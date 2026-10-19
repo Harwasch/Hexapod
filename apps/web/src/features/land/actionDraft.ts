@@ -187,9 +187,9 @@ export function downloadActionDraft(value: unknown) {
 }
 
 /**
- * A reason the draft cannot be saved yet, and the DOM id of the field that fixes it. The draft
- * form sets `noValidate`: the browser's bubbles cannot point into a collapsed <details>, so
- * this list is what stops Save, and the server's 422 stays the backstop.
+ * A reason the draft cannot be saved yet, and the DOM id of the field that fixes it. The plan
+ * editor (Plans lens) sets `noValidate`: the browser's bubbles cannot point into a collapsed
+ * <details>, so this list is what stops Save, and the server's 422 stays the backstop.
  */
 export interface DraftProblem {
   id: string;
@@ -199,7 +199,7 @@ export interface DraftProblem {
 type StepField =
   "title" | "detail" | "start" | "days" | "success" | "area" | "resources" | "cost" | "cost-basis";
 
-/** The draft form's field ids, shared with actionDraftProblems so the two cannot drift. */
+/** The plan editor's field ids, shared with actionDraftProblems so the two cannot drift. */
 export const actionFieldId = {
   title: "action-title",
   objective: "action-objective",
@@ -218,28 +218,28 @@ const over = (text: string | null | undefined, max: number) => (text?.trim().len
 const DAY_MS = 86_400_000;
 
 /**
- * Everything the server would refuse in this draft, in form order, worded as the fix. Mirrors
- * the validators in apps/api/app/schemas/land_actions.py (LandActionCreate, LandActionStep,
- * ActionConstraint): keep the two in step. Geometry validity and vertex counts are left to the
- * server; the form only offers footprints the inventory already validated.
+ * Everything the server would refuse in this draft, worded as the fix in the plan editor's own
+ * words (Plan name, Goal, Done when, Question…) and in the order the editor shows its fields:
+ * name, goal and start date, each step top to bottom, areas to avoid, then the folded money
+ * and questions sections. Mirrors the validators in apps/api/app/schemas/land_actions.py
+ * (LandActionCreate, LandActionStep, ActionConstraint): keep the two in step. Geometry
+ * validity and vertex counts are left to the server; the form only offers footprints the
+ * inventory already validated.
  */
 export function actionDraftProblems(draft: ActionDraft): DraftProblem[] {
   const problems: DraftProblem[] = [];
   const add = (id: string, message: string) => problems.push({ id, message });
   const ids = actionFieldId;
-  if (blank(draft.title)) add(ids.title, "Add an action title.");
-  else if (over(draft.title, 200)) add(ids.title, "Shorten the action title to 200 characters.");
-  if (blank(draft.objective)) add(ids.objective, "Describe the outcome to achieve.");
-  else if (over(draft.objective, 2000))
-    add(ids.objective, "Shorten the outcome to 2,000 characters.");
+  if (blank(draft.title)) add(ids.title, "Add a plan name.");
+  else if (over(draft.title, 200)) add(ids.title, "Shorten the plan name to 200 characters.");
+  if (blank(draft.objective)) add(ids.objective, "Describe the goal.");
+  else if (over(draft.objective, 2000)) add(ids.objective, "Shorten the goal to 2,000 characters.");
   const start = /^\d{4}-\d{2}-\d{2}$/.test(draft.startDate) ? Date.parse(draft.startDate) : NaN;
   const lastDay = Math.max(0, ...draft.steps.map((step) => step.startDay + step.days));
   if (Number.isNaN(start)) add(ids.start, "Choose a start date.");
   // Python's date ends at 9999-12-31; the server refuses a schedule that runs past it.
   else if (Number.isFinite(lastDay) && new Date(start + lastDay * DAY_MS).getUTCFullYear() > 9999)
     add(ids.start, "Choose an earlier start date. This schedule would run past the year 9999.");
-  if (!/^[A-Z]{3}$/.test(draft.currency))
-    add(ids.currency, "Use a three-letter currency code, like USD.");
 
   const byId = new Map(draft.steps.map((step) => [step.id, step]));
   let footprints = 0;
@@ -249,8 +249,11 @@ export function actionDraftProblems(draft: ActionDraft): DraftProblem[] {
     if (blank(step.title)) add(at("title"), `Step ${n}: add a step name.`);
     else if (over(step.title, 200))
       add(at("title"), `Step ${n}: shorten the step name to 200 characters.`);
-    if (over(step.detail, 1000))
-      add(at("detail"), `Step ${n}: shorten the work description to 1,000 characters.`);
+    if (step.footprint && ++footprints === 50)
+      add(
+        at("area"),
+        `Step ${n}: at most 49 steps can have an area of their own. Use the whole area for the rest.`,
+      );
     // The form shows day startDay + 1, so the server's 0..36500 reads as 1..36501.
     if (!Number.isFinite(step.startDay) || step.startDay < 0)
       add(at("start"), `Step ${n}: enter a start day (1 or later).`);
@@ -263,36 +266,31 @@ export function actionDraftProblems(draft: ActionDraft): DraftProblem[] {
       add(at("days"), `Step ${n}: enter the duration in whole days.`);
     else if (step.days > 3650)
       add(at("days"), `Step ${n}: keep the duration to 3,650 days or fewer.`);
-    if (blank(step.successMeasure)) add(at("success"), `Step ${n}: add a success measure.`);
+    const cost = step.estimatedCost;
+    if (cost != null) {
+      if (!Number.isFinite(cost) || cost < 0)
+        add(at("cost"), `Step ${n}: enter a cost of 0 or more, or leave it blank.`);
+      else if (cost > 1e12)
+        add(at("cost"), `Step ${n}: enter a cost of at most 1,000,000,000,000 ${draft.currency}.`);
+      if (Number.isFinite(cost) && blank(step.costBasis))
+        add(
+          at("cost-basis"),
+          `Step ${n}: say where its ${cost.toLocaleString()} ${draft.currency} cost comes from.`,
+        );
+    }
+    if (over(step.costBasis, 2000))
+      add(at("cost-basis"), `Step ${n}: shorten where the cost comes from to 2,000 characters.`);
+    if (blank(step.successMeasure))
+      add(at("success"), `Step ${n}: say how you will know it is done.`);
     else if (over(step.successMeasure, 2000))
-      add(at("success"), `Step ${n}: shorten the success measure to 2,000 characters.`);
-    if (step.footprint && ++footprints === 50)
-      add(
-        at("area"),
-        `Step ${n}: an action can give at most 49 steps their own work area. Use the whole work area for the rest.`,
-      );
+      add(at("success"), `Step ${n}: shorten “Done when” to 2,000 characters.`);
+    if (over(step.detail, 1000))
+      add(at("detail"), `Step ${n}: shorten what the work involves to 1,000 characters.`);
     // actionPayload drops blank resource lines, so only the lines it sends count.
     const resources = (step.resources ?? []).map((line) => line.trim()).filter(Boolean);
     if (resources.length > 50) add(at("resources"), `Step ${n}: list up to 50 resources.`);
     else if (resources.some((line) => line.length > 200))
       add(at("resources"), `Step ${n}: keep each resource to 200 characters.`);
-    const cost = step.estimatedCost;
-    if (cost != null) {
-      if (!Number.isFinite(cost) || cost < 0)
-        add(at("cost"), `Step ${n}: enter an estimated cost of 0 or more, or leave it blank.`);
-      else if (cost > 1e12)
-        add(
-          at("cost"),
-          `Step ${n}: enter an estimated cost of at most 1,000,000,000,000 ${draft.currency}.`,
-        );
-      if (Number.isFinite(cost) && blank(step.costBasis))
-        add(
-          at("cost-basis"),
-          `Step ${n}: explain the basis for its ${cost.toLocaleString()} ${draft.currency} estimate.`,
-        );
-    }
-    if (over(step.costBasis, 2000))
-      add(at("cost-basis"), `Step ${n}: shorten the cost basis to 2,000 characters.`);
     for (const dependency of step.dependsOn ?? []) {
       const before = byId.get(dependency);
       if (!before || before.id === step.id) continue;
@@ -304,19 +302,23 @@ export function actionDraftProblems(draft: ActionDraft): DraftProblem[] {
         );
     }
   });
+  if ((draft.exclusions ?? []).length > 50)
+    add(ids.exclusions, "Avoid at most 50 areas: remove some, or clear them all.");
+  if (!/^[A-Z]{3}$/.test(draft.currency))
+    add(ids.currency, "Use a three-letter currency code, like USD.");
 
   (draft.constraints ?? []).forEach((constraint, index) => {
     const n = index + 1;
     if (blank(constraint.text))
-      add(ids.constraint(index, "text"), `Constraint ${n}: describe it or remove it.`);
+      add(ids.constraint(index, "text"), `Question ${n}: write it out or remove it.`);
     else if (over(constraint.text, 2000))
-      add(ids.constraint(index, "text"), `Constraint ${n}: shorten it to 2,000 characters.`);
+      add(ids.constraint(index, "text"), `Question ${n}: shorten it to 2,000 characters.`);
     if (constraint.resolved && blank(constraint.resolution))
-      add(ids.constraint(index, "resolution"), `Constraint ${n} is marked resolved: record how.`);
+      add(ids.constraint(index, "resolution"), `Question ${n} is marked settled: say how.`);
     else if (over(constraint.resolution, 2000))
       add(
         ids.constraint(index, "resolution"),
-        `Constraint ${n}: shorten how it was resolved to 2,000 characters.`,
+        `Question ${n}: shorten how it was settled to 2,000 characters.`,
       );
   });
   const assumptions = (draft.assumptions ?? []).map((line) => line.trim()).filter(Boolean);
@@ -327,20 +329,18 @@ export function actionDraftProblems(draft: ActionDraft): DraftProblem[] {
       ids.assumptions,
       "Keep each assumption to 2,000 characters. Split a long one over several lines.",
     );
-  if ((draft.exclusions ?? []).length > 50)
-    add(ids.exclusions, "Exclude at most 50 footprints. Clear the exclusions and choose again.");
   return problems;
 }
 
 export interface ApprovalBlocker {
   kind: "stale" | "constraints" | "note";
   message: string;
-  /** Fixed by revising the action: the review offers its Revise button beside it. */
+  /** Fixed by revising the plan: the review offers its Revise button beside it. */
   revise?: boolean;
 }
 
 /**
- * Why Approve (a draft) or Schedule (an approved action) is disabled, in the order to fix them.
+ * Why Approve (a draft) or Schedule (an approved plan) is disabled, in the order to fix them.
  * Mirrors reviewable() in apps/api/app/services/land_actions.py, which refuses a stale revision
  * or an unresolved constraint, and LandActionReview, which requires the note.
  */
@@ -354,14 +354,14 @@ export function approvalBlockers(
     blockers.push({
       kind: "stale",
       message:
-        "Supporting information changed since this revision. Revise the action to review it against current data.",
+        "Something this plan relies on changed since this revision. Revise the plan to check it against the land as it is now.",
       revise: true,
     });
   const open = (action.constraints ?? []).filter((constraint) => !constraint.resolved).length;
   if (open)
     blockers.push({
       kind: "constraints",
-      message: `Resolve ${open} recorded constraint${open > 1 ? "s" : ""}: revise the action, tick Resolved and record how.`,
+      message: `Settle ${open} open question${open > 1 ? "s" : ""}: revise the plan, tick Settled and say how.`,
       revise: true,
     });
   if (!note.trim())

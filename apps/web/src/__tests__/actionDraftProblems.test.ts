@@ -1,5 +1,5 @@
 /**
- * The checklist that stops Save and Approve/Schedule in LandActions
+ * The checklist that stops Save and Approve/Schedule in the Plans lens
  * (features/land/actionDraft.ts), mirroring apps/api/app/schemas/land_actions.py and the
  * review checks in apps/api/app/services/land_actions.py.
  */
@@ -22,7 +22,7 @@ const step = (change: Partial<Step> = {}): Step => ({
   successMeasure: "No brush taller than 30 cm",
   ...change,
 });
-// What LandActions' fresh() opens: today's date, USD and one empty step.
+// What the Plans lens's freshPlan() opens: today's date, USD and one empty step.
 const fresh = (): ActionDraft => ({
   requestKey: "00000000-0000-4000-8000-000000000000",
   title: "",
@@ -51,10 +51,10 @@ const messages = (draft: ActionDraft) =>
 describe("actionDraftProblems", () => {
   it("names the four empty required fields of a fresh draft, in form order", () => {
     expect(actionDraftProblems(fresh())).toEqual([
-      { id: "action-title", message: "Add an action title." },
-      { id: "action-objective", message: "Describe the outcome to achieve." },
+      { id: "action-title", message: "Add a plan name." },
+      { id: "action-objective", message: "Describe the goal." },
       { id: "action-step-0-title", message: "Step 1: add a step name." },
-      { id: "action-step-0-success", message: "Step 1: add a success measure." },
+      { id: "action-step-0-success", message: "Step 1: say how you will know it is done." },
     ]);
   });
 
@@ -85,7 +85,7 @@ describe("actionDraftProblems", () => {
     expect(actionDraftProblems(complete({ steps: [step({ estimatedCost: 450 })] }))).toEqual([
       {
         id: "action-step-0-cost-basis",
-        message: "Step 1: explain the basis for its 450 USD estimate.",
+        message: "Step 1: say where its 450 USD cost comes from.",
       },
     ]);
     expect(ids(complete({ steps: [step({ estimatedCost: 0, costBasis: " " })] }))).toEqual([
@@ -95,7 +95,7 @@ describe("actionDraftProblems", () => {
       ids(complete({ steps: [step({ estimatedCost: 450, costBasis: "Contractor quote" })] })),
     ).toEqual([]);
     expect(messages(complete({ steps: [step({ estimatedCost: -1, costBasis: "x" })] }))).toEqual([
-      "Step 1: enter an estimated cost of 0 or more, or leave it blank.",
+      "Step 1: enter a cost of 0 or more, or leave it blank.",
     ]);
   });
 
@@ -132,7 +132,7 @@ describe("actionDraftProblems", () => {
     ]);
   });
 
-  it("flags constraints with no text, and resolved ones with no resolution", () => {
+  it("flags questions with no text, and settled ones that do not say how", () => {
     const draft = complete({
       constraints: [
         { text: "", resolved: false },
@@ -141,10 +141,10 @@ describe("actionDraftProblems", () => {
       ],
     });
     expect(actionDraftProblems(draft)).toEqual([
-      { id: "action-constraint-0-text", message: "Constraint 1: describe it or remove it." },
+      { id: "action-constraint-0-text", message: "Question 1: write it out or remove it." },
       {
         id: "action-constraint-1-resolution",
-        message: "Constraint 2 is marked resolved: record how.",
+        message: "Question 2 is marked settled: say how.",
       },
     ]);
   });
@@ -158,6 +158,42 @@ describe("actionDraftProblems", () => {
     });
     expect(ids(draft)).toEqual(["action-step-0-detail", "action-assumptions"]);
     expect(ids(complete({ assumptions: ["a".repeat(2000), "", "  "] }))).toEqual([]);
+  });
+
+  it("lists problems in the order the plan editor shows its fields", () => {
+    // Name and goal, each step top to bottom (its area, timing, cost, Done when, then what is
+    // folded under More), areas to avoid, then the folded money and questions sections.
+    const draft = complete({
+      title: "",
+      currency: "usd",
+      constraints: [{ text: "", resolved: false }],
+      exclusions: Array.from({ length: 51 }, () => ({
+        type: "Polygon" as const,
+        coordinates: [
+          [
+            [0, 0],
+            [1, 0],
+            [1, 1],
+            [0, 0],
+          ],
+        ],
+      })),
+      steps: [
+        step({ successMeasure: "", estimatedCost: 10, detail: "d".repeat(1001) }),
+        step({ id: "s2", title: "" }),
+      ],
+    });
+    expect(ids(draft)).toEqual([
+      "action-title",
+      "action-step-0-cost-basis",
+      "action-step-0-success",
+      "action-step-0-detail",
+      "action-step-1-title",
+      "action-exclusions",
+      "action-currency",
+      "action-constraint-0-text",
+    ]);
+    expect(messages(draft)).toContain("Avoid at most 50 areas: remove some, or clear them all.");
   });
 
   it("counts only the resource lines actionPayload sends", () => {
@@ -183,27 +219,27 @@ describe("approvalBlockers", () => {
       {
         kind: "stale",
         message:
-          "Supporting information changed since this revision. Revise the action to review it against current data.",
+          "Something this plan relies on changed since this revision. Revise the plan to check it against the land as it is now.",
         revise: true,
       },
       {
         kind: "constraints",
-        message: "Resolve 2 recorded constraints: revise the action, tick Resolved and record how.",
+        message: "Settle 2 open questions: revise the plan, tick Settled and say how.",
         revise: true,
       },
       { kind: "note", message: "Add a review note. It is stored with the approval." },
     ]);
   });
 
-  it("words the note for scheduling and counts one constraint in the singular", () => {
+  it("words the note for scheduling and counts one question in the singular", () => {
     const one = { staleReasons: [], constraints: [{ text: "Confirm access", resolved: false }] };
     expect(approvalBlockers(one, "", "schedule").map((blocker) => blocker.message)).toEqual([
-      "Resolve 1 recorded constraint: revise the action, tick Resolved and record how.",
+      "Settle 1 open question: revise the plan, tick Settled and say how.",
       "Add a scheduling note. It is stored with the scheduled mission.",
     ]);
   });
 
-  it("clears once the revision is current, every constraint is resolved and a note is written", () => {
+  it("clears once the revision is current, every question is settled and a note is written", () => {
     expect(approvalBlockers({ staleReasons: [] }, "Reviewed on site", "approve")).toEqual([]);
   });
 });
