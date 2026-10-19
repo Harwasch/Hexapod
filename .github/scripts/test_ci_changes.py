@@ -84,9 +84,24 @@ class PullRequest(unittest.TestCase):
     def pr(self, *paths: str) -> dict[str, bool]:
         return decide("pull_request", list(paths))[0]
 
-    def test_every_job_but_playwright_always_runs(self) -> None:
-        needed = self.pr("docs/HANDOFF.md")
-        self.assertEqual({job for job in JOBS if not needed[job]}, {"e2e"})
+    def jobs(self, *paths: str) -> set[str]:
+        needed = self.pr(*paths)
+        return {job for job in JOBS if needed[job]}
+
+    def test_docs_only_runs_nothing(self) -> None:
+        self.assertEqual(self.jobs("docs/HANDOFF.md", "README.md"), set())
+
+    def test_api_file_runs_api_and_image_only(self) -> None:
+        self.assertEqual(self.jobs("apps/api/app/main.py"), {"api", "image"})
+
+    def test_web_file_runs_web_and_playwright(self) -> None:
+        self.assertEqual(self.jobs("apps/web/src/features/app/App.tsx"), NODE)
+
+    def test_an_unclassified_path_runs_everything(self) -> None:
+        self.assertEqual(self.jobs("brand-new-dir/thing.py"), set(JOBS))
+
+    def test_a_diff_that_failed_runs_everything(self) -> None:
+        self.assertTrue(all(decide("pull_request", None)[0].values()))
 
     def test_ci_yml_alone_no_longer_forces_playwright(self) -> None:
         self.assertFalse(self.pr(".github/workflows/ci.yml")["e2e"])

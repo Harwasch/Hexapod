@@ -8,19 +8,18 @@ workflows job) and run by hand:
 
 By event:
 
-- pull_request: every job runs, as before; only the Playwright shards are skipped when
-  nothing the web app is built or tested from changed (and only the page specs run when
-  the 3D scene's inputs did not change).
+- pull_request: only the jobs whose inputs changed between the base and the PR; the
+  Playwright shards run the page specs alone when the 3D scene's inputs did not change.
 - push to main: only the jobs whose inputs changed between the push's `before` and its
-  head. A new branch (an all-zeros `before`), a force-push, or a diff that cannot be
-  computed runs everything.
+  head, with the scene specs whenever Playwright runs. A new branch (an all-zeros
+  `before`), a force-push, or a diff that cannot be computed runs everything.
 - schedule (the nightly): everything, unless main's head is the commit the last nightly
   already tested -- then nothing.
 - workflow_dispatch, or anything else: everything.
 
 The mapping is deliberately coarse and errs towards running: a path is matched against
-every job's inputs (one file can need several jobs), on a push a path no rule knows about
-runs everything, and only `INERT` paths are allowed to run nothing. The nightly is the
+every job's inputs (one file can need several jobs), a path no rule knows about runs
+everything, and only `INERT` paths are allowed to run nothing. The nightly is the
 backstop for a dependency the mapping misses.
 """
 
@@ -220,11 +219,11 @@ def decide(
     if event == "pull_request":
         if changed is None:
             return everything(), "pull request: could not diff against the base; everything"
-        needed, _ = classify(changed)
-        # A pull request runs every job but the Playwright shards, as it always has, so an
-        # unclassified path does not add them either.
-        result = {**everything(), "e2e": needed["e2e"], "scene": needed["scene"]}
-        return result, "pull request: every job, Playwright as the diff needs"
+        needed, unknown = classify(changed)
+        if unknown:
+            return everything(), f"pull request: unclassified paths {unknown[:5]}; everything"
+        # Unlike a push, a page-only pull request runs the app's page specs alone.
+        return needed, "pull request: only the jobs whose inputs changed"
     if event == "push":
         if not before or before == ZERO_SHA:
             return everything(), "push: no `before` commit (new branch); everything"

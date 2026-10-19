@@ -47,8 +47,8 @@ docker run --env-file .env twin-api python -m app.worker      # the worker
 docker run --env-file .env twin-api python -m app.seed        # seed the catalogue, once
 ```
 
-CI's `image` job builds this image (on every pull request, on a push to main that touches
-what goes into it, and nightly) and asserts against the running container
+CI's `image` job builds this image (on a pull request or a push to main that touches what
+goes into it, and nightly) and asserts against the running container
 that the API is healthy, that `/api/v1/recipes` lists both recipes, that the pipeline's
 stages import in the image's venv, that `python -m app.worker --once` exits cleanly, that
 every command `fly.toml` names exists on `PATH` in the image, and that a production
@@ -1095,7 +1095,7 @@ optional URL inputs, which is how provisioning hands it values a dispatch would 
 told. Neither workflow uses a third-party action: flyctl comes from Fly's own installer,
 wrangler from npm.
 
-CI parses both workflows (on every pull request, on a push to main that touches `.github/` or
+CI parses both workflows (on a pull request or a push to main that touches `.github/` or
 this document, and nightly) and fails if either one names a secret or a variable that this
 document does not, or if either one grows a `push` trigger.
 
@@ -1581,12 +1581,12 @@ twin-web`) is the equivalent.
   effect has not been observed.
 - **The R2 `AllowedHeaders` question is still open**, as flagged above.
 - **Neither workflow has ever run.** Not once, not with dummy credentials. What CI does
-  check, on every pull request and nightly, is that both files parse as YAML, that neither has grown a `push`
+  check, nightly and on any change to `.github/` or this document, is that both files parse as YAML, that neither has grown a `push`
   trigger, and that every `secrets.*` and `vars.*` name they read appears in this document.
 - **The r2.dev URL makes the whole bucket public**, `captures/` included. That is stated
   above rather than discovered later, but it is a property of this design that nobody has
   seen in operation either.
-- What _is_ verified, on every pull request and nightly: the image builds, the API in it is healthy against a
+- What _is_ verified, nightly and on any change to what goes into the image: the image builds, the API in it is healthy against a
   real Postgres, the recipe catalogue lists both recipes, the pipeline imports in the image's
   venv, the worker starts and exits cleanly, a production configuration starts, a
   misconfigured one refuses to, and every command `fly.toml` names exists in the image.

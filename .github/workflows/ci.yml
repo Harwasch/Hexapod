@@ -26,10 +26,10 @@ concurrency:
 jobs:
   # Which jobs this change needs; every job below is gated on one of these outputs. The
   # mapping from paths to jobs is .github/scripts/ci_changes.py (tested by the workflows
-  # job): a pull request runs every job but skips Playwright when the web app's inputs did
-  # not change; a push to main runs only the jobs whose inputs changed since the push's
-  # `before`; a new branch, a force-push, an unclassified path, a diff that cannot be
-  # computed, a dispatch and the nightly run everything.
+  # job): a pull request runs only the jobs whose inputs it changed, and a push to main
+  # only those whose inputs changed since the push's `before`; a new branch, a
+  # force-push, an unclassified path, a diff that cannot be computed, a dispatch and the
+  # nightly run everything.
   #
   # A job-level `if:` rather than a workflow-level `paths:` filter, deliberately: a
   # workflow that `paths:` leaves out never starts, so a required check on it waits for
