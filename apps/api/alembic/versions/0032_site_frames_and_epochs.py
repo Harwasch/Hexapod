@@ -259,9 +259,22 @@ def upgrade() -> None:
     )
     op.execute("DROP TABLE IF EXISTS _m0032_registered")
 
+    # `services/epochs.nearest_framed_site` measures on the ellipsoid, `geography(boundary)`,
+    # which the geometry gist index (`idx_sites_boundary`) cannot answer: this index on that
+    # expression can. Built CONCURRENTLY, so it does not block writes to sites while it is
+    # built: outside the transaction, which commits here (an autocommit block). `IF NOT
+    # EXISTS` makes a re-run after a failure here safe; a build that failed leaves an
+    # INVALID index, which `DROP INDEX` and a re-run replace.
+    with op.get_context().autocommit_block():
+        op.execute(
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_sites_boundary_geography "
+            "ON sites USING gist (geography(boundary))"
+        )
+
 
 def downgrade() -> None:
     # Tables and columns only: every asset row, and every asset's `source`, survives.
+    op.execute("DROP INDEX IF EXISTS ix_sites_boundary_geography")
     op.drop_index("ix_assets_epoch_id", table_name="assets")
     op.drop_constraint("ck_assets_source_kind", "assets", type_="check")
     op.drop_column("assets", "url_history")

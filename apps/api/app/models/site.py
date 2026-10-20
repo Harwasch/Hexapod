@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from geoalchemy2 import Geometry, WKBElement
-from sqlalchemy import Float, String, Text
+from sqlalchemy import Float, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -19,6 +19,12 @@ class Site(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """A physical place with one or more reality captures."""
 
     __tablename__ = "sites"
+    __table_args__ = (
+        # A distance in metres on the ellipsoid (`services/epochs.nearest_framed_site`) is
+        # on `geography(boundary)`, which the geometry column's gist index cannot answer.
+        # Migration 0032 builds it CONCURRENTLY.
+        Index("ix_sites_boundary_geography", text("geography(boundary)"), postgresql_using="gist"),
+    )
 
     slug: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
