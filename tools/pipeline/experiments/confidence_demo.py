@@ -15,19 +15,20 @@ everywhere). Both tilesets are written under `--out` for a viewer, and `report.j
 them.
 
 **`--change`** (milestone 5, ADR 0018): e2 has a 1.5 m crate on open ground north-west of
-the tree, where both epochs saw well, that e1 did not, and each epoch is its own scan of
-the field -- its own sample of it, 1 cm of height noise, and a "sparse SfM cloud" in its
-pose model that is only a 3% subsample of those same jittered centres: not an independent
-triangulation, so those points are counted twice (once as SfM, once as splat) and the
-cloud adds no evidence of its own; it exercises the SfM path, nothing more. The demo then prints the change between their height surfaces (the `surface`
-stage's) per cell, the way the change map (A5) measures it: both surfaces at the coarser
-level (dsm by max, ground by min, sigma by max), and `delta = dsm_e2 - dsm_e1` against
-`3 sqrt(sigma_e1^2 + sigma_e2^2 + u_e1^2 + u_e2^2)`, where `u` is each epoch's uncertainty
-from the site frame (its confidence grid's `alignmentCap.uncertaintyM`: 0 for e1, which
-made the frame; 0.062 m for e2). A cell is `insufficient` when either epoch has no surface
-there. The report also counts the changed cells either epoch's confidence grid calls weak
--- whether those may be called changed is the change map's decision (A5), not this
-demo's -- and the changed cells that do not touch the crate: what the noise did.
+the tree, where both epochs saw well, that e1 did not, and each epoch is its own scan of the
+field -- its own sample of it, 1 cm of height noise, and a "sparse SfM cloud" in its pose
+model that is only a 3% subsample of those same jittered centres: not an independent
+triangulation, so those points are counted twice (once as SfM, once as splat) and the cloud
+adds no evidence of its own; it exercises the SfM path, nothing more. The demo then prints
+the change between their height surfaces (the `surface` stage's) per cell, the way the
+change map (A5) measures it: both surfaces at the coarser level (dsm by max, ground by min,
+sigma by max), and `delta = dsm_e2 - dsm_e1` against `3 sqrt(sigma_e1^2 + sigma_e2^2 +
+u_e1^2 + u_e2^2)`, where `u` is each epoch's uncertainty from the site frame (its confidence
+grid's `alignmentCap.uncertaintyM`: 0 for e1, which made the frame; 0.062 m for e2). A cell
+is `insufficient` when either epoch has no surface there. The report also counts the changed
+cells either epoch's confidence grid calls weak -- whether those may be called changed is
+the change map's decision (A5), not this demo's -- and the changed cells that do not touch
+the crate: what the noise did.
 
 **Every capture is synthetic.** It shows the stage working against a scene whose answers
 are known; it is not a measurement of a real capture, and no threshold here was
