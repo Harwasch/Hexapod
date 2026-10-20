@@ -560,6 +560,43 @@ sway without its canonical positions ever being touched, using the buffer the en
 declared in one file, `cesium/splatInternals.ts`. See [LIVING_SURVEY.md](LIVING_SURVEY.md) and
 [ADR 0006](DECISIONS/0006-splat-texture-rewrite.md).
 
+## Analytic views: Confidence and Data age
+
+The HUD strip's splat view control (`features/views/`) colours the active scan three ways:
+**Photo**, **Confidence** (how well the capture measured each part, policy `weak-v1`) and **Data
+age** (how old the shown date is, and where a later date of the site has evidence). The data is
+the pipeline's per-cell grid, `hexapod.cellgrid` v1, declared on the root tile as
+`extras.confidence` and decoded by `lib/cellGrid.ts` (Cesium-free). See
+[ADR 0016](DECISIONS/0016-confidence-map.md) § Web.
+
+- **Only the CesiumJS splat primitive draws them.** The tint is one part of the primitive's
+  colour chain (`cesium/splatCellView.ts`, `colorOrder` 5: after the objects' highlight, before
+  the inferred layer's), so no engine-patch change was needed. PlayCanvas and Spark have no such
+  hook: under them the control offers the analytic views disabled, says "Needs the CesiumJS
+  renderer (Settings › Advanced › Splat renderer)", and offers a one-click "Draw with CesiumJS".
+  Nothing silently does nothing.
+- **Zero cost on Photo.** `SiteManager.attachTileset` hooks each splat tileset through a few lines
+  on the first load (`cesium/cellViewSlot.ts`); the view, the part and the decoder load on demand
+  the first time a view is chosen, and the part leaves the chain on Photo. Mode switches and a new
+  data-age texture are uniform changes; each asks for a render (the app renders on request).
+- **The frame.** Cells are read in the tileset frame, the root tile's frame: a model-frame
+  position is `T⁻¹ · R · p`, with `R` the engine's ENU bake frame (`primitive._rootTransform`)
+  and `T` the root's computed transform. Unlike the view cones' per-tile un-bake, this holds for
+  tiles with their own origin (`tile.transform`, ADR 0011).
+- **The level.** Each splat reads the finest level whose cell still covers 6 px at its distance,
+  so far views read the pyramid's coarser levels, which hold the weakest child: a weak patch is
+  never averaged away.
+- **Honesty.** A model without a grid is "Not measured" in the key and in the Inspector's
+  Date shown (a splat upload, or a run before confidence maps). An inferred layer drawn in the
+  scan's sort is grey: it carries no capture evidence. Data age gives one date one age (one
+  capture time), and stripes cells where a later date scored evidence; a later date is compared
+  only when its tileset is in the same frame, and one that is not, has no grid, or cannot be read
+  is named in the key.
+
+Evidence: `e2e/confidenceViewScene.spec.ts` (scene: weak cells red-dominant by pixel count,
+each splat by its own cell) and `e2e/confidenceView.spec.ts` (the app under all three
+renderers).
+
 ## Patched engine
 
 `patches/@cesium__engine@26.3.0.patch` (applied by pnpm on install) guards

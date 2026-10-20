@@ -409,4 +409,41 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
 
 ## Web
 
-Filled by `claude/feat-splat-confidence-view`.
+### Context
+
+A splat scan looks equally certain everywhere. Where the capture saw a part from few views, at
+a narrow spread or too coarse a ground sample, the reconstruction is a guess that looks like a
+measurement. The pipeline writes, per 2.5D column of the site lattice (C1: 0.25 m × 2^level
+cells in the tileset frame), a score and the reasons it is low, as one container
+(`hexapod.cellgrid` v1, C2) declared on the root tile. The globe needs to show it.
+
+### Decision
+
+1. **One decoder, Cesium-free** (`apps/web/src/lib/cellGrid.ts`). It refuses what it could only
+   guess around: a plane whose size disagrees with its cells and channels, a level that skips a
+   lattice step, a cell size off the lattice, a frame other than the tileset's, and planes that
+   do not match their sha256. Until the Python encoder lands, a TypeScript fixture encoder
+   (`apps/web/src/dev/cellGridFixture.ts`) builds grids from the spec, deterministically; a
+   cross-language test is the rescan PR's (W4b).
+2. **CesiumJS draws the views, as a colour-chain part** (`cesium/splatCellView.ts`), not an
+   engine-patch change: per splat, its cell by the root frame (`T⁻¹ · R`), its level by distance
+   (6 px a cell), the `weak-v1` colour (weak below 128 or unseen: red; above, amber to green;
+   no evidence: grey). PlayCanvas and Spark get a disabled control with the reason and a
+   one-click switch (C5).
+3. **Data age is one age per date, plus "newer data here".** It reads the later dates' grids
+   straight from their tilesets (no API), compares only those in the same frame, and says which
+   it left out.
+4. **Not persisted.** The view is a question asked now; a reload starts on Photo.
+5. **Cost.** A few lines on the globe's first load; the rest loads on demand.
+
+### Consequences
+
+- Confidence and Data age are invisible under the default renderer (PlayCanvas) until a person
+  switches; whether CesiumJS becomes the default is open (design § 6, ADR 0020).
+- Every loaded date of a site reacts to the view, including the hidden frame anchor: its grid is
+  fetched too. At most a few dates are loaded at once.
+- More than eight separate slot ranges of inferred layers on one scan: the extra ranges are
+  tinted by the scan's cells instead of grey (the slot uniform's capacity, shared with the view
+  cones and the inferred highlight).
+- `weak-v1`'s threshold and the cell's 6 px minimum are first principles (a majority rule; a cell
+  must be legible), not calibrated measurements.
