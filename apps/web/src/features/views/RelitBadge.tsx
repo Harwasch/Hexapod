@@ -43,8 +43,9 @@ export function RelitBadge() {
     ? pickShownAsset(site.assets, epochs, "gaussian-splat", { epochId: shownEpoch })
     : null;
   const captured = captureTimeOf(asset, epochs);
-  const holding = drawn && sun === "capture" && captured !== null;
   const report = useSunReport((s) => (asset ? s.reports[asset.id] : undefined));
+  // Held only while the relight it is for is on screen: never a moved sky with nothing said.
+  const holding = drawn && sun === "capture" && captured !== null && report !== undefined;
 
   useEffect(() => {
     if (!holding || !scene || captured === null) return;

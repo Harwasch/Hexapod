@@ -178,6 +178,22 @@ describe("the badge", () => {
     expect(screen.getByTestId("relit-night")).toHaveTextContent("Sun below horizon");
   });
 
+  it("holds the clock only while the shown date is reported relit", async () => {
+    const scene = fakeScene();
+    useSunReport.getState().report(A2.id, day);
+    show("cesium", { registry: scene.registry });
+    act(() => useLighting.getState().set("capture"));
+    await waitFor(() => expect(scene.clock.shouldAnimate).toBe(false));
+    // The scene stops drawing it relit (the model unloaded, say): the sky is not left moved.
+    act(() => useSunReport.getState().report(A2.id, null));
+    await waitFor(() => expect(scene.clock.shouldAnimate).toBe(true));
+    expect(JulianDate.toDate(scene.clock.currentTime).getUTCMonth()).toBe(9);
+    expect(screen.queryByTestId("relit-badge")).toBeNull();
+    act(() => useSunReport.getState().report(A2.id, day));
+    await waitFor(() => expect(scene.clock.shouldAnimate).toBe(false));
+    expect(iso(scene.clock.currentTime)).toBe("2026-06-01T15:00:00.000Z");
+  });
+
   it("holds the clock at the shown date's capture while At capture is on, and gives it back", async () => {
     const scene = fakeScene();
     useSunReport.getState().report(A2.id, day);
@@ -189,8 +205,10 @@ describe("the badge", () => {
     expect(screen.getByTestId("relit-badge")).toHaveTextContent("Relit by the sun (at capture)");
     expect(scene.renders()).toBeGreaterThan(0);
 
-    // Another date: its own capture time.
+    // Another date: its own capture time, once that date is relit.
     act(() => useSites.setState({ epoch: { [SITE_ID]: E1.id } }));
+    await waitFor(() => expect(scene.clock.shouldAnimate).toBe(true));
+    act(() => useSunReport.getState().report(A1.id, day));
     await waitFor(() => expect(iso(scene.clock.currentTime)).toBe("2026-03-01T15:00:00.000Z"));
 
     // As captured: the relight is not drawn, and the clock is given back, running.
@@ -227,6 +245,7 @@ describe("the badge", () => {
     expect(badge).toHaveTextContent(SUNLIGHT_TEXT.nowInstead);
 
     // A date with one: held; another renderer: given back, and nothing said.
+    act(() => useSunReport.getState().report(A1.id, day));
     act(() => useSites.setState({ epoch: { [SITE_ID]: E1.id } }));
     await waitFor(() => expect(scene.clock.shouldAnimate).toBe(false));
     act(() => useSettings.getState().set({ splatRenderer: "spark" }));
