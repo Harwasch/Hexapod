@@ -26,7 +26,7 @@ from geoalchemy2 import WKBElement
 from sqlalchemy import Select, String, cast, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Asset, Capture, Epoch, Site, SiteFrame
+from app.models import Artifact, Asset, Capture, Epoch, Job, JobStep, Site, SiteFrame
 from app.models.enums import (
     AssetSourceKind,
     EpochJoinMethod,
@@ -34,6 +34,7 @@ from app.models.enums import (
     EpochStatus,
     HeightDatum,
     ObservedAtSource,
+    RunStatus,
     SiteFrameSource,
 )
 from app.schemas.epoch import EpochRead, SiteFrameRead
@@ -344,14 +345,23 @@ def _number(value: object) -> float | None:
 def frame_for_run(
     db: Session, capture: Capture, located: tuple[float, float] | None = None
 ) -> RunFrame | None:
-    """The frame a run of this capture is placed in, or None to let it define its own.
+    """The frame a run of this capture is placed in, or None to let it define its own:
+    the frame of `site_for_run`'s site, when it has one."""
+    site_id = site_for_run(db, capture, located)
+    return _frame_of(db, site_id) if site_id is not None else None
+
+
+def site_for_run(
+    db: Session, capture: Capture, located: tuple[float, float] | None = None
+) -> uuid.UUID | None:
+    """The site a run of this capture belongs to before it starts, or None for a new one.
 
     The first that applies:
 
-    1. the capture is already an epoch (a re-run): that epoch's site's frame, always;
-    2. the capture was registered into a site with no epoch for it (legacy): its frame;
-    3. the capture named a site (`metadata.siteId`): its frame, or none yet -- the run
-       is then that site's first epoch and defines it;
+    1. the capture is already an epoch (a re-run): that epoch's site, always;
+    2. the capture was registered into a site with no epoch for it (legacy): that site;
+    3. the capture named a site (`metadata.siteId`): that site, framed or not -- with no
+       frame yet the run is its first epoch and defines it;
     4. the run has a located point (`located`, `worker/params.located_point`: a typed
        place in the job's params, else the capture's `metadata.lat`/`lon`): the nearest
        framed site within `SPATIAL_JOIN_BUFFER_M` -- for a phone-key capture, the nearest
@@ -361,15 +371,31 @@ def frame_for_run(
     Decided before the run starts, because the pipeline places the capture in it. A
     capture located only by its EXIF cannot be matched here (nothing knows where it is
     until `normalize` runs); it joins a site only by naming it (M3 moves this later).
+
+    The frame (`frame_for_run`), the reference epoch and the check targets a run is given
+    (`worker/site_context.py`) and the site a rejected run is recorded on
+    (`record_rejected`) all come from this one answer.
     """
     epoch = epoch_of_capture(db, capture.id)
     if epoch is not None:
-        return _frame_of(db, epoch.site_id)
+        return epoch.site_id
     if capture.site_id is not None:
-        return _frame_of(db, capture.site_id)
+        return capture.site_id
     named = requested_site(db, capture)
     if named is not None:
-        return _frame_of(db, named.id)
+        return named.id
+    point = located_or_metadata(capture, located)
+    if point is None:
+        return None
+    site = nearest_framed_site(db, *point, phone_made_only=is_phone_capture(capture))
+    return site.id if site is not None else None
+
+
+def located_or_metadata(
+    capture: Capture, located: tuple[float, float] | None
+) -> tuple[float, float] | None:
+    """`located` (`worker/params.located_point`), else the capture's own `metadata.lat` /
+    `lon`, when it is a point on the globe; else None."""
     if located is None:
         metadata = capture.metadata_ or {}
         lat, lon = _number(metadata.get("lat")), _number(metadata.get("lon"))
@@ -377,5 +403,143 @@ def frame_for_run(
         lat, lon = _number(located[0]), _number(located[1])
     if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return None
-    site = nearest_framed_site(db, lat, lon, phone_made_only=is_phone_capture(capture))
-    return _frame_of(db, site.id) if site is not None else None
+    return lat, lon
+
+
+# ── Which earlier epoch a new one is aligned to (M3b) ─────────────────────────────────────
+
+#: The reference epoch's artifacts a run is seeded with (`worker/site_context.py`), by the
+#: name its recipe gave them: normalize's kept frames, pose's model (`cameras.bin`,
+#: `images.bin`, `points3D.bin`, `poses.json`), place's similarity from that model to its
+#: east/north/up (`placement.json`) and its georeference. Only a Lane 2 run has all four.
+REFERENCE_ARTIFACTS: dict[str, str] = {
+    "frames": "frames",
+    "poses": "poses",
+    "placement": "placement.json",
+    "georef": "georef.json",
+}
+
+#: Verdicts best first; an epoch with no alignment recorded (an M2-era epoch) ranks last.
+VERDICT_RANK: dict[str | None, int] = {"survey": 0, "coarse": 1, "unaligned": 2, None: 3}
+
+#: The uncertainty a reference is taken at when nothing recorded one: the figure a capture
+#: placed by its GPS point or by hand is given (`manual_placement`'s ten metres).
+UNRECORDED_UNCERTAINTY_M = 10.0
+
+
+@dataclass(frozen=True)
+class ReferenceChoice:
+    """The earlier epoch a run is aligned to, as plain values read in one transaction.
+
+    `keys` maps each of `REFERENCE_ARTIFACTS` to its storage key: a prefix for the two
+    directories (`frames`, `poses`), a key for the two files.
+    """
+
+    epoch_id: uuid.UUID
+    job_id: uuid.UUID
+    observed_at: datetime
+    created_at: datetime
+    platform: str
+    verdict: str | None
+    uncertainty_m: float
+    keys: dict[str, str]
+
+
+def claimed_verdict(alignment: object, platform: str) -> str | None:
+    """The verdict an epoch's alignment claims, as far as it may: `survey` is only ever
+    an RTK drone's (D4, D6 amendment), so anything else that says so reads as `coarse`;
+    a verdict outside the vocabulary, or no alignment, is None."""
+    verdict = alignment.get("verdict") if isinstance(alignment, dict) else None
+    if verdict not in ("survey", "coarse", "unaligned"):
+        return None
+    if verdict == "survey" and platform != EpochPlatform.RTK_DRONE.value:
+        return "coarse"
+    return str(verdict)
+
+
+def _reference_uncertainty(epoch: Epoch, capture: Capture | None) -> float:
+    """What the reference epoch is known to: its alignment's `uncertaintyM`, else what its
+    capture was registered with, else `UNRECORDED_UNCERTAINTY_M`. Always positive."""
+    alignment = epoch.alignment if isinstance(epoch.alignment, dict) else {}
+    for value in (alignment.get("uncertaintyM"), capture.uncertainty_m if capture else None):
+        number = _number(value)
+        if number is not None and number > 0:
+            return number
+    return UNRECORDED_UNCERTAINTY_M
+
+
+def _reference_keys(db: Session, job_id: uuid.UUID) -> dict[str, str]:
+    """Each reference artifact's storage key for the run, from its newest row; only the
+    names it has. A directory artifact's key is its prefix (`worker/outputs`)."""
+    rows = db.scalars(
+        select(Artifact.storage_key)
+        .join(JobStep, Artifact.job_step_id == JobStep.id)
+        .where(JobStep.job_id == job_id)
+        .order_by(Artifact.created_at.desc(), Artifact.id.desc())
+    ).all()
+    keys: dict[str, str] = {}
+    for key in rows:
+        name = str(key).rsplit("/", 1)[-1]
+        for role, wanted in REFERENCE_ARTIFACTS.items():
+            if name == wanted and role not in keys:
+                keys[role] = str(key)
+    return keys
+
+
+def reference_epoch(
+    db: Session, site_id: uuid.UUID, *, capture_id: uuid.UUID | None = None
+) -> ReferenceChoice | None:
+    """The earlier epoch of the site a new run of `capture_id` is aligned to, or None.
+
+    Candidates: the site's `published` epochs whose producing run is complete and kept
+    every one of `REFERENCE_ARTIFACTS` (a Lane 2 run), other than the capture's own. For
+    a re-run of an epoch, only epochs that joined the site before it (a lower ordinal):
+    the epoch that made the frame is never aligned onto a later one that was aligned to
+    it, so errors do not go round in a circle.
+
+    Best verdict first (`VERDICT_RANK`, after `claimed_verdict`), then oldest observed,
+    then first recorded: every epoch aligns to one fixed scaffold, and errors do not chain
+    epoch to epoch (the design's open question 2, its default). An RTK epoch is still not
+    moved onto a reference coarser than itself -- the pipeline keeps its own RTK frame and
+    records the visual fit as a check (`tools/pipeline/alignment.py`), which reads the
+    verdict passed here.
+    """
+    own = epoch_of_capture(db, capture_id) if capture_id is not None else None
+    statement = (
+        select(Epoch)
+        .join(Job, Job.id == Epoch.job_id)
+        .where(
+            Epoch.site_id == site_id,
+            Epoch.status == EpochStatus.PUBLISHED.value,
+            Job.status == RunStatus.COMPLETE,
+        )
+    )
+    if capture_id is not None:
+        statement = statement.where((Epoch.capture_id.is_(None)) | (Epoch.capture_id != capture_id))
+    if own is not None:
+        statement = statement.where(Epoch.ordinal < own.ordinal)
+    candidates: list[ReferenceChoice] = []
+    for epoch in db.scalars(statement):
+        assert epoch.job_id is not None
+        keys = _reference_keys(db, epoch.job_id)
+        if set(keys) != set(REFERENCE_ARTIFACTS):
+            continue
+        capture = db.get(Capture, epoch.capture_id) if epoch.capture_id is not None else None
+        candidates.append(
+            ReferenceChoice(
+                epoch_id=epoch.id,
+                job_id=epoch.job_id,
+                observed_at=epoch.observed_at,
+                created_at=epoch.created_at,
+                platform=epoch.platform,
+                verdict=claimed_verdict(epoch.alignment, epoch.platform),
+                uncertainty_m=_reference_uncertainty(epoch, capture),
+                keys=keys,
+            )
+        )
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda c: (VERDICT_RANK[c.verdict], c.observed_at, c.created_at, str(c.epoch_id)),
+    )
