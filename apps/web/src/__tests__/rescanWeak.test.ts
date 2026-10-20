@@ -259,6 +259,20 @@ describe("Plan a re-scan of weak areas", () => {
     expect(toasts()).toEqual(["Could not find the weak areas"]);
   });
 
+  it("still plans when the same project was only rebuilt while the API answered", async () => {
+    let answer: (value: WeakAreas) => void = () => undefined;
+    requestWeakAreas.mockImplementationOnce(
+      () => new Promise<WeakAreas>((resolve) => (answer = resolve)),
+    );
+    const planning = rescanWeak(null, site, EPOCH_ID);
+    // The plans list arriving (or a rename) composes the same project afresh.
+    useMission.getState().refreshProject(siteProject({ ...site, name: "Yard (renamed)" }));
+    answer(read([area()]));
+    await planning;
+    expect(useMission.getState().composer?.zoneIds).toHaveLength(1);
+    expect(startPlanDraft).toHaveBeenCalledTimes(1);
+  });
+
   it("adopts nothing when the view moved to another project while the API answered", async () => {
     let answer: (value: WeakAreas) => void = () => undefined;
     requestWeakAreas.mockImplementationOnce(

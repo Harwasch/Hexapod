@@ -185,8 +185,9 @@ export async function rescanWeak(
     );
     return;
   }
-  // The view went elsewhere while the API answered: the patches are not for that project.
-  if (useMission.getState().project !== before) return;
+  // The view went to another project while the API answered: the patches are not for it. By
+  // id: the same project is composed afresh when its plans arrive or its site is renamed.
+  if (useMission.getState().project?.id !== before.id) return;
   if (read.areas.length === 0) {
     useToasts.getState().push({
       tone: "info",
