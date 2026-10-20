@@ -145,4 +145,15 @@ describe("DJI WPML scout route", () => {
     expect(new DataView(kmz.buffer).getUint32(kmz.length - 22, true)).toBe(0x06054b50);
     expect(new DataView(kmz.buffer).getUint16(kmz.length - 12, true)).toBe(3);
   });
+
+  it("refuses a re-scan that asks for obliques or an orbit, which it cannot fly yet", () => {
+    for (const pattern of ["oblique", "orbit"] as const) {
+      const scout = { ...DEFAULT_SCOUT, purpose: "re-scan-weak" as const, pattern };
+      expect(() => buildScoutKmz(routes, scout)).toThrow(
+        "This re-scan asks for obliques/an orbit; the DJI export flies nadir only so far (W4c)",
+      );
+    }
+    const nadir = { ...DEFAULT_SCOUT, purpose: "re-scan-weak" as const };
+    expect(buildScoutKmz(routes, nadir).length).toBeGreaterThan(0);
+  });
 });

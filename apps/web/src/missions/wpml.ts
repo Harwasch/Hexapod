@@ -264,12 +264,21 @@ export function templateKml(
   ]);
 }
 
+/**
+ * Why a capture's pattern cannot be exported yet: the waylines here fly nadir lanes, and a
+ * re-scan's crossing obliques or orbit would be flown as nadir lines without it (the planner
+ * still sizes them; the export follows).
+ */
+export const PATTERN_NOT_EXPORTED =
+  "This re-scan asks for obliques/an orbit; the DJI export flies nadir only so far (W4c)";
+
 /** The KMZ: `wpmz/` with the template and the waylines, store-only. */
 export function buildScoutKmz(
   routes: readonly CoverageLane[][],
   scout: Scout,
   createdAt: Date = new Date(),
 ): Uint8Array {
+  if (scout.pattern !== "nadir") throw new Error(PATTERN_NOT_EXPORTED);
   const encoder = new TextEncoder();
   return zipStore(
     [
