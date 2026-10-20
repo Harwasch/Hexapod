@@ -263,6 +263,24 @@ describe("the tint", () => {
     close(tintOf(255), CONFIDENCE_RAMP[5]);
   });
 
+  it("hatches weak cells and dots fair ones, so each reads without its colour", () => {
+    const white = [1, 1, 1, 1] as const;
+    const at = (score: number, p: readonly [number, number]) =>
+      cellViewColor("confidence", [score, 0], white, { p, cell: 1 });
+    // Weak: dark diagonal bands, a band pair every two cells.
+    expect(at(60, [0.2, 0])[0]).toBeGreaterThan(at(60, [1.2, 0])[0]);
+    expect(at(60, [0.2, 0])).toEqual(at(60, [2.2, 0]));
+    // Fair: a dark dot every two cells, the rest plain.
+    expect(at(140, [1.5, 1.5])[0]).toBeLessThan(at(140, [0.5, 0.5])[0]);
+    expect(at(140, [1.5, 0.5])).toEqual(at(140, [0.5, 0.5]));
+    // Strong: solid.
+    expect(at(250, [1.5, 1.5])).toEqual(at(250, [0.5, 0.5]));
+    expect(at(250, [1.2, 0])).toEqual(at(250, [0.2, 0]));
+    // Still the weak colour where darkened: red, not some other class's colour.
+    const dark = at(60, [1.2, 0]);
+    expect(dark[0]).toBeGreaterThan(2 * Math.max(dark[1], dark[2]));
+  });
+
   it("colours data age by bucket and stripes where a later date has evidence", () => {
     const white = [1, 1, 1, 1] as const;
     close(cellViewColor("data-age", [1, 0], white), AGE_RAMP[0]);

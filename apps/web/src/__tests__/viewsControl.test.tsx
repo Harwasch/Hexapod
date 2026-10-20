@@ -71,6 +71,10 @@ describe("under CesiumJS", () => {
     expect(screen.getByTestId("cell-legend")).toHaveTextContent(
       /Weak: score under 128 \(under half its splats pass the capture checks\), or unseen.*Fair: score 128–191.*Strong: score 192–255.*No evidence.*weak-v1/,
     );
+    // Each class has a pattern of its own besides its colour, as the scan draws it.
+    const legend = screen.getByTestId("cell-legend");
+    expect(legend.querySelectorAll(".cell-legend__swatch--hatched")).toHaveLength(1);
+    expect(legend.querySelectorAll(".cell-legend__swatch--dotted")).toHaveLength(1);
     // The thresholds are the grid's own.
     report({ kind: "ready", mode: "confidence", weakBelow: 100 });
     expect(screen.getByTestId("cell-legend")).toHaveTextContent(

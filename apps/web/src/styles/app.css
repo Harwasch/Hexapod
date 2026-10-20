@@ -2424,6 +2424,20 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   ) !important;
 }
 
+/* Confidence's own patterns, as the shader draws them: weak hatched dark, fair dotted dark. */
+.cell-legend__swatch--hatched {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(0, 0, 0, 0.45) 0 2px,
+    transparent 2px 4px
+  ) !important;
+}
+
+.cell-legend__swatch--dotted {
+  background-image: radial-gradient(rgba(0, 0, 0, 0.5) 32%, transparent 36%) !important;
+  background-size: 5px 5px !important;
+}
+
 .cell-legend__state,
 .cell-legend__policy {
   margin: 0;

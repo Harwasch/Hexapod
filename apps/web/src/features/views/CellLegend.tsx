@@ -3,11 +3,15 @@ import { AGE_RAMP, CONFIDENCE_RAMP, rampCss } from "@/lib/cellRamps";
 import { AGE_BUCKETS } from "@/lib/dataAge";
 import type { CellViewReport, ViewMode } from "@/state/viewMode";
 
-function Swatch({ color, striped = false }: { color: string; striped?: boolean }) {
+/**
+ * A key colour, with the pattern the scan draws over it: Data age's light "newer" stripes, or
+ * Confidence's dark hatching (weak) and dots (fair) -- so the key reads without colour too.
+ */
+function Swatch({ color, pattern }: { color: string; pattern?: "striped" | "hatched" | "dotted" }) {
   return (
     <span
       className={
-        striped ? "cell-legend__swatch cell-legend__swatch--striped" : "cell-legend__swatch"
+        pattern ? `cell-legend__swatch cell-legend__swatch--${pattern}` : "cell-legend__swatch"
       }
       style={{ background: color }}
       aria-hidden="true"
@@ -26,11 +30,11 @@ function ConfidenceKey({ weakBelow }: { weakBelow: number }) {
   return (
     <ul className="cell-legend__rows">
       <li>
-        <Swatch color={rampCss(CONFIDENCE_RAMP[1] ?? [1, 0, 0])} />
+        <Swatch color={rampCss(CONFIDENCE_RAMP[1] ?? [1, 0, 0])} pattern="hatched" />
         Weak: score under {weakBelow} (under half its splats pass the capture checks), or unseen
       </li>
       <li>
-        <Swatch color={rampCss(CONFIDENCE_RAMP[3] ?? [1, 1, 0])} />
+        <Swatch color={rampCss(CONFIDENCE_RAMP[3] ?? [1, 1, 0])} pattern="dotted" />
         Fair: score {weakBelow}–{strong - 1}
       </li>
       <li>
@@ -68,7 +72,7 @@ function AgeKey({ report }: { report: Extract<CellViewReport, { kind: "ready" }>
         )}
       </li>
       <li data-testid="cell-legend-newer">
-        <Swatch color={GREY} striped />
+        <Swatch color={GREY} pattern="striped" />
         {!newer || newer.dates === 0
           ? "No later date of this site"
           : newer.cells > 0
