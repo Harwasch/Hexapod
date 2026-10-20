@@ -23,7 +23,7 @@ from datetime import datetime
 from typing import Any
 
 from geoalchemy2 import WKBElement
-from sqlalchemy import func, select
+from sqlalchemy import String, cast, func, select
 from sqlalchemy.orm import Session
 
 from app.models import Asset, Capture, Epoch, Site, SiteFrame
@@ -174,13 +174,22 @@ def utm_epsg(lat: float, lon: float) -> int:
 def platform_of(capture: Capture) -> EpochPlatform:
     """What captured it, as far as is known before M3 reads XMP and RTK: a phone-key
     upload is a phone video, everything else is `unknown`."""
-    # Imported here: the phone routes import the services, not the other way round.
-    from app.api.v1.phone import ORIGIN as PHONE_ORIGIN
-
-    metadata: dict[str, Any] = capture.metadata_ or {}
-    if metadata.get("origin") == PHONE_ORIGIN:
+    if is_phone_capture(capture):
         return EpochPlatform.PHONE_VIDEO
     return EpochPlatform.UNKNOWN
+
+
+def _phone_origin() -> str:
+    # Imported here: the phone routes import the services, not the other way round.
+    from app.api.v1.phone import ORIGIN
+
+    return ORIGIN
+
+
+def is_phone_capture(capture: Capture) -> bool:
+    """A capture the phone key started (`metadata.origin`, `phone.ORIGIN`)."""
+    metadata: dict[str, Any] = capture.metadata_ or {}
+    return bool(metadata.get("origin") == _phone_origin())
 
 
 # ── Which frame a run is placed in (decided before it starts) ─────────────────────────────
@@ -256,20 +265,35 @@ def _point(lat: float, lon: float) -> Any:
 
 
 def nearest_framed_site(
-    db: Session, lat: float, lon: float, *, buffer_m: float = SPATIAL_JOIN_BUFFER_M
+    db: Session,
+    lat: float,
+    lon: float,
+    *,
+    buffer_m: float = SPATIAL_JOIN_BUFFER_M,
+    phone_made_only: bool = False,
 ) -> Site | None:
     """The framed site whose boundary is within `buffer_m` of (lat, lon), nearest first.
 
-    Only sites with a frame: a legacy site has no origin to place a new epoch about.
+    Only sites with a frame: a legacy site has no origin to place a new epoch about. With
+    `phone_made_only`, only sites a phone-key capture made (`metadata.captureId` naming
+    one): the rule `phone._check_phone_site` holds a phone capture that names its site to,
+    so the key cannot reach by standing in a site what it may not reach by naming it.
     """
     point = func.geography(_point(lat, lon))
     boundary = func.geography(Site.boundary)
-    return db.scalars(
+    statement = (
         select(Site)
         .join(SiteFrame, SiteFrame.site_id == Site.id)
         .where(func.ST_DWithin(boundary, point, buffer_m))
-        .order_by(func.ST_Distance(boundary, point), Site.created_at, Site.id)
-        .limit(1)
+    )
+    if phone_made_only:
+        maker = select(Capture.id).where(
+            cast(Capture.id, String) == Site.metadata_["captureId"].as_string(),
+            Capture.metadata_["origin"].as_string() == _phone_origin(),
+        )
+        statement = statement.where(maker.exists())
+    return db.scalars(
+        statement.order_by(func.ST_Distance(boundary, point), Site.created_at, Site.id).limit(1)
     ).first()
 
 
@@ -316,7 +340,8 @@ def frame_for_run(
        is then that site's first epoch and defines it;
     4. the run has a located point (`located`, `worker/params.located_point`: a typed
        place in the job's params, else the capture's `metadata.lat`/`lon`): the nearest
-       framed site within `SPATIAL_JOIN_BUFFER_M`;
+       framed site within `SPATIAL_JOIN_BUFFER_M` -- for a phone-key capture, the nearest
+       such site a phone capture made, as when it names one;
     5. none: the run makes a new site and frame.
 
     Decided before the run starts, because the pipeline places the capture in it. A
@@ -338,5 +363,5 @@ def frame_for_run(
         lat, lon = _number(located[0]), _number(located[1])
     if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return None
-    site = nearest_framed_site(db, lat, lon)
+    site = nearest_framed_site(db, lat, lon, phone_made_only=is_phone_capture(capture))
     return _frame_of(db, site.id) if site is not None else None
