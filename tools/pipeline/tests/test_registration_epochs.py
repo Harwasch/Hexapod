@@ -27,6 +27,7 @@ import colmap4
 import exif
 import global_sfm
 import registration_scene as scene
+import sfm
 
 pytestmark = pytest.mark.skipif(
     colmap4.version(colmap4.python()) is None,
@@ -113,8 +114,10 @@ def test_the_phone_epoch_aligns_visually_at_the_coarse_tier(
     assert rmse is not None and rmse <= a["uncertaintyM"]
     # Aligning beat what its GPS point alone was worth.
     assert a["uncertaintyM"] < epoch.georef["uncertaintyM"]
-    # GNSS checks it, never decides it: the cameras' centroid against the located point
-    # is the offset that was written into the clip, to within three sigma of the claim.
+    # GNSS checks it, never decides it: the posed cameras' centroid against the located
+    # point is, in truth, the distance from the location written into the clip to those
+    # same cameras' true centroid (not the orbit's centre: a camera pose dropped moves
+    # the centroid), to within three sigma of the claim.
     check = a["gnssCheck"]
     assert check["kind"] == "located-point"
     meta = json.loads(epoch.path("normalize", "source_meta.json").read_text())
@@ -122,9 +125,13 @@ def test_the_phone_epoch_aligns_visually_at_the_coarse_tier(
         [exif.Fix(name="p", lat=meta["location"]["lat"], lon=meta["location"]["lon"])],
         epoch.origin,
     )["p"]
-    orbit_centre = exif.reframe_enu(np.zeros(3), scene.ORIGIN, epoch.origin)
-    truth = float(np.hypot(written[0] - orbit_centre[0], written[1] - orbit_centre[1]))
-    assert truth == pytest.approx(scene.gnss_offset_truth(), abs=0.2)  # 6-decimal ISO 6709
+    posed = [image.name for image in sfm.read_model(epoch.path("pose", "poses")).images]
+    rendered = epoch.truth.by_name()
+    centroid = exif.reframe_enu(
+        np.stack([rendered[epoch.kept[name]].centre for name in posed]), scene.ORIGIN,
+        epoch.origin,
+    ).mean(axis=0)  # fmt: skip
+    truth = float(np.hypot(written[0] - centroid[0], written[1] - centroid[1]))
     bound = SIGMA_K * math.sqrt(2.0) * a["uncertaintyM"]
     assert abs(check["horizontalOffsetM"] - truth) <= bound, (check, truth, bound)
 
