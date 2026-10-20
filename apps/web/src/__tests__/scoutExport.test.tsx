@@ -109,6 +109,30 @@ it("still exports a straight-down capture", () => {
   expect(screen.getByTestId("scout-download")).toBeInTheDocument();
 });
 
+it("offers no download for a route with an area it could not plan, and says which", () => {
+  const tiny = {
+    ...patch,
+    id: "A-02",
+    name: "Weak area 2",
+    footprint: {
+      type: "Polygon",
+      coordinates: [
+        [
+          [-120.03, 34.695],
+          [-120.02995, 34.695],
+          [-120.02995, 34.69505],
+          [-120.03, 34.69505],
+          [-120.03, 34.695],
+        ],
+      ],
+    },
+  } as unknown as Zone;
+  card([patch, tiny]);
+  expect(screen.getByTestId("scout-unsupported")).toHaveTextContent("Weak area 2: no lane fits");
+  expect(screen.queryByTestId("scout-download")).toBeNull();
+  expect(screen.queryByTestId("scout-facts")).toBeNull();
+});
+
 describe("drone missions behind their flag", () => {
   it("with the flag on, loads the drone card and its download", async () => {
     render(

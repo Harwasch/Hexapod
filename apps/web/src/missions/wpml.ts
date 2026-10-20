@@ -323,6 +323,9 @@ export function buildScoutKmz(
   scout: Scout,
   createdAt: Date = new Date(),
 ): Uint8Array {
+  // Never a KMZ with nothing to fly (the card refuses first: `routeRefusal`).
+  if (!waylines.some((w) => w.waypoints.length >= 2))
+    throw new Error("Nothing to fly: the route has no waypoints.");
   const encoder = new TextEncoder();
   return zipStore(
     [

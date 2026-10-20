@@ -411,7 +411,7 @@ export function scoutPasses(footprint: Footprint, scout: Scout): CoverageLane[] 
 }
 
 /** An area's lane sets: the lanes the map draws, and for an oblique a crossing set as well. */
-function laneSets(footprint: Footprint, scout: Scout): [CoverageLane[], CoverageLane[]] {
+export function laneSets(footprint: Footprint, scout: Scout): [CoverageLane[], CoverageLane[]] {
   const swathM = scoutGeometry(scout).lineSpacingM;
   const first = footprintLanes(footprint, {
     swathM,

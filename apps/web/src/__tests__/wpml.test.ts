@@ -166,6 +166,16 @@ describe("DJI WPML scout route", () => {
     expect(escapeXml(`<a & "b">`)).toBe("&lt;a &amp; &quot;b&quot;&gt;");
   });
 
+  it("writes no KMZ for an empty route", () => {
+    expect(() => buildScoutKmz([], DEFAULT_SCOUT)).toThrow("Nothing to fly");
+    expect(() =>
+      buildScoutKmz(
+        [{ waypoints: [], gimbalPitchDeg: -90, poi: null, photos: "lanes" }],
+        DEFAULT_SCOUT,
+      ),
+    ).toThrow("Nothing to fly");
+  });
+
   it("zips template and waylines under wpmz/", () => {
     const kmz = buildScoutKmz(routes, DEFAULT_SCOUT, new Date(2026, 9, 16));
     const names = new TextDecoder().decode(kmz);

@@ -22,6 +22,7 @@ import {
   waylineStats,
   type Relief,
 } from "@/missions/scout";
+import { routeRefusal } from "@/missions/flightLimits";
 import type { Zone } from "@/missions/types";
 import { useLand } from "@/state/land";
 
@@ -166,7 +167,12 @@ export function DroneScoutExport({
         : "unknown";
   const [error, setError] = useState<string | null>(null);
   if (!first) return null;
-  const refusal = kmzRefusal(scouts);
+  // Whole or not at all: a pattern it cannot fly, or an area it could not plan.
+  const refusal =
+    kmzRefusal(scouts) ??
+    routeRefusal(
+      scouts.map((z) => ({ name: z.name, footprint: z.footprint, scout: scoutOf(z.scout) })),
+    );
   const camera = SCOUT_CAMERAS[scout.camera];
   const download = () => {
     setError(null);
