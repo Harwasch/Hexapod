@@ -11,6 +11,7 @@ import { useScene } from "@/cesium/SceneContext";
 import {
   kmzRefusal,
   reliefFrom,
+  reliefOutlines,
   reliefPoints,
   SCOUT_ALTITUDES_M,
   SCOUT_CAMERAS,
@@ -126,9 +127,9 @@ function km(metres: number): string {
  * detail, line and photo spacing), the route's length, time and batteries, the relief under
  * it from the 3D surface, and the warnings that go with flying it. `zones` come in the order
  * the map routes them (`scoutZonesInOrder`), and each is flown as its own capture's pattern
- * asks (`scoutWaylines`: a nadir area's lanes exactly as `MissionManager.showPlan` draws them,
- * a re-scan's crossing obliques or orbit as the export flies them, and the route's length,
- * time and photos with them); the route is one capture, so areas whose
+ * asks (`scoutWaylines`: nadir lanes, a re-scan's crossing obliques or orbit, exactly the
+ * passes `MissionManager.showPlan` draws, and the route's length, time and photos with them);
+ * the route is one capture, so areas whose
  * heights or overlaps differ are not exported together. The plan card's machine-hours come
  * from the planner flying the same capture. `onAltitude` (a draft) changes the patches'
  * height; an approved plan exports what it stored.
@@ -167,11 +168,11 @@ function DroneScoutExport({
   // What the KMZ flies, area by area as its pattern asks: a nadir area the lanes the map
   // draws, an oblique re-scan those and a crossing set, an orbit its rings (a few hundred
   // waypoints at most: cheap per render).
-  const waylines = scoutWaylines(
-    scouts.map((z) => ({ footprint: z.footprint, scout: scoutOf(z.scout) })),
-  );
+  const areas = scouts.map((z) => ({ footprint: z.footprint, scout: scoutOf(z.scout) }));
+  const waylines = scoutWaylines(areas);
   const stats = waylineStats(waylines, scout);
-  const samples = useReliefSamples(scouts.map((z) => z.footprint));
+  // The ground under the areas and under any orbit, which flies outside its area.
+  const samples = useReliefSamples(reliefOutlines(areas));
   const firstWaypoint = waylines[0]?.waypoints[0] ?? null;
   const relief =
     samples === null || samples === "unknown"

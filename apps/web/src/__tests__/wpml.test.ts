@@ -1,11 +1,11 @@
 import type { Footprint } from "@twin/contracts";
 import {
   bearing,
-  boundingRadiusM,
   boundsOf,
   centerOf,
   destination,
   haversineDistance,
+  laneStrokes,
 } from "@twin/geo";
 import { describe, expect, it } from "vitest";
 
@@ -13,13 +13,16 @@ import {
   DEFAULT_SCOUT,
   MAX_ALTITUDE_M,
   ORBIT_MIN_STANDOFF_M,
-  ORBIT_POINTS,
+  ORBIT_STEP_DEG,
   ORBIT_RINGS,
+  orbitRing,
   orbitStandoffM,
+  reliefOutlines,
   routeStats,
   SCOUT_ALTITUDES_M,
   scoutGeometry,
   scoutLanes,
+  scoutPasses,
   scoutWaylines,
   waylineStats,
   type Scout,
@@ -233,13 +236,14 @@ describe("DJI WPML re-scan patterns", () => {
     expect(rest).toEqual([]);
     if (!orbit?.poi) throw new Error("no orbit");
     expect(orbit.poi).toEqual(centerOf(second));
-    // Two closed rings of 15° steps, at the stand-off where the pitched camera meets the ground.
-    expect(orbit.waypoints).toHaveLength(ORBIT_RINGS * ORBIT_POINTS + 1);
+    // Two closed rings round the outline at the stand-off where the pitched camera meets the
+    // ground, as the planner sizes it (its convex hull grown by the stand-off).
     const standoff = scoutGeometry(scout).altitudeM / Math.tan(Math.PI / 6);
     expect(orbitStandoffM(scout)).toBeCloseTo(standoff, 6);
-    const radius = boundingRadiusM(second) + standoff;
-    for (const p of orbit.waypoints) expect(haversineDistance(orbit.poi, p)).toBeCloseTo(radius, 0);
-    expect(orbit.waypoints.at(-1)?.longitude).toBeCloseTo(orbit.waypoints[0]?.longitude ?? 0, 9);
+    const ring = orbitRing(second, scout);
+    expect(orbit.waypoints).toEqual([...ring, ...ring, ring[0]]);
+    expect(ORBIT_RINGS).toBe(2);
+    for (const p of ring) expect(outlineDistanceM(second, p)).toBeCloseTo(standoff, 0);
     // Straight down, an orbit still keeps its distance (the planner's 5 m floor).
     expect(orbitStandoffM(rescan("orbit", -90))).toBe(ORBIT_MIN_STANDOFF_M);
 
@@ -296,10 +300,10 @@ describe("DJI WPML re-scan patterns", () => {
     const orbit = rescan("orbit", -30);
     const ring = scoutWaylines([{ footprint: second, scout: orbit }]);
     const stats = waylineStats(ring, orbit);
-    const radius = boundingRadiusM(second) + orbitStandoffM(orbit);
-    // Two rings of a 24-gon, all of it photographed, nothing in transit.
-    const perimeter = 2 * ORBIT_POINTS * radius * Math.sin(Math.PI / ORBIT_POINTS);
-    expect(stats.workingM).toBeCloseTo(ORBIT_RINGS * perimeter, -1);
+    // Two rings, all of it photographed, nothing in transit: the planner's ring length (the
+    // outline's convex hull grown by the stand-off: its perimeter plus a circle) twice.
+    const perimeter = 2 * (200 + 100) + 2 * Math.PI * orbitStandoffM(orbit);
+    expect(Math.abs(stats.workingM / (ORBIT_RINGS * perimeter) - 1)).toBeLessThan(0.01);
     expect(stats.transitM).toBe(0);
     expect(stats.photos).toBe(Math.floor(stats.workingM / scoutGeometry(orbit).photoSpacingM) + 1);
     // A fog scout's numbers are routeStats' over the same lanes.
@@ -333,4 +337,104 @@ describe("DJI WPML re-scan patterns", () => {
       expect(ids).toEqual(ids.map((_, i) => i));
     }
   });
+
+  it("orbits a long strip along its sides, not round a circle past its ends", () => {
+    // 200 m by 20 m: a circle round its corners would aim the camera ~90 m off the long sides.
+    const strip: Footprint = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [e(0), n(0)],
+          [e(200), n(0)],
+          [e(200), n(20)],
+          [e(0), n(20)],
+          [e(0), n(0)],
+        ],
+      ],
+    };
+    const scout = rescan("orbit", -30);
+    const ring = orbitRing(strip, scout);
+    const standoff = orbitStandoffM(scout);
+    for (const p of ring) expect(Math.abs(outlineDistanceM(strip, p) - standoff)).toBeLessThan(1);
+    const length = ring.reduce(
+      (sum, p, i) => sum + haversineDistance(p, ring[(i + 1) % ring.length] ?? p),
+      0,
+    );
+    const planner = 2 * (200 + 20) + 2 * Math.PI * standoff;
+    expect(Math.abs(length / planner - 1)).toBeLessThan(0.01);
+    // A single point still gets a ring round it.
+    const dot: Footprint = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [e(5), n(5)],
+          [e(5), n(5)],
+          [e(5), n(5)],
+          [e(5), n(5)],
+        ],
+      ],
+    };
+    const round = orbitRing(dot, rescan("orbit", -90));
+    expect(round.length).toBe(360 / ORBIT_STEP_DEG);
+    for (const p of round)
+      expect(haversineDistance({ longitude: e(5), latitude: n(5) }, p)).toBeCloseTo(
+        ORBIT_MIN_STANDOFF_M,
+        1,
+      );
+  });
+
+  it("draws on the map what the export flies", () => {
+    expect(scoutPasses(second, DEFAULT_SCOUT)).toEqual(scoutLanes(second, DEFAULT_SCOUT));
+    const oblique = rescan("oblique", -45);
+    const [along, across] = scoutWaylines([{ footprint: second, scout: oblique }]);
+    const passes = scoutPasses(second, oblique);
+    expect(passes.flatMap((l) => [l.a, l.b])).toEqual([
+      ...(along?.waypoints ?? []),
+      ...(across?.waypoints ?? []),
+    ]);
+    // The two sets are drawn apart: no stroke joins the last lane of one to the next set.
+    expect(laneStrokes(passes).length).toBeGreaterThanOrEqual(2);
+    const orbit = rescan("orbit", -30);
+    const ring = orbitRing(second, orbit);
+    const drawn = scoutPasses(second, orbit);
+    expect(drawn).toHaveLength(ring.length);
+    expect(laneStrokes(drawn)).toEqual([
+      [...ring.flatMap((p, i) => [p, ring[(i + 1) % ring.length]])],
+    ]);
+  });
+
+  it("samples the ground an orbit flies over, not only inside the outline", () => {
+    const orbit = rescan("orbit", -30);
+    const outlines = reliefOutlines([
+      { footprint: holed, scout: DEFAULT_SCOUT },
+      { footprint: second, scout: orbit },
+    ]);
+    expect(outlines.slice(0, 2)).toEqual([holed, second]);
+    const ring = orbitRing(second, orbit);
+    expect(outlines[2]).toEqual({
+      type: "Polygon",
+      coordinates: [[...ring, ring[0]].map((p) => [p?.longitude ?? 0, p?.latitude ?? 0])],
+    });
+    expect(outlines).toHaveLength(3);
+  });
 });
+
+/** Metres from `p` to the nearest edge of `footprint`'s outer ring (flat, about `p`). */
+function outlineDistanceM(footprint: Footprint, p: { longitude: number; latitude: number }) {
+  const kx = 111_320 * Math.cos((p.latitude * Math.PI) / 180);
+  const ring = (footprint.type === "Polygon" ? footprint.coordinates[0] : []) ?? [];
+  const xy = ring.map(([lon, lat]) => [
+    ((lon ?? 0) - p.longitude) * kx,
+    ((lat ?? 0) - p.latitude) * 111_320,
+  ]);
+  let best = Infinity;
+  for (let i = 1; i < xy.length; i++) {
+    const [ax = 0, ay = 0] = xy[i - 1] ?? [];
+    const [bx = 0, by = 0] = xy[i] ?? [];
+    const dx = bx - ax;
+    const dy = by - ay;
+    const t = dx || dy ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / (dx * dx + dy * dy))) : 0;
+    best = Math.min(best, Math.hypot(ax + t * dx, ay + t * dy));
+  }
+  return best;
+}

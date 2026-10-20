@@ -17,7 +17,6 @@
 import type { Footprint, ScoutCapture } from "@twin/contracts";
 import {
   bearing,
-  boundingRadiusM,
   boundsOf,
   centerOf,
   destination,
@@ -303,8 +302,8 @@ export function routeStats(routes: readonly CoverageLane[][], scout: Scout): Rou
 export const ORBIT_RINGS = 2;
 /** Nearer than this an orbit is not flown (`planner.ORBIT_MIN_STANDOFF_M`), metres. */
 export const ORBIT_MIN_STANDOFF_M = 5;
-/** Waypoints on one ring, 15° apart. */
-export const ORBIT_POINTS = 24;
+/** Most an orbit's heading turns between two waypoints round a corner: 15°. */
+export const ORBIT_STEP_DEG = 15;
 
 /**
  * One executable route of the export (a WPML wayline): waypoints in flying order, the camera
@@ -331,14 +330,128 @@ export function orbitStandoffM(scout: Scout): number {
 
 const ends = (lanes: readonly CoverageLane[]): LonLat[] => lanes.flatMap((l) => [l.a, l.b]);
 
+type Xy = [number, number];
+const cross = (o: Xy, a: Xy, b: Xy) =>
+  (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+
+/** The convex hull of `points`, counter-clockwise, no repeats (monotone chain). */
+function convexHull(points: readonly Xy[]): Xy[] {
+  const sorted = [...points]
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1])
+    .filter((p, i, all) => i === 0 || p[0] !== all[i - 1]?.[0] || p[1] !== all[i - 1]?.[1]);
+  if (sorted.length < 3) return sorted;
+  const half = (list: readonly Xy[]) => {
+    const out: Xy[] = [];
+    for (const p of list) {
+      while (out.length >= 2 && cross(out[out.length - 2] ?? p, out[out.length - 1] ?? p, p) <= 0)
+        out.pop();
+      out.push(p);
+    }
+    return out.slice(0, -1);
+  };
+  return [...half(sorted), ...half([...sorted].reverse())];
+}
+
+/**
+ * One orbit ring: the outline's convex hull grown by `orbitStandoffM` (the ring the planner
+ * sizes, `coverage.orbit_length_m`), its straight sides parallel to the hull's and its corners
+ * arcs in steps of at most `ORBIT_STEP_DEG`. Worked flat about the outline's bounds centre (a
+ * field is small enough), counter-clockwise, not closed. Empty for an empty outline.
+ */
+export function orbitRing(footprint: Footprint, scout: Scout): LonLat[] {
+  const centre = centerOf(footprint);
+  const ky = 111_320;
+  const kx = ky * Math.cos((centre.latitude * Math.PI) / 180);
+  const points = outerRings(footprint).flatMap((ring) =>
+    ring.map(([lon = 0, lat = 0]): Xy => [
+      (lon - centre.longitude) * kx,
+      (lat - centre.latitude) * ky,
+    ]),
+  );
+  if (points.length === 0) return [];
+  const hull = convexHull(points);
+  const r = orbitStandoffM(scout);
+  const step = (ORBIT_STEP_DEG * Math.PI) / 180;
+  const ring: LonLat[] = [];
+  const at = ([x, y]: Xy, a: number) =>
+    ring.push({
+      longitude: centre.longitude + (x + r * Math.cos(a)) / kx,
+      latitude: centre.latitude + (y + r * Math.sin(a)) / ky,
+    });
+  hull.forEach((p, i) => {
+    const n = hull.length;
+    const prev = hull[(i + n - 1) % n] ?? p;
+    const next = hull[(i + 1) % n] ?? p;
+    // Outward normals of the sides in and out of this corner (a point: all the way round).
+    const from = n > 1 ? Math.atan2(p[1] - prev[1], p[0] - prev[0]) - Math.PI / 2 : 0;
+    let to = n > 1 ? Math.atan2(next[1] - p[1], next[0] - p[0]) - Math.PI / 2 : 2 * Math.PI;
+    while (to < from - 1e-12) to += 2 * Math.PI;
+    for (let a = from; a < to - 1e-9; a += step) at(p, a);
+    if (n > 1) at(p, to);
+  });
+  return ring;
+}
+
+/**
+ * The passes of a scout area as the map draws them, which are what the export flies: nadir
+ * lanes; an oblique's lanes then its crossing set (a pass number apart, so the two are drawn
+ * as separate strokes); one orbit ring as consecutive legs (one stroke round).
+ */
+export function scoutPasses(footprint: Footprint, scout: Scout): CoverageLane[] {
+  if (scout.pattern === "orbit") {
+    const ring = orbitRing(footprint, scout);
+    return ring.map((a, pass) => {
+      const b = ring[(pass + 1) % ring.length] ?? a;
+      return { pass, a, b, lengthM: haversineDistance(a, b) };
+    });
+  }
+  const [first, crossing] = laneSets(footprint, scout);
+  const gap = (first.at(-1)?.pass ?? 0) + 2;
+  return [...first, ...crossing.map((lane) => ({ ...lane, pass: lane.pass + gap }))];
+}
+
+/** An area's lane sets: the lanes the map draws, and for an oblique a crossing set as well. */
+function laneSets(footprint: Footprint, scout: Scout): [CoverageLane[], CoverageLane[]] {
+  const swathM = scoutGeometry(scout).lineSpacingM;
+  const first = footprintLanes(footprint, {
+    swathM,
+    ...(scout.headingDeg !== null ? { headingDeg: scout.headingDeg } : {}),
+  });
+  if (scout.pattern !== "oblique") return [first.lanes, []];
+  const crossing = footprintLanes(footprint, { swathM, headingDeg: (first.headingDeg + 90) % 360 });
+  return [first.lanes, crossing.lanes];
+}
+
+/**
+ * The outlines whose ground the relief check samples: every area's, and each orbit's ring,
+ * which flies outside its area.
+ */
+export function reliefOutlines(
+  areas: readonly { footprint: Footprint; scout: Scout }[],
+): Footprint[] {
+  const rings = areas.flatMap(({ footprint, scout }) => {
+    const ring = scout.pattern === "orbit" ? orbitRing(footprint, scout) : [];
+    const first = ring[0];
+    return first
+      ? [
+          {
+            type: "Polygon" as const,
+            coordinates: [[...ring, first].map((p) => [p.longitude, p.latitude])],
+          },
+        ]
+      : [];
+  });
+  return [...areas.map((a) => a.footprint), ...rings];
+}
+
 /**
  * The waylines that fly scout areas in order, each as its capture's pattern asks:
  * - nadir: the lanes the map draws, camera straight down; consecutive nadir areas share one
  *   wayline, so a fog scout is the one route it always was;
  * - oblique: those lanes and a crossing set at right angles, two waylines, the camera at the
  *   capture's pitch facing along each lane (four view directions in all);
- * - orbit: `ORBIT_RINGS` rings of `ORBIT_POINTS` waypoints round the outline's bounds centre,
- *   `orbitStandoffM` beyond its farthest corner, the nose on the centre.
+ * - orbit: `ORBIT_RINGS` laps of its `orbitRing`, closed, the nose on the outline's bounds
+ *   centre.
  */
 export function scoutWaylines(
   areas: readonly { footprint: Footprint; scout: Scout }[],
@@ -349,26 +462,21 @@ export function scoutWaylines(
     const { pattern, gimbalPitchDeg } = scout;
     if (pattern === "orbit") {
       nadir = null;
+      const ring = orbitRing(footprint, scout);
+      const laps = Array.from({ length: ORBIT_RINGS }, () => ring).flat();
       const poi = centerOf(footprint);
-      const radiusM = boundingRadiusM(footprint) + orbitStandoffM(scout);
-      const waypoints: LonLat[] = [];
-      for (let k = 0; k <= ORBIT_RINGS * ORBIT_POINTS; k++)
-        waypoints.push(destination(poi, ((k % ORBIT_POINTS) * 360) / ORBIT_POINTS, radiusM));
-      waylines.push({ waypoints, gimbalPitchDeg, poi, photos: "along" });
+      waylines.push({
+        waypoints: [...laps, ...ring.slice(0, 1)],
+        gimbalPitchDeg,
+        poi,
+        photos: "along",
+      });
       continue;
     }
-    const swathM = scoutGeometry(scout).lineSpacingM;
-    const first = footprintLanes(footprint, {
-      swathM,
-      ...(scout.headingDeg !== null ? { headingDeg: scout.headingDeg } : {}),
-    });
+    const [first, crossing] = laneSets(footprint, scout);
     if (pattern === "oblique") {
       nadir = null;
-      const crossing = footprintLanes(footprint, {
-        swathM,
-        headingDeg: (first.headingDeg + 90) % 360,
-      });
-      for (const lanes of [first.lanes, crossing.lanes])
+      for (const lanes of [first, crossing])
         waylines.push({ waypoints: ends(lanes), gimbalPitchDeg, poi: null, photos: "lanes" });
       continue;
     }
@@ -376,7 +484,7 @@ export function scoutWaylines(
       nadir = { waypoints: [], gimbalPitchDeg: -90, poi: null, photos: "lanes" };
       waylines.push(nadir);
     }
-    nadir.waypoints.push(...ends(first.lanes));
+    nadir.waypoints.push(...ends(first));
   }
   return waylines.filter((w) => w.waypoints.length >= 2);
 }

@@ -33,7 +33,7 @@ import {
 import type { Emitter } from "@/lib/emitter";
 import { eyeOf, frameGround, projectGroundPoints, viewportOptions } from "@/missions/framing";
 import { PREVIEW_MAX_PASSES, PREVIEW_SWATH_M } from "@/missions/preview";
-import { scoutLanes, scoutOf } from "@/missions/scout";
+import { scoutOf, scoutPasses } from "@/missions/scout";
 import { siteAnchor } from "@/missions/sitePin";
 import type { LonLat, Machine, PlanOverlay, Project, Zone } from "@/missions/types";
 
@@ -378,7 +378,8 @@ export class MissionManager {
       const all: CoverageLane[] = line
         ? []
         : scout
-          ? scoutLanes(zone.footprint, scout)
+          ? // What the export flies: an oblique's crossing set and an orbit's ring too.
+            scoutPasses(zone.footprint, scout)
           : footprintLanes(zone.footprint, {
               swathM: PREVIEW_SWATH_M,
               maxPasses: PREVIEW_MAX_PASSES,
