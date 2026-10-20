@@ -55,3 +55,13 @@ export function formatValue(value: unknown): string {
   if (typeof value === "string") return value;
   return JSON.stringify(value) ?? "—";
 }
+
+const M2_PER_ACRE = 4046.856;
+
+/** An outline's area as people read it: acres, and hectares beside them. */
+export function areaLabel(areaM2: number | null): string {
+  if (areaM2 === null) return "—";
+  const acres = areaM2 / M2_PER_ACRE;
+  const shown = acres >= 100 ? acres.toFixed(0) : acres >= 1 ? acres.toFixed(1) : acres.toFixed(2);
+  return `${shown} ac · ${(areaM2 / 1e4).toFixed(1)} ha`;
+}

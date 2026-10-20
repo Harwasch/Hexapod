@@ -65,9 +65,18 @@ export function isLandRequest(request: Request): boolean {
   );
 }
 
+/** Reads the write token gates because they hold contact details: the scan requests visitors
+ * send from the landing page (`GET /api/v1/scan-requests`, read in the admin console). */
+const PRIVATE_READS = ["/api/v1/scan-requests"];
+
+function isPrivateRead(request: Request): boolean {
+  const path = new URL(request.url).pathname;
+  return PRIVATE_READS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
 /** All private workspace requests carry identity, including reads. */
 function needsToken(request: Request): boolean {
-  return !SAFE_METHODS.has(request.method) || isLandRequest(request);
+  return !SAFE_METHODS.has(request.method) || isLandRequest(request) || isPrivateRead(request);
 }
 
 /**

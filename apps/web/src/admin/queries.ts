@@ -19,6 +19,7 @@ import type {
   Job,
   JobCreate,
   PipelineCatalogue,
+  ScanRequestRead,
   Site,
   SiteAsset,
   SiteSummary,
@@ -35,6 +36,7 @@ export const adminKeys = {
   recipes: ["admin", "recipes"] as const,
   sites: ["admin", "sites"] as const,
   assets: ["admin", "assets"] as const,
+  scanRequests: ["admin", "scan-requests"] as const,
 };
 
 /**
@@ -192,4 +194,20 @@ export function siteIndex(sites: SiteSummary[] | Site[] | undefined): Record<str
   const index: Record<string, string> = {};
   for (const site of sites ?? []) index[site.id] = site.name;
   return index;
+}
+
+/**
+ * Site scans visitors requested from the landing page, newest first. The list holds names and
+ * emails, so it needs the write token (the client sends it on this read; a 401 opens the
+ * console's token field).
+ */
+export function useScanRequests() {
+  return useQuery({
+    queryKey: adminKeys.scanRequests,
+    queryFn: () =>
+      unwrap<ScanRequestRead[]>(
+        api.GET("/api/v1/scan-requests", { params: { query: { limit: 200 } } }),
+      ),
+    refetchInterval: POLL_MS,
+  });
 }

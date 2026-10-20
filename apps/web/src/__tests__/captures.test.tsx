@@ -260,6 +260,17 @@ describe("the write token", () => {
       ),
     ).toBeNull();
   });
+
+  it("authenticates the scan-request list, which holds contact details", async () => {
+    useSettings.getState().set({ writeToken: "console-token" });
+    const onRequest = auth.onRequest as (input: {
+      request: Request;
+    }) => Promise<Request | undefined> | Request | undefined;
+    const request = new Request("https://api.invalid/api/v1/scan-requests?limit=200");
+    expect((await onRequest({ request }))?.headers.get("Authorization")).toBe(
+      "Bearer console-token",
+    );
+  });
   it("rides on writes, stays off reads, and is asked for only after a 401", async () => {
     useSettings.getState().set({ writeToken: "s3cret" });
     const read = new Request("https://api.invalid/api/v1/captures");
