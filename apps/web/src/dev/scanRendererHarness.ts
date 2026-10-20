@@ -47,6 +47,12 @@ export async function startScanRendererHarness(options: {
   rangeM: number;
   /** Render only on change, as the app does (scene manager); off by default. */
   requestRenderMode?: boolean;
+  /**
+   * Where to look, in the scan's own east/north/up metres (the root's frame): the camera looks
+   * at `root transform · target` from `rangeM`. The tileset's bounding-sphere centre when
+   * absent -- which for a scan kilometres across is nowhere in particular.
+   */
+  targetLocalM?: [number, number, number];
 }): Promise<ScanRendererHarness> {
   const widget = new CesiumWidget(options.container, {
     baseLayer: false,
@@ -70,10 +76,14 @@ export async function startScanRendererHarness(options: {
   const tileset = await createSiteTileset(asset, { maximumScreenSpaceError: 2 });
   tileset.show = true;
   scene.primitives.add(tileset);
-  camera.lookAt(
-    tileset.boundingSphere.center,
-    new HeadingPitchRange(0.4, CesiumMath.toRadians(-20), options.rangeM),
-  );
+  const target = options.targetLocalM
+    ? Matrix4.multiplyByPoint(
+        tileset.root.computedTransform,
+        Cartesian3.fromArray(options.targetLocalM),
+        new Cartesian3(),
+      )
+    : tileset.boundingSphere.center;
+  camera.lookAt(target, new HeadingPitchRange(0.4, CesiumMath.toRadians(-20), options.rangeM));
   camera.lookAtTransform(Matrix4.IDENTITY);
   const host = new ScanRendererHost(widget);
   const frame = (): Promise<void> => new Promise((done) => requestAnimationFrame(() => done()));
