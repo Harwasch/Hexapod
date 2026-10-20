@@ -10,7 +10,8 @@ the withdrawn ion sample mesh. Every NOTICE must name only files that exist besi
 
 Licence files (LICENSE, LICENCE, COPYING, NOTICE, COPYRIGHT, with or without an extension)
 are read as source wherever they are, generated-data directories included: that is where an
-asset's terms arrive. Lockfiles (`uv.lock`, `pnpm-lock.yaml`) are read as source text too.
+asset's terms arrive. The licences of installed packages are `scripts/dependency_licences.py`'s
+job; this scan reads only the repository's own files (lockfiles included, as text).
 
 A finding that is deliberate is listed in the allowlist (`scripts/licence_allowlist.json`):
 rule, exact path, a substring of the line, and why. An entry that matches nothing is stale
@@ -134,6 +135,10 @@ SELF = frozenset(
         "scripts/licence_allowlist.json",
         "scripts/tests/test_licence_scan.py",
         "tools/pipeline/tests/test_licence_scan.py",
+        "scripts/dependency_licences.py",
+        "scripts/dependency_licence_allowlist.json",
+        "scripts/tests/test_dependency_licences.py",
+        "apps/web/src/__tests__/dependencyLicences.test.ts",
     }
 )
 MAX_BYTES = 2 * 1024 * 1024

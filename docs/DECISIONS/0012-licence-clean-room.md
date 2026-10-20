@@ -169,7 +169,16 @@ merge never runs on it.
   `harmonics.py`, `experiments/benchmark.py`, the seed's `WITHDRAWN_SITES`, the Worlds catalogue
   or the research registry) must update `scripts/licence_allowlist.json` in the same commit: a
   stale entry fails the scan.
-- Dependency licences (Python wheels, npm packages) are not scanned yet.
+- **Dependency licences** are checked by `scripts/dependency_licences.py` (standard library):
+  the installed metadata (`License-Expression`, `License`, `License ::` classifiers) of every
+  package in the `tools/pipeline`, `tools/captures` and `apps/api` venvs, and
+  `pnpm licenses list --json --prod --recursive` for the workspace's production packages. A
+  non-commercial or undeclared licence fails unless `scripts/dependency_licence_allowlist.json`
+  lists it with a reason (empty today: 2026-10-20, 176 Python and 102 npm production packages,
+  none non-commercial; the API image's `modal` extra, 124 packages, also clean). CI runs it
+  through each project's own tests and, for pnpm, a web vitest test. Not covered: the Modal GPU
+  images and the Worlds worker images, which install third-party repositories and
+  `requirements*.lock` files outside these venvs.
 
 ## Appendix: the clean-room specifications
 
