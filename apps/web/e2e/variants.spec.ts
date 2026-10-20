@@ -2,7 +2,7 @@
  * Comparing methods on one scan (lib/variants.ts): the synthetic yard with the bake-off
  * fixture's variants (`data/tiles/synthetic-yard/variants/`, tools/captures/yard_variants.py)
  * declared on its root as a publish declares them, drawn as the app draws a scan
- * (src/dev/variantsHarness.ts) under PlayCanvas (the app's default), Spark and CesiumJS.
+ * (src/dev/variantsHarness.ts) under PlayCanvas, Spark and CesiumJS (the app's default).
  *
  * What must hold, with no reload and the camera where it is:
  *

@@ -13,8 +13,8 @@
  * them amber and dims the rest; and with the view-cone part in the same chain ("seen from
  * below only", seen from above) the scan still vanishes and comes back.
  *
- * The same holds under the app's default splat renderer, PlayCanvas over the globe
- * (cesium/scanView): there the ids come from each tile's checksum as PlayCanvas decodes it, and
+ * The same holds under PlayCanvas over the globe, the app's default splat renderer before
+ * CesiumJS (docs/DECISIONS/0020-cesium-default-renderer.md) and still a choice (cesium/scanView): there the ids come from each tile's checksum as PlayCanvas decodes it, and
  * a hidden splat loses its opacity in PlayCanvas's own work buffer (scanInstances.ts). The
  * `@webgpu` variant chooses the PlayCanvas WebGPU trial: the yard has objects, whose hide,
  * highlight and motion modifiers are GLSL only for now, so the trial draws it with WebGL2 --
@@ -306,7 +306,7 @@ test("the ids follow the splats in aggregated mode, at the app's screen-space er
 });
 
 const RENDERER_TITLES = {
-  playcanvas: "PlayCanvas, the app's default renderer",
+  playcanvas: "PlayCanvas over the globe",
   spark: "Spark",
   "playcanvas-webgpu": "the PlayCanvas WebGPU trial (WebGL2 for a scan with objects)",
 } as const;

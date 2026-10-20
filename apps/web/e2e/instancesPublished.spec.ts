@@ -10,8 +10,8 @@
  * `PUBLISHED_INSTANCES` names a directory of `<scan>.instances.json` served instead of the
  * published ones (`tools/captures/rebind_instances.py` output, before it is uploaded).
  *
- * `PUBLISHED_RENDERERS` picks the renderers (default `playcanvas`, the app's; also `cesium`,
- * `spark`). Per scan and renderer: the categories the panel lists, a category hidden from the
+ * `PUBLISHED_RENDERERS` picks the renderers (default `playcanvas`; also `cesium`, the app's
+ * default, and `spark`). Per scan and renderer: the categories the panel lists, a category hidden from the
  * panel's eye (what changed on screen, and the coverage), and highlighted by a click on its row.
  * Screenshots (scan and panel) go to `PUBLISHED_SHOTS`, else the test's output directory.
  */

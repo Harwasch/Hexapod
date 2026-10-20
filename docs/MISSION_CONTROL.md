@@ -159,8 +159,8 @@ labelled tools above the bar.
   (`MapCorner` moves CesiumJS's own credit container between the two places).
 - **Developer readouts** (altitude, scale band, metres per pixel, the world, the splat
   renderer) and the deployer's "Shared demo map key" note are behind Settings › Advanced ›
-  Show developer readouts, off by default. The splat renderer choice (PlayCanvas / Spark /
-  Cesium) is there too; the strip at a site keeps only Splat / Mesh / Points, and beside it
+  Show developer readouts, off by default. The splat renderer choice (CesiumJS, the default /
+  PlayCanvas / Spark) is there too; the strip at a site keeps only Splat / Mesh / Points, and beside it
   the model's load: "Loading 3D model 42%", or "Couldn't load the 3D model · Retry"
   (`features/sites/SiteLoadStatus`, from the site's load record `SiteManager` writes). The
   active site's failed model is said there only — no toast repeats it with the asset's file
