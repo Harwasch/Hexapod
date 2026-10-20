@@ -6,7 +6,7 @@
  * off while the rule is on; Data age joins W4a's colour part; a Living Survey rig ends it,
  * saying why; and letting go puts every primitive back as it was.
  */
-import { Event, Matrix4, type Cesium3DTileset } from "cesium";
+import { Cartesian3, Event, Matrix4, type Cesium3DTileset } from "cesium";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { setCompanions } from "@/cesium/companions";
@@ -17,6 +17,7 @@ import {
 } from "@/cesium/compositorSession";
 import type { CellViewGpu } from "@/cesium/splatCellView";
 import { colorChainOf } from "@/cesium/splatColor";
+import { ruledObjects } from "@/cesium/companions";
 import type { CompositorGpu } from "@/cesium/splatCompositor";
 import { addVisibilityPart, visibilityChainOf } from "@/cesium/splatVisibility";
 import { encodeConfidenceGrid } from "@/dev/cellGridFixture";
@@ -194,6 +195,26 @@ describe("a view rule's session", () => {
     expect(hostOf(june).drawnBy).toBeUndefined();
     expect(host.vertexVisibility).toBeUndefined();
     expect(useViewRule.getState().legend).toBeNull();
+  });
+
+  it("draws each date's split objects whole, from the date owning the cell under each", async () => {
+    const { march, june, handle, frame } = await harness();
+    await frame();
+    // Split objects are tilesets of their own beside their scan (splitObjects.ts): the host's
+    // shader parts never see them, so the rule says which are drawn.
+    const object = (x: number, y: number) =>
+      ({ boundingSphere: { center: new Cartesian3(x, y, 0.5) } }) as unknown as Cesium3DTileset;
+    const inJunes = object(12, 5);
+    const inMarchs = object(3, 3);
+    expect(ruledObjects.get(march)?.(inMarchs)).toBe(true);
+    expect(ruledObjects.get(march)?.(inJunes)).toBe(false);
+    expect(ruledObjects.get(june)?.(inJunes)).toBe(true);
+    expect(ruledObjects.get(june)?.(inMarchs)).toBe(false);
+    // Outside the plane no date owns the cell: nothing is drawn there, as for the splats.
+    expect(ruledObjects.get(march)?.(object(-40, 3))).toBe(false);
+    handle.dispose();
+    expect(ruledObjects.get(march)).toBeUndefined();
+    expect(ruledObjects.get(june)).toBeUndefined();
   });
 
   it("as of the earlier date, draws only it", async () => {

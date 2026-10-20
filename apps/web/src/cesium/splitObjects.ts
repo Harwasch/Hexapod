@@ -24,6 +24,7 @@ import {
 } from "@/lib/sceneObjects";
 import { useSceneObjects } from "@/state/sceneObjects";
 
+import { ruledObjects } from "./companions";
 import { keepOffscreenSplats } from "./splatInternals";
 import { attachInstances, setInstanceOffset } from "./splatInstances";
 import { attachViewCones } from "./splatViewCones";
@@ -96,8 +97,9 @@ export function attachSplitObjects(
   const poseFor = (ref: SplitObjectRef): ObjectPose =>
     useSceneObjects.getState().poses[assetId]?.[ref.instance] ?? ref.pose;
   const sync = (): void => {
-    const shown = parent.show;
+    const ruled = ruledObjects.get(parent);
     for (const object of drawn) {
+      const shown = parent.show && (!ruled || ruled(object.tileset));
       const pose = poseFor(object.ref);
       const key = `${Matrix4.toArray(parent.modelMatrix).join()}|${pose.translation.join()}|${pose.rotation.join()}`;
       if (key !== object.key) {

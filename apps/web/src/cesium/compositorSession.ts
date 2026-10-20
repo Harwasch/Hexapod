@@ -22,8 +22,10 @@
  * while the rule is on: the anchor's cones would fade the other dates' splats where the anchor
  * never looked. A Living Survey rig on any drawn date takes the scan out of incremental mode,
  * which drawing companions needs, so the rule ends and says why. Per-scan hooks on a date's
- * own primitive (hidden or highlighted objects, skins, split objects) do not act while it is a
- * companion: its primitive draws nothing then.
+ * own primitive (hidden or highlighted objects, skins) do not act while it is a companion: its
+ * primitive draws nothing then. Split objects are tilesets of their own beside their scan, out
+ * of the host's sort: each is drawn whole by the date owning the cell under its centre
+ * (`ruledObjects`), in its own colours (Data age does not tint it).
  */
 
 import type { Epoch, Representation, SiteAsset } from "@twin/contracts";
@@ -34,6 +36,7 @@ import {
   leafTileBoxes,
   NO_OWNER,
   ownerAgeGrid,
+  ownerAt,
   ownerPlane,
   type CompositorSource,
   type OwnerPlane,
@@ -49,9 +52,9 @@ import { useSettings } from "@/state/settings";
 import { useViewMode } from "@/state/viewMode";
 import { useViewRule, type LeftOut, type ViewRuleLegend } from "@/state/viewRule";
 
-import { companionGroups, setCompanions, type CompanionHost } from "./companions";
+import { companionGroups, ruledObjects, setCompanions, type CompanionHost } from "./companions";
 import { cesiumCellViewGpu, SplatCellView, type CellViewGpu } from "./splatCellView";
-import type { Mat4 } from "./splatFrames";
+import { invertAffine, type Mat4 } from "./splatFrames";
 import {
   cesiumCompositorGpu,
   SplatCompositor,
@@ -252,6 +255,8 @@ export function startCompositor(
   /** The host's view cones, switched off while the rule is on, and how they were. */
   let cones: { part: { enabled: boolean }; was: boolean } | undefined;
   const borrowed = new Set<HostPrimitive>();
+  /** The dates drawn, by source index, whose split objects the rule draws (`ruledObjects`). */
+  let ruling: Cesium3DTileset[] = [];
   const listening = new Map<Cesium3DTileset, () => void>();
   const coverage = new Map<Cesium3DTileset, Coverage>();
   let coverageVersion = 0;
@@ -350,8 +355,27 @@ export function startCompositor(
     return later.grids;
   };
 
+  /**
+   * Whether a split object of `date` is drawn: whole, when that date owns the plane's cell
+   * under the object's centre -- one date's copy of an object, never two.
+   */
+  const ownsObject =
+    (date: Cesium3DTileset) =>
+    (object: Cesium3DTileset): boolean => {
+      const plane = compositor?.plane;
+      const root = (host?.root as { computedTransform?: Mat4 } | undefined)?.computedTransform;
+      const m = root && invertAffine(root);
+      if (!plane || !m) return false;
+      const { x, y, z } = object.boundingSphere.center;
+      const at = (r: number) =>
+        (m[r] ?? 0) * x + (m[r + 4] ?? 0) * y + (m[r + 8] ?? 0) * z + (m[r + 12] ?? 0);
+      return ownerAt(plane, at(0), at(1)) === ruling.indexOf(date);
+    };
+
   /** Lets go of the host: its companions, the parts, the dates it drew, the cones. */
   const release = (): void => {
+    for (const tileset of ruling) ruledObjects.delete(tileset);
+    ruling = [];
     if (primitive) setCompanions(primitive, DATES, []);
     for (const own of borrowed) if (own.drawnBy === primitive) own.drawnBy = undefined;
     borrowed.clear();
@@ -414,6 +438,12 @@ export function startCompositor(
       borrowed.delete(theirs);
     }
     setCompanions(target, DATES, others);
+    // Each date's split objects: drawn by the date owning the cell under each.
+    const next = dates.map((d) => d.tileset);
+    for (const tileset of ruling) if (!next.includes(tileset)) ruledObjects.delete(tileset);
+    for (const tileset of next)
+      if (!ruling.includes(tileset)) ruledObjects.set(tileset, ownsObject(tileset));
+    ruling = next;
     // Every source the host draws: the dates, then each date's inferred layers.
     const epochOf = new Map<unknown, Epoch>(dates.map((d) => [d.tileset, d.epoch]));
     const entries: {

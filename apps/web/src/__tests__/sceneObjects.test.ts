@@ -3,6 +3,7 @@ import type { Cesium3DTileset, Scene } from "cesium";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { attachInstances, instanceSphere, setInstanceOffset } from "@/cesium/splatInstances";
+import { ruledObjects } from "@/cesium/companions";
 import { attachSplitObjects, objectModelMatrix } from "@/cesium/splitObjects";
 import {
   applyLocal,
@@ -157,6 +158,13 @@ describe("split objects", () => {
     (parent as { splitDirection: SplitDirection }).splitDirection = SplitDirection.LEFT;
     preUpdate.raiseEvent();
     expect(child.splitDirection).toBe(SplitDirection.LEFT);
+    // A per-cell view rule draws the object only where its date owns the cell.
+    ruledObjects.set(parent, (object) => object !== child);
+    preUpdate.raiseEvent();
+    expect(child.show).toBe(false);
+    ruledObjects.delete(parent);
+    preUpdate.raiseEvent();
+    expect(child.show).toBe(true);
     (parent as { show: boolean }).show = false;
     preUpdate.raiseEvent();
     expect(child.show).toBe(false);

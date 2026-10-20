@@ -49,6 +49,13 @@ export function setCompanions(
   if (now.length !== merged.length || merged.some((t, i) => now[i] !== t)) host.companions = merged;
 }
 
+/**
+ * Per scan, which of its split objects (splitObjects.ts) a per-cell view rule draws
+ * (compositorSession.ts): an object is a tileset of its own, never one of the host's
+ * companions, so the rule's shader parts on the host never see it.
+ */
+export const ruledObjects = new WeakMap<object, (object: Cesium3DTileset) => boolean>();
+
 /** The owners' lists on `host`, in merge order. */
 export function companionGroups(host: CompanionHost | undefined): CompanionGroup[] {
   return host ? [...(GROUPS.get(host)?.values() ?? [])] : [];
