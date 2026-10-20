@@ -19,6 +19,7 @@ from app.api.deps import DbSession, SettingsDep, Storage
 from app.models.capture import Capture
 from app.models.enums import CaptureKind
 from app.models.job import Job
+from app.models.site import Site
 from app.schemas.base import CamelModel
 from app.schemas.capture import QUALITY_BARS, QUALITY_MODES, CaptureCreate, CaptureRead
 from app.schemas.common import Problem
@@ -27,7 +28,7 @@ from app.services import captures as capture_service
 from app.services import handoff, phone_key, worker_wake
 from app.services import jobs as job_service
 from app.services import recipes as recipe_service
-from app.services.errors import ConflictError, UnauthorizedError
+from app.services.errors import ConflictError, NotFoundError, UnauthorizedError
 from app.services.ratelimit import client_key, limits_of
 from app.storage import ObjectStorage
 from app.worker.outputs import artifact_key
@@ -262,6 +263,7 @@ class PhoneCaptureCreate(CamelModel):
     lon: float | None = Field(default=None, ge=-180, le=180)
     accuracy_m: float | None = Field(default=None, ge=0)
     #: The site this capture is a new epoch of; unset, the worker decides (`CaptureCreate`).
+    #: Only a site a phone capture made (409 `site_not_phone` otherwise).
     site_id: uuid.UUID | None = None
 
 
@@ -297,6 +299,8 @@ def create_phone_capture(
             f"The phone key has started {settings.api_phone_daily_captures} captures in "
             "the last 24 hours, which is its limit. Try again later."
         )
+    if payload.site_id is not None:
+        _check_phone_site(db, payload.site_id)
     metadata: dict[str, object] = {"origin": ORIGIN}
     if payload.lat is not None and payload.lon is not None:
         # The phone's own fix, which is a far better placement guess than a desktop
@@ -313,6 +317,34 @@ def create_phone_capture(
     )
     token = handoff.issue(handoff.key_for(settings), capture.id, now=int(time.time()))
     return PhoneCapture(capture=capture_service.capture_to_read(capture), upload_token=token)
+
+
+def _check_phone_site(db: DbSession, site_id: uuid.UUID) -> None:
+    """The phone key may name only a site a phone capture made (decision D3's `siteId`).
+
+    The key is a weak shared credential that reaches only what it created. Naming a site
+    makes the capture that site's next epoch: on a site with no frame yet (every seeded,
+    catalog or hand-made one) its run would fix the frame where the phone happens to be,
+    add a default-visible splat, grow the boundary and take the thumbnail. So a site the
+    key did not make -- seeded, catalog, hand-made, or made by a desktop upload -- is
+    refused here; the write-token route (`POST /captures`) can still name any site.
+    """
+    site = db.get(Site, site_id)
+    if site is None:
+        raise NotFoundError("site", site_id)
+    made_by = (site.metadata_ or {}).get("captureId")
+    maker = None
+    if isinstance(made_by, str):
+        try:
+            maker = db.get(Capture, uuid.UUID(made_by))
+        except ValueError:
+            maker = None
+    if maker is None or (maker.metadata_ or {}).get("origin") != ORIGIN:
+        raise ConflictError(
+            "A phone capture can join only a site a phone capture made. Start a new site, "
+            "or add this capture to that site from the console.",
+            code="site_not_phone",
+        )
 
 
 @router.post(
