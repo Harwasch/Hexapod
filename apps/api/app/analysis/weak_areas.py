@@ -6,11 +6,12 @@ summary is stated at) are squares of `cellM` metres east and north of the site f
 origin in the tileset frame. They are closed on the raster by a square of whole cells
 (at least `MIN_SMOOTHING_M` across each way: exactly what a mitred buffer out and back in
 does to cells, so gaps up to twice it are bridged and a block keeps its exact area),
-outlined region by region, simplified by half a cell, and parts under `MIN_AREA_M2` are
-dropped, largest first. Each patch's numbers are of the finest cells whose centres it
-holds. A plane over `MAX_ZONE_CELLS` is drawn a level or more up, a coarse cell weak when
-at least half of the children the epoch speaks for are (`zone_plane`): outlining every
-region of a noisy 2^22-cell plane took minutes.
+outlined region by region with holes under the smallest zone filled, simplified by half a
+cell, and parts under `MIN_AREA_M2` are dropped, largest first. Each patch's numbers are
+of the finest cells whose centres it holds. A plane over `MAX_ZONE_CELLS`, or whose closed
+outline is over `MAX_ZONE_EDGES` cell edges, is drawn a level or more up, a coarse cell
+weak when at least half of the children the epoch speaks for are (`zone_plane`):
+outlining a noisy 2^22-cell plane cell by cell took minutes.
 
 Each vertex then goes to the globe through the frame's own east/north/up tangent plane
 (`site_projection`): PROJ's `topocentric` conversion inverted, the exact inverse of the
@@ -19,11 +20,13 @@ made of at any origin height. (An azimuthal-equidistant projection at the origin
 that plane: it measures on the ellipsoid, and at a 1,500 m origin it puts a point 1 km
 east 23 cm short.)
 
-**Budget.** Over `budget_m2`, the weakest cells are kept first (unseen before scored, then
-by score), then those nearest `focus`, and the patches are made again from what is kept
-until they fit within one cell of it -- the same trimming as the Fog of Knowing's scout
-(`knowledge.scout`); should closing still leave them over, only the patches that fit are
-kept, largest first, so the budget holds.
+**Budget.** Over `budget_m2`, whole zones are taken in rank order -- the one under
+`focus` first, then the largest, then the nearest `focus` -- while they fit (within one
+zone cell). When none fits, the first is clipped to a square of the budget's area about
+the focus, or its weakest cell (unseen first, then by score): so a budget is a promise,
+and any budget that can hold a zone gets one. (Trimming cells and outlining again, as the
+fog scout does, left nothing: closing grows scattered cells into zones larger than
+themselves, faster than the trimming shrank them.)
 
 **Patterns are UX heuristics, not tolerances.** How a patch is best flown again is a rule
 of thumb from photogrammetry practice, stated here and labelled so in every hint; none of
@@ -52,12 +55,13 @@ from numpy.typing import ArrayLike, NDArray
 from pyproj import Transformer
 from rasterio.features import rasterize, shapes
 from rasterio.transform import Affine
-from shapely.geometry import Polygon, shape
+from shapely.geometry import Point as ShapelyPoint
+from shapely.geometry import Polygon, box
 from shapely.geometry.base import BaseGeometry
 from shapely.geometry.polygon import orient
 from shapely.validation import make_valid
 
-from app.analysis.cell_grid import LATTICE_BASE_M, REASON_BITS, Plane, covered_mask
+from app.analysis.cell_grid import LATTICE_BASE_M, MAX_LEVEL, REASON_BITS, Plane, covered_mask
 
 Pattern = Literal["nadir", "oblique", "orbit"]
 Point = tuple[float, float]
@@ -77,6 +81,9 @@ MIN_AREA_M2 = 1.0
 #: more than linearly in its regions, and a grid at its 2^22-cell ceiling took minutes.
 #: Past it they are drawn a level up, by majority (`zone_plane`).
 MAX_ZONE_CELLS = 1 << 20
+#: ... and with at most this many cell edges in their outline (holes included): outlining
+#: is linear in it, and a dense noisy plane is one region with a hole per strong cell.
+MAX_ZONE_EDGES = 1 << 18
 HEURISTIC = "a rule of thumb, not a calibrated plan"
 
 _GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -177,6 +184,8 @@ class ZonePlane:
     j0: int
     weak: NDArray[np.bool_]
     order: NDArray[np.int64]
+    #: `weak` closed by `smoothing_cells(level)`: what is outlined.
+    closed: NDArray[np.bool_]
 
     @property
     def cell_m(self) -> float:
@@ -204,17 +213,38 @@ def _block(
     return padded.reshape(pnj, 2, pni, 2), pi0, pj0
 
 
+def smoothing_cells(level: int) -> int:
+    """How many whole cells a zone is closed by at `level`: at least `MIN_SMOOTHING_M`."""
+    return math.floor(MIN_SMOOTHING_M / math.ldexp(LATTICE_BASE_M, level) + 1e-9)
+
+
+def outline_edges(mask: NDArray[np.bool_]) -> int:
+    """Cell edges between a cell of `mask` and one outside it (the frame's border counts):
+    what outlining it costs, holes included."""
+    padded = np.pad(mask, 1)
+    return int(
+        np.count_nonzero(padded[:, 1:] != padded[:, :-1])
+        + np.count_nonzero(padded[1:, :] != padded[:-1, :])
+    )
+
+
 def zone_plane(plane: Plane, mask: NDArray[np.bool_]) -> ZonePlane:
-    """`mask` at the level zones are drawn at. Past `MAX_ZONE_CELLS` it goes up a level at
-    a time, a coarse cell weak when at least half of the children the epoch speaks for are
-    weak -- weak-v1's own majority rule, one level up (a UX choice for drawing zones: the
-    min-of-children pyramid would call a whole coarse cell weak for one weak child)."""
+    """`mask` at the level zones are drawn at, closed (`ZonePlane.closed`). It goes up a
+    level at a time while it is over `MAX_ZONE_CELLS` cells or its closed outline is over
+    `MAX_ZONE_EDGES` cell edges -- a dense, noisy plane is one region with a hole per strong
+    cell, which took minutes to outline -- a coarse cell weak when at least half of the
+    children the epoch speaks for are weak: weak-v1's own majority rule, one level up (a UX
+    choice for drawing zones: the min-of-children pyramid would call a whole coarse cell
+    weak for one weak child)."""
     weak = mask.astype(np.int64)
     covered = covered_mask(plane).astype(np.int64)
     order = np.where(mask, plane.channel("score"), _NOT_WEAK)
     level, i0, j0 = plane.level, plane.i0, plane.j0
     zone = mask
-    while zone.size > MAX_ZONE_CELLS:
+    closed = close_mask(zone, smoothing_cells(level))
+    while level < MAX_LEVEL and (
+        zone.size > MAX_ZONE_CELLS or outline_edges(closed) > MAX_ZONE_EDGES
+    ):
         w, pi0, pj0 = _block(weak, i0, j0, 0)
         c, _, _ = _block(covered, i0, j0, 0)
         o, _, _ = _block(order, i0, j0, int(_NOT_WEAK))
@@ -222,30 +252,8 @@ def zone_plane(plane: Plane, mask: NDArray[np.bool_]) -> ZonePlane:
         zone = (covered > 0) & (2 * weak >= covered)
         order = np.where(zone, o.min(axis=(1, 3)), _NOT_WEAK)
         level, i0, j0 = level + 1, pi0, pj0
-    return ZonePlane(level, i0, j0, zone, order)
-
-
-def select_cells(
-    zone: ZonePlane, mask: NDArray[np.bool_], limit: int | None, focus_xy: Point | None
-) -> tuple[NDArray[np.bool_], bool]:
-    """`mask` (over `zone`), or, over `limit` cells, the weakest of it first (unseen, then
-    by score), then those nearest `focus_xy` (the mask's middle without one). Returns the
-    cells and whether the limit cut them."""
-    count = int(np.count_nonzero(mask))
-    if limit is None or count <= limit:
-        return mask, False
-    rows, columns = np.nonzero(mask)
-    cell = zone.cell_m
-    x = (zone.i0 + columns + 0.5) * cell
-    y = (zone.j0 + rows + 0.5) * cell
-    if focus_xy is None:
-        focus_xy = (float(x.mean()), float(y.mean()))
-    distance = np.hypot(x - focus_xy[0], y - focus_xy[1])
-    order = np.lexsort((distance, zone.order[rows, columns]))
-    chosen = order[: max(0, limit)]
-    out = np.zeros(mask.shape, dtype=bool)
-    out[rows[chosen], columns[chosen]] = True
-    return out, True
+        closed = close_mask(zone, smoothing_cells(level))
+    return ZonePlane(level, i0, j0, zone, order, closed)
 
 
 def _box_any(mask: NDArray[np.bool_], k: int) -> NDArray[np.bool_]:
@@ -280,25 +288,28 @@ def close_mask(mask: NDArray[np.bool_], k: int) -> NDArray[np.bool_]:
     return out
 
 
-def mask_polygons(
-    zone: ZonePlane, mask: NDArray[np.bool_], *, smoothing_m: float, min_area_m2: float
-) -> list[Polygon]:
-    """The cells of `mask` (over `zone`) as smoothed polygons in the tileset frame,
-    largest first: closed by `smoothing_m` in whole cells, outlined region by region,
-    simplified by half a cell, parts under `min_area_m2` (and two cells) dropped."""
-    if not mask.any():
+def zone_polygons(zone: ZonePlane, *, min_area_m2: float) -> list[Polygon]:
+    """The zone's closed cells as polygons in the tileset frame, largest first: outlined
+    region by region, holes under the smallest zone filled (a re-scan flies over a pinhole
+    of strong cells anyway), simplified by half a cell, parts under `min_area_m2` (and two
+    cells) dropped -- regions too small are dropped before any geometry is built."""
+    if not zone.closed.any():
         return []
     cell = zone.cell_m
-    closed = close_mask(mask, math.floor(smoothing_m / cell + 1e-9))
     affine = _affine(cell, zone.i0, zone.j0)
     smallest = max(min_area_m2, 2 * cell * cell)
     parts: list[Polygon] = []
     for geometry, value in shapes(
-        closed.astype(np.uint8), mask=closed, transform=affine, connectivity=4
+        zone.closed.astype(np.uint8), mask=zone.closed, transform=affine, connectivity=4
     ):
         if value != 1:
             continue
-        outline = make_valid(shape(geometry).simplify(cell / 2))
+        rings = geometry["coordinates"]
+        exterior = Polygon(rings[0])
+        if exterior.area < smallest:
+            continue
+        holes = [ring for ring in rings[1:] if Polygon(ring).area >= smallest]
+        outline = make_valid(Polygon(rings[0], holes).simplify(cell / 2))
         parts.extend(orient(part) for part in _polygons(outline) if part.area >= smallest)
     return sorted(parts, key=lambda part: part.area, reverse=True)
 
@@ -408,6 +419,83 @@ def _to_globe(polygon: Polygon, projection: SiteProjection) -> Polygon:
     return orient(max(parts, key=lambda part: part.area))
 
 
+def _ranked(polygons: list[Polygon], focus_xy: Point | None) -> list[Polygon]:
+    """Zones in the order a budget takes them: the one under the focus first, then the
+    largest (the most weak cells), then the nearest the focus."""
+    if focus_xy is None:
+        return list(polygons)
+    point = ShapelyPoint(focus_xy)
+    return sorted(
+        polygons,
+        key=lambda polygon: (not polygon.covers(point), -polygon.area, polygon.distance(point)),
+    )
+
+
+def _anchor(zone: ZonePlane, polygon: Polygon, focus_xy: Point | None) -> Point:
+    """Where a zone too large for the budget is clipped about: the focus when it is in the
+    zone, else its weakest cell (unseen first, then by score) nearest its middle."""
+    if focus_xy is not None and polygon.covers(ShapelyPoint(focus_xy)):
+        return focus_xy
+    cell = zone.cell_m
+    nj, ni = zone.weak.shape
+    inside = (
+        rasterize(
+            [(polygon, 1)],
+            out_shape=(nj, ni),
+            transform=_affine(cell, zone.i0, zone.j0),
+            dtype=np.uint8,
+        ).astype(bool)
+        & zone.weak
+    )
+    rows, columns = np.nonzero(inside)
+    if rows.size == 0:
+        middle = polygon.representative_point()
+        return float(middle.x), float(middle.y)
+    x = (zone.i0 + columns + 0.5) * cell
+    y = (zone.j0 + rows + 0.5) * cell
+    middle = polygon.centroid
+    order = np.lexsort((np.hypot(x - middle.x, y - middle.y), zone.order[rows, columns]))
+    return float(x[order[0]]), float(y[order[0]])
+
+
+def choose_zones(
+    zone: ZonePlane,
+    polygons: list[Polygon],
+    *,
+    max_areas: int,
+    budget_m2: float | None,
+    focus_xy: Point | None,
+) -> tuple[list[Polygon], bool]:
+    """At most `max_areas` of `polygons`, together within `budget_m2` plus one zone cell,
+    and whether the budget cut anything. In rank order (`_ranked`), each zone is taken
+    while it fits; when none fits, the first is clipped to a square of the budget's area
+    about its anchor (`_anchor`), so a budget that can hold a zone always gets one."""
+    ranked = _ranked(polygons, focus_xy)
+    if budget_m2 is None:
+        return ranked[:max_areas], False
+    allowance = budget_m2 + zone.cell_m * zone.cell_m
+    chosen: list[Polygon] = []
+    for polygon in ranked:
+        if len(chosen) == max_areas:
+            break
+        if sum(p.area for p in chosen) + polygon.area <= allowance:
+            chosen.append(polygon)
+    if not chosen and ranked:
+        best = ranked[0]
+        x, y = _anchor(zone, best, focus_xy)
+        half = math.sqrt(budget_m2) / 2
+        clipped = [
+            orient(part)
+            for part in _polygons(
+                make_valid(best.intersection(box(x - half, y - half, x + half, y + half)))
+            )
+            if part.area >= max(MIN_AREA_M2, 2 * zone.cell_m * zone.cell_m)
+        ]
+        if clipped:
+            chosen = [max(clipped, key=lambda part: part.area)]
+    return chosen, chosen != ranked[:max_areas]
+
+
 def cell_patches(
     plane: Plane,
     mask: NDArray[np.bool_],
@@ -425,35 +513,18 @@ def cell_patches(
     `plane`'s own weak cells whose centres it holds."""
     zone = zone_plane(plane, mask)
     cell = zone.cell_m
-    cell_area = cell * cell
-    smoothing = max(cell / 2, MIN_SMOOTHING_M)
+    smoothing = smoothing_cells(zone.level) * cell
     focus_xy: Point | None = None
     if focus is not None:
         fx, fy = projection.to_metric(focus[0], focus[1])
         focus_xy = (float(fx), float(fy))
-    limit = None if budget_m2 is None else int(budget_m2 // cell_area)
-    selected = zone.weak
-    polygons: list[Polygon] = []
-    truncated = False
-    for _ in range(8):
-        selected, cut = select_cells(zone, zone.weak, limit, focus_xy)
-        truncated = truncated or cut
-        polygons = mask_polygons(zone, selected, smoothing_m=smoothing, min_area_m2=MIN_AREA_M2)
-        polygons = polygons[:max_areas]
-        total = sum(polygon.area for polygon in polygons)
-        if budget_m2 is None or total <= budget_m2 + cell_area:
-            break
-        kept = int(np.count_nonzero(selected))
-        limit = max(0, kept - math.ceil((total - budget_m2) / cell_area))
-        truncated = True
-    if budget_m2 is not None and sum(p.area for p in polygons) > budget_m2 + cell_area:
-        # Closing can grow a sparse selection faster than trimming shrinks it: keep, largest
-        # first, the patches that still fit, so the budget is a promise.
-        fitting: list[Polygon] = []
-        for polygon in polygons:
-            if sum(p.area for p in fitting) + polygon.area <= budget_m2 + cell_area:
-                fitting.append(polygon)
-        polygons = fitting
+    polygons, truncated = choose_zones(
+        zone,
+        zone_polygons(zone, min_area_m2=MIN_AREA_M2),
+        max_areas=max_areas,
+        budget_m2=budget_m2,
+        focus_xy=focus_xy,
+    )
     score = plane.channel("score")
     relief = plane.channel("relief")
     reasons_plane = plane.channel("reasons")
@@ -493,6 +564,6 @@ def cell_patches(
         truncated_by_budget=truncated,
         weak_cells=int(np.count_nonzero(mask)),
         total_cells=int(total_cells if total_cells is not None else plane.cells),
-        smoothing_m=smoothing,
+        smoothing_m=max(smoothing, cell / 2),
         zone_level=zone.level,
     )

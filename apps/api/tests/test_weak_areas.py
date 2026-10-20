@@ -12,7 +12,7 @@ import math
 import numpy as np
 import pytest
 from pyproj import Transformer
-from shapely.geometry import box
+from shapely.geometry import Polygon, box
 
 from app.analysis import weak_areas
 from app.analysis.cell_grid import REASON_BITS, Plane, weak_mask
@@ -152,7 +152,7 @@ def test_an_unaligned_epoch_is_one_weak_area_to_overlap_the_reference() -> None:
     assert patch.reasons["alignment"] == 400
 
 
-def test_a_budget_keeps_the_weakest_cells_nearest_the_focus() -> None:
+def test_a_zone_too_large_for_the_budget_is_clipped_about_its_weakest_cells_or_the_focus() -> None:
     plane = a_plane()
     # One 10 x 10 m weak block, weaker in its east half.
     weaken(plane, (-5, 0), (-5, 5), score=100, bits=BITS["views"])
@@ -163,7 +163,8 @@ def test_a_budget_keeps_the_weakest_cells_nearest_the_focus() -> None:
     assert found.truncated_by_budget
     total = sum(p.area_m2 for p in found.patches)
     assert total <= 30.0 + 1.0
-    assert all(p.metric.bounds[0] >= -1e-9 for p in found.patches)  # all from the east half
+    [patch] = found.patches
+    assert patch.metric.centroid.x > 0  # about the weaker east half
 
     lon, lat = PROJECTION.to_geographic(4.5, 4.5)
     near = cell_patches(plane, mask, PROJECTION, budget_m2=10.0, focus=(float(lon), float(lat)))
@@ -238,3 +239,91 @@ def test_a_noisy_plane_at_the_ceiling_is_answered_in_seconds() -> None:
     assert time.perf_counter() - started < 20
     assert found.truncated_by_budget
     assert found.patches and sum(p.area_m2 for p in found.patches) <= 2000 + 1.0
+
+
+# --- budgets over scattered weakness, and planes past the ceiling (A4 review) -------------
+
+
+@pytest.mark.parametrize("share", [0.2, 0.4])
+@pytest.mark.parametrize("budget", [10.0, 100.0, 1000.0])
+def test_scattered_weakness_within_a_budget_still_gives_a_zone(share: float, budget: float) -> None:
+    """Closing makes a zone of scattered weak cells larger than its cells; a budget used to
+    trim cells until nothing was left (200 x 200, 40 % weak, 1,000 m2: no zone at all). A
+    budget is met by choosing and clipping zones, and some zone always comes back."""
+    rng = np.random.default_rng(0)
+    plane = a_plane(level=0, i0=0, j0=0, ni=200, nj=200)
+    weak = rng.random((200, 200)) < share
+    plane.channels["score"][weak] = 50
+    plane.channels["reasons"][weak] = BITS["views"]
+    found = cell_patches(plane, weak_mask(plane), PROJECTION, budget_m2=budget)
+    assert found.patches, (share, budget)
+    assert found.truncated_by_budget
+    assert sum(p.area_m2 for p in found.patches) <= budget + 1.0
+    assert all(p.cells > 0 for p in found.patches)
+
+
+def test_a_budget_keeps_the_largest_zone_that_fits_not_a_speck() -> None:
+    """The evidence run kept a 1.75 m2 unseen speck and dropped a 208 m2 zone: cells were
+    ranked weakest first. Zones are ranked by size (then score, then focus) and added while
+    they fit."""
+    plane = a_plane()
+    weaken(plane, (-8, 2), (-8, 2), score=90, bits=BITS["gsd"])  # 100 m2
+    weaken(plane, (6, 8), (6, 8), score=0, bits=BITS["unseen"])  # 4 m2, unseen
+    mask = weak_mask(plane)
+    assert [round(p.area_m2) for p in cell_patches(plane, mask, PROJECTION).patches] == [100, 4]
+    kept = cell_patches(plane, mask, PROJECTION, budget_m2=100.0)
+    assert [round(p.area_m2) for p in kept.patches] == [100] and kept.truncated_by_budget
+    both = cell_patches(plane, mask, PROJECTION, budget_m2=104.0)
+    assert [round(p.area_m2) for p in both.patches] == [100, 4]
+    # Smaller than any zone but the speck: the speck fits, and comes back.
+    assert [
+        round(p.area_m2) for p in cell_patches(plane, mask, PROJECTION, budget_m2=10).patches
+    ] == [4]
+
+
+def test_a_budget_smaller_than_every_zone_clips_the_best_one() -> None:
+    plane = a_plane()
+    weaken(plane, (-8, 2), (-8, 2), score=90, bits=BITS["gsd"])  # 100 m2, the only zone
+    found = cell_patches(plane, weak_mask(plane), PROJECTION, budget_m2=30.0)
+    [patch] = found.patches
+    assert found.truncated_by_budget and patch.area_m2 <= 30.0 + 1.0
+    assert patch.metric.within(box(-8, -8, 2, 2).buffer(1e-9)) and patch.cells > 0
+
+
+def test_a_coarse_cell_is_weak_by_majority_not_by_any_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Drawn a level up, a quarter of the children weak is not a weak coarse cell (with
+    'any child' it would be a 16 m2 zone)."""
+    monkeypatch.setattr(weak_areas, "MAX_ZONE_CELLS", 100)
+    plane = a_plane(level=0, i0=0, j0=0, ni=40, nj=40)
+    for j in range(8, 24, 2):
+        for i in range(8, 24, 2):
+            weaken(plane, (i, i + 1), (j, j + 1), score=50, bits=BITS["views"])
+    weaken(plane, (32, 40), (32, 40), score=50, bits=BITS["views"])  # a real 2 m x 2 m block
+    found = cell_patches(plane, weak_mask(plane), PROJECTION)
+    assert found.zone_level > 0
+    [patch] = found.patches
+    assert patch.metric.symmetric_difference(box(8, 8, 10, 10)).area < 1e-9
+
+
+def test_a_dense_noisy_plane_past_the_ceiling_answers_in_seconds() -> None:
+    """2048 x 2048 cells, half of them weak at random: one region full of holes, which took
+    157 s to outline. Zones are coarsened until their outline is bounded and holes under
+    the smallest zone are filled. The bound -- 10 s -- is the budget an interactive request
+    can spend (first principles: a person pressed a button), not a measured timing."""
+    import time
+
+    rng = np.random.default_rng(0)
+    n = 2048
+    plane = a_plane(level=2, i0=-n // 2, j0=-n // 2, ni=n, nj=n)
+    weak = rng.random((n, n)) < 0.5
+    plane.channels["score"][weak] = 100
+    plane.channels["reasons"][weak] = BITS["views"]
+    started = time.perf_counter()
+    found = cell_patches(plane, weak_mask(plane), PROJECTION, max_areas=3)
+    assert time.perf_counter() - started < 10.0
+    assert found.patches
+    smallest = max(weak_areas.MIN_AREA_M2, 2 * math.ldexp(0.25, found.zone_level) ** 2)
+    for patch in found.patches:
+        assert all(Polygon(ring).area >= smallest for ring in patch.metric.interiors)
