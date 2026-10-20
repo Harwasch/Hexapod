@@ -80,7 +80,8 @@ export interface CellViewGpu {
 /**
  * GLSL of the part. Uniforms: the cell texture; the model-to-grid matrix; per level
  * (i0, j0, ni, nj) and its first texel; (mode, finest cell m, minimum px, levels); (weak
- * threshold, unseen bit, stripe m); the mode's ramp; the companion slots drawn grey.
+ * threshold, unseen bit, stripe m, the model's runtime scale); the mode's ramp; the companion
+ * slots drawn grey.
  */
 export function cellViewGlsl(): string {
   const width = String(CELL_TEXTURE_WIDTH);
@@ -113,7 +114,8 @@ vec4 splatCellViewColor(uint splatIndex, vec3 position, vec4 color) {
     vec3 eye = (czm_inverseModelView * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
     float dist = max(length(position - eye), 0.001);
     float pxPerRadian = 0.5 * czm_viewport.w * czm_projection[1][1];
-    float need = u_cellParams.z * dist / (pxPerRadian * u_cellParams.y);
+    // The cell's size on the globe: grid metres times the model's runtime scale.
+    float need = u_cellParams.z * dist / (pxPerRadian * u_cellParams.y * u_cellRule.w);
     int levels = int(u_cellParams.w + 0.5);
     int k = need <= 1.0 ? 0 : int(ceil(log2(need)));
     k = clamp(k, 0, levels - 1);
@@ -211,10 +213,11 @@ export function cellTexelFor(
   distanceM: number,
   pxPerRadian: number,
   minPx: number = CELL_MIN_PX,
+  scale = 1,
 ): { level: number; texel: number | null } {
   const levels = meta.levels;
   const cellM = levels[0]?.cellM ?? 1;
-  const need = (minPx * Math.max(distanceM, 0.001)) / (pxPerRadian * cellM);
+  const need = (minPx * Math.max(distanceM, 0.001)) / (pxPerRadian * cellM * scale);
   const k = Math.min(levels.length - 1, Math.max(0, need <= 1 ? 0 : Math.ceil(Math.log2(need))));
   const l = levels[k];
   if (!l) return { level: k, texel: null };
@@ -269,7 +272,7 @@ export class SplatCellView implements SplatColorPart {
   readonly #levels: unknown[];
   readonly #offsets: unknown[];
   readonly #params: { cellM: number; levels: number };
-  readonly #rule: unknown;
+  #rule: { scale: number; value: unknown };
   readonly #modeParams: Record<number, unknown>;
   readonly #ramps: Record<CellViewMode, unknown[]>;
   readonly #rows: Partial<Record<CellViewMode, { data: Uint8Array; height: number }>> = {};
@@ -309,12 +312,7 @@ export class SplatCellView implements SplatColorPart {
         gpu.vec4(m, this.#params.cellM, CELL_MIN_PX, levels.length),
       ]),
     );
-    this.#rule = gpu.vec4(
-      grid.meta.weakBelow ?? DEFAULT_WEAK_BELOW,
-      grid.meta.reasonBits?.unseen ?? DEFAULT_UNSEEN_BIT,
-      NEWER_STRIPE_M,
-      0,
-    );
+    this.#rule = { scale: Number.NaN, value: undefined };
     const ramp = (colors: readonly Rgb[]) => colors.map(([r, g, b]) => gpu.vec4(r, g, b, 1));
     this.#ramps = { confidence: ramp(CONFIDENCE_RAMP), "data-age": ramp(AGE_RAMP) };
     this.#rows.confidence = cellTextureRows(grid.meta, confidenceTexels(grid));
@@ -347,7 +345,7 @@ export class SplatCellView implements SplatColorPart {
     uniformMap.u_cellLevels = () => this.#levels;
     uniformMap.u_cellOffsets = () => this.#offsets;
     uniformMap.u_cellParams = () => this.#modeParams[this.#activeMode()];
-    uniformMap.u_cellRule = () => this.#rule;
+    uniformMap.u_cellRule = () => this.#ruleValue();
     uniformMap.u_cellRamp = () => this.#ramps[this.mode];
     uniformMap.u_cellFills = () => this.#fillSlots();
   }
@@ -393,6 +391,31 @@ export class SplatCellView implements SplatColorPart {
       this.#textures.set(mode, texture);
     }
     return texture;
+  }
+
+  /**
+   * (weak threshold, unseen bit, stripe m, scale): the scale is how long a grid metre is on the
+   * globe -- the root's computed transform's first column, `renderConfig.scale` for a model
+   * drawn at one (tilesetScale.ts), 1 for a rigid placement -- so a splat picks its level by
+   * the size its cell is drawn at, while it still indexes the grid in the grid's own metres.
+   */
+  #ruleValue(): unknown {
+    const root = this.#rootOf();
+    const length = root ? Math.hypot(root[0] ?? 0, root[1] ?? 0, root[2] ?? 0) : 1;
+    const scale = Number.isFinite(length) && length > 0 ? length : 1;
+    if (scale !== this.#rule.scale) {
+      const meta = this.grid.meta;
+      this.#rule = {
+        scale,
+        value: this.#gpu.vec4(
+          meta.weakBelow ?? DEFAULT_WEAK_BELOW,
+          meta.reasonBits?.unseen ?? DEFAULT_UNSEEN_BIT,
+          NEWER_STRIPE_M,
+          scale,
+        ),
+      };
+    }
+    return this.#rule.value;
   }
 
   /** `T⁻¹ · R`, rebuilt only when either changes. */

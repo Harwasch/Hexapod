@@ -122,7 +122,7 @@ describe("what the part declares", () => {
     ]);
     const offsets = uniforms.u_cellOffsets?.() as { vec4: number[] }[];
     expect(offsets[0]?.vec4).toEqual([0, 768, 960, 1008]);
-    expect(uniforms.u_cellRule?.()).toEqual({ vec4: [128, REASON_BITS.unseen, 0.6, 0] });
+    expect(uniforms.u_cellRule?.()).toEqual({ vec4: [128, REASON_BITS.unseen, 0.6, 1] });
   });
 
   it("uploads (score, reasons) per cell, every level, in whole texture rows", async () => {
@@ -174,6 +174,30 @@ describe("the frame cells are read in", () => {
     ]);
     const params = uniforms.u_cellParams?.() as { vec4: number[] };
     expect(params.vec4).toEqual([1, 1, CELL_MIN_PX, 6]);
+  });
+});
+
+describe("a model drawn at a runtime scale", () => {
+  it("picks levels by the cell's size on the globe, not in the grid's metres", async () => {
+    const grid = await yardGrid();
+    // renderConfig.scale 2: the root's computed transform doubles lengths (tilesetScale.ts).
+    let root = [2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1];
+    const part = new SplatCellView(grid, gpu, () => root);
+    const { uniforms } = build(part);
+    const target = primitive();
+    target._rootTransform = translation(0, 0, 0);
+    part.install(target);
+    const rule = () => (uniforms.u_cellRule?.() as { vec4: number[] }).vec4;
+    expect(rule()[3]).toBeCloseTo(2, 12);
+    root = translation(0, 0, 0);
+    expect(rule()[3]).toBeCloseTo(1, 12);
+    // The reference: at 1600 m and 1000 px a radian, a 1 m cell needs level 4 (6 px); drawn
+    // twice as large, level 3. The cell indexed is still the grid's own.
+    expect(cellTexelFor(grid.meta, 20, 10, 1600, 1000).level).toBe(4);
+    const scaled = cellTexelFor(grid.meta, 20, 10, 1600, 1000, CELL_MIN_PX, 2);
+    expect(scaled.level).toBe(3);
+    const cell = cellAt(grid, 20, 10, grid.meta.levels[3]?.level ?? 0);
+    expect(confidenceTexels(grid)[(scaled.texel ?? 0) * 2]).toBe(cell?.score);
   });
 });
 
