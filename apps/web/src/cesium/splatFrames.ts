@@ -20,6 +20,16 @@
  * — it is around 2e-6 m for a tree-sized capture, against a 1.2e-4 m half-step. That makes the
  * bit-exact digest usable at runtime, which is the difference between "this is the tree the rig
  * was built for" and "this is approximately tree-shaped".
+ *
+ * A tile the packer gave a frame of its own (a scan wider than SPZ's +/-2048 m, a
+ * translation-only tile `transform`) is baked from that frame, so its `B` un-bakes to
+ * tile-local positions; every digest is over the scan's (site) frame instead. `translateBake`
+ * gives the bake from the site frame, under which the un-bake recovers local + offset: exact
+ * on the grid within ~4 km, the correctly rounded float32 beyond, as the pipeline digests it.
+ * One limit stays: baked positions are float32, whose step passes the half quantum some 2 km
+ * from the tileset's centre (2.4e-4 m between 2 and 4 km), so a far tile under CesiumJS may
+ * not un-bake bit-exactly and its bindings refuse ("checksum"). Spark and PlayCanvas read the
+ * SPZ itself and are not affected (docs/DECISIONS/0011-splat-tile-origins.md).
  */
 
 import { bindingCount, markMovingSplats, type SplatBinding } from "@twin/world";
@@ -141,6 +151,29 @@ export function transformPositions(
 }
 
 /**
+ * The bake of a tile's site-frame positions: `B · T(-offset)`, where `B` bakes the tile's own
+ * (local) positions and `offset` is its frame in the scan's (`tileOffsetOf`). `bake` itself
+ * when the offset is zero, as it is for every tile of a scan that fits SPZ's range, so nothing
+ * changes there.
+ *
+ * Why it is right: the engine bakes `B = inverse(E) · R · T(o) · A · N` (`transformTile`: the
+ * primitive's ENU frame `E`, the root's transform `R`, the tile's composed translation `T(o)`,
+ * the glTF axis correction `A` and node matrix `N`), and `A · N` is the identity for this
+ * pipeline's tiles (splat_tiles.py's node matrix turns z-up into the y-up `A` turns back). So
+ * `B · T(-o) · (local + o) = B · local`: the baked position, from the site-frame one.
+ */
+export function translateBake(bake: Mat4, offset: readonly [number, number, number]): Mat4 {
+  const [ox, oy, oz] = offset;
+  if (ox === 0 && oy === 0 && oz === 0) return bake;
+  const out = Array.from(bake);
+  const moved = transformPoint(bake, -ox, -oy, -oz, [0, 0, 0]);
+  out[12] = moved[0];
+  out[13] = moved[1];
+  out[14] = moved[2];
+  return out;
+}
+
+/**
  * Rounds to the nearest multiple of `quantum`, normalising `-0` to `+0`.
  *
  * The signed zero is not pedantry: `checksumPositions` digests bytes, `-0` and `+0` differ in
@@ -159,7 +192,7 @@ export function snapToGrid(value: number, quantum: number): number {
  * the positions the rig was built from, and a bit-exact digest over it would never match.
  */
 export function unbakePositions(
-  baked: Float32Array,
+  baked: Float32Array | Float64Array,
   inverse: Mat4,
   quantum: number = SPZ_POSITION_QUANTUM_M,
   out?: Float32Array,

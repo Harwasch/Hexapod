@@ -53,6 +53,7 @@ import {
   invertAffine,
   maxAbsDifference,
   transformPositions,
+  translateBake,
   unbakePositions,
   type Mat4,
 } from "./splatFrames";
@@ -69,7 +70,8 @@ export interface SnapshotTile {
   readonly content: SplatTileContent | SplatTile;
   readonly start: number;
   readonly count: number;
-  /** The tile's own bake matrix `B`. */
+  /** The tile's bake from the scan's (site) frame (`siteBakeOf`): `B` for a tile with no frame
+   *  of its own. */
   readonly bake: Mat4;
 }
 
@@ -94,9 +96,40 @@ function sameBits(a: Float32Array, aIndex: number, b: Float32Array, bIndex: numb
   return Object.is(a[aIndex], b[bIndex]);
 }
 
-function bakeOf(content: SplatTileContent | undefined): Mat4 | undefined {
-  const transform = content?._lastSplatTransform;
-  return transform?.length === 16 ? transform : undefined;
+/**
+ * Where a tile's own frame is in the scan's: the translations of its `transform` and every
+ * ancestor's up to (not including) the root, whose transform is the globe placement -- what
+ * `view/tiles.ts` `parseTileset` calls the tile's offset, and `splat_tiles.tile_offsets` in the
+ * pipeline. Zero for every tile of a scan that fits SPZ's range. Undefined when one of them is
+ * anything but a translation: no reader here composes a rotation.
+ */
+export function tileOffsetOf(tile: SplatTile): [number, number, number] | undefined {
+  const offset: [number, number, number] = [0, 0, 0];
+  for (let at: SplatTile | undefined = tile; at?.parent !== undefined; at = at.parent) {
+    const m = at.transform;
+    if (m === undefined) continue;
+    if (m.length !== 16) return undefined;
+    for (let i = 0; i < 12; i += 1) if (m[i] !== (i % 5 === 0 ? 1 : 0)) return undefined;
+    if (m[15] !== 1) return undefined;
+    offset[0] += m[12] ?? 0;
+    offset[1] += m[13] ?? 0;
+    offset[2] += m[14] ?? 0;
+  }
+  return offset;
+}
+
+/**
+ * The bake of `tile`'s positions from the scan's (site) frame, the frame every rig, instance
+ * and skin digest is taken in: the engine's own `B` (`_lastSplatTransform`) with the tile's
+ * frame taken out (`translateBake`), so un-baking gives local + offset. `B` itself for a tile
+ * with no frame of its own. Undefined until the tile is baked, or when its frame is not a
+ * translation.
+ */
+export function siteBakeOf(tile: SplatTile): Mat4 | undefined {
+  const transform = tile.content?._lastSplatTransform;
+  if (transform?.length !== 16) return undefined;
+  const offset = tileOffsetOf(tile);
+  return offset === undefined ? undefined : translateBake(transform, offset);
 }
 
 /**
@@ -131,7 +164,7 @@ function slotTiles(
   for (const [tile, slot] of slots) {
     if (tile.tileset !== undefined && tile.tileset !== owner) continue;
     const content = tile.content;
-    const bake = bakeOf(content);
+    const bake = siteBakeOf(tile);
     if (bake === undefined) {
       return { kind: "wait", reason: "no-bake-transform", detail: "a tile is not baked yet" };
     }
@@ -189,7 +222,7 @@ export function snapshotTiles(
   let start = 0;
   for (const tile of list) {
     const content = tile.content;
-    const bake = bakeOf(content);
+    const bake = siteBakeOf(tile);
     if (bake === undefined) {
       return { kind: "wait", reason: "no-bake-transform", detail: "a tile is not baked yet" };
     }

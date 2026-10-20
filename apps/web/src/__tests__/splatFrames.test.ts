@@ -12,6 +12,10 @@
  * invisible to the digest, and that a different tree is not.
  */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { gunzipSync } from "node:zlib";
+
 import { describe, expect, it } from "vitest";
 
 import { checksumPositions } from "@twin/world";
@@ -24,14 +28,22 @@ import {
   resolveBakedPositions,
   snapToGrid,
   SPZ_POSITION_QUANTUM_M,
+  transformPoint,
   transformPositions,
+  translateBake,
   treeUprightness,
   unbakePositions,
 } from "@/cesium/splatFrames";
+import type { SplatTile } from "@/cesium/splatInternals";
+import { siteBakeOf, tileOffsetOf } from "@/cesium/splatTiles";
+import { spzPickDataOf } from "@/lib/spzPositions";
+import { spzFromGlb } from "@/view/glb";
+import { parseTileset, type TileNode } from "@/view/tiles";
 
 import {
   bakeFixture as bake,
   bakeMatrix,
+  eastNorthUpToFixedFrame,
   canonicalPositions as canonical,
   fixtureRig as rig,
   multiplyMat4 as multiply,
@@ -218,5 +230,137 @@ describe("resolveBakedPositions", () => {
     expect(() =>
       resolveBakedPositions(out, baked, assignment, new Uint8Array(4), bakeMatrix, out),
     ).toThrow(/alias/);
+  });
+});
+
+describe("tiles in frames of their own (data/tiles/synthetic-far)", () => {
+  const far = resolve(process.cwd(), "../../data/tiles/synthetic-far");
+  const tilesetJson = JSON.parse(readFileSync(resolve(far, "splat/tileset.json"), "utf8")) as {
+    root: { transform: number[]; boundingVolume: { box: number[] } };
+  };
+  const expected = (
+    JSON.parse(readFileSync(resolve(far, "source/expected.json"), "utf8")) as {
+      tiles: Record<string, { checksum: string }>;
+    }
+  ).tiles;
+  const everyTile = (tile: TileNode): TileNode[] => [tile, ...tile.children.flatMap(everyTile)];
+  const tiles = everyTile(parseTileset(tilesetJson).root);
+  const localOf = (uri: string): Float32Array => {
+    const glb = readFileSync(resolve(far, "splat", uri));
+    const spz = spzFromGlb(glb.buffer.slice(glb.byteOffset, glb.byteOffset + glb.byteLength));
+    const positions = spzPickDataOf(gunzipSync(spz))?.positions;
+    if (!positions) throw new Error(`${uri} has no positions`);
+    return positions;
+  };
+  // The engine's frames for this tileset: its root placement `R` (ENU at the site origin, on
+  // the Gulf coast of Florida) and the primitive's `E`, ENU at the bounding volume's centre.
+  const placement = tilesetJson.root.transform;
+  const box = tilesetJson.root.boundingVolume.box;
+  const centre = transformPoint(placement, box[0] ?? 0, box[1] ?? 0, box[2] ?? 0, [0, 0, 0]);
+  const enu = eastNorthUpToFixedFrame(centre[0], centre[1], centre[2]);
+  /** `B` for a tile at `offset`, as `transformTile` composes it: inverse(E) · R · T(o). */
+  const bakeAt = (offset: readonly [number, number, number]): number[] =>
+    multiply(
+      invertAffine(enu) ?? [],
+      multiply(placement, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, ...offset, 1]),
+    );
+
+  it("translateBake un-bakes a far tile to float32(local + offset)", () => {
+    expect(tiles.filter((tile) => tile.offset).length).toBeGreaterThanOrEqual(4);
+    for (const tile of tiles) {
+      const offset = tile.offset ?? [0, 0, 0];
+      const local = localOf(tile.uri);
+      const engineBake = bakeAt(offset);
+      // The frame arithmetic alone, in doubles: the baked positions kept exactly enough that
+      // only `translateBake` decides what the un-bake gives.
+      const baked = new Float64Array(local.length);
+      const point: [number, number, number] = [0, 0, 0];
+      for (let i = 0; i < local.length; i += 3) {
+        transformPoint(engineBake, local[i] ?? 0, local[i + 1] ?? 0, local[i + 2] ?? 0, point);
+        baked.set(point, i);
+      }
+      const site = unbakePositions(baked, invertAffine(translateBake(engineBake, offset)) ?? []);
+      expect(checksumPositions(site), tile.uri).toBe(expected[tile.uri]?.checksum);
+      // Un-baked by the engine's own `B`, a moved tile digests as its local positions: not the
+      // site-frame digest every rig, instance and skin lists it by.
+      if (tile.offset) {
+        const own = unbakePositions(baked, invertAffine(engineBake) ?? []);
+        expect(checksumPositions(own)).toBe(checksumPositions(local));
+        expect(checksumPositions(own)).not.toBe(expected[tile.uri]?.checksum);
+      }
+    }
+  });
+
+  it("a zero offset returns the same bake", () => {
+    expect(translateBake(bakeMatrix, [0, 0, 0])).toBe(bakeMatrix);
+    const moved = translateBake(bakeMatrix, [10, -4, 1]);
+    expect(Array.from(moved).slice(0, 12)).toEqual(Array.from(bakeMatrix).slice(0, 12));
+    expect(moved).not.toBe(bakeMatrix);
+  });
+
+  it("un-bakes the engine's float32 bake exactly within 2 km of the tileset centre: the recorded limit", () => {
+    // Baked positions are float32 (`_positions`). Below 2048 m a coordinate's rounding is at
+    // most 2^-14 m, and through a rotation at most sqrt(3) * 2^-14 = 1.06e-4 m: under SPZ's
+    // half step (2^-13, 1.22e-4 m), so the snap recovers the site position exactly. Further
+    // out the bound passes the half step and a far tile under CesiumJS may refuse a binding
+    // ("checksum"): an engine limit this does not fix (docs/DECISIONS/0011).
+    let near = 0;
+    for (const tile of tiles) {
+      const offset = tile.offset ?? [0, 0, 0];
+      const local = localOf(tile.uri);
+      const engineBake = bakeAt(offset);
+      const baked = bake(local, engineBake);
+      let reach = 0;
+      for (const value of baked) reach = Math.max(reach, Math.abs(value));
+      if (reach >= 2048) continue;
+      near += 1;
+      const site = unbakePositions(baked, invertAffine(translateBake(engineBake, offset)) ?? []);
+      expect(checksumPositions(site), tile.uri).toBe(expected[tile.uri]?.checksum);
+    }
+    expect(near).toBeGreaterThanOrEqual(2);
+  });
+
+  it("tileOffsetOf sums the tile frames below the root, and siteBakeOf takes them out of B", () => {
+    const moved = (x: number, y: number, z: number): number[] => [
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      x,
+      y,
+      z,
+      1,
+    ];
+    const root: SplatTile = { transform: placement };
+    const parent: SplatTile = { transform: moved(2548, 900, 0), parent: root };
+    const child: SplatTile = {
+      transform: moved(1342, 0, 0),
+      parent,
+      content: { _lastSplatTransform: bakeAt([3890, 900, 0]) },
+    };
+    expect(tileOffsetOf(root)).toEqual([0, 0, 0]);
+    expect(tileOffsetOf(child)).toEqual([3890, 900, 0]);
+    const site = siteBakeOf(child);
+    expect(site).toBeDefined();
+    // The site bake of a moved tile is the bake of an unmoved one (to rounding).
+    const unmoved = bakeAt([0, 0, 0]);
+    for (let i = 0; i < 16; i++) expect(site?.[i] ?? Number.NaN).toBeCloseTo(unmoved[i] ?? 0, 6);
+    const turned: SplatTile = {
+      transform: [0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+      parent: root,
+      content: { _lastSplatTransform: unmoved },
+    };
+    expect(tileOffsetOf(turned)).toBeUndefined();
+    expect(siteBakeOf(turned)).toBeUndefined();
+    // Not baked yet: no bake.
+    expect(siteBakeOf(parent)).toBeUndefined();
   });
 });
