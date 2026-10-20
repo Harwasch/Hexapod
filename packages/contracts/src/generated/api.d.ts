@@ -4371,6 +4371,11 @@ export interface components {
             provenance?: components["schemas"]["Provenance"] | null;
             /** Sensor */
             sensor?: string | null;
+            /**
+             * Siteid
+             * @description The site this capture is a new epoch of. Unset: the worker matches it spatially or makes a new site.
+             */
+            siteId?: string | null;
             /** Slug */
             slug?: string | null;
             temporalExtent?: components["schemas"]["TemporalExtent"] | null;
@@ -8274,6 +8279,8 @@ export interface components {
             lon?: number | null;
             /** Name */
             name?: string | null;
+            /** Siteid */
+            siteId?: string | null;
         };
         /**
          * PhoneRefine

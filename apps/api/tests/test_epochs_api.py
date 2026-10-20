@@ -88,3 +88,41 @@ def test_an_unparseable_stored_quality_reads_as_null(client: TestClient, db: Ses
     [epoch] = client.get(f"/api/v1/sites/{site.id}/epochs").json()
 
     assert epoch["quality"] is None
+
+
+# ── A capture naming its site ───────────────────────────────────────────────────────────
+
+
+def test_a_capture_can_name_the_site_it_is_an_epoch_of(client: TestClient, db: Session) -> None:
+    site = make_site(db)
+    db.commit()
+
+    response = client.post(
+        "/api/v1/captures",
+        json={"name": "October", "kind": "gaussian-splat", "siteId": str(site.id)},
+    )
+
+    assert response.status_code == 201, response.text
+    capture = response.json()
+    assert capture["metadata"]["siteId"] == str(site.id)
+    # Not registered into it yet: `siteId` on the capture is the site a run registered.
+    assert capture["siteId"] is None
+
+
+def test_naming_an_unknown_site_is_404(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/captures",
+        json={"name": "October", "kind": "gaussian-splat", "siteId": str(uuid.uuid4())},
+    )
+
+    assert response.status_code == 404, response.text
+
+
+def test_metadata_site_id_is_reserved(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/captures",
+        json={"name": "October", "kind": "video", "metadata": {"siteId": str(uuid.uuid4())}},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "metadata.siteId is set through siteId" in response.text
