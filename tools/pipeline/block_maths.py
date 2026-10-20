@@ -1,53 +1,26 @@
-"""Block training's geometry: the partition, the camera rule, the frozen ring, the blend.
+"""The geometry of block training: the partition, the camera rule, the frozen ring, the
+cross-fade at the seams and each block's held-out frames.
 
-Plain numpy and nothing newer than CPython 3.10, because two interpreters import it -- the
-pipeline's (3.12), which plans and merges the blocks (`blocks.py`), and the trainer's
-(gsplat's CUDA wheels are 3.10 only), where `block_views.py` renders the prior to decide
-which cameras each block needs. The same arrangement as `holdout_maths.py`.
+Pure numpy and the standard library, importable by CPython 3.10 (the trainer's
+interpreter). The ideas are the papers': testing a camera by how much a block changes the
+coarse model's render (CityGaussian, arXiv 2404.01133), a margin round each block and a
+visibility fallback (VastGaussian, arXiv 2402.17427), and a frozen ring of surroundings
+(Hierarchical 3DGS, arXiv 2406.12080). The rules below -- quantile grid, SSIM boundary,
+blend width and its cap, merge order -- are this project's own, stated as maths.
 
-Every rule here is taken from a primary source's code, read at its tag, and adapted only
-where our data differs; each function says which and how.
-
-* **Partition** (`partition`): CityGaussian V2's `build_partition_coordinates`
-  (`internal/utils/citygs_partitioning_utils.py`): the grid's edges are *per-axis
-  quantiles* of the coarse model's gaussian positions -- `torch.quantile(points[:, 0],
-  linspace(0, 1, block_dim[0] + 1))`, the same for y -- so every column and every row
-  holds the same number of gaussians. In the ground plane, after rotating the scene so the
-  cameras' mean up is +z (their `partition_citygs.py --reorient`: `up = -mean(c2w[:, :3,
-  1])`, which is `sfm.camera_up`). Two differences, both because our captures are phone
-  walks and orbits rather than aerial blocks: the two horizontal axes are the principal
-  axes of the gaussians' footprint (so a long walk is cut across its length, not across a
-  diagonal), and the outer bounds are the 1st and 99th percentiles rather than the min and
-  max, because a phone capture's coarse model has floaters and far background that would
-  otherwise stretch the outer blocks' extents (which set their margin, ring and centre).
-  The outer edges are *open* for membership: every gaussian and every camera belongs to
-  exactly one block.
-* **Cameras** (`assign`): CityGS V1 `data_partition.py` / V2
-  `projection_based_partition_assignment`: a camera belongs to a block if its centre lies
-  in it, or if rendering the coarse model with the block's gaussians' opacity zeroed
-  changes its render by `1 - SSIM > epsilon`. Their `ssim` is the standard 11x11,
-  sigma 1.5 gaussian window with zero padding (`utils/loss_utils.py`), which `ssim` here
-  reproduces.
-* **Minimum views** (`merge_small`): V2's block dataparser asserts `len(images) > 50`
-  ("Easy to overfit"); a block with fewer is merged into its grid neighbour.
-* **Margin**: VastGaussian §3.2 expands each cell by 20% for data selection --
-  `(l_h + 0.2 l_h) x (l_w + 0.2 l_w)`, 10% a side -- which is `DEFAULT_MARGIN`.
-* **Frozen ring** (`ring`): Hierarchical 3DGS `scene/gaussian_model.py`
-  (`create_from_pcd`, the scaffold): a chunk loads the coarse gaussians whose Chebyshev
-  distance from its centre, `max(|dx|, |dy|)`, is between 0.5 and 1.5 chunk sizes, and
-  excludes them from densification. Here the inner bound is the trainable region's edge
-  (the block plus its margin), so no surface is both trainable and frozen.
-* **Blend** (`weights`): H3DGS `hierarchy_explicit_loader.cpp::getWeight`: a gaussian of
-  chunk `c` keeps weight 1 while `dist(c) <= 0.95 d_other`, 0 past `1.05 d_other`, linear
-  between, and its opacity is multiplied by it. On H3DGS's uniform grid that band is the
-  shared edge +- `falloff * D / 4` (D the distance between the two centres: `x = f D /
-  (2 (2 + f))`, 0.0122 D at f = 0.05). A quantile grid is not uniform, and there the
-  bisector between centres is *not* the shared edge -- it can lie inside the neighbour's
-  core, where this block trained nothing. So the ramp is applied per axis at the grid's
-  own edges, with that same half-width, and a block's weight is the sum over its cells of
-  the product of the two axes' ramps. That is a partition of unity: the weights of all
-  blocks sum to exactly 1 everywhere, so the band never doubles the density. `falloff 0`
-  is the hard crop CityGS and VastGS use.
+* **Partition.** A grid in the ground plane of the cameras' up: axes from the principal
+  direction of the points, cell edges at per-axis quantiles (so each column and each row
+  holds as many points as the others, within one), the outer edges open.
+* **Cameras.** A camera trains a block when it stands in it, or when removing the block
+  from the coarse model's render changes the view: 1 - SSIM > epsilon (Wang, Bovik,
+  Sheikh and Simoncelli, IEEE TIP 13(4), 2004), with local statistics renormalised to
+  the in-frame pixels so a block seen only at the frame border counts.
+* **Ring.** The prior's gaussians within a square annulus round the block (block-
+  normalised L-infinity distance <= outer), outside its trainable region.
+* **Blend.** Across each interior edge, a linear ramp of half-width h = min(blend * D,
+  margin * w): D the spacing of the adjacent cell centres, w the narrower cell's width.
+  The per-cell weights telescope, so the blocks' weights sum to exactly 1 everywhere, and
+  the cap keeps the band inside both blocks' trained margins.
 """
 
 from __future__ import annotations
@@ -58,100 +31,82 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 
-#: VastGaussian §3.2: each cell expanded by 20% (10% a side) for its training data.
+F64 = npt.NDArray[np.float64]
+I64 = npt.NDArray[np.int64]
+B = npt.NDArray[np.bool_]
+
+#: The trainable region grows by this fraction of each cell's width per side (VastGaussian,
+#: arXiv 2402.17427, expands by 20%; 10% is what the measured 2-block spool run used:
+#: 26.42 dB merged against 26.39 whole).
 DEFAULT_MARGIN = 0.1
-#: H3DGS scaffold: the frozen ring reaches 1.5 block sizes from the block's centre.
+#: The frozen ring reaches this many block sizes from the block's centre: one full block
+#: width beyond each edge, so a camera anywhere in the block sees at least a block width
+#: of frozen surroundings in every ground direction.
 DEFAULT_RING_OUTER = 1.5
-#: H3DGS getWeight's `falloff`: the +-5% band of the distance ratio.
-DEFAULT_FALLOFF = 0.05
-#: CityGS's `1 - SSIM` threshold. Their released configs use 0.05-0.12 (V1: Sci-Art and
-#: MatrixCity 0.05, Residence 0.08, Building 0.1, Rubble 0.12; V2: 0.05 for every aerial
-#: scene and 0.01 for MatrixCity's street views, with 0.08 as the code default). The
-#: lowest non-street value: a lower threshold gives a block more cameras, and CityGS
-#: Tab. 4 shows the camera test is the largest single factor (25.77 dB with it, 23.43
-#: without), while an extra camera only costs training time -- the frozen ring already
-#: renders what it sees outside the block. Ours are ground-level phone captures, closer to
-#: their street case than to aerial; calibrating on our captures is the plan's open
-#: question, and `block_epsilon` is the knob.
+#: Half-width of the cross-fade, as a fraction of the spacing of adjacent cell centres.
+DEFAULT_BLEND = 0.0125
+#: The camera test's 1 - SSIM threshold (`block_epsilon` is the knob).
 DEFAULT_EPSILON = 0.05
-#: CityGS V2 `colmap_block_dataparser.py`: `assert len(new_images) > 50`.
+#: The fewest training cameras a block may have; fewer and it joins a neighbour.
 MIN_IMAGES = 50
-#: The outer bounds, as quantiles (see the module docstring).
+#: Robust outer bounds of the points, per axis.
 OUTER_QUANTILES = (0.01, 0.99)
-
-#: CityGS `utils/loss_utils.py::ssim`: an 11-tap gaussian of sigma 1.5, and the standard
-#: constants for images in [0, 1].
+#: SSIM's window (Wang et al. 2004): 11 taps, sigma 1.5, K1 0.01 and K2 0.03 at L = 1.
 SSIM_WINDOW = 11
 SSIM_SIGMA = 1.5
-_C1 = 0.01**2
-_C2 = 0.03**2
+SSIM_K = (0.01, 0.03)
 
 
-# --- the partition ----------------------------------------------------------------------
+def _unit(vector: F64) -> F64:
+    out: F64 = vector / np.linalg.norm(vector)
+    return out
 
 
-def horizontal_axes(up: Sequence[float], xyz: Any) -> tuple[Any, Any]:
-    """Two orthonormal axes perpendicular to `up`: the principal axis of the positions'
-    footprint in the ground plane first, then the one across it."""
-    u = np.asarray(up, dtype=np.float64)
-    u = u / np.linalg.norm(u)
-    # Any vector not parallel to up, then Gram-Schmidt.
-    seed = np.array([1.0, 0.0, 0.0]) if abs(u[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-    e1 = seed - (seed @ u) * u
-    e1 /= np.linalg.norm(e1)
-    e2 = np.cross(u, e1)
+def horizontal_axes(up: npt.ArrayLike, xyz: npt.ArrayLike) -> tuple[F64, F64]:
+    """Two orthonormal ground-plane axes for `up`: the first along the points' principal
+    horizontal direction (sign fixed), the second up x first."""
+    u_hat = _unit(np.asarray(up, dtype=np.float64).reshape(3))
+    seed = np.array([1.0, 0.0, 0.0]) if abs(u_hat[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    e1 = _unit(seed - float(seed @ u_hat) * u_hat)
+    e2: F64 = np.cross(u_hat, e1)
     points = np.asarray(xyz, dtype=np.float64).reshape(-1, 3)
     points = points[np.isfinite(points).all(axis=1)]
     if points.shape[0] < 2:
         return e1, e2
-    flat = np.stack([points @ e1, points @ e2], axis=1)
-    flat -= flat.mean(axis=0)
-    values, vectors = np.linalg.eigh(flat.T @ flat)
-    major = vectors[:, int(np.argmax(values))]
-    # A deterministic sign, so the same scene always numbers its blocks the same way.
-    if major[0] < 0 or (major[0] == 0 and major[1] < 0):
-        major = -major
-    a1 = major[0] * e1 + major[1] * e2
-    a1 /= np.linalg.norm(a1)
-    a2 = np.cross(u, a1)
+    planar = np.stack([points @ e1, points @ e2], axis=1)
+    planar -= planar.mean(axis=0)
+    scatter = planar.T @ planar
+    _values, vectors = np.linalg.eigh(scatter)
+    m = vectors[:, -1]
+    if m[0] < 0 or (m[0] == 0 and m[1] < 0):
+        m = -m
+    a1 = _unit(m[0] * e1 + m[1] * e2)
+    a2: F64 = np.cross(u_hat, a1)
     return a1, a2
 
 
-def grid_shape(count: int, extent_u: float, extent_v: float, *, exact: bool) -> tuple[int, int]:
-    """Columns along the long axis and rows across it, for `count` blocks.
-
-    CityGS fixes `block_dim` by hand per scene (2x2 to 6x6). Here it follows the count:
-    the grid whose cells are closest to square, with `exact` meaning `m * k == count` (a
-    forced block count is honoured as given) and otherwise the smallest `m * k >= count`
-    that is, penalised by the extra blocks (a count from the budget is a minimum).
-    """
-    count = max(1, int(count))
-    lu = max(float(extent_u), 1e-12)
-    lv = max(float(extent_v), 1e-12)
-    # Ties (square extents) go to more columns: cut across the principal axis first.
-    best: tuple[float, int, int] | None = None
-    shape = (count, 1)
-    for m in range(1, count + 1):
-        k = count // m if exact else math.ceil(count / m)
-        if k < 1 or (exact and m * k != count):
+def grid_shape(count: float, extent_u: float, extent_v: float, *, exact: bool) -> tuple[int, int]:
+    """(columns, rows) for `count` blocks over extents (u, v): cells as square as possible,
+    with no more cells than needed (`exact`: exactly `count`; else at least `count`)."""
+    n = max(1, math.floor(count))
+    lu, lv = max(float(extent_u), 1e-12), max(float(extent_v), 1e-12)
+    best: tuple[tuple[float, int, int], tuple[int, int]] | None = None
+    for m in range(1, n + 1):
+        k = n // m if exact else -(-n // m)
+        if k < 1 or (exact and m * k != n):
             continue
-        aspect = abs(math.log((lu / m) / (lv / k)))
-        key = (round(aspect + math.log(m * k / count), 12), m * k, -m)
-        if best is None or key < best:
-            best, shape = key, (m, k)
-    return shape
+        score = (round(abs(math.log((lu / m) / (lv / k))) + math.log(m * k / n), 12), m * k, -m)
+        if best is None or score < best[0]:
+            best = (score, (m, k))
+    return (n, 1) if best is None else best[1]
 
 
 @dataclass(frozen=True)
 class Partition:
-    """A grid over the ground plane, and which cells each block is.
-
-    `u_edges` / `v_edges` are the grid's edges including the (finite, robust) outer ones;
-    membership treats the outer edges as open. A cell is `iu * rows + iv`. `blocks` are
-    tuples of cells: one each, until `merge_small` joins a block too thin in cameras to
-    its neighbour.
-    """
+    """A grid in the ground plane: cells (iu, iv) numbered iu * rows + iv, grouped into
+    blocks. Persisted as `to_dict` (`checkpoint/blocks/plan.json`, `partition.json`)."""
 
     origin: tuple[float, float, float]
     axis_u: tuple[float, float, float]
@@ -172,36 +127,48 @@ class Partition:
     def count(self) -> int:
         return len(self.blocks)
 
-    def project(self, xyz: Any) -> Any:
-        """(n, 3) world positions as (n, 2) ground-plane coordinates."""
-        points = np.asarray(xyz, dtype=np.float64).reshape(-1, 3) - np.asarray(self.origin)
-        return np.stack([points @ np.asarray(self.axis_u), points @ np.asarray(self.axis_v)], 1)
+    def project(self, xyz: npt.ArrayLike) -> F64:
+        """(n, 2) ground-plane coordinates (u, v) of points, about the origin."""
+        p = np.asarray(xyz, dtype=np.float64).reshape(-1, 3)
+        d = p - np.asarray(self.origin, dtype=np.float64)
+        au, av = self.axis_u, self.axis_v
+        # Element-wise, not a matrix product: the same bits on every BLAS kernel.
+        u = d[:, 0] * au[0] + d[:, 1] * au[1] + d[:, 2] * au[2]
+        v = d[:, 0] * av[0] + d[:, 1] * av[1] + d[:, 2] * av[2]
+        out: F64 = np.stack([u, v], axis=1)
+        return out
 
-    def cell_of(self, uv: Any) -> Any:
-        """Each point's cell, the outer edges open (non-finite points go to cell 0)."""
-        uv = np.asarray(uv, dtype=np.float64).reshape(-1, 2)
-        u = np.nan_to_num(uv[:, 0], nan=0.0, posinf=0.0, neginf=0.0)
-        v = np.nan_to_num(uv[:, 1], nan=0.0, posinf=0.0, neginf=0.0)
-        iu = np.searchsorted(np.asarray(self.u_edges[1:-1]), u, side="right")
-        iv = np.searchsorted(np.asarray(self.v_edges[1:-1]), v, side="right")
-        return iu * self.rows + iv
+    def cell_of(self, uv: npt.ArrayLike) -> I64:
+        """Each point's cell. A point on an inner edge goes to the cell after it; the outer
+        edges are open, so every point (a non-finite coordinate read as 0) has one."""
+        coords = np.asarray(uv, dtype=np.float64).reshape(-1, 2)
+        coords = np.where(np.isfinite(coords), coords, 0.0)
+        inner_u = np.asarray(self.u_edges[1:-1], dtype=np.float64)
+        inner_v = np.asarray(self.v_edges[1:-1], dtype=np.float64)
+        iu = np.searchsorted(inner_u, coords[:, 0], side="right")
+        iv = np.searchsorted(inner_v, coords[:, 1], side="right")
+        out: I64 = (iu * self.rows + iv).astype(np.int64)
+        return out
 
-    def block_of_cell(self) -> Any:
+    def block_of_cell(self) -> I64:
+        """The block of each cell, -1 for a cell no block holds."""
         table = np.full(self.columns * self.rows, -1, dtype=np.int64)
         for index, cells in enumerate(self.blocks):
-            table[list(cells)] = index
+            for cell in cells:
+                table[cell] = index
         return table
 
-    def block_of(self, uv: Any) -> Any:
-        """Each point's block (by its centre; outer edges open)."""
-        return self.block_of_cell()[self.cell_of(uv)]
+    def block_of(self, uv: npt.ArrayLike) -> I64:
+        out: I64 = self.block_of_cell()[self.cell_of(uv)]
+        return out
 
     def cell_rect(self, cell: int) -> tuple[float, float, float, float]:
+        """(u0, u1, v0, v1) of a cell."""
         iu, iv = divmod(int(cell), self.rows)
         return (self.u_edges[iu], self.u_edges[iu + 1], self.v_edges[iv], self.v_edges[iv + 1])
 
     def rect(self, block: int) -> tuple[float, float, float, float]:
-        """The block's finite bounding rectangle, (u0, u1, v0, v1)."""
+        """The bounding rectangle (u0, u1, v0, v1) of a block's cells."""
         rects = [self.cell_rect(cell) for cell in self.blocks[block]]
         return (
             min(r[0] for r in rects),
@@ -214,22 +181,21 @@ class Partition:
         u0, u1, v0, v1 = self.rect(block)
         return (0.5 * (u0 + u1), 0.5 * (v0 + v1))
 
-    def in_expanded(self, uv: Any, block: int, margin: float) -> Any:
-        """In the block grown by `margin` of each cell's size on each side (VastGS's 10%),
-        the grid's outer edges staying open."""
-        uv = np.asarray(uv, dtype=np.float64).reshape(-1, 2)
-        inside = np.zeros(uv.shape[0], dtype=bool)
+    def in_expanded(self, uv: npt.ArrayLike, block: int, margin: float) -> B:
+        """Whether each point lies in one of the block's cells grown by `margin` times that
+        cell's width on each side (closed); a side on the grid's outer edge is unbounded."""
+        coords = np.asarray(uv, dtype=np.float64).reshape(-1, 2)
+        u, v = coords[:, 0], coords[:, 1]
+        inside = np.zeros(coords.shape[0], dtype=bool)
         for cell in self.blocks[block]:
             iu, iv = divmod(int(cell), self.rows)
             u0, u1, v0, v1 = self.cell_rect(cell)
-            du, dv = margin * (u1 - u0), margin * (v1 - v0)
-            lo_u = -np.inf if iu == 0 else u0 - du
-            hi_u = np.inf if iu == self.columns - 1 else u1 + du
-            lo_v = -np.inf if iv == 0 else v0 - dv
-            hi_v = np.inf if iv == self.rows - 1 else v1 + dv
-            inside |= (
-                (uv[:, 0] >= lo_u) & (uv[:, 0] <= hi_u) & (uv[:, 1] >= lo_v) & (uv[:, 1] <= hi_v)
-            )
+            gu, gv = margin * (u1 - u0), margin * (v1 - v0)
+            low_u = -np.inf if iu == 0 else u0 - gu
+            high_u = np.inf if iu == self.columns - 1 else u1 + gu
+            low_v = -np.inf if iv == 0 else v0 - gv
+            high_v = np.inf if iv == self.rows - 1 else v1 + gv
+            inside |= (u >= low_u) & (u <= high_u) & (v >= low_v) & (v <= high_v)
         return inside
 
     def to_dict(self) -> dict[str, Any]:
@@ -244,291 +210,317 @@ class Partition:
 
     @staticmethod
     def from_dict(document: dict[str, Any]) -> Partition:
+        def triple(values: Sequence[Any]) -> tuple[float, float, float]:
+            a, b, c = (float(x) for x in values)
+            return (a, b, c)
+
         return Partition(
-            origin=_three(document["origin"]),
-            axis_u=_three(document["axisU"]),
-            axis_v=_three(document["axisV"]),
-            u_edges=tuple(float(v) for v in document["uEdges"]),
-            v_edges=tuple(float(v) for v in document["vEdges"]),
+            origin=triple(document["origin"]),
+            axis_u=triple(document["axisU"]),
+            axis_v=triple(document["axisV"]),
+            u_edges=tuple(float(x) for x in document["uEdges"]),
+            v_edges=tuple(float(x) for x in document["vEdges"]),
             blocks=tuple(tuple(int(c) for c in cells) for cells in document["blocks"]),
         )
 
 
-def _three(values: Any) -> tuple[float, float, float]:
-    x, y, z = (float(v) for v in values)
-    return (x, y, z)
-
-
-def _edges(values: Any, count: int) -> tuple[float, ...]:
-    """`count` cells' edges: inner ones at equal-count quantiles (CityGS V2), outer ones at
-    `OUTER_QUANTILES`, made non-decreasing so a degenerate axis still yields a grid."""
-    inner = [float(q) for q in np.quantile(values, np.linspace(0.0, 1.0, count + 1)[1:-1])]
+def _edges(values: F64, cells: int) -> tuple[float, ...]:
     low, high = (float(q) for q in np.quantile(values, OUTER_QUANTILES))
-    edges = [min(low, *inner) if inner else low, *inner, max(high, *inner) if inner else high]
-    for index in range(1, len(edges)):
-        edges[index] = max(edges[index], edges[index - 1])
+    inner = [float(np.quantile(values, j / cells)) for j in range(1, cells)]
+    edges = [min([low, *inner]), *inner, max([high, *inner])]
+    edges = [float(e) for e in np.maximum.accumulate(np.asarray(edges, dtype=np.float64))]
     if edges[-1] == edges[0]:
         edges[-1] = edges[0] + 1e-9
     return tuple(edges)
 
 
-def partition(xyz: Any, up: Sequence[float], count: int, *, exact: bool) -> Partition:
-    """Split `xyz` (the prior's gaussian centres in the region to train) into `count`
-    blocks of equal gaussian counts per column and per row. Deterministic."""
+def partition(xyz: npt.ArrayLike, up: npt.ArrayLike, count: float, *, exact: bool) -> Partition:
+    """The grid of `count` blocks (exactly, or at least) over the points' ground plane,
+    one block a cell. Independent of the points' order."""
     points = np.asarray(xyz, dtype=np.float64).reshape(-1, 3)
     points = points[np.isfinite(points).all(axis=1)]
     if points.shape[0] == 0:
         raise ValueError("no finite positions to partition")
-    # Rounded, so that the same points in another order (a sum's rounding differs in the
-    # last bit) give the same partition, byte for byte.
-    a1, a2 = (np.round(axis, 9) for axis in horizontal_axes(up, points))
-    origin = np.median(points, axis=0)
-    rel = points - origin
-    u, v = rel @ a1, rel @ a2
-    lo_u, hi_u = np.quantile(u, OUTER_QUANTILES)
-    lo_v, hi_v = np.quantile(v, OUTER_QUANTILES)
+    a1, a2 = horizontal_axes(up, points)
+    axis_u = tuple(round(float(c), 9) for c in a1)
+    axis_v = tuple(round(float(c), 9) for c in a2)
+    origin = tuple(float(c) for c in np.median(points, axis=0))
+    probe = Partition(
+        origin=(origin[0], origin[1], origin[2]),
+        axis_u=(axis_u[0], axis_u[1], axis_u[2]),
+        axis_v=(axis_v[0], axis_v[1], axis_v[2]),
+        u_edges=(0.0, 1.0),
+        v_edges=(0.0, 1.0),
+        blocks=((0,),),
+    )
+    uv = probe.project(points)
+    lo_u, hi_u = np.quantile(uv[:, 0], OUTER_QUANTILES)
+    lo_v, hi_v = np.quantile(uv[:, 1], OUTER_QUANTILES)
     columns, rows = grid_shape(count, float(hi_u - lo_u), float(hi_v - lo_v), exact=exact)
     return Partition(
-        origin=_three(origin),
-        axis_u=_three(a1),
-        axis_v=_three(a2),
-        u_edges=_edges(u, columns),
-        v_edges=_edges(v, rows),
+        origin=probe.origin,
+        axis_u=probe.axis_u,
+        axis_v=probe.axis_v,
+        u_edges=_edges(uv[:, 0], columns),
+        v_edges=_edges(uv[:, 1], rows),
         blocks=tuple((cell,) for cell in range(columns * rows)),
     )
 
 
-# --- which cameras each block trains on -------------------------------------------------
-
-
-def cameras_inside(part: Partition, centres: Any) -> Any:
-    """(cameras, blocks): the block each camera centre stands in (outer edges open)."""
-    block = part.block_of(part.project(centres))
-    out = np.zeros((block.shape[0], part.count), dtype=bool)
-    out[np.arange(block.shape[0]), block] = True
+def cameras_inside(part: Partition, centres: npt.ArrayLike) -> B:
+    """(cameras, blocks): True where a camera's centre stands in the block."""
+    which = part.block_of(part.project(centres))
+    out: B = which[:, None] == np.arange(part.count)[None, :]
     return out
 
 
-def assign(inside: Any, loss: Any | None, epsilon: float) -> Any:
-    """CityGS's union: inside the block, or `1 - SSIM > epsilon` without it."""
-    assigned = np.asarray(inside, dtype=bool).copy()
-    if loss is not None:
-        assigned |= np.asarray(loss, dtype=np.float64) > epsilon
-    return assigned
+# --- the camera test ------------------------------------------------------------------
 
 
-def _gaussian_window(size: int = SSIM_WINDOW, sigma: float = SSIM_SIGMA) -> Any:
-    x = np.arange(size, dtype=np.float64) - size // 2
-    g = np.exp(-(x**2) / (2 * sigma**2))
-    return g / g.sum()
+def _window() -> F64:
+    offsets = np.arange(SSIM_WINDOW, dtype=np.float64) - (SSIM_WINDOW - 1) / 2
+    taps = np.exp(-(offsets**2) / (2.0 * SSIM_SIGMA**2))
+    out: F64 = taps / taps.sum()
+    return out
 
 
-def _filter(image: Any, window: Any) -> Any:
-    """Separable 2D filter with zero padding ('same'), per channel: (H, W, C)."""
-    pad = window.shape[0] // 2
-    padded = np.pad(image, ((pad, pad), (pad, pad), (0, 0)))
-    rows = sum(w * padded[i : i + image.shape[0], :, :] for i, w in enumerate(window))
-    return sum(w * rows[:, i : i + image.shape[1], :] for i, w in enumerate(window))
+def _blur(image: F64, taps: F64) -> F64:
+    """Separable correlation of (H, W, C) with `taps` along H and W, zero outside."""
+    half = taps.size // 2
+    out = image
+    for axis in (0, 1):
+        size = out.shape[axis]
+        pad = [(0, 0)] * out.ndim
+        pad[axis] = (half, half)
+        padded = np.pad(out, pad)
+        total = np.zeros_like(out)
+        for k, weight in enumerate(taps):
+            total += weight * np.take(padded, np.arange(k, k + size), axis=axis)
+        out = total
+    return out
 
 
-def ssim(a: Any, b: Any) -> float:
-    """Mean SSIM of two (H, W, 3) images in [0, 1], as CityGS's `ssim` computes it."""
+def ssim(a: npt.ArrayLike, b: npt.ArrayLike) -> float:
+    """Mean SSIM of two images (H, W, C) or (H, W) in [0, 1] (Wang et al. 2004), local
+    statistics by the 11-tap gaussian renormalised to the in-frame pixels: every local
+    average is (G * x) / (G * 1) with zero outside the frame, so a border window uses only
+    real pixels, weighted to sum to 1."""
     x = np.asarray(a, dtype=np.float64)
     y = np.asarray(b, dtype=np.float64)
     if x.ndim == 2:
-        x, y = x[..., None], y[..., None]
-    window = _gaussian_window()
-    mu_x, mu_y = _filter(x, window), _filter(y, window)
-    sxx = _filter(x * x, window) - mu_x**2
-    syy = _filter(y * y, window) - mu_y**2
-    sxy = _filter(x * y, window) - mu_x * mu_y
-    value = ((2 * mu_x * mu_y + _C1) * (2 * sxy + _C2)) / (
-        (mu_x**2 + mu_y**2 + _C1) * (sxx + syy + _C2)
-    )
-    return float(value.mean())
+        x, y = x[:, :, None], y[:, :, None]
+    taps = _window()
+    norm = _blur(np.ones((*x.shape[:2], 1), dtype=np.float64), taps)
+
+    def mean(z: F64) -> F64:
+        out: F64 = _blur(z, taps) / norm
+        return out
+
+    mx, my = mean(x), mean(y)
+    sxx = mean(x * x) - mx * mx
+    syy = mean(y * y) - my * my
+    sxy = mean(x * y) - mx * my
+    c1, c2 = SSIM_K[0] ** 2, SSIM_K[1] ** 2
+    top = (2.0 * mx * my + c1) * (2.0 * sxy + c2)
+    bottom = (mx * mx + my * my + c1) * (sxx + syy + c2)
+    return float((top / bottom).mean())
 
 
 def contribution(
-    render: Callable[[int, Any | None], Any],
+    render: Callable[[int, Any], Any],
     cameras: int,
     members: Sequence[Any],
     *,
-    skip: Any | None = None,
+    skip: npt.ArrayLike | None = None,
     ssim_fn: Callable[[Any, Any], float] = ssim,
-) -> Any:
-    """(cameras, blocks) of `1 - SSIM(render without block, render with it)`.
-
-    `render(camera, drop)` renders the prior from `camera`, with the gaussians where
-    `drop` is true made transparent (None: all of them drawn). `members[b]` is block `b`'s
-    gaussians. `skip[c, b]` true means the answer is already known (the camera stands in
-    the block, or none of the block's gaussians are in its view) and 0 is recorded without
-    rendering -- CityGS V2 likewise renders only for cameras not assigned by position.
-    """
-    loss = np.zeros((cameras, len(members)), dtype=np.float64)
-    for camera in range(cameras):
-        full = None
-        for block, member in enumerate(members):
-            if skip is not None and bool(skip[camera, block]):
-                continue
-            if not np.any(member):
+) -> F64:
+    """(cameras, blocks): 1 - SSIM of each camera's render without the block's gaussians
+    (`render(c, members[b])`, handed that very object) against its full render
+    (`render(c, None)`, at most once a camera). 0, unrendered, where `skip` is set or a
+    block has no gaussians."""
+    blocks = len(members)
+    loss = np.zeros((cameras, blocks), dtype=np.float64)
+    skipped = (
+        np.zeros((cameras, blocks), dtype=bool) if skip is None else np.asarray(skip, dtype=bool)
+    )
+    present = [bool(np.asarray(member).any()) for member in members]
+    for c in range(cameras):
+        full: Any = None
+        for b in range(blocks):
+            if skipped[c, b] or not present[b]:
                 continue
             if full is None:
-                full = render(camera, None)
-            loss[camera, block] = 1.0 - ssim_fn(render(camera, member), full)
+                full = render(c, None)
+            loss[c, b] = 1.0 - float(ssim_fn(render(c, members[b]), full))
     return loss
+
+
+def assign(inside: npt.ArrayLike, loss: npt.ArrayLike | None, epsilon: float) -> B:
+    """The cameras each block trains on: those standing in it, or whose view it changes
+    by more than `epsilon`."""
+    stands = np.array(inside, dtype=bool, copy=True)
+    if loss is None:
+        return stands
+    out: B = stands | (np.asarray(loss, dtype=np.float64) > epsilon)
+    return out
+
+
+def _adjacent(part: Partition, a: Sequence[int], b: Sequence[int]) -> bool:
+    for ca in a:
+        ua, va = divmod(int(ca), part.rows)
+        for cb in b:
+            ub, vb = divmod(int(cb), part.rows)
+            if abs(ua - ub) + abs(va - vb) == 1:
+                return True
+    return False
 
 
 def merge_small(
     part: Partition,
-    assigned: Any,
-    train: Any,
+    assigned: npt.ArrayLike,
+    train: npt.ArrayLike,
     gaussians: Sequence[int],
     minimum: int = MIN_IMAGES,
-) -> tuple[Partition, Any, list[tuple[int, int, int]]]:
-    """Merge blocks with fewer than `minimum` training cameras into a grid neighbour.
-
-    Repeatedly: the block with the fewest training cameras, if under `minimum`, joins
-    the edge-adjacent block holding the fewest gaussians (the least likely to push the
-    merged block over the GPU); its cameras are the union of both. Returns the new
-    partition, the new assignment, and each merge as (kept, absorbed, cameras before).
-    The union is a subset of what the SSIM test would give the merged block (removing
-    both blocks changes a render at least as much as removing either), so it is never
-    more cameras than a re-render would pick.
-    """
-    blocks = [tuple(cells) for cells in part.blocks]
-    columns = [np.asarray(assigned[:, b], dtype=bool) for b in range(len(blocks))]
-    counts = list(int(g) for g in gaussians)
-    train = np.asarray(train, dtype=bool)
+) -> tuple[Partition, B, list[tuple[int, int, int]]]:
+    """Blocks with fewer than `minimum` training cameras join a neighbour, smallest first,
+    each into the edge-adjacent block with the fewest gaussians. Returns the partition with
+    the merged blocks (ordered by their smallest cell), its camera matrix and the merges
+    as (into, absorbed, its training cameras) in the indices of the list at that step."""
+    cells = [list(c) for c in part.blocks]
+    columns = [np.asarray(col, dtype=bool) for col in np.asarray(assigned, dtype=bool).T]
+    mass = [int(g) for g in gaussians]
+    is_train = np.asarray(train, dtype=bool)
     merges: list[tuple[int, int, int]] = []
-    while len(blocks) > 1:
-        cams = [int((column & train).sum()) for column in columns]
-        small = min(range(len(blocks)), key=lambda b: (cams[b], b))
-        if cams[small] >= minimum:
+    while len(cells) > 1:
+        cams = [int((col & is_train).sum()) for col in columns]
+        s = min(range(len(cells)), key=lambda b: (cams[b], b))
+        if cams[s] >= minimum:
             break
-        neighbours = [
-            b
-            for b in range(len(blocks))
-            if b != small and _adjacent(part, blocks[small], blocks[b])
+        candidates = [
+            o for o in range(len(cells)) if o != s and _adjacent(part, cells[o], cells[s])
         ]
-        if not neighbours:
-            neighbours = [b for b in range(len(blocks)) if b != small]
-        other = min(neighbours, key=lambda b: (counts[b], b))
-        merges.append((other, small, cams[small]))
-        blocks[other] = tuple(sorted(blocks[other] + blocks[small]))
-        columns[other] = columns[other] | columns[small]
-        counts[other] += counts[small]
-        del blocks[small], columns[small], counts[small]
-    order = sorted(range(len(blocks)), key=lambda b: min(blocks[b]))
+        if not candidates:
+            candidates = [o for o in range(len(cells)) if o != s]
+        o = min(candidates, key=lambda b: (mass[b], b))
+        merges.append((o, s, cams[s]))
+        cells[o] = sorted(set(cells[o]) | set(cells[s]))
+        columns[o] = columns[o] | columns[s]
+        mass[o] += mass[s]
+        del cells[s], columns[s], mass[s]
+    order = sorted(range(len(cells)), key=lambda b: min(cells[b]))
+    matrix: B = (
+        np.stack([columns[b] for b in order], axis=1)
+        if columns
+        else np.zeros((np.asarray(assigned).shape[0], 0), dtype=bool)
+    )
     merged = Partition(
         origin=part.origin,
         axis_u=part.axis_u,
         axis_v=part.axis_v,
         u_edges=part.u_edges,
         v_edges=part.v_edges,
-        blocks=tuple(blocks[b] for b in order),
+        blocks=tuple(tuple(cells[b]) for b in order),
     )
-    matrix = np.stack([columns[b] for b in order], axis=1) if blocks else assigned
     return merged, matrix, merges
 
 
-def _adjacent(part: Partition, a: Sequence[int], b: Sequence[int]) -> bool:
-    for cell in a:
-        iu, iv = divmod(int(cell), part.rows)
-        for other in b:
-            ju, jv = divmod(int(other), part.rows)
-            if abs(iu - ju) + abs(iv - jv) == 1:
-                return True
-    return False
+# --- the frozen ring and the blend ----------------------------------------------------
 
 
-# --- the frozen ring and the blend ------------------------------------------------------
-
-
-def ring(part: Partition, uv: Any, block: int, *, margin: float, outer: float) -> Any:
-    """The prior's gaussians to freeze round `block`: within `outer` block sizes of its
-    centre (Chebyshev, per axis, as H3DGS's scaffold) and outside its trainable region."""
-    uv = np.asarray(uv, dtype=np.float64).reshape(-1, 2)
+def ring(part: Partition, uv: npt.ArrayLike, block: int, *, margin: float, outer: float) -> B:
+    """The frozen ring: points within `outer` block sizes of the block's centre (block-
+    normalised L-infinity distance) that are not in its trainable region."""
+    coords = np.asarray(uv, dtype=np.float64).reshape(-1, 2)
     u0, u1, v0, v1 = part.rect(block)
     cu, cv = 0.5 * (u0 + u1), 0.5 * (v0 + v1)
     wu, wv = max(u1 - u0, 1e-12), max(v1 - v0, 1e-12)
-    chebyshev = np.maximum(np.abs(uv[:, 0] - cu) / wu, np.abs(uv[:, 1] - cv) / wv)
-    return (chebyshev <= outer) & ~part.in_expanded(uv, block, margin)
+    with np.errstate(invalid="ignore"):
+        d = np.maximum(np.abs(coords[:, 0] - cu) / wu, np.abs(coords[:, 1] - cv) / wv)
+        near = d <= outer
+    out: B = near & ~part.in_expanded(coords, block, margin)
+    return out
 
 
-def _axis_weights(edge_values: Sequence[float], values: Any, falloff: float) -> Any:
-    """(n, cells) one axis's partition of unity: ramps of half-width `falloff * D / 4` at
-    each interior edge (D the distance between the two cells' centres), open outside."""
-    edges = np.asarray(edge_values, dtype=np.float64)
-    cells = edges.shape[0] - 1
-    x = np.asarray(values, dtype=np.float64)
-    x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
-    steps = np.ones((x.shape[0], cells + 1), dtype=np.float64)
-    steps[:, cells] = 0.0
-    centres = 0.5 * (edges[:-1] + edges[1:])
+def _cell_weights(edges: Sequence[float], x: F64, blend: float, margin: float) -> F64:
+    """(n, cells) weights of one axis: S_j - S_{j+1}, S_j the ramp across edge j."""
+    e = np.asarray(edges, dtype=np.float64)
+    cells = e.size - 1
+    widths = np.diff(e)
+    centres = 0.5 * (e[:-1] + e[1:])
+    x = np.where(np.isfinite(x), x, 0.0)
+    steps = [np.ones_like(x)]
     for k in range(1, cells):
-        half = falloff * (centres[k] - centres[k - 1]) / 4.0
-        if half <= 0.0:
-            steps[:, k] = (x >= edges[k]).astype(np.float64)
+        spacing = centres[k] - centres[k - 1]
+        h = min(blend * spacing, margin * min(widths[k - 1], widths[k]))
+        if h == 0.0:
+            steps.append((x >= e[k]).astype(np.float64))
         else:
-            # 1 to the right of the edge (inside cell k), 0 to the left, linear across.
-            steps[:, k] = np.clip(0.5 + (x - edges[k]) / (2.0 * half), 0.0, 1.0)
-    # weight of cell i = (right of edge i) - (right of edge i + 1).
-    return steps[:, :-1] - steps[:, 1:]
+            steps.append(np.clip(0.5 + (x - e[k]) / (2.0 * h), 0.0, 1.0))
+    steps.append(np.zeros_like(x))
+    out: F64 = np.stack([steps[j] - steps[j + 1] for j in range(cells)], axis=1)
+    return out
 
 
-def weights(part: Partition, uv: Any, block: int, *, falloff: float = DEFAULT_FALLOFF) -> Any:
-    """Each point's weight in `block`: the sum over its cells of the product of the two
-    axes' ramps (see the module docstring). 1 deep inside, 0 outside past the band."""
-    uv = np.asarray(uv, dtype=np.float64).reshape(-1, 2)
-    wu = _axis_weights(part.u_edges, uv[:, 0], falloff)
-    wv = _axis_weights(part.v_edges, uv[:, 1], falloff)
-    total = np.zeros(uv.shape[0], dtype=np.float64)
+def weights(
+    part: Partition,
+    uv: npt.ArrayLike,
+    block: int,
+    *,
+    blend: float = DEFAULT_BLEND,
+    margin: float = DEFAULT_MARGIN,
+) -> F64:
+    """Each point's weight in `block`, in [0, 1]: the sum over its cells of the product of
+    the per-axis cell weights. Summed over every block it is exactly 1."""
+    coords = np.asarray(uv, dtype=np.float64).reshape(-1, 2)
+    wu = _cell_weights(part.u_edges, coords[:, 0], blend, margin)
+    wv = _cell_weights(part.v_edges, coords[:, 1], blend, margin)
+    total = np.zeros(coords.shape[0], dtype=np.float64)
     for cell in part.blocks[block]:
         iu, iv = divmod(int(cell), part.rows)
         total += wu[:, iu] * wv[:, iv]
-    return np.clip(total, 0.0, 1.0)
+    out: F64 = np.clip(total, 0.0, 1.0)
+    return out
 
 
-def blended_opacity(logits: Any, weight: Any) -> Any:
-    """`alpha' = alpha * weight`, in the PLY's logit space (getWeight's `opacity * w`)."""
-    logits = np.asarray(logits, dtype=np.float64)
+def blended_opacity(logits: npt.ArrayLike, weight: npt.ArrayLike) -> npt.NDArray[np.float32]:
+    """Opacity logits with alpha scaled by `weight` (clipped to (1e-7, 1 - 1e-7)); where
+    the weight is at least 1 the input logit, bit for bit."""
+    raw = np.asarray(logits, dtype=np.float32)
+    w = np.asarray(weight, dtype=np.float64)
     with np.errstate(over="ignore"):
-        alpha = 1.0 / (1.0 + np.exp(-logits))
-    scaled = np.clip(alpha * np.asarray(weight, dtype=np.float64), 1e-7, 1.0 - 1e-7)
-    out = np.log(scaled / (1.0 - scaled))
-    # A weight of exactly 1 leaves the stored value as it was, bit for bit.
-    return np.where(np.asarray(weight) >= 1.0, logits, out).astype(np.float32)
+        alpha = 1.0 / (1.0 + np.exp(-raw.astype(np.float64)))
+    faded = np.clip(alpha * w, 1e-7, 1.0 - 1e-7)
+    out = np.log(faded / (1.0 - faded)).astype(np.float32)
+    full = w >= 1.0
+    out[full] = raw[full]
+    return out
+
+
+# --- a block's held-out frames --------------------------------------------------------
 
 
 def val_order(train: Sequence[str], val: Sequence[str]) -> tuple[list[tuple[str, bool]], int]:
-    """Names in the order a block's dataset lists them, and the `test_every` that makes
-    gsplat's parser hold out exactly the val ones.
-
-    v1.5.3's parser sorts image names and holds out `index % test_every == 0`. A block's
-    frames are renamed `<position>_<name>` in this order, so the block trains on its
-    training frames and is evaluated on the global held-out frames it was assigned --
-    never on a frame another block trained on. The smallest `test_every` whose slots
-    the val frames fill, so as many of them as possible are used; any left over are not
-    in the block's dataset at all. Index 0 is always held out, so a block with no val
-    frame gives up its first training frame to it.
-    """
-    train, val = list(train), list(val)
+    """The frames of a block in the order its dataset renames them (`<position>_<name>`),
+    each with whether it is held out, and the `test_every` that holds out exactly the val
+    ones: gsplat 1.5.3's parser sorts the names and holds out index % every == 0."""
     if not val:
         return [(name, index == 0) for index, name in enumerate(train)], max(2, len(train) + 1)
     for every in range(2, len(train) + 3):
         order: list[tuple[str, bool]] = []
         t = v = 0
-        ok = True
+        failed = False
+        position = 0
         while t < len(train):
-            if len(order) % every == 0:
+            if position % every == 0:
                 if v >= len(val):
-                    ok = False
+                    failed = True
                     break
                 order.append((val[v], True))
                 v += 1
             else:
                 order.append((train[t], False))
                 t += 1
-        if ok:
+            position += 1
+        if not failed:
             return order, every
-    raise AssertionError("unreachable: every = len(train) + 1 always fits one val frame")
+    raise AssertionError("val_order: no hold-out spacing fits, which cannot happen")
