@@ -6,11 +6,29 @@ so M3b extends these tests rather than redefining the error.
 
 from __future__ import annotations
 
+import json
 import pickle
+from pathlib import Path
 
 import pytest
 
-from errors import BAD_INPUT_ERRORS, PipelineError, QualityGateError, check_gate, parse_quality_gate
+import colmap4
+import tree_frames
+from artifacts import ArtifactDecl
+from conftest import FIXTURE_PLY, make_recipe
+from contracts import StageContext, StageOutcome
+from errors import (
+    BAD_INPUT_ERRORS,
+    PipelineError,
+    QualityGateError,
+    check_gate,
+    evaluate_gate,
+    parse_quality_gate,
+)
+from executor import execute
+from registry import stage_impl
+from runners import LocalRunner, RunnerSet
+from workdir import Workdir
 
 
 def test_the_message_round_trips() -> None:
@@ -89,3 +107,86 @@ def test_a_gate_error_survives_crossing_a_process() -> None:
 
     assert isinstance(copy, QualityGateError)
     assert (str(copy), copy.to_dict()) == (str(error), error.to_dict())
+
+
+# --- M3b: the gates a stage applies, and how a failure leaves the runner -------------------
+
+
+def test_evaluate_gate_records_a_failure_without_raising() -> None:
+    record, error = evaluate_gate("g", 0.4, 0.8, fail_when="below", reason="why")
+    assert record == {"name": "g", "enabled": True, "limit": 0.8, "measured": 0.4, "passed": False}
+    assert isinstance(error, QualityGateError) and error.gate == "g"
+    passed, none = evaluate_gate("g", 0.9, 0.8, fail_when="below", reason="why")
+    assert passed["passed"] is True and none is None
+    off, nothing = evaluate_gate("g", 0.1, None, fail_when="below", reason="why")
+    assert off["enabled"] is False and nothing is None
+
+
+GATED = ArtifactDecl("gated.json", content_type="application/json")
+
+
+@stage_impl("t_quality_gate_raises", produces=(GATED,), summary="fails its one gate")
+def t_quality_gate_raises(ctx: StageContext) -> StageOutcome:
+    check_gate(
+        "t_fraction",
+        0.25,
+        _float(ctx.param("floor")),
+        fail_when="below",
+        reason="the test asked for more",
+    )
+    ctx.output(GATED.name).write_text("{}")
+    return StageOutcome(metrics={}, summary="passed")
+
+
+def _float(value: object) -> float | None:
+    return None if value is None else float(str(value))
+
+
+def test_a_gate_error_passes_the_runner_unwrapped(tmp_path: Path) -> None:
+    recipe = make_recipe(
+        [{"id": "g", "impl": "t_quality_gate_raises", "params": {"floor": 0.5}}], inputs=[]
+    )
+    with pytest.raises(QualityGateError) as raised:
+        execute(recipe, Workdir.create(tmp_path / "w"), RunnerSet(cpu=LocalRunner()))
+    assert raised.value.to_dict() == {
+        "gate": "t_fraction",
+        "measured": 0.25,
+        "limit": 0.5,
+        "unit": "",
+        "reason": "the test asked for more",
+    }
+    # Off by default: the same stage with no limit passes.
+    execute(
+        make_recipe([{"id": "g", "impl": "t_quality_gate_raises"}], inputs=[]),
+        Workdir.create(tmp_path / "off"),
+        RunnerSet(cpu=LocalRunner()),
+    )
+
+
+@pytest.mark.skipif(
+    colmap4.version(colmap4.python()) is None, reason="needs pycolmap==4.2.0 for the pose stage"
+)
+def test_the_registered_fraction_gate_fails_the_pose_stage(tmp_path: Path) -> None:
+    """A limit no capture can meet (1.01 of its frames) fails the pose stage by name,
+    after `poses.json` recorded what was measured; with no limit the gate is off."""
+    workdir = Workdir.create(tmp_path / "pose")
+    tree_frames.render_orbit(FIXTURE_PLY, workdir.input_path("frames"), count=24)
+    params = {"matcher": "exhaustive", "colmap": "4.2", "first_octave": 0}
+    recipe = make_recipe(
+        [
+            {
+                "id": "pose",
+                "impl": "colmap",
+                "params": {**params, "fail_below_registered_fraction": 1.01},
+            }
+        ],
+        inputs=["frames"],
+    )
+    with pytest.raises(QualityGateError) as raised:
+        execute(recipe, workdir, RunnerSet(cpu=LocalRunner()))
+    assert raised.value.gate == "registered_fraction"
+    assert raised.value.limit == 1.01 and raised.value.measured <= 1.0
+    poses = json.loads((workdir.artifact_path("pose", "poses") / "poses.json").read_text())
+    gates = {gate["name"]: gate for gate in poses["gates"]}
+    assert gates["registered_fraction"]["passed"] is False
+    assert gates["mean_reprojection_error_px"]["enabled"] is False

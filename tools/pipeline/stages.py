@@ -73,7 +73,7 @@ from captures_bridge import (
     tile_offsets,
 )
 from contracts import FANOUT_METRIC, MetricValue, StageContext, StageOutcome, fanout_role
-from errors import QualityGateError, check_gate
+from errors import QualityGateError, check_gate, evaluate_gate
 from phases import Phases
 from registry import stage_impl
 
@@ -1503,7 +1503,11 @@ def colmap(ctx: StageContext) -> StageOutcome:
         # levels the splat by when nothing better (an EXIF similarity) exists.
         "upEstimate": None if (up := sfm.camera_up(model)) is None else up.to_dict(),
     }
+    gates, gate_failure = _pose_gates(ctx, model, len(images))
+    document["gates"] = gates
     _write_json(out / "poses.json", document)
+    if gate_failure is not None:
+        raise gate_failure
     ctx.log(
         f"colmap: {model.registered}/{len(images)} registered, {model.points3d} points, "
         f"mean track {model.mean_track_length:.2f}, focal {focal:.1f} px"
@@ -1542,6 +1546,41 @@ def colmap(ctx: StageContext) -> StageOutcome:
 #: `focal_from`: `none` leaves the initial focal to COLMAP; `exif` seeds it from
 #: `frames_meta.json`'s capture focal.
 FOCAL_FROM: tuple[str, ...] = ("none", "exif")
+
+
+def _pose_gates(
+    ctx: StageContext, model: sfm.Model, frames: int
+) -> tuple[list[dict[str, object]], QualityGateError | None]:
+    """The pose stage's two gates, off unless the run sets a limit (D4: no recorded
+    measurement backs either threshold yet): what each measured, and the first failure."""
+    fraction = model.registered / frames if frames else 0.0
+    floor = _optional_float(ctx.param("fail_below_registered_fraction"))
+    ceiling = _optional_float(ctx.param("max_mean_reprojection_error_px"))
+    first, first_error = evaluate_gate(
+        "registered_fraction",
+        fraction,
+        floor,
+        fail_when="below",
+        reason=(
+            f"{model.registered} of {frames} frames registered; "
+            f"fail_below_registered_fraction is set to {floor}"
+        ),
+    )
+    second, second_error = evaluate_gate(
+        "mean_reprojection_error_px",
+        model.mean_reprojection_error if model.points3d else None,
+        ceiling,
+        fail_when="above",
+        unit="px",
+        reason=(
+            f"the sparse model's points reproject {model.mean_reprojection_error:.3f} px "
+            f"from their features on average; max_mean_reprojection_error_px is set to "
+            f"{ceiling}"
+        ),
+    )
+    first["param"] = "fail_below_registered_fraction"
+    second["param"] = "max_mean_reprojection_error_px"
+    return [first, second], first_error or second_error
 
 
 def _frames_meta(ctx: StageContext) -> dict[str, object] | None:
