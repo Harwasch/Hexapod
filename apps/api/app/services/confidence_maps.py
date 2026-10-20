@@ -12,19 +12,23 @@ bucket's public base, read from the public bucket -- the published copy, never t
 own key in the private one, which a Refine rewrites in place. A grid is at most
 `MAX_GRID_BYTES` on the wire (refused past it, before it is read), and decoded no further
 than its descriptor declares (`app/analysis/cell_grid.py`). Decoded grids are kept in a
-small LRU bounded by bytes and keyed by **URL and the descriptor's sha256**: a published
-generation is immutable, so its URL alone would do, but a single bucket's run keys are
-rewritten in place, and the sha256 (which `decode` checks against the bytes) makes a
-rewritten grid a different entry rather than a stale hit.
+small LRU bounded by bytes and keyed by **URL and the sha256 of the whole descriptor**: a
+published generation is immutable, so its URL alone would do, but a single bucket's run
+keys are rewritten in place. The planes' own sha256 (which `decode` checks against the
+bytes) is not enough: the same bytes under a descriptor with another origin or window are
+another grid, so the key is a hash of everything that says how to read them.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import math
 import threading
 import uuid
 from collections import OrderedDict
+from collections.abc import Mapping
 from typing import Any
 
 from geoalchemy2.shape import to_shape
@@ -62,7 +66,8 @@ CACHE_BYTES = 96 * 1024 * 1024
 
 
 class GridCache:
-    """Decoded grids by `(url, sha256)`, least recently used out first, bounded by bytes."""
+    """Decoded grids by `(url, descriptor sha256)`, least recently used out first, bounded
+    by bytes."""
 
     def __init__(self, max_bytes: int = CACHE_BYTES) -> None:
         self.max_bytes = max_bytes
@@ -115,11 +120,17 @@ def storage_key(storage: ObjectStorage, url: str) -> str | None:
     return key
 
 
+def descriptor_sha256(descriptor: Mapping[str, Any]) -> str:
+    """The sha256 of the whole descriptor, canonical JSON: it holds the planes' own sha256
+    and everything that says how to read them (levels, windows, channels)."""
+    canonical = json.dumps(descriptor, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def load_grid(storage: ObjectStorage, row: EpochMap) -> cell_grid.Grid:
     """The decoded grid of `row`, from the cache or the bucket; a 409 `confidence-unreadable`
     when it is not in this deployment's bucket, is missing, too large or damaged."""
-    sha = str(row.descriptor.get("sha256") or "")
-    cache_key = (row.url, sha)
+    cache_key = (row.url, descriptor_sha256(row.descriptor))
     cached = GRIDS.get(cache_key)
     if cached is not None:
         return cached

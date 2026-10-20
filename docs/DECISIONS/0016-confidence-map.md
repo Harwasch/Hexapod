@@ -252,8 +252,9 @@ maxAreas 1..8}`. The finest level's weak cells (weak-v1, where the summary is st
    copy — not the run's private key a Refine rewrites; the design said the unpublished key), a
    HEAD refusing anything over 32 MB, a bounded ranged GET, inflated no further than the
    descriptor declares (≤ 64 MB) and checked against its sha256. Decoded grids sit in a
-   per-process LRU bounded by bytes (96 MB), keyed by URL **and** sha256 so a rewritten grid is
-   never a stale hit. Neither route stores anything, but both take the write token: weak
+   per-process LRU bounded by bytes (96 MB), keyed by URL **and** the sha256 of the whole
+   descriptor (the planes' sha256 alone let the same bytes under a moved origin hit the old
+   grid), so a rewritten grid is never a stale hit. Neither route stores anything, but both take the write token: weak
    areas because every POST does (`test_no_mutating_route_is_left_ungated`) and it is the
    first step of planning a flight, gated anyway; fill targets because a call may decode
    nine grids, and its one consumer, the fill workflow, holds the token. Both also spend a

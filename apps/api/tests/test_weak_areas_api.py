@@ -389,3 +389,27 @@ def test_weak_areas_stay_inside_the_site_boundary(
         assert boundary.buffer(1e-9).covers(polygon)
         assert polygon.intersection(ShapelyPolygon(globe(hole))).area < 1e-14
         assert area["areaM2"] < 640.0
+
+
+def test_the_same_bytes_under_another_descriptor_are_another_grid(storage: S3Storage) -> None:
+    """The planes' sha256 says the bytes are the same; the descriptor says where they lie.
+    Rewritten in place with only `levels[0].i0` moved, the grid must be read at its new
+    origin, not served from the cache at the old one."""
+    from app.models import EpochMap
+    from tests.confidence_fixtures import descriptor
+
+    confidence_maps.GRIDS.clear()
+    key = "runs/moved/package/splat/confidence.bin"
+    url = storage.public_url(key)
+    storage.put_object(key, blob("e1"), "application/octet-stream")
+    first = descriptor("e1")
+    moved = descriptor("e1")
+    moved["levels"][0]["i0"] += 7
+    assert moved["sha256"] == first["sha256"]
+
+    before = confidence_maps.load_grid(storage, EpochMap(url=url, descriptor=first, summary={}))
+    after = confidence_maps.load_grid(storage, EpochMap(url=url, descriptor=moved, summary={}))
+    assert after.finest.i0 == before.finest.i0 + 7
+    hits = confidence_maps.GRIDS.hits
+    again = confidence_maps.load_grid(storage, EpochMap(url=url, descriptor=moved, summary={}))
+    assert again is after and confidence_maps.GRIDS.hits == hits + 1
