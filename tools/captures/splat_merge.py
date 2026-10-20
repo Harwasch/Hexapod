@@ -33,8 +33,9 @@ directly: the pairwise combination identity for weighted means and covariances (
 Golub and LeVeque, Am. Statistician 37(3), 1983).
 
 **Back to a gaussian.** The eigen-decomposition of Sigma gives the axes (made a proper
-rotation) and sigma_k = sqrt(max(lambda_k, e^(2 lo))), floored at the smallest scale SPZ
-stores. F = W / S(sigma) is the opacity that would deposit exactly the members' ink. If F
+rotation) and sigma_k = sqrt(max(lambda_k, e^(2 lo), 2^-20 lambda_max)): floored at the
+smallest scale SPZ stores, and at 1/1024 of the longest axis (`MERGED_EIGEN_FLOOR`, which says
+why). F = W / S(sigma) is the opacity that would deposit exactly the members' ink. If F
 is at most `MERGED_OPACITY_MAX` the scales stay and alpha = F; otherwise every axis widens
 by k = clip(sqrt(F / alpha_max), 1, `MERGED_WIDEN_MAX`), so S grows by k^2 and alpha =
 F / k^2 conserves alpha * S = W until k reaches its cap (the widening idea Spark, MIT,
@@ -57,6 +58,19 @@ MERGED_OPACITY_MAX = 511.0 / 512.0
 MERGED_WIDEN_MAX = 2.0
 #: A numeric guard only.
 MERGED_OPACITY_MIN = 1e-6
+#: The smallest variance a merged axis keeps, relative to its largest: 2^-20, an axis 1/1024 of
+#: the longest. A cell whose members lie on a line or in a plane (rank-1 or rank-2 scatter)
+#: has eigenvalues down at e^(2 lo) under ones up to SPZ's top, a 10^14 spread, and nothing
+#: downstream can use it. A viewer rebuilds R diag(s^2) R^T in float32 (unit roundoff
+#: u = 2^-24), where every entry carries a few u of the largest variance, so a smaller
+#: eigenvalue is lost and can come back negative: a gaussian that is not one. Measured over
+#: 200,000 random rotations of a needle and of a disc: at 2^-20 the rebuilt smallest
+#: eigenvalue was within 11% and always positive; at 2^-24 0.1% came back negative; at 1e-10
+#: half did. Nor would SPZ show the thinner axis: its rotation bytes are good to 1/255 per
+#: component, a tilt of up to ~1/128 rad, which already blurs an axis thinner than 1/128 of the
+#: longest; 1/1024 sits 8x below that. The float64 merge's own rounding (~n 2^-53 of the largest
+#: variance for n members) is far below both.
+MERGED_EIGEN_FLOOR = 2.0**-20
 #: Thomsen's exponent for the ellipsoid's surface area.
 THOMSEN_P = 1.6075
 #: Weights are floored here so a cell of invisible members still divides.
@@ -298,7 +312,7 @@ def coarsen(m: Moments, levels: int) -> Moments:
 
 def to_splats(m: Moments, *, log_scale_range: tuple[float, float]) -> MergedSplats:
     """Each row's gaussian: axes and scales from its covariance (floored at SPZ's smallest
-    scale), opacity conserving its weight, widened up to `MERGED_WIDEN_MAX` past
+    scale and at `MERGED_EIGEN_FLOOR` of the largest variance), opacity conserving its weight, widened up to `MERGED_WIDEN_MAX` past
     `MERGED_OPACITY_MAX`."""
     n = len(m)
     c = m.cov
@@ -314,7 +328,10 @@ def to_splats(m: Moments, *, log_scale_range: tuple[float, float]) -> MergedSpla
     flip = np.linalg.det(vectors) < 0 if n else np.zeros(0, dtype=bool)
     vectors[flip, :, 0] *= -1.0
     lo = log_scale_range[0]
-    sigma = np.sqrt(np.maximum(values, np.exp(2.0 * lo)))
+    # eigh's values ascend, so the last is the largest; it is positive (every leaf's
+    # covariance is at least e^(2 lo) I), but a NaN-free floor needs it clipped at 0.
+    floor = np.maximum(np.exp(2.0 * lo), MERGED_EIGEN_FLOOR * np.maximum(values[:, 2:], 0.0))
+    sigma = np.sqrt(np.maximum(values, floor))
     fill = m.weight / thomsen_area(sigma)
     widen = np.clip(np.sqrt(fill / MERGED_OPACITY_MAX), 1.0, MERGED_WIDEN_MAX)
     alpha = np.clip(fill / (widen * widen), MERGED_OPACITY_MIN, MERGED_OPACITY_MAX)

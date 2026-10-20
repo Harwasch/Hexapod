@@ -256,7 +256,7 @@ An empty input returns itself. Use run-wise reductions; no Python loop over cell
 **`to_splats(m, *, log_scale_range) -> MergedSplats`.** For each row:
 
 1. **Eigendecomposition.** Assemble the symmetric 3×3 Σ and take its eigen-decomposition with `numpy.linalg.eigh` (eigenvalues ascending, eigenvectors as columns V). If det V < 0, negate column 0, so V is a proper rotation.
-2. **Floor (our choice).** σ_k = sqrt(max(λ_k, e^(2·lo))), aligned with the columns of V. The floor is the smallest scale SPZ can store. It is absolute (no factor relative to the largest eigenvalue): a scale SPZ would clip anyway is the only meaningful lower bound, and it keeps S(σ) > 0.
+2. **Floor (our choice; amended 2026-10-20 after review, see "Why the merge differs").** σ_k = sqrt(max(λ_k, e^(2·lo), 2^-20·λ_max)), aligned with the columns of V. The absolute part is the smallest scale SPZ can store, and keeps S(σ) > 0. The relative part (`MERGED_EIGEN_FLOOR`) keeps a rank-1 or rank-2 cell a gaussian that a float32 consumer can rebuild: as first written the floor was absolute only, which left such cells with axes 10^14 apart.
 3. **Mass-conserving opacity with bounded widening (our choice).** F = W / S(σ) is the opacity that would deposit exactly the members' total ink. If F ≤ α_max, keep σ and set α = F. Otherwise, widen every axis by k = clip(sqrt(F/α_max), 1, k_max). Then S grows by k² and α = F/k², so α·S = W is conserved while k < k_max. Finally α = clip(F/k², α_min, α_max). Constants:
    - `MERGED_OPACITY_MAX` α_max = 511/512. The largest α whose logit is finite and small (≈ 6.24) and whose SPZ alpha byte round(255·α) is still 255.
    - `MERGED_WIDEN_MAX` k_max = 2.0. A parent widened past twice its moment-matched size spreads past its cell's neighbourhood. F > 4·α_max means about four or more stacked layers, whose extra mass is not recoverable as coverage.
@@ -296,7 +296,7 @@ An empty input returns itself. Use run-wise reductions; no Python loop over cell
    - scales outside the range: clipped before the area is taken.
 7. `test_quaternions_round_trip`: 2,000 random unit quaternions (w ≥ 0), including angles within 1e-6 of π about each axis. Quaternion → R → quaternion matches within 1e-12 up to sign, and det R = 1.
 8. `test_the_axes_reproduce_the_covariance`: 500 random SPD matrices. Reconstruction from the float32 outputs is within 1e-5·‖Σ‖_F + 1e-12.
-9. `test_a_flat_cell_is_floored_at_the_smallest_spz_scale`: coplanar members give min log_scale = lo, up to float32 rounding.
+9. (Amended.) `test_a_flat_cell_is_floored_relative_to_its_longest_axis` and `test_a_cell_on_a_line_is_floored_in_both_thin_axes`: rank-2 and rank-1 cells give their thin axes ½·log(2^-20·λ_max), and their float32 rebuild stays positive definite; `test_a_small_flat_cell_is_floored_at_the_smallest_spz_scale`: a 1 cm flat cell gives lo.
 10. `test_colour_and_sh_are_weighted_means`.
 11. `test_opacity_stays_finite_and_in_range`: random F spanning 1e-9 to 1e3 gives α_out in [α_min, α_max] and finite logits.
 

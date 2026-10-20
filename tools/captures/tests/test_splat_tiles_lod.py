@@ -309,8 +309,8 @@ def _expected_root(columns: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     """The root's merged gaussians, from the leaves, by the maths written out per cell:
     weight alpha * S(sigma clipped to SPZ's range), S Thomsen's ellipsoid area (p 1.6075);
     the weighted mean, and the weighted covariance by the law of total covariance; axes by
-    `eigh`, scales floored at SPZ's smallest; opacity W / S, widened by at most 2 past
-    511/512. Returned in SPZ's byte units where SPZ quantises."""
+    `eigh`, variances floored at SPZ's smallest and at 2^-20 of the largest; opacity W / S,
+    widened by at most 2 past 511/512. Returned in SPZ's byte units where SPZ quantises."""
     xyz = np.stack([columns[a] for a in "xyz"], axis=1).astype(np.float64)
     origin = xyz.min(axis=0)
     edge = max(float((xyz.max(axis=0) - origin).max()), 1e-3)
@@ -357,7 +357,7 @@ def _expected_root(columns: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         d = xyz[rows] - mean
         sigma = (weight[:, None, None] * (cov[rows] + d[:, :, None] * d[:, None, :])).sum(0) / total
         values = np.linalg.eigvalsh(sigma)
-        scales = np.sqrt(np.maximum(values, np.exp(2 * lo)))
+        scales = np.sqrt(np.maximum(values, max(math.exp(2 * lo), 2.0**-20 * values[-1])))
         fill = total / area(scales)
         k = min(max(math.sqrt(fill / (511 / 512)), 1.0), 2.0)
         a = min(max(fill / k**2, 1e-6), 511 / 512)

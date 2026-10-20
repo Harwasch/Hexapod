@@ -207,15 +207,95 @@ def test_the_axes_reproduce_the_covariance() -> None:
         )
 
 
-def test_a_flat_cell_is_floored_at_the_smallest_spz_scale() -> None:
+FLOOR = 2.0**-20  # the smallest variance an axis keeps, relative to the largest
+
+
+def _floor_scale(m: sm.Moments) -> float:
+    """The log-scale the floor gives a degenerate axis: max(lo, log of 2^-10 the longest)."""
+    largest = float(np.linalg.eigvalsh(sym(m.cov[0]))[-1])
+    return max(RANGE[0], 0.5 * math.log(FLOOR * largest))
+
+
+def _float32_rebuild(out: sm.MergedSplats) -> np.ndarray:
+    """The covariance as a viewer rebuilds it: in float32, element by element."""
+    x, y, z, w = out.quat_xyzw[0].astype(np.float64)
+    r = rotation(np.array([w, x, y, z])).astype(np.float32)
+    var = np.exp(2 * out.log_scales[0].astype(np.float64)).astype(np.float32)
+    rebuilt = np.zeros((3, 3), np.float32)
+    for i in range(3):
+        for j in range(3):
+            rebuilt[i, j] = sum(r[i, k] * r[j, k] * var[k] for k in range(3))
+    return rebuilt.astype(np.float64)
+
+
+def test_a_flat_cell_is_floored_relative_to_its_longest_axis() -> None:
+    """Rank-2 scatter: coplanar centres of gaussians flat in that plane, 3 m across. The thin
+    axis would be SPZ's smallest (e^lo, 45 um) under a 3 m one; it is kept at 1/1024 of the
+    longest instead, and a float32 rebuild of the result is still a gaussian."""
     g = gaussians(40, 9)
-    g["xyz"][:, 2] = 0.0  # coplanar centres...
-    g["log_scales"][:, 2] = -30.0  # ...of gaussians flat in that plane
+    g["xyz"][:, 2] = 0.0
+    g["log_scales"][:, 2] = -30.0
     g["quat"][:] = [1.0, 0.0, 0.0, 0.0]
     g["logit"][:] = -3.0  # faint, so nothing widens
-    out = sm.to_splats(sm.merge_cells(moments(g, np.zeros(40, np.int64))), log_scale_range=RANGE)
+    m = sm.merge_cells(moments(g, np.zeros(40, np.int64)))
+    assert float(np.linalg.eigvalsh(sym(m.cov[0]))[0]) < 1e-8  # degenerate before the floor
+    out = sm.to_splats(m, log_scale_range=RANGE)
     assert float(sigmoid(out.opacity_logit[0])) < sm.MERGED_OPACITY_MAX
+    want = _floor_scale(m)
+    assert want > RANGE[0] + 1  # the relative floor is the one that binds here
+    assert float(out.log_scales[0].min()) == pytest.approx(want, abs=1e-5)
+    # The thin axis is the plane's normal, z.
+    x, y, z, w = out.quat_xyzw[0].astype(np.float64)
+    axes = rotation(np.array([w, x, y, z]))
+    assert abs(axes[2, int(np.argmin(out.log_scales[0]))]) == pytest.approx(1.0, abs=1e-6)
+    assert np.linalg.eigvalsh(_float32_rebuild(out))[0] > 0
+
+
+def test_a_cell_on_a_line_is_floored_in_both_thin_axes() -> None:
+    """Rank-1 scatter: needles strung along one direction over 40 m. Both thin axes take the
+    floor, the long one keeps the line's direction, and the float32 rebuild stays positive."""
+    rng = np.random.default_rng(13)
+    n = 30
+    direction = np.array([2.0, -1.0, 0.5]) / np.linalg.norm([2.0, -1.0, 0.5])
+    along = rng.uniform(-20, 20, n)
+    g = gaussians(n, 13)
+    g["xyz"] = along[:, None] * direction + [300.0, -40.0, 12.0]
+    # Each a needle along the line: x is its long axis, rotated onto `direction`.
+    half = np.cross([1.0, 0.0, 0.0], direction)
+    angle = math.acos(float(direction[0]))
+    axis = half / np.linalg.norm(half)
+    g["quat"][:] = [math.cos(angle / 2), *(math.sin(angle / 2) * axis)]
+    g["log_scales"][:] = [-1.0, -30.0, -30.0]
+    g["logit"][:] = -3.0
+    m = sm.merge_cells(moments(g, np.zeros(n, np.int64)))
+    values = np.linalg.eigvalsh(sym(m.cov[0]))
+    assert values[1] / values[2] < 1e-10  # rank 1 before the floor
+    out = sm.to_splats(m, log_scale_range=RANGE)
+    scales = np.sort(out.log_scales[0].astype(np.float64))
+    assert scales[:2] == pytest.approx([_floor_scale(m)] * 2, abs=1e-5)
+    x, y, z, w = out.quat_xyzw[0].astype(np.float64)
+    long_axis = rotation(np.array([w, x, y, z]))[:, int(np.argmax(out.log_scales[0]))]
+    assert abs(float(long_axis @ direction)) == pytest.approx(1.0, abs=1e-6)
+    assert np.linalg.eigvalsh(_float32_rebuild(out))[0] > 0
+
+
+def test_a_small_flat_cell_is_floored_at_the_smallest_spz_scale() -> None:
+    """A flat cell 1 cm across: 2^-20 of its largest variance is below SPZ's smallest scale,
+    so the absolute floor, e^lo, is the one that binds."""
+    g = gaussians(40, 9)
+    g["xyz"] = (g["xyz"] - g["xyz"].mean(0)) * 1e-3
+    g["xyz"][:, 2] = 0.0
+    g["log_scales"][:] = [-6.0, -6.0, -30.0]
+    g["quat"][:] = [1.0, 0.0, 0.0, 0.0]
+    g["logit"][:] = -3.0
+    m = sm.merge_cells(moments(g, np.zeros(40, np.int64)))
+    assert 0.5 * math.log(FLOOR * float(np.linalg.eigvalsh(sym(m.cov[0]))[-1])) < RANGE[0]
+    out = sm.to_splats(m, log_scale_range=RANGE)
     assert float(out.log_scales[0].min()) == pytest.approx(RANGE[0], abs=1e-6)
+
+
+def test_the_floor_is_the_modules() -> None:
+    assert sm.MERGED_EIGEN_FLOOR == FLOOR
 
 
 def test_colour_and_sh_are_weighted_means() -> None:
