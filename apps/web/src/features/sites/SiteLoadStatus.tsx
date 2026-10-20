@@ -48,9 +48,8 @@ export function SiteLoadStatus() {
   const representation = useSites((s) =>
     activeSiteId ? s.representation[activeSiteId] : undefined,
   );
-  const temporal = useSites((s) => (activeSiteId ? s.temporalAsset[activeSiteId] : undefined));
   const site = useSite(activeSiteId).data;
-  const asset = site ? shownAsset(site.assets, representation, temporal) : null;
+  const asset = site ? shownAsset(site.assets, representation, undefined) : null;
   const assetId = asset?.id ?? null;
   const runtime = useSites((s) => (assetId ? s.assets[assetId] : undefined));
 
