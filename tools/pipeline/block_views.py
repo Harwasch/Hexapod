@@ -94,7 +94,8 @@ def main(argv: list[str] | None = None) -> int:
     inside = block_maths.cameras_inside(part, camtoworlds[:, :3, 3])
 
     def tensor(values: Any) -> Any:
-        return torch.from_numpy(np.ascontiguousarray(values, dtype=np.float32)).to(device)
+        """`values` as a contiguous float32 torch tensor on `device` (what gsplat takes)."""
+        return torch.as_tensor(np.ascontiguousarray(values, dtype=np.float32), device=device)
 
     means = tensor(xyz)
     quats = tensor(prior["quats"])
