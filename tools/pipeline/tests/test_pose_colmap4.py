@@ -481,6 +481,20 @@ def two_epochs(
     return out
 
 
+# The two_epochs fixture's reference orbit is not always posed whole, and cannot be made
+# to be: measured on this machine (pycolmap 4.2.0, 2026-10-20) over 110 poses of it --
+# 16 threads (the default here) 39 of 40 frames once in 40 runs, else 40; 4 threads (CI's
+# runner) 39 once in 30; 2 threads 40 in 30 of 30; 1 thread 40 in 10 of 10 -- and not
+# byte-reproducible at any thread count (1 thread: 2 distinct images.bin in 10 runs; 16:
+# 10 in 10), so no seed pins it. CI saw the 39 (#52's Pipeline job). The register tests
+# therefore assert against the model as posed, never against 40.
+
+
+def _posed(poses: Path) -> int:
+    """How many frames a pose model registered."""
+    return len(sfm.read_model(poses).images)
+
+
 def _register(
     root: Path, reference: tuple[Path, Path, Any], new: tuple[Path, Path, Any]
 ) -> dict[str, Any]:
@@ -514,9 +528,16 @@ def test_new_frames_register_into_a_fixed_reference(
     document = _register(tmp_path, reference, new)
 
     assert document["pycolmap"] == PYCOLMAP
-    assert document["newFramesUsed"] == 30 and document["referenceFramesUsed"] == 40
-    assert len(document["registeredNew"]) == 30
-    assert document["registeredReference"] == 40
+    # What register is given is the reference *as posed*: the fixture's own mapping
+    # sometimes leaves a frame out (see `_posed`), which is pose's business, not
+    # register's. Register's guarantee is about its input: every reference frame it
+    # sampled stays registered and fixed, and every new one it sampled registers.
+    # (Both sides are under register's 60-frame sample, so all of each is used.)
+    used = _posed(reference[1])
+    assert document["newFramesUsed"] == _posed(new[1])
+    assert document["referenceFramesUsed"] == used
+    assert len(document["registeredNew"]) == document["newFramesUsed"]
+    assert document["registeredReference"] == used
     assert document["referenceMovedMaxM"] < 1e-9
     assert document["crossPairs"] > 0 and document["crossInlierMatches"] > 0
     # The truth in the reference model's frame: the similarity from epoch 1's true
@@ -603,14 +624,17 @@ def test_a_reference_frame_that_matches_nothing_does_not_crash_the_registration(
     reference, new = two_epochs["reference"], two_epochs["new"]
     frames = tmp_path / "reference" / "frames"
     shutil.copytree(reference[0], frames)
-    stranger = frames / "frame_0024.jpg"
+    # A frame the reference model posed (the fixture's mapping may leave one out).
+    posed = sorted(image.name for image in sfm.read_model(reference[1]).images)
+    name = "frame_0024.jpg" if "frame_0024.jpg" in posed else posed[len(posed) // 2]
+    stranger = frames / name
     with Image.open(stranger) as image:
         size = image.size
     drone_frames.pixels(size, seed=99).save(stranger, format="JPEG", quality=92)
 
     document = _register(tmp_path / "reg", (frames, reference[1], reference[2]), new)
 
-    assert document["referenceFramesUnmatched"] == ["frame_0024.jpg"]
-    assert document["registeredReference"] == 39
-    assert len(document["registeredNew"]) == 30
+    assert document["referenceFramesUnmatched"] == [name]
+    assert document["registeredReference"] == document["referenceFramesUsed"] - 1
+    assert len(document["registeredNew"]) == document["newFramesUsed"]
     assert document["referenceMovedMaxM"] < 1e-9
