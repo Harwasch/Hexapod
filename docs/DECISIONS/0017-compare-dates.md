@@ -72,4 +72,82 @@ time. Seeing what changed means flicking between them; a swipe shows both at onc
 
 ## Per-cell view rules
 
-Filled by `claude/feat-splat-compositor`.
+Date 2026-10-20 · design M4–M6 §1 C1–C5, W5b; branch `claude/feat-splat-compositor`.
+
+### Context
+
+A swipe shows two dates side by side. Often the question is another one: what is the newest
+thing we know, everywhere? One capture rarely covers a whole site, so the answer is a patchwork:
+this corner from June, that one from March where June never looked. Drawing two dates as two
+primitives cannot make that patchwork: each primitive is sorted on its own and drawn after the
+other, so wherever both reach one is painted over the other.
+
+### Decision
+
+1. **One primitive draws every date.** `SiteManager.setViewRule(rule | null)` makes the frame
+   anchor's splat primitive (the date that made the site's frame, whose placement every other
+   date copies) the host: the other dates' tilesets are its companions
+   (`cesium/companions.ts`, the engine patch's `companions` array, now one list with several
+   owners), in its one texture and one sort, and each date's own primitive draws nothing
+   (`drawnBy`). Their inferred layers follow their scan onto the host. Only dates that share the
+   anchor's placement (`followAnchor`) take part; one placed on its own is left out.
+2. **Each slot knows its source** (`cesium/splatSources.ts`): an R8 texture of our own, one
+   byte a slot (0 the host, then up to 15 companions; 255 none), rewritten from `_tileSlots`
+   whenever the patch replaces that map, only the rows touched uploaded. A reset of the slots
+   (model matrix, texture growth) is every tile having moved. R8 read back as `round(r·255)`, not
+   R8UI: this CesiumJS's `Texture` has no internal format for `RED_INTEGER` with unsigned bytes.
+3. **A rule picks one owner per cell** (`lib/compositor.ts`, Cesium-free). The owner plane is one
+   byte a cell of the site lattice (C1) at the coarsest of the drawn dates' finest levels, coarser
+   while over 2^22 cells, so a cell never has two owners. A date covers a cell where its
+   confidence grid scored it; a date without a grid, and an inferred layer, cover the cells under
+   their leaf tiles' boxes, which the key flags as "tile bounds, overstates what it saw". Only
+   dates observed up to **As of** (the capture-date control's choice, which reads "As of" while a
+   rule is on) take part.
+   - **Latest**: the newest observed date that covers the cell; else an older one; else, where
+     inferred layers are drawn at all, the newest inferred layer.
+   - **Ground truth**: Latest, never an inferred layer.
+   - **Highlight invented**: Latest, with the inferred owners tinted as the inferred highlight.
+     The viewer's own Highlight (Layers › Inferred) still applies: the host's own layers keep
+     their scan's highlight part, the other dates' layers are tinted by the rule's colour part,
+     so no layer is tinted twice.
+   - **Data age**: Latest, each cell coloured by its owner's age (W4a's colour part on a
+     one-level grid of the plane), striped where a date after As of saw it.
+4. **The shader keeps the owner's splats** (`cesium/splatCompositor.ts`): a part of the host's
+   visibility chain weighs a splat 0 unless its source owns its cell, and feathers seams:
+   `mix(0.5, 1, smoothstep(0, w, d))`, `d` the distance to the nearest cell edge whose neighbour
+   has another owner, `w = min(cell/4, 0.5 m)`, a UX constant, not a measurement. A slot of no
+   source or a cell of no owner draws nothing: the rule fails closed rather than blending.
+5. **Off by default** (open question Q5): resident splats roughly double while a rule is on.
+   The splat budget counts a date the host draws once.
+6. **One or the other with Compare › Dates.** Turning either on ends the other, and the control
+   says so (before, and after: "Per-cell dates ended: Compare › Dates was turned on").
+7. **CesiumJS only (C5).** Under PlayCanvas or Spark the control is disabled with the views'
+   notice and one-click switch; choosing another renderer ends a rule, and says so.
+8. **What it turns off while on, and says.** A date's own Confidence and Data age views (they read
+   one date's grid) are held at Photo. The host's view cones are off: the anchor's cones would
+   fade the other dates' splats where the anchor never looked. A Living Survey rig takes its scan
+   out of incremental mode, which drawing companions needs: the control is disabled while a rig
+   moves the site's scan, and a rig that attaches during a rule ends it, saying why.
+9. **Cost.** The rule's parts load on demand (`compositorSession.ts`, 7,166 B gzip); the
+   globe's entry grows by what the scene keeps of it. Index entry 193,893 B → 194,555 B gzip
+   (budget 197,000 B).
+
+### Consequences
+
+- Per-scan hooks on a date's own primitive (hidden or highlighted objects, skins, split objects,
+  telemetry) do not act on it while it is the host's companion: its own primitive draws nothing.
+  The host's own hooks act on the host's slots as before.
+- A companion is drawn with the host's spherical-harmonics degree: one with more is drawn in its
+  base colour, one with fewer has its range zeroed (the patch's `zeroShRange`).
+- A pick (Measure, selection) is answered by the collider from every drawn date's solids, not by
+  the rule's owner of the cell hit.
+- Sixteen sources at most on one primitive: past them a layer is not drawn, and the key says so.
+
+### Not built: GPU seam stitch
+
+A seam between two owners is feathered, never fixed: the two dates' splats near it were
+optimised against different photographs. Stitching would re-optimise a band of splats either
+side of each seam against the newest images, on a GPU. It is not built here (no GPU runs from
+this work), and when it is, its output is a **derived layer of its own** -- a tileset beside the
+dates, declared as derived, with its inputs named -- never written into either epoch: an epoch is
+what one capture measured, and a stitched band is not.
