@@ -509,6 +509,20 @@ export class SceneSelectController {
     useSceneSelect.getState().clear();
   }
 
+  /**
+   * Scans no longer drawn (another date of their site chosen, SiteManager's `epoch`): an
+   * object of one is not selected any more -- its card's Hide and Show only would act on a
+   * date nobody sees -- and an area painted on one is not kept for Use painted area. The brush
+   * stays out; its next stroke projects what is drawn now.
+   */
+  forgetScans(assetIds: readonly string[]): void {
+    const gone = (assetId = ""): boolean => assetIds.includes(assetId);
+    // The store's clear drops the painted match too (`paint`).
+    if (gone(useSceneSelect.getState().assetId ?? "")) this.clear();
+    if (gone(this.#painted?.assetId)) this.#painted = null;
+    if (gone(this.#paintView?.assetId)) this.#paintView = null;
+  }
+
   /** Hides the selection (every member of a combination, with what it contains) and clears it. */
   hide(): void {
     const s = this.selection();
