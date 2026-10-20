@@ -26,6 +26,14 @@ label the web shows as is. The web reads only `label`, `verdict` and `uncertaint
   conservative: a resection averages many points), so their 3D difference has sigma
   `sqrt(6) g`, and three of those is `AGREE_K = 3 sqrt(6)`, about 7.3 `g`. First
   principles, not calibrated. (A deviation from the design, which used LMedS's inliers.)
+
+  The cameras' **orientations** must agree too: the median angle between each agreeing
+  camera's rotation through the fit and its rotation as registered within `AGREE_K` of
+  one pixel's angle (`1 / focal` radians), by the same reasoning. Centres alone leave a
+  rotation about their own line free when they are (nearly) collinear -- a walk along a
+  path, a single drone strip -- and a fit wrong about that line would put every camera
+  centre right and the scene off to the side; the orientations see it. (Also a
+  deviation: the design recorded the rotation residual but did not judge it.)
 * `gnss-prior-ba` / `gnss-similarity` -- the georeference's own EXIF frame (pose priors in
   bundle adjustment, or a similarity fitted after it), when it did not recentre.
 * `none` -- a located or hand-placed capture: it keeps its placement and is `unaligned`.
@@ -526,6 +534,19 @@ def visual_candidate(
             f"visual: {candidate.inlier_fraction:.2f} of correspondences agree with the fit, "
             f"under {MIN_INLIER_FRACTION:g}"
         )
+    focal = statistics.median(c.focal_px for c in model.cameras) if model.cameras else 0.0
+    if candidate.rotation_residual_deg and focal > 0:
+        limit = math.degrees(AGREE_K / focal)
+        turned = statistics.median(candidate.rotation_residual_deg)
+        if turned > limit:
+            accepted = False
+            candidate.reasons.append(
+                f"visual: the cameras' orientations disagree with the fit by {turned:.2f} deg "
+                f"(median), over {limit:.2f} deg ({AGREE_K:.1f} pixels' angle): the camera "
+                f"centres do not fix the rotation (nearly collinear?)"
+            )
+        if candidate.ransac is not None:
+            candidate.ransac["agreeDeg"] = round(limit, 4)
     candidate.aligned = accepted
     return candidate
 

@@ -668,3 +668,23 @@ def test_catalog_carries_the_alignment_without_per_image_residuals(tmp_path: Pat
     assert carried["label"] == document["label"] and carried["verdict"] == "coarse"
     assert carried["uncertaintyM"] == 0.065
     assert carried["residualM"] == {"rms": 0.01, "median": 0.01, "p90": 0.02, "max": 0.03}
+
+
+def test_orientations_that_disagree_with_the_fit_are_not_an_alignment(tmp_path: Path) -> None:
+    """Centres alone leave a rotation about their own line free; the orientations must
+    agree too. Every registered camera turned 5 deg (far past 3*sqrt(6) pixels' angle at
+    the ring's 1300 px focal, ~0.32 deg) while its centre stays put: not aligned."""
+    poses, model = _ring_model(tmp_path / "m")
+    names = [image.name for image in model.images]
+    registered = _registered(model, TRUE, names)
+    turn = sfm.quat_to_matrix([math.cos(math.radians(2.5)), math.sin(math.radians(2.5)), 0, 0])
+    for name in names:
+        rotation = np.asarray(registered["registeredNew"][name]["rotation"])
+        registered["registeredNew"][name]["rotation"] = (turn @ rotation).tolist()
+    candidate = alignment.visual_candidate(
+        registered, model_dir=poses, model=model, to_target=IDENTITY,
+        reference=_reference(tmp_path), min_registered_fraction=0.5, seed=0,
+    )  # fmt: skip
+
+    assert not candidate.aligned
+    assert any("orientations disagree" in reason for reason in candidate.reasons)
