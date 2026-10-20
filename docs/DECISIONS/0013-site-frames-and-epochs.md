@@ -21,9 +21,9 @@ the opposite of both.
    current revision, `observed_at` (with where it came from, first that applies: the run
    manifest's tz-aware `capturedAtUtc`, labelled `manifest`; the capture row's `captured_at`; the
    manifest's naive `capturedAt`; the upload time, labelled `created`. `capturedAtUtc` is read
-   before the capture row because M3a also copies it into `captures.captured_at`, where it would
-   pass for a date a person gave), its footprint, platform (`phone-video` or `unknown` until
-   M3), status (`published`; `rejected` and `superseded` are reserved for M3's gates), how it found
+   before the capture row and is never copied into `captures.captured_at`, where it would pass
+   for a date a person gave), its footprint, platform (detected from the frames since M3a, ADR
+   0014; `phone-video` or `unknown` before), status (`published`; `rejected` and `superseded` are reserved for M3's gates), how it found
    its site (`explicit`, `spatial`, `new-site`), alignment (M3) and quality. One capture is one
    epoch; `captures.epoch_id`, for several captures of one day, is future work. The run, footprint
    and quality describe the epoch's current revision, so a re-run replaces them; what they said

@@ -36,6 +36,7 @@ from app.models.enums import (
     AssetSourceKind,
     CaptureStatus,
     EpochJoinMethod,
+    EpochPlatform,
     EpochStatus,
     GeorefMethod,
     HeightDatum,
@@ -98,6 +99,10 @@ class Registration:
     quality: dict[str, Any] | None = None
     #: The placed coverage point cloud's file name, when the run made one with points.
     coverage: str | None = None
+    #: What captured it, as `normalize` detected from the frames (`capture_platform`,
+    #: copied up by `catalog`); None when the lane detects nothing (`ingest_splat`) or
+    #: the document names something outside the epoch vocabulary.
+    platform: EpochPlatform | None = None
 
     @staticmethod
     def read(path: Path) -> Registration:
@@ -121,7 +126,36 @@ class Registration:
             ground_samples=_ground_samples(document.get("ground")),
             quality=document.get("quality") if isinstance(document.get("quality"), dict) else None,
             coverage=str(document["coverage"]) if document.get("coverage") else None,
+            platform=_platform(document.get("platform")),
         )
+
+
+def _platform(value: object) -> EpochPlatform | None:
+    """A detected platform, or None for an absent or unknown one (logged, not raised: the
+    tiles are good whatever the detector called them)."""
+    if value is None:
+        return None
+    try:
+        return EpochPlatform(str(value))
+    except ValueError:
+        log.warning("registration.json names platform %r, which is not an epoch platform", value)
+        return None
+
+
+def epoch_platform(capture: Capture, registration: Registration, current: str | None) -> str:
+    """The platform an epoch records after this run (decision D4's tiers).
+
+    What the run detected from its own frames, when it detected something; else what
+    the epoch already says (a re-run that detected nothing, or only `unknown`, does not
+    erase a known platform); else, for a first run, what the capture row implies
+    (`epochs.platform_of`: a phone-key upload is a phone video).
+    """
+    detected = registration.platform
+    if detected is not None and detected is not EpochPlatform.UNKNOWN:
+        return detected.value
+    if current is not None:
+        return current
+    return epochs.platform_of(capture).value
 
 
 def _ground_samples(value: object) -> tuple[GroundSample, ...]:
@@ -630,9 +664,10 @@ def _observed_at(capture: Capture, registration: Registration) -> tuple[datetime
     The rule, stated once (ADR 0013, DATA_MODEL `epochs.observed_at_source`):
 
     1. the manifest's tz-aware `capture.capturedAtUtc` (M3a writes it from the files' own
-       clocks), labelled `manifest`. First, because M3a also copies it into
-       `capture.captured_at`, and read from there it would be labelled `captured-at`
-       although it came from the files;
+       clocks), labelled `manifest`. It is **not** copied into `capture.captured_at`:
+       that column is what a person or the console said, and a date that came from the
+       files must not pass for one. First, because the files' own clock, with a zone, is
+       the better evidence of when the capture was made;
     2. the capture row's `captured_at` (what a person or the console said), `captured-at`;
     3. the manifest's naive `capture.capturedAt` (a video's container date), `manifest`,
        taken as UTC;
@@ -1135,7 +1170,7 @@ def register(
             observed_at=observed_at,
             observed_at_source=observed_source.value,
             footprint=footprint,
-            platform=epochs.platform_of(capture).value,
+            platform=epoch_platform(capture, registration, None),
             status=EpochStatus.PUBLISHED.value,
             join_method=join.value,
             quality=quality,
@@ -1150,8 +1185,13 @@ def register(
             current.footprint = (
                 current.footprint if current.footprint is not None else epoch.footprint
             )
-    elif url is not None:
-        _replace_run(epoch, producing, footprint, quality, now)
+    else:
+        # A re-run of the epoch: what it detected this time is the epoch's platform (a
+        # later normalize reads more of the frames than an earlier one did), published
+        # tiles or not -- the platform is a fact about the capture, not the tiles.
+        epoch.platform = epoch_platform(capture, registration, epoch.platform)
+        if url is not None:
+            _replace_run(epoch, producing, footprint, quality, now)
     same_tiles = published.content_addressed and url == tileset_url(current)
     if url is not None and current is not None and not same_tiles:
         # New tiles -- or, with one bucket, a republish onto the run's own keys, which a
