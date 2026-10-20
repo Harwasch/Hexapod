@@ -333,6 +333,14 @@ class Worker:
         finally:
             finished.set()
             reaping.join(timeout=30)
+            if self.exited_idle:
+                # One more pass on the way out. A job cancelled while this worker sat idle
+                # (lease clear) is the reaper's alone, and its tick is `reap_every_s`, so
+                # without this a cancel in the last minutes before the exit left its GPU
+                # call running until the next start. The API's 20 s re-wake does not
+                # cover that (it finds this machine up) and is an in-memory timer that a
+                # suspended or rebooted API delays or loses (docs/DEPLOYMENT.md).
+                self.reap_abandoned()
 
     def _reap_every(self, halt: threading.Event, finished: threading.Event) -> None:
         """The reaper's tick, on a thread of its own: a slot may be two hours into a job."""

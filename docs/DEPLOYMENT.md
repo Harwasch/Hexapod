@@ -396,9 +396,16 @@ suspend is checked before use (`pool_pre_ping`) and replaced.
 
 The `app` group has `auto_stop_machines = "suspend"` and `min_machines_running = 0`: when
 one of Fly Proxy's checks (every few minutes) finds the one API machine with no traffic, it
-suspends it, and the next request resumes it. A suspended or stopped machine is billed
-for storage only, not CPU or memory, so the 2 GB machine costs about $10 a month while it
-is awake and close to nothing while it is not (Fly's ~$5 per GB-month; an estimate).
+suspends it, and the next request resumes it.
+
+**What it costs**, from [Fly's pricing page](https://fly.io/docs/about/pricing/) as read on
+2026-10-20 (`iad`, per 30 days of runtime, billed by the second): shared-cpu-1x with 1 GB
+is $6.70; RAM beyond the preset's is $6.00/GB, so the 2 GB machine is $12.70 for every
+month it is awake. A stopped or suspended machine is billed $0.15/GB/month for its rootfs
+only, about the image's size (not measured; ~$0.30 at 2 GB). The `twin_worlds_data` volume
+is $0.15 whatever the machine does. So the always-on 1 GB API was $6.70; asleep but for
+2 h a day the 2 GB one is about $1.30, at 8 h about $4.40, and it costs more than before
+past about 12 h a day. Estimates: Fly bills what the machine actually ran.
 
 **What wakes it** is a request through the proxy: the console, the phone, a smoke check.
 Nothing else does, and nothing needs to:
@@ -406,9 +413,16 @@ Nothing else does, and nothing needs to:
 - **the worker and research groups never call the API.** They talk to the database, the
   buckets and Modal. Waking runs the other way: the API starts the worker when it queues a
   job ([above](#waking-the-worker-and-letting-neon-sleep)), from a request that has itself
-  woken the API. Its 20 s recheck (`RECHECK_AFTER_S`) could in principle be overtaken by
-  a suspend; it then runs on the next resume. That matters only if the job also landed
-  in the moment the worker was exiting, and `QUEUE_CHECK_URL` alerts on it either way.
+  woken the API.
+- **the 20 s recheck after a wake** (`RECHECK_AFTER_S`, for a worker found on its way
+  out) is an in-memory timer: a suspend inside those 20 s delays it to the next resume,
+  and a cold boot loses it. For a job queued in that moment, `QUEUE_CHECK_URL` is the
+  durable answer: healthchecks.io alerts when the job is not claimed within its grace.
+  For a cancel there is no check to alert, so the worker closes the gap itself: an idle
+  exit reaps once more on its way out (`app/worker/loop.py`), after its last look at the
+  queue, which leaves only the moment between that pass and the process ending. A call
+  missed even then is cancelled by the worker's next start (any enqueue, or a deploy,
+  which starts it), and Modal's six-hour function limit bounds it regardless.
 - **the release command** runs `alembic upgrade head` in a machine of its own.
 - **the Worlds lease reaper** (`app/worlds/lifecycle.py`) is a thread in the API process,
   so it does not run while the machine is suspended. Its state is on `/worlds-data`, and it
@@ -417,8 +431,12 @@ Nothing else does, and nothing needs to:
   false: a paid GPU worker past its deadline would keep billing until somebody opened the
   console. Turning one on means `auto_stop_machines = "off"` and
   `min_machines_running = 1` again, and `WORLD_API_MAY_SLEEP = "false"`. Two guards say
-  so: CI's image job refuses the combination (`.github/scripts/check_fly_toml.py`), and an
-  API started with `WORLD_API_MAY_SLEEP=true` and provisioning allowed logs a warning.
+  so. CI's image job refuses the combination in `fly.toml`
+  (`.github/scripts/check_fly_toml.py`, which reads the flags as the API does: `1`, `yes`,
+  `on`, any case). A Fly secret overrides `[env]` where CI cannot see it, so the API is the
+  real guard: with `WORLD_API_MAY_SLEEP=true` it refuses every new managed worker (503,
+  logged) and lists no provider as able to provision; workers and sessions that already
+  exist are still reaped.
 
 **The cost of waking.** A resume from suspend takes a few hundred milliseconds (Fly's
 figure), plus Neon's start if its compute has scaled to zero. A resumed process still has

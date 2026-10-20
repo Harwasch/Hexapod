@@ -176,15 +176,31 @@ jobs:
           mounted=$(printf '%s' "$machines" | jq -r '.[] | select(.config.metadata.fly_process_group == "app") | .config.mounts[]? | select(.path == "/worlds-data") | .volume')
           [ -n "$volume" ] && [ "$mounted" = "$volume" ] || { echo "::error::Worlds ledger is not on its expected persistent volume"; exit 1; }
           # The API suspends when idle (fly.toml), and `fly deploy` leaves a machine it
-          # found stopped or suspended stopped. `ssh console` needs it running.
-          state=$(printf '%s' "$machines" | jq -r '.[] | select(.config.metadata.fly_process_group == "app") | .state')
+          # found stopped or suspended stopped. `ssh console` needs it running: start it,
+          # wait (up to 2 minutes) until Fly reports it started, and give each ssh one
+          # retry, since a machine that has just started may not take a session yet.
+          app_state() {
+            flyctl machines list --json | jq -r '.[] | select(.config.metadata.fly_process_group == "app") | .state'
+          }
+          state=$(app_state)
           if [ "$state" != "started" ]; then
             echo "starting API machine $machine (was $state)"
             flyctl machines start "$machine"
+            for _ in $(seq 1 24); do
+              state=$(app_state)
+              [ "$state" = "started" ] && break
+              sleep 5
+            done
+            [ "$state" = "started" ] || { echo "::error::API machine $machine is $state, not started, after 2 minutes"; exit 1; }
           fi
-          flyctl ssh console --machine "$machine" --user root --command "chown 1000:1000 /worlds-data"
-          flyctl ssh console --machine "$machine" --user root --command "chmod 700 /worlds-data"
-          flyctl ssh console --machine "$machine" --user api --command "/app/.venv/bin/python -c 'from pathlib import Path; p=Path(\"/worlds-data/.release-write-check\"); p.write_text(\"ok\"); p.unlink()'"
+          on_api() {
+            local user=$1 command=$2
+            flyctl ssh console --machine "$machine" --user "$user" --command "$command" \
+              || { echo "ssh failed; retrying once in 10 s"; sleep 10; flyctl ssh console --machine "$machine" --user "$user" --command "$command"; }
+          }
+          on_api root "chown 1000:1000 /worlds-data"
+          on_api root "chmod 700 /worlds-data"
+          on_api api "/app/.venv/bin/python -c 'from pathlib import Path; p=Path(\"/worlds-data/.release-write-check\"); p.write_text(\"ok\"); p.unlink()'"
       # `fly deploy` restores every machine to the state it found it in, so a worker that
       # was stopped before the deploy is stopped after it -- and flyctl reports that as "a
       # good state". The app process is behind Fly's proxy, which starts it on the next
