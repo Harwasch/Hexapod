@@ -123,6 +123,7 @@ __all__ = [
     "decide",
     "empty_site_context",
     "label",
+    "platform_evidence",
     "read_site_context",
     "reference_frame",
     "rtk_evidence",
@@ -340,34 +341,55 @@ def _frame_origin(
     return lat, lon, height or 0.0, datum
 
 
+#: What a platform rests on (#49's `platformEvidence`, `capture_platform`).
+PLATFORM_EVIDENCE = ("metadata", "claimed", "none")
+
+
+def platform_evidence(block: object) -> str:
+    """A platform block's `platformEvidence` (#49): `metadata` (the frames showed it),
+    `claimed` (a param or the phone-key hint) or `none`; a missing or unknown value -- a
+    block written before #49 -- is `none`, never assumed `metadata`."""
+    found = block.get("platformEvidence") if isinstance(block, Mapping) else None
+    return found if isinstance(found, str) and found in PLATFORM_EVIDENCE else "none"
+
+
 def _platform(
     requested: object,
     source_meta: Mapping[str, Any] | None,
     frames_meta: Mapping[str, Any] | None,
-) -> tuple[str, str]:
-    """The M3a adapter: (platform, where it came from). The param, then normalize's own
-    detection (`frames_meta`, then `source_meta`), then the make: Apple is a phone, DJI a
-    `drone` -- never `rtk-drone` without RTK evidence, which only detection reads."""
+) -> tuple[str, str, str]:
+    """The M3a adapter: (platform, where it came from, what it rests on). The param, then
+    normalize's own detection (`frames_meta`, then `source_meta`), then the make: Apple is
+    a phone, DJI a `drone` -- never `rtk-drone` without RTK evidence, which only detection
+    reads. A param is `claimed` unless the frames showed the same; detection's own block
+    says what it rests on (`platform_evidence`)."""
+    detected: tuple[str, str, str] | None = None
+    for name, document in (("frames_meta", frames_meta), ("source_meta", source_meta)):
+        block = document.get("platform") if document is not None else None
+        found = block.get("value") if isinstance(block, Mapping) else block
+        if isinstance(found, str) and found in capture_platform.PLATFORMS:
+            detected = found, name, platform_evidence(block)
+            break
     if requested is not None:
         value = str(requested)
         if value not in capture_platform.PLATFORMS:
             raise ValueError(
                 f"platform={value!r} is not one of {', '.join(capture_platform.PLATFORMS)}"
             )
-        return value, "param"
-    for name, document in (("frames_meta", frames_meta), ("source_meta", source_meta)):
-        block = document.get("platform") if document is not None else None
-        found = block.get("value") if isinstance(block, Mapping) else block
-        if isinstance(found, str) and found in capture_platform.PLATFORMS:
-            return found, name
+        # A param that only repeats what the frames showed keeps their evidence, as
+        # `capture_platform.detect` does (#49); any other is a claim.
+        shown = detected is not None and detected[0] == value and detected[2] == "metadata"
+        return value, "param", "metadata" if shown else "claimed"
+    if detected is not None:
+        return detected
     if source_meta is not None:
         make = str(source_meta.get("sensor") or "").casefold()
         video = source_meta.get("format") == "video"
         if make == "apple":
-            return ("phone-video" if video else "phone-photo"), "source_meta"
+            return ("phone-video" if video else "phone-photo"), "source_meta", "metadata"
         if "dji" in make:
-            return "drone", "source_meta"
-    return "unknown", "default"
+            return "drone", "source_meta", "metadata"
+    return "unknown", "default", "none"
 
 
 def rtk_evidence(frames_meta: Mapping[str, Any] | None) -> str | None:
@@ -707,6 +729,7 @@ def decide(
     platform: str,
     visual_failed: bool = False,
     rtk_evidence: str | None = None,
+    platform_evidence: str | None = None,
     uncertainty_m: float | None = None,
     method: str = "",
     reference_verdict: str | None = None,
@@ -715,7 +738,9 @@ def decide(
 
     `rtk_evidence` (`rtk_evidence()`): what in the frames' metadata shows an RTK fixed
     solution. None -- the default, so a caller that forgets it fails closed -- is never
-    survey, whatever the platform string says. `uncertainty_m`, the claim the verdict
+    survey, whatever the platform string says. `platform_evidence` (#49's
+    `platformEvidence`): survey ignores a platform that is not `metadata` -- shown by the
+    frames themselves -- and None (missing) is `none`. `uncertainty_m`, the claim the verdict
     would carry: over `SURVEY_CEILING_M`, or None, is never survey. `method` "visual" with
     a `reference_verdict` that is not survey is never survey either: an epoch aligned into
     a reference is no better than that reference.
@@ -748,6 +773,13 @@ def decide(
             f"accuracy unverified: the platform is {PLATFORM_WORDS.get(platform, platform)}, "
             f"but no RTK fixed solution is in the frames' metadata, and survey needs that "
             f"evidence in the data, not a platform name"
+        )
+        return "coarse", reasons
+    if platform_evidence != "metadata":
+        reasons.append(
+            f"accuracy unverified: the {PLATFORM_WORDS.get(platform, platform)} platform rests "
+            f"on {platform_evidence or 'none'}, not the frames' metadata, and survey needs "
+            f"the frames themselves to show it"
         )
         return "coarse", reasons
     if checks.get("verticalAnchorFree"):
@@ -972,7 +1004,9 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
     frame = site_frame.from_param(ctx.param("site_frame"))
     lat, lon, height, datum = _frame_origin(georef, frame)
     origin = (lat, lon, height)
-    platform, platform_source = _platform(ctx.param("platform"), source_meta, frames_meta)
+    platform, platform_source, platform_rests_on = _platform(
+        ctx.param("platform"), source_meta, frames_meta
+    )
     tier = TIER_OF[platform]
     evidence = rtk_evidence(frames_meta)
     visual_mode = str(ctx.param("visual", "auto"))
@@ -1100,6 +1134,7 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
         platform=platform,
         visual_failed=visual_failed,
         rtk_evidence=evidence,
+        platform_evidence=platform_rests_on,
         uncertainty_m=uncertainty_m,
         method=chosen.method,
         reference_verdict=reference.verdict if reference is not None else None,
@@ -1137,6 +1172,7 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
         "referenceHeightDatum": reference.height_datum if reference is not None else None,
         "platform": platform,
         "platformSource": platform_source,
+        "platformEvidence": platform_rests_on,
         "rtkEvidence": evidence,
         "tier": tier,
         "verdict": verdict,

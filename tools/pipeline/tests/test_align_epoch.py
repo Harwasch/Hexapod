@@ -48,6 +48,7 @@ def test_rtk_with_passing_targets_is_survey() -> None:
         checks=checks,
         platform="rtk-drone",
         rtk_evidence=RTK,
+        platform_evidence="metadata",
         uncertainty_m=0.03,
     ) == (
         "survey",
@@ -57,7 +58,12 @@ def test_rtk_with_passing_targets_is_survey() -> None:
 
 def test_rtk_without_targets_is_coarse_and_says_why() -> None:
     verdict, reasons = alignment.decide(
-        aligned=True, tier="survey", checks={"checks": 0}, platform="rtk-drone", rtk_evidence=RTK
+        aligned=True,
+        tier="survey",
+        checks={"checks": 0},
+        platform="rtk-drone",
+        rtk_evidence=RTK,
+        platform_evidence="metadata",
     )
     assert verdict == "coarse"
     assert reasons == ["accuracy unverified: 0 check target(s) evaluated, fewer than 3"]
@@ -69,7 +75,12 @@ def test_rtk_without_targets_is_coarse_and_says_why() -> None:
         "tolerance": {"horizontalM": 0.12, "verticalM": 0.11},
     }
     verdict, reasons = alignment.decide(
-        aligned=True, tier="survey", checks=failing, platform="rtk-drone", rtk_evidence=RTK
+        aligned=True,
+        tier="survey",
+        checks=failing,
+        platform="rtk-drone",
+        rtk_evidence=RTK,
+        platform_evidence="metadata",
     )
     assert verdict == "coarse" and "out of tolerance" in reasons[0]
 
@@ -81,7 +92,12 @@ def test_survey_needs_three_check_targets_scored_vertically() -> None:
     for vertical in (0, 2):
         checks = {"checks": 3, "verticalChecks": vertical, "withinTolerance": True}
         verdict, reasons = alignment.decide(
-            aligned=True, tier="survey", checks=checks, platform="rtk-drone", rtk_evidence=RTK
+            aligned=True,
+            tier="survey",
+            checks=checks,
+            platform="rtk-drone",
+            rtk_evidence=RTK,
+            platform_evidence="metadata",
         )
         assert verdict == "coarse", vertical
         assert "accuracy unverified vertically" in reasons[0]
@@ -102,6 +118,7 @@ def test_survey_has_an_absolute_ceiling_half_an_l1_carrier_cycle() -> None:
         "checks": perfect,
         "platform": "rtk-drone",
         "rtk_evidence": RTK,
+        "platform_evidence": "metadata",
     }
     assert alignment.decide(**common, uncertainty_m=0.05)[0] == "survey"
     for claim in (0.0952, 10.0, None):
@@ -115,15 +132,34 @@ def test_an_epoch_aligned_to_a_reference_that_is_not_survey_is_not_survey() -> N
     for reference in ("coarse", "unaligned", None):
         verdict, reasons = alignment.decide(
             aligned=True, tier="survey", checks=perfect, platform="rtk-drone",
-            rtk_evidence=RTK, uncertainty_m=0.03, method="visual",
-            reference_verdict=reference,
+            rtk_evidence=RTK, platform_evidence="metadata", uncertainty_m=0.03,
+            method="visual", reference_verdict=reference,
         )  # fmt: skip
         assert verdict == "coarse", reference
         assert "reference epoch that is not surveyed" in reasons[0], reference
     assert alignment.decide(
         aligned=True, tier="survey", checks=perfect, platform="rtk-drone", rtk_evidence=RTK,
-        uncertainty_m=0.03, method="visual", reference_verdict="survey",
+        platform_evidence="metadata", uncertainty_m=0.03, method="visual",
+        reference_verdict="survey",
     )[0] == "survey"  # fmt: skip
+
+
+def test_a_platform_not_shown_by_the_frames_metadata_is_never_survey() -> None:
+    """Coordinator, with #49's `platformEvidence`: survey ignores a platform whose
+    evidence is not `metadata` -- `claimed` (a param, the phone-key hint) or `none`, which
+    a missing field is read as -- even beside RTK flags and passing targets."""
+    perfect = {"checks": 8, "verticalChecks": 8, "withinTolerance": True}
+    for evidence in ("claimed", "none", None):
+        verdict, reasons = alignment.decide(
+            aligned=True, tier="survey", checks=perfect, platform="rtk-drone",
+            rtk_evidence=RTK, platform_evidence=evidence, uncertainty_m=0.03,
+        )  # fmt: skip
+        assert verdict == "coarse", evidence
+        assert "not the frames' metadata" in reasons[0], evidence
+    assert alignment.platform_evidence({"value": "rtk-drone"}) == "none"
+    assert alignment.platform_evidence({"platformEvidence": "claimed"}) == "claimed"
+    assert alignment.platform_evidence({"platformEvidence": "surely"}) == "none"
+    assert alignment.platform_evidence("rtk-drone") == "none"
 
 
 def test_the_rtk_drone_platform_alone_is_never_survey() -> None:
@@ -414,7 +450,12 @@ def test_an_unconstrained_vertical_anchor_is_not_scored_and_cannot_be_survey() -
     assert block["tolerance"]["verticalM"] is None  # type: ignore[index]
     assert all(entry["verticalM"] is None for entry in block["perTarget"])  # type: ignore[attr-defined]
     verdict, reasons = alignment.decide(
-        aligned=True, tier="survey", checks=block, platform="rtk-drone", rtk_evidence=RTK
+        aligned=True,
+        tier="survey",
+        checks=block,
+        platform="rtk-drone",
+        rtk_evidence=RTK,
+        platform_evidence="metadata",
     )
     assert verdict == "coarse"
     assert "accuracy unverified vertically" in reasons[0]
@@ -960,15 +1001,33 @@ def test_a_platform_param_never_makes_survey_without_rtk_evidence_in_the_frames(
         "platform": {"value": "rtk-drone", "source": "param", "evidence": "asked for"},
         "frames": [{"name": n, "dji": None} for n in names],
     }
-    fixed = {
-        "platform": {"value": "rtk-drone", "source": "dji-rtk-fixed", "evidence": "10/10"},
-        "frames": [{"name": n, "dji": {"rtk": {"flag": 50}}} for n in names],
+    platform: dict[str, str] = {
+        "value": "rtk-drone",
+        "source": "dji-rtk-fixed",
+        "evidence": "10/10",
+        "platformEvidence": "metadata",
+    }
+    flags = [{"name": n, "dji": {"rtk": {"flag": 50}}} for n in names]
+    fixed: dict[str, Any] = {"platform": platform, "frames": flags}
+    # #49's `platformEvidence`: the frames' flags are there, but the platform rests on a
+    # claim (or says nothing of what it rests on, read as "none"): never survey.
+    flagged_but_claimed: dict[str, Any] = {
+        "platform": {**platform, "platformEvidence": "claimed"},
+        "frames": flags,
+    }
+    unstated: dict[str, Any] = {
+        "platform": {k: v for k, v in platform.items() if k != "platformEvidence"},
+        "frames": flags,
     }
     cases: list[tuple[str, dict[str, object], dict[str, Any] | None, str]] = [
         ("param, no metadata", {"platform": "rtk-drone"}, None, "coarse"),
         ("param over an iPhone", {"platform": "rtk-drone"}, phone, "coarse"),
         ("normalize's override", {}, claimed, "coarse"),
         ("RTK fixed frames", {}, fixed, "survey"),
+        # A param that repeats what the frames showed keeps their evidence (#49's rule).
+        ("param over RTK fixed frames", {"platform": "rtk-drone"}, fixed, "survey"),
+        ("RTK flags, platform claimed", {}, flagged_but_claimed, "coarse"),
+        ("RTK flags, evidence unstated", {}, unstated, "coarse"),
     ]
     for index, (case, params, meta, expected) in enumerate(cases):
         _, document = _run(
@@ -980,11 +1039,14 @@ def test_a_platform_param_never_makes_survey_without_rtk_evidence_in_the_frames(
         )
         assert document["verdict"] == expected, case
         assert document["platform"] == "rtk-drone", case
-        if expected == "coarse":
-            assert any("no RTK fixed solution" in r for r in document["reasons"]), case
-            assert document["rtkEvidence"] is None, case
-        else:
+        if expected == "survey":
             assert document["rtkEvidence"].startswith("10/10 frames"), case
+            assert document["platformEvidence"] == "metadata", case
+        elif document["rtkEvidence"] is None:
+            assert any("no RTK fixed solution" in r for r in document["reasons"]), case
+        else:
+            assert document["platformEvidence"] != "metadata", case
+            assert any("not the frames' metadata" in r for r in document["reasons"]), case
 
 
 def test_an_rtk_epoch_without_priors_is_not_surveyed_through_a_coarse_reference(

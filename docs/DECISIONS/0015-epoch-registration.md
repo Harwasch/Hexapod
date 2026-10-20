@@ -54,7 +54,8 @@ use_robust_loss_on_prior_position`; the Modal image's self-check builds each one
    principles, not calibrated on any capture.
 6. **Verdict**: `survey` = the `rtk-drone` tier **with RTK evidence in the data** — an RTK fixed
    solution (`dji.rtk.flag` 50) on at least half the frames' `frames_meta.json` records
-   (`alignment.rtk_evidence`); a platform string from a param, normalize's override or detection
+   (`alignment.rtk_evidence`), and a platform whose `platformEvidence` (#49) is `metadata` (a
+   missing field reads `none`); a platform string from a param, normalize's override or detection
    never upgrades a capture on its own (the R2 review of #51) — aligned, ≥ 3 check targets within tolerance — at
    least 3 of them scored vertically on the frame's height datum (a target surveyed on another
    datum leaves only its own height unscored, never the others'), and an anchor that constrains height (GNSS priors whose vertical was left unconstrained by a datum
