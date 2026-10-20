@@ -415,6 +415,58 @@ def check_extras_key(key: str) -> str:
     return key
 
 
+# --- the fill gate (ADR 0016 § Fill) ---------------------------------------------------
+
+#: `app.analysis.rescan_gate.POLICY`, restated so the sidecar rules import no numpy
+#: (`tests/test_sidecar_carry.py` holds the two equal).
+FILL_GATE_POLICY = "rescan-gate-v1"
+#: The flag a fill no longer gated by the tiles' grid leaves on the asset.
+FILL_AGAIN = "Inferred fill needs filling again"
+
+
+def grid_sha256(extras: Mapping[str, Any]) -> str | None:
+    """The sha256 the tiles' confidence grid declares (`extras.confidence`), or None."""
+    grid = extras.get("confidence")
+    sha = grid.get("sha256") if isinstance(grid, Mapping) else None
+    return sha if isinstance(sha, str) and sha else None
+
+
+def fill_gate_problem(
+    entry: object, *, grid_sha: str | None, epoch_id: str | None = None
+) -> str | None:
+    """Why an `inferredLayers` entry may not be shown on tiles whose confidence grid is
+    `grid_sha`, or None. A fill is shown only where a re-scan left cells weak: its
+    evidence carries `rescanGate` (`rescan-gate-v1`), gated against this very grid (and,
+    when the asset is an epoch's revision, for that epoch). A split's hole fill (`fills/`)
+    is not judged: it goes with its split, which is never attached or published."""
+    if not isinstance(entry, Mapping):
+        return "it is not a layer entry"
+    uri = entry.get("uri")
+    if isinstance(uri, str) and uri.removeprefix("./").startswith("fills/"):
+        return None
+    evidence = entry.get("evidence")
+    gate = evidence.get("rescanGate") if isinstance(evidence, Mapping) else None
+    if not isinstance(gate, Mapping):
+        return (
+            "it carries no rescanGate: it was not filled through the fill gate, and only "
+            "cells a re-scan left weak may be filled"
+        )
+    if gate.get("policy") != FILL_GATE_POLICY:
+        return f"its rescanGate policy {gate.get('policy')!r} is not {FILL_GATE_POLICY!r}"
+    if grid_sha is None:
+        return (
+            "the tiles carry no confidence grid: nothing measured them, so no fill is gated on them"
+        )
+    if gate.get("confidenceSha256") != grid_sha:
+        return (
+            "it was gated by a confidence grid these tiles do not carry (a re-run measured "
+            "its own, or another epoch's): the cells it filled may no longer be weak"
+        )
+    if epoch_id is not None and gate.get("epochId") != epoch_id:
+        return f"it was gated for epoch {gate.get('epochId')}, not this asset's epoch {epoch_id}"
+    return None
+
+
 # --- tilesets ------------------------------------------------------------------------
 
 

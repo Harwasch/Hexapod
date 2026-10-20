@@ -44,6 +44,8 @@ from tests.sidecar_fixtures import (
     COLLISION_EXTRAS,
     FILL_EXTRAS,
     FILL_FILES,
+    GRID_EXTRAS,
+    GRID_FILES,
     INSTANCES_EXTRAS,
     LEGACY_DIR,
     LEGACY_URL,
@@ -51,9 +53,11 @@ from tests.sidecar_fixtures import (
     TILES,
     TREE_LOD,
     TREE_SH,
+    UNGATED_FILL_EXTRAS,
     directory_of,
     files_under,
     fixture_scan,
+    gate_for,
     put_scan,
     splat_glb,
     stage,
@@ -90,17 +94,36 @@ def a_registration() -> Registration:
     )
 
 
-def a_run(buckets: Publisher, *, tag: bytes = b"", collision: bool = True) -> None:
-    """The run's packaged tileset in the private bucket, as the packer writes it."""
+def a_run(
+    buckets: Publisher, *, tag: bytes = b"", collision: bool = True, grid: bool = False
+) -> None:
+    """The run's packaged tileset in the private bucket, as the packer writes it; `grid`:
+    with the confidence grid a measured run packs (`GRID_EXTRAS`)."""
     if not collision:
         buckets.private.delete_object(f"{RUN_DIR}collision.bin")
+    if not grid:
+        buckets.private.delete_object(f"{RUN_DIR}confidence.bin")
     put_scan(
         buckets.private,
         RUN_DIR,
         tiles={name: b"glb " + tag + name.encode() for name in TILES},
-        sidecars={"collision.bin": b"grid " + tag} if collision else {},
-        extras={"collision": COLLISION_EXTRAS} if collision else {},
+        sidecars={
+            **({"collision.bin": b"grid " + tag} if collision else {}),
+            **(GRID_FILES if grid else {}),
+        },
+        extras={
+            **({"collision": COLLISION_EXTRAS} if collision else {}),
+            **({"confidence": GRID_EXTRAS} if grid else {}),
+        },
     )
+
+
+def fill_for(asset: Asset) -> list[dict[str, Any]]:
+    """`FILL_EXTRAS` gated for `asset`'s epoch against `GRID_EXTRAS`: what publish-fill.yml
+    would send for it."""
+    entry = FILL_EXTRAS[0]
+    gate = gate_for(epoch=asset.epoch_id)
+    return [{**entry, "evidence": {**entry["evidence"], "rescanGate": gate}}]
 
 
 def republish(db: Session, buckets: Publisher, capture: Capture) -> uuid.UUID | None:
@@ -142,9 +165,9 @@ def attach(
 
 
 def a_scan_with_everything(db: Session, buckets: Publisher) -> tuple[Capture, Asset]:
-    """A run published and registered, then objects, materials, a fill, the streamed LOD
-    and a plant rig attached beside it."""
-    a_run(buckets)
+    """A measured run published and registered, then objects, materials, a fill (gated
+    against its grid), the streamed LOD and a plant rig attached beside it."""
+    a_run(buckets, grid=True)
     capture = Capture(slug="camp", name="Camp", kind=CaptureKind.GAUSSIAN_SPLAT)
     db.add(capture)
     db.commit()
@@ -164,7 +187,7 @@ def a_scan_with_everything(db: Session, buckets: Publisher) -> tuple[Capture, As
         extras={
             "instances": INSTANCES_EXTRAS,
             "materials": MATERIALS_EXTRAS,
-            "inferredLayers": FILL_EXTRAS,
+            "inferredLayers": fill_for(asset),
             "nativeLod": "sog/lod-meta.json",
         },
         rig_url="rig.json",
@@ -191,11 +214,13 @@ def test_a_republish_of_the_same_tiles_carries_every_sidecar(
     assert set(extras) == {
         "gaussians",
         "collision",
+        "confidence",
         "instances",
         "materials",
         "inferredLayers",
         "nativeLod",
     }
+    assert extras["inferredLayers"] == fill_for(asset)
     assert moved.render_config["rigUrl"] == "rig.json"
     assert moved.sidecar_flags == []
 
@@ -208,8 +233,9 @@ def test_a_republish_of_new_tiles_drops_what_was_bound_to_the_old_and_flags_it(
 ) -> None:
     """A Refine: new splats. Objects (and the materials keyed by their ids), the streamed
     LOD and the rig were computed on the old splats and are dropped, each with a flag; the
-    inferred fill is in the scan's frame and is carried; the run's own collision grid
-    replaces the old one."""
+    run's own collision grid replaces the old one. The inferred fill is in the scan's
+    frame, but it was gated by the old tiles' confidence grid, which these tiles do not
+    carry: dropped and flagged to fill again (ADR 0016 § Fill), as the grid is."""
     capture, _ = a_scan_with_everything(db, buckets)
     a_run(buckets, tag=b"refined ")
     # alembic's fileConfig (the `engine` fixture) disables the loggers that exist by then.
@@ -221,16 +247,23 @@ def test_a_republish_of_new_tiles_drops_what_was_bound_to_the_old_and_flags_it(
     moved = the_splat(db, capture)
     url = moved.source["url"]
     files = files_under(buckets.public, directory_of(url))
-    assert set(files) == {*TILES, "collision.bin", *FILL_FILES, "tileset.json"}
+    assert set(files) == {*TILES, "collision.bin", "tileset.json"}
     assert files["collision.bin"] == b"grid refined "  # the run's own
     assert files["0/0.glb"] == b"glb refined 0/0.glb"
     extras = tileset_at(buckets.public, url)["root"]["extras"]
-    assert set(extras) == {"gaussians", "collision", "inferredLayers"}
-    assert extras["inferredLayers"] == FILL_EXTRAS
+    assert set(extras) == {"gaussians", "collision"}
     assert "rigUrl" not in moved.render_config
 
     flags = {flag["kind"]: flag for flag in moved.sidecar_flags}
-    assert set(flags) == {"instances", "materials", "nativeLod", "rig"}
+    assert set(flags) == {
+        "instances",
+        "materials",
+        "nativeLod",
+        "rig",
+        "confidence",
+        "inferredLayers",
+    }
+    assert flags["inferredLayers"]["action"] == "Inferred fill needs filling again"
     assert flags["instances"]["action"] == "Objects need re-segmenting"
     assert "new tiles" in flags["instances"]["reason"]
     assert "instances was not carried" in flags["materials"]["reason"]
@@ -245,15 +278,18 @@ def test_a_republish_of_new_tiles_drops_what_was_bound_to_the_old_and_flags_it(
         "materials",
         "nativeLod",
         "rig",
+        "confidence",
+        "inferredLayers",
     }
 
 
-def test_a_republish_from_a_legacy_prefix_carries_the_fill_and_flags_the_rest(
+def test_a_republish_from_a_legacy_prefix_drops_its_ungated_fill_and_flags_the_rest(
     db: Session, buckets: Publisher
 ) -> None:
     """The camp as it is: published before generations, objects, a fill and a collision
     backfill written beside it in place. Its first republish, from a run whose packer wrote
-    no grid, keeps the fill and says what has to be redone."""
+    no grid, says what has to be redone -- the fill too: it was made before the fill gate,
+    for no re-scan, so it is not carried (ADR 0016 § Fill)."""
     put_scan(
         buckets.public,
         LEGACY_DIR,
@@ -261,7 +297,7 @@ def test_a_republish_from_a_legacy_prefix_carries_the_fill_and_flags_the_rest(
         extras={
             "instances": INSTANCES_EXTRAS,
             "collision": COLLISION_EXTRAS,
-            "inferredLayers": FILL_EXTRAS,
+            "inferredLayers": UNGATED_FILL_EXTRAS,
             "mystery": {"note": "nobody knows"},
             # The root tile's own least-confident cell (P4): the tileset's, not a sidecar.
             "confidenceMin": 37,
@@ -294,13 +330,14 @@ def test_a_republish_from_a_legacy_prefix_carries_the_fill_and_flags_the_rest(
     url = moved.source["url"]
     assert url.startswith(f"{PUBLIC_URL}/runs/{RUN}/p")
     files = files_under(buckets.public, directory_of(url))
-    assert set(files) == {*TILES, *FILL_FILES, "tileset.json"}
+    assert set(files) == {*TILES, "tileset.json"}
     extras = tileset_at(buckets.public, url)["root"]["extras"]
-    assert set(extras) == {"gaussians", "inferredLayers"}
+    assert set(extras) == {"gaussians"}
     flags = {flag["kind"]: flag["action"] for flag in moved.sidecar_flags}
     assert flags == {
         "instances": "Objects need re-segmenting",
         "collision": "Collision needs a backfill",
+        "inferredLayers": "Inferred fill needs filling again",
         "mystery": "Unrecognised sidecar extras.mystery needs re-attaching",
     }
     assert files_under(buckets.public, LEGACY_DIR) == before
@@ -426,10 +463,20 @@ def test_a_split_fill_goes_with_the_split(buckets: Publisher) -> None:
     put_scan(
         buckets.public,
         live_dir,
-        sidecars={**FILL_FILES, "fills/3/tileset.json": b"{}", "objects/3/tileset.json": b"{}"},
-        extras={"inferredLayers": [*FILL_EXTRAS, split_fill], "objects": [{"uri": "x"}]},
+        sidecars={
+            **FILL_FILES,
+            **GRID_FILES,
+            "fills/3/tileset.json": b"{}",
+            "objects/3/tileset.json": b"{}",
+        },
+        extras={
+            "inferredLayers": [*FILL_EXTRAS, split_fill],
+            "objects": [{"uri": "x"}],
+            "confidence": GRID_EXTRAS,
+        },
     )
-    a_run(buckets, tag=b"new ")
+    # New tiles measured with the very grid the fill was gated by: the fill holds.
+    a_run(buckets, tag=b"new ", grid=True)
     plan = plan_carry(
         buckets,
         live_url=f"{PUBLIC_URL}/{live_dir}tileset.json",
@@ -835,7 +882,7 @@ def test_an_attach_to_another_epoch_does_not_stall_a_re_run(
 
 # --- the confidence grid: the run's own, bound to its tiles ---------------------------------
 
-CONFIDENCE_EXTRAS = {"format": "hexapod.cellgrid", "version": 1, "uri": "confidence.bin"}
+CONFIDENCE_EXTRAS = GRID_EXTRAS
 
 
 def a_measured_run(buckets: Publisher, *, tag: bytes = b"", confidence: bool = True) -> None:
@@ -956,3 +1003,129 @@ def test_the_same_tiles_keep_their_grid_through_an_attach_and_a_republish(
     # A run that measured nothing republished the same tiles: the grid was carried, and
     # so is the map, beside the new revision's URL.
     assert the_map_url(db, moved) == moved.source["url"].replace("tileset.json", "confidence.bin")
+
+
+def the_measured_asset(db: Session, buckets: Publisher) -> Asset:
+    """The measured scan's asset: a revision of an epoch, its tiles carrying a grid."""
+    return the_splat(db, a_measured_scan(db, buckets))
+
+
+# --- the fill gate (ADR 0016 § Fill): a fill holds only while its grid does -------------
+
+GATED_LIVE_DIR = f"runs/{RUN}/pfedcba9876543210/package/splat/"
+
+
+def plan_onto(
+    buckets: Publisher,
+    layers: list[dict[str, Any]],
+    *,
+    run_grid: dict[str, Any] | None,
+    tag: bytes = b"new ",
+) -> Any:
+    """A live generation with a grid and `layers`, and a run whose tiles carry `run_grid`
+    (or none): what the carry plans."""
+    files = {**GRID_FILES}
+    for layer in layers:
+        folder = layer["uri"].rsplit("/", 1)[0]
+        files.update({f"{folder}/tileset.json": b"{}", f"{folder}/f0.glb": b"fill"})
+    put_scan(
+        buckets.public,
+        GATED_LIVE_DIR,
+        sidecars=files,
+        extras={"confidence": GRID_EXTRAS, "inferredLayers": layers},
+    )
+    put_scan(
+        buckets.private,
+        RUN_DIR,
+        tiles={name: b"glb " + tag + name.encode() for name in TILES},
+        sidecars=GRID_FILES if run_grid is not None else {},
+        extras={"confidence": run_grid} if run_grid is not None else {},
+    )
+    return plan_carry(
+        buckets,
+        live_url=f"{PUBLIC_URL}/{GATED_LIVE_DIR}tileset.json",
+        tiles_prefix=RUN_DIR,
+        entry=f"{RUN_DIR}tileset.json",
+    )
+
+
+def _layers(plan: Any) -> list[dict[str, Any]] | None:
+    if plan.document is None:
+        return None
+    found: list[dict[str, Any]] | None = json.loads(plan.document)["root"]["extras"].get(
+        "inferredLayers"
+    )
+    return found
+
+
+def test_a_gated_fill_is_carried_while_the_new_tiles_carry_its_grid(buckets: Publisher) -> None:
+    plan = plan_onto(buckets, FILL_EXTRAS, run_grid=GRID_EXTRAS)
+    assert _layers(plan) == FILL_EXTRAS
+    assert "inferredLayers" in plan.carried
+    assert "inferredLayers" not in {gone.kind for gone in plan.dropped}
+    assert set(FILL_FILES) <= {rel for _, rel in plan.objects}
+
+
+def test_a_fill_gated_by_another_grid_is_dropped_and_flagged(buckets: Publisher) -> None:
+    """A re-run measured its own grid: the cells the fill was gated by may no longer be
+    weak, so it is not carried onto the new tiles, and the asset says to fill again."""
+    plan = plan_onto(buckets, FILL_EXTRAS, run_grid={**GRID_EXTRAS, "sha256": "b2" * 32})
+    assert not _layers(plan)
+    assert not any(rel.startswith("inferred/") for _, rel in plan.objects)
+    (gone,) = [gone for gone in plan.dropped if gone.kind == "inferredLayers"]
+    assert gone.action == "Inferred fill needs filling again"
+    assert "confidence grid" in gone.reason
+    assert "inferredLayers" not in plan.carried
+
+
+def test_new_tiles_with_no_grid_drop_every_gated_fill(buckets: Publisher) -> None:
+    plan = plan_onto(buckets, FILL_EXTRAS, run_grid=None)
+    assert not _layers(plan)
+    assert "inferredLayers" in {gone.kind for gone in plan.dropped}
+
+
+def test_an_ungated_fill_is_dropped_even_onto_the_same_tiles(buckets: Publisher) -> None:
+    """A fill from before the gate is not carried by any republish, the very same tiles
+    included; a gated one beside it is."""
+    gated = {**FILL_EXTRAS[0], "uri": "inferred/gated/tileset.json"}
+    plan = plan_onto(buckets, [*UNGATED_FILL_EXTRAS, gated], run_grid=GRID_EXTRAS, tag=b"")
+    assert _layers(plan) == [gated]
+    assert not any(rel.startswith("inferred/fixer/") for _, rel in plan.objects)
+    assert any(rel.startswith("inferred/gated/") for _, rel in plan.objects)
+    (gone,) = [gone for gone in plan.dropped if gone.kind == "inferredLayers"]
+    assert "no rescanGate" in gone.reason
+
+
+def test_a_re_run_that_measured_again_flags_its_fill_on_the_asset(
+    db: Session, buckets: Publisher
+) -> None:
+    capture = a_measured_scan(db, buckets)
+    asset = the_splat(db, capture)
+    attach(db, buckets, asset, FILL_FILES, extras={"inferredLayers": fill_for(asset)})
+    a_measured_run(buckets, tag=b"refined ")
+    # The refined run measured a grid of its own.
+    put_scan(
+        buckets.private,
+        RUN_DIR,
+        tiles={name: b"glb refined " + name.encode() for name in TILES},
+        sidecars={"collision.bin": b"grid refined ", "confidence.bin": b"cells refined "},
+        extras={
+            "collision": COLLISION_EXTRAS,
+            "confidence": {**CONFIDENCE_EXTRAS, "sha256": "c3" * 32},
+        },
+    )
+
+    republish(db, buckets, capture)
+
+    moved = the_splat(db, capture)
+    extras = tileset_at(buckets.public, moved.source["url"])["root"]["extras"]
+    assert "inferredLayers" not in extras
+    flags = {flag["kind"]: flag for flag in moved.sidecar_flags}
+    assert flags["inferredLayers"]["action"] == "Inferred fill needs filling again"
+
+
+def test_the_sidecar_rules_name_the_api_s_own_gate_policy() -> None:
+    from app.analysis import rescan_gate
+    from app.services import sidecars
+
+    assert sidecars.FILL_GATE_POLICY == rescan_gate.POLICY

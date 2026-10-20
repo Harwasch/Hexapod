@@ -189,6 +189,7 @@ def _attach(
         raise InvalidInputError(f"nothing to attach: {prefix} is empty and no extras were given")
 
     old_extras = sidecars.root_extras(current.document)
+    _check_fills(patch, old_extras, asset)
     extras = sidecars.merge_extras(old_extras, patch)
     tiles = sidecars.content_uris(current.document)
     owners = sidecars.assign(extras, staged)
@@ -535,6 +536,22 @@ def _staged(
 
 def _replaced(rel: str, units: set[str]) -> bool:
     return rel in units or any(unit.endswith("/") and rel.startswith(unit) for unit in units)
+
+
+def _check_fills(patch: dict[str, Any], current: dict[str, Any], asset: Asset) -> None:
+    """The fill gate's second barrier (ADR 0016 § Fill; the first is publish-fill.yml): an
+    inferred layer is attached only when gated against the confidence grid the asset's
+    tiles carry now, for its epoch. A 422 that says why, before anything is copied."""
+    layers = patch.get("inferredLayers")
+    if not isinstance(layers, list):
+        return
+    sha = sidecars.grid_sha256(current)
+    epoch = str(asset.epoch_id) if asset.epoch_id is not None else None
+    for entry in layers:
+        why = sidecars.fill_gate_problem(entry, grid_sha=sha, epoch_id=epoch)
+        if why is not None:
+            uri = entry.get("uri") if isinstance(entry, dict) else None
+            raise InvalidInputError(f"extras.inferredLayers {uri!r} is refused: {why}")
 
 
 def _checked_patch(extras: dict[str, Any]) -> dict[str, Any]:

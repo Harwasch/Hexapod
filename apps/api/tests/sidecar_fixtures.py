@@ -151,17 +151,54 @@ def stage(
 
 
 INSTANCES_EXTRAS = {"uri": "instances.json", "count": 2}
+#: A scan's confidence grid as the packer declares it (P4): what a fill is gated against.
+GRID_SHA = "a1" * 32
+GRID_EXTRAS = {
+    "format": "hexapod.cellgrid",
+    "version": 1,
+    "kind": "confidence",
+    "uri": "confidence.bin",
+    "sha256": GRID_SHA,
+}
+GRID_FILES = {"confidence.bin": b"cells"}
+#: Evidence of a fill made without the fill gate (before ADR 0016 § Fill): the camp's.
+UNGATED_EVIDENCE: dict[str, Any] = {
+    "kind": "inferred",
+    "filler": "nvidia-fixer",
+    "views": 12,
+    "gaussians": 900,
+    "meanConfidence": 0.4,
+}
+
+
+def gate_for(grid_sha: str = GRID_SHA, epoch: uuid.UUID | str | None = None) -> dict[str, Any]:
+    """`evidence.rescanGate` of a fill gated against the grid `grid_sha` names."""
+    return {
+        "policy": "rescan-gate-v1",
+        "siteId": "00000000-0000-4000-8000-000000005173",
+        "epochId": str(epoch or "00000000-0000-4000-8000-0000000000e2"),
+        "weakIn": ["00000000-0000-4000-8000-0000000000e1"],
+        "comparedWith": ["00000000-0000-4000-8000-0000000000e1"],
+        "level": 2,
+        "cellM": 1.0,
+        "i0": -4,
+        "j0": -4,
+        "ni": 40,
+        "nj": 32,
+        "cells": 90,
+        "maskSha256": "4d" * 32,
+        "confidenceSha256": grid_sha,
+    }
+
+
 FILL_EXTRAS: list[dict[str, Any]] = [
     {
         "uri": "inferred/fixer/tileset.json",
-        "evidence": {
-            "kind": "inferred",
-            "filler": "nvidia-fixer",
-            "views": 12,
-            "gaussians": 900,
-            "meanConfidence": 0.4,
-        },
+        "evidence": {**UNGATED_EVIDENCE, "rescanGate": gate_for()},
     }
+]
+UNGATED_FILL_EXTRAS: list[dict[str, Any]] = [
+    {"uri": "inferred/fixer/tileset.json", "evidence": UNGATED_EVIDENCE}
 ]
 COLLISION_EXTRAS = {"format": "hexapod.collision", "version": 1, "uri": "collision.bin"}
 FILL_FILES = {

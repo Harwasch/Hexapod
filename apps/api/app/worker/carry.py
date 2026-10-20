@@ -27,7 +27,10 @@ So before the copy, the live generation is read and each sidecar kind in it is d
   keeps them; anything else drops them;
 * **keyed by instance ids** (`INSTANCES`: materials, telemetry): carried exactly when
   `instances` is;
-* **in the scan's frame only** (`FRAME`: inferred layers): carried.
+* **in the scan's frame only** (`FRAME`: inferred layers): carried -- each layer only while
+  the new tiles carry the confidence grid its fill gate was checked against (ADR 0016
+  § Fill); one that was never gated, or whose grid a re-run replaced, is dropped and the
+  asset flagged to fill again.
 
 When the tiles are the same, everything the live generation has beyond them is carried,
 known kind or not: nothing about the scan changed. When they differ, a root extras key no
@@ -379,6 +382,14 @@ def _decide(
         if stray:
             log.warning("carry: %s: not carried, belonging to no sidecar kind: %s", live_url, stray)
 
+    gone_fills = _gate_fills(new_extras, extras)
+    if gone_fills is not None:
+        folders, reason = gone_fills
+        files = [rel for rel in files if not any(rel.startswith(f) for f in folders)]
+        if "inferredLayers" not in extras and "inferredLayers" in carried:
+            carried.remove("inferredLayers")
+        dropped.append(Dropped(kind="inferredLayers", action=sidecars.FILL_AGAIN, reason=reason))
+
     document = None
     if extras:
         document = sidecars.serialize(sidecars.with_extras(new, {**new_extras, **extras}))
@@ -404,6 +415,38 @@ def _decide(
         provided=tuple(sorted(new_kinds)),
         lines=lines,
     )
+
+
+def _gate_fills(
+    new_extras: Mapping[str, Any], extras: dict[str, Any]
+) -> tuple[list[str], str] | None:
+    """The fill gate on a republish (ADR 0016 § Fill): a carried inferred layer stays only
+    while the new generation's tiles carry the very confidence grid it was gated by
+    (`sidecars.fill_gate_problem`). The rest are taken out of `extras` (in place); returns
+    their folders and why, or None when every layer holds."""
+    layers = extras.get("inferredLayers")
+    if not isinstance(layers, list) or "inferredLayers" in new_extras:
+        return None
+    sha = sidecars.grid_sha256({**new_extras, **extras})
+    kept: list[Any] = []
+    folders: list[str] = []
+    reasons: list[str] = []
+    for entry in layers:
+        why = sidecars.fill_gate_problem(entry, grid_sha=sha)
+        if why is None:
+            kept.append(entry)
+            continue
+        uri = entry.get("uri") if isinstance(entry, dict) else None
+        if isinstance(uri, str) and "/" in uri and uri.startswith("inferred/"):
+            folders.append(uri.rsplit("/", 1)[0] + "/")
+        reasons.append(f"{uri}: {why}")
+    if not reasons:
+        return None
+    if kept:
+        extras["inferredLayers"] = kept
+    else:
+        extras.pop("inferredLayers")
+    return folders, "; ".join(reasons)
 
 
 def _why_not(
