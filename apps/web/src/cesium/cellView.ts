@@ -19,6 +19,7 @@ import type { Cesium3DTileset, Scene } from "cesium";
 import { cellGridMeta, loadCellGrid, type CellGrid } from "@/lib/cellGrid";
 import {
   ageBucket,
+  comparedGrids,
   dataAgeTexels,
   laterDates,
   loadLaterGrids,
@@ -114,8 +115,7 @@ export function startCellView(
     const { shown, later } = laterDates(c, assetId, representation);
     const bucket = ageBucket(shown?.observedAt, now());
     age = loadLaterGrids(later, asArray(root()?.transform)).then((grids): CellViewReport => {
-      const compared = grids.flatMap((l) => ("grid" in l ? [l.grid] : []));
-      const skipped = grids.flatMap((l) => ("skipped" in l ? [l.skipped] : []));
+      const { compared, skipped } = comparedGrids(grids, g);
       const { rg, newerCells } = dataAgeTexels(g, bucket, compared);
       if (!disposed && key === ageKey) part?.setDataAge(rg);
       return {

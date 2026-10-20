@@ -133,6 +133,25 @@ export async function loadLaterGrids(
 }
 
 /**
+ * The later grids that can be compared with `shown`, and why each other one is not: a grid on
+ * another lattice (another `baseM`) indexes other ground by the same (i, j), so it is named
+ * and left out rather than compared cell by cell.
+ */
+export function comparedGrids(
+  grids: readonly LaterGrid[],
+  shown: CellGrid,
+): { compared: CellGrid[]; skipped: string[] } {
+  const compared: CellGrid[] = [];
+  const skipped: string[] = [];
+  for (const later of grids) {
+    if ("skipped" in later) skipped.push(later.skipped);
+    else if (later.grid.meta.lattice.baseM === shown.meta.lattice.baseM) compared.push(later.grid);
+    else skipped.push(`${formatEpochDate(later.epoch.observedAt)}: on another cell lattice`);
+  }
+  return { compared, skipped };
+}
+
+/**
  * The Data age texture's bytes for `grid` (the shown date's), in `cellTexelLayout` order:
  * R = 1 + `bucket` where the shown date scored the cell (0 elsewhere, or with no date), G =
  * 255 where a later grid has evidence under the cell. `newerCells` counts the finest level's.

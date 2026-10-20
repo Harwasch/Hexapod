@@ -11,6 +11,7 @@ import { cellTexelLayout, decodeCellGrid } from "@/lib/cellGrid";
 import {
   AGE_BUCKETS,
   ageBucket,
+  comparedGrids,
   dataAgeTexels,
   laterDates,
   loadLaterGrids,
@@ -112,6 +113,30 @@ describe("which later dates are compared", () => {
       "Sep 1, 2026: could not be read (answered 404)",
       "Nov 1, 2026: not a tileset this page can read",
     ]);
+  });
+
+  it("never compares a grid on another lattice, and says so", async () => {
+    const cells = { level: 2, i0: 0, j0: 0, ni: 4, nj: 4, cell: () => ({ score: 200 }) };
+    const built = await encodeConfidenceGrid(cells);
+    const shown = await decodeCellGrid(built.meta, built.planes);
+    const same = await decodeCellGrid(built.meta, built.planes);
+    // Half-metre base cells: index (i, j) of it is not the same ground as (i, j) of the shown.
+    const other = await decodeCellGrid(
+      { ...built.meta, lattice: { ...built.meta.lattice, baseM: 0.5 } },
+      built.planes,
+    );
+    const july = epoch("jul", { observedAt: "2026-07-01T00:00:00Z" });
+    const august = epoch("aug", { observedAt: "2026-08-01T00:00:00Z" });
+    const { compared, skipped } = comparedGrids(
+      [
+        { epoch: july, grid: same },
+        { epoch: august, grid: other },
+        { epoch: july, skipped: "Jul 1, 2026: not measured" },
+      ],
+      shown,
+    );
+    expect(compared).toEqual([same]);
+    expect(skipped).toEqual(["Aug 1, 2026: on another cell lattice", "Jul 1, 2026: not measured"]);
   });
 
   it("calls two root transforms one frame to a millimetre", () => {
