@@ -601,3 +601,37 @@ def test_coarsening_a_surface_takes_the_highest_top_the_lowest_ground_the_widest
     empty[..., :2] = NO
     nothing = confidence_demo.coarsen_surface(cell_grid.CellPlane(0, 0, 0, 2, 2, empty), 1)
     assert nothing.data[0, 0].tolist() == [NO, NO, 0, 0]
+
+
+# --- boundaries (review) -----------------------------------------------------------------
+
+
+def _one_cell(points: list[list[float]], **kwargs: Any) -> tuple[list[int], surface.Surfaced]:
+    """`surface_plane` over a 3x1 window at 1 m with nothing else in it: cell 0's channels."""
+    xyz = np.asarray(points, dtype=np.float64)
+    window = surface.Window(level=2, i0=0, j0=0, ni=3, nj=1)
+    found = surface.surface_plane(lambda: iter([(xyz, surface.SPLAT)]), window, **kwargs)
+    return [int(v) for v in found.plane.data[0, 0]], found
+
+
+def test_exactly_three_samples_are_a_surface_and_sigma_spans_all_three() -> None:
+    """`count >= min_samples`, not `>`; and with three, z4 does not exist, so sigma is
+    half of z1 - z3."""
+    cell, found = _one_cell([[0.5, 0.5, 0.0], [0.5, 0.5, 0.1], [0.5, 0.5, 0.3]])
+    assert cell[:3] == [10, 10, 15]  # dsm z2, ground z2 (no neighbours), (0.3 - 0.0) / 2
+    assert found.thin == 0
+
+
+def test_sigma_is_rounded_up_to_the_centimetre() -> None:
+    """(z1 - z4) / 2 = 1.2 cm is stored as 2 cm, never 1; exactly 1 cm stays 1."""
+    up, _ = _one_cell([[0.5, 0.5, z] for z in (0.024, 0.01, 0.005, 0.0)])
+    assert up[2] == 2
+    exact, _ = _one_cell([[0.5, 0.5, z] for z in (0.02, 0.01, 0.005, 0.0)])
+    assert exact[2] == 1
+
+
+def test_a_gaussian_exactly_half_opaque_is_a_sample(tmp_path: Path) -> None:
+    """`opacity >= 0` in the logit: alpha exactly 0.5 is in."""
+    descriptor, grid = _grid(_run(tmp_path / "run", _plane(), opacity=0.0))
+    assert descriptor["summary"]["samples"]["splat"] == len(_plane())
+    assert (grid.planes[0].data[..., 2] > 0).all()
