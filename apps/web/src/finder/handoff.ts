@@ -19,6 +19,8 @@ export interface FoundLand {
   areaM2: number;
   /** Whose records the parcels are, as their sources ask to be credited. */
   attributions: string[];
+  /** Statements the parcels' sources require with any copy of their data (Kern's). */
+  notices: { source: string; text: string }[];
 }
 
 export type FinderMessage =
@@ -29,6 +31,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 const isStrings = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item) => typeof item === "string");
+const isNotices = (value: unknown): value is FoundLand["notices"] =>
+  Array.isArray(value) &&
+  value.every(
+    (item) => isRecord(item) && typeof item.source === "string" && typeof item.text === "string",
+  );
 
 function isFootprint(value: unknown): value is Footprint {
   return (
@@ -51,7 +58,8 @@ export function readFinderMessage(data: unknown): FinderMessage | null {
     typeof land.label !== "string" ||
     typeof land.areaM2 !== "number" ||
     !Number.isFinite(land.areaM2) ||
-    !isStrings(land.attributions)
+    !isStrings(land.attributions) ||
+    !isNotices(land.notices)
   )
     return null;
   return {
@@ -64,6 +72,7 @@ export function readFinderMessage(data: unknown): FinderMessage | null {
       label: land.label,
       areaM2: land.areaM2,
       attributions: land.attributions,
+      notices: land.notices.map(({ source, text }) => ({ source, text })),
     },
   };
 }

@@ -10,6 +10,11 @@ test.use({ reducedMotion: "reduce", colorScheme: "light" });
 
 const PARCEL_ID = "ca-parcel/06001/2-51-1";
 const ATTRIBUTION = "Alameda County Information Technology Department";
+/** A statement the source's terms require with its data, as the route returns Kern's. */
+const NOTICE = {
+  source: "Alameda County parcels",
+  text: "SUMMARY:\n\nA test disclaimer that must travel with these records.",
+};
 
 /** A small square around a point, as a county service would outline a parcel. */
 function square(point: number[], half = 0.0008) {
@@ -88,6 +93,7 @@ async function stub(page: Page, answer: "parcels" | "uncovered"): Promise<Stubs>
         message:
           "Parcels from Alameda County records near your click. They show county assessor mapping, not surveyed property lines.",
         truncated: false,
+        notices: [NOTICE],
         candidates: [
           {
             id: PARCEL_ID,
@@ -182,6 +188,11 @@ test("finds a parcel on the map, selects it, and hands it to the form", async ({
   expect(Math.abs(lon + 122.2711)).toBeLessThan(0.5);
   expect(Math.abs(lat - 37.8044)).toBeLessThan(0.5);
   await expect(frame.getByTestId("finder-attribution")).toContainText(ATTRIBUTION);
+  // The disclaimer its terms require, shown with the records.
+  const notice = frame.getByTestId("finder-notice");
+  await expect(notice).toContainText(NOTICE.source);
+  await notice.locator("summary").click();
+  await expect(notice).toContainText("must travel with these records");
   await parcel.check();
   await picker.getByRole("button", { name: /^Use this/ }).click();
 
@@ -191,6 +202,7 @@ test("finds a parcel on the map, selects it, and hands it to the form", async ({
   await expect(list).toContainText("Parcel 2-51-1");
   await expect(list).toContainText("County parcel record");
   await expect(page.locator("#pk-attr")).toContainText(ATTRIBUTION);
+  await expect(page.locator("#pk-notices")).toContainText(NOTICE.source);
   await expect(page.getByLabel("Acres")).not.toHaveValue("");
 
   await page.getByLabel("Name").fill("Ada Lovelace");
@@ -239,6 +251,7 @@ test("outside California, the outline can be drawn instead", async ({ page }) =>
   await expect(page.getByRole("dialog", { name: "Find your land" })).toBeHidden();
   await expect(page.locator("#pk-list")).toContainText("Drawn outline");
   await expect(page.locator("#pk-attr")).toBeHidden();
+  await expect(page.locator("#pk-notices")).toBeHidden();
   expect(stubs.sent).toEqual([]);
   expect(stubs.errors).toEqual([]);
 });

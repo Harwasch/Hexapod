@@ -40,6 +40,15 @@
 .finder-found {
   color: var(--text-primary);
 }
+.finder-notice summary {
+  cursor: pointer;
+}
+.finder-notice p {
+  max-height: 40vh;
+  margin: var(--space-2) 0 0;
+  overflow-y: auto;
+  white-space: pre-line;
+}
 
 .finder-strip {
   position: absolute;

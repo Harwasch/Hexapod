@@ -1,7 +1,7 @@
 import { X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { Layer } from "@twin/contracts";
+import type { Layer, SourceNotice } from "@twin/contracts";
 import { GlassButton, GlassPanel } from "@twin/ui";
 
 import { useLayers } from "@/api/queries";
@@ -64,6 +64,10 @@ export function Finder({ reducedMotion }: { reducedMotion: boolean }) {
   const mode = useLand((s) => s.mode);
   const candidates = useLandContext((s) => s.candidates);
   const [found, setFound] = useState<FoundLand | null>(null);
+  // The notices each candidate's answer came with: what its source's terms require be shown
+  // with it (Kern County's disclaimer), here and wherever the chosen land goes.
+  const noticesById = useRef(new Map<string, SourceNotice[]>());
+  const [notices, setNotices] = useState<SourceNotice[]>([]);
 
   // The land panel is what hands the map's taps to the land controller (cesium/LandBridge).
   useEffect(() => {
@@ -84,6 +88,7 @@ export function Finder({ reducedMotion }: { reducedMotion: boolean }) {
           label: "Drawn outline",
           areaM2: footprintAreaM2(drawn.boundary),
           attributions: [],
+          notices: [],
         };
         setFound(land);
         tell({ source: FINDER_SOURCE, type: "found", land });
@@ -93,9 +98,18 @@ export function Finder({ reducedMotion }: { reducedMotion: boolean }) {
 
   const pick = useMemo<PublicParcelPick>(
     () => ({
-      find: findPublicParcels,
+      find: async (point, signal) => {
+        const answer = await findPublicParcels(point, signal);
+        const shown = answer.notices ?? [];
+        for (const candidate of answer.candidates) noticesById.current.set(candidate.id, shown);
+        setNotices(shown);
+        return answer;
+      },
       onUse: (chosen) => {
-        const land = foundParcels(chosen);
+        const land = foundParcels(
+          chosen,
+          (candidate) => noticesById.current.get(candidate.id) ?? [],
+        );
         setFound(land);
         tell({ source: FINDER_SOURCE, type: "found", land });
       },
@@ -145,6 +159,16 @@ export function Finder({ reducedMotion }: { reducedMotion: boolean }) {
                 Parcel records: {attributions.join("; ")}. County assessor mapping, not a survey.
               </p>
             )}
+            {notices.map((notice) => (
+              <details
+                key={notice.source}
+                className="finder-credit finder-notice"
+                data-testid="finder-notice"
+              >
+                <summary>{notice.source}: the disclaimer that comes with these records</summary>
+                <p>{notice.text}</p>
+              </details>
+            ))}
           </>
         )}
         {mode !== "draw" && (
