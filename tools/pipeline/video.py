@@ -30,6 +30,7 @@ import shutil
 import subprocess
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -40,8 +41,11 @@ import numpy.typing as npt
 from PIL import Image
 
 __all__ = [
+    "ACCURACY_KEY",
+    "HDR_TRANSFERS",
     "IMAGE_SUFFIXES",
     "VIDEO_SUFFIXES",
+    "VIDEO_TAG_KEYS",
     "Location",
     "Source",
     "VideoMeta",
@@ -76,6 +80,56 @@ LOCATION_KEYS: tuple[str, ...] = (
     "location",
     "location-eng",
 )
+
+#: How far off the iPhone says its fix may be, in metres (horizontal, one sigma as far as
+#: Apple documents it at all). Stored lower-cased, as every scraped tag is.
+ACCURACY_KEY = "com.apple.quicktime.location.accuracy.horizontal"
+#: The QuickTime creation date: local time *with* its UTC offset, which is why it is
+#: preferred over `creation_time` (the mvhd time, UTC, sometimes rewritten by an editor).
+CREATIONDATE_KEY = "com.apple.quicktime.creationdate"
+#: The phone's own 35 mm-equivalent focal length. UNVERIFIED: the key is documented by
+#: third parties (Remotion's media-parser, an ExifTool forum thread), not by Apple, and a
+#: hugin-devs report says it includes digital zoom. Read when present, never relied on.
+FOCAL_35MM_KEY = "com.apple.quicktime.camera.focal_length.35mm_equivalent"
+LENS_MODEL_KEY = "com.apple.quicktime.camera.lens_model"
+
+#: The only container tags that leave this module (`VideoMeta.to_dict()["tags"]`). The
+#: full scrape can carry device identifiers -- serial numbers, content identifiers, a
+#: vendor id -- and `source_meta.json` travels into the manifest and the API, so the
+#: subset is named rather than filtered.
+VIDEO_TAG_KEYS: tuple[str, ...] = (
+    "creation_time",
+    "encoder",
+    CREATIONDATE_KEY,
+    ACCURACY_KEY,
+    FOCAL_35MM_KEY,
+    LENS_MODEL_KEY,
+    "com.apple.quicktime.make",
+    "com.apple.quicktime.model",
+    "com.apple.quicktime.software",
+    "com.android.version",
+    "com.android.manufacturer",
+    "com.android.model",
+)
+
+#: The transfer characteristics that mean HDR: HLG (what an iPhone records "HDR" video
+#: in) and PQ (SMPTE ST 2084, Dolby Vision's base layer and HDR10). ffmpeg's names.
+HDR_TRANSFERS: tuple[str, ...] = ("arib-std-b67", "smpte2084")
+
+#: The pixel formats a video stream's colour group can open with (`yuv420p10le(...)`).
+_PIXEL_FORMAT_PREFIXES: tuple[str, ...] = ("yuv", "rgb", "bgr", "gbr", "nv", "p0", "gray")
+#: ffmpeg's colour-space names (`av_color_space_name`). A lone token in the colour group
+#: is one of these: ffmpeg prints a single name when the matrix, primaries and transfer
+#: *enums* are equal, and only for these three do the three *names* coincide too -- a
+#: lone `bt470bg` is primaries bt470bg with transfer gamma28, so it says nothing about
+#: the transfer and is recorded as the matrix only.
+_COLOR_SPACES: frozenset[str] = frozenset(
+    {
+        "rgb", "bt709", "fcc", "bt470bg", "smpte170m", "smpte240m", "ycgco", "bt2020nc",
+        "bt2020c", "smpte2085", "chroma-derived-nc", "chroma-derived-c", "ictcp",
+    }
+)  # fmt: skip
+_SAME_NAME_SPACES: frozenset[str] = frozenset({"bt709", "smpte170m", "smpte240m"})
 
 _TAG_RE = re.compile(r"^\s{4}([A-Za-z0-9_.\-]+)\s*:\s*(.*?)\s*$")
 _DURATION_RE = re.compile(r"^\s*Duration:\s*(\d+):(\d\d):(\d\d(?:\.\d+)?)")
@@ -119,6 +173,9 @@ class Location:
     lon: float
     altitude_m: float | None
     source: str
+    #: The phone's own horizontal accuracy for this fix, in metres (`ACCURACY_KEY`), or
+    #: None when it wrote none or wrote something that is not a positive number.
+    accuracy_m: float | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -126,6 +183,7 @@ class Location:
             "lon": self.lon,
             "altitudeM": self.altitude_m,
             "source": self.source,
+            "accuracyM": self.accuracy_m,
         }
 
 
@@ -145,6 +203,50 @@ class VideoMeta:
     created_at: str | None = None
     location: Location | None = None
     tags: dict[str, str] = field(default_factory=dict)
+    #: The video stream's colour description, as ffmpeg prints it after the codec:
+    #: `yuv420p10le(tv, bt2020nc/bt2020/arib-std-b67)` is pixel format, range, and
+    #: matrix/primaries/transfer. None for whatever was not printed (or printed `unknown`).
+    pixel_format: str | None = None
+    color_range: str | None = None
+    color_matrix: str | None = None
+    color_primaries: str | None = None
+    color_transfer: str | None = None
+    #: `com.apple.quicktime.creationdate` and the mvhd `creation_time`, verbatim.
+    creation_date: str | None = None
+    creation_time: str | None = None
+    #: The phone's 35 mm-equivalent focal length (`FOCAL_35MM_KEY`, UNVERIFIED key).
+    focal_35mm: float | None = None
+    lens_model: str | None = None
+
+    @property
+    def is_hdr(self) -> bool:
+        """An HLG or PQ transfer: frames taken from it straight are washed out and flat."""
+        return self.color_transfer in HDR_TRANSFERS
+
+    def started_at(self) -> datetime | None:
+        """When recording started, timezone-aware, or None.
+
+        The QuickTime creation date first (local time with its offset), else the mvhd
+        `creation_time`. A time without a zone is refused rather than guessed: a naive
+        time read as UTC is hours off for most of the world. That the creation date is
+        the *start* of recording is an assumption (UNVERIFIED against Apple's docs).
+        """
+        return self._start()[0]
+
+    def started_from(self) -> str | None:
+        """Which tag `started_at` came from: `quicktime-creationdate`,
+        `mvhd-creation-time`, or None."""
+        return self._start()[1]
+
+    def _start(self) -> tuple[datetime | None, str | None]:
+        for raw, source in (
+            (self.creation_date, "quicktime-creationdate"),
+            (self.creation_time, "mvhd-creation-time"),
+        ):
+            parsed = _aware_time(raw)
+            if parsed is not None:
+                return parsed, source
+        return None, None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -159,6 +261,17 @@ class VideoMeta:
             "software": self.software,
             "createdAt": self.created_at,
             "location": None if self.location is None else self.location.to_dict(),
+            "pixelFormat": self.pixel_format,
+            "colorRange": self.color_range,
+            "colorMatrix": self.color_matrix,
+            "colorPrimaries": self.color_primaries,
+            "colorTransfer": self.color_transfer,
+            "hdr": self.is_hdr,
+            "creationDate": self.creation_date,
+            "creationTime": self.creation_time,
+            "focal35mm": self.focal_35mm,
+            "lensModel": self.lens_model,
+            "tags": {key: self.tags[key] for key in VIDEO_TAG_KEYS if key in self.tags},
         }
 
 
@@ -222,6 +335,7 @@ def parse_probe(text: str) -> VideoMeta:
     fps: float | None = None
     codec: str | None = None
     rotation: float | None = None
+    colour: _Colour | None = None
     for line in text.splitlines():
         if duration is None and (match := _DURATION_RE.match(line)):
             hours, minutes, seconds = match.groups()
@@ -236,6 +350,8 @@ def parse_probe(text: str) -> VideoMeta:
                 width, height = int(size.group(1)), int(size.group(2))
             if fps is None and (rate := _FPS_RE.search(rest)):
                 fps = float(rate.group(1))
+            if colour is None:
+                colour = _colour(rest)
         # Container and stream tags are indented four spaces under a `Metadata:` line.
         # Collected flat and first-wins, so a container-level tag is not overwritten by
         # a per-stream one that means something narrower.
@@ -254,7 +370,106 @@ def parse_probe(text: str) -> VideoMeta:
         created_at=_first(tags, ("com.apple.quicktime.creationdate", "creation_time", "date")),
         location=_location(tags),
         tags=tags,
+        pixel_format=colour.pixel_format if colour else None,
+        color_range=colour.range if colour else None,
+        color_matrix=colour.matrix if colour else None,
+        color_primaries=colour.primaries if colour else None,
+        color_transfer=colour.transfer if colour else None,
+        creation_date=tags.get(CREATIONDATE_KEY) or None,
+        creation_time=tags.get("creation_time") or None,
+        focal_35mm=_positive(tags.get(FOCAL_35MM_KEY)),
+        lens_model=tags.get(LENS_MODEL_KEY) or None,
     )
+
+
+@dataclass(frozen=True)
+class _Colour:
+    pixel_format: str
+    range: str | None = None
+    matrix: str | None = None
+    primaries: str | None = None
+    transfer: str | None = None
+
+
+def _top_level(text: str) -> list[str]:
+    """`text` split on the commas outside parentheses: `a (b, c), d(e, f), g` -> three."""
+    parts: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for char in text:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+        if char == "," and depth == 0:
+            parts.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    parts.append("".join(current).strip())
+    return parts
+
+
+def _colour(rest: str) -> _Colour | None:
+    """The pixel format and colour description out of a video stream line, or None.
+
+    The first top-level item that is a pixel-format word (`yuv420p10le`, `yuvj420p`,
+    `nv12`, `p010le`, `gray`, ...) optionally followed by its parenthesised group. The
+    codec's own brackets (`hevc (Main 10) (hvc1 / 0x31637668)`) come first and are a
+    different item, so they are never read as one. Total: never raises.
+    """
+    for item in _top_level(rest)[1:]:
+        match = re.fullmatch(r"(?P<pix>[a-z0-9_]+)(?:\((?P<inner>[^)]*)\))?", item)
+        if match is None or not match.group("pix").startswith(_PIXEL_FORMAT_PREFIXES):
+            continue
+        colour = _Colour(pixel_format=match.group("pix"))
+        values: dict[str, str | None] = {}
+        for token in (match.group("inner") or "").split(","):
+            token = token.strip()
+            if token in ("tv", "pc"):
+                values["range"] = token
+            elif token.count("/") == 2:
+                matrix, primaries, transfer = (_known(part) for part in token.split("/"))
+                values.update(matrix=matrix, primaries=primaries, transfer=transfer)
+            elif token in _COLOR_SPACES:
+                values["matrix"] = token
+                if token in _SAME_NAME_SPACES:
+                    values.update(primaries=token, transfer=token)
+        return _Colour(
+            pixel_format=colour.pixel_format,
+            range=values.get("range"),
+            matrix=values.get("matrix"),
+            primaries=values.get("primaries"),
+            transfer=values.get("transfer"),
+        )
+    return None
+
+
+def _known(name: str) -> str | None:
+    name = name.strip()
+    return None if not name or name in ("unknown", "reserved") else name
+
+
+def _positive(raw: str | None) -> float | None:
+    """A positive, finite number out of a tag, or None."""
+    if raw is None:
+        return None
+    try:
+        number = float(raw)
+    except ValueError:
+        return None
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def _aware_time(raw: str | None) -> datetime | None:
+    """An ISO 8601 time with a zone (`Z`, `+01:00` or `+0100`), or None."""
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.strip())
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
 
 
 def _first(tags: dict[str, str], keys: Iterable[str]) -> str | None:
@@ -274,7 +489,13 @@ def _location(tags: dict[str, str]) -> Location | None:
         parsed = parse_iso6709(raw)
         if parsed is not None:
             lat, lon, alt = parsed
-            return Location(lat=lat, lon=lon, altitude_m=alt, source=key)
+            return Location(
+                lat=lat,
+                lon=lon,
+                altitude_m=alt,
+                source=key,
+                accuracy_m=_positive(tags.get(ACCURACY_KEY)),
+            )
     return None
 
 
