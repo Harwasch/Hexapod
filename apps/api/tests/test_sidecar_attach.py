@@ -968,3 +968,28 @@ def test_discovery_finds_each_kind_by_its_key_or_its_files() -> None:
         "rig": ("rig.json",),
     }
     assert sidecars.unknown_extras(extras) == ["mystery"]
+
+
+def test_an_attach_to_a_superseded_revision_is_refused(
+    db: Session, buckets: Publisher, client: TestClient
+) -> None:
+    """A re-run superseded this revision (decision D3): attaching to it would cut a
+    generation nothing shows, so it is refused and names the epoch's current asset."""
+    from datetime import UTC, datetime
+
+    from tests.test_epochs import T0, make_asset, make_epoch, make_site
+
+    put_scan(buckets.public, LIVE_DIR)
+    site = make_site(db)
+    epoch = make_epoch(db, site, 1, observed=T0)
+    old = make_asset(db, site, epoch, LIVE_URL, created=T0, valid_to=datetime.now(tz=UTC))
+    current = make_asset(db, site, epoch, LIVE_URL.replace("tileset", "next"), created=T0)
+    db.commit()
+    before = files_under(buckets.public, "")
+
+    response = attach(client, old, stage(buckets.private, old.id, INSTANCES_FILES))
+
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "not_attachable"
+    assert str(current.id) in response.json()["detail"]
+    assert files_under(buckets.public, "") == before
