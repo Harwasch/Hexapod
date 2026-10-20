@@ -10,7 +10,7 @@
  * 1 m: a raised block, a lowered block, and a weak raised block), the cells it counts as not
  * comparable (one date measured them, the other did not: read here from the two surface.bin
  * planes, as the API compares them), its counts, and A5's evidence for the rest (minDetectableM
- * as the least threshold, the uncertainties, the appearance stub). Areas are each class's
+ * as the least threshold, the uncertainties, the appearance stub, as ADR 0018 records them). Areas are each class's
  * 4-connected regions, split by confidence as the API splits them, outlined as row runs of
  * cells in the yard's frame (whose origin is the yard tileset's root transform). Unchanged
  * cells are counted, never outlined, as the API now answers.
@@ -106,7 +106,27 @@ function epoch(
             label: "Phone video, aligned visually, ±0.062 m",
           },
     quality: null,
-    confidence: null,
+    // A map is answered only for dates with a confidence grid too (else 409
+    // confidence-not-measured): each of these has one, the phone date capped by ±0.062 m.
+    confidence: {
+      status: "measured",
+      assetId: asset,
+      url: `https://tiles.example/${asset}/confidence.bin`,
+      cellM: 1,
+      level: 2,
+      policy: "weak-v1",
+      weakShare: 0.02,
+      weakCells: 23,
+      scoredCells: 1272,
+      unseenCells: 0,
+      reasons: {},
+      alignmentCap: {
+        uncertaintyM: ordinal === 1 ? 0 : 0.062,
+        factor: 1,
+        priorEpochs: ordinal - 1,
+        source: ordinal === 1 ? "site-frame" : "epoch_alignment.json",
+      },
+    },
     surface: surface ? surfaceOf(asset) : null,
     currentAssetId: asset,
     createdAt: observedAt,
@@ -303,19 +323,15 @@ function changeMap() {
     readFileSync(resolve(SURFACES, "surfaces.json"), "utf8"),
   ) as SurfacesFixture;
   const { cellM, counts, changed } = fixture.change;
-  const evidencePath = "/home/harrison/.cache/hexapod-splat/evidence/a5/change-e1-e2-full.json";
-  // A5's evidence, where present, for the fields the fixture does not carry; its values
-  // otherwise, as recorded in ADR 0018 § API Evidence.
-  const evidence = existsSync(evidencePath)
-    ? (JSON.parse(readFileSync(evidencePath, "utf8")) as Record<string, unknown>)
-    : {
-        appearance: {
-          status: "not-computed",
-          reason:
-            "needs the new photos compared with the old epoch at fixed geometry; never splat pixels",
-        },
-        uncertainty: { fromM: 0, toM: 0.062 },
-      };
+  // What the fixture does not carry, as A5's evidence answered it (ADR 0018 § API Evidence).
+  const evidence = {
+    appearance: {
+      status: "not-computed",
+      reason:
+        "needs the new photos compared with the old epoch at fixed geometry; never splat pixels",
+    },
+    uncertainty: { fromM: 0, toM: 0.062 },
+  };
   const areas: Record<string, unknown>[] = [];
   for (const cls of ["raised", "lowered"]) {
     for (const weak of [false, true]) {
@@ -601,7 +617,7 @@ const EXPECTED = [
   { cls: "insufficient", lowConfidence: false, hatched: false },
 ];
 
-for (const renderer of ["cesium", "playcanvas"] as const) {
+for (const renderer of ["cesium", "playcanvas", "spark"] as const) {
   test(`under ${renderer}, Compare › Dates drapes the change between two dates and keys it`, async ({
     page,
   }) => {
