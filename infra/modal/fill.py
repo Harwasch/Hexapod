@@ -853,23 +853,52 @@ def main(
         raise SystemExit(f"failed: {', '.join(failed)}")
 
 
-def _fill_targets(still_weak: str, jobs: str) -> dict[str, str]:
-    """`<scan>=<file>` pairs read and checked (`rescan_gate.RescanGate.from_json`): the text
-    of each fill job's targets by scan. A fill job without them, or with targets that are
-    not `rescan-gate-v1`, is a refusal before anything runs."""
-    sys.path.insert(0, str(LOCAL_CAPTURES))
-    import rescan_gate
+#: What a fill-targets answer (`FillTargetsRead`, rescan-gate-v1) holds: what
+#: `rescan_gate.RescanGate.from_payload` reads, all of it required.
+TARGET_KEYS = (
+    "policy", "siteId", "epochId", "weakIn", "comparedWith", "frame", "cellM", "level",
+    "i0", "j0", "ni", "nj", "rowBytes", "bitOrder", "mask", "cells", "reason",
+)  # fmt: skip
 
+
+def _targets_problem(payload: object) -> str | None:
+    """Why `payload` is not a rescan-gate-v1 answer, by its shape alone, or None."""
+    if not isinstance(payload, dict):
+        return "not a JSON object (FillTargetsRead)"
+    missing = [key for key in TARGET_KEYS if key not in payload]
+    if missing:
+        return f"missing {', '.join(missing)}"
+    if payload["policy"] != "rescan-gate-v1":
+        return f"policy {payload['policy']!r} is not 'rescan-gate-v1'"
+    if payload["frame"] != "tileset" or payload["bitOrder"] != "little":
+        return "not in the tileset frame, least significant bit first"
+    return None
+
+
+def _fill_targets(still_weak: str, jobs: str) -> dict[str, str]:
+    """`<scan>=<file>` pairs read and checked: the text of each fill job's targets by scan.
+    A fill job without them, or with a file that is not a rescan-gate-v1 answer, is a
+    refusal before anything runs on Modal.
+
+    Standard library only: this side runs where fill.yml runs it, `uv run --with modal`
+    from the repository root, with nothing of tools/captures' dependencies (a numpy import
+    here would crash every run, drop-only ones included; tests/test_modal_fill_local.py).
+    The shape is checked here; the job's `teacher_fill.py fill --still-weak` reads every
+    bit (`rescan_gate`) and holds it to the tileset before anything renders."""
     given: dict[str, str] = {}
     for pair in (p.strip() for p in still_weak.split(",") if p.strip()):
         scan, sep, path = pair.partition("=")
         if not sep or scan not in SCANS or not path:
             raise SystemExit(f"--still-weak {pair!r}: <scan>=<file>, scans {sorted(SCANS)}")
         try:
-            rescan_gate.RescanGate.from_json(Path(path))
-        except rescan_gate.RescanGateError as error:
-            raise SystemExit(f"--still-weak {scan}: refused: {error}") from None
-        given[scan] = Path(path).read_text(encoding="utf-8")
+            text = Path(path).read_text(encoding="utf-8")
+            payload = json.loads(text)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise SystemExit(f"--still-weak {scan}: refused: not JSON ({error})") from None
+        problem = _targets_problem(payload)
+        if problem is not None:
+            raise SystemExit(f"--still-weak {scan}: refused: {problem}")
+        given[scan] = text
     listed = (j.strip() for j in jobs.split(","))
     fills = sorted({j.partition(":")[2] for j in listed if j.startswith("fill:")})
     missing = [scan for scan in fills if scan not in given]
