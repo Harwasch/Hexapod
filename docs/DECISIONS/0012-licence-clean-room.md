@@ -66,6 +66,32 @@ would write to. `package` no longer reads optimised parents, because nothing pro
   the old code were replaced by tests against references written in the tests from the
   mathematics.
 
+### What actually happened (correction, 2026-10-20)
+
+The procedure above was not kept perfectly, and this records exactly how:
+
+- **The first implementer's incidental exposures.** Two grep outputs showed it a few lines of
+  the old code: old docstring and comment lines, and a few lines of the old merge. The merge's
+  opacity rule, opacity = weight / surface area, is in that old code too; it is also what spec
+  5A specifies, and the implementer took it from the spec.
+- **A review found matches.** An independent review compared the result with the old code and
+  found that five helper bodies in `tools/captures/splat_merge.py` (`Moments.concat`,
+  `Moments.take`, `merge_cells`, `coarsen`, `_rows`) and the `tensor()` helper nested in
+  `tools/pipeline/block_views.py`'s `main()` matched the old code character for character, so
+  the clean-room claim could not stand for those six bodies.
+- **They were rewritten by a second implementer.** It removed each body with a script that
+  printed only line numbers, and wrote new ones having seen only the signatures and docstrings,
+  the tests, metadata of the call sites (where each is called and with what kinds of argument,
+  not the calling code), the name of `main()`'s device variable and spec 5A. It never displayed
+  the old bodies, the originals or a diff of either file. `merge_cells` now weighs members by
+  their share of the cell and copies a one-member cell bit for bit. The rewrite changed the
+  last bits of the arithmetic, which flips the arbitrary sign of a few eigenvectors, so four
+  parent tiles of the yard and far fixtures carry an equivalent but differently quantised
+  rotation; no leaf changed.
+
+Nothing more is claimed: the rest of `splat_merge.py` and `block_views.py` is the first
+implementer's work under the procedure above, with the exposures listed.
+
 ## Regenerating the fixtures
 
 Parents go through `eigh` and the Thomsen area through `pow`, so their bytes depend on the
