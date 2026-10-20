@@ -41,10 +41,13 @@ __all__ = [
     "Fix",
     "ecef_to_enu",
     "enu_offsets",
+    "enu_rotation",
+    "enu_to_ecef",
     "geodetic_to_ecef",
     "median_fix",
     "read_fix",
     "read_fixes",
+    "reframe_enu",
 ]
 
 F64 = npt.NDArray[np.float64]
@@ -216,12 +219,13 @@ def geodetic_to_ecef(lat: float, lon: float, height: float) -> F64:
     )
 
 
-def ecef_to_enu(point: F64, origin_lat: float, origin_lon: float, origin_height: float) -> F64:
-    """ECEF metres to east/north/up metres about a geodetic origin."""
-    phi, lam = math.radians(origin_lat), math.radians(origin_lon)
+def enu_rotation(lat: float, lon: float) -> F64:
+    """The rotation taking an ECEF direction into east/north/up at (lat, lon): its rows
+    are the east, north and up unit vectors in ECEF."""
+    phi, lam = math.radians(lat), math.radians(lon)
     sin_phi, cos_phi = math.sin(phi), math.cos(phi)
     sin_lam, cos_lam = math.sin(lam), math.cos(lam)
-    rotation = np.array(
+    return np.array(
         [
             [-sin_lam, cos_lam, 0.0],
             [-sin_phi * cos_lam, -sin_phi * sin_lam, cos_phi],
@@ -229,7 +233,41 @@ def ecef_to_enu(point: F64, origin_lat: float, origin_lon: float, origin_height:
         ],
         dtype=np.float64,
     )
+
+
+def ecef_to_enu(point: F64, origin_lat: float, origin_lon: float, origin_height: float) -> F64:
+    """ECEF metres to east/north/up metres about a geodetic origin."""
+    rotation = enu_rotation(origin_lat, origin_lon)
     return rotation @ (point - geodetic_to_ecef(origin_lat, origin_lon, origin_height))
+
+
+def enu_to_ecef(points: npt.ArrayLike, origin: tuple[float, float, float]) -> F64:
+    """East/north/up metres about `origin` (lat, lon, height) back to ECEF metres.
+
+    `(n, 3)` in, `(n, 3)` out; a single `(3,)` point gives a `(3,)` point.
+    """
+    values = np.asarray(points, dtype=np.float64)
+    single = values.ndim == 1
+    rows = values.reshape(-1, 3)
+    lat, lon, height = origin
+    ecef = rows @ enu_rotation(lat, lon) + geodetic_to_ecef(lat, lon, height)
+    return ecef[0] if single else ecef
+
+
+def reframe_enu(
+    points: npt.ArrayLike,
+    source: tuple[float, float, float],
+    target: tuple[float, float, float],
+) -> F64:
+    """Points in east/north/up about `source` expressed about `target` instead, exactly
+    (through ECEF, a rigid motion: the two tangent planes differ by a rotation as well
+    as an offset once the origins are apart). Same shapes as `enu_to_ecef`."""
+    values = np.asarray(points, dtype=np.float64)
+    single = values.ndim == 1
+    ecef = enu_to_ecef(values.reshape(-1, 3), source)
+    lat, lon, height = target
+    moved = (ecef - geodetic_to_ecef(lat, lon, height)) @ enu_rotation(lat, lon).T
+    return moved[0] if single else moved
 
 
 def enu_offsets(
