@@ -17,15 +17,13 @@ export function TimelineControl() {
   const representation = useSites((s) =>
     activeSiteId ? s.representation[activeSiteId] : undefined,
   );
-  const temporal = useSites((s) => (activeSiteId ? s.temporalAsset[activeSiteId] : undefined));
   const site = useSite(activeSiteId).data;
   if (!site || !representation) return null;
   const versions = site.assets
     .filter((a) => a.representation === representation && a.observedAt)
     .sort((a, b) => (a.observedAt ?? "").localeCompare(b.observedAt ?? ""));
   if (versions.length < 2) return null;
-  const current =
-    temporal ?? versions.find((a) => a.defaultVisible)?.id ?? versions.at(-1)?.id ?? "";
+  const current = versions.find((a) => a.defaultVisible)?.id ?? versions.at(-1)?.id ?? "";
   return (
     <GlassPanel
       strong
@@ -39,10 +37,7 @@ export function TimelineControl() {
       <GlassSegmentedControl
         aria-label="Capture date"
         value={current}
-        onValueChange={(assetId) => {
-          useSites.getState().setTemporalAsset(site.id, assetId);
-          void scene?.sites.setTemporalAsset(assetId);
-        }}
+        onValueChange={(assetId) => void scene?.sites.setTemporalAsset(assetId)}
         options={versions.map((a) => ({ value: a.id, label: formatDate(a.observedAt) }))}
       />
     </GlassPanel>

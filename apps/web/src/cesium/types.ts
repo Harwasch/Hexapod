@@ -36,6 +36,12 @@ export interface SceneEvents extends Record<string, unknown> {
   /** The site a fly-to is taking the camera to, until the camera has left it; else null. */
   "site-flight": string | null;
   representation: { siteId: string; representation: Representation };
+  /**
+   * The epoch (dated capture) a loaded site shows now, whenever that changes: a date chosen,
+   * Splat / Mesh switched to one another epoch has, the site loaded. Null when the shown model
+   * belongs to no epoch (lib/epochs.ts).
+   */
+  epoch: { siteId: string; epochId: string | null };
   selection: Selection | null;
   hover: string | null;
   measurement: Measurement;
