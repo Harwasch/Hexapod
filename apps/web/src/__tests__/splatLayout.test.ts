@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { checksumPositions } from "@twin/world";
+
 import {
   SH_C0,
   centreColumns,
@@ -8,6 +10,7 @@ import {
   reorderColumns,
   rgbaOf,
   shCoefficientsOf,
+  tileFrame,
 } from "@/lib/splatLayout";
 
 // The engine's own loops (GltfVertexBufferLoader.js processSpz), which the layout replaces.
@@ -211,5 +214,33 @@ describe("centreColumns", () => {
     expect([...columns.x]).toEqual([-1, 1]);
     expect([...columns.y]).toEqual([-1, 1]);
     expect([...columns.z]).toEqual([0, 0]);
+  });
+});
+
+describe("tileFrame", () => {
+  // Three splats of a tile written 2.6 km out in a frame of its own: local metres on SPZ's grid.
+  const local = Float32Array.from([-1.5, 0.25, 0.5, 0.5, -0.75, 1, 2.5, 1.25, 0]);
+  const columns = (): Record<string, Float32Array> => ({
+    x: Float32Array.from([-1.5, 0.5, 2.5]),
+    y: Float32Array.from([0.25, -0.75, 1.25]),
+    z: Float32Array.from([0.5, 1, 0]),
+  });
+
+  it("digests the site-frame positions and places the tile at its centre plus its offset", () => {
+    const cols = columns();
+    const { checksum, origin } = tileFrame(local, cols, [2601, 1550, 0]);
+    const site = Float32Array.from([2599.5, 1550.25, 0.5, 2601.5, 1549.25, 1, 2603.5, 1551.25, 0]);
+    expect(checksum).toBe(checksumPositions(site));
+    expect(origin).toEqual([2601.5, 1550.25, 0.5]);
+    // The columns are about the tile's own middle: small numbers, whatever the offset.
+    expect([...(cols.x ?? [])]).toEqual([-2, 0, 2]);
+    // Column plus origin is the splat in the scan's frame.
+    expect((cols.x?.[0] ?? 0) + origin[0]).toBe(2599.5);
+  });
+
+  it("is the tile's own digest and centre when it has no frame of its own", () => {
+    const { checksum, origin } = tileFrame(local, columns());
+    expect(checksum).toBe(checksumPositions(local));
+    expect(origin).toEqual([0.5, 0.25, 0.5]);
   });
 });

@@ -103,9 +103,10 @@ interface Decoded {
   count?: number;
   /** In Morton order already (`order`): playcanvasTile.worker.ts. */
   properties?: Record<string, Float32Array>;
-  /** The tile's centre: the positions are relative to it (playcanvasTile.worker.ts). */
+  /** The tile's centre in the scan's frame, its own frame's offset included: the positions are
+   *  relative to it (playcanvasTile.worker.ts). */
   origin?: [number, number, number];
-  /** `checksumPositions` of the tile's own positions, before centring. */
+  /** `checksumPositions` of the tile's positions in the scan's frame, before centring. */
   checksum?: string;
   /** Slot `i` holds the tile's own splat `order[i]`. */
   order?: Uint32Array;
@@ -547,12 +548,13 @@ function assemble(
       waiting.delete(event.data.id);
     };
   }
-  const decode = (url: string): Promise<Decoded> =>
+  /** A tile decoded off the main thread, `offset` its frame in the scan's (`TileNode.offset`). */
+  const decode = (url: string, offset?: [number, number, number]): Promise<Decoded> =>
     new Promise((resolve) => {
       const id = nextId++;
       waiting.set(id, resolve);
       const worker = workers[turn++ % workers.length];
-      worker?.postMessage({ id, url, maxSh: hooks.maxShDegree });
+      worker?.postMessage({ id, url, maxSh: hooks.maxShDegree, ...(offset ? { offset } : {}) });
     });
 
   const dataTexture = (
@@ -990,7 +992,7 @@ function assemble(
     apiNote: identity.note,
     loadFactor: 1,
     load: async (tilesetUrl: string, tile: TileNode, signal?: AbortSignal) => {
-      const decoded = await decode(new URL(tile.uri, tilesetUrl).toString());
+      const decoded = await decode(new URL(tile.uri, tilesetUrl).toString(), tile.offset);
       signal?.throwIfAborted();
       // Building the resource packs every splat into textures on the main thread: within the
       // frame's budget, a little at a time while the camera moves.
@@ -1001,7 +1003,7 @@ function assemble(
       return entity;
     },
     loadLayer: async (tilesetUrl: string, tile: TileNode, signal?: AbortSignal) => {
-      const decoded = await decode(new URL(tile.uri, tilesetUrl).toString());
+      const decoded = await decode(new URL(tile.uri, tilesetUrl).toString(), tile.offset);
       signal?.throwIfAborted();
       return hooks.work.run(() => {
         signal?.throwIfAborted();

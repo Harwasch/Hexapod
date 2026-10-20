@@ -14,7 +14,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BackendHooks } from "@/cesium/scanView/types";
 import type { TileWork } from "@/cesium/scanView/tileWork";
-import { centreColumns, mortonOrder, reorderColumns } from "@/lib/splatLayout";
+import { checksumPositions } from "@twin/world";
+
+import { centreColumns, mortonOrder, reorderColumns, tileFrame } from "@/lib/splatLayout";
 import { castRay, labelsNear, type PickTile } from "@/lib/splatPick";
 import type { TileNode } from "@/view/tiles";
 
@@ -155,8 +157,11 @@ function ownTile(count: number) {
 const OWN = ownTile(256);
 const CHECKSUM = "fnv1a32:256:0000abcd";
 
-/** The worker's answer for the tile (playcanvasTile.worker.ts), Morton order and all. */
-function workerAnswer(id: number) {
+/**
+ * The worker's answer for the tile (playcanvasTile.worker.ts), Morton order and all; with an
+ * `offset` (the tile's own frame), digested and placed as the worker does it (`tileFrame`).
+ */
+function workerAnswer(id: number, offset?: [number, number, number]) {
   const columns: Record<string, Float32Array> = {
     x: OWN.x.slice(),
     y: OWN.y.slice(),
@@ -166,7 +171,11 @@ function workerAnswer(id: number) {
     scale_2: OWN.scale.slice(),
     opacity: OWN.opacity.slice(),
   };
-  const origin = centreColumns(columns);
+  const own = new Float32Array(OWN.x.length * 3).map(
+    (_, i) => [OWN.x, OWN.y, OWN.z][i % 3]?.[Math.floor(i / 3)] ?? 0,
+  );
+  const framed = offset ? tileFrame(own, columns, offset) : null;
+  const origin = framed?.origin ?? centreColumns(columns);
   const empty = new Float32Array(0);
   const order = mortonOrder(columns.x ?? empty, columns.y ?? empty, columns.z ?? empty);
   return {
@@ -174,20 +183,21 @@ function workerAnswer(id: number) {
     count: OWN.x.length,
     properties: reorderColumns(columns, order),
     origin,
-    checksum: CHECKSUM,
+    checksum: framed?.checksum ?? CHECKSUM,
     order,
   };
 }
 
 class FakeWorker {
   onmessage: ((event: { data: unknown }) => void) | null = null;
-  postMessage(message: { id: number }): void {
-    queueMicrotask(() => this.onmessage?.({ data: workerAnswer(message.id) }));
+  postMessage(message: { id: number; offset?: [number, number, number] }): void {
+    queueMicrotask(() => this.onmessage?.({ data: workerAnswer(message.id, message.offset) }));
   }
   terminate = (): void => undefined;
 }
 
-const tile = (uri: string) => ({ uri }) as unknown as TileNode;
+const tile = (uri: string, offset?: [number, number, number]) =>
+  ({ uri, ...(offset ? { offset } : {}) }) as unknown as TileNode;
 
 async function backend() {
   const { createBackend } = await import("@/cesium/scanView/playcanvasBackend");
@@ -271,6 +281,33 @@ describe("picking in a scan PlayCanvas draws in Morton order", () => {
     // A tile taken off the screen is not picked.
     b.remove(entity);
     expect(b.pickTiles?.()).toEqual([]);
+    b.destroy();
+  });
+
+  it("pickTileOf with an offset origin returns site-frame positions", async () => {
+    // The tile in a frame of its own, 2.6 km east and 1.5 km north: the backend asks the
+    // worker for it with the offset, and the pick and digest come back in the scan's frame.
+    const offset: [number, number, number] = [2601, 1550, 0];
+    const b = await backend();
+    const entity = await b.load("https://scan.test/tileset.json", tile("far.glb", offset));
+    b.add(entity);
+    const pick = b.pickTiles?.()[0];
+    if (!pick) throw new Error("no pick tile");
+    const site = new Float32Array(256 * 3);
+    for (let i = 0; i < 256; i++) {
+      site[i * 3] = (OWN.x[i] ?? 0) + offset[0];
+      site[i * 3 + 1] = (OWN.y[i] ?? 0) + offset[1];
+      site[i * 3 + 2] = (OWN.z[i] ?? 0) + offset[2];
+      expect(pick.positions[i * 3]).toBeCloseTo(site[i * 3] ?? 0, 3);
+      expect(pick.positions[i * 3 + 1]).toBeCloseTo(site[i * 3 + 1] ?? 0, 3);
+      expect(pick.positions[i * 3 + 2]).toBeCloseTo(site[i * 3 + 2] ?? 0, 3);
+    }
+    expect(pick.checksum).toBe(checksumPositions(site));
+    // The entity sits at the tile's middle in the scan's frame, and a placement keeps it so.
+    const east = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 0, 0, 1];
+    b.place?.(entity, east);
+    b.place?.(entity, null);
+    expect((entity as unknown as { position: number[] }).position[0]).toBeGreaterThan(2600);
     b.destroy();
   });
 });

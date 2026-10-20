@@ -9,6 +9,10 @@
  * at `base[l - 1] + 3 n` within a splat's `stride` (9, 24 or 45 for degree 1, 2, 3).
  */
 
+import { checksumPositions } from "@twin/world";
+
+import { siteFramePositions } from "./spzPositions";
+
 export interface DecodedCloud {
   numPoints: number;
   shDegree: number;
@@ -229,4 +233,23 @@ export function centreColumns(columns: Record<string, Float32Array>): [number, n
     return middle;
   };
   return [centre(columns.x), centre(columns.y), centre(columns.z)];
+}
+
+/**
+ * Where a decoded tile goes in the scan, for a renderer that centres each tile (PlayCanvas,
+ * playcanvasTile.worker.ts): its digest -- `checksumPositions` of its positions in the scan's
+ * (site) frame, the key `instances.json` and `skin.json` list it by -- and the point its
+ * entity is placed at, the middle of its columns (`centreColumns`, which moves them) plus the
+ * tile's own frame (`TileNode.offset`, a scan wider than SPZ's +/-2048 m). The columns stay
+ * small numbers about the tile's middle; the offset, whole metres, goes into the placement.
+ */
+export function tileFrame(
+  positions: Float32Array,
+  columns: Record<string, Float32Array>,
+  offset?: readonly [number, number, number],
+): { checksum: string; origin: [number, number, number] } {
+  const checksum = checksumPositions(siteFramePositions(positions, offset));
+  const [cx, cy, cz] = centreColumns(columns);
+  const [ox, oy, oz] = offset ?? [0, 0, 0];
+  return { checksum, origin: [cx + ox, cy + oy, cz + oz] };
 }
