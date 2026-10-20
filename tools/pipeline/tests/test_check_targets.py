@@ -287,3 +287,53 @@ def test_targets_are_checked_and_no_targets_is_none() -> None:
     lat, lon, height = gps_frames.enu_to_geodetic(4.0, 4.0, 0.0, *ORIGIN)
     enu = exif.ecef_to_enu(exif.geodetic_to_ecef(lat, lon, height), *ORIGIN)
     assert np.abs(enu - np.array([4.0, 4.0, 0.0])).max() < 1e-6
+
+
+def test_a_target_on_another_datum_does_not_silence_the_others_vertical_errors() -> None:
+    """R2 review (#51, high): one target surveyed on another height datum cleared
+    `verticalEvaluated`, and with it the vertical test of every other target -- three
+    marks 0.5 m out vertically passed. The others are still scored, and fail."""
+    poses = tree_frames.orbit(8)
+    names = tuple(p.name for p in poses)
+    truth = {"T1": (4.0, 4.0, 0.0), "T2": (-4.0, 4.0, 0.0), "T3": (-4.0, -4.0, 0.0)}
+    targets = [_target(label, enu) for label, enu in truth.items()]
+    targets.append(_target("T4", (4.0, -4.0, 0.0), datum="ellipsoid-wgs84"))
+    found = {
+        label: _found(label, _add(enu, (0.0, 0.0, 0.5)), names) for label, enu in truth.items()
+    }
+    found["T4"] = _found("T4", (4.0, -4.0, 30.0), names)
+
+    block = check_targets.evaluate(
+        found,
+        targets,
+        to_frame=IDENTITY,
+        origin=ORIGIN,
+        frame_datum="msl-unverified",
+        model=_model(poses),
+        anchor_h=0.02,
+        anchor_v=0.02,
+    )
+
+    assert block["verticalEvaluated"] is False  # not on every target ...
+    assert block["verticalChecks"] == 3  # ... but on these three
+    rmse = block["rmseM"]
+    assert isinstance(rmse, dict) and rmse["vertical"] == pytest.approx(0.5, abs=1e-4)
+    assert block["withinTolerance"] is False
+
+
+def test_check_targets_all_on_another_datum_score_no_vertical_checks() -> None:
+    poses = tree_frames.orbit(8)
+    names = tuple(p.name for p in poses)
+    truth = {"T1": (4.0, 4.0, 0.0), "T2": (-4.0, 4.0, 0.0), "T3": (-4.0, -4.0, 0.0)}
+    targets = [_target(label, enu, datum="ellipsoid-wgs84") for label, enu in truth.items()]
+    block = check_targets.evaluate(
+        {label: _found(label, enu, names) for label, enu in truth.items()},
+        targets,
+        to_frame=IDENTITY,
+        origin=ORIGIN,
+        frame_datum="msl-unverified",
+        model=_model(poses),
+        anchor_h=0.02,
+        anchor_v=0.02,
+    )
+    assert block["checks"] == 3 and block["verticalChecks"] == 0

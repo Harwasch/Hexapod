@@ -37,7 +37,9 @@ tolerance wrong too: it can only be as honest as what it is told.
 
 Vertical is scored only when the target's height datum is the frame's: an EXIF-defined
 frame is `msl-unverified`, a target surveyed on the ellipsoid is tens of metres away from
-it vertically for reasons that have nothing to do with the capture.
+it vertically for reasons that have nothing to do with the capture. A target on another
+datum leaves only *its own* vertical unscored: every same-datum target is still scored
+and must pass (`verticalChecks` counts them; a survey verdict needs `MIN_CHECK_TARGETS`).
 """
 
 from __future__ import annotations
@@ -508,6 +510,7 @@ def evaluate(
     vertical: list[float] = []
     footprints: list[float] = []
     evaluated: list[Target] = []
+    vertical_targets: list[Target] = []
     for label in sorted(triangulated):
         result = triangulated[label]
         target = by_label.get(label)
@@ -538,6 +541,7 @@ def evaluate(
         horizontal.append(h)
         if same_datum:
             vertical.append(abs(float(error[2])))
+            vertical_targets.append(target)
         evaluated.append(target)
         entry.update(
             {
@@ -558,6 +562,8 @@ def evaluate(
         "evaluated": len(evaluated),
         "checks": sum(1 for t in evaluated if t.role == "check"),
         "verticalEvaluated": bool(evaluated) and len(vertical) == len(evaluated),
+        # Check-role targets whose vertical was scored: what a survey verdict counts.
+        "verticalChecks": sum(1 for t in vertical_targets if t.role == "check"),
         "verticalAnchorFree": vertical_anchor_free,
         "perTarget": per_target,
         "rmseM": None,
@@ -581,8 +587,10 @@ def evaluate(
         target_v=statistics.median(t.sigma_v_m for t in evaluated),
         pick_m=PICK_PX * statistics.median(footprints),
     )
+    # Every vertical that was scored must pass: a target on another datum leaves its
+    # own height unscored, never the others' (R2 review of #51).
     within = rmse_h <= tolerance["horizontalM"] and (
-        rmse_v is None or not block["verticalEvaluated"] or rmse_v <= tolerance["verticalM"]
+        rmse_v is None or rmse_v <= tolerance["verticalM"]
     )
     block.update(
         {
@@ -613,7 +621,8 @@ def evaluate(
         block["reason"] = f"vertical not scored: the anchor's vertical is {vertical_anchor_free}"
     elif not block["verticalEvaluated"]:
         block["reason"] = (
-            "vertical not scored on every target: a target's height datum is not the frame's"
+            f"vertical scored on {len(vertical)} of {len(evaluated)} targets: the others' "
+            f"height datum is not the frame's"
         )
     return block
 

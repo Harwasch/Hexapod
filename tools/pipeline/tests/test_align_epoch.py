@@ -39,7 +39,7 @@ COUNT = 10
 
 
 def test_rtk_with_passing_targets_is_survey() -> None:
-    checks = {"checks": 3, "withinTolerance": True}
+    checks = {"checks": 3, "verticalChecks": 3, "withinTolerance": True}
     assert alignment.decide(aligned=True, tier="survey", checks=checks, platform="rtk-drone") == (
         "survey",
         [],
@@ -54,6 +54,7 @@ def test_rtk_without_targets_is_coarse_and_says_why() -> None:
     assert reasons == ["accuracy unverified: 0 check target(s) evaluated, fewer than 3"]
     failing = {
         "checks": 8,
+        "verticalChecks": 8,
         "withinTolerance": False,
         "rmseM": {"horizontal": 0.4, "vertical": 0.1},
         "tolerance": {"horizontalM": 0.12, "verticalM": 0.11},
@@ -64,9 +65,23 @@ def test_rtk_without_targets_is_coarse_and_says_why() -> None:
     assert verdict == "coarse" and "out of tolerance" in reasons[0]
 
 
+def test_survey_needs_three_check_targets_scored_vertically() -> None:
+    """R2 review (#51, high): `decide` never asked whether any height was checked, so
+    targets all surveyed on another height datum (vertical unscored) could still give
+    `survey`. A survey verdict needs three check targets scored vertically too."""
+    for vertical in (0, 2):
+        checks = {"checks": 3, "verticalChecks": vertical, "withinTolerance": True}
+        verdict, reasons = alignment.decide(
+            aligned=True, tier="survey", checks=checks, platform="rtk-drone"
+        )
+        assert verdict == "coarse", vertical
+        assert "accuracy unverified vertically" in reasons[0]
+        assert f"{vertical} check target(s)" in reasons[0]
+
+
 def test_a_phone_epoch_is_never_survey_even_with_perfect_numbers() -> None:
     assert [p for p, tier in alignment.TIER_OF.items() if tier == "survey"] == ["rtk-drone"]
-    perfect = {"checks": 8, "withinTolerance": True}
+    perfect = {"checks": 8, "verticalChecks": 8, "withinTolerance": True}
     for platform in ("phone-video", "phone-photo", "drone", "unknown"):
         verdict, reasons = alignment.decide(
             aligned=True, tier=alignment.TIER_OF[platform], checks=perfect, platform=platform

@@ -52,8 +52,9 @@ use_robust_loss_on_prior_position`; the Modal image's self-check builds each one
    datum only) and total against **three sigma of the declared uncertainties**: horizontal
    3·√2·√(anchor² + target² + pick²), vertical 3·√(…), the pick one pixel's footprint. First
    principles, not calibrated on any capture.
-6. **Verdict**: `survey` = the `rtk-drone` tier, aligned, ≥ 3 check targets within tolerance, and
-   an anchor that constrains height (GNSS priors whose vertical was left unconstrained by a datum
+6. **Verdict**: `survey` = the `rtk-drone` tier, aligned, ≥ 3 check targets within tolerance — at
+   least 3 of them scored vertically on the frame's height datum (a target surveyed on another
+   datum leaves only its own height unscored, never the others'), and an anchor that constrains height (GNSS priors whose vertical was left unconstrained by a datum
    mismatch score no vertical and cannot be survey); `coarse` = aligned otherwise; `unaligned`
    otherwise — **including an epoch whose site had a reference it could not be aligned to, whatever
    its own GNSS** ("Drone, not aligned: placed by its GPS, ±5 m"), and one whose registration

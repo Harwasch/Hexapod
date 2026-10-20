@@ -45,8 +45,9 @@ coarser phone epoch would throw its centimetre GNSS away for the phone's metres;
 `gnss-prior-ba` and the visual fit is recorded beside it (`visualCheck`) as a check.
 
 **Verdict.** `survey` only for the survey tier (`rtk-drone`; `TIER_OF`), aligned, with at
-least three evaluated check targets within the 3-sigma tolerance of their declared
-uncertainties (`check_targets.survey_tolerance`). `coarse` is aligned and not survey -- a
+least three evaluated check targets -- three of them scored vertically too, on the frame's
+height datum -- within the 3-sigma tolerance of their declared uncertainties
+(`check_targets.survey_tolerance`). `coarse` is aligned and not survey -- a
 phone epoch that aligns is "Phone video, aligned visually, ±X m", never "surveyed".
 `unaligned` is everything else -- including an epoch whose site had a reference it could
 not be aligned to, whatever its own GNSS (D4: an epoch that fails alignment is unaligned)
@@ -653,6 +654,14 @@ def decide(
             f"{check_targets.MIN_CHECK_TARGETS}"
         )
         return "coarse", reasons
+    vertical = int(checks.get("verticalChecks") or 0)
+    if vertical < check_targets.MIN_CHECK_TARGETS:
+        reasons.append(
+            f"accuracy unverified vertically: {vertical} check target(s) share the frame's "
+            f"height datum and were scored vertically, fewer than "
+            f"{check_targets.MIN_CHECK_TARGETS}"
+        )
+        return "coarse", reasons
     if checks.get("withinTolerance") is not True:
         rmse = checks.get("rmseM") or {}
         tolerance = checks.get("tolerance") or {}
@@ -1100,7 +1109,7 @@ def _gates(
     ratio: float | None = None
     if rmse is not None and tolerance is not None:
         parts = [float(rmse["horizontal"]) / float(tolerance["horizontalM"])]
-        if checks.get("verticalEvaluated") and rmse.get("vertical") is not None:
+        if rmse.get("vertical") is not None and tolerance.get("verticalM") is not None:
             parts.append(float(rmse["vertical"]) / float(tolerance["verticalM"]))
         ratio = max(parts)
     specs: list[tuple[str, str, float | None, float | None, str, str]] = [
