@@ -242,14 +242,18 @@ cells, surfacedCells, medianSigmaM, originHeightM, groundWindowM}`, or null — 
 4. **`minDetectableM`** is the least threshold over the compared cells: no change smaller can be
    seen anywhere between those dates (null when none was compared). An epoch placed by GPS alone
    at ±10 m makes it about 30 m, and so finds no change rather than false ones.
-5. **Areas** are the 4-connected regions of one class — raised and lowered split further by
-   confidence — outlined on their cells' exact edges (rasterio `shapes`, as weak areas are) and
-   placed on the globe through the site frame's own tangent plane (§ API 5 of ADR 0016), each a
-   MultiPolygon with its cells, area, low-confidence cells (and `lowConfidence` when all are), and
-   for compared classes the mean and largest dsm change and the mean ground change. Raised and
-   lowered first. The outline is held to weak areas' bounds (2^20 cells, 2^18 cell edges): past
-   them the map is classified again a level up, by the same rule, and drawn there (`areaLevel`);
-   the counts stay the compared level's.
+5. **Areas** are the 4-connected regions of one changed or insufficient class — raised and
+   lowered split further by confidence — outlined on their cells' exact edges (rasterio `shapes`,
+   as weak areas are) and placed on the globe through the site frame's own tangent plane (§ API 5
+   of ADR 0016), each a MultiPolygon with its cells, area, low-confidence cells (and
+   `lowConfidence` when all are), and for raised and lowered the mean and largest dsm change and
+   the mean ground change. Raised and lowered first, then insufficient. **Unchanged cells are
+   counted, never outlined** (decided in review): they are most of a map and of its outline's
+   cost, and an area of them would read as confident wherever the comparison could not see — an
+   epoch placed by GPS alone is unchanged everywhere. The drape draws changes and insufficient
+   only. The outline is held to weak areas' bounds (2^20 cells, 2^18 cell edges): past them the
+   map is classified again a level up, by the same rule, and drawn there (`areaLevel`); the
+   counts stay the compared level's.
 6. **What it says it is.** Every answer is `derived: true`, labelled "Derived from height
    surfaces, not observed", and `calibration: uncalibrated`: the 3σ rule (and the surfaces' own
    estimators, the 5 m ground window among them) is first principles until a pilot site scanned
@@ -273,7 +277,7 @@ cells, surfacedCells, medianSigmaM, originHeightM, groundWindowM}`, or null — 
 The P5 demo's two epochs (`confidence_demo.py --change`) registered through `register` on one site
 and asked `GET /change`: at 0.25 m cells, `u` 0 and 0.062 m, `minDetectableM` 0.191 m; 49 raised
 (the crate's 36 cells and the 13 its sides stand in, mean Δ 1.50 m), 0 lowered, 1,423 unchanged,
-1,997 insufficient; 11 of the raised cells low confidence (the crate's sides, as the demo found).
+1,997 insufficient (the unchanged ones counted, not outlined); 11 of the raised cells low confidence (the crate's sides, as the demo found).
 From and to swapped: 49 lowered. The same re-scan as if unaligned (±10 m): `minDetectableM` 30.0 m
 and nothing raised or lowered. Every capture is synthetic; nothing was calibrated on it.
 

@@ -113,7 +113,7 @@ class ChangeArea(CamelModel):
     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
     """
 
-    change_class: ChangeClass = Field(alias="class")
+    change_class: Literal["raised", "lowered", "insufficient"] = Field(alias="class")
     footprint: MultiPolygon
     #: Its cells at `areaLevel` (the compared level unless the map was too large to outline).
     cells: int
@@ -174,5 +174,7 @@ class ChangeMapRead(CamelModel):
     #: 2^20 cells or 2^18 cell edges: then classified again, by the same rule, coarser).
     area_level: int
     area_cell_m: Finite
-    #: Raised and lowered first, then insufficient, then unchanged; largest first in each.
+    #: Raised and lowered first, then insufficient; largest first in each. Unchanged cells
+    #: are counted (`counts`), never outlined: an area of them would read as confident
+    #: wherever the comparison could not see.
     areas: list[ChangeArea]

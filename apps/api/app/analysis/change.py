@@ -46,14 +46,16 @@ threshold is then a lower bound). It is still classified: P5's demo found
 the weak cells of a real change were its crate's own sides, so hiding them would hide the
 change.
 
-**Areas.** The classified cells become outlines in the site frame (`change_areas`): every
-4-connected region of one class (raised and lowered split further by low confidence) is a
-polygon with its exact cell edges, through `rasterio.features.shapes` as weak areas are
-outlined, then to the globe through the frame's own tangent plane
-(`weak_areas.site_projection`). The outline is bounded as weak areas' are: a map over
-`weak_areas.MAX_ZONE_CELLS` cells or over `weak_areas.MAX_ZONE_EDGES` cell edges of
-outline is classified again a level up (from the surfaces, by the same rule) and drawn
-there, and its areas' numbers are of the cells they were drawn from.
+**Areas.** The changed and insufficient cells become outlines in the site frame
+(`change_areas`): every 4-connected region of one class (raised and lowered split further
+by low confidence) is a polygon with its exact cell edges, through
+`rasterio.features.shapes` as weak areas are outlined, then to the globe through the
+frame's own tangent plane (`weak_areas.site_projection`). Unchanged cells are counted, not
+outlined: an area of them would read as confident wherever the comparison could not see.
+The outline is bounded as weak areas' are: a map over `weak_areas.MAX_ZONE_CELLS` cells or
+over `weak_areas.MAX_ZONE_EDGES` cell edges of outline is classified again a level up (from
+the surfaces, by the same rule) and drawn there, and its areas' numbers are of the cells
+they were drawn from.
 """
 
 from __future__ import annotations
@@ -561,15 +563,17 @@ def change_planes(
 
 # --- areas --------------------------------------------------------------------------------
 
-#: What an area is drawn by: its class and, for raised and lowered, its confidence. (An
-#: unchanged or insufficient area is drawn whole; it says how many of its cells are low.)
-_GROUPS: tuple[tuple[ChangeClass, bool | None], ...] = (
+#: What an area is drawn by: its class and, for raised and lowered, its confidence.
+#: Unchanged cells are counted, never outlined: they are most of a map and its outline's
+#: cost, and an area of them would read as confident wherever the comparison could not see
+#: (an epoch placed by GPS alone is unchanged everywhere).
+AreaClass = Literal["raised", "lowered", "insufficient"]
+_GROUPS: tuple[tuple[AreaClass, bool | None], ...] = (
     ("raised", False),
     ("raised", True),
     ("lowered", False),
     ("lowered", True),
     ("insufficient", None),
-    ("unchanged", None),
 )
 
 
@@ -597,7 +601,7 @@ def outline_edges(codes: NDArray[np.uint8]) -> int:
 class AreaShape:
     """One change area: its outline in the frame and on the globe, and what is in it."""
 
-    change: ChangeClass
+    change: AreaClass
     metric: Polygon
     footprint: MultiPolygon
     cells: int
@@ -638,8 +642,9 @@ def _globe(polygons: list[Any], projection: SiteProjection) -> list[MultiPolygon
 
 def change_areas(planes: ChangePlanes, projection: SiteProjection) -> list[AreaShape]:
     """Every 4-connected region of one group (`_GROUPS`) of `planes` as an area, raised and
-    lowered first, then insufficient, then unchanged, largest first within each. Each
-    area's numbers are of its own cells (its region's, at `planes.level`)."""
+    lowered first, then insufficient, largest first within each (unchanged cells are
+    counted in `planes`, not outlined). Each area's numbers are of its own cells (its
+    region's, at `planes.level`)."""
     codes = group_codes(planes)
     if not codes.any():
         return []
@@ -692,7 +697,7 @@ def change_areas(planes: ChangePlanes, projection: SiteProjection) -> list[AreaS
                 else None,
             )
         )
-    order: Mapping[str, int] = {"raised": 0, "lowered": 1, "insufficient": 2, "unchanged": 3}
+    order: Mapping[str, int] = {"raised": 0, "lowered": 1, "insufficient": 2}
     return sorted(out, key=lambda area: (order[area.change], -area.cells))
 
 

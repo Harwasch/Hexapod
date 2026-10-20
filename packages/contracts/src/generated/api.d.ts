@@ -4902,7 +4902,7 @@ export interface components {
              * Class
              * @enum {string}
              */
-            class: "unchanged" | "raised" | "lowered" | "insufficient";
+            class: "raised" | "lowered" | "insufficient";
             footprint: components["schemas"]["MultiPolygon"];
             /** Lowconfidence */
             lowConfidence: boolean;

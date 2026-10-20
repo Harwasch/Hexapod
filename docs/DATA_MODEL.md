@@ -213,7 +213,8 @@ target: which of `comparedWith` it re-scanned), reason}`. 409 `confidence-not-me
 toEpochId, fromAssetId, toAssetId, frame, level, nativeLevel, cellM, thresholdSigma: 3,
 minDetectableM, uncertainty {fromM, toM}, counts {unchanged, raised, lowered, insufficient},
 lowConfidence {unchanged, raised, lowered}, appearance {status: not-computed, reason}, areaLevel,
-areaCellM, areas: [{class, footprint (MultiPolygon), cells, areaM2, lowConfidence,
+areaCellM, areas (raised, lowered and insufficient only; unchanged cells are counted, not outlined):
+[{class, footprint (MultiPolygon), cells, areaM2, lowConfidence,
 lowConfidenceCells, meanDeltaM, maxAbsDeltaM, meanGroundDeltaM}]}`. 404 · 422 (same epoch) · 409
   `epoch-not-published` · `no-site-frame` · `surface-not-measured` · `confidence-not-measured` ·
   `frames-differ` · `surface-unreadable` · `confidence-unreadable`.

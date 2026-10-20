@@ -156,7 +156,10 @@ def test_the_change_from_e1_to_e2_is_p5_s_reference(
     insufficient = [a for a in areas if a["class"] == "insufficient"]
     assert sum(a["cells"] for a in insufficient) == reference["counts"]["insufficient"]
     assert all(a["meanDeltaM"] is None for a in insufficient)
-    assert sum(a["cells"] for a in areas) == sum(reference["counts"].values())
+    # Unchanged cells are counted, never outlined: an unaligned epoch's cannot read confident.
+    assert all(a["class"] != "unchanged" for a in areas)
+    counts = reference["counts"]
+    assert sum(a["cells"] for a in areas) == sum(counts.values()) - counts["unchanged"]
 
 
 def test_from_and_to_the_other_way_round_swap_raised_and_lowered(

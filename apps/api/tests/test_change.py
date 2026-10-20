@@ -112,13 +112,11 @@ def test_a_crate_is_raised_and_nothing_else_changed() -> None:
     # 3 sqrt(2 * 0.02^2 + 0.062^2): the least change seen here.
     assert planes.min_detectable_m == pytest.approx(3 * math.sqrt(2 * 0.02**2 + 0.062**2))
 
-    [raised, unchanged] = change_areas(planes, PROJECTION)
+    [raised] = change_areas(planes, PROJECTION)  # unchanged cells are counted, not outlined
     assert (raised.change, raised.cells, raised.low_confidence) == ("raised", 9, False)
     assert raised.metric.area == pytest.approx(9.0)
     assert raised.mean_delta_m == pytest.approx(1.5) and raised.max_abs_delta_m == 1.5
     assert raised.mean_ground_delta_m == 0.0
-    assert (unchanged.change, unchanged.cells) == ("unchanged", 391)
-    assert len(unchanged.metric.interiors) == 1  # the crate is a hole in it
 
 
 def test_a_lowered_cell_and_its_sign() -> None:
@@ -198,8 +196,7 @@ def test_weak_cells_are_flagged_low_confidence_not_hidden() -> None:
     areas = change_areas(planes, PROJECTION)
     raised = [area for area in areas if area.change == "raised"]
     assert sorted((area.cells, area.low_confidence) for area in raised) == [(3, False), (6, True)]
-    [unchanged] = [area for area in areas if area.change == "unchanged"]
-    assert (unchanged.low_confidence_cells, unchanged.low_confidence) == (1, False)
+    assert {str(area.change) for area in areas} == {"raised"}  # no unchanged area
 
 
 def test_without_a_confidence_grid_nothing_is_vouched_for() -> None:
@@ -377,7 +374,7 @@ def test_a_noisy_map_is_drawn_coarser_within_the_outline_bound(
 def test_an_area_lies_over_its_cells_on_the_globe() -> None:
     a = flat(i0=-10, j0=-10)
     b = crate(flat(i0=-10, j0=-10), slice(5, 8), slice(10, 13), 150)
-    [raised, _] = change_areas(change_planes(surface(a), surface(b), 0.0, 0.0), PROJECTION)
+    [raised] = change_areas(change_planes(surface(a), surface(b), 0.0, 0.0), PROJECTION)
     [polygon] = raised.footprint.geoms
     lon, lat = np.asarray(polygon.exterior.coords).T
     x, y = PROJECTION.to_metric(lon, lat)
@@ -387,10 +384,10 @@ def test_an_area_lies_over_its_cells_on_the_globe() -> None:
 
 
 @pytest.mark.parametrize("seed", range(25))
-def test_every_classed_cell_is_in_one_area_and_every_outline_is_valid(seed: int) -> None:
+def test_every_outlined_cell_is_in_one_area_and_every_outline_is_valid(seed: int) -> None:
     """Random maps (holes, raised and lowered specks, random confidence, any window): the
-    areas' cells add up to the classed cells, and every footprint is valid GeoJSON as the
-    API answers it."""
+    areas' cells add up to the changed and insufficient cells (unchanged ones are counted,
+    not outlined), and every footprint is valid GeoJSON as the API answers it."""
     from app.services.change_maps import _footprint
 
     rng = np.random.default_rng(seed)
@@ -410,7 +407,9 @@ def test_every_classed_cell_is_in_one_area_and_every_outline_is_valid(seed: int)
     found = change_map(
         surface(a), surface(b), 0.0, 0.0, PROJECTION, confidence_a=grid, confidence_b=grid
     )
-    assert sum(area.cells for area in found.areas) == int((found.drawn.classes >= 0).sum())
+    outlined = (found.drawn.classes >= 0) & (found.drawn.classes != change.UNCHANGED)
+    assert sum(area.cells for area in found.areas) == int(outlined.sum())
+    assert {str(area.change) for area in found.areas} <= {"raised", "lowered", "insufficient"}
     for area in found.areas:
         assert _footprint(area.footprint).type == "MultiPolygon"
 

@@ -4053,7 +4053,6 @@
           },
           "class": {
             "enum": [
-              "unchanged",
               "raised",
               "lowered",
               "insufficient"
