@@ -58,10 +58,28 @@ const patch = {
   scout: { ...DEFAULT_SCOUT, altitudeM: 120 },
 } as unknown as Zone;
 
+/** The site the patches lie in (siteProject's SITE zone): the route must stay inside it. */
+const SITE = {
+  id: "SITE",
+  name: "Site boundary",
+  footprint: {
+    type: "Polygon",
+    coordinates: [
+      [
+        [-120.05, 34.69],
+        [-120.02, 34.69],
+        [-120.02, 34.71],
+        [-120.05, 34.71],
+        [-120.05, 34.69],
+      ],
+    ],
+  },
+} as unknown as Zone;
+
 it("shows the return-home height, capped at 120 m above take-off", () => {
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <DroneScoutExport zones={[patch]} onAltitude={() => undefined} />
+      <DroneScoutExport zones={[patch]} ground={[SITE]} onAltitude={() => undefined} />
     </QueryClientProvider>,
   );
   const facts = screen.getByTestId("scout-facts");
@@ -74,7 +92,7 @@ it("shows the return-home height, capped at 120 m above take-off", () => {
 function card(zones: Zone[]) {
   return render(
     <QueryClientProvider client={new QueryClient()}>
-      <DroneScoutExport zones={zones} />
+      <DroneScoutExport zones={zones} ground={[SITE]} />
     </QueryClientProvider>,
   );
 }
@@ -133,11 +151,35 @@ it("offers no download for a route with an area it could not plan, and says whic
   expect(screen.queryByTestId("scout-facts")).toBeNull();
 });
 
+it("offers no route that would leave the site boundary, or with no boundary to check", () => {
+  const edge = { ...SITE, footprint: patch.footprint };
+  const orbit = {
+    ...patch,
+    scout: { ...DEFAULT_SCOUT, purpose: "re-scan-weak", pattern: "orbit", gimbalPitchDeg: -30 },
+  } as unknown as Zone;
+  // The orbit rings the patch from outside it: here the site ends at the patch's edge.
+  const { unmount } = render(
+    <QueryClientProvider client={new QueryClient()}>
+      <DroneScoutExport zones={[orbit]} ground={[edge]} />
+    </QueryClientProvider>,
+  );
+  expect(screen.getByTestId("scout-unsupported")).toHaveTextContent("Fog patch 1: its orbit flies");
+  expect(screen.queryByTestId("scout-download")).toBeNull();
+  unmount();
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <DroneScoutExport zones={[patch]} />
+    </QueryClientProvider>,
+  );
+  expect(screen.getByTestId("scout-unsupported")).toHaveTextContent("No site boundary");
+  expect(screen.queryByTestId("scout-download")).toBeNull();
+});
+
 describe("drone missions behind their flag", () => {
   it("with the flag on, loads the drone card and its download", async () => {
     render(
       <QueryClientProvider client={new QueryClient()}>
-        <ScoutExport zones={[patch]} />
+        <ScoutExport zones={[patch]} ground={[SITE]} />
       </QueryClientProvider>,
     );
     expect(await screen.findByTestId("scout-download")).toBeInTheDocument();
@@ -164,7 +206,7 @@ it("says when areas are flown as their re-scan asks, and counts the crossing pas
   const facts = (scout: Zone["scout"]) => {
     render(
       <QueryClientProvider client={new QueryClient()}>
-        <DroneScoutExport zones={[{ ...patch, scout }]} />
+        <DroneScoutExport zones={[{ ...patch, scout }]} ground={[SITE]} />
       </QueryClientProvider>,
     );
     const card = screen.getByTestId("scout-export").textContent ?? "";
@@ -198,7 +240,7 @@ it("writes the KMZ on the download click, its writer loaded then", async () => {
   const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <DroneScoutExport zones={[patch]} />
+      <DroneScoutExport zones={[patch]} ground={[SITE]} />
     </QueryClientProvider>,
   );
   fireEvent.click(screen.getByTestId("scout-download"));
@@ -214,7 +256,7 @@ it("says when the route cannot be written, and downloads nothing", async () => {
   const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <DroneScoutExport zones={[patch]} />
+      <DroneScoutExport zones={[patch]} ground={[SITE]} />
     </QueryClientProvider>,
   );
   fireEvent.click(screen.getByTestId("scout-download"));

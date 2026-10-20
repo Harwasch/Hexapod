@@ -16,6 +16,7 @@ const DroneScoutExport = lazy(() =>
  */
 export function ScoutExport(props: {
   zones: readonly Zone[];
+  ground?: readonly Zone[];
   onAltitude?: (altitudeM: number) => void;
 }) {
   if (!props.zones.some((z) => z.scout)) return null;

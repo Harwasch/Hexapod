@@ -1,12 +1,13 @@
 /**
  * What the DJI export refuses before it offers a download (missions/flightLimits.ts): a route
- * with an area it could not plan, whole or in part.
+ * with an area it could not plan, whole or in part, and a route that would leave the site's
+ * boundary or enter one of its holes (holes are no-fly).
  */
 import type { Footprint } from "@twin/contracts";
 import { destination } from "@twin/geo";
 import { describe, expect, it } from "vitest";
 
-import { routeRefusal } from "@/missions/flightLimits";
+import { flightRefusal, routeRefusal } from "@/missions/flightLimits";
 import { DEFAULT_SCOUT, type Scout } from "@/missions/scout";
 
 const origin = { longitude: -120.04, latitude: 34.698 };
@@ -77,5 +78,67 @@ describe("an empty or partial route", () => {
         },
       ]),
     ).toBeNull();
+  });
+});
+
+/** `outer` with `holes` cut out of it: each a [west, south, east, north] box in metres. */
+function holed(outer: Footprint, ...holes: [number, number, number, number][]): Footprint {
+  const ring = ([w, s, e, n]: [number, number, number, number]) =>
+    (rectangle(e - w, n - s, w, s).coordinates[0] ?? []).slice().reverse();
+  return {
+    type: "Polygon",
+    coordinates: [...(outer.coordinates as number[][][]), ...holes.map(ring)],
+  } as Footprint;
+}
+
+const orbit: Scout = { ...oblique, pattern: "orbit", gimbalPitchDeg: -30 };
+
+describe("the site's boundary and holes", () => {
+  it("refuse a route when there is no boundary to keep it inside", () => {
+    const areas = [{ name: "Fog patch 1", footprint: rectangle(300, 300), scout: DEFAULT_SCOUT }];
+    expect(flightRefusal(areas, null)).toContain("No site boundary");
+  });
+
+  it("let a route fly lanes that end on the boundary itself", () => {
+    const site = rectangle(300, 300);
+    const areas = [{ name: "Fog patch 1", footprint: site, scout: DEFAULT_SCOUT }];
+    expect(flightRefusal(areas, site)).toBeNull();
+  });
+
+  it("refuse an orbit that would leave the boundary, and keep one inside it", () => {
+    // At 60 m and 30° down the ring flies about 104 m out from the area.
+    const nearEdge = [{ name: "Weak area 1", footprint: rectangle(10, 10, 20, 145), scout: orbit }];
+    const refusal = flightRefusal(nearEdge, rectangle(300, 300));
+    expect(refusal).toContain("Weak area 1: its orbit");
+    expect(refusal).toContain("would leave the site boundary");
+    const middle = [{ name: "Weak area 1", footprint: rectangle(10, 10, 295, 295), scout: orbit }];
+    expect(flightRefusal(middle, rectangle(600, 600))).toBeNull();
+  });
+
+  it("refuse an area whose legs between lanes would cross a hole", () => {
+    const site = holed(rectangle(300, 300), [100, 100, 200, 200]);
+    const areas = [{ name: "Fog patch 1", footprint: site, scout: DEFAULT_SCOUT }];
+    expect(flightRefusal(areas, site)).toContain(
+      "Fog patch 1: a leg between its passes would cross a no-fly hole",
+    );
+  });
+
+  it("refuse a leg from one area to the next across a hole", () => {
+    const site = holed(rectangle(700, 300), [300, 20, 400, 280]);
+    const areas = [
+      { name: "Fog patch 1", footprint: rectangle(250, 100, 0, 100), scout: DEFAULT_SCOUT },
+      { name: "Fog patch 2", footprint: rectangle(250, 100, 450, 100), scout: DEFAULT_SCOUT },
+    ];
+    expect(flightRefusal(areas, site)).toContain(
+      "The leg from Fog patch 1 to Fog patch 2 would cross a no-fly hole",
+    );
+    // Without the hole the same route is flown.
+    expect(flightRefusal(areas, rectangle(700, 300))).toBeNull();
+  });
+
+  it("treat a hole in an area as no-fly too", () => {
+    const patch = holed(rectangle(300, 300), [100, 100, 200, 200]);
+    const areas = [{ name: "Fog patch 1", footprint: patch, scout: DEFAULT_SCOUT }];
+    expect(flightRefusal(areas, rectangle(300, 300))).toContain("no-fly hole");
   });
 });

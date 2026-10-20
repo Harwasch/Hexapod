@@ -703,6 +703,7 @@ function DraftReview({
       </div>
       <PathList draft={draft} project={project} />
       <ScoutExport
+        ground={project.zones}
         zones={scoutZonesInOrder(
           project.zones,
           overlayFor({ zoneIds: draft.zoneIds, machineIds: draft.machineIds, steps: draft.steps }),

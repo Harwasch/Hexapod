@@ -251,7 +251,9 @@ function PlanDetail({ plan, onBack }: { plan: Plan; onBack: () => void }) {
             </div>
           ))}
         </div>
-        {project && <ScoutExport zones={scoutZonesInOrder(project.zones, overlay)} />}
+        {project && (
+          <ScoutExport zones={scoutZonesInOrder(project.zones, overlay)} ground={project.zones} />
+        )}
         <section>
           <div className="mc-row mc-row--between">
             <span className="mc-eyebrow">PROGRESS</span>

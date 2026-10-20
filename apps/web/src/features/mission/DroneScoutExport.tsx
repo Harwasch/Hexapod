@@ -22,7 +22,9 @@ import {
   waylineStats,
   type Relief,
 } from "@/missions/scout";
-import { routeRefusal } from "@/missions/flightLimits";
+import { flightRefusal, routeRefusal } from "@/missions/flightLimits";
+import { boundaryZoneOf } from "@/missions/landGround";
+import { SITE_ZONE_ID } from "@/missions/siteProject";
 import type { Zone } from "@/missions/types";
 import { useLand } from "@/state/land";
 
@@ -139,9 +141,12 @@ function km(metres: number): string {
  */
 export function DroneScoutExport({
   zones,
+  ground = [],
   onAltitude,
 }: {
   zones: readonly Zone[];
+  /** The project's zones: its Land's or site's boundary bounds where the drone may fly. */
+  ground?: readonly Zone[];
   onAltitude?: (altitudeM: number) => void;
 }) {
   const landName = useLand((s) => s.active?.name ?? null);
@@ -167,12 +172,16 @@ export function DroneScoutExport({
         : "unknown";
   const [error, setError] = useState<string | null>(null);
   if (!first) return null;
-  // Whole or not at all: a pattern it cannot fly, or an area it could not plan.
-  const refusal =
-    kmzRefusal(scouts) ??
-    routeRefusal(
-      scouts.map((z) => ({ name: z.name, footprint: z.footprint, scout: scoutOf(z.scout) })),
-    );
+  // Whole or not at all: a pattern it cannot fly, an area it could not plan, or a leg out of
+  // the boundary (the Land's, else the site's) or into a hole.
+  const flown = scouts.map((z) => ({
+    name: z.name,
+    footprint: z.footprint,
+    scout: scoutOf(z.scout),
+  }));
+  const limits =
+    (boundaryZoneOf(ground) ?? ground.find((z) => z.id === SITE_ZONE_ID))?.footprint ?? null;
+  const refusal = kmzRefusal(scouts) ?? routeRefusal(flown) ?? flightRefusal(flown, limits);
   const camera = SCOUT_CAMERAS[scout.camera];
   const download = () => {
     setError(null);
