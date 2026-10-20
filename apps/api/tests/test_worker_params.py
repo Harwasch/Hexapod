@@ -141,6 +141,50 @@ def test_no_frame_leaves_the_params_exactly_as_before(
     assert all("site_frame" not in values for values in stage_params(plan, capture, job).values())
 
 
+def test_a_typed_place_reaches_normalize_and_georeference_alike() -> None:
+    """The upload page's typed place (`georeference: {lat, lon}` in the job's params) wins
+    over the phone's fix. In a frame, `normalize` moves the splat by the located point's
+    offset and `georeference` refuses any other offset, so both must be told the typed
+    place; told the phone's fix and the typed place, the capture could never run."""
+    typed = {"georeference": {"lat": 47.6005, "lon": -122.3}}
+    with_fix = _params("splat-ingest", {"lat": 47.6001, "lon": -122.3}, typed, FRAME)
+    without_fix = _params("splat-ingest", {}, typed, FRAME)
+
+    for resolved in (with_fix, without_fix):
+        assert (resolved["normalize"]["lat"], resolved["normalize"]["lon"]) == (47.6005, -122.3)
+        assert (resolved["georeference"]["lat"], resolved["georeference"]["lon"]) == (
+            47.6005,
+            -122.3,
+        )
+    # With no fix of its own the capture still takes the frame's height as its fallback.
+    assert without_fix["georeference"]["height"] == FRAME["height"]
+
+
+def test_without_a_frame_a_typed_place_leaves_normalize_alone() -> None:
+    resolved = _params(
+        "splat-ingest", {"lat": 1.0, "lon": 2.0}, {"georeference": {"lat": 3.0, "lon": 4.0}}
+    )
+
+    assert "lat" not in resolved.get("normalize", {})
+    assert (resolved["georeference"]["lat"], resolved["georeference"]["lon"]) == (3.0, 4.0)
+
+
+def test_the_located_point_is_the_typed_place_then_the_capture_then_none() -> None:
+    from app.worker.params import located_point
+
+    plan = plan_recipe(load_recipe("splat-ingest"))
+
+    def point(metadata: dict[str, Any], job_params: dict[str, Any]) -> object:
+        capture = Capture(slug="c", name="c", kind=CaptureKind.GAUSSIAN_SPLAT, metadata_=metadata)
+        return located_point(plan, capture, Job(recipe="splat-ingest", params=job_params))
+
+    typed = {"georeference": {"lat": 3.0, "lon": 4.0}}
+    assert point({"lat": 1.0, "lon": 2.0}, typed) == (3.0, 4.0)
+    assert point({"lat": 1.0, "lon": 2.0}, {}) == (1.0, 2.0)
+    assert point({}, {"georeference": {"lat": 3.0}}) is None
+    assert point({}, {}) is None
+
+
 def test_a_job_can_still_override_the_site_frame() -> None:
     other = {**FRAME, "lat": 10.0}
     resolved = _params(

@@ -1060,7 +1060,7 @@ class JobSupervisor:
             return {}
         # The site frame the capture is placed in (decision D3): decided now, because the
         # pipeline places the capture in it, and the same on every attempt of a re-run.
-        frame = epochs.frame_for_run(db, capture)
+        frame = epochs.frame_for_run(db, capture, params.located_point(plan, capture, job))
         resolved = params.stage_params(plan, capture, job, frame=frame.param() if frame else None)
         # Refused here rather than in the child, so a `params` naming a stage the recipe
         # does not have dead-letters with the recipe error instead of a failed run.
