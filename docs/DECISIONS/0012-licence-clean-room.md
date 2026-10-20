@@ -115,6 +115,56 @@ implementer's work under the procedure above, with the exposures listed.
   project's values (none of the papers blends at the seams or sets a minimum of images per
   block), and the comments say so.
 
+## Why the merge differs from the code it replaced
+
+The review of this change (PR #50) measured that the new merge is not numerically the old one:
+a two-gaussian cell's mean moves from 4.012 to 4.373. That is intended. Equivalence with the
+encumbered rule is not a goal; each place where the method left a choice now has our own rule,
+for a reason of its own:
+
+- **Weight: opacity × the ellipsoid's surface area by Thomsen's formula** (p = 1.6075), where
+  the old weight was opacity × (ab + ac + bc), the same power mean with p = 1. Thomsen's is the
+  standard closed form for an ellipsoid's area: checked here against the exact area (elliptic
+  integrals, axis ratios down to e^-6), its largest relative error is 1.06%. The p = 1 form is
+  exact for spheres but 33% low for a flat disc (4π·ab/3 against 2π·ab). By Cauchy's formula
+  the mean projected area over all view directions is a quarter of the surface area, so weights
+  proportional to true area follow true on-screen coverage; flat splats, which most of a scan's
+  ground is, now weigh what they cover.
+- **Opacity cap 511/512** instead of 0.99. SPZ stores alpha as round(255·α): 0.99 is byte 252
+  (decodes to 0.988), so a capped parent could never be stored opaque; 511/512 = 0.99805 is the
+  coarsest 1 − 2^-k that rounds to byte 255 (255/256 gives 254), and its logit, 6.24, is finite.
+  So a parent can reach the most opaque alpha SPZ stores. The cap comes with bounded widening
+  (k ≤ 2, the idea Spark applies), so mass beyond the cap spreads instead of being dropped.
+- **Eigenvalue floor**: max(e^(2·lo), 2^-20·λ_max). The first rewrite floored at SPZ's smallest
+  scale only and dropped the old rule's floor relative to the largest eigenvalue; the review
+  flagged that, and the floor is restored with our own constant. A cell whose members lie on a
+  line or in a plane has eigenvalues down at e^(2·lo) under axes up to SPZ's largest. A viewer
+  rebuilds the covariance in float32: over 200,000 random rotations, a thin axis at 2^-20 of the
+  longest came back within 11% and always positive, at 2^-24 0.1% came back negative, and at
+  1e-10 half did. SPZ's rotation bytes (1/255 a component, up to ~1/128 rad of tilt) already
+  blur any axis thinner than 1/128 of the longest, so 1/1024 changes nothing a viewer can show.
+  It binds in one committed fixture: four root cells of `synthetic-far`, needles about 1 km
+  long and 0.5 m thick (2.2e-7 of the longest axis in variance), now 1 m thick. Only that
+  fixture's root `splat.glb` is regenerated (command 4 below); every other tile and fixture is
+  byte-identical. The next-thinnest parent the captures suite builds is 9.1e-6, ten times
+  above the floor.
+
+**Measured effect** (`tools/captures/lod_parity.py`, parents against their own leaves, CPU,
+τ 16, means; old merge → new): synthetic-tree-lod coverage 0.311 → 0.318, holes 0.781 → 0.779,
+PSNR 12.38 → 12.40 dB; synthetic-yard 0.551 → 0.559, 0.633 → 0.632, 11.14 → 11.18 dB;
+synthetic-far 0.561 → 0.518, 0.462 → 0.493, 9.69 → 9.54 dB. The far site's drop is the area
+weight on its flat discs seen from a low camera: swapping the p = 1 area back in reproduces the
+old numbers exactly. The restored floor then moves only the far site, by its four root cells:
+coverage 0.518 → 0.516, holes 0.493 → 0.496, PSNR 9.54 → 9.53 dB.
+Not gated: no threshold has a recorded measurement behind it.
+
+**Published scans.** Their parent tiles were built by the old merge; their leaves never went
+through it. The tilesets stay valid: the format, the leaves and the tree are unchanged, and the
+viewers read them as before. Re-packing them is licence hygiene, not a fix, and nothing breaks
+if they are not re-packed. It is recommended as a dispatch-only follow-up workflow: re-run
+`package` from each scan's stored `canonical.ply`, then `rebind_instances --rekey`, then re-skin
+(see Consequences for what a re-pack changes).
+
 ## Regenerating the fixtures
 
 Parents go through `eigh` and the Thomsen area through `pow`, so their bytes depend on the
