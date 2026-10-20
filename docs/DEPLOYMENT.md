@@ -753,11 +753,11 @@ and the staged files stay for a retry.
 Every 409 says why in the Problem's `code` (an RFC 9457 extension member; other errors
 have none), so a client branches on it rather than on the words of `detail`:
 
-| `code`           | Means                                                                                                                                                            | Do                                                     |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `tiles_changed`  | `basedOn` no longer holds the asset's tiles: a republish replaced them                                                                                           | compute the files again on the asset's current tileset |
-| `busy`           | another attach, or a worker's register, held the asset past the 60 s lock wait                                                                                   | retry                                                  |
-| `not_attachable` | the asset cannot take an attach: not a run's 3D Tiles in the public bucket, its `tileset.json` missing or not a tileset, too many objects, one too large to copy | neither; fix the asset or the bucket                   |
+| `code`           | Means                                                                                                                                                                                                                                        | Do                                                     |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `tiles_changed`  | `basedOn` no longer holds the asset's tiles: a republish replaced them                                                                                                                                                                       | compute the files again on the asset's current tileset |
+| `busy`           | another attach, or a worker's register, held the asset past the 60 s lock wait                                                                                                                                                               | retry                                                  |
+| `not_attachable` | the asset cannot take an attach: not a run's 3D Tiles in the public bucket, its `tileset.json` missing or not a tileset, too many objects, one too large to copy, or a new generation whose tiles did not come out byte-identical (ADR 0013) | neither; fix the asset or the bucket                   |
 
 **Serialised per asset.** The attach takes `SELECT … FOR UPDATE` on the asset, so a second
 attach waits (up to 60 s, then 409 — retry) and builds on the first's generation; neither
