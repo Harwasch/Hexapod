@@ -285,7 +285,9 @@ def _number(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def frame_for_run(db: Session, capture: Capture) -> RunFrame | None:
+def frame_for_run(
+    db: Session, capture: Capture, located: tuple[float, float] | None = None
+) -> RunFrame | None:
     """The frame a run of this capture is placed in, or None to let it define its own.
 
     The first that applies:
@@ -294,8 +296,9 @@ def frame_for_run(db: Session, capture: Capture) -> RunFrame | None:
     2. the capture was registered into a site with no epoch for it (legacy): its frame;
     3. the capture named a site (`metadata.siteId`): its frame, or none yet -- the run
        is then that site's first epoch and defines it;
-    4. the capture has a coordinate (`metadata.lat`/`lon`): the nearest framed site
-       within `SPATIAL_JOIN_BUFFER_M`;
+    4. the run has a located point (`located`, `worker/params.located_point`: a typed
+       place in the job's params, else the capture's `metadata.lat`/`lon`): the nearest
+       framed site within `SPATIAL_JOIN_BUFFER_M`;
     5. none: the run makes a new site and frame.
 
     Decided before the run starts, because the pipeline places the capture in it. A
@@ -310,8 +313,11 @@ def frame_for_run(db: Session, capture: Capture) -> RunFrame | None:
     named = requested_site(db, capture)
     if named is not None:
         return _frame_of(db, named.id)
-    metadata = capture.metadata_ or {}
-    lat, lon = _number(metadata.get("lat")), _number(metadata.get("lon"))
+    if located is None:
+        metadata = capture.metadata_ or {}
+        lat, lon = _number(metadata.get("lat")), _number(metadata.get("lon"))
+    else:
+        lat, lon = _number(located[0]), _number(located[1])
     if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return None
     site = nearest_framed_site(db, lat, lon)

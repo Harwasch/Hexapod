@@ -257,6 +257,19 @@ def test_a_spatial_match_needs_a_frame_and_25_m(db: Session) -> None:
     assert frameless.id != site.id
 
 
+def test_a_spatial_match_uses_the_runs_located_point(db: Session) -> None:
+    """A typed place in the job's params wins over the capture's own fix for the join, as
+    it does for the placement (`worker/params.located_point`)."""
+    site = make_site(db)
+    edge = ORIGIN[0] + 0.0005
+    far = _capture(db, "far", {"lat": _north_of(500, edge), "lon": ORIGIN[1]})
+    db.commit()
+
+    assert epochs.frame_for_run(db, far) is None
+    found = epochs.frame_for_run(db, far, (_north_of(20, edge), ORIGIN[1]))
+    assert found is not None and found.site_id == site.id
+
+
 def test_no_coordinate_and_no_site_means_no_frame(db: Session) -> None:
     make_site(db)
     capture = _capture(db, "c", {"note": "nowhere"})
