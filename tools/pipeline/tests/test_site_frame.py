@@ -326,6 +326,25 @@ def test_the_aligned_origin_is_the_frame_when_one_is_given() -> None:
     assert _aligned_origin(fixes, None) == exif.median_fix(fixes)
 
 
+def test_the_aligned_branch_refuses_fixes_past_the_frames_range() -> None:
+    """The aligned branch has no offset of its own to check: its fixes are expressed about
+    the frame's origin directly, so a capture that named a site 3 km away would be packed
+    3 km out. Each fix is held to the same range as the located branch's one point."""
+    import exif
+    from stages import _aligned_origin
+
+    far = gps_frames.enu_to_geodetic(0.0, 3000.0, 0.0, LAT, LON, HEIGHT)
+    fixes = (
+        exif.Fix(name="a", lat=LAT, lon=LON, alt=10.0),
+        exif.Fix(name="b", lat=LAT + 0.001, lon=LON, alt=12.0),
+        exif.Fix(name="c", lat=far[0], lon=far[1], alt=14.0),
+    )
+    with pytest.raises(ValueError, match="cannot be packed"):
+        _aligned_origin(fixes, _frame())
+    # Without a frame the fixes define their own origin, and nothing is refused.
+    assert _aligned_origin(fixes, None) == exif.median_fix(fixes)
+
+
 def _georeference(root: Path, params: dict[str, Any], location: dict[str, Any] | None) -> Any:
     import tree_frames
     from conftest import make_recipe
