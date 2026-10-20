@@ -142,7 +142,8 @@ def _grid(workdir: Workdir) -> tuple[dict[str, Any], cell_grid.CellGrid]:
 
 def _at(grid: cell_grid.CellGrid, x: float, y: float) -> dict[str, int]:
     row = cell_grid.lookup(grid, [[x, y, 0.0]])[0]
-    return dict(zip(("dsm", "ground", "sigma", "support"), (int(v) for v in row), strict=True))
+    names = [channel.name for channel in cell_grid.SURFACE_CHANNELS]
+    return dict(zip(names, (int(v) for v in row), strict=True))
 
 
 BOX = ((0.0, 0.0), 2.0, 1.5)
@@ -255,7 +256,7 @@ def test_support_counts_the_samples_by_powers_of_two_and_says_where_from(tmp_pat
     assert (thin["dsm"], thin["ground"], thin["sigma"]) == (NO, NO, 0)
     assert descriptor["summary"]["thin"] == 1
     empty = _at(grid, -5.5, -5.5)
-    assert empty == {"dsm": NO, "ground": NO, "sigma": 0, "support": 0}
+    assert empty == {"dsm": NO, "ground": NO, "sigma": 0, "support": 0, "groundSigma": 0}
     np.testing.assert_array_equal(
         surface.support_of(np.array([0, 1, 2, 3, 4, 1 << 15, 1 << 20]), np.zeros(7, np.uint8)),
         np.array([0, 0, 1, 1, 2, 15, 15]) << 4,
@@ -591,27 +592,28 @@ def test_the_change_demo_finds_the_crate_raised_and_the_noise_unchanged(
 def test_coarsening_a_surface_takes_the_highest_top_the_lowest_ground_the_widest_sigma() -> None:
     from experiments import confidence_demo
 
-    data = np.zeros((2, 2, 4), dtype=np.int64)
+    data = np.zeros((2, 2, 5), dtype=np.int64)
     data[..., 0] = [[10, NO], [30, 20]]
     data[..., 1] = [[5, NO], [-7, 0]]
     data[..., 2] = [[1, 0], [4, 2]]
     data[..., 3] = [[0x12, 0x00], [0x31, 0x22]]
+    data[..., 4] = [[6, 0], [9, 3]]
     coarse = confidence_demo.coarsen_surface(cell_grid.CellPlane(0, 0, 0, 2, 2, data), 1)
-    assert coarse.data[0, 0].tolist() == [30, -7, 4, 0x33]
-    empty = np.zeros((2, 2, 4), dtype=np.int64)
+    assert coarse.data[0, 0].tolist() == [30, -7, 4, 0x33, 9]
+    empty = np.zeros((2, 2, 5), dtype=np.int64)
     empty[..., :2] = NO
     nothing = confidence_demo.coarsen_surface(cell_grid.CellPlane(0, 0, 0, 2, 2, empty), 1)
-    assert nothing.data[0, 0].tolist() == [NO, NO, 0, 0]
+    assert nothing.data[0, 0].tolist() == [NO, NO, 0, 0, 0]
     # A child whose ground was never observed (NO_HEIGHT under a surface) gives no ground:
     # the lowest is of the children that have one, and none when no child has.
     unseen = data.copy()
-    unseen[0, 1, :] = [50, NO, 3, 0x12]
-    unseen[1, 0, 1] = NO
+    unseen[0, 1, :] = [50, NO, 3, 0x12, 0]
+    unseen[1, 0, 1], unseen[1, 0, 4] = NO, 0
     coarse = confidence_demo.coarsen_surface(cell_grid.CellPlane(0, 0, 0, 2, 2, unseen), 1)
-    assert coarse.data[0, 0].tolist()[:3] == [50, 0, 4]
-    unseen[..., 1] = NO
+    assert coarse.data[0, 0].tolist() == [50, 0, 4, 0x33, 6]
+    unseen[..., 1], unseen[..., 4] = NO, 0
     coarse = confidence_demo.coarsen_surface(cell_grid.CellPlane(0, 0, 0, 2, 2, unseen), 1)
-    assert coarse.data[0, 0].tolist()[:3] == [50, NO, 4]
+    assert coarse.data[0, 0].tolist() == [50, NO, 4, 0x33, 0]
 
 
 # --- boundaries (review) -----------------------------------------------------------------
@@ -652,7 +654,7 @@ def test_a_height_too_large_for_int64_is_out_of_range_not_a_wrapped_surface() ->
         warnings.simplefilter("error")
         cell, found = _one_cell([[0.5, 0.5, 1e20]] * 3)
         low, below = _one_cell([[0.5, 0.5, 0.0]] * 2 + [[0.5, 0.5, -1e19]] * 2)
-    assert cell == [NO, NO, 0, cell[3]] and found.out_of_range == 1
+    assert cell == [NO, NO, 0, cell[3], 0] and found.out_of_range == 1
     assert low[:3] == [NO, NO, 0] and below.out_of_range == 1
 
 
@@ -802,3 +804,34 @@ def test_ground_on_a_steep_even_slope_is_never_called_unobserved() -> None:
         found = _surface_of(tilted, level=0, half_m=8.0)
         assert found.ground_unobserved == 0, grade
         assert (found.plane.data[..., 1] != NO).all()
+
+
+def _channel(plane: cell_grid.CellPlane, name: str) -> np.ndarray:
+    names = [channel.name for channel in cell_grid.SURFACE_CHANNELS]
+    return plane.data[..., names.index(name)].astype(np.float64)
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "ub"),
+    [
+        ((20, 0.10), (2000, 0.10), 0.0),
+        ((100, 0.01), (100, 0.10), 0.03),
+        ((3, 0.05), (500, 0.05), 0.0),
+        ((100, 0.01), (100, 0.01), 0.0),
+    ],
+)
+def test_no_change_control_for_the_ground_its_own_sigma_carries_the_envelopes_bias(
+    a: tuple[int, float], b: tuple[int, float], ub: float
+) -> None:
+    """Review B5a, the no-change control for the ground (the change map's primary layer):
+    the ground is the least 2nd-lowest sample over a 5 m window, so it reads low by more
+    the more samples the window holds and the noisier they are -- by far more than dsm
+    reads high. `groundSigma` must carry that, or unchanged ground reads as lowered."""
+    first = _flat_epoch(*a, seed=1)
+    second = _flat_epoch(*b, seed=2)
+    unit = cell_grid.HEIGHT_UNIT_M
+    ga, gb = (_channel(p, "ground") * unit for p in (first, second))
+    sa, sb = (_channel(p, "groundSigma") * unit for p in (first, second))
+    assert (sa > 0).all() and (sb > 0).all()
+    threshold = 3.0 * np.sqrt(sa**2 + sb**2 + ub**2)
+    assert int((np.abs(gb - ga) > threshold).sum()) <= 1

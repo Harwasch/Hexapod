@@ -28,13 +28,14 @@ def surface_grid(root: Path, *, level: int = 1, seed: int = 9, uri: str = "surfa
     cell = cell_grid.Lattice(level).cell_m
     i0 = j0 = int(np.floor(-9.0 / cell))
     n = int(np.ceil(18.0 / cell))
-    data = np.zeros((n, n, 4), dtype=np.int16)
+    data = np.zeros((n, n, 5), dtype=np.int16)
     has = rng.random((n, n)) < 0.8
     top = rng.integers(-300, 3000, (n, n))
     data[..., 0] = np.where(has, top, cell_grid.NO_HEIGHT)
     data[..., 1] = np.where(has, top - rng.integers(0, 300, (n, n)), cell_grid.NO_HEIGHT)
     data[..., 2] = np.where(has, rng.integers(1, 256, (n, n)), 0)
     data[..., 3] = rng.integers(0, 256, (n, n))
+    data[..., 4] = np.where(has, rng.integers(1, 256, (n, n)), 0)
     grid = cell_grid.CellGrid(
         "surface",
         cell_grid.SURFACE_CHANNELS,

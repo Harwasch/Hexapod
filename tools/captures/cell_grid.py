@@ -39,8 +39,10 @@ epoch's measured heights, on the very plane of its confidence grid -- `dsm` and 
 (`i2`, centimetres above the tileset frame's origin, `NO_HEIGHT` where the cell has no
 surface; `ground` alone `NO_HEIGHT` under a surface where its ground was never observed),
 `sigma` (`u1`, centimetres, saturating: 255 means at least 2.55 m; 0 only where
-there is no surface) and `support` (`u1`: `SURFACE_SOURCE_BITS` in the low nibble, the floor
-of log2 of the samples in the high one, saturating at 15). One plane, no pyramid: how two
+there is no surface), `support` (`u1`: `SURFACE_SOURCE_BITS` in the low nibble, the floor
+of log2 of the samples in the high one, saturating at 15) and `groundSigma` (`u1`
+centimetres, `ground`'s own, saturating as `sigma` does; 0 where `ground` is `NO_HEIGHT`).
+One plane, no pyramid: how two
 epochs' surfaces are brought to a common level is the change map's decision (A5).
 """
 
@@ -230,6 +232,7 @@ SURFACE_CHANNELS: tuple[Channel, ...] = (
     Channel("ground", "i2", unit_m=HEIGHT_UNIT_M),
     Channel("sigma", "u1", unit_m=HEIGHT_UNIT_M),
     Channel("support", "u1"),
+    Channel("groundSigma", "u1", unit_m=HEIGHT_UNIT_M),
 )
 
 
@@ -392,7 +395,7 @@ def _int(value: object, what: str) -> int:
 #: Channels a grid of a known kind cannot be read without.
 REQUIRED_CHANNELS: Mapping[str, tuple[str, ...]] = {
     "confidence": ("score", "reasons", "relief"),
-    "surface": ("dsm", "ground", "sigma", "support"),
+    "surface": ("dsm", "ground", "sigma", "support", "groundSigma"),
 }
 
 

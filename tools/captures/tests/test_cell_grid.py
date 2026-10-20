@@ -197,25 +197,28 @@ def test_two_byte_channels_are_little_endian_and_signed(tmp_path: Path) -> None:
         )
 
 
-def test_a_surface_grid_needs_its_four_channels(tmp_path: Path) -> None:
-    """`surface` (ADR 0018): dsm and ground i2 centimetres, sigma and support u1, in that
-    order; the no-height sentinel is i2's least value and survives the round trip."""
+def test_a_surface_grid_needs_its_five_channels(tmp_path: Path) -> None:
+    """`surface` (ADR 0018): dsm and ground i2 centimetres, sigma and support u1, and the
+    ground's own sigma u1, in that order; the no-height sentinel is i2's least value and
+    survives the round trip, in ground alone too (ground never observed)."""
     assert [(c.name, c.type, c.unit_m) for c in cell_grid.SURFACE_CHANNELS] == [
         ("dsm", "i2", 0.01),
         ("ground", "i2", 0.01),
         ("sigma", "u1", 0.01),
         ("support", "u1", None),
+        ("groundSigma", "u1", 0.01),
     ]
-    data = np.zeros((1, 2, 4), dtype=np.int16)
-    data[0, 0] = [cell_grid.NO_HEIGHT, cell_grid.NO_HEIGHT, 0, 0x11]
-    data[0, 1] = [32767, -32767, 255, 0xF3]
-    grid = CellGrid("surface", cell_grid.SURFACE_CHANNELS, (CellPlane(2, -1, 0, 2, 1, data),))
+    data = np.zeros((1, 3, 5), dtype=np.int16)
+    data[0, 0] = [cell_grid.NO_HEIGHT, cell_grid.NO_HEIGHT, 0, 0x11, 0]
+    data[0, 1] = [32767, -32767, 255, 0xF3, 255]
+    data[0, 2] = [400, cell_grid.NO_HEIGHT, 3, 0x72, 0]
+    grid = CellGrid("surface", cell_grid.SURFACE_CHANNELS, (CellPlane(2, -1, 0, 3, 1, data),))
     descriptor = cell_grid.encode(grid, tmp_path)
     assert descriptor["uri"] == "surface.bin"
     assert descriptor["channels"][0] == {"name": "dsm", "type": "i2", "unitM": 0.01}
     back = cell_grid.decode(descriptor, (tmp_path / "surface.bin").read_bytes())
     np.testing.assert_array_equal(back.planes[0].data, data)
-    short = dict(descriptor, channels=descriptor["channels"][:2])
+    short = dict(descriptor, channels=descriptor["channels"][:4])
     with pytest.raises(CellGridError, match="needs channels"):
         cell_grid.decode(short, (tmp_path / "surface.bin").read_bytes())
 

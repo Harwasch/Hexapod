@@ -32,8 +32,9 @@ how well each cell was seen (ADR 0016).
      confidence grids do (C1). One plane; no pyramid;
    - **channels**: `dsm` and `ground` (`i2`, centimetres above the frame origin's height; `-32768`
      where the cell has no surface), `sigma` (`u1` centimetres, saturating: 255 is "at least
-     2.55 m"; 0 only where there is no surface) and `support` (`u1`: bit 1 SfM, bit 2 splat, the
-     floor of log2 of the samples in the high nibble).
+     2.55 m"; 0 only where there is no surface), `support` (`u1`: bit 1 SfM, bit 2 splat, the
+     floor of log2 of the samples in the high nibble) and `groundSigma` (`u1` centimetres,
+     `ground`'s own sigma, saturating as `sigma` does; 0 where `ground` is `-32768`).
 3. **The estimators, from first principles and uncalibrated.** Per cell, streaming, the eight
    highest and eight lowest sample heights (`z1 ≥ z2 ≥ … ≥ z8` from the top) and the count `n`:
    - `dsm = z2`, the 2nd highest: one floater cannot raise it;
@@ -42,7 +43,13 @@ how well each cell was seen (ADR 0016).
      holds at levels 0 to 3 (0.25 to 2 m cells: 21, 11, 5 and 3 cells a side). At level 4 and
      coarser (4 m cells and up) no other cell's centre is within 2.5 m, the window is the cell
      alone, and `ground` is just the cell's own 2nd-lowest sample. The descriptor records the
-     window it used (`groundWindowCells`). Where the window saw only canopy or roof, the ground
+     window it used (`groundWindowCells`). `groundSigma = max(1 cm, s_low·RMS2(N))`: the
+     least 2nd-lowest over a window of `N` samples is never below the 2nd lowest of those `N`
+     together, so that order statistic bounds its distance below the ground; `s_low` is the
+     mean over the window's cells of each one's bottom-eight noise scale. At 1 cm noise and 100
+     samples a cell it is about 5 cm, against dsm's 2 cm: a lower envelope over 441 cells is the
+     more biased estimator, and its sigma says so (review B5a's control, for the ground: 0 of
+     400 unchanged cells called changed at 20 vs 2,000 samples or 1 vs 10 cm). Where the window saw only canopy or roof, the ground
      was **never observed** and says so: `ground` is `-32768` under a `dsm` that is there, when
      the window's least is higher than any slope up to 1 in 2 (`GROUND_MAX_GRADE`) from a lower
      2nd-lowest sample anywhere allows (`summary.groundUnobserved` counts them; review B5a: a
@@ -142,7 +149,7 @@ how well each cell was seen (ADR 0016).
   changed cell that one epoch's grid calls weak is the crate's own side, so excluding weak cells
   would have hidden real change and caught nothing false; whether A5 should exclude them is open.
 - **Memory and determinism.** One band of extremes at a time (137 bytes a cell, 2^19 cells a band)
-  and the plane (8 bytes a cell); order statistics then roundings, so the bytes depend on neither
+  and the plane (10 bytes a cell); order statistics then roundings, so the bytes depend on neither
   chunk nor band. `points3D.bin` is streamed.
 - Until A5 adds a `surface` sidecar kind, a re-publish that carries sidecars from a previous
   generation reports `extras.surface` as an unrecognised sidecar if the new run has none, as

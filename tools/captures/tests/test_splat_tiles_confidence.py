@@ -219,7 +219,7 @@ def test_a_grid_that_is_not_a_confidence_grid_or_not_its_bytes_is_refused(
     heights = cell_grid.CellGrid(
         "surface",
         cell_grid.SURFACE_CHANNELS,
-        (cell_grid.CellPlane(1, -18, -18, 36, 36, np.zeros((36, 36, 4), dtype=np.int16)),),
+        (cell_grid.CellPlane(1, -18, -18, 36, 36, np.zeros((36, 36, 5), dtype=np.int16)),),
     )
     descriptor = cell_grid.encode(heights, tmp_path / "s", "surface.bin")
     surface = tmp_path / "s" / "surface.json"

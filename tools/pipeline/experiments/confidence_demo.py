@@ -247,21 +247,22 @@ def _surface(run: Path) -> tuple[dict[str, Any], cell_grid.CellGrid]:
 
 def coarsen_surface(plane: cell_grid.CellPlane, level: int) -> cell_grid.CellPlane:
     """`plane` at `level` (>= its own): dsm the highest, ground the lowest and sigma the
-    largest of the children that have a surface (ground of those whose ground was
-    observed: none when no child's was); support's bits OR'd, its count the largest
-    child's (a floor). A cell with no child surfaced has none."""
+    largest of the children that have a surface (ground and groundSigma of those whose
+    ground was observed: none when no child's was); support's bits OR'd, its count the
+    largest child's (a floor). A cell with no child surfaced has none."""
     no = cell_grid.NO_HEIGHT
+    width = len(cell_grid.SURFACE_CHANNELS)
     while plane.level < level:
         pi0, pj0 = plane.i0 >> 1, plane.j0 >> 1
         ni = ((plane.i0 + plane.ni - 1) >> 1) - pi0 + 1
         nj = ((plane.j0 + plane.nj - 1) >> 1) - pj0 + 1
-        padded = np.zeros((2 * nj, 2 * ni, 4), dtype=np.int64)
+        padded = np.zeros((2 * nj, 2 * ni, width), dtype=np.int64)
         padded[..., 0] = padded[..., 1] = no
         di, dj = plane.i0 - 2 * pi0, plane.j0 - 2 * pj0
         padded[dj : dj + plane.nj, di : di + plane.ni] = plane.data
-        quads = padded.reshape(nj, 2, ni, 2, 4)
+        quads = padded.reshape(nj, 2, ni, 2, width)
         has = quads[..., 2] > 0
-        out = np.zeros((nj, ni, 4), dtype=np.int64)
+        out = np.zeros((nj, ni, width), dtype=np.int64)
         out[..., 0] = np.where(has, quads[..., 0], no - 1).max(axis=(1, 3))
         grounded = has & (quads[..., 1] != no)  # a child whose ground was observed
         out[..., 1] = np.where(grounded, quads[..., 1], 1 << 20).min(axis=(1, 3))
@@ -272,6 +273,7 @@ def coarsen_surface(plane: cell_grid.CellPlane, level: int) -> cell_grid.CellPla
         support = quads[..., 3]
         bits = np.bitwise_or.reduce(np.bitwise_or.reduce(support & 0x0F, axis=3), axis=1)
         out[..., 3] = bits | ((support >> 4).max(axis=(1, 3)) << 4)
+        out[..., 4] = np.where(grounded, quads[..., 4], 0).max(axis=(1, 3))
         plane = cell_grid.CellPlane(plane.level + 1, pi0, pj0, ni, nj, out)
     return plane
 
@@ -309,7 +311,7 @@ def surface_change(
     ni = max(pa.i0 + pa.ni, pb.i0 + pb.ni) - i0
     nj = max(pa.j0 + pa.nj, pb.j0 + pb.nj) - j0
     no = cell_grid.NO_HEIGHT
-    wa, wb = (_window(p, i0, j0, ni, nj, (no, no, 0, 0)) for p in (pa, pb))
+    wa, wb = (_window(p, i0, j0, ni, nj, (no, no, 0, 0, 0)) for p in (pa, pb))
     weak = np.zeros((nj, ni), dtype=bool)
     for graded in (graded_a, graded_b):
         plane = graded.plane(level)

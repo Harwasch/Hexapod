@@ -29,6 +29,8 @@ them yet). Per cell, streaming, the eight highest and the eight lowest sample he
                                        the bare ground under a crown or a roof
     sigma  = max(1 cm, (z1 - zm) RMS2(n) / SPAN(n)),  m = min(n, 8)
                                        how far z2 is from the surface, bias included
+    groundSigma = max(1 cm, s_low RMS2(N))
+                                       how far the ground is from the bare surface
 
 `ground` is the 2nd-lowest height (one sample under the surface cannot lower it) of every
 cell whose centre is within 2.5 m of this one's along each axis (`GROUND_WINDOW_M`): under
@@ -38,6 +40,15 @@ its own 2nd-lowest sample (`groundWindowCells` in the descriptor says which). It
 envelope, so it is biased **low, never high**: on a slope of grade `g` by up to `2.5 g`
 metres along each axis, and a low outlier that survives the 2nd-lowest rule spreads over
 its whole square.
+
+**The ground's sigma** (`groundSigma`) is the envelope's own, as `sigma` is dsm's. The
+least 2nd-lowest over a window holding `N` samples in all is never lower than the 2nd
+lowest of those `N` together, so its distance below the ground is at most that order
+statistic's: `s_low RMS2(N)`, with `N` the window's samples (a box sum) and `s_low` the
+noise scale of its ground -- the mean, over the window's cells with a ground, of each one's
+`(z_m - z_1) / SPAN(n)` from its bottom `m` samples. Far larger than dsm's at the same noise
+(at 1 cm and 100 samples a cell, about 5 cm against dsm's 2 cm): a lower envelope over 441
+cells is a biased estimator, and its sigma says so. 0 where the ground is `NO_HEIGHT`.
 
 **Ground that was never seen.** Under a crown or a roof wider than the window, every cell
 of the window sees only it, and the least of them is the canopy, not the ground. That is
@@ -72,10 +83,10 @@ confidence grid's summary).
 
 **Memory and determinism.** One pass over the samples per band of at most `BAND_CELLS`
 cells, whose extremes (137 bytes a cell: 72 MB at 2^19) are that band's alone; the plane is
-8 bytes a cell (32 MB at 2^22) and the ground filter two more 4-byte planes, whatever the
-number of samples. The eight highest and lowest of a set do not depend on the order it is
-read in, and every other step is a rounding of them, so the bytes depend on neither the
-chunk nor the band.
+10 bytes a cell (40 MB at 2^22), and making the ground about 40 more (its filter, envelope
+and box sums), whatever the number of samples. The eight highest and lowest of a set do not
+depend on the order it is read in, and every other step is a rounding of them or exact
+integer arithmetic, so the bytes depend on neither the chunk nor the band.
 """
 
 from __future__ import annotations
@@ -110,6 +121,7 @@ __all__ = [
     "TOP_K",
     "Surfaced",
     "Window",
+    "box_sum",
     "grade_envelope",
     "ground_filter",
     "ground_half_cells",
@@ -160,6 +172,9 @@ SPLAT = cell_grid.SURFACE_SOURCE_BITS["splat"]
 #: i2's range in centimetres, less the sentinel.
 HEIGHT_LIMIT_CM = 32767
 _NO_GROUND = np.iinfo(np.int32).max
+#: A millimetre, and the most a cell's ground noise is held as (32 m).
+_MM = 0.001
+_NOISE_MM_MAX = (1 << 15) - 1
 #: One SfM point's fixed part in `points3D.bin`: id, xyz, rgb, error, track length.
 _POINT = struct.Struct("<Q3d3BdQ")
 
@@ -488,6 +503,8 @@ class Surfaced:
     ground_half: int
     #: Surfaced cells whose ground was never observed (module docstring): `NO_HEIGHT` ground.
     ground_unobserved: int = 0
+    #: Cells whose groundSigma is past 255 cm (stored as 255: "at least").
+    ground_sigma_saturated: int = 0
 
 
 def ground_half_cells(cell_m: float, window_m: float = GROUND_WINDOW_M) -> int:
@@ -520,6 +537,24 @@ def ground_filter(ground: npt.NDArray[np.int32], half: int) -> npt.NDArray[np.in
         np.int32
     )
     return filtered
+
+
+def box_sum(values: I64, half: int) -> I64:
+    """The sum of each cell's `(2 half + 1)^2` square of cells (cells past the plane's edge
+    are none): two passes of exact integer cumulative sums."""
+    if half <= 0:
+        return values.copy()
+    out = values
+    for axis in (1, 0):
+        n = out.shape[axis]
+        total = np.cumsum(out, axis=axis)
+        zero = np.zeros_like(np.take(total, [0], axis=axis))
+        padded = np.concatenate([zero, total], axis=axis)  # padded[k] = sum of the first k
+        hi = np.minimum(np.arange(n) + half + 1, n)
+        lo = np.maximum(np.arange(n) - half, 0)
+        out = np.take(padded, hi, axis=axis) - np.take(padded, lo, axis=axis)
+    result: I64 = out
+    return result
 
 
 def grade_envelope(low: npt.NDArray[np.int32], step: float) -> F64:
@@ -555,10 +590,11 @@ def surface_plane(
     ground_max_grade: float = GROUND_MAX_GRADE,
     band_cells: int = BAND_CELLS,
 ) -> Surfaced:
-    """Every sample binned on `window`, and the four channels (module docstring).
+    """Every sample binned on `window`, and the five channels (module docstring).
 
     Memory: one band of extremes at a time (`band_cells` cells, 137 bytes each), the plane
-    (8 bytes a cell) and, while the ground is filtered, two 4-byte planes."""
+    (10 bytes a cell), and while the ground is made, about 40 bytes a cell more: the
+    filter's two 4-byte planes, the envelope's 8-byte one and the box sums' 8-byte ones."""
     if min_samples < 3:
         raise ValueError(
             f"min_samples is at least 3, not {min_samples}: with two samples the 2nd lowest "
@@ -575,6 +611,10 @@ def surface_plane(
     ground = np.full((nj, ni), _NO_GROUND, dtype=np.int32)
     sigma = np.zeros((nj, ni), dtype=np.uint8)
     support = np.zeros((nj, ni), dtype=np.uint8)
+    # The ground's own noise per cell (the bottom eight's spread over SPAN, whole mm) and
+    # its sample count: what groundSigma is made of once the window is known.
+    noise_mm = np.zeros((nj, ni), dtype=np.int32)
+    counts = np.zeros((nj, ni), dtype=np.int64)
     rows_per_band = max(1, band_cells // max(1, ni))
     binned = {SFM: 0, SPLAT: 0}
     thin = out_of_range = saturated = 0
@@ -595,6 +635,9 @@ def surface_plane(
             # Rounded up -- never understated -- after a micro-rounding that keeps a
             # floating error from turning exactly 1 cm into 2.
             sigma_cm = np.ceil(np.round(spread / cell_grid.HEIGHT_UNIT_M, 6))
+        zl1, zlm = band.bottom[:, 0], band.bottom[np.arange(count.size), last]
+        with np.errstate(invalid="ignore"):
+            low_noise = np.ceil(np.round((zlm - zl1) / top_span(count) / _MM, 6))
         top_cm = _centimetres(band.top[:, 1])
         low_cm = _centimetres(band.bottom[:, 1])
         fits = (np.abs(top_cm) <= HEIGHT_LIMIT_CM) & (np.abs(low_cm) <= HEIGHT_LIMIT_CM)
@@ -608,21 +651,40 @@ def surface_plane(
             surfaced, np.clip(np.nan_to_num(sigma_cm, nan=255.0), 1, 255), 0
         ).reshape(shape)
         support[band0:band1] = support_of(count, band.sources).reshape(shape)
+        noise_mm[band0:band1] = np.where(
+            surfaced, np.clip(np.nan_to_num(low_noise, nan=_NOISE_MM_MAX), 1, _NOISE_MM_MAX), 0
+        ).reshape(shape)
+        counts[band0:band1] = count.reshape(shape)
         del band
     half = ground_half_cells(window.cell_m, ground_window_m)
     filtered = ground_filter(ground, half)
+    # The ground's noise scale: the mean, over the window's cells with a ground, of each
+    # one's own (module docstring), in whole millimetres rounded up.
+    measured = box_sum((ground != _NO_GROUND).astype(np.int64), half)
+    noise_at = -(-box_sum(noise_mm.astype(np.int64), half) // np.maximum(measured, 1))
+    del noise_mm, measured
     # Ground the window saw only canopy or roof for: higher than any slope up to
     # GROUND_MAX_GRADE from a lower 2nd-lowest anywhere allows (module docstring).
     step_cm = ground_max_grade * window.cell_m / cell_grid.HEIGHT_UNIT_M
     unobserved = (filtered != _NO_GROUND) & (filtered > grade_envelope(ground, step_cm))
     del ground
+    has_ground = (filtered != _NO_GROUND) & ~unobserved
+    pooled = box_sum(counts, half)
+    del counts
+    with np.errstate(invalid="ignore"):
+        spread = np.maximum(sigma_floor_m, noise_at * _MM * rms_second(pooled))
+        ground_sigma_cm = np.ceil(np.round(spread / cell_grid.HEIGHT_UNIT_M, 6))
+    del pooled, noise_at, spread
+    ground_saturated = int((has_ground & (ground_sigma_cm > 255)).sum())
     data = np.empty((nj, ni, len(cell_grid.SURFACE_CHANNELS)), dtype=np.int16)
     data[..., 0] = dsm
     del dsm
-    data[..., 1] = np.where((filtered == _NO_GROUND) | unobserved, cell_grid.NO_HEIGHT, filtered)
+    data[..., 1] = np.where(has_ground, filtered, cell_grid.NO_HEIGHT)
     del filtered
     data[..., 2] = sigma
     data[..., 3] = support
+    data[..., 4] = np.where(has_ground, np.clip(ground_sigma_cm, 1, 255), 0)
+    del ground_sigma_cm
     plane = cell_grid.CellPlane(window.level, window.i0, window.j0, ni, nj, data)
     return Surfaced(
         plane=plane,
@@ -634,6 +696,7 @@ def surface_plane(
         sigma_saturated=saturated,
         ground_half=half,
         ground_unobserved=int(unobserved.sum()),
+        ground_sigma_saturated=ground_saturated,
     )
 
 
@@ -658,6 +721,7 @@ def summarise(surfaced: Surfaced, metric: bool | None) -> dict[str, Any]:
         "outOfRange": surfaced.out_of_range,
         "sigmaSaturated": surfaced.sigma_saturated,
         "groundUnobserved": surfaced.ground_unobserved,
+        "groundSigmaSaturated": surfaced.ground_sigma_saturated,
         "medianSigmaCm": median,
         "metric": metric,
     }
@@ -743,6 +807,9 @@ def height_surface(ctx: StageContext) -> StageOutcome:
             f"{max_grade:g} from any lower 2nd-lowest sample allows: canopy or roof "
             "wider than the window, the ground under it never seen",
             "groundMaxGrade": max_grade,
+            "groundSigma": f"max({sigma_floor:g} m, s_low RMS2(N)): N the window's samples, "
+            "s_low the mean over its cells of (z_m - z_1) / SPAN(n) of each one's lowest: "
+            "the 2nd lowest of N samples bounds the envelope's distance below the ground",
             "samples": "SfM points3D placed by placement.json, and canonical.ply centres "
             f"at least {min_alpha:g} opaque",
         },
