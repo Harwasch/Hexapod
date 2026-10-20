@@ -12,10 +12,12 @@ from __future__ import annotations
 import json
 import struct
 from pathlib import Path
+from typing import Any
 
+import numpy as np
 import pytest
 
-from captures_bridge import CAPTURES_DIR, splat_tiles_convert
+from captures_bridge import CAPTURES_DIR, cell_grid, splat_tiles_convert
 from conftest import seeded_workdir
 from executor import execute
 from recipe import load_recipe
@@ -129,10 +131,49 @@ def test_a_hierarchy_adds_only_the_tiles_its_tileset_names(tmp_path: Path) -> No
     assert tileset["root"]["extras"]["collision"]["uri"] == "collision.bin"
     # ...and the view-cone grid, likewise.
     assert tileset["root"]["extras"]["viewCones"]["uri"] == "viewcones.bin"
-    assert written == {*named, "tileset.json", "collision.bin", "viewcones.bin"}
+    assert written == {*named, "tileset.json", *declared_files(tileset)}
+    assert declared_files(tileset) == {"collision.bin", "viewcones.bin"}
     # REPLACE: the leaves hold every gaussian once; the parents hold merged stand-ins on top.
     assert sum(tile_count(out / name) for name in leaves) == 600
     assert stats["parent_gaussians"] == sum(tile_count(out / n) for n in named) - 600
+
+
+def declared_files(tileset: dict[str, Any]) -> set[str]:
+    """The files the root tile declares in its extras (collision, view cones, and the
+    confidence grid when the run measured one): published beside the tiles, so allowed."""
+    extras = tileset["root"].get("extras", {})
+    return {
+        str(value["uri"]) for value in extras.values() if isinstance(value, dict) and "uri" in value
+    }
+
+
+def test_a_confidence_grid_is_a_declared_member_and_nothing_else_moves(tmp_path: Path) -> None:
+    """`package` with a `confidence` artifact: confidence.bin beside the tiles, declared on
+    the root, every other file the bytes it is without it."""
+    ply = write_ply(tmp_path / "splat.ply", count=600)
+    plain, measured = tmp_path / "plain", tmp_path / "measured"
+    level = 0
+    data = np.full((8, 8, 3), 200, dtype=np.uint8)
+    plane = cell_grid.CellPlane(level, -1, -1, 8, 8, data)
+    grid = cell_grid.CellGrid(
+        "confidence", cell_grid.CONFIDENCE_CHANNELS, (plane,), {"policy": "weak-v1"}
+    )
+    folder = tmp_path / "confidence"
+    descriptor = cell_grid.encode(grid, folder, "confidence.bin")
+    (folder / "confidence.json").write_text(json.dumps(descriptor))
+
+    splat_tiles_convert(ply, plain, 46.84, -91.99, 0.0, tile_gaussians=100)
+    stats = splat_tiles_convert(
+        ply, measured, 46.84, -91.99, 0.0, tile_gaussians=100, confidence=folder / "confidence.json"
+    )
+
+    tileset = json.loads((measured / "tileset.json").read_text(encoding="utf-8"))
+    assert declared_files(tileset) == {"collision.bin", "viewcones.bin", "confidence.bin"}
+    written = {path.name for path in measured.iterdir()}
+    assert written == {path.name for path in plain.iterdir()} | {"confidence.bin"}
+    for name in written - {"tileset.json", "confidence.bin"}:
+        assert (measured / name).read_bytes() == (plain / name).read_bytes(), name
+    assert stats["confidence_min"] == 200 and stats["confidence_level"] == 0
 
 
 def tile_count(path: Path) -> int:
