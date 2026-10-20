@@ -1,0 +1,365 @@
+"""The change between two epochs from their height surfaces (`app/analysis/change.py`, A5).
+
+Synthetic surface planes built here (a crate on flat ground, noise, holes, an unaligned
+epoch, weak confidence), and the committed fixture (data/tiles/synthetic-yard-surfaces) for
+P5's own reference: its demo's `coarsen_surface` and `surface_change` over the same grids.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import math
+import tracemalloc
+from typing import Any
+
+import numpy as np
+import pytest
+
+from app.analysis import cell_grid, change
+from app.analysis.change import Surface, change_areas, change_map, change_planes, coarsen_surface
+from app.analysis.weak_areas import site_projection
+from tests.confidence_fixtures import blob, descriptor
+from tests.surface_fixtures import DOCUMENT, surface_blob, surface_descriptor
+
+NO = cell_grid.NO_HEIGHT
+PROJECTION = site_projection(44.7965, -111.1346, 1520.0)
+
+
+def flat(
+    level: int = 2,
+    i0: int = 0,
+    j0: int = 0,
+    ni: int = 20,
+    nj: int = 20,
+    height_cm: int = 1000,
+    sigma_cm: int = 2,
+) -> dict[str, Any]:
+    return {
+        "level": level,
+        "i0": i0,
+        "j0": j0,
+        "ni": ni,
+        "nj": nj,
+        "dsm": np.full((nj, ni), height_cm, dtype=np.int16),
+        "ground": np.full((nj, ni), height_cm, dtype=np.int16),
+        "sigma": np.full((nj, ni), sigma_cm, dtype=np.uint8),
+        "support": np.full((nj, ni), 3 | (4 << 4), dtype=np.uint8),
+    }
+
+
+def surface(fields: dict[str, Any]) -> Surface:
+    return Surface(**fields)
+
+
+def crate(fields: dict[str, Any], rows: slice, columns: slice, tall_cm: int) -> dict[str, Any]:
+    out = {**fields, "dsm": fields["dsm"].copy()}
+    out["dsm"][rows, columns] += tall_cm
+    return out
+
+
+def hole(fields: dict[str, Any], rows: slice, columns: slice) -> dict[str, Any]:
+    out = {k: v.copy() if isinstance(v, np.ndarray) else v for k, v in fields.items()}
+    out["dsm"][rows, columns] = NO
+    out["ground"][rows, columns] = NO
+    out["sigma"][rows, columns] = 0
+    out["support"][rows, columns] = 0
+    return out
+
+
+def confidence(
+    level: int, i0: int, j0: int, score: np.ndarray, reasons: np.ndarray | None = None
+) -> cell_grid.Grid:
+    nj, ni = score.shape
+    plane = cell_grid.Plane(
+        level,
+        i0,
+        j0,
+        ni,
+        nj,
+        {
+            "score": score.astype(np.uint8),
+            "reasons": (reasons if reasons is not None else np.zeros_like(score)).astype(np.uint8),
+            "relief": np.zeros_like(score, dtype=np.uint8),
+        },
+    )
+    return cell_grid.Grid(kind="confidence", planes=(plane,), descriptor={})
+
+
+def strong(fields: dict[str, Any]) -> cell_grid.Grid:
+    return confidence(
+        fields["level"],
+        fields["i0"],
+        fields["j0"],
+        np.full((fields["nj"], fields["ni"]), 200),
+    )
+
+
+def classes_at(planes: change.ChangePlanes, name: str) -> set[tuple[int, int]]:
+    rows, columns = np.nonzero(planes.classes == change.CLASSES.index(name))
+    return {(int(planes.i0 + c), int(planes.j0 + r)) for r, c in zip(rows, columns, strict=True)}
+
+
+def test_a_crate_is_raised_and_nothing_else_changed() -> None:
+    a = flat()
+    b = crate(flat(), slice(5, 8), slice(10, 13), 150)
+    planes = change_planes(
+        surface(a), surface(b), 0.0, 0.062, confidence_a=strong(a), confidence_b=strong(b)
+    )
+    assert planes.level == 2 and planes.cell_m == 1.0
+    assert classes_at(planes, "raised") == {(i, j) for i in range(10, 13) for j in range(5, 8)}
+    assert planes.counts() == {"unchanged": 391, "raised": 9, "lowered": 0, "insufficient": 0}
+    assert planes.low_counts() == {"unchanged": 0, "raised": 0, "lowered": 0}
+    # 3 sqrt(2 * 0.02^2 + 0.062^2): the least change seen here.
+    assert planes.min_detectable_m == pytest.approx(3 * math.sqrt(2 * 0.02**2 + 0.062**2))
+
+    [raised, unchanged] = change_areas(planes, PROJECTION)
+    assert (raised.change, raised.cells, raised.low_confidence) == ("raised", 9, False)
+    assert raised.metric.area == pytest.approx(9.0)
+    assert raised.mean_delta_m == pytest.approx(1.5) and raised.max_abs_delta_m == 1.5
+    assert raised.mean_ground_delta_m == 0.0
+    assert (unchanged.change, unchanged.cells) == ("unchanged", 391)
+    assert len(unchanged.metric.interiors) == 1  # the crate is a hole in it
+
+
+def test_a_lowered_cell_and_its_sign() -> None:
+    a = crate(flat(), slice(2, 4), slice(2, 4), 120)
+    b = flat()
+    planes = change_planes(surface(a), surface(b), 0.0, 0.0)
+    assert classes_at(planes, "lowered") == {(2, 2), (3, 2), (2, 3), (3, 3)}
+    [lowered, *_] = change_areas(planes, PROJECTION)
+    assert lowered.change == "lowered" and lowered.mean_delta_m == pytest.approx(-1.2)
+
+
+def test_noise_within_three_sigma_is_unchanged() -> None:
+    rng = np.random.default_rng(5)
+    a, b = flat(sigma_cm=4), flat(sigma_cm=4)
+    # Up to 15 cm of difference against t = 3 sqrt(2 * 0.04^2) = 0.17 m.
+    a["dsm"] = a["dsm"] + rng.integers(-7, 8, a["dsm"].shape).astype(np.int16)
+    b["dsm"] = b["dsm"] + rng.integers(-8, 9, b["dsm"].shape).astype(np.int16)
+    planes = change_planes(surface(a), surface(b), 0.0, 0.0)
+    assert planes.counts()["unchanged"] == 400
+    assert int(np.abs(planes.delta_cm).max()) >= 10  # the noise is there, and within t
+
+
+def test_one_side_without_a_surface_is_insufficient() -> None:
+    a = hole(flat(), slice(0, 20), slice(0, 4))
+    b = hole(crate(flat(), slice(0, 20), slice(0, 2), 300), slice(15, 20), slice(15, 20))
+    planes = change_planes(surface(a), surface(b), 0.0, 0.0)
+    insufficient = classes_at(planes, "insufficient")
+    expected = {(i, j) for i in range(4) for j in range(20)} | {
+        (i, j) for i in range(15, 20) for j in range(15, 20)
+    }
+    assert insufficient == expected
+    # The 3 m in b's west strip is where a has no surface: insufficient, never raised.
+    assert planes.counts()["raised"] == 0
+
+
+def test_neither_side_has_no_class_and_a_window_s_outside_is_insufficient() -> None:
+    a = flat(ni=10)
+    b = flat(i0=5, ni=10)
+    planes = change_planes(surface(a), surface(b), 0.0, 0.0)
+    assert (planes.i0, planes.ni) == (0, 15)
+    counts = planes.counts()
+    assert counts["insufficient"] == 10 * 20 and counts["unchanged"] == 5 * 20
+    both_holes = hole(flat(), slice(0, 2), slice(0, 2))
+    planes = change_planes(surface(both_holes), surface(both_holes), 0.0, 0.0)
+    assert int(np.count_nonzero(planes.classes == change.NONE)) == 4
+
+
+def test_an_unaligned_epoch_cannot_see_a_crate_and_says_how_much_it_could() -> None:
+    """An epoch placed by GPS alone at +/-10 m: the threshold is ~30 m, so a 1.5 m crate is
+    not a change it can see -- and nothing is called changed."""
+    a = flat()
+    b = crate(flat(), slice(5, 8), slice(10, 13), 150)
+    planes = change_planes(surface(a), surface(b), 0.0, 10.0)
+    assert planes.min_detectable_m == pytest.approx(30.0, abs=0.01)
+    assert planes.counts() == {"unchanged": 400, "raised": 0, "lowered": 0, "insufficient": 0}
+    assert planes.uncertainty_to_m == 10.0
+
+
+def test_weak_cells_are_flagged_low_confidence_not_hidden() -> None:
+    a = flat()
+    b = crate(flat(), slice(5, 8), slice(10, 13), 150)
+    score = np.full((20, 20), 200)
+    score[5:8, 10:12] = 60  # two columns of the crate weak in a's grid
+    reasons = np.zeros((20, 20))
+    reasons[0, 0] = cell_grid.UNSEEN  # an unseen cell: not vouched for either
+    score[0, 0] = 0
+    planes = change_planes(
+        surface(a),
+        surface(b),
+        0.0,
+        0.0,
+        confidence_a=confidence(2, 0, 0, score, reasons),
+        confidence_b=strong(b),
+    )
+    assert planes.counts()["raised"] == 9  # still classified
+    assert planes.low_counts() == {"unchanged": 1, "raised": 6, "lowered": 0}
+    areas = change_areas(planes, PROJECTION)
+    raised = [area for area in areas if area.change == "raised"]
+    assert sorted((area.cells, area.low_confidence) for area in raised) == [(3, False), (6, True)]
+    [unchanged] = [area for area in areas if area.change == "unchanged"]
+    assert (unchanged.low_confidence_cells, unchanged.low_confidence) == (1, False)
+
+
+def test_without_a_confidence_grid_nothing_is_vouched_for() -> None:
+    planes = change_planes(surface(flat()), surface(flat()), 0.0, 0.0, confidence_a=None)
+    assert planes.low_counts()["unchanged"] == 400
+
+
+def test_a_saturated_sigma_is_low_confidence() -> None:
+    a, b = flat(), flat()
+    b["sigma"] = b["sigma"].copy()
+    b["sigma"][3, 3] = 255
+    planes = change_planes(
+        surface(a), surface(b), 0.0, 0.0, confidence_a=strong(a), confidence_b=strong(b)
+    )
+    assert planes.low[3, 3] and int(planes.low.sum()) == 1
+
+
+def test_heights_far_apart_do_not_wrap() -> None:
+    """Two i2 heights 640 m apart: an i2 difference would wrap to -1.36 m and call it
+    lowered; the change is computed wide."""
+    a = flat(ni=2, nj=1, height_cm=-32000)
+    b = flat(ni=2, nj=1, height_cm=32000)
+    planes = change_planes(surface(a), surface(b), 0.0, 0.0)
+    assert planes.counts()["raised"] == 2
+    assert int(planes.delta_cm[0, 0]) == 64000
+    [area] = change_areas(planes, PROJECTION)
+    assert area.mean_delta_m == pytest.approx(640.0)
+
+
+def test_the_no_surface_sentinel_is_never_a_height() -> None:
+    """A cell with NO_HEIGHT but a sigma (no grid P5 writes) is not believed: no surface."""
+    a, b = flat(ni=3, nj=1), flat(ni=3, nj=1)
+    b["dsm"] = b["dsm"].copy()
+    b["dsm"][0, 1] = NO  # sigma left at 2 cm
+    planes = change_planes(surface(a), surface(b), 0.0, 0.0)
+    assert classes_at(planes, "insufficient") == {(1, 0)}
+
+
+def test_two_levels_compare_at_the_coarser_with_dsm_max_ground_min_sigma_max() -> None:
+    """a at 1 m cells, b at 0.5 m: compared at 1 m. One 0.5 m child 2 m taller raises its
+    1 m cell (dsm by max); a child's larger sigma is the coarse cell's (sigma by max)."""
+    a = flat(level=2, ni=4, nj=4)
+    b = flat(level=1, ni=8, nj=8)
+    b["dsm"] = b["dsm"].copy()
+    b["dsm"][0, 0] += 200
+    b["ground"] = b["ground"].copy()
+    b["ground"][1, 1] -= 50
+    b["sigma"] = b["sigma"].copy()
+    b["sigma"][7, 7] = 40
+    coarse = coarsen_surface(surface(b))
+    assert (coarse.level, coarse.ni, coarse.nj) == (2, 4, 4)
+    assert int(coarse.dsm[0, 0]) == 1200 and int(coarse.ground[0, 0]) == 950
+    assert int(coarse.sigma[3, 3]) == 40
+    planes = change_planes(surface(a), surface(b), 0.0, 0.0)
+    assert (planes.level, planes.native_level) == (2, 2)
+    assert classes_at(planes, "raised") == {(0, 0)}
+
+
+def test_windows_too_large_together_are_compared_coarser(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(change, "MAX_CHANGE_CELLS", 100)
+    a = flat(ni=8, nj=8)
+    b = flat(i0=40, ni=8, nj=8)
+    planes = change_planes(surface(a), surface(b), 0.0, 0.0)
+    assert planes.native_level == 2 and planes.level > 2
+    assert planes.ni * planes.nj <= 100
+
+
+def test_a_noisy_map_is_drawn_coarser_within_the_outline_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A checkerboard of raised cells is one area per cell: over the edge bound it is
+    classified again a level up and drawn there; the counts stay the compared level's."""
+    monkeypatch.setattr(change, "MAX_ZONE_EDGES", 400)
+    a = flat(level=0, ni=32, nj=32)
+    b = {**a, "dsm": a["dsm"].copy()}
+    jj, ii = np.indices(b["dsm"].shape)
+    b["dsm"][(ii + jj) % 2 == 0] += 100
+    found = change_map(surface(a), surface(b), 0.0, 0.0, PROJECTION)
+    assert found.planes.level == 0 and found.planes.counts()["raised"] == 512
+    assert found.drawn.level > 0
+    assert change.outline_edges(change.group_codes(found.drawn)) <= 400
+    assert all(area.change == "raised" for area in found.areas)
+
+
+def test_an_area_lies_over_its_cells_on_the_globe() -> None:
+    a = flat(i0=-10, j0=-10)
+    b = crate(flat(i0=-10, j0=-10), slice(5, 8), slice(10, 13), 150)
+    [raised, _] = change_areas(change_planes(surface(a), surface(b), 0.0, 0.0), PROJECTION)
+    [polygon] = raised.footprint.geoms
+    lon, lat = np.asarray(polygon.exterior.coords).T
+    x, y = PROJECTION.to_metric(lon, lat)
+    corners = {(round(float(p), 6), round(float(q), 6)) for p, q in zip(x, y, strict=True)}
+    # Cells i 0..2, j -5..-3 at 1 m: the square [0, 3] x [-5, -2], four corners only.
+    assert corners == {(0.0, -5.0), (3.0, -5.0), (3.0, -2.0), (0.0, -2.0)}
+
+
+def test_change_planes_memory_is_bounded() -> None:
+    """About 12 bytes a cell at the peak (the outputs, the vouched cells), not the window
+    held in float64 per array."""
+    side = 1024
+    a = flat(level=0, ni=side, nj=side)
+    b = crate(flat(level=0, ni=side, nj=side), slice(0, 100), slice(0, 100), 150)
+    sa, sb = surface(a), surface(b)
+    grid = strong(a)
+    tracemalloc.start()
+    change_planes(sa, sb, 0.0, 0.0, confidence_a=grid, confidence_b=grid)
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    assert peak / (side * side) < 16, peak / (side * side)
+
+
+# --- P5's reference, over the committed fixture -----------------------------------------
+
+
+def fixture_surface(epoch: str) -> Surface:
+    grid = cell_grid.decode(surface_descriptor(epoch), surface_blob(epoch))
+    return Surface.of(grid.finest)
+
+
+def fixture_confidence(epoch: str) -> cell_grid.Grid:
+    return cell_grid.decode(descriptor(epoch), blob(epoch))
+
+
+def test_the_api_coarsens_as_p5_s_demo_does() -> None:
+    coarse = coarsen_surface(fixture_surface("e2"))
+    expected = DOCUMENT["coarsened"]
+    window = [coarse.i0, coarse.j0, coarse.ni, coarse.nj]
+    assert (coarse.level, window) == (expected["level"], expected["window"])
+    record = np.dtype([("dsm", "<i2"), ("ground", "<i2"), ("sigma", "<u1"), ("support", "<u1")])
+    rows = np.zeros((coarse.nj, coarse.ni), dtype=record)
+    for name in ("dsm", "ground", "sigma", "support"):
+        rows[name] = getattr(coarse, name)
+    assert hashlib.sha256(rows.tobytes()).hexdigest() == expected["sha256"]
+
+
+def test_the_api_classifies_as_p5_s_demo_does() -> None:
+    """Every class count and every changed cell (its class and delta) as P5's demo found
+    them on the same grids; the cells the demo calls weak are all low confidence here."""
+    reference = DOCUMENT["change"]
+    ua = DOCUMENT["epochs"]["e1"]["uncertaintyM"]
+    ub = DOCUMENT["epochs"]["e2"]["uncertaintyM"]
+    planes = change_planes(
+        fixture_surface("e1"),
+        fixture_surface("e2"),
+        ua,
+        ub,
+        confidence_a=fixture_confidence("e1"),
+        confidence_b=fixture_confidence("e2"),
+    )
+    assert (planes.level, planes.cell_m) == (reference["level"], reference["cellM"])
+    assert planes.counts() == reference["counts"]
+    found = {}
+    for name in ("raised", "lowered"):
+        for i, j in classes_at(planes, name):
+            delta = int(planes.delta_cm[j - planes.j0, i - planes.i0]) / 100
+            found[(i, j)] = (name, round(delta, 2), bool(planes.low[j - planes.j0, i - planes.i0]))
+    expected = {
+        (r["i"], r["j"]): (r["class"], r["deltaM"], r["weak"]) for r in reference["changed"]
+    }
+    assert {k: v[:2] for k, v in found.items()} == {k: v[:2] for k, v in expected.items()}
+    assert all(found[k][2] for k, v in expected.items() if v[2])
+    # The shed and the spoil were seen well by both: not low confidence.
+    assert planes.low_counts()["raised"] == reference["weakChanged"]

@@ -172,15 +172,15 @@ class Patches:
     zone_level: int = 0
 
 
-def _polygons(geometry: BaseGeometry) -> list[Polygon]:
+def polygon_parts(geometry: BaseGeometry) -> list[Polygon]:
     if isinstance(geometry, Polygon):
         return [] if geometry.is_empty else [geometry]
     if hasattr(geometry, "geoms"):
-        return [polygon for part in geometry.geoms for polygon in _polygons(part)]
+        return [polygon for part in geometry.geoms for polygon in polygon_parts(part)]
     return []
 
 
-def _affine(level_cell: float, i0: int, j0: int) -> Affine:
+def cell_affine(level_cell: float, i0: int, j0: int) -> Affine:
     # Row k of a plane is j = j0 + k, northward: a positive `e` keeps y increasing.
     return Affine(level_cell, 0.0, i0 * level_cell, 0.0, level_cell, j0 * level_cell)
 
@@ -308,7 +308,7 @@ def zone_polygons(zone: ZonePlane, *, min_area_m2: float) -> list[Polygon]:
     if not zone.closed.any():
         return []
     cell = zone.cell_m
-    affine = _affine(cell, zone.i0, zone.j0)
+    affine = cell_affine(cell, zone.i0, zone.j0)
     smallest = max(min_area_m2, 2 * cell * cell)
     parts: list[Polygon] = []
     for geometry, value in shapes(
@@ -322,7 +322,7 @@ def zone_polygons(zone: ZonePlane, *, min_area_m2: float) -> list[Polygon]:
             continue
         holes = [ring for ring in rings[1:] if Polygon(ring).area >= smallest]
         outline = make_valid(Polygon(rings[0], holes).simplify(cell / 2))
-        parts.extend(orient(part) for part in _polygons(outline) if part.area >= smallest)
+        parts.extend(orient(part) for part in polygon_parts(outline) if part.area >= smallest)
     return sorted(parts, key=lambda part: part.area, reverse=True)
 
 
@@ -447,7 +447,7 @@ def split_at_antimeridian(polygon: Polygon, projection: SiteProjection) -> list[
     lats = np.linspace(float(lat.min()) - margin, float(lat.max()) + margin, 65)
     mx, my = projection.to_metric(np.full_like(lats, 180.0), lats)
     cut = shapely.LineString(np.column_stack([mx, my]))
-    parts = _polygons(shapely.ops.split(polygon, cut))
+    parts = polygon_parts(shapely.ops.split(polygon, cut))
     return [orient(part) for part in parts] if parts else [polygon]
 
 
@@ -458,7 +458,7 @@ def _to_globe(polygon: Polygon, projection: SiteProjection) -> Polygon:
     The largest part should the projection make it more than one (it does not at site
     scale)."""
     globe = make_valid(shapely.transform(polygon, _projected(projection)))
-    parts = _polygons(globe)
+    parts = polygon_parts(globe)
     if not parts:
         raise ValueError("a weak area did not survive projection to the globe")
     part = max(parts, key=lambda each: each.area)
@@ -491,7 +491,7 @@ def _weak_inside(zone: ZonePlane, polygon: Polygon) -> NDArray[np.bool_]:
         rasterize(
             [(polygon, 1)],
             out_shape=(nj, ni),
-            transform=_affine(zone.cell_m, zone.i0, zone.j0),
+            transform=cell_affine(zone.cell_m, zone.i0, zone.j0),
             dtype=np.uint8,
         ).astype(bool)
         & zone.weak
@@ -548,7 +548,7 @@ def _clip_about(zone: ZonePlane, polygon: Polygon, area_m2: float, anchor: Point
     centre = ShapelyPoint(x, y)
 
     def piece(radius: float) -> Polygon | None:
-        parts = _polygons(make_valid(polygon.intersection(centre.buffer(radius, quad_segs=16))))
+        parts = polygon_parts(make_valid(polygon.intersection(centre.buffer(radius, quad_segs=16))))
         return orient(max(parts, key=lambda part: part.area)) if parts else None
 
     low, high = 0.0, float(centre.hausdorff_distance(polygon)) + zone.cell_m
@@ -614,7 +614,7 @@ def clip_to(polygons: list[Polygon], allowed: BaseGeometry) -> list[Polygon]:
     parts = [
         orient(part)
         for polygon in polygons
-        for part in _polygons(make_valid(polygon.intersection(allowed)))
+        for part in polygon_parts(make_valid(polygon.intersection(allowed)))
         if part.area >= MIN_AREA_M2
     ]
     return sorted(parts, key=lambda part: part.area, reverse=True)
@@ -670,7 +670,7 @@ def cell_patches(
     score = plane.channel("score")
     relief = plane.channel("relief")
     reasons_plane = plane.channel("reasons")
-    affine = _affine(plane.cell_m, plane.i0, plane.j0)
+    affine = cell_affine(plane.cell_m, plane.i0, plane.j0)
     out: list[Patch] = []
     for polygon in polygons:
         # The plane's weak cells whose centres are inside (rasterize's own rule).

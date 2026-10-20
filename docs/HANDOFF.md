@@ -297,7 +297,7 @@ pnpm lint && pnpm typecheck && pnpm test`, `pnpm e2e` if `apps/web` changed, plu
   (P5's encoder; tools/pipeline `test_surface_fixture.py` compares every byte). Its surfaces sit on
   the planes of `synthetic-yard-epochs`, so regenerating those means regenerating these. Its
   `surfaces.json` also holds P5's demo reference change (`confidence_demo.surface_change`), which
-  apps/api's change map is held to.
+  apps/api's change map is held to (`test_surface_grid_decode.py`, `test_change.py`).
 - `data/tiles/synthetic-yard-epochs/fill-targets.json` is the API's own fill-targets answer over
   those grids (ids replaced by placeholders): apps/api `test_fill_targets_api.py` rewrites it with
   `HEXAPOD_WRITE_FILL_TARGETS=1`, and tools/captures' fill gate (`rescan_gate.py`) is held to it.
