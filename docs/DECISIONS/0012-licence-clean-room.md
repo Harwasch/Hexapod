@@ -92,6 +92,29 @@ The procedure above was not kept perfectly, and this records exactly how:
 Nothing more is claimed: the rest of `splat_merge.py` and `block_views.py` is the first
 implementer's work under the procedure above, with the exposures listed.
 
+### Second blind rewrite (2026-10-20)
+
+- **A second review found two more matches.** A reviewer from another model found that `ring`
+  and `_cell_weights` in `tools/pipeline/block_maths.py` were near-identical to the original
+  non-commercial implementation, down to its guards and the form of its ramp, so the
+  clean-room claim could not stand for those two bodies either.
+- **They were re-derived blind.** A further implementer cut both bodies with an `ast` script
+  that printed only line numbers, and wrote new ones having seen only the module with the
+  bodies of `ring`, `_cell_weights`, `weights` and `blended_opacity` removed (signatures and
+  docstrings kept), the tests, the call sites in `blocks.py`, and the prose and tables of the
+  papers (Hierarchical 3DGS arXiv 2406.12080, CityGaussian arXiv 2404.01133, VastGaussian arXiv
+  2402.17427), never their code. It never displayed the old bodies, any earlier version of
+  them on any branch, or a diff of the file. One incidental exposure: a grep for call sites
+  printed the two lines of `weights` that call `_cell_weights`. The derivation of each formula
+  is in the module docstring. One behaviour was added: the ramp's half-width is also capped
+  at half the narrower cell, so no weight is negative for any margin (inactive at the default
+  margin of 0.1).
+- **Hyperparameters kept as values, with citations.** `DEFAULT_EPSILON = 0.05` is
+  CityGaussian's Table S3 value; the frozen ring is Hierarchical 3DGS's idea, but
+  `DEFAULT_RING_OUTER = 1.5`, `DEFAULT_BLEND = 0.0125` and `MIN_IMAGES = 50` are this
+  project's values (none of the papers blends at the seams or sets a minimum of images per
+  block), and the comments say so.
+
 ## Regenerating the fixtures
 
 Parents go through `eigh` and the Thomsen area through `pow`, so their bytes depend on the
