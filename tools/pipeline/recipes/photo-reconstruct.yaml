@@ -9,10 +9,14 @@
 # `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
 # run `none` would be billing a GPU to do nothing.
 name: photo-reconstruct
-version: 12
+version: 13
 description: Reconstruct a splat from a raw capture, then package and register it.
 
-inputs: [upload]
+# `site_context` is what the worker knows about the site before the run: its reference
+# epoch (frames, poses, placement, georef), its surveyed check targets and this capture's
+# clicks on them (`alignment.py`; empty for a site's first epoch). Seeded once and frozen:
+# a resumed run aligns to the context it started with.
+inputs: [upload, site_context]
 
 stages:
   - id: normalize
@@ -101,15 +105,15 @@ stages:
       min_registered_fraction: 0.8
       # Half the stage's defaults (8192 / 2400): the same 50/50 registered, in 62% of
       # the time. Training reads the normalized 1600 px frames.
-      max_features: 4096
-      max_image_size: 1600
+      max_features: &max_features 4096
+      max_image_size: &max_image_size 1600
       # SIFT from the frame's own resolution rather than COLMAP's -1 (doubled first):
       # at 1600 px the 4096 cap is hit either way and the doubled octave's features are
       # the ones it discards. Measured 2026-09-26: 100 real frames, extraction 109 s ->
       # 35 s, still 100/100; the fixture orbit rendered at 1600x1200, 40/40 either way,
       # extract + match + map 168 s -> 107 s, median rotation error 0.026 -> 0.032 deg
       # and translation 0.030% -> 0.046% of extent against the known poses.
-      first_octave: 0
+      first_octave: &first_octave 0
       # `mapper: global` -- GLOMAP through pycolmap (global_sfm.py), falling back to the
       # incremental mapper when it registers too few -- stays opt-in: on the spool
       # capture (179 frames, 2026-09-28, two runs each) it registered 179/179 like the
@@ -130,11 +134,77 @@ stages:
       # against pycolmap 4.2) -- and refines it: it seeds, never holds (`hold_focal`),
       # because an integer 35 mm value can be ~2% off. poses.json records how far it moved.
       focal_from: exif
+      # GNSS pose priors (D4): each frame's EXIF fix enters bundle adjustment as a
+      # position prior about the georeference's own origin, so the model comes out in
+      # metric east/north/up and `georeference` agrees with it by construction. The sigma
+      # is the capture's own (an RTK fixed solution's std, or the EXIF horizontal error,
+      # from frames_meta.json), else 5 m (`priors.py`). COLMAP 4.2 only; a capture with
+      # fewer than 3 fixes (every video) maps without them, and poses.json says why.
+      # On by default (open question 3): unverified on a GPU that training in metric
+      # east/north/up behaves as in COLMAP's arbitrary frame; gsplat scales by camera
+      # spread, so it should.
+      pose_priors: auto
     # On Modal's CPU box, not the worker: `cpu4` is 4 cores and 8 GB with no GPU, billed
     # per second ($0.25 an hour) only while a capture is posed. Feature extraction
     # peaked at 1.7 GB on real 1080p frames, more than the 2 GB worker can spare, and a
     # Fly machine big enough to do it in place is $124 a month whether it is used or not.
     # `gpu:` is the key because it is the routing signal; the tier says there is no GPU.
+    gpu:
+      tier: cpu4
+      preemptible: false
+
+  # Real since B4. It reads each frame's own EXIF GPS, defines an east/north/up frame
+  # about the median fix, and has a seeded RANSAC (`sim3.py`) solve for the similarity that
+  # takes the reconstruction into it -- which is also where a metric scale comes from
+  # when the capture has no ARKit. A capture whose frames carry no EXIF (every frame
+  # ffmpeg extracts from a video, for one) falls back to the video's own location if it
+  # had one, and otherwise says to use `manual_placement` and give it a coordinate.
+  #
+  # `arkit_scale` is deliberately absent rather than commented as an option: no such impl
+  # is registered, and `pose: arkit` is the stub it would have depended on.
+  #
+  # A video with no location, and frames with no EXIF, fall back to the coordinate on the
+  # capture (the worker passes `lat`/`lon`), recorded as `manual`. With none of the three
+  # the stage refuses by name rather than placing the capture at (0, 0).
+  - id: georeference
+    impl: exif_gps # | manual_placement
+    params:
+      # RANSAC inlier threshold in metres. COLMAP 3.9.1 refuses a zero here outright.
+      max_error_m: 5.0
+      # The seeded numpy RANSAC (`sim3.py`) rather than `colmap model_aligner`: the same
+      # similarity on the same threshold, byte-reproducible, and no COLMAP 3.9.1 binary
+      # needed. `aligner: model_aligner` is the A/B.
+      aligner: ransac
+      seed: 0
+
+  # Register this epoch to its site (D4, `alignment.py`): its frames into the site's
+  # reference epoch's fixed model (COLMAP 4.2 through pycolmap), a seeded similarity from
+  # its own model onto that, its check targets triangulated and scored, and the verdict
+  # the web shows -- survey (an RTK drone within 3 sigma of three check targets), coarse
+  # or unaligned -- with a label and an uncertainty. A site's first epoch, or one with
+  # nothing to match, keeps its georeference and says so. `place` applies the alignment's
+  # frame when it aligned visually.
+  #
+  # Before training on purpose: a gate that fails here fails before any L4 time is spent,
+  # and a Refine that resumes at `train` keeps the poses and the alignment, which is
+  # right because the poses are unchanged. The extraction settings are pose's (anchors).
+  - id: align
+    impl: align_epoch
+    params:
+      max_features: *max_features
+      max_image_size: *max_image_size
+      first_octave: *first_octave
+      # Per side; a larger capture is sampled evenly down to it (no vocabulary-tree
+      # pairing for big joint registrations yet).
+      max_frames: 60
+      seed: 0
+      min_registered_fraction: 0.5
+      # Gates, all off: no recorded measurement backs a threshold (D4).
+      #   fail_unaligned: true
+      #   max_check_target_rmse_m: 0.1
+      #   fail_check_targets_out_of_tolerance: true
+      #   max_alignment_rms_m: 0.1
+      #   max_gnss_visual_offset_m: 10
     gpu:
       tier: cpu4
       preemptible: false
@@ -268,25 +338,6 @@ stages:
 
   - id: compensate
     impl: none # | imc  <- real motion; add `gpu: {tier: l4, preemptible: true}` with it
-
-  # Real since B4. It reads each frame's own EXIF GPS, defines an east/north/up frame
-  # about the median fix, and has `colmap model_aligner` solve for the similarity that
-  # takes the reconstruction into it -- which is also where a metric scale comes from
-  # when the capture has no ARKit. A capture whose frames carry no EXIF (every frame
-  # ffmpeg extracts from a video, for one) falls back to the video's own location if it
-  # had one, and otherwise says to use `manual_placement` and give it a coordinate.
-  #
-  # `arkit_scale` is deliberately absent rather than commented as an option: no such impl
-  # is registered, and `pose: arkit` is the stub it would have depended on.
-  #
-  # A video with no location, and frames with no EXIF, fall back to the coordinate on the
-  # capture (the worker passes `lat`/`lon`), recorded as `manual`. With none of the three
-  # the stage refuses by name rather than placing the capture at (0, 0).
-  - id: georeference
-    impl: exif_gps # | manual_placement
-    params:
-      # RANSAC inlier threshold in metres. COLMAP 3.9.1 refuses a zero here outright.
-      max_error_m: 5.0
 
   # The quality bar (quality.py). Per gaussian: how many frames saw it unoccluded, over
   # what spread of angles, at what ground sampling distance -- then keep / context / drop,

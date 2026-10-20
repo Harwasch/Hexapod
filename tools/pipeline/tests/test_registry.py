@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -66,7 +67,11 @@ def test_a_new_impl_is_a_decorator_and_a_recipe_edit(tmp_path: Path) -> None:
 def test_swapping_mask_none_for_mask_robust_rewires_the_trainer(tmp_path: Path) -> None:
     document = json.loads(json.dumps(load_recipe("photo-reconstruct").to_dict()))
     before = plan_recipe(load_recipe("photo-reconstruct"))
-    assert "masks" not in dict(before.stages[3].inputs)
+
+    def train(plan: Any) -> Any:
+        return next(stage for stage in plan.stages if stage.id == "train")
+
+    assert "masks" not in dict(train(before).inputs)
 
     for stage in document["stages"]:
         if stage["id"] == "mask":
@@ -77,7 +82,7 @@ def test_swapping_mask_none_for_mask_robust_rewires_the_trainer(tmp_path: Path) 
 
     # gsplat declares `masks` as an optional consume, so the same trainer now gets them --
     # with no change to the trainer, the executor, or any other stage.
-    assert "masks" in dict(after.stages[3].inputs)
+    assert "masks" in dict(train(after).inputs)
     assert after.origins["masks"] == "mask"
     execute(Recipe.from_dict(document), seeded_workdir(tmp_path / "run"), RunnerSet.stubbed())
 

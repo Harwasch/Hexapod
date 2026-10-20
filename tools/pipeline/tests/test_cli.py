@@ -17,8 +17,23 @@ def test_plan_only_validates_without_running_anything(
 
     assert exit_code == 0
     document = json.loads(capsys.readouterr().out)
-    assert document["gpuStages"] == ["pose", "train", "quality"]
+    assert document["gpuStages"] == ["pose", "align", "train", "quality"]
     assert not (tmp_path / "run").exists()
+
+
+def test_photo_reconstruct_is_given_an_empty_site_context_unless_one_is_seeded(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import alignment
+    from run_recipe import seed_empty_site_context
+
+    target = seed_empty_site_context(tmp_path / "run")
+    document = json.loads((target / alignment.SITE_CONTEXT_FILE).read_text())
+    assert document == alignment.empty_site_context()
+    # One already there (a seeded or resumed run) is never overwritten.
+    (target / alignment.SITE_CONTEXT_FILE).write_text('{"version": 1, "siteId": "kept"}')
+    seed_empty_site_context(tmp_path / "run")
+    assert json.loads((target / alignment.SITE_CONTEXT_FILE).read_text())["siteId"] == "kept"
 
 
 def test_a_run_seeds_its_inputs_and_prints_its_artifacts(

@@ -3,6 +3,10 @@
     uv run python run_recipe.py splat-ingest --workdir /tmp/run-1 \
         --runner stub --seed upload=./fixture.ply
 
+A recipe that declares `site_context` (photo-reconstruct) gets an empty one -- a site's
+first epoch, nothing to align to -- unless `--seed site_context=<dir>` names one (a
+directory holding `site_context.json`, laid out as `alignment.py` describes).
+
 The worker (A7) calls `executor.execute_recipe` directly rather than shelling out to this;
 this exists so a recipe can be run and inspected by hand, which is how A8 developed
 Lane 1's stages and how B2 will develop Lane 2's.
@@ -15,6 +19,7 @@ import json
 import sys
 from pathlib import Path
 
+import alignment
 from errors import PipelineError
 from executor import execute_recipe
 from plan import plan_recipe
@@ -56,9 +61,12 @@ def main(argv: list[str] | None = None) -> int:
                 "gpuStages": list(plan.gpu_stages),
             }
         else:
-            result = execute_recipe(
-                args.recipe, args.workdir, _RUNNERS[args.runner](), _seed(args.seed)
-            )
+            seeds = _seed(args.seed)
+            if alignment.SITE_CONTEXT in load_recipe(args.recipe).inputs and (
+                alignment.SITE_CONTEXT not in seeds
+            ):
+                seed_empty_site_context(args.workdir)
+            result = execute_recipe(args.recipe, args.workdir, _RUNNERS[args.runner](), seeds)
             document = {
                 "recipe": result.recipe,
                 "stages": [step.to_dict() for step in result.steps],
@@ -69,6 +77,16 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     sys.stdout.write(json.dumps(document, indent=1, sort_keys=True) + "\n")
     return 0
+
+
+def seed_empty_site_context(workdir: Path) -> Path:
+    """`inputs/site_context/site_context.json`, empty, unless one is already there."""
+    target = workdir / "inputs" / alignment.SITE_CONTEXT
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / alignment.SITE_CONTEXT_FILE
+    if not path.exists():
+        path.write_text(json.dumps(alignment.empty_site_context()) + "\n", encoding="utf-8")
+    return target
 
 
 if __name__ == "__main__":

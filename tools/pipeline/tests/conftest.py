@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +33,21 @@ def seeded_workdir(root: Path, *, upload: bool = True) -> Workdir:
         target = workdir.input_path("upload")
         target.mkdir(parents=True, exist_ok=True)
         (target / "capture.ply").write_bytes(b"not really a splat, but deterministic bytes")
+    seed_site_context(workdir)
     return workdir
+
+
+def seed_site_context(workdir: Workdir) -> Path:
+    """photo-reconstruct's second input, as the worker seeds a site's first epoch: an
+    empty `site_context/site_context.json` (`alignment.empty_site_context`)."""
+    import alignment
+
+    target = workdir.input_path(alignment.SITE_CONTEXT)
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / alignment.SITE_CONTEXT_FILE
+    if not path.exists():
+        path.write_text(json.dumps(alignment.empty_site_context()) + "\n", encoding="utf-8")
+    return target
 
 
 def tree(root: Path) -> dict[str, bytes]:
