@@ -268,3 +268,27 @@ def test_the_cache_is_keyed_by_url_and_planes() -> None:
     cache.put(("w", "a"), e1)
     cache.put(("x", "a"), e1)
     assert cache.get(("u", "a")) is None  # the least recently used went
+
+
+def test_a_rejected_epoch_shows_nothing_and_says_so(
+    api: TestClient, db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    capture = _capture(db)
+    register_run(db, storage, tmp_path, capture, measured("e1"), grid=blob("e1"))
+    epoch = _epoch(db, capture)
+    rejected = Epoch(
+        site_id=epoch.site_id,
+        ordinal=2,
+        observed_at=epoch.observed_at,
+        observed_at_source="created",
+        footprint=epoch.footprint,
+        platform="unknown",
+        status="rejected",
+        join_method="spatial",
+    )
+    db.add(rejected)
+    db.commit()
+    response = ask(api, rejected)
+    assert response.status_code == 409 and response.json()["code"] == "confidence-not-measured"
+    assert "shows no tiles (rejected)" in response.json()["detail"]
+

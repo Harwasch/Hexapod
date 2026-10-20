@@ -170,6 +170,11 @@ def measured_map(db: Session, epoch: Epoch) -> EpochMap:
         if current is not None
         else None
     )
+    if current is None:
+        raise ConflictError(
+            f"epoch {epoch.id} shows no tiles ({epoch.status}), so nothing of it was measured",
+            code=NOT_MEASURED,
+        )
     if row is None:
         raise ConflictError(
             f"epoch {epoch.id} has no confidence map: the run that made what it shows "
