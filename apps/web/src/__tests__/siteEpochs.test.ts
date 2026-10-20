@@ -139,6 +139,8 @@ function harness(record: Site = twoEpochSite(), options: { sampling?: boolean } 
   const events = new Emitter<SceneEvents>();
   const epochs: (string | null)[] = [];
   events.on("epoch", ({ epochId }) => epochs.push(epochId));
+  const toasts: string[] = [];
+  events.on("toast", ({ title }) => toasts.push(title));
   const tilesetEvents = vi.fn();
   events.on("tilesets", tilesetEvents);
   const listener = { addEventListener: () => () => undefined };
@@ -190,7 +192,7 @@ function harness(record: Site = twoEpochSite(), options: { sampling?: boolean } 
   );
   manager.setCatalog([summary], () => Promise.resolve(site));
   const tileset = (id: string) => made.tilesets.get(id) as FakeTileset | undefined;
-  return { manager, epochs, tilesetEvents, tileset, site, viewer };
+  return { manager, epochs, tilesetEvents, tileset, site, viewer, toasts };
 }
 
 /** The two-epoch site with each splat's render config changed as given. */
@@ -439,11 +441,13 @@ describe("every epoch of a site is drawn with one placement", () => {
   });
 
   it("an epoch whose anchor did not load is placed on its own", async () => {
-    const { manager, tileset } = harness(
+    const { manager, tileset, toasts } = harness(
       withConfigs({}, { clampToGround: false, heightOffsetM: 2 }),
     );
     made.missing.add(A1.id);
     await open(manager);
+    // Nobody chose that date: its failure is the log's, not a toast's.
+    expect(toasts).toEqual([]);
     expect(manager.shownAsset()?.id).toBe(A2.id);
     expect(originHeight(tileset(A2.id))).toBeCloseTo(12, 3);
     expect(warned("the site frame's own epoch did not load; this date is placed on its own")).toBe(
