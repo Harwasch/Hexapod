@@ -266,6 +266,20 @@ describe("Plan a re-scan of weak areas", () => {
     expect(startPlanDraft).not.toHaveBeenCalled();
   });
 
+  it("says what is left when the weak cells form no patch worth planning", async () => {
+    // The API drops parts under 1 m² (and what the site's boundary clips away): weak cells
+    // remain, but no area comes back.
+    requestWeakAreas.mockResolvedValueOnce({ ...read([]), weakCells: 12 });
+    await rescanWeak(null, site, EPOCH_ID);
+    const [toast] = useToasts.getState().items;
+    expect(toast?.title).toBe("No weak patch big enough to plan (weak-v1)");
+    expect(toast?.body).toContain("12 weak cells remain");
+    expect(toast?.body).toContain("under 1 m²");
+    expect(toast?.body).not.toContain("passes");
+    expect(useMission.getState().composer).toBeNull();
+    expect(startPlanDraft).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["confidence-not-measured", "Not measured"],
     ["no-rescan-yet", "No re-scan yet"],

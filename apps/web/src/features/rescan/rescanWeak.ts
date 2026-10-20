@@ -194,11 +194,22 @@ export async function rescanWeak(
   // id: the same project is composed afresh when its plans arrive or its site is renamed.
   if (useMission.getState().project?.id !== before.id) return;
   if (read.areas.length === 0) {
-    useToasts.getState().push({
-      tone: "info",
-      title: `Nothing here is weak (${read.policy})`,
-      body: "Every measured part of this date passes the capture checks. There is nothing to re-scan.",
-    });
+    // No area back is not "nothing weak": the API drops parts under 1 m² (MIN_AREA_M2) and
+    // what the site's boundary clips away, so weak cells may remain that no patch holds.
+    const left = read.weakCells;
+    useToasts.getState().push(
+      left > 0
+        ? {
+            tone: "info",
+            title: `No weak patch big enough to plan (${read.policy})`,
+            body: `${left.toLocaleString()} weak cell${left === 1 ? " remains" : "s remain"}, but only in scattered parts under 1 m² or outside the site, which are not planned. They stay weak until a new capture covers them.`,
+          }
+        : {
+            tone: "info",
+            title: `Nothing here is weak (${read.policy})`,
+            body: "Every measured part of this date passes the capture checks. There is nothing to re-scan.",
+          },
+    );
     return;
   }
   // The patches are this site's ground: plan on its project (a new plan anyway, so a card
