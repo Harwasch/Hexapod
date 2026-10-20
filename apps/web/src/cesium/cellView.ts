@@ -25,6 +25,7 @@ import {
   loadLaterGrids,
   type DataAgeContext,
 } from "@/lib/dataAge";
+import { observedAtFromUpload } from "@/lib/epochs";
 import { createLogger } from "@/lib/log";
 import { useViewMode, type CellViewReport, type ViewMode } from "@/state/viewMode";
 
@@ -122,6 +123,7 @@ export function startCellView(
         kind: "ready",
         mode: "data-age",
         ageBucket: bucket,
+        ...(shown && observedAtFromUpload(shown) ? { ageFromUpload: true } : {}),
         newer: { dates: later.length, compared: compared.length, cells: newerCells, skipped },
       };
     });

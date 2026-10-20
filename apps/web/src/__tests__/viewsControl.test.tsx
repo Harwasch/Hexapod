@@ -108,6 +108,21 @@ describe("under CesiumJS", () => {
     );
     expect(screen.getByTestId("cell-legend-newer")).toHaveTextContent("No later date of this site");
   });
+
+  it("says an age counted from the upload is one", async () => {
+    show("cesium");
+    await userEvent.click(await screen.findByRole("radio", { name: "Data age" }));
+    report({
+      kind: "ready",
+      mode: "data-age",
+      ageBucket: 0,
+      ageFromUpload: true,
+      newer: { dates: 0, compared: 0, cells: 0, skipped: [] },
+    });
+    expect(screen.getByTestId("cell-legend-age")).toHaveTextContent(
+      "This date: uploaded under a month ago (capture time not recorded)",
+    );
+  });
 });
 
 describe.each(["playcanvas", "spark", "playcanvas-webgpu"] as const)("under %s", (renderer) => {

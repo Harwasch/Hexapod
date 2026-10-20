@@ -55,7 +55,10 @@ function AgeKey({ report }: { report: Extract<CellViewReport, { kind: "ready" }>
         ) : (
           <>
             <Swatch color={rampCss(AGE_RAMP[bucket] ?? [0.5, 0.5, 0.5])} />
-            This date: {(AGE_BUCKETS[bucket]?.label ?? "").toLowerCase()} old
+            {/* An upload's date is not when the ground looked like this: said so. */}
+            {report.ageFromUpload
+              ? `This date: uploaded ${(AGE_BUCKETS[bucket]?.label ?? "").toLowerCase()} ago (capture time not recorded)`
+              : `This date: ${(AGE_BUCKETS[bucket]?.label ?? "").toLowerCase()} old`}
           </>
         )}
       </li>

@@ -232,6 +232,24 @@ describe("Confidence, then Data age, then Photo", () => {
     expect(listeners.size).toBe(0);
   });
 
+  it("says when the shown date's age is counted from its upload", async () => {
+    const { asCesium, tileset, primitive } = scan({ confidence: served.meta });
+    tileset.gaussianSplatPrimitive = primitive;
+    const uploaded = { ...E1, observedAtSource: "created" } as typeof E1;
+    const dispose = attachCellView(asCesium, { requestRender: vi.fn() }, A1.id, () => ({
+      epochs: [uploaded],
+      assets: [A1],
+    }));
+    useViewMode.getState().set("data-age");
+    await vi.waitFor(() =>
+      expect(useViewMode.getState().cells[A1.id]).toMatchObject({
+        kind: "ready",
+        ageFromUpload: true,
+      }),
+    );
+    dispose();
+  });
+
   it("a comparison overtaken by a newer one never says what it found", async () => {
     const { asCesium, tileset, primitive } = scan({ confidence: served.meta });
     tileset.gaussianSplatPrimitive = primitive;
