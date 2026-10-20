@@ -42,10 +42,10 @@ change rather than false ones.
 **Low confidence is flagged, not hidden.** A compared cell is `lowConfidence` when either
 epoch's confidence grid does not vouch for it at the compared level (weak-v1: scored under
 128, or unseen, or no evidence at all; the grid's own min-of-children pyramid, so a coarse
-cell is as weak as its weakest child), or when either sigma is saturated (255 cm means at least 2.55 m: the
-threshold is then a lower bound). It is still classified: P5's demo found
-the weak cells of a real change were its crate's own sides, so hiding them would hide the
-change.
+cell is as weak as its weakest child). It is still classified: P5's demo found the weak
+cells of a real change were its crate's own sides, so hiding them would hide the change. A
+cell where either sigma saturates (255 cm means at least 2.55 m: the threshold would be a
+lower bound only) is `insufficient`, not compared.
 
 **Areas.** The changed and insufficient cells become outlines in the site frame
 (`change_areas`): every 4-connected region of one class (raised and lowered split further
@@ -457,7 +457,7 @@ def change_planes(
     uncertainty from the site frame in metres, at the coarser of their levels (or `level`
     when that is coarser still, or coarser yet when the windows would hold over
     `MAX_CHANGE_CELLS`). A cell is low confidence when a confidence grid given does not
-    vouch for it, or a grid is not given (nothing vouches), or either sigma saturates."""
+    vouch for it, or a grid is not given (nothing vouches)."""
     for name, value in (("ua", ua), ("ub", ub)):
         if not math.isfinite(value) or value < 0:
             raise ValueError(f"{name} must be a finite uncertainty >= 0, not {value!r}")
@@ -521,11 +521,12 @@ def change_planes(
     for r0 in range(0, jw[3], step):
         r1 = min(jw[3], r0 + step)
         band = (jw[0], jw[1] + r0, jw[2], r1 - r0)
-        # Compared only over every child the finer epoch (or, coarser, either) measured.
-        both = joint.shared[r0:r1] & ~joint.partial[r0:r1]
+        s_a, s_b = sa[r0:r1], sb[r0:r1]
+        # Compared only over every child the finer epoch (or, coarser, either) measured,
+        # and only where neither sigma saturates (its threshold would be a lower bound).
+        both = joint.shared[r0:r1] & ~joint.partial[r0:r1] & (s_a < SATURATED) & (s_b < SATURATED)
         delta = db[r0:r1].astype(np.int32) - da[r0:r1].astype(np.int32)
         ground = gb[r0:r1].astype(np.int32) - ga[r0:r1].astype(np.int32)
-        s_a, s_b = sa[r0:r1], sb[r0:r1]
         spread = (s_a.astype(np.float64) * CM) ** 2 + (s_b.astype(np.float64) * CM) ** 2
         threshold = sigmas * np.sqrt(spread + ua * ua + ub * ub)
         change_m = delta * CM
@@ -543,9 +544,7 @@ def change_planes(
                 strong[...] = False
             else:
                 strong &= _place(grid.channels["strong"], grid.i0, grid.j0, band, False)
-        low[dj + r0 : dj + r1, di : di + jw[2]] = both & (
-            ~strong | (s_a >= SATURATED) | (s_b >= SATURATED)
-        )
+        low[dj + r0 : dj + r1, di : di + jw[2]] = both & ~strong
     return ChangePlanes(
         level=at,
         native_level=native,

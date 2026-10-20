@@ -204,14 +204,21 @@ def test_without_a_confidence_grid_nothing_is_vouched_for() -> None:
     assert planes.low_counts()["unchanged"] == 400
 
 
-def test_a_saturated_sigma_is_low_confidence() -> None:
+def test_a_saturated_sigma_is_insufficient_never_a_change() -> None:
+    """255 cm means at least 2.55 m, so a threshold made of it is a lower bound only: two
+    30 m floaters in a cell (P5's review) read as raised against 7.65 m when the true
+    spread was past 45 m. Such a cell is not classified (it was, and flagged)."""
     a, b = flat(), flat()
     b["sigma"] = b["sigma"].copy()
-    b["sigma"][3, 3] = 255
+    b["dsm"] = b["dsm"].copy()
+    b["sigma"][3, 3], b["dsm"][3, 3] = 255, 4000
+    b["sigma"][3, 4], b["dsm"][3, 4] = 254, 4000
     planes = change_planes(
         surface(a), surface(b), 0.0, 0.0, confidence_a=strong(a), confidence_b=strong(b)
     )
-    assert planes.low[3, 3] and int(planes.low.sum()) == 1
+    assert classes_at(planes, "insufficient") == {(3, 3)}
+    assert classes_at(planes, "raised") == {(4, 3)}  # 254 cm is a measurement
+    assert int(planes.low.sum()) == 0
 
 
 def test_heights_far_apart_do_not_wrap() -> None:
