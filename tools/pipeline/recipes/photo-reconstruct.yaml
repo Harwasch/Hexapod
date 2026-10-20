@@ -394,7 +394,7 @@ stages:
     params: {}
 
   # How well each part of this epoch was seen, per cell of its site (confidence.py,
-  # docs/DECISIONS/0016): the quality stage's per-gaussian evidence (`support/`, every
+  # docs/DECISIONS/0016-confidence-map.md): the quality stage's per-gaussian evidence (`support/`, every
   # trained gaussian, not only what the bar published) moved by `place`'s similarity
   # into the tileset frame and binned on the site lattice, 0.25 m x 2^level, so every
   # epoch's cells nest. `weak-v1`: a cell is weak below a keep majority (score 128) or

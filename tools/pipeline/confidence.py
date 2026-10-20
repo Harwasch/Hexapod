@@ -8,9 +8,9 @@ stage moves those gaussians into the tileset frame by the very similarity `place
 epoch of a site -- which shares one frame (D3) -- lands on cells that nest with every other
 epoch's.
 
-**Score** (policy `weak-v1`; first principles, not calibrated -- docs/DECISIONS/0016). Over
-the gaussians in a cell at least 0.05 opaque (the coverage-candidate rule; as stored,
-`round(255 alpha) >= 13`):
+**Score** (policy `weak-v1`; first principles, not calibrated -- ADR 0016,
+docs/DECISIONS/0016-confidence-map.md). Over the gaussians in a cell at least 0.05 opaque
+(the coverage-candidate rule; as stored, `round(255 alpha) >= 13`):
 
     keepShare = sum(alpha [tier == keep]) / sum(alpha)
     score     = 1 + round(254 keepShare f)          (0: no evidence at all)

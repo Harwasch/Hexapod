@@ -13,7 +13,7 @@ are written under `--out` for a viewer, and `report.json` beside them.
 
 **Every capture is synthetic.** It shows the stage working against a scene whose answers
 are known; it is not a measurement of a real capture, and no threshold here was
-calibrated on it (docs/DECISIONS/0016).
+calibrated on it (docs/DECISIONS/0016-confidence-map.md).
 
     cd tools/pipeline && uv run --no-sync python -m experiments.confidence_demo \\
         --out <dir> | tee <dir>/report.txt
