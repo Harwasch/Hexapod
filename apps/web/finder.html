@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0b0c0a" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- The site finder (src/finder/): the app's globe and parcel picker, opened by the landing
+         page's "Find my land" in a dialog. A globe page: it loads CesiumJS, on purpose. -->
+    <title>Find your land</title>
+    <style>
+      @font-face {
+        font-family: "Instrument Sans";
+        font-style: normal;
+        font-weight: 400 600;
+        font-display: swap;
+        src: url("/fonts/instrument-sans-v4-latin.woff2") format("woff2");
+      }
+      @font-face {
+        font-family: "Azeret Mono";
+        font-style: normal;
+        font-weight: 400 600;
+        font-display: swap;
+        src: url("/fonts/azeret-mono-v21-latin.woff2") format("woff2");
+      }
+      html {
+        background: #0b0c0a;
+        color-scheme: dark;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/finder/main.tsx"></script>
+  </body>
+</html>

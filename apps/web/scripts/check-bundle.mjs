@@ -42,7 +42,11 @@ import { basename, dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 
-/** Pages that must not reach CesiumJS, and the one that is measured but allowed to. */
+/**
+ * Pages that must not reach CesiumJS, and the one that is measured but allowed to. Not listed:
+ * `finder.html`, the site finder the landing page opens in a frame, which is a globe page on
+ * purpose (it runs the app's globe and parcel picker so that the landing page need not).
+ */
 export const CESIUM_FREE_PAGES = [
   "admin.html",
   "upload.html",

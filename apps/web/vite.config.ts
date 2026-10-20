@@ -225,6 +225,9 @@ export default defineConfig({
         // The landing page: the fleet, its use cases and the request form. Its scenes are
         // three.js, loaded on demand; no CesiumJS, which check-bundle.mjs asserts too.
         landing: resolve(import.meta.dirname, "landing.html"),
+        // The site finder the landing page opens in a dialog: the app's globe and parcel
+        // picker on a page of their own, so the landing page never loads CesiumJS itself.
+        finder: resolve(import.meta.dirname, "finder.html"),
       },
       // Keep shared chunks out of the entries. From rolldown 1.2.9 the common-chunk merge
       // (on by default) folded the globe page's lazy modules (demoRanchData, planFlow,
