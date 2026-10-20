@@ -13,16 +13,17 @@ import type { Site } from "@twin/contracts";
 import { GlassTooltipProvider } from "@twin/ui";
 
 import { queryKeys } from "@/api/queries";
+import type { CompareDates as CompareDatesPair } from "@/lib/epochs";
 import { CompareSplit } from "@/features/compare/Compare";
 import { CompareDates } from "@/features/compare/CompareDates";
-import { undo } from "@/state/history";
+import { clearHistory, undo } from "@/state/history";
 import { useRendererOverride, useSettings, type SplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
 
 import { A1, E1, E2, SITE_ID, epoch, splat, twoEpochSite } from "./epochFixtures";
 
 const scene = vi.hoisted(() => ({
-  sites: { setCompareDates: vi.fn(() => Promise.resolve()) },
+  sites: { setCompareDates: vi.fn((_dates: CompareDatesPair | null) => Promise.resolve()) },
   layers: { setSplit: vi.fn(), setSplitPosition: vi.fn(), setVisible: vi.fn() },
 }));
 vi.mock("@/cesium/SceneContext", () => ({ useScene: () => scene }));
@@ -45,6 +46,7 @@ const BOTH = { left: E1.id, right: E2.id };
 const toggle = () => screen.getByRole("switch", { name: "Swipe between dates" });
 
 beforeEach(() => {
+  clearHistory();
   scene.sites.setCompareDates.mockClear();
   scene.layers.setSplitPosition.mockClear();
   useSites.setState({
@@ -123,6 +125,24 @@ describe("Compare › Dates", () => {
     expect(useRendererOverride.getState().renderer).toBeNull();
     await waitFor(() => expect(screen.queryByTestId("compare-dates-needs-cesium")).toBeNull());
     expect(toggle()).toBeEnabled();
+  });
+
+  it("undo skips turning it on once a date choice has ended it, rather than doing nothing", async () => {
+    // The scene, as it answers: the comparison is what it says (SiteManager.setCompareDates).
+    scene.sites.setCompareDates.mockImplementation((dates) => {
+      useSites.getState().setCompareDates(SITE_ID, dates);
+      return Promise.resolve();
+    });
+    show();
+    await userEvent.click(toggle());
+    expect(useSites.getState().compareDates).toMatchObject(BOTH);
+    // A date chosen in the capture-date control: the scene ends the comparison itself.
+    act(() => useSites.getState().setCompareDates(SITE_ID, null));
+    scene.sites.setCompareDates.mockClear();
+    // Nothing of it is left to take back: the step is dropped, not replayed as a no-op.
+    expect(undo()).toBeNull();
+    expect(scene.sites.setCompareDates).not.toHaveBeenCalled();
+    scene.sites.setCompareDates.mockImplementation(() => Promise.resolve());
   });
 
   it("another site's comparison is not this one's", () => {

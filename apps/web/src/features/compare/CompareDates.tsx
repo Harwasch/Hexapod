@@ -26,6 +26,13 @@ import { useSites } from "@/state/sites";
  * CesiumJS's: under another splat renderer the section is disabled, says so, and offers the
  * one-click switch (lib/viewModes.ts), rather than a switch that silently does nothing.
  */
+/** Whether the scene draws `dates` for `siteId` now (null: one date). */
+function isShown(siteId: string, dates: Dates | null): boolean {
+  const pair = useSites.getState().compareDates;
+  const own = pair?.siteId === siteId ? pair : null;
+  return dates ? own?.left === dates.left && own.right === dates.right : own === null;
+}
+
 export function CompareDates({ siteId }: { siteId: string }) {
   const scene = useScene();
   const site = useSite(siteId).data;
@@ -83,12 +90,26 @@ export function CompareDates({ siteId }: { siteId: string }) {
           disabled={needsCesium || left === right}
           onCheckedChange={(on) => {
             const dates = { left, right };
+            const [after, before] = on ? [dates, null] : [null, dates];
+            let applied = true;
             recordAction(
               `Turn date comparison ${on ? "on" : "off"}`,
-              () => ask(on ? dates : null),
-              () => ask(on ? null : dates),
-              // The active site's dates: never undone from another site's view.
-              { scope: "site" },
+              () => {
+                applied = true;
+                ask(after);
+              },
+              () => {
+                applied = false;
+                ask(before);
+              },
+              {
+                // The active site's dates: never undone from another site's view.
+                scope: "site",
+                // Undone or redone only from where it left the scene: a comparison a date
+                // choice (or the renderer) has ended since leaves nothing to take back, and the
+                // step is dropped rather than replayed as a no-op.
+                alive: () => isShown(siteId, applied ? after : before),
+              },
             );
           }}
           aria-labelledby="compare-dates-label"
