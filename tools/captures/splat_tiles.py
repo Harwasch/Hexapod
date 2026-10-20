@@ -1603,8 +1603,8 @@ def build_tiles(root: Tile, codes: np.ndarray, store: SortedStore, edge: float, 
     to its own level (`Moments`), which each child hands up coarsened to that level -- so
     every original is read once, by its leaf, and each merged cell is merged once more per
     level above it. `emit` receives each tile's content as it is finished: `write_tiles`
-    writes it as a GLB; the GPU stage that optimises the parents (tools/pipeline
-    lod_optimise.py) keeps it, so both see the one tree this function builds.
+    writes it as a GLB; `hierarchy` hands it to its caller, so both see the one tree this
+    function builds.
 
     Geometric error, which Cesium projects to pixels and refines on: a leaf is the data at
     full resolution, so 0. A parent's is what the merge gives away: detail finer than the
@@ -1678,8 +1678,8 @@ def write_tiles(
         if keys is not None and parents is not None:
             better = parents.take(tile.uri, keys)
             if better is not None:
-                # Optimised parents are optimised in DC colour only (lod_optimise.py); the
-                # higher bands stay the merge's, cell for cell (`take` checked the cells).
+                # Optimised parents carry DC colour only (`ParentOverrides`); the higher
+                # bands stay the merge's, cell for cell (`take` checked the cells).
                 gaussians = replace(better, sh_rest=gaussians.sh_rest)
                 replaced += int(keys.size)
         _write_tile(out_dir, tile, gaussians)
@@ -1769,7 +1769,7 @@ def hierarchy(
     return tree.root
 
 
-# ------------------------------------------------------------- optimised parents (H3DGS)
+# --------- optimised parents (a file format; nothing in this repo writes one since recipe 11)
 
 #: The version of the file `ParentOverrides.save` writes.
 PARENTS_FORMAT = 1
@@ -1790,8 +1790,8 @@ def file_sha256(path: Path) -> str:
 
 @dataclass
 class ParentOverrides:
-    """Parent gaussians optimised against the photos (Hierarchical 3DGS Sec. 5.1), written
-    in place of the merge's, tile by tile.
+    """Parent gaussians optimised elsewhere against the photos, written in place of the
+    merge's, tile by tile.
 
     Keyed by tile (`Tile.uri`, the octant path) and, within it, by each merged gaussian's
     cell key at the tile's level -- the `keys` `build_tiles` emits, in the order the tile
@@ -2376,9 +2376,9 @@ def convert(
     does, its normalise/place stages turn them with the splat (tools/pipeline
     harmonics.py), so a canonical.ply's SH is already in the frame its positions are.
 
-    **Optimised parents.** `parents`, when given, are parent gaussians optimised against
-    the capture's photos on the GPU (tools/pipeline lod_optimise.py, Hierarchical 3DGS
-    Sec. 5.1) for exactly this PLY and these parameters; each parent tile draws them in
+    **Optimised parents.** `parents`, when given, are parent gaussians optimised elsewhere
+    against the capture's photos (no stage in this repository writes them since recipe 11)
+    for exactly this PLY and these parameters; each parent tile draws them in
     place of its merge, and nothing else changes (`write_tiles`). A set built for another
     PLY or other parameters is refused before anything is written (`ParentOverrideError`).
 

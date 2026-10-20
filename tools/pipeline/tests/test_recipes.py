@@ -52,21 +52,23 @@ def test_every_recipe_ends_in_a_registration(name: str, tmp_path: Path) -> None:
     ]
 
 
-def test_photo_reconstruct_sends_pose_train_quality_and_optimise_lod_off_the_worker() -> None:
-    """`train` and `optimise_lod` (which renders the tileset's cuts) to a GPU; `pose` and
-    `quality` to Modal's CPU box, because COLMAP's extraction and projecting every
-    gaussian into every frame both want more memory than the 2 GB worker has to spare.
-    Nothing else leaves the worker."""
-    plan = plan_recipe(load_recipe("photo-reconstruct"))
+def test_photo_reconstruct_sends_pose_train_and_quality_off_the_worker() -> None:
+    """`train` to a GPU; `pose` and `quality` to Modal's CPU box, because COLMAP's
+    extraction and projecting every gaussian into every frame both want more memory than
+    the 2 GB worker has to spare. Nothing else leaves the worker (recipe 11 removed the
+    parent optimiser, which never ran)."""
+    recipe = load_recipe("photo-reconstruct")
+    plan = plan_recipe(recipe)
 
-    assert plan.gpu_stages == ("pose", "train", "quality", "optimise_lod")
+    assert recipe.version == 11
+    assert plan.gpu_stages == ("pose", "train", "quality")
     tiers = {stage.id: stage.gpu.tier for stage in plan.stages if stage.gpu is not None}
-    assert tiers == {"pose": "cpu4", "train": "l4", "quality": "cpu4", "optimise_lod": "l4"}
-    # The parents are optimised on what `place` wrote, and `package` reads them back.
+    assert tiers == {"pose": "cpu4", "train": "l4", "quality": "cpu4"}
+    # `place` records the similarity it applied; `package` merges its own parents.
     assert plan.origins["placement.json"] == "place"
-    assert plan.origins["lod_parents"] == "optimise_lod"
+    assert "lod_parents" not in plan.origins
     package = next(stage for stage in plan.stages if stage.id == "package")
-    assert package.inputs["lod_parents"] == "stages/optimise_lod/out/lod_parents"
+    assert "lod_parents" not in package.inputs
     # The trainer's splat is in COLMAP's frame; `quality` gates it and `place` is what
     # makes the gated one canonical.
     assert plan.origins["trained.ply"] == "train"

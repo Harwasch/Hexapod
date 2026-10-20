@@ -318,7 +318,7 @@ def test_a_merged_parents_sh_is_its_members_weighted_mean(
 
 
 def test_optimised_parents_keep_the_merged_sh(tmp_path: Path) -> None:
-    """lod_optimise.py optimises parents in DC colour only; the bands stay the merge's."""
+    """Parents optimised elsewhere carry DC colour only; the bands stay the merge's."""
     columns = with_sh(scene(6_000))
     ply = write_sh_ply(tmp_path / "s.ply", columns)
     emitted: dict[str, Any] = {}
