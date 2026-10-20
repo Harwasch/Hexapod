@@ -33,6 +33,14 @@ height range of the cell's gaussians, in `RELIEF_UNIT_M`, saturating), and the
 `weak-v1` policy (`WEAK_BELOW`). Its coarser levels are a **min-of-children** pyramid
 (`min_pyramid`): a coarse cell is as weak as its weakest child, so a viewer that draws
 the coarse level never shows a weak patch as strong.
+
+**Surface** is the second (tools/pipeline surface.py writes it, ADR 0018): per cell the
+epoch's measured heights, on the very plane of its confidence grid -- `dsm` and `ground`
+(`i2`, centimetres above the tileset frame's origin, `NO_HEIGHT` where the cell has no
+surface), `sigma` (`u1`, centimetres, saturating: 255 means at least 2.55 m; 0 only where
+there is no surface) and `support` (`u1`: `SURFACE_SOURCE_BITS` in the low nibble, the floor
+of log2 of the samples in the high one, saturating at 15). One plane, no pyramid: how two
+epochs' surfaces are brought to a common level is the change map's decision (A5).
 """
 
 from __future__ import annotations
@@ -52,9 +60,13 @@ import numpy as np
 __all__ = [
     "CONFIDENCE_CHANNELS",
     "FORMAT",
+    "HEIGHT_UNIT_M",
     "LATTICE_BASE_M",
+    "NO_HEIGHT",
     "REASON_BITS",
     "RELIEF_UNIT_M",
+    "SURFACE_CHANNELS",
+    "SURFACE_SOURCE_BITS",
     "VERSION",
     "WEAK_BELOW",
     "WEAK_POLICY",
@@ -199,6 +211,23 @@ CONFIDENCE_CHANNELS: tuple[Channel, ...] = (
     Channel("score", "u1"),
     Channel("reasons", "u1"),
     Channel("relief", "u1", unit_m=RELIEF_UNIT_M),
+)
+
+
+#: `surface`'s height unit: `dsm`, `ground` and `sigma` are whole centimetres.
+HEIGHT_UNIT_M = 0.01
+#: `dsm` and `ground` where a cell has no surface (too few samples, or a height `i2`
+#: centimetres cannot hold: more than 327.67 m from the frame origin's height).
+NO_HEIGHT = -32768
+#: `support`'s low nibble: which samples a cell's surface came from.
+SURFACE_SOURCE_BITS: Mapping[str, int] = {"sfm": 1, "splat": 2}
+
+#: `surface`'s channels, in the order they are interleaved.
+SURFACE_CHANNELS: tuple[Channel, ...] = (
+    Channel("dsm", "i2", unit_m=HEIGHT_UNIT_M),
+    Channel("ground", "i2", unit_m=HEIGHT_UNIT_M),
+    Channel("sigma", "u1", unit_m=HEIGHT_UNIT_M),
+    Channel("support", "u1"),
 )
 
 
@@ -359,7 +388,10 @@ def _int(value: object, what: str) -> int:
 
 
 #: Channels a grid of a known kind cannot be read without.
-REQUIRED_CHANNELS: Mapping[str, tuple[str, ...]] = {"confidence": ("score", "reasons", "relief")}
+REQUIRED_CHANNELS: Mapping[str, tuple[str, ...]] = {
+    "confidence": ("score", "reasons", "relief"),
+    "surface": ("dsm", "ground", "sigma", "support"),
+}
 
 
 def decode(descriptor: Mapping[str, Any], blob: bytes) -> CellGrid:

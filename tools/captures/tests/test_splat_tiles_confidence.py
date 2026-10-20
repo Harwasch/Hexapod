@@ -216,7 +216,14 @@ def test_a_grid_that_is_not_a_confidence_grid_or_not_its_bytes_is_refused(
     tmp_path: Path,
 ) -> None:
     ply = write_ply(tmp_path / "scene.ply", scene(500, seed=6))
-    surface = _grid(tmp_path / "s", kind="surface")
+    heights = cell_grid.CellGrid(
+        "surface",
+        cell_grid.SURFACE_CHANNELS,
+        (cell_grid.CellPlane(1, -18, -18, 36, 36, np.zeros((36, 36, 4), dtype=np.int16)),),
+    )
+    descriptor = cell_grid.encode(heights, tmp_path / "s", "surface.bin")
+    surface = tmp_path / "s" / "surface.json"
+    surface.write_text(json.dumps(descriptor))
     with pytest.raises(cell_grid.CellGridError, match="not a confidence grid"):
         splat_tiles.convert(ply, tmp_path / "a", 0.0, 0.0, 0.0, confidence=surface)
     tampered = _grid(tmp_path / "t")
