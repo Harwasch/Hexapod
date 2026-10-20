@@ -365,11 +365,13 @@ def _crate_tally(found: Mapping[str, Any]) -> dict[str, Any]:
     j0, j1 = math.floor((north - side / 2) / cell), math.floor((north + side / 2) / cell)
 
     def on(row: Mapping[str, Any]) -> bool:
-        return abs(row["eastM"] - east) <= side / 2 and abs(row["northM"] - north) <= side / 2
+        dx, dy = float(row["eastM"]) - east, float(row["northM"]) - north
+        return abs(dx) <= side / 2 and abs(dy) <= side / 2
 
     def touches(row: Mapping[str, Any]) -> bool:
         reach = side / 2 + cell / 2
-        return abs(row["eastM"] - east) < reach and abs(row["northM"] - north) < reach
+        dx, dy = float(row["eastM"]) - east, float(row["northM"]) - north
+        return abs(dx) < reach and abs(dy) < reach
 
     footprint = sum(
         1
