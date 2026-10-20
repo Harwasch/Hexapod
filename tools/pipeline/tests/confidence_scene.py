@@ -110,10 +110,12 @@ def with_crate(
     rng = np.random.default_rng(seed)
     x, y, z = (np.asarray(columns[name], dtype=np.float64) for name in ("x", "y", "z"))
     half = side_m / 2
-    under = (np.abs(x - centre[0]) < half) & (np.abs(y - centre[1]) < half) & (z < 0.5 * height_m)
-    ground = int(((np.abs(z) < 1e-6) & ~under).sum())
+    # Ground: within 5 cm of z = 0 (a jittered scan's ground too).
+    flat = np.abs(z) < 0.05
+    under = (np.abs(x - centre[0]) < half) & (np.abs(y - centre[1]) < half) & flat
+    ground = int((flat & ~under).sum())
     # The ground's density, from what is left of it over the field it covers.
-    span = float(np.ptp(x[np.abs(z) < 1e-6])) * float(np.ptp(y[np.abs(z) < 1e-6]))
+    span = float(np.ptp(x[flat])) * float(np.ptp(y[flat])) if flat.any() else 0.0
     density = ground / max(span, 1.0)
     faces = side_m * side_m + 4 * side_m * height_m
     count = int(density * faces)

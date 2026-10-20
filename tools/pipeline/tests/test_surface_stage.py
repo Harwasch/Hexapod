@@ -548,3 +548,56 @@ def test_a_surface_package_refuses_is_left_out_and_the_confidence_grid_still_shi
         assert "confidence grid was not shipped" not in log
     registration = json.loads((run.out_dir("register") / "registration.json").read_text())
     assert registration["surface"] is None and registration["confidence"] is not None
+
+
+# --- the demo ----------------------------------------------------------------------------
+
+
+def test_the_change_demo_finds_the_crate_raised_and_the_noise_unchanged(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`confidence_demo.py --change`: a 1.5 m crate in e2 on ground both epochs saw well,
+    each scan with its own sample, 1 cm noise and SfM cloud. Every cell of the crate is
+    raised by about its height, and nothing that does not touch it changes."""
+    from experiments import confidence_demo
+
+    assert confidence_demo.main(["--out", str(tmp_path / "demo"), "--change"]) == 0
+    text = capsys.readouterr().out
+    report = json.loads((tmp_path / "demo" / "report.json").read_text())
+    found = report["change"]
+    crate = found["crate"]
+    assert crate["cellsInside"] > 20
+    assert crate["raisedInside"] == crate["cellsInside"]
+    assert crate["changedOutside"] == 0
+    assert found["counts"]["lowered"] == 0
+    assert found["counts"]["unchanged"] > 10 * found["counts"]["raised"]
+    on = [
+        row
+        for row in found["changed"]
+        if abs(row["eastM"] + 3.1) <= 0.75 and abs(row["northM"] - 3.4) <= 0.75
+    ]
+    assert on and all(abs(row["deltaM"] - 1.5) < 0.1 for row in on)
+    # The threshold is the frame-relative one: e1 made the frame (0), e2 aligned at 0.062.
+    assert (found["uE1M"], found["uE2M"]) == (0.0, 0.062)
+    assert 0.18 < found["minDetectableM"] < 0.2
+    assert found["unchangedMaxDeltaOverThreshold"] < 1.0
+    assert "Derived from height surfaces, not observed" in text
+    for name in ("e1-splat", "e2-splat"):
+        tileset = json.loads((tmp_path / "demo" / name / "tileset.json").read_text())
+        assert list(tileset["root"]["extras"])[-2:] == ["confidence", "surface"]
+
+
+def test_coarsening_a_surface_takes_the_highest_top_the_lowest_ground_the_widest_sigma() -> None:
+    from experiments import confidence_demo
+
+    data = np.zeros((2, 2, 4), dtype=np.int64)
+    data[..., 0] = [[10, NO], [30, 20]]
+    data[..., 1] = [[5, NO], [-7, 0]]
+    data[..., 2] = [[1, 0], [4, 2]]
+    data[..., 3] = [[0x12, 0x00], [0x31, 0x22]]
+    coarse = confidence_demo.coarsen_surface(cell_grid.CellPlane(0, 0, 0, 2, 2, data), 1)
+    assert coarse.data[0, 0].tolist() == [30, -7, 4, 0x33]
+    empty = np.zeros((2, 2, 4), dtype=np.int64)
+    empty[..., :2] = NO
+    nothing = confidence_demo.coarsen_surface(cell_grid.CellPlane(0, 0, 0, 2, 2, empty), 1)
+    assert nothing.data[0, 0].tolist() == [NO, NO, 0, 0]
