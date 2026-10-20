@@ -130,3 +130,36 @@ class WeakAreasRead(CamelModel):
     truncated_by_budget: bool
     heuristic: str
     areas: list[WeakArea]
+
+
+class FillTargetsRead(CamelModel):
+    """The cells a re-scan left weak (`rescan-gate-v1`): weak in this epoch, covered by it,
+    and weak in at least one earlier measured epoch of the site, compared at the coarser of
+    their levels. The fill gate (F4) only fills these.
+
+    `mask` is base64 of `nj` rows, south to north (`j0` first), each `rowBytes` bytes; in a
+    row, bit `k` (least significant first) of byte `b` is cell `i0 + 8 b + k`. 1 is a
+    target. Cells are in the tileset frame of the site lattice (`0.25 m * 2**level`).
+
+    Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+    """
+
+    policy: Literal["rescan-gate-v1"]
+    site_id: uuid.UUID
+    epoch_id: uuid.UUID
+    #: Earlier epochs a target cell was also weak in.
+    weak_in: list[uuid.UUID]
+    #: Every earlier measured epoch it was compared with.
+    compared_with: list[uuid.UUID]
+    frame: Literal["tileset"]
+    cell_m: Finite
+    level: int
+    i0: int
+    j0: int
+    ni: int
+    nj: int
+    row_bytes: int
+    bit_order: Literal["little"]
+    mask: str
+    cells: int
+    reason: str

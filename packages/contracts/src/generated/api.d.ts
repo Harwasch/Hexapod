@@ -2452,6 +2452,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sites/{site_id}/fill-targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The cells a re-scan left weak
+         * @description `rescan-gate-v1`: the cells of epoch `epochId` (default: the site's latest published)
+         *     that are weak, covered by it, and were weak in at least one earlier measured epoch,
+         *     compared at the coarser level -- a re-scan that did not fix them. An inferred fill
+         *     fills only these (F4). A bit mask in the tileset frame of the site lattice.
+         */
+        get: operations["site_fill_targets_api_v1_sites__site_id__fill_targets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sites/{site_id}/thumbnail": {
         parameters: {
             query?: never;
@@ -6002,6 +6025,69 @@ export interface components {
         FeatureRequestRead: {
             current: components["schemas"]["LandFeatureRead"];
             original: components["schemas"]["LandFeatureCreate"];
+        };
+        /**
+         * FillTargetsRead
+         * @description The cells a re-scan left weak (`rescan-gate-v1`): weak in this epoch, covered by it,
+         *     and weak in at least one earlier measured epoch of the site, compared at the coarser of
+         *     their levels. The fill gate (F4) only fills these.
+         *
+         *     `mask` is base64 of `nj` rows, south to north (`j0` first), each `rowBytes` bytes; in a
+         *     row, bit `k` (least significant first) of byte `b` is cell `i0 + 8 b + k`. 1 is a
+         *     target. Cells are in the tileset frame of the site lattice (`0.25 m * 2**level`).
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        FillTargetsRead: {
+            /**
+             * Bitorder
+             * @constant
+             */
+            bitOrder: "little";
+            /** Cellm */
+            cellM: number;
+            /** Cells */
+            cells: number;
+            /** Comparedwith */
+            comparedWith: string[];
+            /**
+             * Epochid
+             * Format: uuid
+             */
+            epochId: string;
+            /**
+             * Frame
+             * @constant
+             */
+            frame: "tileset";
+            /** I0 */
+            i0: number;
+            /** J0 */
+            j0: number;
+            /** Level */
+            level: number;
+            /** Mask */
+            mask: string;
+            /** Ni */
+            ni: number;
+            /** Nj */
+            nj: number;
+            /**
+             * Policy
+             * @constant
+             */
+            policy: "rescan-gate-v1";
+            /** Reason */
+            reason: string;
+            /** Rowbytes */
+            rowBytes: number;
+            /**
+             * Siteid
+             * Format: uuid
+             */
+            siteId: string;
+            /** Weakin */
+            weakIn: string[];
         };
         /** FindingDisposition */
         FindingDisposition: {
@@ -12243,6 +12329,7 @@ export type SchemaFeatureGeometryRequest = components['schemas']['FeatureGeometr
 export type SchemaFeatureInspectionCreate = components['schemas']['FeatureInspectionCreate'];
 export type SchemaFeatureInspectionRead = components['schemas']['FeatureInspectionRead'];
 export type SchemaFeatureRequestRead = components['schemas']['FeatureRequestRead'];
+export type SchemaFillTargetsRead = components['schemas']['FillTargetsRead'];
 export type SchemaFindingDisposition = components['schemas']['FindingDisposition'];
 export type SchemaFindingRead = components['schemas']['FindingRead'];
 export type SchemaGalleryOutput = components['schemas']['GalleryOutput'];
@@ -23203,6 +23290,66 @@ export interface operations {
                 };
             };
             /** @description `confidence-not-measured`: the epoch's current revision has no confidence map (a splat upload is not measured); `confidence-unreadable`: its grid cannot be read; `no-site-frame`: the site has no frame to place cells by. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    site_fill_targets_api_v1_sites__site_id__fill_targets_get: {
+        parameters: {
+            query?: {
+                epochId?: string | null;
+            };
+            header?: never;
+            path: {
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FillTargetsRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such site, or no such epoch of it. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description `confidence-not-measured`: the epoch has no confidence map (or the site no published epoch); `no-rescan-yet`: no earlier epoch of the site was measured; `confidence-unreadable`: a grid cannot be read. */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -7105,6 +7105,114 @@
         "title": "FeatureRequestRead",
         "type": "object"
       },
+      "FillTargetsRead": {
+        "additionalProperties": false,
+        "description": "The cells a re-scan left weak (`rescan-gate-v1`): weak in this epoch, covered by it,\nand weak in at least one earlier measured epoch of the site, compared at the coarser of\ntheir levels. The fill gate (F4) only fills these.\n\n`mask` is base64 of `nj` rows, south to north (`j0` first), each `rowBytes` bytes; in a\nrow, bit `k` (least significant first) of byte `b` is cell `i0 + 8 b + k`. 1 is a\ntarget. Cells are in the tileset frame of the site lattice (`0.25 m * 2**level`).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "bitOrder": {
+            "const": "little",
+            "title": "Bitorder",
+            "type": "string"
+          },
+          "cellM": {
+            "title": "Cellm",
+            "type": "number"
+          },
+          "cells": {
+            "title": "Cells",
+            "type": "integer"
+          },
+          "comparedWith": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Comparedwith",
+            "type": "array"
+          },
+          "epochId": {
+            "format": "uuid",
+            "title": "Epochid",
+            "type": "string"
+          },
+          "frame": {
+            "const": "tileset",
+            "title": "Frame",
+            "type": "string"
+          },
+          "i0": {
+            "title": "I0",
+            "type": "integer"
+          },
+          "j0": {
+            "title": "J0",
+            "type": "integer"
+          },
+          "level": {
+            "title": "Level",
+            "type": "integer"
+          },
+          "mask": {
+            "title": "Mask",
+            "type": "string"
+          },
+          "ni": {
+            "title": "Ni",
+            "type": "integer"
+          },
+          "nj": {
+            "title": "Nj",
+            "type": "integer"
+          },
+          "policy": {
+            "const": "rescan-gate-v1",
+            "title": "Policy",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "rowBytes": {
+            "title": "Rowbytes",
+            "type": "integer"
+          },
+          "siteId": {
+            "format": "uuid",
+            "title": "Siteid",
+            "type": "string"
+          },
+          "weakIn": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Weakin",
+            "type": "array"
+          }
+        },
+        "required": [
+          "policy",
+          "siteId",
+          "epochId",
+          "weakIn",
+          "comparedWith",
+          "frame",
+          "cellM",
+          "level",
+          "i0",
+          "j0",
+          "ni",
+          "nj",
+          "rowBytes",
+          "bitOrder",
+          "mask",
+          "cells",
+          "reason"
+        ],
+        "title": "FillTargetsRead",
+        "type": "object"
+      },
       "FindingDisposition": {
         "additionalProperties": false,
         "properties": {
@@ -41800,6 +41908,97 @@
           }
         },
         "summary": "An epoch's weak areas as re-scan zones",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/api/v1/sites/{site_id}/fill-targets": {
+      "get": {
+        "description": "`rescan-gate-v1`: the cells of epoch `epochId` (default: the site's latest published)\nthat are weak, covered by it, and were weak in at least one earlier measured epoch,\ncompared at the coarser level -- a re-scan that did not fix them. An inferred fill\nfills only these (F4). A bit mask in the tileset frame of the site lattice.",
+        "operationId": "site_fill_targets_api_v1_sites__site_id__fill_targets_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "epochId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Epochid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FillTargetsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such site, or no such epoch of it."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "`confidence-not-measured`: the epoch has no confidence map (or the site no published epoch); `no-rescan-yet`: no earlier epoch of the site was measured; `confidence-unreadable`: a grid cannot be read."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "The cells a re-scan left weak",
         "tags": [
           "sites"
         ]

@@ -1,8 +1,10 @@
-"""An epoch's confidence map as re-scan zones (M4, ADR 0016 § API).
+"""An epoch's confidence map as re-scan zones, and what a re-scan left weak (M4, ADR 0016).
 
 `weak_areas` reads the map of the epoch's current revision (`epoch_maps`), loads its grid
 from the bucket the tiles are published in, and turns the weak cells into zones on the
-globe (`app/analysis/weak_areas.py`).
+globe (`app/analysis/weak_areas.py`). `fill_targets` compares an epoch's grid with the
+earlier measured epochs of its site and answers the cells that are still weak after the
+re-scan (`app/analysis/rescan_gate.py`): all an inferred fill may fill (F4).
 
 **Loading a grid.** The map's URL is the file beside the tiles in the generation the run
 published (or the attach that last moved the asset cut); its key is that URL less the
@@ -19,19 +21,27 @@ rewritten grid a different entry rather than a stale hit.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import uuid
 from collections import OrderedDict
 from typing import Any
 
 from shapely.geometry import mapping
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.analysis import cell_grid
+from app.analysis import cell_grid, rescan_gate
 from app.analysis.weak_areas import cell_patches, site_projection
 from app.models import Epoch, EpochMap, Site, SiteFrame
-from app.models.enums import EpochMapKind
-from app.schemas.confidence import HEURISTIC_LABEL, WeakArea, WeakAreasRead, WeakAreasRequest
+from app.models.enums import EpochMapKind, EpochStatus
+from app.schemas.confidence import (
+    HEURISTIC_LABEL,
+    FillTargetsRead,
+    WeakArea,
+    WeakAreasRead,
+    WeakAreasRequest,
+)
 from app.schemas.geojson import Polygon
 from app.services import epoch_maps, epochs
 from app.services.errors import ConflictError, NotFoundError
@@ -257,4 +267,87 @@ def weak_areas(
         truncated_by_budget=found.truncated_by_budget,
         heuristic=HEURISTIC_LABEL,
         areas=areas,
+    )
+
+
+NO_RESCAN = "no-rescan-yet"
+#: Earlier epochs a fill-targets answer compares with, newest first: a site scanned more
+#: often than this is compared with its most recent ones (and says which, `comparedWith`).
+MAX_EARLIER = 32
+
+
+def _latest_published(db: Session, site_id: uuid.UUID) -> Epoch:
+    epoch = db.scalars(
+        select(Epoch)
+        .where(Epoch.site_id == site_id, Epoch.status == EpochStatus.PUBLISHED.value)
+        .order_by(Epoch.observed_at.desc(), Epoch.ordinal.desc())
+        .limit(1)
+    ).first()
+    if epoch is None:
+        raise ConflictError(f"site {site_id} has no published epoch", code=NOT_MEASURED)
+    return epoch
+
+
+def fill_targets(
+    db: Session, storage: ObjectStorage, site_id: uuid.UUID, epoch_id: uuid.UUID | None
+) -> FillTargetsRead:
+    """The cells epoch B (`epoch_id`, else the site's latest published) left weak after a
+    re-scan (`app/analysis/rescan_gate.py`): 409 `confidence-not-measured` when B has no
+    map, `no-rescan-yet` when no earlier epoch of the site was measured."""
+    if db.get(Site, site_id) is None:
+        raise NotFoundError("site", site_id)
+    epoch = (
+        epoch_of_site(db, site_id, epoch_id)
+        if epoch_id is not None
+        else _latest_published(db, site_id)
+    )
+    row = measured_map(db, epoch)
+    earlier_rows: list[tuple[Epoch, EpochMap]] = []
+    for candidate in db.scalars(
+        select(Epoch)
+        .where(
+            Epoch.site_id == site_id,
+            Epoch.status == EpochStatus.PUBLISHED.value,
+            Epoch.observed_at < epoch.observed_at,
+            Epoch.id != epoch.id,
+        )
+        .order_by(Epoch.observed_at.desc(), Epoch.ordinal.desc())
+    ):
+        try:
+            earlier_rows.append((candidate, measured_map(db, candidate)))
+        except ConflictError:
+            continue
+        if len(earlier_rows) == MAX_EARLIER:
+            break
+    if not earlier_rows:
+        raise ConflictError(
+            f"epoch {epoch.id} has no earlier measured epoch on its site: nothing has been "
+            "re-scanned yet, so no cell can be still weak after one",
+            code=NO_RESCAN,
+        )
+    grid = load_grid(storage, row)
+    earlier = [load_grid(storage, found) for _, found in earlier_rows]
+    result = rescan_gate.still_weak(grid, earlier)
+    return FillTargetsRead(
+        policy="rescan-gate-v1",
+        site_id=site_id,
+        epoch_id=epoch.id,
+        weak_in=[earlier_rows[index][0].id for index in result.contributed],
+        compared_with=[candidate.id for candidate, _ in earlier_rows],
+        frame="tileset",
+        cell_m=math.ldexp(cell_grid.LATTICE_BASE_M, result.level),
+        level=result.level,
+        i0=result.i0,
+        j0=result.j0,
+        ni=result.ni,
+        nj=result.nj,
+        row_bytes=result.row_bytes,
+        bit_order="little",
+        mask=result.packed(),
+        cells=result.cells,
+        reason=(
+            "weak in this epoch, which covers them, and weak in at least one earlier "
+            f"measured epoch: a re-scan that did not fix them ({rescan_gate.POLICY}, compared "
+            f"at {math.ldexp(cell_grid.LATTICE_BASE_M, result.level):g} m cells)"
+        ),
     )

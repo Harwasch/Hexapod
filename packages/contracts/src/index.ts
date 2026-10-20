@@ -42,6 +42,8 @@ export type AlignmentCap = Schemas["AlignmentCapRead"];
 export type WeakAreasRequest = Schemas["WeakAreasRequest"];
 export type WeakAreas = Schemas["WeakAreasRead"];
 export type WeakArea = Schemas["WeakArea"];
+/** The cells a re-scan left weak (`rescan-gate-v1`): what an inferred fill may fill. */
+export type FillTargets = Schemas["FillTargetsRead"];
 export type CheckTarget = Schemas["CheckTargetRead"];
 export type CheckTargetRole = Schemas["CheckTargetRole"];
 export type EpochStatus = Schemas["EpochStatus"];

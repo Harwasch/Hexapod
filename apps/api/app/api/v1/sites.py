@@ -3,14 +3,14 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 
 from app.api.deps import DbSession, LimitCellMap, PublicStorage, RequireWriteToken
 from app.schemas.asset import AssetRead
 from app.schemas.bookmark import CameraBookmarkCreate, CameraBookmarkRead
 from app.schemas.check_target import CheckTargetRead, CheckTargetSet
 from app.schemas.common import Problem
-from app.schemas.confidence import WeakAreasRead, WeakAreasRequest
+from app.schemas.confidence import FillTargetsRead, WeakAreasRead, WeakAreasRequest
 from app.schemas.epoch import EpochRead
 from app.schemas.site import SiteCreate, SiteRead, SiteSummary, SiteUpdate
 from app.services import assets as asset_service
@@ -118,6 +118,34 @@ def epoch_weak_areas(
     hint. Computes and stores nothing, so it is open like every read of a site; a POST for
     its body. The patterns are UX heuristics, labelled so (`heuristic`)."""
     return confidence_maps.weak_areas(db, storage, site_id, epoch_id, payload)
+
+
+@router.get(
+    "/{site_id}/fill-targets",
+    response_model=FillTargetsRead,
+    summary="The cells a re-scan left weak",
+    dependencies=[LimitCellMap],
+    responses={
+        404: {"model": Problem, "description": "No such site, or no such epoch of it."},
+        409: {
+            "model": Problem,
+            "description": "`confidence-not-measured`: the epoch has no confidence map (or the "
+            "site no published epoch); `no-rescan-yet`: no earlier epoch of the site was "
+            "measured; `confidence-unreadable`: a grid cannot be read.",
+        },
+    },
+)
+def site_fill_targets(
+    site_id: uuid.UUID,
+    db: DbSession,
+    storage: PublicStorage,
+    epoch_id: Annotated[uuid.UUID | None, Query(alias="epochId")] = None,
+) -> FillTargetsRead:
+    """`rescan-gate-v1`: the cells of epoch `epochId` (default: the site's latest published)
+    that are weak, covered by it, and were weak in at least one earlier measured epoch,
+    compared at the coarser level -- a re-scan that did not fix them. An inferred fill
+    fills only these (F4). A bit mask in the tileset frame of the site lattice."""
+    return confidence_maps.fill_targets(db, storage, site_id, epoch_id)
 
 
 @router.get(
