@@ -97,6 +97,7 @@ import { attachSkin } from "./splatSkin";
 import { attachTelemetry } from "./telemetry";
 import { attachViewCones } from "./splatViewCones";
 import { attachCellView } from "./cellViewSlot";
+import { attachSunlight } from "./sunlightSlot";
 import {
   footprintAtScale,
   groundAtScale,
@@ -2015,6 +2016,9 @@ export class SiteManager {
               }),
           },
         ),
+        // Sunlight, when turned on (state/lighting.ts) and As captured is off: loaded and
+        // joined to the shader only then; only CesiumJS draws it.
+        attachSunlight(tileset, this.scene, asset.id),
         // What an image model filled in where it never looked, beside it (lib/inferred.ts):
         // drawn by whichever renderer draws the scan, in the same sort as its splats -- by
         // CesiumJS while CesiumJS draws it, by the overlay's renderer otherwise
