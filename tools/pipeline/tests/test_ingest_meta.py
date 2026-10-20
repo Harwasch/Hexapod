@@ -233,3 +233,23 @@ def test_nonsense_exposure_params_are_refused(tmp_path: Path, params: dict[str, 
 
     with pytest.raises(Exception, match="must be"):
         run_normalize(tmp_path, {"select": "all", **params}, upload)
+
+
+def test_a_clip_whose_creation_date_is_out_of_range_still_normalizes(tmp_path: Path) -> None:
+    upload = tmp_path / "upload"
+    clip = iphone_clip(upload / "raw.MOV", frames=4)
+    fixed = upload / "IMG_0001.MOV"
+    subprocess.run(
+        [imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-nostdin", "-y", "-i", str(clip),
+         "-c", "copy", "-movflags", "use_metadata_tags",
+         "-metadata", "com.apple.quicktime.creationdate=0001-01-01T00:00:00+0100",
+         "-metadata", "com.apple.quicktime.make=Apple", str(fixed)],
+        capture_output=True, check=True,
+    )  # fmt: skip
+    clip.unlink()
+
+    workdir = run_normalize(tmp_path, {"select": "all", "fps": 5}, upload)
+
+    frames = _out(workdir, "frames_meta.json")
+    assert all(record["time"]["utc"] is None for record in frames["frames"])
+    assert _out(workdir, "source_meta.json")["capturedAtUtc"] is None

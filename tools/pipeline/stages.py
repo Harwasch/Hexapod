@@ -850,14 +850,22 @@ def _clip_time(
     """A video frame's time: the clip's start plus its offset into the clip."""
     if started is None or offset_s is None or source is None:
         return frame_meta.FrameTime()
-    moment = started + timedelta(seconds=offset_s)
+    try:
+        moment = started + timedelta(seconds=offset_s)
+    except OverflowError:
+        return frame_meta.FrameTime()
+    utc = frame_meta.utc_text(moment)
+    if utc is None:
+        # A date outside the calendar in UTC (a container written by a dead clock): no
+        # time for this frame, rather than no frames.
+        return frame_meta.FrameTime()
     if source != "quicktime-creationdate":
         # The mvhd time is UTC by definition; the camera's local zone is not in it.
-        return frame_meta.FrameTime(utc=frame_meta.utc_text(moment), source="mvhd-creation-time")
+        return frame_meta.FrameTime(utc=utc, source="mvhd-creation-time")
     return frame_meta.FrameTime(
         local=moment.replace(tzinfo=None).isoformat(timespec="milliseconds"),
         offset=frame_meta.offset_text(moment.utcoffset() or timedelta(0)),
-        utc=frame_meta.utc_text(moment),
+        utc=utc,
         source="quicktime-creationdate",
     )
 

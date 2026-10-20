@@ -341,3 +341,31 @@ def test_xmp_without_the_xmpmeta_wrapper_is_still_read(tmp_path: Path) -> None:
     )
 
     assert record.dji is not None and record.dji.rtk_flag == 50
+
+
+def test_a_time_at_the_edge_of_the_calendar_is_no_utc_time_not_a_lost_record(
+    tmp_path: Path,
+) -> None:
+    """Year 1 at +01:00 is before datetime's own range in UTC: OverflowError. A camera
+    with a dead clock writes such things, and it must cost the time, not the record."""
+    edge = frame_meta.exif_time({0x9003: "0001:01:01 00:00:00", 0x9011: "+01:00"})
+    assert edge.utc is None
+    assert (edge.local, edge.source) == ("0001-01-01T00:00:00", "exif-local")
+    late = {29: "9999:12:31", 7: (IFDRational(23, 1), IFDRational(59, 1), IFDRational(60, 1))}
+    assert frame_meta.exif_time({}, late).utc is None
+    zoned = frame_meta.exif_time({}, xmp_create_date="0001-01-01T00:00:00+01:00")
+    assert (zoned.utc, zoned.source) == (None, "xmp-createdate-local")
+
+    photo = write_jpeg(
+        tmp_path / "a.jpg",
+        size=(64, 48),
+        exif={0x010F: "DJI"},
+        exif_ifd={0x9003: "0001:01:01 00:00:00", 0x9011: "+01:00", 0xA405: 24},
+        xmp=dji_xmp(),
+    )
+    record = frame_meta.read_photo(
+        photo, frame_name="frame_0000.jpg", upload_root=tmp_path, frame_size=(64, 48)
+    )
+    assert record.unreadable is None
+    assert record.dji is not None and record.focal.px is not None
+    assert record.time.utc is None

@@ -342,9 +342,15 @@ class FrameTime:
         return {"local": self.local, "offset": self.offset, "utc": self.utc, "source": self.source}
 
 
-def utc_text(moment: datetime) -> str:
-    """ISO 8601 in UTC with a `Z` and milliseconds: `2026-10-01T15:20:30.123Z`."""
-    return moment.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+def utc_text(moment: datetime) -> str | None:
+    """ISO 8601 in UTC with a `Z` and milliseconds: `2026-10-01T15:20:30.123Z`; None when
+    the moment is outside datetime's range once in UTC (year 1 at +01:00 -- a dead camera
+    clock), which costs the UTC time and nothing else."""
+    try:
+        utc = moment.astimezone(UTC)
+    except (OverflowError, ValueError):
+        return None
+    return utc.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _exif_text(value: object) -> str | None:
@@ -413,9 +419,9 @@ def _gps_utc(gps: Mapping[int, object]) -> datetime | None:
         return None
     try:
         day = datetime.strptime(date[:10], "%Y:%m:%d").replace(tzinfo=UTC)
-    except ValueError:
+        return day + timedelta(hours=hours, minutes=minutes, seconds=seconds)
+    except (ValueError, OverflowError):
         return None
-    return day + timedelta(hours=hours, minutes=minutes, seconds=seconds)
 
 
 def exif_time(
@@ -442,15 +448,18 @@ def exif_time(
     local_text = None if local is None else _local_text(local)
     if local is not None and zone is not None:
         aware = local.replace(tzinfo=zone)
-        return FrameTime(
-            local=local_text,
-            offset=offset_text(aware.utcoffset() or timedelta(0)),
-            utc=utc_text(aware),
-            source="exif-offset",
-        )
+        utc = utc_text(aware)
+        if utc is not None:
+            return FrameTime(
+                local=local_text,
+                offset=offset_text(aware.utcoffset() or timedelta(0)),
+                utc=utc,
+                source="exif-offset",
+            )
     gps = _gps_utc(gps_ifd or {})
-    if gps is not None:
-        return FrameTime(local=local_text, offset=None, utc=utc_text(gps), source="gps-time")
+    gps_text = None if gps is None else utc_text(gps)
+    if gps_text is not None:
+        return FrameTime(local=local_text, offset=None, utc=gps_text, source="gps-time")
     if local is not None:
         return FrameTime(local=local_text, source="exif-local")
     if xmp_create_date:
@@ -458,12 +467,14 @@ def exif_time(
             parsed = datetime.fromisoformat(xmp_create_date.strip())
         except ValueError:
             return FrameTime()
-        if parsed.tzinfo is None:
-            return FrameTime(local=parsed.isoformat(), source="xmp-createdate-local")
+        utc = None if parsed.tzinfo is None else utc_text(parsed)
+        if utc is None:
+            naive = parsed.replace(tzinfo=None).isoformat()
+            return FrameTime(local=naive, source="xmp-createdate-local")
         return FrameTime(
             local=parsed.replace(tzinfo=None).isoformat(),
             offset=offset_text(parsed.utcoffset() or timedelta(0)),
-            utc=utc_text(parsed),
+            utc=utc,
             source="xmp-createdate",
         )
     return FrameTime()
