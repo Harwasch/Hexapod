@@ -148,6 +148,74 @@ class ScaleSource(StrEnum):
     UNRESOLVED = "unresolved"
 
 
+class HeightDatum(StrEnum):
+    """What a site frame's origin height is measured from.
+
+    ``msl-unverified``: every frame today. GPS altitude is above mean sea level (the geoid),
+    and nothing here applies a geoid model, so the number is recorded with the datum it
+    probably has rather than passed off as an ellipsoid height.
+    """
+
+    ELLIPSOID_WGS84 = "ellipsoid-wgs84"
+    MSL_UNVERIFIED = "msl-unverified"
+
+
+class SiteFrameSource(StrEnum):
+    """How a site's frame came to exist (decision D3): from its first epoch's georeference
+    (``registration``), from migration 0032 (``backfill``), or re-made from the frame a run
+    echoed after the site it named was deleted (``echo``)."""
+
+    REGISTRATION = "registration"
+    BACKFILL = "backfill"
+    ECHO = "echo"
+
+
+class EpochStatus(StrEnum):
+    """An epoch's standing. Only ``published`` is written until quality gates exist (M3)."""
+
+    PUBLISHED = "published"
+    REJECTED = "rejected"
+    SUPERSEDED = "superseded"
+
+
+class EpochJoinMethod(StrEnum):
+    """How a capture found the site it is an epoch of: named it (``explicit``), was matched
+    to it by location before its run (``spatial``), or made it (``new-site``)."""
+
+    EXPLICIT = "explicit"
+    SPATIAL = "spatial"
+    NEW_SITE = "new-site"
+
+
+class EpochPlatform(StrEnum):
+    """What captured an epoch, by survey tier (decision D4). Only ``phone-video`` and
+    ``unknown`` are told apart until M3 reads DJI XMP and RTK."""
+
+    RTK_DRONE = "rtk-drone"
+    DRONE = "drone"
+    PHONE_VIDEO = "phone-video"
+    PHONE_PHOTO = "phone-photo"
+    UNKNOWN = "unknown"
+
+
+class ObservedAtSource(StrEnum):
+    """Where an epoch's ``observed_at`` came from: the capture row's ``captured_at``, the
+    run's manifest (the files' own date), or -- with neither -- the upload time
+    (``created``), which is labelled as such rather than passed off as a capture date."""
+
+    CAPTURED_AT = "captured-at"
+    MANIFEST = "manifest"
+    CREATED = "created"
+
+
+class AssetSourceKind(StrEnum):
+    """Whether an asset shows what was captured (``observed``) or what was inferred to fill
+    it (``inferred``, M5). One asset is one tileset of one epoch and one source kind."""
+
+    OBSERVED = "observed"
+    INFERRED = "inferred"
+
+
 class ArtifactKind(StrEnum):
     """What a stage produced. Step logs and checkpoints are not artifacts: they are
     ``job_steps.log_key`` and ``job_steps.checkpoint_key``.

@@ -65,6 +65,8 @@ TABLES = (
     "plan_revisions",
     "plans",
     "camera_bookmarks",
+    "epochs",
+    "site_frames",
     "assets",
     "layers",
     "sites",
