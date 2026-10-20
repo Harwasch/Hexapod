@@ -312,6 +312,87 @@ describe("placementProvenance", () => {
     expect(aligned?.scaleEstimated).toBe(false);
   });
 
+  describe("an epoch's recorded alignment (R2 review of #52)", () => {
+    // The web reads only `label`, `verdict` and `uncertaintyM` of `epochs.alignment` (D6).
+    const withEpoch = (
+      provenance: NonNullable<SiteAsset["provenance"]>,
+      alignment: Record<string, unknown> | null,
+    ) => {
+      const one = { ...asset({ provenance }), epochId: "epoch-1" };
+      const shaped = site([one]) as unknown as Record<string, unknown>;
+      shaped.epochs = [{ id: "epoch-1", currentAssetId: "asset-1", alignment }];
+      return shaped as unknown as Site;
+    };
+
+    it("a failed visual alignment is never shown as aligned to EXIF GPS", () => {
+      // Its georeference is still the EXIF similarity, but the epoch could not be aligned to
+      // its site's reference: D4 records it unaligned, and the row must say so.
+      const failed = placementProvenance(
+        withEpoch(
+          { georefMethod: "exif-gps", scaleSource: "exif-gps", uncertaintyM: 5 },
+          {
+            verdict: "unaligned",
+            label: "Drone, not aligned: placed by its GPS, ±5 m",
+            uncertaintyM: 5,
+          },
+        ),
+        "asset-1",
+        "metric",
+      );
+      expect(failed?.summary).not.toContain("Aligned to EXIF GPS");
+      expect(failed?.summary).toContain("Drone, not aligned: placed by its GPS");
+      expect(failed?.summary).toContain("unaligned");
+      expect(failed?.summary).toContain("±5 m");
+      expect(failed?.measured).toBe(false);
+    });
+
+    it("a phone aligned visually says phone and coarse, never survey-grade", () => {
+      const phone = placementProvenance(
+        withEpoch(
+          { georefMethod: "visual-epoch", scaleSource: "visual-epoch", uncertaintyM: 0.0677 },
+          {
+            verdict: "coarse",
+            label: "Phone video, aligned visually, ±0.068 m",
+            uncertaintyM: 0.0677,
+          },
+        ),
+        "asset-1",
+        "metric",
+      );
+      expect(phone?.summary).toContain("Phone video, aligned visually");
+      expect(phone?.summary).toContain("coarse, not survey-grade");
+      expect(phone?.summary).not.toContain("surveyed");
+      expect(phone?.summary).not.toContain("(survey-grade)");
+      expect(phone?.measured).toBe(false);
+    });
+
+    it("a survey verdict is the one that reads as surveyed", () => {
+      const survey = placementProvenance(
+        withEpoch(
+          { georefMethod: "exif-gps", scaleSource: "exif-gps", uncertaintyM: 5 },
+          {
+            verdict: "survey",
+            label: "RTK drone, surveyed, check targets ±0.035 m",
+            uncertaintyM: 0.0351,
+          },
+        ),
+        "asset-1",
+        "metric",
+      );
+      expect(survey?.summary).toContain("RTK drone, surveyed, check targets (survey-grade)");
+      expect(survey?.measured).toBe(true);
+    });
+
+    it("an epoch with no recorded verdict keeps the asset's own words", () => {
+      const legacy = placementProvenance(
+        withEpoch({ georefMethod: "exif-gps", scaleSource: "exif-gps", uncertaintyM: 1.4 }, null),
+        "asset-1",
+        "metric",
+      );
+      expect(legacy?.summary).toContain("Aligned to EXIF GPS");
+    });
+  });
+
   it("still calls it an estimate when no figure was recorded", () => {
     const bare = placementProvenance(
       placed({ georefMethod: "exif-gps", scaleSource: "camera-height-estimate", uncertaintyM: 10 }),

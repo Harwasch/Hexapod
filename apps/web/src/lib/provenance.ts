@@ -197,6 +197,49 @@ function placedAsset(
   return assets.find((a) => a.provenance?.georefMethod);
 }
 
+/** The three verdicts an epoch's alignment records (decision D4), in words that never round up. */
+const VERDICT_WORDS = {
+  survey: "survey-grade",
+  coarse: "coarse, not survey-grade",
+  unaligned: "unaligned",
+} as const;
+type Verdict = keyof typeof VERDICT_WORDS;
+
+/** What the web reads of `epochs.alignment` (D6): its label, verdict and uncertainty. */
+interface EpochVerdict {
+  readonly label: string;
+  readonly verdict: Verdict;
+  readonly uncertaintyM: number | null;
+}
+
+/**
+ * The recorded alignment of the epoch an asset belongs to, when it carries a verdict and a
+ * label; read defensively, since `alignment` is an open object and an M2-era epoch has none.
+ */
+function epochVerdict(site: Site | null | undefined, asset: SiteAsset): EpochVerdict | undefined {
+  const listed: unknown = (site as { epochs?: unknown } | null | undefined)?.epochs;
+  if (!Array.isArray(listed)) return undefined;
+  const epoch = (listed as Record<string, unknown>[]).find(
+    (e) => (asset.epochId != null && e.id === asset.epochId) || e.currentAssetId === asset.id,
+  );
+  const alignment = epoch?.alignment;
+  if (!alignment || typeof alignment !== "object") return undefined;
+  const { label, verdict, uncertaintyM } = alignment as Record<string, unknown>;
+  if (typeof label !== "string" || !label) return undefined;
+  if (typeof verdict !== "string" || !(verdict in VERDICT_WORDS)) return undefined;
+  return {
+    label,
+    verdict: verdict as Verdict,
+    uncertaintyM:
+      typeof uncertaintyM === "number" && Number.isFinite(uncertaintyM) ? uncertaintyM : null,
+  };
+}
+
+/** The label less its trailing "±X m", which the summary prints in the viewer's units. */
+function withoutFigure(label: string): string {
+  return label.replace(/\s*±\s*[\d.eE+-]+\s*m$/, "").replace(/,\s*$/, "");
+}
+
 export function placementProvenance(
   site: Site | null | undefined,
   assetId: string | null | undefined,
@@ -205,20 +248,32 @@ export function placementProvenance(
   const asset = placedAsset(site, assetId);
   const provenance = asset?.provenance;
   const method = provenance?.georefMethod;
-  if (!method) return null;
-  const uncertainty = provenance?.uncertaintyM;
+  if (!asset || !method) return null;
   const scale = provenance?.scaleSource ?? "unresolved";
   const aligned = method === "exif-gps" && scale === "exif-gps";
+  // The epoch's verdict outranks the asset's method (the R2 review of #52): an epoch that
+  // failed its visual alignment keeps its EXIF similarity, and "Aligned to EXIF GPS" alone
+  // would hide that it is unaligned; a phone's coarse alignment must say phone and coarse.
+  const recorded = epochVerdict(site, asset);
+  const uncertainty = recorded?.uncertaintyM ?? provenance?.uncertaintyM;
+  const how = recorded
+    ? `${withoutFigure(recorded.label)} (${VERDICT_WORDS[recorded.verdict]})`
+    : aligned
+      ? "Aligned to EXIF GPS"
+      : GEOREF_LABEL[method];
   const parts = [
-    aligned ? "Aligned to EXIF GPS" : GEOREF_LABEL[method],
+    how,
     typeof uncertainty === "number" && Number.isFinite(uncertainty)
       ? `±${formatLength(uncertainty, units)}`
       : "uncertainty not recorded",
     scaleLabel(asset),
   ];
+  const fromMeasurement = aligned || method === "arkit";
   return {
     summary: parts.join(" · "),
-    measured: aligned || method === "arkit",
+    measured: recorded
+      ? recorded.verdict === "survey" || (recorded.verdict === "coarse" && fromMeasurement)
+      : fromMeasurement,
     scaleUnresolved: scale === "unresolved",
     scaleEstimated: scale === "camera-height-estimate",
   };
