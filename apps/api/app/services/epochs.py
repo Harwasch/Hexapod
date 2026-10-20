@@ -422,6 +422,9 @@ REFERENCE_ARTIFACTS: dict[str, str] = {
 #: Verdicts best first; an epoch with no alignment recorded (an M2-era epoch) ranks last.
 VERDICT_RANK: dict[str | None, int] = {"survey": 0, "coarse": 1, "unaligned": 2, None: 3}
 
+#: A run in these states may be writing its artifacts' keys right now (`jobs.ACTIVE_STATUSES`).
+RUNS_IN_FLIGHT = (RunStatus.NOT_STARTED, RunStatus.IN_PROGRESS)
+
 #: The uncertainty a reference is taken at when nothing recorded one: the figure a capture
 #: placed by its GPS point or by hand is given (`manual_placement`'s ten metres).
 UNRECORDED_UNCERTAINTY_M = 10.0
@@ -468,22 +471,26 @@ def _reference_uncertainty(epoch: Epoch, capture: Capture | None) -> float:
     return UNRECORDED_UNCERTAINTY_M
 
 
-def _reference_keys(db: Session, job_id: uuid.UUID) -> dict[str, str]:
-    """Each reference artifact's storage key for the run, from its newest row; only the
-    names it has. A directory artifact's key is its prefix (`worker/outputs`)."""
-    rows = db.scalars(
-        select(Artifact.storage_key)
+def _reference_keys(db: Session, job_id: uuid.UUID) -> tuple[dict[str, str], datetime | None]:
+    """Each reference artifact's storage key for the run, from its newest row, and when
+    the newest of those rows was written; only the names it has. A directory artifact's
+    key is its prefix (`worker/outputs`). A retried stage writes the same key again, so
+    the newest row is the one whose bytes the bucket holds."""
+    rows = db.execute(
+        select(Artifact.storage_key, Artifact.created_at)
         .join(JobStep, Artifact.job_step_id == JobStep.id)
         .where(JobStep.job_id == job_id)
         .order_by(Artifact.created_at.desc(), Artifact.id.desc())
     ).all()
     keys: dict[str, str] = {}
-    for key in rows:
+    written: datetime | None = None
+    for key, created in rows:
         name = str(key).rsplit("/", 1)[-1]
         for role, wanted in REFERENCE_ARTIFACTS.items():
             if name == wanted and role not in keys:
                 keys[role] = str(key)
-    return keys
+                written = created if written is None else max(written, created)
+    return keys, written
 
 
 def reference_epoch(
@@ -491,8 +498,15 @@ def reference_epoch(
 ) -> ReferenceChoice | None:
     """The earlier epoch of the site a new run of `capture_id` is aligned to, or None.
 
-    Candidates: the site's `published` epochs whose producing run is complete and kept
-    every one of `REFERENCE_ARTIFACTS` (a Lane 2 run), other than the capture's own. For
+    Candidates: the site's `published` epochs whose producing run kept every one of
+    `REFERENCE_ARTIFACTS` (a Lane 2 run), other than the capture's own, when those files
+    are the ones the epoch shows. Not by the run row's current status: a phone Refine is a
+    retry of the same row (`jobs.retry_job`), and a Refine that failed leaves the epoch
+    showing its old revision, whose files are still in the bucket -- it stays the scaffold.
+    Two guards instead. A run in flight (queued or running) is skipped: it writes the same
+    keys, and must not be read mid-write. And every reference artifact's newest row must be
+    no newer than the epoch's current revision: a Refine that re-uploaded its placement and
+    then failed left a placement the shown tiles were not made from. For
     a re-run of an epoch, only epochs that joined the site before it (a lower ordinal):
     the epoch that made the frame is never aligned onto a later one that was aligned to
     it, so errors do not go round in a circle.
@@ -511,7 +525,7 @@ def reference_epoch(
         .where(
             Epoch.site_id == site_id,
             Epoch.status == EpochStatus.PUBLISHED.value,
-            Job.status == RunStatus.COMPLETE,
+            Job.status.not_in(RUNS_IN_FLIGHT),
         )
     )
     if capture_id is not None:
@@ -521,8 +535,18 @@ def reference_epoch(
     candidates: list[ReferenceChoice] = []
     for epoch in db.scalars(statement):
         assert epoch.job_id is not None
-        keys = _reference_keys(db, epoch.job_id)
+        keys, written = _reference_keys(db, epoch.job_id)
         if set(keys) != set(REFERENCE_ARTIFACTS):
+            continue
+        shown = current_asset(db, epoch.id)
+        if shown is None or written is None or written > shown.created_at:
+            log.info(
+                "reference: epoch %s is not a reference: %s",
+                epoch.id,
+                "it shows no tiles"
+                if shown is None
+                else "its run's files are newer than the tiles it shows (a Refine that failed)",
+            )
             continue
         capture = db.get(Capture, epoch.capture_id) if epoch.capture_id is not None else None
         candidates.append(

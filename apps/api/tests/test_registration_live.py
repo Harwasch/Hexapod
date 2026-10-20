@@ -91,7 +91,9 @@ def _keep(db: Session, storage: S3Storage, job: Job, workdir: Workdir) -> None:
             storage.upload_file(f"{key}/{relative}", member, "application/octet-stream")
         if not source.is_dir():
             storage.upload_file(key, source, "application/json")
-        db.add(Artifact(job_step_id=step.id, kind=kind_for(name), storage_key=key))
+        # Rowed before the register, as the worker uploads a stage's outputs as it ends.
+        db.add(Artifact(job_step_id=step.id, kind=kind_for(name), storage_key=key,
+                        created_at=job.created_at))  # fmt: skip
     db.commit()
 
 

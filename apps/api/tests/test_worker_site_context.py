@@ -53,7 +53,10 @@ def keep_reference_artifacts(
     db: Session, storage: S3Storage, job_id: uuid.UUID, *, skip: tuple[str, ...] = ()
 ) -> None:
     """The run's frames, poses, placement and georef, rowed and uploaded as the worker
-    leaves a Lane 2 run's outputs (`worker/outputs.upload_artifact`)."""
+    leaves a Lane 2 run's outputs (`worker/outputs.upload_artifact`). Rowed when the run
+    started, as the worker rows them before it registers the run."""
+    job = db.get(Job, job_id)
+    assert job is not None
     for ordinal, (name, stage) in enumerate(STAGES.items()):
         if name in skip:
             continue
@@ -74,7 +77,14 @@ def keep_reference_artifacts(
         else:
             for member, data in members.items():
                 storage.put_object(f"{key}/{member}", data, "application/octet-stream")
-        db.add(Artifact(job_step_id=step.id, kind=kind_for(name), storage_key=key))
+        db.add(
+            Artifact(
+                job_step_id=step.id,
+                kind=kind_for(name),
+                storage_key=key,
+                created_at=job.created_at,
+            )
+        )
     db.commit()
 
 
@@ -360,3 +370,95 @@ def test_a_re_run_never_aligns_to_its_own_or_a_later_epoch(
     assert later is not None
     chosen = _reference(db, first.site_id, later)
     assert chosen is not None and chosen.epoch_id == one.id
+
+
+# --- a Refine of the reference epoch (same job row, same keys) -----------------------------
+
+
+def _refine(
+    db: Session, storage: S3Storage, epoch: Epoch, status: RunStatus, *, placed: bool
+) -> None:
+    """A Refine of the reference's run (`jobs.retry_job` on the same row, resuming at
+    `train`): the job goes back to `status`, and -- when the Refine got as far as `place`
+    -- a new `placement.json` row is uploaded over the same key, as `worker/outputs` does."""
+    assert epoch.job_id is not None
+    job = db.get(Job, epoch.job_id)
+    assert job is not None
+    job.status = status
+    if placed:
+        step = db.scalars(
+            select(JobStep).where(JobStep.job_id == job.id, JobStep.stage_id == "place")
+        ).one()
+        key = artifact_key(job.id, "place", "placement.json")
+        storage.put_object(key, b'{"refined": true}', "application/json")
+        db.add(Artifact(job_step_id=step.id, kind=kind_for("placement.json"), storage_key=key))
+    db.commit()
+
+
+@pytest.mark.parametrize("status", [RunStatus.NOT_STARTED, RunStatus.IN_PROGRESS])
+def test_a_refine_in_flight_is_not_read_mid_write(
+    db: Session, storage: S3Storage, tmp_path: Path, status: RunStatus
+) -> None:
+    first, _epoch = first_epoch(db, storage, tmp_path)
+    assert first.site_id is not None
+    _refine(db, storage, _epoch, status, placed=False)
+    assert _reference(db, first.site_id, second_capture(db, first.site_id)) is None
+
+
+def test_a_refine_that_failed_leaves_the_epoch_the_reference(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """The Refine failed before it re-uploaded anything: the bucket still holds the files
+    the epoch's shown revision was made from, so it is still the site's scaffold (one
+    fixed reference; a later epoch must not silently align to another, or to none)."""
+    first, epoch = first_epoch(db, storage, tmp_path, alignment={"verdict": "coarse"})
+    assert first.site_id is not None
+    _refine(db, storage, epoch, RunStatus.ERROR, placed=False)
+    chosen = _reference(db, first.site_id, second_capture(db, first.site_id))
+    assert chosen is not None and chosen.epoch_id == epoch.id
+
+
+def test_a_refine_that_failed_after_replacing_the_placement_is_not_a_reference(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """It got as far as `place` and then failed: the placement under the key is the new
+    training's, and the epoch still shows the old tiles. Aligning to that pair would put
+    the new epoch about a placement nobody is shown."""
+    first, epoch = first_epoch(db, storage, tmp_path)
+    assert first.site_id is not None
+    _refine(db, storage, epoch, RunStatus.ERROR, placed=True)
+    assert _reference(db, first.site_id, second_capture(db, first.site_id)) is None
+
+
+def test_a_refine_that_succeeded_is_the_reference_with_its_new_files(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """The same run row, resumed at `train`, uploads a new placement over the same key and
+    registers a new revision of the epoch: the epoch is the reference again, its files the
+    Refine's."""
+    from app.worker import registration
+    from app.worker.carry import CarryPlan
+    from tests.test_asset_scale import _document, _registration
+
+    first, epoch = first_epoch(db, storage, tmp_path, alignment={"verdict": "coarse"})
+    assert first.site_id is not None and epoch.job_id is not None
+    _refine(db, storage, epoch, RunStatus.IN_PROGRESS, placed=True)
+    job = db.get(Job, epoch.job_id)
+    assert job is not None
+    job.status = RunStatus.COMPLETE
+    db.commit()
+    live = registration.live_tileset_url(db, first)
+    registration.register(
+        db, storage, capture=first, job_id=job.id,
+        registration=_registration(tmp_path, _document()), tiles_stage_id="package",
+        published=registration.Published(
+            tileset=f"https://cdn.example.com/twin-worker-test/runs/{job.id}/refined/tileset.json",
+            thumbnail=None, coverage=None, carry=CarryPlan(based_on=live),
+        ),
+    )  # fmt: skip
+    capture = second_capture(db, first.site_id)
+    chosen = _reference(db, first.site_id, capture)
+    assert chosen is not None and chosen.epoch_id == epoch.id
+    document = seeded(db, storage, capture, tmp_path)
+    placement = tmp_path / "site_context" / document["reference"]["placement"]
+    assert json.loads(placement.read_text()) == {"refined": True}
