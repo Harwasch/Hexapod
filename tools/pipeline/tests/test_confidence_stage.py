@@ -453,9 +453,20 @@ def test_the_demo_runs_and_reports_the_rescan(
     text = capsys.readouterr().out
     report = json.loads((tmp_path / "demo" / "report.json").read_text())
     names = [row["epoch"] for row in report["epochs"]]
-    assert names == ["e1 (south arc)", "e2 (re-scan)", "e2 if unaligned"]
-    unaligned = report["epochs"][2]
+    assert names == [
+        "e1 (south arc)",
+        "e2 (re-scan)",
+        "e2 if unaligned",
+        "e2 aligned to a GPS-framed e1",
+        "e2 if GPS only",
+    ]
+    unaligned, framed, gps_only = report["epochs"][2:]
     assert unaligned["weakShare"] == 1.0 and "alignment" in unaligned["reasons"]
+    # The cap is the frame's: aligned as well to a GPS-placed frame is not capped at all...
+    assert framed["weakShare"] == report["epochs"][1]["weakShare"]
+    assert "alignment" not in framed["reasons"]
+    # ...and a GPS-only later epoch is.
+    assert gps_only["weakShare"] == 1.0 and "alignment" in gps_only["reasons"]
     change = report["rescan"]
     assert change["strongAfterRescan"] > 0 and change["stillWeak"] > 0
     assert change["coveredByE2"] <= change["weakInE1"]

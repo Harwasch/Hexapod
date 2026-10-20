@@ -8,8 +8,10 @@ not run). Each goes through the shipped `quality -> place -> confidence -> packa
 LocalRunner, CPU only. Then e2's grid is made again as if its alignment had failed
 (unaligned, +/-10 m) to show the cap. It prints one row per epoch -- level, cells, weak
 share, the reasons, the cap, the root tile's `confidenceMin` -- and what the re-scan did
-to e1's weak cells at the coarser of the two levels, with a map of each. Both tilesets
-are written under `--out` for a viewer, and `report.json` beside them.
+to e1's weak cells at the coarser of the two levels, with a map of each. Two more rows show
+the cap is the frame's: e2 aligned as well to an e1 consumer GPS put +/-5 m from the globe
+(not capped), and e2 as a later epoch placed by its GPS alone (capped, weak everywhere).
+Both tilesets are written under `--out` for a viewer, and `report.json` beside them.
 
 **Every capture is synthetic.** It shows the stage working against a scene whose answers
 are known; it is not a measurement of a real capture, and no threshold here was
@@ -241,8 +243,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     unaligned = _confidence_again(
         out / "e2-unaligned", e2, confidence_scene.alignment_of(10.0, "unaligned")
     )
+    # Aligned just as well, but to an epoch 1 that consumer GPS put +/-5 m from the globe:
+    # +/-5 m on the globe, +/-0.062 m from the site frame -- and the cap is the frame's.
+    gps_framed = _confidence_again(
+        out / "e2-gps-framed",
+        e2,
+        confidence_scene.alignment_of(5.0004, frame_relative_m=0.062),
+    )
+    # A later epoch nobody could align, placed by its EXIF GPS alone (+/-5 m).
+    gps_only = _confidence_again(
+        out / "e2-gps-only", e2, confidence_scene.alignment_of(5.0, "unaligned")
+    )
     seconds = time.perf_counter() - started
-    table = rows({"e1 (south arc)": e1, "e2 (re-scan)": e2, "e2 if unaligned": unaligned})
+    table = rows(
+        {
+            "e1 (south arc)": e1,
+            "e2 (re-scan)": e2,
+            "e2 if unaligned": unaligned,
+            "e2 aligned to a GPS-framed e1": gps_framed,
+            "e2 if GPS only": gps_only,
+        }
+    )
     change = rescan(_grid(e1)[1], _grid(e2)[1])
     text = report(table, change, seconds)
     sys.stdout.write(text + "\n")
@@ -258,6 +279,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "e1": _grid(e1)[0],
                     "e2": _grid(e2)[0],
                     "e2-unaligned": _grid(unaligned)[0],
+                    "e2-gps-framed": _grid(gps_framed)[0],
+                    "e2-gps-only": _grid(gps_only)[0],
                 },
             },
             indent=1,
