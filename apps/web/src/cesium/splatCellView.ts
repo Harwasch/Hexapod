@@ -51,6 +51,7 @@ import { AGE_RAMP, CONFIDENCE_RAMP, type Rgb } from "@/lib/cellRamps";
 
 import {
   addColorPart,
+  colorChainOf,
   hasColorPart,
   removeColorPart,
   type ColorPrimitive,
@@ -62,6 +63,9 @@ import type { SplatPrimitive, SplatShaderBuilder } from "./splatInternals";
 import { COMPANION_SLOT_VECS, companionSlots, companionSlotsGlsl } from "./splatSlots";
 
 export type CellViewMode = "confidence" | "data-age";
+
+/** No companions: one array, so its identity says nothing changed. */
+const NO_FILLS: readonly unknown[] = [];
 export { AGE_RAMP, CONFIDENCE_RAMP };
 
 /** The shader's mode numbers. */
@@ -314,11 +318,23 @@ export class SplatCellView implements SplatColorPart {
   #identity: unknown;
   #fillsOf: unknown;
   #fills: unknown[];
+  readonly #fillSet: (() => ReadonlySet<unknown>) | undefined;
+  #fillsFrom: unknown;
   /** What is drawn; a mode without its texture yet draws the photo. */
   mode: CellViewMode = "confidence";
 
-  /** `rootOf`: the root tile's computed transform now (`T`). */
-  constructor(grid: CellGrid, gpu: CellViewGpu, rootOf: () => Mat4 | undefined) {
+  /**
+   * `rootOf`: the root tile's computed transform now (`T`). `fills`: the tilesets drawn grey,
+   * as having no capture evidence -- by default every companion (an inferred layer); under a
+   * view rule, whose companions are the site's other dates, its inferred layers alone.
+   */
+  constructor(
+    grid: CellGrid,
+    gpu: CellViewGpu,
+    rootOf: () => Mat4 | undefined,
+    fills?: () => ReadonlySet<unknown>,
+  ) {
+    this.#fillSet = fills;
     this.grid = grid;
     this.#gpu = gpu;
     this.#rootOf = rootOf;
@@ -384,6 +400,10 @@ export class SplatCellView implements SplatColorPart {
   install(primitive: CellViewPrimitive): boolean {
     if (this.#primitive === primitive && hasColorPart(primitive, this)) return true;
     if (this.#primitive && this.#primitive !== primitive) this.uninstall();
+    // One cell view a primitive: two would declare the same uniforms (a date's own view and a
+    // view rule's Data age on one primitive). The one there keeps it.
+    if (colorChainOf(primitive)?.parts.some((p) => p.colorFunction === this.colorFunction))
+      return false;
     if (!addColorPart(primitive, this)) return false;
     this.#primitive = primitive;
     this.#frame = undefined;
@@ -478,11 +498,12 @@ export class SplatCellView implements SplatColorPart {
   #fillSlots(): unknown[] {
     const primitive = this.#primitive;
     const slots = primitive?._tileSlots;
-    const companions = primitive?.companions;
-    const key = slots && companions && companions.length > 0 ? slots : undefined;
-    if (key !== this.#fillsOf) {
+    const fills = this.#fillSet?.() ?? primitive?.companions ?? NO_FILLS;
+    const key = slots && [...fills].length > 0 ? slots : undefined;
+    if (key !== this.#fillsOf || fills !== this.#fillsFrom) {
       this.#fillsOf = key;
-      const owners = new Set<unknown>(key ? companions : []);
+      this.#fillsFrom = fills;
+      const owners = new Set<unknown>(key ? fills : []);
       const slots = companionSlots(primitive, owners);
       // More layer ranges than the uniform holds: the last range is stretched over all those
       // past it. Fails closed -- an inferred splat is never given a measured colour; scan

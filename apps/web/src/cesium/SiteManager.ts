@@ -30,6 +30,7 @@ import {
   deviceSplatCeiling,
   isHandheld,
 } from "@/lib/detail";
+import type { ViewRule, ViewRuleEnd } from "@/lib/compositor";
 import {
   epochOptions,
   frameAnchor,
@@ -42,6 +43,7 @@ import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 
 import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
 import type { SiteLoad } from "@/state/sites";
+import { useViewRule } from "@/state/viewRule";
 import type { Viewport } from "@/missions/framing";
 
 import { prefetchScanDestination } from "./scanView/ScanRendererHost";
@@ -56,6 +58,7 @@ import { withTimeout } from "@/lib/timeout";
 import { timed } from "@/lib/timing";
 
 import type { CameraController, GlideHandle } from "./CameraController";
+import type { CompositorHandle } from "./compositorSession";
 import type { ClippingManager } from "./ClippingManager";
 import { samePose, type ArrivalPose } from "./flightRetarget";
 import { plausible, type GlidePose, type PoseGround } from "./glide";
@@ -287,6 +290,11 @@ interface ActiveSite {
    * one date is drawn. `epochId` is kept meanwhile: it is the date shown again after.
    */
   compare: CompareDates | null;
+  /**
+   * A per-cell view rule (`setViewRule`; ADR 0017): the site's dates up to the one chosen drawn
+   * as one, each cell from the date the rule picks; null while one date is drawn.
+   */
+  rule: { rule: ViewRule; session?: CompositorHandle } | null;
   handles: Map<string, AssetHandle>;
   /** Radius of the authored footprint (at least MIN_SITE_RADIUS_M), the yardstick for engagement. */
   radius: number;
@@ -576,8 +584,10 @@ export class SiteManager {
       if (handle.placement) handle.placement.serial += 1;
       this.placeTileset(entry, handle, tileset);
     }
-    // Two dates compared stay while both are still offered, each drawn as its current model.
+    // Two dates compared stay while both are still offered, each drawn as its current model;
+    // a view rule while the dates can still be composed.
     this.keepCompare(entry);
+    this.keepRule(entry);
     this.restartLoad(entry);
     void this.showRepresentation(entry, entry.representation);
     this.events.emit("site-dates", entry.site.id);
@@ -712,6 +722,7 @@ export class SiteManager {
       epochs: siteEpochs(site),
       epochId: null,
       compare: null,
+      rule: null,
       handles: new Map(),
       radius: Math.max(boundingRadiusM(site.boundary), MIN_SITE_RADIUS_M),
       engaged: false,
@@ -746,6 +757,7 @@ export class SiteManager {
     // Only the primary site's dates are compared: the divider and its controls are its.
     if (previous && this.endCompare(previous))
       void this.showRepresentation(previous, previous.representation);
+    if (previous) this.endRule(previous);
     this.setView(entry, entry.engaged, this.farFor(entry));
     this.performance.resetBenchmark();
     this.events.emit("site-active", siteId);
@@ -762,6 +774,8 @@ export class SiteManager {
       for (const handle of entry.handles.values()) this.disposeHandle(handle);
       this.clipping.setFootprint(id, null);
       this.loaded.delete(id);
+      // After the delete: an unloaded site is not drawn again (its primitives are let go).
+      this.endRule(entry);
       this.endCompare(entry);
       if (this.loads.delete(id)) this.events.emit("site-load", { siteId: id, load: null });
       if (this.flightSiteId === id) this.setFlightSite(null);
@@ -1343,8 +1357,9 @@ export class SiteManager {
     // The date chosen stays: Splat / Mesh switches what is drawn of it, not when.
     this.active.pinnedAssetId = null;
     this.events.emit("representation", { siteId: this.active.site.id, representation });
-    // Compared in the new representation too, while both dates have it.
+    // Compared in the new representation too, while both dates have it; a rule needs splats.
     this.keepCompare(this.active);
+    this.keepRule(this.active);
     this.restartLoad(this.active);
     await this.showRepresentation(this.active, representation);
   }
@@ -1390,6 +1405,7 @@ export class SiteManager {
     this.active.epochId = ofEpoch ? asset.epochId : this.active.epochId;
     this.active.pinnedAssetId = ofEpoch ? null : assetId;
     this.endCompare(this.active);
+    this.endRule(this.active);
     if (asset.representation !== this.active.representation) {
       this.active.representation = asset.representation;
       this.events.emit("representation", {
@@ -1425,6 +1441,8 @@ export class SiteManager {
       : active.compare === null;
     if (same) return;
     active.compare = dates ? { left: dates.left, right: dates.right } : null;
+    // A swipe and a view rule are one or the other: either ends the one before.
+    if (dates) this.endRule(active, "compare");
     this.events.emit("compare-dates", { siteId: active.site.id, dates: active.compare });
     // A date the comparison has to load is the site's model loading again: the load pill says
     // so until both are in (`watchFirstTiles`), not only for a first visit.
@@ -1501,6 +1519,8 @@ export class SiteManager {
   ): SiteAsset[] {
     const pair = this.comparedAssets(entry, entry.compare, representation);
     if (pair) return [pair.left, pair.right];
+    const composed = entry.rule?.session?.assets(representation);
+    if (composed) return composed;
     const asset = this.pickAsset(entry, representation);
     return asset ? [asset] : [];
   }
@@ -1519,6 +1539,68 @@ export class SiteManager {
     if (pair?.left.id === asset.id) return SplitDirection.LEFT;
     if (pair?.right.id === asset.id) return SplitDirection.RIGHT;
     return SplitDirection.NONE;
+  }
+
+  /**
+   * Draws the primary site's dates as one under a per-cell view rule (ADR 0017; design M4-6
+   * W5b): the frame anchor's splat primitive draws every date up to the one chosen ("As of",
+   * `setEpoch`) that shares its placement, as companions in its one sort, and each cell of the
+   * site lattice keeps only the date the rule picks (`compositorSession.ts`, loaded on demand).
+   * Null draws the date chosen alone again. Off by default; it ends Compare › Dates and is
+   * ended by it. Refused off CesiumJS, without two dates, or for anything but splats; ended,
+   * and said, when that changes or a Living Survey rig takes the scan.
+   */
+  async setViewRule(rule: ViewRule | null): Promise<void> {
+    const active = this.active;
+    if (!active) return;
+    if (!rule) return void this.endRule(active);
+    if (!active.rule) {
+      const { ruleAssets, startCompositor } = await import("./compositorSession");
+      const cesium = () => this.splatRenderer === "cesium";
+      if (this.active !== active) return;
+      if (!active.rule) {
+        // Refused when the dates cannot be drawn as one here.
+        if (!ruleAssets(active, active.representation, cesium())) return;
+        active.rule = { rule };
+        this.endCompare(active);
+        active.rule.session = startCompositor({
+          scene: this.scene,
+          entry: active,
+          cesium,
+          end: (reason) => this.endRule(active, reason),
+        });
+        this.restartLoad(active);
+        void this.showRepresentation(active, active.representation);
+      }
+    }
+    if (!active.rule) return;
+    active.rule.rule = rule;
+    useViewRule.setState({ active: { siteId: active.site.id, rule }, ended: null });
+    this.scene.requestRender();
+  }
+
+  /**
+   * Ends a site's view rule, saying so (and why, when it ended on its own), and draws a loaded
+   * site's date chosen again; whether it had one.
+   */
+  private endRule(entry: ActiveSite, reason?: ViewRuleEnd): boolean {
+    const rule = entry.rule;
+    if (!rule) return false;
+    entry.rule = null;
+    rule.session?.dispose();
+    useViewRule.setState({ active: null, ended: reason ?? null });
+    if (this.loaded.get(entry.site.id) === entry)
+      void this.showRepresentation(entry, entry.representation);
+    return true;
+  }
+
+  /** Ends a site's view rule once its dates can no longer be composed. */
+  private keepRule(entry: ActiveSite): boolean {
+    return (
+      entry.rule !== null &&
+      !entry.rule.session?.assets(entry.representation) &&
+      this.endRule(entry, "changed")
+    );
   }
 
   /**
@@ -1590,6 +1672,11 @@ export class SiteManager {
   ): Promise<void> {
     const asset = this.pickAsset(active, representation);
     const assets = this.drawnAssets(active, representation);
+    // Under a rule each date is loaded (hidden) to learn whether it shares the frame anchor's
+    // placement; one that does is drawn from then on (`followAnchor`).
+    if (active.rule)
+      for (const option of epochOptions(active.epochs, active.site.assets, representation))
+        if (!active.handles.has(option.asset.id)) void this.ensureTileset(active, option.asset);
     for (const handle of active.handles.values()) {
       if (!handle.tileset || assets.some((a) => a.id === handle.asset.id)) continue;
       handle.tileset.show = false;
@@ -1973,6 +2060,8 @@ export class SiteManager {
     for (const { handle } of this.handles()) {
       if (!handle.tileset?.show || !handle.splats) continue;
       const primitive = splatTilesetOf(handle.tileset).gaussianSplatPrimitive;
+      // A date another primitive draws (a view rule's companion) is counted there, once.
+      if (primitive?.drawnBy) continue;
       // Live slots, not the slot range: hidden tiles stay resident but are not drawn.
       total += primitive?._liveSplats ?? primitive?._numSplats ?? 0;
     }
@@ -2082,6 +2171,7 @@ export class SiteManager {
     const decided = (): void => {
       handle.followPending = false;
       this.events.emit("tilesets", this.activeTilesetLabels());
+      if (entry.rule) void this.showRepresentation(entry, entry.representation);
     };
     const alone = async (message: string): Promise<void> => {
       log.warn(message, { asset: handle.asset.id, anchor: anchor.id });
@@ -2799,11 +2889,13 @@ export class SiteManager {
     // Two dates side by side are CesiumJS's split: under a renderer that draws the scan itself
     // the site shows its one date again, which that renderer draws (loaded if it was not),
     // and its load record is that date's, not a compared one's that failed.
-    for (const entry of this.loaded.values())
+    for (const entry of this.loaded.values()) {
       if (this.keepCompare(entry)) {
         this.restartLoad(entry);
         void this.showRepresentation(entry, entry.representation);
       }
+      this.keepRule(entry);
+    }
     for (const { entry, handle } of this.handles()) {
       const tileset = handle.tileset;
       if (!tileset || handle.asset.representation !== "gaussian-splat") continue;

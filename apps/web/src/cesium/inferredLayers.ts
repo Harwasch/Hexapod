@@ -280,7 +280,10 @@ export function attachInferredLayers(
   let host: CompanionPrimitive | undefined;
   const sync = (): void => {
     const wanted = style !== "hide" && drawn();
-    const primitive: CompanionPrimitive | undefined = splatTilesetOf(parent).gaussianSplatPrimitive;
+    const scan: CompanionPrimitive | undefined = splatTilesetOf(parent).gaussianSplatPrimitive;
+    // A scan another primitive draws (a date under a view rule) has its layers drawn there,
+    // and highlighted there by the rule (splatCompositor.ts): one highlight a primitive.
+    const primitive = scan?.drawnBy ?? scan;
     // One sort with the scan's splats, when its primitive can (see the file comment).
     const together = wanted && layers.length > 0 && drawsCompanions(primitive);
     const next = together ? primitive : undefined;
@@ -316,7 +319,7 @@ export function attachInferredLayers(
         layers.map((l) => l.tileset),
         parent,
       );
-      companionHighlight.install(host);
+      if (host === scan) companionHighlight.install(host);
     }
   };
   const offUpdate = scene.preUpdate.addEventListener(sync);

@@ -50,6 +50,18 @@ export const VIEW_RULES: readonly { value: ViewRule; label: string; hint: string
   { value: "data-age", label: "Data age", hint: "Latest, coloured by each cell's date" },
 ];
 
+/** Why a rule ended without being turned off (SiteManager `setViewRule`). */
+export type ViewRuleEnd = "compare" | "changed" | "living" | "unsupported";
+
+/** What the control says of it. */
+export const VIEW_RULE_ENDED: Record<ViewRuleEnd, string> = {
+  compare: "Per-cell dates ended: Compare › Dates was turned on (it is one or the other)",
+  changed: "Per-cell dates ended: the dates can no longer be drawn as one here",
+  living:
+    "Per-cell dates ended: a Living Survey rig moves this scan, and its motion needs the scan drawn on its own",
+  unsupported: "Per-cell dates ended: this CesiumJS build cannot draw them",
+};
+
 /** A cell no date owns: nothing is drawn there under a rule. */
 export const NO_OWNER = 255;
 /** The most cells the owner plane holds (its texture, `cesium/splatCompositor.ts`). */
@@ -316,9 +328,14 @@ function multiply(a: readonly number[], b: readonly number[]): number[] {
 /**
  * The boxes of a tileset's leaf tiles with content, in its root's frame (each child's
  * `transform` composed down from the root, the root's own left out: it is the frame), as
- * axis-aligned boxes in x and y. What a date without a grid covers (`tile-bounds`).
+ * axis-aligned boxes in x and y. What a date without a grid covers (`tile-bounds`). `frame`
+ * takes the root's frame to the plane's (column-major), for a tileset whose root frame is not
+ * the host's (an inferred layer packed in its own).
  */
-export function leafTileBoxes(root: TilesetNode | undefined): TileBox[] {
+export function leafTileBoxes(
+  root: TilesetNode | undefined,
+  frame: readonly number[] = IDENTITY,
+): TileBox[] {
   const out: TileBox[] = [];
   const walk = (node: TilesetNode, m: readonly number[]): void => {
     const children = node.children ?? [];
@@ -355,7 +372,7 @@ export function leafTileBoxes(root: TilesetNode | undefined): TileBox[] {
       maxY: Math.max(...ys),
     });
   };
-  if (root) walk(root, IDENTITY);
+  if (root) walk(root, frame);
   return out;
 }
 

@@ -217,6 +217,32 @@ describe("inferred layers", () => {
     dispose();
   });
 
+  it("is drawn by the primitive that draws its scan, when another does (a view rule's)", async () => {
+    const { parent, child, scene, preUpdate, primitive } = fixture();
+    const own = hostPrimitive();
+    const host = hostPrimitive();
+    (own as { drawnBy?: unknown }).drawnBy = host;
+    (parent as unknown as { gaussianSplatPrimitive: unknown }).gaussianSplatPrimitive = own;
+    const dispose = attachInferredLayers(parent, scene, "asset-8", () => Promise.resolve(child));
+    await settle();
+    useSettings.getState().set({ inferredStyle: "highlight" });
+    preUpdate.raiseEvent();
+    expect(host.companions).toEqual([child]);
+    expect(own.companions).toEqual([]);
+    expect((primitive as { drawnBy?: unknown }).drawnBy).toBe(host);
+    // That primitive's rule highlights them (splatCompositor.ts): no second highlight there.
+    expect(colorChainOf(host)).toBeUndefined();
+    // The rule ends: back to the scan's own primitive, highlighted by its own part.
+    (own as { drawnBy?: unknown }).drawnBy = undefined;
+    preUpdate.raiseEvent();
+    expect(host.companions).toEqual([]);
+    expect(own.companions).toEqual([child]);
+    expect((primitive as { drawnBy?: unknown }).drawnBy).toBe(own);
+    expect(colorChainOf(own)?.parts.some((p) => p instanceof CompanionHighlight)).toBe(true);
+    dispose();
+    useSettings.getState().set({ inferredStyle: "hide" });
+  });
+
   it("draws itself, as before, beside a scan whose primitive cannot sort it in", async () => {
     const { parent, child, scene, preUpdate, primitive } = fixture();
     const host = hostPrimitive();
