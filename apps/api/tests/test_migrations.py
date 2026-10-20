@@ -431,6 +431,16 @@ def test_0032_backfills_a_frame_and_an_epoch_for_every_registered_site(
             )
             _raw_job(connection, b_capture, finished=now - timedelta(hours=2))
             b_newest = _raw_job(connection, b_capture, finished=now - timedelta(hours=1))
+            # B's splat had a validity window somebody set (PATCH allowed it on any asset
+            # before 0032). On an epoch asset `valid_to` means superseded, so it stays legacy.
+            b_windowed = _raw_splat(
+                connection, b_site, "https://cdn.example.com/b/tileset.json", now
+            )
+            window_end = now + timedelta(days=30)
+            connection.execute(
+                text("UPDATE assets SET valid_to = :t WHERE id = CAST(:a AS uuid)"),
+                {"t": window_end, "a": b_windowed},
+            )
             # (C) a seeded demo-ranch site, (D) captureId but no registration, (E) a
             # captureId that is not a uuid.
             c_site = _raw_site(connection, "site-c", {"origin": "demo-ranch"})
@@ -464,7 +474,7 @@ def test_0032_backfills_a_frame_and_an_epoch_for_every_registered_site(
         assets = {
             str(row.id): row
             for row in connection.execute(
-                text("SELECT id, epoch_id, observed_at, source_kind FROM assets")
+                text("SELECT id, epoch_id, observed_at, valid_to, source_kind FROM assets")
             ).all()
         }
         same_footprint = connection.execute(
@@ -504,6 +514,10 @@ def test_0032_backfills_a_frame_and_an_epoch_for_every_registered_site(
     assert b_epoch.observed_at == now - timedelta(days=3)
     assert str(b_epoch.job_id) == b_newest
     assert b_epoch.platform == "unknown"
+    # Its window is kept as it was, and the asset is not made the epoch's: linked, its
+    # `valid_to` would read as superseded and the splat would vanish from `SiteRead`.
+    assert assets[b_windowed].epoch_id is None
+    assert assets[b_windowed].valid_to == window_end
     assert (frames[b_site].height, frames[b_site].epsg) == (0.0, 32756)
     for legacy in (c_site, d_site, e_site):
         assert legacy not in frames and legacy not in epochs
@@ -582,3 +596,4 @@ def test_0032_downgrade_keeps_every_asset_and_its_source(
         assert after == before
     finally:
         command.upgrade(alembic_config, "head")
+

@@ -218,7 +218,10 @@ def upgrade() -> None:
         """
     )
     # The site's first splat by creation -- the one the worker repointed until now, the
-    # rule of `registration.splat_asset` -- is its epoch's asset.
+    # rule of `registration.splat_asset` -- is its epoch's asset. Unless it has a
+    # `valid_to`: before 0032 that was a validity window anyone could PATCH, and on an
+    # epoch asset it means "superseded", which would hide the splat. Such a splat stays
+    # legacy with its window, and the epoch's next run gives it its first revision.
     op.execute(
         """
         UPDATE assets a
@@ -231,7 +234,7 @@ def upgrade() -> None:
             ORDER BY x.site_id, x.created_at, x.id
         ) first_splat
         JOIN epochs e ON e.site_id = first_splat.site_id AND e.ordinal = 1
-        WHERE a.id = first_splat.id
+        WHERE a.id = first_splat.id AND a.valid_to IS NULL
         """
     )
     op.execute("DROP TABLE IF EXISTS _m0032_registered")
