@@ -1,10 +1,15 @@
 import { create } from "zustand";
 
-/** A change map asked for: of which site, from the older date to the newer (epoch ids). */
+/**
+ * A change map asked for: of which site, from the older date to the newer (epoch ids), and the
+ * two as Compare › Dates had them either side of the divider, so the panel shows them again.
+ */
 export interface ChangeDrapeRequest {
   siteId: string;
   from: string;
   to: string;
+  left: string;
+  right: string;
 }
 
 /**

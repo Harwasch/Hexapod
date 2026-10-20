@@ -24,6 +24,7 @@ import { clearHistory, undo } from "@/state/history";
 import { useSettings, type SplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
 import { useUi } from "@/state/ui";
+import { useViewRule } from "@/state/viewRule";
 
 import { A1, A2, E1, E2, SITE_ID, epoch, splat, twoEpochSite } from "./epochFixtures";
 
@@ -166,7 +167,7 @@ describe("the offer in Compare › Dates", () => {
     expect(changeSwitch()).toBeEnabled();
     expect(screen.queryByTestId("change-drape")).toBeNull();
     await userEvent.click(changeSwitch());
-    expect(useChangeDrape.getState().request).toEqual({
+    expect(useChangeDrape.getState().request).toMatchObject({
       siteId: SITE_ID,
       from: E1.id,
       to: E2.id,
@@ -175,7 +176,11 @@ describe("the offer in Compare › Dates", () => {
     await userEvent.click(changeSwitch());
     expect(useChangeDrape.getState().request).toBeNull();
     undo();
-    expect(useChangeDrape.getState().request).toEqual({ siteId: SITE_ID, from: E1.id, to: E2.id });
+    expect(useChangeDrape.getState().request).toMatchObject({
+      siteId: SITE_ID,
+      from: E1.id,
+      to: E2.id,
+    });
   });
 
   it("says why it is not offered when a date has no height surface", () => {
@@ -213,15 +218,109 @@ describe("the offer in Compare › Dates", () => {
     // Newer on the left, older on the right: still from the older to the newer.
     expect(screen.getByLabelText("Left of the divider")).toHaveValue(S3.id);
     await userEvent.click(changeSwitch());
-    expect(useChangeDrape.getState().request).toEqual({ siteId: SITE_ID, from: S2.id, to: S3.id });
+    expect(useChangeDrape.getState().request).toMatchObject({
+      siteId: SITE_ID,
+      from: S2.id,
+      to: S3.id,
+    });
     await userEvent.selectOptions(screen.getByLabelText("Right of the divider"), S1.id);
-    expect(useChangeDrape.getState().request).toEqual({ siteId: SITE_ID, from: S1.id, to: S3.id });
+    expect(useChangeDrape.getState().request).toMatchObject({
+      siteId: SITE_ID,
+      from: S1.id,
+      to: S3.id,
+    });
     await userEvent.selectOptions(screen.getByLabelText("Left of the divider"), E4.id);
     expect(useChangeDrape.getState().request).toBeNull();
     expect(changeSwitch()).toHaveAttribute("aria-checked", "false");
     expect(screen.getByTestId("compare-change-not-offered")).toHaveTextContent(
       "Not offered: Dec 1, 2026 has no height surface measured",
     );
+  });
+});
+
+describe("its dates", () => {
+  const S3 = epoch("e3", {
+    ordinal: 3,
+    observedAt: "2026-09-01T15:00:00Z",
+    currentAssetId: "a3",
+    surface,
+  } as unknown as Partial<Epoch>);
+  const A3 = splat("a3", { epochId: "e3", createdAt: "2026-09-02T00:00:00Z" });
+  const three = () => twoEpochSite({ epochs: [S1, S2, S3], assets: [A1, A2, A3] });
+
+  it("are the ones the panel shows when it opens again", async () => {
+    const { unmount } = show(three());
+    await userEvent.selectOptions(screen.getByLabelText("Left of the divider"), S1.id);
+    await userEvent.click(changeSwitch());
+    expect(useChangeDrape.getState().request).toMatchObject({
+      siteId: SITE_ID,
+      from: S1.id,
+      to: S3.id,
+    });
+    // The panel closes (its choice goes with it) and opens again: it shows what is drawn.
+    unmount();
+    show(three());
+    expect(screen.getByLabelText("Left of the divider")).toHaveValue(S1.id);
+    expect(screen.getByLabelText("Right of the divider")).toHaveValue(S3.id);
+    expect(changeSwitch()).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("are the ones the panel shows after an undo brings it back", async () => {
+    show(three());
+    // The two latest: S2 left, S3 right. On, off, another date, then undo the off.
+    await userEvent.click(changeSwitch());
+    await userEvent.click(changeSwitch());
+    await userEvent.selectOptions(screen.getByLabelText("Left of the divider"), S1.id);
+    act(() => {
+      undo();
+    });
+    expect(useChangeDrape.getState().request).toMatchObject({
+      siteId: SITE_ID,
+      from: S2.id,
+      to: S3.id,
+    });
+    expect(screen.getByLabelText("Left of the divider")).toHaveValue(S2.id);
+    expect(screen.getByLabelText("Right of the divider")).toHaveValue(S3.id);
+  });
+
+  it("keep the sides the viewer chose, newer on the left", async () => {
+    const { unmount } = show(three());
+    await userEvent.selectOptions(screen.getByLabelText("Right of the divider"), S1.id);
+    // Left S2 (newer), right S1 (older): the map is S1 -> S2, the panel keeps the sides.
+    await userEvent.click(changeSwitch());
+    expect(useChangeDrape.getState().request).toMatchObject({
+      siteId: SITE_ID,
+      from: S1.id,
+      to: S2.id,
+    });
+    expect(screen.getByLabelText("Left of the divider")).toHaveValue(S2.id);
+    unmount();
+    show(three());
+    expect(screen.getByLabelText("Left of the divider")).toHaveValue(S2.id);
+    expect(screen.getByLabelText("Right of the divider")).toHaveValue(S1.id);
+  });
+});
+
+describe("beside the swipe and a per-cell rule", () => {
+  it("stays on when the swipe goes on and off, and is offered while a rule is on", async () => {
+    useViewRule.setState({ active: { siteId: SITE_ID, rule: "latest" } });
+    show();
+    expect(changeSwitch()).toBeEnabled();
+    await userEvent.click(changeSwitch());
+    act(() => useSites.getState().setCompareDates(SITE_ID, { left: E1.id, right: E2.id }));
+    expect(useChangeDrape.getState().request).toMatchObject({
+      siteId: SITE_ID,
+      from: E1.id,
+      to: E2.id,
+    });
+    act(() => useSites.getState().setCompareDates(SITE_ID, null));
+    expect(useChangeDrape.getState().request).toMatchObject({
+      siteId: SITE_ID,
+      from: E1.id,
+      to: E2.id,
+    });
+    expect(changeSwitch()).toHaveAttribute("aria-checked", "true");
+    act(() => useViewRule.setState({ active: null }));
   });
 });
 

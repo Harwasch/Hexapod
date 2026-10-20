@@ -52,7 +52,7 @@ function isShown(siteId: string, dates: Dates | null): boolean {
 function isDraped(siteId: string, request: ChangeDrapeRequest | null): boolean {
   const asked = useChangeDrape.getState().request;
   const own = asked?.siteId === siteId ? asked : null;
-  return request ? own?.from === request.from && own.to === request.to : own === null;
+  return request ? own?.left === request.left && own.right === request.right : own === null;
 }
 
 function askDrape(request: ChangeDrapeRequest | null): void {
@@ -79,9 +79,12 @@ export function CompareDates({ siteId }: { siteId: string }) {
   if (!before || !latest) return null;
   const offered = (id: string | undefined) =>
     options.some((option) => option.epoch.id === id) ? id : undefined;
-  // What the scene draws, else the choice made here, else the latest against the one before.
-  const left = pair?.left ?? offered(choice.left) ?? before.epoch.id;
-  const right = pair?.right ?? offered(choice.right) ?? latest.epoch.id;
+  // What the scene draws, else the dates the change map was asked for (it outlives this panel,
+  // and an undo can bring it back), else the choice made here, else the latest against the one
+  // before.
+  const shown = pair ?? drape;
+  const left = shown?.left ?? offered(choice.left) ?? before.epoch.id;
+  const right = shown?.right ?? offered(choice.right) ?? latest.epoch.id;
   const needsRenderer = representation === "gaussian-splat" && !compareDrawable(renderer);
   // Refused by PlayCanvas for want of room: this pair's root tiles alone pass the device's
   // budget (state/splatRoom.ts). Held off, saying so, until another pair or renderer.
@@ -96,7 +99,7 @@ export function CompareDates({ siteId }: { siteId: string }) {
     if (pair && next.left !== next.right) ask(next);
     if (drape) {
       const follows = changeOffer(epochs, next.left, next.right);
-      askDrape(follows.offered ? { siteId, from: follows.from, to: follows.to } : null);
+      askDrape(follows.offered ? { siteId, from: follows.from, to: follows.to, ...next } : null);
     }
   };
   const offer = changeOffer(epochs, left, right);
@@ -188,7 +191,9 @@ export function CompareDates({ siteId }: { siteId: string }) {
           checked={drape !== null}
           disabled={!offer.offered}
           onCheckedChange={(on) => {
-            const request = offer.offered ? { siteId, from: offer.from, to: offer.to } : null;
+            const request = offer.offered
+              ? { siteId, from: offer.from, to: offer.to, left, right }
+              : null;
             const [after, before] = on ? [request, null] : [null, drape];
             let applied = true;
             recordAction(
