@@ -107,6 +107,7 @@ describe("Per cell", () => {
           ],
           inferredCells: 6,
           left: 0,
+          leftOut: [],
         },
       }),
     );
@@ -123,6 +124,40 @@ describe("Per cell", () => {
     ruleOn("data-age");
     expect(screen.getAllByTestId("rule-legend-date")[1]).toHaveTextContent(
       "Jun 1, 2026: 40 cells (tile bounds, overstates what it saw) · 3–6 months",
+    );
+  });
+
+  it("names each date it leaves out and why, and says when it is the As of date", async () => {
+    show();
+    await screen.findByTestId("views");
+    ruleOn();
+    act(() =>
+      useViewRule.setState({
+        legend: {
+          cellM: 1,
+          dates: [{ epochId: E1.id, coverage: "grid", cells: 120, ageBucket: 3 }],
+          inferredCells: 0,
+          left: 0,
+          leftOut: [{ epochId: E2.id, reason: "frame", asOf: true }],
+        },
+      }),
+    );
+    expect(screen.getByTestId("rule-legend-left-out")).toHaveTextContent(
+      "Jun 1, 2026, the As of date, is not drawn: placed in its own frame, not the site's",
+    );
+    act(() =>
+      useViewRule.setState({
+        legend: {
+          cellM: 1,
+          dates: [{ epochId: E1.id, coverage: "grid", cells: 120, ageBucket: 3 }],
+          inferredCells: 0,
+          left: 0,
+          leftOut: [{ epochId: E2.id, reason: "loading", asOf: false }],
+        },
+      }),
+    );
+    expect(screen.getByTestId("rule-legend-left-out")).toHaveTextContent(
+      "Jun 1, 2026 is not drawn yet: still loading",
     );
   });
 

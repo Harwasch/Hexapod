@@ -47,7 +47,7 @@ import { epochOf, epochOptions, frameAnchor, shownOption } from "@/lib/epochs";
 import { createLogger } from "@/lib/log";
 import { useSettings } from "@/state/settings";
 import { useViewMode } from "@/state/viewMode";
-import { useViewRule, type ViewRuleLegend } from "@/state/viewRule";
+import { useViewRule, type LeftOut, type ViewRuleLegend } from "@/state/viewRule";
 
 import { companionGroups, setCompanions, type CompanionHost } from "./companions";
 import { cesiumCellViewGpu, SplatCellView, type CellViewGpu } from "./splatCellView";
@@ -78,8 +78,18 @@ export interface CompositorSite {
   /** The date chosen (the capture-date control's): "As of" it. Null for the latest. */
   epochId: string | null;
   site: { assets: readonly SiteAsset[] };
-  /** Each loaded model, and the asset whose placement it copies (`followAnchor`), if any. */
-  handles: ReadonlyMap<string, { tileset: Cesium3DTileset | null; follows?: string | undefined }>;
+  /**
+   * Each loaded model, the asset whose placement it copies (`followAnchor`), if any, and
+   * whether that is still being decided.
+   */
+  handles: ReadonlyMap<
+    string,
+    {
+      tileset: Cesium3DTileset | null;
+      follows?: string | undefined;
+      followPending?: boolean | undefined;
+    }
+  >;
 }
 
 /**
@@ -104,6 +114,31 @@ export function ruleAssets(
       site.handles.get(o.asset.id)?.follows === anchor.id,
   );
   return [anchor, ...dates.map((o) => o.asset)];
+}
+
+/**
+ * The dates up to "As of" a rule cannot draw (beside the frame anchor), and why: `loading` while
+ * the date's model loads or its placement is being compared with the anchor's, `frame` once it
+ * is placed on its own (its tiles are not in the site frame). `asOf` marks the date chosen.
+ */
+export function leftOutDates(site: CompositorSite, representation: Representation): LeftOut[] {
+  const options = epochOptions(site.epochs, site.site.assets, representation);
+  const anchor = frameAnchor(site.epochs, site.site.assets, representation)?.asset;
+  const chosen = shownOption(options, site.epochId);
+  const until = Date.parse(chosen?.epoch.observedAt ?? "");
+  const out: LeftOut[] = [];
+  for (const o of options) {
+    if (!anchor || o.asset.id === anchor.id || Date.parse(o.epoch.observedAt) > until) continue;
+    const handle = site.handles.get(o.asset.id);
+    if (handle?.follows === anchor.id) continue;
+    const loading = !handle?.tileset || handle.followPending === true;
+    out.push({
+      epochId: o.epoch.id,
+      reason: loading ? "loading" : "frame",
+      asOf: o.epoch.id === chosen?.epoch.id,
+    });
+  }
+  return out;
 }
 
 /** What the session reads of the scene, every frame. */
@@ -511,7 +546,13 @@ export function startCompositor(
       });
     }
     const dates = [...byId.values()];
-    const legend: ViewRuleLegend = { cellM: plane.cellM, dates, inferredCells, left };
+    const legend: ViewRuleLegend = {
+      cellM: plane.cellM,
+      dates,
+      inferredCells,
+      left,
+      leftOut: leftOutDates(site, site.representation),
+    };
     const next = JSON.stringify(legend);
     if (next === legendKey) return;
     legendKey = next;

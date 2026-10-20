@@ -187,6 +187,7 @@ describe("a view rule's session", () => {
       ],
       inferredCells: 0,
       left: 0,
+      leftOut: [],
     });
     handle.dispose();
     expect(host.companions).toEqual([]);
@@ -256,6 +257,29 @@ describe("a view rule's session", () => {
     useSettings.getState().set({ inferredStyle: "show" });
     await frame();
     expect(handle.compositor()?.tinted).toBe(0);
+    handle.dispose();
+  });
+
+  it("names each date it leaves out, and why, the As of date too", async () => {
+    const { handle, frame, entry } = await harness();
+    // June is placed on its own (another frame): SiteManager decided it does not follow.
+    const june = entry.handles.get(A2.id);
+    (entry.handles as Map<string, unknown>).set(A2.id, { ...june, follows: undefined });
+    await frame();
+    expect(useViewRule.getState().legend?.dates.map((d) => d.epochId)).toEqual([E1.id]);
+    expect(useViewRule.getState().legend?.leftOut).toEqual([
+      { epochId: E2.id, reason: "frame", asOf: true },
+    ]);
+    // Still deciding (loading, or its placement being compared): said as such.
+    (entry.handles as Map<string, unknown>).set(A2.id, {
+      ...june,
+      follows: undefined,
+      followPending: true,
+    });
+    await frame();
+    expect(useViewRule.getState().legend?.leftOut).toEqual([
+      { epochId: E2.id, reason: "loading", asOf: true },
+    ]);
     handle.dispose();
   });
 

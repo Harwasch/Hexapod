@@ -21,6 +21,16 @@ export interface ViewRuleLegend {
   inferredCells: number;
   /** Tilesets past the sixteen one primitive tells apart: not drawn under the rule. */
   left: number;
+  /** Dates up to "As of" the rule cannot draw, and why (compositorSession.ts `leftOutDates`). */
+  leftOut: LeftOut[];
+}
+
+/** A date a rule leaves out: still loading, or placed in a frame of its own. */
+export interface LeftOut {
+  epochId: string;
+  reason: "loading" | "frame";
+  /** It is the date chosen, which the rule is "As of". */
+  asOf: boolean;
 }
 
 /**

@@ -56,6 +56,17 @@ function RuleLegend({
             Inferred: {String(legend.inferredCells)} cells no date saw
           </li>
         )}
+        {legend.leftOut.map((d) => {
+          const epoch = epochs.find((e) => e.id === d.epochId);
+          const date = epoch ? formatEpochDate(epoch.observedAt) : d.epochId;
+          return (
+            <li key={d.epochId} className="cell-legend__skipped" data-testid="rule-legend-left-out">
+              {d.reason === "frame"
+                ? `${date}${d.asOf ? ", the As of date," : ""} is not drawn: ${RULE_TEXT.ownFrame}`
+                : `${date}${d.asOf ? ", the As of date," : ""} is not drawn yet: still loading`}
+            </li>
+          );
+        })}
         {legend.left > 0 && (
           <li className="cell-legend__skipped">
             {String(legend.left)} more layers are not drawn (sixteen at most)

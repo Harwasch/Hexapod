@@ -33,5 +33,6 @@ export const VIEW_RULE_TEXT = {
     "Off while a Living Survey rig moves this scan: its motion needs the scan drawn on its own",
   compare: "Choosing a rule ends Compare › Dates: the two are one or the other",
   tileBounds: "tile bounds, overstates what it saw",
+  ownFrame: "placed in its own frame, not the site's",
   holdsViews: "Per-cell dates are on: a date's own Confidence and Data age come back with One date",
 } as const;
