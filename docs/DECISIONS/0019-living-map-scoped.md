@@ -165,24 +165,38 @@ name, the axis of its smallest variance.
    (`e2e/sunlightScene.spec.ts`). `c.rgb *= mix(1, 0.35 + 0.65 · lambert · sunUp, strength)`,
    strength 1. `sunUp` is a uniform worked out once a frame on the CPU at the scan's centre by the
    engine's own sun arithmetic (`sunSine`), faded in over the first 5° of elevation (a rendering
-   choice, not a measurement), so the shader and the badge agree on night.
+   choice, not a measurement), so the shader and the badge agree on night. Before the engine's
+   Earth-orientation data loads there is no ICRF matrix; the engine turns by TEME then, and so
+   does `sunSine`. A sun that is still not a number (a scan not placed, a matrix of NaN) is
+   never drawn or claimed: the uniform's strength goes to 0, the colours are the photograph's,
+   and the frame withdraws its report.
 4. **Deviation: a splat without a normal counts as facing the sun** (lambert 1), not as untouched:
    by day it is unchanged, as designed; at night it goes to the same ambient floor as everything
    else, instead of the round splats (foliage) staying daylit beside a darkened ground.
 5. **Sun: Off · Now · At capture** (`state/lighting.ts`, not persisted), in the Splat view control
    (`features/views/SunControl.tsx`, in its lazy chunk; no tool-rail button). At capture is
    offered only for a date whose capture time was recorded (`observedAtSource` not `created`);
-   a seeded model without a date uses its own `observedAt`.
+   a seeded model without a date uses its own `observedAt`. It is labelled **Simulated
+   lighting**, as the repo's rule asks of anything simulated: the control, its hint and the
+   badge say so.
 6. **At capture holds the scene clock** at the shown date's capture time, `shouldAnimate` off,
    and gives back the clock it found, exactly (`cesium/sunClock.ts`): the time it would read had
    it never been held (the held span at its own multiplier when it was running, nothing when it
    was still), its animate flag and its step; a time someone else set meanwhile stands. The hold
    lives with the badge, so whatever ends the relight ends it, and it needs the scene's report
-   that the shown model is drawn relit, so a moved sky is never unlabelled.
-7. **The badge is the label** (`features/views/RelitBadge.tsx`, in the HUD's messages): "Relit by
-   the sun (now) over shadows baked in at capture, {capture date and time} UTC" (or "(at
-   capture)"), and "Sun below horizon" when the frame drawn had the sun down. It shows only what
-   the scene reports drawing for the shown model (`state/sunReport.ts`), never the choice.
+   that the shown model is drawn relit, so a moved sky is never unlabelled. **Not under
+   Compare or a per-cell view rule**: more than one date is drawn, each with its own capture
+   time, and the scene has one clock, so holding either would relight the other at a moment
+   that is not its own. At capture is disabled while more than one date is drawn, with the note
+   "At capture is off while more than one date is drawn: one scene clock holds one capture's
+   sun, so the sun of now is drawn"; the choice is kept and holds again with one date.
+7. **The badge is the label** (`features/views/RelitBadge.tsx`, in the HUD's messages):
+   "Simulated lighting: the sun (now) over shadows baked in at capture, {capture date and time}
+   UTC" (or "(at capture)"; "each date's own" while more than one date is drawn), and "Sun
+   below horizon" when the frame drawn had the sun down. It shows only what the scene reports
+   drawing (`state/sunReport.ts`), never the choice: a model reports only while its tileset is
+   shown, so a date kept loaded but hidden, or a site left behind, claims nothing and holds no
+   clock. With one date it reads the shown model's report; with more, any of the site's.
 8. **Off while As captured is on** (the slot reads `useAsCaptured`, as § As captured asked): the
    part leaves the chain, the badge goes, the clock is given back; the control shows Off, disabled,
    saying "Off while As captured is on", and the choice comes back after.
@@ -196,7 +210,9 @@ name, the axis of its smallest variance.
     `cos`, three cross products) and a few dozen flops a splat; with a motion Jacobian, that
     Jacobian once more. The globe's entry: index 194,969 → 195,331 B gzip (+362 B; budget
     197,000 B), the badge's slot and the store; the relight, its part, the badge and the words are
-    chunks loaded on demand.
+    chunks loaded on demand. After the second review, with § As captured's fixes beneath it, the
+    stack's entry is 195,742 B → 195,811 B (+69 B): the Simulated lighting label in the slot's
+    error boundary; Compare, the shown-tileset guard and the NaN guard are in lazy chunks.
 
 ### Stubbed
 
