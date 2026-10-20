@@ -27,6 +27,7 @@ from app.api.v1 import (
     live,
     phone,
     plans,
+    public,
     recipes,
     research,
     scenarios,
@@ -79,6 +80,7 @@ api_v1.include_router(land_archive_images.router)
 api_v1.include_router(workspaces.router)
 api_v1.include_router(workspace_missions.router)
 api_v1.include_router(research.router)
+api_v1.include_router(public.router)
 
 api_v1.include_router(scenarios.router)
 

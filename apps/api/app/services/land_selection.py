@@ -13,13 +13,14 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.research.providers.base import SourceError, SourceSpec, fetch_json
-from app.research.providers.parcels import ParcelSource, counties_touching
+from app.research.providers.parcels import NO_PUBLIC_REUSE, ParcelSource, counties_touching
 from app.schemas.geojson import MapGeometry, MultiPolygon, Polygon
 from app.schemas.land import BoundarySource, LandCreate
 from app.schemas.land_selection import (
     CandidateRequest,
     CandidateResult,
     LandCandidate,
+    PublicParcelRequest,
     SelectionInstruction,
     SelectionInterpretation,
 )
@@ -65,7 +66,9 @@ def _county_names(sources: list[ParcelSource]) -> str:
     return " and ".join(f"{source.county} County" for source in sources)
 
 
-def _parcels(db: Session, request: CandidateRequest, client: httpx.Client) -> CandidateResult:
+def _parcels(
+    db: Session, request: CandidateRequest, client: httpx.Client, *, public: bool = False
+) -> CandidateResult:
     lon, lat = request.point.coordinates[:2]
     dx = request.radius_m / (111_320 * max(0.1, math.cos(math.radians(lat))))
     dy = request.radius_m / 110_574
@@ -79,6 +82,16 @@ def _parcels(db: Session, request: CandidateRequest, client: httpx.Client) -> Ca
         )
     # Near a county line the search reaches both counties; each answers for its own parcels.
     available = [source for source in counties if source.status == "available"][:2]
+    if public:
+        withheld = [source for source in available if source.fips in NO_PUBLIC_REUSE]
+        available = [source for source in available if source.fips not in NO_PUBLIC_REUSE]
+        if withheld and not available:
+            return CandidateResult(
+                status="uncovered",
+                message=f"{_county_names(withheld)} does not allow its parcel records to be "
+                "shown here. Draw the land, or enter its acres.",
+                candidates=[],
+            )
     if not available:
         return CandidateResult(
             status="uncovered",
@@ -170,6 +183,19 @@ def _parcels(db: Session, request: CandidateRequest, client: httpx.Client) -> Ca
         ),
         candidates=result[:PARCEL_LIMIT],
         truncated=truncated,
+    )
+
+
+def public_parcels(
+    db: Session, request: PublicParcelRequest, client: httpx.Client
+) -> CandidateResult:
+    """Parcels near a point for a visitor who has not signed in: the same county services,
+    provenance and attribution as `candidates`, without the counties in `NO_PUBLIC_REUSE`."""
+    return _parcels(
+        db,
+        CandidateRequest(point=request.point, kind="parcel", radius_m=request.radius_m),
+        client,
+        public=True,
     )
 
 

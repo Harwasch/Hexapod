@@ -195,6 +195,9 @@ def limit_imagery_catalog(request: Request, settings: SettingsDep) -> None:
 def limit_cell_map(request: Request, settings: SettingsDep) -> None:
     """One confidence-map computation per token: see app/services/ratelimit.py."""
     limits_of(request).cell_map.take(client_key(request, settings))
+def limit_public_parcels(request: Request, settings: SettingsDep) -> None:
+    """One public parcel lookup per token: see app/services/ratelimit.py."""
+    limits_of(request).public_parcels.take(client_key(request, settings))
 
 
 LimitReconcile = Depends(limit_reconcile)
@@ -202,3 +205,4 @@ LimitStepLog = Depends(limit_step_log)
 LimitPlace = Depends(limit_place)
 LimitTopoTile = Depends(limit_topo_tile)
 LimitCellMap = Depends(limit_cell_map)
+LimitPublicParcels = Depends(limit_public_parcels)

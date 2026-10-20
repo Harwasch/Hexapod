@@ -89,6 +89,18 @@ def _registry() -> _Registry:
     return _Registry(tuple(sources), tuple(geometries), STRtree(geometries))
 
 
+#: Counties whose parcel service is used in the app but not by the public parcel lookup
+#: (`POST /public/parcels/near`), because their published terms restrict redistribution, with
+#: the words that say so. Each available county's layer, service and ArcGIS item metadata was
+#: read on 2026-10-20; the rest state no terms or only disclaimers (no warranty, not a survey),
+#: which do not restrict showing the outlines with their attribution. Sierra County, whose data
+#: is sold, is not `available` at all.
+NO_PUBLIC_REUSE: dict[str, str] = {
+    "06017": "El Dorado County's item licence: 'These results are not to be redistributed "
+    "unless agreed upon with the originator.'",
+}
+
+
 def counties_touching(area: BaseGeometry) -> list[ParcelSource]:
     """Counties whose outline meets the search area, the most-covered first."""
     registry = _registry()

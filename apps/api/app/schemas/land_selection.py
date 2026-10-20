@@ -15,6 +15,18 @@ class CandidateRequest(CamelModel):
     radius_m: float = Field(default=250, gt=0, le=2000, allow_inf_nan=False)
 
 
+#: Widest search the public parcel lookup answers (m from the point): a few neighbours'
+#: parcels, not a neighbourhood. The signed-in picker asks for 250 m.
+PUBLIC_PARCEL_RADIUS_M = 300
+
+
+class PublicParcelRequest(CamelModel):
+    """Parcels near a point, asked by a visitor who has not signed in."""
+
+    point: Point
+    radius_m: float = Field(default=250, gt=0, le=PUBLIC_PARCEL_RADIUS_M, allow_inf_nan=False)
+
+
 class LandCandidate(CamelModel):
     id: str = Field(min_length=1, max_length=200)
     label: str = Field(min_length=1, max_length=300)
