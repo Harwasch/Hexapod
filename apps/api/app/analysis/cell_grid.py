@@ -13,7 +13,7 @@ pipeline's bytes by the committed cross-language fixture `data/tiles/synthetic-y
 (`tests/test_cell_grid_decode.py`). It is stricter about size than the pipeline's: the
 planes are decompressed no further than the descriptor says they reach, so a hostile or
 broken file cannot inflate past what its descriptor declared, and nothing is decoded past
-`MAX_RAW_BYTES`.
+`MAX_RAW_BYTES`. Levels may not share bytes, so the decoded planes are no larger than that.
 """
 
 from __future__ import annotations
@@ -177,6 +177,13 @@ def decode(descriptor: Mapping[str, Any], blob: bytes) -> Grid:
         windows.append((level, i0, j0, ni, nj, offset, size))
     if [w[0] for w in windows] != sorted({w[0] for w in windows}):
         raise CellGridError("levels must be finest first, one per level")
+    # Each level is copied out of its slice, so the slices must not share bytes: then what
+    # decode keeps is at most the planes, and the planes at most `MAX_RAW_BYTES`.
+    reached = 0
+    for level, *_, offset, size in sorted(windows, key=lambda w: (w[5], w[6])):
+        if size and offset < reached:
+            raise CellGridError(f"level {level}'s slice overlaps another level's")
+        reached = max(reached, offset + size)
     if declared > MAX_RAW_BYTES:
         raise CellGridError(f"the planes would be {declared} bytes, over {MAX_RAW_BYTES}")
     raw = _inflate(blob, declared)

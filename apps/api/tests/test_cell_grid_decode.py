@@ -104,3 +104,37 @@ def test_a_damaged_or_inflated_file_is_refused() -> None:
     huge["levels"][0].update({"ni": 1 << 13, "nj": 1 << 13, "bytes": 3 << 26})
     with pytest.raises(cell_grid.CellGridError, match="over"):
         cell_grid.decode(huge, data)
+
+
+def _decoded_bytes(grid: cell_grid.Grid) -> int:
+    return sum(int(a.nbytes) for plane in grid.planes for a in plane.channels.values())
+
+
+def test_levels_that_share_bytes_are_refused() -> None:
+    """Every level copies its own slice, so slices that overlap would decode the same bytes
+    again per level: thirty levels over one 48 MiB slice would be ~1.4 GiB from a file under
+    the 64 MiB cap. A level's slice must start where the one before it ended, or later."""
+    from tests.confidence_fixtures import encode_grid
+
+    data, good = encode_grid(1, 0, 0, np.full((4, 4), 200), np.zeros((4, 4)))
+    entry = good["levels"][0]
+    stacked = copy.deepcopy(good)
+    stacked["levels"] = [{**entry, "level": level} for level in range(1, 31)]
+    with pytest.raises(cell_grid.CellGridError, match="overlap"):
+        cell_grid.decode(stacked, data)
+    half = copy.deepcopy(good)
+    half["levels"] = [
+        {**entry, "ni": 2, "nj": 2, "bytes": 12, "offset": 0},
+        {**entry, "level": 2, "ni": 2, "nj": 2, "bytes": 12, "offset": 6},
+    ]
+    with pytest.raises(cell_grid.CellGridError, match="overlap"):
+        cell_grid.decode(half, data)
+
+
+@pytest.mark.parametrize("epoch", ["e1", "e2"])
+def test_a_decoded_grid_holds_no_more_than_its_planes(epoch: str) -> None:
+    """The bound the cap rests on: what decode keeps is at most the inflated planes, which
+    are at most `MAX_RAW_BYTES`."""
+    grid = cell_grid.decode(descriptor(epoch), blob(epoch))
+    raw = gzip.decompress(blob(epoch))
+    assert _decoded_bytes(grid) <= len(raw) <= cell_grid.MAX_RAW_BYTES
