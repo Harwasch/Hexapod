@@ -6,7 +6,8 @@ frame: the site frame for every tile of a scan under ~4 km, and for a tile of a 
 its own origin, a translation-only `transform` relative to its parent's
 (`splat_tiles.tile_frame`). splat-transform knows nothing of tile transforms, so a leaf with
 an offset is moved by its own `--translate` before the merge (`plan`), and the merged PLY is
-checked against the site-frame box of the leaves before anything is built from it (`check`).
+checked leaf by leaf against the leaves' site-frame boxes before anything is built from it
+(`check`).
 
 **The sign of the translate.** splat-transform 3.8.0 (@playcanvas/splat-transform, MIT) reads
 an SPZ as data in `Transform.PLY` space -- a 180-degree turn about z (dist/index.mjs
@@ -17,10 +18,9 @@ in our east-north-up frame the flag is `--translate=-ox,-oy,oz`. The `=` form, b
 starting with `-` would otherwise be read as an option. Derived from the source, then run
 (2026-10-19, splat-transform 3.8.0 from npm, the workflow's own commands on
 data/tiles/synthetic-far): the merge held every one of the 7,901 gaussians where the scene
-put it (within 6e-13 m: a half turn's sine is not exactly 0), `check` found its box 0 m from
-the leaves', and one leaf given the opposite sign was refused 1,799 m off. `check` stays in
-the workflow, so a later splat-transform that changes its frames fails the run instead of
-publishing a scrambled site.
+put it (within 6e-13 m: a half turn's sine is not exactly 0), in input order. `check` stays
+in the workflow and checks every leaf's own run of rows, so a later splat-transform that
+changes its frames or its order fails the run instead of publishing a scrambled site.
 
 Usage:
     python lod_leaves.py fetch SOURCE OUT_DIR    # SOURCE: https://.../tileset.json or a dir
@@ -43,10 +43,10 @@ import numpy as np
 from splat_tiles import read_ply, tile_offsets
 
 USER_AGENT = "streamed-lod-backfill"
-#: How far the merged PLY's box may stand from the leaves' site-frame box (m): the accessor
-#: bounds are float32 of the stored positions, and splat-transform writes float32 too, so the
-#: two agree to within a float32 step at 5 km (~0.0005 m). A wrong frame is metres off at
-#: least: every leaf with a translate is at least `TILE_FIT_M` from the site origin.
+#: How far a leaf's run of merged rows may stand from that leaf's site-frame box (m): the
+#: accessor bounds are float32 of the stored positions, and splat-transform writes float32
+#: too, so the two agree to within a float32 step at 5 km (~0.0005 m), by construction and
+#: not by calibration. A leaf in the wrong frame is off by its whole-metre offset, or twice it.
 CHECK_TOLERANCE_M = 0.01
 
 
@@ -150,34 +150,62 @@ def fetch(source: str, out_dir: Path) -> dict[str, Any]:
         offset = np.asarray(row["offset"], np.float64)
         row["min"] = [float(v) for v in np.asarray(position["min"], np.float64) + offset]
         row["max"] = [float(v) for v in np.asarray(position["max"], np.float64) + offset]
+        row["count"] = int(position["count"])
     summary = {"tileset": source, "leaves": rows}
     (out_dir / "leaves.json").write_text(json.dumps(summary, indent=1) + "\n", encoding="utf-8")
     return summary
 
 
 def check(out_dir: Path, full_ply: Path) -> dict[str, Any]:
-    """Refuses (`SystemExit`) a merged PLY whose box is not the leaves' site-frame box: the
-    merge must hold every leaf, each where its tile's transform puts it."""
+    """Refuses (`SystemExit`) a merged PLY that does not hold every leaf where its tile's
+    transform puts it. splat-transform concatenates its inputs in the order given (the
+    order of leaves.json, `plan`'s) and keeps every gaussian, so the merge must have exactly
+    the leaves' count, and each leaf's run of rows must have that leaf's own site-frame box.
+    One leaf merged in the wrong frame moves its run's box by its offset (at least
+    `TILE_FIT_M`); a leaf missing or duplicated changes the count. A splat-transform that
+    ever reorders its inputs is refused too: the check fails safe, it never passes a merge
+    it cannot place."""
     leaves = json.loads((out_dir / "leaves.json").read_text(encoding="utf-8"))["leaves"]
     want_low = np.min([row["min"] for row in leaves], axis=0)
     want_high = np.max([row["max"] for row in leaves], axis=0)
     columns = read_ply(full_ply)
     xyz = np.stack([columns["x"], columns["y"], columns["z"]], axis=1).astype(np.float64)
-    low, high = xyz.min(axis=0), xyz.max(axis=0)
-    error = float(max(np.abs(low - want_low).max(), np.abs(high - want_high).max()))
-    report = {
+    counts = [int(row.get("count", row["gaussians"])) for row in leaves]
+    report: dict[str, Any] = {
         "gaussians": int(xyz.shape[0]),
-        "min": low.tolist(),
-        "max": high.tolist(),
+        "leavesGaussians": int(sum(counts)),
+        "min": xyz.min(axis=0).tolist() if len(xyz) else None,
+        "max": xyz.max(axis=0).tolist() if len(xyz) else None,
         "leavesMin": want_low.tolist(),
         "leavesMax": want_high.tolist(),
-        "errorM": error,
     }
+    if xyz.shape[0] != sum(counts):
+        raise SystemExit(
+            f"{full_ply.name} holds {xyz.shape[0]} gaussians, the leaves {sum(counts)}: "
+            "a leaf is missing from the merge, or merged twice"
+        )
+    error, worst = 0.0, ""
+    start = 0
+    for row, count in zip(leaves, counts, strict=True):
+        part = xyz[start : start + count]
+        start += count
+        if not count:
+            continue
+        off = float(
+            max(
+                np.abs(part.min(axis=0) - np.asarray(row["min"], np.float64)).max(),
+                np.abs(part.max(axis=0) - np.asarray(row["max"], np.float64)).max(),
+            )
+        )
+        if off > error:
+            error, worst = off, row["name"]
+    report["errorM"] = error
+    report["worstLeaf"] = worst or None
     if error > CHECK_TOLERANCE_M:
         raise SystemExit(
-            f"{full_ply.name} spans {low.tolist()} to {high.tolist()}, but the leaves in the "
-            f"site frame span {want_low.tolist()} to {want_high.tolist()} ({error:.3f} m off): "
-            "a leaf was merged in the wrong frame (the --translate of a tile with an origin)"
+            f"{full_ply.name}: leaf {worst}'s gaussians are {error:.3f} m from its box in the "
+            "site frame: a leaf was merged in the wrong frame (the --translate of a tile "
+            "with an origin), or out of order"
         )
     return report
 

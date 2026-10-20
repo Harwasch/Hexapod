@@ -54,8 +54,10 @@ origin, so nothing noticed that the packer cast to int32 and kept the low 24 bit
 9. **splat-transform translates in its own frame** (R4). It reads SPZ in PLY space, a half
    turn about z, applies `--translate t` there and bakes back on write, so moving a leaf by `o`
    in ENU is `--translate=-ox,-oy,oz`. Derived from 3.8.0's source and then run with the pinned
-   package on the fixture (`tools/captures/lod_leaves.py`); the backfill checks the merged box
-   against the leaves' site-frame box before it builds anything.
+   package on the fixture (`tools/captures/lod_leaves.py`). Before it builds anything the
+   backfill checks the merge leaf by leaf: the count is the leaves' count, and each leaf's run
+   of rows (splat-transform keeps its inputs' order) has that leaf's own site-frame box. A box
+   of the whole merge is not enough: one leaf misplaced inside the site's extent passes it.
 
 ## The fixture
 
