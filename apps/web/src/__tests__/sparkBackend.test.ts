@@ -19,9 +19,12 @@ import * as THREE from "three";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { OverlayFrames, type FrameClock } from "@/cesium/scanView/overlayFrames";
+import { layerCones } from "@/cesium/scanView/layerLook";
 import { createBackend } from "@/cesium/scanView/sparkBackend";
 import { TileWork } from "@/cesium/scanView/tileWork";
 import type { ScanBackend, ScanPose } from "@/cesium/scanView/types";
+import { gunzip, spzPickDataOf } from "@/lib/spzPositions";
+import { cellCount, type ViewConesMeta } from "@/lib/viewCones";
 import { spzFromGlb } from "@/view/glb";
 import { loadSplatTile } from "@/view/sparkStream";
 
@@ -134,7 +137,15 @@ vi.mock("@sparkjsdev/spark", async () => {
   const uniform = (value: unknown) => ({ value });
   return {
     SparkRenderer,
-    dyno: { dynoSampler2D: uniform, dynoUsampler2D: uniform, dynoVec4: uniform },
+    dyno: {
+      dynoSampler2D: uniform,
+      dynoUsampler2D: uniform,
+      dynoVec4: uniform,
+      dynoMat4: uniform,
+      // A layer's modifier is built and handed to the mesh, never run here.
+      dynoBlock: () => ({}),
+      Gsplat: {},
+    },
   };
 });
 
@@ -307,11 +318,77 @@ describe("the Spark back-end and tile frames", () => {
     expect(northMost).toBeGreaterThan(1795);
     expect(northMost).toBeLessThan(1805);
 
-    // A placement moves the scan's frame: the tile's own sits `offset` inside it.
-    const lift = new THREE.Matrix4().makeTranslation(1, 2, 3);
-    backend.place?.(loaded, lift.toArray());
-    expect(mesh.position.toArray()).toEqual([offset[0] + 1, offset[1] + 2, offset[2] + 3]);
+    // A placement moves the scan's frame: the tile's own sits `offset` inside it, so the mesh
+    // goes to M · T(offset). A turn tells that from T(offset) · M, which a pure lift cannot.
+    const turn = new THREE.Matrix4().makeRotationZ(Math.PI / 2).setPosition(10, 20, 30);
+    backend.place?.(loaded, turn.toArray());
+    const want = new THREE.Vector3(...offset).applyMatrix4(turn).toArray();
+    mesh.position.toArray().forEach((v, i) => expect(v).toBeCloseTo(want[i] ?? Number.NaN, 9));
+    const turned = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+    expect(mesh.quaternion.angleTo(turned)).toBeLessThan(1e-9);
     backend.place?.(loaded, null);
+    expect(mesh.position.toArray()).toEqual(offset);
+    expect(mesh.quaternion.toArray()).toEqual([0, 0, 0, 1]);
+    backend.destroy();
+  });
+
+  it("a layer's far tile is faded from its own place, and place(null) puts it back there", async () => {
+    const far = resolve(process.cwd(), "../../data/tiles/synthetic-far");
+    const uri = "splat_4-4-2.glb";
+    const offset = (
+      JSON.parse(readFileSync(resolve(far, "source/expected.json"), "utf8")) as {
+        tiles: Record<string, { offset: [number, number, number] }>;
+      }
+    ).tiles[uri]?.offset;
+    if (!offset) throw new Error("the fixture has no such tile");
+    const glb = readFileSync(resolve(far, "splat", uri));
+    const bytes = spzFromGlb(glb.buffer.slice(glb.byteOffset, glb.byteOffset + glb.byteLength));
+    const local = spzPickDataOf(await gunzip(bytes))?.positions;
+    if (!local) throw new Error("no positions");
+    // As Spark's: the box of the tile's own (local) centres, the mesh at its offset.
+    const box = new THREE.Box3().setFromArray(local);
+    const updateVersion = vi.fn();
+    const mesh = Object.assign(new THREE.Object3D(), {
+      maxSh: 0,
+      updateGenerator: vi.fn(),
+      updateVersion,
+      dispose: vi.fn(),
+      worldModifier: undefined,
+      getBoundingBox: () => box.clone(),
+    });
+    mesh.position.set(...offset);
+    vi.mocked(loadSplatTile).mockResolvedValue({ mesh: mesh as unknown as SplatMesh, bytes });
+
+    const { backend } = await rig();
+    const tile = { uri, gaussians: 552, geometricError: 0, children: [], offset };
+    const layer = await backend.loadLayer?.("https://tiles.example/far/tileset.json", tile);
+    if (!layer) throw new Error("no layer loaded");
+    const meta: ViewConesMeta = {
+      format: "hexapod.viewcones",
+      version: 1,
+      uri: "viewcones.bin",
+      origin: [2500, 700, -10],
+      cell: 50,
+      dims: [2, 12, 1],
+      fadeDeg: 20,
+    };
+    const look = {
+      highlight: false,
+      cones: layerCones(meta, new Uint8Array(cellCount(meta) * 4)),
+      fromScan: new THREE.Matrix4().toArray(),
+    };
+    backend.setLayerLook?.(layer, look);
+    // Ten metres above the tile where it is drawn (the scan's frame), then a metre over: a
+    // tenth of the way there is enough to fade again (layerLook.ts `eyeMoved`). Measured from
+    // the tile's local box instead, 3 km off, it would need thirty metres.
+    const centre = box.getCenter(new THREE.Vector3()).add(new THREE.Vector3(...offset));
+    backend.render(poseAt([centre.x, centre.y, centre.z + 10]));
+    const faded = updateVersion.mock.calls.length;
+    backend.render(poseAt([centre.x + 1, centre.y, centre.z + 10]));
+    expect(updateVersion.mock.calls.length).toBe(faded + 1);
+
+    backend.place?.(layer, new THREE.Matrix4().makeTranslation(5, 0, 0).toArray());
+    backend.place?.(layer, null);
     expect(mesh.position.toArray()).toEqual(offset);
     backend.destroy();
   });

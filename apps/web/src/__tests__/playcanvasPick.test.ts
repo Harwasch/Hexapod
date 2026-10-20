@@ -77,7 +77,8 @@ vi.mock("playcanvas", () => {
     }
     setPosition = (): void => undefined;
     setLocalPosition = (...p: unknown[]): void => {
-      this.position = p.length === 1 ? [0, 0, 0] : (p as number[]);
+      const [v] = p as [{ x: number; y: number; z: number }];
+      this.position = p.length === 1 ? [v.x, v.y, v.z] : (p as number[]);
     };
     setLocalRotation = (): void => undefined;
     lookAt = (): void => undefined;
@@ -189,8 +190,11 @@ function workerAnswer(id: number, offset?: [number, number, number]) {
 }
 
 class FakeWorker {
+  /** Every message the backend sent a worker, newest last. */
+  static readonly messages: { url: string; offset?: [number, number, number] }[] = [];
   onmessage: ((event: { data: unknown }) => void) | null = null;
-  postMessage(message: { id: number; offset?: [number, number, number] }): void {
+  postMessage(message: { id: number; url: string; offset?: [number, number, number] }): void {
+    FakeWorker.messages.push(message);
     queueMicrotask(() => this.onmessage?.({ data: workerAnswer(message.id, message.offset) }));
   }
   terminate = (): void => undefined;
@@ -303,9 +307,30 @@ describe("picking in a scan PlayCanvas draws in Morton order", () => {
       expect(pick.positions[i * 3 + 2]).toBeCloseTo(site[i * 3 + 2] ?? 0, 3);
     }
     expect(pick.checksum).toBe(checksumPositions(site));
-    // The entity sits at the tile's middle in the scan's frame, and a placement keeps it so.
-    const east = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 0, 0, 1];
-    b.place?.(entity, east);
+    // The entity sits at the tile's middle in the scan's frame. A placement moves that frame,
+    // so the entity goes to M · origin: a turn tells it from origin + M's lift, a pure lift not.
+    const position = (): number[] => (entity as unknown as { position: number[] }).position;
+    b.place?.(entity, null);
+    const origin = position().slice();
+    expect(origin[0]).toBeGreaterThan(2600);
+    expect(origin[1]).toBeGreaterThan(1550);
+    const turn = [0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 10, 20, 30, 1];
+    b.place?.(entity, turn);
+    const [ox = 0, oy = 0, oz = 0] = origin;
+    const want = [10 - oy, 20 + ox, 30 + oz];
+    position().forEach((v, i) => expect(v).toBeCloseTo(want[i] ?? Number.NaN, 6));
+    b.place?.(entity, null);
+    expect(position()).toEqual(origin);
+    b.destroy();
+  });
+
+  it("asks the worker for a layer's tile in its own frame", async () => {
+    const offset: [number, number, number] = [2601, 1550, 0];
+    const b = await backend();
+    const entity = await b.loadLayer?.("https://scan.test/tileset.json", tile("far.glb", offset));
+    expect(FakeWorker.messages.at(-1)?.offset).toEqual(offset);
+    // Decoded about its middle in the scan's frame, and put back there.
+    if (!entity) throw new Error("no layer loaded");
     b.place?.(entity, null);
     expect((entity as unknown as { position: number[] }).position[0]).toBeGreaterThan(2600);
     b.destroy();
