@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import struct
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -253,6 +254,28 @@ def test_a_block_count_that_cannot_reach_the_minimum_comes_down_to_one() -> None
     assigned = np.ones((30, 2), dtype=bool)
     merged, matrix, merges = block_maths.merge_small(part, assigned, np.ones(30, bool), [5, 5])
     assert merged.count == 1 and matrix.shape == (30, 1) and len(merges) == 1
+
+
+def test_block_views_takes_the_argv_blocks_passes() -> None:
+    """The GPU script cannot run here, but its command line can: every argument
+    `blocks._contribution` passes is one `block_views.main` declares."""
+    done = subprocess.run(
+        [sys.executable, str(HERE.parent / "block_views.py"), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    for flag in (
+        "--data_dir",
+        "--prior",
+        "--partition",
+        "--out",
+        "--trainer",
+        "--max-side",
+        "--budget-s",
+    ):
+        assert flag in done.stdout
 
 
 # --- the frozen ring and the blend ----------------------------------------------------
