@@ -279,3 +279,57 @@ export function evidenceAt(grid: CellGrid, level: number, i: number, j: number):
   }
   return false;
 }
+
+/** Texels a row of the cell texture holds (`cesium/splatCellView.ts`). */
+export const CELL_TEXTURE_WIDTH = 4096;
+
+/**
+ * Where each level's cells start in the cell texture, finest first, and how many cells there
+ * are in all: the levels' planes one after another, two bytes (RG) a cell, `j * ni + i`
+ * within a level, `CELL_TEXTURE_WIDTH` cells a row.
+ */
+export function cellTexelLayout(meta: Pick<CellGridMeta, "levels">): {
+  offsets: number[];
+  cells: number;
+  height: number;
+} {
+  const offsets: number[] = [];
+  let cells = 0;
+  for (const l of meta.levels) {
+    offsets.push(cells);
+    cells += l.ni * l.nj;
+  }
+  return { offsets, cells, height: Math.max(1, Math.ceil(cells / CELL_TEXTURE_WIDTH)) };
+}
+
+/**
+ * The cell texture of `rg` (two bytes a cell, in `cellTexelLayout` order), padded to whole
+ * rows.
+ */
+export function cellTextureRows(
+  meta: Pick<CellGridMeta, "levels">,
+  rg: Uint8Array,
+): { data: Uint8Array; height: number } {
+  const { height } = cellTexelLayout(meta);
+  const data = new Uint8Array(CELL_TEXTURE_WIDTH * height * 2);
+  data.set(rg.subarray(0, data.length));
+  return { data, height };
+}
+
+/** The confidence texture's bytes: (score, reasons) per cell, every level. */
+export function confidenceTexels(grid: CellGrid): Uint8Array {
+  const score = channelAt(grid.meta, "score");
+  const reasons = channelAt(grid.meta, "reasons");
+  const { cells } = cellTexelLayout(grid.meta);
+  const out = new Uint8Array(cells * 2);
+  let k = 0;
+  for (const l of grid.meta.levels) {
+    for (let c = 0; c < l.ni * l.nj; c += 1) {
+      const at = l.offset + c * grid.stride;
+      out[k] = score ? (grid.planes[at + score.at] ?? 0) : 0;
+      out[k + 1] = reasons ? (grid.planes[at + reasons.at] ?? 0) : 0;
+      k += 2;
+    }
+  }
+  return out;
+}
