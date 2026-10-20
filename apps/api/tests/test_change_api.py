@@ -315,3 +315,22 @@ def test_a_surface_finer_than_its_confidence_grid_is_refused_not_a_crash(
     response = get(api, _epoch(db, first), _epoch(db, later))
     assert response.status_code == 409, response.text
     assert response.json()["code"] == "confidence-unreadable"
+
+
+def test_an_unknown_epoch_is_a_404_whatever_the_other_one_is(
+    api: TestClient, db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Both epochs are resolved before either one's status is judged: a rejected `from`
+    with an unknown `to` is a 404 for `to`, not a 409 for `from`."""
+    import uuid
+
+    e1, _ = two_epochs(db, storage, tmp_path)
+    db.execute(text("UPDATE epochs SET status = 'rejected' WHERE id = :id"), {"id": e1.id})
+    db.commit()
+    db.expire_all()
+    missing = uuid.uuid4()
+    response = api.get(
+        f"/api/v1/sites/{e1.site_id}/change", params={"from": str(e1.id), "to": str(missing)}
+    )
+    assert response.status_code == 404, response.text
+    assert str(missing) in response.text

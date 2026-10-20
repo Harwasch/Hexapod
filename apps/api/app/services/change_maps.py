@@ -67,12 +67,15 @@ def _epoch(db: Session, site_id: uuid.UUID, epoch_id: uuid.UUID) -> Epoch:
     epoch = db.get(Epoch, epoch_id)
     if epoch is None or epoch.site_id != site_id:
         raise NotFoundError("epoch", epoch_id)
+    return epoch
+
+
+def _published(epoch: Epoch) -> None:
     if epoch.status != EpochStatus.PUBLISHED.value:
         raise ConflictError(
             f"epoch {epoch.id} is {epoch.status}: only published epochs are compared",
             code=NOT_PUBLISHED,
         )
-    return epoch
 
 
 def _maps(db: Session, epoch: Epoch) -> tuple[uuid.UUID, EpochMap, EpochMap]:
@@ -167,7 +170,10 @@ def change(
         raise NotFoundError("site", site_id)
     if from_id == to_id:
         raise InvalidInputError("a change is between two different epochs")
+    # Both found (404) before either is judged (409): a missing epoch is the answer.
     before, after = _epoch(db, site_id, from_id), _epoch(db, site_id, to_id)
+    _published(before)
+    _published(after)
     frame = db.get(SiteFrame, site_id)
     if frame is None:
         raise ConflictError(
