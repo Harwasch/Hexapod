@@ -261,6 +261,8 @@ class PhoneCaptureCreate(CamelModel):
     lat: float | None = Field(default=None, ge=-90, le=90)
     lon: float | None = Field(default=None, ge=-180, le=180)
     accuracy_m: float | None = Field(default=None, ge=0)
+    #: The site this capture is a new epoch of; unset, the worker decides (`CaptureCreate`).
+    site_id: uuid.UUID | None = None
 
 
 class PhoneCapture(CamelModel):
@@ -304,7 +306,10 @@ def create_phone_capture(
             metadata["locationAccuracyM"] = round(payload.accuracy_m, 1)
     name = payload.name or f"Phone capture {datetime.now(tz=UTC):%Y-%m-%d %H:%M} UTC"
     capture = capture_service.create_capture(
-        db, CaptureCreate(name=name, kind=CaptureKind.VIDEO, metadata=metadata)
+        db,
+        CaptureCreate(
+            name=name, kind=CaptureKind.VIDEO, metadata=metadata, site_id=payload.site_id
+        ),
     )
     token = handoff.issue(handoff.key_for(settings), capture.id, now=int(time.time()))
     return PhoneCapture(capture=capture_service.capture_to_read(capture), upload_token=token)
