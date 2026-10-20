@@ -23,7 +23,6 @@ import {
   type Relief,
 } from "@/missions/scout";
 import type { Zone } from "@/missions/types";
-import { buildScoutKmz } from "@/missions/wpml";
 import { useLand } from "@/state/land";
 
 /** How long each source may take before the next is asked, ms. */
@@ -190,18 +189,21 @@ function DroneScoutExport({
       setError(refusal);
       return;
     }
-    try {
-      const bytes = buildScoutKmz(waylines, scout);
-      const blob = new Blob([bytes as BlobPart], { type: "application/vnd.google-earth.kmz" });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `scout-${slug(landName ?? first.name)}-${new Date().toISOString().slice(0, 10)}.kmz`;
-      anchor.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The route could not be written.");
-    }
+    // The writer is needed only for this click: it loads then, not with the globe.
+    import("@/missions/wpml")
+      .then(({ buildScoutKmz }) => {
+        const bytes = buildScoutKmz(waylines, scout);
+        const blob = new Blob([bytes as BlobPart], { type: "application/vnd.google-earth.kmz" });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `scout-${slug(landName ?? first.name)}-${new Date().toISOString().slice(0, 10)}.kmz`;
+        anchor.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      })
+      .catch((cause: unknown) => {
+        setError(cause instanceof Error ? cause.message : "The route could not be written.");
+      });
   };
   const reliefLine =
     relief === null

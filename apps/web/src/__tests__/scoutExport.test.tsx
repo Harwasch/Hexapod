@@ -6,7 +6,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { env } from "@/app/env";
@@ -138,4 +138,25 @@ it("says when areas are flown as their re-scan asks, and counts the crossing pas
   );
   // Both sets of lanes: about twice the photos of the nadir lines.
   expect(oblique.photos).toBeGreaterThan(1.5 * nadir.photos);
+});
+
+it("writes the KMZ on the download click, its writer loaded then", async () => {
+  const made: Blob[] = [];
+  vi.spyOn(URL, "createObjectURL").mockImplementation((blob) => {
+    made.push(blob as Blob);
+    return "blob:kmz";
+  });
+  vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ScoutExport zones={[patch]} />
+    </QueryClientProvider>,
+  );
+  fireEvent.click(screen.getByTestId("scout-download"));
+  await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+  expect(made[0]?.type).toBe("application/vnd.google-earth.kmz");
+  expect(made[0]?.size).toBeGreaterThan(1000);
+  expect(screen.queryByRole("alert")).toBeNull();
+  vi.restoreAllMocks();
 });
