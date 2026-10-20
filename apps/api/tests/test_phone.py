@@ -402,3 +402,28 @@ def test_a_finished_capture_downloads_its_placed_splat(client: TestClient, db: S
     response = client.get(url, follow_redirects=False)
     assert response.status_code == 307
     assert "runs/x/place/canonical.ply" in response.headers["location"]
+
+
+def test_a_phone_capture_can_name_its_site(client: TestClient, db: Session) -> None:
+    """A second walk of a field the phone already captured: the capture names that site,
+    and the worker makes it the site's next epoch (decision D3)."""
+    from tests.test_epochs import make_site
+
+    site = make_site(db)
+    db.commit()
+
+    created = client.post(
+        "/api/v1/phone/captures",
+        json={"lat": 47.6445, "lon": -122.138, "siteId": str(site.id)},
+        headers=PHONE,
+    )
+    missing = client.post(
+        "/api/v1/phone/captures", json={"siteId": str(uuid.uuid4())}, headers=PHONE
+    )
+
+    assert created.status_code == 201, created.text
+    capture = created.json()["capture"]
+    assert capture["metadata"]["siteId"] == str(site.id)
+    assert capture["metadata"]["origin"] == "phone-key"
+    assert capture["siteId"] is None
+    assert missing.status_code == 404, missing.text

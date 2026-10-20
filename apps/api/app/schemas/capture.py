@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.models.enums import CaptureKind, CaptureStatus, GeorefMethod, ScaleSource, UploadStatus
 from app.schemas.base import CamelModel
@@ -59,6 +59,13 @@ class CaptureBase(CamelModel):
 
 class CaptureCreate(CaptureBase):
     slug: str | None = Field(default=None, max_length=120)
+    site_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "The site this capture is a new epoch of. Unset: the worker matches it "
+            "spatially or makes a new site."
+        ),
+    )
 
     @field_validator("slug")
     @classmethod
@@ -66,6 +73,14 @@ class CaptureCreate(CaptureBase):
         if value is not None and not SLUG_RE.match(value):
             raise ValueError("slug must be lowercase letters, digits and single hyphens")
         return value
+
+    @model_validator(mode="after")
+    def _site_is_not_metadata(self) -> CaptureCreate:
+        # `metadata.siteId` is where the requested site is kept (captures has no column for
+        # it), so it is only ever written from `siteId`, which is checked to exist.
+        if "siteId" in self.metadata:
+            raise ValueError("metadata.siteId is set through siteId")
+        return self
 
 
 class CaptureFileCreate(CamelModel):

@@ -2969,6 +2969,19 @@
             ],
             "title": "Sensor"
           },
+          "siteId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The site this capture is a new epoch of. Unset: the worker matches it spatially or makes a new site.",
+            "title": "Siteid"
+          },
           "slug": {
             "anyOf": [
               {
@@ -13982,6 +13995,18 @@
               }
             ],
             "title": "Name"
+          },
+          "siteId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siteid"
           }
         },
         "title": "PhoneCaptureCreate",
