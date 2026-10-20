@@ -1,0 +1,310 @@
+{
+  "checkTargets": {
+    "checks": 8,
+    "evaluated": 8,
+    "observations": 152,
+    "observedTargets": 8,
+    "perTarget": [
+      {
+        "angleDeg": 96.67,
+        "errorM": [
+          -0.0019,
+          -0.0116,
+          0.0293
+        ],
+        "horizontalM": 0.0118,
+        "label": "T1",
+        "pixelFootprintM": 0.027,
+        "reprojectionRmsPx": 0.549,
+        "role": "check",
+        "status": "ok",
+        "verticalM": 0.0293,
+        "views": 19
+      },
+      {
+        "angleDeg": 96.73,
+        "errorM": [
+          0.0259,
+          -0.0139,
+          0.0288
+        ],
+        "horizontalM": 0.0294,
+        "label": "T2",
+        "pixelFootprintM": 0.027,
+        "reprojectionRmsPx": 0.879,
+        "role": "check",
+        "status": "ok",
+        "verticalM": 0.0288,
+        "views": 19
+      },
+      {
+        "angleDeg": 96.68,
+        "errorM": [
+          0.0206,
+          0.0005,
+          0.0176
+        ],
+        "horizontalM": 0.0206,
+        "label": "T3",
+        "pixelFootprintM": 0.027,
+        "reprojectionRmsPx": 0.681,
+        "role": "check",
+        "status": "ok",
+        "verticalM": 0.0176,
+        "views": 19
+      },
+      {
+        "angleDeg": 96.52,
+        "errorM": [
+          0.0051,
+          0.0082,
+          0.0159
+        ],
+        "horizontalM": 0.0097,
+        "label": "T4",
+        "pixelFootprintM": 0.027,
+        "reprojectionRmsPx": 0.637,
+        "role": "check",
+        "status": "ok",
+        "verticalM": 0.0159,
+        "views": 19
+      },
+      {
+        "angleDeg": 94.62,
+        "errorM": [
+          -0.0205,
+          0.0036,
+          0.0214
+        ],
+        "horizontalM": 0.0208,
+        "label": "T5",
+        "pixelFootprintM": 0.0276,
+        "reprojectionRmsPx": 0.871,
+        "role": "check",
+        "status": "ok",
+        "verticalM": 0.0214,
+        "views": 19
+      },
+      {
+        "angleDeg": 94.5,
+        "errorM": [
+          0.005,
+          -0.0071,
+          0.0305
+        ],
+        "horizontalM": 0.0087,
+        "label": "T6",
+        "pixelFootprintM": 0.0276,
+        "reprojectionRmsPx": 0.695,
+        "role": "check",
+        "status": "ok",
+        "verticalM": 0.0305,
+        "views": 19
+      },
+      {
+        "angleDeg": 94.65,
+        "errorM": [
+          0.0429,
+          0.01,
+          0.0306
+        ],
+        "horizontalM": 0.0441,
+        "label": "T7",
+        "pixelFootprintM": 0.0276,
+        "reprojectionRmsPx": 0.862,
+        "role": "check",
+        "status": "ok",
+        "verticalM": 0.0306,
+        "views": 19
+      },
+      {
+        "angleDeg": 94.56,
+        "errorM": [
+          0.0115,
+          0.0318,
+          0.0115
+        ],
+        "horizontalM": 0.0339,
+        "label": "T8",
+        "pixelFootprintM": 0.0276,
+        "reprojectionRmsPx": 0.534,
+        "role": "check",
+        "status": "ok",
+        "verticalM": 0.0115,
+        "views": 19
+      }
+    ],
+    "problems": [],
+    "reason": null,
+    "rmseM": {
+      "horizontal": 0.0253,
+      "total": 0.0351,
+      "vertical": 0.0243
+    },
+    "sigmaM": {
+      "anchorH": 0.02,
+      "anchorV": 0.02,
+      "pick": 0.02730666487941761,
+      "targetH": 0.005,
+      "targetV": 0.01
+    },
+    "status": "evaluated",
+    "targets": 8,
+    "tolerance": {
+      "horizontalM": 0.1452,
+      "verticalM": 0.1059
+    },
+    "verticalAnchorFree": null,
+    "verticalEvaluated": true,
+    "withinTolerance": true
+  },
+  "confidence": 0.607,
+  "correspondences": 40,
+  "frame": {
+    "headingDeg": null,
+    "headingSource": "exif-gps",
+    "recentre": false,
+    "rotation": [
+      [
+        0.9999999999999999,
+        -2.539962714676405e-16,
+        -3.669025301171954e-17
+      ],
+      [
+        3.156706769244311e-16,
+        1.0,
+        2.8380378260023534e-16
+      ],
+      [
+        -2.7582943998355374e-17,
+        -2.1460387324250608e-16,
+        0.9999999999999998
+      ]
+    ],
+    "scale": 1.0,
+    "source": "exif-gps-similarity",
+    "translationM": [
+      4.371503159461554e-16,
+      9.367506770274758e-16,
+      -6.698201021615446e-16
+    ],
+    "up": null
+  },
+  "frameSource": "georef",
+  "gates": [
+    {
+      "enabled": false,
+      "limit": null,
+      "measured": 0.0,
+      "name": "unaligned",
+      "param": "fail_unaligned",
+      "passed": null
+    },
+    {
+      "enabled": false,
+      "limit": null,
+      "measured": 0.0351,
+      "name": "check_target_rmse_m",
+      "param": "max_check_target_rmse_m",
+      "passed": null
+    },
+    {
+      "enabled": false,
+      "limit": null,
+      "measured": 0.22946175637393768,
+      "name": "check_targets_tolerance_ratio",
+      "param": "fail_check_targets_out_of_tolerance",
+      "passed": null
+    },
+    {
+      "enabled": false,
+      "limit": null,
+      "measured": 0.025543105723462838,
+      "name": "alignment_rms_m",
+      "param": "max_alignment_rms_m",
+      "passed": null
+    },
+    {
+      "enabled": false,
+      "limit": null,
+      "measured": null,
+      "name": "gnss_visual_offset_m",
+      "param": "max_gnss_visual_offset_m",
+      "passed": null
+    }
+  ],
+  "gnssCheck": {
+    "available": false
+  },
+  "inlierFraction": 1.0,
+  "inliers": 40,
+  "label": "RTK drone, surveyed, check targets \u00b10.035 m",
+  "method": "gnss-prior-ba",
+  "origin": {
+    "height": 14.3975,
+    "heightDatum": "msl-unverified",
+    "lat": 28.038900097222225,
+    "lon": -82.69659969444444
+  },
+  "platform": "rtk-drone",
+  "platformSource": "frames_meta",
+  "ransac": null,
+  "reasons": [],
+  "referenceEpochId": null,
+  "referenceJobId": null,
+  "registration": null,
+  "residualM": {
+    "max": 0.0498,
+    "median": 0.0228,
+    "p90": 0.0321,
+    "rms": 0.0255
+  },
+  "rotationResidualDeg": null,
+  "sim3": {
+    "from": "this epoch's pose model (COLMAP frame)",
+    "rotation": [
+      [
+        0.9999999999999999,
+        -2.539962714676405e-16,
+        -3.669025301171954e-17
+      ],
+      [
+        3.156706769244311e-16,
+        1.0,
+        2.8380378260023534e-16
+      ],
+      [
+        -2.7582943998355374e-17,
+        -2.1460387324250608e-16,
+        0.9999999999999998
+      ]
+    ],
+    "scale": 1.0,
+    "to": "east/north/up metres about origin",
+    "translationM": [
+      4.371503159461554e-16,
+      9.367506770274758e-16,
+      -6.698201021615446e-16
+    ]
+  },
+  "tier": "survey",
+  "tolerance": {
+    "alignment": {
+      "minCheckTargets": 3,
+      "minInlierFraction": 0.5,
+      "minInliers": 6,
+      "minRegisteredFraction": 0.5,
+      "pixelFootprintM": null,
+      "rmsM": null
+    },
+    "basis": "3-sigma of the declared input uncertainties (first principles; not calibrated)",
+    "checkTargets": {
+      "horizontalM": 0.1452,
+      "verticalM": 0.1059
+    }
+  },
+  "uncertaintyM": 0.0351,
+  "verdict": "survey",
+  "version": 1,
+  "visualCheck": null
+}
