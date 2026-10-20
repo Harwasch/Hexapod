@@ -125,7 +125,10 @@ jobs:
           out.mkdir(exist_ok=True)
           pairs = []
           for scan in fills:
-              request = urllib.request.Request(given[scan], headers={"Accept": "application/json"})
+              request = urllib.request.Request(
+                  given[scan],
+                  headers={"Accept": "application/json", "User-Agent": "hexapod-fill-targets/1"},
+              )
               try:
                   with urllib.request.urlopen(request, timeout=60) as response:
                       body = response.read()
