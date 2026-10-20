@@ -1,4 +1,4 @@
-import { type CesiumWidget, Color, EntityCollection } from "cesium";
+import { type CesiumWidget, Color, EntityCollection, JulianDate } from "cesium";
 import { DEG_TO_RAD, EARTH_RADIUS_M, type LonLat } from "@twin/geo";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -51,7 +51,7 @@ function setup() {
   const entities = new EntityCollection();
   const requestRender = vi.fn();
   const viewer = { entities, scene: { requestRender } } as unknown as CesiumWidget;
-  const mission = { setPreviewPassesShown: vi.fn(), flyToPoint: vi.fn() };
+  const mission = { setPreviewPassesShown: vi.fn(), flyToPoint: vi.fn(), hideAgents: vi.fn() };
   const manager = new RehearsalManager(viewer, mission as unknown as MissionManager);
   const heard: (RehearsalFrame | null)[] = [];
   manager.onFrame((frame) => heard.push(frame));
@@ -78,6 +78,30 @@ afterEach(() => {
 });
 
 describe("RehearsalManager", () => {
+  it("draws no simulated machine while As captured hides them; the run and its lanes go on", () => {
+    const { manager, entities, requestRender, shown } = setup();
+    const run = rehearsal();
+    manager.load(run, look);
+    const ghost = entities.getById("rehearsal:ghost:TR-04");
+    const now = JulianDate.now();
+    expect(ghost?.position?.getValue(now)).toBeDefined();
+    requestRender.mockClear();
+    manager.hideAgents(true);
+    expect(requestRender).toHaveBeenCalled();
+    // No position, nothing drawn: the billboard and its label go with it.
+    expect(ghost?.position?.getValue(now)).toBeUndefined();
+    const first = run.lanes[0];
+    if (!first) throw new Error("expected a lane");
+    manager.seek(first.t1 + 1);
+    expect(shown("rehearsal:done:A-01:0")).toBe(true);
+    // A rehearsal loaded meanwhile is hidden too, until they are shown again.
+    manager.load(rehearsal(), look);
+    const again = entities.getById("rehearsal:ghost:TR-04");
+    expect(again?.position?.getValue(now)).toBeUndefined();
+    manager.hideAgents(false);
+    expect(again?.position?.getValue(now)).toBeDefined();
+  });
+
   it("draws pending lanes, ghosts and the checked creek, hides the plan's passes", () => {
     const { manager, mission, ids, shown, heard } = setup();
     const run = rehearsal();

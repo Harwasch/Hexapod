@@ -277,6 +277,8 @@ export class RehearsalManager {
   private readonly leftOut: Entity[] = [];
   /** The ghosts, and the creek lines drawn with them. */
   private readonly ghosts: Entity[] = [];
+  /** Whether the simulated machines' ghosts are hidden (As captured). */
+  private agentsHidden = false;
   private readonly listeners = new Set<RehearsalFrameListener>();
 
   constructor(
@@ -634,7 +636,20 @@ export class RehearsalManager {
     return Cartesian3.fromDegrees(at.longitude, at.latitude, height + lift);
   }
 
+  /**
+   * Hides the simulated machines (state/asCaptured.ts), or draws them again: this rehearsal's
+   * ghosts (the run goes on) and a simulated fleet's tracks (MissionManager; its markers are
+   * MissionOverlays').
+   */
+  hideAgents(hidden: boolean): void {
+    this.agentsHidden = hidden;
+    this.mission.hideAgents(hidden);
+    this.scene.requestRender();
+  }
+
+  /** Where a ghost stands now; none (not drawn) while the machines are hidden. */
   private ghostPosition(track: RehearsalTrack): Cartesian3 | undefined {
+    if (this.agentsHidden) return undefined;
     const where = positionAt(track, this.t);
     return where ? this.standing(where.at, 1.5) : undefined;
   }

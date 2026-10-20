@@ -123,6 +123,8 @@ export class MissionManager {
   /** Zones another layer draws (the selected Land's boundary): no entity, no chip anchor. */
   private hiddenZoneIds: ReadonlySet<string> = new Set();
   private tracksVisible = true;
+  /** Whether a simulated project's machines' tracks are hidden (As captured). */
+  private agentsHidden = false;
   private readonly planEntities: Entity[] = [];
   /** The lanes drawn for each zone of the plan overlay (`previewLanes`). */
   private readonly drawnLanes = new Map<string, CoverageLane[]>();
@@ -213,7 +215,7 @@ export class MissionManager {
       this.trackEntities.push(
         this.viewer.entities.add({
           id: `mission:track:${machine.id}`,
-          show: this.tracksVisible,
+          show: this.tracksOn,
           polyline: {
             positions,
             width: 5,
@@ -223,7 +225,7 @@ export class MissionManager {
         }),
         this.viewer.entities.add({
           id: `mission:track-dash:${machine.id}`,
-          show: this.tracksVisible,
+          show: this.tracksOn,
           polyline: {
             positions,
             width: 2.2,
@@ -275,9 +277,19 @@ export class MissionManager {
       for (const entity of this.zoneEntities) entity.show = visible;
     } else {
       this.tracksVisible = visible;
-      for (const entity of this.trackEntities) entity.show = visible;
+      for (const entity of this.trackEntities) entity.show = this.tracksOn;
     }
     this.scene.requestRender();
+  }
+
+  /** Hides a simulated project's machine tracks, or draws them again (state/asCaptured.ts). */
+  hideAgents(hidden: boolean): void {
+    this.agentsHidden = hidden;
+    this.setLayer("tracks", this.tracksVisible);
+  }
+
+  private get tracksOn(): boolean {
+    return this.tracksVisible && !(this.agentsHidden && this.project?.simulated);
   }
 
   /** Highlights the selected zone outline. */

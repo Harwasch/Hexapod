@@ -4,6 +4,7 @@ import { useScene } from "@/cesium/SceneContext";
 import { hiddenMissionZoneIds, isLandZone } from "@/missions/landGround";
 import { collapsesToPin, pinCounts, pinLabel } from "@/missions/sitePin";
 import type { Machine, Zone } from "@/missions/types";
+import { useAsCaptured } from "@/state/asCaptured";
 import { useLand } from "@/state/land";
 import { useMission } from "@/state/mission";
 import { useViewer } from "@/state/viewer";
@@ -37,6 +38,8 @@ export function MissionOverlays() {
   const hovered = useMission((s) => s.hoveredMachineId);
   const setHovered = useMission((s) => s.setHoveredMachine);
   const zonesOn = useMission((s) => s.layers.zones);
+  // A simulated fleet's machines are not drawn while As captured is on (state/asCaptured.ts).
+  const asCaptured = useAsCaptured((s) => s.on);
   const collapsed = useViewer((s) => collapsesToPin(s.camera.altitude));
   const { selectMachine, selectZone, flyToProject } = useMissionActions();
   const nodes = useRef(new Map<string, HTMLElement>());
@@ -133,37 +136,38 @@ export function MissionOverlays() {
             </button>
           );
         })}
-      {project.machines.map((machine: Machine) => {
-        const selected = selection?.kind === "machine" && selection.id === machine.id;
-        const labelOn = selected || hovered === machine.id;
-        return (
-          <button
-            key={machine.id}
-            ref={register(`machine:${machine.id}`)}
-            type="button"
-            className={`mc-marker ${STATUS_CLASS[machine.status]} ${selected ? "is-selected" : ""}`}
-            style={{ visibility: "hidden" }}
-            onClick={() => selectMachine(machine.id)}
-            onMouseEnter={() => setHovered(machine.id)}
-            onMouseLeave={() => setHovered(null)}
-            onFocus={() => setHovered(machine.id)}
-            onBlur={() => setHovered(null)}
-            aria-label={`${machine.name}, ${machine.task}`}
-            data-testid={`machine-marker-${machine.id}`}
-          >
-            {machine.status === "working" && (
-              <span className="mc-marker__pulse" aria-hidden="true" />
-            )}
-            {selected && <span className="mc-marker__halo" aria-hidden="true" />}
-            <span className="mc-marker__dot" aria-hidden="true" />
-            {labelOn && (
-              <span className="mc-marker__label">
-                {machine.id} · {machine.task}
-              </span>
-            )}
-          </button>
-        );
-      })}
+      {!(asCaptured && project.simulated) &&
+        project.machines.map((machine: Machine) => {
+          const selected = selection?.kind === "machine" && selection.id === machine.id;
+          const labelOn = selected || hovered === machine.id;
+          return (
+            <button
+              key={machine.id}
+              ref={register(`machine:${machine.id}`)}
+              type="button"
+              className={`mc-marker ${STATUS_CLASS[machine.status]} ${selected ? "is-selected" : ""}`}
+              style={{ visibility: "hidden" }}
+              onClick={() => selectMachine(machine.id)}
+              onMouseEnter={() => setHovered(machine.id)}
+              onMouseLeave={() => setHovered(null)}
+              onFocus={() => setHovered(machine.id)}
+              onBlur={() => setHovered(null)}
+              aria-label={`${machine.name}, ${machine.task}`}
+              data-testid={`machine-marker-${machine.id}`}
+            >
+              {machine.status === "working" && (
+                <span className="mc-marker__pulse" aria-hidden="true" />
+              )}
+              {selected && <span className="mc-marker__halo" aria-hidden="true" />}
+              <span className="mc-marker__dot" aria-hidden="true" />
+              {labelOn && (
+                <span className="mc-marker__label">
+                  {machine.id} · {machine.task}
+                </span>
+              )}
+            </button>
+          );
+        })}
     </div>
   );
 }
