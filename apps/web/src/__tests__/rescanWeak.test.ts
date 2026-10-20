@@ -161,9 +161,8 @@ describe("re-scan zones", () => {
     expect(nadir?.scout?.rescanOf?.reasons).toEqual(["gsd"]);
   });
 
-  it("ask for a survey at the finest detail flown, never a treatment", () => {
-    const goal = rescanGoal(0.0172);
-    expect(goal).toMatch(/at 1\.7 cm per pixel/);
+  it.each([true, false])("ask for a survey, never a treatment or a 3D scan (drone %s)", (drone) => {
+    const goal = rescanGoal(0.0172, drone);
     // The planner's treatment words (planner.TREATMENT_WORDS), matched as substrings.
     const treatment = ["mow", "cut", "clear", "spray", "treat", "drill", "seed", "till", "remove"];
     for (const word of treatment) expect(goal.toLowerCase()).not.toContain(word);
@@ -171,6 +170,18 @@ describe("re-scan zones", () => {
     // areas' own captures with the scan table's heights and obliques.
     expect(goal.toLowerCase()).not.toContain("scan");
     expect(goal).toMatch(/^Survey /);
+  });
+
+  it("ask a drone for the finest detail flown", () => {
+    expect(rescanGoal(0.0172, true)).toMatch(/from the air at 1\.7 cm per pixel/);
+  });
+
+  it("ask for a walk or a phone video when there is no drone", () => {
+    const goal = rescanGoal(0.0172, false);
+    expect(goal).toContain("walk or film");
+    // planner.GROUND_SURVEY_WORDS puts it on the ground; no FLIGHT_WORDS keep it in the air.
+    expect(goal).toMatch(/\bon foot\b/);
+    expect(goal.toLowerCase()).not.toMatch(/\b(fly|flown|flight|from the air|aerial|drone|uav)/);
   });
 });
 
@@ -219,7 +230,7 @@ describe("Plan a re-scan of weak areas", () => {
     expect(zones?.map((z) => z?.scout?.purpose)).toEqual(["re-scan-weak", "re-scan-weak"]);
     // The finest detail asked for names the goal and answers the planner.
     const finest = scoutGeometry(scoutOf({ ...DEFAULT_SCOUT, altitudeM: altitudeForGsd(0.01) }));
-    expect(startPlanDraft).toHaveBeenCalledWith(rescanGoal(finest.gsdM), {
+    expect(startPlanDraft).toHaveBeenCalledWith(rescanGoal(finest.gsdM, true), {
       zoneIds: composer?.zoneIds,
       answers: { resolution: "2" },
     });
@@ -246,6 +257,19 @@ describe("Plan a re-scan of weak areas", () => {
       maxAreas: 3,
     });
     expect(useMission.getState().composer?.ground?.note).not.toContain("battery");
+  });
+
+  it("asks to walk or film the areas when there is no drone, with each area's hint", async () => {
+    env.droneExportEnabled = false;
+    requestWeakAreas.mockResolvedValueOnce(
+      read([area(), area({ footprint: square(-123.879), hint: "Never seen: film it all round" })]),
+    );
+    await rescanWeak(null, site, EPOCH_ID);
+    const note = useMission.getState().composer?.ground?.note ?? "";
+    expect(note).toMatch(/^Re-scan these areas: walk or film them with a phone\./);
+    expect(note).toContain("Weak area 1: Seen from too few views: fly crossing obliques.");
+    expect(note).toContain("Weak area 2: Never seen: film it all round.");
+    expect(startPlanDraft.mock.calls[0]?.[0]).toBe(rescanGoal(0, false));
   });
 
   it("plans on the site's project when another project is current", async () => {

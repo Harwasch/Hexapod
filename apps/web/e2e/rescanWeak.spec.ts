@@ -6,8 +6,9 @@
  * A site with one dated capture of the synthetic yard. The weak-areas route is mocked: two
  * patches over the yard, an oblique and a nadir one, as the API outlines them (weak-v1). From
  * the Inspector's Date shown section the button asks for them, and the plan composer opens
- * on the site's project with them as its ground, drafting a survey. The tool rail is as it
- * was.
+ * on the site's project with them as its ground, drafting a survey: walked or filmed with a
+ * phone while drone missions are off (VITE_ENABLE_DRONE_EXPORT), flown when on. The tool rail
+ * is as it was.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -264,17 +265,30 @@ for (const renderer of ["playcanvas", "cesium"] as const) {
     // The composer, on the site's project, with the two patches as its ground.
     const card = page.getByTestId("plan-card");
     await expect(card).toBeVisible({ timeout: 30_000 });
-    await expect(card).toContainText("Survey the weak ground again from the air at", {
-      timeout: 30_000,
-    });
+    // No drone yet (VITE_ENABLE_DRONE_EXPORT off): the plan says where to walk or film.
+    const drone = process.env.VITE_ENABLE_DRONE_EXPORT === "true";
+    await expect(card).toContainText(
+      drone
+        ? "Survey the weak ground again from the air at"
+        : "Survey the weak ground again on foot: walk or film each area with a phone",
+      { timeout: 30_000 },
+    );
     // The note counts both patches; the ground row names the first (largest) of them.
     await expect(card).toContainText("2 weak areas");
     await expect(card).toContainText("chosen by Confidence map weak-v1");
     await expect(card.getByTestId("plan-ground")).toContainText("Weak area 1");
-    // Each patch flies its own height (the nadir one lower, for its detail): said, not hidden.
-    await expect(card.getByTestId("scout-mixed")).toBeVisible();
+    if (drone) {
+      // Each patch flies its own height (the nadir one lower, for its detail): said, not hidden.
+      await expect(card.getByTestId("scout-mixed")).toBeVisible();
+    } else {
+      await expect(card).toContainText("Re-scan these areas: walk or film them with a phone.");
+      await expect(card).toContainText("Weak area 2: Too coarse: fly lower for 1 cm per pixel.");
+      await expect(card.getByTestId("scout-drone-stub")).toHaveText(
+        "Drone missions: not available yet",
+      );
+    }
     expect(asked).toHaveLength(1);
-    expect(asked[0]).toMatchObject({ maxAreas: 3 });
+    expect(asked[0]).toMatchObject({ maxAreas: 3, budgetM2: drone ? expect.any(Number) : null });
     await shot(page, `${renderer}-rescan-composer`);
     await railUnchanged(page);
   });

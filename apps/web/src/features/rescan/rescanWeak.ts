@@ -116,12 +116,16 @@ export function rescanZones(
 }
 
 /**
- * The re-scan goal: a survey at the detail flown, in the words `goalAtDetail` restates for a
- * new height. A survey for the planner, never a "scan" (that is a 3D reconstruction job, whose
- * questions and capture table would override the areas' own captures) nor a treatment.
+ * The re-scan goal: a survey for the planner, never a "scan" (that is a 3D reconstruction job,
+ * whose questions and capture table would override the areas' own captures) nor a treatment.
+ * With a drone, flown at the detail asked for, in the words `goalAtDetail` restates for a new
+ * height; without one (drone missions off), walked or filmed with a phone: "on foot" puts the
+ * survey on the ground (planner.GROUND_SURVEY_WORDS).
  */
-export function rescanGoal(gsdM: number): string {
-  return `Survey the weak ground again from the air at ${Math.round(gsdM * 1000) / 10} cm per pixel so it can be measured again`;
+export function rescanGoal(gsdM: number, drone = env.droneExportEnabled): string {
+  return drone
+    ? `Survey the weak ground again from the air at ${Math.round(gsdM * 1000) / 10} cm per pixel so it can be measured again`
+    : "Survey the weak ground again on foot: walk or film each area with a phone so it can be measured again";
 }
 
 /** What a 409 from the weak-areas route means, by `problem.code`. */
@@ -234,9 +238,16 @@ export async function rescanWeak(
   const acres = zones.reduce((sum, z) => sum + toAcres(footprintAreaM2(z.footprint)), 0);
   // The finest detail any patch asks for names the goal; each patch flies its own height.
   const gsdM = Math.min(...zones.map((z) => scoutGeometry(scoutOf(z.scout)).gsdM));
-  const goal = rescanGoal(gsdM);
+  const goal = rescanGoal(gsdM, drone);
   const count = `${zones.length} weak area${zones.length === 1 ? "" : "s"}`;
-  const note = `${count}, ${acres < 1 ? acres.toFixed(2) : Math.round(acres)} ac, of ${read.weakCells.toLocaleString()} weak cells chosen by ${RESCAN_ATTRIBUTION}${drone && read.truncatedByBudget ? " within one battery" : ""}. ${read.heuristic}`;
+  const chosen = `${count}, ${acres < 1 ? acres.toFixed(2) : Math.round(acres)} ac, of ${read.weakCells.toLocaleString()} weak cells chosen by ${RESCAN_ATTRIBUTION}${drone && read.truncatedByBudget ? " within one battery" : ""}.`;
+  // Without a drone the plan shows where to walk or film, and what each area lacks.
+  const note = drone
+    ? `${chosen} ${read.heuristic}`
+    : `Re-scan these areas: walk or film them with a phone. ${chosen} ${zones
+        .filter((z) => z.note)
+        .map((z) => `${z.name}: ${(z.note ?? "").replace(/\.?$/, ".")}`)
+        .join(" ")} ${read.heuristic}`;
   // A fresh composer, as "Lift the fog" starts one: a card left open would hand the re-scan
   // its zones, machines, answers and, mid-revision, the approved plan it replaces.
   useMission.getState().openComposer({ goal });
