@@ -68,8 +68,7 @@ function rig(first: typeof A1) {
     shownAsset: () => site.assets.find((asset) => asset.id === shown.id) ?? null,
     // Two dates compared: each date's tileset draws its own model (SiteManager.drawnAssetOf).
     drawnAssetOf: (tileset: unknown) =>
-      site.assets.find((asset) => (drawn as Map<unknown, string>).get(tileset) === asset.id) ??
-      null,
+      site.assets.find((asset) => drawn.get(tileset) === asset.id) ?? null,
   };
   const drawn = new Map<unknown, string>();
   const layers = { layerIdForPrimitive: () => undefined, get: () => undefined };

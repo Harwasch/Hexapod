@@ -123,14 +123,14 @@ async function compared() {
 describe("picks with two dates either side of the divider", () => {
   it("a click left of the divider never answers from the right date's solids", async () => {
     const { collider, march, ray } = await compared();
-    const hit = collider.raycast(ray as never, undefined, { x: 250 });
+    const hit = collider.raycast(ray, undefined, { x: 250 });
     expect(hit?.tileset).toBe(march);
     expect(hit?.distance).toBeCloseTo(5, 0);
   });
 
   it("a click right of it answers from the right date's", async () => {
     const { collider, june, ray } = await compared();
-    const hit = collider.raycast(ray as never, undefined, { x: 750 });
+    const hit = collider.raycast(ray, undefined, { x: 750 });
     expect(hit?.tileset).toBe(june);
     expect(hit?.distance).toBeCloseTo(3, 0);
   });
