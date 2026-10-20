@@ -162,8 +162,13 @@ describe("re-scan zones", () => {
   it("ask for a survey at the finest detail flown, never a treatment", () => {
     const goal = rescanGoal(0.0172);
     expect(goal).toMatch(/at 1\.7 cm per pixel/);
-    for (const word of ["mow", "cut", "clear", "spray", "treat", "drill", "seed", "till"])
-      expect(goal.toLowerCase()).not.toContain(word);
+    // The planner's treatment words (planner.TREATMENT_WORDS), matched as substrings.
+    const treatment = ["mow", "cut", "clear", "spray", "treat", "drill", "seed", "till", "remove"];
+    for (const word of treatment) expect(goal.toLowerCase()).not.toContain(word);
+    // A survey, not a 3D scan: "scan" would ask what to reconstruct and override the
+    // areas' own captures with the scan table's heights and obliques.
+    expect(goal.toLowerCase()).not.toContain("scan");
+    expect(goal).toMatch(/^Survey /);
   });
 });
 

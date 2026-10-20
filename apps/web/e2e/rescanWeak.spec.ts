@@ -264,7 +264,7 @@ for (const renderer of ["playcanvas", "cesium"] as const) {
     // The composer, on the site's project, with the two patches as its ground.
     const card = page.getByTestId("plan-card");
     await expect(card).toBeVisible({ timeout: 30_000 });
-    await expect(card).toContainText("Re-scan the weak ground from the air at", {
+    await expect(card).toContainText("Survey the weak ground again from the air at", {
       timeout: 30_000,
     });
     // The note counts both patches; the ground row names the first (largest) of them.

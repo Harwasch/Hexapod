@@ -116,10 +116,11 @@ export function rescanZones(
 
 /**
  * The re-scan goal: a survey at the detail flown, in the words `goalAtDetail` restates for a
- * new height. "Re-scan" makes it a scan for the planner; it never names a treatment.
+ * new height. A survey for the planner, never a "scan" (that is a 3D reconstruction job, whose
+ * questions and capture table would override the areas' own captures) nor a treatment.
  */
 export function rescanGoal(gsdM: number): string {
-  return `Re-scan the weak ground from the air at ${Math.round(gsdM * 1000) / 10} cm per pixel so it can be measured again`;
+  return `Survey the weak ground again from the air at ${Math.round(gsdM * 1000) / 10} cm per pixel so it can be measured again`;
 }
 
 /** What a 409 from the weak-areas route means, by `problem.code`. */
