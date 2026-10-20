@@ -5,7 +5,9 @@ import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
+import pytest
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import Connection, Engine, inspect, select, text
@@ -606,3 +608,78 @@ def test_0032_phone_origin_is_the_routes() -> None:
 
     path = Path(__file__).parents[1] / "alembic" / "versions" / "0032_site_frames_and_epochs.py"
     assert f"c.metadata ->> 'origin' = '{ORIGIN}'" in path.read_text(encoding="utf-8")
+
+
+def test_0032_re_runs_after_an_index_build_fails(
+    alembic_config: Config, engine: Engine, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0032's tables, columns and backfill commit in one transaction before its two
+    indexes are built CONCURRENTLY, outside it. If a build then fails, 0032 is never
+    recorded: the re-run must skip what already committed (not die at CREATE TABLE, not
+    backfill twice), and replace the INVALID index a failed concurrent build leaves."""
+    from alembic import op
+
+    db.rollback()
+    command.downgrade(alembic_config, "0031")
+    now = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+    with engine.begin() as connection:
+        capture = str(uuid.uuid4())
+        site = _raw_site(
+            connection,
+            "site-r",
+            {"captureId": capture, "registration": {"georef": {"lat": 47.6, "lon": -122.3}}},
+        )
+        _raw_capture(connection, "cap-r", site, captured_at=now, capture_id=capture)
+        _raw_splat(connection, site, "https://cdn.example.com/r1/tileset.json", now)
+        _raw_splat(connection, site, "https://cdn.example.com/r2/tileset.json", now)
+    real = op.execute
+
+    def failing(sql: Any, *args: Any, **kwargs: Any) -> Any:
+        if "CREATE INDEX CONCURRENTLY" in str(sql) and "ix_sites_boundary_geography" in str(sql):
+            raise RuntimeError("simulated: the index build failed")
+        return real(sql, *args, **kwargs)
+
+    monkeypatch.setattr(op, "execute", failing)
+    try:
+        with pytest.raises(RuntimeError, match="simulated"):
+            command.upgrade(alembic_config, "0032")
+    finally:
+        monkeypatch.undo()
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar() == (
+            "0031"
+        )
+        assert inspect(engine).has_table("epochs")
+    # A concurrent build that fails leaves its index behind, INVALID: make one the way a
+    # build of `ix_assets_epoch_id` could (a unique build over duplicate rows fails).
+    with engine.connect() as connection:
+        connection.execute(text("DROP INDEX IF EXISTS ix_assets_epoch_id"))
+        connection.commit()
+        autocommit = connection.execution_options(isolation_level="AUTOCOMMIT")
+        with pytest.raises(Exception, match="could not create unique index"):
+            autocommit.execute(
+                text("CREATE UNIQUE INDEX CONCURRENTLY ix_assets_epoch_id ON assets (site_id)")
+            )
+
+    command.upgrade(alembic_config, "head")
+
+    with engine.connect() as connection:
+        epochs = connection.execute(
+            text("SELECT count(*) FROM epochs WHERE site_id = CAST(:s AS uuid)"), {"s": site}
+        ).scalar()
+        assert epochs == 1
+        indexes = {
+            row.name: row
+            for row in connection.execute(
+                text(
+                    "SELECT c.relname AS name, i.indisvalid AS valid, i.indisunique AS uniq, "
+                    "pg_get_indexdef(i.indexrelid) AS definition "
+                    "FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                    "WHERE c.relname IN ('ix_assets_epoch_id', 'ix_sites_boundary_geography')"
+                )
+            ).all()
+        }
+    assert set(indexes) == {"ix_assets_epoch_id", "ix_sites_boundary_geography"}
+    assert all(row.valid for row in indexes.values())
+    assert not indexes["ix_assets_epoch_id"].uniq
+    assert "(epoch_id)" in indexes["ix_assets_epoch_id"].definition
