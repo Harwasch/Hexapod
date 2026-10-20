@@ -87,3 +87,80 @@ def register_run(
         ),
     )
     return job.id
+
+
+def encode_grid(
+    level: int,
+    i0: int,
+    j0: int,
+    score: Any,
+    reasons: Any,
+    relief: Any | None = None,
+    *,
+    cap: dict[str, Any] | None = None,
+    median_gsd_mm: float | None = None,
+) -> tuple[bytes, dict[str, Any]]:
+    """A one-level confidence grid in the container's own layout (ADR 0016, C2) and its
+    descriptor with a weak-v1 summary: for cases the committed fixtures do not cover."""
+    import gzip
+    import hashlib
+    import math
+
+    import numpy as np
+
+    score = np.asarray(score, dtype=np.uint8)
+    reasons = np.asarray(reasons, dtype=np.uint8)
+    relief = np.zeros_like(score) if relief is None else np.asarray(relief, dtype=np.uint8)
+    nj, ni = score.shape
+    raw = np.stack([score, reasons, relief], axis=-1).tobytes()
+    weak = ((score > 0) & (score < 128)) | ((reasons & 16) > 0)
+    unseen = (reasons & 16) > 0
+    scored = score > 0
+    bits = {"views": 1, "spread": 2, "gsd": 4, "accuracy": 8, "unseen": 16, "alignment": 32}
+    expected = int(scored.sum() + unseen.sum())
+    descriptor: dict[str, Any] = {
+        "format": "hexapod.cellgrid",
+        "version": 1,
+        "kind": "confidence",
+        "uri": "confidence.bin",
+        "frame": "tileset",
+        "lattice": {"baseM": 0.25, "level": level},
+        "cellM": math.ldexp(0.25, level),
+        "channels": [
+            {"name": "score", "type": "u1"},
+            {"name": "reasons", "type": "u1"},
+            {"name": "relief", "type": "u1", "unitM": 0.25},
+        ],
+        "levels": [
+            {
+                "level": level,
+                "cellM": math.ldexp(0.25, level),
+                "i0": i0,
+                "j0": j0,
+                "ni": ni,
+                "nj": nj,
+                "offset": 0,
+                "bytes": len(raw),
+            }
+        ],
+        "reasonBits": bits,
+        "policy": "weak-v1",
+        "weakBelow": 128,
+        "alignmentCap": cap
+        or {"uncertaintyM": 0.0, "priorEpochs": 0, "factor": 1.0, "source": "site_context.json"},
+        "roiDisc": None,
+        "summary": {
+            "cells": ni * nj,
+            "scored": int(scored.sum()),
+            "weak": int(weak.sum()),
+            "unseen": int(unseen.sum()),
+            "weakShare": round(int(weak.sum()) / expected, 4) if expected else 0.0,
+            "reasons": {n: int((weak & ((reasons & b) > 0)).sum()) for n, b in bits.items()},
+            "gaussians": 0,
+            "outside": 0,
+            "medianGsdMm": median_gsd_mm,
+            "metric": median_gsd_mm is not None,
+        },
+        "sha256": hashlib.sha256(raw).hexdigest(),
+    }
+    return gzip.compress(raw, compresslevel=9, mtime=0), descriptor

@@ -23336,6 +23336,195 @@
         "title": "VersionReference",
         "type": "object"
       },
+      "WeakArea": {
+        "additionalProperties": false,
+        "description": "One re-scan zone: weak cells merged, smoothed and placed on the globe.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "areaM2": {
+            "title": "Aream2",
+            "type": "number"
+          },
+          "cells": {
+            "title": "Cells",
+            "type": "integer"
+          },
+          "diameterM": {
+            "title": "Diameterm",
+            "type": "number"
+          },
+          "footprint": {
+            "$ref": "#/components/schemas/Polygon"
+          },
+          "gimbalPitchDeg": {
+            "title": "Gimbalpitchdeg",
+            "type": "number"
+          },
+          "hint": {
+            "title": "Hint",
+            "type": "string"
+          },
+          "meanScore": {
+            "title": "Meanscore",
+            "type": "number"
+          },
+          "pattern": {
+            "enum": [
+              "nadir",
+              "oblique",
+              "orbit"
+            ],
+            "title": "Pattern",
+            "type": "string"
+          },
+          "reasons": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Reasons",
+            "type": "object"
+          },
+          "reliefM": {
+            "title": "Reliefm",
+            "type": "number"
+          },
+          "targetGsdM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Targetgsdm"
+          }
+        },
+        "required": [
+          "footprint",
+          "areaM2",
+          "cells",
+          "meanScore",
+          "reasons",
+          "reliefM",
+          "diameterM",
+          "pattern",
+          "targetGsdM",
+          "gimbalPitchDeg",
+          "hint"
+        ],
+        "title": "WeakArea",
+        "type": "object"
+      },
+      "WeakAreasRead": {
+        "additionalProperties": false,
+        "description": "An epoch's weak cells as re-scan zones, largest first.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/WeakArea"
+            },
+            "title": "Areas",
+            "type": "array"
+          },
+          "assetId": {
+            "format": "uuid",
+            "title": "Assetid",
+            "type": "string"
+          },
+          "cellM": {
+            "title": "Cellm",
+            "type": "number"
+          },
+          "epochId": {
+            "format": "uuid",
+            "title": "Epochid",
+            "type": "string"
+          },
+          "heuristic": {
+            "title": "Heuristic",
+            "type": "string"
+          },
+          "level": {
+            "title": "Level",
+            "type": "integer"
+          },
+          "policy": {
+            "const": "weak-v1",
+            "title": "Policy",
+            "type": "string"
+          },
+          "totalCells": {
+            "title": "Totalcells",
+            "type": "integer"
+          },
+          "truncatedByBudget": {
+            "title": "Truncatedbybudget",
+            "type": "boolean"
+          },
+          "weakCells": {
+            "title": "Weakcells",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epochId",
+          "assetId",
+          "policy",
+          "cellM",
+          "level",
+          "weakCells",
+          "totalCells",
+          "truncatedByBudget",
+          "heuristic",
+          "areas"
+        ],
+        "title": "WeakAreasRead",
+        "type": "object"
+      },
+      "WeakAreasRequest": {
+        "additionalProperties": false,
+        "description": "Which of an epoch's weak cells to turn into re-scan zones.",
+        "properties": {
+          "budgetM2": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 50000000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budgetm2"
+          },
+          "focus": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 2,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focus"
+          },
+          "maxAreas": {
+            "default": 3,
+            "maximum": 8.0,
+            "minimum": 1.0,
+            "title": "Maxareas",
+            "type": "integer"
+          }
+        },
+        "title": "WeakAreasRequest",
+        "type": "object"
+      },
       "WmsSource": {
         "additionalProperties": false,
         "properties": {
@@ -41437,6 +41626,86 @@
           }
         },
         "summary": "List a site's epochs",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/api/v1/sites/{site_id}/epochs/{epoch_id}/weak-areas": {
+      "post": {
+        "description": "The epoch's weak cells (weak-v1, ADR 0016) merged into at most `maxAreas` zones on\nthe globe, largest first, within `budgetM2`, each with a pattern to fly it again and a\nhint. Computes and stores nothing, so it is open like every read of a site; a POST for\nits body. The patterns are UX heuristics, labelled so (`heuristic`).",
+        "operationId": "epoch_weak_areas_api_v1_sites__site_id__epochs__epoch_id__weak_areas_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "epoch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Epoch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WeakAreasRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeakAreasRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "description": "No such site, or no such epoch of it."
+          },
+          "409": {
+            "description": "`confidence-not-measured`: the epoch's current revision has no confidence map (a splat upload is not measured); `confidence-unreadable`: its grid cannot be read; `no-site-frame`: the site has no frame to place cells by."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "An epoch's weak areas as re-scan zones",
         "tags": [
           "sites"
         ]

@@ -5,15 +5,17 @@ from typing import Annotated
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 
-from app.api.deps import DbSession, PublicStorage, RequireWriteToken
+from app.api.deps import DbSession, LimitCellMap, PublicStorage, RequireWriteToken
 from app.schemas.asset import AssetRead
 from app.schemas.bookmark import CameraBookmarkCreate, CameraBookmarkRead
 from app.schemas.check_target import CheckTargetRead, CheckTargetSet
+from app.schemas.confidence import WeakAreasRead, WeakAreasRequest
 from app.schemas.epoch import EpochRead
 from app.schemas.site import SiteCreate, SiteRead, SiteSummary, SiteUpdate
 from app.services import assets as asset_service
 from app.services import bookmarks as bookmark_service
 from app.services import check_targets as check_target_service
+from app.services import confidence_maps
 from app.services import epochs as epoch_service
 from app.services import sites as site_service
 from app.storage import StorageUnavailableError
@@ -86,6 +88,34 @@ def list_site_epochs(site_id: uuid.UUID, db: DbSession) -> list[EpochRead]:
     currently shows. Empty for a legacy (seeded, catalog, hand-made) site."""
     site = site_service.get_site(db, site_id)
     return [epoch_service.epoch_to_read(e, site.assets) for e in site.epochs]
+
+
+@router.post(
+    "/{site_id}/epochs/{epoch_id}/weak-areas",
+    response_model=WeakAreasRead,
+    summary="An epoch's weak areas as re-scan zones",
+    dependencies=[LimitCellMap],
+    responses={
+        404: {"description": "No such site, or no such epoch of it."},
+        409: {
+            "description": "`confidence-not-measured`: the epoch's current revision has no "
+            "confidence map (a splat upload is not measured); `confidence-unreadable`: its "
+            "grid cannot be read; `no-site-frame`: the site has no frame to place cells by."
+        },
+    },
+)
+def epoch_weak_areas(
+    site_id: uuid.UUID,
+    epoch_id: uuid.UUID,
+    payload: WeakAreasRequest,
+    db: DbSession,
+    storage: PublicStorage,
+) -> WeakAreasRead:
+    """The epoch's weak cells (weak-v1, ADR 0016) merged into at most `maxAreas` zones on
+    the globe, largest first, within `budgetM2`, each with a pattern to fly it again and a
+    hint. Computes and stores nothing, so it is open like every read of a site; a POST for
+    its body. The patterns are UX heuristics, labelled so (`heuristic`)."""
+    return confidence_maps.weak_areas(db, storage, site_id, epoch_id, payload)
 
 
 @router.get(

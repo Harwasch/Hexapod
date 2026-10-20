@@ -39,6 +39,9 @@ export type SiteFrame = Schemas["SiteFrameRead"];
 /** An epoch's confidence map, summarised (ADR 0016); null on an epoch is "not measured". */
 export type EpochConfidence = Schemas["EpochConfidenceRead"];
 export type AlignmentCap = Schemas["AlignmentCapRead"];
+export type WeakAreasRequest = Schemas["WeakAreasRequest"];
+export type WeakAreas = Schemas["WeakAreasRead"];
+export type WeakArea = Schemas["WeakArea"];
 export type CheckTarget = Schemas["CheckTargetRead"];
 export type CheckTargetRole = Schemas["CheckTargetRole"];
 export type EpochStatus = Schemas["EpochStatus"];

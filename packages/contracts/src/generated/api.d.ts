@@ -2429,6 +2429,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sites/{site_id}/epochs/{epoch_id}/weak-areas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * An epoch's weak areas as re-scan zones
+         * @description The epoch's weak cells (weak-v1, ADR 0016) merged into at most `maxAreas` zones on
+         *     the globe, largest first, within `budgetM2`, each with a pattern to fly it again and a
+         *     hint. Computes and stores nothing, so it is open like every read of a site; a POST for
+         *     its body. The patterns are UX heuristics, labelled so (`heuristic`).
+         */
+        post: operations["epoch_weak_areas_api_v1_sites__site_id__epochs__epoch_id__weak_areas_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sites/{site_id}/thumbnail": {
         parameters: {
             query?: never;
@@ -11622,6 +11645,92 @@ export interface components {
             /** Revision */
             revision: number;
         };
+        /**
+         * WeakArea
+         * @description One re-scan zone: weak cells merged, smoothed and placed on the globe.
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        WeakArea: {
+            /** Aream2 */
+            areaM2: number;
+            /** Cells */
+            cells: number;
+            /** Diameterm */
+            diameterM: number;
+            footprint: components["schemas"]["Polygon"];
+            /** Gimbalpitchdeg */
+            gimbalPitchDeg: number;
+            /** Hint */
+            hint: string;
+            /** Meanscore */
+            meanScore: number;
+            /**
+             * Pattern
+             * @enum {string}
+             */
+            pattern: "nadir" | "oblique" | "orbit";
+            /** Reasons */
+            reasons: {
+                [key: string]: number;
+            };
+            /** Reliefm */
+            reliefM: number;
+            /** Targetgsdm */
+            targetGsdM: number | null;
+        };
+        /**
+         * WeakAreasRead
+         * @description An epoch's weak cells as re-scan zones, largest first.
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        WeakAreasRead: {
+            /** Areas */
+            areas: components["schemas"]["WeakArea"][];
+            /**
+             * Assetid
+             * Format: uuid
+             */
+            assetId: string;
+            /** Cellm */
+            cellM: number;
+            /**
+             * Epochid
+             * Format: uuid
+             */
+            epochId: string;
+            /** Heuristic */
+            heuristic: string;
+            /** Level */
+            level: number;
+            /**
+             * Policy
+             * @constant
+             */
+            policy: "weak-v1";
+            /** Totalcells */
+            totalCells: number;
+            /** Truncatedbybudget */
+            truncatedByBudget: boolean;
+            /** Weakcells */
+            weakCells: number;
+        };
+        /**
+         * WeakAreasRequest
+         * @description Which of an epoch's weak cells to turn into re-scan zones.
+         */
+        WeakAreasRequest: {
+            /** Budgetm2 */
+            budgetM2?: number | null;
+            /** Focus */
+            focus?: number[] | null;
+            /**
+             * Maxareas
+             * @default 3
+             */
+            maxAreas?: number;
+        };
         /** WmsSource */
         WmsSource: {
             /** Layers */
@@ -12357,6 +12466,9 @@ export type SchemaVegetationObservation = components['schemas']['VegetationObser
 export type SchemaVegetationPeriod = components['schemas']['VegetationPeriod'];
 export type SchemaVegetationTimeline = components['schemas']['VegetationTimeline'];
 export type SchemaVersionReference = components['schemas']['VersionReference'];
+export type SchemaWeakArea = components['schemas']['WeakArea'];
+export type SchemaWeakAreasRead = components['schemas']['WeakAreasRead'];
+export type SchemaWeakAreasRequest = components['schemas']['WeakAreasRequest'];
 export type SchemaWmsSource = components['schemas']['WmsSource'];
 export type SchemaWmtsSource = components['schemas']['WmtsSource'];
 export type SchemaWorkableCreeks = components['schemas']['WorkableCreeks'];
@@ -22994,6 +23106,65 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Problem"];
                 };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    epoch_weak_areas_api_v1_sites__site_id__epochs__epoch_id__weak_areas_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                epoch_id: string;
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WeakAreasRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WeakAreasRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such site, or no such epoch of it. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `confidence-not-measured`: the epoch's current revision has no confidence map (a splat upload is not measured); `confidence-unreadable`: its grid cannot be read; `no-site-frame`: the site has no frame to place cells by. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation error */
             422: {
