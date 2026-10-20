@@ -14,7 +14,8 @@ geoid model is applied; `source` `backfill`) and one epoch: ordinal 1, `new-site
 `unknown` otherwise, the capture's quality, the site boundary as its footprint, and the
 run named by `metadata.jobId` (else the capture's newest complete run). The site's first
 splat by creation -- the one the worker repointed until now -- becomes that epoch's asset
-and takes its `observed_at` where it had none. Seeded and catalog sites have no
+and takes its `observed_at` where it had none, unless it has a `valid_to` (then it stays
+legacy: on an epoch asset `valid_to` means superseded). Seeded and catalog sites have no
 `captureId` and stay legacy.
 
 Downgrade drops the tables and columns and nothing else: no asset row is deleted and no

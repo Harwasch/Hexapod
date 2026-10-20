@@ -49,9 +49,8 @@ A derived, renderable delivery asset with provenance.
 | render_config                     | jsonb `RenderConfig`               | `maximumScreenSpaceError`, `pointCloudShading`, `clipsWorld`, `clipFootprint` (`catalog`/`tileset`), `heightOffsetM`, `clampToGround`, `groundSamples` (the capture's own measured ground as ellipsoid heights — what the clamp rests on), `scale`/`scaleEvidence` (a runtime size correction, below); provenance, including `georefMethod`/`scaleSource`/`uncertaintyM`, is stored alongside |
 | default_visible                   | bool                               | the representation shown first                                                                                                                                                                                                                                                                                                                                                                |
 | sidecar_flags                     | jsonb                              | sidecars a republish could not carry into the new generation, one `{kind, action, reason, jobId, flaggedAt}` per kind ("Objects need re-segmenting"); cleared when the kind is attached again (0009, docs/SCENE_OBJECTS.md §8)                                                                                                                                                                |
-
-| epoch_id | uuid → epochs (set null), nullable | the epoch this asset is a revision of (0032); null for seeded, catalog and hand-made assets |
-| source_kind | text | `observed` (the capture) · `inferred` (a fill, M5); one asset is one tileset of one epoch and one source kind |
+| epoch_id                          | uuid → epochs (set null), nullable | the epoch this asset is a revision of (0032); null for seeded, catalog and hand-made assets                                                                                                                                                                                                                                                                                                   |
+| source_kind                       | text                               | `observed` (the capture) · `inferred` (a fill, M5); one asset is one tileset of one epoch and one source kind                                                                                                                                                                                                                                                                                 |
 
 **Superseded = `valid_to` set on an epoch asset.** A re-run of a capture inserts a new revision of
 its epoch and sets the old row's `valid_to` and `default_visible = false`; nothing else of the old
@@ -147,8 +146,9 @@ A legacy asset is the site's first gaussian-splat asset, a 3D Tiles URL, on a si
 `metadata.registration.georef` records the origin. Anything else is a 409 with
 `code: not_scalable`. A re-run that registers new tiles adds a new
 revision with no scale (the new tiles carry the run's own, in the provenance that replaces the
-old) and resizes the site's boundary back; the superseded revision keeps its scale as history; the site's `metadata.registration` becomes the new run's, so the
-next scale is set about the origin those tiles are placed at. Unscaled assets store neither
+old) and resizes the site's boundary back; the superseded revision keeps its scale as history; the next scale is set about the
+origin those tiles are placed at: for an epoch asset the site's frame, which never moves; for a
+legacy asset the site's `metadata.registration`, which becomes the new run's. Unscaled assets store neither
 key, so code from before this can still read every asset nobody resized; reset scaled ones
 before rolling back past it.
 
