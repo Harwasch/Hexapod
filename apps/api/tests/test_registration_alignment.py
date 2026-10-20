@@ -347,3 +347,22 @@ def test_survey_is_never_recorded_for_a_platform_the_frames_did_not_show(
     assert "frames' metadata" in epoch.alignment["reasons"][-1]
     claim = {**epoch.alignment, "verdict": "survey"}
     assert epochs.claimed_verdict(claim, "rtk-drone") == "coarse"
+
+
+def test_an_alignment_judged_for_a_claimed_rtk_drone_records_a_drone(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Rebase onto #49: the epoch takes the platform its alignment was judged for, ahead
+    of #49's rule that `rtk-drone` is written only when the frames showed it. An alignment
+    for a `platform: rtk-drone` param (`platformEvidence: claimed`) must not slip an RTK
+    tier onto the epoch through that door: it is recorded `drone`."""
+
+    def claimed(ref: uuid.UUID) -> dict[str, Any]:
+        block = aligned(method="visual", verdict="coarse", platform="rtk-drone",
+                        uncertainty=0.04, label="RTK drone, aligned visually, ±0.04 m",
+                        reference=ref)  # fmt: skip
+        block["platformEvidence"] = "claimed"
+        return block
+
+    _first, second = second_epoch(db, storage, tmp_path, claimed)
+    assert _epoch_of(db, second).platform == "drone"

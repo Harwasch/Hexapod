@@ -178,7 +178,17 @@ def epoch_platform(capture: Capture, registration: Registration, current: str | 
     (a write-token client's `metadata.platform`, or a document from before the field)
     is recorded as the `drone` it claims to be, without the survey part.
     """
-    aligned = _platform((registration.alignment or {}).get("platform"))
+    alignment = registration.alignment or {}
+    aligned = _platform(alignment.get("platform"))
+    if aligned is EpochPlatform.RTK_DRONE and alignment.get("platformEvidence") != "metadata":
+        # The same rule for the alignment's platform: it is what the run was judged for,
+        # and a `platform: rtk-drone` param makes it so without the frames showing it.
+        log.warning(
+            "register: the alignment's rtk-drone rests on %r, not the frames' metadata; "
+            "recorded as drone",
+            alignment.get("platformEvidence"),
+        )
+        aligned = EpochPlatform.DRONE
     if aligned is not None and aligned is not EpochPlatform.UNKNOWN:
         return aligned.value
     detected = registration.platform
