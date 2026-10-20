@@ -110,10 +110,15 @@ implementer's work under the procedure above, with the exposures listed.
   at half the narrower cell, so no weight is negative for any margin (inactive at the default
   margin of 0.1).
 - **Hyperparameters kept as values, with citations.** `DEFAULT_EPSILON = 0.05` is
-  CityGaussian's Table S3 value; the frozen ring is Hierarchical 3DGS's idea, but
-  `DEFAULT_RING_OUTER = 1.5`, `DEFAULT_BLEND = 0.0125` and `MIN_IMAGES = 50` are this
-  project's values (none of the papers blends at the seams or sets a minimum of images per
-  block), and the comments say so.
+  CityGaussian's Table S3 value. The other three come from the projects' code, not their
+  papers, and are cited to it: `DEFAULT_RING_OUTER = 1.5` is the reach of Hierarchical
+  3DGS's scaffold (`scene/gaussian_model.py`, `create_from_pcd`); `DEFAULT_BLEND = 0.0125`
+  is H3DGS `getWeight`'s falloff 0.05 divided by 4, the half-width the replaced code used
+  (`hierarchy_explicit_loader.cpp`); `MIN_IMAGES = 50` is CityGaussian V2's
+  `colmap_block_dataparser.py` assertion `len(new_images) > 50`. (An earlier revision of
+  this change called these three this project's own values; a review found where each came
+  from.) A number is kept, not the code around it: the rewrite took formulas from the
+  papers and only these values from the code, and the measured spool run used all of them.
 
 ## Why the merge differs from the code it replaced
 
@@ -358,17 +363,17 @@ Also, in `test_splat_tiles_lod.py`, new `test_a_parent_tile_is_its_subtree_merge
 
 **Constants (names callers use):**
 
-| Name                 | Value        | Meaning                                                                                                                                                                                                          |
-| -------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DEFAULT_MARGIN`     | 0.1          | Trainable region grows by 10% of each cell's width per side. VastGaussian arXiv 2402.17427 uses a 20% expansion. Kept so the measured 2-block spool run (26.42 dB against 26.39 whole) still describes this code |
-| `DEFAULT_RING_OUTER` | 1.5          | Ring reaches 1.5 block sizes from the centre, one full block width beyond each edge, so a camera anywhere in the block sees at least a block width of frozen surroundings in every ground direction              |
-| `DEFAULT_BLEND`      | 0.0125       | Half-width of the cross-fade, as a fraction of the spacing between adjacent cell centres (the band the spool run used)                                                                                           |
-| `DEFAULT_EPSILON`    | 0.05         | Camera-test threshold, the value shipped and measured with until now; `block_epsilon` is the knob                                                                                                                |
-| `MIN_IMAGES`         | 50           | Fewest training cameras a block may have                                                                                                                                                                         |
-| `OUTER_QUANTILES`    | (0.01, 0.99) | Robust outer bounds                                                                                                                                                                                              |
-| `SSIM_WINDOW`        | 11           | Wang et al. 2004                                                                                                                                                                                                 |
-| `SSIM_SIGMA`         | 1.5          | Wang et al. 2004                                                                                                                                                                                                 |
-| `SSIM_K`             | (0.01, 0.03) | With dynamic range L = 1                                                                                                                                                                                         |
+| Name                 | Value        | Meaning                                                                                                                                                                                                                                                             |
+| -------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DEFAULT_MARGIN`     | 0.1          | Trainable region grows by 10% of each cell's width per side. VastGaussian arXiv 2402.17427 uses a 20% expansion. Kept so the measured 2-block spool run (26.42 dB against 26.39 whole) still describes this code                                                    |
+| `DEFAULT_RING_OUTER` | 1.5          | Ring reaches 1.5 block sizes from the centre, one full block width beyond each edge, so a camera anywhere in the block sees at least a block width of frozen surroundings in every ground direction. Hierarchical 3DGS's scaffold reach (`scene/gaussian_model.py`) |
+| `DEFAULT_BLEND`      | 0.0125       | Half-width of the cross-fade, as a fraction of the spacing between adjacent cell centres (the band the spool run used). H3DGS `getWeight`'s falloff 0.05 / 4 (`hierarchy_explicit_loader.cpp`)                                                                      |
+| `DEFAULT_EPSILON`    | 0.05         | Camera-test threshold, the value shipped and measured with until now; `block_epsilon` is the knob                                                                                                                                                                   |
+| `MIN_IMAGES`         | 50           | Fewest training cameras a block may have. CityGaussian V2's `colmap_block_dataparser.py` (`len(new_images) > 50`)                                                                                                                                                   |
+| `OUTER_QUANTILES`    | (0.01, 0.99) | Robust outer bounds                                                                                                                                                                                                                                                 |
+| `SSIM_WINDOW`        | 11           | Wang et al. 2004                                                                                                                                                                                                                                                    |
+| `SSIM_SIGMA`         | 1.5          | Wang et al. 2004                                                                                                                                                                                                                                                    |
+| `SSIM_K`             | (0.01, 0.03) | With dynamic range L = 1                                                                                                                                                                                                                                            |
 
 **`horizontal_axes(up, xyz) -> (a1, a2)`.** Let û = up/|up|.
 
@@ -473,15 +478,15 @@ Finally, order the blocks by their smallest cell, and reorder the matrix columns
 
 Note: the union of cameras is never more than a re-test would give, since removing two blocks changes a render at least as much as removing one.
 
-**`ring(part, uv, block, *, margin, outer) -> bool (n,)`.** Take rect(block) = (u0, u1, v0, v1), centre (c_u, c_v), and widths w_u = max(u1 − u0, 1e-12), w_v likewise. Let
+**`ring(part, uv, block, *, margin, outer) -> bool (n,)`.** Take rect(block) = (u0, u1, v0, v1), centre (c_u, c_v), and widths w_u = u1 − u0, w_v = v1 − v0. The ring is
 
-d = max(|u − c_u|/w_u, |v − c_v|/w_v).
+|u − c_u| ≤ outer·w_u AND |v − c_v| ≤ outer·w_v AND NOT `in_expanded(uv, block, margin)`.
 
-The ring is d ≤ outer AND NOT `in_expanded(uv, block, margin)`. This is a square annulus in block-normalised L∞ distance, so nothing is both trainable and frozen.
+That is d = max(|u − c_u|/w_u, |v − c_v|/w_v) ≤ outer, written without the division, so a block of zero width along an axis is the limit (only points on its centre line, along that axis), not a NaN; no floor on the width is needed. This is a square annulus in block-normalised L∞ distance, so nothing is both trainable and frozen.
 
 **`weights(part, uv, block, *, blend=DEFAULT_BLEND, margin=DEFAULT_MARGIN) -> float (n,)` (our cross-fade).** Per axis, with edges e₀…e_c, cell widths w_j and centres m_j:
 
-1. For each interior edge k = 1…c−1: D_k = m_k − m_{k−1} and h_k = min(blend·D_k, margin·min(w_{k−1}, w_k)).
+1. For each interior edge k = 1…c−1: D_k = m_k − m_{k−1} and h_k = min(blend·D_k, margin·min(w_{k−1}, w_k), ½·min(w_{k−1}, w_k)).
 2. Step function: S₀ ≡ 1, S_c ≡ 0. For an interior edge, S_k(x) = 1 if x ≥ e_k when h_k = 0; otherwise S_k(x) = clip(½ + (x − e_k)/(2h_k), 0, 1). A non-finite coordinate is treated as 0.
 3. Cell weight ω_j(x) = S_j(x) − S_{j+1}(x).
 4. The block's weight is Σ over its cells (iu, iv) of ω^u_iu(u)·ω^v_iv(v), clipped to [0, 1].

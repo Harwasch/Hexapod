@@ -96,6 +96,30 @@
       "path": "apps/api/app/seed/__init__.py",
       "contains": "san-francisco-aerometrex-mesh",
       "reason": "WITHDRAWN_SITES must keep the slug so old databases delete the row"
+    },
+    {
+      "rule": "nc-code-marker",
+      "path": "docs/DECISIONS/0012-licence-clean-room.md",
+      "contains": "gaussian_model.py",
+      "reason": "Cites the file DEFAULT_RING_OUTER = 1.5 was taken from, as a value only; no code from it is here (PR #50 review)"
+    },
+    {
+      "rule": "nc-code-marker",
+      "path": "docs/DECISIONS/0012-licence-clean-room.md",
+      "contains": "getWeight",
+      "reason": "Cites the file DEFAULT_BLEND = 0.0125 was taken from, as a value only; no code from it is here (PR #50 review)"
+    },
+    {
+      "rule": "nc-code-marker",
+      "path": "docs/DECISIONS/0012-licence-clean-room.md",
+      "contains": "hierarchy_explicit_loader",
+      "reason": "Cites the file DEFAULT_BLEND = 0.0125 was taken from, as a value only; no code from it is here (PR #50 review)"
+    },
+    {
+      "rule": "nc-code-marker",
+      "path": "docs/DECISIONS/0012-licence-clean-room.md",
+      "contains": "colmap_block_dataparser",
+      "reason": "Cites the file MIN_IMAGES = 50 was taken from, as a value only; no code from it is here (PR #50 review)"
     }
   ]
 }

@@ -72,19 +72,25 @@ DEFAULT_MARGIN = 0.1
 #: The frozen ring reaches this many block sizes from the block's centre: one full block
 #: width beyond each edge, so a camera anywhere in the block sees at least a block width
 #: of frozen surroundings in every ground direction. The frozen surroundings are
-#: Hierarchical 3DGS's (arXiv 2406.12080, which also takes cameras from within 2x the
-#: chunk bounds); the value 1.5 is this project's.
+#: Hierarchical 3DGS's (arXiv 2406.12080). The value 1.5 is from that project's released
+#: code, not the paper: its scaffold loads coarse gaussians up to 1.5 chunk sizes from the
+#: chunk's centre. Only the value is kept; ADR 0012 names the file.
 DEFAULT_RING_OUTER = 1.5
 #: Half-width of the cross-fade, as a fraction of the spacing of adjacent cell centres.
-#: This project's value: VastGaussian (arXiv 2402.17427) and CityGaussian (arXiv
-#: 2404.01133) crop each block to its bounds and concatenate, the limit blend = 0.
+#: The value is from Hierarchical 3DGS's (arXiv 2406.12080) released code, not the paper:
+#: its renderer fades over a +-5% band of the distance ratio (falloff 0.05), on a uniform
+#: grid a half-width of about falloff / 4 of the centre spacing. The code this replaced
+#: used exactly 0.05 / 4, and the measured 2-block spool run used it. Only the value is
+#: kept; ADR 0012 names the file. VastGaussian (arXiv 2402.17427) and CityGaussian (arXiv
+#: 2404.01133) crop each block to its bounds, the limit blend = 0.
 DEFAULT_BLEND = 0.0125
 #: The camera test's 1 - SSIM threshold (`block_epsilon` is the knob): Table S3 of
 #: CityGaussian, arXiv 2404.01133, which uses 0.05 for MatrixCity and Sci-Art.
 DEFAULT_EPSILON = 0.05
-#: The fewest training cameras a block may have; fewer and it joins a neighbour. This
-#: project's value: none of the three papers states a minimum per block (Hierarchical
-#: 3DGS, arXiv 2406.12080, uses 50 as a count of SfM points for its camera rule).
+#: The fewest training cameras a block may have; fewer and it joins a neighbour. The value
+#: is from CityGaussian V2's (arXiv 2411.00771) released code, not the paper: its block
+#: data parser asserts more than 50 images per block. Only the value is kept; ADR 0012
+#: names the file. None of the three papers states a minimum per block.
 MIN_IMAGES = 50
 #: Robust outer bounds of the points, per axis.
 OUTER_QUANTILES = (0.01, 0.99)
