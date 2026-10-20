@@ -41689,9 +41689,23 @@
             "description": "Missing or wrong write token"
           },
           "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
             "description": "No such site, or no such epoch of it."
           },
           "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
             "description": "`confidence-not-measured`: the epoch's current revision has no confidence map (a splat upload is not measured); `confidence-unreadable`: its grid cannot be read; `no-site-frame`: the site has no frame to place cells by."
           },
           "422": {

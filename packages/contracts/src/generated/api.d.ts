@@ -23157,14 +23157,18 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
             };
             /** @description `confidence-not-measured`: the epoch's current revision has no confidence map (a splat upload is not measured); `confidence-unreadable`: its grid cannot be read; `no-site-frame`: the site has no frame to place cells by. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
             };
             /** @description Validation error */
             422: {

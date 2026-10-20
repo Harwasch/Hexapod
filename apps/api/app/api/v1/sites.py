@@ -9,6 +9,7 @@ from app.api.deps import DbSession, LimitCellMap, PublicStorage, RequireWriteTok
 from app.schemas.asset import AssetRead
 from app.schemas.bookmark import CameraBookmarkCreate, CameraBookmarkRead
 from app.schemas.check_target import CheckTargetRead, CheckTargetSet
+from app.schemas.common import Problem
 from app.schemas.confidence import WeakAreasRead, WeakAreasRequest
 from app.schemas.epoch import EpochRead
 from app.schemas.site import SiteCreate, SiteRead, SiteSummary, SiteUpdate
@@ -96,11 +97,12 @@ def list_site_epochs(site_id: uuid.UUID, db: DbSession) -> list[EpochRead]:
     summary="An epoch's weak areas as re-scan zones",
     dependencies=[LimitCellMap],
     responses={
-        404: {"description": "No such site, or no such epoch of it."},
+        404: {"model": Problem, "description": "No such site, or no such epoch of it."},
         409: {
+            "model": Problem,
             "description": "`confidence-not-measured`: the epoch's current revision has no "
             "confidence map (a splat upload is not measured); `confidence-unreadable`: its "
-            "grid cannot be read; `no-site-frame`: the site has no frame to place cells by."
+            "grid cannot be read; `no-site-frame`: the site has no frame to place cells by.",
         },
     },
 )
