@@ -304,16 +304,25 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
    every target is weak and covered there); the layer records that grid's sha256. At publish
    (`publish-fill.yml`, `verify_layer`), the scan's asset must be a current revision of the
    gate's epoch and site, its current tileset must carry that very grid, the targets fetched
-   now must be the ones it was filled for, and every gaussian must be in a target cell. Fill
+   now must be the ones it was filled for, and every gaussian of every tile -- parents as well
+   as leaves (`layer_positions`) -- must be in a target cell. Fill
    time cannot tell an earlier epoch whose grid shares the window (its targets are weak there
    too, by definition); publish can.
 4. **The evidence says so**: `extras.evidence.rescanGate` {policy, siteId, epochId, weakIn,
    comparedWith, level, cellM, i0, j0, ni, nj, cells, maskSha256, confidenceSha256}.
-5. **The API holds it too, so nothing new reaches the live site without it.** An attach
-   (`POST /assets/{id}/sidecars`) refuses with a 422 any `inferredLayers` entry, and any layer
-   of a fill variant it adds or changes (`extras.variants.fill`), that has no `rescan-gate-v1`
-   `rescanGate` gated against the confidence grid the asset's tiles carry now, for the asset's
-   epoch (`sidecars.fill_gate_problem`). A republish carries an `inferred/` layer only while
+5. **The API recomputes it, so nothing new reaches the live site without it.** The write
+   token is the auth, not the evidence: a layer's `rescanGate` is readable metadata anyone
+   holding the token can copy, so it never admits a layer. An attach
+   (`POST /assets/{id}/sidecars`) judges every inferred layer it declares anew --
+   `inferredLayers`, and the layers of a fill variant (`extras.variants.fill`) -- and every declared layer it
+   stages any file of (an empty `extras` that replaces a layer's tiles is judged too). Each
+   must carry a `rescan-gate-v1` `rescanGate` against the grid the tiles carry, for the
+   asset's epoch, at a plain path (`sidecars.fill_gate_problem`); then the API's own gate
+   (`app/services/fill_gate.py`) recomputes the targets with `confidence_maps.fill_targets`
+   over the stored `epoch_maps` (no earlier measured epoch, or no cell still weak, is a 422),
+   requires the asset to be its epoch's current revision, the evidence to name exactly those
+   targets, the layer's root transform to be the scan's, and every gaussian of every tile to
+   be in a target cell. A republish carries an `inferred/` layer only while
    the new generation's tiles carry that very grid — a re-run that measured its own drops it,
    with its files, and flags the asset "Inferred fill needs filling again"; so does any
    republish of a layer that was never gated, the same tiles included. Layers live from before
@@ -322,11 +331,13 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
 6. **Where it is enforced in the tools.** `teacher_fill.py fill` requires `--still-weak FILE`;
    `infra/modal/fill.py` takes `--still-weak <scan>=<file>`, checks each file's shape with the
    standard library alone (it runs where fill.yml runs it, with nothing but modal installed)
-   before anything starts on Modal, and forwards it; the job's `teacher_fill.py` reads every
-   bit. `fill.yml` gains `fill_targets_url` and fetches each fill job's targets from the API's
+   before anything starts on Modal, and forwards it; the job fetches the scan with every cell
+   grid it declares (`_fetch`), and its `teacher_fill.py` reads every bit. `fill.yml` gains
+   `fill_targets_url` and fetches each fill job's targets from the API's
    own route (no new secret); its jobs have no default, so a push runs nothing and says so.
 7. **What stays ungated.** `drop`, the evaluation harness, is never published. A split
-   object's hole fill (`fill_hole`, declared under `fills/`) stays ungated while splits are
+   object's hole fill (`fill_hole`, declared under `fills/`, a plain path: a uri that climbs
+   out of `fills/` is refused, never exempt) stays ungated while splits are
    unpublished (the attach refuses `fills/` and `objects/`; carry sends it with its split);
    gating it is the first step of ever publishing a split. `FillTargetsRead` stays as it is:
    the exact binding to a revision is at publish and in the API, not at fill time.
@@ -346,6 +357,9 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
 
 - Fill execution on a GPU (Modal): only the gate runs locally, with the Telea stand-in.
 - Gating `fill_hole` (split objects' holes): only once a split is published.
+- A republish judges only top-level `inferredLayers` (`carry._gate_fills`): a fill variant's
+  layers are carried as they are (Codex R3 on #60, finding 7), and a carried layer is not
+  re-held to targets that changed because an earlier epoch was measured since.
 - A carry rule for fill variants on new tiles: `variants` is an extras key the API does not
   own, so new tiles drop it whole (flagged), and the same tiles keep it.
 
