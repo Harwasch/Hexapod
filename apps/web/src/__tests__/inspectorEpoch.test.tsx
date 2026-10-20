@@ -19,11 +19,23 @@ import { useUi } from "@/state/ui";
 
 import { A1, A2, E1, E2, SITE_ID, twoEpochSite } from "./epochFixtures";
 
-const scene = vi.hoisted(() => ({
-  sites: { sharesPlacement: vi.fn((): boolean | null => null), previewScale: vi.fn() },
-  camera: { flyTo: vi.fn() },
-  selection: { clear: vi.fn() },
-}));
+const scene = vi.hoisted(() => {
+  const listeners = new Map<string, Set<() => void>>();
+  return {
+    sites: { sharesPlacement: vi.fn((): boolean | null => true), previewScale: vi.fn() },
+    camera: { flyTo: vi.fn() },
+    selection: { clear: vi.fn() },
+    events: {
+      on: (name: string, listener: () => void) => {
+        const set = listeners.get(name) ?? new Set();
+        listeners.set(name, set);
+        set.add(listener);
+        return () => set.delete(listener);
+      },
+      emit: (name: string) => listeners.get(name)?.forEach((listener) => listener()),
+    },
+  };
+});
 vi.mock("@/cesium/SceneContext", () => ({ useScene: () => scene }));
 
 /** The anchor rests on its own measured ground. */
@@ -67,7 +79,7 @@ function inspect(site: Site, epochId: string | null = null) {
   );
 }
 
-beforeEach(() => scene.sites.sharesPlacement.mockReturnValue(null));
+beforeEach(() => scene.sites.sharesPlacement.mockReturnValue(true));
 
 afterEach(() => {
   cleanup();
@@ -115,6 +127,21 @@ describe("Date shown", () => {
     expect(scene.sites.sharesPlacement).toHaveBeenCalledWith(SITE_ID, A2.id);
     expect(screen.getByTestId("inspector-epoch-placement")).toHaveTextContent(
       "Placed on its own, not with the placement the site's other dates share",
+    );
+  });
+
+  it("a date whose placement is not decided yet does not claim one, and follows the scene", () => {
+    scene.sites.sharesPlacement.mockReturnValue(null);
+    inspect(twoEpochSite({ assets: [clamped, A2] }));
+    const placement = screen.getByTestId("inspector-epoch-placement");
+    expect(placement).toHaveTextContent(
+      "Not placed yet: waiting for the Mar 1, 2026 capture, whose placement every date shares",
+    );
+    // The scene decides (its anchor loaded, the frames agree) and says so.
+    scene.sites.sharesPlacement.mockReturnValue(true);
+    act(() => scene.events.emit("tilesets"));
+    expect(placement).toHaveTextContent(
+      "Shares the site frame's placement, rested on the Mar 1, 2026 capture's ground",
     );
   });
 

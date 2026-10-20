@@ -208,6 +208,11 @@ interface AssetHandle {
    * id, whose model matrix this one copies and is never clamped on its own.
    */
   follows?: string;
+  /**
+   * A date of the site waiting to learn whether it can follow its anchor (`followAnchor`: the
+   * anchor loading, the frames compared). Neither following nor placed on its own yet.
+   */
+  followPending?: boolean;
   /** The dates of the site that copy this anchor's model matrix (`followAnchor`). */
   followers?: Set<AssetHandle>;
   /**
@@ -574,7 +579,7 @@ export class SiteManager {
    */
   sharesPlacement(siteId: string, assetId: string): boolean | null {
     const handle = this.loaded.get(siteId)?.handles.get(assetId);
-    if (!handle?.tileset) return null;
+    if (!handle?.tileset || handle.followPending) return null;
     return handle.follows !== undefined;
   }
 
@@ -1770,12 +1775,19 @@ export class SiteManager {
       serial: 0,
       timer: null,
     };
-    handle.follows = anchor.id;
+    // Following only once the guard below has passed: until then it is undecided.
+    handle.followPending = true;
     let rough = (): void => undefined;
     handle.placedRoughly = new Promise<void>((resolve) => (rough = resolve));
+    // Whether the date shares the placement is now known: what describes it reads it again
+    // (the Inspector's Date shown, on `tilesets`).
+    const decided = (): void => {
+      handle.followPending = false;
+      this.events.emit("tilesets", this.activeTilesetLabels());
+    };
     const alone = async (message: string): Promise<void> => {
       log.warn(message, { asset: handle.asset.id, anchor: anchor.id });
-      handle.follows = undefined;
+      decided();
       const own = this.placeOwn(handle, tileset);
       void own.roughly.then(rough);
       await own.placed;
@@ -1792,7 +1804,9 @@ export class SiteManager {
         await alone("an epoch's tiles are not in its site's frame; placed on its own");
         return;
       }
+      handle.follows = anchor.id;
       (anchorHandle.followers ??= new Set()).add(handle);
+      decided();
       // At once, then each time the anchor moves (`applyPlacement` copies to its followers).
       this.copyPlacement(anchorTileset, tileset);
       await anchorHandle.placedRoughly;
@@ -1898,9 +1912,10 @@ export class SiteManager {
     const placement = handle.placement;
     if (!placement) return;
     const asset = handle.asset;
-    if (handle.follows) {
+    if (handle.follows || handle.followPending) {
       // Drawn with the frame's anchor, never rested on its own: it moves when the anchor does.
-      const anchor = entry.handles.get(handle.follows)?.tileset;
+      // Still undecided, it waits for that (`followAnchor`).
+      const anchor = handle.follows ? entry.handles.get(handle.follows)?.tileset : undefined;
       if (anchor && !anchor.isDestroyed()) this.copyPlacement(anchor, tileset);
       if (entry.engaged && this.pickAsset(entry, entry.representation)?.id === asset.id)
         this.applyClip(entry, asset, tileset);
