@@ -683,3 +683,76 @@ def test_0032_re_runs_after_an_index_build_fails(
     assert all(row.valid for row in indexes.values())
     assert not indexes["ix_assets_epoch_id"].uniq
     assert "(epoch_id)" in indexes["ix_assets_epoch_id"].definition
+
+
+def test_0033_downgrade_folds_visual_epoch(
+    alembic_config: Config, engine: Engine, db: Session
+) -> None:
+    """`visual-epoch` is a value 0032's enums cannot hold and 0032's `Provenance` refuses.
+    Down, a visually aligned capture and its asset's provenance read as placed by no
+    method of their own with an unresolved scale (their uncertainty kept); up, the value
+    is back in both types, before each type's "nothing" member, as the enums declare."""
+    from app.models.enums import GeorefMethod
+
+    with Session(engine) as session:
+        capture = Capture(
+            slug="aligned",
+            name="Aligned",
+            kind=CaptureKind.VIDEO,
+            georef_method=GeorefMethod.VISUAL_EPOCH,
+            scale_source=ScaleSource.VISUAL_EPOCH,
+        )
+        asset = Asset(
+            name="Aligned splat",
+            representation=Representation.GAUSSIAN_SPLAT,
+            provider=AssetProvider.TILES_3D_URL,
+            source={"type": "3d-tiles-url", "url": "https://cdn.example.com/a/tileset.json"},
+            render_config={
+                "provenance": {
+                    "georefMethod": "visual-epoch",
+                    "scaleSource": "visual-epoch",
+                    "uncertaintyM": 0.065,
+                }
+            },
+            attribution=[],
+            default_visible=True,
+        )
+        session.add_all([capture, asset])
+        session.commit()
+        capture_id, asset_id = capture.id, asset.id
+
+    def labels(connection: Connection, type_name: str) -> list[str]:
+        rows = connection.execute(text(f"SELECT unnest(enum_range(NULL::{type_name}))::text"))
+        return [str(value) for value in rows.scalars()]
+
+    command.downgrade(alembic_config, "0032")
+    try:
+        with engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT georef_method::text, scale_source::text FROM captures WHERE id = :id"),
+                {"id": capture_id},
+            ).one()
+            provenance = connection.execute(
+                text("SELECT render_config -> 'provenance' FROM assets WHERE id = :id"),
+                {"id": asset_id},
+            ).scalar_one()
+            assert tuple(row) == ("none", "unresolved")
+            assert provenance == {
+                "georefMethod": "none",
+                "scaleSource": "unresolved",
+                "uncertaintyM": 0.065,
+            }
+            assert labels(connection, "georef_method") == ["exif-gps", "arkit", "manual", "none"]
+            assert labels(connection, "scale_source") == [
+                "arkit",
+                "exif-gps",
+                "manual",
+                "camera-height-estimate",
+                "unresolved",
+            ]
+    finally:
+        command.upgrade(alembic_config, "head")
+
+    with engine.connect() as connection:
+        assert labels(connection, "georef_method") == [m.value for m in GeorefMethod]
+        assert labels(connection, "scale_source") == [s.value for s in ScaleSource]

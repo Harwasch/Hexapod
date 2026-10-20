@@ -7139,11 +7139,12 @@
         "type": "object"
       },
       "GeorefMethod": {
-        "description": "How a reconstruction was placed on the globe.",
+        "description": "How a reconstruction was placed on the globe.\n\n``visual-epoch`` (M3b): its frames were registered into an earlier epoch of the same\nsite and placed by that alignment, not by its own GNSS. It is only as good as the\nepoch it was aligned to -- the uncertainty says how good -- so it is never read as a\nmeasurement in its own right. Declared before ``none``, where migration 0033 puts it.",
         "enum": [
           "exif-gps",
           "arkit",
           "manual",
+          "visual-epoch",
           "none"
         ],
         "title": "GeorefMethod",
@@ -18556,12 +18557,13 @@
         "type": "object"
       },
       "ScaleSource": {
-        "description": "Where metric scale came from.\n\n``unresolved`` is a first-class answer, not a missing value: COLMAP alone recovers\ngeometry up to scale, and a measurement taken off an unresolved reconstruction is\nmeaningless rather than merely imprecise.\n\n``camera-height-estimate`` is between a measurement and that: none was made, but a\nhandheld phone is about 1.5 m above the ground and the reconstruction says how many of\nits units that is (tools/pipeline/scale_estimate.py). Roughly the right size, at \u00b120%\nor worse -- the provenance carries the figure -- and never counted as metric.",
+        "description": "Where metric scale came from.\n\n``unresolved`` is a first-class answer, not a missing value: COLMAP alone recovers\ngeometry up to scale, and a measurement taken off an unresolved reconstruction is\nmeaningless rather than merely imprecise.\n\n``camera-height-estimate`` is between a measurement and that: none was made, but a\nhandheld phone is about 1.5 m above the ground and the reconstruction says how many of\nits units that is (tools/pipeline/scale_estimate.py). Roughly the right size, at \u00b120%\nor worse -- the provenance carries the figure -- and never counted as metric.\n\n``visual-epoch`` (M3b): the scale of the earlier epoch it was aligned to, carried by\nthe alignment's similarity. Written only when that epoch's own scale was measured; an\nepoch aligned to an estimated or unresolved one inherits that word instead\n(`worker/registration.py`). Before ``unresolved``, as 0033 adds it (and as the 0010\ntest reads the type's order back).",
         "enum": [
           "arkit",
           "exif-gps",
           "manual",
           "camera-height-estimate",
+          "visual-epoch",
           "unresolved"
         ],
         "title": "ScaleSource",

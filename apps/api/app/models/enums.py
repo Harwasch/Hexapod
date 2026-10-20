@@ -120,11 +120,18 @@ class RunStatus(StrEnum):
 
 
 class GeorefMethod(StrEnum):
-    """How a reconstruction was placed on the globe."""
+    """How a reconstruction was placed on the globe.
+
+    ``visual-epoch`` (M3b): its frames were registered into an earlier epoch of the same
+    site and placed by that alignment, not by its own GNSS. It is only as good as the
+    epoch it was aligned to -- the uncertainty says how good -- so it is never read as a
+    measurement in its own right. Declared before ``none``, where migration 0033 puts it.
+    """
 
     EXIF_GPS = "exif-gps"
     ARKIT = "arkit"
     MANUAL = "manual"
+    VISUAL_EPOCH = "visual-epoch"
     NONE = "none"
 
 
@@ -139,12 +146,19 @@ class ScaleSource(StrEnum):
     handheld phone is about 1.5 m above the ground and the reconstruction says how many of
     its units that is (tools/pipeline/scale_estimate.py). Roughly the right size, at ±20%
     or worse -- the provenance carries the figure -- and never counted as metric.
+
+    ``visual-epoch`` (M3b): the scale of the earlier epoch it was aligned to, carried by
+    the alignment's similarity. Written only when that epoch's own scale was measured; an
+    epoch aligned to an estimated or unresolved one inherits that word instead
+    (`worker/registration.py`). Before ``unresolved``, as 0033 adds it (and as the 0010
+    test reads the type's order back).
     """
 
     ARKIT = "arkit"
     EXIF_GPS = "exif-gps"
     MANUAL = "manual"
     CAMERA_HEIGHT_ESTIMATE = "camera-height-estimate"
+    VISUAL_EPOCH = "visual-epoch"
     UNRESOLVED = "unresolved"
 
 

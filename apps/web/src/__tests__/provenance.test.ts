@@ -296,6 +296,22 @@ describe("placementProvenance", () => {
     expect(estimated?.measured).toBe(false);
   });
 
+  it("a visually aligned epoch is labelled aligned visually, not measured", () => {
+    // M3b: an epoch registered into an earlier one of its site. Its placement is the earlier
+    // scan's, carried over, so it is not a measurement of its own -- and not "EXIF GPS".
+    const aligned = placementProvenance(
+      placed({ georefMethod: "visual-epoch", scaleSource: "visual-epoch", uncertaintyM: 0.065 }),
+      "asset-1",
+      "metric",
+    );
+    expect(aligned?.summary).toContain("Aligned visually to an earlier scan");
+    expect(aligned?.summary).toContain("metric scale from an earlier scan");
+    expect(aligned?.summary).not.toContain("EXIF");
+    expect(aligned?.measured).toBe(false);
+    expect(aligned?.scaleUnresolved).toBe(false);
+    expect(aligned?.scaleEstimated).toBe(false);
+  });
+
   it("still calls it an estimate when no figure was recorded", () => {
     const bare = placementProvenance(
       placed({ georefMethod: "exif-gps", scaleSource: "camera-height-estimate", uncertaintyM: 10 }),

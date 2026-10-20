@@ -151,6 +151,9 @@ const GEOREF_LABEL: Record<NonNullable<Provenance["georefMethod"]>, string> = {
   "exif-gps": "Located by EXIF GPS",
   arkit: "Aligned to ARKit poses",
   manual: "Placed by hand",
+  // M3b: its frames were registered into an earlier epoch of the site and placed by that.
+  // Only as good as the epoch it was aligned to, which the ± says; never "measured".
+  "visual-epoch": "Aligned visually to an earlier scan",
   none: "Not georeferenced",
 };
 
@@ -159,6 +162,9 @@ const SCALE_LABEL: Record<NonNullable<Provenance["scaleSource"]>, string> = {
   "exif-gps": "metric scale from EXIF GPS",
   manual: "scale set by hand",
   "camera-height-estimate": "scale estimated from camera height",
+  // The earlier scan's measured scale, carried by the alignment. The worker writes this only
+  // when that scan's scale was measured; an estimated or unresolved one is inherited as such.
+  "visual-epoch": "metric scale from an earlier scan",
   unresolved: "scale unresolved",
 };
 
