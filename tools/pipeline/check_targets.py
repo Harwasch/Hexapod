@@ -489,8 +489,14 @@ def evaluate(
     model: sfm.Model,
     anchor_h: float,
     anchor_v: float,
+    vertical_anchor_free: str | None = None,
 ) -> dict[str, object]:
     """The `checkTargets` block of `epoch_alignment.json` (design section 4.4).
+
+    `vertical_anchor_free` (why, when the anchor says nothing about height -- GNSS priors
+    whose vertical was unconstrained by a datum mismatch or missing altitudes): vertical
+    is then not scored at all and no vertical tolerance is given. A tolerance of three
+    times a 1 km "sigma" would pass any vertical error and call it surveyed.
 
     `to_frame` takes the pose model into east/north/up about `origin` (the epoch's
     placement); each target's survey is put in the same frame through ECEF."""
@@ -526,7 +532,7 @@ def evaluate(
         )
         error = placed - survey
         h = float(math.hypot(float(error[0]), float(error[1])))
-        same_datum = target.height_datum == frame_datum
+        same_datum = target.height_datum == frame_datum and vertical_anchor_free is None
         footprint = _footprint(result, images, cameras, to_frame, placed)
         footprints.append(footprint)
         horizontal.append(h)
@@ -552,6 +558,7 @@ def evaluate(
         "evaluated": len(evaluated),
         "checks": sum(1 for t in evaluated if t.role == "check"),
         "verticalEvaluated": bool(evaluated) and len(vertical) == len(evaluated),
+        "verticalAnchorFree": vertical_anchor_free,
         "perTarget": per_target,
         "rmseM": None,
         "tolerance": None,
@@ -584,18 +591,27 @@ def evaluate(
                 "vertical": None if rmse_v is None else _round(rmse_v),
                 "total": _round(total),
             },
-            "tolerance": {k: _round(v) for k, v in tolerance.items()},
+            "tolerance": {
+                "horizontalM": _round(tolerance["horizontalM"]),
+                "verticalM": None
+                if vertical_anchor_free is not None
+                else _round(tolerance["verticalM"]),
+            },
+            # Unrounded: the tolerance is a closed form of these, and a reader who
+            # recomputes it must get the same number.
             "sigmaM": {
-                "anchorH": _round(anchor_h),
-                "anchorV": _round(anchor_v),
-                "targetH": _round(statistics.median(t.sigma_h_m for t in evaluated)),
-                "targetV": _round(statistics.median(t.sigma_v_m for t in evaluated)),
-                "pick": _round(PICK_PX * statistics.median(footprints)),
+                "anchorH": float(anchor_h),
+                "anchorV": None if vertical_anchor_free is not None else float(anchor_v),
+                "targetH": float(statistics.median(t.sigma_h_m for t in evaluated)),
+                "targetV": float(statistics.median(t.sigma_v_m for t in evaluated)),
+                "pick": float(PICK_PX * statistics.median(footprints)),
             },
             "withinTolerance": within,
         }
     )
-    if not block["verticalEvaluated"]:
+    if vertical_anchor_free is not None:
+        block["reason"] = f"vertical not scored: the anchor's vertical is {vertical_anchor_free}"
+    elif not block["verticalEvaluated"]:
         block["reason"] = (
             "vertical not scored on every target: a target's height datum is not the frame's"
         )

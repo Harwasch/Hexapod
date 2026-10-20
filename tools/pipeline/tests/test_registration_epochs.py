@@ -62,6 +62,8 @@ def test_the_rtk_epoch_1_is_survey_grade_against_its_check_targets(
         target_v=scene.TARGET_SIGMA_V_M,
         pick_m=sigma["pick"],
     )
+    # The sigmas are recorded unrounded, so the only difference is the tolerance's own
+    # rounding to 4 decimals: at most 5e-5 m.
     assert checks["tolerance"]["horizontalM"] == pytest.approx(expected["horizontalM"], abs=1e-4)
     assert checks["tolerance"]["verticalM"] == pytest.approx(expected["verticalM"], abs=1e-4)
     assert checks["rmseM"]["horizontal"] <= checks["tolerance"]["horizontalM"]

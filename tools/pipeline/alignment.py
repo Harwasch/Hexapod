@@ -48,15 +48,19 @@ coarser phone epoch would throw its centimetre GNSS away for the phone's metres;
 least three evaluated check targets within the 3-sigma tolerance of their declared
 uncertainties (`check_targets.survey_tolerance`). `coarse` is aligned and not survey -- a
 phone epoch that aligns is "Phone video, aligned visually, ±X m", never "surveyed".
-`unaligned` is everything else, labelled as placed by its GPS point or by hand, and its
-frame is the georeference's (`frameSource: georef`): it is never shown as aligned.
+`unaligned` is everything else -- including an epoch whose site had a reference it could
+not be aligned to, whatever its own GNSS (D4: an epoch that fails alignment is unaligned)
+-- labelled as placed by its GPS, its GPS point or by hand, with the georeference's own
+uncertainty, and its frame is the georeference's (`frameSource: georef`): it is never
+shown as aligned. A registration that crashes is such a failure, never a failed run.
 
 **Confidence is a heuristic score in [0, 1], not a probability**: registered fraction x
 inlier fraction x min(1, inliers / 20) x how far the residual is inside its consistency
-tolerance x how far the check targets are inside theirs. **uncertaintyM** is the check
-targets' RMSE (floored at their own declared sigma) when three were evaluated; else, for
-a visual alignment, the reference's uncertainty and three times the fit's RMS in
-quadrature; else the georeference's own (floored at 5 m by `exif_gps`).
+tolerance x how far the check targets are inside theirs. **uncertaintyM** (`uncertainty`)
+starts from what anchors the frame -- for a visual alignment the reference's uncertainty
+and three times the fit's RMS in quadrature, for GNSS the georeference's own (floored at
+5 m by `exif_gps`) or, with three check targets, the priors' sigma -- and check targets can
+only raise it. An anchor with no vertical never claims better than the georeference.
 
 Every gate is a recipe param and **off**: no recorded measurement backs a threshold (D4).
 
@@ -68,6 +72,7 @@ from __future__ import annotations
 import json
 import math
 import statistics
+import subprocess
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -82,6 +87,7 @@ import check_targets
 import colmap4
 import exif
 import global_sfm
+import priors
 import sfm
 import sim3
 import site_frame
@@ -356,6 +362,9 @@ class Candidate:
     anchor_v: float = 0.0
     registered_fraction: float | None = None
     rotation_residual_deg: list[float] = field(default_factory=list)
+    #: Why the anchor says nothing about height, when it does not (GNSS priors whose
+    #: vertical was left unconstrained): vertical is then never scored or claimed.
+    vertical_free: str | None = None
     ransac: dict[str, object] | None = None
     registration: dict[str, object] | None = None
     #: The consistency tolerance and the pixel footprint it is three of (visual).
@@ -404,6 +413,11 @@ def gnss_candidate(georef: Mapping[str, Any], poses: Mapping[str, Any]) -> Candi
         inlier_names=inliers,
         anchor_h=anchor_h if anchor_h is not None else floor,
         anchor_v=anchor_v if anchor_v is not None else floor,
+        vertical_free=(
+            str(prior.get("vertical") or "unconstrained")
+            if anchor_v is not None and anchor_v >= priors.UNCONSTRAINED_STD_M
+            else None
+        ),
     )
 
 
@@ -600,16 +614,36 @@ def gnss_check(
 
 
 def decide(
-    *, aligned: bool, tier: str, checks: Mapping[str, Any], platform: str
+    *,
+    aligned: bool,
+    tier: str,
+    checks: Mapping[str, Any],
+    platform: str,
+    visual_failed: bool = False,
 ) -> tuple[str, list[str]]:
-    """The verdict, and a sentence for every rule that kept it from `survey`."""
+    """The verdict, and a sentence for every rule that kept it from `survey`.
+
+    `visual_failed`: the site had a reference and this epoch could not be aligned to it.
+    D4: an epoch that fails alignment is `unaligned` -- kept, with its GNSS placement,
+    and labelled so -- however good its own GNSS frame is; it is not `coarse`."""
     reasons: list[str] = []
     if not aligned:
         return "unaligned", ["not aligned to the site: placed by its georeference only"]
+    if visual_failed:
+        return "unaligned", [
+            "not aligned to the site's reference epoch: placed by its own GNSS only, which "
+            "D4 records as unaligned"
+        ]
     if tier != "survey":
         reasons.append(
             f"{PLATFORM_WORDS.get(platform, platform)} is the coarse tier: only an RTK drone "
             f"can be surveyed"
+        )
+        return "coarse", reasons
+    if checks.get("verticalAnchorFree"):
+        reasons.append(
+            f"accuracy unverified vertically: the GNSS priors' vertical is "
+            f"{checks['verticalAnchorFree']}, so no height is surveyed"
         )
         return "coarse", reasons
     evaluated = int(checks.get("checks") or 0)
@@ -641,29 +675,45 @@ def uncertainty(
     rms_m: float,
     georef_m: float,
     anchor_m: float = 0.0,
+    vertical_free: bool = False,
 ) -> float:
     """`uncertaintyM` (module docstring).
 
-    With check targets: their RMSE, floored at their own declared sigma (they cannot
-    measure better than they were surveyed) **and at the anchor's sigma** -- a deviation
-    from the design, which floored at the targets only. A few targets' RMSE can come out
-    below what anchors the frame (it did here: 1.3 cm for an epoch aligned into a
-    reference worth 3 cm, whose cameras were 1.9 cm from the truth), and an epoch
-    aligned into another is not more accurate than the frame it was aligned into."""
+    The claim without check targets is the floor; targets can only **raise** it, never
+    lower it (deviations from the design, which let targets replace it):
+
+    * visually aligned: `sqrt(reference^2 + (3 rms)^2)`, the frame it was aligned into
+      and its own fit's error; with GNSS: the anchor's sigma;
+    * with three or more targets: also their RMSE and their own declared sigma (they
+      cannot measure better than they were surveyed). A few targets can score below
+      what anchors the frame -- 1.3 cm for an epoch aligned into a reference worth 3 cm,
+      whose cameras were 1.9 cm from the truth, on one demo run;
+    * an anchor with no vertical (`vertical_free`): never better than the georeference's
+      own figure, because no height was measured at all;
+    * unaligned: the georeference's own figure (its GPS, floored at 5 m by `exif_gps`;
+      10 m for a located or hand-placed capture)."""
+    if verdict == "unaligned":
+        return georef_m
+    visual = method == "visual" and reference_m is not None
+    floor = (
+        math.sqrt(reference_m**2 + (SIGMA_K * rms_m) ** 2)
+        if method == "visual" and reference_m is not None
+        else anchor_m
+    )
     if int(checks.get("evaluated") or 0) >= check_targets.MIN_CHECK_TARGETS:
         rmse = checks.get("rmseM") or {}
         labels = {e.get("label") for e in checks.get("perTarget") or [] if "errorM" in e}
         sigmas = [
             math.sqrt(2.0 * t.sigma_h_m**2 + t.sigma_v_m**2) for t in targets if t.label in labels
         ]
-        return max(
+        claim = max(
+            floor,
             float(rmse.get("total") or 0.0),
             statistics.median(sigmas) if sigmas else 0.0,
-            anchor_m,
         )
-    if verdict != "unaligned" and method == "visual" and reference_m is not None:
-        return math.sqrt(reference_m**2 + (SIGMA_K * rms_m) ** 2)
-    return georef_m
+    else:
+        claim = floor if visual else georef_m
+    return max(claim, georef_m) if vertical_free else claim
 
 
 def confidence(candidate: Candidate, *, verdict: str, checks: Mapping[str, Any]) -> float:
@@ -675,7 +725,9 @@ def confidence(candidate: Candidate, *, verdict: str, checks: Mapping[str, Any])
     tolerance = checks.get("tolerance")
     rmse = checks.get("rmseM")
     if isinstance(tolerance, Mapping) and isinstance(rmse, Mapping):
-        scale = math.hypot(float(tolerance["horizontalM"]), float(tolerance["verticalM"]))
+        scale = math.hypot(
+            float(tolerance["horizontalM"]), float(tolerance.get("verticalM") or 0.0)
+        )
         c_chk = max(0.0, 1.0 - float(rmse.get("total") or 0.0) / scale) if scale > 0 else 0.0
     inliers = min(1.0, candidate.inliers / CONFIDENT_INLIERS) * candidate.inlier_fraction
     if candidate.method == "visual":
@@ -698,7 +750,9 @@ def label(*, platform: str, verdict: str, method: str, uncertainty_m: float, man
     if verdict == "coarse":
         how = "aligned visually" if method == "visual" else "aligned to its GNSS"
         return f"{words}, {how}, ±{x} m"
-    return f"{words}, not aligned: placed by {'hand' if manual else 'its GPS point'}, ±{x} m"
+    # Placed by its frames' GPS (a similarity), by one GPS point, or by hand.
+    by = "hand" if manual else ("its GPS" if method.startswith("gnss") else "its GPS point")
+    return f"{words}, not aligned: placed by {by}, ±{x} m"
 
 
 # --- the stage ------------------------------------------------------------------------------
@@ -805,16 +859,26 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
     reference = context.reference
     visual: Candidate | None = None
     if reference is not None and visual_mode == "auto":
-        registered = _register(ctx, reference, frames, model_dir, seed)
-        visual = visual_candidate(
-            registered,
-            model_dir=model_dir,
-            model=model,
-            to_target=reference_frame(reference, origin),
-            reference=reference,
-            min_registered_fraction=min_registered,
-            seed=seed,
-        )
+        try:
+            registered = _register(ctx, reference, frames, model_dir, seed)
+        except (subprocess.CalledProcessError, OSError, json.JSONDecodeError) as error:
+            # A registration that crashed is a failed alignment, recorded as one -- never
+            # a failed run, which would lose the epoch (D4: unaligned, and labelled).
+            visual = Candidate(method="visual", aligned=False, similarity=None)
+            visual.reasons.append(
+                f"visual: the registration into the reference failed "
+                f"({type(error).__name__}: {str(error)[:200]})"
+            )
+        else:
+            visual = visual_candidate(
+                registered,
+                model_dir=model_dir,
+                model=model,
+                to_target=reference_frame(reference, origin),
+                reference=reference,
+                min_registered_fraction=min_registered,
+                seed=seed,
+            )
     elif reference is not None:
         reasons.append("visual alignment is off (visual: off); placed by its georeference")
     chosen = gnss
@@ -858,6 +922,7 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
             model=model,
             anchor_h=chosen.anchor_h,
             anchor_v=chosen.anchor_v,
+            vertical_anchor_free=chosen.vertical_free,
         )
         checks["problems"] = problems
     else:
@@ -868,7 +933,14 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
             "evaluated": 0,
             "checks": 0,
         }
-    verdict, why = decide(aligned=chosen.aligned, tier=tier, checks=checks, platform=platform)
+    visual_failed = visual is not None and not visual.aligned
+    verdict, why = decide(
+        aligned=chosen.aligned,
+        tier=tier,
+        checks=checks,
+        platform=platform,
+        visual_failed=visual_failed,
+    )
     reasons.extend(why)
     rms = chosen.stats()["rms"] if chosen.aligned else 0.0
     georef_m = _float(georef.get("uncertaintyM")) or 10.0
@@ -881,6 +953,7 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
         rms_m=rms,
         georef_m=georef_m,
         anchor_m=chosen.anchor_h if chosen.aligned else 0.0,
+        vertical_free=chosen.vertical_free is not None,
     )
     score = confidence(chosen, verdict=verdict, checks=checks)
     words = label(

@@ -15,6 +15,7 @@ import struct
 from pathlib import Path
 from typing import Any
 
+import gps_frames
 import numpy as np
 import pytest
 
@@ -225,25 +226,112 @@ def test_uncertainty_follows_the_evidence() -> None:
         "rmseM": {"total": 0.002},
         "perTarget": [{"label": t.label, "errorM": [0, 0, 0]} for t in targets],
     }
-    # Floored at the targets' own declared sigma: they cannot measure better than that.
-    floor = math.sqrt(2 * 0.005**2 + 0.01**2)
-    common: dict[str, Any] = {
-        "targets": targets,
-        "reference_m": 0.03,
-        "rms_m": 0.01,
-        "georef_m": 10.0,
-    }
-    assert alignment.uncertainty(verdict="survey", method="visual", checks=checks, **common) == (
-        pytest.approx(floor)
-    )
-    # And at the anchor's: an epoch is no more accurate than the frame it is aligned into.
+    common: dict[str, Any] = {"targets": targets, "reference_m": 0.03, "rms_m": 0.01}
+    visual_floor = math.hypot(0.03, 3 * 0.01)
+    # Visually aligned, no targets: the reference and three times the fit's RMS.
     assert alignment.uncertainty(
-        verdict="survey", method="visual", checks=checks, anchor_m=0.03, **common
-    ) == pytest.approx(0.03)
-    assert alignment.uncertainty(verdict="coarse", method="visual", checks={}, **common) == (
-        pytest.approx(math.hypot(0.03, 0.03))
+        verdict="coarse", method="visual", checks={}, georef_m=10.0, **common
+    ) == pytest.approx(visual_floor)
+    # GNSS with targets: their RMSE, floored at their own sigma and the anchor's.
+    target_floor = math.sqrt(2 * 0.005**2 + 0.01**2)
+    assert alignment.uncertainty(
+        verdict="survey", method="gnss-prior-ba", checks=checks, georef_m=5.0, **common
+    ) == pytest.approx(target_floor)
+    assert alignment.uncertainty(
+        verdict="survey", method="gnss-prior-ba", checks=checks, georef_m=5.0, anchor_m=0.03,
+        **common,
+    ) == pytest.approx(0.03)  # fmt: skip
+    # Unaligned: the georeference's own figure, whatever else was measured.
+    assert (
+        alignment.uncertainty(
+            verdict="unaligned", method="gnss-similarity", checks=checks, georef_m=5.0, **common
+        )
+        == 5.0
     )
-    assert alignment.uncertainty(verdict="unaligned", method="none", checks={}, **common) == 10.0
+
+
+def test_check_targets_never_lower_a_visual_epochs_claim() -> None:
+    """Review finding 2: with targets, a visual epoch's claim dropped its own fit's error
+    and kept only the reference's, so adding targets lowered it -- one run claimed
+    ±0.0247 m with the cameras 0.028 m from the truth. Targets may only raise it."""
+    targets = tuple(
+        check_targets.Target(f"T{i}", "check", 0, 0, 0, "msl-unverified", 0.005, 0.01)
+        for i in range(8)
+    )
+    checks = {
+        "evaluated": 8,
+        "rmseM": {"total": 0.012},
+        "perTarget": [{"label": t.label, "errorM": [0, 0, 0]} for t in targets],
+    }
+    without = alignment.uncertainty(
+        verdict="coarse", method="visual", checks={}, targets=targets, reference_m=0.024,
+        rms_m=0.012, georef_m=5.0, anchor_m=0.024,
+    )  # fmt: skip
+    with_targets = alignment.uncertainty(
+        verdict="survey", method="visual", checks=checks, targets=targets, reference_m=0.024,
+        rms_m=0.012, georef_m=5.0, anchor_m=0.024,
+    )  # fmt: skip
+    assert with_targets >= without == pytest.approx(math.hypot(0.024, 3 * 0.012))
+
+
+def test_an_unconstrained_vertical_anchor_is_not_scored_and_cannot_be_survey() -> None:
+    """Review finding 3: priors whose vertical was unconstrained (a datum mismatch: sigma
+    1 km) made a 3 km vertical tolerance, and a target 30 m out vertically passed as
+    "RTK drone, surveyed". Vertical is now not scored and survey not allowed."""
+    names = [f"frame_{i:04d}.jpg" for i in range(COUNT)]
+    poses = {
+        "priors": {
+            "used": True,
+            "vertical": "unconstrained: fix altitude is msl-unverified, the frame is "
+            "ellipsoid-wgs84",
+            "sigmaM": {"horizontalMedian": 0.02, "verticalMedian": 1000.0},
+        }
+    }
+    candidate = alignment.gnss_candidate(_georef_aligned(IDENTITY, names), poses)
+    assert candidate.vertical_free is not None and "unconstrained" in candidate.vertical_free
+
+    ring = synthetic_scene.ring(8, radius=6.0, height=2.0)
+    model = sfm.Model(
+        cameras=(sfm.Camera(1, "PINHOLE", 1600, 1200, (1300.0, 1300.0, 800.0, 600.0),
+                            ("fx", "fy", "cx", "cy")),),
+        images=tuple(
+            sfm.Image(i + 1, f"frame_{i:04d}.jpg", synthetic_scene._quat(r),
+                      tuple(float(v) for v in -r @ c), 1, 0, 0)  # type: ignore[arg-type]
+            for i, (r, c) in enumerate(ring)
+        ),
+        points3d=0,
+        mean_track_length=0.0,
+    )  # fmt: skip
+    survey = gps_frames.enu_to_geodetic(1.0, 1.0, 0.0, *ORIGIN)
+    targets = [
+        check_targets.Target(f"T{i}", "check", *survey, "ellipsoid-wgs84", 0.005, 0.01)
+        for i in range(3)
+    ]
+    found = {
+        t.label: check_targets.Triangulated(
+            t.label, (1.0, 1.0, 30.0), 8, tuple(i.name for i in model.images), 40.0, 0.5, "ok"
+        )
+        for t in targets
+    }
+    block = check_targets.evaluate(
+        found, targets, to_frame=IDENTITY, origin=ORIGIN, frame_datum="ellipsoid-wgs84",
+        model=model, anchor_h=candidate.anchor_h, anchor_v=candidate.anchor_v,
+        vertical_anchor_free=candidate.vertical_free,
+    )  # fmt: skip
+
+    assert block["verticalEvaluated"] is False
+    assert block["tolerance"]["verticalM"] is None  # type: ignore[index]
+    assert all(entry["verticalM"] is None for entry in block["perTarget"])  # type: ignore[attr-defined]
+    verdict, reasons = alignment.decide(
+        aligned=True, tier="survey", checks=block, platform="rtk-drone"
+    )
+    assert verdict == "coarse"
+    assert "accuracy unverified vertically" in reasons[0]
+    claim = alignment.uncertainty(
+        verdict=verdict, method="gnss-prior-ba", checks=block, targets=tuple(targets),
+        reference_m=None, rms_m=0.01, georef_m=5.0, anchor_m=0.02, vertical_free=True,
+    )  # fmt: skip
+    assert claim >= 5.0
 
 
 def test_reference_frame_composes_placement_and_reframe(tmp_path: Path) -> None:
@@ -688,3 +776,48 @@ def test_orientations_that_disagree_with_the_fit_are_not_an_alignment(tmp_path: 
 
     assert not candidate.aligned
     assert any("orientations disagree" in reason for reason in candidate.reasons)
+
+
+def test_a_gnss_epoch_that_fails_visual_alignment_is_unaligned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review finding 5 (D4): an epoch that fails alignment to its site's reference is
+    unaligned and labelled so, even with a GNSS similarity of its own -- not "coarse,
+    aligned to its GNSS". It keeps that placement and the georeference's uncertainty."""
+    _, model = _ring_model(tmp_path / "m")
+    names = [image.name for image in model.images]
+    monkeypatch.setattr(alignment, "_register", _fake_register(_registered(model, TRUE, names[:2])))
+    _, document = _run(
+        tmp_path / "w", _georef_aligned(IDENTITY, names), reference=REFERENCE,
+        params={"platform": "drone"},
+    )  # fmt: skip
+
+    assert document["verdict"] == "unaligned" and document["method"] == "gnss-similarity"
+    assert document["frameSource"] == "georef" and document["confidence"] == 0.0
+    assert document["label"] == "Drone, not aligned: placed by its GPS, ±5 m"
+    assert document["uncertaintyM"] == 5.0
+    # No reference at all is not a failure: the same epoch is then coarse.
+    _, alone = _run(tmp_path / "a", _georef_aligned(IDENTITY, names), params={"platform": "drone"})
+    assert alone["verdict"] == "coarse" and alone["label"] == "Drone, aligned to its GNSS, ±5 m"
+
+
+def test_a_registration_that_crashes_is_an_unaligned_epoch_not_a_failed_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review finding 1's backstop: whatever makes `colmap4 register` die, the epoch is
+    recorded unaligned with the reason, and the run goes on."""
+    import subprocess
+
+    def crash(*_: object, **__: object) -> dict[str, Any]:
+        raise subprocess.CalledProcessError(1, ["colmap4.py", "register"])
+
+    names = [f"frame_{i:04d}.jpg" for i in range(COUNT)]
+    monkeypatch.setattr(alignment, "_register", crash)
+    _, document = _run(
+        tmp_path / "w", _georef_aligned(IDENTITY, names), reference=REFERENCE,
+        params={"platform": "drone"},
+    )  # fmt: skip
+
+    assert document["verdict"] == "unaligned" and document["frameSource"] == "georef"
+    assert any("registration into the reference failed" in r for r in document["reasons"])
+    assert document["label"].startswith("Drone, not aligned: placed by its GPS")
