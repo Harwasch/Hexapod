@@ -6,8 +6,8 @@
  * `window.__twin` and what is on screen:
  *
  * - Off: nothing in the shown model's colour chain, no badge;
- * - Now: the relight part in the chain, and the badge "Relit by the sun (now) over shadows
- *   baked in at capture, {the capture's date and time} UTC";
+ * - Now: the relight part in the chain, and the badge "Simulated lighting: the sun (now) over
+ *   shadows baked in at capture, {the capture's date and time} UTC";
  * - At capture: the scene clock stands at the shown date's capture time, still, the badge says
  *   "(at capture)"; the March date moves it to March's midnight and the badge says "Sun below
  *   horizon";
@@ -265,7 +265,7 @@ test("under cesium, the sun relights the shown date, says so, and At capture hol
   await expect.poll(async () => (await state(page)).parts[A2] ?? [], poll).toContain(RELIT);
   const badge = page.getByTestId("relit-badge");
   await expect(badge).toContainText(
-    /Relit by the sun \(now\) over shadows baked in at capture, .*Jun.*1, 2026.* UTC/,
+    /Simulated lighting: the sun \(now\) over shadows baked in at capture, .*Jun.*1, 2026.* UTC/,
     { timeout: 60_000 },
   );
   expect((await state(page)).animating).toBe(true);
@@ -275,7 +275,7 @@ test("under cesium, the sun relights the shown date, says so, and At capture hol
   await radio("At capture").click();
   await expect.poll(async () => (await state(page)).clock, poll).toBe("2026-06-01T18:30:00Z");
   expect((await state(page)).animating).toBe(false);
-  await expect(badge).toContainText("Relit by the sun (at capture)");
+  await expect(badge).toContainText("Simulated lighting: the sun (at capture)");
   await expect(page.getByTestId("relit-night")).toHaveCount(0);
   await shot(page, "app-at-capture-jun");
 
@@ -347,9 +347,12 @@ for (const renderer of ["playcanvas", "spark"] as const) {
     await expect(radio("Now")).toBeEnabled();
     await radio("Now").click();
     await expect.poll(async () => (await state(page)).parts[A2] ?? [], poll).toContain(RELIT);
-    await expect(page.getByTestId("relit-badge")).toContainText("Relit by the sun (now)", {
-      timeout: 60_000,
-    });
+    await expect(page.getByTestId("relit-badge")).toContainText(
+      "Simulated lighting: the sun (now)",
+      {
+        timeout: 60_000,
+      },
+    );
     await shot(page, `app-${renderer}-switched-now`);
     await railUnchanged(page);
   });

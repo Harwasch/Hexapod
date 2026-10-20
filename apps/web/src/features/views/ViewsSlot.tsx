@@ -52,7 +52,7 @@ export function ViewsSlot() {
 export function RelitSlot() {
   const on = useLighting((s) => s.sun !== "off");
   return on ? (
-    <ErrorBoundary inline label="Sunlight">
+    <ErrorBoundary inline label="Simulated lighting">
       <Suspense fallback={null}>
         <RelitBadge />
       </Suspense>

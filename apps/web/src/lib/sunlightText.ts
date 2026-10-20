@@ -9,12 +9,13 @@ import { useSites } from "@/state/sites";
 import { useViewRule } from "@/state/viewRule";
 
 export const SUNLIGHT_TEXT = {
-  label: "Sun",
-  hint: "Shade flat surfaces by the real sun. The shadows the photographs had stay in them.",
+  // Simulated: a model of light the capture did not see, so it says so (the repo's rule).
+  label: "Simulated lighting",
+  hint: "Simulated lighting: flat surfaces shaded as the sun would light them. The shadows the photographs had stay in them.",
   off: "Off",
   now: "Now",
   capture: "At capture",
-  badge: "Sunlight",
+  badge: "Simulated lighting",
   asCaptured: "Off while As captured is on",
   noCaptureTime: "This date's capture time was not recorded",
   nowInstead: "This date's capture time was not recorded: the sun of now is drawn",
@@ -64,5 +65,5 @@ export function relitSentence(
     : capturedAt
       ? formatEpochDateTime(capturedAt)
       : "time not recorded";
-  return `Relit by the sun (${sun}) over shadows baked in at capture, ${when}`;
+  return `Simulated lighting: the sun (${sun}) over shadows baked in at capture, ${when}`;
 }

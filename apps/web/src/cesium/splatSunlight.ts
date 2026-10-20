@@ -1,5 +1,5 @@
 /**
- * Sunlight on a splat scan: each clearly flat splat shaded by the real sun at the scene clock's
+ * Sunlight on a splat scan: each clearly flat splat shaded by the engine's sun at the scene clock's
  * time, in the CesiumJS splat primitive's vertex shader, as one part of its colour chain
  * (`splatColor.ts`). ADR 0019 "Sunlight".
  *

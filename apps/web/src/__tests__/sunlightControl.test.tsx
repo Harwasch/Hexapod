@@ -41,11 +41,20 @@ describe("the capture time", () => {
 
   it("is said in UTC in the badge, or said to be unknown", () => {
     expect(relitSentence("now", "2026-06-01T15:00:00Z")).toMatch(
-      /^Relit by the sun \(now\) over shadows baked in at capture, .*2026.* UTC$/,
+      /^Simulated lighting: the sun \(now\) over shadows baked in at capture, .*2026.* UTC$/,
     );
     expect(relitSentence("at capture", null)).toBe(
-      "Relit by the sun (at capture) over shadows baked in at capture, time not recorded",
+      "Simulated lighting: the sun (at capture) over shadows baked in at capture, time not recorded",
     );
+  });
+
+  it("calls the relight simulated wherever it is chosen or said", () => {
+    // The repo's rule: what is simulated is labelled Simulated in the UI.
+    expect(SUNLIGHT_TEXT.label).toBe("Simulated lighting");
+    expect(SUNLIGHT_TEXT.badge).toBe("Simulated lighting");
+    expect(SUNLIGHT_TEXT.hint).toMatch(/^Simulated lighting\b/);
+    expect(SUNLIGHT_TEXT.hint).not.toMatch(/real sun/);
+    expect(relitSentence("now", null, true)).toMatch(/^Simulated lighting:/);
   });
 });
 
@@ -228,7 +237,9 @@ describe("the badge", () => {
     await screen.findByTestId("relit-badge");
     expect(iso(scene.clock.currentTime)).toBe("2026-06-01T15:00:00.000Z");
     expect(scene.clock.shouldAnimate).toBe(false);
-    expect(screen.getByTestId("relit-badge")).toHaveTextContent("Relit by the sun (at capture)");
+    expect(screen.getByTestId("relit-badge")).toHaveTextContent(
+      "Simulated lighting: the sun (at capture)",
+    );
     expect(scene.renders()).toBeGreaterThan(0);
 
     // Another date: its own capture time, once that date is relit.
@@ -288,7 +299,7 @@ describe("the badge", () => {
     const badge = await screen.findByTestId("relit-badge");
     expect(scene.clock.shouldAnimate).toBe(true);
     expect(badge).toHaveTextContent(
-      "Relit by the sun (now) over shadows baked in at capture, time not recorded",
+      "Simulated lighting: the sun (now) over shadows baked in at capture, time not recorded",
     );
     expect(badge).toHaveTextContent(SUNLIGHT_TEXT.nowInstead);
 
