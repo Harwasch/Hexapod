@@ -1628,7 +1628,11 @@ export class SiteManager {
         // beside Splat / Mesh / Points reads the record above ("Couldn't load the 3D model ·
         // Retry", `SiteLoadStatus`). A toast as well would say it twice, and with the asset's
         // file name rather than the site's. Any other failure has no pill to speak for it.
-        if (!shown || this.primaryId !== active.site.id) {
+        // A date of the site nobody chose, loaded hidden as the frame's anchor, is not said in
+        // a toast either: the date shown is placed on its own and says so (Date shown), and
+        // choosing this date tries it again and speaks through the pill.
+        const hiddenDate = Boolean(asset.epochId) && !shown;
+        if (!hiddenDate && (!shown || this.primaryId !== active.site.id)) {
           this.events.emit("toast", {
             tone: "error",
             title: `${asset.name} failed to load`,
