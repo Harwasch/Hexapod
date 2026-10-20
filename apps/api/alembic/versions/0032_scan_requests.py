@@ -35,6 +35,8 @@ def upgrade() -> None:
         sa.Column(
             "parcel_ids", postgresql.ARRAY(sa.String(200)), nullable=False, server_default="{}"
         ),
+        sa.Column("outline_unvalidated", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("raw_outline", postgresql.JSONB(), nullable=True),
     )
     # Newest first, counted by the day (the daily cap), and pruned by age once retention is set.
     op.create_index("ix_scan_requests_created_at", "scan_requests", ["created_at"])

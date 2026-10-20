@@ -1,19 +1,26 @@
 """Site scans requested from the landing page: stored as sent, read with the write token.
 
 Open to anyone, so what it does with a request is bounded: an outline is checked for size
-before PostGIS sees it (app/schemas/scan_request.py), dissolved under a statement timeout,
-reduced to the precision it is stored and read at, and refused if nothing of it survives; the
-day's requests are capped across every client; and a database refusal is answered without the
-values that caused it.
+before PostGIS sees it (app/schemas/scan_request.py), dissolved one at a time per process and
+under a statement timeout, reduced to the precision it is stored and read at, and refused if
+nothing of it survives; the day's requests are capped across every client, atomically; and a
+database refusal is answered without the values that caused it.
+
+An outline that cannot be dissolved in time (the cleaner busy, or the timeout reached) does not
+cost a real visitor their request: it is stored as sent, flagged `outline_unvalidated`, for a
+person to look at. Its size was still capped before it got here.
 """
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
+from typing import Any
 
+from psycopg.errors import QueryCanceled
 from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import func, select, text
-from sqlalchemy.exc import DataError, OperationalError
+from sqlalchemy.exc import DataError, DBAPIError
 from sqlalchemy.orm import Session
 
 from app.models.scan_request import ScanRequest
@@ -48,6 +55,15 @@ UNPROCESSABLE = (
 )
 
 
+#: One outline cleaned at a time in this process: a slow clean holds one database connection,
+#: never the pool. Waited on without a connection checked out.
+CLEANER = threading.BoundedSemaphore(1)
+#: Seconds a request waits for the cleaner before its outline is kept unvalidated.
+CLEANER_WAIT_S = 3.0
+#: The advisory lock the daily cap's count-then-insert is taken under (any fixed bigint).
+DAILY_CAP_LOCK = 0x5CA4_0001
+
+
 class DailyCapReached(Exception):  # noqa: N818 - a condition, answered 503, not an error
     """The day's requests are all in: the form is told to try later."""
 
@@ -58,17 +74,22 @@ class CleanOutline:
     area_m2: float
 
 
-def clean_outline(db: Session, boundary: str, timeout_ms: int) -> CleanOutline:
-    """The outline as it will be stored, or InvalidInputError. Bounded by `timeout_ms`: two
-    crossing comb-shaped parcels of a few hundred corners took 16 s to dissolve unbounded."""
+def clean_outline(db: Session, boundary: str, timeout_ms: int) -> CleanOutline | None:
+    """The outline as it will be stored; None when it could not be dissolved within
+    `timeout_ms` (two crossing comb-shaped parcels of a few hundred corners took 16 s
+    unbounded); InvalidInputError when it encloses no area or PostGIS refuses it. Ends its own
+    transaction, so its statement timeout ends with it."""
     db.execute(text(f"SET LOCAL statement_timeout = {int(timeout_ms)}"))
     try:
         ewkt, area, empty, geojson = db.execute(
             CLEAN, {"boundary": boundary, "grid": PRECISION_DEG}
         ).one()
-    except OperationalError as error:  # the timeout (QueryCanceled), or the geometry refused
+    except DBAPIError as error:
         db.rollback()
+        if isinstance(error.orig, QueryCanceled):
+            return None
         raise InvalidInputError(UNPROCESSABLE) from error
+    db.rollback()
     if empty or not area or area < MIN_AREA_M2:
         raise InvalidInputError("The outline does not enclose an area.")
     try:
@@ -96,12 +117,30 @@ def create_scan_request(
     """Stores a request, or quietly drops one whose honeypot was filled in."""
     if payload.website.strip():
         return
+    # A cheap look first, so a capped day cleans nothing; the count that decides is below.
     if stored_today(db) >= daily_cap:
         raise DailyCapReached
-    boundary = None
+    db.commit()  # no connection held while waiting for the cleaner
+    boundary: str | None = None
+    raw: dict[str, Any] | None = None
     if payload.boundary is not None:
-        boundary = clean_outline(db, payload.boundary.model_dump_json(), clean_timeout_ms).ewkt
+        cleaned: CleanOutline | None = None
+        if CLEANER.acquire(timeout=CLEANER_WAIT_S):
+            try:
+                cleaned = clean_outline(db, payload.boundary.model_dump_json(), clean_timeout_ms)
+            finally:
+                CLEANER.release()
+        if cleaned is None:
+            raw = payload.boundary.model_dump(mode="json")
+        else:
+            boundary = cleaned.ewkt
     try:
+        # Count and insert under one transaction-scoped lock: without it, 16 requests at once
+        # with one place left all saw room (213 rows for a cap of 200).
+        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": DAILY_CAP_LOCK})
+        if stored_today(db) >= daily_cap:
+            db.rollback()
+            raise DailyCapReached
         db.add(
             ScanRequest(
                 name=payload.name,
@@ -109,6 +148,8 @@ def create_scan_request(
                 notes=payload.notes.strip(),
                 boundary=boundary,
                 parcel_ids=payload.parcel_ids,
+                outline_unvalidated=raw is not None,
+                raw_outline=raw,
             )
         )
         db.commit()
@@ -151,6 +192,7 @@ def list_scan_requests(db: Session, limit: int) -> list[ScanRequestRead]:
                 notes=row.notes,
                 boundary=boundary,
                 boundary_unreadable=unreadable,
+                outline_unvalidated=row.outline_unvalidated,
                 area_m2=float(area) if area is not None and boundary is not None else None,
                 parcel_ids=list(row.parcel_ids),
             )

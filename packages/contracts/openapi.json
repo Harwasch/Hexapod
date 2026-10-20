@@ -19814,6 +19814,11 @@
             "title": "Notes",
             "type": "string"
           },
+          "outlineUnvalidated": {
+            "default": false,
+            "title": "Outlineunvalidated",
+            "type": "boolean"
+          },
           "parcelIds": {
             "items": {
               "type": "string"

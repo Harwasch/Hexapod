@@ -9,6 +9,7 @@ rate-limited, and every accepted request gets the same answer. The list needs th
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Iterator
 from typing import Any
@@ -17,15 +18,16 @@ import pytest
 from fastapi.testclient import TestClient
 from httpx2 import Response
 from sqlalchemy import func, inspect, select, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DataError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.deps import _db
 from app.config import Settings
 from app.db import get_engine
 from app.main import create_app
 from app.models.scan_request import ScanRequest
-from app.schemas.scan_request import MAX_RINGS, MAX_VERTICES
+from app.schemas.scan_request import MAX_RINGS, MAX_VERTICES, ScanRequestCreate
 from app.services import scan_requests as service
 from app.services.ratelimit import SCAN_REQUESTS, RateLimits
 from tests.conftest import TEST_DATABASE_URL
@@ -265,19 +267,87 @@ def test_the_list_is_newest_first_and_bounded(client: TestClient, clock: Clock) 
 # ---- Review of 2026-10-20 (Codex, confirmed against a local Postgres) ---------------------
 
 
-def test_crossed_combs_are_refused_in_seconds_not_minutes(client: TestClient, db: Session) -> None:
+def test_crossed_combs_are_kept_unvalidated_in_seconds_not_minutes(
+    client: TestClient, db: Session
+) -> None:
     # 11 KB of two comb-shaped parcels whose fingers cross: dissolving them took 16.5 s
-    # unbounded (measured 2026-10-20), 49 s at 60 fingers. Under the statement timeout it is
-    # refused as an outline that could not be processed, and nothing is stored.
+    # unbounded (measured 2026-10-20), 49 s at 60 fingers. Under the statement timeout the
+    # cleaning stops, and the request is not lost: it is stored with its outline as sent,
+    # flagged for a person to look at, and answered like any other.
     started = time.monotonic()
     response = send(client, request(boundary=crossed_combs(40), parcelIds=[]))
     elapsed = time.monotonic() - started
-    assert response.status_code == 422, response.text
-    assert "could not be processed" in response.text
+    assert response.status_code == 202, response.text
     assert elapsed < 6, elapsed
-    assert stored(db) == 0
-    # The session is usable again: the next request is stored.
+    (row,) = listed(client)
+    assert row["outlineUnvalidated"] is True
+    assert row["boundary"] is None and row["areaM2"] is None
+    raw = db.scalar(text("SELECT raw_outline FROM scan_requests"))
+    assert raw["type"] == "MultiPolygon" and len(raw["coordinates"]) == 2
+    # The session is usable again: the next request is cleaned and stored as usual.
     assert send(client, request(), ip="198.51.100.4").status_code == 202
+    assert [r["outlineUnvalidated"] for r in listed(client)] == [False, True]
+
+
+def test_one_clean_at_a_time_and_a_busy_cleaner_does_not_lose_the_request(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The process cleans one outline at a time; a request that cannot get the cleaner in time
+    # is kept unvalidated rather than refused.
+    monkeypatch.setattr(service, "CLEANER_WAIT_S", 0.05)
+    assert service.CLEANER.acquire(timeout=1)
+    try:
+        assert send(client, request()).status_code == 202
+    finally:
+        service.CLEANER.release()
+    (row,) = listed(client)
+    assert row["outlineUnvalidated"] is True
+    assert row["parcelIds"] == ["ca-parcel/06001/2-51-1"]
+
+
+def test_the_daily_cap_holds_under_concurrent_requests(db: Session, engine: Engine) -> None:
+    # 16 requests at once with one place left under the cap: before the advisory lock, 213 rows
+    # for a cap of 200 (Codex, 2026-10-20). Each request has its own session, as in the API.
+    cap = 20
+    db.execute(
+        text(
+            "INSERT INTO scan_requests (id, name, email, notes, parcel_ids) "
+            "SELECT gen_random_uuid(), 'Seed', 'seed@example.com', '', '{}' "
+            "FROM generate_series(1, :n)"
+        ),
+        {"n": cap - 1},
+    )
+    db.commit()
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    payload = ScanRequestCreate.model_validate(request())
+    start = threading.Barrier(16)
+    outcomes: list[str] = []
+
+    def submit() -> None:
+        with factory() as session:
+            start.wait()
+            try:
+                service.create_scan_request(session, payload, daily_cap=cap, clean_timeout_ms=1500)
+                outcomes.append("stored")
+            except service.DailyCapReached:
+                outcomes.append("capped")
+
+    threads = [threading.Thread(target=submit) for _ in range(16)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(30)
+    assert sorted(outcomes) == ["capped"] * 15 + ["stored"]
+    assert stored(db) == cap
+
+
+def test_parcel_ids_are_printable(client: TestClient, db: Session) -> None:
+    for n, control in enumerate(("\x1f", "\x7f", "\x0b", "\u00a0")):
+        response = send(
+            client, request(parcelIds=[f"ca-parcel/06001/2-51{control}1"]), ip=f"198.51.100.{n}"
+        )
+        assert response.status_code == 422, repr(control)
+    assert stored(db) == 0
 
 
 def test_vertex_and_ring_caps_refuse_before_postgis(

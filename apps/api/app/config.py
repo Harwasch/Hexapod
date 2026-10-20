@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     #: can grow (app/services/scan_requests.py).
     scan_requests_daily_cap: int = Field(default=200, ge=1)
     #: How long dissolving a request's outline in PostGIS may take (ms) before it is refused.
-    scan_request_clean_timeout_ms: int = Field(default=2_000, ge=1)
+    scan_request_clean_timeout_ms: int = Field(default=1_500, ge=1)
     land_oidc_issuer: str | None = None
     land_oidc_audience: str | None = None
     land_oidc_jwks_url: str | None = None

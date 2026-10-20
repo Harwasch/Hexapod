@@ -20,8 +20,9 @@ EMAIL = re.compile(
 #: Control characters: none in a name or an email, and in notes only tab and line breaks.
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 NOTES_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-#: A parcel the public lookup returned: `ca-parcel/<county FIPS>/<parcel number>`.
-PARCEL_ID = r"^ca-parcel/06\d{3}/[^\s/]{1,150}$"
+#: A parcel the public lookup returned: `ca-parcel/<county FIPS>/<parcel number>`, the number
+#: printable ASCII without `/` (no spaces, control characters or look-alikes).
+PARCEL_ID = r"^ca-parcel/06\d{3}/[\x21-\x2e\x30-\x7e]{1,150}$"
 
 
 #: What a submitted outline may hold, checked before PostGIS sees it: fifty parcels of a hundred
@@ -132,5 +133,8 @@ class ScanRequestRead(CamelModel):
     boundary: Footprint | None
     #: True when a stored outline could not be read back (an old row): the rest is still shown.
     boundary_unreadable: bool = False
+    #: True when the outline could not be cleaned in time and was kept as sent, for a person to
+    #: look at (`raw_outline` in the table; not served here).
+    outline_unvalidated: bool = False
     area_m2: float | None
     parcel_ids: list[str]

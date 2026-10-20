@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from typing import Any
+
 from geoalchemy2 import Geometry, WKBElement
-from sqlalchemy import Index, String, Text
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy import Boolean, Index, String, Text, false
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -30,3 +32,9 @@ class ScanRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     parcel_ids: Mapped[list[str]] = mapped_column(
         ARRAY(String(200)), nullable=False, default=list, server_default="{}"
     )
+    #: The outline could not be cleaned in time (app/services/scan_requests.py): it is kept as
+    #: sent, in `raw_outline`, and `boundary` is empty, rather than the request being lost.
+    outline_unvalidated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    raw_outline: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
