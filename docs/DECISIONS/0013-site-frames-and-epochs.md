@@ -65,7 +65,10 @@ heightDatum, epsg}`) to the stages that write the placement: `ingest_splat`, `ma
    `keepVerifiedPct` are still written on a pipeline-made site for `view.html`, the real-size tool
    and older readers, by runs of the site's first epoch only (the splat those readers show), so a
    later epoch's coverage never lies over epoch 1's tiles; the epoch row is the record of truth,
-   and M2b moves those readers onto it.
+   and M2b moves those readers onto it. `view.html` (`src/view/shown.ts`) shows the current
+   revision of the oldest epoch that has tiles, not the first splat listed (a re-run of epoch 1
+   lists its new revision after epoch 2's asset), and lays the mirrored coverage over it only when
+   that epoch is epoch 1.
 9. **Migration 0032** backfills a frame and epoch 1 for every site a pipeline run registered (a
    `captureId` naming a capture of that site, and a numeric georef), with that site's first splat
    as the epoch's asset unless it has a `valid_to` (a validity window before 0032; on an epoch
