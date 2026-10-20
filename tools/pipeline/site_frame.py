@@ -38,15 +38,25 @@ MAX_OFFSET_M = 2047.0
 #: then some), only there so a garbage number is refused rather than used.
 _HEIGHT_RANGE = (-1.0e5, 1.0e5)
 
+#: What a frame's height is measured from: the API's `HeightDatum` vocabulary.
+HEIGHT_DATUMS = ("ellipsoid-wgs84", "msl-unverified")
+
 
 @dataclass(frozen=True)
 class SiteFrame:
-    """A site's origin: the WGS84 point its east/north/up frame is about."""
+    """A site's origin: the WGS84 point its east/north/up frame is about.
+
+    `height_datum` and `epsg` (the origin's UTM zone) travel with it when the worker sends
+    them (the shared `site_frame` contract); nothing here places by them, and they are not
+    part of the echo, whose job is to say which origin the tiles are about.
+    """
 
     site_id: str
     lat: float
     lon: float
     height: float
+    height_datum: str | None = None
+    epsg: int | None = None
 
 
 def _number(value: object, key: str, low: float, high: float) -> float:
@@ -74,11 +84,25 @@ def from_param(value: object) -> SiteFrame | None:
     site_id = value.get("siteId")
     if not isinstance(site_id, str) or not site_id:
         raise ValueError(f"site_frame.siteId must be a non-empty string, not {site_id!r}")
+    datum = value.get("heightDatum")
+    if datum is not None and datum not in HEIGHT_DATUMS:
+        raise ValueError(
+            f"site_frame.heightDatum must be one of {', '.join(HEIGHT_DATUMS)}, not {datum!r}"
+        )
+    epsg = value.get("epsg")
+    if epsg is not None and (
+        isinstance(epsg, bool)
+        or not isinstance(epsg, int)
+        or not (32601 <= epsg <= 32660 or 32701 <= epsg <= 32760)
+    ):
+        raise ValueError(f"site_frame.epsg must be a WGS84 UTM zone code, not {epsg!r}")
     return SiteFrame(
         site_id=site_id,
         lat=_number(value.get("lat"), "lat", -90.0, 90.0),
         lon=_number(value.get("lon"), "lon", -180.0, 180.0),
         height=_number(value.get("height"), "height", *_HEIGHT_RANGE),
+        height_datum=datum,
+        epsg=epsg,
     )
 
 
