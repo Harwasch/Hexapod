@@ -17,6 +17,7 @@ registration is part of the same transaction-shaped step as finishing the job.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import math
@@ -34,6 +35,7 @@ from sqlalchemy.orm import Session
 from app.models import Asset, Capture, Epoch, Job, Site, SiteFrame
 from app.models.enums import (
     AssetSourceKind,
+    CaptureKind,
     CaptureStatus,
     EpochJoinMethod,
     EpochPlatform,
@@ -57,6 +59,7 @@ from app.services.slugs import slugify
 from app.storage import ObjectStorage
 from app.worker.carry import CarryPlan, plan_carry
 from app.worker.outputs import artifact_key, stage_prefix
+from app.worker.pipeline_bridge import PLATFORM_WORDS
 from app.worker.publish import Publisher, PublishError
 
 log = logging.getLogger("app.worker")
@@ -107,6 +110,10 @@ class Registration:
     #: when the frames' own metadata showed it, `claimed` when only a request or the
     #: upload route said so, `none`; None in a document from before the field.
     platform_evidence: str | None = None
+    #: How the run was registered to its site (`align_epoch`'s `epoch_alignment.json`, less
+    #: its per-image residuals, copied up by `catalog`), or None for a recipe with no align
+    #: stage (`registration.alignment_of` then records why it is unaligned).
+    alignment: dict[str, Any] | None = None
 
     @staticmethod
     def read(path: Path) -> Registration:
@@ -136,6 +143,9 @@ class Registration:
                 if isinstance(document.get("platformEvidence"), str)
                 else None
             ),
+            alignment=document.get("alignment")
+            if isinstance(document.get("alignment"), dict)
+            else None,
         )
 
 
@@ -154,9 +164,12 @@ def _platform(value: object) -> EpochPlatform | None:
 def epoch_platform(capture: Capture, registration: Registration, current: str | None) -> str:
     """The platform an epoch records after this run (decision D4's tiers).
 
-    What the run detected from its own frames, when it detected something; else what
-    the epoch already says (a re-run that detected nothing, or only `unknown`, does not
-    erase a known platform); else, for a first run, what the capture row implies
+    The platform the run's alignment was judged for (`epoch_alignment.json`'s
+    `platform`), when it names one: its verdict and label are that platform's -- "survey"
+    is only ever an RTK drone's -- so the epoch must say the same. Else what the run
+    detected from its own frames, when it detected something; else what the epoch
+    already says (a re-run that detected nothing, or only `unknown`, does not erase a
+    known platform); else, for a first run, what the capture row implies
     (`epochs.platform_of`: a phone-key upload is a phone video).
 
     `rtk-drone` -- the survey tier -- only when the frames showed it (`platformEvidence:
@@ -165,6 +178,9 @@ def epoch_platform(capture: Capture, registration: Registration, current: str | 
     (a write-token client's `metadata.platform`, or a document from before the field)
     is recorded as the `drone` it claims to be, without the survey part.
     """
+    aligned = _platform((registration.alignment or {}).get("platform"))
+    if aligned is not None and aligned is not EpochPlatform.UNKNOWN:
+        return aligned.value
     detected = registration.platform
     if detected is EpochPlatform.RTK_DRONE and registration.platform_evidence != "metadata":
         log.warning(
@@ -177,6 +193,104 @@ def epoch_platform(capture: Capture, registration: Registration, current: str | 
     if current is not None:
         return current
     return epochs.platform_of(capture).value
+
+
+#: The scale sources that are measurements. A visually aligned epoch takes its scale from
+#: the epoch it was aligned to, so it is `visual-epoch` only when that one's was one of
+#: these; an estimated or unresolved scale is inherited as what it is (`_aligned_scale`).
+MEASURED_SCALES = frozenset({ScaleSource.ARKIT, ScaleSource.EXIF_GPS, ScaleSource.VISUAL_EPOCH})
+
+#: How a run with no alignment of its own was placed, in a label's words.
+_PLACED_BY: dict[GeorefMethod, str] = {
+    GeorefMethod.MANUAL: "placed by hand",
+    GeorefMethod.EXIF_GPS: "placed by its GPS",
+    GeorefMethod.ARKIT: "placed by ARKit",
+}
+
+
+def alignment_of(capture: Capture, registration: Registration) -> dict[str, Any]:
+    """What `epochs.alignment` records for this run (decision D4).
+
+    The run's own `epoch_alignment.json` (via `registration.json`) when its recipe has an
+    align stage. Otherwise the run was never aligned to its site, and says so in the
+    shape the web reads (`label`, `verdict`, `uncertaintyM`): a splat upload has no frames
+    to match (M3b leaves ICP of uploaded splats for later), and any other run without an
+    align stage was placed by its georeference alone. Never a claim it did not make.
+    """
+    if registration.alignment is not None:
+        return registration.alignment
+    splat = capture.kind in (CaptureKind.GAUSSIAN_SPLAT, CaptureKind.POINT_CLOUD)
+    platform = epoch_platform(capture, registration, None)
+    words = "Splat upload" if splat else PLATFORM_WORDS.get(platform, "Capture")
+    placed = _PLACED_BY.get(registration.georef_method, "placed by its georeference")
+    uncertainty = registration.uncertainty_m if registration.uncertainty_m > 0 else None
+    told = f"±{uncertainty:.2g} m" if uncertainty is not None else "uncertainty not recorded"
+    return {
+        "version": 1,
+        "method": "none",
+        "referenceEpochId": None,
+        "platform": platform,
+        "verdict": "unaligned",
+        "confidence": 0.0,
+        "uncertaintyM": uncertainty,
+        "label": f"{words}, not aligned: {placed}, {told}",
+        "reasons": [
+            "a splat upload has no frames to match"
+            if splat
+            else "the run's recipe has no align stage: placed by its georeference only"
+        ],
+        "frameSource": "georef",
+    }
+
+
+def _aligned_scale(db: Session, reference_id: object) -> tuple[ScaleSource, float | None]:
+    """The scale a visually aligned epoch has: its reference epoch's, carried by the
+    alignment's similarity. `visual-epoch` when that was measured; else that word itself
+    (an estimate keeps its +/-% from the reference's asset); `unresolved` when the
+    reference is gone or never said."""
+    try:
+        epoch = db.get(Epoch, uuid.UUID(str(reference_id)))
+    except ValueError:
+        epoch = None
+    capture = db.get(Capture, epoch.capture_id) if epoch and epoch.capture_id else None
+    source = capture.scale_source if capture is not None else None
+    if source is None:
+        return ScaleSource.UNRESOLVED, None
+    if source in MEASURED_SCALES:
+        return ScaleSource.VISUAL_EPOCH, None
+    if source is ScaleSource.CAMERA_HEIGHT_ESTIMATE and epoch is not None:
+        current = epochs.current_asset(db, epoch.id)
+        provenance = (current.render_config or {}).get("provenance") if current else None
+        pct = (
+            _optional_number(provenance.get("scaleUncertaintyPct"))
+            if isinstance(provenance, dict)
+            else None
+        )
+        return source, pct
+    return source, None
+
+
+def as_aligned(db: Session, registration: Registration) -> Registration:
+    """The registration with its provenance as the alignment has it (M3b.2).
+
+    Its uncertainty is the alignment's `uncertaintyM` whenever the alignment states one
+    (what the epoch is claimed to: an unaligned epoch's is its georeference's anyway). An
+    epoch the alignment placed visually -- `method: visual`, aligned -- was placed by its
+    reference, not by its own GNSS: `georef_method` is `visual-epoch`, and its scale the
+    reference's (`_aligned_scale`). One that fell back to, or kept, its own GNSS frame
+    keeps the georeference's provenance.
+    """
+    alignment = registration.alignment or {}
+    changes: dict[str, Any] = {}
+    uncertainty = _optional_number(alignment.get("uncertaintyM"))
+    if uncertainty is not None and uncertainty > 0:
+        changes["uncertainty_m"] = uncertainty
+    if alignment.get("method") == "visual" and alignment.get("verdict") in ("survey", "coarse"):
+        scale, pct = _aligned_scale(db, alignment.get("referenceEpochId"))
+        changes.update(
+            georef_method=GeorefMethod.VISUAL_EPOCH, scale_source=scale, scale_uncertainty_pct=pct
+        )
+    return dataclasses.replace(registration, **changes) if changes else registration
 
 
 def _ground_samples(value: object) -> tuple[GroundSample, ...]:
@@ -1139,6 +1253,7 @@ def register(
             carry_from=live_tileset_url(db, capture),
         )
     url, thumbnail, coverage = published.tileset, published.thumbnail, published.coverage
+    registration = as_aligned(db, registration)
     echo = _frame_echo(registration)
     epoch = epochs.epoch_of_capture(db, capture.id, lock=True)
     legacy = capture.site_id is not None and epoch is None
@@ -1194,6 +1309,7 @@ def register(
             platform=epoch_platform(capture, registration, None),
             status=EpochStatus.PUBLISHED.value,
             join_method=join.value,
+            alignment=alignment_of(capture, registration),
             quality=quality,
         )
         db.add(epoch)
@@ -1211,8 +1327,19 @@ def register(
         # later normalize reads more of the frames than an earlier one did), published
         # tiles or not -- the platform is a fact about the capture, not the tiles.
         epoch.platform = epoch_platform(capture, registration, epoch.platform)
-        if url is not None:
+        # A capture a quality gate rejected (`record_rejected`) whose run has now passed:
+        # its epoch is published, dated by this run's evidence, and takes its footprint,
+        # quality and alignment whether or not its tiles could be published. What they
+        # replace is kept in the epoch's history (`_replace_run`).
+        promoted = epoch.status == EpochStatus.REJECTED.value
+        if promoted:
+            epoch.status = EpochStatus.PUBLISHED.value
+            observed_at, observed_source = _observed_at(capture, registration)
+            epoch.observed_at = observed_at
+            epoch.observed_at_source = observed_source.value
+        if url is not None or promoted:
             _replace_run(epoch, producing, footprint, quality, now)
+            epoch.alignment = alignment_of(capture, registration)
     same_tiles = published.content_addressed and url == tileset_url(current)
     if url is not None and current is not None and not same_tiles:
         # New tiles -- or, with one bucket, a republish onto the run's own keys, which a
