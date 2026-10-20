@@ -62,9 +62,11 @@ __all__ = [
     "ev100",
     "exif_time",
     "focal_px_from_35mm",
+    "offset_text",
     "read_dji_xmp",
     "read_photo",
     "rtk_flag_meaning",
+    "utc_text",
     "xmp_packet",
     "xmp_value",
 ]
@@ -385,7 +387,8 @@ def _offset(text: str | None) -> timezone | None:
     return timezone(sign * timedelta(hours=hours, minutes=minutes))
 
 
-def _offset_text(delta: timedelta) -> str:
+def offset_text(delta: timedelta) -> str:
+    """A UTC offset as `+HH:MM` / `-HH:MM`."""
     total = int(delta.total_seconds() // 60)
     sign = "-" if total < 0 else "+"
     total = abs(total)
@@ -435,7 +438,7 @@ def exif_time(
         aware = local.replace(tzinfo=zone)
         return FrameTime(
             local=local_text,
-            offset=_offset_text(aware.utcoffset() or timedelta(0)),
+            offset=offset_text(aware.utcoffset() or timedelta(0)),
             utc=utc_text(aware),
             source="exif-offset",
         )
@@ -453,7 +456,7 @@ def exif_time(
             return FrameTime(local=parsed.isoformat(), source="xmp-createdate-local")
         return FrameTime(
             local=parsed.replace(tzinfo=None).isoformat(),
-            offset=_offset_text(parsed.utcoffset() or timedelta(0)),
+            offset=offset_text(parsed.utcoffset() or timedelta(0)),
             utc=utc_text(parsed),
             source="xmp-createdate",
         )
@@ -645,14 +648,18 @@ class FrameRecord:
 
 
 def read_photo(
-    original: Path, *, frame_name: str, upload_root: Path, frame_size: tuple[int, int]
+    original: Path,
+    *,
+    frame_name: str,
+    upload_root: Path,
+    frame_size: tuple[int, int] | None,
 ) -> FrameRecord:
     """Everything `original` says about itself, for the kept frame `frame_name`.
 
     Never raises: a photo set can hold anything a phone or a drone put in it, and one
     unreadable original is a thin record (name, original, mask, `unreadable`), not a
     failed run. `frame_size` is the kept frame's, so the focal in pixels is the one pose
-    will see.
+    will see; None (the kept frame did not open) leaves the focal in pixels unset.
     """
     try:
         relative = original.relative_to(upload_root).as_posix()
@@ -670,7 +677,7 @@ def read_photo(
 
 
 def _read_photo(
-    original: Path, frame_name: str, relative: str, frame_size: tuple[int, int]
+    original: Path, frame_name: str, relative: str, frame_size: tuple[int, int] | None
 ) -> FrameRecord:
     with PIL.Image.open(original) as image:
         size = (int(image.width), int(image.height))
@@ -693,7 +700,9 @@ def _read_photo(
     focal_35 = _positive(_rational(exif_ifd.get(FOCAL_35MM)))
     px: float | None = None
     px_from: FocalFrom | None = None
-    if dji is not None and dji.calibrated_focal_px is not None:
+    if frame_size is None:
+        pass
+    elif dji is not None and dji.calibrated_focal_px is not None:
         px = calibrated_focal_px(dji.calibrated_focal_px, size, frame_size)
         px_from = "dji-calibrated"
     elif focal_35 is not None:

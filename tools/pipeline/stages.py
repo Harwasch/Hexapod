@@ -28,6 +28,7 @@ import subprocess
 import time
 import tomllib
 from collections.abc import Callable, Sequence
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import IO, Any, NoReturn
 
@@ -37,9 +38,11 @@ import PIL
 import PIL.Image
 
 import blocks
+import capture_platform
 import colmap4
 import convergence
 import exif
+import frame_meta
 import gaussian_budget
 import gaussians
 import global_sfm
@@ -79,6 +82,11 @@ SOURCE_META = ArtifactDecl(
     "source_meta.json",
     content_type="application/json",
     summary="sensor, capture date, frame count, and what the uploaded bytes turned out to be",
+)
+FRAMES_META = ArtifactDecl(
+    "frames_meta.json",
+    content_type="application/json",
+    summary="one record per kept frame, read from the original upload before shrinking",
 )
 FRAMES = ArtifactDecl(
     "frames",
@@ -361,7 +369,7 @@ SELECT_MODES: tuple[str, ...] = ("viewpoint", "sharpness", "sharpness-windowed",
 @stage_impl(
     "ffmpeg_frames",
     consumes=("upload",),
-    produces=(FRAMES, SOURCE_META),
+    produces=(FRAMES, SOURCE_META, FRAMES_META),
     summary="Lane 2: video or image folder to a frame set, keyframes by camera motion",
 )
 def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
@@ -397,9 +405,17 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     sample of the capture's sharpest frames measurably carries detail above it, then up
     to `auto_ceiling` (`resolution.py`). Absent, frames keep their size.
 
-    What it does *not* do is read EXIF off a folder of stills or turn a location into a
-    georeference -- `exif_gps` is that stage, and it lands in B4. A location found here is
-    recorded in `source_meta.json` and goes no further.
+    `frames_meta.json` describes every kept frame from its **original** -- the upload's
+    photo before it was shrunk, or the clip and the frame's place in it -- because
+    shrinking keeps only the EXIF block and the DJI XMP (RTK, gimbal, calibrated focal)
+    is gone from the frame by the time `pose` sees it (`frame_meta.py`). The capture's
+    platform (`capture_platform.py`: `rtk-drone`, `drone`, `phone-video`, `phone-photo`,
+    `unknown`) is decided from those records and recorded in both documents; a
+    `platform` param overrides it and `platform_hint: phone` (a phone-key upload) is the
+    last thing it falls back on.
+
+    What it does *not* do is turn a location into a georeference -- `exif_gps` is that
+    stage. A location found here is recorded and goes no further.
     """
     upload = ctx.input("upload")
     source = video.pick_source(upload)
@@ -503,6 +519,17 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         max_side=max_side,
     )
 
+    records = _frame_records(source, upload, candidates, chosen, written, meta, rate)
+    platform = capture_platform.detect(
+        fmt="video" if source.is_video else "images",
+        records=records,
+        video=meta if source.is_video else None,
+        requested=_optional_str(ctx.param("platform")),
+        hint=_optional_str(ctx.param("platform_hint")),
+    )
+    focal_summary = frame_meta.capture_focal(records)
+    time_range = _time_range(records)
+
     kept_scores = [scores[i] for i in chosen] if scores else []
     chosen_set = set(chosen)
     dropped_scores = [s for i, s in enumerate(scores) if i not in chosen_set]
@@ -555,10 +582,37 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         # way round -- a phone that was renamed is still the phone the row names.
         "sensor": _optional_str(ctx.param("sensor")) or meta.make,
         "device": _optional_str(ctx.param("device")) or meta.model,
-        "capturedAt": _optional_str(ctx.param("captured_at")) or meta.created_at,
+        # What the capture row says, else the container's date, else the first kept
+        # frame's own clock (a photo set's EXIF time, local unless it carried a zone).
+        "capturedAt": _optional_str(ctx.param("captured_at"))
+        or meta.created_at
+        or _first_frame_time(records),
+        # The files' own clocks, in UTC, only when a zone was known (`frames_meta.json`
+        # `timeRange`); what the worker dates the epoch by first (`_observed_at`).
+        "capturedAtUtc": time_range["firstUtc"],
+        "platform": platform.to_dict(),
+        "focal": focal_summary,
         "tools": {"ffmpeg": video.ffmpeg_version(), "ffmpegFrom": "imageio-ffmpeg"},
     }
     _write_json(ctx.output(SOURCE_META.name), document)
+    _write_json(
+        ctx.output(FRAMES_META.name),
+        {
+            "schema": FRAMES_META_SCHEMA,
+            "format": "video" if source.is_video else "images",
+            "platform": platform.to_dict(),
+            "frames": [record.to_dict() for record in records],
+            "focal": focal_summary,
+            "timeRange": time_range,
+            "masks": {
+                "convention": "COLMAP ImageReader.mask_path: <frame name>.png; 0 = ignore, "
+                "255 = keep",
+                "producedBy": "the ingest_mask stage when its impl is not none: "
+                "ingest_masks/masks.json, keyed by frame name",
+            },
+        },
+    )
+    ctx.log(f"platform: {platform.value} ({platform.source}: {platform.evidence})")
     ctx.log(
         f"{source.kind}: {len(candidates)} candidate frame(s) -> {len(written)} kept "
         f"by {applied} ({first[0]}x{first[1]})"
@@ -584,6 +638,7 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         "height": first[1],
         "maxSide": max_side if max_side is not None else max(first),
         "maxSideRule": "auto" if size is not None else "fixed" if max_side else "source",
+        "platform": platform.value,
     }
     if source.is_video:
         metrics["fps"] = rate if rate is not None else fps
@@ -594,6 +649,117 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         metrics["motionScale"] = round(segmentation.scale, 4)
         metrics["unmeasuredPairs"] = segmentation.unmeasured_pairs
     return StageOutcome(metrics=metrics, summary=f"{len(written)} frames by {applied}")
+
+
+#: The shape of `frames_meta.json`; bumped when a field changes meaning.
+FRAMES_META_SCHEMA = "frames_meta/1"
+
+
+def _frame_records(
+    source: video.Source,
+    upload: Path,
+    candidates: Sequence[Path],
+    chosen: Sequence[int],
+    written: Sequence[Path],
+    meta: video.VideoMeta,
+    rate: float | None,
+) -> list[frame_meta.FrameRecord]:
+    """One `frame_meta.FrameRecord` per kept frame, in frame order.
+
+    Photos are read from their originals (`candidates[i]`), which still carry the XMP the
+    shrunk frame lost. A video's frames are described by the clip and their place in it:
+    candidate `i` of an `fps` extraction numbered from 0 is the frame at about `i / rate`
+    seconds, so its UTC time is the clip's start plus that -- with the clip's start taken
+    from its QuickTime creation date (assumed to be the start of recording; UNVERIFIED)
+    or its mvhd time. A clip's one location lives in `source_meta.location`, not in each
+    frame's `gps`, where it would read as a per-frame fix.
+    """
+    if not source.is_video:
+        return [
+            frame_meta.read_photo(
+                candidates[index],
+                frame_name=frame.name,
+                upload_root=upload,
+                frame_size=_safe_image_size(frame),
+            )
+            for index, frame in zip(chosen, written, strict=True)
+        ]
+    started, started_from = meta.started_at(), meta.started_from()
+    size = _safe_image_size(written[0]) if written else None
+    focal = frame_meta.Focal(mm35=meta.focal_35mm)
+    if meta.focal_35mm is not None and size is not None:
+        focal = frame_meta.Focal(
+            mm35=meta.focal_35mm,
+            px=frame_meta.focal_px_from_35mm(meta.focal_35mm, *size),
+            px_from="quicktime-35mm",
+        )
+    coded = (meta.width, meta.height) if meta.width and meta.height else None
+    records: list[frame_meta.FrameRecord] = []
+    for index, frame in zip(chosen, written, strict=True):
+        offset = round(index / rate, 3) if rate else None
+        records.append(
+            frame_meta.FrameRecord(
+                name=frame.name,
+                original=source.path.name,
+                original_path=source.path.relative_to(upload).as_posix()
+                if source.path.is_relative_to(upload)
+                else source.path.name,
+                original_size=coded,
+                candidate_index=index,
+                offset_s=offset,
+                time=_clip_time(started, started_from, offset),
+                make=meta.make,
+                model=meta.model,
+                lens=meta.lens_model,
+                focal=focal,
+            )
+        )
+    return records
+
+
+def _clip_time(
+    started: datetime | None, source: str | None, offset_s: float | None
+) -> frame_meta.FrameTime:
+    """A video frame's time: the clip's start plus its offset into the clip."""
+    if started is None or offset_s is None or source is None:
+        return frame_meta.FrameTime()
+    moment = started + timedelta(seconds=offset_s)
+    if source != "quicktime-creationdate":
+        # The mvhd time is UTC by definition; the camera's local zone is not in it.
+        return frame_meta.FrameTime(utc=frame_meta.utc_text(moment), source="mvhd-creation-time")
+    return frame_meta.FrameTime(
+        local=moment.replace(tzinfo=None).isoformat(timespec="milliseconds"),
+        offset=frame_meta.offset_text(moment.utcoffset() or timedelta(0)),
+        utc=frame_meta.utc_text(moment),
+        source="quicktime-creationdate",
+    )
+
+
+def _time_range(records: Sequence[frame_meta.FrameRecord]) -> dict[str, object]:
+    """The first and last UTC time among the frames, and which clock(s) said so."""
+    times = sorted(r.time.utc for r in records if r.time.utc is not None)
+    sources = sorted({r.time.source for r in records if r.time.utc and r.time.source})
+    return {
+        "firstUtc": times[0] if times else None,
+        "lastUtc": times[-1] if times else None,
+        "source": sources[0] if len(sources) == 1 else ("mixed" if sources else None),
+        "framesWithUtc": len(times),
+    }
+
+
+def _first_frame_time(records: Sequence[frame_meta.FrameRecord]) -> str | None:
+    for record in records:
+        if record.time.local or record.time.utc:
+            return record.time.local or record.time.utc
+    return None
+
+
+def _safe_image_size(path: Path) -> tuple[int, int] | None:
+    """A frame's size, or None for a file that does not open as an image."""
+    try:
+        return _image_size(path)
+    except (OSError, ValueError, SyntaxError):
+        return None
 
 
 def _frame_size_rule(value: object) -> int | str | None:
