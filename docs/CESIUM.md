@@ -750,8 +750,9 @@ it is offered under every splat renderer and sits beside the date swipe and a pe
 rather than ending them; it ends with its site or from its own Hide. The legend says it is derived
 and uncalibrated, the least change it can show (`minDetectableM`), and which date is not
 survey-grade. The read is behind the write token: a 401 asks for it in the legend and in Compare.
-The drape lies on the ground, so splats over the ground (a yard's grass) cover it where they are
-dense: it shows through gaps and where nothing was scanned. Evidence: `e2e/changeDrape.spec.ts`
+Splats over the ground (a yard's grass) cover the drape where they are dense, so the same areas
+are outlined over the scan too (`cesium/changeOverlay.ts`): an SVG above every renderer's canvas,
+projected through the camera at the globe's height, redrawn only when the view changes. Evidence: `e2e/changeDrape.spec.ts`
 (the app under CesiumJS, PlayCanvas and Spark).
 
 ## Patched engine
