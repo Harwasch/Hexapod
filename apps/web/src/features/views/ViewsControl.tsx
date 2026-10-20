@@ -1,4 +1,4 @@
-import { Layers } from "lucide-react";
+import { Palette } from "lucide-react";
 
 import { GlassButton, GlassPanel, GlassSegmentedControl } from "@twin/ui";
 
@@ -44,7 +44,7 @@ export function ViewsControl({ siteId }: { siteId: string }) {
       aria-label="Splat view"
       data-testid="views"
     >
-      <Layers size={14} className="glass-muted" aria-hidden="true" />
+      <Palette size={14} className="glass-muted" aria-hidden="true" />
       <GlassSegmentedControl
         aria-label="Splat view"
         data-testid="views-modes"

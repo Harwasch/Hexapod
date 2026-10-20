@@ -56,7 +56,7 @@ import {
 import { invertAffine, type Mat4 } from "./splatFrames";
 import type { OwnedTexture } from "./splatGpuMotion";
 import type { SplatPrimitive, SplatShaderBuilder } from "./splatInternals";
-import { COMPANION_SLOT_VECS, companionSlots, companionSlotsGlsl } from "./splatViewCones";
+import { COMPANION_SLOT_VECS, companionSlots, companionSlotsGlsl } from "./splatSlots";
 
 export type CellViewMode = "confidence" | "data-age";
 export { AGE_RAMP, CONFIDENCE_RAMP };
