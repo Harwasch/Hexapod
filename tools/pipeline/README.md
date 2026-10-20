@@ -28,6 +28,15 @@ The state of each piece, in the three-state vocabulary of `docs/HANDOFF.md`:
 
 - `normalize` / `ffmpeg_frames` extracts and selects frames and scrapes the container's
   metadata. It runs here and in CI, on a generated clip.
+  - `frames_meta.json` (`frame_meta.py`): one record per kept frame, read from the
+    **original** upload before it is shrunk -- time with its zone, GPS with its error,
+    exposure, focal, camera, and a DJI drone's XMP (RTK fix, gimbal, calibrated focal).
+    Tested on synthetic DJI-style files only: no real Mavic 3 Enterprise photo has been
+    read, and the fields no primary source confirms are named per record (ADR 0014).
+  - the capture's platform (`capture_platform.py`: `rtk-drone`, `drone`, `phone-video`,
+    `phone-photo`, `unknown`), detected from those records, written onto the epoch.
+  - HLG/PQ video is tonemapped before frames are taken; exposure is measured and flagged,
+    with its fail gate off.
 - `pose` / `colmap` runs real structure from motion and is scored against known poses —
   40 frames rendered from the committed synthetic tree, 40/40 registered, 0.059° median
   rotation error, 0.092% of scene extent in translation. CI installs `colmap` so this
