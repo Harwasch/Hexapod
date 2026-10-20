@@ -1,0 +1,205 @@
+"""Weak cells become smoothed patches on the globe, each with a way to fly it (A4).
+
+Synthetic planes with known answers: where the patches are, how large, what a budget
+keeps, and which pattern each reason asks for. The projection is checked against an
+independent east/north/up -> ECEF -> WGS84 computation, not against itself.
+"""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+import pytest
+from pyproj import Transformer
+from shapely.geometry import box
+
+from app.analysis import weak_areas
+from app.analysis.cell_grid import REASON_BITS, Plane, weak_mask
+from app.analysis.weak_areas import cell_patches, pattern_for, site_projection
+
+LAT, LON, HEIGHT = 40.2, -111.6, 1500.0
+BITS = REASON_BITS
+
+
+def a_plane(level: int = 2, i0: int = -10, j0: int = -10, ni: int = 20, nj: int = 20) -> Plane:
+    """Strong everywhere (score 200, no reasons, flat)."""
+    return Plane(
+        level,
+        i0,
+        j0,
+        ni,
+        nj,
+        {
+            "score": np.full((nj, ni), 200, dtype=np.uint8),
+            "reasons": np.zeros((nj, ni), dtype=np.uint8),
+            "relief": np.zeros((nj, ni), dtype=np.uint8),
+        },
+    )
+
+
+def weaken(
+    plane: Plane, i: tuple[int, int], j: tuple[int, int], *, score: int, bits: int, relief: int = 0
+) -> None:
+    """Cells `i[0] <= i < i[1]`, `j[0] <= j < j[1]` (lattice indices) made weak."""
+    rows = slice(j[0] - plane.j0, j[1] - plane.j0)
+    columns = slice(i[0] - plane.i0, i[1] - plane.i0)
+    plane.channels["score"][rows, columns] = score
+    plane.channels["reasons"][rows, columns] = bits
+    plane.channels["relief"][rows, columns] = relief
+
+
+def enu_to_lonlat(x: float, y: float) -> tuple[float, float]:
+    """Independently of the module: rotate (x, y, 0) out of the frame's ENU into ECEF
+    about the origin, then ECEF to WGS84."""
+    to_ecef = Transformer.from_crs("EPSG:4979", "EPSG:4978", always_xy=True)
+    to_geo = Transformer.from_crs("EPSG:4978", "EPSG:4979", always_xy=True)
+    ox, oy, oz = to_ecef.transform(LON, LAT, HEIGHT)
+    phi, lam = math.radians(LAT), math.radians(LON)
+    east = np.array([-math.sin(lam), math.cos(lam), 0.0])
+    north = np.array(
+        [-math.sin(phi) * math.cos(lam), -math.sin(phi) * math.sin(lam), math.cos(phi)]
+    )
+    point = np.array([ox, oy, oz]) + x * east + y * north
+    lon, lat, _ = to_geo.transform(float(point[0]), float(point[1]), float(point[2]))
+    return float(lon), float(lat)
+
+
+PROJECTION = site_projection(LAT, LON, HEIGHT)
+
+
+def test_the_projection_is_the_frame_s_own_tangent_plane() -> None:
+    for x, y in ((0.0, 0.0), (1000.0, 0.0), (-300.0, 700.0), (1500.0, -1500.0)):
+        lon, lat = PROJECTION.to_geographic(x, y)
+        want = enu_to_lonlat(x, y)
+        assert float(lon) == pytest.approx(want[0], abs=1e-9)
+        assert float(lat) == pytest.approx(want[1], abs=1e-9)
+        back = PROJECTION.to_metric(lon, lat)
+        assert math.hypot(float(back[0]) - x, float(back[1]) - y) < 1e-3
+
+
+def test_an_azimuthal_projection_would_put_the_patch_off_its_cells() -> None:
+    """Why the module does not use an azimuthal-equidistant projection at the origin: at a
+    1,500 m origin it measures on the ellipsoid, and 1 km east lands 23 cm short."""
+    aeqd = Transformer.from_crs(
+        "EPSG:4326", f"+proj=aeqd +lat_0={LAT} +lon_0={LON} +datum=WGS84 +units=m", always_xy=True
+    )
+    x, _ = aeqd.transform(*enu_to_lonlat(1000.0, 0.0))
+    assert 1000.0 - x > 0.2
+
+
+def test_two_weak_blocks_are_two_patches_over_their_cells() -> None:
+    plane = a_plane()
+    # A 4 m x 6 m block that stands 4 m tall, seen from too few directions ...
+    weaken(plane, (0, 4), (0, 6), score=50, bits=BITS["views"] | BITS["spread"], relief=16)
+    # ... and a 10 m x 2 m strip seen too coarsely.
+    weaken(plane, (-10, 0), (-8, -6), score=90, bits=BITS["gsd"])
+    mask = weak_mask(plane)
+
+    found = cell_patches(plane, mask, PROJECTION, median_gsd_mm=12.0)
+
+    assert not found.truncated_by_budget and found.weak_cells == 44
+    big, small = found.patches
+    assert big.metric.symmetric_difference(box(0, 0, 4, 6)).area < 1e-9
+    assert big.area_m2 == pytest.approx(24.0) and big.cells == 24
+    assert small.metric.symmetric_difference(box(-10, -8, 0, -6)).area < 1e-9
+    assert small.area_m2 == pytest.approx(20.0) and small.cells == 20
+    # The tall compact block: an orbit, sideways camera.
+    assert big.pattern == "orbit" and big.gimbal_pitch_deg == -30.0
+    assert big.relief_max_m == pytest.approx(4.0) and big.diameter_m == pytest.approx(6.0)
+    assert big.reasons["views"] == 24 and big.reasons["gsd"] == 0
+    assert big.mean_score == pytest.approx(50.0)
+    assert "rule of thumb" in big.hint
+    # The strip: nadir, lower, for the capture's median GSD.
+    assert small.pattern == "nadir" and small.target_gsd_m == pytest.approx(0.012)
+    assert "1.2 cm" in small.hint
+    # On the globe, each corner is where the independent computation puts it.
+    lon, lat = big.footprint.exterior.coords[0]
+    corners = [enu_to_lonlat(x, y) for x, y in box(0, 0, 4, 6).exterior.coords]
+    assert min(math.dist((lon, lat), c) for c in corners) < 1e-9
+    assert big.footprint.exterior.is_ccw
+
+
+def test_a_flat_or_wide_patch_is_flown_oblique() -> None:
+    plane = a_plane()
+    weaken(plane, (0, 4), (0, 6), score=50, bits=BITS["spread"], relief=4)
+    [patch] = cell_patches(plane, weak_mask(plane), PROJECTION).patches
+    assert patch.pattern == "oblique" and patch.gimbal_pitch_deg == -45.0
+    assert patch.target_gsd_m is None
+
+
+def test_pattern_rules() -> None:
+    """UX heuristics, stated once: the reason group most cells carry decides."""
+    assert pattern_for({"views": 10}, 5.0, 30.0, None)[0] == "orbit"
+    assert pattern_for({"views": 10}, 5.0, 41.0, None)[0] == "oblique"
+    assert pattern_for({"views": 10}, 2.9, 10.0, None)[0] == "oblique"
+    assert pattern_for({"gsd": 10, "views": 3}, 5.0, 10.0, 20.0)[:2] == ("nadir", 0.02)
+    assert pattern_for({"gsd": 10}, 0.0, 10.0, None)[:2] == ("nadir", None)
+    assert pattern_for({"unseen": 10}, 0.0, 10.0, 20.0)[:2] == ("nadir", None)
+    pattern, target, hint = pattern_for({"alignment": 10, "views": 10}, 9.0, 10.0, 20.0)
+    assert (pattern, target) == ("nadir", None) and "reference area" in hint
+    assert pattern_for({}, 0.0, 0.0, None)[0] == "nadir"
+
+
+def test_an_unaligned_epoch_is_one_weak_area_to_overlap_the_reference() -> None:
+    """Every scored cell capped with the alignment bit: weak everywhere, flown nadir."""
+    plane = a_plane()
+    plane.channels["score"][:] = 14
+    plane.channels["reasons"][:] = BITS["alignment"] | BITS["views"]
+    [patch] = cell_patches(plane, weak_mask(plane), PROJECTION).patches
+    assert patch.cells == 400 and patch.area_m2 == pytest.approx(400.0)
+    assert patch.pattern == "nadir" and "reference area" in patch.hint
+    assert patch.reasons["alignment"] == 400
+
+
+def test_a_budget_keeps_the_weakest_cells_nearest_the_focus() -> None:
+    plane = a_plane()
+    # One 10 x 10 m weak block, weaker in its east half.
+    weaken(plane, (-5, 0), (-5, 5), score=100, bits=BITS["views"])
+    weaken(plane, (0, 5), (-5, 5), score=30, bits=BITS["views"])
+    mask = weak_mask(plane)
+
+    found = cell_patches(plane, mask, PROJECTION, budget_m2=30.0)
+    assert found.truncated_by_budget
+    total = sum(p.area_m2 for p in found.patches)
+    assert total <= 30.0 + 1.0
+    assert all(p.metric.bounds[0] >= -1e-9 for p in found.patches)  # all from the east half
+
+    lon, lat = PROJECTION.to_geographic(4.5, 4.5)
+    near = cell_patches(plane, mask, PROJECTION, budget_m2=10.0, focus=(float(lon), float(lat)))
+    [patch] = near.patches
+    assert patch.metric.centroid.x > 2.5 and patch.metric.centroid.y > 2.5
+
+    everything = cell_patches(plane, mask, PROJECTION, budget_m2=1e6)
+    assert not everything.truncated_by_budget
+
+
+def test_max_areas_keeps_the_largest_and_small_specks_are_not_zones() -> None:
+    plane = a_plane()
+    weaken(plane, (-10, -6), (-10, -6), score=50, bits=BITS["views"])  # 16 m2
+    weaken(plane, (0, 3), (0, 3), score=50, bits=BITS["views"])  # 9 m2
+    weaken(plane, (6, 8), (6, 8), score=50, bits=BITS["views"])  # 4 m2
+    weaken(plane, (-8, -7), (8, 9), score=50, bits=BITS["views"])  # a single cell: dropped
+    found = cell_patches(plane, weak_mask(plane), PROJECTION, max_areas=2)
+    assert [round(p.area_m2) for p in found.patches] == [16, 9]
+    every = cell_patches(plane, weak_mask(plane), PROJECTION, max_areas=8)
+    assert [round(p.area_m2) for p in every.patches] == [16, 9, 4]
+
+
+def test_nothing_weak_is_no_patch() -> None:
+    plane = a_plane()
+    found = cell_patches(plane, weak_mask(plane), PROJECTION)
+    assert found.patches == [] and found.weak_cells == 0
+
+
+def test_quarter_metre_cells_are_closed_into_zones_a_drone_can_fly() -> None:
+    """At the finest level a checkerboard of weak cells is one zone, not hundreds of
+    specks: patches close by at least `MIN_SMOOTHING_M` (a UX heuristic)."""
+    plane = a_plane(level=0, i0=0, j0=0, ni=40, nj=40)
+    for j in range(8, 32):
+        for i in range(8, 32):
+            if (i + j) % 2 == 0:
+                weaken(plane, (i, i + 1), (j, j + 1), score=40, bits=BITS["views"])
+    [patch] = cell_patches(plane, weak_mask(plane), PROJECTION).patches
+    assert patch.area_m2 == pytest.approx(36.0, abs=2.0)
+    assert weak_areas.MIN_SMOOTHING_M == 0.5
