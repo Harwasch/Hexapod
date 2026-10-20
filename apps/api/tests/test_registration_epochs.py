@@ -163,6 +163,45 @@ def test_a_re_run_inserts_a_revision_and_supersedes_the_old_one(
     assert registration.splat_asset(db, capture.site_id) == new
 
 
+def test_a_re_run_keeps_what_the_epoch_said_before_in_its_history(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """A re-run replaces the epoch's run, footprint and quality, which describe its current
+    revision. What they said before is not lost: each re-run appends the values it
+    replaces to the epoch's `history`, oldest first, and never rewrites an entry."""
+    from geoalchemy2.shape import to_shape
+    from shapely.geometry import shape
+
+    capture = _capture(db)
+    first = _document()
+    first["quality"] = {"mode": "preview", "bar": "strict", "keepVerifiedPct": 81.5}
+    first_job = run(db, storage, tmp_path, capture, first)
+    assert capture.site_id is not None
+    [epoch] = _epochs(db, capture.site_id)
+    first_footprint, first_quality = to_shape(epoch.footprint), epoch.quality
+    assert epoch.history == []
+    wider = _document()
+    wider["bboxLocalM"] = {"min": [-8.0, -4.0, -1.0], "max": [12.0, 16.0, 3.0]}
+    wider["quality"] = {"mode": "full", "bar": "strict", "keepVerifiedPct": 90.0}
+
+    second_job = run(db, storage, tmp_path, capture, wider)
+    third_job = run(db, storage, tmp_path, capture)
+
+    [epoch] = _epochs(db, capture.site_id)
+    assert epoch.job_id == third_job
+    assert [entry["jobId"] for entry in epoch.history] == [str(first_job), str(second_job)]
+    assert [entry["replacedByJobId"] for entry in epoch.history] == [
+        str(second_job),
+        str(third_job),
+    ]
+    oldest, newer = epoch.history
+    assert oldest["quality"] == first_quality and oldest["quality"]["keepVerifiedPct"] == 81.5
+    assert shape(oldest["footprint"]).equals(first_footprint)
+    assert newer["quality"]["keepVerifiedPct"] == 90.0
+    assert shape(newer["footprint"]).area > shape(oldest["footprint"]).area
+    assert all(isinstance(entry["replacedAt"], str) for entry in epoch.history)
+
+
 def test_a_republish_of_the_same_url_makes_no_revision(
     db: Session, storage: S3Storage, tmp_path: Path
 ) -> None:
