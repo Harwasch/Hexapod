@@ -4,7 +4,7 @@
  * is placed -- and nothing new for a site before epochs.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Site } from "@twin/contracts";
@@ -41,6 +41,8 @@ const scene = vi.hoisted(() => {
   };
 });
 vi.mock("@/cesium/SceneContext", () => ({ useScene: () => scene }));
+const rescanWeak = vi.hoisted(() => vi.fn((..._args: unknown[]) => Promise.resolve()));
+vi.mock("@/features/rescan/rescanWeak", () => ({ rescanWeak }));
 
 /** The anchor rests on its own measured ground. */
 const clamped = {
@@ -231,5 +233,29 @@ describe("Confidence, in Date shown", () => {
     expect(screen.getByTestId("inspector-epoch-confidence")).toHaveTextContent(
       "Nothing weak · weak-v1",
     );
+  });
+});
+
+describe("Plan a re-scan, in Date shown", () => {
+  it("plans a re-scan of the shown date's weak areas, whatever draws the splats", async () => {
+    // Nothing loaded in the scene (another renderer, or still loading): offered all the same.
+    inspect(twoEpochSite({ assets: [clamped, A2] }));
+    const button = screen.getByRole("button", { name: "Plan a re-scan of weak areas" });
+    fireEvent.click(button);
+    expect(button).toBeDisabled();
+    await waitFor(() => expect(rescanWeak).toHaveBeenCalledTimes(1));
+    const [passedScene, site, epochId] = rescanWeak.mock.calls[0] ?? [];
+    expect(passedScene).toBe(scene);
+    expect((site as Site).id).toBe(SITE_ID);
+    expect(epochId).toBe(E2.id);
+    await waitFor(() => expect(button).toBeEnabled());
+  });
+
+  it("asks for the date on screen", async () => {
+    rescanWeak.mockClear();
+    inspect(twoEpochSite({ assets: [clamped, A2] }), E1.id);
+    fireEvent.click(screen.getByRole("button", { name: "Plan a re-scan of weak areas" }));
+    await waitFor(() => expect(rescanWeak).toHaveBeenCalledTimes(1));
+    expect(rescanWeak.mock.calls[0]?.[2]).toBe(E1.id);
   });
 });
