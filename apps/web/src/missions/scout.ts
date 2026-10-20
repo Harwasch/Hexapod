@@ -17,7 +17,9 @@
 import type { Footprint, ScoutCapture } from "@twin/contracts";
 import {
   bearing,
+  boundingRadiusM,
   boundsOf,
+  centerOf,
   destination,
   footprintAreaM2,
   footprintContains,
@@ -224,8 +226,8 @@ export function scoutZonesInOrder(zones: readonly Zone[], overlay: PlanOverlay):
 
 /**
  * The one capture a set of scout areas shares, or null when they differ: a route is flown at
- * one height, speed and overlap, in one pattern at one camera pitch (the export writes the
- * shared capture's). Only the heading may differ, since it turns each area's own lanes.
+ * one height, speed and overlap. The heading, pattern and camera pitch may differ: the export
+ * flies each area's own (`scoutWaylines`).
  */
 export function sharedScout(zones: readonly Pick<Zone, "scout">[]): Scout | null {
   const scouts = zones.map((zone) => scoutOf(zone.scout));
@@ -236,29 +238,23 @@ export function sharedScout(zones: readonly Pick<Zone, "scout">[]): Scout | null
     other.altitudeM === first.altitudeM &&
     other.speedMs === first.speedMs &&
     other.forwardOverlap === first.forwardOverlap &&
-    other.sideOverlap === first.sideOverlap &&
-    other.pattern === first.pattern &&
-    other.gimbalPitchDeg === first.gimbalPitchDeg;
+    other.sideOverlap === first.sideOverlap;
   return scouts.every(same) ? first : null;
 }
 
 /**
  * Why a set of scout areas cannot be written as a DJI route, or null when it can. The KMZ
- * (`buildScoutKmz`) flies parallel lanes with the gimbal straight down, so an oblique or orbit
- * capture, or a nadir one at another pitch, would export a different flight than the plan holds.
- * Refused, not flown nadir: oblique and orbit routes are not written yet.
+ * (`buildScoutKmz`, `scoutWaylines`) flies obliques and orbits at their capture's pitch, but
+ * nadir lanes only straight down (consecutive nadir areas share one wayline at -90°), so a
+ * nadir capture at another pitch would export a different flight than the plan holds: refused.
  */
 export function kmzRefusal(zones: readonly Pick<Zone, "scout">[]): string | null {
   const odd = zones
     .map((zone) => scoutOf(zone.scout))
-    .find((scout) => scout.pattern !== "nadir" || scout.gimbalPitchDeg !== -90);
+    .find((scout) => scout.pattern === "nadir" && scout.gimbalPitchDeg !== -90);
   if (!odd) return null;
   const pitch = `${Math.round(odd.gimbalPitchDeg)}`.replace("-", "−");
-  const what =
-    odd.pattern === "nadir"
-      ? `a nadir capture pitched ${pitch}°`
-      : `an ${odd.pattern} capture (camera pitched ${pitch}°)`;
-  return `This route includes ${what}. The DJI export writes only straight-down lanes, so it would fly something other than the plan; oblique and orbit routes cannot be exported yet.`;
+  return `This route includes a nadir capture pitched ${pitch}°. The DJI export writes nadir lanes only straight-down, so it would fly something other than the plan.`;
 }
 
 /** The lanes a scout area is flown in: one image footprint apart, less the side overlap. */
@@ -292,6 +288,122 @@ export function routeStats(routes: readonly CoverageLane[][], scout: Scout): Rou
       if (previous) transitM += haversineDistance(previous.b, lane.a);
       previous = lane;
     }
+  }
+  const minutes = (workingM + transitM) / geometry.speedMs / 60;
+  return {
+    workingM,
+    transitM,
+    minutes,
+    photos,
+    batteries: minutes > 0 ? Math.ceil(minutes / USABLE_BATTERY_MIN) : 0,
+  };
+}
+
+/** Rings an orbit re-scan flies, as the planner sizes it (`planner.ORBIT_RINGS`). */
+export const ORBIT_RINGS = 2;
+/** Nearer than this an orbit is not flown (`planner.ORBIT_MIN_STANDOFF_M`), metres. */
+export const ORBIT_MIN_STANDOFF_M = 5;
+/** Waypoints on one ring, 15° apart. */
+export const ORBIT_POINTS = 24;
+
+/**
+ * One executable route of the export (a WPML wayline): waypoints in flying order, the camera
+ * pitch it is flown at, and what the nose faces -- along the route, or an orbit's centre.
+ * `photos` says where the camera fires: along each lane (waypoint pairs; the legs between
+ * lanes take none) or all the way round.
+ */
+export interface ScoutWayline {
+  waypoints: LonLat[];
+  gimbalPitchDeg: number;
+  poi: LonLat | null;
+  photos: "lanes" | "along";
+}
+
+/**
+ * How far out an orbit flies from the outline: where a camera pitched `gimbalPitchDeg` down
+ * from the capture's height meets the ground, never nearer than 5 m (`planner._orbit_standoff_m`).
+ */
+export function orbitStandoffM(scout: Scout): number {
+  const pitch = (-scout.gimbalPitchDeg * Math.PI) / 180;
+  const reach = pitch < Math.PI / 2 ? scoutGeometry(scout).altitudeM / Math.tan(pitch) : 0;
+  return Math.max(ORBIT_MIN_STANDOFF_M, reach);
+}
+
+const ends = (lanes: readonly CoverageLane[]): LonLat[] => lanes.flatMap((l) => [l.a, l.b]);
+
+/**
+ * The waylines that fly scout areas in order, each as its capture's pattern asks:
+ * - nadir: the lanes the map draws, camera straight down; consecutive nadir areas share one
+ *   wayline, so a fog scout is the one route it always was;
+ * - oblique: those lanes and a crossing set at right angles, two waylines, the camera at the
+ *   capture's pitch facing along each lane (four view directions in all);
+ * - orbit: `ORBIT_RINGS` rings of `ORBIT_POINTS` waypoints round the outline's bounds centre,
+ *   `orbitStandoffM` beyond its farthest corner, the nose on the centre.
+ */
+export function scoutWaylines(
+  areas: readonly { footprint: Footprint; scout: Scout }[],
+): ScoutWayline[] {
+  const waylines: ScoutWayline[] = [];
+  let nadir: ScoutWayline | null = null;
+  for (const { footprint, scout } of areas) {
+    const { pattern, gimbalPitchDeg } = scout;
+    if (pattern === "orbit") {
+      nadir = null;
+      const poi = centerOf(footprint);
+      const radiusM = boundingRadiusM(footprint) + orbitStandoffM(scout);
+      const waypoints: LonLat[] = [];
+      for (let k = 0; k <= ORBIT_RINGS * ORBIT_POINTS; k++)
+        waypoints.push(destination(poi, ((k % ORBIT_POINTS) * 360) / ORBIT_POINTS, radiusM));
+      waylines.push({ waypoints, gimbalPitchDeg, poi, photos: "along" });
+      continue;
+    }
+    const swathM = scoutGeometry(scout).lineSpacingM;
+    const first = footprintLanes(footprint, {
+      swathM,
+      ...(scout.headingDeg !== null ? { headingDeg: scout.headingDeg } : {}),
+    });
+    if (pattern === "oblique") {
+      nadir = null;
+      const crossing = footprintLanes(footprint, {
+        swathM,
+        headingDeg: (first.headingDeg + 90) % 360,
+      });
+      for (const lanes of [first.lanes, crossing.lanes])
+        waylines.push({ waypoints: ends(lanes), gimbalPitchDeg, poi: null, photos: "lanes" });
+      continue;
+    }
+    if (!nadir) {
+      nadir = { waypoints: [], gimbalPitchDeg: -90, poi: null, photos: "lanes" };
+      waylines.push(nadir);
+    }
+    nadir.waypoints.push(...ends(first.lanes));
+  }
+  return waylines.filter((w) => w.waypoints.length >= 2);
+}
+
+/** Length, time, photos and batteries for waylines flown one after the other. */
+export function waylineStats(waylines: readonly ScoutWayline[], scout: Scout): RouteStats {
+  const geometry = scoutGeometry(scout);
+  let workingM = 0;
+  let transitM = 0;
+  let photos = 0;
+  let previous: LonLat | null = null;
+  for (const { waypoints, photos: shoot } of waylines) {
+    let along = 0;
+    waypoints.forEach((point, i) => {
+      const leg = previous ? haversineDistance(previous, point) : 0;
+      previous = point;
+      // A lane runs from an even waypoint to the next; every other leg is transit.
+      if (shoot === "along" ? i > 0 : i % 2 === 1) {
+        workingM += leg;
+        along += leg;
+        if (shoot === "lanes") {
+          photos += Math.floor(leg / geometry.photoSpacingM) + 1;
+          along = 0;
+        }
+      } else transitM += leg;
+    });
+    if (shoot === "along") photos += Math.floor(along / geometry.photoSpacingM) + 1;
   }
   const minutes = (workingM + transitM) / geometry.speedMs / 60;
   return {

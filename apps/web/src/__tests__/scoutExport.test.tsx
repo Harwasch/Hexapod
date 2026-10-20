@@ -65,25 +65,29 @@ function card(zones: Zone[]) {
   );
 }
 
+const planned = (pattern: "nadir" | "oblique" | "orbit", gimbalPitchDeg: number) =>
+  ({
+    ...patch,
+    scout: { ...DEFAULT_SCOUT, altitudeM: 120, purpose: "re-scan-weak", pattern, gimbalPitchDeg },
+  }) as unknown as Zone;
+
+it("refuses to export a nadir capture pitched off straight down: the lanes fly at -90°", () => {
+  card([patch, planned("nadir", -60)]);
+  const refusal = screen.getByTestId("scout-unsupported");
+  expect(refusal).toHaveTextContent("pitched −60°");
+  expect(refusal).toHaveTextContent("only straight-down");
+  expect(screen.queryByTestId("scout-download")).toBeNull();
+  expect(screen.queryByTestId("scout-facts")).toBeNull();
+});
+
 it.each([
-  ["orbit", -30, "orbit"],
-  ["oblique", -45, "oblique"],
-  ["nadir", -60, "pitched −60°"],
-] as const)(
-  "refuses to export a %s capture as straight-down lanes",
-  (pattern, gimbalPitchDeg, words) => {
-    const planned = {
-      ...patch,
-      scout: { ...DEFAULT_SCOUT, altitudeM: 120, purpose: "re-scan-weak", pattern, gimbalPitchDeg },
-    } as unknown as Zone;
-    card([patch, planned]);
-    const refusal = screen.getByTestId("scout-unsupported");
-    expect(refusal).toHaveTextContent(words);
-    expect(refusal).toHaveTextContent("only straight-down");
-    expect(screen.queryByTestId("scout-download")).toBeNull();
-    expect(screen.queryByTestId("scout-facts")).toBeNull();
-  },
-);
+  ["orbit", -30],
+  ["oblique", -45],
+] as const)("exports a %s capture, which the writer flies as planned", (pattern, pitch) => {
+  card([patch, planned(pattern, pitch)]);
+  expect(screen.queryByTestId("scout-unsupported")).toBeNull();
+  expect(screen.getByTestId("scout-download")).toBeInTheDocument();
+});
 
 it("still exports a straight-down capture", () => {
   card([patch]);
@@ -106,4 +110,32 @@ describe("with drone missions off (the default)", () => {
     expect(screen.queryByTestId("scout-facts")).toBeNull();
     expect(screen.queryByRole("group", { name: "Height above take-off" })).toBeNull();
   });
+});
+
+it("says when areas are flown as their re-scan asks, and counts the crossing passes", () => {
+  const facts = (scout: Zone["scout"]) => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ScoutExport zones={[{ ...patch, scout }]} />
+      </QueryClientProvider>,
+    );
+    const card = screen.getByTestId("scout-export").textContent ?? "";
+    const photos = Number(/about ([\d,]+)/.exec(card)?.[1]?.replace(/,/g, "") ?? NaN);
+    cleanup();
+    return { card, photos };
+  };
+  const nadir = facts({ ...DEFAULT_SCOUT, altitudeM: 120 });
+  expect(nadir.card).toContain("flying lines with the camera straight down.");
+  const oblique = facts({
+    ...DEFAULT_SCOUT,
+    altitudeM: 120,
+    purpose: "re-scan-weak",
+    pattern: "oblique",
+    gimbalPitchDeg: -45,
+  });
+  expect(oblique.card).toContain(
+    "flying each area as it asks: lines straight down, crossing obliques or an orbit.",
+  );
+  // Both sets of lanes: about twice the photos of the nadir lines.
+  expect(oblique.photos).toBeGreaterThan(1.5 * nadir.photos);
 });

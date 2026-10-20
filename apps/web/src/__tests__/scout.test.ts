@@ -174,16 +174,16 @@ describe("one route, one capture", () => {
     expect(sharedScout([])).toBeNull();
   });
 
-  it("shares no capture between areas flown in different patterns or pitches", () => {
-    // The export writes one pattern for the route: a nadir area first must not carry an
-    // oblique re-scan past the refusal as nadir lines.
+  it("shares a capture across patterns and pitches: the export flies each area its own way", () => {
+    // scoutWaylines gives each area the waylines its pattern and pitch ask for; the route
+    // still flies one height, speed and overlap.
     const rescan = { ...DEFAULT_SCOUT, purpose: "re-scan-weak" as const };
     const oblique = { ...rescan, pattern: "oblique" as const, gimbalPitchDeg: -45 };
-    expect(sharedScout([area("A", rescan), area("B", oblique)])).toBeNull();
+    expect(sharedScout([area("A", rescan), area("B", oblique)])).toEqual(rescan);
     expect(
       sharedScout([area("A", oblique), area("B", { ...oblique, gimbalPitchDeg: -60 })]),
-    ).toBeNull();
-    expect(sharedScout([area("A", oblique), area("B", oblique)])).toEqual(oblique);
+    ).toEqual(oblique);
+    expect(sharedScout([area("A", oblique), area("B", { ...oblique, altitudeM: 90 })])).toBeNull();
   });
 });
 
@@ -234,12 +234,16 @@ describe("relief samples", () => {
 });
 
 describe("what the KMZ export can fly", () => {
-  it("is straight-down lanes only, and says why for anything else", () => {
+  it("flies obliques and orbits as planned, but nadir lanes only straight down", () => {
     expect(kmzRefusal([{}])).toBeNull();
     expect(kmzRefusal([{ scout: { ...DEFAULT_SCOUT } }])).toBeNull();
     const orbit = { scout: { ...DEFAULT_SCOUT, pattern: "orbit" as const, gimbalPitchDeg: -30 } };
-    expect(kmzRefusal([{}, orbit])).toMatch(/orbit/);
+    const oblique = {
+      scout: { ...DEFAULT_SCOUT, pattern: "oblique" as const, gimbalPitchDeg: -45 },
+    };
+    expect(kmzRefusal([{}, orbit, oblique])).toBeNull();
     const pitched = { scout: { ...DEFAULT_SCOUT, gimbalPitchDeg: -70 } };
-    expect(kmzRefusal([pitched])).toMatch(/pitched −70°/);
+    expect(kmzRefusal([orbit, pitched])).toMatch(/nadir capture pitched −70°/);
+    expect(kmzRefusal([pitched])).toMatch(/only straight-down/);
   });
 });

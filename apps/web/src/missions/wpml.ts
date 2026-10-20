@@ -2,11 +2,24 @@
  * The scout route as a DJI WPML KMZ: `wpmz/template.kml` and `wpmz/waylines.wpml` (WPML
  * 1.0.2), zipped, for DJI Pilot 2 and FlightHub 2 with a Mavic 3 Enterprise class aircraft.
  *
- * It is an explicit waypoint route, not a mapping template the app regenerates: one waypoint
- * at each end of every lane the map draws (`missions/scout.ts`, holes honoured), in the same
- * order, heights relative to the take-off point. Along each lane an action group fires the
- * wide camera every photo spacing (multipleDistance + takePhoto); transit legs between lanes
- * take no photos. The gimbal points straight down at the first waypoint.
+ * It is an explicit waypoint route, not a mapping template the app regenerates. Each wayline
+ * (`missions/scout.ts` `scoutWaylines`, by the areas' patterns) is one `Folder` in each file:
+ * a waypoint template (`templateId` k) and the executable route made from it (`templateId` k,
+ * `waylineId` k), indices from 0 within each, as the WPML reference asks. Heights are relative
+ * to the take-off point.
+ *
+ * - Nadir lanes (a fog scout, a nadir re-scan): one waypoint at each end of every lane the map
+ *   draws, in the same order, holes honoured; along each lane an action group fires the wide
+ *   camera every photo spacing (multipleDistance + takePhoto) and transit legs take none.
+ * - Crossing obliques: the same, twice, the second set of lanes at right angles; the camera at
+ *   the capture's pitch (`gimbalPitchAngle` at every template waypoint, `gimbalRotate` at the
+ *   first of each wayline), the nose along each lane.
+ * - An orbit: waypoints round a circle, the nose on its centre (`waypointHeadingMode`
+ *   `towardPOI`, `waypointPoiPoint` "latitude,longitude,0" -- WPML takes no height for it),
+ *   photos all the way round.
+ *
+ * The WPML elements are DJI's (Cloud API, DJI WPML: template.kml, waylines.wpml, common
+ * elements); none is written that the reference does not define for a waypoint route.
  *
  * Draft, not flight-tested: nobody has imported this into DJI Pilot 2 or FlightHub 2 yet, so
  * the files say so, and so does the console. Terrain following is not attempted.
@@ -17,11 +30,11 @@
  * app, and the test import into DJI Pilot 2.
  */
 
-import type { CoverageLane } from "@twin/geo";
+import { haversineDistance, type LonLat } from "@twin/geo";
 
 import { zipStore } from "@/lib/zipStore";
 
-import { SCOUT_CAMERAS, routeStats, scoutGeometry, type Scout } from "./scout";
+import { SCOUT_CAMERAS, scoutGeometry, type Scout, type ScoutWayline } from "./scout";
 
 export const KML_NS = "http://www.opengis.net/kml/2.2";
 export const WPML_NS = "http://www.dji.com/wpmz/1.0.2";
@@ -50,14 +63,15 @@ function el(name: string, value: string | number): string {
   return `<wpml:${name}>${typeof value === "number" ? num(value) : escapeXml(value)}</wpml:${name}>`;
 }
 
-interface Waypoint {
-  longitude: number;
-  latitude: number;
+/** `waypointPoiPoint`: latitude, longitude, height (unused by WPML, so 0); none is all zeros. */
+function poiPoint(poi: LonLat | null): string {
+  return poi
+    ? `${poi.latitude.toFixed(7)},${poi.longitude.toFixed(7)},0.000000`
+    : "0.000000,0.000000,0.000000";
 }
 
-/** The waypoints in flying order: the two ends of every lane, zone after zone. */
-export function waypointsOf(routes: readonly CoverageLane[][]): Waypoint[] {
-  return routes.flatMap((lanes) => lanes.flatMap((lane) => [lane.a, lane.b]));
+function headingMode(wayline: ScoutWayline): string {
+  return wayline.poi ? "towardPOI" : "followWayline";
 }
 
 function missionConfig(scout: Scout): string {
@@ -85,7 +99,8 @@ function missionConfig(scout: Scout): string {
   ].join("\n");
 }
 
-function gimbalDown(): string {
+/** The camera to `pitchDeg` at the wayline's first waypoint. */
+function gimbalTo(pitchDeg: number): string {
   return [
     "<wpml:actionGroup>",
     el("actionGroupId", 0),
@@ -101,7 +116,7 @@ function gimbalDown(): string {
     "<wpml:actionActuatorFuncParam>",
     el("gimbalRotateMode", "absoluteAngle"),
     el("gimbalPitchRotateEnable", 1),
-    el("gimbalPitchRotateAngle", -90),
+    el("gimbalPitchRotateAngle", pitchDeg),
     el("gimbalRollRotateEnable", 0),
     el("gimbalRollRotateAngle", 0),
     el("gimbalYawRotateEnable", 0),
@@ -115,13 +130,13 @@ function gimbalDown(): string {
   ].join("\n");
 }
 
-/** Photos every `spacing` metres from waypoint `start` to `start + 1` (one lane). */
-function photosAlong(groupId: number, start: number, spacingM: number): string {
+/** Photos every `spacing` metres from waypoint `start` to waypoint `end`. */
+function photosAlong(groupId: number, start: number, end: number, spacingM: number): string {
   return [
     "<wpml:actionGroup>",
     el("actionGroupId", groupId),
     el("actionGroupStartIndex", start),
-    el("actionGroupEndIndex", start + 1),
+    el("actionGroupEndIndex", end),
     el("actionGroupMode", "sequence"),
     "<wpml:actionTrigger>",
     el("actionTriggerType", "multipleDistance"),
@@ -141,20 +156,25 @@ function photosAlong(groupId: number, start: number, spacingM: number): string {
   ].join("\n");
 }
 
-/** The action groups that start at waypoint `index`. */
-function groupsAt(index: number, spacingM: number): string {
+/** The action groups that start at waypoint `index` of `wayline`. */
+function groupsAt(wayline: ScoutWayline, index: number, spacingM: number): string {
   const groups: string[] = [];
-  if (index === 0) groups.push(gimbalDown());
-  // Every lane starts at an even index: its photos run to the next waypoint, the lane's end.
-  if (index % 2 === 0) groups.push(photosAlong(index / 2 + 1, index, spacingM));
+  if (index === 0) groups.push(gimbalTo(wayline.gimbalPitchDeg));
+  if (wayline.photos === "along") {
+    // Round the whole orbit, from its first waypoint to its last.
+    if (index === 0) groups.push(photosAlong(1, 0, wayline.waypoints.length - 1, spacingM));
+  } else if (index % 2 === 0) {
+    // Every lane starts at an even index: its photos run to the next waypoint, the lane's end.
+    groups.push(photosAlong(index / 2 + 1, index, index + 1, spacingM));
+  }
   return groups.join("\n");
 }
 
-function point(waypoint: Waypoint): string {
+function point(waypoint: LonLat): string {
   return `<Point><coordinates>${waypoint.longitude.toFixed(7)},${waypoint.latitude.toFixed(7)}</coordinates></Point>`;
 }
 
-function document(scout: Scout, body: string[]): string {
+function document(body: string[]): string {
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     `<!-- ${escapeXml(NOTICE)} -->`,
@@ -167,129 +187,137 @@ function document(scout: Scout, body: string[]): string {
   ].join("\n");
 }
 
-/** `wpmz/waylines.wpml`: what the aircraft executes. */
-export function waylinesWpml(routes: readonly CoverageLane[][], scout: Scout): string {
-  const geometry = scoutGeometry(scout);
-  const stats = routeStats(routes, scout);
-  const placemarks = waypointsOf(routes).map((waypoint, index) =>
-    [
-      "<Placemark>",
-      point(waypoint),
-      el("index", index),
-      el("executeHeight", geometry.altitudeM),
-      el("waypointSpeed", geometry.speedMs),
-      "<wpml:waypointHeadingParam>",
-      el("waypointHeadingMode", "followWayline"),
-      el("waypointHeadingAngle", 0),
-      el("waypointPoiPoint", "0.000000,0.000000,0.000000"),
-      el("waypointHeadingAngleEnable", 0),
-      el("waypointHeadingPathMode", "followBadArc"),
-      "</wpml:waypointHeadingParam>",
-      "<wpml:waypointTurnParam>",
-      el("waypointTurnMode", "toPointAndStopWithDiscontinuityCurvature"),
-      el("waypointTurnDampingDist", 0),
-      "</wpml:waypointTurnParam>",
-      el("useStraightLine", 1),
-      groupsAt(index, geometry.photoSpacingM),
-      "</Placemark>",
-    ]
-      .filter(Boolean)
-      .join("\n"),
-  );
-  return document(scout, [
-    missionConfig(scout),
-    "<Folder>",
-    el("templateId", 0),
-    el("executeHeightMode", "relativeToStartPoint"),
-    el("waylineId", 0),
-    el("distance", stats.workingM + stats.transitM),
-    el("duration", stats.minutes * 60),
-    el("autoFlightSpeed", geometry.speedMs),
-    ...placemarks,
-    "</Folder>",
-  ]);
+function lengthM(waypoints: readonly LonLat[]): number {
+  let total = 0;
+  for (let i = 1; i < waypoints.length; i++) {
+    const a = waypoints[i - 1];
+    const b = waypoints[i];
+    if (a && b) total += haversineDistance(a, b);
+  }
+  return total;
 }
 
-/** `wpmz/template.kml`: the route as the planning apps show and edit it. */
+/** `wpmz/waylines.wpml`: what the aircraft executes, one `Folder` a wayline. */
+export function waylinesWpml(waylines: readonly ScoutWayline[], scout: Scout): string {
+  const geometry = scoutGeometry(scout);
+  const folders = waylines.map((wayline, id) => {
+    const placemarks = wayline.waypoints.map((waypoint, index) =>
+      [
+        "<Placemark>",
+        point(waypoint),
+        el("index", index),
+        el("executeHeight", geometry.altitudeM),
+        el("waypointSpeed", geometry.speedMs),
+        "<wpml:waypointHeadingParam>",
+        el("waypointHeadingMode", headingMode(wayline)),
+        el("waypointHeadingAngle", 0),
+        el("waypointPoiPoint", poiPoint(wayline.poi)),
+        el("waypointHeadingAngleEnable", 0),
+        el("waypointHeadingPathMode", "followBadArc"),
+        "</wpml:waypointHeadingParam>",
+        "<wpml:waypointTurnParam>",
+        el("waypointTurnMode", "toPointAndStopWithDiscontinuityCurvature"),
+        el("waypointTurnDampingDist", 0),
+        "</wpml:waypointTurnParam>",
+        el("useStraightLine", 1),
+        groupsAt(wayline, index, geometry.photoSpacingM),
+        "</Placemark>",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+    const distanceM = lengthM(wayline.waypoints);
+    return [
+      "<Folder>",
+      el("templateId", id),
+      el("executeHeightMode", "relativeToStartPoint"),
+      el("waylineId", id),
+      el("distance", distanceM),
+      el("duration", distanceM / geometry.speedMs),
+      el("autoFlightSpeed", geometry.speedMs),
+      ...placemarks,
+      "</Folder>",
+    ].join("\n");
+  });
+  return document([missionConfig(scout), ...folders]);
+}
+
+/** `wpmz/template.kml`: the route as the planning apps show and edit it, a template a wayline. */
 export function templateKml(
-  routes: readonly CoverageLane[][],
+  waylines: readonly ScoutWayline[],
   scout: Scout,
   createdAt: Date = new Date(),
 ): string {
   const geometry = scoutGeometry(scout);
-  const placemarks = waypointsOf(routes).map((waypoint, index) =>
-    [
-      "<Placemark>",
-      point(waypoint),
-      el("index", index),
-      el("ellipsoidHeight", geometry.altitudeM),
-      el("height", geometry.altitudeM),
-      el("useGlobalHeight", 1),
-      el("useGlobalSpeed", 1),
-      el("useGlobalHeadingParam", 1),
-      el("useGlobalTurnParam", 1),
-      el("gimbalPitchAngle", -90),
-      groupsAt(index, geometry.photoSpacingM),
-      "</Placemark>",
-    ]
-      .filter(Boolean)
-      .join("\n"),
-  );
+  const folders = waylines.map((wayline, id) => {
+    const placemarks = wayline.waypoints.map((waypoint, index) =>
+      [
+        "<Placemark>",
+        point(waypoint),
+        el("index", index),
+        el("ellipsoidHeight", geometry.altitudeM),
+        el("height", geometry.altitudeM),
+        el("useGlobalHeight", 1),
+        el("useGlobalSpeed", 1),
+        el("useGlobalHeadingParam", 1),
+        el("useGlobalTurnParam", 1),
+        el("gimbalPitchAngle", wayline.gimbalPitchDeg),
+        groupsAt(wayline, index, geometry.photoSpacingM),
+        "</Placemark>",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+    return [
+      "<Folder>",
+      el("templateType", "waypoint"),
+      el("templateId", id),
+      "<wpml:waylineCoordinateSysParam>",
+      el("coordinateMode", "WGS84"),
+      el("heightMode", "relativeToStartPoint"),
+      "</wpml:waylineCoordinateSysParam>",
+      el("autoFlightSpeed", geometry.speedMs),
+      el("globalHeight", geometry.altitudeM),
+      el("caliFlightEnable", 0),
+      el("gimbalPitchMode", "usePointSetting"),
+      "<wpml:globalWaypointHeadingParam>",
+      el("waypointHeadingMode", headingMode(wayline)),
+      el("waypointHeadingAngle", 0),
+      el("waypointPoiPoint", poiPoint(wayline.poi)),
+      el("waypointHeadingPoiIndex", 0),
+      "</wpml:globalWaypointHeadingParam>",
+      el("globalWaypointTurnMode", "toPointAndStopWithDiscontinuityCurvature"),
+      el("globalUseStraightLine", 0),
+      ...placemarks,
+      "<wpml:payloadParam>",
+      el("payloadPositionIndex", 0),
+      el("imageFormat", "wide"),
+      "</wpml:payloadParam>",
+      "</Folder>",
+    ].join("\n");
+  });
   const time = String(createdAt.getTime());
-  return document(scout, [
+  return document([
     el("author", AUTHOR),
     el("createTime", time),
     el("updateTime", time),
     missionConfig(scout),
-    "<Folder>",
-    el("templateType", "waypoint"),
-    el("templateId", 0),
-    "<wpml:waylineCoordinateSysParam>",
-    el("coordinateMode", "WGS84"),
-    el("heightMode", "relativeToStartPoint"),
-    "</wpml:waylineCoordinateSysParam>",
-    el("autoFlightSpeed", geometry.speedMs),
-    el("globalHeight", geometry.altitudeM),
-    el("caliFlightEnable", 0),
-    el("gimbalPitchMode", "usePointSetting"),
-    "<wpml:globalWaypointHeadingParam>",
-    el("waypointHeadingMode", "followWayline"),
-    el("waypointHeadingAngle", 0),
-    el("waypointPoiPoint", "0.000000,0.000000,0.000000"),
-    el("waypointHeadingPoiIndex", 0),
-    "</wpml:globalWaypointHeadingParam>",
-    el("globalWaypointTurnMode", "toPointAndStopWithDiscontinuityCurvature"),
-    el("globalUseStraightLine", 0),
-    ...placemarks,
-    "<wpml:payloadParam>",
-    el("payloadPositionIndex", 0),
-    el("imageFormat", "wide"),
-    "</wpml:payloadParam>",
-    "</Folder>",
+    ...folders,
   ]);
 }
 
-/**
- * Why a capture's pattern cannot be exported yet: the waylines here fly nadir lanes, and a
- * re-scan's crossing obliques or orbit would be flown as nadir lines without it (the planner
- * still sizes them; the export follows).
- */
-export const PATTERN_NOT_EXPORTED =
-  "This re-scan asks for obliques/an orbit; the DJI export flies nadir only so far (W4c)";
-
 /** The KMZ: `wpmz/` with the template and the waylines, store-only. */
 export function buildScoutKmz(
-  routes: readonly CoverageLane[][],
+  waylines: readonly ScoutWayline[],
   scout: Scout,
   createdAt: Date = new Date(),
 ): Uint8Array {
-  if (scout.pattern !== "nadir") throw new Error(PATTERN_NOT_EXPORTED);
   const encoder = new TextEncoder();
   return zipStore(
     [
       { name: "wpmz/", data: null },
-      { name: "wpmz/template.kml", data: encoder.encode(templateKml(routes, scout, createdAt)) },
-      { name: "wpmz/waylines.wpml", data: encoder.encode(waylinesWpml(routes, scout)) },
+      { name: "wpmz/template.kml", data: encoder.encode(templateKml(waylines, scout, createdAt)) },
+      { name: "wpmz/waylines.wpml", data: encoder.encode(waylinesWpml(waylines, scout)) },
     ],
     createdAt,
   );

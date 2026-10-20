@@ -12,14 +12,14 @@ import {
   kmzRefusal,
   reliefFrom,
   reliefPoints,
-  routeStats,
   SCOUT_ALTITUDES_M,
   SCOUT_CAMERAS,
   scoutGeometry,
-  scoutLanes,
   scoutOf,
+  scoutWaylines,
   sharedScout,
   USABLE_BATTERY_MIN,
+  waylineStats,
   type Relief,
 } from "@/missions/scout";
 import type { Zone } from "@/missions/types";
@@ -126,8 +126,10 @@ function km(metres: number): string {
  * the aircraft and camera it assumes, the height above take-off, what that gives (ground
  * detail, line and photo spacing), the route's length, time and batteries, the relief under
  * it from the 3D surface, and the warnings that go with flying it. `zones` come in the order
- * the map routes them (`scoutZonesInOrder`), and each is flown with its own capture's lanes,
- * exactly as `MissionManager.showPlan` draws them; the route is one capture, so areas whose
+ * the map routes them (`scoutZonesInOrder`), and each is flown as its own capture's pattern
+ * asks (`scoutWaylines`: a nadir area's lanes exactly as `MissionManager.showPlan` draws them,
+ * a re-scan's crossing obliques or orbit as the export flies them, and the route's length,
+ * time and photos with them); the route is one capture, so areas whose
  * heights or overlaps differ are not exported together. The plan card's machine-hours come
  * from the planner flying the same capture. `onAltitude` (a draft) changes the patches'
  * height; an approved plan exports what it stored.
@@ -163,11 +165,15 @@ function DroneScoutExport({
   const shared = sharedScout(scouts);
   const scout = shared ?? scoutOf(first?.scout);
   const geometry = scoutGeometry(scout);
-  // The same lanes the map draws for each area (a few hundred at most: cheap per render).
-  const routes = scouts.map((z) => scoutLanes(z.footprint, scoutOf(z.scout)));
-  const stats = routeStats(routes, scout);
+  // What the KMZ flies, area by area as its pattern asks: a nadir area the lanes the map
+  // draws, an oblique re-scan those and a crossing set, an orbit its rings (a few hundred
+  // waypoints at most: cheap per render).
+  const waylines = scoutWaylines(
+    scouts.map((z) => ({ footprint: z.footprint, scout: scoutOf(z.scout) })),
+  );
+  const stats = waylineStats(waylines, scout);
   const samples = useReliefSamples(scouts.map((z) => z.footprint));
-  const firstWaypoint = routes.flat()[0]?.a ?? null;
+  const firstWaypoint = waylines[0]?.waypoints[0] ?? null;
   const relief =
     samples === null || samples === "unknown"
       ? samples
@@ -185,7 +191,7 @@ function DroneScoutExport({
       return;
     }
     try {
-      const bytes = buildScoutKmz(routes, scout);
+      const bytes = buildScoutKmz(waylines, scout);
       const blob = new Blob([bytes as BlobPart], { type: "application/vnd.google-earth.kmz" });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
@@ -219,7 +225,12 @@ function DroneScoutExport({
   return (
     <section className="mc-scout" data-testid="scout-export" aria-label="Scout route">
       <span className="mc-eyebrow">SCOUT ROUTE</span>
-      <p className="mc-muted">{camera.label}, flying lines with the camera straight down.</p>
+      <p className="mc-muted">
+        {camera.label},{" "}
+        {waylines.every((w) => !w.poi && w.gimbalPitchDeg === -90)
+          ? "flying lines with the camera straight down."
+          : "flying each area as it asks: lines straight down, crossing obliques or an orbit."}
+      </p>
       {onAltitude && (
         <div className="mc-tags" role="group" aria-label="Height above take-off">
           {SCOUT_ALTITUDES_M.map((height) => (
