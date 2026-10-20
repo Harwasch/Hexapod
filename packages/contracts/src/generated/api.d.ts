@@ -3491,6 +3491,23 @@ export interface components {
             /** Projectid */
             projectId: string;
         };
+        /**
+         * AlignmentCapRead
+         * @description How the epoch's placement capped its scores (ADR 0016, C4): a cell may only claim
+         *     evidence when the epoch's uncertainty from the site frame is under half a cell.
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        AlignmentCapRead: {
+            /** Factor */
+            factor: number;
+            /** Priorepochs */
+            priorEpochs: number;
+            /** Source */
+            source: string;
+            /** Uncertaintym */
+            uncertaintyM: number;
+        };
         /** AppearancePackage */
         AppearancePackage: {
             /** Appearance */
@@ -5540,6 +5557,47 @@ export interface components {
             taxa?: components["schemas"]["TaxonQuery"][];
         };
         /**
+         * EpochConfidenceRead
+         * @description The confidence map an epoch's current revision shipped, summarised at its finest
+         *     level. Null on an epoch means not measured: the run that made its current revision
+         *     measured none (a splat upload carries no capture evidence).
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        EpochConfidenceRead: {
+            alignmentCap: components["schemas"]["AlignmentCapRead"];
+            /**
+             * Assetid
+             * Format: uuid
+             */
+            assetId: string;
+            /** Cellm */
+            cellM: number;
+            /** Level */
+            level: number;
+            /** Policy */
+            policy: string;
+            /** Reasons */
+            reasons: {
+                [key: string]: number;
+            };
+            /** Scoredcells */
+            scoredCells: number;
+            /**
+             * Status
+             * @constant
+             */
+            status: "measured";
+            /** Unseencells */
+            unseenCells: number;
+            /** Url */
+            url: string;
+            /** Weakcells */
+            weakCells: number;
+            /** Weakshare */
+            weakShare: number;
+        };
+        /**
          * EpochJoinMethod
          * @description How a capture found the site it is an epoch of: named it (``explicit``), was matched
          *     to it by location before its run (``spatial``), or made it (``new-site``).
@@ -5566,6 +5624,7 @@ export interface components {
             } | null;
             /** Captureid */
             captureId: string | null;
+            confidence: components["schemas"]["EpochConfidenceRead"] | null;
             /**
              * Createdat
              * Format: date-time
@@ -11916,6 +11975,7 @@ export interface components {
 export type SchemaAction = components['schemas']['Action'];
 export type SchemaActionConstraint = components['schemas']['ActionConstraint'];
 export type SchemaActionMissionCreate = components['schemas']['ActionMissionCreate'];
+export type SchemaAlignmentCapRead = components['schemas']['AlignmentCapRead'];
 export type SchemaAppearancePackage = components['schemas']['AppearancePackage'];
 export type SchemaArcGisMapServerSource = components['schemas']['ArcGisMapServerSource'];
 export type SchemaArchiveImageRead = components['schemas']['ArchiveImageRead'];
@@ -12014,6 +12074,7 @@ export type SchemaDocumentOutput = components['schemas']['DocumentOutput'];
 export type SchemaDocumentPageRead = components['schemas']['DocumentPageRead'];
 export type SchemaDocumentSearchHit = components['schemas']['DocumentSearchHit'];
 export type SchemaEcologyRequest = components['schemas']['EcologyRequest'];
+export type SchemaEpochConfidenceRead = components['schemas']['EpochConfidenceRead'];
 export type SchemaEpochJoinMethod = components['schemas']['EpochJoinMethod'];
 export type SchemaEpochPlatform = components['schemas']['EpochPlatform'];
 export type SchemaEpochRead = components['schemas']['EpochRead'];

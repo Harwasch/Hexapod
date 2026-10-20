@@ -116,6 +116,36 @@
         "title": "ActionMissionCreate",
         "type": "object"
       },
+      "AlignmentCapRead": {
+        "additionalProperties": false,
+        "description": "How the epoch's placement capped its scores (ADR 0016, C4): a cell may only claim\nevidence when the epoch's uncertainty from the site frame is under half a cell.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "factor": {
+            "title": "Factor",
+            "type": "number"
+          },
+          "priorEpochs": {
+            "title": "Priorepochs",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "uncertaintyM": {
+            "title": "Uncertaintym",
+            "type": "number"
+          }
+        },
+        "required": [
+          "uncertaintyM",
+          "factor",
+          "priorEpochs",
+          "source"
+        ],
+        "title": "AlignmentCapRead",
+        "type": "object"
+      },
       "AppearancePackage": {
         "properties": {
           "appearance": {
@@ -5898,6 +5928,80 @@
         "title": "EcologyRequest",
         "type": "object"
       },
+      "EpochConfidenceRead": {
+        "additionalProperties": false,
+        "description": "The confidence map an epoch's current revision shipped, summarised at its finest\nlevel. Null on an epoch means not measured: the run that made its current revision\nmeasured none (a splat upload carries no capture evidence).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "alignmentCap": {
+            "$ref": "#/components/schemas/AlignmentCapRead"
+          },
+          "assetId": {
+            "format": "uuid",
+            "title": "Assetid",
+            "type": "string"
+          },
+          "cellM": {
+            "title": "Cellm",
+            "type": "number"
+          },
+          "level": {
+            "title": "Level",
+            "type": "integer"
+          },
+          "policy": {
+            "title": "Policy",
+            "type": "string"
+          },
+          "reasons": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Reasons",
+            "type": "object"
+          },
+          "scoredCells": {
+            "title": "Scoredcells",
+            "type": "integer"
+          },
+          "status": {
+            "const": "measured",
+            "title": "Status",
+            "type": "string"
+          },
+          "unseenCells": {
+            "title": "Unseencells",
+            "type": "integer"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "weakCells": {
+            "title": "Weakcells",
+            "type": "integer"
+          },
+          "weakShare": {
+            "title": "Weakshare",
+            "type": "number"
+          }
+        },
+        "required": [
+          "status",
+          "assetId",
+          "url",
+          "cellM",
+          "level",
+          "policy",
+          "weakShare",
+          "weakCells",
+          "scoredCells",
+          "unseenCells",
+          "reasons",
+          "alignmentCap"
+        ],
+        "title": "EpochConfidenceRead",
+        "type": "object"
+      },
       "EpochJoinMethod": {
         "description": "How a capture found the site it is an epoch of: named it (``explicit``), was matched\nto it by location before its run (``spatial``), or made it (``new-site``).",
         "enum": [
@@ -5947,6 +6051,16 @@
               }
             ],
             "title": "Captureid"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EpochConfidenceRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "createdAt": {
             "format": "date-time",
@@ -6057,6 +6171,7 @@
           "alignment",
           "quality",
           "currentAssetId",
+          "confidence",
           "createdAt",
           "updatedAt"
         ],

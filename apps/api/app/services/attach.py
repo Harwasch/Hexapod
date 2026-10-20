@@ -61,7 +61,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Asset
 from app.schemas.sidecar import SidecarAttach, SidecarAttachment
-from app.services import epochs, sidecars
+from app.services import epoch_maps, epochs, sidecars
 from app.services.assets import asset_to_read
 from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.services.published import IMMUTABLE_CACHE
@@ -304,6 +304,8 @@ def _attach(
             render["rigUrl"] = payload.rig_url
         asset.render_config = render
     asset.sidecar_flags = sidecars.updated_flags(asset.sidecar_flags, clear=cleared, add=flags)
+    # The revision's confidence map is a file of the generation: it moves with it.
+    epoch_maps.repoint(db, asset, new_url, final)
     db.commit()
     db.refresh(asset)
     log.info(

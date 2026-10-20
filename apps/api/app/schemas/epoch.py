@@ -16,6 +16,7 @@ from app.models.enums import (
 )
 from app.schemas.base import CamelModel
 from app.schemas.capture import CaptureQuality
+from app.schemas.confidence import EpochConfidenceRead
 from app.schemas.geojson import Footprint
 
 
@@ -61,5 +62,9 @@ class EpochRead(CamelModel):
     quality: CaptureQuality | None
     #: The epoch's newest observed asset that is not superseded; null when it has none.
     current_asset_id: uuid.UUID | None
+    #: How well each part of it was seen: the confidence map its current revision's run
+    #: measured (ADR 0016), summarised. Null is "not measured" -- that run measured none
+    #: (a splat upload carries no capture evidence).
+    confidence: EpochConfidenceRead | None
     created_at: datetime
     updated_at: datetime

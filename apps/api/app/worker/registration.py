@@ -52,7 +52,7 @@ from app.schemas.capture import QUALITY_BARS, QUALITY_MODES, CaptureQuality
 from app.schemas.common import Provenance
 from app.schemas.geojson import Polygon
 from app.schemas.site import SiteCreate
-from app.services import epochs, geometry, placement, sidecars
+from app.services import epoch_maps, epochs, geometry, placement, sidecars
 from app.services import sites as site_service
 from app.services.assets import build_asset
 from app.services.slugs import slugify
@@ -114,6 +114,10 @@ class Registration:
     #: its per-image residuals, copied up by `catalog`), or None for a recipe with no align
     #: stage (`registration.alignment_of` then records why it is unaligned).
     alignment: dict[str, Any] | None = None
+    #: The confidence grid the run shipped beside its tiles, as the tileset declares it
+    #: (`extras.confidence`, copied up by `catalog`; ADR 0016), or None when the run
+    #: measured none (`splat-ingest`). `register` records it as the revision's map.
+    confidence: dict[str, Any] | None = None
 
     @staticmethod
     def read(path: Path) -> Registration:
@@ -145,6 +149,9 @@ class Registration:
             ),
             alignment=document.get("alignment")
             if isinstance(document.get("alignment"), dict)
+            else None,
+            confidence=document.get("confidence")
+            if isinstance(document.get("confidence"), dict)
             else None,
         )
 
@@ -1395,11 +1402,14 @@ def register(
             _replace_run(epoch, producing, footprint, quality, now, published=url is not None)
             epoch.alignment = alignment_of(capture, registration)
     same_tiles = published.content_addressed and url == tileset_url(current)
+    shown: Asset | None = None
     if url is not None and current is not None and not same_tiles:
         # New tiles -- or, with one bucket, a republish onto the run's own keys, which a
         # Refine rewrites in place: the URL cannot vouch for the bytes, so the new run's
         # render config gets a revision of its own rather than the old run's.
-        _supersede(db, site, epoch, current, url, registration, published.carry, job_id, now)
+        shown = _supersede(
+            db, site, epoch, current, url, registration, published.carry, job_id, now
+        )
     elif url is not None and current is not None:
         # The very same tiles (a content-hashed generation it already shows): no new
         # revision, only what the publish carried or the run made clears its flags.
@@ -1408,9 +1418,33 @@ def register(
             clear={*published.carry.carried, *published.carry.provided},
             add=[],
         )
+        shown = current
     elif url is not None:
         # An epoch's first tiles: its first run, or one after a run that was withheld.
-        db.add(_new_asset(site, epoch, capture, url, registration, published.carry, job_id, now))
+        shown = _new_asset(site, epoch, capture, url, registration, published.carry, job_id, now)
+        db.add(shown)
+    if shown is not None and url is not None:
+        # What the run measured on the tiles it published is that revision's map; a
+        # superseded revision keeps the one it was measured with (ADR 0016, `epoch_maps`).
+        db.flush()
+        if (
+            registration.confidence is None
+            and current is not None
+            and shown is not current
+            and "confidence" in published.carry.carried
+        ):
+            # The same tiles republished by a run that measured nothing: the grid the
+            # publish carried into the new generation is still the old revision's map.
+            epoch_maps.carry_map(db, epoch=epoch, source=current, target=shown, tileset_url=url)
+        else:
+            epoch_maps.record_map(
+                db,
+                epoch=epoch,
+                asset=shown,
+                job_id=producing,
+                descriptor=registration.confidence,
+                tileset_url=url,
+            )
     capture.site_id = site.id
     if url is not None:
         _grow_boundary(site, epoch.footprint)

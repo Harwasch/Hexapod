@@ -151,3 +151,58 @@ def test_a_site_record_does_not_query_per_epoch(
         read = client.get(f"/api/v1/sites/{four}").json()
     assert len(read["epochs"]) == 4 and len(read["assets"]) == 4
     assert len(many) == len(few), many
+
+
+def test_the_epoch_list_does_not_query_per_confidence_map(
+    client: TestClient, db: Session, engine: Engine
+) -> None:
+    """Each epoch reads its current revision's map (A4): loaded with the epochs, not one
+    query per epoch, on the site record and on the epochs list alike."""
+    from datetime import timedelta
+
+    from app.models import EpochMap
+    from tests.confidence_fixtures import descriptor
+    from tests.test_epochs import T0, make_asset, make_epoch, make_site
+
+    def site_with(slug: str, count: int) -> str:
+        site = make_site(db, slug)
+        for ordinal in range(1, count + 1):
+            epoch = make_epoch(db, site, ordinal, observed=T0 + timedelta(days=ordinal))
+            asset = make_asset(
+                db,
+                site,
+                epoch,
+                f"https://cdn.example.com/{slug}/{ordinal}/tileset.json",
+                created=T0 + timedelta(days=ordinal),
+            )
+            grid = descriptor("e1")
+            db.add(
+                EpochMap(
+                    epoch_id=epoch.id,
+                    asset_id=asset.id,
+                    kind="confidence",
+                    format="hexapod.cellgrid",
+                    version=1,
+                    url=f"https://cdn.example.com/{slug}/{ordinal}/confidence.bin",
+                    cell_m=1.0,
+                    level=2,
+                    descriptor=grid,
+                    summary=grid["summary"],
+                )
+            )
+        db.commit()
+        return str(site.id)
+
+    one, four = site_with("one", 1), site_with("four", 4)
+    for path in ("", "/epochs"):
+        db.expunge_all()
+        with counting(engine) as few:
+            read = client.get(f"/api/v1/sites/{one}{path}").json()
+        epochs = read if path else read["epochs"]
+        assert len(epochs) == 1 and epochs[0]["confidence"]["status"] == "measured"
+        db.expunge_all()
+        with counting(engine) as many:
+            read = client.get(f"/api/v1/sites/{four}{path}").json()
+        epochs = read if path else read["epochs"]
+        assert len(epochs) == 4 and all(e["confidence"]["level"] == 2 for e in epochs)
+        assert len(many) == len(few), many

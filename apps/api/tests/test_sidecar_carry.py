@@ -14,6 +14,7 @@ flagged on the asset, where the console and the API show it.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import uuid
@@ -22,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import Asset, Capture
@@ -858,12 +859,31 @@ def a_measured_run(buckets: Publisher, *, tag: bytes = b"", confidence: bool = T
 
 
 def a_measured_scan(db: Session, buckets: Publisher) -> Capture:
+    """The measured run published and registered, its grid recorded as the epoch's map."""
+    from tests.confidence_fixtures import descriptor
+
     a_measured_run(buckets)
     capture = Capture(slug="field", name="Field", kind=CaptureKind.GAUSSIAN_SPLAT)
     db.add(capture)
     db.commit()
-    republish(db, buckets, capture)
+    register(
+        db,
+        buckets.private,
+        publish=buckets,
+        capture=capture,
+        job_id=RUN,
+        registration=dataclasses.replace(a_registration(), confidence=descriptor("e1")),
+        tiles_stage_id="package",
+    )
     return capture
+
+
+def the_map_url(db: Session, asset: Asset) -> str | None:
+    from app.models import EpochMap
+
+    db.expire_all()
+    row = db.scalars(select(EpochMap).where(EpochMap.asset_id == asset.id)).first()
+    return row.url if row is not None else None
 
 
 def test_a_new_run_s_own_confidence_grid_replaces_the_old_one(
@@ -918,6 +938,12 @@ def test_the_same_tiles_keep_their_grid_through_an_attach_and_a_republish(
     attached = the_splat(db, capture)
     files = files_under(buckets.public, directory_of(attached.source["url"]))
     assert files["confidence.bin"] == b"cells "
+    # The revision's map moved with its generation.
+    assert the_map_url(db, attached) == attached.source["url"].replace(
+        "tileset.json", "confidence.bin"
+    )
+    # The same tiles again, from a run that measured nothing.
+    a_measured_run(buckets, confidence=False)
 
     republish(db, buckets, capture)
 
@@ -927,3 +953,6 @@ def test_the_same_tiles_keep_their_grid_through_an_attach_and_a_republish(
     extras = tileset_at(buckets.public, moved.source["url"])["root"]["extras"]
     assert extras["confidence"] == CONFIDENCE_EXTRAS
     assert moved.sidecar_flags == []
+    # A run that measured nothing republished the same tiles: the grid was carried, and
+    # so is the map, beside the new revision's URL.
+    assert the_map_url(db, moved) == moved.source["url"].replace("tileset.json", "confidence.bin")

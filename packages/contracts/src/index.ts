@@ -36,6 +36,9 @@ export type AssetSourceKind = Schemas["AssetSourceKind"];
 
 export type Epoch = Schemas["EpochRead"];
 export type SiteFrame = Schemas["SiteFrameRead"];
+/** An epoch's confidence map, summarised (ADR 0016); null on an epoch is "not measured". */
+export type EpochConfidence = Schemas["EpochConfidenceRead"];
+export type AlignmentCap = Schemas["AlignmentCapRead"];
 export type CheckTarget = Schemas["CheckTargetRead"];
 export type CheckTargetRole = Schemas["CheckTargetRole"];
 export type EpochStatus = Schemas["EpochStatus"];
