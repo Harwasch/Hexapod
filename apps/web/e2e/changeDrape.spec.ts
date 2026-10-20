@@ -539,6 +539,14 @@ const drawn = (page: Page): Promise<DrapeTag[]> =>
     return out;
   })()`);
 
+/** The outline overlay over the scan: each class's path, and whether it draws anything. */
+const overlay = (page: Page): Promise<{ cls: string; low: string; drawn: boolean }[]> =>
+  page.evaluate(`[...document.querySelectorAll("svg[data-change-overlay] path")].map((p) => ({
+    cls: p.getAttribute("data-class"),
+    low: p.getAttribute("data-low-confidence"),
+    drawn: (p.getAttribute("d") ?? "").length > 0,
+  }))`);
+
 /** A screenshot once the scene has drawn a few frames at rest; saved as evidence when named. */
 async function settledShot(page: Page, name?: string): Promise<Buffer> {
   await page.evaluate(`window.__twin.scene.requestRender()`);
@@ -657,6 +665,15 @@ for (const renderer of ["cesium", "playcanvas", "spark"] as const) {
     await expect
       .poll(async () => (await drawn(page)).every((d) => d.ready && d.show), poll)
       .toBe(true);
+    // And over the scan, above whichever canvas draws the splats: the same four, outlined.
+    await expect
+      .poll(() => overlay(page), poll)
+      .toEqual([
+        { cls: "raised", low: "false", drawn: true },
+        { cls: "raised", low: "true", drawn: true },
+        { cls: "lowered", low: "false", drawn: true },
+        { cls: "insufficient", low: "false", drawn: true },
+      ]);
 
     // The legend: counts from the fixture, low confidence hatched, derived, the floor,
     // uncalibrated, and the phone date named as not survey-grade.
@@ -686,16 +703,16 @@ for (const renderer of ["cesium", "playcanvas", "spark"] as const) {
     test
       .info()
       .annotations.push({ type: "drape pixels", description: JSON.stringify({ off, on }) });
-    // The drape lies under the splats: dense ground splats (the yard's grass, thicker under
-    // PlayCanvas) cover most of it. The raised block shows through the grass at the yard's
-    // south-west corner under both; the lowered block lies under the shed and a tree, so it is
-    // recorded above but not asserted.
+    // The ground drape alone lay under the splats (dense grass covered most of it); the
+    // outlines over the scan show both blocks, the lowered one over the shed and a tree too.
     expect(on.raised).toBeGreaterThan(off.raised + 0.001);
+    expect(on.lowered).toBeGreaterThan(off.lowered + 0.001);
 
     // Hide: off the ground, and the legend gone.
     await legend.getByRole("button", { name: "Hide change map" }).click();
     await expect(legend).toHaveCount(0);
     await expect.poll(async () => (await drawn(page)).length, poll).toBe(0);
+    await expect(page.locator("svg[data-change-overlay]")).toHaveCount(0);
     await railUnchanged(page);
   });
 }
