@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+import re
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, inspect, select, text
+from sqlalchemy import Connection, Engine, inspect, select, text
 from sqlalchemy.orm import Session
 
 from alembic import command
@@ -29,10 +32,14 @@ def test_migrations_round_trip(alembic_config: Config, engine: Engine) -> None:
         "jobs",
         "job_steps",
         "artifacts",
+        "site_frames",
+        "epochs",
     ):
         assert inspector.has_table(table)
     index_names = {index["name"] for index in inspector.get_indexes("sites")}
     assert "idx_sites_boundary" in index_names
+    epoch_indexes = {index["name"] for index in inspector.get_indexes("epochs")}
+    assert {"idx_epochs_footprint", "ix_epochs_site_id"} <= epoch_indexes
 
 
 def test_models_match_migrations(alembic_config: Config, engine: Engine) -> None:
@@ -271,3 +278,266 @@ def test_0031_links_missions_that_land_actions_already_scheduled(
     assert str(row.land_id) == land["id"] and row.boundary_revision == 1
     checks = {check["name"] for check in inspect(engine).get_check_constraints("plans")}
     assert "ck_plans_land_private" in checks
+
+
+_SQUARE_WKT = (
+    "MULTIPOLYGON(((-122.31 47.59, -122.29 47.59, -122.29 47.61, -122.31 47.61, -122.31 47.59)))"
+)
+
+
+def _raw_site(connection: Connection, slug: str, metadata: dict[str, object]) -> str:
+    return str(
+        connection.execute(
+            text(
+                "INSERT INTO sites (id, slug, name, boundary, centroid, metadata, attribution) "
+                "VALUES (gen_random_uuid(), :slug, :slug, ST_GeomFromText(:wkt, 4326), "
+                "ST_Centroid(ST_GeomFromText(:wkt, 4326)), CAST(:metadata AS jsonb), '[]') "
+                "RETURNING id"
+            ),
+            {"slug": slug, "wkt": _SQUARE_WKT, "metadata": json.dumps(metadata)},
+        ).scalar_one()
+    )
+
+
+def _raw_capture(
+    connection: Connection,
+    slug: str,
+    site_id: str | None,
+    *,
+    captured_at: datetime | None,
+    metadata: dict[str, object] | None = None,
+    quality: dict[str, object] | None = None,
+    capture_id: str | None = None,
+) -> str:
+    return str(
+        connection.execute(
+            text(
+                "INSERT INTO captures (id, slug, name, status, kind, captured_at, metadata, "
+                "attribution, site_id, quality) VALUES (COALESCE(CAST(:id AS uuid), "
+                "gen_random_uuid()), :slug, :slug, 'complete', 'gaussian-splat', :captured_at, "
+                "CAST(:metadata AS jsonb), '[]', CAST(:site AS uuid), CAST(:quality AS jsonb)) "
+                "RETURNING id"
+            ),
+            {
+                "id": capture_id,
+                "slug": slug,
+                "captured_at": captured_at,
+                "metadata": json.dumps(metadata or {}),
+                "site": site_id,
+                "quality": None if quality is None else json.dumps(quality),
+            },
+        ).scalar_one()
+    )
+
+
+def _raw_job(connection: Connection, capture_id: str, *, finished: datetime) -> str:
+    return str(
+        connection.execute(
+            text(
+                "INSERT INTO jobs (id, capture_id, recipe, recipe_version, status, params, "
+                "finished_at) VALUES (gen_random_uuid(), CAST(:capture AS uuid), 'splat-ingest', "
+                "'3', 'complete', '{}', :finished) RETURNING id"
+            ),
+            {"capture": capture_id, "finished": finished},
+        ).scalar_one()
+    )
+
+
+def _raw_splat(connection: Connection, site_id: str, url: str, created: datetime) -> str:
+    return str(
+        connection.execute(
+            text(
+                "INSERT INTO assets (id, site_id, name, representation, provider, source, "
+                "attribution, render_config, default_visible, created_at, updated_at) VALUES "
+                "(gen_random_uuid(), CAST(:site AS uuid), 'splat', 'gaussian-splat', "
+                "'3d-tiles-url', CAST(:source AS jsonb), '[]', '{}', true, :created, :created) "
+                "RETURNING id"
+            ),
+            {
+                "site": site_id,
+                "source": json.dumps({"type": "3d-tiles-url", "url": url}),
+                "created": created,
+            },
+        ).scalar_one()
+    )
+
+
+def test_0032_backfills_a_frame_and_an_epoch_for_every_registered_site(
+    alembic_config: Config, engine: Engine, db: Session
+) -> None:
+    """Every site the pipeline registered becomes epoch 1 of itself, in a frame made from
+    the georef it was registered with; nothing else gains an epoch (decision D3)."""
+    db.rollback()
+    command.downgrade(alembic_config, "0031")
+    now = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+    quality: dict[str, object] = {"verdict": "ok", "coverageUrl": "https://cdn.example.com/c.ply"}
+    try:
+        with engine.begin() as connection:
+            # (A) a phone-key capture, no capture date, one complete run, two splats.
+            a_capture = str(uuid.uuid4())
+            a_job_placeholder = str(uuid.uuid4())
+            a_site = _raw_site(
+                connection,
+                "site-a",
+                {
+                    "captureId": a_capture,
+                    "jobId": a_job_placeholder,
+                    "registration": {"georef": {"lat": 47.6, "lon": -122.3, "height": 30}},
+                },
+            )
+            _raw_capture(
+                connection,
+                "cap-a",
+                a_site,
+                captured_at=None,
+                metadata={"origin": "phone-key"},
+                quality=quality,
+                capture_id=a_capture,
+            )
+            a_job = _raw_job(connection, a_capture, finished=now)
+            connection.execute(
+                text(
+                    "UPDATE sites SET metadata = jsonb_set(metadata, '{jobId}', to_jsonb(CAST(:j AS text)))"
+                    " WHERE id = CAST(:s AS uuid)"
+                ),
+                {"j": a_job, "s": a_site},
+            )
+            a_first = _raw_splat(connection, a_site, "https://cdn.example.com/a1/tileset.json", now)
+            a_second = _raw_splat(
+                connection,
+                a_site,
+                "https://cdn.example.com/a2/tileset.json",
+                now + timedelta(seconds=1),
+            )
+            # (B) a jobId naming no job, a capture date, two complete runs.
+            b_capture = str(uuid.uuid4())
+            b_site = _raw_site(
+                connection,
+                "site-b",
+                {
+                    "captureId": b_capture,
+                    "jobId": str(uuid.uuid4()),
+                    "registration": {"georef": {"lat": -33.9, "lon": 151.2}},
+                },
+            )
+            _raw_capture(
+                connection,
+                "cap-b",
+                b_site,
+                captured_at=now - timedelta(days=3),
+                capture_id=b_capture,
+            )
+            _raw_job(connection, b_capture, finished=now - timedelta(hours=2))
+            b_newest = _raw_job(connection, b_capture, finished=now - timedelta(hours=1))
+            # (C) a seeded demo-ranch site, (D) captureId but no registration, (E) a
+            # captureId that is not a uuid.
+            c_site = _raw_site(connection, "site-c", {"origin": "demo-ranch"})
+            _raw_splat(connection, c_site, "https://cdn.example.com/c/tileset.json", now)
+            d_capture = str(uuid.uuid4())
+            d_site = _raw_site(connection, "site-d", {"captureId": d_capture})
+            _raw_capture(connection, "cap-d", d_site, captured_at=now, capture_id=d_capture)
+            e_site = _raw_site(
+                connection,
+                "site-e",
+                {
+                    "captureId": "not-a-uuid",
+                    "registration": {"georef": {"lat": 1.0, "lon": 2.0}},
+                },
+            )
+            a_created = connection.execute(
+                text("SELECT created_at FROM captures WHERE id = CAST(:c AS uuid)"),
+                {"c": a_capture},
+            ).scalar_one()
+    finally:
+        command.upgrade(alembic_config, "head")
+
+    with engine.connect() as connection:
+        frames = {
+            str(row.site_id): row
+            for row in connection.execute(text("SELECT * FROM site_frames")).all()
+        }
+        epochs = {
+            str(row.site_id): row for row in connection.execute(text("SELECT * FROM epochs")).all()
+        }
+        assets = {
+            str(row.id): row
+            for row in connection.execute(
+                text("SELECT id, epoch_id, observed_at, source_kind FROM assets")
+            ).all()
+        }
+        same_footprint = connection.execute(
+            text(
+                "SELECT ST_Equals(e.footprint, s.boundary) FROM epochs e JOIN sites s "
+                "ON s.id = e.site_id WHERE s.id = CAST(:s AS uuid)"
+            ),
+            {"s": a_site},
+        ).scalar_one()
+
+    assert set(frames) == set(epochs) == {a_site, b_site}
+    frame = frames[a_site]
+    assert (frame.lat, frame.lon, frame.height) == (47.6, -122.3, 30.0)
+    assert (frame.height_datum, frame.epsg, frame.source) == ("msl-unverified", 32610, "backfill")
+    epoch = epochs[a_site]
+    assert epoch.ordinal == 1
+    assert epoch.observed_at == a_created
+    assert epoch.observed_at_source == "created"
+    assert (epoch.platform, epoch.join_method, epoch.status) == (
+        "phone-video",
+        "new-site",
+        "published",
+    )
+    assert str(epoch.job_id) == a_job
+    assert str(epoch.capture_id) == a_capture
+    assert epoch.quality == quality
+    assert epoch.alignment is None
+    assert same_footprint is True
+    # Only the first splat by creation is the epoch's, and it takes the epoch's date.
+    assert assets[a_first].epoch_id == epoch.id
+    assert assets[a_first].observed_at == a_created
+    assert assets[a_second].epoch_id is None and assets[a_second].observed_at is None
+    assert {row.source_kind for row in assets.values()} == {"observed"}
+
+    b_epoch = epochs[b_site]
+    assert b_epoch.observed_at_source == "captured-at"
+    assert b_epoch.observed_at == now - timedelta(days=3)
+    assert str(b_epoch.job_id) == b_newest
+    assert b_epoch.platform == "unknown"
+    assert (frames[b_site].height, frames[b_site].epsg) == (0.0, 32756)
+    for legacy in (c_site, d_site, e_site):
+        assert legacy not in frames and legacy not in epochs
+
+
+def test_the_epoch_vocabularies_match_their_check_constraints(engine: Engine) -> None:
+    """The enums the API reads and writes are exactly what the database accepts."""
+    from app.models.enums import (
+        AssetSourceKind,
+        EpochJoinMethod,
+        EpochPlatform,
+        EpochStatus,
+        HeightDatum,
+        ObservedAtSource,
+        SiteFrameSource,
+    )
+
+    expected = {
+        "ck_site_frames_height_datum": HeightDatum,
+        "ck_site_frames_source": SiteFrameSource,
+        "ck_epochs_status": EpochStatus,
+        "ck_epochs_join_method": EpochJoinMethod,
+        "ck_epochs_platform": EpochPlatform,
+        "ck_epochs_observed_at_source": ObservedAtSource,
+        "ck_assets_source_kind": AssetSourceKind,
+    }
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conname = ANY(:names)"
+            ),
+            {"names": list(expected)},
+        ).all()
+    definitions: dict[str, str] = {str(row[0]): str(row[1]) for row in rows}
+    assert set(definitions) == set(expected)
+    for name, vocabulary in expected.items():
+        quoted = set(re.findall(r"'([^']*)'", definitions[name]))
+        assert quoted == {member.value for member in vocabulary}, name

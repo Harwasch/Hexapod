@@ -12,6 +12,7 @@ from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 if TYPE_CHECKING:
     from app.models.asset import Asset
     from app.models.bookmark import CameraBookmark
+    from app.models.epoch import Epoch, SiteFrame
 
 
 class Site(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -39,6 +40,14 @@ class Site(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     assets: Mapped[list[Asset]] = relationship(
         back_populates="site", cascade="all, delete-orphan", order_by="Asset.created_at"
+    )
+    # The site's fixed frame and its epochs (decision D3, migration 0032). A legacy site --
+    # seeded, catalog, hand-made -- has neither.
+    frame: Mapped[SiteFrame | None] = relationship(
+        cascade="all, delete-orphan", uselist=False, passive_deletes=True
+    )
+    epochs: Mapped[list[Epoch]] = relationship(
+        cascade="all, delete-orphan", order_by="Epoch.ordinal", passive_deletes=True
     )
     bookmarks: Mapped[list[CameraBookmark]] = relationship(
         back_populates="site", cascade="all, delete-orphan", order_by="CameraBookmark.created_at"
