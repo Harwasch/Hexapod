@@ -6,7 +6,7 @@
  * compiles and lights an east-facing slab in a real engine in e2e/sunlightScene.spec.ts.
  */
 import { Cartesian3, Event, JulianDate, type Cesium3DTileset, type Scene } from "cesium";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { colorChainOf, composeColorGlsl, type SplatVertexColor } from "@/cesium/splatColor";
 import type { SplatShaderBuilder } from "@/cesium/splatInternals";
@@ -17,6 +17,7 @@ import { startSunlight } from "@/cesium/sunlight";
 import { FLAT_RATIO, SUN_AMBIENT } from "@/lib/splatNormals";
 import { useAsCaptured } from "@/state/asCaptured";
 import { useLighting } from "@/state/lighting";
+import { useRendererOverride, useSettings } from "@/state/settings";
 import { useSunReport } from "@/state/sunReport";
 
 const vec4 = (x: number, y: number, z: number, w: number) => ({ vec4: [x, y, z, w] });
@@ -56,7 +57,13 @@ function scan() {
   return { primitive, tileset, tileLoad, scene, preRender, renders, functions };
 }
 
+beforeEach(() => {
+  useSettings.getState().set({ splatRenderer: "cesium" });
+});
+
 afterEach(() => {
+  useSettings.getState().reset();
+  useRendererOverride.setState({ renderer: null });
   useLighting.setState({ sun: "off" });
   useAsCaptured.setState({ on: false });
   useSunReport.setState({ reports: {} });
@@ -158,6 +165,28 @@ describe("the relight", () => {
     expect(s.functions()).toEqual([]);
     expect(useSunReport.getState().reports.a).toBeUndefined();
     handle.dispose();
+  });
+
+  it("draws nothing while another renderer draws splats, and comes back with CesiumJS", () => {
+    const s = scan();
+    const handle = startSunlight(s.tileset, s.scene, "a", { vec4 });
+    handle.sync(true);
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601("2026-06-21T20:21:00Z"));
+    expect(useSunReport.getState().reports.a).toBeDefined();
+    useSettings.getState().set({ splatRenderer: "playcanvas" });
+    expect(s.functions()).toEqual([]);
+    expect(useSunReport.getState().reports.a).toBeUndefined();
+    useSettings.getState().set({ splatRenderer: "cesium" });
+    expect(s.functions()).toEqual(["splatSunlightColor"]);
+    // A page address's choice counts as the setting does.
+    useRendererOverride.setState({ renderer: "spark" });
+    expect(s.functions()).toEqual([]);
+    useRendererOverride.setState({ renderer: null });
+    expect(s.functions()).toEqual(["splatSunlightColor"]);
+    handle.dispose();
+    useSettings.getState().set({ splatRenderer: "playcanvas" });
+    useSettings.getState().set({ splatRenderer: "cesium" });
+    expect(s.functions()).toEqual([]);
   });
 
   it("waits for the primitive, which comes with the first tile", () => {

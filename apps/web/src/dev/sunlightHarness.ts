@@ -38,6 +38,7 @@ import { attachSunlight } from "@/cesium/sunlightSlot";
 import { SUN_AMBIENT, sunUpFactor } from "@/lib/splatNormals";
 import { useAsCaptured } from "@/state/asCaptured";
 import { useLighting, type SunMode } from "@/state/lighting";
+import { useSettings } from "@/state/settings";
 import { useSunReport } from "@/state/sunReport";
 
 export interface SlabView {
@@ -103,7 +104,9 @@ export async function startSunlightHarness(options: {
   });
   incrementalSplats(tileset, 0);
   scene.primitives.add(tileset);
-  // The app's path: the slot, which loads the relight when the sun is on and As captured off.
+  // The app's path: the slot, which loads the relight when the sun is on and As captured off,
+  // under CesiumJS -- which draws this page, so the setting says so.
+  useSettings.getState().set({ splatRenderer: "cesium" });
   attachSunlight(tileset, scene, "slab");
   const primitive = (): ColorPrimitive | undefined =>
     splatTilesetOf(tileset).gaussianSplatPrimitive;

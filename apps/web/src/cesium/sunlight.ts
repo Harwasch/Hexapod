@@ -1,7 +1,9 @@
 /**
  * One splat model's sunlight relight (`splatSunlight.ts`), on while the sun is (state/lighting.ts)
  * and As captured is not -- `sunlightSlot.ts` says which and loads this on the first switch, so
- * the globe's first load carries none of it.
+ * the globe's first load carries none of it -- and while CesiumJS is the splat renderer: a scan
+ * CesiumJS draws under another one (a Living Survey rig's) is not relit, as the control, which
+ * is disabled there, and the badge, which says nothing there, have it.
  *
  * The part joins the primitive's colour chain while on and leaves it when off (the draw command
  * is rebuilt either way); the primitive appears with the first tile, so a tile load places it
@@ -15,6 +17,7 @@
 import { JulianDate, type Cesium3DTileset, type Scene } from "cesium";
 
 import { sunUpFactor } from "@/lib/splatNormals";
+import { useRendererOverride, useSettings } from "@/state/settings";
 import { useSunReport, type SunReport } from "@/state/sunReport";
 
 import type { ColorPrimitive } from "./splatColor";
@@ -43,6 +46,9 @@ export function startSunlight(
 ): SunlightHandle {
   const part = new SplatSunlight(options.vec4);
   const report = useSunReport.getState().report;
+  const cesium = (): boolean =>
+    (useRendererOverride.getState().renderer ?? useSettings.getState().splatRenderer) === "cesium";
+  let asked = false;
   let on = false;
   let disposed = false;
   let last: SunReport | undefined;
@@ -80,24 +86,33 @@ export function startSunlight(
     timer = undefined;
   };
 
+  const apply = (): void => {
+    const next = asked && cesium();
+    if (disposed || next === on) return;
+    on = next;
+    place();
+    stopTimer();
+    if (on) {
+      timer = setInterval(() => scene.requestRender(), SUN_REFRESH_MS);
+    } else {
+      last = undefined;
+      report(assetId, null);
+    }
+    scene.requestRender();
+  };
+
   const removeTileLoad = tileset.tileLoad.addEventListener(place);
   const removeFrame = scene.preRender.addEventListener(frame);
+  const unsubscribe = [useSettings.subscribe(apply), useRendererOverride.subscribe(apply)];
   return {
     sync(next) {
-      if (disposed || next === on) return;
-      on = next;
-      place();
-      stopTimer();
-      if (on) {
-        timer = setInterval(() => scene.requestRender(), SUN_REFRESH_MS);
-      } else {
-        last = undefined;
-        report(assetId, null);
-      }
-      scene.requestRender();
+      asked = next;
+      apply();
     },
     dispose() {
+      asked = false;
       on = false;
+      for (const off of unsubscribe) off();
       place();
       disposed = true;
       stopTimer();
