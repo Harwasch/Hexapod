@@ -392,3 +392,52 @@ def test_a_hostile_packet_is_read_in_linear_time() -> None:
 
     assert dji is not None and dji.rtk_flag is None
     assert elapsed < 2.0, f"{elapsed:.2f} s: the XMP patterns have gone quadratic again"
+
+
+@pytest.mark.parametrize(
+    ("time_s", "f_number", "iso"),
+    [
+        (1 / 1000, 1e-200, 100),  # squares to 0.0, then log2(0) raised
+        (1 / 1000, 2.8, 1e-320),  # subnormal ISO
+        (1e-320, 2.8, 100),  # N^2 / t overflows to inf
+        (1 / 1000, 1e300, 100),
+        (1 / 1000, float("nan"), 100),
+        (float("inf"), 2.8, 100),
+    ],
+)
+def test_ev100_of_an_impossible_exposure_is_none_not_an_error(
+    time_s: float, f_number: float, iso: float
+) -> None:
+    assert frame_meta.ev100(time_s, f_number, iso) is None
+    assert frame_meta.Exposure(exposure_time_s=time_s, f_number=f_number, iso=iso).ev100 is None
+
+
+def test_the_plausible_exposure_ranges_hold_real_cameras() -> None:
+    # f/0.95 at 1/8000 s and ISO 102400; f/64 at 30 s and ISO 50: both are real exposures.
+    assert frame_meta.ev100(1 / 8000, 0.95, 102_400) is not None
+    assert frame_meta.ev100(30.0, 64.0, 50) is not None
+
+
+def test_an_implausible_exif_exposure_is_dropped_with_its_reason(tmp_path: Path) -> None:
+    """f/0.0000000002 is no lens (an f-number below 0.5 is impossible in air): the value
+    is dropped, the record says why, and nothing downstream sees it."""
+    photo = write_jpeg(
+        tmp_path / "odd.jpg",
+        size=(64, 48),
+        exif={0x010F: "Canon"},
+        exif_ifd={
+            0x829A: IFDRational(1, 1000),
+            0x829D: IFDRational(1, 4_000_000_000),
+            0x8827: 100,
+        },
+    )
+
+    record = frame_meta.read_photo(
+        photo, frame_name="frame_0000.jpg", upload_root=tmp_path, frame_size=(64, 48)
+    )
+
+    assert record.exposure.f_number is None and record.exposure.exposure_time_s == 0.001
+    assert record.exposure.ev100 is None
+    [reason] = record.implausible
+    assert reason.startswith("fNumber 2.5e-10") and "0.5" in reason
+    assert record.to_dict()["implausible"] == [reason]

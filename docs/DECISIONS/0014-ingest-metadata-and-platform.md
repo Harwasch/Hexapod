@@ -59,7 +59,10 @@ hAccuracyM, dop}`, `camera`, `exposure`, `focal` `{mm, mm35, px, pxFrom}`, `dji`
    information only. The fail gate (`max_clipped_frames_fraction`) ships **off**: no measurement
    backs a threshold. `QualityGateError(gate, measured, limit, *, unit, reason)`,
    `parse_quality_gate` and `check_gate` are defined here with M3b's signature; the error is in
-   `BAD_INPUT_ERRORS` and never retried.
+   `BAD_INPUT_ERRORS` and never retried. An EXIF setting no camera can record (outside f/0.5–f/1024,
+   1 µs–1 day, ISO 1–10,000,000; `frame_meta.EXPOSURE_RANGES` gives the physics) is dropped and
+   named in the frame's `implausible` list, and its EV100 is null: a value in a file never fails
+   the run.
 8. **Focal**: `pose` `focal_from: exif` **seeds** COLMAP's camera from the capture focal and lets
    bundle adjustment refine it (`hold_focal: true` holds it). A 35 mm focal converts by the diagonal
    with COLMAP's own 43.27 mm constant (pycolmap 4.2 reads 443.7254 px for 24 mm at 640×480).

@@ -92,3 +92,25 @@ def test_clipped_frames_are_named_at_either_end() -> None:
     }
     assert summary["flaggedFrames"] == 2
     assert "first principles" in str(summary["thresholds"])
+
+
+def test_an_impossible_exposure_on_one_frame_does_not_fail_the_summary() -> None:
+    """A frame record built with an f-number no lens has (as a writer could put in any
+    file) is left out of the EV spread; the capture is still summarised."""
+    good = frame_meta.FrameRecord(
+        name="a.jpg",
+        original="a.jpg",
+        exposure=frame_meta.Exposure(exposure_time_s=1 / 1000, f_number=2.8, iso=100),
+    )
+    bad = frame_meta.FrameRecord(
+        name="b.jpg",
+        original="b.jpg",
+        exposure=frame_meta.Exposure(exposure_time_s=1 / 1000, f_number=1e-200, iso=100),
+    )
+
+    summary = exposure.summarise(
+        [good, bad], {}, clip_pct=5.0, ev_spread=1.0, luma_spread_stops=1.0
+    )
+
+    assert summary["evSpread"] is None
+    assert summary["ev100"] is not None

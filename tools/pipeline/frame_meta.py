@@ -47,6 +47,7 @@ import site_frame
 
 __all__ = [
     "DJI_ALTITUDE_DATUM",
+    "EXPOSURE_RANGES",
     "FOCAL_SPREAD_LIMIT",
     "GPS_ALTITUDE_DATUM",
     "META_BYTES",
@@ -63,6 +64,7 @@ __all__ = [
     "ev100",
     "exif_time",
     "focal_px_from_35mm",
+    "implausible_exposure",
     "offset_text",
     "read_dji_xmp",
     "read_photo",
@@ -511,17 +513,46 @@ def _iso(value: object) -> float | None:
     return _positive(_rational(value))
 
 
+#: The exposure settings a camera can physically record, `(low, high)`, inclusive. Wide on
+#: purpose: they keep out what no camera can write, not what is merely unusual.
+#:
+#: * f-number: N = 1 / (2 NA), and a lens in air has a numerical aperture below 1, so no
+#:   lens is faster than f/0.5. The top, f/1024 (APEX Av 20), is past the f/200-f/500 of
+#:   pinhole cameras.
+#: * exposure time: 1 us is far shorter than the fastest electronic shutters (1/64000 s);
+#:   a day (86 400 s) is longer than any long exposure a capture would carry.
+#: * ISO: 1 is below every sensor's base sensitivity, 10 000 000 above the highest
+#:   (4 560 000) any camera has sold with.
+EXPOSURE_RANGES: dict[str, tuple[float, float]] = {
+    "exposureTimeS": (1e-6, 86_400.0),
+    "fNumber": (0.5, 1024.0),
+    "iso": (1.0, 10_000_000.0),
+}
+
+
+def implausible_exposure(name: str, value: float | None) -> str | None:
+    """Why `value` cannot be the `name` setting (an `EXPOSURE_RANGES` key), or None."""
+    if value is None:
+        return None
+    low, high = EXPOSURE_RANGES[name]
+    if math.isfinite(value) and low <= value <= high:
+        return None
+    return f"{name} {value:.3g} is outside {low:g}-{high:g}, which no camera records"
+
+
 def ev100(exposure_time_s: float | None, f_number: float | None, iso: float | None) -> float | None:
     """The exposure value at ISO 100: `log2(N^2 / t) - log2(ISO / 100)`.
 
     Brightness of the scene the camera metered, in stops: one EV is a doubling. Two
     frames of the same surface under the same light should agree whatever settings the
-    camera chose to record them with.
+    camera chose to record them with. None when a setting is missing or outside what a
+    camera can record (`EXPOSURE_RANGES`): inside them the logarithms are always finite.
     """
-    if exposure_time_s is None or f_number is None or iso is None:
-        return None
-    if exposure_time_s <= 0 or f_number <= 0 or iso <= 0:
-        return None
+    settings = {"exposureTimeS": exposure_time_s, "fNumber": f_number, "iso": iso}
+    for name, value in settings.items():
+        if value is None or implausible_exposure(name, value) is not None:
+            return None
+    assert exposure_time_s is not None and f_number is not None and iso is not None
     return math.log2(f_number * f_number / exposure_time_s) - math.log2(iso / 100.0)
 
 
@@ -632,6 +663,9 @@ class FrameRecord:
     dji: DjiXmp | None = None
     #: Why the original could not be read, when it could not; the record is then thin.
     unreadable: str | None = None
+    #: Values the original carried that no camera can have written, each dropped from
+    #: the record, with why (`implausible_exposure`): read, not trusted, not failed on.
+    implausible: tuple[str, ...] = ()
 
     @property
     def mask(self) -> str:
@@ -676,6 +710,7 @@ class FrameRecord:
             "dji": None if self.dji is None else self.dji.to_dict(),
             "mask": self.mask,
             "unreadable": self.unreadable,
+            "implausible": list(self.implausible),
         }
 
 
@@ -741,10 +776,21 @@ def _read_photo(
         px_from = "dji-calibrated"
     elif focal_35 is not None:
         px, px_from = focal_px_from_35mm(focal_35, *frame_size), "exif-35mm"
+    implausible: list[str] = []
+
+    def plausible(name: str, value: float | None) -> float | None:
+        reason = implausible_exposure(name, value)
+        if reason is not None:
+            implausible.append(reason)
+            return None
+        return value
+
     exposure = Exposure(
-        exposure_time_s=_positive(_rational(exif_ifd.get(EXPOSURE_TIME))),
-        f_number=_positive(_rational(exif_ifd.get(F_NUMBER))),
-        iso=_iso(exif_ifd.get(ISO)),
+        exposure_time_s=plausible(
+            "exposureTimeS", _positive(_rational(exif_ifd.get(EXPOSURE_TIME)))
+        ),
+        f_number=plausible("fNumber", _positive(_rational(exif_ifd.get(F_NUMBER)))),
+        iso=plausible("iso", _iso(exif_ifd.get(ISO))),
         bias_ev=_rational(exif_ifd.get(EXPOSURE_BIAS)),
     )
     return FrameRecord(
@@ -761,6 +807,7 @@ def _read_photo(
         exposure=exposure,
         focal=Focal(mm=focal_mm, mm35=focal_35, px=px, px_from=px_from),
         dji=dji,
+        implausible=tuple(implausible),
     )
 
 
