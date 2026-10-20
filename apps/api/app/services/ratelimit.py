@@ -20,8 +20,7 @@ not cheap:
   data, but not an open proxy either.
 * **Confidence maps** (`/sites/{id}/epochs/{id}/weak-areas`, `/sites/{id}/fill-targets`)
   read a grid of up to 2^22 cells a level out of the bucket and polygonise or compare it
-  (fill targets open to read like every site, weak areas behind the write token): cached,
-  but bucketed so a loop cannot pin a CPU.
+  (both behind the write token): cached, but bucketed so a loop cannot pin a CPU.
 
 In-process and per-machine, on purpose: the API runs as one Fly machine (fly.toml), and a
 limit that needs Redis to work is a limit nobody deploys. A second machine would give each

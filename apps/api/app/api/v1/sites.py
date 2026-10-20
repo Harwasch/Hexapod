@@ -126,7 +126,7 @@ def epoch_weak_areas(
     "/{site_id}/fill-targets",
     response_model=FillTargetsRead,
     summary="The cells a re-scan left weak",
-    dependencies=[LimitCellMap],
+    dependencies=[RequireWriteToken, LimitCellMap],
     responses={
         404: {"model": Problem, "description": "No such site, or no such epoch of it."},
         409: {
@@ -146,7 +146,9 @@ def site_fill_targets(
     """`rescan-gate-v1`: the cells of epoch `epochId` (default: the site's latest published)
     that are weak, covered by it, and were weak in at least one earlier measured epoch,
     compared at the coarser level -- a re-scan that did not fix them. An inferred fill
-    fills only these (F4). A bit mask in the tileset frame of the site lattice."""
+    fills only these (F4). A bit mask in the tileset frame of the site lattice. Behind the
+    write token, which its one consumer (the fill workflow) holds: a call may decode a grid
+    per earlier epoch, at most the eight most recent (`capped` says when there were more)."""
     return confidence_maps.fill_targets(db, storage, site_id, epoch_id)
 
 

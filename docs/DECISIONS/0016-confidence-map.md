@@ -203,16 +203,20 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 A4), branc
 5. **Weak areas** — `POST /sites/{id}/epochs/{epoch}/weak-areas` `{budgetM2?, focus?,
 maxAreas 1..8}`. The finest level's weak cells (weak-v1, where the summary is stated), closed
    on the raster by whole cells (≥ 0.5 m each way — exactly a mitred buffer out and back in, so
-   a block keeps its area), outlined region by region, simplified by half a cell, parts under
-   1 m² dropped, largest first; over 2^20 cells, drawn a level up where at least half of the
+   a block keeps its area), outlined region by region with holes under the smallest zone
+   filled, simplified by half a cell, parts under 1 m² dropped, largest first; over 2^20
+   cells, or over 2^18 cell edges of outline (a dense noisy plane is one region with a hole
+   per strong cell, which took minutes), drawn a level up where at least half of the
    children the epoch speaks for are weak (weak-v1's own majority; the min-of-children pyramid
    would mark a whole coarse cell weak for one child). Counts are of the finest cells inside.
    To the globe through the **site frame's own tangent plane** (PROJ `topocentric`, inverted):
    the exact inverse of how the pipeline placed the tiles. The design's azimuthal-equidistant
    projection is not that plane — it measures on the ellipsoid, and at a 1,500 m origin a point
-   1 km east lands 23 cm short. A budget keeps the weakest cells first, then those nearest
-   `focus`, trimming as the fog scout does, and only zones that fit when closing grows a sparse
-   selection past it. 409 `confidence-not-measured`, `confidence-unreadable`, `no-site-frame`.
+   1 km east lands 23 cm short. A budget takes whole zones in rank order — under `focus`,
+   then largest, then nearest — while they fit (within one zone cell), and when none fits
+   clips the first to a square of the budget's area about the focus or its weakest cell, so
+   any budget that can hold a zone gets one. (Trimming cells and outlining again, as the fog
+   scout does, left nothing on scattered weakness: closing grows the cells faster.) 409 `confidence-not-measured`, `confidence-unreadable`, `no-site-frame`.
 6. **Patterns are UX heuristics, labelled so in every answer** (`heuristic`, each `hint`):
    mostly `views`/`spread` → `orbit` when the patch stands ≥ 3 m and is ≤ 40 m across, else
    crossing `oblique` passes; `gsd` → `nadir`, lower, `targetGsdM` = the capture's median (null
@@ -230,16 +234,18 @@ maxAreas 1..8}`. The finest level's weak cells (weak-v1, where the summary is st
    epoch B (default the latest published) weak in B, covered by B, and weak in at least one
    earlier measured epoch, at the coarsest of their levels through each grid's pyramid. 409
    `no-rescan-yet` when nothing earlier was measured. A bit-packed window in the tileset frame
-   (rows south to north, least significant bit first). F4's fill gate fills only these.
+   (rows south to north, least significant bit first). Compared with at most the **eight**
+   most recent earlier measured epochs (`comparedWith`; `capped` says there were more): each
+   may be a ~17 MB grid decoded, on a 1 GB machine. F4's fill gate fills only these.
 9. **Reading grids**: from the public bucket by the URL's own key (the published, immutable
    copy — not the run's private key a Refine rewrites; the design said the unpublished key), a
    HEAD refusing anything over 32 MB, a bounded ranged GET, inflated no further than the
    descriptor declares (≤ 64 MB) and checked against its sha256. Decoded grids sit in a
    per-process LRU bounded by bytes (96 MB), keyed by URL **and** sha256 so a rewritten grid is
-   never a stale hit. Neither route stores anything. Fill targets is a GET, open like every
-   read of a site (the fill workflow fetches it); weak areas is a POST, and every POST takes the
-   write token (`test_no_mutating_route_is_left_ungated`) — it is the first step of planning a
-   flight, which is gated anyway. Both read and outline up to 2^22 cells, so both also spend a
+   never a stale hit. Neither route stores anything, but both take the write token: weak
+   areas because every POST does (`test_no_mutating_route_is_left_ungated`) and it is the
+   first step of planning a flight, gated anyway; fill targets because a call may decode
+   nine grids, and its one consumer, the fill workflow, holds the token. Both also spend a
    per-client token bucket (20, then 60 a minute) like the other routes whose cost is the
    attack.
 

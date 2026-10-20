@@ -2466,7 +2466,9 @@ export interface paths {
          * @description `rescan-gate-v1`: the cells of epoch `epochId` (default: the site's latest published)
          *     that are weak, covered by it, and were weak in at least one earlier measured epoch,
          *     compared at the coarser level -- a re-scan that did not fix them. An inferred fill
-         *     fills only these (F4). A bit mask in the tileset frame of the site lattice.
+         *     fills only these (F4). A bit mask in the tileset frame of the site lattice. Behind the
+         *     write token, which its one consumer (the fill workflow) holds: a call may decode a grid
+         *     per earlier epoch, at most the eight most recent (`capped` says when there were more).
          */
         get: operations["site_fill_targets_api_v1_sites__site_id__fill_targets_get"];
         put?: never;
@@ -6046,6 +6048,8 @@ export interface components {
              * @constant
              */
             bitOrder: "little";
+            /** Capped */
+            capped: boolean;
             /** Cellm */
             cellM: number;
             /** Cells */

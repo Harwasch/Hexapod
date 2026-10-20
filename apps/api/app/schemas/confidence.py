@@ -149,8 +149,10 @@ class FillTargetsRead(CamelModel):
     epoch_id: uuid.UUID
     #: Earlier epochs a target cell was also weak in.
     weak_in: list[uuid.UUID]
-    #: Every earlier measured epoch it was compared with.
+    #: Every earlier measured epoch it was compared with, newest first.
     compared_with: list[uuid.UUID]
+    #: True when the site has more earlier measured epochs than the eight compared with.
+    capped: bool
     frame: Literal["tileset"]
     cell_m: Finite
     level: int

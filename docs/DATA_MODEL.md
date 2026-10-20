@@ -198,8 +198,8 @@ attachable).
 truncatedByBudget, heuristic, areas: [{footprint, areaM2, cells, meanScore, reasons, reliefM,
 diameterM, pattern (nadir · oblique · orbit), targetGsdM, gimbalPitchDeg, hint}]}`. 409
   `confidence-not-measured` · `confidence-unreadable` · `no-site-frame`.
-- `GET /api/v1/sites/{id}/fill-targets?epochId=` → `rescan-gate-v1`: `{siteId, epochId, weakIn,
-comparedWith, frame: tileset, cellM, level, i0, j0, ni, nj, rowBytes, bitOrder: little, mask
+- `GET /api/v1/sites/{id}/fill-targets?epochId=` (write token) → `rescan-gate-v1`: `{siteId,
+epochId, weakIn, comparedWith (at most the eight most recent earlier epochs), capped, frame: tileset, cellM, level, i0, j0, ni, nj, rowBytes, bitOrder: little, mask
 (base64, rows south to north), cells, reason}`. 409 `confidence-not-measured` · `no-rescan-yet`.
 
 ## Confidence grid

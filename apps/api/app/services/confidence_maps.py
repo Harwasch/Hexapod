@@ -276,9 +276,10 @@ def weak_areas(
 
 
 NO_RESCAN = "no-rescan-yet"
-#: Earlier epochs a fill-targets answer compares with, newest first: a site scanned more
-#: often than this is compared with its most recent ones (and says which, `comparedWith`).
-MAX_EARLIER = 32
+#: Earlier epochs a fill-targets answer compares with, newest first. Each may be a grid
+#: of ~17 MB decoded; eight bound one call's memory on a small machine, and a site scanned
+#: more often is compared with its eight most recent (and says so, `capped`).
+MAX_EARLIER = 8
 
 
 def _latest_published(db: Session, site_id: uuid.UUID) -> Epoch:
@@ -308,6 +309,7 @@ def fill_targets(
     )
     row = measured_map(db, epoch)
     earlier_rows: list[tuple[Epoch, EpochMap]] = []
+    capped = False
     for candidate in db.scalars(
         select(Epoch)
         .where(
@@ -319,11 +321,13 @@ def fill_targets(
         .order_by(Epoch.observed_at.desc(), Epoch.ordinal.desc())
     ):
         try:
-            earlier_rows.append((candidate, measured_map(db, candidate)))
+            found = measured_map(db, candidate)
         except ConflictError:
             continue
         if len(earlier_rows) == MAX_EARLIER:
+            capped = True
             break
+        earlier_rows.append((candidate, found))
     if not earlier_rows:
         raise ConflictError(
             f"epoch {epoch.id} has no earlier measured epoch on its site: nothing has been "
@@ -339,6 +343,7 @@ def fill_targets(
         epoch_id=epoch.id,
         weak_in=[earlier_rows[index][0].id for index in result.contributed],
         compared_with=[candidate.id for candidate, _ in earlier_rows],
+        capped=capped,
         frame="tileset",
         cell_m=math.ldexp(cell_grid.LATTICE_BASE_M, result.level),
         level=result.level,

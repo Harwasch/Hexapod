@@ -222,3 +222,46 @@ def test_only_published_epochs_are_earlier_evidence(
     response = api.get(f"/api/v1/sites/{e2.site_id}/fill-targets")
     assert response.status_code == 409 and response.json()["code"] == "no-rescan-yet"
 
+
+def test_fill_targets_take_the_write_token(db: Session, storage: S3Storage, tmp_path: Path) -> None:
+    """Each call may decode a grid per earlier epoch; its one consumer, the fill workflow,
+    holds the token."""
+    from app.config import Settings
+
+    _, e2 = two_epochs(db, storage, tmp_path)
+    app = create_app(Settings(api_write_token="a4-token"))
+
+    def override_db() -> Iterator[Session]:
+        yield db
+
+    app.dependency_overrides[_db] = override_db
+    app.dependency_overrides[get_public_storage] = lambda: storage
+    with TestClient(app) as client:
+        path = f"/api/v1/sites/{e2.site_id}/fill-targets"
+        assert client.get(path).status_code == 401
+        assert client.get(path, headers={"Authorization": "Bearer a4-token"}).status_code == 200
+
+
+def test_at_most_eight_earlier_epochs_are_compared_and_it_says_so(
+    api: TestClient, db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    from datetime import timedelta
+
+    first = _capture(db, "first", FIRST)
+    register_run(db, storage, tmp_path, first, measured("e1"), grid=blob("e1"))
+    site_id = _epoch(db, first).site_id
+    ids = [_epoch(db, first).id]
+    for index in range(1, 10):
+        capture = _capture(db, f"again-{index}", FIRST + timedelta(days=index))
+        register_run(
+            db, storage, tmp_path, capture, measured("e1", _echoed(site_id)), grid=blob("e1")
+        )
+        ids.append(_epoch(db, capture).id)
+    latest = ids[-1]
+    read = api.get(f"/api/v1/sites/{site_id}/fill-targets").json()
+    assert read["epochId"] == str(latest)
+    assert read["capped"] is True
+    # The eight most recent before it, newest first.
+    assert read["comparedWith"] == [str(i) for i in reversed(ids[1:9])]
+    fewer = api.get(f"/api/v1/sites/{site_id}/fill-targets", params={"epochId": str(ids[5])}).json()
+    assert fewer["capped"] is False and len(fewer["comparedWith"]) == 5

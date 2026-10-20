@@ -293,10 +293,10 @@ def test_a_rejected_epoch_shows_nothing_and_says_so(
     assert "shows no tiles (rejected)" in response.json()["detail"]
 
 
-def test_weak_areas_take_the_write_token_and_fill_targets_stay_open(
+def test_weak_areas_take_the_write_token(
     db: Session, storage: S3Storage, tmp_path: Path
 ) -> None:
-    """Every POST is gated (test_write_token); the fill workflow reads fill targets open."""
+    """Every POST is gated (test_write_token)."""
     from app.config import Settings
 
     capture = _capture(db)
@@ -314,8 +314,6 @@ def test_weak_areas_take_the_write_token_and_fill_targets_stay_open(
         assert client.post(path, json={}).status_code == 401
         allowed = client.post(path, json={}, headers={"Authorization": "Bearer a4-token"})
         assert allowed.status_code == 200
-        # Open, and a 409 because nothing has been re-scanned: not a 401.
-        assert client.get(f"/api/v1/sites/{epoch.site_id}/fill-targets").status_code == 409
 
 
 def test_a_grid_rewritten_at_the_same_url_is_read_again(storage: S3Storage) -> None:
@@ -332,8 +330,9 @@ def test_a_grid_rewritten_at_the_same_url_is_read_again(storage: S3Storage) -> N
         return EpochMap(url=url, descriptor=descriptor(epoch), summary={})
 
     storage.put_object(key, blob("e1"), "application/octet-stream")
+    hits = confidence_maps.GRIDS.hits
     assert confidence_maps.load_grid(storage, row("e1")).finest.level == 2
     storage.put_object(key, blob("e2"), "application/octet-stream")
     assert confidence_maps.load_grid(storage, row("e2")).finest.level == 1
     assert confidence_maps.load_grid(storage, row("e2")).finest.level == 1
-    assert confidence_maps.GRIDS.hits == 1
+    assert confidence_maps.GRIDS.hits == hits + 1
