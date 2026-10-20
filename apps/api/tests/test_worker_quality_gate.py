@@ -121,6 +121,7 @@ def test_a_later_run_that_passes_publishes_the_rejected_epoch(
     _run(db, sessions, storage, tmp_path / "a", capture)
     rejected = epochs.epoch_of_capture(db, capture.id)
     assert rejected is not None and rejected.status == "rejected"
+    rejection = dict(rejected.alignment or {})
 
     again = _run(db, sessions, storage, tmp_path / "b", capture, {"align": {"fail": False}})
 
@@ -131,6 +132,10 @@ def test_a_later_run_that_passes_publishes_the_rejected_epoch(
     assert (epoch.id, epoch.status, epoch.job_id) == (rejected.id, "published", again.id)
     # A Lane 1 run has no align stage of its own: unaligned, and saying why.
     assert epoch.alignment is not None and "rejected" not in epoch.alignment
+    # The rejection it replaces -- gate, measurement, reason -- stays in its history.
+    assert "rejected" in rejection
+    assert epoch.history[-1]["alignment"] == rejection
+    assert epoch.history[-1]["alignment"]["rejected"]["gate"] == GATE
     [_one, shown] = client.get(f"/api/v1/sites/{site_id}/epochs").json()
     assert shown["status"] == "published" and shown["currentAssetId"] is not None
 
@@ -187,3 +192,22 @@ def test_a_published_epoch_is_never_demoted_and_a_frameless_site_gets_none(
     assert frameless.status_code == 201, frameless.text
     capture = _capture(db, "named", metadata_={"siteId": frameless.json()["id"]})
     assert epochs.record_rejected(db, uuid.uuid4(), capture, _rejection()) is None
+
+
+def test_a_second_rejection_keeps_the_first_in_the_epochs_history(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """R2 review of #52: a rejected epoch's later rejection replaced its alignment (gate,
+    measurement, reason) outright. The first is kept in its history."""
+    site_id = _site_with_a_frame(db, storage, tmp_path)
+    capture = _capture(db, "twice", metadata_={"siteId": str(site_id)})
+    epoch = epochs.record_rejected(db, uuid.uuid4(), capture, _rejection())
+    db.commit()
+    assert epoch is not None
+    first = dict(epoch.alignment or {})
+    later = epochs.Rejection(stage_id="align", gate={"gate": GATE, "measured": 0.5, "limit": 0.12})
+    again = epochs.record_rejected(db, uuid.uuid4(), capture, later)
+    db.commit()
+    assert again is not None and again.id == epoch.id
+    assert again.alignment is not None and again.alignment["rejected"]["measured"] == 0.5
+    assert [entry["alignment"] for entry in again.history] == [first]

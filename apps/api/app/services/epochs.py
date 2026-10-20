@@ -19,7 +19,7 @@ import math
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from geoalchemy2 import WKBElement
@@ -641,6 +641,18 @@ def record_rejected(
     alignment = _rejected_alignment(platform, job_id, rejection)
     if existing is not None:
         if existing.status == EpochStatus.REJECTED.value:
+            # The rejection it replaces stays in the epoch's history (as `register`'s
+            # `_replace_run` keeps a re-run's): each failed gate is evidence.
+            kept = geometry.wkb_to_footprint(existing.footprint)
+            entry = {
+                "jobId": str(existing.job_id) if existing.job_id is not None else None,
+                "footprint": kept.model_dump(mode="json") if kept is not None else None,
+                "quality": existing.quality,
+                "alignment": existing.alignment,
+                "replacedAt": datetime.now(UTC).isoformat(),
+                "replacedByJobId": str(job_id),
+            }
+            existing.history = [*(existing.history or []), entry]
             existing.alignment = alignment
             existing.job_id = job_id if db.get(Job, job_id) is not None else None
         return existing if existing.status == EpochStatus.REJECTED.value else None

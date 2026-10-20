@@ -1176,12 +1176,15 @@ def _replace_run(
 
     The three describe the epoch's current revision, so a re-run sets them; what they said
     of the revision before is appended to `epoch.history` (never rewritten), so the epoch
-    still records how each earlier run saw the ground."""
+    still records how each earlier run saw the ground. So is its alignment, which the
+    caller then replaces: a rejection a later run passed, or an earlier run's reference,
+    verdict and check targets, is evidence, and stays (the R2 review of #52)."""
     previous = geometry.wkb_to_footprint(epoch.footprint)
     entry = {
         "jobId": str(epoch.job_id) if epoch.job_id is not None else None,
         "footprint": previous.model_dump(mode="json") if previous is not None else None,
         "quality": epoch.quality,
+        "alignment": epoch.alignment,
         "replacedAt": now.isoformat(),
         "replacedByJobId": str(producing) if producing is not None else None,
     }

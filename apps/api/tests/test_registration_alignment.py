@@ -247,11 +247,16 @@ def test_a_re_run_records_its_own_alignment(
         method="visual", verdict="coarse", platform="drone", uncertainty=0.08,
         label="Drone, aligned visually, ±0.08 m", reference=one.id,
     )  # fmt: skip
+    before = copy.deepcopy(_epoch_of(db, second).alignment)
     run(db, storage, tmp_path, second, copy.deepcopy(document))
     db.expire_all()
     epoch = _epoch_of(db, second)
     assert epoch.alignment is not None and epoch.alignment["verdict"] == "coarse"
     assert second.georef_method is GeorefMethod.VISUAL_EPOCH
+    # R2 review of #52: what it replaced -- the earlier run's verdict, reference and
+    # reasons -- is kept in the epoch's history, never lost to the re-run.
+    assert before is not None and before["verdict"] == "unaligned"
+    assert epoch.history[-1]["alignment"] == before
 
 
 def test_the_alignment_block_is_read_defensively(tmp_path: Path) -> None:
