@@ -613,23 +613,45 @@ def _check_frame(site: Site, registration: Registration, echo: FrameEcho | None)
 
 
 def _observed_at(capture: Capture, registration: Registration) -> tuple[datetime, ObservedAtSource]:
-    """When the epoch was captured, and on whose say-so: the capture row's `captured_at`,
-    else the run's manifest (the files' own date: a video's container), else the upload."""
-    if capture.captured_at is not None:
-        return capture.captured_at, ObservedAtSource.CAPTURED_AT
+    """When the epoch was captured, and on whose say-so.
+
+    The rule, stated once (ADR 0013, DATA_MODEL `epochs.observed_at_source`):
+
+    1. the manifest's tz-aware `capture.capturedAtUtc` (M3a writes it from the files' own
+       clocks), labelled `manifest`. First, because M3a also copies it into
+       `capture.captured_at`, and read from there it would be labelled `captured-at`
+       although it came from the files;
+    2. the capture row's `captured_at` (what a person or the console said), `captured-at`;
+    3. the manifest's naive `capture.capturedAt` (a video's container date), `manifest`,
+       taken as UTC;
+    4. the upload's `created_at`, `created`.
+    """
     manifest = registration.document.get("manifest")
     facts = manifest.get("capture") if isinstance(manifest, dict) else None
-    raw = facts.get("capturedAt") if isinstance(facts, dict) else None
-    if isinstance(raw, str) and raw.strip():
-        try:
-            parsed = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
-        except ValueError:
-            parsed = None
-        if parsed is not None:
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=UTC)
-            return parsed, ObservedAtSource.MANIFEST
+    facts = facts if isinstance(facts, dict) else {}
+    utc = _parsed_time(facts.get("capturedAtUtc"), aware_only=True)
+    if utc is not None:
+        return utc, ObservedAtSource.MANIFEST
+    if capture.captured_at is not None:
+        return capture.captured_at, ObservedAtSource.CAPTURED_AT
+    naive = _parsed_time(facts.get("capturedAt"), aware_only=False)
+    if naive is not None:
+        return naive, ObservedAtSource.MANIFEST
     return capture.created_at, ObservedAtSource.CREATED
+
+
+def _parsed_time(raw: object, *, aware_only: bool) -> datetime | None:
+    """An ISO 8601 time, or None. `aware_only` refuses one without an offset (a
+    `capturedAtUtc` that is not is malformed); otherwise a naive time is taken as UTC."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None if aware_only else parsed.replace(tzinfo=UTC)
+    return parsed
 
 
 def _frame_from_registration(
