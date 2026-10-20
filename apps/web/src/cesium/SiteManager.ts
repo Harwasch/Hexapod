@@ -567,6 +567,18 @@ export class SiteManager {
   }
 
   /**
+   * Whether a loaded date of a site is drawn with its frame anchor's placement
+   * (`followAnchor`): true while it follows, false once it was placed on its own (the anchor
+   * itself, a date out of the frame, an anchor that did not load), null when the asset has no
+   * tileset in the scene.
+   */
+  sharesPlacement(siteId: string, assetId: string): boolean | null {
+    const handle = this.loaded.get(siteId)?.handles.get(assetId);
+    if (!handle?.tileset) return null;
+    return handle.follows !== undefined;
+  }
+
+  /**
    * Loads a site's assets into the scene without moving the camera. `flight` marks the load as
    * one a fly-to is waiting on (the HUD shows those). Resolves null when the record could not be
    * had; the site's load record (`site-load`) says whether it is gone or failed, and why.
