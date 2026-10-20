@@ -16,7 +16,7 @@ image and class as in `infra/modal/fill.py`, which ran it on 2026-10-02).
              facebook/sam2.1-hiera-tiny (Apache-2.0) and google/siglip2-base-patch16-224
              (Apache-2.0), run by `tools/captures/segment_models.py` itself (copied into
              the image): class-free masks at three granularities, image/text embeddings.
-    InpaintSDXL / InpaintQwen / InpaintFlux
+    InpaintSDXL / InpaintQwen
              Generative inpainting for Teacher B's holes, run by
              `tools/captures/inpaint_models.py` (licences in its docstring): image + mask +
              prompt -> the image painted. `world_model_client.GenerativeFiller` calls them.
@@ -600,29 +600,6 @@ class InpaintQwen:
     @modal.method()
     def inpaint(self, request: dict) -> dict:
         return self.im.inpaint("qwen", self.pipe, request)
-
-
-@app.cls(
-    image=inpaint_image,
-    gpu="H100",
-    volumes={"/weights": WEIGHTS},
-    secrets=[HF_SECRET],
-    memory=98304,
-    timeout=3600,
-    scaledown_window=300,
-)
-class InpaintFlux:
-    """FLUX.1 Fill [dev] (gated; non-commercial licence -- for comparison only)."""
-
-    @modal.enter()
-    def load(self) -> None:
-        self.im = _inpaint_models()
-        self.pipe = self.im.load("flux")
-        WEIGHTS.commit()
-
-    @modal.method()
-    def inpaint(self, request: dict) -> dict:
-        return self.im.inpaint("flux", self.pipe, request)
 
 
 # --- shared --------------------------------------------------------------------------------

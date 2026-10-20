@@ -4,10 +4,10 @@
   its artifacts included, which is what Fixer is trained on) sent to NVIDIA Fixer, the
   cleaned image back. Only the masked pixels are lifted; the rest is the gate.
 * `GenerativeFiller` -- a `teacher_fill.Filler`: each view and its mask sent to a generative
-  inpainting model (`inpaint_models`: SDXL inpainting, Qwen-Image's inpainting ControlNet,
-  FLUX.1 Fill), with a prompt describing what is around the hole (`context`, set by the
-  caller from instances.json) and the same seed for every view; only the masked pixels of
-  what comes back are kept.
+  inpainting model (`inpaint_models`: SDXL inpainting, Qwen-Image's inpainting ControlNet),
+  with a prompt describing what is around the hole (`context`, set by the caller from
+  instances.json) and the same seed for every view; only the masked pixels of what comes
+  back are kept.
 * `VideoClips` -- a `teacher_motion.ClipSource`: each still sent to Wan 2.2 or Cosmos with
   a prompt and a seed, the clip back as frames at the still's size, `fps` the model's.
 
@@ -167,7 +167,6 @@ INPAINT_NEGATIVE = (
 INPAINT_CLASSES = {
     "sdxl": "InpaintSDXL",
     "qwen": "InpaintQwen",
-    "flux": "InpaintFlux",
     "lama": "InpaintSDXL",  # LaMa is held beside SDXL (`inpaint_models.lama_fill`)
 }
 

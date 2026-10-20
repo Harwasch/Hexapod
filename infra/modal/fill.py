@@ -94,7 +94,6 @@ FILLERS = {
     "sdxl-chain": "world_model_client:GenerativeFiller?model=sdxl&chain=1",
     "qwen": "world_model_client:GenerativeFiller?model=qwen",
     "qwen-chain": "world_model_client:GenerativeFiller?model=qwen&chain=1",
-    "flux": "world_model_client:GenerativeFiller?model=flux",
     # LaMa alone (texture, never an object), and LaMa's fill refined by SDXL at strength 0.6.
     "lama": "world_model_client:GenerativeFiller?model=lama",
     "lama-chain": "world_model_client:GenerativeFiller?model=lama&chain=1",
@@ -258,7 +257,7 @@ def _snapshot(repo: str, local: Path, marker: str) -> None:
     WEIGHTS.commit()
 
 
-# --- Generative inpainting, as world_models.InpaintSDXL / InpaintQwen / InpaintFlux --------
+# --- Generative inpainting, as world_models.InpaintSDXL / InpaintQwen ---------------------
 
 #: The workspace's Hugging Face secret: `huggingface` by the runbook, but named otherwise in
 #: this workspace (fill.yml finds it by its prefix and passes it here).
@@ -329,27 +328,6 @@ class InpaintQwen:
     @modal.method()
     def inpaint(self, request: dict) -> dict:
         return self.im.inpaint("qwen", self.pipe, request)
-
-
-@app.cls(
-    image=inpaint_image,
-    gpu="H100",
-    volumes={"/weights": WEIGHTS},
-    secrets=[HF_SECRET],
-    memory=98304,
-    timeout=3600,
-    scaledown_window=120,
-)
-class InpaintFlux:
-    @modal.enter()
-    def load(self) -> None:
-        self.im = _inpaint_module()
-        self.pipe = self.im.load("flux")
-        WEIGHTS.commit()
-
-    @modal.method()
-    def inpaint(self, request: dict) -> dict:
-        return self.im.inpaint("flux", self.pipe, request)
 
 
 @app.function(image=inpaint_image, secrets=[HF_SECRET], timeout=300)
@@ -551,7 +529,6 @@ def _remote_classes() -> None:
         Distill=lambda: _Timed("Distill", Distill),
         InpaintSDXL=lambda: _Timed("InpaintSDXL", InpaintSDXL),
         InpaintQwen=lambda: _Timed("InpaintQwen", InpaintQwen),
-        InpaintFlux=lambda: _Timed("InpaintFlux", InpaintFlux),
     )
 
 
