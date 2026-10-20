@@ -48,6 +48,7 @@ known-first-party = [
   "blocks",
   "capture_platform",
   "captures_bridge",
+  "check_targets",
   "cloud",
   "cloud_stages",
   "conftest",
