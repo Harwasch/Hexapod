@@ -262,3 +262,24 @@ def test_the_alignment_block_is_read_defensively(tmp_path: Path) -> None:
     assert _registration(tmp_path, document).alignment is None
     document["alignment"] = {"verdict": "coarse"}
     assert _registration(tmp_path, document).alignment == {"verdict": "coarse"}
+
+
+def test_survey_is_never_recorded_for_anything_but_an_rtk_drone(
+    db: Session, storage: S3Storage, tmp_path: Path, client: TestClient
+) -> None:
+    """D6 amendment, held at the API too: an alignment that claimed survey for a phone
+    (align_epoch never writes one) is recorded coarse, in align_epoch's words, with why."""
+    first, second = second_epoch(
+        db, storage, tmp_path,
+        lambda ref: aligned(method="visual", verdict="survey", platform="phone-video",
+                            uncertainty=0.065, label="Phone video, surveyed, check targets ±0.065 m",
+                            reference=ref),
+    )  # fmt: skip
+    assert first.site_id is not None
+    assert _shown(client, first.site_id)[1] == {
+        "verdict": "coarse",
+        "label": "Phone video, aligned visually, ±0.065 m",
+        "uncertaintyM": 0.065,
+    }
+    epoch = _epoch_of(db, second)
+    assert epoch.alignment is not None and "only an RTK drone" in epoch.alignment["reasons"][-1]
