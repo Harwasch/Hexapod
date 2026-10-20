@@ -1136,3 +1136,61 @@ def test_a_reference_on_another_height_datum_is_refused_not_reframed(
     )
     assert unstated["verdict"] == "unaligned"
     assert any("does not state its height datum" in r for r in unstated["reasons"])
+
+
+# --- uncertainty relative to the site frame (ADR 0016, the confidence cap) ---------------
+
+
+def test_the_frame_defining_epoch_is_zero_from_its_frame(tmp_path: Path) -> None:
+    _, document = _run(tmp_path / "w", _georef_located(), params={"platform": "phone-video"})
+    # Placed by its GPS point (±10 m on the globe), but it *is* the frame: 0 from it.
+    assert document["uncertaintyM"] == 10.0
+    assert document["priorEpochs"] == 0
+    assert document["frameRelativeUncertaintyM"] == 0.0
+    assert document["frameRelativeBasis"] == "frame-defining"
+
+
+def test_a_visual_epoch_is_its_fit_from_a_frame_defining_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A phone aligned to the consumer-GPS epoch that defined the frame (±5 m on the
+    globe): ±5 m absolute, but only its fit, 3 rms, from the frame -- not capped by the
+    reference's GPS."""
+    _, model = _ring_model(tmp_path / "m")
+    names = [image.name for image in model.images]
+    monkeypatch.setattr(alignment, "_register", _fake_register(_registered(model, TRUE, names)))
+    consumer = {**REFERENCE, "platform": "drone", "verdict": "coarse", "uncertaintyM": 5.0}
+    framing = {**consumer, "frameRelativeUncertaintyM": 0.0}
+    _, document = _run(
+        tmp_path / "w", _georef_located(), reference=framing, params={"platform": "phone-video"}
+    )
+    assert document["method"] == "visual" and document["verdict"] == "coarse"
+    assert document["uncertaintyM"] >= 5.0  # on the globe: the reference's GPS and the fit
+    rms = document["residualM"]["rms"]
+    assert document["frameRelativeUncertaintyM"] == pytest.approx(alignment.SIGMA_K * rms, abs=1e-4)
+    assert document["frameRelativeUncertaintyM"] < 0.5
+    assert document["frameRelativeBasis"] == "visual"
+    # A reference that says nothing of its own frame-relative figure (an older alignment)
+    # is taken at its absolute one: conservative.
+    _, older = _run(
+        tmp_path / "o", _georef_located(), reference=consumer, params={"platform": "phone-video"}
+    )
+    assert older["frameRelativeUncertaintyM"] == pytest.approx(
+        math.sqrt(5.0**2 + (alignment.SIGMA_K * older["residualM"]["rms"]) ** 2), abs=1e-4
+    )
+    assert older["frameRelativeBasis"] == "visual, reference at its absolute uncertainty"
+
+
+def test_an_unaligned_later_epoch_is_its_own_placement_from_the_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, model = _ring_model(tmp_path / "m")
+    names = [image.name for image in model.images]
+    monkeypatch.setattr(alignment, "_register", _fake_register(_registered(model, TRUE, names[:2])))
+    _, document = _run(tmp_path / "w", _georef_located(), reference=REFERENCE)
+    assert document["verdict"] == "unaligned" and document["priorEpochs"] == 1
+    # Its own GPS point and the reference's placement, in quadrature: never better than either.
+    assert document["frameRelativeUncertaintyM"] == pytest.approx(
+        math.hypot(10.0, 0.024),
+        abs=1e-4,  # REFERENCE["uncertaintyM"]
+    )

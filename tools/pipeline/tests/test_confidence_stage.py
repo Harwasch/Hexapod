@@ -178,7 +178,7 @@ def test_an_unaligned_epoch_is_weak_everywhere_and_says_why(arc: Workdir, tmp_pa
         "uncertaintyM": 10.0,
         "priorEpochs": 1,
         "factor": 0.025,  # a 0.5 m cell over twice 10 m
-        "source": "epoch_alignment.json",
+        "source": "epoch_alignment.json frameRelativeUncertaintyM",
     }
     assert cell_grid.weak_mask(plane)[scored].all()
     assert (plane.data[..., 0][scored] <= 1 + round(254 * 0.025)).all()
@@ -596,3 +596,51 @@ def test_the_sums_are_held_a_band_at_a_time_not_for_the_whole_plane(tmp_path: Pa
     whole = 72 * cells
     assert peaks[1 << 20] > whole
     assert peaks[1 << 12] < whole, (peaks, whole)
+
+
+def test_a_phone_aligned_to_a_gps_framed_site_is_capped_by_its_fit_alone(
+    arc: Workdir, tmp_path: Path
+) -> None:
+    """Review finding 5: the cap is relative to the site frame. A phone aligned visually
+    to the consumer-GPS epoch that made the frame is ±5 m on the globe, ±0.06 m from the
+    frame: not capped at 0.5 m cells."""
+    aligned = {
+        **scene.alignment_of(5.03),
+        "frameRelativeUncertaintyM": 0.06,
+        "frameRelativeBasis": "visual",
+    }
+    run = _again(tmp_path / "phone", arc, prior_epochs=1, alignment=aligned)
+    cap = _grid(run)[0]["alignmentCap"]
+    assert cap == {
+        "uncertaintyM": 0.06,
+        "priorEpochs": 1,
+        "factor": 1.0,
+        "source": "epoch_alignment.json frameRelativeUncertaintyM",
+    }
+
+
+def test_a_gps_only_later_epoch_with_no_reference_is_capped(arc: Workdir, tmp_path: Path) -> None:
+    """No reference to align to, but the site has an earlier epoch: placed by its own GPS
+    relative to that frame, so weak everywhere with the alignment reason."""
+    unaligned = {
+        **scene.alignment_of(5.0, "unaligned"),
+        "frameRelativeUncertaintyM": 5.0,
+        "frameRelativeBasis": "own placement",
+    }
+    run = _again(tmp_path / "gps", arc, prior_epochs=1, alignment=unaligned)
+    descriptor, grid = _grid(run)
+    assert descriptor["alignmentCap"]["factor"] == 0.05
+    plane = grid.planes[0]
+    scored = plane.data[..., 0] > 0
+    assert cell_grid.weak_mask(plane)[scored].all()
+    assert ((plane.data[..., 1][scored] & cell_grid.REASON_BITS["alignment"]) > 0).all()
+
+
+def test_an_alignment_with_no_frame_relative_figure_is_read_at_its_absolute_one(
+    arc: Workdir, tmp_path: Path
+) -> None:
+    older = scene.alignment_of(5.0, frame_relative_m=-1.0)
+    assert "frameRelativeUncertaintyM" not in older
+    cap = _grid(_again(tmp_path / "older", arc, prior_epochs=1, alignment=older))[0]
+    assert cap["alignmentCap"]["source"] == "epoch_alignment.json"
+    assert cap["alignmentCap"]["uncertaintyM"] == 5.0

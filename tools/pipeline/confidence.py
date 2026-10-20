@@ -25,13 +25,16 @@ held-out accuracy -- the recipe's own thresholds, as `support/` recorded them), 
 
 **The alignment cap.** A cell can only claim its evidence when the epoch's placement
 error is under half the cell: `f = min(1, cell / (2 u_rel))`, where `u_rel` is the
-epoch's uncertainty *relative to the site frame* -- 0 when `site_context.json` says no
-epoch came before it (this epoch defines the frame), else `epoch_alignment.json`'s
-`uncertaintyM`, else `georef.json`'s. So an unaligned drone epoch placed by its GPS
-(+/-10 m) scores `f = 0.05` on 1 m cells and is weak everywhere, with the `alignment`
-reason, which is the honest answer: nobody knows where its evidence is to a metre.
-`uncertaintyM` of a visual alignment includes its reference's own uncertainty
-(alignment.py `uncertainty`), so the cap is conservative there (ADR 0016, open questions).
+epoch's uncertainty *relative to the site frame*, not to the globe -- 0 when
+`site_context.json` says no published epoch came before it (this epoch defines the frame),
+else what `align` measured from the frame (`frameRelativeUncertaintyM`: a visual fit's
+`sqrt(ref_rel^2 + (3 rms)^2)`, or an unaligned epoch's own placement; alignment.py
+`frame_relative_uncertainty`). So a phone aligned visually to the consumer-GPS epoch that
+made the frame is capped by its fit, not by that epoch's +/-5 m; and a later drone epoch
+placed only by its GPS (+/-10 m) scores `f = 0.05` on 1 m cells and is weak everywhere,
+with the `alignment` reason, which is the honest answer: nobody knows where its evidence
+is to a metre. An alignment from before the frame-relative figure existed is read at its
+absolute `uncertaintyM`, which is never smaller.
 
 **Level.** The smallest level at which the median occupied cell holds at least
 `MIN_CELL_GAUSSIANS` (16) visible gaussians -- a binomial share from 16 has sigma <= 0.125,
@@ -183,14 +186,10 @@ def _positive(value: object) -> float | None:
 
 
 def prior_epochs(site_context: Mapping[str, Any] | None) -> int:
-    """`site_context.json`'s `priorEpochs`, or what it implies: none without a reference
-    epoch, one with (the worker writes the key from A4 on)."""
-    if site_context is None:
-        return 0
-    value = site_context.get("priorEpochs")
-    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-        return value
-    return 0 if site_context.get("reference") is None else 1
+    """`site_context.json`'s `priorEpochs` (`alignment.prior_epochs`): the site's published
+    epochs before this one, which the worker writes; for an older context, none without a
+    reference epoch and one with."""
+    return alignment.prior_epochs(site_context)
 
 
 def relative_uncertainty(
@@ -198,15 +197,23 @@ def relative_uncertainty(
     georef: Mapping[str, Any] | None,
     site_context: Mapping[str, Any] | None,
 ) -> tuple[float, str, int]:
-    """`u_rel` (module docstring), where it came from, and the prior epochs it assumed."""
+    """`u_rel` (module docstring), where it came from, and the prior epochs it assumed.
+
+    The epoch that makes the site's frame is 0 from it. Any later one is what `align`
+    measured from the frame (`frameRelativeUncertaintyM`; alignment.py
+    `frame_relative_uncertainty`); an alignment written before that existed gives its
+    absolute `uncertaintyM` (never smaller: conservative), and with no alignment at all the
+    georeference's own figure, else `UNKNOWN_UNCERTAINTY_M`."""
     prior = prior_epochs(site_context)
     if prior == 0:
         return 0.0, alignment.SITE_CONTEXT_FILE, prior
-    for document, source in (
-        (alignment_doc, alignment.EPOCH_ALIGNMENT.name),
-        (georef, "georef.json"),
+    name = alignment.EPOCH_ALIGNMENT.name
+    for document, key, source in (
+        (alignment_doc, "frameRelativeUncertaintyM", f"{name} frameRelativeUncertaintyM"),
+        (alignment_doc, "uncertaintyM", name),
+        (georef, "uncertaintyM", "georef.json"),
     ):
-        value = None if document is None else _positive(document.get("uncertaintyM"))
+        value = None if document is None else _positive(document.get(key))
         if value is not None:
             return value, source, prior
     return UNKNOWN_UNCERTAINTY_M, "unknown", prior

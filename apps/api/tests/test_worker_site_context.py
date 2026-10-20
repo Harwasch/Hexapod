@@ -131,6 +131,7 @@ def test_a_capture_of_no_site_gets_the_empty_context(
         "reference": None,
         "targets": [],
         "observations": [],
+        "priorEpochs": 0,
     }
 
 
@@ -147,6 +148,7 @@ def test_a_published_reference_is_seeded_with_its_files_and_paths(
     chosen = _reference(db, first.site_id, capture)
     assert chosen is not None and len(chosen.revision) == 16
     assert document["siteId"] == str(first.site_id)
+    assert document["priorEpochs"] == 1
     assert document["reference"] == {
         "epochId": str(epoch.id),
         "jobId": str(epoch.job_id),
@@ -157,6 +159,8 @@ def test_a_published_reference_is_seeded_with_its_files_and_paths(
         "revision": chosen.revision,
         "heightDatum": None,
         "runtimeScale": 1.0,
+        # It made the site's frame (ordinal 1): 0 from it, whatever its GPS.
+        "frameRelativeUncertaintyM": 0.0,
         "frames": "reference/frames",
         "poses": "reference/poses",
         "placement": "reference/placement.json",
@@ -732,3 +736,53 @@ def test_an_unresized_reference_is_seeded_as_registered(
     assert document["reference"]["placement"] == "reference/placement.json"
     shown = json.loads((tmp_path / "site_context" / document["reference"]["placement"]).read_text())
     assert shown == placement
+
+
+# --- uncertainty from the site frame (ADR 0016: what caps the confidence grid) --------------
+
+
+#: What a `survey` reference needs beside the platform since #52 (`epochs.survey_evidenced`):
+#: without it the RTK epoch reads `coarse` and is not the one chosen.
+SURVEY_EVIDENCE = {"rtkEvidence": "30/30 frames", "platformEvidence": "metadata"}
+
+
+def test_the_reference_passes_on_its_uncertainty_from_the_frame(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    first, _ = first_epoch(
+        db, storage, tmp_path, alignment={"verdict": "coarse", "uncertaintyM": 5.0}
+    )
+    assert first.site_id is not None
+    two = _join(
+        db, storage, tmp_path, first.site_id, "rtk",
+        platform="rtk-drone",
+        alignment={"verdict": "survey", "uncertaintyM": 5.0, "frameRelativeUncertaintyM": 0.04,
+                   **SURVEY_EVIDENCE},
+    )  # fmt: skip
+    newcomer = second_capture(db, first.site_id, "newcomer")
+    document = seeded(db, storage, newcomer, tmp_path / "a")
+    assert document["reference"]["epochId"] == str(two.id)
+    assert document["reference"]["uncertaintyM"] == 5.0
+    assert document["reference"]["frameRelativeUncertaintyM"] == 0.04
+    assert document["priorEpochs"] == 2
+    # An older alignment that never measured it: its absolute figure, which is never less.
+    two.alignment = {"verdict": "survey", "uncertaintyM": 0.5, **SURVEY_EVIDENCE}
+    db.commit()
+    other = second_capture(db, first.site_id, "other")
+    document = seeded(db, storage, other, tmp_path / "b")
+    assert document["reference"]["frameRelativeUncertaintyM"] == 0.5
+
+
+def test_prior_epochs_counts_only_what_came_before_this_capture(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """A later epoch with no usable reference still knows the site has a frame it did not
+    make; a re-run of the epoch that made it still knows it did."""
+    first, _ = first_epoch(db, storage, tmp_path, alignment={"verdict": "coarse"})
+    assert first.site_id is not None
+    _join(db, storage, tmp_path, first.site_id, "later", alignment={"verdict": "coarse"})
+    rerun = seeded(db, storage, first, tmp_path / "rerun")
+    assert rerun["reference"] is None and rerun["priorEpochs"] == 0
+    third = second_capture(db, first.site_id, "third")
+    assert seeded(db, storage, third, tmp_path / "third")["priorEpochs"] == 2
+    assert site_context.plan_seed(db, third).prior_epochs == 2

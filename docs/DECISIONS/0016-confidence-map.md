@@ -47,14 +47,34 @@ weak, in a frame another epoch could be compared in.
    level is the finest at which the median occupied cell holds at least 16 visible gaussians (a
    binomial share from 16 has σ ≤ 0.125, enough to tell under a half from three quarters) within
    2^22 cells.
-5. **The alignment cap (C4).** `f = min(1, cell / (2 u_rel))`: a cell can only claim evidence when
-   the epoch's placement error is under half a cell. `u_rel` is the epoch's uncertainty relative to
-   the site frame — 0 for the epoch that starts the frame (`site_context.json` `priorEpochs` 0, or
-   no reference epoch), else `epoch_alignment.json`'s `uncertaintyM`, else `georef.json`'s, else
-   10 m. An unaligned ±10 m epoch on 0.5 m cells scores at most `1 + round(254 × 0.025) = 7`
-   everywhere, with the `alignment` reason: honest, since nobody knows where its evidence is to a
-   metre. The cap is applied at the finest level; the coarser levels inherit it through the
-   minimum, so they never relax it.
+5. **The alignment cap (C4), relative to the site frame.** `f = min(1, cell / (2 u_rel))`: a cell
+   can only claim evidence when the epoch's placement error is under half a cell. `u_rel` is the
+   epoch's uncertainty **from the site frame, not from the globe** — every epoch of a site is
+   compared in that frame, so an error they all share is no error between them. `align` writes it
+   as `frameRelativeUncertaintyM` (`alignment.frame_relative_uncertainty`):
+   - the epoch that makes the frame (no earlier published epoch: `site_context.json`
+     `priorEpochs` 0): **0**;
+   - aligned visually to a reference: **`sqrt(ref_rel² + (3 rms)²)`**, where `ref_rel` is the
+     reference's own frame-relative figure — 0 when the reference made the frame (ordinal 1), else
+     its alignment's `frameRelativeUncertaintyM`, else (an older alignment) its absolute
+     `uncertaintyM`, which is never smaller; the worker passes it in the reference block;
+   - not aligned to the reference it had (a failed fit, or an RTK epoch that kept its own GNSS
+     frame over a coarser reference): its own placement and the reference's absolute one in
+     quadrature — the frame is where an earlier epoch was placed, so it is never better than
+     either;
+   - not aligned and no reference, but the site has earlier epochs: **its own georeference
+     uncertainty** (5 m EXIF, 10 m a located point or a pin).
+
+   So a phone aligned visually to the consumer-GPS epoch that made the frame (±5 m on the globe) is
+   capped by its fit alone, and a later GPS-only epoch is weak everywhere with the `alignment`
+   reason (±5 m on 0.5 m cells: `f = 0.05`, a score of at most 14) — honest, since nobody knows
+   where its evidence is to a metre. The confidence stage reads `frameRelativeUncertaintyM`; an
+   alignment from before it existed is read at its absolute `uncertaintyM`, else `georef.json`'s,
+   else 10 m. `priorEpochs` is the site's published epochs other than this capture's, and for a
+   re-run only those with a lower ordinal, so a re-run of the frame's own epoch stays the frame. The
+   cap is applied at the finest level; the coarser levels inherit it through the minimum, so they
+   never relax it.
+
 6. **Shipped beside the tiles, opt-in (C8).** The `confidence` stage (`confidence_grid`, between
    `place` and `package`, no GPU) writes `confidence/confidence.{json,bin}`. `package` copies
    the file beside the tiles, appends the descriptor to the root extras after `collision`, and gives
@@ -90,12 +110,11 @@ weak, in a frame another epoch could be compared in.
 - **The ROI disc is coarse.** "Should have been seen" is where the cameras pointed (half the median
   camera distance about the point nearest every optical axis), not each camera's frustum; a
   lawnmower survey's disc covers its middle, not its corners.
-- **`uncertaintyM` of a visual alignment includes the reference's own uncertainty**
-  (`alignment.uncertainty`: `sqrt(reference² + (3 rms)²)`). For a reference placed by consumer GPS
-  (±5 m floor), a phone epoch aligned to it is capped as if it were ±5 m from the frame, though the
-  fit itself is `3 rms` from it. The cap is therefore conservative there — it never over-claims —
-  and the relative figure is an open question for A4, which seeds `priorEpochs` and could seed the
-  reference's own frame-relative uncertainty with it.
+- **What the frame-relative figure cannot see.** An epoch with no reference on a site that has
+  earlier epochs is taken at its own placement alone: the frame's own absolute error (where the
+  first epoch's GPS put it) is not known to the run, so an RTK epoch placed there by its GNSS
+  could be further from the frame than it claims. With a reference, the reference's absolute
+  uncertainty is added in quadrature, which covers it.
 - A tile's `confidenceMin` is computed from the leaf positions as packed and the grid from
   `support/` placed by `placement.json`'s single similarity; the two placements agree to float32
   rounding, so a gaussian exactly on a cell edge may be looked up in its neighbour. It is a

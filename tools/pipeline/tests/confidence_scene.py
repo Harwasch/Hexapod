@@ -177,15 +177,21 @@ def write_epoch(
     return names
 
 
-def alignment_of(uncertainty_m: float, verdict: str = "coarse") -> dict[str, Any]:
+def alignment_of(
+    uncertainty_m: float, verdict: str = "coarse", *, frame_relative_m: float | None = None
+) -> dict[str, Any]:
     """An `epoch_alignment.json` as `align` writes it for an epoch it kept in its
     georeference's frame (`frameSource: georef`, so `place` is unchanged by it), with the
-    uncertainty asked for."""
+    uncertainty asked for -- from the site frame too, the same unless said otherwise (an
+    older alignment has no frame-relative figure: pass a negative one to leave it out)."""
+    relative = uncertainty_m if frame_relative_m is None else frame_relative_m
+    extra: dict[str, Any] = {} if relative < 0 else {"frameRelativeUncertaintyM": relative}
     return {
         "version": 1,
         "method": "visual" if verdict != "unaligned" else "none",
         "verdict": verdict,
         "uncertaintyM": uncertainty_m,
+        **extra,
         "label": f"synthetic, ±{uncertainty_m:.2g} m",
         "frameSource": "georef",
         "frame": None,
