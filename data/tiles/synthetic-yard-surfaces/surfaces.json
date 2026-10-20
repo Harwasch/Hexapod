@@ -1,0 +1,783 @@
+{
+ "note": "cross-language fixture for hexapod.cellgrid v1 surface grids (tools/pipeline/experiments/surface_fixture.py); synthetic, not measured",
+ "frame": "data/tiles/synthetic-yard/splat/tileset.json (tileset frame), on the planes of data/tiles/synthetic-yard-epochs",
+ "epochs": {
+  "e1": {
+   "descriptor": {
+    "format": "hexapod.cellgrid",
+    "version": 1,
+    "kind": "surface",
+    "uri": "surface.bin",
+    "frame": "tileset",
+    "lattice": {
+     "baseM": 0.25,
+     "level": 2
+    },
+    "cellM": 1.0,
+    "channels": [
+     {
+      "name": "dsm",
+      "type": "i2",
+      "unitM": 0.01
+     },
+     {
+      "name": "ground",
+      "type": "i2",
+      "unitM": 0.01
+     },
+     {
+      "name": "sigma",
+      "type": "u1",
+      "unitM": 0.01
+     },
+     {
+      "name": "support",
+      "type": "u1"
+     }
+    ],
+    "levels": [
+     {
+      "level": 2,
+      "cellM": 1.0,
+      "i0": -4,
+      "j0": -4,
+      "ni": 40,
+      "nj": 32,
+      "offset": 0,
+      "bytes": 7680
+     }
+    ],
+    "policy": "surface-v1",
+    "status": "uncalibrated",
+    "estimators": {
+     "fixture": "synthetic: integer arithmetic over the synthetic-yard-epochs planes, not a measurement (tools/pipeline/experiments/surface_fixture.py)"
+    },
+    "noData": -32768,
+    "sourceBits": {
+     "sfm": 1,
+     "splat": 2
+    },
+    "sigmaSaturatesAt": 255,
+    "vertical": {
+     "zero": "the tileset frame's origin",
+     "originHeightM": 0.0,
+     "surface": "the tangent plane at the origin, not a height above a datum"
+    },
+    "alignedTo": {
+     "kind": "confidence",
+     "level": 2,
+     "sha256": "f365dccdba14be8d5384fad9e22227e9d8096e1653fb8dc51e69dbedf820f52a"
+    },
+    "summary": {
+     "cells": 1280,
+     "surfaced": 1272,
+     "thin": 8,
+     "samples": {
+      "sfm": 0,
+      "splat": 0
+     },
+     "outside": 0,
+     "nonFinite": 0,
+     "outOfRange": 0,
+     "sigmaSaturated": 0,
+     "medianSigmaCm": 3.0,
+     "metric": false
+    },
+    "sha256": "5b4eb61da3b28d4938edbe61aee60c7e1fdc7746b608b1725d0736f56ecd2e0b"
+   },
+   "file": "e1/surface.bin",
+   "fileSha256": "02627e69587ee3d06782f7c2e4088b5e0ca423e374c4178e998128041a1db678",
+   "plane": {
+    "level": 2,
+    "sha256": "5b4eb61da3b28d4938edbe61aee60c7e1fdc7746b608b1725d0736f56ecd2e0b"
+   },
+   "uncertaintyM": 0.0
+  },
+  "e2": {
+   "descriptor": {
+    "format": "hexapod.cellgrid",
+    "version": 1,
+    "kind": "surface",
+    "uri": "surface.bin",
+    "frame": "tileset",
+    "lattice": {
+     "baseM": 0.25,
+     "level": 1
+    },
+    "cellM": 0.5,
+    "channels": [
+     {
+      "name": "dsm",
+      "type": "i2",
+      "unitM": 0.01
+     },
+     {
+      "name": "ground",
+      "type": "i2",
+      "unitM": 0.01
+     },
+     {
+      "name": "sigma",
+      "type": "u1",
+      "unitM": 0.01
+     },
+     {
+      "name": "support",
+      "type": "u1"
+     }
+    ],
+    "levels": [
+     {
+      "level": 1,
+      "cellM": 0.5,
+      "i0": -7,
+      "j0": -7,
+      "ni": 79,
+      "nj": 62,
+      "offset": 0,
+      "bytes": 29388
+     }
+    ],
+    "policy": "surface-v1",
+    "status": "uncalibrated",
+    "estimators": {
+     "fixture": "synthetic: integer arithmetic over the synthetic-yard-epochs planes, not a measurement (tools/pipeline/experiments/surface_fixture.py)"
+    },
+    "noData": -32768,
+    "sourceBits": {
+     "sfm": 1,
+     "splat": 2
+    },
+    "sigmaSaturatesAt": 255,
+    "vertical": {
+     "zero": "the tileset frame's origin",
+     "originHeightM": 0.0,
+     "surface": "the tangent plane at the origin, not a height above a datum"
+    },
+    "alignedTo": {
+     "kind": "confidence",
+     "level": 1,
+     "sha256": "35c9ad001242f484b94f36d4d04490fe397535480b2aa775261bac5d9c5f6425"
+    },
+    "summary": {
+     "cells": 4898,
+     "surfaced": 4712,
+     "thin": 186,
+     "samples": {
+      "sfm": 0,
+      "splat": 0
+     },
+     "outside": 0,
+     "nonFinite": 0,
+     "outOfRange": 0,
+     "sigmaSaturated": 1,
+     "medianSigmaCm": 3.0,
+     "metric": false
+    },
+    "sha256": "6944b9b1f67f211ed322a92172e3e92abde99fce7e490e3beb2ecf7bb294ee19"
+   },
+   "file": "e2/surface.bin",
+   "fileSha256": "e6c9bef63d8663dc54b2b6b164e68d2471495f03050e65b1b414ee0cfa2aa8a2",
+   "plane": {
+    "level": 1,
+    "sha256": "6944b9b1f67f211ed322a92172e3e92abde99fce7e490e3beb2ecf7bb294ee19"
+   },
+   "uncertaintyM": 0.062
+  }
+ },
+ "coarsened": {
+  "epoch": "e2",
+  "level": 2,
+  "window": [
+   -4,
+   -4,
+   40,
+   32
+  ],
+  "sha256": "75130ea62b2d2689a7f7e6fd6aa4a4f6faad783ed503342a63d3fb36cad8eeea"
+ },
+ "change": {
+  "reference": "experiments.confidence_demo.surface_change (P5): dsm by max, ground by min, sigma by max at the coarser level; 3 sqrt(sa^2 + sb^2 + ua^2 + ub^2)",
+  "from": "e1",
+  "to": "e2",
+  "level": 2,
+  "cellM": 1.0,
+  "counts": {
+   "raised": 47,
+   "lowered": 24,
+   "unchanged": 1137,
+   "insufficient": 72
+  },
+  "weakChanged": 23,
+  "changed": [
+   {
+    "i": 2,
+    "j": 2,
+    "deltaM": 2.54,
+    "thresholdM": 0.239,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 3,
+    "j": 2,
+    "deltaM": 2.52,
+    "thresholdM": 0.252,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 4,
+    "j": 2,
+    "deltaM": 2.5,
+    "thresholdM": 0.229,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 5,
+    "j": 2,
+    "deltaM": 2.53,
+    "thresholdM": 0.239,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 6,
+    "j": 2,
+    "deltaM": 2.51,
+    "thresholdM": 0.252,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 7,
+    "j": 2,
+    "deltaM": 2.54,
+    "thresholdM": 0.229,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 2,
+    "j": 3,
+    "deltaM": 2.51,
+    "thresholdM": 0.252,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 3,
+    "j": 3,
+    "deltaM": 2.54,
+    "thresholdM": 0.229,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 4,
+    "j": 3,
+    "deltaM": 2.52,
+    "thresholdM": 0.239,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 5,
+    "j": 3,
+    "deltaM": 2.5,
+    "thresholdM": 0.252,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 6,
+    "j": 3,
+    "deltaM": 2.53,
+    "thresholdM": 0.229,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 7,
+    "j": 3,
+    "deltaM": 2.51,
+    "thresholdM": 0.239,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 20,
+    "j": 3,
+    "deltaM": -1.2,
+    "thresholdM": 0.252,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 21,
+    "j": 3,
+    "deltaM": -1.17,
+    "thresholdM": 0.229,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 22,
+    "j": 3,
+    "deltaM": -1.19,
+    "thresholdM": 0.239,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 23,
+    "j": 3,
+    "deltaM": -1.16,
+    "thresholdM": 0.252,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 24,
+    "j": 3,
+    "deltaM": -1.18,
+    "thresholdM": 0.229,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 25,
+    "j": 3,
+    "deltaM": -1.2,
+    "thresholdM": 0.239,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 2,
+    "j": 4,
+    "deltaM": 2.54,
+    "thresholdM": 0.229,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 3,
+    "j": 4,
+    "deltaM": 2.52,
+    "thresholdM": 0.239,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 4,
+    "j": 4,
+    "deltaM": 2.55,
+    "thresholdM": 0.252,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 5,
+    "j": 4,
+    "deltaM": 2.53,
+    "thresholdM": 0.229,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 6,
+    "j": 4,
+    "deltaM": 2.51,
+    "thresholdM": 0.239,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 7,
+    "j": 4,
+    "deltaM": 2.54,
+    "thresholdM": 0.252,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 20,
+    "j": 4,
+    "deltaM": -1.17,
+    "thresholdM": 0.229,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 21,
+    "j": 4,
+    "deltaM": -1.19,
+    "thresholdM": 0.239,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 22,
+    "j": 4,
+    "deltaM": -1.16,
+    "thresholdM": 0.252,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 23,
+    "j": 4,
+    "deltaM": -1.18,
+    "thresholdM": 0.229,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 24,
+    "j": 4,
+    "deltaM": -1.15,
+    "thresholdM": 0.239,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 25,
+    "j": 4,
+    "deltaM": -1.17,
+    "thresholdM": 0.252,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 2,
+    "j": 5,
+    "deltaM": 2.49,
+    "thresholdM": 0.239,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 3,
+    "j": 5,
+    "deltaM": 2.52,
+    "thresholdM": 0.252,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 4,
+    "j": 5,
+    "deltaM": 2.5,
+    "thresholdM": 0.229,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 5,
+    "j": 5,
+    "deltaM": 2.53,
+    "thresholdM": 0.239,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 6,
+    "j": 5,
+    "deltaM": 2.51,
+    "thresholdM": 0.252,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 7,
+    "j": 5,
+    "deltaM": 2.49,
+    "thresholdM": 0.229,
+    "class": "raised",
+    "weak": false
+   },
+   {
+    "i": 20,
+    "j": 5,
+    "deltaM": -1.17,
+    "thresholdM": 0.239,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 21,
+    "j": 5,
+    "deltaM": -1.19,
+    "thresholdM": 0.252,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 22,
+    "j": 5,
+    "deltaM": -1.21,
+    "thresholdM": 0.229,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 23,
+    "j": 5,
+    "deltaM": -1.18,
+    "thresholdM": 0.239,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 24,
+    "j": 5,
+    "deltaM": -1.2,
+    "thresholdM": 0.252,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 25,
+    "j": 5,
+    "deltaM": -1.17,
+    "thresholdM": 0.229,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 20,
+    "j": 6,
+    "deltaM": -1.19,
+    "thresholdM": 0.252,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 21,
+    "j": 6,
+    "deltaM": -1.16,
+    "thresholdM": 0.229,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 22,
+    "j": 6,
+    "deltaM": -1.18,
+    "thresholdM": 0.239,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 23,
+    "j": 6,
+    "deltaM": -1.2,
+    "thresholdM": 0.252,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 24,
+    "j": 6,
+    "deltaM": -1.17,
+    "thresholdM": 0.229,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 25,
+    "j": 6,
+    "deltaM": -1.19,
+    "thresholdM": 0.239,
+    "class": "lowered",
+    "weak": false
+   },
+   {
+    "i": 4,
+    "j": 16,
+    "deltaM": 1.03,
+    "thresholdM": 0.252,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 5,
+    "j": 16,
+    "deltaM": 1.01,
+    "thresholdM": 0.229,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 6,
+    "j": 16,
+    "deltaM": 1.04,
+    "thresholdM": 0.239,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 7,
+    "j": 16,
+    "deltaM": 1.02,
+    "thresholdM": 0.252,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 8,
+    "j": 16,
+    "deltaM": 1.0,
+    "thresholdM": 0.229,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 9,
+    "j": 16,
+    "deltaM": 1.03,
+    "thresholdM": 0.239,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 5,
+    "j": 17,
+    "deltaM": 1.04,
+    "thresholdM": 0.239,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 6,
+    "j": 17,
+    "deltaM": 1.02,
+    "thresholdM": 0.252,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 7,
+    "j": 17,
+    "deltaM": 1.05,
+    "thresholdM": 0.229,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 8,
+    "j": 17,
+    "deltaM": 1.03,
+    "thresholdM": 0.239,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 9,
+    "j": 17,
+    "deltaM": 1.01,
+    "thresholdM": 0.252,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 4,
+    "j": 18,
+    "deltaM": 1.01,
+    "thresholdM": 0.239,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 5,
+    "j": 18,
+    "deltaM": 0.99,
+    "thresholdM": 0.252,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 6,
+    "j": 18,
+    "deltaM": 1.02,
+    "thresholdM": 0.229,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 7,
+    "j": 18,
+    "deltaM": 1.0,
+    "thresholdM": 0.239,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 8,
+    "j": 18,
+    "deltaM": 1.03,
+    "thresholdM": 0.252,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 9,
+    "j": 18,
+    "deltaM": 1.01,
+    "thresholdM": 0.229,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 4,
+    "j": 19,
+    "deltaM": 1.06,
+    "thresholdM": 0.252,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 5,
+    "j": 19,
+    "deltaM": 1.04,
+    "thresholdM": 0.229,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 6,
+    "j": 19,
+    "deltaM": 1.02,
+    "thresholdM": 0.239,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 7,
+    "j": 19,
+    "deltaM": 1.05,
+    "thresholdM": 0.252,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 8,
+    "j": 19,
+    "deltaM": 1.03,
+    "thresholdM": 0.229,
+    "class": "raised",
+    "weak": true
+   },
+   {
+    "i": 9,
+    "j": 19,
+    "deltaM": 1.06,
+    "thresholdM": 0.239,
+    "class": "raised",
+    "weak": true
+   }
+  ]
+ }
+}

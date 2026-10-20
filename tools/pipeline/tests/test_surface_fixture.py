@@ -1,0 +1,46 @@
+"""The committed cross-language surface fixture is what its generator writes, byte for byte,
+and it tells the story it says it tells (experiments/surface_fixture.py)."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections import Counter
+from pathlib import Path
+
+from captures_bridge import cell_grid
+from experiments import surface_fixture
+
+COMMITTED = surface_fixture.OUT
+
+
+def test_the_committed_surfaces_are_regenerated_byte_for_byte(tmp_path: Path) -> None:
+    surface_fixture.write(tmp_path)
+    for name in ("e1/surface.bin", "e2/surface.bin", "surfaces.json"):
+        assert (tmp_path / name).read_bytes() == (COMMITTED / name).read_bytes(), name
+
+
+def test_each_surface_is_on_its_confidence_grid_s_plane() -> None:
+    document = json.loads((COMMITTED / "surfaces.json").read_text(encoding="utf-8"))
+    for name, epoch in document["epochs"].items():
+        blob = (COMMITTED / epoch["file"]).read_bytes()
+        assert hashlib.sha256(blob).hexdigest() == epoch["fileSha256"]
+        surface = cell_grid.decode(epoch["descriptor"], blob)
+        assert surface_fixture.plane_sha256(surface.planes[0]) == epoch["plane"]["sha256"]
+        graded_descriptor, graded = surface_fixture.confidence(name)
+        a, b = surface.planes[0], graded.planes[0]
+        assert (a.level, a.i0, a.j0, a.ni, a.nj) == (b.level, b.i0, b.j0, b.ni, b.nj)
+        assert epoch["descriptor"]["alignedTo"]["sha256"] == graded_descriptor["sha256"]
+
+
+def test_the_reference_change_finds_what_was_built() -> None:
+    """P5's demo rule over the fixture: the shed and the stack raised, the spoil lowered,
+    the hedge and the noise unchanged, the holes insufficient, the stack weak."""
+    change = json.loads((COMMITTED / "surfaces.json").read_text(encoding="utf-8"))["change"]
+    assert (change["level"], change["cellM"]) == (2, 1.0)
+    tally = Counter((row["class"], row["weak"]) for row in change["changed"])
+    # 6 x 4 one-metre cells each; one stack cell is where e1 saw nothing (insufficient).
+    assert tally == {("raised", False): 24, ("lowered", False): 24, ("raised", True): 23}
+    # e2's 2 m strip along the west edge (64 cells) and e1's 8 unseen cells.
+    assert change["counts"]["insufficient"] == 72
+    assert change["weakChanged"] == 23
