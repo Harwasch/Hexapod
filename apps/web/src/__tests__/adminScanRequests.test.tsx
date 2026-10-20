@@ -43,6 +43,7 @@ const rows: ScanRequestRead[] = [
       ],
     },
     boundaryUnreadable: false,
+    outlineUnvalidated: false,
     areaM2: 50_342,
     parcelIds: ["ca-parcel/06001/2-51-1"],
   },
@@ -54,6 +55,7 @@ const rows: ScanRequestRead[] = [
     notes: "Area (acres): 40",
     boundary: null,
     boundaryUnreadable: false,
+    outlineUnvalidated: false,
     areaM2: null,
     parcelIds: [],
   },
@@ -121,4 +123,15 @@ it("shows an address that is not plain as text, and an unreadable outline as suc
   expect(within(row).queryByRole("link")).toBeNull();
   expect(row).toHaveTextContent("person@example.com?bcc=x");
   expect(row).toHaveTextContent("outline unreadable");
+});
+
+it("flags an outline kept unvalidated", async () => {
+  vi.spyOn(api, "GET").mockResolvedValue({
+    data: [{ ...rows[1], parcelIds: ["ca-parcel/06001/2-51-1"], outlineUnvalidated: true }],
+    response: new Response(),
+  });
+  renderView();
+  const row = await screen.findByTestId("request-row");
+  expect(row).toHaveTextContent("outline not validated");
+  expect(row).toHaveTextContent("ca-parcel/06001/2-51-1");
 });

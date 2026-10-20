@@ -65,7 +65,14 @@ export function RequestsView() {
                   )}
                 </td>
                 <td className="admin-num">
-                  {row.boundary ? (
+                  {row.outlineUnvalidated ? (
+                    <GlassBadge
+                      tone="warning"
+                      title="The outline could not be checked in time; it is kept as sent."
+                    >
+                      outline not validated
+                    </GlassBadge>
+                  ) : row.boundary ? (
                     areaLabel(row.areaM2)
                   ) : row.boundaryUnreadable ? (
                     <GlassBadge tone="danger">outline unreadable</GlassBadge>
