@@ -206,7 +206,8 @@ def test_one_floater_moves_neither_surface_but_widens_sigma(tmp_path: Path) -> N
     _, grid = _grid(_run(tmp_path / "one", np.concatenate([flat, high, low])))
     cell = _at(grid, 3.5, 3.5)
     assert cell["dsm"] == 0
-    # The floater is in z1: half the top four's spread is 15 m, past u1 -- "at least 2.55 m".
+    # The floater is in z1: the top eight's spread is 30 m, so sigma is past u1 -- "at least
+    # 2.55 m".
     assert cell["sigma"] == 255
     assert _at(grid, -4.5, 2.5)["ground"] == 0  # the 2nd lowest is the plane's
     assert (grid.planes[0].data[..., 1] == 0).all()  # and it did not spread
@@ -316,7 +317,7 @@ def test_the_bytes_depend_on_neither_chunk_nor_band_and_repeat(
 
 
 def test_the_extremes_are_held_a_band_at_a_time(tmp_path: Path) -> None:
-    """Memory: the band's extremes (73 bytes a cell), not the plane's; the plane the same
+    """Memory: the band's extremes (137 bytes a cell), not the plane's; the plane the same
     whatever the band."""
     import tracemalloc
 
@@ -335,7 +336,7 @@ def test_the_extremes_are_held_a_band_at_a_time(tmp_path: Path) -> None:
         peaks[band] = tracemalloc.get_traced_memory()[1]
         tracemalloc.stop()
     np.testing.assert_array_equal(planes[1 << 12].data, planes[1 << 20].data)
-    whole = 73 * window.cells  # 19 MB: every cell's extremes at once
+    whole = 137 * window.cells  # 36 MB: every cell's extremes at once
     assert peaks[1 << 20] > whole
     assert peaks[1 << 12] < whole, (peaks, whole)
 
@@ -615,16 +616,18 @@ def _one_cell(points: list[list[float]], **kwargs: Any) -> tuple[list[int], surf
 
 
 def test_exactly_three_samples_are_a_surface_and_sigma_spans_all_three() -> None:
-    """`count >= min_samples`, not `>`; and with three, z4 does not exist, so sigma is
-    half of z1 - z3."""
+    """`count >= min_samples`, not `>`; and with three, z8 does not exist, so sigma is
+    read from the spread of all three: (z1 - z3) RMS2(3) / SPAN(3)."""
     cell, found = _one_cell([[0.5, 0.5, 0.0], [0.5, 0.5, 0.1], [0.5, 0.5, 0.3]])
-    assert cell[:3] == [10, 10, 15]  # dsm z2, ground z2 (no neighbours), (0.3 - 0.0) / 2
+    # dsm z2, ground z2 (no neighbours), 0.3 m * 0.6699 / 1.6925 = 11.9 cm, rounded up.
+    assert cell[:3] == [10, 10, 12]
     assert found.thin == 0
 
 
 def test_sigma_is_rounded_up_to_the_centimetre() -> None:
-    """(z1 - z4) / 2 = 1.2 cm is stored as 2 cm, never 1; exactly 1 cm stays 1."""
-    up, _ = _one_cell([[0.5, 0.5, z] for z in (0.024, 0.01, 0.005, 0.0)])
+    """0.0369 m * RMS2(4) / SPAN(4) = 1.2 cm is stored as 2 cm, never 1; the 1 cm floor
+    stays exactly 1."""
+    up, _ = _one_cell([[0.5, 0.5, z] for z in (0.0369, 0.01, 0.005, 0.0)])
     assert up[2] == 2
     exact, _ = _one_cell([[0.5, 0.5, z] for z in (0.02, 0.01, 0.005, 0.0)])
     assert exact[2] == 1
@@ -648,3 +651,99 @@ def test_a_gaussian_exactly_half_opaque_is_a_sample(tmp_path: Path) -> None:
     descriptor, grid = _grid(_run(tmp_path / "run", _plane(), opacity=0.0))
     assert descriptor["summary"]["samples"]["splat"] == len(_plane())
     assert (grid.planes[0].data[..., 2] > 0).all()
+
+
+# --- the noise floor (review B5a) --------------------------------------------------------
+
+
+def _flat_epoch(per_cell: int, noise_m: float, seed: int, side: int = 20) -> cell_grid.CellPlane:
+    """Unchanged flat ground at 0 over `side` x `side` cells of 0.25 m: `per_cell` samples
+    in every cell, each with Gaussian height noise `noise_m`. One epoch's scan of it."""
+    rng = np.random.default_rng(seed)
+    cells = side * side
+    i, j = np.divmod(np.repeat(np.arange(cells), per_cell), side)
+    xy = (np.column_stack([i, j]) + rng.uniform(0.01, 0.99, (cells * per_cell, 2))) * 0.25
+    xyz = np.column_stack([xy, rng.normal(0.0, noise_m, cells * per_cell)])
+    window = surface.Window(level=0, i0=0, j0=0, ni=side, nj=side)
+    return surface.surface_plane(lambda: iter([(xyz, surface.SPLAT)]), window).plane
+
+
+def _false_changes(a: cell_grid.CellPlane, b: cell_grid.CellPlane, ua: float, ub: float) -> int:
+    """Cells of an unchanged scene the change rule (ADR 0018 section 4, the demo's and
+    A5's) would call raised or lowered: |dsm_b - dsm_a| > 3 sqrt(sa^2 + sb^2 + ua^2 + ub^2)."""
+    unit = cell_grid.HEIGHT_UNIT_M
+    da, db = (p.data[..., 0].astype(np.float64) * unit for p in (a, b))
+    sa, sb = (p.data[..., 2].astype(np.float64) * unit for p in (a, b))
+    assert (sa > 0).all() and (sb > 0).all()
+    threshold = 3.0 * np.sqrt(sa**2 + sb**2 + ua**2 + ub**2)
+    return int((np.abs(db - da) > threshold).sum())
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "ub"),
+    [
+        ((20, 0.10), (2000, 0.10), 0.0),  # the review's: 198 of 400 cells raised before
+        ((100, 0.01), (100, 0.10), 0.03),  # the review's: 332 of 400 before
+        ((3, 0.05), (500, 0.05), 0.0),
+        ((100, 0.01), (100, 0.01), 0.0),
+    ],
+)
+def test_no_change_control_unchanged_ground_is_unchanged_whatever_the_samples_and_noise(
+    a: tuple[int, float], b: tuple[int, float], ub: float
+) -> None:
+    """Review B5a, the no-change control: the same unchanged ground scanned twice, with
+    very different sample counts or noise. `dsm` is the 2nd highest sample, which reads
+    higher the more samples a cell has and the noisier they are; its sigma must carry
+    that bias, or the denser or noisier epoch reads as raised everywhere. At the rule's
+    3 sigma no more than about one cell in 370 of Gaussian noise may be called changed:
+    at most 1 of 400 here."""
+    first = _flat_epoch(*a, seed=1)
+    second = _flat_epoch(*b, seed=2)
+    assert _false_changes(first, second, 0.0, ub) <= 1
+
+
+def _normal_order_moments(k: int, n: int) -> tuple[float, float]:
+    """E[Z(k:n)] and E[Z(k:n)^2], the k-th highest of n standard normals, by integrating
+    its density on a fine grid in log space (math.erfc alone: independent of the Beta
+    quadrature the tables were computed by)."""
+    x = np.linspace(-14.0, 14.0, 280_001)
+    erfc = np.frompyfunc(math.erfc, 1, 1)
+    upper = np.asarray(erfc(x / math.sqrt(2.0)), dtype=np.float64) / 2.0  # 1 - Phi(x)
+    lower = np.asarray(erfc(-x / math.sqrt(2.0)), dtype=np.float64) / 2.0  # Phi(x), no cancelling
+    with np.errstate(divide="ignore"):
+        log_density = (
+            math.lgamma(n + 1)
+            - math.lgamma(k)
+            - math.lgamma(n - k + 1)
+            + ((n - k) * np.log(lower) if n > k else 0.0)
+            + ((k - 1) * np.log(upper) if k > 1 else 0.0)
+            - x * x / 2.0
+            - 0.5 * math.log(2.0 * math.pi)
+        )
+    weight = np.exp(log_density)
+    weight /= weight.sum()
+    return float((weight * x).sum()), float((weight * x * x).sum())
+
+
+@pytest.mark.parametrize("n", [3, 4, 5, 8, 9, 20, 64, 65, 95, 96, 127, 1000, 1 << 16])
+def test_the_noise_model_tables_are_the_normal_order_statistics(n: int) -> None:
+    """RMS2 and SPAN (surface.py, the noise model) against an independent integration:
+    exact to 64 samples; above, the bucket's value is its top's, so never a smaller sigma
+    than the count's own (RMS2 at least, SPAN at most), and within the half-octave."""
+    count = np.array([n], dtype=np.int64)
+    rms, span = float(surface.rms_second(count)[0]), float(surface.top_span(count)[0])
+    m = min(n, surface.TOP_K)
+    _, second = _normal_order_moments(2, n)
+    span_n = _normal_order_moments(1, n)[0] - _normal_order_moments(m, n)[0]
+    if n <= 64:
+        # Rounded at the 4th decimal: up for RMS2, down for SPAN.
+        assert 0.0 <= rms - math.sqrt(second) < 2e-4, (rms, math.sqrt(second))
+        assert 0.0 <= span_n - span < 2e-4, (span, span_n)
+    else:
+        e = n.bit_length() - 1  # n in [2^e, 2^(e+1)); halves split at 1.5 2^e
+        top = (3 << (e - 1)) - 1 if n < 3 << (e - 1) else (1 << (e + 1)) - 1
+        _, top_second = _normal_order_moments(2, top)
+        top_span = _normal_order_moments(1, top)[0] - _normal_order_moments(m, top)[0]
+        assert 0.0 <= rms - math.sqrt(top_second) < 2e-4
+        assert 0.0 <= top_span - span < 2e-4
+        assert rms >= math.sqrt(second) and span <= span_n

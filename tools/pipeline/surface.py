@@ -21,13 +21,14 @@ two epochs' surfaces nest exactly as their confidence grids do (cell_grid.py, C1
 outside that window are counted (`summary.outside`) and not binned.
 
 **Estimators** (first principles, **uncalibrated**: no measurement on a real site backs
-them yet). Per cell, streaming, the four highest and the four lowest sample heights,
-`z1 >= z2 >= z3 >= z4` from the top:
+them yet). Per cell, streaming, the eight highest and the eight lowest sample heights,
+`z1 >= z2 >= ... >= z8` from the top, and the count `n`:
 
     dsm    = z2                        the 2nd highest: one floater cannot raise it
     ground = the least 2nd lowest over a 5 m square of cells
                                        the bare ground under a crown or a roof
-    sigma  = max(1 cm, (z1 - z4) / 2)  half the spread of the top four
+    sigma  = max(1 cm, (z1 - zm) RMS2(n) / SPAN(n)),  m = min(n, 8)
+                                       how far z2 is from the surface, bias included
 
 `ground` is the 2nd-lowest height (one sample under the surface cannot lower it) of every
 cell whose centre is within 2.5 m of this one's along each axis (`GROUND_WINDOW_M`): under
@@ -39,11 +40,13 @@ metres along each axis, and a low outlier that survives the 2nd-lowest rule spre
 its whole square. A cell with fewer than `MIN_SAMPLES` (3) samples has no surface
 (`NO_HEIGHT`, sigma 0): with two, the 2nd highest is the lower and the 2nd lowest the
 higher of them, so the ground would stand above the top. From three up,
-`ground <= 2nd lowest <= dsm`. `sigma` is `dsm`'s: a floater does not move `dsm` but widens
-`sigma`, which makes the cell slower to call changed rather than wrongly changed. Only `dsm`
-and `sigma` enter the change threshold. Under height noise both surfaces are biased (dsm a
-little high, the ground envelope low) alike in every epoch with that noise, and `sigma` is
-the top four's spread, not a noise estimate (ADR 0018, Consequences).
+`ground <= 2nd lowest <= dsm`. `sigma` is `dsm`'s: the root-mean-square distance of `z2`
+from the surface under Gaussian noise of the scale the top eight's spread shows. The 2nd
+highest of `n` noisy samples reads high by a bias that grows with `n` (about 1.4 noise
+scales at 20 samples, 3.2 at 2,000), so sigma carries that bias as well as the scatter
+("the noise model" below): two scans of unchanged ground with very different sample counts
+or noise then differ by less than the change threshold. A floater does not move `dsm` but
+widens `sigma`, which makes the cell slower to call changed rather than wrongly changed.
 
 **Heights** are `z` of the tileset frame in centimetres: above the frame origin's height
 (georef.json `height`, in whatever datum the site frame names), along the origin's up. That
@@ -55,9 +58,9 @@ run whose scale was never resolved is not in metres at all, and says so (`metric
 confidence grid's summary).
 
 **Memory and determinism.** One pass over the samples per band of at most `BAND_CELLS`
-cells, whose extremes (73 bytes a cell: 76 MB at 2^20) are that band's alone; the plane is
+cells, whose extremes (137 bytes a cell: 72 MB at 2^19) are that band's alone; the plane is
 8 bytes a cell (32 MB at 2^22) and the ground filter two more 4-byte planes, whatever the
-number of samples. The four highest and lowest of a set do not depend on the order it is
+number of samples. The eight highest and lowest of a set do not depend on the order it is
 read in, and every other step is a rounding of them, so the bytes depend on neither the
 chunk nor the band.
 """
@@ -117,8 +120,8 @@ SURFACE = ArtifactDecl(
     stub_members=(DESCRIPTOR_FILE, BIN_FILE),
 )
 
-#: Heights kept per cell at each end: what `z2` and `z4` need.
-TOP_K = 4
+#: Heights kept per cell at each end: `z2`, and the eight the noise is read from.
+TOP_K = 8
 #: Fewer samples than this in a cell: no surface (module docstring).
 MIN_SAMPLES = 3
 #: `sigma` is never under a centimetre, the unit it is stored in.
@@ -127,8 +130,8 @@ SIGMA_FLOOR_M = 0.01
 GROUND_WINDOW_M = 5.0
 #: Opaque enough to be a surface: a gaussian at least half opaque.
 MIN_SPLAT_ALPHA = 0.5
-#: Cells whose extremes are held in one pass: 2^20 (73 bytes each) is 76 MB.
-BAND_CELLS = 1 << 20
+#: Cells whose extremes are held in one pass: 2^19 (137 bytes each) is 72 MB.
+BAND_CELLS = 1 << 19
 #: The most cells the plane may have: the confidence grid's own cap.
 MAX_CELLS = confidence.MAX_CELLS
 #: SfM points read from `points3D.bin` at a time.
@@ -141,6 +144,94 @@ HEIGHT_LIMIT_CM = 32767
 _NO_GROUND = np.iinfo(np.int32).max
 #: One SfM point's fixed part in `points3D.bin`: id, xyz, rgb, error, track length.
 _POINT = struct.Struct("<Q3d3BdQ")
+
+# --- the noise model: order statistics of the normal ------------------------------------
+#
+# `dsm` is the 2nd highest of a cell's `n` samples. Under height noise of scale `s` about a
+# surface at `mu`, it reads `mu + s E[Z(2:n)]` on average, where `Z(k:n)` is the k-th
+# highest of `n` standard normals: about 1.4 s high at 20 samples and 3.2 s at 2,000. So
+# two scans of unchanged ground with different counts or noise differ by that bias, and
+# sigma must carry it. `s` is read from the spread of the top `m = min(n, 8)` samples,
+# whose expectation is `s (E[Z(1:n)] - E[Z(m:n)])`. So
+#
+#     sigma = (z1 - zm) * RMS2(n) / SPAN(n),   RMS2(n) = sqrt(E[Z(2:n)^2]),
+#                                              SPAN(n) = E[Z(1:n)] - E[Z(m:n)]
+#
+# the root-mean-square distance of `z2` from `mu` (bias and scatter together) at the noise
+# the top eight show. Two epochs' biases have the same sign, so their difference is never
+# more than the larger, and `3 sqrt(sigma_a^2 + sigma_b^2)` covers it and the scatter.
+#
+# The tables are the exact normal values for n = 3 .. 64, then one per half-octave
+# (n in [2^e, 1.5 2^e) and [1.5 2^e, 2^(e+1))) taken at its top: RMS2 grows with n and,
+# from n = 8, SPAN shrinks, so a bucket's value gives the larger sigma. Computed by
+# integrating the order statistic's density (V = 1 - Phi(Z(k:n)) is Beta(k, n - k + 1)),
+# RMS2 rounded up and SPAN down at the 4th decimal; `tests/test_surface_stage.py` checks
+# them against a second, independent integration. Fixed numbers in the source, so the
+# stored bytes depend on no machine's libm. Gaussian noise is the model, not a measurement:
+# heavier tails read further high, and that is uncalibrated (ADR 0018).
+
+#: Counts the tables hold exactly; above, half-octaves to 2^48 (beyond, the last).
+_EXACT_MAX = 64
+# fmt: off
+_RMS2 = (
+    0.6699, 0.6699, 0.7461, 0.8316, 0.9113, 0.9827, 1.0464, 1.1033, 1.1545, 1.2009, 1.2432,
+    1.2820, 1.3178, 1.3510, 1.3818, 1.4107, 1.4378, 1.4632, 1.4873, 1.5100, 1.5316, 1.5522,
+    1.5718, 1.5904, 1.6083, 1.6255, 1.6419, 1.6577, 1.6729, 1.6875, 1.7016, 1.7153, 1.7285,
+    1.7412, 1.7536, 1.7655, 1.7772, 1.7884, 1.7994, 1.8101, 1.8204, 1.8305, 1.8404, 1.8500,
+    1.8593, 1.8684, 1.8774, 1.8861, 1.8946, 1.9029, 1.9110, 1.9190, 1.9268, 1.9344, 1.9419,
+    1.9493, 1.9564, 1.9635, 1.9704, 1.9772, 1.9839, 1.9904, 2.1502, 2.2625, 2.4138, 2.5167,
+    2.6562, 2.7517, 2.8817, 2.9711, 3.0934, 3.1777, 3.2933, 3.3733, 3.4833, 3.5595, 3.6646,
+    3.7375, 3.8382, 3.9083, 4.0052, 4.0726, 4.1660, 4.2312, 4.3215, 4.3845, 4.4719, 4.5330,
+    4.6179, 4.6773, 4.7598, 4.8175, 4.8978, 4.9540, 5.0323, 5.0871, 5.1635, 5.2171, 5.2917,
+    5.3441, 5.4170, 5.4683, 5.5397, 5.5899, 5.6599, 5.7090, 5.7777, 5.8259, 5.8932, 5.9406,
+    6.0067, 6.0532, 6.1181, 6.1638, 6.2277, 6.2726, 6.3354, 6.3796, 6.4414, 6.4849, 6.5458,
+    6.5886, 6.6486, 6.6908, 6.7499, 6.7915, 6.8497, 6.8908, 6.9482, 6.9887, 7.0454, 7.0853,
+    7.1413, 7.1807, 7.2359, 7.2748, 7.3294, 7.3678, 7.4217, 7.4597, 7.5130, 7.5505, 7.6031,
+    7.6403, 7.6923, 7.7290,
+)
+_SPAN = (
+    1.6925, 2.0587, 2.3259, 2.5344, 2.7043, 2.8472, 2.4173, 2.1948, 2.0484, 1.9414, 1.8585,
+    1.7915, 1.7359, 1.6887, 1.6479, 1.6122, 1.5807, 1.5525, 1.5271, 1.5041, 1.4830, 1.4637,
+    1.4459, 1.4294, 1.4141, 1.3998, 1.3864, 1.3739, 1.3620, 1.3509, 1.3403, 1.3303, 1.3208,
+    1.3118, 1.3032, 1.2950, 1.2871, 1.2796, 1.2724, 1.2655, 1.2588, 1.2524, 1.2463, 1.2404,
+    1.2346, 1.2291, 1.2238, 1.2186, 1.2136, 1.2088, 1.2041, 1.1995, 1.1951, 1.1908, 1.1866,
+    1.1826, 1.1786, 1.1748, 1.1711, 1.1674, 1.1639, 1.1604, 1.0824, 1.0342, 0.9760, 0.9403,
+    0.8960, 0.8681, 0.8328, 0.8102, 0.7813, 0.7625, 0.7381, 0.7222, 0.7014, 0.6877, 0.6696,
+    0.6576, 0.6417, 0.6311, 0.6170, 0.6075, 0.5949, 0.5863, 0.5749, 0.5672, 0.5569, 0.5499,
+    0.5404, 0.5340, 0.5253, 0.5193, 0.5113, 0.5059, 0.4984, 0.4934, 0.4865, 0.4817, 0.4753,
+    0.4709, 0.4648, 0.4607, 0.4551, 0.4512, 0.4459, 0.4422, 0.4372, 0.4337, 0.4290, 0.4257,
+    0.4212, 0.4181, 0.4139, 0.4109, 0.4069, 0.4041, 0.4003, 0.3976, 0.3939, 0.3914, 0.3879,
+    0.3855, 0.3821, 0.3798, 0.3766, 0.3744, 0.3713, 0.3691, 0.3662, 0.3641, 0.3613, 0.3593,
+    0.3566, 0.3547, 0.3521, 0.3503, 0.3478, 0.3460, 0.3436, 0.3419, 0.3395, 0.3379, 0.3356,
+    0.3340, 0.3318, 0.3303,
+)
+# fmt: on
+
+
+def _order_index(count: I64) -> I64:
+    """Each count's (>= 3) row of `_RMS2` and `_SPAN`: exact to 64, then its half-octave
+    (the bit after the leading one), from integer arithmetic alone."""
+    n = np.maximum(count, 3)
+    _, exponent = np.frexp(n.astype(np.float64))  # n < 2^53: exact; n = m 2^exponent
+    top = exponent.astype(np.int64) - 1  # floor(log2 n)
+    half = (n >> np.maximum(top - 1, 0)) & 1
+    bucket = (_EXACT_MAX - 2) + 2 * (top - 6) + half
+    index = np.where(n <= _EXACT_MAX, n - 3, bucket)
+    out: I64 = np.minimum(index, len(_RMS2) - 1)
+    return out
+
+
+def rms_second(count: I64) -> F64:
+    """`RMS2(n)`: sqrt(E[Z(2:n)^2]) for standard normal noise (the noise model above)."""
+    out: F64 = np.asarray(_RMS2, dtype=np.float64)[_order_index(count)]
+    return out
+
+
+def top_span(count: I64) -> F64:
+    """`SPAN(n)`: E[Z(1:n) - Z(m:n)], m = min(n, TOP_K) (the noise model above)."""
+    out: F64 = np.asarray(_SPAN, dtype=np.float64)[_order_index(count)]
+    return out
+
 
 # --- inputs ------------------------------------------------------------------------------
 
@@ -422,7 +513,7 @@ def surface_plane(
 ) -> Surfaced:
     """Every sample binned on `window`, and the four channels (module docstring).
 
-    Memory: one band of extremes at a time (`band_cells` cells, 73 bytes each), the plane
+    Memory: one band of extremes at a time (`band_cells` cells, 137 bytes each), the plane
     (8 bytes a cell) and, while the ground is filtered, two 4-byte planes."""
     if min_samples < 3:
         raise ValueError(
@@ -452,9 +543,9 @@ def surface_plane(
         enough = count >= min_samples
         thin += int(((count > 0) & ~enough).sum())
         last = np.maximum(np.minimum(count, TOP_K) - 1, 0)
-        z1, zk = band.top[:, 0], band.top[np.arange(count.size), last]
+        z1, zm = band.top[:, 0], band.top[np.arange(count.size), last]
         with np.errstate(invalid="ignore"):
-            spread = np.maximum(sigma_floor_m, (z1 - zk) / 2.0)
+            spread = np.maximum(sigma_floor_m, (z1 - zm) * (rms_second(count) / top_span(count)))
             # Rounded up -- never understated -- after a micro-rounding that keeps a
             # floating error from turning exactly 1 cm into 2.
             sigma_cm = np.ceil(np.round(spread / cell_grid.HEIGHT_UNIT_M, 6))
@@ -587,7 +678,9 @@ def height_surface(ctx: StageContext) -> StageOutcome:
             "dsm": "the 2nd highest sample in the cell",
             "ground": "the 2nd lowest sample, then the least of it over the cells whose "
             f"centres are within {window_m / 2:g} m along each axis ({cells}x{cells} cells)",
-            "sigma": f"max({sigma_floor:g} m, (z1 - z4) / 2) of the 4 highest samples",
+            "sigma": f"max({sigma_floor:g} m, (z1 - zm) RMS2(n) / SPAN(n)), m = min(n, "
+            f"{TOP_K}): the RMS distance of the 2nd highest from the surface, its bias "
+            "included, under normal noise of the scale the top samples' spread shows",
             "minSamples": min_samples,
             "groundWindowM": window_m,
             "groundWindowCells": cells,

@@ -34,8 +34,8 @@ how well each cell was seen (ADR 0016).
      where the cell has no surface), `sigma` (`u1` centimetres, saturating: 255 is "at least
      2.55 m"; 0 only where there is no surface) and `support` (`u1`: bit 1 SfM, bit 2 splat, the
      floor of log2 of the samples in the high nibble).
-3. **The estimators, from first principles and uncalibrated.** Per cell, streaming, the four
-   highest and four lowest sample heights (`z1 ≥ z2 ≥ z3 ≥ z4` from the top):
+3. **The estimators, from first principles and uncalibrated.** Per cell, streaming, the eight
+   highest and eight lowest sample heights (`z1 ≥ z2 ≥ … ≥ z8` from the top) and the count `n`:
    - `dsm = z2`, the 2nd highest: one floater cannot raise it;
    - `ground` = the 2nd lowest, then the least of it over the cells whose centres are within 2.5 m
      along each axis (a 5 m square): bare ground under a crown or a roof up to 5 m across. That
@@ -43,7 +43,15 @@ how well each cell was seen (ADR 0016).
      coarser (4 m cells and up) no other cell's centre is within 2.5 m, the window is the cell
      alone, and `ground` is just the cell's own 2nd-lowest sample: under a crown wider than the
      cell it reads the crown. The descriptor records the window it used (`groundWindowCells`);
-   - `sigma = max(1 cm, (z1 − z4) / 2)`, half the spread of the top four;
+   - `sigma = max(1 cm, (z1 − zm) · RMS2(n) / SPAN(n))`, `m = min(n, 8)`: the root-mean-square
+     distance of `z2` from the surface, **its bias included**, under Gaussian noise of the scale
+     the top eight's spread shows. `RMS2(n) = √E[Z(2:n)²]` and `SPAN(n) = E[Z(1:n)] − E[Z(m:n)]`
+     for `Z(k:n)` the k-th highest of `n` standard normals, tabulated exactly to 64 samples and
+     per half-octave above (each bucket at its top, the larger sigma). The 2nd highest of `n`
+     noisy samples reads high by `s·E[Z(2:n)]` (about 1.4 noise scales at 20 samples, 3.2 at
+     2,000), so two scans of unchanged ground with different counts or noise differ by that
+     bias; both biases have the same sign, so their difference is never more than the larger,
+     and the threshold below covers it (review B5a);
    - fewer than 3 samples is no surface: with two, the 2nd lowest is the higher of them and the
      ground would stand above the top. From three up, `ground ≤ dsm` by construction.
 
@@ -104,13 +112,17 @@ how well each cell was seen (ADR 0016).
 - **The ground is biased low, never high.** A lower envelope reads low on a slope (up to 2.5·g m
   along each axis on grade `g`), and a low outlier that survives the 2nd-lowest rule spreads over
   its 5 m square. `ground` does not enter the change threshold; it is for the bare-earth view.
-- **Under noise both surfaces are biased, alike in every epoch.** With height noise σ the 2nd
-  highest of a cell's samples reads about σ to 2σ high, and the ground, a lower envelope over 441
-  cells' 2nd-lowest values at 0.25 m, about 3σ low (the demo: 1 cm noise, flat ground at −3 cm,
-  the tree's 4 m top at 4.01 m). Epochs with the same noise share the bias, so `Δ` does not; an
-  epoch much noisier than another does not. `sigma` is the spread of the top four, not a noise
-  estimate: under σ with ~20 samples a cell it is about σ/2, so the 1 cm floor is what it mostly
-  reads. Calibrating either needs a site surveyed twice.
+- **Under noise both surfaces are biased, and sigma says by how much.** With height noise σ the
+  2nd highest of `n` samples reads `σ·E[Z(2:n)]` high (1.4σ at 20, 3.2σ at 2,000), and the
+  ground, a lower envelope over 441 cells' 2nd-lowest values at 0.25 m, about 3σ low (the demo:
+  1 cm noise, flat ground at −3 cm, the tree's 4 m top at 4.01 m). The first version's sigma,
+  half the top four's spread, held none of that: two scans of the same flat ground at 20 and
+  2,000 samples a cell called 204 of 400 cells raised, and at 1 cm against 10 cm of noise 329 of
+  400 (the review's control, `test_no_change_control_…`). With the bias in sigma, at most one of
+  400 (the 3σ rule's own rate). The cost is a larger sigma: at 1 cm noise and ~100 samples a
+  cell about 2 cm, not the 1 cm floor. Two limits: the noise model is Gaussian, and heavier
+  tails read further high; and a cell of 3 to 7 samples reads its noise from that few, so it is
+  the weakest. Calibrating either needs a site surveyed twice.
 - **Floaters.** One floater in a cell moves neither surface but widens `sigma` (to "at least
   2.55 m" when it is high enough), which makes the cell slower to call changed rather than wrongly
   changed. Two or more floaters in one cell are a surface as far as this rule can tell.
@@ -122,7 +134,7 @@ how well each cell was seen (ADR 0016).
 - **Weak cells.** The change rule above does not consult the confidence score. In the demo every
   changed cell that one epoch's grid calls weak is the crate's own side, so excluding weak cells
   would have hidden real change and caught nothing false; whether A5 should exclude them is open.
-- **Memory and determinism.** One band of extremes at a time (73 bytes a cell, 2^20 cells a band)
+- **Memory and determinism.** One band of extremes at a time (137 bytes a cell, 2^19 cells a band)
   and the plane (8 bytes a cell); order statistics then roundings, so the bytes depend on neither
   chunk nor band. `points3D.bin` is streamed.
 - Until A5 adds a `surface` sidecar kind, a re-publish that carries sidecars from a previous
