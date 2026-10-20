@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
+from sqlalchemy import Engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from tests.conftest import SQUARE, site_payload
 
@@ -144,3 +145,50 @@ def test_a_patch_cannot_change_an_assets_source(client: TestClient) -> None:
     )
 
     assert response.status_code == 422, response.text
+
+
+def test_a_patch_waits_for_a_re_run_superseding_the_asset_and_then_refuses(
+    db: Session, engine: Engine
+) -> None:
+    """A re-run supersedes the epoch's asset holding its row lock (`registration.register`).
+    A PATCH read the asset unlocked, so it saw a current revision, waited only at its own
+    UPDATE, and then wrote its edit onto what had become history. It locks the asset
+    first, as a scale and an attach do, and then sees the revision is superseded."""
+    from datetime import UTC, datetime
+
+    from app.models import Asset
+    from app.schemas.asset import AssetUpdate
+    from app.services import assets as asset_service
+    from app.services.errors import ConflictError
+    from tests.test_asset_scale import run_beside
+    from tests.test_epochs import T0, make_asset, make_epoch, make_site
+
+    site = make_site(db)
+    epoch = make_epoch(db, site, 1, observed=T0)
+    asset = make_asset(db, site, epoch, "https://cdn.example.com/a/tileset.json", created=T0)
+    db.commit()
+    holder = sessionmaker(bind=engine, expire_on_commit=False)()
+    try:
+        held = holder.get(Asset, asset.id, with_for_update=True)
+        assert held is not None
+        held.valid_to = datetime.now(tz=UTC)
+        held.default_visible = False
+        holder.flush()
+        thread, result, waited = run_beside(
+            engine,
+            lambda session: asset_service.update_asset(
+                session, asset.id, AssetUpdate(name="Renamed")
+            ),
+        )
+        holder.commit()
+    finally:
+        holder.close()
+    thread.join(timeout=30)
+
+    assert waited, "the PATCH did not wait for the asset's lock"
+    refused = result["value"]
+    assert isinstance(refused, ConflictError), refused
+    assert refused.code == "epoch_managed"
+    db.expire_all()
+    stored = db.get(Asset, asset.id)
+    assert stored is not None and stored.name == "splat"
