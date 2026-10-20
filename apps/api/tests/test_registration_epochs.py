@@ -359,7 +359,7 @@ def test_an_explicit_site_without_a_frame_gets_one_from_its_first_epoch(
 ) -> None:
     from tests.conftest import site_payload
 
-    created = client.post("/api/v1/sites", json=site_payload(slug="ranch"))
+    created = client.post("/api/v1/sites", json=site_payload(slug="ranch", boundary=_around()))
     assert created.status_code == 201, created.text
     site_id = uuid.UUID(created.json()["id"])
     [legacy] = _assets(db, site_id)
@@ -386,6 +386,42 @@ def test_an_explicit_site_without_a_frame_gets_one_from_its_first_epoch(
     ).scalar_one()
     assert after == legacy_row
     assert {a.epoch_id for a in _assets(db, site_id)} == {None, epoch.id}
+
+
+def _around(half_deg: float = 0.001) -> dict[str, Any]:
+    """A boundary about the runs' georeference (`test_asset_scale`'s LAT/LON)."""
+    ring = [
+        [LON - half_deg, LAT - half_deg],
+        [LON + half_deg, LAT - half_deg],
+        [LON + half_deg, LAT + half_deg],
+        [LON - half_deg, LAT + half_deg],
+        [LON - half_deg, LAT - half_deg],
+    ]
+    return {"type": "Polygon", "coordinates": [ring]}
+
+
+def test_a_capture_far_from_the_frameless_site_it_names_is_a_site_of_its_own(
+    db: Session, storage: S3Storage, tmp_path: Path, client: Any
+) -> None:
+    """Naming a site with no frame fixes its frame where the capture is, for good. A
+    capture past the range a frame can hold (2047 m) from that site -- here the test site
+    in Seattle and a run placed in Montana -- would fix it a thousand kilometres from
+    what the site shows, so it becomes a site of its own and the named one is untouched."""
+    from tests.conftest import site_payload
+
+    created = client.post("/api/v1/sites", json=site_payload(slug="seattle"))
+    assert created.status_code == 201, created.text
+    named = uuid.UUID(created.json()["id"])
+    capture = _capture(db, metadata_={"siteId": str(named)})
+
+    run(db, storage, tmp_path, capture)
+
+    db.expire_all()
+    assert capture.site_id is not None and capture.site_id != named
+    assert db.get(SiteFrame, named) is None
+    assert _epochs(db, named) == []
+    [epoch] = _epochs(db, capture.site_id)
+    assert epoch.join_method == "new-site"
 
 
 def test_an_echoed_frame_joins_that_site_as_the_next_epoch(
