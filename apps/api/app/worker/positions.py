@@ -1,8 +1,13 @@
 """Per-tile position checksums: what objects, skins and a plant rig are bound to.
 
 `instances.json`, `skin.json`, the rig's `plants.json` and `rig.json`'s `tileChecksums` key
-every tile by one string: FNV-1a over the tile's decoded float32 positions, in its own
-gaussian order, plus the count (`fnv1a32:<n>:<8 hex>`). The viewer computes the same string
+every tile by one string: FNV-1a over the tile's decoded float32 positions in the **site
+frame** (the tileset root's), in its own gaussian order, plus the count
+(`fnv1a32:<n>:<8 hex>`). A tile of a site past ~4 km may be written in a frame of its own,
+a translation-only `transform` relative to its parent (`splat_tiles.tile_frame`); its
+site positions are `float32(local + composed offset)` (`tile_offsets`). Every tile of a
+smaller scan has no transform and an offset of zero, and is hashed as it is decoded.
+The viewer computes the same string
 for each tile it loads (`checksumPositions`, packages/world/src/rig.ts) and refuses a tile
 the binding does not list, so a binding holds for new tiles exactly when every new tile's
 checksum is one it lists -- whatever else in the tiles changed. A re-pack with another
@@ -12,10 +17,12 @@ every position where it was.
 This is a transcription of the tools/captures code that writes those keys, and must stay
 one: `rig_tiles.glb_spz` (the SPZ block of a tile's GLB), the position half of
 `splat_tiles.unpack_spz` (24-bit fixed point over `fractional_bits`, SPZ versions 2 and 3),
-`rig_tiles.tile_positions` (little-endian float32, negative zero cleared) and
-`synthetic_tree.checksum_positions`. tests/test_tile_positions.py holds it to the vectors
-both languages' tests read (data/tiles/synthetic-tree/source/checksum_vectors.json) and to
-the committed fixture tree's `rig.json`, which tools/captures stamped.
+`splat_tiles.tile_offsets` and `site_positions`, `rig_tiles.tile_positions` (little-endian
+float32, negative zero cleared) and `synthetic_tree.checksum_positions`.
+tests/test_tile_positions.py holds it to the vectors both languages' tests read
+(data/tiles/synthetic-tree/source/checksum_vectors.json), to the committed fixture tree's
+`rig.json`, which tools/captures stamped, and to the far fixture's expected.json
+(data/tiles/synthetic-far), whose tiles have transforms.
 
 numpy is the worker's dependency, not the API's (pyproject.toml); only `app/worker` imports
 this. FNV-1a is a byte-serial recurrence, so the hash itself is a Python loop: about 0.1 s
@@ -28,8 +35,11 @@ from __future__ import annotations
 
 import gzip
 import json
+import math
 import struct
 import zlib
+from collections.abc import Mapping
+from typing import Any
 
 import numpy as np
 
@@ -100,12 +110,65 @@ def spz_positions(blob: bytes) -> np.ndarray:
     return xyz
 
 
-def tile_positions(data: bytes) -> np.ndarray:
-    """A tile's canonical positions from its GLB bytes (`rig_tiles.tile_positions`)."""
+def _translation(transform: object, uri: str) -> np.ndarray:
+    """A child tile's `transform` as its translation, refusing anything else
+    (`splat_tiles._translation`)."""
+    if (
+        not isinstance(transform, list)
+        or len(transform) != 16
+        or not all(
+            isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v)
+            for v in transform
+        )
+    ):
+        raise TileFormatError(f"{uri}: its tile transform is not 16 finite numbers")
+    m = np.asarray(transform, dtype=np.float64).reshape(4, 4).T  # column-major
+    if not (np.array_equal(m[:3, :3], np.eye(3)) and not m[3, :3].any() and float(m[3, 3]) == 1.0):
+        raise TileFormatError(f"{uri}: its tile transform is not a pure translation")
+    out: np.ndarray = m[:3, 3].copy()
+    return out
+
+
+def tile_offsets(document: Mapping[str, Any]) -> dict[str, np.ndarray]:
+    """Each content uri's frame in the root's frame: the float64 sum of the child
+    translations from the root down, the root's own transform (the globe placement)
+    excluded (`splat_tiles.tile_offsets`). `content.uri` and 3D Tiles 1.1
+    `contents[].uri`, a leading `./` removed. Raises `TileFormatError` on a child transform
+    that is not a pure translation."""
+    out: dict[str, np.ndarray] = {}
+    root = document.get("root")
+    stack: list[tuple[Any, np.ndarray]] = [(root, np.zeros(3))]
+    while stack:
+        tile, offset = stack.pop()
+        if not isinstance(tile, dict):
+            continue
+        if tile is not root and tile.get("transform") is not None:
+            content = tile.get("content")
+            name = content.get("uri", "a tile") if isinstance(content, dict) else "a tile"
+            offset = offset + _translation(tile["transform"], str(name))
+        for content in [tile.get("content"), *(tile.get("contents") or [])]:
+            uri = content.get("uri") if isinstance(content, dict) else None
+            if isinstance(uri, str) and uri:
+                out[uri.removeprefix("./")] = offset
+        children = tile.get("children")
+        if isinstance(children, list):
+            stack.extend((child, offset) for child in children)
+    return out
+
+
+def tile_positions(data: bytes, offset: np.ndarray | None) -> np.ndarray:
+    """A tile's canonical positions from its GLB bytes, in the site frame
+    (`rig_tiles.tile_positions`): `offset` is its entry in `tile_offsets`, required so no
+    caller forgets it, None for a tile known to be in the site frame."""
     positions = spz_positions(glb_spz(data)).astype("<f4")
     # SPZ's integer round trip has no negative zero; neither does the runtime's un-bake.
     positions[positions == 0.0] = 0.0
-    return positions
+    if offset is None or not np.asarray(offset).any():
+        return positions
+    # `splat_tiles.site_positions`: the float64 sum, rounded once to float32.
+    moved = (positions.astype(np.float64) + np.asarray(offset, np.float64)).astype("<f4")
+    moved[moved == 0.0] = 0.0
+    return moved
 
 
 def checksum_positions(positions: np.ndarray) -> str:
@@ -118,6 +181,7 @@ def checksum_positions(positions: np.ndarray) -> str:
     return f"fnv1a32:{flat.size // 3}:{digest:08x}"
 
 
-def tile_checksum(data: bytes) -> str:
-    """The position checksum a binding keys this tile (its GLB bytes) by."""
-    return checksum_positions(tile_positions(data))
+def tile_checksum(data: bytes, offset: np.ndarray | None) -> str:
+    """The position checksum a binding keys this tile (its GLB bytes, at `offset` in the
+    site frame) by."""
+    return checksum_positions(tile_positions(data, offset))

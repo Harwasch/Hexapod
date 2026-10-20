@@ -218,6 +218,14 @@ def _position_check(
         uris = sorted(sidecars.content_uris(new))
         if not accepted or not uris:
             return frozenset()
+        # Bindings are over site-frame positions: a far tile's transform is composed in.
+        try:
+            offsets = positions.tile_offsets(new)
+        except positions.TileFormatError as error:
+            log.info(
+                "carry: the new tileset's tile frames are unreadable (%s); no binding holds", error
+            )
+            return frozenset()
         remaining = set(accepted)
         for count, uri in enumerate(uris, start=1):
             data = _tile_bytes(uri, private, new_objects, tiles_dir=tiles_dir)
@@ -225,7 +233,7 @@ def _position_check(
                 log.info("carry: %s is not among the run's tiles; no binding holds", uri)
                 return frozenset()
             try:
-                checksum = positions.tile_checksum(data)
+                checksum = positions.tile_checksum(data, offsets.get(uri))
             except positions.TileFormatError as error:
                 log.info("carry: %s: no position checksum (%s); no binding holds", uri, error)
                 return frozenset()
