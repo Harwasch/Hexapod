@@ -183,6 +183,7 @@ describe("a splat scan seen from afar", () => {
   it("a dedicated renderer draws it small, as the same scan, near and far", async () => {
     tileset = fakeTileset();
     const { manager, moveTo, clip } = harness();
+    manager.setSplatRenderer("playcanvas");
     // Loaded from 50 km off: past the far view's limit, so not drawn.
     await manager.activate(SITE_ID);
     expect(manager.scanTarget()).toBeNull();

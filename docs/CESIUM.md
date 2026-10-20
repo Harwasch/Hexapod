@@ -115,7 +115,7 @@ manager calls `scene.requestRender()` after mutating the scene. An idle view cos
 the GPU, and a Gaussian splat is not re-sorted every 16 ms while nobody is touching it. The one
 manager that renders continuously is `LivingSurveyManager`, and only while wind is non-zero: at
 calm it writes nothing and asks for nothing, so an idle survey is as idle as it ever was. A
-scan drawn by a dedicated splat renderer (PlayCanvas, the default, or Spark) follows the same
+scan drawn by a dedicated splat renderer (PlayCanvas or Spark, when chosen) follows the same
 rule on its own canvas: it draws only when something it is drawn from changes, and nothing
 once the scan is in and the camera still (_Dedicated splat renderers_, below). It used to
 redraw the identical frame on every display frame.
@@ -256,9 +256,21 @@ only at rest, once per anchor every few seconds; the camera pose is throttled to
 
 ## Dedicated splat renderers
 
-A splat scan is drawn by default by PlayCanvas (SuperSplat's engine), or by Spark, on a
-transparent canvas over the globe from Cesium's camera (`cesium/scanView`); CesiumJS keeps the
-tileset hidden for its frame and solids. The overlay is held to the globe's rules:
+A splat scan is drawn by default by CesiumJS's own splat primitive, as patched in
+`patches/@cesium__engine@26.3.0.patch`. Until settings version 4 the default was PlayCanvas.
+It moved because the view features of the splat pipeline are built on that patched primitive
+(decision (a) of 2026-10-19: one primitive to build them on, not each one three times). The
+epoch slider works under every renderer, but the confidence and data-age tints, the per-cell
+compositor, compare-two-dates and capture lighting are CesiumJS-only, and under another
+renderer say "Needs the CesiumJS renderer" with a one-click switch. A default that drew none
+of them would hide them from everyone who never opens Settings
+([ADR 0020](DECISIONS/0020-cesium-default-renderer.md)). Stored settings still on PlayCanvas
+move to CesiumJS once; Spark and the WebGPU trial, only ever chosen, stay.
+
+PlayCanvas (SuperSplat's engine) and Spark remain a choice in Settings › Advanced, or for one
+visit by `?renderer=playcanvas` / `?renderer=spark`. Either draws on a transparent canvas over
+the globe from Cesium's camera (`cesium/scanView`); CesiumJS keeps the tileset hidden for its
+frame and solids. The overlay is held to the globe's rules:
 
 - **It draws only on change** (`overlayFrames.ts`). A frame is drawn when the globe renders
   and the overlay's own inputs moved with it (camera, canvas, the globe's resolution, the scan's

@@ -1,6 +1,6 @@
 /**
  * The capture-date control on a site with two dated captures (epochs), in the app itself,
- * under each splat renderer: PlayCanvas (the default), Spark and CesiumJS.
+ * under each splat renderer: CesiumJS (the default), PlayCanvas and Spark.
  *
  * E1 is the synthetic yard as a drone flew it on Mar 1 (the capture that made the site's
  * frame); E2 is a phone video of Jun 1. So that the two dates look different on screen without

@@ -291,8 +291,9 @@ describe("a site with two epochs", () => {
     const { manager, tilesetEvents } = harness(
       twoEpochSite({ epochs: [E1, E2, E3], assets: [A1, A2, A3] }),
     );
+    manager.setSplatRenderer("playcanvas");
     await open(manager);
-    // PlayCanvas, the default, draws the scan: CesiumJS keeps it hidden.
+    // PlayCanvas draws the scan: CesiumJS keeps it hidden.
     expect(manager.scanTarget()?.assetId).toBe(A3.id);
     expect(manager.scanTarget()?.key).toBe(`${SITE_ID}:${A3.id}`);
     let release = (): void => undefined;

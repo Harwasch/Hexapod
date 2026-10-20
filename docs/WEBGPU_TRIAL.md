@@ -1,7 +1,7 @@
 # WebGPU trial: PlayCanvas on WebGPU
 
 A fourth splat renderer, **PlayCanvas WebGPU (beta)** (`playcanvas-webgpu`), sits beside
-PlayCanvas on WebGL2 (the default), Spark and CesiumJS. It is the same PlayCanvas splat
+PlayCanvas on WebGL2, Spark and CesiumJS (the default since settings version 4; ADR 0020). It is the same PlayCanvas splat
 renderer drawing the same tiles or the same streamed package, under the same overlay rules
 (CESIUM.md, _Dedicated splat renderers_); only the graphics device differs. It stays off by
 default until it has been judged on real devices, in person, by the criteria at the end.
@@ -117,7 +117,7 @@ The trial never leaves a scan undrawn (`ScanRendererHost.start`, `createWebgpuBa
   then WebGL2 on the same canvas (WebGPU takes the canvas only once its adapter and device
   exist), and the trial draws with that WebGL2 device, saying why.
 - **PlayCanvas's Null device** (neither started on that canvas: it draws nothing, silently).
-  Refused; PlayCanvas on WebGL2, the default renderer, draws on a fresh canvas.
+  Refused; PlayCanvas on WebGL2 draws on a fresh canvas.
 - **WebGPU device lost** (driver reset, GPU process crash, memory pressure). PlayCanvas would
   make another WebGPU device on the same canvas; the trial instead replaces the renderer with
   PlayCanvas on WebGL2 on a fresh canvas, which streams the scan again and draws. Later scans
@@ -199,5 +199,7 @@ If a device class fails only on itself (for example trailing on one browser), th
 still change with that class sent to WebGL2 by detection, rather than waiting on it.
 
 Making it the default is then `DEFAULT_SPLAT_RENDERER = "playcanvas-webgpu"`
-(`state/settings.ts`), with a settings migration (version 4) that moves stored `playcanvas`
-choices along, as version 3 did when PlayCanvas became the default.
+(`state/settings.ts`), with a settings migration (version 5) that moves stored `cesium`
+choices along, as version 4 did when CesiumJS became the default (ADR 0020) -- and only once
+the features built on CesiumJS's primitive (epochs, confidence, compare, lighting) draw there
+too.

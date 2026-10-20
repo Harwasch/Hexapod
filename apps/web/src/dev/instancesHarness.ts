@@ -178,7 +178,7 @@ export async function startInstancesHarness(options: {
   incremental?: boolean;
   /** 16 by default; a low one draws the leaves wherever the camera is. */
   maximumScreenSpaceError?: number;
-  /** Who draws the splats: CesiumJS (default) or PlayCanvas over it, as the app's default. */
+  /** Who draws the splats: CesiumJS (default, as the app's) or PlayCanvas over it. */
   renderer?: SplatRendererKind;
   /** Where to mount the app's objects panel (`InstancePanel`), driving this scan. */
   panel?: HTMLElement;

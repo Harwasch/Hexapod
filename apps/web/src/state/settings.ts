@@ -22,12 +22,14 @@ export const SPLAT_RENDERERS: readonly SplatRenderer[] = [
   "cesium",
 ];
 /**
- * Who draws splat scans unless chosen otherwise: PlayCanvas, streaming a scan's own streamed
- * level of detail as superspl.at does (scanView/ScanRendererHost.runNative). CesiumJS still
- * draws a Living Survey scan (its motion is CesiumJS's shader) and every other layer. Here,
- * not beside the renderers, so pages without the globe (admin.html) never load cesium/.
+ * Who draws splat scans unless chosen otherwise: CesiumJS's own splat primitive (patched,
+ * cesium/splatPatch), because the epoch slider, confidence, compare and capture lighting are
+ * built on it (docs/DECISIONS/0020-cesium-default-renderer.md). PlayCanvas, streaming a
+ * scan's own streamed level of detail as superspl.at does (scanView/ScanRendererHost.runNative),
+ * and Spark stay a choice in Settings › Advanced or `?renderer=`. Here, not beside the
+ * renderers, so pages without the globe (admin.html) never load cesium/.
  */
-export const DEFAULT_SPLAT_RENDERER: SplatRenderer = "playcanvas";
+export const DEFAULT_SPLAT_RENDERER: SplatRenderer = "cesium";
 
 /** Short forms `?renderer=` also takes, for typing on a phone. */
 const RENDERER_ALIASES: Record<string, SplatRenderer> = {
@@ -99,9 +101,9 @@ export interface SettingsState {
    */
   livingGpuMotion: boolean;
   /**
-   * Who draws splat scans: a dedicated splat renderer laid over the globe -- PlayCanvas
-   * (SuperSplat's engine, the default; on WebGL2, or on WebGPU as a trial) or Spark
-   * (three.js) -- or CesiumJS's own splat primitive. The globe, navigation and tools stay
+   * Who draws splat scans: CesiumJS's own splat primitive (the default), or a dedicated splat
+   * renderer laid over the globe -- PlayCanvas (SuperSplat's engine; on WebGL2, or on WebGPU
+   * as a trial) or Spark (three.js). The globe, navigation and tools stay
    * CesiumJS's either way. A page address can choose another for one visit
    * (`useRendererOverride`); what is drawn is `useSplatRenderer`.
    */
@@ -151,6 +153,25 @@ const defaults = {
   writeToken: "",
 };
 
+/**
+ * Stored settings from an older version, moved along once. v2 switched the default world to
+ * Google Photorealistic and v3 the default splat renderer to PlayCanvas, both overwriting
+ * whatever was stored. v4 moves the default renderer to CesiumJS: a stored "playcanvas" goes
+ * to "cesium", and Spark or PlayCanvas on WebGPU, which were only ever chosen, stay. A stored
+ * "playcanvas" cannot tell a person's choice from the default: the store writes every field,
+ * so the v3 default, the v3 migration's overwrite and a click in Settings all read alike, and
+ * all three move. Exported for its tests.
+ */
+export function migrateSettings(persisted: unknown, version: number): Partial<SettingsState> {
+  let state = (persisted ?? {}) as Partial<SettingsState>;
+  if (version < 2) state = { ...state, world: "photorealistic" };
+  if (version < 3) state = { ...state, splatRenderer: "playcanvas" };
+  if (version < 4 && state.splatRenderer === "playcanvas") {
+    state = { ...state, splatRenderer: "cesium" };
+  }
+  return state;
+}
+
 export const useSettings = create<SettingsState>()(
   persist(
     (set) => ({
@@ -167,16 +188,8 @@ export const useSettings = create<SettingsState>()(
     }),
     {
       name: "twin.settings.v1",
-      version: 3,
-      // v2 switched the default world to Google Photorealistic, v3 the default splat renderer
-      // to PlayCanvas; stored settings still carried the old defaults, so they are moved along
-      // once.
-      migrate: (persisted, version) => {
-        let state = (persisted ?? {}) as Partial<SettingsState>;
-        if (version < 2) state = { ...state, world: "photorealistic" };
-        if (version < 3) state = { ...state, splatRenderer: DEFAULT_SPLAT_RENDERER };
-        return state;
-      },
+      version: 4,
+      migrate: migrateSettings,
     },
   ),
 );

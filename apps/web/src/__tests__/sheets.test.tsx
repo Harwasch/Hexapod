@@ -71,9 +71,10 @@ describe("Settings › Advanced", () => {
     expect(within(advanced).getByTestId("splat-renderer-now")).toHaveTextContent(
       "Chosen by the page address for this visit",
     );
-    await user.click(within(renderer).getByRole("radio", { name: "Draw splats with PlayCanvas" }));
+    // The saved renderer, CesiumJS by default: choosing it again still ends the address's.
+    await user.click(within(renderer).getByRole("radio", { name: "Draw splats with CesiumJS" }));
     expect(useRendererOverride.getState().renderer).toBeNull();
-    expect(useSettings.getState().splatRenderer).toBe("playcanvas");
+    expect(useSettings.getState().splatRenderer).toBe("cesium");
     expect(within(advanced).queryByTestId("splat-renderer-now")).not.toBeInTheDocument();
   });
 });
