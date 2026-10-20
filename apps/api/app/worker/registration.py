@@ -1030,6 +1030,12 @@ def register(
         # a site the backfill could not make an epoch of: the same site, its frame checked.
         site_id = epoch.site_id if epoch is not None else capture.site_id
         site = db.get(Site, site_id, with_for_update=True, populate_existing=True)
+    if site is not None and epoch is None:
+        # A legacy capture's first epoch: `new-site` when its own earlier run made the site,
+        # as the 0032 backfill labels the sites it could read; `explicit` when it was put
+        # in somebody else's.
+        made_it = (site.metadata_ or {}).get("captureId") == str(capture.id)
+        join = EpochJoinMethod.NEW_SITE if made_it else EpochJoinMethod.EXPLICIT
     if site is not None:
         _check_frame(site, registration, echo)
         if site.frame is None:
