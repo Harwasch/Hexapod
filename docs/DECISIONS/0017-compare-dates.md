@@ -90,7 +90,8 @@ other, so wherever both reach one is painted over the other.
    (`cesium/companions.ts`, the engine patch's `companions` array, now one list with several
    owners), in its one texture and one sort, and each date's own primitive draws nothing
    (`drawnBy`). Their inferred layers follow their scan onto the host. Only dates that share the
-   anchor's placement (`followAnchor`) take part; one placed on its own is left out.
+   anchor's placement (`followAnchor`) take part; one placed on its own is left out, and the
+   key names it and why (still loading, or placed in its own frame), the As of date included.
 2. **Each slot knows its source** (`cesium/splatSources.ts`): an R8 texture of our own, one
    byte a slot (0 the host, then up to 15 companions; 255 none), rewritten from `_tileSlots`
    whenever the patch replaces that map, only the rows touched uploaded. A reset of the slots
@@ -128,8 +129,8 @@ other, so wherever both reach one is painted over the other.
    fade the other dates' splats where the anchor never looked. A Living Survey rig takes its scan
    out of incremental mode, which drawing companions needs: the control is disabled while a rig
    moves the site's scan, and a rig that attaches during a rule ends it, saying why.
-9. **Cost.** The rule's parts load on demand (`compositorSession.ts`, 7,166 B gzip); the
-   globe's entry grows by what the scene keeps of it. Index entry 193,893 B → 194,555 B gzip
+9. **Cost.** The rule's parts load on demand (`compositorSession.ts`, 7,314 B gzip); the
+   globe's entry grows by what the scene keeps of it. Index entry 193,893 B → 194,589 B gzip
    (budget 197,000 B).
 
 ### Consequences
