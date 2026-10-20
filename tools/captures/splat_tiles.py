@@ -1443,7 +1443,10 @@ def _sort_to_disk(
             for index in range(buckets):
                 part = out[order[edges[index] : edges[index + 1]]]
                 if part.size:
-                    handles[index].write(part.tobytes())
+                    part.tofile(handles[index])
+            # Freed before the next window is read, not when its names are rebound: a
+            # window's arrays and the next one's never coexist.
+            del out, part, order, which, edges, positions, rows, good, chunk
     finally:
         for handle in handles:
             handle.close()
@@ -1456,7 +1459,10 @@ def _sort_to_disk(
             slots = part["pos"] - index * per_bucket
             for name in record.names:
                 block[name][slots] = part[name]
-            sink.write(block.tobytes())
+            block.tofile(sink)
+            # The bucket and its block go before the next bucket is read: two of each
+            # alive at once was the packer's peak.
+            del part, block, slots
     return store
 
 
