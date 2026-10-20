@@ -121,15 +121,63 @@ export function tileOffsetOf(tile: SplatTile): [number, number, number] | undefi
 /**
  * The bake of `tile`'s positions from the scan's (site) frame, the frame every rig, instance
  * and skin digest is taken in: the engine's own `B` (`_lastSplatTransform`) with the tile's
- * frame taken out (`translateBake`), so un-baking gives local + offset. `B` itself for a tile
- * with no frame of its own. Undefined until the tile is baked, or when its frame is not a
- * translation.
+ * frame taken out (`translateBake`), so un-baking gives local + offset; `B` for a tile with no
+ * frame of its own. Every tile of one tileset (`tile.tileset`, else `owner`) gets the same
+ * array for what is the same bake to rounding (`canonicalSiteBake`). Undefined until the tile
+ * is baked, or when its frame is not a translation.
  */
-export function siteBakeOf(tile: SplatTile): Mat4 | undefined {
+export function siteBakeOf(tile: SplatTile, owner?: unknown): Mat4 | undefined {
   const transform = tile.content?._lastSplatTransform;
   if (transform?.length !== 16) return undefined;
   const offset = tileOffsetOf(tile);
-  return offset === undefined ? undefined : translateBake(transform, offset);
+  if (offset === undefined) return undefined;
+  return canonicalSiteBake(tile.tileset ?? owner, translateBake(transform, offset));
+}
+
+/**
+ * How far apart two site bakes of one tileset may be and still be one bake: 1e-6 m in the
+ * translation, 1e-12 in the linear part. From first principles, not a measurement: each tile's
+ * `B` is composed in doubles from an ECEF-scale `computedTransform` (~6.4e6 m, so ~1e-9 m a
+ * rounding; 2e-9 m is the most seen across the far fixture's 18 tiles), and `translateBake`
+ * subtracts kilometres from it, so equal-in-exact-maths bakes differ in the last bits. The
+ * bound moves an un-baked position by at most 1e-6 + 3 * 1e-12 * 1e4 m for a point 10 km out,
+ * about 1% of SPZ's 1.22e-4 m half step, so the snap gives the same grid point either way; and
+ * any real re-bake (clamp-to-ground moving the model) moves it by millimetres or more.
+ */
+export const SITE_BAKE_TOLERANCE_M = 1e-6;
+const SITE_BAKE_LINEAR_TOLERANCE = 1e-12;
+/** Site bakes kept per tileset: the current one and a few it re-baked from. */
+const KEPT_SITE_BAKES = 4;
+const siteBakes = new WeakMap<object, number[][]>();
+
+function closeSiteBake(a: Mat4, b: Mat4): boolean {
+  for (let i = 0; i < 16; i += 1) {
+    const limit = i >= 12 && i < 15 ? SITE_BAKE_TOLERANCE_M : SITE_BAKE_LINEAR_TOLERANCE;
+    if (!(Math.abs((a[i] ?? Number.NaN) - (b[i] ?? Number.NaN)) <= limit)) return false;
+  }
+  return true;
+}
+
+/**
+ * One array for every site bake of `owner`'s tiles that is the same bake to rounding
+ * (`SITE_BAKE_TOLERANCE_M`): the first such bake seen, copied (the engine re-bakes into its
+ * own matrix in place). So a snapshot mixing unmoved and moved tiles shares one bake bit for
+ * bit, which the GPU motion path (`SplatDeformer` `sharedBake`), `aggregateBindings`'
+ * `commonBake` and the view cones compare exactly, and a tile's cached binding keeps matching
+ * whichever tile came first. `bake` itself when there is no owner to keep them by.
+ */
+export function canonicalSiteBake(owner: unknown, bake: Mat4): Mat4 {
+  if (typeof owner !== "object" || owner === null) return bake;
+  let kept = siteBakes.get(owner);
+  if (kept === undefined) {
+    kept = [];
+    siteBakes.set(owner, kept);
+  }
+  for (const known of kept) if (closeSiteBake(known, bake)) return known;
+  const copy = Array.from(bake);
+  kept.unshift(copy);
+  if (kept.length > KEPT_SITE_BAKES) kept.length = KEPT_SITE_BAKES;
+  return copy;
 }
 
 /**
@@ -164,7 +212,7 @@ function slotTiles(
   for (const [tile, slot] of slots) {
     if (tile.tileset !== undefined && tile.tileset !== owner) continue;
     const content = tile.content;
-    const bake = siteBakeOf(tile);
+    const bake = siteBakeOf(tile, owner);
     if (bake === undefined) {
       return { kind: "wait", reason: "no-bake-transform", detail: "a tile is not baked yet" };
     }
@@ -222,7 +270,7 @@ export function snapshotTiles(
   let start = 0;
   for (const tile of list) {
     const content = tile.content;
-    const bake = siteBakeOf(tile);
+    const bake = siteBakeOf(tile, tileset);
     if (bake === undefined) {
       return { kind: "wait", reason: "no-bake-transform", detail: "a tile is not baked yet" };
     }

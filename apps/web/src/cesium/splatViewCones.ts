@@ -16,7 +16,8 @@
  * The scan's frame: a splat's position in the shader is in the draw command's model frame,
  * the frame its tile was baked into (`tile.content._lastSplatTransform`, `B`); the grid is in
  * the scan's local ENU metres, `B⁻¹ · p`, with a tile's own frame taken out of `B` for a tile
- * that has one (`siteBakeOf`). Every tile of a `splat_tiles.py` tileset then shares one bake,
+ * that has one (`siteBakeOf`). Every tile of a `splat_tiles.py` tileset then shares one bake
+ * (the same array, `canonicalSiteBake`: equal in exact maths, they differ by double rounding),
  * read off the first selected tile that has one; until one has, the hook draws everything.
  *
  * Off with `?viewCones=off` in the page's URL, to compare.
@@ -417,7 +418,7 @@ function bakeOf(primitive: VisibilityPrimitive | undefined): Mat4 | undefined {
     if (tile.tileset !== undefined && primitive._tileset !== undefined) {
       if (tile.tileset !== primitive._tileset) continue;
     }
-    const bake = siteBakeOf(tile);
+    const bake = siteBakeOf(tile, primitive._tileset ?? primitive);
     if (bake !== undefined) return bake;
   }
   return undefined;
