@@ -18,7 +18,9 @@ Start with `README.md`, then `docs/HANDOFF.md` and `docs/DEPLOYMENT.md`.
 - Contracts: `pnpm contracts:check`. After a Pydantic schema change:
   `cd apps/api && uv run python -m app.scripts.export_openapi ../../packages/contracts/openapi.json`, then
   `pnpm contracts:generate`.
-- CI (`.github/workflows/ci.yml`) runs all of the above per changed area; Deploy (`deploy.yml`) ships main.
+- CI (`.github/workflows/ci.yml`): a PR, and a push to main, run only the jobs whose paths changed
+  (`.github/scripts/ci_changes.py`, tested by `python3 -m unittest discover -s .github/scripts`); a change to
+  CI itself runs everything; a nightly runs everything when main moved. Deploy (`deploy.yml`) ships main.
 
 ## Conventions
 
