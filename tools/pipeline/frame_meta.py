@@ -49,6 +49,7 @@ __all__ = [
     "FOCAL_SPREAD_LIMIT",
     "GPS_ALTITUDE_DATUM",
     "META_BYTES",
+    "RTK_FIXED",
     "RTK_FLAG_MEANING",
     "UNVERIFIED_DJI_FIELDS",
     "DjiXmp",
