@@ -19787,6 +19787,11 @@
             ],
             "title": "Boundary"
           },
+          "boundaryUnreadable": {
+            "default": false,
+            "title": "Boundaryunreadable",
+            "type": "boolean"
+          },
           "createdAt": {
             "format": "date-time",
             "title": "Createdat",
@@ -41820,6 +41825,9 @@
             },
             "description": "Missing or wrong write token"
           },
+          "403": {
+            "description": "No write token is configured on this server"
+          },
           "404": {
             "content": {
               "application/json": {
@@ -41930,6 +41938,9 @@
           },
           "429": {
             "description": "Too many requests from this client; see Retry-After"
+          },
+          "503": {
+            "description": "The day's requests are all in; see Retry-After"
           }
         },
         "summary": "Create",

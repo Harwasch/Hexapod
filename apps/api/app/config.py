@@ -88,6 +88,12 @@ class Settings(BaseSettings):
     )
     land_archive_workspace_quota_bytes: int = Field(default=512 * 1024 * 1024, ge=21 * 1024 * 1024)
     land_auth_mode: Literal["pilot", "oidc"] = "pilot"
+    #: Scan requests stored in any 24 hours, across all clients, before the form is told to try
+    #: later: a cap the per-process rate limits cannot give, and a bound on how fast the table
+    #: can grow (app/services/scan_requests.py).
+    scan_requests_daily_cap: int = Field(default=200, ge=1)
+    #: How long dissolving a request's outline in PostGIS may take (ms) before it is refused.
+    scan_request_clean_timeout_ms: int = Field(default=2_000, ge=1)
     land_oidc_issuer: str | None = None
     land_oidc_audience: str | None = None
     land_oidc_jwks_url: str | None = None

@@ -11,14 +11,25 @@ from pydantic import Field, field_validator, model_validator
 from app.schemas.base import CamelModel
 from app.schemas.geojson import Footprint, Polygon, PolygonCoordinates
 
-#: The same check the landing form makes (src/landing/form.ts): something@something.tld.
-EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+#: An address as the landing form checks it (src/landing/form.ts): a plain local part, a domain
+#: of dot-separated labels and a letter TLD. Stricter than RFC 5322 on purpose: no `?`, `&`,
+#: `<`, spaces or quotes, so an address can go into a mailto link or a log line as it is.
+EMAIL = re.compile(
+    r"^[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$"
+)
+#: Control characters: none in a name or an email, and in notes only tab and line breaks.
+CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+NOTES_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 #: A parcel the public lookup returned: `ca-parcel/<county FIPS>/<parcel number>`.
 PARCEL_ID = r"^ca-parcel/06\d{3}/[^\s/]{1,150}$"
 
 
-#: Vertices a submitted outline may have, as a saved land may (LandCreate.bounded_boundary).
-MAX_VERTICES = 20_000
+#: What a submitted outline may hold, checked before PostGIS sees it: fifty parcels of a hundred
+#: corners each, and their holes. Not the whole defence (two crossing combs of a few hundred
+#: corners were slow to dissolve; services/scan_requests.py bounds that with a timeout), but
+#: what keeps a body under the size cap from being a very large geometry.
+MAX_VERTICES = 5_000
+MAX_RINGS = 100
 
 
 class ParcelsMultiPolygon(CamelModel):
@@ -53,15 +64,24 @@ class ScanRequestCreate(CamelModel):
     @field_validator("name", "email")
     @classmethod
     def stripped(cls, value: str) -> str:
+        if CONTROL.search(value):
+            raise ValueError("must not contain control characters")
         value = value.strip()
         if not value:
             raise ValueError("must not be blank")
         return value
 
+    @field_validator("notes")
+    @classmethod
+    def plain_notes(cls, value: str) -> str:
+        if NOTES_CONTROL.search(value):
+            raise ValueError("must not contain control characters")
+        return value
+
     @field_validator("email")
     @classmethod
     def looks_like_email(cls, value: str) -> str:
-        if not EMAIL.fullmatch(value):
+        if not EMAIL.fullmatch(value) or ".." in value:
             raise ValueError("must be an email address like name@example.com")
         return value
 
@@ -82,6 +102,8 @@ class ScanRequestCreate(CamelModel):
             return None
         polygons = [boundary.coordinates] if isinstance(boundary, Polygon) else boundary.coordinates
         rings = [ring for polygon in polygons for ring in polygon]
+        if len(rings) > MAX_RINGS:
+            raise ValueError(f"an outline may have at most {MAX_RINGS} rings")
         if sum(len(ring) for ring in rings) > MAX_VERTICES:
             raise ValueError(f"an outline may have at most {MAX_VERTICES:,} vertices")
         if any(abs(a[0] - b[0]) > 180 for ring in rings for a, b in pairwise(ring)):
@@ -108,5 +130,7 @@ class ScanRequestRead(CamelModel):
     email: str
     notes: str
     boundary: Footprint | None
+    #: True when a stored outline could not be read back (an old row): the rest is still shown.
+    boundary_unreadable: bool = False
     area_m2: float | None
     parcel_ids: list[str]

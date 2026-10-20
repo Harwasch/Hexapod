@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from geoalchemy2 import Geometry, WKBElement
-from sqlalchemy import String, Text
+from sqlalchemy import Index, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,6 +17,9 @@ class ScanRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """
 
     __tablename__ = "scan_requests"
+    # Read newest first, counted by the day for the daily cap, and pruned by age once a
+    # retention period is decided.
+    __table_args__ = (Index("ix_scan_requests_created_at", "created_at"),)
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     email: Mapped[str] = mapped_column(String(254), nullable=False)

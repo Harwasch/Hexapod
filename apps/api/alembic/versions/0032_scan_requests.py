@@ -36,6 +36,8 @@ def upgrade() -> None:
             "parcel_ids", postgresql.ARRAY(sa.String(200)), nullable=False, server_default="{}"
         ),
     )
+    # Newest first, counted by the day (the daily cap), and pruned by age once retention is set.
+    op.create_index("ix_scan_requests_created_at", "scan_requests", ["created_at"])
 
 
 def downgrade() -> None:

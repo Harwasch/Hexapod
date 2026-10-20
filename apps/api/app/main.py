@@ -25,7 +25,7 @@ from app.services.errors import (
     UnauthorizedError,
 )
 from app.services.public_parcels import PublicParcels
-from app.services.ratelimit import RateLimited, RateLimits
+from app.services.ratelimit import RateLimited, RateLimits, client_key, limits_of
 from app.services.text_encoder import LazyTextEncoder, TextEncoderUnavailableError
 from app.services.urls import UrlValidationError
 from app.storage import StorageUnavailableError
@@ -76,12 +76,26 @@ PUBLIC_BODY_LIMITS: dict[str, int] = {
 BODY_METHODS = frozenset({"POST", "PUT", "PATCH"})
 
 
+#: Each open route's per-client bucket (an attribute of RateLimits), taken in the same middleware
+#: as the body cap: before the body is read, so a malformed body spends a token like any other.
+PUBLIC_RATE_LIMITS: dict[str, str] = {
+    "/api/v1/public/parcels/near": "public_parcels",
+    "/api/v1/scan-requests": "scan_requests",
+}
+
+
 def public_body_limit_of(path: str) -> int | None:
     """The body cap for an open route, or None for any other path."""
     for prefix, limit in PUBLIC_BODY_LIMITS.items():
         if path.startswith(prefix):
             return limit
     return None
+
+
+def _rate_limited(exc: RateLimited) -> JSONResponse:
+    response = _problem(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests", str(exc))
+    response.headers["Retry-After"] = str(max(1, math.ceil(exc.retry_after_s)))
+    return response
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -160,6 +174,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         their declared length before anything reads them: the body is parsed before a
         route's rate limit runs, so the limit alone does not bound what a request costs.
         Added before CORS, so CORS wraps it and a browser can read the refusal."""
+        bucket = PUBLIC_RATE_LIMITS.get(request.url.path)
+        if bucket is not None and request.method in BODY_METHODS:
+            try:
+                getattr(limits_of(request), bucket).take(
+                    client_key(request, request.app.state.settings)
+                )
+            except RateLimited as limited:
+                return _rate_limited(limited)
         cap = public_body_limit_of(request.url.path)
         if cap is not None and request.method in BODY_METHODS:
             length = request.headers.get("content-length")
@@ -236,9 +258,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(RateLimited)
     async def rate_limited_handler(_: Request, exc: RateLimited) -> JSONResponse:
-        response = _problem(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests", str(exc))
-        response.headers["Retry-After"] = str(max(1, math.ceil(exc.retry_after_s)))
-        return response
+        return _rate_limited(exc)
 
     @app.exception_handler(StorageUnavailableError)
     async def storage_handler(_: Request, exc: StorageUnavailableError) -> JSONResponse:
