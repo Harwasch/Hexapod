@@ -236,6 +236,16 @@ export function observedAtFromUpload(epoch: Epoch): boolean {
   return epoch.observedAtSource === "created";
 }
 
+/**
+ * An epoch's date as a control or a page title names it: its capture date, or, when only the
+ * upload was dated (`observedAtSource: "created"`), said to be the upload's -- a scan of last
+ * spring uploaded today is not a capture of today.
+ */
+export function epochDateLabel(epoch: Epoch): string {
+  const date = formatEpochDate(epoch.observedAt);
+  return observedAtFromUpload(epoch) ? `Uploaded ${date} (capture time not recorded)` : date;
+}
+
 export interface AlignmentLabel {
   /** A few words, under the date in the capture-date control. */
   short: string;

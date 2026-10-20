@@ -6,8 +6,8 @@ import { useSite } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import {
   alignmentLabel,
+  epochDateLabel,
   epochOptions,
-  formatEpochDate,
   frameAnchor,
   platformLabel,
   shownOption,
@@ -54,7 +54,7 @@ export function TimelineControl() {
         value={value}
         onValueChange={(epochId) => void scene?.sites.setEpoch(epochId)}
         options={options.map(({ epoch }) => {
-          const date = formatEpochDate(epoch.observedAt);
+          const date = epochDateLabel(epoch);
           const platform = platformLabel(epoch.platform);
           const alignment = alignmentLabel(epoch, anchor, epochs);
           return {
