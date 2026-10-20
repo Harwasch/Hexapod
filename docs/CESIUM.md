@@ -528,6 +528,11 @@ scan's ENU frame for every reader. How each renderer composes it:
   cones) un-bake with the **site bake** `B · T(-offset)` (`splatTiles.ts` `siteBakeOf`,
   `splatFrames.ts` `translateBake`), the offset summed from `tile.transform` up the `parent`
   chain, root excluded. Every digest is over site-frame positions, `float32(local + offset)`.
+  The site bakes are equal in exact maths but not to the last bit, since each `B` is composed
+  in doubles at ECEF scale. So every tile of one tileset gets the same array
+  (`canonicalSiteBake`, within 1e-6 m). The GPU motion path's shared bake, `commonBake` and
+  the view cones compare bakes exactly, and they keep working when a selection mixes moved and
+  unmoved tiles.
 - **Spark and PlayCanvas** get each tile's composed offset from the shared tile tree
   (`view/tiles.ts` `parseTileset`, which also moves each tile's bounding volume into the root's
   frame, so the streamer culls in one frame). Spark puts the mesh at the offset
