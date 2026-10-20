@@ -115,6 +115,9 @@ export function attachSplitObjects(
         );
       }
       if (object.tileset.show !== shown) object.tileset.show = shown;
+      // Drawn on the scan's side of the compare divider only (SiteManager `setCompareDates`).
+      if (object.tileset.splitDirection !== parent.splitDirection)
+        object.tileset.splitDirection = parent.splitDirection;
     }
   };
   const offUpdate = scene.preUpdate.addEventListener(sync);

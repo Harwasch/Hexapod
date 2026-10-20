@@ -1,4 +1,4 @@
-import { Cartesian3, Event, Matrix4 } from "cesium";
+import { Cartesian3, Event, Matrix4, SplitDirection } from "cesium";
 import type { Cesium3DTileset, Scene } from "cesium";
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -153,6 +153,10 @@ describe("split objects", () => {
       Matrix4.toArray(child.modelMatrix),
       Matrix4.toArray(objectModelMatrix(parent.modelMatrix, sceneRoot, ENTRY as never, pose)),
     );
+    // On the scan's side of the compare divider only (SiteManager.setCompareDates).
+    (parent as { splitDirection: SplitDirection }).splitDirection = SplitDirection.LEFT;
+    preUpdate.raiseEvent();
+    expect(child.splitDirection).toBe(SplitDirection.LEFT);
     (parent as { show: boolean }).show = false;
     preUpdate.raiseEvent();
     expect(child.show).toBe(false);
