@@ -439,3 +439,26 @@ def test_a_grid_package_cannot_read_is_left_out_not_fatal(arc: Workdir, tmp_path
     assert "confidence grid was not shipped" in log
     registration = json.loads((run.out_dir("register") / "registration.json").read_text())
     assert registration["confidence"] is None
+
+
+def test_the_demo_runs_and_reports_the_rescan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from experiments import confidence_demo
+
+    monkeypatch.setattr(confidence_demo, "GAUSSIANS", 20_000)
+    assert confidence_demo.main(["--out", str(tmp_path / "demo")]) == 0
+
+    text = capsys.readouterr().out
+    report = json.loads((tmp_path / "demo" / "report.json").read_text())
+    names = [row["epoch"] for row in report["epochs"]]
+    assert names == ["e1 (south arc)", "e2 (re-scan)", "e2 if unaligned"]
+    unaligned = report["epochs"][2]
+    assert unaligned["weakShare"] == 1.0 and "alignment" in unaligned["reasons"]
+    change = report["rescan"]
+    assert change["strongAfterRescan"] > 0 and change["stillWeak"] > 0
+    assert change["coveredByE2"] <= change["weakInE1"]
+    assert "Every capture here is synthetic" in text
+    for name in ("e1-splat", "e2-splat"):
+        tileset = json.loads((tmp_path / "demo" / name / "tileset.json").read_text())
+        assert tileset["root"]["extras"]["confidence"]["kind"] == "confidence"

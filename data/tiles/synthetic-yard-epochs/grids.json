@@ -1,0 +1,404 @@
+{
+ "note": "cross-language fixture for hexapod.cellgrid v1 (tools/captures/synthetic_cell_grids.py); synthetic, not measured",
+ "frame": "data/tiles/synthetic-yard/splat/tileset.json (tileset frame)",
+ "epochs": {
+  "e1": {
+   "descriptor": {
+    "format": "hexapod.cellgrid",
+    "version": 1,
+    "kind": "confidence",
+    "uri": "confidence.bin",
+    "frame": "tileset",
+    "lattice": {
+     "baseM": 0.25,
+     "level": 2
+    },
+    "cellM": 1.0,
+    "channels": [
+     {
+      "name": "score",
+      "type": "u1"
+     },
+     {
+      "name": "reasons",
+      "type": "u1"
+     },
+     {
+      "name": "relief",
+      "type": "u1",
+      "unitM": 0.25
+     }
+    ],
+    "levels": [
+     {
+      "level": 2,
+      "cellM": 1.0,
+      "i0": -4,
+      "j0": -4,
+      "ni": 41,
+      "nj": 32,
+      "offset": 0,
+      "bytes": 3936
+     },
+     {
+      "level": 3,
+      "cellM": 2.0,
+      "i0": -2,
+      "j0": -2,
+      "ni": 21,
+      "nj": 16,
+      "offset": 3936,
+      "bytes": 1008
+     },
+     {
+      "level": 4,
+      "cellM": 4.0,
+      "i0": -1,
+      "j0": -1,
+      "ni": 11,
+      "nj": 8,
+      "offset": 4944,
+      "bytes": 264
+     },
+     {
+      "level": 5,
+      "cellM": 8.0,
+      "i0": -1,
+      "j0": -1,
+      "ni": 6,
+      "nj": 5,
+      "offset": 5208,
+      "bytes": 90
+     },
+     {
+      "level": 6,
+      "cellM": 16.0,
+      "i0": -1,
+      "j0": -1,
+      "ni": 4,
+      "nj": 3,
+      "offset": 5298,
+      "bytes": 36
+     },
+     {
+      "level": 7,
+      "cellM": 32.0,
+      "i0": -1,
+      "j0": -1,
+      "ni": 3,
+      "nj": 2,
+      "offset": 5334,
+      "bytes": 18
+     },
+     {
+      "level": 8,
+      "cellM": 64.0,
+      "i0": -1,
+      "j0": -1,
+      "ni": 2,
+      "nj": 2,
+      "offset": 5352,
+      "bytes": 12
+     },
+     {
+      "level": 9,
+      "cellM": 128.0,
+      "i0": -1,
+      "j0": -1,
+      "ni": 2,
+      "nj": 2,
+      "offset": 5364,
+      "bytes": 12
+     },
+     {
+      "level": 10,
+      "cellM": 256.0,
+      "i0": -1,
+      "j0": -1,
+      "ni": 2,
+      "nj": 2,
+      "offset": 5376,
+      "bytes": 12
+     }
+    ],
+    "reasonBits": {
+     "views": 1,
+     "spread": 2,
+     "gsd": 4,
+     "accuracy": 8,
+     "unseen": 16,
+     "alignment": 32
+    },
+    "policy": "weak-v1",
+    "weakBelow": 128,
+    "alignmentCap": {
+     "uncertaintyM": 0.0,
+     "priorEpochs": 0,
+     "factor": 1.0,
+     "source": "site_context.json"
+    },
+    "roiDisc": null,
+    "summary": {
+     "cells": 1312,
+     "scored": 1304,
+     "weak": 656,
+     "unseen": 8,
+     "weakShare": 0.5,
+     "reasons": {
+      "views": 324,
+      "spread": 324,
+      "gsd": 130,
+      "accuracy": 0,
+      "unseen": 8,
+      "alignment": 0
+     },
+     "gaussians": 0,
+     "outside": 0,
+     "medianGsdMm": null,
+     "metric": false
+    },
+    "fixture": "synthetic: integer arithmetic over the synthetic-yard root box, not a measurement (tools/captures/synthetic_cell_grids.py)",
+    "sha256": "256c3a6ebdb2342ef0a17b81ff52bd87c05d81ac3a0bfe39c820c6e0fa1975e8"
+   },
+   "file": "e1/confidence.bin",
+   "fileSha256": "3cbfffe420ac2a152dd06f10ecc50f604b58d5939a2bada44c9260bf32713d95",
+   "planes": [
+    {
+     "level": 2,
+     "sha256": "515ada55df96ca3e4ab8777c900697bc61a698607ea24ef2171f0bcd6a5e0be7"
+    },
+    {
+     "level": 3,
+     "sha256": "dddbc8b53747b862da5e676b872fc7fcddda0368da291a34a7ea3302bfc8840d"
+    },
+    {
+     "level": 4,
+     "sha256": "c0ecfe2af7978df48d6223c1b10aac0744fd81a87fa80bba8f1a3b1bfb5f27ef"
+    },
+    {
+     "level": 5,
+     "sha256": "5062e5f40afe177023b7ca31e4bb866de8a2ba9d39fee4641bb752bd6becfbc0"
+    },
+    {
+     "level": 6,
+     "sha256": "e006a3633ce5a06cd36f6cb08f86e909631d013afa58fded7d941906f7df17c9"
+    },
+    {
+     "level": 7,
+     "sha256": "f298f8e7c5ad4810cc7518b5745fbfd744ff945fb547aab0bf7d8335fe7af616"
+    },
+    {
+     "level": 8,
+     "sha256": "b7ab64b67092985578f0759ab1876a8aa1f1b942cabeb559b27d113ab567a4a1"
+    },
+    {
+     "level": 9,
+     "sha256": "b7ab64b67092985578f0759ab1876a8aa1f1b942cabeb559b27d113ab567a4a1"
+    },
+    {
+     "level": 10,
+     "sha256": "b7ab64b67092985578f0759ab1876a8aa1f1b942cabeb559b27d113ab567a4a1"
+    }
+   ]
+  },
+  "e2": {
+   "descriptor": {
+    "format": "hexapod.cellgrid",
+    "version": 1,
+    "kind": "confidence",
+    "uri": "confidence.bin",
+    "frame": "tileset",
+    "lattice": {
+     "baseM": 0.25,
+     "level": 1
+    },
+    "cellM": 0.5,
+    "channels": [
+     {
+      "name": "score",
+      "type": "u1"
+     },
+     {
+      "name": "reasons",
+      "type": "u1"
+     },
+     {
+      "name": "relief",
+      "type": "u1",
+      "unitM": 0.25
+     }
+    ],
+    "levels": [
+     {
+      "level": 1,
+      "cellM": 0.5,
+      "i0": -7,
+      "j0": -7,
+      "ni": 80,
+      "nj": 63,
+      "offset": 0,
+      "bytes": 15120
+     },
+     {
+      "level": 2,
+      "cellM": 1.0,
+      "i0": -4,
+      "j0": -4,
+      "ni": 41,
+      "nj": 32,
+      "offset": 15120,
+      "bytes": 3936
+     },
+     {
+      "level": 3,
+      "cellM": 2.0,
+      "i0": -2,
+      "j0": -2,
+      "ni": 21,
+      "nj": 16,
+      "offset": 19056,
+      "bytes": 1008
+     },
+     {
+      "level": 4,
+      "cellM": 4.0,
+      "i0": -1,
+      "j0": -1,
+      "ni": 11,
+      "nj": 8,
+      "offset": 20064,
+      "bytes": 264
+     },
+     {
+      "level": 5,
+      "cellM": 8.0,
+      "i0": -1,
+      "j0": -1,
+      "ni": 6,
+      "nj": 5,
+      "offset": 20328,
+      "bytes": 90
+     },
+     {
+      "level": 6,
+      "cellM": 16.0,
+      "i0": -1,
+      "j0": -1,
+      "ni": 4,
+      "nj": 3,
+      "offset": 20418,
+      "bytes": 36
+     },
+     {
+      "level": 7,
+      "cellM": 32.0,
+      "i0": -1,
+      "j0": -1,
+      "ni": 3,
+      "nj": 2,
+      "offset": 20454,
+      "bytes": 18
+     },
+     {
+      "level": 8,
+      "cellM": 64.0,
+      "i0": -1,
+      "j0": -1,
+      "ni": 2,
+      "nj": 2,
+      "offset": 20472,
+      "bytes": 12
+     },
+     {
+      "level": 9,
+      "cellM": 128.0,
+      "i0": -1,
+      "j0": -1,
+      "ni": 2,
+      "nj": 2,
+      "offset": 20484,
+      "bytes": 12
+     }
+    ],
+    "reasonBits": {
+     "views": 1,
+     "spread": 2,
+     "gsd": 4,
+     "accuracy": 8,
+     "unseen": 16,
+     "alignment": 32
+    },
+    "policy": "weak-v1",
+    "weakBelow": 128,
+    "alignmentCap": {
+     "uncertaintyM": 0.062,
+     "priorEpochs": 1,
+     "factor": 1.0,
+     "source": "epoch_alignment.json"
+    },
+    "roiDisc": null,
+    "summary": {
+     "cells": 5040,
+     "scored": 5040,
+     "weak": 320,
+     "unseen": 0,
+     "weakShare": 0.0635,
+     "reasons": {
+      "views": 0,
+      "spread": 0,
+      "gsd": 320,
+      "accuracy": 0,
+      "unseen": 0,
+      "alignment": 0
+     },
+     "gaussians": 0,
+     "outside": 0,
+     "medianGsdMm": null,
+     "metric": false
+    },
+    "fixture": "synthetic: integer arithmetic over the synthetic-yard root box, not a measurement (tools/captures/synthetic_cell_grids.py)",
+    "sha256": "22588fe50c15a9dbb905e97b92a76324e53005eed27a354176c34e74b24586ac"
+   },
+   "file": "e2/confidence.bin",
+   "fileSha256": "68a03b682b829e0788c556d703a28f77922d280f68e608aa7c7d207ccd22178d",
+   "planes": [
+    {
+     "level": 1,
+     "sha256": "106180c63d99a769ec134b8f65bcbe0497525474e0cdfbaf9d0429392cdf1dbc"
+    },
+    {
+     "level": 2,
+     "sha256": "16fb16ee213b8a9aac7e39a0c63fe8d59b51de922069c3989b89a40406dc6014"
+    },
+    {
+     "level": 3,
+     "sha256": "f0ef4d81fcd24339ab2659c3223845db106bc2f596d98e2b10c728bec7eea22e"
+    },
+    {
+     "level": 4,
+     "sha256": "355bedbb9556140c7c59e8d526419d15bcd139a34a5ca714644631dc10f22552"
+    },
+    {
+     "level": 5,
+     "sha256": "b889bde47408ee132cfc02c0144af209accc4e160177aac7fb53ec941b5b3cf8"
+    },
+    {
+     "level": 6,
+     "sha256": "d2e27e602134edd1d254076a85d70df3df1a6742ee061fc3c06847c1c16fcdfe"
+    },
+    {
+     "level": 7,
+     "sha256": "e467b49586946364065d7caf74c8ae82522b80e17af3453505ac209acfd1011b"
+    },
+    {
+     "level": 8,
+     "sha256": "592aae0b967efb2ad7664fa88263f391503eebe27ae1b8cbda8eacc130547cdd"
+    },
+    {
+     "level": 9,
+     "sha256": "592aae0b967efb2ad7664fa88263f391503eebe27ae1b8cbda8eacc130547cdd"
+    }
+   ]
+  }
+ }
+}
