@@ -609,4 +609,32 @@ describe("comparing two dates of a site", () => {
     for (let i = 0; i < 5; i++) await settle();
     expect(clipping.setFootprint.mock.calls.at(-1)?.[1]).toEqual({ withCanopy: june });
   });
+
+  it("the load pill follows a date the comparison has to load, until both are in", async () => {
+    const E3 = epoch("e3", {
+      ordinal: 3,
+      observedAt: "2026-09-01T15:00:00Z",
+      currentAssetId: "a3",
+    });
+    const A3 = splat("a3", { epochId: "e3", createdAt: "2026-09-02T00:00:00Z" });
+    const { manager, loads, tileset } = harness(
+      twoEpochSite({ epochs: [E1, E2, E3], assets: [A1, A2, A3] }),
+    );
+    await open(manager);
+    expect(loads.at(-1)).toBe("ready");
+    let release = (): void => undefined;
+    made.held.set(A2.id, (r) => (release = r));
+    const comparing = manager.setCompareDates(BOTH);
+    await settle();
+    // March is in already; June is being made: the site's model is loading again.
+    expect(loads.at(-1)).toBe("model");
+    const june = tileset(A2.id);
+    if (june) june.tilesLoaded = false;
+    release();
+    await comparing;
+    expect(loads.at(-1)).toBe("streaming");
+    if (june) june.tilesLoaded = true;
+    june?.allTilesLoaded.raiseEvent();
+    expect(loads.at(-1)).toBe("ready");
+  });
 });

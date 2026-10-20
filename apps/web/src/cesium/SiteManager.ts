@@ -1206,18 +1206,29 @@ export class SiteManager {
   ): void {
     const load = this.loads.get(siteId);
     if (!load || load.phase === "ready" || load.phase === "error") return;
+    // Ready once every drawn model's first view is in: both dates, when two are compared.
+    const allIn = (): boolean => {
+      const entry = this.loaded.get(siteId);
+      if (!entry) return false;
+      const drawnAssets = this.drawnAssets(entry);
+      const handles = this.drawnHandles(entry);
+      return (
+        handles.length === drawnAssets.length &&
+        handles.every((h) => !this.cesiumDraws(h.handle.asset) || h.tileset.tilesLoaded)
+      );
+    };
     if (!this.cesiumDraws(asset) || tileset.tilesLoaded) {
-      this.reportLoad(siteId, { phase: "ready" });
+      if (allIn()) this.reportLoad(siteId, { phase: "ready" });
       return;
     }
     this.reportLoad(siteId, { phase: "streaming", progress: LOAD_PROGRESS.streaming });
     let peak = 0;
     const span = 1 - LOAD_PROGRESS.streaming;
-    // Only while this asset is the one shown: Splat / Mesh / Points can change mid-stream, and
-    // the record then belongs to the representation shown now (`restartLoad`).
+    // Only while this asset is drawn: Splat / Mesh / Points can change mid-stream, and the
+    // record then belongs to the representation shown now (`restartLoad`).
     const shown = (): boolean => {
       const entry = this.loaded.get(siteId);
-      return entry !== undefined && this.mainAsset(entry)?.id === asset.id;
+      return entry !== undefined && this.drawnAssets(entry).some((a) => a.id === asset.id);
     };
     const offProgress = tileset.loadProgress.addEventListener(
       (pending: number, processing: number) => {
@@ -1235,7 +1246,7 @@ export class SiteManager {
       offProgress();
       offReady();
       offAll();
-      if (shown() && this.loads.get(siteId)?.phase === "streaming")
+      if (shown() && allIn() && this.loads.get(siteId)?.phase === "streaming")
         this.reportLoad(siteId, { phase: "ready" });
     };
     const offReady = tileset.initialTilesLoaded.addEventListener(done);
@@ -1405,7 +1416,15 @@ export class SiteManager {
     if (same) return;
     active.compare = dates ? { left: dates.left, right: dates.right } : null;
     this.events.emit("compare-dates", { siteId: active.site.id, dates: active.compare });
-    this.restartLoad(active);
+    // A date the comparison has to load is the site's model loading again: the load pill says
+    // so until both are in (`watchFirstTiles`), not only for a first visit.
+    const load = this.loads.get(active.site.id);
+    const loading = this.drawnAssets(active).some(
+      (asset) => !active.handles.get(asset.id)?.tileset?.tilesLoaded,
+    );
+    if (dates && load?.phase === "ready" && loading)
+      this.startLoad(active.site.id, "model", load.flight);
+    else this.restartLoad(active);
     await this.showRepresentation(active, active.representation);
   }
 
@@ -1613,9 +1632,9 @@ export class SiteManager {
     if (main) {
       if (drawn(active)) this.applyClip(active, asset, tileset);
       else this.clipping.setFootprint(active.site.id, null);
-      const handle = active.handles.get(asset.id);
-      if (handle) this.watchFirstTiles(active.site.id, handle, tileset, asset);
     }
+    const handle = active.handles.get(asset.id);
+    if (handle) this.watchFirstTiles(active.site.id, handle, tileset, asset);
     this.events.emit("tilesets", this.activeTilesetLabels());
     this.scene.requestRender();
   }
