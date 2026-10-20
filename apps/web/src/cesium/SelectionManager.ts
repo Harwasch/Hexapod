@@ -138,17 +138,19 @@ export class SelectionManager {
     window.addEventListener("pointerdown", this.onPointerDown, { capture: true });
     window.addEventListener("pointerup", this.onPointerUp, { capture: true });
     window.addEventListener("pointercancel", this.onPointerUp, { capture: true });
-    // A site's card open while another date of it is chosen: it now names that date's model.
-    this.offEpoch = events.on("epoch", ({ siteId }) => {
+    // A site's card open while another date of it is chosen, or two dates are compared or no
+    // longer: it now names the date shown, not one that may no longer be drawn.
+    const follow = ({ siteId }: { siteId: string }): void => {
       const current = this.current;
       const site = this.sites.activeSite;
       if (current?.kind !== "site" || current.siteId !== siteId || site?.id !== siteId) return;
       this.current = { ...current, ...this.shownModel(site) };
       this.events.emit("selection", this.current);
-    });
+    };
+    this.offEpoch = [events.on("epoch", follow), events.on("compare-dates", follow)];
   }
 
-  private readonly offEpoch: () => void;
+  private readonly offEpoch: (() => void)[];
 
   /** Disabled while measuring or exploring so those tools own the pointer. */
   /**
@@ -813,7 +815,7 @@ export class SelectionManager {
   }
 
   destroy(): void {
-    this.offEpoch();
+    for (const off of this.offEpoch) off();
     window.removeEventListener("pointerdown", this.onPointerDown, { capture: true });
     window.removeEventListener("pointerup", this.onPointerUp, { capture: true });
     window.removeEventListener("pointercancel", this.onPointerUp, { capture: true });

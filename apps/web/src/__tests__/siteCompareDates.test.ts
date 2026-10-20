@@ -440,6 +440,17 @@ describe("comparing two dates of a site", () => {
     expect(manager.drawnAssetOf({})).toBeNull();
   });
 
+  it("once ended, says the other date is not drawn, so what was picked on it is let go", async () => {
+    const { manager, tileset } = harness();
+    await open(manager);
+    const march = tileset(A1.id) ?? {};
+    await manager.setCompareDates(BOTH);
+    expect(manager.drawnAssetOf(march, SITE_ID)?.id).toBe(A1.id);
+    await manager.setCompareDates(null);
+    expect(manager.drawnAssetOf(march, SITE_ID)).toBeNull();
+    expect(manager.drawnAssetOf(tileset(A2.id) ?? {}, SITE_ID)?.id).toBe(A2.id);
+  });
+
   it("ends when an asset is asked for by id (the load pill's Retry)", async () => {
     const { manager, said, drawn } = harness();
     await open(manager);

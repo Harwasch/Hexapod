@@ -130,6 +130,24 @@ it("with two dates compared, the card names the date on the side clicked", () =>
   expect(String(card(june).sourceLabel)).toMatch(/^June phone video/);
 });
 
+it("a card naming a compared date names the date shown again once the comparison ends", () => {
+  const { card, drawn, events, manager } = rig(A2);
+  const march = { name: "March tileset" };
+  drawn.set(march, A1.id);
+  // Opened on March, drawn left of the divider while June is the date shown alone.
+  (manager as unknown as { current: unknown }).current = card(march);
+  const cards: { sourceLabel?: string }[] = [];
+  events.on("selection", (selection) => {
+    if (selection) cards.push(selection);
+  });
+  drawn.clear();
+  events.emit("compare-dates", { siteId: SITE_ID, dates: null });
+  expect(cards.at(-1)?.sourceLabel).toMatch(/^June phone video/);
+  // Another site's comparison says nothing about this card.
+  events.emit("compare-dates", { siteId: "elsewhere", dates: null });
+  expect(cards).toHaveLength(1);
+});
+
 it("a click asks the splats under the point clicked, on its side of the divider", () => {
   const { manager } = rig(A2);
   const hit = { point: Cartesian3.fromDegrees(-123.88, 46.1335, 10), distance: 5, tileset: {} };
