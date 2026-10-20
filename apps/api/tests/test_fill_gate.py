@@ -22,6 +22,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
 from app.analysis import rescan_gate
@@ -32,7 +33,7 @@ from app.services import attach as attach_service
 from app.services import confidence_maps, epochs
 from app.services.errors import InvalidInputError
 from app.storage import S3Storage
-from tests.confidence_fixtures import descriptor
+from tests.confidence_fixtures import blob, descriptor
 from tests.sidecar_fixtures import TRANSFORM, a_tileset, put_scan, splat_glb, stage
 from tests.test_fill_targets_api import two_epochs
 
@@ -730,3 +731,43 @@ def test_a_grid_the_prefetch_did_not_foresee_is_refused_not_fetched_in_a_transac
     (gone,) = [gone for gone in plan.dropped if gone.kind == "inferredLayers"]
     assert "is missing" in gone.reason
     assert not [key for key in fetched if key.endswith("confidence.bin")]
+
+
+def test_the_carry_gate_finds_its_maps_in_a_bounded_number_of_queries(
+    db: Session, engine: Engine, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Codex B5b N5: `_map_rows` looked up a map per earlier published epoch until enough
+    were measured, so unmeasured uploads between a measured epoch and its re-scan cost a
+    query each. It reads them as the fill-targets route does: one bounded query."""
+    from datetime import timedelta
+
+    from app.services import fill_gate
+    from tests.confidence_fixtures import measured, register_run
+    from tests.test_fill_targets_api import FIRST, SECOND, _capture, _epoch
+    from tests.test_query_counts import counting
+    from tests.test_registration_epochs import _echoed
+
+    first = _capture(db, "first", FIRST)
+    register_run(db, storage, tmp_path, first, measured("e1"), grid=blob("e1"))
+    site_id = _epoch(db, first).site_id
+    second = _capture(db, "second", SECOND)
+    register_run(db, storage, tmp_path, second, measured("e2", _echoed(site_id)), grid=blob("e2"))
+
+    def uploads(start: int, count: int) -> None:
+        for index in range(start, start + count):
+            capture = _capture(db, f"upload-{index}", FIRST + timedelta(hours=index + 1))
+            register_run(db, storage, tmp_path, capture, measured(None, _echoed(site_id)))
+
+    def rows() -> tuple[list[tuple[str, str]], list[str]]:
+        db.expunge_all()
+        epoch = _epoch(db, second)
+        with counting(engine) as statements:
+            found = fill_gate._map_rows(db, epoch)
+        return found, statements
+
+    uploads(0, 2)
+    few_rows, few = rows()
+    uploads(2, 12)
+    many_rows, many = rows()
+    assert many_rows == few_rows and len(many_rows) == 2
+    assert len(many) == len(few)

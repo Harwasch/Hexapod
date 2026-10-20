@@ -51,12 +51,10 @@ from typing import Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.analysis import cell_grid, rescan_gate
-from app.models import Asset, Epoch, EpochMap
-from app.models.enums import EpochStatus
+from app.models import Asset, Epoch
 from app.schemas.confidence import FillTargetsRead
 from app.services import confidence_maps, epochs, sidecars
 from app.services.errors import ConflictError, InvalidInputError
@@ -368,40 +366,22 @@ class _Fetched:
 
 
 def _map_rows(db: Session, epoch: Epoch) -> list[tuple[str, str]]:
-    """`(url, sha256)` of every map `confidence_maps.fill_targets` reads for `epoch`: its
-    current revision's, and those of the earlier published epochs of its site, newest
-    first, the first `MAX_EARLIER` measured (one more, so `capped` is told right). Read as
-    plain values, so nothing of the session is needed once the transaction ends."""
-    rows: list[tuple[str, str]] = []
-
-    def of(candidate: Epoch) -> EpochMap | None:
-        try:
-            return confidence_maps.measured_map(db, candidate)
-        except ConflictError:
-            return None
-
-    own = of(epoch)
-    if own is None:
-        return rows
-    rows.append((own.url, str(own.descriptor.get("sha256") or "")))
-    earlier = db.scalars(
-        select(Epoch)
-        .where(
-            Epoch.site_id == epoch.site_id,
-            Epoch.status == EpochStatus.PUBLISHED.value,
-            Epoch.observed_at < epoch.observed_at,
-            Epoch.id != epoch.id,
-        )
-        .order_by(Epoch.observed_at.desc(), Epoch.ordinal.desc())
-    )
-    for candidate in earlier:
-        row = of(candidate)
-        if row is None:
-            continue
-        if len(rows) > confidence_maps.MAX_EARLIER:
-            break
-        rows.append((row.url, str(row.descriptor.get("sha256") or "")))
-    return rows
+    """`(url, descriptor sha256)` of every map `confidence_maps.fill_targets` reads for
+    `epoch`: its current revision's, and those of the `MAX_EARLIER` newest earlier measured
+    epochs of its site (the route decodes no more; its one more only says `capped`) --
+    found by the route's own bounded query (`confidence_maps.earlier_measured`), one
+    statement however many unmeasured epochs lie between. Keyed as the grid cache is (`descriptor_sha256`),
+    and read as plain values, so nothing of the session is needed once the transaction
+    ends."""
+    try:
+        own = confidence_maps.measured_map(db, epoch)
+    except ConflictError:
+        return []
+    earlier = confidence_maps.earlier_measured(db, epoch, confidence_maps.MAX_EARLIER)
+    return [
+        (row.url, confidence_maps.descriptor_sha256(row.descriptor))
+        for row in (own, *(found for _, found in earlier))
+    ]
 
 
 def _targets_outside(
