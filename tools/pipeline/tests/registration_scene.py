@@ -347,6 +347,8 @@ def write_site_context(
             "platform": reference.alignment["platform"],
             "verdict": reference.alignment["verdict"],
             "uncertaintyM": reference.alignment["uncertaintyM"],
+            # The datum its origin's height is on: `align` refuses to reframe across two.
+            "heightDatum": reference.alignment["origin"]["heightDatum"],
             "frames": "reference/frames",
             "poses": "reference/poses",
             "placement": "reference/placement.json",

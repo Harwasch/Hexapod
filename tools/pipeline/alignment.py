@@ -119,6 +119,7 @@ __all__ = [
     "SiteContext",
     "align_epoch",
     "confidence",
+    "datum_problem",
     "decide",
     "empty_site_context",
     "label",
@@ -197,6 +198,9 @@ class Reference:
     poses: Path
     placement: Path
     georef: Path
+    #: The datum its georef origin's height is on (`site_frame.HEIGHT_DATUMS`), when the
+    #: site context states it.
+    height_datum: str | None = None
 
 
 @dataclass(frozen=True)
@@ -239,6 +243,12 @@ def read_site_context(directory: Path, log: Callable[[str], None] = print) -> Si
                     f"the reference epoch's {key} ({relative}) is not in site_context/"
                 )
             paths[key] = resolved
+        datum = raw.get("heightDatum")
+        if datum is not None and datum not in site_frame.HEIGHT_DATUMS:
+            raise ValueError(
+                f"reference.heightDatum must be one of {', '.join(site_frame.HEIGHT_DATUMS)} "
+                f"or null, not {datum!r}"
+            )
         uncertainty_m = _float(raw.get("uncertaintyM"))
         if uncertainty_m is None or uncertainty_m <= 0:
             raise ValueError("reference.uncertaintyM must be a positive number of metres")
@@ -249,6 +259,7 @@ def read_site_context(directory: Path, log: Callable[[str], None] = print) -> Si
             platform=_str(raw.get("platform")),
             verdict=_str(raw.get("verdict")),
             uncertainty_m=uncertainty_m,
+            height_datum=datum,
             **paths,
         )
     return SiteContext(
@@ -484,6 +495,35 @@ def reference_frame(reference: Reference, origin: tuple[float, float, float]) ->
         translation=r_t @ (exif.geodetic_to_ecef(*source) - exif.geodetic_to_ecef(*origin)),
     )
     return _compose(reframe, placement)
+
+
+def datum_problem(
+    reference: Reference, origin: tuple[float, float, float], datum: str
+) -> str | None:
+    """Why the reference cannot be reframed into this epoch's east/north/up, or None.
+
+    `reference_frame` moves through ECEF with both origins' numeric heights, which is
+    exact only when they are on one height datum: the same point at 100 m above sea level
+    and 130 m above the ellipsoid would move the epoch 30 m. No geoid model is available
+    here to convert between them, so a different datum is refused. A reference that does
+    not state its datum is accepted only at this epoch's own origin (the site frame's,
+    shared by every epoch of the site), where no height is converted."""
+    if reference.height_datum is not None:
+        if reference.height_datum == datum:
+            return None
+        return (
+            f"visual: the reference epoch's heights are on height datum "
+            f"{reference.height_datum} and this epoch's on {datum}; with no geoid model to "
+            f"convert them the reframe would move it by their separation, so it is refused"
+        )
+    georef = _read_json(reference.georef)
+    theirs = tuple(_float(georef.get(k)) for k in ("lat", "lon", "height"))
+    if theirs == tuple(float(v) for v in origin):
+        return None
+    return (
+        "visual: the reference epoch does not state its height datum and its origin is not "
+        "this epoch's, so its heights cannot be reframed safely; refused"
+    )
 
 
 def _footprint(model_dir: Path, model: sfm.Model, fit: sfm.Similarity) -> float | None:
@@ -945,7 +985,15 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
     reasons: list[str] = list(gnss.reasons)
     reference = context.reference
     visual: Candidate | None = None
-    if reference is not None and visual_mode == "auto":
+    problem = (
+        datum_problem(reference, origin, datum)
+        if reference is not None and visual_mode == "auto"
+        else None
+    )
+    if problem is not None:
+        visual = Candidate(method="visual", aligned=False, similarity=None)
+        visual.reasons.append(problem)
+    elif reference is not None and visual_mode == "auto":
         try:
             registered = _register(ctx, reference, frames, model_dir, seed)
         except (subprocess.CalledProcessError, OSError, json.JSONDecodeError) as error:
@@ -1086,6 +1134,7 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
         "method": chosen.method,
         "referenceEpochId": reference.epoch_id if reference is not None else None,
         "referenceJobId": reference.job_id if reference is not None else None,
+        "referenceHeightDatum": reference.height_datum if reference is not None else None,
         "platform": platform,
         "platformSource": platform_source,
         "rtkEvidence": evidence,

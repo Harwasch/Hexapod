@@ -517,6 +517,7 @@ def _run(
     reference: dict[str, Any] | None = None,
     poses_json: dict[str, Any] | None = None,
     frames_meta: dict[str, Any] | None = None,
+    reference_origin: tuple[float, float, float] = ORIGIN,
 ) -> tuple[Workdir, dict[str, Any]]:
     workdir = Workdir.create(root)
     inputs = ["frames", "poses", "georef.json", "site_context"]
@@ -546,9 +547,9 @@ def _run(
                         "scale": 1.0,
                         "rotation": np.eye(3).tolist(),
                         "translation": [0, 0, 0],
-                        "lat": ORIGIN[0],
-                        "lon": ORIGIN[1],
-                        "height": ORIGIN[2],
+                        "lat": reference_origin[0],
+                        "lon": reference_origin[1],
+                        "height": reference_origin[2],
                     }
                 )
             )
@@ -1042,3 +1043,34 @@ def test_the_claim_is_floored_by_the_vertical_anchor_too(
     _, document = _run(tmp_path / "w", _georef_aligned(IDENTITY, names), poses_json=priors)
     assert document["method"] == "gnss-prior-ba"
     assert document["uncertaintyM"] == pytest.approx(0.20)
+
+
+def _never_register(*_: object, **__: object) -> dict[str, Any]:
+    raise AssertionError("a reference on another height datum must not be registered into")
+
+
+def test_a_reference_on_another_height_datum_is_refused_not_reframed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R2 review (#51): the reference-to-epoch reframe went through ECEF with both
+    origins' numeric heights, whatever their datums -- the same point at 100 m above sea
+    level and 130 m above the ellipsoid moved the epoch 30 m down. There is no geoid model
+    here to convert them, so the visual alignment is refused (unaligned, and says why);
+    a reference whose datum is not stated is refused unless its origin is this epoch's."""
+    monkeypatch.setattr(alignment, "_register", _never_register)
+    names = [f"frame_{i:04d}.jpg" for i in range(COUNT)]
+    ellipsoid = {**REFERENCE, "heightDatum": "ellipsoid-wgs84"}
+    _, document = _run(tmp_path / "a", _georef_aligned(IDENTITY, names), reference=ellipsoid)
+    assert document["verdict"] == "unaligned" and document["frameSource"] == "georef"
+    assert any("height datum" in r and "ellipsoid-wgs84" in r for r in document["reasons"])
+    assert document["referenceHeightDatum"] == "ellipsoid-wgs84"
+
+    elsewhere = (ORIGIN[0] + 0.001, ORIGIN[1], ORIGIN[2] + 30.0)
+    _, unstated = _run(
+        tmp_path / "b",
+        _georef_aligned(IDENTITY, names),
+        reference=REFERENCE,
+        reference_origin=elsewhere,
+    )
+    assert unstated["verdict"] == "unaligned"
+    assert any("does not state its height datum" in r for r in unstated["reasons"])
