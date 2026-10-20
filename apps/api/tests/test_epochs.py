@@ -317,12 +317,11 @@ def test_the_spatial_match_is_answered_from_an_index_on_the_boundary(db: Session
     adds a gist index on that very expression, so the planner can use it (shown with
     sequential scans priced out, since a test database is too small to need it)."""
     from sqlalchemy import text
-    from sqlalchemy.dialects import postgresql
 
     make_site(db)
     db.commit()
     statement = epochs.nearest_framed_site_statement(ORIGIN[0], ORIGIN[1])
-    sql = statement.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})
+    sql = statement.compile(dialect=db.get_bind().dialect, compile_kwargs={"literal_binds": True})
 
     db.execute(text("SET LOCAL enable_seqscan = off"))
     plan = "\n".join(db.scalars(text(f"EXPLAIN {sql}")))
