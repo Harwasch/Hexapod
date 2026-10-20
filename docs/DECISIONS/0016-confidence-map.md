@@ -154,6 +154,9 @@ weak, in a frame another epoch could be compared in.
 - A tile's `confidenceMin` is a summary for finding weak tiles, not a per-gaussian score. Its box
   is padded by its gaussians' reach and is axis-aligned, so it can take in a weak neighbour's
   cell the tile barely draws over: the summary errs to the weak side, never the strong one.
+- `confidenceMin` is the grid's, not the tiles': the API's tile fingerprint
+  (`sidecars.tiles_fingerprint`) leaves it out on every tile, so a re-pack that changes only the
+  grid keeps what is bound to the tiles (`nativeLod`, the rig, objects).
 - Until A4 adds a `confidence` sidecar kind, a re-publish that carries sidecars from a previous
   generation reports `extras.confidence` as an unrecognised sidecar if the new run has none.
 - New trip-wires: `docs/HANDOFF.md` § 6.
