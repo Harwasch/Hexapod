@@ -751,7 +751,8 @@ rather than ending them; it ends with its site or from its own Hide. The legend 
 and uncalibrated, the least change it can show (`minDetectableM`), and which date is not
 survey-grade. The read is behind the write token: a 401 asks for it in the legend and in Compare.
 The drape lies on the ground, so splats over the ground (a yard's grass) cover it where they are
-dense: it shows through gaps and where nothing was scanned. Evidence: `e2e/changeDrape.spec.ts`.
+dense: it shows through gaps and where nothing was scanned. Evidence: `e2e/changeDrape.spec.ts`
+(the app under CesiumJS, PlayCanvas and Spark).
 
 ## Patched engine
 
