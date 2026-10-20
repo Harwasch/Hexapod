@@ -35,7 +35,7 @@ from pydantic import ValidationError
 from rasterio.io import MemoryFile
 from shapely.geometry import mapping, shape
 from shapely.geometry.base import BaseGeometry
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.analysis import knowledge
@@ -257,6 +257,8 @@ def _captures(
         .join(Site, Site.id == Asset.site_id)
         .outerjoin(stats, stats.c.site_id == Site.id)
         .where(func.ST_Intersects(footprint, land))
+        # A superseded revision of an epoch is history, not knowledge of the land.
+        .where(or_(Asset.epoch_id.is_(None), Asset.valid_to.is_(None)))
         .order_by(Asset.created_at.desc())
         .limit(ROW_LIMIT)
     ).all()

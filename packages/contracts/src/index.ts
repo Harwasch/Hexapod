@@ -32,6 +32,15 @@ export type ResolutionMetadata = Schemas["ResolutionMetadata"];
 
 export type Representation = Schemas["Representation"];
 export type AssetProvider = Schemas["AssetProvider"];
+export type AssetSourceKind = Schemas["AssetSourceKind"];
+
+export type Epoch = Schemas["EpochRead"];
+export type SiteFrame = Schemas["SiteFrameRead"];
+export type EpochStatus = Schemas["EpochStatus"];
+export type EpochJoinMethod = Schemas["EpochJoinMethod"];
+export type EpochPlatform = Schemas["EpochPlatform"];
+export type ObservedAtSource = Schemas["ObservedAtSource"];
+export type HeightDatum = Schemas["HeightDatum"];
 
 export type Layer = Schemas["LayerRead"];
 export type LayerCreate = Schemas["LayerCreate"];

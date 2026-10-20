@@ -2379,6 +2379,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sites/{site_id}/epochs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a site's epochs
+         * @description The site's dated captures in its one frame, oldest first, each with the asset it
+         *     currently shows. Empty for a legacy (seeded, catalog, hand-made) site.
+         */
+        get: operations["list_site_epochs_api_v1_sites__site_id__epochs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sites/{site_id}/thumbnail": {
         parameters: {
             query?: never;
@@ -3796,6 +3817,8 @@ export interface components {
             crs: components["schemas"]["CrsMetadata"] | null;
             /** Defaultvisible */
             defaultVisible: boolean;
+            /** Epochid */
+            epochId: string | null;
             /** Footprint */
             footprint: (components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"]) | null;
             /**
@@ -3819,6 +3842,7 @@ export interface components {
             siteId: string | null;
             /** Source */
             source: components["schemas"]["CesiumIonSource"] | components["schemas"]["TilesUrlSource"];
+            sourceKind: components["schemas"]["AssetSourceKind"];
             /**
              * Updatedat
              * Format: date-time
@@ -3847,6 +3871,13 @@ export interface components {
             /** Scale */
             scale?: number | null;
         };
+        /**
+         * AssetSourceKind
+         * @description Whether an asset shows what was captured (``observed``) or what was inferred to fill
+         *     it (``inferred``, M5). One asset is one tileset of one epoch and one source kind.
+         * @enum {string}
+         */
+        AssetSourceKind: "observed" | "inferred";
         /** AssetUpdate */
         AssetUpdate: {
             /** Attribution */
@@ -5387,6 +5418,78 @@ export interface components {
             taxa?: components["schemas"]["TaxonQuery"][];
         };
         /**
+         * EpochJoinMethod
+         * @description How a capture found the site it is an epoch of: named it (``explicit``), was matched
+         *     to it by location before its run (``spatial``), or made it (``new-site``).
+         * @enum {string}
+         */
+        EpochJoinMethod: "explicit" | "spatial" | "new-site";
+        /**
+         * EpochPlatform
+         * @description What captured an epoch, by survey tier (decision D4). Only ``phone-video`` and
+         *     ``unknown`` are told apart until M3 reads DJI XMP and RTK.
+         * @enum {string}
+         */
+        EpochPlatform: "rtk-drone" | "drone" | "phone-video" | "phone-photo" | "unknown";
+        /**
+         * EpochRead
+         * @description One dated capture of a site, expressed in the site's frame.
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        EpochRead: {
+            /** Alignment */
+            alignment: {
+                [key: string]: unknown;
+            } | null;
+            /** Captureid */
+            captureId: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Currentassetid */
+            currentAssetId: string | null;
+            /** Footprint */
+            footprint: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Jobid */
+            jobId: string | null;
+            joinMethod: components["schemas"]["EpochJoinMethod"];
+            /**
+             * Observedat
+             * Format: date-time
+             */
+            observedAt: string;
+            observedAtSource: components["schemas"]["ObservedAtSource"];
+            /** Ordinal */
+            ordinal: number;
+            platform: components["schemas"]["EpochPlatform"];
+            quality: components["schemas"]["CaptureQuality"] | null;
+            /**
+             * Siteid
+             * Format: uuid
+             */
+            siteId: string;
+            status: components["schemas"]["EpochStatus"];
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+        };
+        /**
+         * EpochStatus
+         * @description An epoch's standing. Only ``published`` is written until quality gates exist (M3).
+         * @enum {string}
+         */
+        EpochStatus: "published" | "rejected" | "superseded";
+        /**
          * EventLocation
          * @description Where on the map a research step is looking or what it found.
          *
@@ -5865,6 +5968,16 @@ export interface components {
              */
             active?: boolean;
         };
+        /**
+         * HeightDatum
+         * @description What a site frame's origin height is measured from.
+         *
+         *     ``msl-unverified``: every frame today. GPS altitude is above mean sea level (the geoid),
+         *     and nothing here applies a geoid model, so the number is recorded with the datum it
+         *     probably has rather than passed off as an ellipsoid height.
+         * @enum {string}
+         */
+        HeightDatum: "ellipsoid-wgs84" | "msl-unverified";
         /** Highlight */
         Highlight: {
             /** Endseconds */
@@ -8063,6 +8176,14 @@ export interface components {
              */
             progress: "unknown" | "not-started" | "in-progress" | "appears-complete";
         };
+        /**
+         * ObservedAtSource
+         * @description Where an epoch's ``observed_at`` came from: the capture row's ``captured_at``, the
+         *     run's manifest (the files' own date), or -- with neither -- the upload time
+         *     (``created``), which is labelled as such rather than passed off as a capture date.
+         * @enum {string}
+         */
+        ObservedAtSource: "captured-at" | "manifest" | "created";
         /** Offer */
         Offer: {
             /** Sdp */
@@ -10275,6 +10396,42 @@ export interface components {
             /** Thumbnailurl */
             thumbnailUrl?: string | null;
         };
+        /**
+         * SiteFrameRead
+         * @description The WGS84 origin every epoch of the site is placed about; fixed once created.
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        SiteFrameRead: {
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Epsg */
+            epsg: number;
+            /** Height */
+            height: number;
+            heightDatum: components["schemas"]["HeightDatum"];
+            /** Lat */
+            lat: number;
+            /** Lon */
+            lon: number;
+            /**
+             * Siteid
+             * Format: uuid
+             */
+            siteId: string;
+            source: components["schemas"]["SiteFrameSource"];
+        };
+        /**
+         * SiteFrameSource
+         * @description How a site's frame came to exist (decision D3): from its first epoch's georeference
+         *     (``registration``), from migration 0032 (``backfill``), or re-made from the frame a run
+         *     echoed after the site it named was deleted (``echo``).
+         * @enum {string}
+         */
+        SiteFrameSource: "registration" | "backfill" | "echo";
         /** SiteQuality */
         SiteQuality: {
             /** Groundsampledistancem */
@@ -10305,6 +10462,9 @@ export interface components {
             createdAt: string;
             /** Description */
             description: string | null;
+            /** Epochs */
+            epochs: components["schemas"]["EpochRead"][];
+            frame: components["schemas"]["SiteFrameRead"] | null;
             /**
              * Id
              * Format: uuid
@@ -11635,6 +11795,7 @@ export type SchemaAssetCreate = components['schemas']['AssetCreate'];
 export type SchemaAssetProvider = components['schemas']['AssetProvider'];
 export type SchemaAssetRead = components['schemas']['AssetRead'];
 export type SchemaAssetScaleUpdate = components['schemas']['AssetScaleUpdate'];
+export type SchemaAssetSourceKind = components['schemas']['AssetSourceKind'];
 export type SchemaAssetUpdate = components['schemas']['AssetUpdate'];
 export type SchemaAttribution = components['schemas']['Attribution'];
 export type SchemaBillingImport = components['schemas']['BillingImport'];
@@ -11714,6 +11875,10 @@ export type SchemaDocumentOutput = components['schemas']['DocumentOutput'];
 export type SchemaDocumentPageRead = components['schemas']['DocumentPageRead'];
 export type SchemaDocumentSearchHit = components['schemas']['DocumentSearchHit'];
 export type SchemaEcologyRequest = components['schemas']['EcologyRequest'];
+export type SchemaEpochJoinMethod = components['schemas']['EpochJoinMethod'];
+export type SchemaEpochPlatform = components['schemas']['EpochPlatform'];
+export type SchemaEpochRead = components['schemas']['EpochRead'];
+export type SchemaEpochStatus = components['schemas']['EpochStatus'];
 export type SchemaEventLocation = components['schemas']['EventLocation'];
 export type SchemaEventLocationRef = components['schemas']['EventLocationRef'];
 export type SchemaEventRead = components['schemas']['EventRead'];
@@ -11741,6 +11906,7 @@ export type SchemaGooglePhotorealisticSource = components['schemas']['GooglePhot
 export type SchemaGroundSample = components['schemas']['GroundSample'];
 export type SchemaHealthStatus = components['schemas']['HealthStatus'];
 export type SchemaHeartbeat = components['schemas']['Heartbeat'];
+export type SchemaHeightDatum = components['schemas']['HeightDatum'];
 export type SchemaHighlight = components['schemas']['Highlight'];
 export type SchemaHighlightSample = components['schemas']['HighlightSample'];
 export type SchemaHighlightsRequest = components['schemas']['HighlightsRequest'];
@@ -11839,6 +12005,7 @@ export type SchemaMultiPolygon = components['schemas']['MultiPolygon'];
 export type SchemaMvtSource = components['schemas']['MvtSource'];
 export type SchemaNotCountedRead = components['schemas']['NotCountedRead'];
 export type SchemaObjectiveAssessment = components['schemas']['ObjectiveAssessment'];
+export type SchemaObservedAtSource = components['schemas']['ObservedAtSource'];
 export type SchemaOffer = components['schemas']['Offer'];
 export type SchemaOrphanObject = components['schemas']['OrphanObject'];
 export type SchemaOutline = components['schemas']['Outline'];
@@ -11946,6 +12113,8 @@ export type SchemaSignatureZone = components['schemas']['SignatureZone'];
 export type SchemaSignatureZonesRead = components['schemas']['SignatureZonesRead'];
 export type SchemaSignatureZonesRequest = components['schemas']['SignatureZonesRequest'];
 export type SchemaSiteCreate = components['schemas']['SiteCreate'];
+export type SchemaSiteFrameRead = components['schemas']['SiteFrameRead'];
+export type SchemaSiteFrameSource = components['schemas']['SiteFrameSource'];
 export type SchemaSiteQuality = components['schemas']['SiteQuality'];
 export type SchemaSiteRead = components['schemas']['SiteRead'];
 export type SchemaSiteSummary = components['schemas']['SiteSummary'];
@@ -22420,6 +22589,64 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_site_epochs_api_v1_sites__site_id__epochs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EpochRead"][];
+                };
             };
             /** @description Missing or wrong write token */
             401: {
