@@ -1278,7 +1278,13 @@ def fill_scan(
         for f in filled
     ]
     if len(lifted) == 0:
-        return {**skipped, "skipped": "no accepted fill", "views": per_view}
+        if not any(f.accepted for f in filled):
+            why = "no accepted fill"
+        elif not any(f.conditioning.mask.any() for f in filled):
+            why = "no view shows a hole in the target cells (too few or too scattered to fill)"
+        else:
+            why = "nothing lifted is inside a target cell"
+        return {**skipped, "skipped": why, "views": per_view}
     distilled: dict[str, object] | None = None
     if distill_iterations > 0:
         import distill_fill

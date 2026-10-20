@@ -509,6 +509,24 @@ def test_fill_scan_with_no_cell_still_weak_is_skipped_not_refused(tmp_path: Path
     assert not out.exists()
 
 
+def test_fill_scan_says_so_when_no_view_shows_a_hole_in_the_targets(tmp_path: Path) -> None:
+    """Targets too few or too scattered to cover a pixel in any view (a renderer that draws
+    the seen side as the whole of it stands in): skipped, saying why, nothing written."""
+    wall, tileset, gate, grid = _wall_case(tmp_path, _north)
+
+    def all_seen(splats: Splats, camera: Camera, **kwargs: object) -> tf.Frame:
+        return tf.render(splats, camera)
+
+    out = tmp_path / "inferred"
+    evidence = tf.fill_scan(
+        wall, grid, tf.InpaintFiller(), tileset, out,
+        gate=gate, views=2, width=64, height=48, renderer=all_seen,
+    )  # fmt: skip
+    assert evidence["gaussians"] == 0 and evidence["gated"]["targets"] > 0
+    assert evidence["skipped"].startswith("no view shows a hole in the target cells")
+    assert not out.exists()
+
+
 def test_fill_scan_refuses_another_tileset_s_targets(tmp_path: Path) -> None:
     """Targets computed for another epoch (another window) or for a tileset never measured
     are refused before anything is rendered."""
