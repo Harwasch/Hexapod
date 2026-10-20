@@ -3164,6 +3164,7 @@ def splat_ground(ctx: StageContext) -> StageOutcome:
         percentile=percentile,
         min_points=int(ctx.param("min_points", 8)),
         max_cells=int(ctx.param("max_cells", 64)),
+        to_lonlat=_frame_lonlat(georef),
     )
     median = gaussians.median_of([sample.z for sample in samples])
     median = None if median is None else round(median, 3)
@@ -3189,6 +3190,22 @@ def splat_ground(ctx: StageContext) -> StageOutcome:
     if median is not None:
         metrics["medianZ"] = median
     return StageOutcome(metrics=metrics, summary=f"{len(samples)} ground cells")
+
+
+def _frame_lonlat(
+    georef: dict[str, object],
+) -> Callable[[float, float, float], tuple[float, float]] | None:
+    """In a site frame, the exact east/north/up-to-(lon, lat) of the tiles' own placement;
+    None outside one, where the flat rule about the capture's own centre is what it was."""
+    if not isinstance(georef.get("siteFrame"), dict):
+        return None
+    frame = site_frame.SiteFrame(
+        site_id="",
+        lat=float(_number(georef.get("lat"))),
+        lon=float(_number(georef.get("lon"))),
+        height=float(_number(georef.get("height"))),
+    )
+    return lambda east, north, up: site_frame.enu_to_lonlat(frame, east, north, up)
 
 
 @stage_impl(

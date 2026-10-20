@@ -242,27 +242,56 @@ def test_lane1_in_a_site_frame_keeps_the_origin_and_moves_the_capture(
     expected = splat_tiles.enu_to_ecef(FRAME["lat"], FRAME["lon"], HEIGHT)
     assert tileset["root"]["transform"] == pytest.approx(expected, abs=1e-6)
 
-    # And the ground is in the same place on the globe. Not to a centimetre: the ground
-    # samples convert metres to degrees by a flat 111,320 m a degree (`gaussians.
-    # ground_samples`), which at 28 deg N is ~0.4% long north-south and ~0.06% east-west
-    # -- over this 36 m offset, about 12 cm (1.1e-6 deg) of latitude. 2e-6 deg (about
-    # 20 cm) is that with margin, from first principles; the exact composition is checked
-    # beside it.
+    # And the ground is in the same place on the globe. In the frame the samples are
+    # converted exactly (`site_frame.enu_to_lonlat`, the inverse of the tiles' own root
+    # transform); without one they keep the flat 111,320 m a degree about the capture's
+    # own centre, which is 0.43% long north-south at 28 deg N over a's own extent. So b
+    # agrees with a to that 0.43% of each cell's distance from the capture's centre (0.5%
+    # is it with margin, from first principles), plus a millimetre.
+    import exif
+
     ground_a = _json(a, "ground_samples", "ground_samples.json")
     ground_b = _json(b, "ground_samples", "ground_samples.json")
     assert ground_b["origin"] == {"lat": FRAME["lat"], "lon": FRAME["lon"], "height": HEIGHT}
     assert len(ground_a["samples"]) == len(ground_b["samples"]) > 0
-    scale = max(math.cos(math.radians(FRAME["lat"])), 1e-6)
+    scale = max(math.cos(math.radians(LAT)), 1e-6)
     for one, two in zip(ground_a["samples"], ground_b["samples"], strict=True):
-        assert two["lat"] == pytest.approx(one["lat"], abs=2e-6)
-        assert two["lon"] == pytest.approx(one["lon"], abs=2e-6)
-        # The flat conversion, composed exactly: b's cell is a's, moved by the offset.
         north_a = (one["lat"] - LAT) * gaussians.METRES_PER_DEGREE
-        north_b = (two["lat"] - FRAME["lat"]) * gaussians.METRES_PER_DEGREE
-        assert north_b - north_a == pytest.approx(offset[1], abs=1e-3)
-        east_b = (two["lon"] - FRAME["lon"]) * gaussians.METRES_PER_DEGREE * scale
-        assert east_b > 0
+        east_a = (one["lon"] - LON) * gaussians.METRES_PER_DEGREE * scale
+        allowed_m = 0.005 * math.hypot(east_a, north_a) + 1e-3
+        enu_b = exif.ecef_to_enu(
+            exif.geodetic_to_ecef(two["lat"], two["lon"], HEIGHT + two["z"]),
+            FRAME["lat"],
+            FRAME["lon"],
+            HEIGHT,
+        )
+        # b's cell, read back exactly about the frame, is a's cell moved by the offset.
+        assert float(enu_b[0]) == pytest.approx(east_a + offset[0], abs=allowed_m)
+        assert float(enu_b[1]) == pytest.approx(north_a + offset[1], abs=allowed_m)
         assert two["z"] == pytest.approx(one["z"] + offset[2], abs=1e-3)
+
+
+def test_the_exact_inverse_agrees_with_an_independent_one_far_from_the_origin() -> None:
+    """`site_frame.enu_to_lonlat` against `gps_frames`' Ferrari closed form (a different
+    method, so they cannot agree for the wrong reason), out to the 2047 m range. The flat
+    rule the samples used before is ~9 m off north-south at 2 km; this is held to 1 mm
+    (about 1e-8 deg), well inside the SPZ position quantum's order."""
+    frame = _frame()
+    for east, north, up in (
+        (0.0, 0.0, 0.0),
+        (2000.0, 0.0, 3.0),
+        (0.0, 2000.0, -5.0),
+        (-1400.0, 1400.0, 20.0),
+        (36.0, -36.0, 0.0),
+    ):
+        lon, lat = site_frame.enu_to_lonlat(frame, east, north, up)
+        want = gps_frames.enu_to_geodetic(east, north, up, frame.lat, frame.lon, frame.height)
+        assert lat == pytest.approx(want[0], abs=1e-8)
+        assert lon == pytest.approx(want[1], abs=1e-8)
+    # The flat rule's error it replaces, for the record: metres, not millimetres, at 2 km.
+    lon, lat = site_frame.enu_to_lonlat(frame, 0.0, 2000.0, 0.0)
+    flat = frame.lat + 2000.0 / gaussians.METRES_PER_DEGREE
+    assert abs(flat - lat) * gaussians.METRES_PER_DEGREE > 5.0
 
 
 def test_lane1_without_a_frame_writes_no_site_frame_key(runs: tuple[Workdir, Workdir]) -> None:
