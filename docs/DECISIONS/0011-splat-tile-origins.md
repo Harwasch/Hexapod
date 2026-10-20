@@ -90,13 +90,16 @@ bits and decode error; the worst is exactly half a quantum, on the 11-bit tiles.
 - **Spark memory.** Part B's 32-bit centres in view.html double Spark's per-splat memory (16 to
   32 bytes); `LOAD_FACTOR` and `MAX_STREAMED` are kept, not re-measured on a phone. The globe's
   Spark renderer keeps its accumulator at 16 bytes (`accumExtSplats` off), as before.
-- **Untested Spark options in view.html and live mode.** No test covers these lines: the
-  `accumExtSplats: true` on both pages' `SparkRenderer`, live mode's `extSplats: true`, and the
-  `extSplats.lodSplats` fallback in live mode's framing. The first two only show as half-float
-  quantisation in what Spark draws, and at the fixture's 3 km that is 2 m steps under 0.4 m
-  splats, which a screenshot cannot tell apart. The fallback only runs for a snapshot above the
-  Detail budget with no cameras. Both pages build these inside their page entry points, and no
-  unit test can load those without a WebGL context. What is tested: view.html's tile
-  `extSplats` default (`sparkStream.test.ts`), and its `drawn()` boxes (`viewFar.spec.ts`),
-  which are read from `extSplats.lodSplats`.
+- **Spark options in view.html and live mode, tested and not.** `viewFar.spec.ts` holds
+  view.html to 32-bit centres twice. Its `__viewer.gpu()` reads what Spark holds on the GPU:
+  each drawn tile's generator source (ExtSplats, not PackedSplats) and the accumulator's
+  `extSplats` and render targets, so turning off either the tiles' `extSplats` or
+  `accumExtSplats` fails it. And a two-splat tile, 30 cm apart 1 km from its origin, must draw
+  two marks: half floats put both at 1000.0 (recorded run: one mark, at 0.499 of the width).
+  The accumulator cannot be held this way. A half-float accumulator keeps centres relative to
+  the eye (Spark 2.2 `SplatAccumulator`), so its steps are millimetres where anything is looked
+  at from; its flag is what is tested. Still untested, in live mode's entry point (no unit test
+  loads it without WebGL): its `accumExtSplats`, its `extSplats: true`, and the
+  `extSplats.lodSplats` fallback in its framing, which runs only for a snapshot above the
+  Detail budget with no cameras.
 - **SOG precision** for very large sites is not addressed.

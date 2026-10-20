@@ -541,8 +541,9 @@ scan's ENU frame for every reader. How each renderer composes it:
   `siteFramePositions`), and a placement (`place`) moves the scan's frame with the tile's
   offset inside it.
 - **view.html** keeps 32-bit centres: `extSplats` on every tile and the live splat, and
-  `accumExtSplats` on its `SparkRenderer`. Spark's packed splats hold centres as half floats,
-  metres apart a few kilometres out. It doubles Spark's memory per splat (32 bytes); the
+  `accumExtSplats` on its `SparkRenderer`. Spark's packed splats hold a tile's centres as half
+  floats, half a metre apart a kilometre from its origin (a packed accumulator holds them
+  relative to the eye, so finer). It doubles Spark's memory per splat (32 bytes); the
   globe's Spark renderer already used `extSplats` per tile and keeps its accumulator as it was.
 
 The limit that stays: CesiumJS stores baked positions as float32, so beyond about 2 km from the

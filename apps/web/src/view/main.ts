@@ -13,7 +13,7 @@
  * watches a capture's run as it happens (live.ts). Reads are open in this API, so the page
  * needs no key.
  */
-import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
+import { ExtSplats, PackedSplats, SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
@@ -233,10 +233,13 @@ async function showScan(siteId: string): Promise<void> {
   // (lib/detail.ts -- the phone's Detail choice on a phone, several million on a desktop;
   // SparkRenderer `lodSplatCount`).
   const budget = deviceSplatBudget();
-  // 32-bit centres all the way: each tile's (`extSplats`, sparkStream.ts) and the renderer's
-  // own accumulated splats, which would otherwise hold half floats -- metres apart a few
-  // kilometres from the scan's origin, where a large site's tiles are.
-  scene.add(new SparkRenderer({ renderer, lodSplatCount: budget, accumExtSplats: true }));
+  // 32-bit centres all the way: each tile's (`extSplats`, sparkStream.ts), which would
+  // otherwise hold its own centres as half floats -- half a metre apart a kilometre from its
+  // origin -- and the renderer's accumulated splats. A half-float accumulator keeps them
+  // relative to the eye (Spark 2.2 `SplatAccumulator`), so its steps are a few millimetres at
+  // the distances anything is looked at from; 32-bit keeps them in the world's frame.
+  const spark = new SparkRenderer({ renderer, lodSplatCount: budget, accumExtSplats: true });
+  scene.add(spark);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.autoRotate = true;
@@ -372,6 +375,28 @@ async function showScan(siteId: string): Promise<void> {
           box.translate(tileMeshDrawn.position);
           return [{ uri, min: box.min.toArray(), max: box.max.toArray() }];
         }),
+      /**
+       * What Spark holds centres in on the GPU: each drawn tile's source, the one its
+       * generator reads (`context.splats`: its LoD tree when it draws from one), ExtSplats'
+       * 32-bit floats or PackedSplats' half floats; and the accumulator each frame's splats
+       * are generated into (three render targets with 32-bit centres, two without).
+       */
+      gpu: () => ({
+        accumulator: {
+          extSplats: spark.display.extSplats,
+          textures: spark.display.getTextures().length,
+        },
+        tiles: [...drawnMeshes].map(([uri, tileMeshDrawn]) => {
+          const source: unknown = tileMeshDrawn.context.splats;
+          const centres =
+            source instanceof ExtSplats
+              ? "float32"
+              : source instanceof PackedSplats
+                ? "float16"
+                : "none";
+          return { uri, centres };
+        }),
+      }),
     };
     offerCoverage(site, scene, scan, size);
     status.textContent = "Drag to turn · pinch to zoom · two fingers to move";
