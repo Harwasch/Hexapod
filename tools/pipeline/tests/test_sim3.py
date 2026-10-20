@@ -163,3 +163,16 @@ def test_three_points_fit_without_dividing_by_zero() -> None:
 
     assert fit.similarity.scale == pytest.approx(2.0)
     assert len(fit.inliers) == 3 and math.isfinite(fit.threshold_m)
+
+
+def test_ransac_with_fewer_than_three_inliers_is_no_fit() -> None:
+    """R2 review (#51, medium): when no 3-point sample found three points within the
+    threshold, the sampled fit was returned anyway, and `exif_gps` applied it as the
+    capture's frame. No consensus is now refused, by name."""
+    source = {"a": (0, 0, 0), "b": (1, 0, 0), "c": (0, 1, 0), "d": (1, 1, 0.5)}
+    target = {"a": (0, 0, 0), "b": (10, 0, 0), "c": (0, 0.1, 0), "d": (3, -7, 5)}
+    with pytest.raises(sim3.NoConsensusError, match=r"0 of 4 points agree within 0\.05 m"):
+        sim3.fit_sim3(source, target, max_error_m=0.05)
+    assert issubclass(sim3.NoConsensusError, ValueError)
+    # LMedS sets its own threshold from the median, so it always has its half.
+    assert len(sim3.fit_sim3(source, target, max_error_m=None).inliers) >= 2

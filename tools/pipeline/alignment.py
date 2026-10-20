@@ -434,6 +434,16 @@ def gnss_candidate(georef: Mapping[str, Any], poses: Mapping[str, Any]) -> Candi
     residuals = {str(k): float(v) for k, v in per_image.items()}
     limit = _float(alignment.get("maxErrorM")) or math.inf
     inliers = tuple(sorted(name for name, value in residuals.items() if value <= limit))
+    inlier_count = int(alignment.get("inliers") or len(inliers))
+    if inlier_count < sim3.MIN_POINTS:
+        # A similarity fewer than three fixes agree with is no frame (R2 review of #51):
+        # `model_aligner`'s path records the count after the fact, and RANSAC's refuses.
+        candidate = Candidate(method="gnss-similarity", aligned=False, similarity=None)
+        candidate.reasons.append(
+            f"gnss: {inlier_count} of {len(residuals)} fixes agree with the similarity, "
+            f"fewer than {sim3.MIN_POINTS}"
+        )
+        return candidate
     raw_sigma = prior.get("sigmaM")
     sigma: dict[str, Any] = raw_sigma if isinstance(raw_sigma, dict) else {}
     anchor_h = _float(sigma.get("horizontalMedian")) if used else None
@@ -444,7 +454,7 @@ def gnss_candidate(georef: Mapping[str, Any], poses: Mapping[str, Any]) -> Candi
         aligned=True,
         similarity=_similarity(frame),
         correspondences=int(alignment.get("images") or len(residuals)),
-        inliers=int(alignment.get("inliers") or len(inliers)),
+        inliers=inlier_count,
         residuals=residuals,
         inlier_names=inliers,
         anchor_h=anchor_h if anchor_h is not None else floor,
@@ -931,7 +941,7 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
     min_registered = float(ctx.param("min_registered_fraction", DEFAULT_MIN_REGISTERED_FRACTION))
     model = sfm.read_model(model_dir)
     gnss = gnss_candidate(georef, poses)
-    reasons: list[str] = []
+    reasons: list[str] = list(gnss.reasons)
     reference = context.reference
     visual: Candidate | None = None
     if reference is not None and visual_mode == "auto":

@@ -168,6 +168,26 @@ def test_one_wild_fix_is_dropped(
     assert alignment["residualM"]["perImage"][wild] > alignment["maxErrorM"]
 
 
+@requires_pycolmap
+def test_fixes_with_no_consensus_are_located_not_aligned(
+    orbit: tuple[Path, Path, tree_frames.Truth], tmp_path: Path
+) -> None:
+    """R2 review (#51, medium): fixes that agree on no similarity (every one moved by
+    hundreds of metres, independently) gave the sampled fit as the capture's frame. The
+    georeference now falls back to the fixes' median, located and not aligned."""
+    plain, poses, truth = orbit
+    rng = np.random.default_rng(1)
+    scattered = {p.name: rng.normal(scale=200.0, size=3) for p in truth.poses}
+    georef, _ = _georeference(
+        tmp_path / "n", plain, poses, truth, params={"aligner": "ransac"}, moved=scattered
+    )
+
+    assert georef["alignment"] is None
+    assert georef["frame"]["recentre"] is True
+    assert georef["georefMethod"] == "exif-gps"
+    assert "no consensus" in georef["note"]
+
+
 def test_an_unknown_aligner_is_refused(tmp_path: Path) -> None:
     workdir = Workdir.create(tmp_path / "r")
     frames = workdir.input_path("frames")

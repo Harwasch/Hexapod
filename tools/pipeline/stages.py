@@ -2967,8 +2967,15 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
     ctx.log(f"{len(fixes)} of {_count_files(frames)} frames carry an EXIF GPS fix")
 
     model_dir = ctx.input(POSES.name) if ctx.has_input(POSES.name) else None
+    no_consensus: str | None = None
     if len(fixes) >= max(min_images, 3) and model_dir is not None:
-        return _exif_gps_aligned(ctx, fixes, model_dir, frame_given)
+        try:
+            return _exif_gps_aligned(ctx, fixes, model_dir, frame_given)
+        except sim3.NoConsensusError as error:
+            # The fixes agree on no similarity: applying the sampled one would place the
+            # capture by a guess. It is located at their median instead, not aligned.
+            no_consensus = str(error)
+            ctx.log(f"WARNING: the EXIF fixes reached {no_consensus}; located, not aligned")
 
     located = _sole_location(ctx, fixes)
     method = "exif-gps"
@@ -3014,7 +3021,11 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
             frame_given, offset=offset, offset_source=offset_source, located=located
         )
         lat, lon, height = frame_given.lat, frame_given.lon, frame_given.height
-    why = "fewer than three EXIF fixes" if model_dir else "no pose model to align against"
+    why = (
+        f"the EXIF fixes reached {no_consensus}"
+        if no_consensus is not None
+        else ("fewer than three EXIF fixes" if model_dir else "no pose model to align against")
+    )
     frame = _frame_from_poses(ctx, model_dir, estimate_scale=True)
     source = (
         "the capture's own coordinate (placed by hand)"
@@ -3466,6 +3477,12 @@ def _exif_gps_aligned(
     values = np.asarray(sorted(residuals.values()), dtype=np.float64)
     rms = float(np.sqrt(float((values**2).mean()))) if values.size else 0.0
     inliers = int((values <= max_error_m).sum())
+    if inliers < sim3.MIN_POINTS:
+        # `model_aligner` has no such refusal of its own; the same rule as `sim3`'s.
+        raise sim3.NoConsensusError(
+            f"no consensus: {inliers} of {len(common)} fixes agree within {max_error_m:g} m "
+            f"with {tool['tool']}'s similarity, and a similarity needs {sim3.MIN_POINTS}"
+        )
     # Consistency, floored. The residual cannot see the receiver's own bias, which is
     # common to every fix in the capture and moves all of it together.
     uncertainty = max(rms, EXIF_GPS_UNCERTAINTY_FLOOR_M)

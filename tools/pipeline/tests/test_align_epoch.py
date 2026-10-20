@@ -1013,3 +1013,16 @@ def test_an_rtk_epoch_without_priors_is_not_surveyed_through_a_coarse_reference(
         assert document["method"] == method, uncertainty_m
         assert document["verdict"] == "coarse", uncertainty_m
         assert "surveyed" not in document["label"], uncertainty_m
+
+
+def test_a_gnss_similarity_with_fewer_than_three_inliers_is_not_aligned() -> None:
+    """R2 review (#51, medium): `gnss_candidate` marked any recorded similarity aligned,
+    whatever its inlier count (`model_aligner`'s path records it after the fact)."""
+    names = [f"frame_{i:04d}.jpg" for i in range(COUNT)]
+    georef = _georef_aligned(IDENTITY, names)
+    georef["alignment"]["inliers"] = 2
+    candidate = alignment.gnss_candidate(georef, {})
+    assert candidate.aligned is False
+    assert "2 of 10 fixes agree" in candidate.reasons[0]
+    georef["alignment"]["inliers"] = 3
+    assert alignment.gnss_candidate(georef, {}).aligned is True

@@ -25,6 +25,9 @@ The algorithm, pinned (M3b design section 5):
      then taken at `n - 3 = 1`, its largest finite value, rather than dividing by zero.
 5. Umeyama refitted on the inliers; residuals and the inlier set recomputed once with the
    same threshold, and refitted again if the set changed (never on fewer than three).
+6. **ransac** with fewer than three final inliers is no fit (`NoConsensusError`): no
+   similarity is fixed by fewer points than it has to agree on, and the sampled one would
+   be a guess. LMedS sets its own threshold from the median and always keeps its half.
 
 Pure numpy; nothing here imports pycolmap.
 """
@@ -47,6 +50,7 @@ __all__ = [
     "DEFAULT_SEED",
     "LMEDS_CUTOFF",
     "MIN_POINTS",
+    "NoConsensusError",
     "Sim3Fit",
     "fit_sim3",
     "residuals",
@@ -124,6 +128,10 @@ def similarity_dict(similarity: sfm.Similarity) -> dict[str, object]:
     }
 
 
+class NoConsensusError(ValueError):
+    """RANSAC found fewer than `MIN_POINTS` correspondences agreeing within its threshold."""
+
+
 def residuals(similarity: sfm.Similarity, source: F64, target: F64) -> F64:
     """Per-row distance between `similarity(source)` and `target`."""
     moved = similarity.apply(source)
@@ -161,7 +169,8 @@ def fit_sim3(
 
     `max_error_m` None is LMedS (no threshold needed); a number is RANSAC with that
     inlier threshold in target metres. Raises `ValueError` for fewer than three common
-    names, a non-positive threshold, or when every sample is collinear.
+    names, a non-positive threshold, or when every sample is collinear, and its subclass
+    `NoConsensusError` when RANSAC's best fit has fewer than three inliers.
     """
     if max_error_m is not None and not (math.isfinite(max_error_m) and max_error_m > 0):
         raise ValueError(f"max_error_m must be a positive number of metres, not {max_error_m!r}")
@@ -220,6 +229,11 @@ def fit_sim3(
             fit = sfm.umeyama(src[keep], tgt[keep])
     final = residuals(fit, src, tgt)
     inliers = tuple(name for name, value in zip(names, final, strict=True) if value <= threshold)
+    if max_error_m is not None and len(inliers) < MIN_POINTS:
+        raise NoConsensusError(
+            f"no consensus: {len(inliers)} of {n} points agree within {max_error_m:g} m, "
+            f"and a similarity needs {MIN_POINTS}"
+        )
     return Sim3Fit(
         similarity=fit,
         names=names,
