@@ -37,7 +37,8 @@ Byte-reproducible, like the tree: seeded RNG, positions snapped to the SPZ grid.
 
 Usage (OpenBLAS pinned to the kernel the committed bytes were written with, as the test that
 checks them pins it -- `FIXTURE_CORETYPE` -- so they are the CPU's own no more):
-    OPENBLAS_CORETYPE=Haswell python synthetic_yard.py ../../data/tiles/synthetic-yard \
+    OPENBLAS_CORETYPE=Haswell NPY_DISABLE_CPU_FEATURES="X86_V4 AVX512_ICL AVX512_SPR" \
+        python synthetic_yard.py ../../data/tiles/synthetic-yard \
         [--seed 11] [--tile-gaussians 6000]
 """
 
