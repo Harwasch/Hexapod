@@ -826,6 +826,7 @@ def _frame_records(
                 if source.path.is_relative_to(upload)
                 else source.path.name,
                 original_size=coded,
+                frame_size=size,
                 candidate_index=index,
                 offset_s=offset,
                 time=_clip_time(started, started_from, offset),
@@ -1069,7 +1070,7 @@ def _viewpoint_record(
 @stage_impl(
     "colmap",
     consumes=("frames",),
-    optional_consumes=("source_meta.json",),
+    optional_consumes=("source_meta.json", "frames_meta.json"),
     produces=(POSES,),
     summary="COLMAP SfM poses",
 )
@@ -1101,6 +1102,16 @@ def colmap(ctx: StageContext) -> StageOutcome:
     `poses.json` therefore records the recovered focal, whether a prior was held, and
     both measurements, rather than a correction. Pass `focal_px` (EXIF or ARKit) and the
     prior is held through bundle adjustment.
+
+    `focal_from: exif` **seeds** the camera from `frames_meta.json`'s capture focal (DJI's
+    calibrated focal, the EXIF 35 mm equivalent, or the QuickTime one) and lets bundle
+    adjustment refine it from there; `hold_focal: true` holds it instead. Seeding, not
+    holding, is the default because the integer 35 mm value can be ~2% off at 24 mm (half
+    a 1 mm step), the same order as the self-calibration bias above. COLMAP already seeds
+    a photo from its EXIF 35 mm focal; what this adds is a seed for video (no EXIF) and
+    DJI's per-unit calibration. `poses.json` records the initial focal, where it came
+    from, whether it was held, and `recoveredOverInitial` -- collected across captures,
+    the measurement that will decide whether holding is ever right.
 
     `mapper: global` maps with GLOMAP (COLMAP 4, through pycolmap -- `global_sfm.py` has
     the why and the measurements) before any incremental seed, on the first matches; a
@@ -1157,7 +1168,24 @@ def colmap(ctx: StageContext) -> StageOutcome:
     )
     width, height = _image_size(images[0])
     focal_prior = _optional_float(ctx.param("focal_px"))
-    params = None if focal_prior is None else (focal_prior, width / 2.0, height / 2.0, 0.0)
+    focal_from = str(ctx.param("focal_from", "none"))
+    if focal_from not in FOCAL_FROM:
+        raise ValueError(f"focal_from must be one of {', '.join(FOCAL_FROM)}, not {focal_from!r}")
+    seed = None if focal_prior is not None else _focal_seed(ctx, focal_from, width, height)
+    if focal_prior is not None:
+        initial: float | None = focal_prior
+        initial_from: str | None = "param"
+        held = True
+    elif seed is not None:
+        initial, initial_from = seed
+        held = _optional_bool(ctx.param("hold_focal", False), "hold_focal")
+    else:
+        initial, initial_from, held = None, None, False
+    params = None if initial is None else (initial, width / 2.0, height / 2.0, 0.0)
+    if initial is not None:
+        ctx.log(
+            f"colmap: focal {'held at' if held else 'seeded at'} {initial:.3f} px ({initial_from})"
+        )
     # A run's own `threads`, else the image's (`sfm.THREADS_ENV`: the CPU box's reservation).
     threads = _optional_int(ctx.param("threads")) or sfm.default_threads()
     seconds = {"extract": 0.0, "match": 0.0, "map": 0.0}
@@ -1241,14 +1269,14 @@ def colmap(ctx: StageContext) -> StageOutcome:
         into.mkdir(parents=True)
         began = time.monotonic()
         if global_:
-            if not _map_globally(ctx, database, frames, into, focal_prior is None, threads):
+            if not _map_globally(ctx, database, frames, into, not held, threads):
                 return None, 0
             seconds["global"] = time.monotonic() - began
         else:
             # Cameras as they are solved, for the live viewer (`live.MapperWatch`).
             snapshots = ctx.work_dir / "snapshots" / into.name
             how: dict[str, Any] = {
-                "refine_focal_length": focal_prior is None,
+                "refine_focal_length": not held,
                 "random_seed": seed,
                 "num_threads": threads,
                 "snapshot_path": snapshots if watch else None,
@@ -1349,7 +1377,15 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "focal": {
             "px": round(focal, 3),
             "priorPx": focal_prior,
-            "refined": focal_prior is None,
+            "refined": not held,
+            # Where bundle adjustment started from, and whether it was let move: `param`
+            # (`focal_px`, held), `exif-35mm` / `dji-calibrated` / `quicktime-35mm`
+            # (`focal_from: exif`, seeded unless `hold_focal`), or none (COLMAP's own
+            # default, which for a photo is its EXIF focal when it has one).
+            "initialPx": None if initial is None else round(initial, 5),
+            "initialFrom": initial_from,
+            "held": held,
+            "recoveredOverInitial": round(focal / initial, 5) if initial else None,
             # Said out loud rather than left for somebody to rediscover: a
             # self-calibrated focal that is low makes the whole reconstruction small by
             # about the same fraction, and nothing downstream can see that from the
@@ -1364,8 +1400,13 @@ def colmap(ctx: StageContext) -> StageOutcome:
                 "self-calibrated, so the scale is unverified: A0 #7 measured this 3.1% "
                 "low, B2's rendered-orbit fixture measured it 0.17% high. Neither is a "
                 "correction to apply -- pass focal_px (EXIF or ARKit) to hold a prior"
-                if focal_prior is None
-                else "held at the supplied prior through bundle adjustment"
+                if initial is None
+                else (
+                    f"held at the {initial_from} prior through bundle adjustment"
+                    if held
+                    else f"seeded from {initial_from} and refined by bundle adjustment, so "
+                    "the scale is still unverified; recoveredOverInitial is how far it moved"
+                )
             ),
         },
         "scale": {
@@ -1397,7 +1438,8 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "meanTrackLength": round(model.mean_track_length, 3),
         "meanReprojectionErrorPx": round(model.mean_reprojection_error, 4),
         "focalPx": round(focal, 3),
-        "focalPrior": focal_prior is not None,
+        "focalPrior": initial is not None,
+        "focalFrom": initial_from or "none",
         "matcher": matcher,
         "matchedPairs": pairs[0],
         "fellBack": fell_back,
@@ -1412,6 +1454,41 @@ def colmap(ctx: StageContext) -> StageOutcome:
     return StageOutcome(
         metrics=metrics, summary=f"{model.registered}/{len(images)} frames registered"
     )
+
+
+#: `focal_from`: `none` leaves the initial focal to COLMAP; `exif` seeds it from
+#: `frames_meta.json`'s capture focal.
+FOCAL_FROM: tuple[str, ...] = ("none", "exif")
+
+
+def _focal_seed(
+    ctx: StageContext, focal_from: str, width: int, height: int
+) -> tuple[float, str] | None:
+    """The capture focal `frames_meta.json` names, when `focal_from: exif` asks for it and
+    it applies to these frames: `(px, where from)`, else None.
+
+    None when the capture's frames disagree (`frame_meta.capture_focal` refuses mixed
+    lenses), and when the first record's focal was computed for another frame size than
+    the frames posed here -- a focal in pixels of other pixels is not a focal of these.
+    """
+    if focal_from != "exif" or not ctx.has_input(FRAMES_META.name):
+        return None
+    document = _read_json(ctx.input(FRAMES_META.name))
+    summary = document.get("focal")
+    frames = document.get("frames")
+    if not isinstance(summary, dict) or not isinstance(frames, list) or not frames:
+        return None
+    px, source = _optional_float(summary.get("px")), summary.get("from")
+    first = frames[0] if isinstance(frames[0], dict) else {}
+    if px is None or px <= 0 or not isinstance(source, str):
+        return None
+    if first.get("frameSize") != [width, height]:
+        ctx.log(
+            f"colmap: frames_meta.json's focal is for frames of {first.get('frameSize')}, "
+            f"not {width}x{height}; not seeding from it"
+        )
+        return None
+    return px, source
 
 
 #: The seed `_best_reconstruction` is handed for the global mapper's one try.

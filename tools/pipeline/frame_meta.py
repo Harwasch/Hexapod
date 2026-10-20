@@ -589,6 +589,8 @@ class FrameRecord:
     original: str
     original_path: str | None = None
     original_size: tuple[int, int] | None = None
+    #: The kept frame's own size, which `focal.px` is in pixels of.
+    frame_size: tuple[int, int] | None = None
     candidate_index: int | None = None
     offset_s: float | None = None
     time: FrameTime = field(default_factory=FrameTime)
@@ -624,6 +626,7 @@ class FrameRecord:
             "original": self.original,
             "originalPath": self.original_path,
             "originalSize": None if self.original_size is None else list(self.original_size),
+            "frameSize": None if self.frame_size is None else list(self.frame_size),
             "candidateIndex": self.candidate_index,
             "offsetS": self.offset_s,
             "time": self.time.to_dict(),
@@ -672,6 +675,7 @@ def read_photo(
             name=frame_name,
             original=original.name,
             original_path=relative,
+            frame_size=frame_size,
             unreadable=f"{type(exc).__name__}: {exc}"[:200],
         )
 
@@ -718,6 +722,7 @@ def _read_photo(
         original=original.name,
         original_path=relative,
         original_size=size,
+        frame_size=frame_size,
         time=exif_time(exif_ifd, gps_ifd, xmp_create_date=None if dji is None else dji.create_date),
         gps=exif.read_fix(original),
         make=make,

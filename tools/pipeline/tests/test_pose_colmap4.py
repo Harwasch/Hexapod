@@ -292,6 +292,41 @@ def test_4_2s_mapper_snapshots_reach_the_live_viewer(
 
 
 @requires_pycolmap
+def test_a_seeded_focal_is_refined_from_where_it_starts(
+    tmp_path: Path, orbit: tuple[Path, tree_frames.Truth]
+) -> None:
+    """`focal_from: exif` starts bundle adjustment at frames_meta's focal and lets it move:
+    seeded 15% long (600 px against the true 520), it comes back within the bound
+    `test_pose_colmap.py` already holds the free focal to, and `recoveredOverInitial`
+    says how far it moved. Held, it would have stayed at 600."""
+    frames, truth = orbit
+    workdir = Workdir.create(tmp_path / "run")
+    shutil.copytree(frames, workdir.input_path("frames"))
+    document = {
+        "schema": "frames_meta/1",
+        "focal": {"px": 600.0, "from": "exif-35mm"},
+        "frames": [{"name": "frame_0000.jpg", "frameSize": [640, 480]}],
+    }
+    workdir.input_path("frames_meta.json").write_text(json.dumps(document))
+    params = {**RECIPE_POSE, "colmap": "4.2", "focal_from": "exif"}
+    recipe = make_recipe(
+        [{"id": "pose", "impl": "colmap", "params": params}],
+        inputs=["frames", "frames_meta.json"],
+    )
+    execute(recipe, workdir, RunnerSet(cpu=LocalRunner()))
+    poses = json.loads((workdir.artifact_path("pose", "poses") / "poses.json").read_text())
+
+    focal = poses["focal"]
+    assert (focal["initialPx"], focal["initialFrom"], focal["held"]) == (600.0, "exif-35mm", False)
+    error_pct = 100.0 * (focal["px"] - truth.intrinsics.fx) / truth.intrinsics.fx
+    assert abs(error_pct) < 5.0, f"focal off by {error_pct:.2f}%"
+    assert focal["recoveredOverInitial"] < 1.0
+    assert "seeded from exif-35mm" in focal["biasNote"]
+    metrics = json.loads(workdir.step_path("pose").read_text())["metrics"]
+    assert (metrics["focalPrior"], metrics["focalFrom"]) == (True, "exif-35mm")
+
+
+@requires_pycolmap
 def test_4_2_and_the_global_mapper_run_on_the_same_database(
     tmp_path: Path, orbit: tuple[Path, tree_frames.Truth]
 ) -> None:
