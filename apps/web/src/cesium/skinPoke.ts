@@ -49,6 +49,7 @@ import {
 import { castRay, type PickTile } from "@/lib/splatPick";
 import { useInstances } from "@/state/instances";
 import { useSceneSelect } from "@/state/sceneSelect";
+import { useAsCaptured } from "@/state/asCaptured";
 import { useSkinPoke } from "@/state/skinPoke";
 
 import { uniformScale } from "./placement";
@@ -171,8 +172,13 @@ export class SkinPokeController {
   }
 
   destroy(): void {
-    this.#letGo();
     for (const off of this.#off.splice(0)) off();
+    this.#still();
+  }
+
+  /** Every poked object back at rest at once: no ringing down. */
+  #still(): void {
+    this.#letGo();
     for (const [part, skins] of this.#poked)
       for (const p of skins.values()) part.setOverlay(p.skin.id, null);
     this.#poked.clear();
@@ -308,6 +314,12 @@ export class SkinPokeController {
   /** Advances every poked object and hands its skin part the overlay. Once a frame. */
   tick(): void {
     if (this.#poked.size === 0) return;
+    // As captured (state/asCaptured.ts): a ring is modelled motion, so it stops, not decays.
+    if (useAsCaptured.getState().on) {
+      this.#still();
+      this.#viewer.scene.requestRender();
+      return;
+    }
     const now = this.#clock();
     let moving = false;
     for (const [part, skins] of this.#poked) {

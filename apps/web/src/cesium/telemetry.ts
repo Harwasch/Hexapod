@@ -15,7 +15,9 @@
  *
  * A bound instance (with its ancestors and descendants) is claimed (`motionClaims.ts`), so the
  * wind does not also sway it. At rest -- no reading yet, or faded back -- the object's motion
- * is `null`: the measured frame, pixel for pixel.
+ * is `null`: the measured frame, pixel for pixel. While As captured is on (state/asCaptured.ts)
+ * every bound object is held there; the tracks still take readings, so turning it off shows
+ * the pose of now, not of when it was turned on.
  */
 
 import {
@@ -35,6 +37,7 @@ import { Matrix4, type Cesium3DTileset, type Scene } from "cesium";
 import type { InstancesDoc } from "@/lib/instances";
 import { createLogger } from "@/lib/log";
 import { HANDLE_FLOATS, rigidHandle, type SkinEntry } from "@/lib/skin";
+import { useAsCaptured } from "@/state/asCaptured";
 import {
   loadTelemetry,
   telemetryRefOf,
@@ -242,11 +245,13 @@ export class TelemetryDriver {
   /**
    * Pumps the sources to local time `nowMs`, plays every track out at it and writes what moved:
    * through `skin` when it skins the instance, otherwise through `rigid()` (made on demand).
+   * `held` writes every bound object at rest instead (As captured), reading on regardless.
    */
   tick(
     nowMs: number,
     skin: TelemetrySkinTarget | undefined,
     rigid: () => TelemetryRigidTarget | undefined,
+    held = false,
   ): TelemetryTick {
     for (const source of this.#sources.values()) source.pump?.(nowMs);
     let changed = false;
@@ -255,7 +260,7 @@ export class TelemetryDriver {
       const reading = b.track.read(nowMs);
       const rest = b.rest;
       const pose =
-        rest !== null && reading.pose !== null
+        !held && rest !== null && reading.pose !== null
           ? fadeTowardRest(rest, reading.pose, reading.weight)
           : null;
       const motion = pose !== null && rest !== null ? relativeMotion(rest, pose) : null;
@@ -425,7 +430,7 @@ export function attachTelemetry(
       start();
       if (!driver) return;
     }
-    const tick = driver.tick(clock(), skinningOf(assetId), rigidFor);
+    const tick = driver.tick(clock(), skinningOf(assetId), rigidFor, useAsCaptured.getState().on);
     const uploaded = rigid?.sync() ?? false;
     if (tick.changed || uploaded) scene.requestRender();
   });

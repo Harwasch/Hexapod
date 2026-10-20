@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
-import type { ObjectPose, SplitObjectRef } from "@/lib/sceneObjects";
+import { REST_POSE, type ObjectPose, type SplitObjectRef } from "@/lib/sceneObjects";
+import { useAsCaptured } from "@/state/asCaptured";
 
 /** Split objects (lib/sceneObjects.ts) per asset, and where each is drawn now. */
 interface SceneObjectsState {
@@ -36,3 +37,18 @@ export const useSceneObjects = create<SceneObjectsState>()((set) => ({
       return { poses: { ...s.poses, [assetId]: current } };
     }),
 }));
+
+/**
+ * Where object `ref` of `assetId`'s scan is drawn now: the pose set in the store, else the one
+ * the scan declares -- and at rest, where it was measured, while As captured is on
+ * (state/asCaptured.ts). Both renderers' paths read it (cesium/splitObjects.ts,
+ * cesium/scanView/scanObjects.ts).
+ */
+export function objectPose(assetId: string | undefined, ref: SplitObjectRef): ObjectPose {
+  if (useAsCaptured.getState().on) return REST_POSE;
+  return (
+    (assetId === undefined
+      ? undefined
+      : useSceneObjects.getState().poses[assetId]?.[ref.instance]) ?? ref.pose
+  );
+}

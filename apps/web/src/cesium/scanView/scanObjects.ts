@@ -9,7 +9,8 @@
  * relative to `origin`. The renderer draws in the scan's frame (`S`'s), so an object's tile
  * goes under `L · S⁻¹ · O` (`O` its root transform, `L = T(origin + t) R T(−origin)` its pose,
  * `poseLocalMatrix`): at rest exactly where it was measured. The pose is the store's
- * (`useSceneObjects.setPose`, what a driver or a person sets) over the one the scan declares.
+ * (`useSceneObjects.setPose`, what a driver or a person sets) over the one the scan declares,
+ * and the rest pose while As captured is on (`objectPose`).
  */
 
 import { resolveLayerUrl } from "@/lib/inferred";
@@ -20,7 +21,7 @@ import {
   type ObjectPose,
   type SplitObjectRef,
 } from "@/lib/sceneObjects";
-import { useSceneObjects } from "@/state/sceneObjects";
+import { objectPose } from "@/state/sceneObjects";
 import { parseTileset, type TileNode } from "@/view/tiles";
 
 import { invertAffine, type Mat4 } from "../splatFrames";
@@ -153,10 +154,7 @@ export class ScanObjects<M> {
   }
 
   #place(placed: Placed<M>): boolean {
-    const pose =
-      (this.assetId !== undefined
-        ? useSceneObjects.getState().poses[this.assetId]?.[placed.ref.instance]
-        : undefined) ?? placed.ref.pose;
+    const pose = objectPose(this.assetId, placed.ref);
     const key = `${pose.translation.join()}|${pose.rotation.join()}`;
     if (key === placed.key) return false;
     placed.key = key;
