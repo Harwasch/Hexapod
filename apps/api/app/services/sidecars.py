@@ -438,11 +438,21 @@ def fill_gate_problem(
     `grid_sha`, or None. A fill is shown only where a re-scan left cells weak: its
     evidence carries `rescanGate` (`rescan-gate-v1`), gated against this very grid (and,
     when the asset is an epoch's revision, for that epoch). A split's hole fill (`fills/`)
-    is not judged: it goes with its split, which is never attached or published."""
+    is not judged: it goes with its split, which is never attached or published. Only a
+    plain path is one (`check_relative`): a uri that climbs out of `fills/` (`..`, encoded
+    or behind backslashes), is absolute or is otherwise not plain names another file, and
+    is refused outright rather than read as the split's."""
     if not isinstance(entry, Mapping):
         return "it is not a layer entry"
     uri = entry.get("uri")
-    if isinstance(uri, str) and uri.removeprefix("./").startswith("fills/"):
+    if not isinstance(uri, str):
+        return "it names no uri"
+    rel = uri.removeprefix("./")
+    try:
+        check_relative(rel)
+    except SidecarPathError as error:
+        return f"its uri is refused: {error}"
+    if rel.startswith("fills/"):
         return None
     evidence = entry.get("evidence")
     gate = evidence.get("rescanGate") if isinstance(evidence, Mapping) else None

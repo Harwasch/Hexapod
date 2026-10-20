@@ -1247,3 +1247,57 @@ def test_a_fill_variant_is_held_to_the_same_gate(
     files, extras = _fill_variant(FILL_EXTRAS[0]["evidence"])
     response = attach(client, asset, stage(buckets.private, asset.id, files, "ok"), extras=extras)
     assert response.status_code == 200, response.text
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "fills/../variants/fill/x/tileset.json",
+        "./fills/../variants/fill/x/tileset.json",
+        "fills/%2e%2e/variants/fill/x/tileset.json",
+        "fills/..\\variants\\fill\\x\\tileset.json",
+        "/fills/x/tileset.json",
+        "fills//x/tileset.json",
+    ],
+)
+def test_only_a_plain_fills_path_is_a_splits_hole_fill(uri: str) -> None:
+    """The `fills/` exemption is for a split's own hole fill, a plain path under `fills/`.
+    A uri that climbs out of it (`..`, encoded or with backslashes), is absolute or is not
+    a plain path names some other file -- a staged, ungated layer -- and is refused."""
+    entry = {"uri": uri, "evidence": {"kind": "inferred"}}
+    why = sidecars.fill_gate_problem(entry, grid_sha="a1" * 32)
+    assert why is not None and "plain path" in why, why
+
+
+def test_a_plain_fills_path_is_still_the_splits_own() -> None:
+    for uri in ("fills/hole/tileset.json", "./fills/hole/tileset.json"):
+        entry = {"uri": uri, "evidence": {"kind": "inferred"}}
+        assert sidecars.fill_gate_problem(entry, grid_sha=None) is None
+
+
+def test_a_fill_variant_cannot_climb_out_of_fills_past_the_gate(
+    db: Session, buckets: Publisher, client: TestClient
+) -> None:
+    """Codex R3 #60: an ungated layer staged under `variants/fill/x/`, declared as a fill
+    variant at `fills/../variants/fill/x/tileset.json`, was exempted as a split's hole fill
+    (and nested variant uris are not path-checked), so it reached the viewer ungated."""
+    a_measured_live_scan(buckets)
+    asset = an_asset(db, LIVE_URL)
+    files = {f"variants/fill/x/{k.rsplit('/', 1)[1]}": v for k, v in FILL_FILES.items()}
+    entry = {
+        "name": "x",
+        "label": "X",
+        "inferredLayers": [
+            {"uri": "fills/../variants/fill/x/tileset.json", "evidence": {"kind": "inferred"}}
+        ],
+    }
+    before = files_under(buckets.public, "")
+    response = attach(
+        client,
+        asset,
+        stage(buckets.private, asset.id, files),
+        extras={"variants": {"fill": [entry]}},
+    )
+    assert response.status_code == 422, response.text
+    assert "plain path" in response.json()["detail"]
+    assert files_under(buckets.public, "") == before
