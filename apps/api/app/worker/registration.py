@@ -904,6 +904,13 @@ def _supersede(
     sanctions on it. A runtime scale it carried is undone on the *site's* boundary only,
     about the site's frame (or, for a frameless site, the origin it was registered at):
     the boundary drew the scaled model, and the new revision is at the run's own scale.
+
+    Only while the epoch is the site's only one. A scale is set on a site of one epoch
+    (`assets._placed_epoch`), but later epochs may have joined since and grown the
+    boundary; resizing it then would resize their part of it too, about an origin that is
+    not theirs. So with any other epoch on the site the boundary is left as it is -- what
+    the scaled model drew stays inside it, which costs a margin, never coverage -- and
+    `register` grows it to the new revision.
     """
     scale = _optional_number((current.render_config or {}).get("scale"))
     origin = (
@@ -911,7 +918,12 @@ def _supersede(
         if site.frame is not None
         else placement.registered_origin(site.metadata_)
     )
-    if scale is not None and scale > 0 and scale != 1.0 and origin is not None:
+    others = db.scalar(
+        select(func.count())
+        .select_from(Epoch)
+        .where(Epoch.site_id == site.id, Epoch.id != epoch.id)
+    )
+    if scale is not None and scale > 0 and scale != 1.0 and origin is not None and not others:
         placement.rescale_site(site, origin, 1.0 / scale)
     render, flags = _revision_render_config(current, registration, url, carry, job_id, now)
     revision = Asset(
