@@ -1171,6 +1171,8 @@ def _replace_run(
     footprint: WKBElement,
     quality: dict[str, Any] | None,
     now: datetime,
+    *,
+    published: bool,
 ) -> None:
     """A re-run's run, footprint and quality on its epoch, with what they replace kept.
 
@@ -1187,6 +1189,9 @@ def _replace_run(
         "alignment": epoch.alignment,
         "replacedAt": now.isoformat(),
         "replacedByJobId": str(producing) if producing is not None else None,
+        # The replacing run published tiles (new or the very same): its files are the
+        # ones the epoch shows as of `replacedAt` (`epochs.reference_epoch` reads it).
+        "tilesPublished": published,
     }
     epoch.history = [*(epoch.history or []), entry]
     epoch.job_id = producing
@@ -1365,7 +1370,7 @@ def register(
             epoch.observed_at = observed_at
             epoch.observed_at_source = observed_source.value
         if url is not None or promoted:
-            _replace_run(epoch, producing, footprint, quality, now)
+            _replace_run(epoch, producing, footprint, quality, now, published=url is not None)
             epoch.alignment = alignment_of(capture, registration)
     same_tiles = published.content_addressed and url == tileset_url(current)
     if url is not None and current is not None and not same_tiles:

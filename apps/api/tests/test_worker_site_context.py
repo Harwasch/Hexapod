@@ -464,6 +464,41 @@ def test_a_refine_that_succeeded_is_the_reference_with_its_new_files(
     assert json.loads(placement.read_text()) == {"refined": True}
 
 
+def test_a_refine_that_republished_the_same_tiles_is_still_the_reference(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """R2 review of #52: a retry from `place` that produced the very same content-hashed
+    tiles keeps the shown asset and its timestamp (no new revision), while its placement
+    row is new -- so the files looked newer than the tiles, and the epoch stopped being
+    any later capture's reference. A successful publication confirms its files."""
+    from app.worker import registration
+    from app.worker.carry import CarryPlan
+    from tests.test_asset_scale import _document, _registration
+
+    first, epoch = first_epoch(db, storage, tmp_path, alignment={"verdict": "coarse"})
+    assert first.site_id is not None and epoch.job_id is not None
+    _refine(db, storage, epoch, RunStatus.IN_PROGRESS, placed=True)
+    job = db.get(Job, epoch.job_id)
+    assert job is not None
+    job.status = RunStatus.COMPLETE
+    db.commit()
+    live = registration.live_tileset_url(db, first)
+    assert live is not None
+    shown = epochs.current_asset(db, epoch.id)
+    assert shown is not None
+    registration.register(
+        db, storage, capture=first, job_id=job.id,
+        registration=_registration(tmp_path, _document()), tiles_stage_id="package",
+        published=registration.Published(
+            tileset=live, thumbnail=None, coverage=None, carry=CarryPlan(based_on=live),
+        ),
+    )  # fmt: skip
+    assert epochs.current_asset(db, epoch.id) == shown  # the same tiles: no new revision
+    capture = second_capture(db, first.site_id)
+    chosen = _reference(db, first.site_id, capture)
+    assert chosen is not None and chosen.epoch_id == epoch.id
+
+
 # --- what the bucket may do to a seed ----------------------------------------------------
 
 

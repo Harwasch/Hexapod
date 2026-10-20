@@ -471,6 +471,26 @@ def _reference_uncertainty(epoch: Epoch, capture: Capture | None) -> float:
     return UNRECORDED_UNCERTAINTY_M
 
 
+def _confirmed_at(epoch: Epoch, shown_at: datetime) -> datetime:
+    """When the epoch's run last published the tiles it shows: the shown asset's creation,
+    or later, a successful re-run by the same run that republished the very same
+    content-hashed tiles -- which keeps that asset and its timestamp, while its artifact
+    rows are new (the R2 review of #52). `register` records each publication in the
+    epoch's history (`tilesPublished`, `replacedAt`); a run that failed records none."""
+    confirmed = shown_at
+    for entry in epoch.history or []:
+        if not isinstance(entry, dict) or entry.get("tilesPublished") is not True:
+            continue
+        if entry.get("replacedByJobId") != str(epoch.job_id):
+            continue
+        try:
+            at = datetime.fromisoformat(str(entry.get("replacedAt")))
+        except ValueError:
+            continue
+        confirmed = max(confirmed, at)
+    return confirmed
+
+
 def _reference_keys(db: Session, job_id: uuid.UUID) -> tuple[dict[str, str], datetime | None]:
     """Each reference artifact's storage key for the run, from its newest row, and when
     the newest of those rows was written; only the names it has. A directory artifact's
@@ -505,8 +525,10 @@ def reference_epoch(
     showing its old revision, whose files are still in the bucket -- it stays the scaffold.
     Two guards instead. A run in flight (queued or running) is skipped: it writes the same
     keys, and must not be read mid-write. And every reference artifact's newest row must be
-    no newer than the epoch's current revision: a Refine that re-uploaded its placement and
-    then failed left a placement the shown tiles were not made from. For
+    no newer than when the epoch's current revision was last published (`_confirmed_at`: a
+    run that republished the very same tiles confirms its new rows): a Refine that
+    re-uploaded its placement and then failed left a placement the shown tiles were not
+    made from. For
     a re-run of an epoch, only epochs that joined the site before it (a lower ordinal):
     the epoch that made the frame is never aligned onto a later one that was aligned to
     it, so errors do not go round in a circle.
@@ -539,7 +561,7 @@ def reference_epoch(
         if set(keys) != set(REFERENCE_ARTIFACTS):
             continue
         shown = current_asset(db, epoch.id)
-        if shown is None or written is None or written > shown.created_at:
+        if shown is None or written is None or written > _confirmed_at(epoch, shown.created_at):
             log.info(
                 "reference: epoch %s is not a reference: %s",
                 epoch.id,
@@ -651,6 +673,7 @@ def record_rejected(
                 "alignment": existing.alignment,
                 "replacedAt": datetime.now(UTC).isoformat(),
                 "replacedByJobId": str(job_id),
+                "tilesPublished": False,
             }
             existing.history = [*(existing.history or []), entry]
             existing.alignment = alignment
