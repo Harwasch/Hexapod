@@ -17,12 +17,14 @@ dependent colour the trainer learned is drawn (see `convert`). Beside the tiles 
 declared on the root tile (`COLLISION_FORMAT`), and `viewcones.bin`, the directions each
 part of it was seen from (`view_cones`), declared beside it. When the run measured one,
 the epoch's confidence grid (`cell_grid`, `confidence.bin`) is declared there too, and each
-tile says how confident the least confident cell under it is (`extras.confidenceMin`).
+tile says how confident the least confident cell under it is (`extras.confidenceMin`); and
+when it measured them, the epoch's height surfaces (`surface.bin`) after it.
 
 Usage:
     python splat_tiles.py splat.ply out_dir --lat 46.84 --lon -91.99 --height 0
         [--opacity-min 0.02] [--tile-gaussians 100000] [--parents lod_parents.npz]
         [--sh-degree 0-3] [--confidence confidence/confidence.json]
+        [--surface surface/surface.json]
     python splat_tiles.py collision splat.ply out_dir [--tileset out_dir/tileset.json]
         [--opacity-min 0.02]
     python splat_tiles.py viewcones splat.ply|tileset.json out_dir [--tileset tileset.json]
@@ -2140,6 +2142,7 @@ def convert(
     parents: ParentOverrides | None = None,
     sh_degree: int | None = None,
     confidence: Path | None = None,
+    surface: Path | None = None,
 ) -> dict[str, float | int]:
     """Every gaussian that passes the filters, as a level-of-detail tileset.
 
@@ -2241,6 +2244,13 @@ def convert(
     (`write_tiles`; an unseen cell is 0): a viewer can find the weak tiles from
     `tileset.json` alone. Opt-in: without it every
     byte written is what it was before the grid existed.
+
+    **Surface.** `surface`, likewise, is the epoch's height surfaces (tools/pipeline
+    surface.py's `surface.json`, a `cell_grid` of kind `surface` on the confidence grid's
+    plane). Its file is copied beside the tiles and its descriptor appended to the root
+    extras as `extras.surface`, after `confidence` (after `collision` when there is no
+    confidence grid), so a backfill appending it last writes these bytes. Nothing per tile.
+    Opt-in in the same way: without it not a byte changes.
     """
     if sh_degree is not None and not 0 <= sh_degree <= SH_MAX_DEGREE:
         raise ValueError(f"sh_degree caps the SH bands at 0 to {SH_MAX_DEGREE}, not {sh_degree}")
@@ -2250,6 +2260,10 @@ def convert(
             raise ParentOverrideError(why)
     scores, scores_blob, scores_extras = (
         (None, b"", None) if confidence is None else _confidence(confidence)
+    )
+    taken = () if scores_extras is None else (str(scores_extras["uri"]),)
+    heights, heights_blob, heights_extras = (
+        (None, b"", None) if surface is None else load_grid(surface, "surface", taken)
     )
     carried = ply_sh_degree(ply_layout(ply))
     degree = carried if sh_degree is None else min(sh_degree, carried)
@@ -2340,44 +2354,53 @@ def convert(
         # collision grid, so a backfill that appends it writes these bytes.
         (out_dir / str(scores_extras["uri"])).write_bytes(scores_blob)
         tileset["root"]["extras"]["confidence"] = scores_extras
+    if heights_extras is not None:
+        # The epoch's heights per cell (`cell_grid`, ADR 0018): last, after the
+        # confidence grid, for the same reason.
+        (out_dir / str(heights_extras["uri"])).write_bytes(heights_blob)
+        tileset["root"]["extras"]["surface"] = heights_extras
     (out_dir / "tileset.json").write_text(json.dumps(tileset, indent=1), encoding="utf-8")
     leaves = sum(tile.count for tile in tiles if not tile.children)
     parent_count = sum(tile.count for tile in tiles if tile.children)
-    return {
-        "gaussians": count,
-        "dropped": int(layout.count - count),
-        "extent_m": float(max(pmax - pmin)),
-        "tiles": len(tiles),
-        "depth": max(len(tile.path) for tile in tiles),
-        # What the coarse levels cost on top of the scan itself: the merged parents.
-        "parent_gaussians": parent_count,
-        "storage_overhead": round(parent_count / max(leaves, 1), 4),
-        # How many of those were optimised against the photos (`ParentOverrides`); 0
-        # when none were given.
-        "optimised_parent_gaussians": replaced,
-        # The SH degree every tile carries: the PLY's, or `sh_degree` if that is lower.
-        "sh_degree": degree,
-        # The collision grid (`collision.bin`): its cell (m), bricks and solid cells.
-        "collision_cell_m": grid.cell,
-        "collision_bricks": cast(int, collision["bricks"]),
-        "collision_solid_cells": int(grid.cells.shape[0]),
-        # The view-cone grid (`viewcones.bin`): its cell (m), and the share of gaussians a
-        # viewer fades when seen from where the capture never looked.
-        "view_cones_cell_m": cones.cell,
-        "view_cones_directional_share": cast(float, cones.stats.get("directionalShare", 0.0)),
-        # Tiles written in a frame of their own (`tile_frame`), and the fewest fractional
-        # bits any tile's SPZ declares: 0 and 12 for every scan under ~4 km across.
-        "offset_tiles": sum(1 for tile in tiles if tile.origin.any()),
-        "min_fractional_bits": min(tile.fractional_bits for tile in tiles),
-    } | (
-        {}
-        if scores is None
-        else {
-            # The confidence grid's finest level, and the root's least confident cell (0:
-            # no tile holds a scored cell).
-            "confidence_level": scores.level,
-            "confidence_min": root.confidence_min or 0,
+    return (
+        {
+            "gaussians": count,
+            "dropped": int(layout.count - count),
+            "extent_m": float(max(pmax - pmin)),
+            "tiles": len(tiles),
+            "depth": max(len(tile.path) for tile in tiles),
+            # What the coarse levels cost on top of the scan itself: the merged parents.
+            "parent_gaussians": parent_count,
+            "storage_overhead": round(parent_count / max(leaves, 1), 4),
+            # How many of those were optimised against the photos (`ParentOverrides`); 0
+            # when none were given.
+            "optimised_parent_gaussians": replaced,
+            # The SH degree every tile carries: the PLY's, or `sh_degree` if that is lower.
+            "sh_degree": degree,
+            # The collision grid (`collision.bin`): its cell (m), bricks and solid cells.
+            "collision_cell_m": grid.cell,
+            "collision_bricks": cast(int, collision["bricks"]),
+            "collision_solid_cells": int(grid.cells.shape[0]),
+            # The view-cone grid (`viewcones.bin`): its cell (m), and the share of gaussians a
+            # viewer fades when seen from where the capture never looked.
+            "view_cones_cell_m": cones.cell,
+            "view_cones_directional_share": cast(float, cones.stats.get("directionalShare", 0.0)),
+            # Tiles written in a frame of their own (`tile_frame`), and the fewest fractional
+            # bits any tile's SPZ declares: 0 and 12 for every scan under ~4 km across.
+            "offset_tiles": sum(1 for tile in tiles if tile.origin.any()),
+            "min_fractional_bits": min(tile.fractional_bits for tile in tiles),
         }
+        | (
+            {}
+            if scores is None
+            else {
+                # The confidence grid's finest level, and the root's least confident cell (0:
+                # no tile holds a scored cell).
+                "confidence_level": scores.level,
+                "confidence_min": root.confidence_min or 0,
+            }
+        )
+        | ({} if heights is None else {"surface_level": heights.level})
     )
 
 
@@ -2385,10 +2408,38 @@ def convert(
 _RESERVED = ("tileset.json", COLLISION_URI, view_cones.URI)
 
 
+class GridRefused(cell_grid.CellGridError):
+    """A root-extras grid (`key`: `confidence` or `surface`) `convert` will not ship, so a
+    caller that ships the tiles without it knows which one to leave out."""
+
+    def __init__(self, key: str, problem: str) -> None:
+        super().__init__(problem)
+        self.key = key
+
+
 def _confidence(path: Path) -> tuple[cell_grid.CellGrid, bytes, dict[str, Any]]:
-    """The confidence grid `path` (its descriptor) describes, its file's bytes, and the
-    descriptor -- checked (`cell_grid.decode`: format, sizes, sha256) before anything is
-    written, and refused unless it is a confidence grid with a plain file name."""
+    """The confidence grid `path` (its descriptor) describes (`load_grid`)."""
+    return load_grid(path, "confidence")
+
+
+def load_grid(
+    path: Path, kind: str, taken: tuple[str, ...] = ()
+) -> tuple[cell_grid.CellGrid, bytes, dict[str, Any]]:
+    """The grid `path` (its descriptor) describes, its file's bytes, and the descriptor --
+    checked (`cell_grid.decode`: format, channels, sizes, sha256) before anything is
+    written, and refused (`GridRefused`, keyed by `kind`) unless it is a `kind` grid whose
+    file is a plain name no other file beside the tiles has (`taken`: another grid's)."""
+    try:
+        return _load_grid(path, kind, taken)
+    except GridRefused:
+        raise
+    except cell_grid.CellGridError as problem:
+        raise GridRefused(kind, str(problem)) from problem
+
+
+def _load_grid(
+    path: Path, kind: str, taken: tuple[str, ...]
+) -> tuple[cell_grid.CellGrid, bytes, dict[str, Any]]:
     try:
         descriptor = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as problem:
@@ -2402,6 +2453,7 @@ def _confidence(path: Path) -> tuple[cell_grid.CellGrid, bytes, dict[str, Any]]:
         or "\\" in uri
         or uri.startswith(".")
         or uri in _RESERVED
+        or uri in taken
         or (uri.startswith("splat") and uri.endswith(".glb"))
     ):
         raise cell_grid.CellGridError(f"{path.name}: {uri!r} is not a file name a tileset can hold")
@@ -2410,8 +2462,8 @@ def _confidence(path: Path) -> tuple[cell_grid.CellGrid, bytes, dict[str, Any]]:
     except OSError as problem:
         raise cell_grid.CellGridError(f"{path.name}: {uri} is not readable: {problem}") from problem
     grid = cell_grid.decode(descriptor, blob)
-    if grid.kind != "confidence":
-        raise cell_grid.CellGridError(f"{path.name} is a {grid.kind!r} grid, not a confidence grid")
+    if grid.kind != kind:
+        raise cell_grid.CellGridError(f"{path.name} is a {grid.kind!r} grid, not a {kind} grid")
     return grid, blob, descriptor
 
 
@@ -2568,6 +2620,12 @@ def main() -> None:
         default=None,
         help="the epoch's confidence grid descriptor (confidence.json, its .bin beside it)",
     )
+    parser.add_argument(
+        "--surface",
+        type=Path,
+        default=None,
+        help="the epoch's height surfaces descriptor (surface.json, its .bin beside it)",
+    )
     args = parser.parse_args()
     stats = convert(
         args.ply,
@@ -2580,6 +2638,7 @@ def main() -> None:
         parents=ParentOverrides.load(args.parents) if args.parents else None,
         sh_degree=args.sh_degree,
         confidence=args.confidence,
+        surface=args.surface,
     )
     print(json.dumps(stats))
 
