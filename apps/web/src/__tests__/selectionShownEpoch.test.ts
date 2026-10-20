@@ -3,7 +3,15 @@
  * captures, the shown epoch's asset, its name, date and attribution -- not the site's first
  * asset of the representation. Through the real SelectionManager on a stub scene.
  */
-import { Ellipsoid, EntityCollection, Event as CesiumEvent, JulianDate, Ray } from "cesium";
+import {
+  Cartesian2,
+  Cartesian3,
+  Ellipsoid,
+  EntityCollection,
+  Event as CesiumEvent,
+  JulianDate,
+  Ray,
+} from "cesium";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { SelectionManager } from "@/cesium/SelectionManager";
@@ -58,7 +66,12 @@ function rig(first: typeof A1) {
     activeSite: site,
     activeRepresentation: "gaussian-splat",
     shownAsset: () => site.assets.find((asset) => asset.id === shown.id) ?? null,
+    // Two dates compared: each date's tileset draws its own model (SiteManager.drawnAssetOf).
+    drawnAssetOf: (tileset: unknown) =>
+      site.assets.find((asset) => (drawn as Map<unknown, string>).get(tileset) === asset.id) ??
+      null,
   };
+  const drawn = new Map<unknown, string>();
   const layers = { layerIdForPrimitive: () => undefined, get: () => undefined };
   const events = new Emitter<SceneEvents>();
   const manager = new SelectionManager(
@@ -74,10 +87,10 @@ function rig(first: typeof A1) {
       selectTileset: (tileset: unknown, base: Record<string, unknown>) => Record<string, unknown>;
     }
   ).selectTileset.bind(manager);
-  const card = () =>
-    select({}, { longitude: -123.88, latitude: 46.1335, height: 10, terrainHeight: 4 });
+  const card = (tileset: unknown = {}) =>
+    select(tileset, { longitude: -123.88, latitude: 46.1335, height: 10, terrainHeight: 4 });
   const show = (next: typeof A1) => (shown = next);
-  return { card, show, events, manager };
+  return { card, show, events, manager, drawn };
 }
 
 it("a site selection names the shown epoch's asset", () => {
@@ -105,4 +118,30 @@ it("an open site card follows another date being chosen", () => {
   // Another site's date says nothing about this card.
   events.emit("epoch", { siteId: "elsewhere", epochId: null });
   expect(cards).toHaveLength(1);
+});
+
+it("with two dates compared, the card names the date on the side clicked", () => {
+  // June is the date shown alone before; March is drawn left of the divider, June right.
+  const { card, drawn } = rig(A2);
+  const march = { name: "March tileset" };
+  const june = { name: "June tileset" };
+  drawn.set(march, A1.id).set(june, A2.id);
+  expect(String(card(march).sourceLabel)).toMatch(/^March drone flight/);
+  expect(card(march).observedAt).toBe("2026-03-01T15:00:00Z");
+  expect(String(card(june).sourceLabel)).toMatch(/^June phone video/);
+});
+
+it("a click asks the splats under the point clicked, on its side of the divider", () => {
+  const { manager } = rig(A2);
+  const hit = { point: Cartesian3.fromDegrees(-123.88, 46.1335, 10), distance: 5, tileset: {} };
+  const raycast = vi.fn(() => hit);
+  manager.setCollider({ raycast } as never);
+  const window = new Cartesian2(250, 300);
+  const context = (
+    manager as unknown as {
+      pickPosition: (w: Cartesian2, picked: unknown) => { splat?: unknown } | null;
+    }
+  ).pickPosition(window, undefined);
+  expect(raycast).toHaveBeenCalledWith(expect.anything(), undefined, window);
+  expect(context?.splat).toBe(hit.tileset);
 });

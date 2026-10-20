@@ -1409,6 +1409,18 @@ export class SiteManager {
     await this.showRepresentation(active, active.representation);
   }
 
+  /**
+   * The model a loaded site (the primary's unless named) draws with `tileset`: its one shown
+   * date, or either of two compared; null for any other tileset. What a pick on that tileset
+   * is about -- with two dates compared, the date on the side clicked.
+   */
+  drawnAssetOf(tileset: object, siteId?: string): SiteAsset | null {
+    const entry = siteId ? this.loaded.get(siteId) : this.active;
+    if (!entry) return null;
+    const drawnAssets = this.drawnAssets(entry);
+    return drawnAssets.find((asset) => entry.handles.get(asset.id)?.tileset === tileset) ?? null;
+  }
+
   /** The two dates a loaded site draws side by side (the primary's unless named), or null. */
   compareDates(siteId?: string): CompareDates | null {
     const entry = siteId ? this.loaded.get(siteId) : this.active;
