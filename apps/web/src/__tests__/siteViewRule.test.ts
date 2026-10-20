@@ -157,7 +157,7 @@ function harness(record: Site = twoEpochSite(), others: Site[] = []) {
   // Each harness's own list; one left subscribed after its test only writes to its own.
   useViewRule.subscribe((s, before) => {
     if (s.active === before.active && s.ended === before.ended) return;
-    rules.push(s.ended ? { rule: null, reason: s.ended } : { rule: s.active?.rule ?? null });
+    rules.push(s.ended ? { rule: null, reason: s.ended.reason } : { rule: s.active?.rule ?? null });
   });
   const epochs: (string | null)[] = [];
   events.on("epoch", ({ epochId }) => epochs.push(epochId));

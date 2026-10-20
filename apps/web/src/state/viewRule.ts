@@ -6,7 +6,10 @@ import type { Coverage, ViewRule, ViewRuleEnd } from "@/lib/compositor";
 export interface ViewRuleLegend {
   /** The owner plane's cell, metres. */
   cellM: number;
-  /** Each date taking part, oldest first: how its coverage was read, and the cells it owns. */
+  /**
+   * Each date taking part, the frame's own first, then the rest oldest first: how its coverage
+   * was read, and the cells it owns.
+   */
   dates: {
     epochId: string;
     coverage: Coverage | "loading";
@@ -28,7 +31,7 @@ export interface ViewRuleLegend {
  */
 interface ViewRuleState {
   active: { siteId: string; rule: ViewRule } | null;
-  ended: ViewRuleEnd | null;
+  ended: { siteId: string; reason: ViewRuleEnd } | null;
   legend: ViewRuleLegend | null;
 }
 

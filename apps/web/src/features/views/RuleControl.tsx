@@ -85,7 +85,7 @@ export function RuleControl({
 }) {
   const scene = useScene();
   const active = useViewRule((s) => (s.active?.siteId === siteId ? s.active.rule : null));
-  const ended = useViewRule((s) => s.ended);
+  const ended = useViewRule((s) => (s.ended?.siteId === siteId ? s.ended.reason : null));
   const legend = useViewRule((s) => s.legend);
   const compare = useSites((s) => s.compareDates?.siteId === siteId);
   const rigged = useLiving((s) => s.status.sites.some((site) => site.siteId === siteId));

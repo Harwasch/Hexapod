@@ -1588,7 +1588,10 @@ export class SiteManager {
     if (!rule) return false;
     entry.rule = null;
     rule.session?.dispose();
-    useViewRule.setState({ active: null, ended: reason ?? null });
+    useViewRule.setState({
+      active: null,
+      ended: reason ? { siteId: entry.site.id, reason } : null,
+    });
     if (this.loaded.get(entry.site.id) === entry)
       void this.showRepresentation(entry, entry.representation);
     return true;

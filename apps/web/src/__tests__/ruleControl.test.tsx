@@ -142,12 +142,17 @@ describe("Per cell", () => {
     show();
     await screen.findByTestId("views-rule");
     expect(screen.getByTestId("views-rule-compare")).toHaveTextContent(VIEW_RULE_TEXT.compare);
-    act(() => useViewRule.setState({ active: null, ended: "compare" }));
+    act(() =>
+      useViewRule.setState({ active: null, ended: { siteId: SITE_ID, reason: "compare" } }),
+    );
     expect(screen.getByTestId("views-rule-ended")).toHaveTextContent(VIEW_RULE_ENDED.compare);
     // Said once: the note before gives way to why the rule ended.
     expect(screen.queryByTestId("views-rule-compare")).toBeNull();
-    act(() => useViewRule.setState({ ended: "living" }));
+    act(() => useViewRule.setState({ ended: { siteId: SITE_ID, reason: "living" } }));
     expect(screen.getByTestId("views-rule-ended")).toHaveTextContent(VIEW_RULE_ENDED.living);
+    // Another site's rule that ended says nothing here.
+    act(() => useViewRule.setState({ ended: { siteId: "elsewhere", reason: "living" } }));
+    expect(screen.queryByTestId("views-rule-ended")).toBeNull();
   });
 
   it("is disabled under another renderer, whose notice the views already show", async () => {
