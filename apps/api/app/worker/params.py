@@ -31,6 +31,10 @@ MANUAL_PLACEMENT = "manual_placement"
 INGEST_SPLAT = "ingest_splat"
 #: Lane 2's georeference, which takes the capture's coordinate as its last resort.
 EXIF_GPS = "exif_gps"
+#: Lane 2's pose and alignment, which express GNSS priors, check targets and the
+#: reference epoch about the same origin `exif_gps` uses (M3b): with a site frame, its.
+COLMAP = "colmap"
+ALIGN_EPOCH = "align_epoch"
 #: The capture-metadata keys that say how a splat file is oriented, and the parameter of
 #: `ingest_splat` each becomes. Metadata is camelCase because the console writes it;
 #: stage parameters are snake_case because the recipes are.
@@ -59,8 +63,11 @@ def stage_params(
 
     `frame` is the site frame the run is placed in (`services/epochs.frame_for_run`), or
     None for a run that defines its own. It goes to the stages that write the placement
-    -- `manual_placement`, `ingest_splat`, `exif_gps` -- and to no other: everything after
-    them reads the origin from `georef.json`. Without it the output is what it always was.
+    -- `manual_placement`, `ingest_splat`, `exif_gps` -- and to the two that must agree
+    with it about the origin before `georef.json` exists or about its datum: `colmap`
+    (GNSS pose priors about the frame's origin, not the fixes' median) and
+    `align_epoch` (the frame's height datum, for check targets). Everything else reads
+    the origin from `georef.json`. Without it the output is what it always was.
     """
     resolved: dict[str, dict[str, Any]] = {}
     requested = _requested(job)
@@ -86,6 +93,8 @@ def stage_params(
             # `manual_placement` refuses a frame offset `normalize` did not apply.
             here = located or {"lat": frame["lat"], "lon": frame["lon"]}
             resolved.setdefault(stage.id, {}).update({SITE_FRAME: frame, **here})
+        if stage.impl.name in (COLMAP, ALIGN_EPOCH) and frame is not None:
+            resolved.setdefault(stage.id, {})[SITE_FRAME] = frame
         if stage.impl.name == EXIF_GPS and frame is not None:
             # The stage falls back to the frame's origin itself, after the frames' own GPS,
             # the video's location and the capture's coordinate.

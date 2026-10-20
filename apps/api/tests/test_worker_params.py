@@ -102,9 +102,17 @@ def test_a_site_frame_reaches_every_stage_that_places_a_capture() -> None:
     assert (lane1["georeference"]["lat"], lane1["georeference"]["lon"]) == (47.6001, -122.3)
     assert lane2["georeference"]["site_frame"] == FRAME
     assert lane2["georeference"]["lat"] == 47.6001
-    # Every stage after them reads the origin from georef.json, so nothing else gets it.
+    # Pose (GNSS priors about the frame's origin) and align (the frame's datum for check
+    # targets) must agree with the georeference before or beside it (M3b); every stage
+    # after them reads the origin from georef.json, so nothing else gets it.
+    assert lane2["pose"]["site_frame"] == FRAME
+    assert lane2["align"]["site_frame"] == FRAME
     for resolved in (lane1, lane2):
-        placing = {"normalize", "georeference"} if resolved is lane1 else {"georeference"}
+        placing = (
+            {"normalize", "georeference"}
+            if resolved is lane1
+            else {"pose", "georeference", "align"}
+        )
         others = {stage for stage, values in resolved.items() if "site_frame" in values}
         assert others == placing
 
@@ -234,12 +242,17 @@ def test_a_phone_captures_params_are_pinned_whole(recipe: str) -> None:
         "site_frame": FRAME,
     }
     expected_normalize: dict[str, Any] = {"platform_hint": "phone"}
+    expected: dict[str, Any] = {}
     if recipe == "splat-ingest":
         expected_normalize.update(site_frame=FRAME, lat=47.6, lon=-122.3)
+    else:
+        # Lane 2's pose and align are told the frame too (M3b), and nothing else.
+        expected = {"pose": {"site_frame": FRAME}, "align": {"site_frame": FRAME}}
     assert framed == {
         "normalize": expected_normalize,
         "georeference": expected_georeference,
         "register": {"slug": "c", "title": "c"},
+        **expected,
     }
 
 
