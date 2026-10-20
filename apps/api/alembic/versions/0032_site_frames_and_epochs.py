@@ -20,6 +20,16 @@ and takes its `observed_at` where it had none, unless it has a `valid_to` (then 
 legacy: on an epoch asset `valid_to` means superseded). Seeded and catalog sites have no
 `captureId` and stay legacy.
 
+Locks. Everything but two indexes runs in one transaction, and `ADD COLUMN` on `assets`
+takes an ACCESS EXCLUSIVE lock held to its commit, so reads and writes of `assets` (and
+writes of `sites`, for the new foreign keys) wait for the backfill. Measured on the dev
+machine (hwgeekom, PostGIS 3.6 on Postgres 17.11, 2026-10-20), with probes timing one read and
+one write of each table during `alembic upgrade 0032`: 2,000 registered sites and 10,000
+assets blocked them for at most 0.4 s; 20,000 sites and 100,000 assets, 9.5 s (one run
+each, one machine: an order of magnitude, not a bound). The two indexes on tables that already hold rows -- `ix_assets_epoch_id`
+and `ix_sites_boundary_geography` -- are built CONCURRENTLY after that commit, so they do not
+add to it.
+
 Downgrade drops the tables and columns and nothing else: no asset row is deleted and no
 `source` is touched. A site with several revisions of one epoch is then a site with
 several splat assets; the newest stays `default_visible`, and a 0031 worker would repoint
@@ -162,7 +172,6 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_assets_source_kind", "assets", "source_kind IN ('observed', 'inferred')"
     )
-    op.create_index("ix_assets_epoch_id", "assets", ["epoch_id"])
 
     # The backfill: one frame and one epoch for every site the pipeline registered.
     # `c.id::text = metadata->>'captureId'` rather than a uuid cast, so a malformed id
@@ -259,13 +268,17 @@ def upgrade() -> None:
     )
     op.execute("DROP TABLE IF EXISTS _m0032_registered")
 
-    # `services/epochs.nearest_framed_site` measures on the ellipsoid, `geography(boundary)`,
-    # which the geometry gist index (`idx_sites_boundary`) cannot answer: this index on that
-    # expression can. Built CONCURRENTLY, so it does not block writes to sites while it is
-    # built: outside the transaction, which commits here (an autocommit block). `IF NOT
-    # EXISTS` makes a re-run after a failure here safe; a build that failed leaves an
-    # INVALID index, which `DROP INDEX` and a re-run replace.
+    # The two indexes on tables that already hold rows, built CONCURRENTLY so neither
+    # blocks writes while it is built: outside the transaction, which commits here (an
+    # autocommit block). `IF NOT EXISTS` makes a re-run after a failure here safe; a build
+    # that failed leaves an INVALID index, which `DROP INDEX` and a re-run replace.
+    # `ix_sites_boundary_geography` is the one `services/epochs.nearest_framed_site` uses:
+    # it measures on the ellipsoid, `geography(boundary)`, which the geometry gist index
+    # (`idx_sites_boundary`) cannot answer.
     with op.get_context().autocommit_block():
+        op.execute(
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_assets_epoch_id ON assets (epoch_id)"
+        )
         op.execute(
             "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_sites_boundary_geography "
             "ON sites USING gist (geography(boundary))"
