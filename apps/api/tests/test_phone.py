@@ -460,3 +460,63 @@ def test_the_phone_key_cannot_name_a_site_a_phone_did_not_make(
         db.query(Capture).filter(Capture.metadata_["origin"].as_string() == "phone-key").count()
         == 0
     )
+
+
+def test_a_phone_re_run_rechecks_that_the_phone_may_still_join_its_site(
+    client: TestClient, db: Session
+) -> None:
+    """A re-run of a capture that is already an epoch goes into that epoch's site, and a
+    capture the console put on a site goes into that one. The phone key may start either
+    only while the site is one a phone capture made -- the rule its first join was held
+    to (`_check_phone_site`) -- so a site whose maker is no longer a phone capture, or a
+    phone capture the console moved onto another site, is refused (409 `site_not_phone`),
+    by `process` and by `refine` alike. A phone capture on its own site re-runs as before."""
+    from app.models import Capture
+    from app.models.enums import CaptureKind
+    from tests.test_epochs import T0, make_epoch, make_site
+
+    def phone_capture() -> Capture:
+        # Written directly, as `create_phone_capture` writes it: four would pass the
+        # suite's daily limit of three.
+        capture = Capture(
+            slug=f"phone-{uuid.uuid4().hex[:8]}",
+            name="Phone",
+            kind=CaptureKind.VIDEO,
+            metadata_={"origin": "phone-key"},
+        )
+        db.add(capture)
+        db.flush()
+        uploaded(db, str(capture.id))
+        return capture
+
+    def epoch_of(capture: Capture, site_metadata: dict[str, object], slug: str) -> None:
+        site = make_site(db, slug, metadata=site_metadata)
+        epoch = make_epoch(db, site, 1, observed=T0)
+        epoch.capture_id = capture.id
+        capture.site_id = site.id
+        db.commit()
+
+    own = phone_capture()
+    epoch_of(own, {"captureId": str(own.id)}, "own")
+    desktop = Capture(slug="desk", name="Desk", kind=CaptureKind.VIDEO, metadata_={})
+    db.add(desktop)
+    db.flush()
+    moved = phone_capture()
+    epoch_of(moved, {"captureId": str(desktop.id)}, "desktop-made")
+    replaced = phone_capture()
+    # A phone-made site whose metadata the console has since replaced (PATCH does).
+    epoch_of(replaced, {"note": "edited by hand"}, "edited")
+    assigned = phone_capture()
+    assigned.site_id = make_site(db, "seeded", metadata={"origin": "demo-ranch"}).id
+    db.commit()
+
+    run = {"recipe": "photo-reconstruct"}
+    ok = client.post(f"/api/v1/phone/captures/{own.id}/process", json=run, headers=PHONE)
+    assert ok.status_code == 202, ok.text
+    for capture in (moved, replaced, assigned):
+        for action, body in (("process", run), ("refine", {})):
+            refused = client.post(
+                f"/api/v1/phone/captures/{capture.id}/{action}", json=body, headers=PHONE
+            )
+            assert refused.status_code == 409, (action, refused.text)
+            assert refused.json()["code"] == "site_not_phone", (action, refused.text)
