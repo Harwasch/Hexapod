@@ -45,6 +45,12 @@ export interface PixelCounts {
   rightRed: number;
   leftGreen: number;
   rightGreen: number;
+  /**
+   * Of the covered pixels: saturated ones whose hue is the 3-6 months bucket's (230-275°, the
+   * age ramp's blue-violet), and light, washed-out ones (the "newer data here" stripes).
+   */
+  ageHue: number;
+  light: number;
 }
 
 export interface CellViewHarness {
@@ -114,9 +120,11 @@ export async function startCellViewHarness(options: {
     strong: new SplatCellView(await build("strong"), gpu, root),
     split: new SplatCellView(await build("split"), gpu, root),
   };
-  // Data age on the split grid: four months old, a later date with evidence everywhere.
+  // Data age, four months old (bucket 2): on the split grid with a later date's evidence
+  // everywhere (striped), on the weak one with no later date (not striped).
   const later = await build("strong");
   parts.split.setDataAge(dataAgeTexels(parts.split.grid, 2, [later]).rg);
+  parts.weak.setDataAge(dataAgeTexels(parts.weak.grid, 2, []).rg);
   const primitive = (): CellViewPrimitive | undefined =>
     splatTilesetOf(tileset).gaussianSplatPrimitive;
 
@@ -134,6 +142,8 @@ export async function startCellViewHarness(options: {
       rightRed: 0,
       leftGreen: 0,
       rightGreen: 0,
+      ageHue: 0,
+      light: 0,
     };
     if (!context) return empty;
     context.drawImage(canvas, 0, 0);
@@ -141,7 +151,19 @@ export async function startCellViewHarness(options: {
     const bg = Color.fromCssColorString(BACKGROUND);
     const [br, bgG, bb] = [bg.red * 255, bg.green * 255, bg.blue * 255];
     const half = copy.width / 2;
-    const n = { covered: 0, red: 0, green: 0, left: 0, right: 0, lr: 0, rr: 0, lg: 0, rg: 0 };
+    const n = {
+      covered: 0,
+      red: 0,
+      green: 0,
+      left: 0,
+      right: 0,
+      lr: 0,
+      rr: 0,
+      lg: 0,
+      rg: 0,
+      ageHue: 0,
+      light: 0,
+    };
     for (let p = 0; p < data.length; p += 4) {
       const r = data[p] ?? 0;
       const g = data[p + 1] ?? 0;
@@ -163,6 +185,14 @@ export async function startCellViewHarness(options: {
         if (left) n.lg += 1;
         else n.rg += 1;
       }
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const saturation = max > 0 ? (max - min) / max : 0;
+      if (max > 140 && saturation < 0.3) n.light += 1;
+      if (saturation > 0.25 && max === b) {
+        const hue = 240 + (60 * (r - g)) / (max - min);
+        if (hue >= 230 && hue <= 275) n.ageHue += 1;
+      }
     }
     const share = (a: number, b: number) => (b > 0 ? a / b : 0);
     return {
@@ -173,6 +203,8 @@ export async function startCellViewHarness(options: {
       rightRed: share(n.rr, n.right),
       leftGreen: share(n.lg, n.left),
       rightGreen: share(n.rg, n.right),
+      ageHue: share(n.ageHue, n.covered),
+      light: share(n.light, n.covered),
     };
   }
 

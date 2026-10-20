@@ -6,8 +6,9 @@
  * one that calls every cell strong, green and not red; under one weak west of the yard's middle
  * and strong east of it, seen looking north, red on the left of the screen and green on the
  * right -- so the shader compiles, reads each splat's own cell through the root frame, and
- * tints by `weak-v1`. Off, the yard is not red. Data age with a later date's evidence
- * everywhere stripes, so it is neither the photo nor the confidence tint.
+ * tints by `weak-v1`. Off, the yard is not red. Data age four months old is the 3-6 months
+ * colour (by hue: a wrong bucket fails), and with a later date's evidence everywhere it is
+ * striped with light bands besides (a missing stripe fails).
  *
  * Headless GL is SwiftShader: pixels are counted, not eyeballed.
  */
@@ -50,6 +51,8 @@ interface Counts {
   rightRed: number;
   leftGreen: number;
   rightGreen: number;
+  ageHue: number;
+  light: number;
 }
 
 interface Harness {
@@ -106,10 +109,11 @@ test("weak cells draw red, strong ones green, each splat by its own cell", async
   );
   const strong = await view("strong");
   const split = await view("split");
-  const age = await view("split", "data-age");
+  const age = await view("weak", "data-age");
+  const newer = await view("split", "data-age");
   test.info().annotations.push({
     type: "pixels",
-    description: JSON.stringify({ off, weak, strong, split, age }),
+    description: JSON.stringify({ off, weak, strong, split, age, newer }),
   });
 
   expect(errors.filter((e) => /shader|compile|link|uniform/i.test(e))).toEqual([]);
@@ -126,8 +130,13 @@ test("weak cells draw red, strong ones green, each splat by its own cell", async
   expect(split.leftRed).toBeGreaterThan(0.5);
   expect(split.rightRed).toBeLessThan(0.1);
   expect(split.rightGreen).toBeGreaterThan(0.5);
-  // Data age (four months old, newer evidence everywhere): neither red nor green dominates.
-  expect(age.red).toBeLessThan(0.1);
-  expect(age.green).toBeLessThan(0.2);
-  expect(age.coverage).toBeGreaterThan(off.coverage * 0.8);
+  // Data age, four months old: the 3-6 months colour (blue-violet), which neither the photo nor
+  // a wrong bucket's colour is; with a later date's evidence everywhere, light stripes besides.
+  expect(off.ageHue).toBeLessThan(0.1);
+  expect(age.ageHue).toBeGreaterThan(0.6);
+  expect(age.red).toBeLessThan(0.05);
+  expect(age.green).toBeLessThan(0.05);
+  expect(newer.coverage).toBeGreaterThan(off.coverage * 0.8);
+  expect(newer.light).toBeGreaterThan(age.light + 0.15);
+  expect(newer.ageHue + newer.light).toBeGreaterThan(0.7);
 });
