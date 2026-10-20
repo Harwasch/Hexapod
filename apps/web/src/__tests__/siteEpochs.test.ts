@@ -378,6 +378,10 @@ describe("every epoch of a site is drawn with one placement", () => {
     expect(originHeight(tileset(A2.id))).toBeCloseTo(13, 3);
     // What reads the frame of the scan drawn saw the new matrix at once.
     expect(tileset(A2.id)?.root.updateTransform).toHaveBeenCalled();
+    // And the Inspector can say so (EpochFacts).
+    expect(manager.sharesPlacement(SITE_ID, A2.id)).toBe(true);
+    expect(manager.sharesPlacement(SITE_ID, A1.id)).toBe(false);
+    expect(manager.sharesPlacement(SITE_ID, "not-loaded")).toBeNull();
   });
 
   it("a later change to the anchor's placement moves every epoch with it", async () => {
@@ -408,6 +412,7 @@ describe("every epoch of a site is drawn with one placement", () => {
     await open(manager);
     expect(Matrix4.equals(tileset(A2.id)?.modelMatrix, Matrix4.IDENTITY)).toBe(true);
     expect(warned("an epoch's tiles are not in its site's frame; placed on its own")).toBe(true);
+    expect(manager.sharesPlacement(SITE_ID, A2.id)).toBe(false);
   });
 
   it("an epoch whose anchor did not load is placed on its own", async () => {
