@@ -18,8 +18,9 @@ it. It recomputes the gate itself and holds the layer's geometry to it:
 4. **The layer is in the scan's frame**: its root transform is the scan's, so its positions
    are in the tileset frame the targets are cells of.
 5. **Every gaussian of every tile** -- parents as well as leaves, each tile's origin
-   composed (`app/worker/positions.py`, the reader the carry's checksums use) -- is in a
-   target cell. Nothing outside them reaches the live site.
+   composed (`app/worker/positions.py`, the reader the carry's checksums use), and at
+   every place a tile is drawn (`tile_placements`: two tiles naming one GLB draw it at
+   both) -- is in a target cell. Nothing outside them reaches the live site.
 
 Only step 3 reads the client's metadata, and only to refuse: nothing it says admits a layer.
 A layer whose tiles cannot be read as splats is refused, not waved through.
@@ -183,22 +184,28 @@ def check_layer(
             "the scan's tileset's"
         )
     try:
-        offsets = positions.tile_offsets(document)
+        placements = positions.tile_placements(document)
     except positions.TileFormatError as error:
         raise InvalidInputError(f"inferred layer {uri!r}: {error}") from error
-    if not offsets:
+    if not placements:
         raise InvalidInputError(f"inferred layer {uri!r} names no tiles")
     folder = posixpath.dirname(rel)
     total = outside = count = 0
-    for content in sorted(offsets):
+    files: dict[str, bytes] = {}
+    # Every place a tile is drawn, not every uri: two tiles naming one GLB draw it twice.
+    for content, offset in placements:
         try:
             sidecars.check_relative(content)
         except sidecars.SidecarPathError as error:
             raise InvalidInputError(f"inferred layer {uri!r}: tile {error}") from error
         path = posixpath.join(folder, content) if folder else content
-        data = read(path)
+        data = files.get(path)
         if data is None:
-            raise InvalidInputError(f"inferred layer {uri!r}: its tile {path} is not there")
+            data = read(path)
+            if data is None:
+                raise InvalidInputError(f"inferred layer {uri!r}: its tile {path} is not there")
+            files[path] = data
+        # Counted per placement: the work, not the download, is what this bounds.
         total += len(data)
         if total > MAX_LAYER_BYTES:
             raise InvalidInputError(
@@ -206,7 +213,7 @@ def check_layer(
                 "too large to check, so not attached"
             )
         try:
-            xyz = positions.tile_positions(data, offsets[content])
+            xyz = positions.tile_positions(data, offset)
         except positions.TileFormatError as error:
             raise InvalidInputError(
                 f"inferred layer {uri!r}: its tile {path} cannot be read as splats ({error}), "

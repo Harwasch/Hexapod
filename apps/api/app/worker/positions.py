@@ -129,13 +129,14 @@ def _translation(transform: object, uri: str) -> np.ndarray:
     return out
 
 
-def tile_offsets(document: Mapping[str, Any]) -> dict[str, np.ndarray]:
-    """Each content uri's frame in the root's frame: the float64 sum of the child
-    translations from the root down, the root's own transform (the globe placement)
-    excluded (`splat_tiles.tile_offsets`). `content.uri` and 3D Tiles 1.1
-    `contents[].uri`, a leading `./` removed. Raises `TileFormatError` on a child transform
-    that is not a pure translation."""
-    out: dict[str, np.ndarray] = {}
+def tile_placements(document: Mapping[str, Any]) -> list[tuple[str, np.ndarray]]:
+    """Every `(content uri, offset)` the tileset draws, one per tile that names it, in the
+    order `tile_offsets` visits them: the float64 sum of the child translations from the
+    root down, the root's own transform (the globe placement) excluded. `content.uri` and
+    3D Tiles 1.1 `contents[].uri`, a leading `./` removed. A uri two tiles name is drawn
+    twice, once at each tile's offset, so it is here twice (`tile_offsets` keeps one).
+    Raises `TileFormatError` on a child transform that is not a pure translation."""
+    out: list[tuple[str, np.ndarray]] = []
     root = document.get("root")
     stack: list[tuple[Any, np.ndarray]] = [(root, np.zeros(3))]
     while stack:
@@ -149,11 +150,19 @@ def tile_offsets(document: Mapping[str, Any]) -> dict[str, np.ndarray]:
         for content in [tile.get("content"), *(tile.get("contents") or [])]:
             uri = content.get("uri") if isinstance(content, dict) else None
             if isinstance(uri, str) and uri:
-                out[uri.removeprefix("./")] = offset
+                out.append((uri.removeprefix("./"), offset))
         children = tile.get("children")
         if isinstance(children, list):
             stack.extend((child, offset) for child in children)
     return out
+
+
+def tile_offsets(document: Mapping[str, Any]) -> dict[str, np.ndarray]:
+    """Each content uri's frame in the root's frame (`splat_tiles.tile_offsets`): its
+    `tile_placements` offset, the last visited when two tiles name one uri. What a
+    position checksum is keyed by; a gate that must see every drawn copy reads
+    `tile_placements`."""
+    return dict(tile_placements(document))
 
 
 def tile_positions(data: bytes, offset: np.ndarray | None) -> np.ndarray:

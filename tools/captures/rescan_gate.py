@@ -487,28 +487,30 @@ def verify_layer(
 
 def layer_positions(tileset: Path) -> np.ndarray:
     """Every gaussian of **every tile** a layer's `tileset.json` names -- parents, drawn at
-    coarse detail, as well as leaves; `content` and 3D Tiles 1.1 `contents` -- in its
-    tileset frame, each tile's origin composed (`splat_tiles.tile_offsets`): what publish
-    holds to the targets (`verify_layer`). `splat_render.load_tileset` reads the leaves
-    alone, which is what a renderer needs and not what is published. A tile uri that is
-    not beside the tileset is a `RescanGateError`."""
+    coarse detail, as well as leaves; `content` and 3D Tiles 1.1 `contents`; a GLB two
+    tiles name, at both -- in its tileset frame, each tile's origin composed
+    (`splat_tiles.tile_placements`): what publish holds to the targets (`verify_layer`).
+    `splat_render.load_tileset` reads the leaves alone, which is what a renderer needs and
+    not what is published. A tile uri that is not beside the tileset is a
+    `RescanGateError`."""
     from rig_tiles import tile_positions
-    from splat_tiles import SplatFormatError, tile_offsets
+    from splat_tiles import SplatFormatError, tile_placements
 
     path = Path(tileset)
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
-        offsets = tile_offsets(document)
+        placements = tile_placements(document)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, SplatFormatError) as error:
         raise RescanGateError(f"{path}: {error}") from error
     folder = path.parent.resolve()
     parts: list[np.ndarray] = []
-    for uri in sorted(offsets):
+    # Every place a tile is drawn: two tiles naming one GLB draw it at both.
+    for uri, offset in placements:
         target = (folder / uri).resolve()
         if not target.is_relative_to(folder):
             raise RescanGateError(f"{path}: tile {uri!r} is not beside the layer's tileset")
         try:
-            parts.append(tile_positions(target, offsets[uri]))
+            parts.append(tile_positions(target, offset))
         except (OSError, ValueError, KeyError) as error:
             raise RescanGateError(f"{path}: tile {uri!r} cannot be read: {error}") from error
     return np.concatenate(parts) if parts else np.zeros((0, 3), dtype=np.float32)

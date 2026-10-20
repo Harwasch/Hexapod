@@ -539,6 +539,23 @@ def test_layer_positions_compose_each_tiles_origin(tmp_path: Path) -> None:
     assert rg.verify_layer(**{**case, "positions": rg.layer_positions(tileset)})
 
 
+def test_a_tile_named_twice_is_read_at_every_place_it_is_drawn(tmp_path: Path) -> None:
+    """Codex B5b N1: a second tile naming the same GLB, moved off the targets, is drawn
+    there too; one offset per uri saw only the first."""
+    case = _publish_case()
+    inside = case["positions"][:1]
+    tileset = _layer(tmp_path / "layer", parent=inside, leaf=inside)
+    document = json.loads(tileset.read_text(encoding="utf-8"))
+    child = document["root"]["children"][0]
+    shift = [1.0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1000, 0, 0, 1]
+    document["root"]["children"].append({**child, "transform": shift})
+    tileset.write_text(json.dumps(document), encoding="utf-8")
+    every = rg.layer_positions(tileset)
+    assert every.shape == (3, 3)
+    with pytest.raises(rg.RescanGateError, match="1 of the layer's 3 gaussians are outside"):
+        rg.verify_layer(**{**case, "positions": every})
+
+
 def test_a_layer_tile_outside_its_folder_is_refused(tmp_path: Path) -> None:
     tileset = _layer(tmp_path / "layer", parent=[[0.0, 0.0, 0.0]], leaf=[[0.0, 0.0, 0.0]])
     document = json.loads(tileset.read_text(encoding="utf-8"))

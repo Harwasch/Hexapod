@@ -180,6 +180,42 @@ def test_every_tile_is_checked_not_only_the_leaves(
         attach(db, storage, asset, layer_files([outside], [inside]), gate_of(read))
 
 
+def test_a_tile_named_twice_is_checked_at_every_place_it_is_drawn(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Codex B5b N1 (probed): two sibling tiles name the same GLB, the second moved into a
+    cell that is not a target. The viewer draws it at both; the gate kept one offset per
+    uri and saw only the allowed copy."""
+    _, asset = site(db, storage, tmp_path)
+    read = targets(db, storage, asset)
+    inside, outside = centre(read, target=True), centre(read, target=False)
+    files = layer_files([inside], [inside])
+    document = json.loads(files[f"{LAYER}tileset.json"])
+    child = document["root"]["children"][0]
+    shift = [
+        1.0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        outside[0] - inside[0],
+        outside[1] - inside[1],
+        0,
+        1,
+    ]
+    document["root"]["children"].append({**child, "transform": shift})
+    files[f"{LAYER}tileset.json"] = json.dumps(document).encode()
+    with pytest.raises(InvalidInputError, match="1 of its 3 gaussians are outside"):
+        attach(db, storage, asset, files, gate_of(read))
+
+
 def test_a_fill_for_other_targets_is_filled_again(
     db: Session, storage: S3Storage, tmp_path: Path
 ) -> None:
