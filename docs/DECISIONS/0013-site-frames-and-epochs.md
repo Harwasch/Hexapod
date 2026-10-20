@@ -35,9 +35,15 @@ the opposite of both.
 4. **The site is resolved when the job starts**, because the pipeline has to place the capture in
    the frame while it runs (`services/epochs.frame_for_run`): a re-run keeps its epoch's frame; a
    capture that names a site (`siteId` on capture create and on the phone route, kept in
-   `captures.metadata.siteId`) uses that site's frame, or defines it as the site's first epoch; a
-   capture with a coordinate joins the nearest framed site whose boundary is within 25 m; anything
-   else is a new site. Only framed sites are spatial candidates.
+   `captures.metadata.siteId`) uses that site's frame, or defines it as the site's first epoch
+   when the capture lies within 2047 m of it (else it is a new site); a capture with a located
+   point joins the nearest framed site whose boundary is within 25 m; anything else is a new site.
+   Only framed sites are spatial candidates. The located point is decided once, before the run
+   (`worker/params.located_point`): a hand placement in the job's params (the upload page's typed
+   place) wins over the capture's own coordinate, and the same point goes to the spatial join,
+   to `normalize` and to `georeference`. The phone key may name only a site a phone capture made
+   (409 `site_not_phone`): it is a weak shared credential, and naming a seeded or hand-made site
+   would fix that site's frame where the phone happens to be.
 5. **The worker passes the frame** as the `site_frame` param (`{siteId, lat, lon, height,
 heightDatum, epsg}`) to the stages that write the placement: `ingest_splat`, `manual_placement`,
    `exif_gps`. `georef.json` then _is_ the frame origin, and every later stage (`place_splat`,
@@ -56,7 +62,8 @@ heightDatum, epsg}`) to the stages that write the placement: `ingest_splat`, `ma
    and M2b moves those readers onto it.
 9. **Migration 0032** backfills a frame and epoch 1 for every site a pipeline run registered (a
    `captureId` naming a capture of that site, and a numeric georef), with that site's first splat
-   as the epoch's asset. Seeded and catalog sites stay legacy. The downgrade drops only the new
+   as the epoch's asset unless it has a `valid_to` (a validity window before 0032; on an epoch
+   asset it would read as superseded, so such a splat stays legacy). Seeded and catalog sites stay legacy. The downgrade drops only the new
    tables and columns: no asset row and no `source` is touched.
 
 ## Two deviations from D3, stated loudly
@@ -76,8 +83,12 @@ And three made while building it:
 - A capture registered into a site before 0032 that the backfill could not read (no georef) adopts
   that site's first legacy splat as its epoch's first revision on its next run, instead of adding a
   second visible splat beside it; its sidecars still carry.
-- The ground-sample check in the pipeline tests uses 2e-6° rather than 1e-7°: the ground samples
-  convert metres to degrees with a flat 111,320 m/°, about 0.4% long at 28° N.
+- In a frame, ground samples (`splat_ground`) and epoch footprints (`placement.boundary`) are
+  placed by the exact inverse of the tiles' root transform (ENU → ECEF → geodetic), not the flat
+  111,320 m/° used about a capture's own centre: that rule is about 0.4% long north-south at 28° N,
+  which is ~9 m at the 2 km a joined epoch can sit from its origin. Outside a frame both are what
+  they were. A runtime scale still rescales footprints linearly in degrees about the origin; its
+  error spans only (factor − 1) of the offset.
 - Footprint containment (`geometry.contains`) allows 1e-9° (0.1 mm, under the SPZ quantum), so a
   runtime scale undone and redone does not grow a site's boundary by rounding.
 
@@ -96,5 +107,10 @@ And three made while building it:
   make two sites.
 - Vertical disagreement between epochs is hidden by the viewer's per-asset ground clamp until M2b
   removes it and M3 aligns epochs visually.
-- A site several hundred metres across in one tile can still wrap SPZ positions until M1's refusal
-  to wrap is merged; M2a merges after it.
+- An epoch up to 2047 m from its frame's origin, plus its own extent, can pass SPZ's 24-bit range
+  in the root tile. Nothing wraps: `pack_spz` refuses such a position (M1a-A's refusal, carried on
+  this branch), every fix of an EXIF-aligned epoch is held to the range, and per-tile origins (M1)
+  are what will let such an epoch pack.
+- The one end-to-end test of the EXIF-aligned branch in a frame
+  (`test_exact_gps_in_a_site_frame_recovers_the_scene_in_that_frame`) needs the COLMAP 3.9.1
+  binary: it runs in CI only. Locally the branch's frame handling is covered by unit tests.
