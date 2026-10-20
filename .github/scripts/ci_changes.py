@@ -127,6 +127,7 @@ INPUTS: dict[str, str] = {
             r"tools/(pipeline|captures)/",
             r"infra/(api\.Dockerfile$|modal/|cors/)",
             r"fly\.toml$",
+            r"\.github/scripts/check_fly_toml\.py$",
             r"\.dockerignore$",
         ]
     ),

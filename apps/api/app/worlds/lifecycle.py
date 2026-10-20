@@ -213,6 +213,20 @@ class Lifecycle:
             )
 
 
+PROVIDERS = ("runpod", "lambda", "modal")
+
+
+def sleep_hazard(config: WorldsSettings, profiles: list[WorldsSettings]) -> list[str]:
+    """The providers allowed to provision paid workers on an API that may sleep.
+
+    A paid worker is torn down at its idle or hard deadline by the lease reaper, and the
+    reaper is a thread in this process: suspended or stopped with the machine, it does
+    nothing until a request wakes the API, and the worker bills until then."""
+    if not config.api_may_sleep:
+        return []
+    return [name for name in PROVIDERS if any(selected.managed(name) for selected in profiles)]
+
+
 @asynccontextmanager
 async def worlds_lifespan(app: FastAPI) -> AsyncIterator[None]:
     config = WorldsSettings.load()
@@ -237,6 +251,15 @@ async def worlds_lifespan(app: FastAPI) -> AsyncIterator[None]:
                 raise RuntimeError(
                     problem or "Managed Worlds provisioning requires API_WRITE_TOKEN."
                 )
+    hazard = sleep_hazard(config, profiles)
+    if hazard:
+        logger.warning(
+            "Paid Worlds provisioning is allowed (%s) on an API that may sleep "
+            "(WORLD_API_MAY_SLEEP): the lease reaper runs only while the API is awake, so "
+            "a worker past its idle or hard deadline keeps billing until the next request. "
+            'Set auto_stop_machines = "off" and min_machines_running = 1 in fly.toml.',
+            ", ".join(hazard),
+        )
     lifecycle: Lifecycle | None = None
     start_transport()
     try:

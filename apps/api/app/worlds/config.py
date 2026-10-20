@@ -70,6 +70,10 @@ class WorldsSettings(BaseSettings):
     max_managed_workers: int = Field(default=1, ge=1, le=8)
     max_worker_hourly_cost: float | None = Field(default=None, gt=0, le=100, allow_inf_nan=False)
     data_persistent: bool = False
+    # Set by a deployment whose API machine may be stopped or suspended when idle (fly.toml:
+    # auto_stop_machines). The lease reaper is a thread in the API process, so on such a
+    # machine it runs only while the API is awake; see worlds_lifespan's warning.
+    api_may_sleep: bool = False
 
     @classmethod
     def load(cls) -> WorldsSettings:

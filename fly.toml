@@ -72,7 +72,10 @@ kill_timeout = "30s"
   # Keep these three false while [http_service] lets the API sleep. The Worlds lease reaper
   # (app/worlds/lifecycle.py) runs in the API process, and a suspended API does not tear
   # down a paid GPU worker whose idle or hard deadline passes until the next request wakes
-  # it. Turning one on means auto_stop_machines = "off" and min_machines_running = 1 again.
+  # it. Turning one on means auto_stop_machines = "off" and min_machines_running = 1 again
+  # (CI's image job refuses the combination: .github/scripts/check_fly_toml.py), and
+  # WORLD_API_MAY_SLEEP "false"; with it "true" the API logs a warning at startup.
+  WORLD_API_MAY_SLEEP = "true"
   WORLD_RUNPOD_ALLOW_PROVISION = "false"
   WORLD_LAMBDA_ALLOW_PROVISION = "false"
   WORLD_MODAL_ALLOW_PROVISION = "false"

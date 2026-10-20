@@ -416,7 +416,9 @@ Nothing else does, and nothing needs to:
   went away stays open on its gateway. That is why every `WORLD_*_ALLOW_PROVISION` stays
   false: a paid GPU worker past its deadline would keep billing until somebody opened the
   console. Turning one on means `auto_stop_machines = "off"` and
-  `min_machines_running = 1` again.
+  `min_machines_running = 1` again, and `WORLD_API_MAY_SLEEP = "false"`. Two guards say
+  so: CI's image job refuses the combination (`.github/scripts/check_fly_toml.py`), and an
+  API started with `WORLD_API_MAY_SLEEP=true` and provisioning allowed logs a warning.
 
 **The cost of waking.** A resume from suspend takes a few hundred milliseconds (Fly's
 figure), plus Neon's start if its compute has scaled to zero. A resumed process still has
