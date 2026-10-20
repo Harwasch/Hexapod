@@ -13,7 +13,7 @@ import pytest
 import confidence
 import confidence_scene as scene
 import quality
-from captures_bridge import cell_grid
+from captures_bridge import cell_grid, sigmoid
 from conftest import make_recipe
 from executor import execute
 from runners import RunnerSet
@@ -462,3 +462,46 @@ def test_the_demo_runs_and_reports_the_rescan(
     for name in ("e1-splat", "e2-splat"):
         tileset = json.loads((tmp_path / "demo" / name / "tileset.json").read_text())
         assert tileset["root"]["extras"]["confidence"]["kind"] == "confidence"
+
+
+def test_the_grid_is_in_the_frame_canonical_ply_and_the_tiles_are_in(tmp_path: Path) -> None:
+    """A recentred, rotated, scaled epoch moved by a site-frame offset: every gaussian
+    `place` published lands in a scored cell of the grid, so the grid is in the frame the
+    tileset's root transform places on the globe, not the trainer's."""
+    import gaussians
+
+    workdir = Workdir.create(tmp_path / "moved")
+    names = scene.write_epoch(workdir.root / "inputs", scene.field(N, seed=2), scene.orbit(24))
+    turn = np.array([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    georef = json.loads(workdir.input_path("georef.json").read_text())
+    georef["frame"] = {
+        "source": "camera-up",
+        "scale": 2.0,
+        "rotation": turn.tolist(),
+        "translationM": None,
+        "recentre": True,
+    }
+    georef.pop("scaleSource")
+    georef["siteFrame"] = {"offsetM": [30.0, -12.0, 1.0]}
+    workdir.input_path("georef.json").write_text(json.dumps(georef))
+    execute(
+        make_recipe(
+            [
+                {"id": "quality", "impl": "support_gate", "params": {"bar": "balanced"}},
+                {"id": "place", "impl": "place_splat"},
+                {"id": "confidence", "impl": "confidence_grid"},
+            ],
+            inputs=names,
+        ),
+        workdir,
+        RunnerSet.local(),
+    )
+    _, grid = _grid(workdir)
+    placed = gaussians.read_splat(workdir.out_dir("place") / "canonical.ply")
+    visible = sigmoid(placed.columns["opacity"]) >= 0.05
+    xyz = placed.xyz[visible]
+    assert abs(float(np.median(xyz[:, 0])) - 30.0) < 3.0  # really moved
+    scores = cell_grid.lookup(grid, xyz)[:, 0]
+    # A gaussian exactly on a cell edge may round into its neighbour (ADR 0016).
+    assert (scores > 0).mean() > 0.999
+    assert grid.planes[0].cell_m == 1.0  # twice the scale: a quarter of the density
