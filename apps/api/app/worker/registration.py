@@ -753,17 +753,29 @@ def _target(
         return site, frame, EpochJoinMethod.NEW_SITE
     if explicit is not None:
         site = db.get(Site, explicit.id, with_for_update=True, populate_existing=True)
-        if site is not None and site.frame is None:
+        away = _distance_from(db, site, registration)
+        if site is not None and site.frame is None and away <= epochs.EXPLICIT_JOIN_MAX_M:
             frame = _frame_from_registration(site.id, registration, SiteFrameSource.REGISTRATION)
             if frame is not None:
                 db.add(frame)
             return site, frame, EpochJoinMethod.EXPLICIT
-        log.warning(
-            "register: capture %s named site %s, which gained a frame while the run was "
-            "going; its tiles are not in that frame, so it is a new site",
-            capture.id,
-            explicit.id,
-        )
+        if site is not None and site.frame is None:
+            # The site's frame would be fixed here for good, kilometres from what it shows.
+            log.warning(
+                "register: capture %s named site %s but lies %.0f m from it, past the "
+                "%g m a site's frame can hold; it is a new site",
+                capture.id,
+                explicit.id,
+                away,
+                epochs.EXPLICIT_JOIN_MAX_M,
+            )
+        else:
+            log.warning(
+                "register: capture %s named site %s, which gained a frame while the run "
+                "was going; its tiles are not in that frame, so it is a new site",
+                capture.id,
+                explicit.id,
+            )
     elif _near_a_framed_site(db, registration) is not None:
         log.info(
             "register: capture %s lies within %g m of a framed site but its run was given no "
@@ -776,6 +788,15 @@ def _target(
     if frame is not None:
         db.add(frame)
     return site, frame, EpochJoinMethod.NEW_SITE
+
+
+def _distance_from(db: Session, site: Site | None, registration: Registration) -> float:
+    """Metres from the run's georeference to the site's boundary; 0 for a run with no
+    georeference (the stub runner's), which fixes no frame."""
+    origin = placement.registered_origin({"registration": registration.document})
+    if site is None or origin is None:
+        return 0.0
+    return epochs.distance_to_site_m(db, site.id, origin.lat, origin.lon) or 0.0
 
 
 def _near_a_framed_site(db: Session, registration: Registration) -> Site | None:

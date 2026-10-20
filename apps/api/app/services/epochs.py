@@ -273,6 +273,24 @@ def nearest_framed_site(
     ).first()
 
 
+#: How far from a frameless site's boundary a capture that names it may be and still
+#: define its frame: the SPZ range a tile holds about its origin (D1, `tools/pipeline/
+#: site_frame.MAX_OFFSET_M`). Farther, no later epoch of what the site shows could share
+#: that frame, so the capture is a site of its own (`registration._target`).
+EXPLICIT_JOIN_MAX_M = 2047.0
+
+
+def distance_to_site_m(db: Session, site_id: uuid.UUID, lat: float, lon: float) -> float | None:
+    """Metres from (lat, lon) to the site's boundary on the ellipsoid; 0 inside it, None for
+    a site that does not exist."""
+    distance = db.scalar(
+        select(
+            func.ST_Distance(func.geography(Site.boundary), func.geography(_point(lat, lon)))
+        ).where(Site.id == site_id)
+    )
+    return None if distance is None else float(distance)
+
+
 def _frame_of(db: Session, site_id: uuid.UUID) -> RunFrame | None:
     frame = db.get(SiteFrame, site_id)
     return RunFrame.of(frame) if frame is not None else None
