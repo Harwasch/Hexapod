@@ -373,6 +373,49 @@ describe("in the colour chain", () => {
     expect(inCompanionSlots(vecs, 150)).toBe(false);
   });
 
+  it("under a view rule greys only the inferred layers, not the other dates it draws", async () => {
+    // A rule's host draws another date and that date's inferred layer as companions; Data
+    // age's part is told which are inferred (`fills`): the date is coloured by its age.
+    const scan = {};
+    const date = {};
+    const layer = {};
+    const inferred = new Set<unknown>([layer]);
+    const part = new SplatCellView(
+      await yardGrid(),
+      gpu,
+      () => translation(0, 0, 0),
+      () => inferred,
+    );
+    const target = primitive();
+    Object.assign(target, {
+      _tileset: scan,
+      companions: [date, layer],
+      _tileSlots: new Map([
+        [{ tileset: scan }, { start: 0, count: 100 }],
+        [{ tileset: date }, { start: 100, count: 50 }],
+        [{ tileset: layer }, { start: 150, count: 20 }],
+      ]),
+    });
+    part.install(target);
+    const { uniforms } = build(part);
+    const fills = (uniforms.u_cellFills?.() as { vec4: number[] }[]).map((v) => v.vec4);
+    expect(fills[0]).toEqual([150, 170, 0, 0]);
+    expect(fills.slice(1).every((v) => v.every((n) => n === 0))).toBe(true);
+  });
+
+  it("is one a primitive: a second cell view is refused, and the first stays", async () => {
+    // Two would declare the same uniforms (a date's own view and a rule's Data age).
+    const first = new SplatCellView(await yardGrid(), gpu, () => translation(0, 0, 0));
+    const second = new SplatCellView(await yardGrid(), gpu, () => translation(0, 0, 0));
+    const target = primitive();
+    expect(first.install(target)).toBe(true);
+    expect(second.install(target)).toBe(false);
+    expect(second.installed).toBe(false);
+    expect(colorChainOf(target)?.parts).toEqual([first]);
+    first.uninstall();
+    expect(second.install(target)).toBe(true);
+  });
+
   it("is refused by an engine without the colour slot", async () => {
     const part = new SplatCellView(await yardGrid(), gpu, () => translation(0, 0, 0));
     expect(part.install({ isDestroyed: () => false })).toBe(false);
