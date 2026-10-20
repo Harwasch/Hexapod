@@ -26,7 +26,10 @@ A layer whose tiles cannot be read as splats is refused, not waved through.
 
 A republish asks the same of every layer it would carry (`carry_check`, used by
 `app/worker/carry.py`): the targets of the run's epoch, recomputed, computed on the very grid
-the new tiles carry, and every gaussian in them -- or the layer is not carried.
+the new tiles carry, and every gaussian in them -- or the layer is not carried. It runs
+beside a publish with no transaction open, so it never downloads inside one
+(`_targets_outside`): the `epoch_maps` rows are read, the transaction ended, the grids
+downloaded to disk, and only then the targets computed from those files.
 """
 
 from __future__ import annotations
@@ -36,21 +39,26 @@ import hashlib
 import json
 import math
 import posixpath
+import tempfile
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.analysis import cell_grid, rescan_gate
-from app.models import Asset, Epoch
+from app.models import Asset, Epoch, EpochMap
+from app.models.enums import EpochStatus
 from app.schemas.confidence import FillTargetsRead
 from app.services import confidence_maps, epochs, sidecars
 from app.services.errors import ConflictError, InvalidInputError
 from app.storage import ObjectStorage
+from app.storage.base import StoredObject
 from app.worker import positions
 
 #: Bytes of one layer's tiles read to check its gaussians: far past any fill (the yard's is
@@ -108,7 +116,10 @@ class Targets:
 
 def targets_for(db: Session, storage: ObjectStorage, asset: Asset) -> Targets:
     """The API's fill targets for `asset`'s epoch, from the stored maps; an
-    `InvalidInputError` that says why there are none to fill."""
+    `InvalidInputError` that says why there are none to fill. The grids are read from
+    `storage` as the targets are computed, inside the caller's transaction (the attach's,
+    which holds the asset's row lock throughout); `_targets_outside` is the variant that
+    ends it first."""
     if asset.epoch_id is None or asset.site_id is None:
         raise InvalidInputError(
             "the asset is a revision of no epoch (seeded or legacy): nothing was measured, so "
@@ -268,14 +279,7 @@ def carry_check(
         if found:
             return found[0]
         try:
-            epoch = epochs.epoch_of_capture(db, capture_id) if capture_id is not None else None
-            current = epochs.current_asset(db, epoch.id) if epoch is not None else None
-            if current is None:
-                raise InvalidInputError(
-                    "the run's capture is no epoch with a current revision: nothing it shows "
-                    "was measured, so no fill holds on it"
-                )
-            found.append(targets_for(db, storage, current))
+            found.append(_targets_outside(db, storage, capture_id, after or (lambda: None)))
         except InvalidInputError as error:
             found.append(str(error))
         finally:
@@ -301,3 +305,108 @@ def carry_check(
         return None
 
     return check
+
+
+class _Fetched:
+    """The grids `_targets_outside` downloaded, served from disk to `load_grid` as if from
+    `storage`: what it reads of a store (`public_url`, `head_object`, `get_object_tail`). A
+    key that was not downloaded is missing -- `load_grid`'s refusal -- so a grid the
+    targets need and the prefetch did not foresee (an epoch published in between) is
+    never downloaded inside the transaction: the gate refuses instead."""
+
+    def __init__(self, storage: ObjectStorage, files: Mapping[str, Path]) -> None:
+        self._storage, self._files = storage, dict(files)
+
+    def public_url(self, key: str) -> str:
+        return self._storage.public_url(key)
+
+    def head_object(self, key: str) -> StoredObject | None:
+        path = self._files.get(key)
+        if path is None:
+            return None
+        return StoredObject(
+            key=key,
+            url=self.public_url(key),
+            content_type="application/octet-stream",
+            size=path.stat().st_size,
+        )
+
+    def get_object_tail(self, key: str, max_bytes: int) -> tuple[bytes, int]:
+        data = self._files[key].read_bytes()
+        return data[-max_bytes:] if max_bytes < len(data) else data, len(data)
+
+
+def _map_rows(db: Session, epoch: Epoch) -> list[tuple[str, str]]:
+    """`(url, sha256)` of every map `confidence_maps.fill_targets` reads for `epoch`: its
+    current revision's, and those of the earlier published epochs of its site, newest
+    first, the first `MAX_EARLIER` measured (one more, so `capped` is told right). Read as
+    plain values, so nothing of the session is needed once the transaction ends."""
+    rows: list[tuple[str, str]] = []
+
+    def of(candidate: Epoch) -> EpochMap | None:
+        try:
+            return confidence_maps.measured_map(db, candidate)
+        except ConflictError:
+            return None
+
+    own = of(epoch)
+    if own is None:
+        return rows
+    rows.append((own.url, str(own.descriptor.get("sha256") or "")))
+    earlier = db.scalars(
+        select(Epoch)
+        .where(
+            Epoch.site_id == epoch.site_id,
+            Epoch.status == EpochStatus.PUBLISHED.value,
+            Epoch.observed_at < epoch.observed_at,
+            Epoch.id != epoch.id,
+        )
+        .order_by(Epoch.observed_at.desc(), Epoch.ordinal.desc())
+    )
+    for candidate in earlier:
+        row = of(candidate)
+        if row is None:
+            continue
+        if len(rows) > confidence_maps.MAX_EARLIER:
+            break
+        rows.append((row.url, str(row.descriptor.get("sha256") or "")))
+    return rows
+
+
+def _targets_outside(
+    db: Session,
+    storage: ObjectStorage,
+    capture_id: uuid.UUID | None,
+    end: Callable[[], None],
+) -> Targets:
+    """`targets_for` the current revision of `capture_id`'s epoch with no grid downloaded
+    inside a transaction: the rows are read and `end` called; the grids downloaded to a
+    temporary folder (each refused past `MAX_GRID_BYTES` before it is fetched); then the
+    targets computed by `confidence_maps.fill_targets` itself -- its rule, its selection --
+    reading those files (`_Fetched`), and `end` again by the caller."""
+    epoch = epochs.epoch_of_capture(db, capture_id) if capture_id is not None else None
+    current = epochs.current_asset(db, epoch.id) if epoch is not None else None
+    if epoch is None or current is None:
+        raise InvalidInputError(
+            "the run's capture is no epoch with a current revision: nothing it shows was "
+            "measured, so no fill holds on it"
+        )
+    current_id = current.id
+    rows = _map_rows(db, epoch)
+    end()
+    with tempfile.TemporaryDirectory(prefix="fill-gate-") as folder:
+        files: dict[str, Path] = {}
+        for index, (url, sha) in enumerate(rows):
+            key = confidence_maps.storage_key(storage, url)
+            if key is None or confidence_maps.GRIDS.get((url, sha)) is not None:
+                continue
+            head = storage.head_object(key)
+            if head is None or head.size > confidence_maps.MAX_GRID_BYTES:
+                continue
+            path = Path(folder) / f"{index}.bin"
+            storage.download_file(key, path)
+            files[key] = path
+        asset = db.get(Asset, current_id)
+        if asset is None:
+            raise InvalidInputError("the epoch's current revision is gone")
+        return targets_for(db, cast(ObjectStorage, _Fetched(storage, files)), asset)

@@ -16,6 +16,7 @@ import base64
 import hashlib
 import json
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -337,9 +338,12 @@ def _live(
     put_scan(storage, directory, sidecars=files, extras={"confidence": descriptor("e2"), **extras})
 
 
-def _republish(db: Session, storage: S3Storage, asset: Asset) -> Any:
+def _republish(
+    db: Session, storage: S3Storage, asset: Asset, after: Callable[[], None] | None = None
+) -> Any:
     """What a re-run of `asset`'s epoch carries: the same tiles and the same grid, so every
-    sidecar would be carried were it not for the gate."""
+    sidecar would be carried were it not for the gate. `after` is the check's
+    end-of-transaction hook, as the runner gives it."""
     from app.services import fill_gate
     from app.worker.carry import plan_carry
     from app.worker.publish import Publisher
@@ -360,7 +364,7 @@ def _republish(db: Session, storage: S3Storage, asset: Asset) -> Any:
         live_url=str(asset.source["url"]),
         tiles_prefix=run,
         entry=f"{run}tileset.json",
-        fill_check=fill_gate.carry_check(db, storage, epoch.capture_id),
+        fill_check=fill_gate.carry_check(db, storage, epoch.capture_id, after=after),
     )
 
 
@@ -484,3 +488,91 @@ def test_a_republish_with_no_earlier_epoch_carries_no_fill(
     assert "inferredLayers" not in _extras(plan)
     (gone,) = [gone for gone in plan.dropped if gone.kind == "inferredLayers"]
     assert "re-scanned" in gone.reason
+
+
+def test_no_session_is_idle_in_a_transaction_while_the_carry_gate_downloads_grids(
+    db: Session, storage: S3Storage, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The carry gate reads the site's `epoch_maps` rows, then downloads their grids -- up
+    to nine of 32 MB, with the publish's copy still to come. A session idle in a transaction
+    that long is killed by the database (`runner._end_transaction`), so during every grid
+    download no session may be: checked in Postgres itself, as
+    test_worker_registration.py's reference-download test does, with the runner's hook."""
+    from sqlalchemy import create_engine, text
+
+    from tests.conftest import TEST_DATABASE_URL
+
+    _, asset = site(db, storage, tmp_path)
+    read = targets(db, storage, asset)
+    inside = centre(read, target=True)
+    _live(storage, asset, layer_files([inside], [inside]), {"inferredLayers": [_entry(read)]})
+    db.commit()
+    confidence_maps.GRIDS.clear()
+
+    probe = create_engine(TEST_DATABASE_URL)
+    seen: list[tuple[str, int]] = []
+
+    def idle_in_transaction() -> int:
+        with probe.connect() as connection:
+            return int(
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM pg_stat_activity WHERE datname = "
+                        "current_database() AND pid <> pg_backend_pid() AND "
+                        "state LIKE 'idle in transaction%'"
+                    )
+                ).scalar_one()
+            )
+
+    def spied(name: str) -> Callable[..., Any]:
+        real = getattr(storage, name)
+
+        def call(key: str, *args: Any, **kwargs: Any) -> Any:
+            if key.endswith("confidence.bin"):
+                seen.append((f"{name} {key}", idle_in_transaction()))
+            return real(key, *args, **kwargs)
+
+        return call
+
+    for name in ("get_object", "get_object_tail", "download_file", "head_object"):
+        monkeypatch.setattr(storage, name, spied(name))
+    plan = _republish(db, storage, asset, after=db.commit)
+    probe.dispose()
+
+    assert _extras(plan)["inferredLayers"] == [_entry(read)]
+    downloads = [key for key, _ in seen if not key.startswith("head_object")]
+    # e2's grid and e1's: each fetched once, and never inside a transaction.
+    assert len({key.split(" ", 1)[1] for key in downloads}) == 2, seen
+    assert all(idle == 0 for _key, idle in seen), seen
+
+
+def test_a_grid_the_prefetch_did_not_foresee_is_refused_not_fetched_in_a_transaction(
+    db: Session, storage: S3Storage, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Should the targets need a map the rows read first did not name (an epoch published
+    in between), the gate refuses rather than download it inside the transaction."""
+    from app.services import fill_gate
+
+    _, asset = site(db, storage, tmp_path)
+    read = targets(db, storage, asset)
+    inside = centre(read, target=True)
+    _live(storage, asset, layer_files([inside], [inside]), {"inferredLayers": [_entry(read)]})
+    db.commit()
+    confidence_maps.GRIDS.clear()
+    real = fill_gate._map_rows
+    monkeypatch.setattr(fill_gate, "_map_rows", lambda db, epoch: real(db, epoch)[:1])
+    fetched: list[str] = []
+    real_tail = storage.get_object_tail
+
+    def tail(key: str, max_bytes: int) -> tuple[bytes, int]:
+        fetched.append(key)
+        return real_tail(key, max_bytes)
+
+    monkeypatch.setattr(storage, "get_object_tail", tail)
+
+    plan = _republish(db, storage, asset, after=db.commit)
+
+    assert "inferredLayers" not in _extras(plan)
+    (gone,) = [gone for gone in plan.dropped if gone.kind == "inferredLayers"]
+    assert "is missing" in gone.reason
+    assert not [key for key in fetched if key.endswith("confidence.bin")]

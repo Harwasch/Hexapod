@@ -325,7 +325,8 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
    be in a target cell. A republish carries a layer -- `inferredLayers`, and each fill
    variant's -- only if the same gate admits it on the new revision (`fill_gate.carry_check`:
    the epoch's targets recomputed, computed on the very grid the new tiles carry, every
-   gaussian of every tile in them). A re-run that measured its own grid drops it, with its
+   gaussian of every tile in them; the `epoch_maps` rows are read and the transaction ended
+   before any grid is downloaded). A re-run that measured its own grid drops it, with its
    files, and flags the asset "Inferred fill needs filling again" (a fill variant goes whole:
    "Fill variant needs filling again"); so does any republish of a layer that was never gated,
    or whose targets changed because an earlier epoch was measured since, the same tiles
