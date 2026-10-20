@@ -477,7 +477,8 @@ def test_the_api_coarsens_as_p5_s_demo_does() -> None:
 
 def test_the_api_classifies_as_p5_s_demo_does() -> None:
     """Every class count and every changed cell (its class and delta) as P5's demo found
-    them on the same grids; the cells the demo calls weak are all low confidence here."""
+    them on the same grids; the cells the demo calls weak are all low confidence here. The
+    demo compares cell for cell, so this does too (`horizontal=False`)."""
     reference = DOCUMENT["change"]
     ua = DOCUMENT["epochs"]["e1"]["uncertaintyM"]
     ub = DOCUMENT["epochs"]["e2"]["uncertaintyM"]
@@ -488,6 +489,7 @@ def test_the_api_classifies_as_p5_s_demo_does() -> None:
         ub,
         confidence_a=fixture_confidence("e1"),
         confidence_b=fixture_confidence("e2"),
+        horizontal=False,
     )
     assert (planes.level, planes.cell_m) == (reference["level"], reference["cellM"])
     assert planes.counts() == reference["counts"]
@@ -503,3 +505,49 @@ def test_the_api_classifies_as_p5_s_demo_does() -> None:
     assert all(found[k][2] for k, v in expected.items() if v[2])
     # The shed and the spoil were seen well by both: not low confidence.
     assert planes.low_counts()["raised"] == reference["weakChanged"]
+
+
+# --- horizontal uncertainty (review B5a) ---------------------------------------------------
+
+
+def roof(columns: slice, level: int = 0, tall_cm: int = 400) -> dict[str, Any]:
+    """Flat ground at 0 with a roof `tall_cm` up over rows 5..14 and `columns`, 0.25 m cells."""
+    fields = flat(level=level, height_cm=0)
+    fields["dsm"] = fields["dsm"].copy()
+    fields["dsm"][5:15, columns] = tall_cm
+    return fields
+
+
+def test_a_roof_edge_one_cell_off_is_not_a_change_within_the_horizontal_uncertainty() -> None:
+    """Review B5a: an unchanged 4 m roof, the re-scan placed one 25 cm cell east of the
+    first, with 25 cm of declared uncertainty. Cell for cell its west edge reads as
+    lowered 4 m and its east edge as raised; against the other epoch's neighbourhood
+    within the horizontal radius (3 sigma: 0.75 m, 3 cells) nothing changed."""
+    a, b = roof(slice(5, 12)), roof(slice(6, 13))
+    planes = change_planes(surface(a), surface(b), 0.0, 0.25)
+    assert planes.horizontal_cells == 3
+    assert planes.counts()["raised"] == planes.counts()["lowered"] == 0
+    # The same pair cell for cell (P5's demo rule): the edges are "change".
+    naive = change_planes(surface(a), surface(b), 0.0, 0.25, horizontal=False)
+    assert classes_at(naive, "lowered") == {(5, j) for j in range(5, 15)}
+    assert classes_at(naive, "raised") == {(12, j) for j in range(5, 15)}
+
+
+def test_a_post_put_up_or_taken_away_is_still_a_change_under_horizontal_uncertainty() -> None:
+    """The neighbourhood explains a shift, never a new height: a 2 m post where the other
+    epoch had only ground anywhere near is raised (put up) or lowered (taken away)."""
+    ground = flat(level=0, height_cm=0)
+    post = {**ground, "dsm": ground["dsm"].copy()}
+    post["dsm"][10, 10] = 200
+    up = change_planes(surface(ground), surface(post), 0.0, 0.25)
+    assert classes_at(up, "raised") == {(10, 10)} and up.counts()["lowered"] == 0
+    down = change_planes(surface(post), surface(ground), 0.0, 0.25)
+    assert classes_at(down, "lowered") == {(10, 10)} and down.counts()["raised"] == 0
+    # A roof raised by a metre is raised everywhere, its edges included.
+    higher = change_planes(
+        surface(roof(slice(5, 12))),
+        surface(roof(slice(5, 12), tall_cm=500)),
+        0.0,
+        0.25,
+    )
+    assert classes_at(higher, "raised") == {(i, j) for i in range(5, 12) for j in range(5, 15)}

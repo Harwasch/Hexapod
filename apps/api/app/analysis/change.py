@@ -39,6 +39,15 @@ over the compared cells: a change smaller than it cannot be seen anywhere betwee
 two dates -- an epoch placed by GPS alone at +/-10 m makes it about 30 m, and so finds no
 change rather than false ones.
 
+**Horizontal uncertainty.** Placement error moves a whole epoch sideways, not only up: a
+roof edge one cell off reads as metres of change cell for cell. So each cell is compared
+with the other epoch's neighbourhood within the horizontal radius `r` (the least whole
+number of cells covering `3 sqrt(u_from^2 + u_to^2)`): `raised` when the later height is
+above everything the earlier epoch had nearby by more than `t`, or the earlier is below
+everything the later has nearby by more than `t` (a hole filled); `lowered` the mirror. A
+pure shift within `r` explains every cell, so it is never change; a post put up or taken
+away still is. `delta` is still the cell's own (review B5a).
+
 **Low confidence is flagged, not hidden.** A compared cell is `lowConfidence` when either
 epoch's confidence grid does not vouch for it at the compared level (weak-v1: scored under
 128, or unseen, or no evidence at all; the grid's own min-of-children pyramid, so a coarse
@@ -426,6 +435,56 @@ def vouched(grid: cell_grid.Grid, level: int) -> cell_grid.Plane:
     return cell_grid.Plane(level, plane.i0, plane.j0, plane.ni, plane.nj, {"strong": strong})
 
 
+# --- horizontal uncertainty ----------------------------------------------------------------
+
+_I16_MAX = np.int16(np.iinfo(np.int16).max)
+
+
+def _slide(values: NDArray[np.int16], half: int, axis: int, op: Any, fill: np.int16) -> Any:
+    """`op` (np.maximum or np.minimum) over each cell's `2 half + 1` cells along `axis`,
+    cells past the edge `fill`: by doubling (runs of 1, 2, 4 ... cells), so the cost is
+    `log2(half)` passes however wide, and exact (a maximum or a minimum is)."""
+    if half <= 0:
+        return values
+    width = 2 * half + 1
+    pad = [(0, 0), (0, 0)]
+    pad[axis] = (half, half)
+    run = np.pad(values, pad, constant_values=fill)
+    span = 1
+    while 2 * span <= width:
+        head, tail = [slice(None)] * 2, [slice(None)] * 2
+        head[axis], tail[axis] = slice(0, -span), slice(span, None)
+        run = op(run[tuple(head)], run[tuple(tail)])
+        span *= 2
+    n = values.shape[axis]
+    first, second = [slice(None)] * 2, [slice(None)] * 2
+    first[axis], second[axis] = slice(0, n), slice(width - span, width - span + n)
+    return op(run[tuple(first)], run[tuple(second)])
+
+
+def neighbourhood(
+    height: NDArray[np.int16], keep: NDArray[np.bool_], half: int
+) -> tuple[NDArray[np.int16], NDArray[np.int16]]:
+    """Each cell's highest and lowest height among the `keep` cells of its `(2 half + 1)^2`
+    square (`NO` and the i2 ceiling where it holds none): the heights a horizontal error
+    of up to `half` cells along each axis could have put there."""
+    if half <= 0:
+        return height, height
+    top = np.where(keep, height, np.int16(NO)).astype(np.int16)
+    low = np.where(keep, height, _I16_MAX).astype(np.int16)
+    for axis in (0, 1):
+        top = _slide(top, half, axis, np.maximum, np.int16(NO))
+        low = _slide(low, half, axis, np.minimum, _I16_MAX)
+    return top, low
+
+
+def horizontal_cells(ua: float, ub: float, cell_m: float, sigmas: float) -> int:
+    """The horizontal radius in whole cells: the least number covering
+    `sigmas * sqrt(ua^2 + ub^2)` (module docstring)."""
+    reach = sigmas * math.sqrt(ua * ua + ub * ub)
+    return math.ceil(round(reach / cell_m, 9))
+
+
 #: `change_planes` classifies a band of rows at a time, of about this many cells.
 BAND_CELLS = 1 << 16
 
@@ -452,6 +511,8 @@ class ChangePlanes:
     min_detectable_m: float | None
     uncertainty_from_m: float
     uncertainty_to_m: float
+    #: The horizontal radius each cell was compared within, cells (module docstring).
+    horizontal_cells: int = 0
 
     @property
     def cell_m(self) -> float:
@@ -481,6 +542,7 @@ def change_planes(
     confidence_b: cell_grid.Grid | None = None,
     level: int | None = None,
     sigmas: float = THRESHOLD_SIGMA,
+    horizontal: bool = True,
 ) -> ChangePlanes:
     """The change from `a` to `b` (module docstring), with `ua` and `ub` each epoch's
     uncertainty from the site frame in metres, at the coarser of their levels (or `level`
@@ -544,6 +606,14 @@ def change_planes(
     jw = joint.window
     di, dj = jw[0] - i0, jw[1] - j0
     (da, ga, sa), (db, gb, sb) = joint.a, joint.b
+    # Compared only over every child the finer epoch (or, coarser, either) measured, and
+    # only where neither sigma saturates (its threshold would be a lower bound); each
+    # against the other epoch's neighbourhood within the horizontal radius.
+    compared = joint.shared & ~joint.partial & (sa < SATURATED) & (sb < SATURATED)
+    cell_m = math.ldexp(cell_grid.LATTICE_BASE_M, at)
+    half = horizontal_cells(ua, ub, cell_m, sigmas) if horizontal else 0
+    top_a, low_a = neighbourhood(da, compared, half)
+    top_b, low_b = neighbourhood(db, compared, half)
     grids = [vouched(g, at) if g is not None else None for g in (confidence_a, confidence_b)]
     least = math.inf
     step = max(1, BAND_CELLS // max(jw[2], 1))
@@ -551,19 +621,22 @@ def change_planes(
         r1 = min(jw[3], r0 + step)
         band = (jw[0], jw[1] + r0, jw[2], r1 - r0)
         s_a, s_b = sa[r0:r1], sb[r0:r1]
-        # Compared only over every child the finer epoch (or, coarser, either) measured,
-        # and only where neither sigma saturates (its threshold would be a lower bound).
-        both = joint.shared[r0:r1] & ~joint.partial[r0:r1] & (s_a < SATURATED) & (s_b < SATURATED)
-        delta = db[r0:r1].astype(np.int32) - da[r0:r1].astype(np.int32)
+        both = compared[r0:r1]
+        here_a, here_b = da[r0:r1].astype(np.int32), db[r0:r1].astype(np.int32)
+        delta = here_b - here_a
         ground = gb[r0:r1].astype(np.int32) - ga[r0:r1].astype(np.int32)
         grounded = (ga[r0:r1] != NO) & (gb[r0:r1] != NO)
         spread = (s_a.astype(np.float64) * CM) ** 2 + (s_b.astype(np.float64) * CM) ** 2
         threshold = sigmas * np.sqrt(spread + ua * ua + ub * ub)
-        change_m = delta * CM
+        # Raised: the later height is above all the earlier had nearby, or the earlier one
+        # below all the later has nearby (a hole filled); lowered the mirror. A shift within
+        # the radius explains every cell, a new height none (module docstring).
+        up = np.maximum(here_b - top_a[r0:r1], low_b[r0:r1].astype(np.int32) - here_a)
+        down = np.maximum(low_a[r0:r1].astype(np.int32) - here_b, here_a - top_b[r0:r1])
         out = classes[dj + r0 : dj + r1, di : di + jw[2]]
         out[both] = UNCHANGED
-        out[both & (change_m > threshold)] = RAISED
-        out[both & (change_m < -threshold)] = LOWERED
+        out[both & (up * CM > threshold)] = RAISED
+        out[both & (down * CM > threshold)] = LOWERED
         delta_cm[dj + r0 : dj + r1, di : di + jw[2]] = np.where(both, delta, 0)
         ground_delta_cm[dj + r0 : dj + r1, di : di + jw[2]] = np.where(both & grounded, ground, 0)
         if both.any():
@@ -589,6 +662,7 @@ def change_planes(
         min_detectable_m=least if math.isfinite(least) else None,
         uncertainty_from_m=ua,
         uncertainty_to_m=ub,
+        horizontal_cells=half,
     )
 
 
