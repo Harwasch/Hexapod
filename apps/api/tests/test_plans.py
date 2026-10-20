@@ -110,7 +110,13 @@ def test_a_scout_area_keeps_its_capture_parameters(client: TestClient) -> None:
     created = client.post("/api/v1/plans", json={**BODY, "areas": areas})
     assert created.status_code == 201, created.text
     stored = client.get(f"/api/v1/plans/{created.json()['id']}").json()
-    assert stored["areas"][0]["capture"] == capture
+    # A fog scout is flown nadir, camera down, and is no re-scan (A4's defaults).
+    assert stored["areas"][0]["capture"] == {
+        **capture,
+        "pattern": "nadir",
+        "gimbalPitchDeg": -90.0,
+        "rescanOf": None,
+    }
     assert (
         client.get(f"/api/v1/plans/{created.json()['id']}").json()["areas"][0]["attribution"]
         is None

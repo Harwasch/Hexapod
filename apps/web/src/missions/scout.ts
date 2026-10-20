@@ -67,6 +67,11 @@ const drone = MACHINE_CLASSES.drone;
 /** The drone class's flight, as a scout capture: what "Lift the fog" proposes. */
 export const DEFAULT_SCOUT: Scout = {
   purpose: "lift-knowledge-fog",
+  // Nadir lines, camera straight down; a re-scan of weak areas (M4) may ask for crossing
+  // obliques or an orbit, which the planner sizes and the DJI export does not fly yet.
+  pattern: "nadir",
+  gimbalPitchDeg: -90,
+  rescanOf: null,
   camera: "dji-m3e-wide",
   altitudeM: drone.altitudeAglM,
   forwardOverlap: drone.frontlapPct / 100,
@@ -130,7 +135,12 @@ export function scoutOf(capture: ScoutCapture | null | undefined): Scout {
   return {
     ...DEFAULT_SCOUT,
     ...(capture ?? {}),
-    purpose: "lift-knowledge-fog",
+    // The capture's own purpose: a re-scan stays a re-scan (the API refuses an oblique or
+    // orbit "lift the fog", so forcing it would make the zone's capture invalid).
+    purpose: capture?.purpose ?? DEFAULT_SCOUT.purpose,
+    pattern: capture?.pattern ?? DEFAULT_SCOUT.pattern,
+    gimbalPitchDeg: capture?.gimbalPitchDeg ?? DEFAULT_SCOUT.gimbalPitchDeg,
+    rescanOf: capture?.rescanOf ?? null,
     camera: capture?.camera ?? DEFAULT_SCOUT.camera,
     headingDeg: capture?.headingDeg ?? null,
   };

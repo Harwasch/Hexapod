@@ -19275,6 +19275,13 @@
             "title": "Forwardoverlap",
             "type": "number"
           },
+          "gimbalPitchDeg": {
+            "default": -90,
+            "maximum": -30.0,
+            "minimum": -90.0,
+            "title": "Gimbalpitchdeg",
+            "type": "number"
+          },
           "headingDeg": {
             "anyOf": [
               {
@@ -19288,11 +19295,34 @@
             ],
             "title": "Headingdeg"
           },
+          "pattern": {
+            "default": "nadir",
+            "enum": [
+              "nadir",
+              "oblique",
+              "orbit"
+            ],
+            "title": "Pattern",
+            "type": "string"
+          },
           "purpose": {
-            "const": "lift-knowledge-fog",
             "default": "lift-knowledge-fog",
+            "enum": [
+              "lift-knowledge-fog",
+              "re-scan-weak"
+            ],
             "title": "Purpose",
             "type": "string"
+          },
+          "rescanOf": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScoutRescanRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "sideOverlap": {
             "maximum": 0.9,
@@ -19314,6 +19344,56 @@
           "speedMs"
         ],
         "title": "ScoutCapture",
+        "type": "object"
+      },
+      "ScoutRescanRef": {
+        "additionalProperties": false,
+        "description": "Which epoch's weak cells a re-scan area is for. Informational only: plans are a\nworkspace's and sites are public, so this is a reference, never a foreign key (the\nre-scan of a cell is any later epoch of the site that covers it, ADR 0016).",
+        "properties": {
+          "cells": {
+            "minimum": 0.0,
+            "title": "Cells",
+            "type": "integer"
+          },
+          "epochId": {
+            "format": "uuid",
+            "title": "Epochid",
+            "type": "string"
+          },
+          "policy": {
+            "const": "weak-v1",
+            "default": "weak-v1",
+            "title": "Policy",
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "enum": [
+                "views",
+                "spread",
+                "gsd",
+                "accuracy",
+                "unseen",
+                "alignment"
+              ],
+              "type": "string"
+            },
+            "maxItems": 6,
+            "title": "Reasons",
+            "type": "array"
+          },
+          "siteId": {
+            "format": "uuid",
+            "title": "Siteid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "siteId",
+          "epochId",
+          "cells"
+        ],
+        "title": "ScoutRescanRef",
         "type": "object"
       },
       "Select": {

@@ -187,3 +187,22 @@ def measure(
         heading_deg=heading,
         capped=capped,
     )
+
+
+def orbit_length_m(geometry: dict[str, Any], standoff_m: float) -> float | None:
+    """One ring round a GeoJSON outline at `standoff_m` from it: the perimeter of its convex
+    hull grown by the stand-off, in metres on the ground (the same azimuthal-equidistant
+    projection `measure` uses). An orbit circles the whole thing, not into its notches.
+    None for an empty geometry or a negative stand-off."""
+    shaped = shape(geometry)
+    if shaped.is_empty or not standoff_m >= 0:
+        return None
+    west, south, east, north = shaped.bounds
+    projection = Transformer.from_crs(
+        "EPSG:4326",
+        f"+proj=aeqd +lat_0={(south + north) / 2} +lon_0={(west + east) / 2} +datum=WGS84 +units=m",
+        always_xy=True,
+    )
+    hull = transform(projection.transform, shaped).convex_hull
+    ring = hull.buffer(standoff_m, quad_segs=16) if standoff_m > 0 else hull
+    return float(ring.exterior.length) if isinstance(ring, Polygon) else float(ring.length)

@@ -10213,18 +10213,58 @@ export interface components {
             camera?: "dji-m3e-wide";
             /** Forwardoverlap */
             forwardOverlap: number;
+            /**
+             * Gimbalpitchdeg
+             * @default -90
+             */
+            gimbalPitchDeg?: number;
             /** Headingdeg */
             headingDeg?: number | null;
             /**
+             * Pattern
+             * @default nadir
+             * @enum {string}
+             */
+            pattern?: "nadir" | "oblique" | "orbit";
+            /**
              * Purpose
              * @default lift-knowledge-fog
-             * @constant
+             * @enum {string}
              */
-            purpose?: "lift-knowledge-fog";
+            purpose?: "lift-knowledge-fog" | "re-scan-weak";
+            rescanOf?: components["schemas"]["ScoutRescanRef"] | null;
             /** Sideoverlap */
             sideOverlap: number;
             /** Speedms */
             speedMs: number;
+        };
+        /**
+         * ScoutRescanRef
+         * @description Which epoch's weak cells a re-scan area is for. Informational only: plans are a
+         *     workspace's and sites are public, so this is a reference, never a foreign key (the
+         *     re-scan of a cell is any later epoch of the site that covers it, ADR 0016).
+         */
+        ScoutRescanRef: {
+            /** Cells */
+            cells: number;
+            /**
+             * Epochid
+             * Format: uuid
+             */
+            epochId: string;
+            /**
+             * Policy
+             * @default weak-v1
+             * @constant
+             */
+            policy?: "weak-v1";
+            /** Reasons */
+            reasons?: ("views" | "spread" | "gsd" | "accuracy" | "unseen" | "alignment")[];
+            /**
+             * Siteid
+             * Format: uuid
+             */
+            siteId: string;
         };
         /** Select */
         Select: {
@@ -12404,6 +12444,7 @@ export type SchemaScenarioRequestRead = components['schemas']['ScenarioRequestRe
 export type SchemaScenarioResult = components['schemas']['ScenarioResult'];
 export type SchemaScenarioRevise = components['schemas']['ScenarioRevise'];
 export type SchemaScoutCapture = components['schemas']['ScoutCapture'];
+export type SchemaScoutRescanRef = components['schemas']['ScoutRescanRef'];
 export type SchemaSelect = components['schemas']['Select'];
 export type SchemaSelectionInstruction = components['schemas']['SelectionInstruction'];
 export type SchemaSelectionInterpretation = components['schemas']['SelectionInterpretation'];
