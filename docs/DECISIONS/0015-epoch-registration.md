@@ -52,7 +52,10 @@ use_robust_loss_on_prior_position`; the Modal image's self-check builds each one
    datum only) and total against **three sigma of the declared uncertainties**: horizontal
    3·√2·√(anchor² + target² + pick²), vertical 3·√(…), the pick one pixel's footprint. First
    principles, not calibrated on any capture.
-6. **Verdict**: `survey` = the `rtk-drone` tier, aligned, ≥ 3 check targets within tolerance — at
+6. **Verdict**: `survey` = the `rtk-drone` tier **with RTK evidence in the data** — an RTK fixed
+   solution (`dji.rtk.flag` 50) on at least half the frames' `frames_meta.json` records
+   (`alignment.rtk_evidence`); a platform string from a param, normalize's override or detection
+   never upgrades a capture on its own (the R2 review of #51) — aligned, ≥ 3 check targets within tolerance — at
    least 3 of them scored vertically on the frame's height datum (a target surveyed on another
    datum leaves only its own height unscored, never the others'), and an anchor that constrains height (GNSS priors whose vertical was left unconstrained by a datum
    mismatch score no vertical and cannot be survey); `coarse` = aligned otherwise; `unaligned`
@@ -108,7 +111,8 @@ worth 3 cm, hence the anchor floor in item 6.
   targets"), open question 1. The reference is chosen by M3b.2 (best verdict, oldest), open
   question 2.
 - A wrong declared sigma — an RTK float reported as fixed — makes every tolerance here wrong with
-  it; the `rtk-drone` platform comes only from M3a's fix-flag evidence.
+  it. The survey verdict reads the fix flags itself (`rtkEvidence` in `epoch_alignment.json`), so a
+  `platform: rtk-drone` override with no fixed frames is `coarse`, never `survey`.
 - Not bit-reproducible end to end: never byte-gate `epoch_alignment.json`.
 - Deferred: automatic target detection (M3c, OpenCV is only in tools/captures), control targets as
   BA constraints, splat-ingest alignment (no frames; `unaligned`), vocabulary-tree pairing for large

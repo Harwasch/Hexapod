@@ -44,7 +44,10 @@ GNSS frame is **not** moved onto a reference that is not itself `survey`. Aligni
 coarser phone epoch would throw its centimetre GNSS away for the phone's metres; it keeps
 `gnss-prior-ba` and the visual fit is recorded beside it (`visualCheck`) as a check.
 
-**Verdict.** `survey` only for the survey tier (`rtk-drone`; `TIER_OF`), aligned, with at
+**Verdict.** `survey` only for the survey tier (`rtk-drone`; `TIER_OF`) **with RTK evidence
+in the data** -- an RTK fixed solution on at least half the frames' metadata
+(`rtk_evidence`); a platform string, from a param or normalize's override, never suffices
+-- aligned, with at
 least three evaluated check targets -- three of them scored vertically too, on the frame's
 height datum -- within the 3-sigma tolerance of their declared uncertainties
 (`check_targets.survey_tolerance`). `coarse` is aligned and not survey -- a
@@ -87,6 +90,7 @@ import capture_platform
 import check_targets
 import colmap4
 import exif
+import frame_meta
 import global_sfm
 import priors
 import sfm
@@ -119,6 +123,7 @@ __all__ = [
     "label",
     "read_site_context",
     "reference_frame",
+    "rtk_evidence",
     "summary_of",
     "uncertainty",
 ]
@@ -342,6 +347,26 @@ def _platform(
         if "dji" in make:
             return "drone", "source_meta"
     return "unknown", "default"
+
+
+def rtk_evidence(frames_meta: Mapping[str, Any] | None) -> str | None:
+    """What in the frames' own metadata says an RTK solution was fixed, or None.
+
+    Survey is decided on this, never on the platform string: a `platform` param, or
+    normalize's own override recorded in `frames_meta`, names a tier but proves nothing
+    (the R2 review of #51). Evidence is `dji.rtk.flag == 50` (fixed) on at least half the
+    kept frames -- the classification rule `capture_platform` uses, not a tolerance."""
+    frames = frames_meta.get("frames") if isinstance(frames_meta, Mapping) else None
+    records = [r for r in frames if isinstance(r, Mapping)] if isinstance(frames, list) else []
+    fixed = 0
+    for record in records:
+        dji = record.get("dji")
+        rtk = dji.get("rtk") if isinstance(dji, Mapping) else None
+        if isinstance(rtk, Mapping) and rtk.get("flag") == frame_meta.RTK_FIXED:
+            fixed += 1
+    if not records or 2 * fixed < len(records):
+        return None
+    return f"{fixed}/{len(records)} frames carry an RTK fixed solution (RtkFlag 50)"
 
 
 # --- candidates ---------------------------------------------------------------------------------
@@ -621,8 +646,13 @@ def decide(
     checks: Mapping[str, Any],
     platform: str,
     visual_failed: bool = False,
+    rtk_evidence: str | None = None,
 ) -> tuple[str, list[str]]:
     """The verdict, and a sentence for every rule that kept it from `survey`.
+
+    `rtk_evidence` (`rtk_evidence()`): what in the frames' metadata shows an RTK fixed
+    solution. None -- the default, so a caller that forgets it fails closed -- is never
+    survey, whatever the platform string says.
 
     `visual_failed`: the site had a reference and this epoch could not be aligned to it.
     D4: an epoch that fails alignment is `unaligned` -- kept, with its GNSS placement,
@@ -639,6 +669,13 @@ def decide(
         reasons.append(
             f"{PLATFORM_WORDS.get(platform, platform)} is the coarse tier: only an RTK drone "
             f"can be surveyed"
+        )
+        return "coarse", reasons
+    if rtk_evidence is None:
+        reasons.append(
+            f"accuracy unverified: the platform is {PLATFORM_WORDS.get(platform, platform)}, "
+            f"but no RTK fixed solution is in the frames' metadata, and survey needs that "
+            f"evidence in the data, not a platform name"
         )
         return "coarse", reasons
     if checks.get("verticalAnchorFree"):
@@ -857,6 +894,7 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
     origin = (lat, lon, height)
     platform, platform_source = _platform(ctx.param("platform"), source_meta, frames_meta)
     tier = TIER_OF[platform]
+    evidence = rtk_evidence(frames_meta)
     visual_mode = str(ctx.param("visual", "auto"))
     if visual_mode not in ("auto", "off"):
         raise ValueError(f"visual must be auto or off, not {visual_mode!r}")
@@ -949,6 +987,7 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
         checks=checks,
         platform=platform,
         visual_failed=visual_failed,
+        rtk_evidence=evidence,
     )
     reasons.extend(why)
     rms = chosen.stats()["rms"] if chosen.aligned else 0.0
@@ -995,6 +1034,7 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
         "referenceJobId": reference.job_id if reference is not None else None,
         "platform": platform,
         "platformSource": platform_source,
+        "rtkEvidence": evidence,
         "tier": tier,
         "verdict": verdict,
         "confidence": score,

@@ -33,6 +33,8 @@ from workdir import Workdir
 
 ORIGIN = (28.0389, -82.6966, 10.8)
 COUNT = 10
+#: What `alignment.rtk_evidence` says of frames that carry an RTK fixed solution.
+RTK = "10/10 frames carry an RTK fixed solution (RtkFlag 50)"
 
 
 # --- the decision, pure -----------------------------------------------------------------
@@ -40,7 +42,9 @@ COUNT = 10
 
 def test_rtk_with_passing_targets_is_survey() -> None:
     checks = {"checks": 3, "verticalChecks": 3, "withinTolerance": True}
-    assert alignment.decide(aligned=True, tier="survey", checks=checks, platform="rtk-drone") == (
+    assert alignment.decide(
+        aligned=True, tier="survey", checks=checks, platform="rtk-drone", rtk_evidence=RTK
+    ) == (
         "survey",
         [],
     )
@@ -48,7 +52,7 @@ def test_rtk_with_passing_targets_is_survey() -> None:
 
 def test_rtk_without_targets_is_coarse_and_says_why() -> None:
     verdict, reasons = alignment.decide(
-        aligned=True, tier="survey", checks={"checks": 0}, platform="rtk-drone"
+        aligned=True, tier="survey", checks={"checks": 0}, platform="rtk-drone", rtk_evidence=RTK
     )
     assert verdict == "coarse"
     assert reasons == ["accuracy unverified: 0 check target(s) evaluated, fewer than 3"]
@@ -60,7 +64,7 @@ def test_rtk_without_targets_is_coarse_and_says_why() -> None:
         "tolerance": {"horizontalM": 0.12, "verticalM": 0.11},
     }
     verdict, reasons = alignment.decide(
-        aligned=True, tier="survey", checks=failing, platform="rtk-drone"
+        aligned=True, tier="survey", checks=failing, platform="rtk-drone", rtk_evidence=RTK
     )
     assert verdict == "coarse" and "out of tolerance" in reasons[0]
 
@@ -72,11 +76,40 @@ def test_survey_needs_three_check_targets_scored_vertically() -> None:
     for vertical in (0, 2):
         checks = {"checks": 3, "verticalChecks": vertical, "withinTolerance": True}
         verdict, reasons = alignment.decide(
-            aligned=True, tier="survey", checks=checks, platform="rtk-drone"
+            aligned=True, tier="survey", checks=checks, platform="rtk-drone", rtk_evidence=RTK
         )
         assert verdict == "coarse", vertical
         assert "accuracy unverified vertically" in reasons[0]
         assert f"{vertical} check target(s)" in reasons[0]
+
+
+def test_the_rtk_drone_platform_alone_is_never_survey() -> None:
+    """Coordinator (R2 review of #51): a platform string -- a param, or normalize's
+    override -- must not upgrade a capture to survey; only evidence in the data can."""
+    perfect = {"checks": 8, "verticalChecks": 8, "withinTolerance": True}
+    verdict, reasons = alignment.decide(
+        aligned=True, tier="survey", checks=perfect, platform="rtk-drone", rtk_evidence=None
+    )
+    assert verdict == "coarse"
+    assert "no RTK fixed solution" in reasons[0]
+
+
+def test_rtk_evidence_is_a_fixed_solution_on_at_least_half_the_frames() -> None:
+    def meta(flags: list[int | None]) -> dict[str, Any]:
+        return {
+            "frames": [
+                {"name": f"f{i}.jpg", "dji": None if f is None else {"rtk": {"flag": f}}}
+                for i, f in enumerate(flags)
+            ]
+        }
+
+    assert alignment.rtk_evidence(None) is None
+    assert alignment.rtk_evidence({"platform": {"value": "rtk-drone", "source": "param"}}) is None
+    assert alignment.rtk_evidence(meta([50, 50, 16, None])) == (
+        "2/4 frames carry an RTK fixed solution (RtkFlag 50)"
+    )
+    assert alignment.rtk_evidence(meta([50, 16, 16, None])) is None  # float is not fixed
+    assert alignment.rtk_evidence(meta([])) is None
 
 
 def test_a_phone_epoch_is_never_survey_even_with_perfect_numbers() -> None:
@@ -338,7 +371,7 @@ def test_an_unconstrained_vertical_anchor_is_not_scored_and_cannot_be_survey() -
     assert block["tolerance"]["verticalM"] is None  # type: ignore[index]
     assert all(entry["verticalM"] is None for entry in block["perTarget"])  # type: ignore[attr-defined]
     verdict, reasons = alignment.decide(
-        aligned=True, tier="survey", checks=block, platform="rtk-drone"
+        aligned=True, tier="survey", checks=block, platform="rtk-drone", rtk_evidence=RTK
     )
     assert verdict == "coarse"
     assert "accuracy unverified vertically" in reasons[0]
@@ -440,8 +473,13 @@ def _run(
     params: dict[str, object] | None = None,
     reference: dict[str, Any] | None = None,
     poses_json: dict[str, Any] | None = None,
+    frames_meta: dict[str, Any] | None = None,
 ) -> tuple[Workdir, dict[str, Any]]:
     workdir = Workdir.create(root)
+    inputs = ["frames", "poses", "georef.json", "site_context"]
+    if frames_meta is not None:
+        workdir.input_path("frames_meta.json").write_text(json.dumps(frames_meta))
+        inputs.append("frames_meta.json")
     poses = workdir.input_path("poses")
     synthetic_scene.write_model(poses, synthetic_scene.ring(COUNT, radius=6.0, height=2.0))
     _write_points(poses)
@@ -475,7 +513,7 @@ def _run(
     execute(
         make_recipe(
             [{"id": "align", "impl": "align_epoch", "params": params or {}}],
-            inputs=["frames", "poses", "georef.json", "site_context"],
+            inputs=inputs,
         ),
         workdir,
         RunnerSet(cpu=LocalRunner()),
@@ -839,3 +877,67 @@ def test_a_registration_that_crashes_is_an_unaligned_epoch_not_a_failed_run(
     assert document["verdict"] == "unaligned" and document["frameSource"] == "georef"
     assert any("registration into the reference failed" in r for r in document["reasons"])
     assert document["label"].startswith("Drone, not aligned: placed by its GPS")
+
+
+def _perfect_checks(*_: object, **__: object) -> dict[str, object]:
+    """Eight check targets scored dead on, horizontally and vertically: the targets are
+    not what is under test here."""
+    return {
+        "status": "evaluated",
+        "evaluated": 8,
+        "checks": 8,
+        "verticalChecks": 8,
+        "verticalEvaluated": True,
+        "verticalAnchorFree": None,
+        "perTarget": [],
+        "rmseM": {"horizontal": 0.001, "vertical": 0.001, "total": 0.0014},
+        "tolerance": {"horizontalM": 0.06, "verticalM": 0.05},
+        "withinTolerance": True,
+    }
+
+
+def test_a_platform_param_never_makes_survey_without_rtk_evidence_in_the_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Coordinator (R2 review of #51): every path by which the platform string alone gave
+    `survey` -- the stage's `platform` param, normalize's own `platform` override in
+    `frames_meta`, an iPhone's metadata with the param saying RTK -- is closed. Only an
+    RTK fixed solution in the frames' own metadata (plus the targets) is survey."""
+    monkeypatch.setattr(alignment.check_targets, "evaluate", _perfect_checks)
+    names = [f"frame_{i:04d}.jpg" for i in range(COUNT)]
+    priors = {
+        "priors": {"used": True, "sigmaM": {"horizontalMedian": 0.01, "verticalMedian": 0.01}}
+    }
+    phone = {
+        "platform": {"value": "phone-video", "source": "phone-quicktime", "evidence": "Apple"},
+        "frames": [{"name": n, "original": "clip.mov", "dji": None} for n in names],
+    }
+    claimed = {
+        "platform": {"value": "rtk-drone", "source": "param", "evidence": "asked for"},
+        "frames": [{"name": n, "dji": None} for n in names],
+    }
+    fixed = {
+        "platform": {"value": "rtk-drone", "source": "dji-rtk-fixed", "evidence": "10/10"},
+        "frames": [{"name": n, "dji": {"rtk": {"flag": 50}}} for n in names],
+    }
+    cases: list[tuple[str, dict[str, object], dict[str, Any] | None, str]] = [
+        ("param, no metadata", {"platform": "rtk-drone"}, None, "coarse"),
+        ("param over an iPhone", {"platform": "rtk-drone"}, phone, "coarse"),
+        ("normalize's override", {}, claimed, "coarse"),
+        ("RTK fixed frames", {}, fixed, "survey"),
+    ]
+    for index, (case, params, meta, expected) in enumerate(cases):
+        _, document = _run(
+            tmp_path / f"w{index}",
+            _georef_aligned(IDENTITY, names),
+            params=params,
+            poses_json=priors,
+            frames_meta=meta,
+        )
+        assert document["verdict"] == expected, case
+        assert document["platform"] == "rtk-drone", case
+        if expected == "coarse":
+            assert any("no RTK fixed solution" in r for r in document["reasons"]), case
+            assert document["rtkEvidence"] is None, case
+        else:
+            assert document["rtkEvidence"].startswith("10/10 frames"), case
