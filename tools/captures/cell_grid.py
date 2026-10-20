@@ -41,6 +41,7 @@ import gzip
 import hashlib
 import json
 import math
+import zlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -355,9 +356,45 @@ def _int(value: object, what: str) -> int:
     return value
 
 
+#: Channels a grid of a known kind cannot be read without.
+REQUIRED_CHANNELS: Mapping[str, tuple[str, ...]] = {"confidence": ("score", "reasons", "relief")}
+
+
 def decode(descriptor: Mapping[str, Any], blob: bytes) -> CellGrid:
     """The grid `descriptor` describes, from its file's bytes. Checks everything it can:
-    the format and version, every level's size against its slice, and the sha256."""
+    the format and version, the channels (unique names; a known kind's own, such as a
+    confidence grid's `score`), every level's size against its slice, and the sha256.
+
+    Whatever is wrong -- a corrupt deflate stream, a descriptor of the wrong shape -- is
+    raised as `CellGridError` and nothing else, so a caller that can do without the grid
+    (`splat_tiles.convert`'s caller, `package`) catches one exception and carries on."""
+    try:
+        return _decode(descriptor, blob)
+    except CellGridError:
+        raise
+    except (
+        zlib.error,
+        OSError,
+        EOFError,
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError,
+        IndexError,
+    ) as problem:
+        raise CellGridError(
+            f"{_uri(descriptor)}: not a readable cell grid ({problem!r})"
+        ) from problem
+
+
+def _uri(descriptor: object) -> str:
+    uri = descriptor.get("uri") if isinstance(descriptor, Mapping) else None
+    return repr(uri) if isinstance(uri, str) else "a cell grid"
+
+
+def _decode(descriptor: Mapping[str, Any], blob: bytes) -> CellGrid:
+    if not isinstance(descriptor, Mapping):
+        raise CellGridError("a cell grid descriptor is a JSON object")
     if descriptor.get("format") != FORMAT or descriptor.get("version") != VERSION:
         raise CellGridError(
             f"not a {FORMAT} v{VERSION}: format {descriptor.get('format')!r}, "
@@ -365,13 +402,22 @@ def decode(descriptor: Mapping[str, Any], blob: bytes) -> CellGrid:
         )
     if descriptor.get("frame") != FRAME:
         raise CellGridError(f"a cell grid is in the {FRAME} frame, not {descriptor.get('frame')!r}")
-    channels = tuple(Channel.from_dict(c) for c in descriptor.get("channels") or ())
+    listed = descriptor.get("channels")
+    if not isinstance(listed, list) or not all(isinstance(c, Mapping) for c in listed):
+        raise CellGridError("channels must be a list of objects")
+    channels = tuple(Channel.from_dict(c) for c in listed)
     if not channels:
         raise CellGridError("a cell grid declares at least one channel")
+    names = [channel.name for channel in channels]
+    if len(set(names)) != len(names):
+        raise CellGridError(f"channel names must be unique: {names}")
+    missing = [n for n in REQUIRED_CHANNELS.get(str(descriptor.get("kind")), ()) if n not in names]
+    if missing:
+        raise CellGridError(f"a {descriptor.get('kind')} grid needs channels {missing}")
     record = _record(channels)
     try:
         raw = gzip.decompress(blob)
-    except (OSError, EOFError) as problem:
+    except (OSError, EOFError, zlib.error) as problem:
         raise CellGridError(f"{descriptor.get('uri')!r} is not gzip: {problem}") from problem
     expected = descriptor.get("sha256")
     if expected is not None and hashlib.sha256(raw).hexdigest() != expected:
@@ -381,7 +427,10 @@ def decode(descriptor: Mapping[str, Any], blob: bytes) -> CellGrid:
     types = {channel.type for channel in channels}
     common = np.dtype(TYPES[types.pop()]).newbyteorder("=") if len(types) == 1 else np.dtype("i4")
     planes: list[CellPlane] = []
-    for entry in descriptor.get("levels") or ():
+    levels = descriptor.get("levels")
+    if not isinstance(levels, list) or not all(isinstance(e, Mapping) for e in levels):
+        raise CellGridError("levels must be a list of objects")
+    for entry in levels:
         level = _int(entry.get("level"), "level")
         ni, nj = _int(entry.get("ni"), "ni"), _int(entry.get("nj"), "nj")
         offset, size = _int(entry.get("offset"), "offset"), _int(entry.get("bytes"), "bytes")
@@ -399,7 +448,9 @@ def decode(descriptor: Mapping[str, Any], blob: bytes) -> CellGrid:
                 data=data,
             )
         )
-    lattice = descriptor.get("lattice") or {}
+    lattice = descriptor.get("lattice")
+    if not isinstance(lattice, Mapping):
+        raise CellGridError("lattice must be an object")
     if planes and lattice.get("level") != planes[0].level:
         raise CellGridError("lattice.level is not the finest plane's level")
     meta = {k: v for k, v in descriptor.items() if k not in _CONTAINER_KEYS}

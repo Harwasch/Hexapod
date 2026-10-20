@@ -233,3 +233,33 @@ def test_a_tileset_names_its_grids_on_the_root(tmp_path: Path) -> None:
     (tmp_path / "tileset.json").write_text(json.dumps(tileset))
     with pytest.raises(CellGridError, match="beside the tileset"):
         cell_grid.from_tileset(tmp_path / "tileset.json")
+
+
+def test_a_corrupt_stream_or_a_malformed_descriptor_is_a_cell_grid_error() -> None:
+    """Whatever is wrong with a grid, a reader gets `CellGridError` and nothing else, so
+    `package` can leave a bad grid out rather than fail the run."""
+    folder = cell_grid_fixture()
+    descriptor = json.loads((folder / "grids.json").read_text())["epochs"]["e2"]["descriptor"]
+    blob = bytearray((folder / "e2" / "confidence.bin").read_bytes())
+    blob[40] ^= 0xFF
+    blob[41] ^= 0xFF  # inside the deflate stream: zlib's own error, or a wrong digest
+    with pytest.raises(CellGridError):
+        cell_grid.decode(descriptor, bytes(blob))
+    good = (folder / "e2" / "confidence.bin").read_bytes()
+    channels = descriptor["channels"]
+    malformed = [
+        {**descriptor, "channels": [channels[0], channels[0], channels[2]]},  # duplicate
+        {**descriptor, "channels": ["score", "reasons", "relief"]},  # not objects
+        {**descriptor, "channels": [{"type": "u1"}, *channels[1:]]},  # no name
+        {**descriptor, "lattice": [0.25, 1]},  # not an object
+        {**descriptor, "levels": "all of them"},
+        {**descriptor, "levels": [["level", 1]]},
+        {**descriptor, "channels": [channels[1], channels[2], {"name": "x", "type": "u1"}]},
+    ]
+    for bad in malformed:
+        with pytest.raises(CellGridError):
+            cell_grid.decode(bad, good)
+
+
+def cell_grid_fixture() -> Path:
+    return Path(__file__).resolve().parents[3] / "data" / "tiles" / "synthetic-yard-epochs"

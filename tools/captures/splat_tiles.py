@@ -2373,7 +2373,10 @@ def _confidence(path: Path) -> tuple[cell_grid.CellGrid, bytes, dict[str, Any]]:
     """The confidence grid `path` (its descriptor) describes, its file's bytes, and the
     descriptor -- checked (`cell_grid.decode`: format, sizes, sha256) before anything is
     written, and refused unless it is a confidence grid with a plain file name."""
-    descriptor = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        descriptor = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as problem:
+        raise cell_grid.CellGridError(f"{path.name} is not readable: {problem}") from problem
     if not isinstance(descriptor, dict):
         raise cell_grid.CellGridError(f"{path.name} is not a cell grid descriptor")
     uri = str(descriptor.get("uri") or "")
@@ -2386,7 +2389,10 @@ def _confidence(path: Path) -> tuple[cell_grid.CellGrid, bytes, dict[str, Any]]:
         or (uri.startswith("splat") and uri.endswith(".glb"))
     ):
         raise cell_grid.CellGridError(f"{path.name}: {uri!r} is not a file name a tileset can hold")
-    blob = (path.parent / uri).read_bytes()
+    try:
+        blob = (path.parent / uri).read_bytes()
+    except OSError as problem:
+        raise cell_grid.CellGridError(f"{path.name}: {uri} is not readable: {problem}") from problem
     grid = cell_grid.decode(descriptor, blob)
     if grid.kind != "confidence":
         raise cell_grid.CellGridError(f"{path.name} is a {grid.kind!r} grid, not a confidence grid")

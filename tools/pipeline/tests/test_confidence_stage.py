@@ -505,3 +505,30 @@ def test_the_grid_is_in_the_frame_canonical_ply_and_the_tiles_are_in(tmp_path: P
     # A gaussian exactly on a cell edge may round into its neighbour (ADR 0016).
     assert (scores > 0).mean() > 0.999
     assert grid.planes[0].cell_m == 1.0  # twice the scale: a quarter of the density
+
+
+@pytest.mark.parametrize("damage", ["mid-stream", "missing-file", "no-score", "not-json"])
+def test_any_broken_grid_is_left_out_by_package(arc: Workdir, tmp_path: Path, damage: str) -> None:
+    """A grid damaged any way at all -- a deflate stream zlib cannot read, a file that is
+    gone, a descriptor of the wrong shape -- is left out, and the tiles still ship."""
+    broken = tmp_path / "broken"
+    shutil.copytree(arc.out_dir("confidence") / "confidence", broken)
+    if damage == "mid-stream":
+        raw = bytearray((broken / "confidence.bin").read_bytes())
+        raw[40] ^= 0xFF
+        raw[41] ^= 0xFF
+        (broken / "confidence.bin").write_bytes(bytes(raw))
+    elif damage == "missing-file":
+        (broken / "confidence.bin").unlink()
+    elif damage == "no-score":
+        descriptor = json.loads((broken / "confidence.json").read_text())
+        descriptor["channels"][0]["name"] = "points"
+        (broken / "confidence.json").write_text(json.dumps(descriptor))
+    else:
+        (broken / "confidence.json").write_text('{"format": "hexapod.cellgrid", "levels": ')
+    run = _package(tmp_path / "run", arc, grid=broken)
+    splat = run.out_dir("package") / "splat"
+    assert (splat / "splat.glb").is_file()
+    assert "confidence" not in json.loads((splat / "tileset.json").read_text())["root"]["extras"]
+    registration = json.loads((run.out_dir("register") / "registration.json").read_text())
+    assert registration["confidence"] is None
