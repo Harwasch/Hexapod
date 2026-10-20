@@ -689,7 +689,11 @@ def test_a_second_capture_of_the_same_field_joins_its_site_as_epoch_2(
     # And October sits where it was captured, relative to September: its north extreme
     # is the north offset of its coordinate further on. 1 mm, from first principles: the
     # SPZ position quantum is 2^-12 m (0.24 mm) on each bound, plus float32 at 10 m.
-    bbox_2 = site.metadata_["registration"]["bboxLocalM"]
+    # Read off October's own run: the site's metadata mirrors only the epoch it shows.
+    bbox_2 = json.loads(storage.get_object(f"runs/{second.id}/register/registration.json"))[
+        "bboxLocalM"
+    ]
+    assert site.metadata_["registration"]["bboxLocalM"] == bbox_1
     expected = _enu_north_m(north_lat, LON, HEIGHT, (LAT, LON, HEIGHT))
     assert abs((bbox_2["max"][1] - bbox_1["max"][1]) - expected) < 1e-3
     assert abs((bbox_2["min"][1] - bbox_1["min"][1]) - expected) < 1e-3

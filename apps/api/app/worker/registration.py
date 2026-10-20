@@ -936,7 +936,7 @@ def _mirror_site_metadata(
     are read off the site by `view.html`, the web's real-size tool and older tests; the
     epoch row is the record of truth now, and M2b moves those readers onto it. Only on a
     site a pipeline run made (`captureId`): a seeded or hand-made site's metadata is its
-    author's.
+    author's. And only for the site's first epoch, the one those readers show (`register`).
     """
     metadata = dict(site.metadata_ or {})
     if not metadata.get("captureId"):
@@ -1085,7 +1085,10 @@ def register(
         _grow_boundary(site, epoch.footprint)
     if thumbnail is not None:
         site.thumbnail_url = thumbnail
-    if not published.withheld:
+    if not published.withheld and epoch.ordinal == 1:
+        # The mirror describes the splat `view.html` shows, which is the first epoch's
+        # (`default_visible`): a later epoch's coverage laid over it would be an overlay
+        # measured on other tiles. M2b reads coverage per epoch instead.
         _mirror_site_metadata(site, registration, job_id, coverage)
     capture.quality = quality
     capture.status = CaptureStatus.COMPLETE

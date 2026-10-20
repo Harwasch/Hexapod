@@ -51,7 +51,9 @@ heightDatum, epsg}`) to the stages that write the placement: `ingest_splat`, `ma
    empty. `LiveMoved` is checked against the epoch's own current asset.
 8. **The site's metadata is a deprecated mirror**: `jobId`, `registration`, `coverageUrl` and
    `keepVerifiedPct` are still written on a pipeline-made site for `view.html`, the real-size tool
-   and older readers; the epoch row is the record of truth, and M2b moves those readers onto it.
+   and older readers, by runs of the site's first epoch only (the splat those readers show), so a
+   later epoch's coverage never lies over epoch 1's tiles; the epoch row is the record of truth,
+   and M2b moves those readers onto it.
 9. **Migration 0032** backfills a frame and epoch 1 for every site a pipeline run registered (a
    `captureId` naming a capture of that site, and a numeric georef), with that site's first splat
    as the epoch's asset. Seeded and catalog sites stay legacy. The downgrade drops only the new
