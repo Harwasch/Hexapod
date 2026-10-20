@@ -14,6 +14,7 @@ import {
   countTiles,
   parseTileset,
   planAdditive,
+  translationOf,
   type LoadStep,
   type Sphere,
   type TileNode,
@@ -691,6 +692,113 @@ describe("reading a tileset", () => {
     expect(tree.refine).toBe("REPLACE");
     expect(tree.root).toMatchObject({ uri: "splat.glb", gaussians: 12_000, geometricError: 0 });
     expect(cutOf(tree, viewFrom([0, 0, 0]), DEFAULT_SPLAT_BUDGET)).toEqual(["splat.glb"]);
+  });
+});
+
+describe("tile frames (a tile's translation-only transform)", () => {
+  const moved = (x: number, y: number, z: number): number[] => [
+    1,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    x,
+    y,
+    z,
+    1,
+  ];
+  const box = (x: number): number[] => [x, 0, 0.5, 2, 0, 0, 0, 2, 0, 0, 0, 1];
+
+  it("parseTileset composes nested child translations and shifts boxes into the root frame", () => {
+    const tree = parseTileset({
+      root: {
+        content: { uri: "splat.glb" },
+        geometricError: 4,
+        boundingVolume: { box: box(0) },
+        children: [
+          {
+            transform: moved(2548, 900, 0),
+            content: { uri: "splat_4.glb" },
+            geometricError: 2,
+            boundingVolume: { box: box(-0.5) },
+            children: [
+              {
+                transform: moved(-1248, 0, 0),
+                content: { uri: "splat_4-0.glb" },
+                geometricError: 0,
+                boundingVolume: { box: box(0.25) },
+              },
+              // No transform of its own: its parent's frame.
+              {
+                content: { uri: "splat_4-1.glb" },
+                geometricError: 0,
+                boundingVolume: { box: box(1) },
+              },
+            ],
+          },
+          { content: { uri: "splat_0.glb" }, geometricError: 0, boundingVolume: { box: box(3) } },
+        ],
+      },
+    });
+    const [far, near] = tree.root.children;
+    const [nested, inherited] = far?.children ?? [];
+    expect(tree.root.offset).toBeUndefined();
+    expect(near?.offset).toBeUndefined();
+    expect(near?.box?.slice(0, 3)).toEqual([3, 0, 0.5]);
+    expect(far?.offset).toEqual([2548, 900, 0]);
+    expect(far?.box).toEqual([2547.5, 900, 0.5, 2, 0, 0, 0, 2, 0, 0, 0, 1]);
+    expect(far?.bounds?.center).toEqual([2547.5, 900, 0.5]);
+    expect(nested?.offset).toEqual([1300, 900, 0]);
+    expect(nested?.box?.slice(0, 3)).toEqual([1300.25, 900, 0.5]);
+    expect(nested?.bounds?.center).toEqual([1300.25, 900, 0.5]);
+    expect(inherited?.offset).toEqual([2548, 900, 0]);
+    expect(inherited?.box?.slice(0, 3)).toEqual([2549, 900, 0.5]);
+    // The half-axes and radius do not move.
+    expect(nested?.bounds?.radius).toBeCloseTo(3, 12);
+  });
+
+  it("refuses a rotating child transform", () => {
+    const turned = [0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 5, 0, 0, 1];
+    const document = {
+      root: {
+        content: { uri: "splat.glb" },
+        geometricError: 1,
+        children: [{ transform: turned, content: { uri: "splat_0.glb" }, geometricError: 0 }],
+      },
+    };
+    expect(() => parseTileset(document)).toThrow(/not a translation/);
+    expect(() => translationOf(turned)).toThrow(/not a translation/);
+    expect(() => translationOf([1, 0, 0])).toThrow(/not a translation/);
+    expect(() => translationOf([...moved(1, 2, 3).slice(0, 15), 2])).toThrow(/not a translation/);
+    expect(translationOf(undefined)).toBeNull();
+    expect(translationOf(moved(1, 2, 3))).toEqual([1, 2, 3]);
+  });
+
+  it("ignores the root transform", () => {
+    // The root's transform is the scan's placement on the globe (ECEF), not a tile frame.
+    const enu = [1, 0, 0, 0, 0, 0.5, 0.86, 0, 0, -0.86, 0.5, 0, 716174, -5587988, 2980310, 1];
+    const tree = parseTileset({
+      root: {
+        transform: enu,
+        content: { uri: "splat.glb" },
+        geometricError: 1,
+        boundingVolume: { box: box(1) },
+        children: [
+          { content: { uri: "splat_0.glb" }, geometricError: 0, boundingVolume: { box: box(2) } },
+        ],
+      },
+    });
+    expect(tree.root.offset).toBeUndefined();
+    expect(tree.root.box?.slice(0, 3)).toEqual([1, 0, 0.5]);
+    expect(tree.root.children[0]?.offset).toBeUndefined();
+    expect(tree.root.children[0]?.box?.slice(0, 3)).toEqual([2, 0, 0.5]);
   });
 });
 

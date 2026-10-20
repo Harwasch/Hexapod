@@ -26,7 +26,8 @@ import { collisionMetaOf, type CollisionMeta } from "@/lib/collision";
 
 export type Refine = "ADD" | "REPLACE";
 
-/** A tile's bounding sphere in the tileset's own frame (the root transform's, east/north/up). */
+/** A tile's bounding sphere in the tileset's own frame (the root transform's, east/north/up),
+ *  whatever frame the tile's own content is in (`TileNode.offset`). */
 export interface Sphere {
   center: [number, number, number];
   radius: number;
@@ -41,8 +42,18 @@ export interface TileNode {
    *  treated as in view and at distance zero, so it is refined first rather than never. */
   bounds?: Sphere | null;
   /** Its `box` bounding volume (centre, then three half-axis vectors), when it has one: how
-   *  far the camera is from the tile, where the sphere around a box is far too loose. */
+   *  far the camera is from the tile, where the sphere around a box is far too loose. In the
+   *  root's frame, like `bounds`: moved by `offset` from the tile's own. */
   box?: number[] | null;
+  /**
+   * Where the tile's own frame is in the root's, metres east/north/up: the sum of the
+   * translation-only `transform`s from the root down to it, the root's own (the globe
+   * placement) left out. Absent when zero, as for every tile of a scan that fits SPZ's
+   * +/-2048 m: `splat_tiles.py` gives a tile a frame of its own only when its positions would
+   * not fit in the root's (`tile_frame`). A reader adds it to the tile's decoded positions to
+   * have them in the scan's frame -- the site frame every position checksum is taken in.
+   */
+  offset?: [number, number, number];
 }
 
 export interface TileTree {
@@ -70,6 +81,7 @@ export interface LoadStep {
 export const LOAD_FACTOR = 4;
 
 interface RawTile {
+  transform?: unknown;
   boundingVolume?: { box?: unknown; sphere?: unknown };
   content?: { uri?: unknown };
   geometricError?: unknown;
@@ -79,35 +91,84 @@ interface RawTile {
 }
 
 /**
+ * The translation of a tile's 3D Tiles `transform` (column-major 4x4), or null when it has
+ * none. `splat_tiles.py` writes only translations (a tile is moved into a frame of its own,
+ * never turned: every tile shares the root's spherical-harmonic frame), and nothing here
+ * composes a rotation, so anything else is refused rather than drawn in the wrong place --
+ * as `splat_tiles.tile_offsets` refuses it.
+ */
+export function translationOf(transform: unknown): [number, number, number] | null {
+  if (transform === undefined || transform === null) return null;
+  const m = numbers(transform, 16);
+  const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0];
+  if (!m || identity.some((value, i) => m[i] !== value) || m[15] !== 1) {
+    throw new Error("The scan's tileset has a tile transform that is not a translation.");
+  }
+  return [m[12] ?? 0, m[13] ?? 0, m[14] ?? 0];
+}
+
+/**
  * The tile tree of a `tileset.json`. A tile without a gaussian count (a tileset packed before
  * the hierarchy, or from elsewhere) counts as unaffordable -- except the root, which is always
  * loaded: without it there is nothing to show. Refinement is read from the root, where the
  * packer states it; a root that does not say is REPLACE, 3D Tiles' own default for content
  * that stands for its children.
+ *
+ * Every tile is given in the root's frame: a child's `transform` (a translation, relative to
+ * its parent) is composed into its `offset`, and its bounding volume moved by it, so the
+ * streamer's culling and distances need know nothing of tile frames. The root's own
+ * transform is the scan's placement on the globe and is not read here.
  */
 export function parseTileset(document: unknown): TileTree {
   const root = (document as { root?: RawTile } | null)?.root;
   if (!root) throw new Error("The scan's tileset has no root tile.");
-  const node = (raw: RawTile): TileNode => {
+  const node = (
+    raw: RawTile,
+    parent: readonly [number, number, number],
+    isRoot: boolean,
+  ): TileNode => {
     const uri = raw.content?.uri;
     const gaussians = raw.extras?.gaussians;
     const error = raw.geometricError;
+    const own = isRoot ? null : translationOf(raw.transform);
+    const offset: [number, number, number] = own
+      ? [parent[0] + own[0], parent[1] + own[1], parent[2] + own[2]]
+      : [parent[0], parent[1], parent[2]];
+    const moved = offset.some((value) => value !== 0);
+    const bounds = sphereOf(raw.boundingVolume);
+    const box = numbers(raw.boundingVolume?.box, 12);
     return {
       uri: typeof uri === "string" ? uri : "",
       gaussians: typeof gaussians === "number" ? gaussians : Number.POSITIVE_INFINITY,
       geometricError: typeof error === "number" ? error : 0,
-      children: Array.isArray(raw.children) ? (raw.children as RawTile[]).map(node) : [],
-      bounds: sphereOf(raw.boundingVolume),
-      box: numbers(raw.boundingVolume?.box, 12),
+      children: Array.isArray(raw.children)
+        ? (raw.children as RawTile[]).map((child) => node(child, offset, false))
+        : [],
+      bounds:
+        bounds && moved
+          ? { center: shifted(bounds.center, offset), radius: bounds.radius }
+          : bounds,
+      box:
+        box && moved
+          ? [...shifted([box[0] ?? 0, box[1] ?? 0, box[2] ?? 0], offset), ...box.slice(3)]
+          : box,
+      ...(moved ? { offset } : {}),
     };
   };
-  const parsed = node(root);
+  const parsed = node(root, [0, 0, 0], true);
   if (!parsed.uri) throw new Error("The scan's tileset names no content.");
   return {
     refine: root.refine === "ADD" ? "ADD" : "REPLACE",
     root: parsed,
     collision: collisionMetaOf((root as { extras?: unknown }).extras),
   };
+}
+
+function shifted(
+  point: readonly [number, number, number],
+  by: readonly [number, number, number],
+): [number, number, number] {
+  return [point[0] + by[0], point[1] + by[1], point[2] + by[2]];
 }
 
 function numbers(value: unknown, length: number): number[] | null {
