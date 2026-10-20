@@ -24,6 +24,7 @@ import {
   inferredLayersOf,
   resolveLayerUrl,
 } from "@/lib/inferred";
+import { useAsCaptured } from "@/state/asCaptured";
 import { useInferred } from "@/state/inferred";
 import { useSettings } from "@/state/settings";
 import { useVariants } from "@/state/variants";
@@ -215,6 +216,32 @@ describe("inferred layers", () => {
     expect((primitive as { drawnBy?: unknown }).drawnBy).toBeUndefined();
     expect(colorChainOf(host)).toBeUndefined();
     dispose();
+  });
+
+  it("leaves the scan's companions while As captured is on, and comes back as it was", async () => {
+    const { parent, child, scene, preUpdate, primitive } = fixture();
+    const host = hostPrimitive();
+    (parent as unknown as { gaussianSplatPrimitive: unknown }).gaussianSplatPrimitive = host;
+    const dispose = attachInferredLayers(parent, scene, "asset-ac", () => Promise.resolve(child));
+    await settle();
+    useSettings.getState().set({ inferredStyle: "highlight" });
+    preUpdate.raiseEvent();
+    expect(host.companions).toEqual([child]);
+    useAsCaptured.getState().set(true);
+    preUpdate.raiseEvent();
+    // Nothing inferred drawn, by the scan's primitive or the layer's own.
+    expect(host.companions).toEqual([]);
+    expect(child.show).toBe(false);
+    expect((primitive as { drawnBy?: unknown }).drawnBy).toBeUndefined();
+    expect(colorChainOf(host)).toBeUndefined();
+    // The viewer's own choice is untouched, and is what comes back.
+    expect(useSettings.getState().inferredStyle).toBe("highlight");
+    useAsCaptured.getState().set(false);
+    preUpdate.raiseEvent();
+    expect(host.companions).toEqual([child]);
+    expect(colorChainOf(host)?.parts.find((p) => p instanceof CompanionHighlight)?.on).toBe(true);
+    dispose();
+    useSettings.getState().set({ inferredStyle: "hide" });
   });
 
   it("is drawn by the primitive that draws its scan, when another does (a view rule's)", async () => {

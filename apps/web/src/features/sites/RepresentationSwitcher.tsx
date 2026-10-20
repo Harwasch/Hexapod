@@ -9,7 +9,7 @@ import { useScene } from "@/cesium/SceneContext";
 import { pickShownAsset, siteEpochs } from "@/lib/epochs";
 import { representationLabel } from "@/lib/format";
 import { useInferred } from "@/state/inferred";
-import { useSettings } from "@/state/settings";
+import { useInferredStyle } from "@/state/asCaptured";
 import { useSites } from "@/state/sites";
 
 import { CompareMethods } from "./CompareMethods";
@@ -41,7 +41,7 @@ export function RepresentationSwitcher() {
   const assets = useSites((s) => s.assets);
   const site = useSite(activeSiteId).data;
   const inferred = useInferred((s) => s.layers);
-  const inferredStyle = useSettings((s) => s.inferredStyle);
+  const inferredStyle = useInferredStyle();
   // The model the scene shows (lib/epochs.ts): on a site with several dates, the shown one's,
   // whose sidecars Methods and the objects search read.
   const epochId = useSites((s) => (activeSiteId ? (s.epoch[activeSiteId] ?? null) : null));

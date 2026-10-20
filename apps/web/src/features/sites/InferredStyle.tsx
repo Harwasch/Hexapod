@@ -10,23 +10,28 @@ import {
   type InferredEvidence,
   type InferredStyle,
 } from "@/lib/inferred";
+import { HIDDEN_AS_CAPTURED, useAsCaptured } from "@/state/asCaptured";
 import { useSettings } from "@/state/settings";
 
-const OPTIONS = INFERRED_STYLES.map((style) => ({
-  value: style,
-  label: INFERRED_STYLE_LABELS[style],
-  ariaLabel: `${INFERRED_STYLE_LABELS[style]} inferred fill`,
-}));
+const options = (disabled: boolean) =>
+  INFERRED_STYLES.map((style) => ({
+    value: style,
+    label: INFERRED_STYLE_LABELS[style],
+    ariaLabel: `${INFERRED_STYLE_LABELS[style]} inferred fill`,
+    disabled,
+  }));
 
 /**
  * Show · Highlight · Hide for a scan's inferred layers (lib/inferred.ts), beside the
  * representation switcher: as painted, purple and hatched (the measured splats untouched), or
  * not drawn. A viewer's setting (`inferredStyle`), kept on this device. What painted each layer
- * is its title.
+ * is its title. Disabled while As captured is on (state/asCaptured.ts), the setting kept for
+ * after.
  */
 export function InferredStyleControl({ evidence }: { evidence: readonly InferredEvidence[] }) {
   const style = useSettings((s) => s.inferredStyle);
   const set = useSettings((s) => s.set);
+  const held = useAsCaptured((s) => s.on);
   return (
     <span
       className="rep-switch__inferred"
@@ -39,8 +44,9 @@ export function InferredStyleControl({ evidence }: { evidence: readonly Inferred
         className="rep-switch__inferred-control"
         value={style}
         onValueChange={(next: InferredStyle) => set({ inferredStyle: next })}
-        options={OPTIONS}
+        options={options(held)}
       />
+      {held && <span className="views__notice">{HIDDEN_AS_CAPTURED}</span>}
     </span>
   );
 }
