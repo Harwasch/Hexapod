@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -20,6 +21,8 @@ from app.worlds.lifecycle import Lifecycle
 from app.worlds.providers import RunPodProvider, hardware, provider, request, response_json
 from app.worlds.request_limits import AuthenticatedBodyRoute
 from app.worlds.store import Store
+
+logger = logging.getLogger("twin.worlds.router")
 
 
 class BoundedWorldsRoute(AuthenticatedBodyRoute):
@@ -209,6 +212,7 @@ def providers(config: Settings, context: Request) -> dict[str, Any]:
             )
             and getattr(getattr(context.app.state, "worlds_lifecycle", None), "running", False)
             and context.app.state.settings.api_write_token
+            and config.sleep_problem() is None
         )
         result.append(
             {
@@ -293,6 +297,10 @@ def create_worker(
         problem = config.provisioning_problem(body.provider)
         if problem:
             raise HTTPException(503, problem)
+        sleeping = config.sleep_problem()
+        if sleeping:
+            logger.warning("Refused managed %s provisioning: %s", body.provider, sleeping)
+            raise HTTPException(503, sleeping)
         if not context.app.state.settings.api_write_token or not getattr(
             getattr(context.app.state, "worlds_lifecycle", None), "running", False
         ):

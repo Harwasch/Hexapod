@@ -255,9 +255,10 @@ async def worlds_lifespan(app: FastAPI) -> AsyncIterator[None]:
     if hazard:
         logger.warning(
             "Paid Worlds provisioning is allowed (%s) on an API that may sleep "
-            "(WORLD_API_MAY_SLEEP): the lease reaper runs only while the API is awake, so "
-            "a worker past its idle or hard deadline keeps billing until the next request. "
-            'Set auto_stop_machines = "off" and min_machines_running = 1 in fly.toml.',
+            "(WORLD_API_MAY_SLEEP): new managed workers are refused, because the lease "
+            "reaper runs only while the API is awake; existing ones are still cleaned up. "
+            'To provision, set auto_stop_machines = "off", min_machines_running = 1 and '
+            'WORLD_API_MAY_SLEEP = "false" in fly.toml.',
             ", ".join(hazard),
         )
     lifecycle: Lifecycle | None = None
