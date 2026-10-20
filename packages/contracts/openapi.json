@@ -2843,6 +2843,13 @@
             "title": "Message",
             "type": "string"
           },
+          "notices": {
+            "items": {
+              "$ref": "#/components/schemas/SourceNotice"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
           "status": {
             "enum": [
               "available",
@@ -22502,6 +22509,30 @@
         "title": "SolarRequest",
         "type": "object"
       },
+      "SourceNotice": {
+        "additionalProperties": false,
+        "description": "A statement a source's terms require with any copy of its data (Kern County's\ndisclaimer), to be shown wherever its parcels are.",
+        "properties": {
+          "source": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Source",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "text"
+        ],
+        "title": "SourceNotice",
+        "type": "object"
+      },
       "SourceRead": {
         "additionalProperties": false,
         "properties": {
@@ -39112,7 +39143,7 @@
     },
     "/api/v1/public/parcels/near": {
       "post": {
-        "description": "County assessor parcels near a point, with their source and attribution.\n\nCalifornia only (elsewhere the answer is `uncovered`), and only counties whose published\nterms allow the outlines on a public page (`NO_PUBLIC_REUSE`).",
+        "description": "County assessor parcels near a point, with their source, attribution and any notice\ntheir terms require.\n\nCalifornia only (elsewhere the answer is `uncovered`), and only the counties the public\nlist allows (`public_counties`; `PUBLIC_PARCELS_UNVERIFIED` widens it).",
         "operationId": "parcels_near_api_v1_public_parcels_near_post",
         "requestBody": {
           "content": {
@@ -39165,6 +39196,9 @@
             },
             "description": "Conflict"
           },
+          "413": {
+            "description": "The request body is larger than this route accepts"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -39177,6 +39211,9 @@
           },
           "429": {
             "description": "Too many lookups from this client; see Retry-After"
+          },
+          "503": {
+            "description": "Too many lookups running at once; see Retry-After"
           }
         },
         "summary": "Parcels Near",

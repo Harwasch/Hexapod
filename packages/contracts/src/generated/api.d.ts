@@ -1929,10 +1929,11 @@ export interface paths {
         put?: never;
         /**
          * Parcels Near
-         * @description County assessor parcels near a point, with their source and attribution.
+         * @description County assessor parcels near a point, with their source, attribution and any notice
+         *     their terms require.
          *
-         *     California only (elsewhere the answer is `uncovered`), and only counties whose published
-         *     terms allow the outlines on a public page (`NO_PUBLIC_REUSE`).
+         *     California only (elsewhere the answer is `uncovered`), and only the counties the public
+         *     list allows (`public_counties`; `PUBLIC_PARCELS_UNVERIFIED` widens it).
          */
         post: operations["parcels_near_api_v1_public_parcels_near_post"];
         delete?: never;
@@ -4481,6 +4482,8 @@ export interface components {
             candidates: components["schemas"]["LandCandidate"][];
             /** Message */
             message: string;
+            /** Notices */
+            notices?: components["schemas"]["SourceNotice"][];
             /**
              * Status
              * @enum {string}
@@ -11569,6 +11572,17 @@ export interface components {
             /** Zonebasis */
             zoneBasis: string;
         };
+        /**
+         * SourceNotice
+         * @description A statement a source's terms require with any copy of its data (Kern County's
+         *     disclaimer), to be shown wherever its parcels are.
+         */
+        SourceNotice: {
+            /** Source */
+            source: string;
+            /** Text */
+            text: string;
+        };
         /** SourceRead */
         SourceRead: {
             /** Attribution */
@@ -12986,6 +13000,7 @@ export type SchemaSolarMonth = components['schemas']['SolarMonth'];
 export type SchemaSolarOutput = components['schemas']['SolarOutput'];
 export type SchemaSolarPreview = components['schemas']['SolarPreview'];
 export type SchemaSolarRequest = components['schemas']['SolarRequest'];
+export type SchemaSourceNotice = components['schemas']['SourceNotice'];
 export type SchemaSourceRead = components['schemas']['SourceRead'];
 export type SchemaSpeciesObservation = components['schemas']['SpeciesObservation'];
 export type SchemaSpeciesTarget = components['schemas']['SpeciesTarget'];
@@ -21603,6 +21618,13 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
+            /** @description The request body is larger than this route accepts */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation error */
             422: {
                 headers: {
@@ -21614,6 +21636,13 @@ export interface operations {
             };
             /** @description Too many lookups from this client; see Retry-After */
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Too many lookups running at once; see Retry-After */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

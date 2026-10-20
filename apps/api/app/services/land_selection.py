@@ -3,17 +3,23 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Callable
 from typing import Any
 
 import httpx
 from pydantic import HttpUrl, TypeAdapter, ValidationError
 from shapely.geometry import box
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.research.providers.base import SourceError, SourceSpec, fetch_json
-from app.research.providers.parcels import NO_PUBLIC_REUSE, ParcelSource, counties_touching
+from app.research.providers.parcels import (
+    NO_PUBLIC_REUSE,
+    ParcelSource,
+    counties_touching,
+    public_counties,
+)
 from app.schemas.geojson import MapGeometry, MultiPolygon, Polygon
 from app.schemas.land import BoundarySource, LandCreate
 from app.schemas.land_selection import (
@@ -23,6 +29,7 @@ from app.schemas.land_selection import (
     PublicParcelRequest,
     SelectionInstruction,
     SelectionInterpretation,
+    SourceNotice,
 )
 from app.services.errors import InvalidInputError
 
@@ -55,6 +62,29 @@ def _distance(db: Session, geometry: MapGeometry, request: CandidateRequest) -> 
     return float(value or 0)
 
 
+#: Every geometry's distance from one point, in one query: a parcel answer can hold up to
+#: twice PARCEL_LIMIT polygons, and a query each was the public route's largest database cost.
+DISTANCES = text(
+    "SELECT ST_Distance("
+    "geography(ST_SetSRID(ST_GeomFromGeoJSON(t.g), 4326)), "
+    "geography(ST_SetSRID(ST_MakePoint(:lon, :lat), 4326))) "
+    "FROM unnest(CAST(:geometries AS text[])) WITH ORDINALITY AS t(g, i) ORDER BY t.i"
+)
+
+
+def _distances(
+    db: Session, geometries: list[MapGeometry], request: CandidateRequest
+) -> list[float]:
+    if not geometries:
+        return []
+    lon, lat = request.point.coordinates[:2]
+    rows = db.execute(
+        DISTANCES,
+        {"lon": lon, "lat": lat, "geometries": [g.model_dump_json() for g in geometries]},
+    ).scalars()
+    return [float(value or 0) for value in rows]
+
+
 def _record_id(value: object) -> str:
     # Some layers store the parcel number as a number; 12345.0 is parcel 12345.
     if isinstance(value, float) and value.is_integer():
@@ -62,13 +92,31 @@ def _record_id(value: object) -> str:
     return str(value).strip() if value is not None else ""
 
 
+def _notices(shown: list[LandCandidate], answered: list[ParcelSource]) -> list[SourceNotice]:
+    """The statements a county's terms require with any copy of its data, for the counties
+    whose parcels are in the answer."""
+    fips = {candidate.id.split("/")[1] for candidate in shown}
+    return [
+        SourceNotice(source=f"{source.county} County parcels", text=source.disclaimer)
+        for source in answered
+        if source.disclaimer and source.fips in fips
+    ]
+
+
 def _county_names(sources: list[ParcelSource]) -> str:
     return " and ".join(f"{source.county} County" for source in sources)
 
 
 def _parcels(
-    db: Session, request: CandidateRequest, client: httpx.Client, *, public: bool = False
+    db: Session,
+    request: CandidateRequest,
+    client: httpx.Client,
+    *,
+    allowed: Callable[[ParcelSource], bool] | None = None,
+    timeout: float = 25,
 ) -> CandidateResult:
+    """Parcels near a point from the county services. `allowed` narrows which counties may be
+    asked (the public lookup's list); `timeout` bounds each county's answer (s)."""
     lon, lat = request.point.coordinates[:2]
     dx = request.radius_m / (111_320 * max(0.1, math.cos(math.radians(lat))))
     dy = request.radius_m / 110_574
@@ -82,14 +130,19 @@ def _parcels(
         )
     # Near a county line the search reaches both counties; each answers for its own parcels.
     available = [source for source in counties if source.status == "available"][:2]
-    if public:
-        withheld = [source for source in available if source.fips in NO_PUBLIC_REUSE]
-        available = [source for source in available if source.fips not in NO_PUBLIC_REUSE]
+    if allowed is not None:
+        withheld = [source for source in available if not allowed(source)]
+        available = [source for source in available if allowed(source)]
         if withheld and not available:
+            forbidden = all(source.fips in NO_PUBLIC_REUSE for source in withheld)
             return CandidateResult(
                 status="uncovered",
-                message=f"{_county_names(withheld)} does not allow its parcel records to be "
-                "shown here. Draw the land, or enter its acres.",
+                message=(
+                    f"{_county_names(withheld)} does not allow its parcel records to be shown here."
+                    if forbidden
+                    else f"{_county_names(withheld)} parcel records are not offered here yet."
+                )
+                + " Draw the land, or enter its acres.",
                 candidates=[],
             )
     if not available:
@@ -100,7 +153,7 @@ def _parcels(
             candidates=[],
         )
     db.commit()  # Release the auth transaction before waiting for a public provider.
-    result: list[LandCandidate] = []
+    found: list[tuple[MapGeometry, ParcelSource, str, HttpUrl | None]] = []
     answered: list[ParcelSource] = []
     truncated = False
     for source in available:
@@ -119,6 +172,7 @@ def _parcels(
                     "returnGeometry": "true",
                     "resultRecordCount": PARCEL_LIMIT,
                 },
+                timeout=timeout,
             )
             if "error" in raw:
                 raise SourceError("The parcel service rejected the query.")
@@ -147,24 +201,27 @@ def _parcels(
                 )
                 if not record_id:
                     continue
-                result.append(
-                    LandCandidate(
-                        id=f"ca-parcel/{source.fips}/{record_id}",
-                        label=f"Parcel {record_id}",
-                        geometry=geometry,
-                        distance_m=_distance(db, geometry, request),
-                        source=BoundarySource(
-                            method="parcel",
-                            label=f"{source.county} County assessor parcel",
-                            url=url,
-                            record_id=record_id,
-                            attribution=source.attribution,
-                            meaning="recorded-parcel",
-                        ),
-                    )
-                )
+                found.append((geometry, source, record_id, url))
             except (ValueError, ValidationError, AttributeError):
                 continue
+    distances = _distances(db, [geometry for geometry, *_ in found], request)
+    result = [
+        LandCandidate(
+            id=f"ca-parcel/{source.fips}/{record_id}",
+            label=f"Parcel {record_id}",
+            geometry=geometry,
+            distance_m=distance,
+            source=BoundarySource(
+                method="parcel",
+                label=f"{source.county} County assessor parcel",
+                url=url,
+                record_id=record_id,
+                attribution=source.attribution,
+                meaning="recorded-parcel",
+            ),
+        )
+        for (geometry, source, record_id, url), distance in zip(found, distances, strict=True)
+    ]
     if not answered:
         return CandidateResult(
             status="unavailable",
@@ -183,19 +240,31 @@ def _parcels(
         ),
         candidates=result[:PARCEL_LIMIT],
         truncated=truncated,
+        notices=_notices(result[:PARCEL_LIMIT], answered),
     )
 
 
+#: Seconds a county may take to answer the public lookup: a visitor is waiting, and a slow
+#: county must not hold a worker for the signed-in picker's 25 s.
+PUBLIC_TIMEOUT_S = 7.0
+
+
 def public_parcels(
-    db: Session, request: PublicParcelRequest, client: httpx.Client
+    db: Session,
+    request: PublicParcelRequest,
+    client: httpx.Client,
+    *,
+    include_unverified: bool = False,
 ) -> CandidateResult:
     """Parcels near a point for a visitor who has not signed in: the same county services,
-    provenance and attribution as `candidates`, without the counties in `NO_PUBLIC_REUSE`."""
+    provenance and attribution as `candidates`, from the counties `public_counties` allows."""
+    counties = public_counties(include_unverified)
     return _parcels(
         db,
         CandidateRequest(point=request.point, kind="parcel", radius_m=request.radius_m),
         client,
-        public=True,
+        allowed=lambda source: source.fips in counties,
+        timeout=PUBLIC_TIMEOUT_S,
     )
 
 
