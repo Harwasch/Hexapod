@@ -63,6 +63,7 @@ from tests.sidecar_fixtures import (
     stage,
     tileset_at,
     two_buckets,
+    waive_fill_gate,
 )
 from tests.test_worker import config, make_capture, queue_job, run_job
 
@@ -72,6 +73,14 @@ INSTANCES_FILES = {"instances.json": b'{"tiles":{}}', "instances.emb": b"\0\1"}
 SOG_FILES = {"sog/lod-meta.json": b"{}", "sog/0.webp": b"webp"}
 RIG_FILES = {"rig.json": b"{}", "motion.json": b"{}", "plants.json": b"{}"}
 MATERIALS_EXTRAS = {"uri": "materials.json", "count": 1}
+
+
+@pytest.fixture(autouse=True)
+def _fill_gate_waived(monkeypatch: pytest.MonkeyPatch) -> list[list[Any]]:
+    """What is held here is what a republish carries; the fills these tests attach sit on
+    single scans with nothing re-scanned, so the API's recompute of the fill gate is
+    waived (tests/test_fill_gate.py holds it; `waive_fill_gate`)."""
+    return waive_fill_gate(monkeypatch)
 
 
 @pytest.fixture

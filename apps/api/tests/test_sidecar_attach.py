@@ -62,10 +62,18 @@ from tests.sidecar_fixtures import (
     stage,
     tileset_at,
     two_buckets,
+    waive_fill_gate,
 )
 
 TOKEN = "correct-horse-battery-staple"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+
+
+@pytest.fixture
+def fill_gate_waived(monkeypatch: pytest.MonkeyPatch) -> list[list[Any]]:
+    """For the attach's mechanics with a fill on a single scan (nothing re-scanned): the
+    API's recompute of the fill gate admits, and records what it was asked to judge."""
+    return waive_fill_gate(monkeypatch)
 
 
 @pytest.fixture
@@ -305,6 +313,7 @@ def _now() -> Any:
     return datetime.now(tz=UTC)
 
 
+@pytest.mark.usefixtures("fill_gate_waived")
 def test_a_second_fill_is_declared_beside_the_first_not_instead_of_it(
     db: Session, buckets: Publisher, client: TestClient
 ) -> None:
@@ -471,6 +480,7 @@ def test_objects_attached_with_their_materials_keep_both_and_flag_nothing(
     assert body["asset"]["sidecarFlags"] == []
 
 
+@pytest.mark.usefixtures("fill_gate_waived")
 def test_an_independent_kind_leaves_the_objects_and_what_is_keyed_by_them_alone(
     db: Session, buckets: Publisher, client: TestClient
 ) -> None:
@@ -525,6 +535,7 @@ def test_a_kind_set_to_null_goes_with_its_files_and_what_was_keyed_by_it(
 # --- legacy prefixes -----------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("fill_gate_waived")
 def test_a_legacy_prefix_is_attached_to_by_cutting_its_first_generation(
     db: Session, buckets: Publisher, client: TestClient
 ) -> None:
@@ -846,6 +857,7 @@ def waiting_on_a_lock(engine: Engine) -> bool:
         )
 
 
+@pytest.mark.usefixtures("fill_gate_waived")
 def test_two_attaches_at_once_both_land_the_second_on_the_first(
     db: Session, buckets: Publisher, engine: Engine
 ) -> None:
@@ -1142,13 +1154,15 @@ def a_measured_live_scan(buckets: Publisher) -> None:
 
 
 def test_a_fill_gated_against_the_scans_own_grid_is_attached(
-    db: Session, buckets: Publisher, client: TestClient
+    db: Session, buckets: Publisher, client: TestClient, fill_gate_waived: list[list[Any]]
 ) -> None:
+    """The metadata half admits it and hands it to the API's recompute (waived here)."""
     a_measured_live_scan(buckets)
     asset = an_asset(db, LIVE_URL)
     prefix = stage(buckets.private, asset.id, FILL_FILES)
     response = attach(client, asset, prefix, extras={"inferredLayers": FILL_EXTRAS})
     assert response.status_code == 200, response.text
+    assert fill_gate_waived == [FILL_EXTRAS]
     layers = tileset_at(buckets.public, response.json()["url"])["root"]["extras"]
     assert layers["inferredLayers"] == FILL_EXTRAS
 
@@ -1233,6 +1247,7 @@ def _fill_variant(evidence: dict[str, Any]) -> tuple[dict[str, bytes], dict[str,
     return files, {"variants": {"fill": [entry]}}
 
 
+@pytest.mark.usefixtures("fill_gate_waived")
 def test_a_fill_variant_is_held_to_the_same_gate(
     db: Session, buckets: Publisher, client: TestClient
 ) -> None:

@@ -61,7 +61,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Asset
 from app.schemas.sidecar import SidecarAttach, SidecarAttachment
-from app.services import epoch_maps, epochs, sidecars
+from app.services import epoch_maps, epochs, fill_gate, sidecars
 from app.services.assets import asset_to_read
 from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.services.published import IMMUTABLE_CACHE
@@ -229,6 +229,16 @@ def _attach(
         raise InvalidInputError(
             f"rigUrl {payload.rig_url} is neither staged nor beside the tileset"
         )
+    _verify_fills(
+        db,
+        asset,
+        _fills_judged(patch, old_extras),
+        document=current.document,
+        staged=staged,
+        kept=kept,
+        staging=staging,
+        public=public,
+    )
     too_big = sorted(rel for rel, item in kept.items() if item.size > sidecars.MAX_COPY_BYTES)
     if too_big:
         raise ConflictError(
@@ -538,15 +548,10 @@ def _replaced(rel: str, units: set[str]) -> bool:
     return rel in units or any(unit.endswith("/") and rel.startswith(unit) for unit in units)
 
 
-def _check_fills(patch: dict[str, Any], current: dict[str, Any], asset: Asset) -> None:
-    """The fill gate's second barrier (ADR 0016 § Fill; the first is publish-fill.yml): an
-    inferred layer is attached only when gated against the confidence grid the asset's
-    tiles carry now, for its epoch. A 422 that says why, before anything is copied.
-
-    That holds for every inferred layer the viewer can show: `inferredLayers`, and the
-    layers of a bake-off's fill variant (`extras.variants.fill`, apps/web lib/variants.ts)
-    that the request adds or changes -- the client sends the whole `variants` value, so
-    the entries it already had are not judged again."""
+def _fills_judged(patch: dict[str, Any], current: dict[str, Any]) -> list[Any]:
+    """The inferred layers the request adds or changes: `inferredLayers`, and the layers of a
+    bake-off's fill variant (`extras.variants.fill`, apps/web lib/variants.ts) -- the client
+    sends the whole `variants` value, so the entries it already had are not judged again."""
     layers = list(patch.get("inferredLayers") or []) if "inferredLayers" in patch else []
     variants = patch.get("variants")
     if isinstance(variants, dict) and isinstance(variants.get("fill"), list):
@@ -556,6 +561,15 @@ def _check_fills(patch: dict[str, Any], current: dict[str, Any], asset: Asset) -
                 continue
             listed = variant.get("inferredLayers")
             layers += listed if isinstance(listed, list) else [None]
+    return layers
+
+
+def _check_fills(patch: dict[str, Any], current: dict[str, Any], asset: Asset) -> None:
+    """The fill gate's cheap half, before anything is read: every layer the request adds or
+    changes (`_fills_judged`) carries a `rescan-gate-v1` gate against the confidence grid
+    the asset's tiles carry now, for its epoch, at a plain path (`fill_gate_problem`). A
+    422 that says why. Its other half, `_verify_fills`, admits a layer."""
+    layers = _fills_judged(patch, current)
     if not layers:
         return
     sha = sidecars.grid_sha256(current)
@@ -565,6 +579,41 @@ def _check_fills(patch: dict[str, Any], current: dict[str, Any], asset: Asset) -
         if why is not None:
             uri = entry.get("uri") if isinstance(entry, dict) else None
             raise InvalidInputError(f"extras.inferredLayers {uri!r} is refused: {why}")
+
+
+def _verify_fills(
+    db: Session,
+    asset: Asset,
+    layers: list[Any],
+    *,
+    document: dict[str, Any],
+    staged: dict[str, ObjectSummary],
+    kept: dict[str, ObjectSummary],
+    staging: ObjectStorage,
+    public: ObjectStorage,
+) -> None:
+    """The fill gate's second barrier (ADR 0016 § Fill; the first is publish-fill.yml), as
+    the API computes it (`fill_gate`): the targets recomputed from the stored maps, every
+    gaussian of every tile of each layer held to them, read from the new generation's
+    files -- staged, or kept from the current one. A split's own hole fill (`fills/`) goes
+    with its split and is not judged."""
+    judged = [
+        entry
+        for entry in layers
+        if isinstance(entry, dict)
+        and not str(entry.get("uri") or "").removeprefix("./").startswith("fills/")
+    ]
+
+    def read(rel: str) -> bytes | None:
+        if rel in staged:
+            return staging.get_object(staged[rel].key)
+        if rel in kept:
+            return public.get_object(kept[rel].key)
+        return None
+
+    root = document.get("root")
+    transform = root.get("transform") if isinstance(root, dict) else None
+    fill_gate.verify(db, public, asset, judged, scan_transform=transform, read=read)
 
 
 def _checked_patch(extras: dict[str, Any]) -> dict[str, Any]:

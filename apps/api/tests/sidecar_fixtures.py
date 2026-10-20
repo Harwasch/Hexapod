@@ -17,6 +17,7 @@ from typing import Any
 
 import boto3
 import numpy as np
+import pytest
 from moto import mock_aws
 from sqlalchemy.orm import Session
 
@@ -286,3 +287,27 @@ def splat_glb(
         + struct.pack("<II", len(binary), 0x004E4942)
         + binary
     )
+
+
+# --- the API's recompute of the fill gate, for tests of something else ------------------
+
+
+def waive_fill_gate(monkeypatch: pytest.MonkeyPatch) -> list[list[Any]]:
+    """Admit every inferred layer at the API's recompute of the fill gate
+    (`fill_gate.verify`) and record the layers it was asked to judge, one list per attach.
+
+    For the attach's and the carry's own mechanics (merging layers by uri, the row lock,
+    what a republish keeps), whose fills sit on single scans with no re-scan. The gate
+    itself -- targets recomputed from `epoch_maps`, every gaussian held to them -- is held
+    in tests/test_fill_gate.py on a real two-epoch site; the metadata half
+    (`sidecars.fill_gate_problem`) still runs here."""
+    from app.services import fill_gate
+
+    asked: list[list[Any]] = []
+
+    def admit(_db: Any, _storage: Any, _asset: Any, layers: list[Any], **_: Any) -> None:
+        if layers:
+            asked.append(list(layers))
+
+    monkeypatch.setattr(fill_gate, "verify", admit)
+    return asked
