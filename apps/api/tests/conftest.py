@@ -25,6 +25,7 @@ TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or get_settings().test_d
 # other client's on the same database (`tests/idle_transactions.py`).
 os.environ["PGAPPNAME"] = f"twin-tests-{os.getpid()}"
 TABLES = (
+    "scan_requests",
     "land_research_workers",
     "land_views",
     "land_feature_batches",

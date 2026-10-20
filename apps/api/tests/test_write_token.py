@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import _db, require_write_token
 from app.config import Settings
-from app.main import create_app
+from app.main import create_app, public_body_limit_of
 from app.services.errors import UnauthorizedError
 from tests.conftest import site_payload
 
@@ -29,11 +29,13 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 #: app/services/phone_key.py), and the test below pins it to the /phone routes alone.
 GATING_SCHEMES = {"writeToken", "uploadToken", "phoneKey"}
 #: Mutating operations open to anyone, on purpose, each named here with a reviewer attached.
-#: Only under `/api/v1/public/` (app/api/v1/public.py), and each is rate-limited per client
-#: there instead: `POST /parcels/near` is the landing page's parcel lookup, approved by Harrison
-#: on 2026-10-20 ("Should the public landing page be allowed to look up land parcels? Add it."),
-#: a POST only because its body is a GeoJSON point; it reads county services and writes nothing.
-PUBLIC_OPERATIONS = {"POST /api/v1/public/parcels/near"}
+#: Each is rate-limited per client and body-capped (app/main.py PUBLIC_BODY_LIMITS) instead:
+#: `POST /public/parcels/near` is the landing page's parcel lookup, approved by Harrison on
+#: 2026-10-20 ("Should the public landing page be allowed to look up land parcels? Add it."), a
+#: POST only because its body is a GeoJSON point; it reads county services and writes nothing.
+#: `POST /scan-requests` is the landing page's request form, approved by Harrison on 2026-10-20
+#: ("scan requests go to our own API and database"); its list is read with the write token.
+PUBLIC_OPERATIONS = {"POST /api/v1/public/parcels/near", "POST /api/v1/scan-requests"}
 
 
 def no_tiles_source(**overrides: object) -> Settings:
@@ -324,7 +326,8 @@ def test_no_mutating_route_is_left_ungated(client: TestClient) -> None:
             target.add(f"{method.upper()} {path}")
 
     assert gated, "no gated operations in the document -- the check is looking in the wrong place"
-    assert all(" /api/v1/public/" in operation for operation in PUBLIC_OPERATIONS)
+    # Every open operation has a body cap in front of it.
+    assert all(public_body_limit_of(op.split(" ", 1)[1]) for op in PUBLIC_OPERATIONS)
     # The exemptions are exact: each is really open (or it would not need to be listed).
     assert ungated >= PUBLIC_OPERATIONS, (
         f"listed as public but gated: {PUBLIC_OPERATIONS - ungated}"

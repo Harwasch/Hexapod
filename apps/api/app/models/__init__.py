@@ -61,6 +61,7 @@ from app.models.research import (
     ResearchRun,
     ResearchWorkerPresence,
 )
+from app.models.scan_request import ScanRequest
 from app.models.scenario import LandScenario, LandScenarioRevision
 from app.models.site import Site
 from app.models.workspace import Membership, Workspace, WorkspaceInvitation, WorkspaceProfile
@@ -131,6 +132,7 @@ __all__ = [
     "ResearchWorkerPresence",
     "RunStatus",
     "ScaleSource",
+    "ScanRequest",
     "Site",
     "SiteCheckTarget",
     "SiteFrame",
