@@ -43,7 +43,9 @@ the opposite of both.
    place) wins over the capture's own coordinate, and the same point goes to the spatial join,
    to `normalize` and to `georeference`. The phone key may name only a site a phone capture made
    (409 `site_not_phone`): it is a weak shared credential, and naming a seeded or hand-made site
-   would fix that site's frame where the phone happens to be.
+   would fix that site's frame where the phone happens to be. The same rule holds its spatial
+   join: a phone-key capture joins by location only a site a phone capture made, so standing in
+   a site reaches no more than naming it would; a desktop capture joins any framed site.
 5. **The worker passes the frame** as the `site_frame` param (`{siteId, lat, lon, height,
 heightDatum, epsg}`) to the stages that write the placement: `ingest_splat`, `manual_placement`,
    `exif_gps`. `georef.json` then _is_ the frame origin, and every later stage (`place_splat`,

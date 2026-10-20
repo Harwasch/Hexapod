@@ -270,6 +270,47 @@ def test_a_spatial_match_uses_the_runs_located_point(db: Session) -> None:
     assert found is not None and found.site_id == site.id
 
 
+def test_a_phone_capture_joins_by_location_only_a_site_a_phone_made(db: Session) -> None:
+    """The phone key reaches only what it created (`phone._check_phone_site`): a phone
+    capture that names a desktop-made site is refused, so one standing in that site must
+    not join it by location either. Beside a site a phone capture made it joins as before;
+    a desktop capture keeps joining any framed site."""
+    from app.api.v1.phone import ORIGIN as PHONE
+
+    edge = ORIGIN[0] + 0.0005
+    by_desk = _capture(db, "desk-maker")
+    desk_site = make_site(db, "desk", metadata={"captureId": str(by_desk.id)})
+    by_phone = _capture(db, "phone-maker", {"origin": PHONE})
+    phone_site = make_site(
+        db, "phone", at=(ORIGIN[1] + 0.05, ORIGIN[0]), metadata={"captureId": str(by_phone.id)}
+    )
+    seeded = make_site(db, "seeded", at=(ORIGIN[1] - 0.05, ORIGIN[0]))
+    near_desk = {"lat": _north_of(20, edge), "lon": ORIGIN[1]}
+    near_phone = {"lat": _north_of(20, edge), "lon": ORIGIN[1] + 0.05}
+    near_seeded = {"lat": _north_of(20, edge), "lon": ORIGIN[1] - 0.05}
+    phone_at_desk = _capture(db, "p1", {"origin": PHONE, **near_desk})
+    phone_at_phone = _capture(db, "p2", {"origin": PHONE, **near_phone})
+    phone_at_seeded = _capture(db, "p3", {"origin": PHONE, **near_seeded})
+    desk_at_desk = _capture(db, "d1", near_desk)
+    desk_at_phone = _capture(db, "d2", near_phone)
+    desk_at_seeded = _capture(db, "d3", near_seeded)
+    db.commit()
+
+    assert epochs.frame_for_run(db, phone_at_desk) is None
+    assert epochs.frame_for_run(db, phone_at_seeded) is None
+    found = epochs.frame_for_run(db, phone_at_phone)
+    assert found is not None and found.site_id == phone_site.id
+    # A typed place given to the phone's run is held to the same rule.
+    assert epochs.frame_for_run(db, phone_at_phone, (near_desk["lat"], near_desk["lon"])) is None
+    for capture, site in (
+        (desk_at_desk, desk_site),
+        (desk_at_phone, phone_site),
+        (desk_at_seeded, seeded),
+    ):
+        found = epochs.frame_for_run(db, capture)
+        assert found is not None and found.site_id == site.id
+
+
 def test_no_coordinate_and_no_site_means_no_frame(db: Session) -> None:
     make_site(db)
     capture = _capture(db, "c", {"note": "nowhere"})
