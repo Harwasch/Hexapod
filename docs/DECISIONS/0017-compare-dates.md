@@ -37,17 +37,31 @@ time. Seeing what changed means flicking between them; a swipe shows both at onc
 6. **Picks follow the side clicked.** A ray through a point on screen (Measure, selection, the
    orbit pivot, the wheel zoom) is answered by `SplatCollider` only from tilesets drawn at that
    point: a tileset split to the other side of `scene.splitPosition` is skipped. The site card
-   names the date whose tileset was hit (`SiteManager.drawnAssetOf`). Queries with no point on
-   screen (camera collision, the floor) count both dates.
+   names the date whose tileset was hit (`SiteManager.drawnAssetOf`). Object selection
+   (`SceneSelectController`) does the same: each pick source says its scan's side, a click
+   selects only from the date drawn where it is, and a brush stroke paints the date drawn where
+   it begins, only that date's splats on its side. Queries with no point on screen (camera
+   collision, the floor) count both dates. What was selected or painted on a date stops being
+   selected once that date is no longer drawn, and an open site card names the date shown.
 7. **Said where a date is named.** The capture-date control checks no date and marks each "left
    of divider" / "right of divider"; the Inspector's Date shown becomes "Left of the divider" and
-   "Right of the divider", each with its own facts.
+   "Right of the divider", each with its own facts. The Inferred control and its legend speak
+   for both compared dates: either side drawing fill puts them up.
 8. **Cost.** The Compare mode of the Layers panel (the layer swipe and Dates) now loads on
-   demand; the scene's part cannot. Index entry 193,054 B → 193,893 B gzip (budget 197,000 B).
+   demand; the scene's part cannot. Index entry 193,054 B → 193,893 B gzip (budget 197,000 B);
+   on its rebased base 194,131 B, and 194,479 B after the review fixes (Node's gzip, as
+   `check-bundle.mjs` counts).
 
 ### Consequences
 
 - Resident splats roughly double while two dates are compared; the splat budget counts both.
+  A date hidden for switching back (the one shown before a comparison, a date compared once)
+  is kept only while the splats resident across the scene fit what the budget keeps
+  (`SPLAT_CACHE_FACTOR` times the ceiling); past that, checked each second, the hidden model
+  drawn longest ago is disposed and loaded again if asked for. The frame's anchor stays while
+  other dates copy its placement. A hidden tileset is never updated, so its own cache would
+  never trim it.
+- The load pill is ready once the last drawn date is in, whichever of the two streamed last.
 - The right-hand date is the one the clip under the site and the far view speak for; the two
   dates share the site's footprint, so the clip is the same in practice. The load pill waits for
   both dates' first tiles.
