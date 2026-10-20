@@ -170,13 +170,14 @@ how well each cell was seen (ADR 0016).
   hold ±327.67 m from the origin; a cell past that has no surface and is counted (`outOfRange`).
 - **Weak cells.** The change rule above does not consult the confidence score. In the demo every
   changed cell that one epoch's grid calls weak is the crate's own side, so excluding weak cells
-  would have hidden real change and caught nothing false; whether A5 should exclude them is open.
+  would have hidden real change and caught nothing false; A5 classifies them and flags them
+  `lowConfidence` (§ API 3).
 - **Memory and determinism.** One band of extremes at a time (137 bytes a cell, 2^19 cells a band)
   and the plane (10 bytes a cell); order statistics then roundings, so the bytes depend on neither
   chunk nor band. `points3D.bin` is streamed.
-- Until A5 adds a `surface` sidecar kind, a re-publish that carries sidecars from a previous
-  generation reports `extras.surface` as an unrecognised sidecar if the new run has none, as
-  `extras.confidence` does until A4.
+- Until A5 adds a `surface` sidecar kind (§ API 1, done), a re-publish that carries sidecars from a
+  previous generation reports `extras.surface` as an unrecognised sidecar if the new run has none,
+  as `extras.confidence` does until A4.
 
 ### Demo (synthetic)
 
@@ -190,11 +191,88 @@ here was calibrated on it.
 
 ### Not done here (stubs and later PRs)
 
-- The change map itself, stored per epoch pair, its API and its classes: A5 (migration 0036).
+- The change map itself, its API and its classes: A5 (§ API; computed per request, not stored).
 - The change drape and the "Derived from height surfaces, not observed" label: W5c.
 - Appearance-only change; any recorded measurement behind the estimators or the 3σ rule; a
-  measured leaf-on/leaf-off pair; a cross-language surface fixture for the API and web decoders.
+  measured leaf-on/leaf-off pair; a cross-language surface fixture for the web decoder (the API's
+  is A5's `synthetic-yard-surfaces`).
 
 ## API
 
-Filled by `claude/feat-splat-change-api`.
+Date 2026-10-20 · M5 of the splat-pipeline build (design M4–M6 §3 A5, DECISIONS D7), branch
+`claude/feat-splat-change-api`.
+
+### Decision
+
+1. **A surface is an epoch revision's map, like its confidence grid.** Migration 0036 widens
+   `epoch_maps.kind` to `confidence` · `surface` (the downgrade deletes the surface rows first).
+   `register` records `registration.json`'s `surface` on the revision it published, through the
+   same record / carry / repoint path as the confidence grid (ADR 0016 § API 2). A descriptor is
+   checked first — the container, a file beside the tiles, a cell on the lattice, the four
+   channels at the types and units the arithmetic assumes (`dsm`, `ground` i2 cm; `sigma` u1 cm;
+   `support` u1), `noData` −32768, the summary counts, a `status`, and
+   `vertical.originHeightM` — and one that fails is logged and not recorded. `surface.bin` is a
+   sidecar of kind `surface`, bound to the tiles and not attachable, like `confidence.bin`. Every
+   epoch says `surface: {status: measured, assetId, url, cellM, level, policy, calibration,
+cells, surfacedCells, medianSigmaM, originHeightM}`, or null — not measured.
+2. **`GET /sites/{id}/change?from=&to=`** (`change-v1`) compares the current revisions of two
+   published epochs of one site. Both go to the coarser of their surfaces' levels by § Pipeline
+   4's rule — of the children with a surface, dsm the highest, ground the lowest, sigma the largest
+   — held byte for byte to P5's demo `coarsen_surface` by the committed fixture
+   `data/tiles/synthetic-yard-surfaces`. Where both have a surface, `Δ = dsm_to − dsm_from` (in 32
+   bits: two i2 heights can differ by more than i2 holds) against
+   `t = 3·√(σ_from² + σ_to² + u_from² + u_to²)`, `u` each epoch's confidence grid's
+   `alignmentCap.uncertaintyM`: `raised` above `t`, `lowered` below `−t`, else `unchanged`;
+   `insufficient` where exactly one has a surface; no class where neither has (the windows'
+   bounding box is not a place either epoch saw — P5's demo report counts those cells as
+   insufficient too; the API does not). `appearance-only` stays reserved: `appearance:
+{status: not-computed, reason}`. Two windows together over 2^22 cells are compared a level
+   up, and the answer says so (`level` above `nativeLevel`).
+3. **Weak cells are classified and flagged, not hidden** (D7). A compared cell is `lowConfidence`
+   when either epoch's confidence grid does not vouch for it at the compared level — weak-v1 weak,
+   unseen, or no evidence at all, through the grid's own min-of-children pyramid, so a coarse cell
+   is as weak as its weakest child — or when either sigma is saturated (255 cm: the threshold is
+   then only a lower bound). The answer counts them per compared class beside the class counts.
+4. **`minDetectableM`** is the least threshold over the compared cells: no change smaller can be
+   seen anywhere between those dates (null when none was compared). An epoch placed by GPS alone
+   at ±10 m makes it about 30 m, and so finds no change rather than false ones.
+5. **Areas** are the 4-connected regions of one class — raised and lowered split further by
+   confidence — outlined on their cells' exact edges (rasterio `shapes`, as weak areas are) and
+   placed on the globe through the site frame's own tangent plane (§ API 5 of ADR 0016), each a
+   MultiPolygon with its cells, area, low-confidence cells (and `lowConfidence` when all are), and
+   for compared classes the mean and largest dsm change and the mean ground change. Raised and
+   lowered first. The outline is held to weak areas' bounds (2^20 cells, 2^18 cell edges): past
+   them the map is classified again a level up, by the same rule, and drawn there (`areaLevel`);
+   the counts stay the compared level's.
+6. **What it says it is.** Every answer is `derived: true`, labelled "Derived from height
+   surfaces, not observed", and `calibration: uncalibrated`: the 3σ rule (and the surfaces' own
+   estimators, the 5 m ground window among them) is first principles until a pilot site scanned
+   twice measures it. It is computed per request from the stored maps and not stored itself.
+7. **Refusals, each with a code**: 404 unknown site or an epoch not of it; 422 the same epoch
+   twice; 409 `epoch-not-published`, `no-site-frame`, `surface-not-measured` (a revision with no
+   surface: one side missing everywhere is no map, not a map of insufficient cells),
+   `confidence-not-measured` (its `u` and its vouching are unknown), `frames-differ` (a surface
+   above another origin height than the site frame's, to the millimetre), `surface-unreadable` /
+   `confidence-unreadable`.
+8. **Open, rate-limited.** No write token: reads stay open (the world is viewable without one) and
+   the drape is a view. Fill targets take the token because their one consumer holds it and a call
+   may decode nine grids; a change call decodes four, through the same bounded grid cache (keyed by
+   URL and sha256), and spends the per-client cell-map bucket weak areas and fill targets spend.
+   The comparison works a band of rows at a time, holding only its outputs for the window (about
+   12 bytes a cell); a 2048 × 2048 map with confidence pyramids peaked under 90 MiB here.
+
+### Evidence (synthetic)
+
+The P5 demo's two epochs (`confidence_demo.py --change`) registered through `register` on one site
+and asked `GET /change`: at 0.25 m cells, `u` 0 and 0.062 m, `minDetectableM` 0.191 m; 49 raised
+(the crate's 36 cells and the 13 its sides stand in, mean Δ 1.50 m), 0 lowered, 1,423 unchanged,
+1,997 insufficient; 11 of the raised cells low confidence (the crate's sides, as the demo found).
+From and to swapped: 49 lowered. The same re-scan as if unaligned (±10 m): `minDetectableM` 30.0 m
+and nothing raised or lowered. Every capture is synthetic; nothing was calibrated on it.
+
+### Not done here
+
+- The drape and its legend (W5c). A stored change map per epoch pair: not needed while a call costs
+  about a second at the grid ceiling.
+- Appearance-only change; any measurement behind the 3σ rule or the surface estimators; per-cell
+  output (only areas and counts are answered; a per-cell raster for the web is a later decision).
