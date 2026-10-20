@@ -535,6 +535,78 @@ def test_fill_scan_says_so_when_no_view_shows_a_hole_in_the_targets(tmp_path: Pa
     assert not out.exists()
 
 
+def test_only_target_gaussians_are_faded_in_the_views_the_filler_is_shown(
+    tmp_path: Path,
+) -> None:
+    """Every gaussian outside the targets -- faded or not -- is drawn as seen in the seen
+    render (opacity scale 1), so no pixel of it is a hole; the targets keep their view-cone
+    weight and so are the holes."""
+    wall, tileset, gate, grid = _wall_case(tmp_path, _north)
+    texels = vc.lookup(grid.texels, grid.origin, grid.cell, grid.dims, wall.positions)
+    faded = texels[:, 2] != vc.OMNI
+    chosen = faded & gate.mask(wall.positions)
+    assert (faded & ~chosen).any() and chosen.any()
+    scales: list[np.ndarray] = []
+
+    def spy(splats: Splats, camera: Camera, **kwargs: object) -> tf.Frame:
+        if kwargs.get("opacity_scale") is not None:
+            scales.append(np.asarray(kwargs["opacity_scale"]))
+        return tf.render(splats, camera, **kwargs)  # type: ignore[arg-type]
+
+    tf.fill_scan(
+        wall, grid, tf.InpaintFiller(), tileset, tmp_path / "inferred",
+        gate=gate, views=4, width=64, height=48, renderer=spy,
+    )  # fmt: skip
+    assert scales
+    for scale in scales:
+        assert (scale[~chosen] == 1.0).all()
+    assert min(float(scale[chosen].min()) for scale in scales) < 1.0
+
+
+def _refined_by(move: Callable[[np.ndarray], np.ndarray]) -> Callable[[dict], dict]:
+    """A distill runner that moves the lifted gaussians by `move` and changes nothing else."""
+    import distill_fill as df
+
+    def runner(request: dict) -> dict:
+        scan = df.unpack_scan(request["init"])
+        scan["positions"] = move(np.asarray(scan["positions"], np.float64))
+        return {"inferred": df.pack_scan(scan), "report": {"iterations": request["iterations"]}}
+
+    return runner
+
+
+def test_the_gate_holds_after_distill_moves_the_fill(tmp_path: Path) -> None:
+    """Refining may carry a disc out of the targets: it is dropped after refining too, and
+    a refine that carries every one out leaves nothing to package."""
+    wall, tileset, gate, grid = _wall_case(tmp_path, _north)
+    every = {"gate": gate, "views": 4, "width": 96, "height": 72, "stride": 2}
+
+    def half_south(positions: np.ndarray) -> np.ndarray:
+        out = positions.copy()
+        out[::2, 1] -= 5.0  # every other disc 5 m south, out of the north-half targets
+        return out
+
+    out = tmp_path / "half"
+    evidence = tf.fill_scan(
+        wall, grid, tf.InpaintFiller(), tileset, out,
+        distill_iterations=1, distill_runner=_refined_by(half_south), **every,
+    )  # fmt: skip
+    gated = evidence["gated"]
+    lifted_in = gated["lifted"] - gated["liftedOutside"]
+    assert gated["refinedOutside"] == (lifted_in + 1) // 2 > 0
+    assert evidence["gaussians"] == lifted_in - gated["refinedOutside"]
+    assert gate.mask(load_tileset(out / "tileset.json").positions).all()
+
+    gone = tmp_path / "gone"
+    evidence = tf.fill_scan(
+        wall, grid, tf.InpaintFiller(), tileset, gone,
+        distill_iterations=1, distill_runner=_refined_by(lambda p: p - [0.0, 50.0, 0.0]),
+        **every,
+    )  # fmt: skip
+    assert evidence["skipped"] == "nothing refined stayed in a target cell"
+    assert not gone.exists()
+
+
 def test_fill_scan_refuses_another_tileset_s_targets(tmp_path: Path) -> None:
     """Targets computed for another epoch (another window) or for a tileset never measured
     are refused before anything is rendered."""
