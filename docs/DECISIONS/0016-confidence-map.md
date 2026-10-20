@@ -47,6 +47,13 @@ weak, in a frame another epoch could be compared in.
    level is the finest at which the median occupied cell holds at least 16 visible gaussians (a
    binomial share from 16 has σ ≤ 0.125, enough to tell under a half from three quarters) within
    2^22 cells.
+
+   **The weak share** (`summary.weakShare`, and what every later reader — A4's weak areas, the
+   web's legend — must mean by it) is `weak / (scored + unseen)` at the finest level: the weak
+   cells over the cells this epoch speaks for, those with evidence and those it should have seen
+   and did not. Cells with no evidence outside the pointed disc are not this epoch's and count in
+   neither. `summary.reasons` counts, per bit, the weak cells that carry it.
+
 5. **The alignment cap (C4), relative to the site frame.** `f = min(1, cell / (2 u_rel))`: a cell
    can only claim evidence when the epoch's placement error is under half a cell. `u_rel` is the
    epoch's uncertainty **from the site frame, not from the globe** — every epoch of a site is
