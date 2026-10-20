@@ -64,6 +64,30 @@ export function spzPickDataOf(raw: Uint8Array): SpzPickData | undefined {
   return { positions, radii, opacity };
 }
 
+/**
+ * A tile's decoded positions in the scan's (site) frame: `local` moved by the tile's `offset`
+ * (tiles.ts `TileNode.offset`, the composed translation of its frame), the basis every position
+ * checksum is taken over (rig `tileChecksums`, `instances.json`, `skin.json`, plants), as
+ * `tools/captures/splat_tiles.py` `site_positions` defines it: `float32(local + offset)`, the
+ * sum in doubles. Exact wherever |site| < 4096 m (an offset is whole metres and `local` is on
+ * the 2^-12 grid), the correctly rounded float32 beyond -- the same bits numpy gives.
+ *
+ * `local` itself, unchanged, when there is no offset or a zero one: every tile of a scan that
+ * fits SPZ's +/-2048 m.
+ */
+export function siteFramePositions(
+  local: Float32Array,
+  offset?: readonly [number, number, number],
+): Float32Array {
+  if (!offset || (offset[0] === 0 && offset[1] === 0 && offset[2] === 0)) return local;
+  const out = new Float32Array(local.length);
+  for (let i = 0; i < local.length; i += 1) {
+    // `+ 0` folds a negative zero into the positive one the pipeline writes.
+    out[i] = (local[i] ?? 0) + (offset[i % 3] ?? 0) + 0;
+  }
+  return out;
+}
+
 function positionsOf(raw: Uint8Array): Float32Array | undefined {
   if (raw.byteLength < HEADER_BYTES) return undefined;
   const header = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);

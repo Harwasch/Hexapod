@@ -11,14 +11,19 @@
  *   generation made while one runs is sorted once it has.
  */
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import type { SplatMesh } from "@sparkjsdev/spark";
-import type * as THREE from "three";
+import * as THREE from "three";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { OverlayFrames, type FrameClock } from "@/cesium/scanView/overlayFrames";
 import { createBackend } from "@/cesium/scanView/sparkBackend";
 import { TileWork } from "@/cesium/scanView/tileWork";
 import type { ScanBackend, ScanPose } from "@/cesium/scanView/types";
+import { spzFromGlb } from "@/view/glb";
+import { loadSplatTile } from "@/view/sparkStream";
 
 /** What a test reads and does of the fake `SparkRenderer`. */
 interface FakeSpark {
@@ -256,6 +261,58 @@ describe("the Spark back-end asking for frames", () => {
     spark.land();
     display(1);
     expect(state.renders).toBe(before + 1);
+    backend.destroy();
+  });
+});
+
+describe("the Spark back-end and tile frames", () => {
+  afterEach(() => {
+    sparks.length = 0;
+  });
+
+  it("a tile's checksum and pick are site-frame and place(null) restores its offset", async () => {
+    // A far tile of the committed 10.4 km site: written 2.6 km east and 1.5 km north of the
+    // scan's origin, in a frame of its own (data/tiles/synthetic-far).
+    const far = resolve(process.cwd(), "../../data/tiles/synthetic-far");
+    const uri = "splat_4-4-2.glb";
+    const expected = (
+      JSON.parse(readFileSync(resolve(far, "source/expected.json"), "utf8")) as {
+        tiles: Record<string, { offset: [number, number, number]; checksum: string }>;
+      }
+    ).tiles[uri];
+    if (!expected) throw new Error("the fixture has no such tile");
+    const offset = expected.offset;
+    const glb = readFileSync(resolve(far, "splat", uri));
+    const bytes = spzFromGlb(glb.buffer.slice(glb.byteOffset, glb.byteOffset + glb.byteLength));
+    // As sparkStream's does: the mesh comes back at the tile's offset.
+    const mesh = Object.assign(new THREE.Object3D(), {
+      maxSh: 0,
+      updateGenerator: vi.fn(),
+      dispose: vi.fn(),
+    });
+    mesh.position.set(...offset);
+    vi.mocked(loadSplatTile).mockResolvedValue({ mesh: mesh as unknown as SplatMesh, bytes });
+
+    const { backend } = await rig();
+    const tile = { uri, gaussians: 950, geometricError: 0, children: [], offset };
+    const loaded = await backend.load("https://tiles.example/far/tileset.json", tile);
+    backend.add(loaded);
+    const [pick] = backend.pickTiles?.() ?? [];
+    expect(pick?.checksum).toBe(expected.checksum);
+    // Every centre is in the scan's frame, where the plot is: within metres of (2600, 1800).
+    let northMost = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < (pick?.count ?? 0); i++) {
+      northMost = Math.max(northMost, pick?.positions[i * 3 + 1] ?? Number.NEGATIVE_INFINITY);
+    }
+    expect(northMost).toBeGreaterThan(1795);
+    expect(northMost).toBeLessThan(1805);
+
+    // A placement moves the scan's frame: the tile's own sits `offset` inside it.
+    const lift = new THREE.Matrix4().makeTranslation(1, 2, 3);
+    backend.place?.(loaded, lift.toArray());
+    expect(mesh.position.toArray()).toEqual([offset[0] + 1, offset[1] + 2, offset[2] + 3]);
+    backend.place?.(loaded, null);
+    expect(mesh.position.toArray()).toEqual(offset);
     backend.destroy();
   });
 });

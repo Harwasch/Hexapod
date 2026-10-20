@@ -12,6 +12,9 @@ import { gunzipSync } from "node:zlib";
 
 import { describe, expect, it } from "vitest";
 
+import { checksumPositions } from "@twin/world";
+
+import { siteFramePositions, spzPickDataOf } from "@/lib/spzPositions";
 import { spzFromGlb } from "@/view/glb";
 import { parseTileset, type TileNode } from "@/view/tiles";
 
@@ -65,5 +68,16 @@ describe("the far fixture's tile frames", () => {
       expect(raw[13], tile.uri).toBe(expected.tiles[tile.uri]?.fractionalBits);
     }
     expect(Math.min(...tiles.map((tile) => rawSpz(tile.uri)[13] ?? 12))).toBeLessThanOrEqual(11);
+  });
+
+  it("digests each tile's site-frame positions to the checksum the pipeline took", () => {
+    for (const tile of tiles) {
+      const local = spzPickDataOf(rawSpz(tile.uri))?.positions;
+      if (!local) throw new Error(`${tile.uri} has no positions`);
+      const site = siteFramePositions(local, tile.offset);
+      expect(checksumPositions(site), tile.uri).toBe(expected.tiles[tile.uri]?.checksum);
+      // A tile with no frame of its own is digested as it was decoded, not copied.
+      if (!tile.offset) expect(site).toBe(local);
+    }
   });
 });
