@@ -3608,6 +3608,12 @@ def capture_manifest(ctx: StageContext) -> StageOutcome:
             "sensor": source.get("sensor"),
             "device": source.get("device"),
             "capturedAt": source.get("capturedAt"),
+            # The files' own clocks in UTC (`ffmpeg_frames`), or null: the worker dates the
+            # epoch by this first, labelled `manifest` (`registration._observed_at`).
+            "capturedAtUtc": source.get("capturedAtUtc"),
+            # What captured it, by survey tier (`capture_platform`); null when the lane
+            # did not detect one (`ingest_splat`).
+            "platform": _platform_value(source.get("platform")),
             "license": ctx.param("license"),
             "attribution": list(ctx.param("attribution", []) or []),
         },
@@ -3701,10 +3707,16 @@ def catalog(ctx: StageContext) -> StageOutcome:
     ground = (
         _read_json(ctx.input(GROUND_SAMPLES.name)) if ctx.has_input(GROUND_SAMPLES.name) else None
     )
+    facts = manifest.get("capture")
+    facts = facts if isinstance(facts, dict) else {}
     document: dict[str, object] = {
         "slug": str(ctx.param("slug", ctx.run_id)),
         "title": str(ctx.param("title", "")),
         "recipe": ctx.recipe,
+        # What the worker writes onto the epoch (`registration.Registration.platform`),
+        # and when the files say the capture was made; both null when nobody detected.
+        "platform": facts.get("platform"),
+        "capturedAtUtc": facts.get("capturedAtUtc"),
         "georef": georef,
         "artifacts": tiles,
         # `ground_samples.json` in full, not the manifest's five-field summary of it.
@@ -3764,6 +3776,13 @@ def _coverage_name(ctx: StageContext) -> str | None:
     except ValueError:
         return None  # a stub's bytes, not a PLY: nothing to lay over the splat
     return COVERAGE_ENU.name if tiers.size else None
+
+
+def _platform_value(value: object) -> str | None:
+    """`source_meta.platform.value`, or None when there is no such record."""
+    if isinstance(value, dict) and isinstance(value.get("value"), str):
+        return str(value["value"])
+    return None
 
 
 def _write_json(path: Path, document: dict[str, object]) -> None:

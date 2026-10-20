@@ -284,3 +284,37 @@ def test_a_hand_placement_carries_the_phones_accuracy(
     georef = _json(workdir, "georeference", "georef.json")
     assert georef["uncertaintyM"] == expected
     assert georef["locationAccuracyM"] == (accuracy or None)
+
+
+def test_lane1_registers_no_platform(run: Workdir) -> None:
+    """`ingest_splat` detects nothing; the worker then keeps the epoch's own fallback."""
+    registration = _json(run, "register", "registration.json")
+
+    assert registration["platform"] is None
+    assert registration["capturedAtUtc"] is None
+    assert registration["manifest"]["capture"]["platform"] is None
+
+
+def test_the_catalog_copies_the_platform_and_capture_time_from_the_manifest(
+    tmp_path: Path,
+) -> None:
+    from conftest import make_recipe
+
+    workdir = Workdir.create(tmp_path / "run")
+    tiles = workdir.input_path("splat")
+    tiles.mkdir(parents=True)
+    (tiles / "tileset.json").write_text("{}")
+    workdir.input_path("georef.json").write_text(json.dumps({"lat": LAT, "lon": LON}))
+    capture = {"platform": "rtk-drone", "capturedAtUtc": "2026-10-01T15:20:30.123Z"}
+    workdir.input_path("manifest.json").write_text(json.dumps({"capture": capture}))
+    recipe = make_recipe(
+        [{"id": "register", "impl": "catalog", "params": {}}],
+        inputs=["splat", "georef.json", "manifest.json"],
+    )
+    execute(recipe, workdir, RunnerSet.local())
+
+    registration = _json(workdir, "register", "registration.json")
+    assert (registration["platform"], registration["capturedAtUtc"]) == (
+        "rtk-drone",
+        "2026-10-01T15:20:30.123Z",
+    )
