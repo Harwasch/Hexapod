@@ -614,12 +614,15 @@ The splat view control's **Per cell** select (`features/views/RuleControl.tsx`) 
 site's dates as one, each cell of the site lattice from the date a rule picks: Latest, Ground
 truth, Highlight invented or Data age (`lib/compositor.ts`). The frame anchor's splat primitive
 draws every date as a companion in its one sort; a part of its visibility chain keeps each
-cell's owner and feathers seams (`cesium/splatCompositor.ts`, loaded on demand). The
+cell's owner, none of whose splats reaches across a seam by its own spread
+(`cesium/splatCompositor.ts`, loaded on demand); split objects are drawn whole by the date
+owning the cell under them. The
 capture-date control reads "As of" meanwhile: dates observed after it take no part. Off by
 default; it and Compare › Dates end each other; CesiumJS only; disabled while a Living Survey
 rig moves the scan. See [ADR 0017](DECISIONS/0017-compare-dates.md) § Per-cell view rules.
 Evidence: `e2e/compositorScene.spec.ts` (scene: each cell's pixels from one date, by debug-colour
-pixel counts) and `e2e/compositor.spec.ts` (the app under CesiumJS and PlayCanvas).
+pixel counts, and the pixels within a metre of a seam that blend both dates: 0 of 9,459, against
+6.3% with centres alone) and `e2e/compositor.spec.ts` (the app under CesiumJS and PlayCanvas).
 
 ## Patched engine
 

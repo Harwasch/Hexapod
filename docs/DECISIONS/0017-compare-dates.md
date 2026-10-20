@@ -104,20 +104,38 @@ other, so wherever both reach one is painted over the other.
    their leaf tiles' boxes, which the key flags as "tile bounds, overstates what it saw". Only
    dates observed up to **As of** (the capture-date control's choice, which reads "As of" while a
    rule is on) take part.
-   - **Latest**: the newest observed date that covers the cell; else an older one; else, where
-     inferred layers are drawn at all, the newest inferred layer.
+   - **Latest**: the newest observed date that covers the cell; else an older one; else a scan
+     dated only by its upload (`observedAtSource: "created"`: when it was captured is unknown),
+     which never outranks a dated date however new its upload, and which the key names
+     "Uploaded <date>, capture time unknown"; else, where inferred layers are drawn at all, the
+     newest inferred layer.
    - **Ground truth**: Latest, never an inferred layer.
    - **Highlight invented**: Latest, with the inferred owners tinted as the inferred highlight.
      The viewer's own Highlight (Layers › Inferred) still applies: the host's own layers keep
      their scan's highlight part, the other dates' layers are tinted by the rule's colour part,
      so no layer is tinted twice.
    - **Data age**: Latest, each cell coloured by its owner's age (W4a's colour part on a
-     one-level grid of the plane), striped where a date after As of saw it.
+     one-level grid of the plane), striped where a date after As of saw it. A cell an
+     upload-dated scan owns has no age (an upload is not when the ground looked so).
 4. **The shader keeps the owner's splats** (`cesium/splatCompositor.ts`): a part of the host's
-   visibility chain weighs a splat 0 unless its source owns its cell, and feathers seams:
-   `mix(0.5, 1, smoothstep(0, w, d))`, `d` the distance to the nearest cell edge whose neighbour
-   has another owner, `w = min(cell/4, 0.5 m)`, a UX constant, not a measurement. A slot of no
-   source or a cell of no owner draws nothing: the rule fails closed rather than blending.
+   visibility chain weighs a splat 0 unless its source owns its cell. Near a seam -- a cell edge
+   across which another date owns the cell; a cell nobody owns is no seam -- a splat is weighed
+   by its own spread across it: `smoothstep(reach / 2, reach, d)`, `d` the distance to the edge
+   in the splat's standard deviations across it (its covariance, read from the engine's
+   attribute texture and turned into the plane's frame), `reach` = `SEAM_REACH` = 2. A slot of
+   no source or a cell of no owner draws nothing: the rule fails closed rather than blending.
+   **Measured** on the synthetic yard (`e2e/compositorScene.spec.ts`, Latest: March west, June
+   east, each debug-coloured, red and blue; SwiftShader, 960 x 640): of the covered pixels within
+   one cell (1 m) of the seam on screen, the share that blend both dates -- after the
+   background's own red and blue are taken out, the lesser of red and blue is at least a tenth
+   of their sum. With splats kept by their centres and the earlier 0.5 feather, 6.3% (11,491
+   pixels; the same with a 0.1 m feather or none: the feather was never the cause, each splat's
+   footprint reaching past its cell was). With the reach, **0 of 9,459** (under 1%, the target);
+   a reach of 1.5 measured 0.16%. The price is a darker line where neither date's splats reach:
+   the band's covered pixels fall from 11,519 (centres alone) to 9,459. One duplicated synthetic
+   scene, where both dates are the same splats; to be measured again on a real two-date scan when
+   one exists. The spec asserts under 1% at the seam, and over 2% with centres alone, so the
+   measure is seen to bite.
 5. **Off by default** (open question Q5): resident splats roughly double while a rule is on.
    The splat budget counts a date the host draws once.
 6. **One or the other with Compare › Dates.** Turning either on ends the other, and the control
@@ -128,16 +146,26 @@ other, so wherever both reach one is painted over the other.
    one date's grid) are held at Photo. The host's view cones are off: the anchor's cones would
    fade the other dates' splats where the anchor never looked. A Living Survey rig takes its scan
    out of incremental mode, which drawing companions needs: the control is disabled while a rig
-   moves the site's scan, and a rig that attaches during a rule ends it, saying why.
-9. **Cost.** The rule's parts load on demand (`compositorSession.ts`, 7,314 B gzip); the
-   globe's entry grows by what the scene keeps of it. Index entry 193,893 B → 194,589 B gzip
-   (budget 197,000 B).
+   moves the site's scan, and a rig that attaches during a rule ends it, saying why. A fill's
+   swap (hiding the measured splats its `supersedes` file names) is off: the rule draws each
+   cell from one date, measured or inferred, and a fill it does not draw there (never under
+   Ground truth) must not leave a hole.
+9. **Split objects** are tilesets of their own beside their scan, outside the host's sort: the
+   rule says per scan which are drawn (`companions.ts` `ruledObjects`), each whole, by the date
+   that owns the cell under its centre, so one date's copy of an object is drawn, never two. They
+   keep their own colours under Data age.
+10. **Cost.** The rule's parts load on demand (`compositorSession.ts`, 7,314 B gzip; 7,967 B
+    after the review fixes); the globe's entry grows by what the scene keeps of it. Index entry
+    193,893 B → 194,589 B gzip (budget 197,000 B); on its rebased base 195,199 B, and 195,217 B
+    after the review fixes (Node's gzip, as `check-bundle.mjs` counts).
 
 ### Consequences
 
-- Per-scan hooks on a date's own primitive (hidden or highlighted objects, skins, split objects,
-  telemetry) do not act on it while it is the host's companion: its own primitive draws nothing.
-  The host's own hooks act on the host's slots as before.
+- Per-scan hooks on a date's own primitive (hidden or highlighted objects, skins, telemetry) do
+  not act on it while it is the host's companion: its own primitive draws nothing. The host's own
+  hooks act on the host's slots as before.
+- A site under a rule keeps every date loaded, hidden where it is not composed (each is loaded to
+  learn whether it shares the anchor's placement): none is let go under the splat budget then.
 - A companion is drawn with the host's spherical-harmonics degree: one with more is drawn in its
   base colour, one with fewer has its range zeroed (the patch's `zeroShRange`).
 - A pick (Measure, selection) is answered by the collider from every drawn date's solids, not by
@@ -146,7 +174,7 @@ other, so wherever both reach one is painted over the other.
 
 ### Not built: GPU seam stitch
 
-A seam between two owners is feathered, never fixed: the two dates' splats near it were
+A seam between two owners is kept clean, never fixed: the two dates' splats near it were
 optimised against different photographs. Stitching would re-optimise a band of splats either
 side of each seam against the newest images, on a GPU. It is not built here (no GPU runs from
 this work), and when it is, its output is a **derived layer of its own** -- a tileset beside the
