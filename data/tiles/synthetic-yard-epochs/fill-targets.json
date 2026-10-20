@@ -1,0 +1,24 @@
+{
+ "policy": "rescan-gate-v1",
+ "siteId": "00000000-0000-4000-8000-000000005173",
+ "epochId": "00000000-0000-4000-8000-0000000000e2",
+ "weakIn": [
+  "00000000-0000-4000-8000-0000000000e1"
+ ],
+ "comparedWith": [
+  "00000000-0000-4000-8000-0000000000e1"
+ ],
+ "frame": "tileset",
+ "cellM": 1.0,
+ "level": 2,
+ "i0": -4,
+ "j0": -4,
+ "ni": 40,
+ "nj": 32,
+ "rowBytes": 5,
+ "bitOrder": "little",
+ "mask": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMD/AAAAwP8AAADA/wAAAMD/AAAAwP8AAADA/wAAAMD/AAAAwP8AAADA/w==",
+ "cells": 90,
+ "reason": "weak in this epoch, which covers them, and weak in at least one earlier measured epoch: a re-scan that did not fix them (rescan-gate-v1, compared at 1 m cells)",
+ "fixture": "GET /api/v1/sites/{site}/fill-targets for the yard's two fixture epochs (e1, then its re-scan e2), as apps/api answers it, with the database's ids replaced by placeholders. Written by apps/api tests/test_fill_targets_api.py with HEXAPOD_WRITE_FILL_TARGETS=1; read by tools/captures tests/test_rescan_gate.py. Synthetic, not measured."
+}
