@@ -341,8 +341,8 @@ def _frame_origin(
     return lat, lon, height or 0.0, datum
 
 
-#: What a platform rests on (#49's `platformEvidence`, `capture_platform`).
-PLATFORM_EVIDENCE = ("metadata", "claimed", "none")
+#: What a platform rests on: #49's own vocabulary (`capture_platform.PLATFORM_EVIDENCE`).
+PLATFORM_EVIDENCE = capture_platform.PLATFORM_EVIDENCE
 
 
 def platform_evidence(block: object) -> str:
