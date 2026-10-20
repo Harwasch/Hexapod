@@ -543,3 +543,121 @@ def reference_epoch(
         candidates,
         key=lambda c: (VERDICT_RANK[c.verdict], c.observed_at, c.created_at, str(c.epoch_id)),
     )
+
+
+# ── A capture a quality gate rejected (M3b) ───────────────────────────────────────────────
+
+#: How far about a rejected capture's located point its epoch's footprint reaches: the
+#: same 25 m a capture may lie outside a site's boundary and still join it (D3).
+REJECTED_FOOTPRINT_M = SPATIAL_JOIN_BUFFER_M
+
+
+@dataclass(frozen=True)
+class Rejection:
+    """A run a quality gate the recipe turned on failed: which stage, which gate
+    (`{gate, measured, limit, unit, reason}`, `errors.parse_quality_gate`; empty when its
+    text could not be read back), and the run's located point, if it had one."""
+
+    stage_id: str
+    gate: dict[str, object]
+    located: tuple[float, float] | None = None
+
+
+def _rejected_alignment(platform: str, job_id: uuid.UUID, rejection: Rejection) -> dict[str, Any]:
+    """What a rejected epoch's `alignment` says, in the shape the web reads (`label`,
+    `verdict`, `uncertaintyM`): unaligned, with the gate as its reason. The API's
+    `CaptureQuality` has no field for a gate, and `quality` stays null rather than holding
+    something that would not parse (the M3b review's fix 8)."""
+    from app.worker.pipeline_bridge import PLATFORM_WORDS
+
+    gate = rejection.gate
+    name = str(gate.get("gate") or "unknown")
+    unit = f" {gate['unit']}" if gate.get("unit") else ""
+    measured = (
+        f"measured {gate['measured']:.4g}{unit} against a limit of {gate['limit']:.4g}{unit}"
+        if isinstance(gate.get("measured"), float) and isinstance(gate.get("limit"), float)
+        else "its measurement could not be read back"
+    )
+    why = f": {gate['reason']}" if gate.get("reason") else ""
+    words = PLATFORM_WORDS.get(platform, "Capture")
+    return {
+        "version": 1,
+        "method": "none",
+        "referenceEpochId": None,
+        "platform": platform,
+        "verdict": "unaligned",
+        "confidence": 0.0,
+        "uncertaintyM": None,
+        "label": f"{words}, rejected: quality gate {name} failed",
+        "reasons": [f"stage {rejection.stage_id!r} failed quality gate {name}, {measured}{why}"],
+        "rejected": {"stage": rejection.stage_id, "jobId": str(job_id), **gate},
+        "frameSource": None,
+    }
+
+
+def record_rejected(
+    db: Session, job_id: uuid.UUID, capture: Capture, rejection: Rejection
+) -> Epoch | None:
+    """Keep a capture a quality gate rejected as a `rejected` epoch of its site (D3, D4).
+
+    Its site is `site_for_run`'s -- the one its run was placed in -- and only a site with
+    a frame: a frameless site's first epoch is the one that defines its frame, and a
+    rejected run defines nothing. No site, no epoch (none is made for it); the job's error
+    still says which gate failed. No asset. Its footprint is the run's located point
+    buffered by `REJECTED_FOOTPRINT_M`, else the site's boundary (the epochs footprint is
+    never null). Dated by the capture row, or its upload flagged `created`.
+
+    The capture already an epoch: a rejected one takes this run's rejection; a published
+    one is left as it is -- its current revision passed, and the gate failed a later run of
+    it, which the job's error records. A later run that passes publishes a rejected epoch
+    (`worker/registration.register`). Not committed here: the caller's transaction.
+    """
+    existing = epoch_of_capture(db, capture.id, lock=True)
+    platform = existing.platform if existing is not None else platform_of(capture).value
+    alignment = _rejected_alignment(platform, job_id, rejection)
+    if existing is not None:
+        if existing.status == EpochStatus.REJECTED.value:
+            existing.alignment = alignment
+            existing.job_id = job_id if db.get(Job, job_id) is not None else None
+        return existing if existing.status == EpochStatus.REJECTED.value else None
+    site_id = site_for_run(db, capture, rejection.located)
+    site = db.get(Site, site_id, with_for_update=True) if site_id is not None else None
+    if site is None or db.get(SiteFrame, site.id) is None:
+        return None
+    point = located_or_metadata(capture, rejection.located)
+    footprint = (
+        db.scalar(
+            select(
+                func.ST_Multi(
+                    func.geometry(
+                        func.ST_Buffer(func.geography(_point(*point)), REJECTED_FOOTPRINT_M)
+                    )
+                )
+            )
+        )
+        if point is not None
+        else site.boundary
+    )
+    named = requested_site(db, capture)
+    explicit = capture.site_id == site.id or (named is not None and named.id == site.id)
+    ordinal = (db.scalar(select(func.max(Epoch.ordinal)).where(Epoch.site_id == site.id)) or 0) + 1
+    observed = capture.captured_at or capture.created_at
+    epoch = Epoch(
+        site_id=site.id,
+        capture_id=capture.id,
+        job_id=job_id if db.get(Job, job_id) is not None else None,
+        ordinal=ordinal,
+        observed_at=observed,
+        observed_at_source=(
+            ObservedAtSource.CAPTURED_AT if capture.captured_at else ObservedAtSource.CREATED
+        ).value,
+        footprint=footprint,
+        platform=platform,
+        status=EpochStatus.REJECTED.value,
+        join_method=(EpochJoinMethod.EXPLICIT if explicit else EpochJoinMethod.SPATIAL).value,
+        alignment=alignment,
+        quality=None,
+    )
+    db.add(epoch)
+    db.flush()
+    return epoch

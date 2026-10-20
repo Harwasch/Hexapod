@@ -18,6 +18,12 @@ anything not plainly one of these keeps today's attempts.
 * **It ran out of time** (`RemoteTimeoutError`: the function's own limit, the runner's
   `max_wait_s`, or its overdue-trainer deadline): not retried. The next attempt would
   outrun the same limit, at the cost of the whole limit.
+* **A quality gate the recipe turned on failed** (`QualityGateError`, M3b): not
+  retried -- the gate measured the capture's own bytes, and the next attempt measures
+  the same bytes the same way. Read before the bad-input class it also belongs to,
+  because it is not a mistake in the recipe: the capture is *rejected*, and the worker
+  records a rejected epoch for it (`services/epochs.record_rejected`) with the gate, its
+  measurement and its limit (`errors.parse_quality_gate`, out of the error's own text).
 * **The recipe or its stage is wrong** (`errors.BAD_INPUT_ERRORS`, by name, for a stage
   that ran here or -- as the head of its provider's detail -- one that ran remotely):
   not retried.
@@ -48,7 +54,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from app.worker.pipeline_bridge import BAD_INPUT_ERRORS
+from app.worker.pipeline_bridge import BAD_INPUT_ERRORS, parse_quality_gate
 
 #: What a CUDA out-of-memory leaves in a log: torch's own message (`CUDA out of memory.
 #: Tried to allocate ...`), its exception classes (`torch.OutOfMemoryError`, the older
@@ -78,7 +84,10 @@ _REMOTE_TYPE = re.compile(r"failed on '[^']+': ([A-Za-z_][A-Za-z0-9_]*)(?::|$)")
 #: Where a stage's failures are kept, beside its ledger: what each attempt failed of.
 HISTORY = "failures.json"
 
-Kind = Literal["oom", "timeout", "bad-input", "cost-cap", "other"]
+Kind = Literal["oom", "timeout", "quality-gate", "bad-input", "cost-cap", "other"]
+
+#: The failure a quality gate raises, by the name it crosses the line protocol with.
+QUALITY_GATE_ERROR = "QualityGateError"
 
 
 @dataclass(frozen=True)
@@ -88,6 +97,9 @@ class Failure:
     kind: Kind
     #: For `oom`: the gaussian cap the attempt trained at, when its log says.
     cap_max: int | None = None
+    #: For `quality-gate`: `{gate, measured, limit, unit, reason}`, when the error's text
+    #: carries the gate's fixed format (`errors.QualityGateError`).
+    gate: dict[str, object] | None = None
 
 
 def classify(error_type: str, error: str, log: str) -> Failure:
@@ -102,6 +114,8 @@ def classify(error_type: str, error: str, log: str) -> Failure:
     if error_type == "RemoteTimeoutError":
         return Failure("timeout")
     remote = _REMOTE_TYPE.search(error) if error_type == "RemoteStageError" else None
+    if error_type == QUALITY_GATE_ERROR or (remote and remote.group(1) == QUALITY_GATE_ERROR):
+        return Failure("quality-gate", gate=parse_quality_gate(error))
     if error_type in BAD_INPUT_ERRORS or (remote and remote.group(1) in BAD_INPUT_ERRORS):
         return Failure("bad-input")
     tail = "\n".join(log.splitlines()[-OOM_TAIL_LINES:])
@@ -151,6 +165,9 @@ class Decision:
     why: str = ""
     #: Parameters for the failed stage's next attempt, merged into `jobs.params[stage]`.
     params: dict[str, Any] = field(default_factory=dict)
+    #: A quality gate rejected the capture: the gate as `Failure.gate` has it (`{}` when
+    #: its text could not be read back), for the rejected epoch the runner records.
+    rejected: dict[str, object] | None = None
 
 
 def decide(stage_id: str, failure: Failure, history: History) -> Decision:
@@ -165,6 +182,13 @@ def decide(stage_id: str, failure: Failure, history: History) -> Decision:
             False,
             f"stage {stage_id!r} ran out of time; another attempt would outrun the same "
             f"limit, so it is not retried",
+        )
+    if failure.kind == "quality-gate":
+        return Decision(
+            False,
+            f"stage {stage_id!r} failed a quality gate the recipe turned on, which another "
+            f"attempt would measure the same way, so it is not retried",
+            rejected=dict(failure.gate or {}),
         )
     if failure.kind == "bad-input":
         return Decision(

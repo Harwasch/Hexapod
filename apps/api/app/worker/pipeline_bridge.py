@@ -83,6 +83,7 @@ from errors import (  # noqa: E402
     QualityGateError,
     StageFailedError,
     StopRequested,
+    parse_quality_gate,
 )
 from executor import RunResult, execute  # noqa: E402
 from harmonics import check_degree as check_sh_degree  # noqa: E402
@@ -142,6 +143,7 @@ __all__ = [
     "latest_live",
     "latest_progress",
     "load_recipe",
+    "parse_quality_gate",
     "plan_recipe",
     "rates_from_env",
     "recipe_dir",

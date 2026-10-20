@@ -245,3 +245,31 @@ def t_reads_site_context(ctx: StageContext) -> StageOutcome:
     seeded = ctx.input("site_context") / "site_context.json"
     ctx.output(CONTEXT_SEEN.name).write_text(seeded.read_text(encoding="utf-8"), "utf-8")
     return StageOutcome(metrics={})
+
+
+# --- for tests/test_worker_quality_gate.py ----------------------------------------------
+
+GATED = ArtifactDecl("gated.json", content_type="application/json")
+
+
+@stage_impl(
+    "t_gate",
+    consumes=("georef.json", "site_context"),
+    produces=(GATED,),
+    summary="a quality gate the recipe turned on: fails unless told not to",
+)
+def t_gate(ctx: StageContext) -> StageOutcome:
+    """What `align_epoch`'s `max_check_target_rmse_m` does when it is on and the check
+    targets are out: raises `QualityGateError` with the gate's measurement and limit."""
+    from errors import QualityGateError
+
+    if bool(ctx.param("fail", True)):
+        raise QualityGateError(
+            "max_check_target_rmse_m",
+            0.31,
+            0.12,
+            unit="m",
+            reason="the check targets' RMSE is over the limit the recipe set",
+        )
+    _write(ctx, GATED.name, passed=True)
+    return StageOutcome(metrics={"passed": True})
