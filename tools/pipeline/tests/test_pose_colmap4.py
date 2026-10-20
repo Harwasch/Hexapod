@@ -417,3 +417,148 @@ def test_4_2s_exhaustive_fallback_fills_in_only_the_pairs_sequential_skipped(
         ("exhaustive", False),
     ]
     assert passes[0]["pairs"] < passes[1]["pairs"] == VIDEO_FRAMES * (VIDEO_FRAMES - 1) // 2
+
+
+# --- registering a new epoch into a fixed reference (M3b) ----------------------------------
+
+
+def test_the_register_argv_carries_its_settings() -> None:
+    argv = colmap4.register_argv(
+        "/py",
+        reference_frames=Path("rf"),
+        reference_poses=Path("rp"),
+        frames=Path("f"),
+        poses=Path("p"),
+        work=Path("w"),
+        output=Path("o.json"),
+        max_frames=25,
+        random_seed=3,
+        first_octave=0,
+        num_threads=4,
+    )
+    assert argv[2] == "register"
+    for flag, value in (
+        ("--reference-frames", "rf"),
+        ("--reference-poses", "rp"),
+        ("--frames", "f"),
+        ("--poses", "p"),
+        ("--work", "w"),
+        ("--output", "o.json"),
+        ("--max-frames", "25"),
+        ("--seed", "3"),
+        ("--first-octave", "0"),
+        ("--threads", "4"),
+        ("--camera-model", "SIMPLE_RADIAL"),
+        ("--max-image-size", "1600"),
+        ("--max-features", "4096"),
+    ):
+        assert argv[argv.index(flag) + 1] == value, flag
+    names = [f"frame_{i:04d}.jpg" for i in range(10)]
+    assert colmap4.sample_evenly(names[::-1], 4) == [names[0], names[3], names[6], names[9]]
+    assert colmap4.sample_evenly(names, 60) == names
+
+
+REGISTER = {
+    "reference": {"count": 40, "radius_m": 9.0, "camera_height_m": 3.6, "phase_deg": 0.0},
+    "new": {"count": 30, "radius_m": 11.0, "camera_height_m": 5.0, "phase_deg": 20.0},
+}
+
+
+@pytest.fixture(scope="module")
+def two_epochs(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, tuple[Path, Path, tree_frames.Truth]]:
+    """Two orbits of the tree, each posed on its own: (frames, poses, truth)."""
+    if PYCOLMAP is None:
+        pytest.skip("needs pycolmap")
+    root = tmp_path_factory.mktemp("epochs")
+    out = {}
+    for side, orbit in REGISTER.items():
+        frames = root / side / "render" / "frames"
+        truth = tree_frames.render_orbit(FIXTURE_PLY, frames, **orbit)  # type: ignore[arg-type]
+        workdir, _ = _pose(root / side / "pose", frames)
+        out[side] = (frames, workdir.artifact_path("pose", "poses"), truth)
+    return out
+
+
+def _register(
+    root: Path, reference: tuple[Path, Path, Any], new: tuple[Path, Path, Any]
+) -> dict[str, Any]:
+    argv = colmap4.register_argv(
+        colmap4.python(),
+        reference_frames=reference[0],
+        reference_poses=reference[1],
+        frames=new[0],
+        poses=new[1],
+        work=root / "work",
+        output=root / "register.json",
+        first_octave=0,
+    )
+    done = subprocess.run(argv, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stdout + done.stderr
+    document = json.loads((root / "register.json").read_text())
+    assert isinstance(document, dict)
+    return document
+
+
+@requires_pycolmap
+def test_new_frames_register_into_a_fixed_reference(
+    tmp_path: Path, two_epochs: dict[str, tuple[Path, Path, tree_frames.Truth]]
+) -> None:
+    """Epoch 2 lands in epoch 1's own model frame and epoch 1 does not move.
+
+    "Does not move" is the fixed-frame guarantee, so its bound is round-off (1e-9 m),
+    not a tolerance. Where epoch 2 lands is held to the bound test_pose_colmap4 already
+    holds 4.2's poses to: median centre error under 1% of the scene's extent."""
+    reference, new = two_epochs["reference"], two_epochs["new"]
+    document = _register(tmp_path, reference, new)
+
+    assert document["pycolmap"] == PYCOLMAP
+    assert document["newFramesUsed"] == 30 and document["referenceFramesUsed"] == 40
+    assert len(document["registeredNew"]) == 30
+    assert document["registeredReference"] == 40
+    assert document["referenceMovedMaxM"] < 1e-9
+    assert document["crossPairs"] > 0 and document["crossInlierMatches"] > 0
+    # The truth in the reference model's frame: the similarity from epoch 1's true
+    # centres to its posed ones, applied to epoch 2's true centres.
+    model = sfm.read_model(reference[1])
+    known = reference[2].by_name()
+    to_model = sfm.umeyama(np.stack([known[i.name].centre for i in model.images]), model.centres())
+    truth = new[2].by_name()
+    names = sorted(document["registeredNew"])
+    expected = to_model.apply(np.stack([truth[name].centre for name in names]))
+    found = np.asarray([document["registeredNew"][name]["centre"] for name in names])
+    metres = np.linalg.norm(found - expected, axis=1) / to_model.scale
+    assert float(np.median(metres)) < 0.01 * new[2].extent_m
+
+
+@requires_pycolmap
+def test_unrelated_frames_do_not_register(
+    tmp_path: Path, two_epochs: dict[str, tuple[Path, Path, tree_frames.Truth]]
+) -> None:
+    """A different scene -- no tree, another ground -- shares nothing with epoch 1, so
+    it must stay far below what align_epoch would accept (half its frames)."""
+    empty = tree_frames.Cloud(
+        position=np.zeros((0, 3)), colour=np.zeros((0, 3), dtype=np.uint8), radius_m=np.zeros(0)
+    )
+    frames = tmp_path / "other" / "frames"
+    truth = tree_frames.render_orbit(
+        FIXTURE_PLY,
+        frames,
+        count=30,
+        radius_m=11.0,
+        camera_height_m=5.0,
+        cloud=empty,
+        ground_seed=12345,
+    )
+    workdir, poses = _pose(tmp_path / "other-pose", frames)
+    if not poses["registered"]:
+        pytest.skip("the unrelated scene did not even pose on its own")
+    document = _register(
+        tmp_path / "reg",
+        two_epochs["reference"],
+        (frames, workdir.artifact_path("pose", "poses"), truth),
+    )
+
+    assert len(document["registeredNew"]) < 0.5 * 30
+    assert document["referenceMovedMaxM"] < 1e-9
