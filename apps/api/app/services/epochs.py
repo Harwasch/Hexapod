@@ -23,7 +23,7 @@ from datetime import datetime
 from typing import Any
 
 from geoalchemy2 import WKBElement
-from sqlalchemy import String, cast, func, select
+from sqlalchemy import Select, String, cast, func, select
 from sqlalchemy.orm import Session
 
 from app.models import Asset, Capture, Epoch, Site, SiteFrame
@@ -279,6 +279,22 @@ def nearest_framed_site(
     one): the rule `phone._check_phone_site` holds a phone capture that names its site to,
     so the key cannot reach by standing in a site what it may not reach by naming it.
     """
+    statement = nearest_framed_site_statement(
+        lat, lon, buffer_m=buffer_m, phone_made_only=phone_made_only
+    )
+    return db.scalars(statement).first()
+
+
+def nearest_framed_site_statement(
+    lat: float,
+    lon: float,
+    *,
+    buffer_m: float = SPATIAL_JOIN_BUFFER_M,
+    phone_made_only: bool = False,
+) -> Select[tuple[Site]]:
+    """`nearest_framed_site`'s query. `ST_DWithin` on `geography(boundary)` is answered from
+    the gist index on that expression (`ix_sites_boundary_geography`, migration 0032); the
+    one on the geometry column cannot answer a distance in metres on the ellipsoid."""
     point = func.geography(_point(lat, lon))
     boundary = func.geography(Site.boundary)
     statement = (
@@ -292,9 +308,7 @@ def nearest_framed_site(
             Capture.metadata_["origin"].as_string() == _phone_origin(),
         )
         statement = statement.where(maker.exists())
-    return db.scalars(
-        statement.order_by(func.ST_Distance(boundary, point), Site.created_at, Site.id).limit(1)
-    ).first()
+    return statement.order_by(func.ST_Distance(boundary, point), Site.created_at, Site.id).limit(1)
 
 
 #: How far from a frameless site's boundary a capture that names it may be and still

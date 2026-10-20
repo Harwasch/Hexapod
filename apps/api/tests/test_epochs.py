@@ -311,6 +311,26 @@ def test_a_phone_capture_joins_by_location_only_a_site_a_phone_made(db: Session)
         assert found is not None and found.site_id == site.id
 
 
+def test_the_spatial_match_is_answered_from_an_index_on_the_boundary(db: Session) -> None:
+    """The match is a distance on the ellipsoid (`geography(boundary)`), which the plain
+    gist index on the geometry column cannot answer: every site was read. Migration 0032
+    adds a gist index on that very expression, so the planner can use it (shown with
+    sequential scans priced out, since a test database is too small to need it)."""
+    from sqlalchemy import text
+    from sqlalchemy.dialects import postgresql
+
+    make_site(db)
+    db.commit()
+    statement = epochs.nearest_framed_site_statement(ORIGIN[0], ORIGIN[1])
+    sql = statement.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})
+
+    db.execute(text("SET LOCAL enable_seqscan = off"))
+    plan = "\n".join(db.scalars(text(f"EXPLAIN {sql}")))
+    db.rollback()
+
+    assert "ix_sites_boundary_geography" in plan, plan
+
+
 def test_no_coordinate_and_no_site_means_no_frame(db: Session) -> None:
     make_site(db)
     capture = _capture(db, "c", {"note": "nowhere"})
