@@ -276,6 +276,15 @@ function CategoryRow({
                     onKeyDown={(event) => onRowKey(event, listRef.current)}
                   >
                     <span className="objects-row__name">{object.name}</span>
+                    {searching && entry.byMeaning.has(object.id) && (
+                      <span
+                        className="objects-row__via"
+                        data-testid="instance-by-meaning"
+                        title="Found by how it looks in this scan's image embeddings, not by a tag: inferred"
+                      >
+                        <span className="sr-only">, </span>by meaning
+                      </span>
+                    )}
                   </button>
                   <EyeToggle
                     name={object.name}
@@ -413,8 +422,10 @@ export function InstancePanel({ assetId }: { assetId: string }) {
         />
       </div>
       <span id={`${inputId}-hint`} className="sr-only">
-        Type what you are looking for, such as tree, water or bench. Enter highlights every match;
-        the arrow keys move through the list. A filter such as vegetation &gt; 0.5 also works.
+        Type what you are looking for, such as tree, water or spool. Words match each object&apos;s
+        tags and, where the scan has image embeddings, what it looks like. Enter highlights every
+        match; the arrow keys move through the list. A filter such as vegetation &gt; 0.5 also
+        works.
       </span>
       {gap && (
         <div className="objects-panel__gap" role="note" data-testid="instance-renderer-gap">
@@ -433,9 +444,20 @@ export function InstancePanel({ assetId }: { assetId: string }) {
         <div className="objects-panel__bar" role="group" aria-label="Matches">
           <span className="objects-panel__count" role="status" data-testid="instance-count">
             {matchCount === 0
-              ? "No objects match"
+              ? entry.meaning === "loading"
+                ? "No tag matches yet"
+                : "No objects match"
               : `${matchCount.toLocaleString()} ${matchCount === 1 ? "match" : "matches"}`}
           </span>
+          {entry.meaning === "loading" && (
+            <span
+              className="objects-panel__count"
+              role="status"
+              data-testid="instance-meaning-loading"
+            >
+              Matching by meaning too…
+            </span>
+          )}
           {matchCount > 0 && (
             <span className="objects-panel__actions">
               <GlassButton size="sm" variant="ghost" onClick={() => hideMatches(assetId)}>

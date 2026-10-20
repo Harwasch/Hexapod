@@ -53,6 +53,7 @@ import {
   loadInstances,
   resolveBeside,
   tileInstanceIds,
+  type EmbeddingSource,
   type InstancesDoc,
   type InstancesRef,
 } from "@/lib/instances";
@@ -796,16 +797,7 @@ export function instancesHookOf(assetId: string): SplatInstances | undefined {
   return ATTACHED.get(assetId)?.hook;
 }
 
-/** Where a scan's object embeddings are and their shape: what "More like this" reads. */
-export interface EmbeddingSource {
-  /** `instances.emb`, beside the `instances.json` drawn now (Today's, or a variant's). */
-  url: string;
-  /** Rows: the instances the declaration counts, else the largest id (row `k` is id `k + 1`). */
-  rows: number;
-  dim: number;
-  /** The embedding model's id, as the file names it. */
-  model: string;
-}
+export type { EmbeddingSource };
 
 /**
  * The embeddings of the objects of `assetId`'s scan drawn now, or null when its instances have
@@ -946,7 +938,8 @@ export function attachInstances(
         instancesUrl: resolveBeside(url, ref.uri),
         declared: ref.count,
       });
-      useInstances.getState().setTable(assetId, doc);
+      // instances.emb is not fetched here: only "More like this" or a search by meaning needs it.
+      useInstances.getState().setTable(assetId, { ...doc, embeddingSource: embeddingOf(assetId) });
     }
     push();
     scene.requestRender();

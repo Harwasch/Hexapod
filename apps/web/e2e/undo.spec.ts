@@ -104,6 +104,24 @@ function hidden(app: Page): Promise<number[]> {
   );
 }
 
+/** The undo/redo line's text (`HISTORY_TOAST`), or null when none is up. */
+function historyLine(app: Page): Promise<string | null> {
+  return inApp(
+    app,
+    `const { useToasts } = await import("/src/state/toasts.ts");
+    return useToasts.getState().items.find((t) => t.id === "history")?.title ?? null;`,
+  );
+}
+
+/** Takes the undo/redo line down, as its own 6 s timer or its close button would. */
+async function dismissHistoryLine(app: Page): Promise<void> {
+  await inApp(
+    app,
+    `const { useToasts } = await import("/src/state/toasts.ts");
+    useToasts.getState().dismiss("history");`,
+  );
+}
+
 test.describe("undo and redo", () => {
   test("Ctrl+Z takes back a hidden object and says so, Ctrl+Shift+Z hides it again, and a text field keeps its own", async ({
     app,
@@ -134,6 +152,14 @@ test.describe("undo and redo", () => {
     await expect(said).toContainText("Redid: Hide Conifer");
 
     // In the command box Ctrl+Z is the field's: the words come back, nothing else changes.
+    // The "Redid" line is cleared first, so the check below sees only what this Ctrl+Z said.
+    // It used to assert the line did not read "Undid", which needed the "Redid" line still
+    // up: the line goes after 6 s, and on a slow runner it had (8 s from "Redid" to that
+    // assertion in CI's trace), leaving nothing to match. Read from the store, not retried:
+    // an app undo would have said so synchronously in the key handler, and a retrying
+    // `toHaveCount(0)` would pass once such a line's own 6 s ran out.
+    await dismissHistoryLine(app);
+    await expect(said).toHaveCount(0);
     const input = app.getByRole("combobox", { name: "Search, run an action or ask the agent" });
     await input.click();
     await app.keyboard.type("conifer");
@@ -143,7 +169,7 @@ test.describe("undo and redo", () => {
     await input.press("Control+z");
     await expect(input).toHaveValue("conifer");
     expect(await hidden(app)).toEqual([2, 3]);
-    await expect(said).not.toContainText("Undid");
+    expect(await historyLine(app)).toBeNull();
   });
 
   test("a layer switched in Layers is switched back by Ctrl+Z, and both keys are on the sheet", async ({

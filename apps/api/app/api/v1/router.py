@@ -33,6 +33,7 @@ from app.api.v1 import (
     sites,
     storage,
     system,
+    text,
     workspace_missions,
     workspaces,
 )
@@ -94,3 +95,4 @@ api_v1.include_router(land_solar.router)
 api_v1.include_router(land_views.router)
 
 api_v1.include_router(imagery.router)
+api_v1.include_router(text.router)

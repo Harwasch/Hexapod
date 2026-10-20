@@ -8,10 +8,40 @@ import {
   type CategoryIndex,
   type SceneCategory,
 } from "@/lib/categories";
-import { parseQuery, searchInstances, withDescendants, type Instance } from "@/lib/instances";
+import {
+  embeddable,
+  embedQueryText,
+  encoderDown,
+  type EncodeText,
+  type QueryEmbedding,
+} from "@/api/textEmbedding";
+import {
+  describedMatrix,
+  loadEmbeddings,
+  meaningScores,
+  parseQuery,
+  searchInstances,
+  textCosines,
+  withDescendants,
+  type DescribedMatrix,
+  type EmbeddingSource,
+  type Instance,
+  type MeaningScores,
+} from "@/lib/instances";
+import { createLogger } from "@/lib/log";
 import { selectionLabel } from "@/lib/sceneSelect";
 
 import { canExtend, currentTask, discard, record, touched, type UndoStep } from "./history";
+
+const log = createLogger("instances");
+
+/**
+ * Search by meaning for one scan: `none` (no `instances.emb`), `idle` (not asked yet),
+ * `loading` (its rows or the query's embedding are on the way; matches are by tags),
+ * `ready` (the matches use it), `unavailable` (a load failed, or the API has no encoder, or
+ * a different model; matches are by tags).
+ */
+export type MeaningStatus = "none" | "idle" | "loading" | "ready" | "unavailable";
 
 /** What the highlight is of, so the panel can mark it and a second click clears it. */
 export type Focus =
@@ -58,6 +88,11 @@ export interface AssetInstances {
   query: string;
   /** Object ids the query matches, best first: what "Hide all" and "Show only" act on. */
   matches: readonly number[];
+  /** Of `matches`, those whose best evidence was meaning rather than a tag (`via`). */
+  byMeaning: ReadonlySet<number>;
+  /** Where the scan's `instances.emb` is, or null when it has none. */
+  embedding: EmbeddingSource | null;
+  meaning: MeaningStatus;
   /** "More like this", while its matches are what is lit (`focus` is `similar`). */
   similar: SimilarState | null;
 }
@@ -87,7 +122,14 @@ interface InstancesState {
    */
   motionGaps: Record<string, RendererGap>;
   setMotionGap: (assetId: string, gap: RendererGap | null) => void;
-  setTable: (assetId: string, table: { instances: Instance[] } | null) => void;
+  setTable: (
+    assetId: string,
+    table: { instances: Instance[]; embeddingSource?: EmbeddingSource | null } | null,
+  ) => void;
+  /**
+   * Matches at once by tags, then -- when the scan has `instances.emb` and the query has
+   * words -- again by meaning as soon as the rows and the query's embedding are here.
+   */
   setQuery: (assetId: string, query: string) => void;
   // What changes `hidden` (below, up to `reset`) is one undoable step each (`state/history.ts`,
   // `changeHidden`); the query and the highlight are not recorded.
@@ -480,21 +522,33 @@ function focusMembers(entry: AssetInstances, focus: Focus): readonly number[] {
   }
 }
 
+/** The objects a query matches (`matchObjects`), and which of them meaning found. */
+export interface ObjectMatches {
+  matches: number[];
+  byMeaning: ReadonlySet<number>;
+}
+
 /**
- * The objects a query matches, best first: objects whose tags (or property filters) match,
- * each found through any of its parts; and, for words that name a category ("trees",
- * "water"), every object in it, first.
+ * The objects a query matches, best first: objects whose tags (or property filters) match --
+ * or, with `meaning`, whose look matches (lib/instances.ts `searchInstances`) -- each found
+ * through any of its parts; and, for words that name a category ("trees", "water"), every
+ * object in it, first.
  */
-export function matchObjects(
+export function matchObjectsBy(
   entry: Pick<AssetInstances, "instances" | "index">,
   query: string,
-): number[] {
+  meaning?: MeaningScores,
+): ObjectMatches {
   const parsed = parseQuery(query);
-  if (parsed.terms.length === 0 && parsed.filters.length === 0) return [];
+  const byMeaning = new Set<number>();
+  if (parsed.terms.length === 0 && parsed.filters.length === 0) return { matches: [], byMeaning };
   const best = new Map<number, number>();
-  const note = (objectId: number | undefined, score: number): void => {
+  const note = (objectId: number | undefined, score: number, viaMeaning = false): void => {
     if (objectId === undefined) return;
-    if (score > (best.get(objectId) ?? -1)) best.set(objectId, score);
+    if (score <= (best.get(objectId) ?? -1)) return;
+    best.set(objectId, score);
+    if (viaMeaning) byMeaning.add(objectId);
+    else byMeaning.delete(objectId);
   };
   if (parsed.filters.length === 0) {
     for (const group of entry.index.groups) {
@@ -502,11 +556,283 @@ export function matchObjects(
       for (const object of group.objects) note(object.id, 2 + object.splats * 1e-12);
     }
   }
-  for (const result of searchInstances(entry.instances, parsed, Number.POSITIVE_INFINITY)) {
-    note(entry.index.objectOf.get(result.id), result.score);
+  for (const result of searchInstances(
+    entry.instances,
+    parsed,
+    Number.POSITIVE_INFINITY,
+    meaning,
+  )) {
+    note(entry.index.objectOf.get(result.id), result.score, result.via === "meaning");
   }
   const splats = (id: number): number => entry.index.objects.get(id)?.splats ?? 0;
-  return [...best].sort((a, b) => b[1] - a[1] || splats(b[0]) - splats(a[0])).map(([id]) => id);
+  const matches = [...best]
+    .sort((a, b) => b[1] - a[1] || splats(b[0]) - splats(a[0]))
+    .map(([id]) => id);
+  return { matches, byMeaning };
+}
+
+/** `matchObjectsBy`'s matches alone. */
+export function matchObjects(
+  entry: Pick<AssetInstances, "instances" | "index">,
+  query: string,
+  meaning?: MeaningScores,
+): number[] {
+  return matchObjectsBy(entry, query, meaning).matches;
+}
+
+// ---- Search by meaning: what it needs, loaded once and kept --------------------------------
+
+export interface MeaningDeps {
+  encode: EncodeText;
+  /** A scan's `instances.emb`, the raw float16 bits (lib/instances.ts `loadEmbeddings`). */
+  loadEmbeddings: (source: EmbeddingSource) => Promise<Uint16Array>;
+  /** How long typing must pause before the query is sent to the encoder. */
+  debounceMs: number;
+  /** After a load fails (503, offline), how long search stays on tags before asking again. */
+  retryMs: number;
+  /** How many scans' decoded rows are kept (the most recently searched); each is megabytes. */
+  rowsKept: number;
+}
+
+const DEFAULT_DEPS: MeaningDeps = {
+  encode: embedQueryText,
+  // Shared with "More like this" (lib/payloadCache.ts): a scan's file is read once for both.
+  loadEmbeddings: (source) => loadEmbeddings(source.url, source.rows, source.dim),
+  debounceMs: 200,
+  retryMs: 30_000,
+  rowsKept: 3,
+};
+
+let deps: MeaningDeps = DEFAULT_DEPS;
+/**
+ * Per `instances.emb` URL: its described rows (`describedMatrix`), or their load; the
+ * `rowsKept` most recently used (Map order), so a session that visits many scans does not
+ * hold every scan's matrix. The raw file stays in lib/payloadCache.ts's own bounded cache.
+ */
+const rowsLoading = new Map<string, Promise<DescribedMatrix>>();
+const rowsLoaded = new Map<string, DescribedMatrix>();
+/** Per `instances.emb` URL whose load failed: when to try again. */
+const rowsDownUntil = new Map<string, number>();
+/** Per query text: its embedding, or its request. */
+const queriesLoading = new Map<string, Promise<QueryEmbedding>>();
+const queriesLoaded = new Map<string, QueryEmbedding>();
+const QUERY_CACHE = 200;
+let encoderDownUntil = 0;
+const timers = new Map<string, ReturnType<typeof setTimeout>>();
+/** The last scores computed, so a filter change does not redo the dot products. */
+let lastScores: { rows: DescribedMatrix; text: string; scores: MeaningScores } | undefined;
+
+/** Swaps what search by meaning calls (tests), and forgets everything it had loaded. */
+export function configureMeaning(change: Partial<MeaningDeps> | null): void {
+  deps = change === null ? DEFAULT_DEPS : { ...deps, ...change };
+  rowsLoading.clear();
+  rowsLoaded.clear();
+  rowsDownUntil.clear();
+  queriesLoading.clear();
+  queriesLoaded.clear();
+  encoderDownUntil = 0;
+  for (const timer of timers.values()) clearTimeout(timer);
+  timers.clear();
+  lastScores = undefined;
+}
+
+/** Marks `url`'s rows as just used, and forgets the least recently used past `rowsKept`. */
+function touchRows(url: string): void {
+  const pending = rowsLoading.get(url);
+  if (pending === undefined) return;
+  rowsLoading.delete(url);
+  rowsLoading.set(url, pending);
+  const loaded = rowsLoaded.get(url);
+  if (loaded) {
+    rowsLoaded.delete(url);
+    rowsLoaded.set(url, loaded);
+  }
+  for (const oldest of rowsLoading.keys()) {
+    if (rowsLoading.size <= Math.max(1, deps.rowsKept)) break;
+    const dropped = rowsLoaded.get(oldest);
+    rowsLoading.delete(oldest);
+    rowsLoaded.delete(oldest);
+    if (dropped && lastScores?.rows === dropped) lastScores = undefined;
+  }
+}
+
+/** The rows of `url` if they are here (and so just used). */
+function loadedRows(url: string): DescribedMatrix | undefined {
+  const rows = rowsLoaded.get(url);
+  if (rows) touchRows(url);
+  return rows;
+}
+
+/** How many scans' rows are held: what `rowsKept` bounds (tests). */
+export function meaningRowsHeld(): number {
+  return rowsLoading.size;
+}
+
+function rowsFor(source: EmbeddingSource): Promise<DescribedMatrix> {
+  let pending = rowsLoading.get(source.url);
+  if (pending) touchRows(source.url);
+  if (!pending) {
+    if (Date.now() < (rowsDownUntil.get(source.url) ?? 0)) {
+      return Promise.reject(new Error("instances.emb did not load a moment ago"));
+    }
+    const mine: Promise<DescribedMatrix> = deps.loadEmbeddings(source).then(
+      (raw) => {
+        const rows = describedMatrix(raw, source.dim);
+        // Kept only while its load is still the one held (not dropped in the meantime).
+        if (rowsLoading.get(source.url) === mine) rowsLoaded.set(source.url, rows);
+        return rows;
+      },
+      (error: unknown) => {
+        if (rowsLoading.get(source.url) === mine) rowsLoading.delete(source.url);
+        rowsDownUntil.set(source.url, Date.now() + deps.retryMs);
+        throw error;
+      },
+    );
+    pending = mine;
+    rowsLoading.set(source.url, pending);
+    touchRows(source.url);
+  }
+  return pending;
+}
+
+function queryFor(text: string): Promise<QueryEmbedding> {
+  let pending = queriesLoading.get(text);
+  if (!pending) {
+    if (Date.now() < encoderDownUntil) return Promise.reject(new Error("text encoder is down"));
+    pending = deps.encode(text).then(
+      (embedding) => {
+        queriesLoaded.set(text, embedding);
+        if (queriesLoaded.size > QUERY_CACHE) {
+          const oldest = queriesLoaded.keys().next().value;
+          if (oldest !== undefined) {
+            queriesLoaded.delete(oldest);
+            queriesLoading.delete(oldest);
+          }
+        }
+        return embedding;
+      },
+      (error: unknown) => {
+        queriesLoading.delete(text);
+        // Only an encoder that is down is waited out; a refused query (4xx) is not.
+        if (encoderDown(error)) encoderDownUntil = Date.now() + deps.retryMs;
+        throw error;
+      },
+    );
+    queriesLoading.set(text, pending);
+  }
+  return pending;
+}
+
+/**
+ * The words of a query, as the encoder is asked about them (filters are not meaning); empty
+ * when there are none, or when the API would refuse them (an article alone, "a"; too long).
+ */
+function meaningText(query: string): string {
+  const text = parseQuery(query).terms.join(" ");
+  return embeddable(text) ? text : "";
+}
+
+/** `unavailable` is tried again once the back-offs have passed. */
+function retryable(status: MeaningStatus): MeaningStatus {
+  if (status !== "unavailable") return status;
+  const now = Date.now();
+  const rowsDown = [...rowsDownUntil.values()].some((until) => now < until);
+  return now >= encoderDownUntil && !rowsDown ? "idle" : status;
+}
+
+/** Matches for `query`, by meaning too when everything it needs is already here. */
+function searchNow(
+  current: AssetInstances,
+  query: string,
+): ObjectMatches & { meaning: MeaningStatus } {
+  const text = meaningText(query);
+  const source = current.embedding;
+  if (!source) return { ...matchObjectsBy(current, query), meaning: "none" };
+  const rows = text ? loadedRows(source.url) : undefined;
+  const embedding = queriesLoaded.get(text);
+  if (text && rows && embedding?.model === source.model) {
+    let scores = lastScores?.rows === rows && lastScores.text === text ? lastScores.scores : null;
+    if (!scores) {
+      scores = meaningScores(current.instances, textCosines(embedding.vector, rows));
+      lastScores = { rows, text, scores };
+    }
+    // Too few described objects to tell a match from the scan's typical cosine: tags only.
+    if (!scores.measurable) return { ...matchObjectsBy(current, query), meaning: "unavailable" };
+    return { ...matchObjectsBy(current, query, scores), meaning: "ready" };
+  }
+  const found = matchObjectsBy(current, query);
+  const keep = current.meaning === "unavailable" ? "unavailable" : null;
+  if (!text) return { ...found, meaning: keep ?? "idle" };
+  if (embedding && embedding.model !== source.model) return { ...found, meaning: "unavailable" };
+  return { ...found, meaning: keep ?? "loading" };
+}
+
+/** What setting `query` changes: the matches, and a highlight of the old matches follows. */
+function withQuery(current: AssetInstances, query: string): Partial<AssetInstances> {
+  const { matches, byMeaning, meaning } = searchNow(current, query);
+  if (current.focus?.kind === "matches") {
+    const lit = focusMembers({ ...current, matches }, current.focus);
+    return {
+      query,
+      matches,
+      byMeaning,
+      meaning,
+      highlighted: lit.length ? new Set(lit) : EMPTY,
+      // Kept while meaning is on the way, so its matches light when they arrive.
+      focus: lit.length || meaning === "loading" ? current.focus : null,
+    };
+  }
+  return { query, matches, byMeaning, meaning };
+}
+
+/** Fetches what `query` needs for meaning, then matches again if it is still the query. */
+function refine(assetId: string, query: string): void {
+  const entry = useInstances.getState().assets[assetId];
+  const source = entry?.embedding;
+  const text = meaningText(query);
+  const pendingTimer = timers.get(assetId);
+  if (pendingTimer !== undefined) clearTimeout(pendingTimer);
+  timers.delete(assetId);
+  if (!entry || !source || !text || entry.meaning === "ready") return;
+  // The rows start loading on the first search (they are the larger download); the query
+  // waits for typing to pause.
+  const rows = rowsFor(source);
+  const table = entry.instances;
+  const current = (): boolean => {
+    const now = useInstances.getState().assets[assetId];
+    return now?.query === query && now.instances === table;
+  };
+  const fail = (what: string) => (error: unknown) => {
+    log.warn(`search by meaning: ${what} failed; searching by tags`, {
+      asset: assetId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    if (current())
+      useInstances.setState((s) => patch(s, assetId, () => ({ meaning: "unavailable" })));
+  };
+  rows.catch(fail("instances.emb"));
+  timers.set(
+    assetId,
+    setTimeout(() => {
+      timers.delete(assetId);
+      if (!current()) return;
+      const embedding = queryFor(text);
+      embedding.catch(fail("the query's embedding"));
+      Promise.all([rows, embedding])
+        .then(([, asked]) => {
+          if (asked.model !== source.model) {
+            fail("matching models")(
+              new Error(`the encoder is ${asked.model}, the scan's rows ${source.model}`),
+            );
+            return;
+          }
+          if (current())
+            useInstances.setState((s) => patch(s, assetId, (now) => withQuery(now, query)));
+        })
+        // Each failure was reported where it happened.
+        .catch(() => undefined);
+    }, deps.debounceMs),
+  );
 }
 
 export const useInstances = create<InstancesState>()((set) => ({
@@ -529,6 +855,7 @@ export const useInstances = create<InstancesState>()((set) => ({
       const next: Record<string, AssetInstances> = {};
       for (const [id, entry] of Object.entries(s.assets)) if (id !== assetId) next[id] = entry;
       if (table && table.instances.length > 0) {
+        const embedding = table.embeddingSource ?? null;
         next[assetId] = {
           instances: table.instances,
           index: indexCategories(table.instances),
@@ -537,28 +864,22 @@ export const useInstances = create<InstancesState>()((set) => ({
           focus: null,
           query: "",
           matches: [],
+          byMeaning: EMPTY,
+          embedding,
+          meaning: embedding ? "idle" : "none",
           similar: null,
         };
       }
       return { assets: next };
     }),
-  setQuery: (assetId, query) =>
+  setQuery: (assetId, query) => {
     set((s) =>
-      patch(s, assetId, (current) => {
-        const matches = matchObjects(current, query);
-        // A highlight of the old matches follows the query.
-        if (current.focus?.kind === "matches") {
-          const lit = focusMembers({ ...current, matches }, current.focus);
-          return {
-            query,
-            matches,
-            highlighted: lit.length ? new Set(lit) : EMPTY,
-            focus: lit.length ? current.focus : null,
-          };
-        }
-        return { query, matches };
-      }),
-    ),
+      patch(s, assetId, (current) =>
+        withQuery({ ...current, meaning: retryable(current.meaning) }, query),
+      ),
+    );
+    refine(assetId, query);
+  },
   setHidden: (assetId, ids, hidden) =>
     changeHidden(assetId, `ids:${String(ids[0])}:${String(ids.length)}`, null, (current) =>
       withIds(current.hidden, withDescendants(current, ids), hidden),

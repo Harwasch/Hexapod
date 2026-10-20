@@ -89,6 +89,38 @@ All of these are general models; none knows our scenes.
    An instance too small in every view for a useful crop (`DESCRIBE_MIN_PX`) keeps no
    embedding and no tags (its row in `instances.emb` is zero) and its nearest described
    ancestor's properties.
+   **Search by meaning (decided 2026-10-02, ported to the objects panel 2026-10-19).** A
+   query is embedded with the same model's text tower and the tags' template
+   (`"a photo of a {}."`), on the API's CPU: `GET /api/v1/text-embeddings`
+   (`apps/api/app/services/text_encoder.py`), from files
+   `tools/captures/export_text_encoder.py` writes in the image's build stage (fp16-stored
+   transformer as ONNX, a memory-mapped fp16 token table, the model's sentencepiece). The
+   viewer reads `instances.emb` on the first search (the same read, and the same decoded
+   matrix, as "More like this": `loadEmbeddings`, `describedMatrix`, `textCosines`) and
+   blends (`searchInstances`); the panel marks an object found that way "by meaning":
+
+   | Option (measured 2026-10-02, 4 shared CPUs)   | Size           | Parity to `SiglipEmbedder`                                 | Latency                                 |
+   | --------------------------------------------- | -------------- | ---------------------------------------------------------- | --------------------------------------- |
+   | Browser, onnx-community int8 text tower       | 283 MB + 34 MB | cos 0.92-0.98; top-10 overlap down to 3/10                 | download alone fails "first query < 5s" |
+   | Modal function (`SegmentEmbed.embed_texts`)   | -              | exact                                                      | container cold start per idle period    |
+   | **API CPU, onnxruntime, fp32 maths (chosen)** | +565 MB image  | cos ≥ 0.9999998, same top-10 on every query and scan tried | first 1.24 s (load), then ~140 ms       |
+
+   Re-measured on today's main (2026-10-19, hwgeekom, one onnxruntime thread): export parity
+   min cos 0.9999998, 543 MB of files; first query 0.84-0.89 s, then ~100 ms (95-118); the API
+   process goes from 358 MB resident to 877 MB with the encoder loaded, **peaking at 1.03 GB while it
+   loads** -- more than the app machine's 1 GB, so the encoder is off unless
+   `TEXT_ENCODER_ENABLED` is true, which needs a 2 GB app machine (docs/DEPLOYMENT.md, "Search by
+   meaning runs on the app machine"). The match by meaning is the cosine's margin over the scan's median for
+   that query (`MEANING_FLOOR` 0.015, `MEANING_SPAN` 0.05: crops of splat renders sit below
+   SigLIP's photo calibration, so its own sigmoid calls everything a non-match; calibrated on
+   the spool, pumpkin and camp scans, mostly two of them), blended with the tag match by
+   noisy-OR under the prominence prior (counted with each instance's parts); an undescribed
+   instance takes its ancestor's (×0.9). A scan with fewer than three described instances
+   (`MEANING_MIN_DESCRIBED`) has no match by meaning: with one, every margin over the median is
+   0; with two, one of them always clears their mean. No fixed baseline has been measured to
+   stand in, so that stays off rather than guessed. With no encoder (503), no `instances.emb` or
+   too few described instances, search is by tags.
+
 5. **Tags and properties.** Zero-shot against a large open vocabulary (tags) and a short,
    fixed list of _attribute_ prompts (not classes): movable, rigid, elastic/flexible,
    static structure, vegetation, water, vehicle, person/animal. Each property is a
@@ -1257,8 +1289,8 @@ read it. Behind an HTTPS proxy, start the dev server with `NODE_USE_ENV_PROXY=1`
 
 Limits: the camp's file is 43.6 MB, read whole on the first press (a phone feels it; a sidecar
 of the described rows only would be about 6× smaller). Only about one object in seven is
-described. Text search by meaning (`rankByEmbedding`, `rankByVector`) still waits for a text
-encoder in the browser.
+described. Search by meaning (§3 step 4) reads the same file through the same decoded matrix, so
+a scan's embeddings are fetched once for both.
 
 ### Variants: other methods for the same scan (bake-offs)
 
