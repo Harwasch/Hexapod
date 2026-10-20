@@ -630,6 +630,19 @@ def test_sigma_is_rounded_up_to_the_centimetre() -> None:
     assert exact[2] == 1
 
 
+def test_a_height_too_large_for_int64_is_out_of_range_not_a_wrapped_surface() -> None:
+    """Review finding: 1e20 m wrapped in the int64 cast and passed the i2 range check as a
+    plausible surface, with a RuntimeWarning. It is out of range, quietly."""
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        cell, found = _one_cell([[0.5, 0.5, 1e20]] * 3)
+        low, below = _one_cell([[0.5, 0.5, 0.0]] * 2 + [[0.5, 0.5, -1e19]] * 2)
+    assert cell == [NO, NO, 0, cell[3]] and found.out_of_range == 1
+    assert low[:3] == [NO, NO, 0] and below.out_of_range == 1
+
+
 def test_a_gaussian_exactly_half_opaque_is_a_sample(tmp_path: Path) -> None:
     """`opacity >= 0` in the logit: alpha exactly 0.5 is in."""
     descriptor, grid = _grid(_run(tmp_path / "run", _plane(), opacity=0.0))

@@ -336,11 +336,18 @@ def _band(samples: Samples, window: Window, rows: tuple[int, int]) -> _Band:
     return _Band(count, sources, top, bottom, binned, finite_total, non_finite_total)
 
 
+#: What `_centimetres` gives a height it cannot hold: past i2's range by far, and an int64.
+_PAST_CM = 1 << 40
+
+
 def _centimetres(metres: F64) -> I64:
-    """Whole centimetres, half up; anything not finite is past every range."""
+    """Whole centimetres, half up. Anything not finite, or too large for the int64 cast to
+    be exact (|cm| >= 2^40, some 11,000 km), becomes `_PAST_CM` *before* the cast, so it
+    is past every range rather than wrapped into a plausible height."""
     with np.errstate(invalid="ignore", over="ignore"):
         cm = np.floor(metres * 100.0 + 0.5)
-    out: I64 = np.where(np.isfinite(cm), cm, float(1 << 40)).astype(np.int64)
+        held = np.isfinite(cm) & (np.abs(cm) < _PAST_CM)
+    out: I64 = np.where(held, cm, float(_PAST_CM)).astype(np.int64)
     return out
 
 
