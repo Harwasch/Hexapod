@@ -53,6 +53,7 @@ import init_seed
 import keyframes
 import live
 import placement
+import priors
 import quality
 import resolution
 import scale_estimate
@@ -1143,6 +1144,18 @@ def colmap(ctx: StageContext) -> StageOutcome:
     compared on one capture. 3.9.1 stays the default until that comparison decides;
     `poses.json`'s `version` is the COLMAP that ran. A run that asks for 4.2 where there
     is no pycolmap fails rather than quietly running 3.9.1.
+
+    `pose_priors: auto` (4.2 only; `off` is the default) hands each frame's EXIF fix to
+    incremental mapping as a CARTESIAN pose prior about the georeference's own origin
+    (the `site_frame` when given, else the fixes' median: `priors.frame_origin`), with a
+    sigma from `frames_meta.json` (an RTK fixed solution's own std, or the EXIF
+    horizontal error), else `prior_std_m` / `prior_std_v_m`, else 5 m (`priors.py`). The
+    model then comes out in metric east/north/up and `poses.json` says so (`priors`,
+    and `scale.metric`). The global mapper ignores priors, and says so.
+
+    Two quality gates, both off unless the run sets them (no recorded measurement backs
+    a threshold, D4): `fail_below_registered_fraction` and
+    `max_mean_reprojection_error_px` raise `QualityGateError`, which is never retried.
     """
     frames = ctx.input(FRAMES.name)
     out = ctx.output(POSES.name)
@@ -1235,6 +1248,30 @@ def colmap(ctx: StageContext) -> StageOutcome:
         if four
         else sfm.feature_extractor_argv(database, frames, **extraction),
     )
+    prior_plan = priors.plan_priors(
+        frames,
+        requested=str(ctx.param("pose_priors", "off")),
+        engine=engine,
+        frame=site_frame.from_param(ctx.param("site_frame")),
+        frames_meta=_frames_meta(ctx),
+        std_m=_optional_float(ctx.param("prior_std_m")),
+        std_v_m=_optional_float(ctx.param("prior_std_v_m")),
+    )
+    if prior_plan.used:
+        priors_file = ctx.work_dir / "priors.json"
+        prior_plan.write(priors_file)
+        ctx.run(colmap4.priors_argv(interpreter, database, priors_file))
+    sigma = prior_plan.summary()["sigmaM"]
+    ctx.log(
+        f"colmap: pose priors {'used' if prior_plan.used else 'not used'} -- "
+        f"{prior_plan.reason}"
+        + (
+            f"; sigma {sigma['horizontalMedian']:g} m h / {sigma['verticalMedian']:g} m v "
+            f"median; vertical {prior_plan.vertical()}"
+            if prior_plan.used and isinstance(sigma, dict)
+            else ""
+        )
+    )
     passes_run: list[dict[str, object]] = []
     pairs = [0]
 
@@ -1303,7 +1340,9 @@ def colmap(ctx: StageContext) -> StageOutcome:
             }
             with live.MapperWatch(snapshots, ctx.log, frames=len(images), enabled=watch):
                 ctx.run(
-                    colmap4.map_argv(interpreter, database, frames, into, **how)
+                    colmap4.map_argv(
+                        interpreter, database, frames, into, use_priors=prior_plan.used, **how
+                    )
                     if four
                     else sfm.mapper_argv(database, frames, into, **how)
                 )
@@ -1353,6 +1392,16 @@ def colmap(ctx: StageContext) -> StageOutcome:
         live.emit_model(ctx.log, out, frames=len(images), final=True)
     focal = model.cameras[0].focal_px if model.cameras else 0.0
     version = colmap_version or sfm.colmap_version()
+    priors_used = prior_plan.used and mapper_used == "incremental"
+    priors_summary: dict[str, object] = {
+        **prior_plan.summary(),
+        "used": priors_used,
+        "mapper": (
+            "incremental"
+            if mapper_used == "incremental"
+            else "ignored by the global mapper, which made the model kept"
+        ),
+    }
     document: dict[str, object] = {
         "tool": "colmap",
         # The COLMAP that extracted, matched and mapped: apt's 3.9.1 CLI, or 4.2 through
@@ -1428,14 +1477,28 @@ def colmap(ctx: StageContext) -> StageOutcome:
                 )
             ),
         },
-        "scale": {
-            "metric": False,
-            "source": "none",
-            "note": (
-                "a reconstruction from images alone has no metric scale; `arkit` or a "
-                "measured baseline is what produces one"
-            ),
-        },
+        # GNSS pose priors, when bundle adjustment had them (`priors.py`).
+        "priors": priors_summary,
+        "scale": (
+            {
+                "metric": True,
+                "source": "gnss-pose-priors",
+                "note": (
+                    f"bundle adjustment held each camera to its GNSS fix ({prior_plan.count} "
+                    "pose priors), so the model is in metric east/north/up about the "
+                    "priors' origin; as accurate as the fixes' declared sigma"
+                ),
+            }
+            if priors_used
+            else {
+                "metric": False,
+                "source": "none",
+                "note": (
+                    "a reconstruction from images alone has no metric scale; `arkit` or a "
+                    "measured baseline is what produces one"
+                ),
+            }
+        ),
         # Gravity, as far as the frames can say: how the phone was held. What `place`
         # levels the splat by when nothing better (an EXIF similarity) exists.
         "upEstimate": None if (up := sfm.camera_up(model)) is None else up.to_dict(),
@@ -1467,6 +1530,7 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "mapS": round(seconds["map"], 1),
         "mapper": mapper_used,
         "colmap": version,
+        "priors": prior_plan.count if priors_used else 0,
     }
     if "global" in seconds:
         metrics["globalMapS"] = round(seconds["global"], 1)
@@ -1478,6 +1542,14 @@ def colmap(ctx: StageContext) -> StageOutcome:
 #: `focal_from`: `none` leaves the initial focal to COLMAP; `exif` seeds it from
 #: `frames_meta.json`'s capture focal.
 FOCAL_FROM: tuple[str, ...] = ("none", "exif")
+
+
+def _frames_meta(ctx: StageContext) -> dict[str, object] | None:
+    """`frames_meta.json` when normalize wrote one, else None (planned but absent too)."""
+    if not ctx.has_input(FRAMES_META.name):
+        return None
+    path = ctx.input(FRAMES_META.name)
+    return _read_json(path) if path.is_file() else None
 
 
 def _focal_seed(

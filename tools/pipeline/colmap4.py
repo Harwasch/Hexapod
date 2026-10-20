@@ -90,6 +90,7 @@ __all__ = [
     "main",
     "map_argv",
     "match_argv",
+    "priors_argv",
     "python",
     "version",
     "vocab_tree_path",
@@ -205,8 +206,12 @@ def map_argv(
     num_threads: int | None = None,
     snapshot_path: Path | None = None,
     snapshot_every: int = 0,
+    use_priors: bool = False,
 ) -> list[str]:
-    """`sfm.mapper_argv`, on 4.2: incremental mapping into numbered models under `output`."""
+    """`sfm.mapper_argv`, on 4.2: incremental mapping into numbered models under `output`.
+
+    `use_priors` maps with the database's pose priors (`priors_argv` writes them) as
+    robust position constraints in bundle adjustment."""
     argv = [
         *_script(interpreter, "map"),
         "--database",
@@ -226,10 +231,76 @@ def map_argv(
         argv += ["--threads", str(num_threads)]
     if snapshot_path is not None and snapshot_every > 0:
         argv += ["--snapshot-path", str(snapshot_path), "--snapshot-every", str(snapshot_every)]
+    if use_priors:
+        argv.append("--use-priors")
     return argv
 
 
+def priors_argv(interpreter: str, database: Path, priors_file: Path) -> list[str]:
+    """Write `priors_file` (`priors.PriorPlan.write`) into the database as pose priors."""
+    return [
+        *_script(interpreter, "priors"),
+        "--database",
+        str(database),
+        "--priors",
+        str(priors_file),
+    ]
+
+
 # --- the script half, run under an interpreter with pycolmap ------------------------------
+
+
+def _pose_prior(pycolmap: Any, camera_id: int, image_id: int, position: Any, cov: Any) -> Any:
+    """A CARTESIAN position prior on one camera image (`data_t` id is the image id)."""
+    import numpy as np
+
+    return pycolmap.PosePrior(
+        corr_data_id=pycolmap.data_t(
+            sensor_id=pycolmap.sensor_t(type=pycolmap.SensorType.CAMERA, id=camera_id),
+            id=image_id,
+        ),
+        position=np.asarray(position, dtype=np.float64),
+        position_covariance=np.asarray(cov, dtype=np.float64),
+        coordinate_system=pycolmap.PosePriorCoordinateSystem.CARTESIAN,
+    )
+
+
+def _write_priors(pycolmap: Any, parsed: argparse.Namespace) -> int:
+    """Replace the database's pose priors with `--priors`; refuse a name it has not got."""
+    import json
+
+    document = json.loads(Path(parsed.priors).read_text(encoding="utf-8"))
+    if document.get("coordinateSystem") != "CARTESIAN":
+        raise SystemExit(
+            f"colmap4: priors must be CARTESIAN, not {document.get('coordinateSystem')}"
+        )
+    database = pycolmap.Database.open(parsed.database)
+    try:
+        images = {image.name: image for image in database.read_all_images()}
+        wanted = document.get("priors") or []
+        missing = sorted(p["name"] for p in wanted if p["name"] not in images)
+        if missing:
+            raise SystemExit(
+                f"colmap4: {len(missing)} prior(s) name frames the database has not got: "
+                f"{', '.join(missing[:5])}"
+            )
+        database.clear_pose_priors()
+        for prior in wanted:
+            image = images[prior["name"]]
+            database.write_pose_prior(
+                _pose_prior(
+                    pycolmap,
+                    image.camera_id,
+                    image.image_id,
+                    prior["position"],
+                    prior["covariance"],
+                )
+            )
+        written = database.num_pose_priors()
+    finally:
+        database.close()
+    sys.stdout.write(f"colmap4: {written} pose prior(s) written\n")
+    return 0
 
 
 def _extraction(pycolmap: Any, parsed: argparse.Namespace) -> tuple[Any, Any]:
@@ -292,6 +363,11 @@ def _mapping(pycolmap: Any, parsed: argparse.Namespace) -> Any:
     if parsed.snapshot_path is not None and parsed.snapshot_every > 0:
         options.snapshot_path = parsed.snapshot_path
         options.snapshot_frames_freq = parsed.snapshot_every
+    if getattr(parsed, "use_priors", False):
+        # A robust (Cauchy) loss on each prior, at COLMAP's own scale (7.815: chi-square
+        # with 3 dof at 95%), so one wild fix is down-weighted rather than obeyed.
+        options.use_prior_position = True
+        options.use_robust_loss_on_prior_position = True
     return options
 
 
@@ -323,6 +399,10 @@ def _parser() -> argparse.ArgumentParser:
     mapper.add_argument("--hold-extra", action="store_true")
     mapper.add_argument("--snapshot-path", type=Path, default=None)
     mapper.add_argument("--snapshot-every", type=int, default=0)
+    mapper.add_argument("--use-priors", action="store_true")
+    priors = commands.add_parser("priors")
+    priors.add_argument("--database", type=Path, required=True)
+    priors.add_argument("--priors", type=Path, required=True)
     commands.add_parser("version")
     check = commands.add_parser("self-check")
     check.add_argument("--vocab-tree", type=Path, default=None)
@@ -365,8 +445,12 @@ def _self_check(pycolmap: Any, parsed: argparse.Namespace) -> int:
             hold_extra=False,
             snapshot_path=Path("s"),
             snapshot_every=3,
+            use_priors=True,
         ),
     )
+    _pose_prior(pycolmap, 1, 1, [0.0, 0.0, 0.0], [[1.0, 0, 0], [0, 1.0, 0], [0, 0, 4.0]])
+    for name in ("open", "read_all_images", "write_pose_prior", "clear_pose_priors"):
+        assert callable(getattr(pycolmap.Database, name)), name
     words = ""
     if parsed.vocab_tree is not None:
         # Loaded, not just found: a FLANN tree (3.9.1's) is refused right here --
@@ -374,7 +458,7 @@ def _self_check(pycolmap: Any, parsed: argparse.Namespace) -> int:
         index = pycolmap.VisualIndex.read(parsed.vocab_tree)
         assert index.num_visual_words() > 0, parsed.vocab_tree
         words = f", vocabulary tree {index.num_visual_words()} words"
-    sys.stdout.write(f"colmap4: {pycolmap.COLMAP_version} ok{words}\n")
+    sys.stdout.write(f"colmap4: {pycolmap.COLMAP_version} ok{words}, priors ok\n")
     return 0
 
 
@@ -394,6 +478,8 @@ def main(args: list[str] | None = None) -> int:
         return 0
     if parsed.command == "self-check":
         return _self_check(pycolmap, parsed)
+    if parsed.command == "priors":
+        return _write_priors(pycolmap, parsed)
     cpu = pycolmap.Device.cpu
     began = time.monotonic()
     if parsed.command == "extract":

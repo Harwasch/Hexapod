@@ -68,6 +68,7 @@ known-first-party = [
   "phases",
   "placement",
   "plan",
+  "priors",
   "progress",
   "providers",
   "quality",

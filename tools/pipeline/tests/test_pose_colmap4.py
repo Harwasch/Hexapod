@@ -105,6 +105,16 @@ def test_the_mapper_argv_holds_a_focal_prior_and_passes_the_seed_and_snapshots()
     assert argv[argv.index("--seed") + 1] == "2"
     assert argv[argv.index("--snapshot-every") + 1] == "3"
     assert "--snapshot-path" not in colmap4.map_argv("/py", Path("d"), Path("i"), Path("o"))
+    assert "--use-priors" not in argv
+    assert "--use-priors" in colmap4.map_argv(
+        "/py", Path("d"), Path("i"), Path("o"), use_priors=True
+    )
+    assert colmap4.priors_argv("/py", Path("d"), Path("p.json"))[-4:] == [
+        "--database",
+        "d",
+        "--priors",
+        "p.json",
+    ]
 
 
 def test_the_faiss_tree_has_its_own_variable(
@@ -163,6 +173,7 @@ def test_the_self_check_the_modal_image_runs_passes_here() -> None:
     )
     assert done.returncode == 0, done.stdout + done.stderr
     assert "COLMAP 4.2" in done.stdout
+    assert "priors ok" in done.stdout
     # And 3.9.1's FLANN tree, where there is one, is refused by it rather than accepted.
     flann = sfm.vocab_tree_path()
     if flann is not None:
