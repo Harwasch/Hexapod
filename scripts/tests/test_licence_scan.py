@@ -120,7 +120,6 @@ def test_generated_and_binary_paths_are_skipped(tmp_path: Path) -> None:
         write(tmp_path, "data/tiles/x/tileset.json", text),
         write(tmp_path, "hardware/arm/viewer/data/meshes.json", text),
         write(tmp_path, "packages/world/fixtures/a.json", text),
-        write(tmp_path, "pnpm-lock.yaml", text),
     ]
     (tmp_path / "blob.bin").write_bytes(b"\0" + text.encode())
     (tmp_path / "latin.py").write_bytes(b"\xff" + text.encode())
@@ -130,6 +129,25 @@ def test_generated_and_binary_paths_are_skipped(tmp_path: Path) -> None:
         write(tmp_path, own, text)
     assert scan.scan(tmp_path, paths) == []
     assert scan.scan(tmp_path, [write(tmp_path, "src/b.py", text)]) != []
+
+
+def test_lockfiles_and_licence_files_are_read(tmp_path: Path) -> None:
+    """Where a dependency's or an asset's terms arrive as text: both lockfiles, and licence
+    files with no extension, generated-data directories included."""
+    licence = MARKERS["nc-licence-in-source"]
+    paths = [
+        write(tmp_path, "pnpm-lock.yaml", licence),
+        write(tmp_path, "tools/x/uv.lock", licence),
+        write(tmp_path, "vendor/thing/LICENSE", licence),
+        write(tmp_path, "vendor/thing/COPYING", licence),
+        write(tmp_path, "vendor/thing/LICENCE.txt", licence),
+        write(tmp_path, "data/tiles/site/NOTICE", licence),
+        write(tmp_path, "docs/assets/LICENSE.md", licence),
+    ]
+    for path in paths:
+        assert rules_of(scan.scan(tmp_path, [path])) == {"nc-licence-in-source"}, path
+    prose = write(tmp_path, "vendor/thing/README", licence)
+    assert scan.scan(tmp_path, [prose]) == []
 
 
 def test_a_tree_without_git_is_walked(tmp_path: Path) -> None:

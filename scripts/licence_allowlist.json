@@ -86,6 +86,12 @@
       "reason": "Offline experiment downloads a public research dataset; not shipped"
     },
     {
+      "rule": "nc-licence-in-source",
+      "path": "tools/captures/NOTICE",
+      "contains": "replaces code derived from a non-commercial",
+      "reason": "Provenance statement: names what splat_merge.py replaced; none of that code is here"
+    },
+    {
       "rule": "withdrawn-asset",
       "path": "apps/api/app/seed/__init__.py",
       "contains": "san-francisco-aerometrex-mesh",

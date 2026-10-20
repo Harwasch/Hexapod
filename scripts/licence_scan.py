@@ -8,6 +8,10 @@ from one, a non-commercial project named in source (a paper citation with its ar
 the same line is fine), a non-commercial model id, a non-commercial licence in source, and
 the withdrawn ion sample mesh. Every NOTICE must name only files that exist beside it.
 
+Licence files (LICENSE, LICENCE, COPYING, NOTICE, COPYRIGHT, with or without an extension)
+are read as source wherever they are, generated-data directories included: that is where an
+asset's terms arrive. Lockfiles (`uv.lock`, `pnpm-lock.yaml`) are read as source text too.
+
 A finding that is deliberate is listed in the allowlist (`scripts/licence_allowlist.json`):
 rule, exact path, a substring of the line, and why. An entry that matches nothing is stale
 and fails the scan, so the list cannot rot. Standard library only (Python 3.10+).
@@ -120,7 +124,9 @@ WALK_SKIP = frozenset(
 )
 #: Generated data: tiles, fixtures, a viewer's baked meshes.
 SKIP_PREFIXES = ("data/tiles/", "hardware/arm/viewer/data/", "packages/world/fixtures/")
-SKIP_NAMES = frozenset({"pnpm-lock.yaml"})
+SKIP_NAMES: frozenset[str] = frozenset()
+#: A licence file's name: read as source, and never skipped as generated data.
+LICENCE_FILE = re.compile(r"(?i)^(licen[cs]e|copying|notice|copyright)([._-].*)?$")
 #: The scan, its allowlist and its tests name every marker on purpose.
 SELF = frozenset(
     {
@@ -147,6 +153,7 @@ SOURCE_SUFFIXES = frozenset(
         ".sh",
         ".json",
         ".patch",
+        ".lock",
         ".html",
         ".css",
     }
@@ -185,12 +192,23 @@ def tracked_files(root: Path) -> list[str]:
     return sorted(out)
 
 
+def is_licence_file(path: str) -> bool:
+    """LICENSE, COPYING, NOTICE and the like, with any extension or none."""
+    return LICENCE_FILE.match(path.rsplit("/", 1)[-1]) is not None
+
+
 def _skipped(path: str) -> bool:
-    return path in SELF or path.startswith(SKIP_PREFIXES) or path.rsplit("/", 1)[-1] in SKIP_NAMES
+    if path in SELF:
+        return True
+    if is_licence_file(path):
+        return False
+    return path.startswith(SKIP_PREFIXES) or path.rsplit("/", 1)[-1] in SKIP_NAMES
 
 
 def is_source(path: str) -> bool:
-    """Code and config; Markdown and everything under docs/ are prose."""
+    """Code, config and licence files; Markdown and everything else under docs/ are prose."""
+    if is_licence_file(path):
+        return True
     return Path(path).suffix.lower() in SOURCE_SUFFIXES and not path.startswith("docs/")
 
 
