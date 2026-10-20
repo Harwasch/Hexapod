@@ -155,6 +155,7 @@
       "verticalM": 0.1059
     },
     "verticalAnchorFree": null,
+    "verticalChecks": 8,
     "verticalEvaluated": true,
     "withinTolerance": true
   },
@@ -238,7 +239,7 @@
   },
   "inlierFraction": 1.0,
   "inliers": 40,
-  "label": "RTK drone, surveyed, check targets \u00b10.035 m",
+  "label": "RTK drone, surveyed, check targets ±0.035 m",
   "method": "gnss-prior-ba",
   "origin": {
     "height": 14.3975,
@@ -251,6 +252,7 @@
   "ransac": null,
   "reasons": [],
   "referenceEpochId": null,
+  "referenceHeightDatum": null,
   "referenceJobId": null,
   "registration": null,
   "residualM": {
@@ -260,6 +262,7 @@
     "rms": 0.0255
   },
   "rotationResidualDeg": null,
+  "rtkEvidence": "40/40 frames carry an RTK fixed solution (RtkFlag 50)",
   "sim3": {
     "from": "this epoch's pose model (COLMAP frame)",
     "rotation": [

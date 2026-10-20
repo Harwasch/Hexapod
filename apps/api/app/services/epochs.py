@@ -454,14 +454,25 @@ class ReferenceChoice:
     height_datum: str | None = None
 
 
+def survey_evidenced(alignment: dict[str, Any]) -> bool:
+    """Whether an alignment records the RTK fix `align_epoch` found in its frames'
+    metadata (`rtkEvidence`), which a `survey` needs beside platform `rtk-drone`: the
+    platform string alone -- a param, an override -- never makes survey."""
+    evidence = alignment.get("rtkEvidence")
+    return isinstance(evidence, str) and bool(evidence.strip())
+
+
 def claimed_verdict(alignment: object, platform: str) -> str | None:
     """The verdict an epoch's alignment claims, as far as it may: `survey` is only ever
-    an RTK drone's (D4, D6 amendment), so anything else that says so reads as `coarse`;
+    an RTK drone's with its RTK evidence (D4, D6 amendment, `survey_evidenced`), so
+    anything else that says so reads as `coarse`;
     a verdict outside the vocabulary, or no alignment, is None."""
     verdict = alignment.get("verdict") if isinstance(alignment, dict) else None
     if verdict not in ("survey", "coarse", "unaligned"):
         return None
-    if verdict == "survey" and platform != EpochPlatform.RTK_DRONE.value:
+    if verdict == "survey" and (
+        platform != EpochPlatform.RTK_DRONE.value or not survey_evidenced(alignment)  # type: ignore[arg-type]
+    ):
         return "coarse"
     return str(verdict)
 

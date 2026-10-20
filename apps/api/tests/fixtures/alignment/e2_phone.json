@@ -101,7 +101,7 @@
   },
   "inlierFraction": 1.0,
   "inliers": 30,
-  "label": "Phone video, aligned visually, \u00b10.068 m",
+  "label": "Phone video, aligned visually, ±0.068 m",
   "method": "visual",
   "origin": {
     "height": 14.3975,
@@ -123,6 +123,7 @@
     "Phone video is the coarse tier: only an RTK drone can be surveyed"
   ],
   "referenceEpochId": "ea623d1f-5072-4ec3-a4ec-3a98a0100ae8",
+  "referenceHeightDatum": "msl-unverified",
   "referenceJobId": "d95dd852-269a-42e1-a068-fe25792a048f",
   "registration": {
     "crossInlierMatches": 20995,
@@ -154,6 +155,7 @@
     "max": 0.1725,
     "median": 0.1028
   },
+  "rtkEvidence": null,
   "sim3": {
     "from": "this epoch's pose model (COLMAP frame)",
     "rotation": [

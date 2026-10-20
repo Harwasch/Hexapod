@@ -245,24 +245,35 @@ def alignment_of(capture: Capture, registration: Registration) -> dict[str, Any]
 
 def _survey_only_for_rtk(alignment: dict[str, Any]) -> dict[str, Any]:
     """The alignment as recorded, unless it claims `survey` for anything but an RTK drone
-    (D4; the D6 amendment: "survey" may only be claimed for platform `rtk-drone`). The
+    (D4; the D6 amendment: "survey" may only be claimed for platform `rtk-drone`), or for
+    one with no RTK evidence in its data (`rtkEvidence`; the platform string alone never
+    makes survey -- the R2 review of #51/#52). The
     pipeline never writes that; if a run ever did, the epoch is recorded `coarse`, its label
     rebuilt in the same words `align_epoch` uses, with the reason -- not shown as surveyed."""
-    if alignment.get("verdict") != "survey" or alignment.get("platform") == "rtk-drone":
+    if alignment.get("verdict") != "survey" or (
+        alignment.get("platform") == EpochPlatform.RTK_DRONE.value
+        and epochs.survey_evidenced(alignment)
+    ):
         return alignment
     platform = str(alignment.get("platform") or EpochPlatform.UNKNOWN.value)
+    why = (
+        "survey needs RTK evidence in the data and the alignment records no RTK evidence "
+        "(rtkEvidence); recorded coarse"
+        if platform == EpochPlatform.RTK_DRONE.value
+        else f"survey is only an RTK drone's; recorded coarse for platform {platform!r}"
+    )
     how = "aligned visually" if alignment.get("method") == "visual" else "aligned to its GNSS"
     uncertainty = _optional_number(alignment.get("uncertaintyM"))
     told = f"±{uncertainty:.2g} m" if uncertainty is not None else "uncertainty not recorded"
     reasons = alignment.get("reasons")
-    log.error("register: an alignment claimed survey for platform %r; recorded coarse", platform)
+    log.error("register: an alignment claimed survey without its evidence: %s", why)
     return {
         **alignment,
         "verdict": "coarse",
         "label": f"{PLATFORM_WORDS.get(platform, 'Capture')}, {how}, {told}",
         "reasons": [
             *(reasons if isinstance(reasons, list) else []),
-            f"survey is only an RTK drone's; recorded coarse for platform {platform!r}",
+            why,
         ],
     }
 

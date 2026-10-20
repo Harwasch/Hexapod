@@ -303,7 +303,8 @@ def test_the_best_verdict_wins_then_the_oldest(
     assert first.site_id is not None
     two = _join(
         db, storage, tmp_path, first.site_id, "rtk",
-        platform="rtk-drone", alignment={"verdict": "survey", "uncertaintyM": 0.03},
+        platform="rtk-drone",
+        alignment={"verdict": "survey", "uncertaintyM": 0.03, "rtkEvidence": "30/30 frames"},
     )  # fmt: skip
     newcomer = second_capture(db, first.site_id, "newcomer")
     chosen = _reference(db, first.site_id, newcomer)
@@ -327,7 +328,8 @@ def test_only_an_rtk_drone_epoch_is_passed_on_as_survey(
     assert first.site_id is not None
     chosen = _reference(db, first.site_id, second_capture(db, first.site_id))
     assert chosen is not None and chosen.verdict == "coarse"
-    assert epochs.claimed_verdict({"verdict": "survey"}, "rtk-drone") == "survey"
+    fixed = {"verdict": "survey", "rtkEvidence": "30/30 frames carry an RTK fixed solution"}
+    assert epochs.claimed_verdict(fixed, "rtk-drone") == "survey"
     assert epochs.claimed_verdict({"verdict": "surveyed"}, "rtk-drone") is None
     assert epochs.claimed_verdict(None, "rtk-drone") is None
 
