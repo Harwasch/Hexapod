@@ -384,6 +384,23 @@ describe("every epoch of a site is drawn with one placement", () => {
     expect(manager.sharesPlacement(SITE_ID, "not-loaded")).toBeNull();
   });
 
+  it("does not say a date shares the placement until it does, and says when that is decided", async () => {
+    const { manager, tilesetEvents } = harness(
+      withConfigs({ clampToGround: false, heightOffsetM: 3 }),
+    );
+    let release = (): void => undefined;
+    made.held.set(A1.id, (r) => (release = r));
+    await open(manager);
+    // A2 is in, its anchor is not: whether it will share the placement is not known yet.
+    expect(manager.sharesPlacement(SITE_ID, A2.id)).toBeNull();
+    tilesetEvents.mockClear();
+    release();
+    await settle();
+    expect(manager.sharesPlacement(SITE_ID, A2.id)).toBe(true);
+    // The Inspector re-reads on this (EpochFacts).
+    expect(tilesetEvents).toHaveBeenCalled();
+  });
+
   it("a later change to the anchor's placement moves every epoch with it", async () => {
     const { manager, tileset, site } = harness(
       withConfigs({ clampToGround: false, heightOffsetM: 3 }),
@@ -409,7 +426,13 @@ describe("every epoch of a site is drawn with one placement", () => {
       A2.id,
       Matrix4.multiply(ROOT, Matrix4.fromTranslation(new Cartesian3(10, 0, 0)), new Matrix4()),
     );
+    let release = (): void => undefined;
+    made.held.set(A1.id, (r) => (release = r));
     await open(manager);
+    // Before the guard has run, it is not said to share anything.
+    expect(manager.sharesPlacement(SITE_ID, A2.id)).toBeNull();
+    release();
+    await settle();
     expect(Matrix4.equals(tileset(A2.id)?.modelMatrix, Matrix4.IDENTITY)).toBe(true);
     expect(warned("an epoch's tiles are not in its site's frame; placed on its own")).toBe(true);
     expect(manager.sharesPlacement(SITE_ID, A2.id)).toBe(false);
