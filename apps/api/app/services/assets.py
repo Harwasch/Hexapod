@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Asset, Site
+from app.models import Asset, Epoch, Site
 from app.models.enums import AssetProvider, AssetSourceKind, Representation, ScaleSource
 from app.schemas.asset import (
     AssetBase,
@@ -26,7 +26,7 @@ from app.schemas.asset import (
     provider_for_source,
 )
 from app.schemas.common import Attribution, LicenseMetadata, Provenance
-from app.services import geometry, placement
+from app.services import epochs, geometry, placement
 from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.services.urls import validate_dataset_url
 
@@ -281,8 +281,16 @@ def _placed(db: Session, asset: Asset) -> tuple[Site, placement.Origin]:
 
 
 def _registered_splat(db: Session, site: Site) -> uuid.UUID | None:
-    """The asset a run repoints: the site's first splat by creation, as the worker's
-    `registration.splat_asset` picks it."""
+    """The splat the site shows, as the worker's `registration.splat_asset` picks it: the
+    current revision of its newest epoch that has one (a superseded revision is history,
+    and resizing it would move nothing anybody sees); for a legacy site, its first splat
+    by creation."""
+    for epoch_id in db.scalars(
+        select(Epoch.id).where(Epoch.site_id == site.id).order_by(Epoch.ordinal.desc())
+    ):
+        current = epochs.current_asset(db, epoch_id)
+        if current is not None:
+            return current.id
     return db.scalar(
         select(Asset.id)
         .where(Asset.site_id == site.id, Asset.representation == Representation.GAUSSIAN_SPLAT)

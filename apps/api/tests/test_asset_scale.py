@@ -494,7 +494,14 @@ def test_a_re_run_resets_the_scale_and_takes_the_boundary_back(
     scan: tuple[Capture, Asset],
 ) -> None:
     """The new tiles carry the run's own scale, so the correction to the old ones goes:
-    scale 1, no evidence, the new run's provenance, and the boundary resized back."""
+    the new revision has no scale and the new run's provenance, and the boundary is
+    resized back.
+
+    Changed with site epochs (decision D3): the re-run used to rewrite this asset in
+    place. Now it is a new revision of the capture's epoch, and the old row keeps its
+    scale of 0.4 as history -- it is superseded, so it can no longer be resized; the new
+    revision can.
+    """
     capture, splat = scan
     assert _put(client, splat, {"scale": 0.4}).status_code == 200
     estimated = _document()
@@ -508,27 +515,35 @@ def test_a_re_run_resets_the_scale_and_takes_the_boundary_back(
     second = _register(db, storage, tmp_path, capture, estimated)
 
     db.expire_all()
-    asset = db.get(Asset, splat.id)
-    assert asset is not None
-    assert str(second.id) in asset.source["url"]
-    assert "scale" not in asset.render_config
-    assert "scaleEvidence" not in asset.render_config
-    assert asset.render_config["provenance"]["scaleSource"] == "camera-height-estimate"
-    assert asset.render_config["provenance"]["scaleUncertaintyPct"] == 21.5
-    _assert_scaled(_ring(_site(client, splat)), 1.0)
+    old = db.get(Asset, splat.id)
+    assert old is not None
+    assert str(second.id) not in old.source["url"]
+    assert old.render_config["scale"] == 0.4
+    assert old.valid_to is not None
+    assert capture.site_id is not None
+    revision = registration.splat_asset(db, capture.site_id)
+    assert revision is not None and revision.id != splat.id
+    assert str(second.id) in revision.source["url"]
+    assert "scale" not in revision.render_config
+    assert "scaleEvidence" not in revision.render_config
+    assert revision.render_config["provenance"]["scaleSource"] == "camera-height-estimate"
+    assert revision.render_config["provenance"]["scaleUncertaintyPct"] == 21.5
+    _assert_scaled(_ring(_site(client, revision)), 1.0)
     site = db.get(Site, splat.site_id)
     assert site is not None
     assert site.metadata_["jobId"] == str(second.id)
     assert site.metadata_["registration"]["georef"]["scaleSource"] == "camera-height-estimate"
-    # Still the one splat, and it can be resized again about the new registration's origin.
+    # Two rows, one shown: the old revision is history and is not resized again.
     splats = db.scalars(
         select(Asset).where(
             Asset.site_id == site.id, Asset.representation == Representation.GAUSSIAN_SPLAT
         )
     ).all()
-    assert [a.id for a in splats] == [splat.id]
-    assert _put(client, splat, {"scale": 0.9}).status_code == 200
-    _assert_scaled(_ring(_site(client, splat)), 0.9)
+    assert {a.id for a in splats} == {splat.id, revision.id}
+    refused = _put(client, old, {"scale": 0.9})
+    assert refused.status_code == 409 and refused.json()["code"] == "not_scalable"
+    assert _put(client, revision, {"scale": 0.9}).status_code == 200
+    _assert_scaled(_ring(_site(client, revision)), 0.9)
 
 
 def test_seeding_twice_stores_no_scale_keys_on_unscaled_assets(db: Session) -> None:
