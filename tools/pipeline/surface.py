@@ -31,7 +31,9 @@ them yet). Per cell, streaming, the four highest and the four lowest sample heig
 
 `ground` is the 2nd-lowest height (one sample under the surface cannot lower it) of every
 cell whose centre is within 2.5 m of this one's along each axis (`GROUND_WINDOW_M`): under
-a crown or a roof no wider than that, some neighbour saw the ground. It is a lower
+a crown or a roof no wider than that, some neighbour saw the ground. That needs cells of
+2 m or less (levels 0-3); from 4 m cells up the window is the cell alone and the ground is
+its own 2nd-lowest sample (`groundWindowCells` in the descriptor says which). It is a lower
 envelope, so it is biased **low, never high**: on a slope of grade `g` by up to `2.5 g`
 metres along each axis, and a low outlier that survives the 2nd-lowest rule spreads over
 its whole square. A cell with fewer than `MIN_SAMPLES` (3) samples has no surface
@@ -342,7 +344,7 @@ _PAST_CM = 1 << 40
 
 def _centimetres(metres: F64) -> I64:
     """Whole centimetres, half up. Anything not finite, or too large for the int64 cast to
-    be exact (|cm| >= 2^40, some 11,000 km), becomes `_PAST_CM` *before* the cast, so it
+    be exact (|cm| >= 2^40: eleven million km), becomes `_PAST_CM` *before* the cast, so it
     is past every range rather than wrapped into a plausible height."""
     with np.errstate(invalid="ignore", over="ignore"):
         cm = np.floor(metres * 100.0 + 0.5)

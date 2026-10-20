@@ -38,7 +38,11 @@ how well each cell was seen (ADR 0016).
    highest and four lowest sample heights (`z1 ≥ z2 ≥ z3 ≥ z4` from the top):
    - `dsm = z2`, the 2nd highest: one floater cannot raise it;
    - `ground` = the 2nd lowest, then the least of it over the cells whose centres are within 2.5 m
-     along each axis (a 5 m square): bare ground under a crown or a roof up to 5 m across;
+     along each axis (a 5 m square): bare ground under a crown or a roof up to 5 m across. That
+     holds at levels 0 to 3 (0.25 to 2 m cells: 21, 11, 5 and 3 cells a side). At level 4 and
+     coarser (4 m cells and up) no other cell's centre is within 2.5 m, the window is the cell
+     alone, and `ground` is just the cell's own 2nd-lowest sample: under a crown wider than the
+     cell it reads the crown. The descriptor records the window it used (`groundWindowCells`);
    - `sigma = max(1 cm, (z1 − z4) / 2)`, half the spread of the top four;
    - fewer than 3 samples is no surface: with two, the 2nd lowest is the higher of them and the
      ground would stand above the top. From three up, `ground ≤ dsm` by construction.

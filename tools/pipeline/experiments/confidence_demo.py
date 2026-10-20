@@ -16,8 +16,10 @@ them.
 
 **`--change`** (milestone 5, ADR 0018): e2 has a 1.5 m crate on open ground north-west of
 the tree, where both epochs saw well, that e1 did not, and each epoch is its own scan of
-the field -- its own sample of it, 1 cm of height noise, and a sparse SfM cloud in its
-pose model. The demo then prints the change between their height surfaces (the `surface`
+the field -- its own sample of it, 1 cm of height noise, and a "sparse SfM cloud" in its
+pose model that is only a 3% subsample of those same jittered centres: not an independent
+triangulation, so those points are counted twice (once as SfM, once as splat) and the
+cloud adds no evidence of its own; it exercises the SfM path, nothing more. The demo then prints the change between their height surfaces (the `surface`
 stage's) per cell, the way the change map (A5) measures it: both surfaces at the coarser
 level (dsm by max, ground by min, sigma by max), and `delta = dsm_e2 - dsm_e1` against
 `3 sqrt(sigma_e1^2 + sigma_e2^2 + u_e1^2 + u_e2^2)`, where `u` is each epoch's uncertainty
