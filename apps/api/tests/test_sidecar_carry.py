@@ -749,3 +749,82 @@ def test_the_runner_publishes_again_when_an_attach_lands_mid_publish(
     splat = registration.splat_asset(db, done.site_id)
     assert splat is not None
     assert str(splat.source["url"]).endswith(f"runs/{second.id}/package/splat/tileset.json")
+
+
+# --- epochs (decision D3): carry within one epoch only ------------------------------------
+
+
+def a_second_epoch(db: Session, buckets: Publisher, first: Capture) -> Capture:
+    """Another capture of the same site, naming it, registered as its epoch 2."""
+    found = db.get(Capture, first.id)
+    assert found is not None and found.site_id is not None
+    october = Capture(
+        slug="camp-october",
+        name="Camp in October",
+        kind=CaptureKind.GAUSSIAN_SPLAT,
+        metadata_={"siteId": str(found.site_id)},
+    )
+    db.add(october)
+    db.commit()
+    a_run(buckets, tag=b"october ")
+    republish(db, buckets, october)
+    return october
+
+
+def test_a_re_run_carries_from_its_own_epoch_only(db: Session, buckets: Publisher) -> None:
+    """Objects attached to epoch 1 were segmented on epoch 1's tiles: epoch 2, captured
+    another day, starts with none, and its re-run carries only what epoch 2 had."""
+    first, asset = a_scan_with_everything(db, buckets)
+    epoch_1_url = asset.source["url"]
+    october = a_second_epoch(db, buckets, first)
+
+    fresh = the_splat(db, october)
+    assert fresh.id != asset.id and fresh.epoch_id != asset.epoch_id
+    assert fresh.sidecar_flags == []
+    assert "instances" not in tileset_at(buckets.public, fresh.source["url"])["root"]["extras"]
+    a_run(buckets, tag=b"october refined ")
+    republish(db, buckets, october)
+
+    rerun = the_splat(db, october)
+    assert rerun.id != fresh.id and rerun.epoch_id == fresh.epoch_id
+    files = files_under(buckets.public, directory_of(rerun.source["url"]))
+    assert not set(INSTANCES_FILES) & set(files)
+    assert "instances" not in tileset_at(buckets.public, rerun.source["url"])["root"]["extras"]
+    db.expire_all()
+    unchanged = db.get(Asset, asset.id)
+    assert unchanged is not None and unchanged.source["url"] == epoch_1_url
+    assert unchanged.valid_to is None
+
+
+def test_an_attach_to_another_epoch_does_not_stall_a_re_run(
+    db: Session, buckets: Publisher
+) -> None:
+    """The LiveMoved check is on the epoch's own current asset: objects attached to epoch 1
+    while epoch 2 republishes are not a reason to publish epoch 2 again."""
+    first, asset = a_scan_with_everything(db, buckets)
+    october = a_second_epoch(db, buckets, first)
+    live = registration.live_tileset_url(db, october)
+    assert live is not None and live != asset.source["url"]
+    a_run(buckets, tag=b"october refined ")
+    published = publish_outputs(
+        buckets.private,
+        publish=buckets,
+        job_id=RUN,
+        registration=a_registration(),
+        tiles_stage_id="package",
+        carry_from=live,
+    )
+    attach(db, buckets, asset, {"telemetry.json": b"{}"}, extras={"telemetry": {}})
+
+    register(
+        db,
+        buckets.private,
+        publish=buckets,
+        capture=october,
+        job_id=RUN,
+        registration=a_registration(),
+        tiles_stage_id="package",
+        published=published,
+    )
+
+    assert the_splat(db, october).source["url"] == published.tileset
