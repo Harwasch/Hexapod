@@ -230,7 +230,7 @@ cells, surfacedCells, medianSigmaM, originHeightM, groundWindowM}`, or null — 
    `alignmentCap.uncertaintyM`: `raised` above `t`, `lowered` below `−t`, else `unchanged`;
    `insufficient` where either measured something but no child is shared; no class where
    neither measured anything (the windows' bounding box is not a place either epoch saw — P5's
-   demo report counts those cells as insufficient too; the API does not). `appearance-only`
+   demo report counts those cells as insufficient too; the API does not, kept in review). `appearance-only`
    stays reserved: `appearance: {status: not-computed, reason}`. Two windows together over 2^22
    cells are compared a level up, and the answer says so (`level` above `nativeLevel`).
 3. **Weak cells are classified and flagged, not hidden** (D7). A compared cell is `lowConfidence`
@@ -263,7 +263,11 @@ cells, surfacedCells, medianSigmaM, originHeightM, groundWindowM}`, or null — 
    surface: one side missing everywhere is no map, not a map of insufficient cells),
    `confidence-not-measured` (its `u` and its vouching are unknown), `frames-differ` (a surface
    above another origin height than the site frame's, to the millimetre), `surface-unreadable` /
-   `confidence-unreadable`.
+   `confidence-unreadable`. Both epochs are found (404) before either one's status is judged
+   (409). The origin-height check is kept (review): a site frame is fixed once created and
+   `register` holds every run to its lat, lon and height exactly, so the descriptor's
+   `vertical.originHeightM` is the one place a surface could still disagree with its frame; lat
+   and lon are not in the descriptor.
 8. **Behind the write token, rate-limited** (decided in review). It stores nothing, but a call
    decodes four grids, and the 96 MB grid cache cannot hold four of the largest: the same cost and
    the same pattern as weak areas (POST, token) and fill targets (GET, token). It also spends the
