@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import shutil
 import uuid
 from dataclasses import dataclass, field
@@ -57,6 +58,11 @@ REFERENCE_MARKER = ".reference.json"
 #: 5 MB is tens of thousands of them, and anything larger is not clicks. Checked before a
 #: byte is downloaded -- the file is read whole, on a worker with 2 GB.
 MAX_OBSERVATIONS_BYTES = 5 * 1024 * 1024
+#: The reference's placement as it is shown, when it was resized at runtime (`_shown`).
+SHOWN_PLACEMENT = "placement.shown.json"
+#: How close the reference's georef origin must be to the site frame's to be the pivot a
+#: runtime scale is about: the same numbers, to float round-off (not a tolerance).
+SAME_ORIGIN_DEG, SAME_ORIGIN_M = 1e-9, 1e-6
 #: The two reference artifacts that are directories (the others are single files).
 DIRECTORIES = frozenset({"frames", "poses"})
 
@@ -167,6 +173,7 @@ def _fetch_reference(
         "epochId": str(reference.epoch_id),
         "jobId": str(reference.job_id),
         "revision": reference.revision,
+        "runtimeScale": reference.runtime_scale,
     }
     try:
         held = json.loads(marker.read_text(encoding="utf-8")) if marker.is_file() else None
@@ -197,6 +204,19 @@ def _fetch_reference(
                 gone,
             )
             return None
+    placement = f"{REFERENCE_DIR}/{names['placement']}"
+    if reference.runtime_scale != 1.0:
+        problem = _shown(root, reference)
+        if problem is not None:
+            log.warning(
+                "site context: reference epoch %s is drawn at %g its registered size, but %s; "
+                "not used, the run is aligned by its own georeference",
+                reference.epoch_id,
+                reference.runtime_scale,
+                problem,
+            )
+            return None
+        placement = f"{REFERENCE_DIR}/{SHOWN_PLACEMENT}"
     return {
         "epochId": str(reference.epoch_id),
         "jobId": str(reference.job_id),
@@ -206,8 +226,55 @@ def _fetch_reference(
         "uncertaintyM": reference.uncertainty_m,
         "revision": reference.revision,
         "heightDatum": reference.height_datum,
+        "runtimeScale": reference.runtime_scale,
         **{role: f"{REFERENCE_DIR}/{names[role]}" for role in epochs.REFERENCE_ARTIFACTS},
+        "placement": placement,
     }
+
+
+def _shown(root: Path, reference: epochs.ReferenceChoice) -> str | None:
+    """Write `SHOWN_PLACEMENT`: the reference's placement as the viewer draws it, or say
+    why it cannot be (R2 review of #52: "Set real size" resizes the shown tiles while the
+    files stay as registered, and a later epoch aligned to the files came out at the
+    uncorrected size beside the corrected reference).
+
+    `PUT /assets/{id}/scale` resizes an epoch's splat by `s` about its site frame's origin
+    (`assets._placed_epoch`). The placement takes the model into east/north/up about the
+    reference's georef origin; when that is the frame's origin, the shown placement is
+    exactly `s * placement`: scale and translation times `s`, rotation unchanged. When it is
+    not, the pivot is elsewhere in that frame and nothing here is guessed: refused. Always
+    computed from the downloaded `placement.json`, which is kept as is, so a resumed seed
+    never scales twice."""
+    scale = reference.runtime_scale
+    if not math.isfinite(scale) or scale <= 0:
+        return f"its runtime scale {scale!r} is not a positive number"
+    try:
+        georef = json.loads((root / epochs.REFERENCE_ARTIFACTS["georef"]).read_text("utf-8"))
+        placement = json.loads((root / epochs.REFERENCE_ARTIFACTS["placement"]).read_text("utf-8"))
+    except (OSError, ValueError) as error:
+        return f"its placement or georef cannot be read ({error})"
+    origin = reference.frame_origin
+    raw = [georef.get(k) for k in ("lat", "lon", "height")] if isinstance(georef, dict) else []
+    here = [float(v) for v in raw if isinstance(v, int | float) and not isinstance(v, bool)]
+    if (
+        origin is None
+        or len(here) != 3
+        or abs(here[0] - origin[0]) > SAME_ORIGIN_DEG
+        or abs(here[1] - origin[1]) > SAME_ORIGIN_DEG
+        or abs(here[2] - origin[2]) > SAME_ORIGIN_M
+    ):
+        return "its georef origin is not the site frame's, about which it is resized"
+    if not isinstance(placement, dict) or not isinstance(placement.get("scale"), int | float):
+        return "its placement has no scale"
+    shown = dict(placement)
+    shown["scale"] = float(placement["scale"]) * scale
+    for key in ("translationM", "translation"):
+        value = placement.get(key)
+        if isinstance(value, list):
+            shown[key] = [float(v) * scale for v in value]
+    shown["runtimeScale"] = scale
+    (root / SHOWN_PLACEMENT).write_text(json.dumps(shown, indent=1) + "\n", encoding="utf-8")
+    return None
 
 
 def _observations(storage: ObjectStorage, key: str, directory: Path) -> list[Any]:

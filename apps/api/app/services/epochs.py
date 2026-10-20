@@ -452,6 +452,11 @@ class ReferenceChoice:
     #: The height datum its origin is on, as its own alignment recorded it (`origin.
     #: heightDatum`), else None: `align_epoch` never reframes across two datums.
     height_datum: str | None = None
+    #: The factor its shown asset is drawn at (`renderConfig.scale`, "Set real size"), 1
+    #: when none: its files are as registered, and the seed scales the placement to match.
+    runtime_scale: float = 1.0
+    #: The site frame's origin (lat, lon, height): the pivot a runtime scale is about.
+    frame_origin: tuple[float, float, float] | None = None
 
 
 def survey_evidenced(alignment: dict[str, Any]) -> bool:
@@ -488,6 +493,12 @@ def _reference_uncertainty(epoch: Epoch, capture: Capture | None) -> float:
         if number is not None and number > 0:
             return number
     return UNRECORDED_UNCERTAINTY_M
+
+
+def _runtime_scale(asset: Asset) -> float:
+    """The factor an asset is drawn at (`renderConfig.scale`), 1 when it has none."""
+    value = _number((asset.render_config or {}).get("scale"))
+    return value if value is not None and value > 0 else 1.0
 
 
 def _reference_datum(epoch: Epoch) -> str | None:
@@ -589,6 +600,8 @@ def reference_epoch(
         statement = statement.where((Epoch.capture_id.is_(None)) | (Epoch.capture_id != capture_id))
     if own is not None:
         statement = statement.where(Epoch.ordinal < own.ordinal)
+    frame = db.get(SiteFrame, site_id)
+    frame_origin = (frame.lat, frame.lon, frame.height) if frame is not None else None
     candidates: list[ReferenceChoice] = []
     for epoch in db.scalars(statement):
         assert epoch.job_id is not None
@@ -618,6 +631,8 @@ def reference_epoch(
                 keys=keys,
                 revision=revision,
                 height_datum=_reference_datum(epoch),
+                runtime_scale=_runtime_scale(shown),
+                frame_origin=frame_origin,
             )
         )
     if not candidates:

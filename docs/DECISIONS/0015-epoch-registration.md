@@ -150,6 +150,11 @@ worth 3 cm, hence the anchor floor in item 6.
   before it, so the frame-defining epoch never aligns onto one aligned to it. `survey` is passed
   on only for an `rtk-drone` epoch, else as `coarse`, which keeps item 6's RTK rule true end to
   end.
+- **A reference resized at runtime** ("Set real size", `renderConfig.scale` `s`): its files stay
+  as registered, so the seed hands the pipeline the placement as shown, `s × placement`
+  (`placement.shown.json`; exact because the resize is about the site frame's origin, which is the
+  reference's georef origin), and records `runtimeScale`. A reference whose georef is not at the
+  frame's origin is not used when resized: nothing about its pivot is guessed.
 - **Recording.** `register` writes the alignment onto `epochs.alignment` and sets the epoch's
   platform to the one the verdict was judged for. A visual alignment's capture and asset say
   `georefMethod: visual-epoch`; their scale is `visual-epoch` only when the reference's was

@@ -156,6 +156,7 @@ def test_a_published_reference_is_seeded_with_its_files_and_paths(
         "uncertaintyM": 0.065,
         "revision": chosen.revision,
         "heightDatum": None,
+        "runtimeScale": 1.0,
         "frames": "reference/frames",
         "poses": "reference/poses",
         "placement": "reference/placement.json",
@@ -638,3 +639,96 @@ def test_the_reference_states_the_height_datum_its_origin_is_on(
     assert first.site_id is not None
     document = seeded(db, storage, second_capture(db, first.site_id), tmp_path)
     assert document["reference"]["heightDatum"] == expected
+
+
+# --- a reference resized at runtime ("Set real size") -------------------------------------
+
+
+def _resized_reference(
+    db: Session, storage: S3Storage, tmp_path: Path, *, scale: float, georef_at_frame: bool
+) -> tuple[Capture, Epoch, dict[str, Any]]:
+    """Epoch 1 with a real placement and georef in the bucket, then resized at runtime:
+    `renderConfig.scale` on its shown asset (what `PUT /assets/{id}/scale` sets). Its tiles
+    and files are unchanged; the viewer draws them `scale` times about the site frame."""
+    from app.models import SiteFrame
+
+    first, epoch = first_epoch(db, storage, tmp_path, alignment={"verdict": "coarse"})
+    assert first.site_id is not None and epoch.job_id is not None
+    frame = db.get(SiteFrame, first.site_id)
+    assert frame is not None
+    placement = {
+        "scale": 2.0,
+        "rotation": [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        "translationM": [1.0, -2.0, 0.5],
+    }
+    georef = {"lat": frame.lat, "lon": frame.lon, "height": frame.height}
+    if not georef_at_frame:
+        georef["lat"] += 0.001
+    storage.put_object(
+        artifact_key(epoch.job_id, "place", "placement.json"),
+        json.dumps(placement).encode(),
+        "application/json",
+    )
+    storage.put_object(
+        artifact_key(epoch.job_id, "georeference", "georef.json"),
+        json.dumps(georef).encode(),
+        "application/json",
+    )
+    shown = epochs.current_asset(db, epoch.id)
+    assert shown is not None
+    shown.render_config = {**(shown.render_config or {}), "scale": scale}
+    db.commit()
+    return first, epoch, placement
+
+
+def test_a_reference_resized_at_runtime_is_seeded_at_the_size_it_is_shown(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """R2 review of #52: "Set real size" draws the reference at `renderConfig.scale` while
+    its placement file stays as registered, so a later epoch aligned to the file appeared
+    at the uncorrected size beside the corrected reference. The seed hands the pipeline
+    the placement as shown: the same similarity scaled by the runtime factor about the
+    site frame's origin, which is the reference's own georef origin (the scale's pivot)."""
+    first, _epoch, placement = _resized_reference(
+        db, storage, tmp_path, scale=0.5, georef_at_frame=True
+    )
+    assert first.site_id is not None
+    document = seeded(db, storage, second_capture(db, first.site_id), tmp_path)
+
+    reference = document["reference"]
+    assert reference["runtimeScale"] == 0.5
+    shown = json.loads((tmp_path / "site_context" / reference["placement"]).read_text())
+    assert shown["scale"] == placement["scale"] * 0.5
+    assert shown["rotation"] == placement["rotation"]
+    assert shown["translationM"] == [0.5, -1.0, 0.25]
+    # The registered file is kept as downloaded, so a resumed seed never scales twice.
+    registered = tmp_path / "site_context" / "reference" / "placement.json"
+    assert json.loads(registered.read_text()) == placement
+
+
+def test_a_reference_resized_about_another_origin_is_not_seeded(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """The runtime scale's pivot is the site frame's origin; a reference whose georef is
+    not at that origin cannot be scaled about it exactly from its files, so it is not
+    used (the run aligns by its own georeference) rather than placed at a guessed size."""
+    first, _epoch, _placement = _resized_reference(
+        db, storage, tmp_path, scale=0.5, georef_at_frame=False
+    )
+    assert first.site_id is not None
+    document = seeded(db, storage, second_capture(db, first.site_id), tmp_path)
+    assert document["reference"] is None
+
+
+def test_an_unresized_reference_is_seeded_as_registered(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    first, _epoch, placement = _resized_reference(
+        db, storage, tmp_path, scale=1.0, georef_at_frame=False
+    )
+    assert first.site_id is not None
+    document = seeded(db, storage, second_capture(db, first.site_id), tmp_path)
+    assert document["reference"]["runtimeScale"] == 1.0
+    assert document["reference"]["placement"] == "reference/placement.json"
+    shown = json.loads((tmp_path / "site_context" / document["reference"]["placement"]).read_text())
+    assert shown == placement
