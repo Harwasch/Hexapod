@@ -500,7 +500,70 @@ export class SiteManager {
     const entry = this.loaded.get(site.id);
     if (entry) {
       entry.site = { ...entry.site, name: site.name, cameraBookmarks: site.cameraBookmarks };
+      this.applyDatesRecord(entry, site);
     }
+  }
+
+  /**
+   * A fresh record of a loaded site with dates (epochs): a date published since it was loaded,
+   * or one run again (its new model current, the old one superseded and no longer listed). The
+   * controls read the fresh record, so the scene takes it too, or a date they offer could not
+   * be shown and a re-run's new model would be described while the old one stayed drawn.
+   *
+   * Its epochs and assets are replaced; the models of assets no longer listed are let go; a
+   * date whose frame anchor changed is placed again (`placeTileset`); the date chosen stays
+   * while it is still offered, else the latest is shown. A record that changes nothing of the
+   * dates (a rename, a bookmark) changes nothing here, and a site without dates is left as it
+   * was loaded, as before.
+   */
+  private applyDatesRecord(entry: ActiveSite, site: Site): void {
+    const epochs = siteEpochs(site);
+    if (epochs.length === 0 && entry.epochs.length === 0) return;
+    const key = (list: readonly Epoch[], assets: readonly SiteAsset[]) =>
+      JSON.stringify([
+        list.map((e) => [e.id, e.status, e.currentAssetId, e.ordinal, e.observedAt]),
+        assets.map((a) => [a.id, a.epochId, a.validTo, a.sourceKind, a.representation]),
+      ]);
+    const changed = key(entry.epochs, entry.site.assets) !== key(epochs, site.assets);
+    entry.epochs = epochs;
+    if (!changed) return;
+    entry.site = { ...entry.site, assets: site.assets };
+    const listed = new Set(site.assets.map((asset) => asset.id));
+    for (const [id, handle] of entry.handles) {
+      if (listed.has(id)) {
+        handle.asset = site.assets.find((asset) => asset.id === id) ?? handle.asset;
+        continue;
+      }
+      for (const other of entry.handles.values()) other.followers?.delete(handle);
+      this.disposeHandle(handle);
+      entry.handles.delete(id);
+    }
+    if (entry.pinnedAssetId && !listed.has(entry.pinnedAssetId)) entry.pinnedAssetId = null;
+    if (
+      entry.epochId &&
+      !epochOptions(epochs, site.assets, entry.representation).some(
+        (option) => option.epoch.id === entry.epochId,
+      )
+    )
+      entry.epochId = null;
+    // Dates drawn with an anchor that is no longer the frame's own model are placed again.
+    for (const handle of entry.handles.values()) {
+      const tileset = handle.tileset;
+      if (!tileset || tileset.isDestroyed() || !handle.asset.epochId) continue;
+      const anchor = frameAnchor(epochs, site.assets, handle.asset.representation)?.asset.id;
+      const own = anchor === undefined || anchor === handle.asset.id;
+      const placedRight = own
+        ? !handle.follows && !handle.followPending
+        : handle.follows === anchor;
+      if (placedRight) continue;
+      for (const other of entry.handles.values()) other.followers?.delete(handle);
+      handle.follows = undefined;
+      // A clamp still sampling for the old placement applies nothing (`clampToGround`).
+      if (handle.placement) handle.placement.serial += 1;
+      this.placeTileset(entry, handle, tileset);
+    }
+    this.restartLoad(entry);
+    void this.showRepresentation(entry, entry.representation);
   }
 
   private get active(): ActiveSite | null {
