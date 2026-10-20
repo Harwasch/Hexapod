@@ -584,3 +584,33 @@ def test_frames_that_carry_exif_gps_still_register(
     assert document["exifPosePriorsCleared"] == 30
     assert len(document["registeredNew"]) == 30
     assert document["referenceMovedMaxM"] < 1e-9
+
+
+@requires_pycolmap
+def test_a_reference_frame_that_matches_nothing_does_not_crash_the_registration(
+    tmp_path: Path, two_epochs: dict[str, tuple[Path, Path, tree_frames.Truth]]
+) -> None:
+    """A sampled reference frame with no verified two-view geometry -- here a frame whose
+    pixels were replaced by an unrelated pattern, so it has features that match nothing --
+    was seeded into the fixed model
+    anyway; COLMAP's database cache dropped it and incremental mapping raised IndexError
+    ("key was not found in unordered_node_map"), failing the run (the review saw it on 1
+    of 6 runs). Only reference frames with at least one verified geometry are seeded."""
+    from PIL import Image
+
+    import drone_frames
+
+    reference, new = two_epochs["reference"], two_epochs["new"]
+    frames = tmp_path / "reference" / "frames"
+    shutil.copytree(reference[0], frames)
+    stranger = frames / "frame_0024.jpg"
+    with Image.open(stranger) as image:
+        size = image.size
+    drone_frames.pixels(size, seed=99).save(stranger, format="JPEG", quality=92)
+
+    document = _register(tmp_path / "reg", (frames, reference[1], reference[2]), new)
+
+    assert document["referenceFramesUnmatched"] == ["frame_0024.jpg"]
+    assert document["registeredReference"] == 39
+    assert len(document["registeredNew"]) == 30
+    assert document["referenceMovedMaxM"] < 1e-9

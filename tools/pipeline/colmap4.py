@@ -392,12 +392,14 @@ def _register(pycolmap: Any, parsed: argparse.Namespace) -> int:
         db.close()
     side_of = {image_id: image.name.split("/", 1)[0] for image_id, image in by_id.items()}
     cross_pairs = verified = cross_matches = 0
+    connected: set[int] = set()
     for pair_id, geometry in zip(pair_ids, geometries, strict=True):
         count = len(geometry.inlier_matches)
         if count == 0:
             continue
         verified += 1
         a, b = pycolmap.pair_id_to_image_pair(pair_id)
+        connected.update((a, b))
         if side_of[a] != side_of[b]:
             cross_pairs += 1
             cross_matches += count
@@ -418,10 +420,17 @@ def _register(pycolmap: Any, parsed: argparse.Namespace) -> int:
             constant.add(camera.camera_id)
     for rig in rigs:
         seed.add_rig(rig)
+    unmatched: list[str] = []
     for frame in frames:
         # One camera image per frame (the database's trivial rigs): its data id.
         image = by_id[min(data.id for data in frame.data_ids)]
         if side_of[image.image_id] != "ref":
+            continue
+        if image.image_id not in connected:
+            # A reference frame no verified pair touches is dropped from COLMAP's
+            # database cache, and seeding it anyway made incremental mapping raise
+            # ("key was not found in unordered_node_map"). It adds no constraint.
+            unmatched.append(image.name.split("/", 1)[1])
             continue
         frame.rig_from_world = reference_by_name[image.name.split("/", 1)[1]].cam_from_world()
         seed.add_frame(frame)
@@ -481,6 +490,7 @@ def _register(pycolmap: Any, parsed: argparse.Namespace) -> int:
         "exifPosePriorsCleared": priors_from_exif,
         "registeredNew": dict(sorted(registered_new.items())),
         "registeredReference": registered_reference,
+        "referenceFramesUnmatched": sorted(unmatched),
         "referenceMovedMaxM": moved,
         "seconds": {k: round(v, 2) for k, v in seconds.items()},
     }
