@@ -96,8 +96,8 @@ test("without WebGL the hero falls back to a still and the examples scroll to th
   await expect(page.locator("canvas.gl")).toBeHidden();
   await page.getByRole("button", { name: "Solar farm" }).click();
   await expect(page.locator("#use-solar")).toBeInViewport();
-  // The site picker is a 2D canvas, so the form still works.
-  await expect(page.locator("#pk-total")).toHaveText(/acres/);
+  // The form needs no WebGL of its own: acres alone complete a request.
+  await expect(page.locator("form#f").getByLabel("Acres")).toBeEditable();
 });
 
 test("the nav scrolls to each section", async ({ page }) => {
@@ -142,8 +142,7 @@ test("the request form validates, and sends nothing while it is not connected", 
   const submit = form.getByRole("button", { name: "Request a site scan" });
   const status = form.getByRole("status");
 
-  // Nothing selected and nothing typed: every required part is called out.
-  await form.getByRole("button", { name: "Clear" }).click();
+  // Nothing found and nothing typed: every required part is called out.
   await expect(form.getByLabel("Acres")).toHaveValue("");
   await submit.click();
   await expect(page.locator("#f-name-err")).toHaveText("Enter your name.");
@@ -171,39 +170,34 @@ test("the request form validates, and sends nothing while it is not connected", 
   await expect(status).toBeVisible();
   await expect(status).toContainText("not connected yet, so nothing was sent");
   await expect(status).toContainText("12 acres");
+  // What would be sent, exactly: no land was found, so no boundary and no parcels.
+  expect(JSON.parse((await status.getAttribute("data-request")) ?? "null")).toEqual({
+    name: "Ada Lovelace",
+    email: "ada@example.com",
+    notes: "Area (acres): 12",
+    boundary: null,
+    parcelIds: [],
+  });
   expect(leaks.left()).toEqual(NOTHING_LEFT);
 });
 
-test("searching for an address adds its parcel, as a click on the map does", async ({ page }) => {
-  await page.goto("/landing.html#start");
-  const form = page.locator("form#f");
-  const list = form.locator("#pk-list");
-  await expect(list.locator("li")).toHaveCount(1);
-  await expect(list).toContainText("Home Ranch");
-  await form.getByRole("searchbox").fill("Creekside");
-  await form.getByRole("searchbox").press("Enter");
-  await expect(list.locator("li")).toHaveCount(2);
-  await expect(list).toContainText("Home Ranch");
-  await expect(list).toContainText("Creek Flats");
-});
-
-test("when the site picker fails, the form still validates and still sends nothing", async ({
+test("when the site finder fails, the form still validates and still sends nothing", async ({
   page,
 }) => {
-  // The picker module, swapped for one that throws as the page starts it.
+  // The finder module, swapped for one that throws as the page starts it.
   await page.route(
-    (url) => url.pathname.endsWith("/src/landing/picker.js"),
+    (url) => url.pathname.endsWith("/src/landing/finder.ts"),
     (route) =>
       route.fulfill({
         contentType: "text/javascript",
-        body: 'export const startSitePicker = () => { throw new Error("test: no picker"); };',
+        body: 'export const startFinder = () => { throw new Error("test: no finder"); };',
       }),
   );
   const leaks = watchLeaks(page);
   await page.goto("/landing.html#start");
   leaks.arm();
   const form = page.locator("form#f");
-  await expect(form.locator("#pk-hint")).toHaveText(/could not load/);
+  await expect(form.getByRole("button", { name: "Find my land" })).toBeDisabled();
   const submit = form.getByRole("button", { name: "Request a site scan" });
   await form.getByLabel("Name").fill("Ada Lovelace");
   await form.getByLabel("Email").fill("ada@example.com");

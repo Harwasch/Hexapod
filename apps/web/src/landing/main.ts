@@ -9,8 +9,16 @@
 import "./landing.css";
 
 import { BRAND } from "./brand";
-import { REQUEST_ENDPOINT, validateRequest, type RequestErrors, type RequestField } from "./form";
-import { startSitePicker, type SitePicker } from "./picker.js";
+import type { FoundLand } from "../finder/handoff";
+import {
+  REQUEST_ENDPOINT,
+  buildPayload,
+  validateRequest,
+  type RequestErrors,
+  type RequestField,
+  type ScanRequestPayload,
+} from "./form";
+import { startFinder } from "./finder";
 import type * as SceneModule from "./scene.js";
 import type { Hero, HeroLabel, HeroStop, HeroZone } from "./scene.js";
 
@@ -25,14 +33,6 @@ function $<T extends HTMLElement>(selector: string, type: new () => T): T {
 // landing.html's inline guard covers the page before this runs, and without JavaScript.
 const form = $("#f", HTMLFormElement);
 form.addEventListener("submit", (event) => event.preventDefault());
-let picker: SitePicker | null = null;
-try {
-  picker = startSitePicker();
-} catch (error) {
-  // The map is a convenience: the acres field still says how big the site is.
-  console.warn("landing: the site picker could not start", error);
-  $("#pk-hint", HTMLElement).textContent = "The map could not load. Enter the acres instead.";
-}
 const status = $("#f-ok", HTMLElement);
 const fields: Record<Exclude<RequestField, "area">, HTMLInputElement> = {
   name: $("#f-name", HTMLInputElement),
@@ -45,6 +45,76 @@ const errorOf: Record<RequestField, HTMLElement> = {
   acres: $("#f-acres-err", HTMLElement),
   area: $("#pk-err", HTMLElement),
 };
+
+/** The land the finder handed back, if any. */
+let land: FoundLand | null = null;
+const acresOf = (m2: number) => {
+  const acres = m2 / 4046.856;
+  return acres >= 100 ? acres.toFixed(0) : acres.toFixed(1);
+};
+
+/** Shows the land found (or that there is none yet) under the finder's button. */
+function showLand() {
+  const list = $("#pk-list", HTMLElement);
+  list.replaceChildren();
+  $("#pk-empty", HTMLElement).hidden = land !== null;
+  $("#pk-tot", HTMLElement).hidden = land === null;
+  const credit = $("#pk-attr", HTMLElement);
+  credit.hidden = !land?.attributions.length;
+  credit.textContent = land?.attributions.length
+    ? `Parcel records: ${land.attributions.join("; ")}. County assessor mapping, not a survey.`
+    : "";
+  if (!land) return;
+  const item = document.createElement("li");
+  const what = document.createElement("span");
+  const name = document.createElement("b");
+  name.textContent = land.label;
+  const sub = document.createElement("em");
+  sub.textContent =
+    land.method === "parcels"
+      ? land.parcelIds.length === 1
+        ? "County parcel record"
+        : `${land.parcelIds.length} county parcel records`
+      : "Drawn on the map";
+  what.append(name, sub);
+  const size = document.createElement("span");
+  size.className = "ac";
+  size.textContent = `${acresOf(land.areaM2)} ac`;
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "rm";
+  remove.setAttribute("aria-label", `Remove ${land.label}`);
+  remove.textContent = "×";
+  remove.addEventListener("click", clearLand);
+  item.append(what, size, remove);
+  list.append(item);
+  const acres = acresOf(land.areaM2);
+  $("#pk-total", HTMLElement).textContent = `${acres} acres · ${(land.areaM2 / 1e4).toFixed(1)} ha`;
+}
+
+function clearLand() {
+  land = null;
+  fields.acres.value = "";
+  showLand();
+}
+
+$("#pk-clear", HTMLButtonElement).addEventListener("click", clearLand);
+try {
+  startFinder({
+    open: $("#pk-open", HTMLButtonElement),
+    dialog: $("#pk-dialog", HTMLDialogElement),
+    onFound: (found) => {
+      land = found;
+      fields.acres.value = acresOf(found.areaM2);
+      errorOf.area.hidden = true;
+      showLand();
+    },
+  });
+} catch (error) {
+  // The finder is a convenience: the acres field still says how big the site is.
+  console.warn("landing: the site finder could not start", error);
+  $("#pk-open", HTMLButtonElement).disabled = true;
+}
 
 function showErrors(errors: RequestErrors) {
   for (const key of Object.keys(errorOf) as RequestField[]) {
@@ -65,14 +135,15 @@ function showErrors(errors: RequestErrors) {
 }
 
 form.addEventListener("submit", () => {
-  const errors = validateRequest({
+  const request = {
     name: fields.name.value,
     organization: $("#f-org", HTMLInputElement).value,
     email: fields.email.value,
     acres: fields.acres.value,
     message: $("#f-msg", HTMLTextAreaElement).value,
-    areaCount: picker?.count() ?? 0,
-  });
+    hasBoundary: land !== null,
+  };
+  const errors = validateRequest(request);
   showErrors(errors);
   const first = (["name", "email", "acres"] as const).find((k) => errors[k]);
   if (first) {
@@ -84,9 +155,15 @@ form.addEventListener("submit", () => {
     status.hidden = true;
     return;
   }
+  // What would be sent, kept on the notice (and read by e2e) until the form has somewhere to go.
+  const payload: ScanRequestPayload = buildPayload(request, land);
+  status.dataset.request = JSON.stringify(payload);
   if (REQUEST_ENDPOINT === null) {
+    const where = land
+      ? `${land.label}, ${acresOf(land.areaM2)} acres`
+      : `${fields.acres.value} acres`;
     status.textContent =
-      `Your request is complete (${picker?.count() ? picker.summary() : `${fields.acres.value} acres`}), ` +
+      `Your request is complete (${where}), ` +
       "but this form is not connected yet, so nothing was sent.";
     status.hidden = false;
   }
