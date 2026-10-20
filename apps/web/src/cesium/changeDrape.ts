@@ -129,6 +129,11 @@ export class ChangeDrapeLayer {
   /** Takes everything drawn off the ground. */
   clear(): void {
     if (!this.primitives.length) return;
+    // The viewer went first (the app closing): its collections, and what they held, with it.
+    if (this.scene.isDestroyed()) {
+      this.primitives = [];
+      return;
+    }
     // `remove` destroys each primitive (the collection's `destroyPrimitives` default).
     for (const { primitive } of this.primitives) this.scene.groundPrimitives.remove(primitive);
     this.primitives = [];

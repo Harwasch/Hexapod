@@ -44,6 +44,7 @@ function fakeScene() {
       }),
     },
     requestRender: vi.fn(),
+    isDestroyed: () => false,
   };
   return { scene: scene as unknown as Scene, added, raw: scene };
 }
@@ -140,6 +141,43 @@ describe("the change drape", () => {
     layer.show(map([area("raised", true, 0)]));
     expect(added).toHaveLength(0);
     layer.destroy();
+  });
+
+  it("keeps a polygon's holes open", () => {
+    const { scene, added } = fakeScene();
+    const [outer] = square(0);
+    const hole = [
+      [-123.88 + 0.2e-5, 46.130002],
+      [-123.88 + 0.8e-5, 46.130002],
+      [-123.88 + 0.8e-5, 46.130008],
+      [-123.88 + 0.2e-5, 46.130008],
+      [-123.88 + 0.2e-5, 46.130002],
+    ];
+    const ringed = {
+      class: "lowered",
+      footprint: { type: "MultiPolygon", coordinates: [[outer, hole]] },
+      cells: 1,
+      lowConfidence: false,
+    } as unknown as ChangeArea;
+    new ChangeDrapeLayer(scene).show(map([ringed]));
+    const instances = added[0]?.geometryInstances as unknown as {
+      geometry: { _polygonHierarchy: { positions: unknown[]; holes: { positions: unknown[] }[] } };
+    }[];
+    const hierarchy = instances[0]?.geometry._polygonHierarchy;
+    expect(hierarchy?.positions).toHaveLength(5);
+    expect(hierarchy?.holes).toHaveLength(1);
+    expect(hierarchy?.holes[0]?.positions).toHaveLength(5);
+  });
+
+  it("leaves a destroyed scene alone when it is cleared after the viewer went", () => {
+    const { scene, raw } = fakeScene();
+    const layer = new ChangeDrapeLayer(scene);
+    layer.show(map([area("raised", false, 0)]));
+    Object.assign(raw, { isDestroyed: () => true });
+    raw.requestRender.mockClear();
+    expect(() => layer.destroy()).not.toThrow();
+    expect(raw.groundPrimitives.remove).not.toHaveBeenCalled();
+    expect(raw.requestRender).not.toHaveBeenCalled();
   });
 
   it("skips a ring too short to be a polygon rather than failing the whole class", () => {
