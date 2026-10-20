@@ -425,6 +425,8 @@ export class SiteManager {
    *  (scanView/ScanRendererHost.ts) while CesiumJS keeps the tileset, hidden, for its frame
    *  and its solids. */
   private splatRenderer: SplatRendererKind = DEFAULT_SPLAT_RENDERER;
+  /** The view rule asked for last (`setViewRule`): an earlier call still loading gives way. */
+  private ruleAsked: ViewRule | null = null;
   /** The site the representation switcher, clipping and the HUD refer to. */
   private primaryId: string | null = null;
   private nearId: string | null = null;
@@ -1552,12 +1554,13 @@ export class SiteManager {
    */
   async setViewRule(rule: ViewRule | null): Promise<void> {
     const active = this.active;
+    this.ruleAsked = rule;
     if (!active) return;
     if (!rule) return void this.endRule(active);
     if (!active.rule) {
       const { ruleAssets, startCompositor } = await import("./compositorSession");
       const cesium = () => this.splatRenderer === "cesium";
-      if (this.active !== active) return;
+      if (this.active !== active || this.ruleAsked !== rule) return;
       if (!active.rule) {
         // Refused when the dates cannot be drawn as one here.
         if (!ruleAssets(active, active.representation, cesium())) return;

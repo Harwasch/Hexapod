@@ -283,6 +283,23 @@ describe("a per-cell view rule", () => {
     expect(drawn()).toEqual({ [A1.id]: DRAWN, [A2.id]: DRAWN });
   });
 
+  it("follows the latest request while the first is still loading its code", async () => {
+    const { manager, rules, drawn } = harness();
+    await open(manager);
+    // Off asked before the first rule's code is in: the rule never starts.
+    const first = manager.setViewRule("latest");
+    await manager.setViewRule(null);
+    await first;
+    await settle();
+    expect(rules).toEqual([]);
+    expect(drawn()).toEqual({ [A1.id]: ALONE, [A2.id]: DRAWN });
+    // Two rules asked one after the other: the second is what is drawn.
+    const one = manager.setViewRule("latest");
+    const two = manager.setViewRule("data-age");
+    await Promise.all([one, two]);
+    expect(useViewRule.getState().active?.rule).toBe("data-age");
+  });
+
   it("turned off, draws the one date chosen again", async () => {
     const { manager, rules, drawn } = harness();
     await open(manager);
