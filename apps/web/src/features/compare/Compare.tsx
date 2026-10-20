@@ -1,13 +1,32 @@
 import { Columns2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { EmptyState, GlassField, GlassPanel, GlassSelect, GlassSwitch, useFieldId } from "@twin/ui";
 
 import { useLayers as useLayerCatalog } from "@/api/queries";
+import { ErrorBoundary } from "@/app/ErrorBoundary";
 import { useScene } from "@/cesium/SceneContext";
 import { recordAction } from "@/state/history";
 import { useLayers } from "@/state/layers";
+import { useSites } from "@/state/sites";
 import { useUi } from "@/state/ui";
+
+/** Compare › Dates, loaded on demand: the globe's first load carries only its slot. */
+const CompareDates = lazy(() =>
+  import("./CompareDates").then((m) => ({ default: m.CompareDates })),
+);
+
+/** The active site's dates, side by side (ADR 0017), above the layers. */
+function DatesSlot() {
+  const siteId = useSites((s) => s.activeSiteId);
+  return siteId ? (
+    <ErrorBoundary inline label="Compare dates">
+      <Suspense fallback={null}>
+        <CompareDates siteId={siteId} />
+      </Suspense>
+    </ErrorBoundary>
+  ) : null;
+}
 
 const COMPARABLE = new Set([
   "cesium-ion-imagery",
@@ -39,14 +58,18 @@ export function CompareControls() {
 
   if (comparable.length < 2)
     return (
-      <EmptyState
-        icon={<Columns2 size={26} />}
-        title="Nothing to compare yet"
-        body="Add at least two imagery or 3D layers to swipe between them."
-      />
+      <>
+        <DatesSlot />
+        <EmptyState
+          icon={<Columns2 size={26} />}
+          title="Nothing to compare yet"
+          body="Add at least two imagery or 3D layers to swipe between them."
+        />
+      </>
     );
   return (
     <div className="glass-stack" data-testid="compare-controls">
+      <DatesSlot />
       <GlassField label="Left" htmlFor={leftId}>
         <GlassSelect id={leftId} value={left} onChange={(e) => setLayers({ left: e.target.value })}>
           <option value="">Choose a layer…</option>
@@ -96,12 +119,16 @@ export function CompareControls() {
   );
 }
 
-/** Applies the comparison to the scene and draws its divider; mounted once, in the shell. */
+/**
+ * Applies the layer comparison to the scene and draws the divider, which two dates compared
+ * (Compare › Dates; the scene's own) share; mounted once, in the shell.
+ */
 export function CompareSplit() {
   const scene = useScene();
   const active = useUi((s) => s.compareActive);
   const left = useUi((s) => s.compareLeft);
   const right = useUi((s) => s.compareRight);
+  const dates = useSites((s) => s.compareDates !== null);
 
   useEffect(() => {
     if (!scene) return;
@@ -117,7 +144,7 @@ export function CompareSplit() {
 
   useEffect(() => () => scene?.layers.setSplit(null, null), [scene]);
 
-  return active && left && right ? <SplitSlider /> : null;
+  return (active && left && right) || dates ? <SplitSlider /> : null;
 }
 
 function SplitSlider() {
