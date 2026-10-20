@@ -3,7 +3,7 @@
  *
  * The API outlines the epoch's weak cells (weak-v1: fewer than half of a cell's splats pass
  * the capture checks, or the cell was never seen; ADR 0016) as at most three smoothed patches
- * within one battery's lanes, nearest the view first, each with the pattern its reasons ask
+ * (within one battery's lanes, with drone missions on), nearest the view first, each with the pattern its reasons ask
  * for (nadir lines, crossing obliques or an orbit) and a hint. Each patch becomes an area zone
  * on the site's project carrying its scout capture (`missions/scout.ts`): flown by the drone
  * class, at the height that gives the detail the patch asks for, with the pattern and camera
@@ -22,6 +22,7 @@ import { footprintAreaM2, toAcres } from "@twin/geo";
 
 import { requestWeakAreas } from "@/api/queries";
 import { ApiError } from "@/api/error";
+import { env } from "@/app/env";
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import { describeError } from "@/lib/log";
 import { nextAreaId, zoneFromFootprint } from "@/missions/areas";
@@ -164,10 +165,14 @@ export async function rescanWeak(
     return;
   }
   const center = scene?.camera.viewCenter() ?? null;
+  // One battery's lanes bound a drone's patches; walked or filmed (no drone yet, drone
+  // missions off) a battery is nobody's limit, so none is asked for or claimed. The budget is
+  // the drone class's 60 m nadir lanes though a patch may fly lower (docs/DRONES.md).
+  const drone = env.droneExportEnabled;
   let read: WeakAreas;
   try {
     read = await requestWeakAreas(site.id, epochId, {
-      budgetM2: scoutBudgetM2(DEFAULT_SCOUT),
+      budgetM2: drone ? scoutBudgetM2(DEFAULT_SCOUT) : null,
       focus: center ? [center.longitude, center.latitude] : null,
       maxAreas: RESCAN_MAX_AREAS,
     });
@@ -207,7 +212,7 @@ export async function rescanWeak(
   const gsdM = Math.min(...zones.map((z) => scoutGeometry(scoutOf(z.scout)).gsdM));
   const goal = rescanGoal(gsdM);
   const count = `${zones.length} weak area${zones.length === 1 ? "" : "s"}`;
-  const note = `${count}, ${acres < 1 ? acres.toFixed(2) : Math.round(acres)} ac, of ${read.weakCells.toLocaleString()} weak cells chosen by ${RESCAN_ATTRIBUTION}${read.truncatedByBudget ? " within one battery" : ""}. ${read.heuristic}`;
+  const note = `${count}, ${acres < 1 ? acres.toFixed(2) : Math.round(acres)} ac, of ${read.weakCells.toLocaleString()} weak cells chosen by ${RESCAN_ATTRIBUTION}${drone && read.truncatedByBudget ? " within one battery" : ""}. ${read.heuristic}`;
   // A fresh composer, as "Lift the fog" starts one: a card left open would hand the re-scan
   // its zones, machines, answers and, mid-revision, the approved plan it replaces.
   useMission.getState().openComposer({ goal });

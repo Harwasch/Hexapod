@@ -5,12 +5,13 @@
  * plan composer drafts a survey over them. The API is mocked; the zones, the composer and
  * the toasts are the module's own.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Site, WeakArea, WeakAreas } from "@twin/contracts";
 
 import type * as Queries from "@/api/queries";
 import { ApiError } from "@/api/error";
+import { env } from "@/app/env";
 import type * as PlanDrafting from "@/features/mission/planDrafting";
 import { isPrivateZone } from "@/missions/landGround";
 import {
@@ -173,7 +174,12 @@ describe("re-scan zones", () => {
 });
 
 describe("Plan a re-scan of weak areas", () => {
+  const droneExport = env.droneExportEnabled;
+  afterEach(() => {
+    env.droneExportEnabled = droneExport;
+  });
   beforeEach(() => {
+    env.droneExportEnabled = true;
     startPlanDraft.mockClear();
     requestWeakAreas.mockReset();
     useToasts.setState({ items: [] });
@@ -216,6 +222,28 @@ describe("Plan a re-scan of weak areas", () => {
       answers: { resolution: "2" },
     });
     expect(toasts()).toEqual([]);
+  });
+
+  it("asks for one battery's patches only for a drone (drone missions on)", async () => {
+    requestWeakAreas.mockResolvedValue({ ...read([area()]), truncatedByBudget: true });
+    await rescanWeak(null, site, EPOCH_ID);
+    expect(requestWeakAreas).toHaveBeenLastCalledWith(SITE_ID, EPOCH_ID, {
+      budgetM2: scoutBudgetM2(DEFAULT_SCOUT),
+      focus: null,
+      maxAreas: 3,
+    });
+    expect(useMission.getState().composer?.ground?.note).toContain("within one battery");
+
+    // Walked or filmed, a battery is nobody's limit: no budget asked for, none claimed.
+    env.droneExportEnabled = false;
+    useMission.setState({ composer: null });
+    await rescanWeak(null, site, EPOCH_ID);
+    expect(requestWeakAreas).toHaveBeenLastCalledWith(SITE_ID, EPOCH_ID, {
+      budgetM2: null,
+      focus: null,
+      maxAreas: 3,
+    });
+    expect(useMission.getState().composer?.ground?.note).not.toContain("battery");
   });
 
   it("plans on the site's project when another project is current", async () => {
