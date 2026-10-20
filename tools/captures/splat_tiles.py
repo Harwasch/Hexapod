@@ -2485,7 +2485,10 @@ def _translation(transform: object, uri: str) -> np.ndarray:
     if (
         not isinstance(transform, list)
         or len(transform) != 16
-        or not all(isinstance(v, int | float) and math.isfinite(v) for v in transform)
+        or not all(
+            isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v)
+            for v in transform
+        )
     ):
         raise SplatFormatError(f"{uri}: its tile transform is not 16 finite numbers")
     m = np.asarray(transform, dtype=np.float64).reshape(4, 4).T  # column-major

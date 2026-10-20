@@ -199,6 +199,32 @@ def test_a_tileset_naming_its_tiles_dot_slash_is_read_in_the_site_frame(tmp_path
     )
 
 
+#: Transforms both readers refuse as "not 16 finite numbers", the same list in
+#: tools/captures/tests/test_tile_origins.py and apps/api/tests/test_tile_positions.py, so
+#: the two transcriptions of `_translation` are held to the same inputs. JSON `true` is
+#: an int to Python, so it is named here.
+NOT_SIXTEEN_NUMBERS = [
+    [True, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 3000, 0, 0, 1],
+    [1, False, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 3000, 0, 0, 1],
+    [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, "3000", 0, 0, 1],
+    [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, float("inf"), 0, 0, 1],
+    [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 3000, 0, 0],
+    {"x": 3000},
+]
+
+
+@pytest.mark.parametrize("transform", NOT_SIXTEEN_NUMBERS)
+def test_tile_offsets_refuses_a_transform_that_is_not_sixteen_numbers(transform: object) -> None:
+    tileset = {
+        "root": {
+            "content": {"uri": "splat.glb"},
+            "children": [{"transform": transform, "content": {"uri": "b.glb"}}],
+        }
+    }
+    with pytest.raises(SplatFormatError, match="16 finite numbers"):
+        splat_tiles.tile_offsets(tileset)
+
+
 def test_tile_offsets_refuses_a_rotating_child_transform() -> None:
     turned = _translate(10.0, 0.0, 0.0)
     turned[0], turned[1], turned[4], turned[5] = 0.0, 1.0, -1.0, 0.0

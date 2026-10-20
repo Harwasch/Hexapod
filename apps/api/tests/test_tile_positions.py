@@ -145,6 +145,32 @@ def test_far_fixture_tiles_hash_to_the_expected_site_frame_checksums() -> None:
     )
 
 
+#: Transforms both readers refuse as "not 16 finite numbers", the same list in
+#: tools/captures/tests/test_tile_origins.py and apps/api/tests/test_tile_positions.py, so
+#: the two transcriptions of `_translation` are held to the same inputs. JSON `true` is
+#: an int to Python, so it is named here.
+NOT_SIXTEEN_NUMBERS = [
+    [True, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 3000, 0, 0, 1],
+    [1, False, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 3000, 0, 0, 1],
+    [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, "3000", 0, 0, 1],
+    [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, float("inf"), 0, 0, 1],
+    [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 3000, 0, 0],
+    {"x": 3000},
+]
+
+
+@pytest.mark.parametrize("transform", NOT_SIXTEEN_NUMBERS)
+def test_a_transform_that_is_not_sixteen_numbers_is_refused(transform: object) -> None:
+    document = {
+        "root": {
+            "content": {"uri": "splat.glb"},
+            "children": [{"transform": transform, "content": {"uri": "b.glb"}}],
+        }
+    }
+    with pytest.raises(positions.TileFormatError, match="16 finite numbers"):
+        positions.tile_offsets(document)
+
+
 def test_a_rotating_child_transform_is_refused() -> None:
     turned = [0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 5.0, 0.0, 0.0, 1.0]
     document = {
