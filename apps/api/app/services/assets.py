@@ -268,8 +268,9 @@ def _scale_provenance(evidence: ScaleEvidence) -> dict[str, Any]:
 
 def _lock(db: Session, asset_id: uuid.UUID) -> Asset:
     """The asset, locked for this transaction: the row lock a re-run takes before it
-    repoints the asset (`app/worker/registration.py`), so a scale and a re-run's reset of
-    it happen one after the other and the boundary is resized from the right scale."""
+    supersedes the asset (`app/worker/registration.py`), so a scale and a re-run's reset
+    of it happen one after the other and the boundary is resized from the right scale.
+    A scale then locks the site (`_locked_site`): asset first, then site, as a register."""
     asset = db.execute(
         select(Asset)
         .where(Asset.id == asset_id)
@@ -300,7 +301,7 @@ def _placed(db: Session, asset: Asset) -> tuple[Site, placement.Origin]:
     if asset.epoch_id is not None:
         return _placed_epoch(db, asset)
     why = None
-    site = db.get(Site, asset.site_id) if asset.site_id is not None else None
+    site = _locked_site(db, asset)
     origin = placement.registered_origin(site.metadata_) if site is not None else None
     if asset.representation != Representation.GAUSSIAN_SPLAT:
         why = f"it is a {asset.representation.value}, and only a splat's tiles are resized"
@@ -325,7 +326,7 @@ def _placed(db: Session, asset: Asset) -> tuple[Site, placement.Origin]:
 
 def _placed_epoch(db: Session, asset: Asset) -> tuple[Site, placement.Origin]:
     """`_placed` for an epoch's asset: about the site's frame, never its metadata."""
-    site = db.get(Site, asset.site_id) if asset.site_id is not None else None
+    site = _locked_site(db, asset)
     why = None
     if asset.representation != Representation.GAUSSIAN_SPLAT:
         why = f"it is a {asset.representation.value}, and only a splat's tiles are resized"
@@ -358,6 +359,20 @@ def _placed_epoch(db: Session, asset: Asset) -> tuple[Site, placement.Origin]:
             code=NOT_SCALABLE,
         )
     return site, placement.frame_origin(site.frame)
+
+
+def _locked_site(db: Session, asset: Asset) -> Site | None:
+    """The asset's site, locked (`FOR UPDATE`) for the rest of a scale's transaction.
+
+    What a scale reads off the site -- its frame, its origin, how many epochs it has -- is
+    what a register changes while it holds this lock (`registration.register` locks an
+    epoch, then its current asset, then the site; a new epoch's register, only the site).
+    Read unlocked, a scale could count one epoch while a second was joining, then resize
+    the boundary under both. Taken after the asset's lock, as a register takes them, so the
+    two never wait on each other in a cycle."""
+    if asset.site_id is None:
+        return None
+    return db.get(Site, asset.site_id, with_for_update=True, populate_existing=True)
 
 
 def _registered_splat(db: Session, site: Site) -> uuid.UUID | None:

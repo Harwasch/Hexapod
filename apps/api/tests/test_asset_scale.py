@@ -13,24 +13,28 @@ from __future__ import annotations
 
 import json
 import math
+import threading
+import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import Engine, select, text
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.deps import _db
 from app.config import Settings
 from app.main import create_app
 from app.models import Asset, Capture, Job, Site
 from app.models.enums import CaptureKind, Representation, RunStatus
+from app.schemas.asset import AssetScaleUpdate
 from app.schemas.geojson import Polygon
 from app.seed import seed
 from app.services import geometry, placement
+from app.services.errors import ConflictError
 from app.storage import S3Storage
 from app.worker import registration
 from app.worker.carry import CarryPlan
@@ -627,6 +631,81 @@ def test_a_re_run_of_a_scaled_epoch_leaves_the_boundary_other_epochs_grew(
     for epoch in _epochs(db, capture.site_id):
         assert after.buffer(1e-9).covers(to_shape(epoch.footprint))
     assert to_shape(site.centroid).equals(centroid)
+
+
+def run_beside(
+    engine: Engine, call: Callable[[Session], object]
+) -> tuple[threading.Thread, dict[str, object], bool]:
+    """`call` in a session of its own on another thread; whether it waited on a row lock.
+
+    For a test that holds a lock in its own transaction: the thread is started, and given
+    up to five seconds to block on that lock (or to finish without blocking). The caller
+    then lets go of its lock and joins the thread; `result["value"]` is what `call`
+    returned or raised."""
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    result: dict[str, object] = {}
+
+    def target() -> None:
+        with factory() as session:
+            try:
+                result["value"] = call(session)
+            except Exception as error:  # surfaced by the caller
+                result["value"] = error
+
+    thread = threading.Thread(target=target)
+    thread.start()
+    deadline = time.monotonic() + 5
+    while thread.is_alive() and time.monotonic() < deadline:
+        with engine.connect() as connection:
+            if connection.execute(text("SELECT count(*) FROM pg_locks WHERE NOT granted")).scalar():
+                return thread, result, True
+        time.sleep(0.05)
+    return thread, result, False
+
+
+def test_a_scale_waits_for_an_epoch_joining_its_site_and_then_refuses(
+    db: Session, engine: Engine, scan: tuple[Capture, Asset]
+) -> None:
+    """A register of a new epoch holds the site's row lock (`registration._target`) while it
+    adds the epoch. A scale read the site and counted its epochs unlocked, so it saw one
+    epoch, resized the boundary and committed -- and the site then had two epochs, one of
+    them resized against the other. It locks the site (after the asset, the order a
+    register takes them) and counts once the joining epoch is committed."""
+    from app.models import Epoch
+    from app.services import assets as asset_service
+
+    capture, splat = scan
+    assert capture.site_id is not None
+    holder = sessionmaker(bind=engine, expire_on_commit=False)()
+    try:
+        site = holder.get(Site, capture.site_id, with_for_update=True)
+        assert site is not None
+        holder.add(
+            Epoch(
+                site_id=site.id,
+                ordinal=2,
+                observed_at=site.created_at,
+                observed_at_source="created",
+                footprint=site.boundary,
+                platform="unknown",
+                status="published",
+                join_method="spatial",
+            )
+        )
+        holder.flush()
+        thread, result, waited = run_beside(
+            engine,
+            lambda session: asset_service.set_scale(session, splat.id, AssetScaleUpdate(scale=0.5)),
+        )
+        holder.commit()
+    finally:
+        holder.close()
+    thread.join(timeout=30)
+
+    assert waited, "the scale did not wait for the site's lock"
+    refused = result["value"]
+    assert isinstance(refused, ConflictError), refused
+    assert refused.code == "not_scalable" and "2 epochs in one frame" in str(refused)
 
 
 def test_a_superseded_revision_is_not_scalable(
