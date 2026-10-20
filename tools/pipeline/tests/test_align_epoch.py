@@ -947,7 +947,7 @@ def test_a_platform_param_never_makes_survey_without_rtk_evidence_in_the_frames(
     `survey` -- the stage's `platform` param, normalize's own `platform` override in
     `frames_meta`, an iPhone's metadata with the param saying RTK -- is closed. Only an
     RTK fixed solution in the frames' own metadata (plus the targets) is survey."""
-    monkeypatch.setattr(alignment.check_targets, "evaluate", _perfect_checks)
+    monkeypatch.setattr(check_targets, "evaluate", _perfect_checks)
     names = [f"frame_{i:04d}.jpg" for i in range(COUNT)]
     priors = {
         "priors": {"used": True, "sigmaM": {"horizontalMedian": 0.01, "verticalMedian": 0.01}}
@@ -995,7 +995,7 @@ def test_an_rtk_epoch_without_priors_is_not_surveyed_through_a_coarse_reference(
     reference, whose sigma widened the check targets' tolerance to ~42 m: 'surveyed'.
     Now a survey-tier epoch keeps whichever frame is anchored tighter, and neither path
     reaches survey: not over the ceiling, not through a reference that is not survey."""
-    monkeypatch.setattr(alignment.check_targets, "evaluate", _perfect_checks)
+    monkeypatch.setattr(check_targets, "evaluate", _perfect_checks)
     _, model = _ring_model(tmp_path / "m")
     names = [image.name for image in model.images]
     monkeypatch.setattr(alignment, "_register", _fake_register(_registered(model, TRUE, names)))
@@ -1035,7 +1035,7 @@ def test_the_claim_is_floored_by_the_vertical_anchor_too(
     """R2 review (#51, medium): the GNSS floor passed only the horizontal anchor sigma,
     so priors of 0.02 m horizontal and 0.20 m vertical, with three targets scoring 0.01 m,
     claimed ±0.02 m. The scalar claim is never better than either axis's anchor."""
-    monkeypatch.setattr(alignment.check_targets, "evaluate", _perfect_checks)
+    monkeypatch.setattr(check_targets, "evaluate", _perfect_checks)
     names = [f"frame_{i:04d}.jpg" for i in range(COUNT)]
     priors = {
         "priors": {"used": True, "sigmaM": {"horizontalMedian": 0.02, "verticalMedian": 0.20}}
