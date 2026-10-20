@@ -34,17 +34,24 @@ time. Seeing what changed means flicking between them; a swipe shows both at onc
    primitive are cut with it already.
 5. **CesiumJS only (C5).** Under PlayCanvas or Spark, Compare › Dates is disabled with "Needs
    the CesiumJS renderer (Settings › Advanced › Splat renderer)" and "Draw with CesiumJS".
-6. **Said where a date is named.** The capture-date control checks no date and marks each "left
+6. **Picks follow the side clicked.** A ray through a point on screen (Measure, selection, the
+   orbit pivot, the wheel zoom) is answered by `SplatCollider` only from tilesets drawn at that
+   point: a tileset split to the other side of `scene.splitPosition` is skipped. The site card
+   names the date whose tileset was hit (`SiteManager.drawnAssetOf`). Queries with no point on
+   screen (camera collision, the floor) count both dates.
+7. **Said where a date is named.** The capture-date control checks no date and marks each "left
    of divider" / "right of divider"; the Inspector's Date shown becomes "Left of the divider" and
    "Right of the divider", each with its own facts.
-7. **Cost.** The Compare mode of the Layers panel (the layer swipe and Dates) now loads on
-   demand; the scene's part cannot. Index entry 193,054 B → 193,667 B gzip (budget 197,000 B).
+8. **Cost.** The Compare mode of the Layers panel (the layer swipe and Dates) now loads on
+   demand; the scene's part cannot. Index entry 193,054 B → 193,893 B gzip (budget 197,000 B).
 
 ### Consequences
 
 - Resident splats roughly double while two dates are compared; the splat budget counts both.
-- The right-hand date is the one the clip under the site, the load pill and the far view speak
-  for; the two dates share the site's footprint, so the clip is the same in practice.
+- The right-hand date is the one the clip under the site and the far view speak for; the two
+  dates share the site's footprint, so the clip is the same in practice. The load pill waits for
+  both dates' first tiles.
+- The Living Survey still reads the single date chosen before the comparison (`tilesetFor`).
 - A Living Survey scan, which CesiumJS draws under any renderer, could be compared under
   PlayCanvas, but the control disables Dates for every splat scan off CesiumJS: one rule to say.
 - Undo of the switch is scoped to the site (`scope: "site"`), like the site's other steps.
