@@ -79,7 +79,7 @@ describe("on Photo", () => {
     tileset.gaussianSplatPrimitive = primitive;
     const load = vi.fn(() => import("@/cesium/cellView"));
     const requestRender = vi.fn();
-    const dispose = attachCellView(asCesium, { requestRender }, A1.id, context, load);
+    const dispose = attachCellView(asCesium, { requestRender }, A1.id, context, { load });
     tileset.tileLoad.raiseEvent({});
     await Promise.resolve();
     expect(load).not.toHaveBeenCalled();
@@ -94,7 +94,7 @@ describe("Confidence, then Data age, then Photo", () => {
     const { asCesium, tileset, primitive } = scan({ confidence: served.meta });
     const load = vi.fn(() => import("@/cesium/cellView"));
     const requestRender = vi.fn();
-    const dispose = attachCellView(asCesium, { requestRender }, A1.id, context, load);
+    const dispose = attachCellView(asCesium, { requestRender }, A1.id, context, { load });
     useViewMode.getState().set("confidence");
     await vi.waitFor(() =>
       expect(useViewMode.getState().cells[A1.id]).toEqual({ kind: "ready", mode: "confidence" }),
@@ -188,7 +188,7 @@ describe("Confidence, then Data age, then Photo", () => {
   it("says when the view's code did not load, and forgets it with the model", async () => {
     const { asCesium } = scan({ confidence: served.meta });
     const load = () => Promise.reject(new Error("chunk failed"));
-    const dispose = attachCellView(asCesium, { requestRender: vi.fn() }, A1.id, context, load);
+    const dispose = attachCellView(asCesium, { requestRender: vi.fn() }, A1.id, context, { load });
     useViewMode.getState().set("confidence");
     await vi.waitFor(() =>
       expect(useViewMode.getState().cells[A1.id]).toEqual({
@@ -198,5 +198,37 @@ describe("Confidence, then Data age, then Photo", () => {
     );
     dispose();
     expect(useViewMode.getState().cells[A1.id]).toBeUndefined();
+  });
+
+  it("builds Data age again when the site's dates change, so a newly published date counts", async () => {
+    const { asCesium, tileset, primitive } = scan({ confidence: served.meta });
+    tileset.gaussianSplatPrimitive = primitive;
+    // Loaded with one date; June is published while Data age is on.
+    let dates = { epochs: [E1], assets: [A1] };
+    const listeners = new Set<() => void>();
+    const onDatesChange = (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    };
+    const dispose = attachCellView(asCesium, { requestRender: vi.fn() }, A1.id, () => dates, {
+      onDatesChange,
+    });
+    useViewMode.getState().set("data-age");
+    await vi.waitFor(() =>
+      expect(useViewMode.getState().cells[A1.id]).toMatchObject({
+        kind: "ready",
+        newer: { dates: 0 },
+      }),
+    );
+    dates = { epochs: [E1, E2], assets: [A1, A2] };
+    for (const listener of listeners) listener();
+    await vi.waitFor(() =>
+      expect(useViewMode.getState().cells[A1.id]).toMatchObject({
+        kind: "ready",
+        newer: { dates: 1, compared: 1, cells: 64 },
+      }),
+    );
+    dispose();
+    expect(listeners.size).toBe(0);
   });
 });

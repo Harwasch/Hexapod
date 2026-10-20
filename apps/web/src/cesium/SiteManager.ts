@@ -565,6 +565,7 @@ export class SiteManager {
     }
     this.restartLoad(entry);
     void this.showRepresentation(entry, entry.representation);
+    this.events.emit("site-dates", entry.site.id);
   }
 
   private get active(): ActiveSite | null {
@@ -1698,10 +1699,18 @@ export class SiteManager {
         attachViewCones(tileset),
         // Confidence and Data age, when chosen (state/viewMode.ts): fetched and joined to the
         // shader only then, and only CesiumJS draws them (lib/viewModes.ts).
-        attachCellView(tileset, this.scene, asset.id, () => ({
-          epochs: active.epochs,
-          assets: active.site.assets,
-        })),
+        attachCellView(
+          tileset,
+          this.scene,
+          asset.id,
+          () => ({ epochs: active.epochs, assets: active.site.assets }),
+          {
+            onDatesChange: (listener) =>
+              this.events.on("site-dates", (siteId) => {
+                if (siteId === active.site.id) listener();
+              }),
+          },
+        ),
         // What an image model filled in where it never looked, beside it (lib/inferred.ts):
         // drawn by whichever renderer draws the scan, in the same sort as its splats -- by
         // CesiumJS while CesiumJS draws it, by the overlay's renderer otherwise

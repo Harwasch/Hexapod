@@ -42,6 +42,12 @@ export interface SceneEvents extends Record<string, unknown> {
    * belongs to no epoch (lib/epochs.ts).
    */
   epoch: { siteId: string; epochId: string | null };
+  /**
+   * A loaded site's dates changed while it stayed loaded (SiteManager `applyDatesRecord`: a
+   * date published, run again or withdrawn): the site's id. What compares one date with the
+   * others (Data age, cesium/cellView.ts) takes the new list.
+   */
+  "site-dates": string;
   selection: Selection | null;
   hover: string | null;
   measurement: Measurement;

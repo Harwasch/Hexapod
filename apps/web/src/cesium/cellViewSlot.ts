@@ -17,8 +17,16 @@ export function attachCellView(
   scene: Pick<Scene, "requestRender">,
   assetId: string,
   context: () => DataAgeContext,
-  load: () => Promise<{ startCellView: typeof startCellView }> = () => import("./cellView"),
+  options: {
+    /**
+     * Calls back when the site's dates change while the model stays loaded (a date published
+     * or run again: `SiteManager.applyDatesRecord`); returns the unsubscriber.
+     */
+    onDatesChange?: (listener: () => void) => () => void;
+    load?: () => Promise<{ startCellView: typeof startCellView }>;
+  } = {},
 ): () => void {
+  const load = options.load ?? (() => import("./cellView"));
   let handle: CellViewHandle | undefined;
   let loading = false;
   let disposed = false;
@@ -44,10 +52,13 @@ export function attachCellView(
   const unsubscribe = useViewMode.subscribe((s, previous) => {
     if (s.mode !== previous.mode) apply(s.mode);
   });
+  // Data age compares with the later dates: a new one counts once it is published.
+  const unsubscribeDates = options.onDatesChange?.(() => handle?.sync(useViewMode.getState().mode));
   apply(useViewMode.getState().mode);
   return () => {
     disposed = true;
     unsubscribe();
+    unsubscribeDates?.();
     handle?.dispose();
     handle = undefined;
     // A load that failed before there was a handle reported too; the model is gone either way.

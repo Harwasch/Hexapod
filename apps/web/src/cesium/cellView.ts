@@ -5,7 +5,9 @@
  *
  * The grid is fetched once, on the first analytic view; the part joins the primitive's colour
  * chain while a view is on and leaves it on Photo (the chain is rebuilt either way). Data age's
- * texture is built when Data age is first asked for, and again when the site's dates change.
+ * texture is built when Data age is first asked for, and again on the next `sync` once the
+ * site's dates have changed (`cellViewSlot.ts` calls it on the scene's `site-dates` event, so a
+ * date published while Data age is on counts at once) or the day has turned over.
  * Every change asks the scene for a render: the app renders on request.
  *
  * What the view found is reported per model (`useViewMode.report`): not measured (no grid on
