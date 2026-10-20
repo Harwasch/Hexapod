@@ -462,17 +462,30 @@ def _clip(
     zone: ZonePlane, polygon: Polygon, area_m2: float, focus_xy: Point | None
 ) -> Polygon | None:
     """The largest part of `polygon` inside a square of `area_m2` about its anchor
-    (`_anchor`), or None when that is no zone (under the smallest)."""
-    x, y = _anchor(zone, polygon, focus_xy)
-    half = math.sqrt(area_m2) / 2
-    square = box(x - half, y - half, x + half, y + half)
+    (`_anchor`), or None when that is no zone (under the smallest). When the anchor is the
+    zone's weakest cell (not the focus) at its edge and the square holds under half of
+    `area_m2`, the square about the zone's own representative point is tried as well, and
+    the larger piece kept: the operator's focus is never moved."""
     smallest = max(MIN_AREA_M2, 2 * zone.cell_m * zone.cell_m)
-    parts = [
-        orient(part)
-        for part in _polygons(make_valid(polygon.intersection(square)))
-        if part.area >= smallest
-    ]
-    return max(parts, key=lambda part: part.area) if parts else None
+    half = math.sqrt(area_m2) / 2
+
+    def piece(x: float, y: float) -> Polygon | None:
+        square = box(x - half, y - half, x + half, y + half)
+        parts = [
+            orient(part)
+            for part in _polygons(make_valid(polygon.intersection(square)))
+            if part.area >= smallest
+        ]
+        return max(parts, key=lambda part: part.area) if parts else None
+
+    at_focus = focus_xy is not None and polygon.covers(ShapelyPoint(focus_xy))
+    best = piece(*_anchor(zone, polygon, focus_xy))
+    if not at_focus and (best is None or best.area < area_m2 / 2):
+        middle = polygon.representative_point()
+        other = piece(float(middle.x), float(middle.y))
+        if other is not None and (best is None or other.area > best.area):
+            best = other
+    return best
 
 
 def choose_zones(

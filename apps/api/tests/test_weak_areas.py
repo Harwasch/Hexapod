@@ -353,3 +353,14 @@ def test_with_a_focus_outside_every_zone_the_largest_comes_first() -> None:
         plane, weak_mask(plane), PROJECTION, focus=(float(lon), float(lat)), max_areas=1
     )
     assert [round(p.area_m2) for p in inside.patches] == [9]
+
+
+def test_a_clip_at_a_zone_s_edge_still_spends_most_of_the_budget() -> None:
+    """The weakest cell at the zone's edge puts most of a square about it outside the zone
+    (the evidence run: 36 m2 of a 100 m2 budget); the square about the zone's middle is
+    tried too, and the larger piece kept."""
+    plane = a_plane()
+    weaken(plane, (-10, 10), (-10, 10), score=100, bits=BITS["views"])  # 400 m2
+    weaken(plane, (-10, -9), (-10, -9), score=0, bits=BITS["unseen"])  # weakest, a corner
+    [patch] = cell_patches(plane, weak_mask(plane), PROJECTION, budget_m2=100.0).patches
+    assert 50.0 <= patch.area_m2 <= 101.0
