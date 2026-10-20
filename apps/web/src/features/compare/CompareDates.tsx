@@ -15,6 +15,7 @@ import { DRAW_WITH_CESIUM, drawWithCesium, NEEDS_CESIUM_NOTICE } from "@/lib/vie
 import { recordAction } from "@/state/history";
 import { useSplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
+import { useViewRule } from "@/state/viewRule";
 
 /**
  * Compare › Dates: two of the active site's dated captures (epochs), one each side of the
@@ -39,6 +40,7 @@ export function CompareDates({ siteId }: { siteId: string }) {
   const representation = useSites((s) => s.representation[siteId]);
   const pair = useSites((s) => (s.compareDates?.siteId === siteId ? s.compareDates : null));
   const renderer = useSplatRenderer();
+  const rule = useViewRule((s) => s.active?.siteId === siteId);
   const [choice, setChoice] = useState<Partial<Dates>>({});
   const leftId = useFieldId("compare-date-left");
   const rightId = useFieldId("compare-date-right");
@@ -130,6 +132,11 @@ export function CompareDates({ siteId }: { siteId: string }) {
       ) : (
         <p className="glass-subtle" style={{ fontSize: "var(--text-xs)", margin: 0 }}>
           Each side draws one date, both with the site&apos;s one placement.
+        </p>
+      )}
+      {rule && !pair && (
+        <p className="views__notice" role="note" data-testid="compare-dates-ends-rule">
+          Swiping ends the per-cell dates (Splat view › Per cell): the two are one or the other.
         </p>
       )}
     </section>

@@ -7,7 +7,13 @@ export interface ViewRuleLegend {
   /** The owner plane's cell, metres. */
   cellM: number;
   /** Each date taking part, oldest first: how its coverage was read, and the cells it owns. */
-  dates: { epochId: string; coverage: Coverage | "loading"; cells: number }[];
+  dates: {
+    epochId: string;
+    coverage: Coverage | "loading";
+    cells: number;
+    /** Its age bucket now (lib/dataAge.ts), null without a usable date. */
+    ageBucket: number | null;
+  }[];
   /** Cells inferred layers own (only where no date saw anything). */
   inferredCells: number;
   /** Tilesets past the sixteen one primitive tells apart: not drawn under the rule. */

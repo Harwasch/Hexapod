@@ -38,29 +38,8 @@ import { ageBucket } from "./dataAge";
 
 export type ViewRule = "latest" | "ground-truth" | "highlight-invented" | "data-age";
 
-/** The rules as the control offers them. */
-export const VIEW_RULES: readonly { value: ViewRule; label: string; hint: string }[] = [
-  { value: "latest", label: "Latest", hint: "Each cell from the newest date that saw it" },
-  { value: "ground-truth", label: "Ground truth", hint: "Latest, never anything inferred" },
-  {
-    value: "highlight-invented",
-    label: "Highlight invented",
-    hint: "Latest, inferred cells tinted",
-  },
-  { value: "data-age", label: "Data age", hint: "Latest, coloured by each cell's date" },
-];
-
 /** Why a rule ended without being turned off (SiteManager `setViewRule`). */
 export type ViewRuleEnd = "compare" | "changed" | "living" | "unsupported";
-
-/** What the control says of it. */
-export const VIEW_RULE_ENDED: Record<ViewRuleEnd, string> = {
-  compare: "Per-cell dates ended: Compare › Dates was turned on (it is one or the other)",
-  changed: "Per-cell dates ended: the dates can no longer be drawn as one here",
-  living:
-    "Per-cell dates ended: a Living Survey rig moves this scan, and its motion needs the scan drawn on its own",
-  unsupported: "Per-cell dates ended: this CesiumJS build cannot draw them",
-};
 
 /** A cell no date owns: nothing is drawn there under a rule. */
 export const NO_OWNER = 255;

@@ -14,6 +14,7 @@ import {
   siteEpochs,
 } from "@/lib/epochs";
 import { useSites } from "@/state/sites";
+import { useViewRule } from "@/state/viewRule";
 
 /**
  * Capture date: which of the active site's dated captures (epochs, lib/epochs.ts) is shown,
@@ -24,7 +25,9 @@ import { useSites } from "@/state/sites";
  * Choosing a date asks the scene (`SiteManager.setEpoch`); the control then follows what the
  * scene says it shows (the store's `epoch`, from the `epoch` event), never its own click.
  * While two dates are compared (Compare › Dates) none is checked and the two say which side of
- * the divider each is on; choosing one shows it alone.
+ * the divider each is on; choosing one shows it alone. While a per-cell view rule draws the
+ * dates as one (Splat view › Per cell), the date chosen is what the rule is "As of": nothing
+ * observed after it takes part.
  */
 export function TimelineControl() {
   const scene = useScene();
@@ -34,6 +37,7 @@ export function TimelineControl() {
   );
   const shown = useSites((s) => (activeSiteId ? (s.epoch[activeSiteId] ?? null) : null));
   const pair = useSites((s) => (s.compareDates?.siteId === activeSiteId ? s.compareDates : null));
+  const asOf = useViewRule((s) => s.active !== null && s.active.siteId === activeSiteId);
   const site = useSite(activeSiteId).data;
   if (!site || !representation) return null;
   const epochs = siteEpochs(site);
@@ -51,8 +55,9 @@ export function TimelineControl() {
       data-testid="timeline"
     >
       <Clock size={14} className="glass-muted" aria-hidden="true" />
+      {asOf && <span className="timeline__as-of">As of</span>}
       <GlassSegmentedControl
-        aria-label="Capture date"
+        aria-label={asOf ? "As of" : "Capture date"}
         data-testid="timeline-epochs"
         value={pair ? "" : value}
         onValueChange={(epochId) => void scene?.sites.setEpoch(epochId)}

@@ -42,7 +42,7 @@ import {
   type ViewRule,
   type ViewRuleEnd,
 } from "@/lib/compositor";
-import { laterDates, loadLaterGrids } from "@/lib/dataAge";
+import { ageBucket, laterDates, loadLaterGrids } from "@/lib/dataAge";
 import { epochOf, epochOptions, frameAnchor, shownOption } from "@/lib/epochs";
 import { createLogger } from "@/lib/log";
 import { useSettings } from "@/state/settings";
@@ -506,6 +506,7 @@ export function startCompositor(
       byId.set(s.epochId, {
         epochId: s.epochId,
         coverage: pending.has(s.source) ? "loading" : taken.coverage,
+        ageBucket: ageBucket(s.observedAt, now()),
         cells: taken.cells,
       });
     }

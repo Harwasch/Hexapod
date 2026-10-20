@@ -182,8 +182,8 @@ describe("a view rule's session", () => {
     expect(useViewRule.getState().legend).toEqual({
       cellM: 1,
       dates: [
-        { epochId: E1.id, coverage: "grid", cells: 192 },
-        { epochId: E2.id, coverage: "tile-bounds", cells: 8 },
+        { epochId: E1.id, coverage: "grid", cells: 192, ageBucket: 3 },
+        { epochId: E2.id, coverage: "tile-bounds", cells: 8, ageBucket: 2 },
       ],
       inferredCells: 0,
       left: 0,

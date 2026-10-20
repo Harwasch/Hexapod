@@ -22,10 +22,10 @@ import {
   ownerAt,
   ownerPlane,
   planeLevel,
-  VIEW_RULES,
   type CompositorSource,
   type ViewRule,
 } from "@/lib/compositor";
+import { VIEW_RULES } from "@/features/views/ruleText";
 
 /** A 1 m grid (level 2) over x in [0, 20), y in [0, 10): scored where `seen(i, j)`. */
 async function grid(seen: (i: number, j: number) => boolean, level = 2): Promise<CellGrid> {

@@ -2384,6 +2384,32 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   color: var(--text-secondary);
 }
 
+/* Per cell: a view rule over the site's dates (ADR 0017). */
+.views__rule {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.views__rule-label {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.views__rule .glass-input {
+  width: auto;
+  min-width: 9rem;
+  padding-block: 0.2rem;
+  font-size: var(--text-xs);
+}
+
+.timeline__as-of {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
 .cell-legend {
   display: flex;
   align-items: center;

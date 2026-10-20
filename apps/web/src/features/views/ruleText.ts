@@ -1,0 +1,37 @@
+/**
+ * The per-cell view rules' words (lib/compositor.ts, ADR 0017), as the Per cell control says
+ * them: here, beside the control, so its chunk carries them and the scene's does not.
+ */
+import type { ViewRule, ViewRuleEnd } from "@/lib/compositor";
+
+/** The rules as the control offers them. */
+export const VIEW_RULES: readonly { value: ViewRule; label: string; hint: string }[] = [
+  { value: "latest", label: "Latest", hint: "Each cell from the newest date that saw it" },
+  { value: "ground-truth", label: "Ground truth", hint: "Latest, never anything inferred" },
+  {
+    value: "highlight-invented",
+    label: "Highlight invented",
+    hint: "Latest, inferred cells tinted",
+  },
+  { value: "data-age", label: "Data age", hint: "Latest, coloured by each cell's date" },
+];
+
+/** What the control says when a rule ended without being turned off. */
+export const VIEW_RULE_ENDED: Record<ViewRuleEnd, string> = {
+  compare: "Per-cell dates ended: Compare › Dates was turned on (it is one or the other)",
+  changed: "Per-cell dates ended: the dates can no longer be drawn as one here",
+  living:
+    "Per-cell dates ended: a Living Survey rig moves this scan, and its motion needs the scan drawn on its own",
+  unsupported: "Per-cell dates ended: this CesiumJS build cannot draw them",
+};
+
+/** The control's other words, here so the tests say the same. */
+export const VIEW_RULE_TEXT = {
+  label: "Per cell",
+  off: "One date",
+  living:
+    "Off while a Living Survey rig moves this scan: its motion needs the scan drawn on its own",
+  compare: "Choosing a rule ends Compare › Dates: the two are one or the other",
+  tileBounds: "tile bounds, overstates what it saw",
+  holdsViews: "Per-cell dates are on: a date's own Confidence and Data age come back with One date",
+} as const;
