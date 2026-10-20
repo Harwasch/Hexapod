@@ -108,7 +108,7 @@ def test_exif_time_with_an_offset_becomes_utc() -> None:
 
     assert time.utc == "2026-10-01T15:20:30.123Z"
     assert time.source == "exif-offset"
-    assert time.local == "2026-10-01T10:20:30.123000"
+    assert time.local == "2026-10-01T10:20:30.123"
     assert time.offset == "-05:00"
 
 
@@ -190,7 +190,7 @@ def test_an_iphone_photo_is_described_in_full(tmp_path: Path) -> None:
         "lens": "iPhone 15 Pro back triple camera 6.765mm f/1.78",
     }
     assert document["time"] == {
-        "local": "2025-06-14T10:41:03.123000",
+        "local": "2025-06-14T10:41:03.123",
         "offset": "+01:00",
         "utc": "2025-06-14T09:41:03.123Z",
         "source": "exif-offset",
@@ -329,3 +329,15 @@ def test_an_unreadable_original_is_a_thin_record(tmp_path: Path) -> None:
     )
     assert record.unreadable is not None
     assert record.dji is None and record.gps is None and record.original_size is None
+
+
+def test_xmp_without_the_xmpmeta_wrapper_is_still_read(tmp_path: Path) -> None:
+    """Some writers put a bare `rdf:RDF` in the XMP segment; Pillow surfaces it as is."""
+    bare = dji_xmp().replace('<x:xmpmeta xmlns:x="adobe:ns:meta/">', "").replace("</x:xmpmeta>", "")
+    photo = write_jpeg(tmp_path / "a.jpg", size=(64, 48), xmp=bare)
+
+    record = frame_meta.read_photo(
+        photo, frame_name="frame_0000.jpg", upload_root=tmp_path, frame_size=(64, 48)
+    )
+
+    assert record.dji is not None and record.dji.rtk_flag == 50

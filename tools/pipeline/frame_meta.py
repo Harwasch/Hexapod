@@ -370,6 +370,12 @@ def _exif_local(stamp: str | None, subsec: str | None) -> datetime | None:
     return moment
 
 
+def _local_text(moment: datetime) -> str:
+    """A camera clock as ISO 8601 with no zone: to the millisecond when it has a fraction,
+    as a video frame's offset time is, else to the second."""
+    return moment.isoformat(timespec="milliseconds" if moment.microsecond else "seconds")
+
+
 _OFFSET_RE = re.compile(r"^([+-])(\d{2}):?(\d{2})$")
 
 
@@ -433,7 +439,7 @@ def exif_time(
         _exif_text(exif_ifd.get(DATETIME_ORIGINAL)), _exif_text(exif_ifd.get(SUBSEC_ORIGINAL))
     )
     zone = _offset(_exif_text(exif_ifd.get(OFFSET_ORIGINAL)))
-    local_text = None if local is None else local.isoformat()
+    local_text = None if local is None else _local_text(local)
     if local is not None and zone is not None:
         aware = local.replace(tzinfo=zone)
         return FrameTime(
@@ -692,10 +698,11 @@ def _read_photo(
         make = _exif_text(tags.get(MAKE))
         model = _exif_text(tags.get(MODEL))
     packet: str | None = None
-    if isinstance(info_xmp, bytes):
-        packet = xmp_packet(info_xmp)
-    elif isinstance(info_xmp, str):
-        packet = xmp_packet(info_xmp.encode("utf-8", errors="replace"))
+    if isinstance(info_xmp, str):
+        info_xmp = info_xmp.encode("utf-8", errors="replace")
+    if isinstance(info_xmp, bytes) and info_xmp:
+        # Pillow's XMP segment, with or without the `x:xmpmeta` wrapper some writers omit.
+        packet = xmp_packet(info_xmp) or info_xmp.decode("utf-8", errors="replace")
     if packet is None:
         with original.open("rb") as handle:
             packet = xmp_packet(handle.read(META_BYTES))
