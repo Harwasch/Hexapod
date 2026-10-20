@@ -287,3 +287,31 @@ def test_the_change_spends_the_cell_map_bucket(api: TestClient) -> None:
     ]
     calls = {d.call.__name__ for d in route.dependant.dependencies}  # type: ignore[attr-defined]
     assert "limit_cell_map" in calls
+
+
+def test_a_surface_finer_than_its_confidence_grid_is_refused_not_a_crash(
+    api: TestClient, db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """A run whose surface (0.5 m) is finer than its own confidence grid (1 m) -- no surface
+    stage writes that, but a descriptor can say it: nothing vouches for its cells at 0.5 m,
+    and the answer is a 409 saying the grids cannot be read together, never a 500."""
+    first = _capture(db, "first", FIRST)
+    document = surveyed("e2")
+    document["confidence"] = measured("e1")["confidence"]
+    register_run(
+        db, storage, tmp_path, first, document, grid=blob("e1"), surface=surface_blob("e2")
+    )
+    site_id = _epoch(db, first).site_id
+    later = _capture(db, "second", SECOND)
+    register_run(
+        db,
+        storage,
+        tmp_path,
+        later,
+        surveyed("e2", _echoed(site_id)),
+        grid=blob("e2"),
+        surface=surface_blob("e2"),
+    )
+    response = get(api, _epoch(db, first), _epoch(db, later))
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "confidence-unreadable"

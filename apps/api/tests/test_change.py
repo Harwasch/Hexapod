@@ -296,6 +296,35 @@ def test_an_area_lies_over_its_cells_on_the_globe() -> None:
     assert corners == {(0.0, -5.0), (3.0, -5.0), (3.0, -2.0), (0.0, -2.0)}
 
 
+@pytest.mark.parametrize("seed", range(25))
+def test_every_classed_cell_is_in_one_area_and_every_outline_is_valid(seed: int) -> None:
+    """Random maps (holes, raised and lowered specks, random confidence, any window): the
+    areas' cells add up to the classed cells, and every footprint is valid GeoJSON as the
+    API answers it."""
+    from app.services.change_maps import _footprint
+
+    rng = np.random.default_rng(seed)
+    n = int(rng.integers(3, 40))
+    a = flat(
+        level=int(rng.integers(0, 3)),
+        i0=int(rng.integers(-50, 50)),
+        j0=int(rng.integers(-50, 50)),
+        ni=n,
+        nj=n,
+    )
+    b = {**a, "dsm": (a["dsm"] + rng.choice([0, 0, 100, -100], size=(n, n))).astype(np.int16)}
+    a = hole(a, slice(0, 0), slice(0, 0))
+    gone = rng.random((n, n)) < 0.15
+    a["dsm"][gone], a["ground"][gone], a["sigma"][gone] = NO, NO, 0
+    grid = confidence(a["level"], a["i0"], a["j0"], rng.integers(0, 256, (n, n)))
+    found = change_map(
+        surface(a), surface(b), 0.0, 0.0, PROJECTION, confidence_a=grid, confidence_b=grid
+    )
+    assert sum(area.cells for area in found.areas) == int((found.drawn.classes >= 0).sum())
+    for area in found.areas:
+        assert _footprint(area.footprint).type == "MultiPolygon"
+
+
 def test_change_planes_memory_is_bounded() -> None:
     """About 12 bytes a cell at the peak (the outputs, the vouched cells), not the window
     held in float64 per array."""

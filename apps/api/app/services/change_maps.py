@@ -18,7 +18,8 @@ weak areas use (`confidence_maps.load_grid`), and measures the change between th
 * 409 `frames-differ` when a surface's heights are above another origin height than the
   site frame's (its `vertical.originHeightM`; to the millimetre, a tenth of the heights'
   own unit) -- the two would differ by the offset everywhere;
-* 409 `surface-unreadable` / `confidence-unreadable` when a grid cannot be read.
+* 409 `surface-unreadable` / `confidence-unreadable` when a grid cannot be read, or an
+  epoch's confidence grid is coarser than its surface (they must be one plane).
 
 Every answer says it is derived, not observed, and uncalibrated.
 """
@@ -32,6 +33,7 @@ from shapely.geometry import mapping
 from shapely.geometry.base import BaseGeometry
 from sqlalchemy.orm import Session
 
+from app.analysis import cell_grid
 from app.analysis import change as analysis
 from app.analysis.weak_areas import site_projection
 from app.models import Epoch, EpochMap, Site, SiteFrame
@@ -54,6 +56,7 @@ from app.storage import ObjectStorage
 
 NOT_PUBLISHED = "epoch-not-published"
 SURFACE_NOT_MEASURED = "surface-not-measured"
+SURFACE_UNREADABLE = "surface-unreadable"
 FRAMES_DIFFER = "frames-differ"
 #: A surface's origin height may differ from the frame's by this much, metres: a tenth of
 #: the heights' own centimetre, so only the same number (as JSON carried it) passes.
@@ -177,15 +180,30 @@ def change(
         _same_frame(epoch, surface, frame)
     ua, ub = _uncertainty(before, graded_a), _uncertainty(after, graded_b)
     grids = [load_grid(storage, row) for row in (surface_a, surface_b, graded_a, graded_b)]
-    found = analysis.change_map(
-        analysis.Surface.of(grids[0].finest),
-        analysis.Surface.of(grids[1].finest),
-        ua,
-        ub,
-        site_projection(frame.lat, frame.lon, frame.height),
-        confidence_a=grids[2],
-        confidence_b=grids[3],
-    )
+    for epoch, heights, graded in ((before, grids[0], grids[2]), (after, grids[1], grids[3])):
+        # A surface is written on its confidence grid's finest plane; one finer than its
+        # grid has cells nothing vouches for at its level, whatever its descriptor says.
+        if graded.finest.level > heights.finest.level:
+            raise ConflictError(
+                f"epoch {epoch.id}'s confidence grid (level {graded.finest.level}) is coarser "
+                f"than its height surface (level {heights.finest.level}): they are not one "
+                "plane, so its cells cannot be vouched for",
+                code=UNREADABLE,
+            )
+    try:
+        found = analysis.change_map(
+            analysis.Surface.of(grids[0].finest),
+            analysis.Surface.of(grids[1].finest),
+            ua,
+            ub,
+            site_projection(frame.lat, frame.lon, frame.height),
+            confidence_a=grids[2],
+            confidence_b=grids[3],
+        )
+    except cell_grid.CellGridError as error:
+        raise ConflictError(
+            f"the height surfaces cannot be compared: {error}", code=SURFACE_UNREADABLE
+        ) from error
     planes, drawn = found.planes, found.drawn
     counts, lows = planes.counts(), planes.low_counts()
     area_cell = drawn.cell_m
