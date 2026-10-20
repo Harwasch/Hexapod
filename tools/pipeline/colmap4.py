@@ -77,6 +77,7 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -773,11 +774,14 @@ def main(args: list[str] | None = None) -> int:
         )
     elif parsed.command == "match":
         options, passes = _matching(pycolmap, parsed)
-        run = {
+        # Typed as one callable: with pycolmap installed its stubs give the three matchers
+        # different signatures, whose join mypy cannot call ("unknown type").
+        matchers: dict[str, Callable[..., object]] = {
             "sequential": pycolmap.match_sequential,
             "spatial": pycolmap.match_spatial,
             "exhaustive": pycolmap.match_exhaustive,
-        }[parsed.matcher]
+        }
+        run = matchers[parsed.matcher]
         for pairing in passes:
             run(parsed.database, matching_options=options, pairing_options=pairing, device=cpu)
     else:
