@@ -507,6 +507,7 @@ def test_a_refine_that_republished_the_same_tiles_is_still_the_reference(
         registration=_registration(tmp_path, _document()), tiles_stage_id="package",
         published=registration.Published(
             tileset=live, thumbnail=None, coverage=None, carry=CarryPlan(based_on=live),
+            content_addressed=True,
         ),
     )  # fmt: skip
     assert epochs.current_asset(db, epoch.id) == shown  # the same tiles: no new revision
