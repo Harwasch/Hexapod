@@ -538,10 +538,13 @@ def test_a_visual_alignment_to_a_survey_reference_is_the_frame_place_uses(
     centres are already this epoch's east/north/up, and the fit must be `TRUE`."""
     _, model = _ring_model(tmp_path / "m")
     names = [image.name for image in model.images]
-    monkeypatch.setattr(alignment, "_register", _fake_register(_registered(model, TRUE, names)))
+    registered = {**_registered(model, TRUE, names), "referenceFramesUnmatched": ["f.jpg"]}
+    monkeypatch.setattr(alignment, "_register", _fake_register(registered))
     _, document = _run(
         tmp_path / "w", _georef_located(), reference=REFERENCE, params={"platform": "phone-video"}
     )
+    # What the registration left out of the fixed model is said, not hidden.
+    assert document["registration"]["referenceFramesUnmatched"] == ["f.jpg"]
 
     assert document["method"] == "visual" and document["verdict"] == "coarse"
     assert document["frameSource"] == "epoch-alignment"

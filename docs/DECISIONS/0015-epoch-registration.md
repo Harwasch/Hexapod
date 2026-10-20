@@ -52,15 +52,19 @@ use_robust_loss_on_prior_position`; the Modal image's self-check builds each one
    datum only) and total against **three sigma of the declared uncertainties**: horizontal
    3·√2·√(anchor² + target² + pick²), vertical 3·√(…), the pick one pixel's footprint. First
    principles, not calibrated on any capture.
-6. **Verdict**: `survey` = the `rtk-drone` tier, aligned, ≥ 3 check targets within tolerance;
-   `coarse` = aligned otherwise; `unaligned` otherwise, keeping the georeference's frame
-   (`frameSource: georef`). **An RTK epoch never trades its own GNSS frame for a reference that is
-   not `survey`** (the review's fix 11; the default until Harrison decides otherwise): it keeps
-   `gnss-prior-ba` and records the visual fit as `visualCheck`. `uncertaintyM` is the targets' RMSE
-   floored at their own sigma **and at the anchor's** (an epoch is no more accurate than the frame
-   it was aligned into — a deviation found on the demo, below); else, aligned visually,
-   √(reference² + (3·rms)²); else the georeference's own (≥ 5 m). Confidence is a heuristic score in
-   [0, 1], documented as not a probability.
+6. **Verdict**: `survey` = the `rtk-drone` tier, aligned, ≥ 3 check targets within tolerance, and
+   an anchor that constrains height (GNSS priors whose vertical was left unconstrained by a datum
+   mismatch score no vertical and cannot be survey); `coarse` = aligned otherwise; `unaligned`
+   otherwise — **including an epoch whose site had a reference it could not be aligned to, whatever
+   its own GNSS** ("Drone, not aligned: placed by its GPS, ±5 m"), and one whose registration
+   crashed, which is never a failed run. It keeps the georeference's frame (`frameSource:
+georef`). **An RTK epoch never trades its own GNSS frame for a reference that is not `survey`**
+   (the review's fix 11; the default until Harrison decides otherwise): it keeps `gnss-prior-ba`
+   and records the visual fit as `visualCheck`. `uncertaintyM` starts from what anchors the frame —
+   √(reference² + (3·rms)²) aligned visually, the priors' sigma or the georeference's own (≥ 5 m)
+   with GNSS — and check targets (their RMSE, their own sigma) can only raise it; an unaligned
+   epoch carries the georeference's own. Confidence is a heuristic score in [0, 1], documented as
+   not a probability.
 7. **Placement**: `place` applies the alignment's frame when it aligned visually, and then never
    adds `georef.siteFrame.offsetM` (the review's fix 2: it would move a located phone epoch by its
    GPS error twice). `catalog` carries the alignment, less per-image residuals, to the API, where
@@ -76,18 +80,20 @@ use_robust_loss_on_prior_position`; the Modal image's self-check builds each one
 
 ## Measured on this machine (16 cores, pycolmap 4.2.0; the synthetic tree, not a real capture)
 
-`experiments/registration_demo.py`, one run (matching and mapping vary run to run with threads):
+`experiments/registration_demo.py`, one run after the review fixes (matching and mapping vary
+run to run with threads; six runs of it and six of `test_registration_epochs.py` all passed, every
+epoch's camera RMSE against the truth inside the uncertainty it claimed):
 
 | epoch           | method        | verdict   | registered | residual rms | truth RMSE | check RMSE h / v | tolerance h / v | ±       |
 | --------------- | ------------- | --------- | ---------- | ------------ | ---------- | ---------------- | --------------- | ------- |
-| e1 RTK drone    | gnss-prior-ba | survey    | —          | 0.026 m      | 0.015 m    | 0.025 / 0.021 m  | 0.145 / 0.106 m | 0.032 m |
-| e2 RTK drone    | visual        | survey    | 30/30      | 0.012 m      | 0.019 m    | 0.011 / 0.008 m  | 0.186 / 0.134 m | 0.032 m |
-| e2 phone `.mov` | visual        | coarse    | 29/30      | 0.018 m      | 0.027 m    | —                | —               | 0.062 m |
+| e1 RTK drone    | gnss-prior-ba | survey    | —          | 0.026 m      | 0.015 m    | 0.021 / 0.023 m  | 0.145 / 0.106 m | 0.031 m |
+| e2 RTK drone    | visual        | survey    | 30/30      | 0.013 m      | 0.018 m    | 0.010 / 0.007 m  | 0.181 / 0.131 m | 0.049 m |
+| e2 phone `.mov` | visual        | coarse    | 30/30      | 0.018 m      | 0.028 m    | —                | —               | 0.062 m |
 | unrelated scene | none          | unaligned | 0/30       | —            | —          | —                | —               | 10 m    |
 
-The whole demo (five epochs, rendering included) takes about 45 s; registering one epoch into the
+The whole demo (five epochs, rendering included) takes 33-45 s; registering one epoch into the
 reference about 3 s (extract 0.5, match 1.3, triangulate 0.1, map 0.8). The reference moved
-≤ 2·10⁻¹⁴ m every time. Two findings changed the design: COLMAP 4 turns EXIF GPS into WGS84 pose
+≤ 2·10⁻¹⁴ m every time. Findings that changed the design (some from the independent review, which saw the demo test fail 3 of 6 runs before them): a sampled reference frame that no verified pair touched crashed the fixed-reference mapping, so only matched reference frames are seeded; COLMAP 4 turns EXIF GPS into WGS84 pose
 priors at extraction, which broke the fixed-reference mapping, so `register` clears them (the
 alignment is visual by decision); and e2's eight targets scored 1.3 cm while its reference is
 worth 3 cm, hence the anchor floor in item 6.

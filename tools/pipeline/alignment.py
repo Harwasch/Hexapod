@@ -1077,6 +1077,8 @@ def _registration_block(registered: Mapping[str, Any] | None) -> dict[str, objec
         "registeredFraction": round(len(new) / used, 4) if used else 0.0,
         "referenceFrames": registered.get("referenceFramesUsed"),
         "registeredReference": registered.get("registeredReference"),
+        "referenceFramesUnmatched": registered.get("referenceFramesUnmatched"),
+        "exifPosePriorsCleared": registered.get("exifPosePriorsCleared"),
         "crossPairs": registered.get("crossPairs"),
         "verifiedPairs": registered.get("verifiedPairs"),
         "crossInlierMatches": registered.get("crossInlierMatches"),
