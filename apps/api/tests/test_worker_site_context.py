@@ -462,3 +462,60 @@ def test_a_refine_that_succeeded_is_the_reference_with_its_new_files(
     document = seeded(db, storage, capture, tmp_path)
     placement = tmp_path / "site_context" / document["reference"]["placement"]
     assert json.loads(placement.read_text()) == {"refined": True}
+
+
+# --- what the bucket may do to a seed ----------------------------------------------------
+
+
+def test_a_clicks_file_over_the_limit_is_never_read(
+    db: Session, storage: S3Storage, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker has 2 GB; a capture file is whatever was uploaded. Clicks are a few kB
+    each, so one past `MAX_OBSERVATIONS_BYTES` is not clicks: skipped, saying why, without
+    downloading a byte of it."""
+    capture = _capture(db, "huge-clicks")
+    key = f"captures/{capture.id}/check_observations.json"
+    storage.put_object(key, b" " * (site_context.MAX_OBSERVATIONS_BYTES + 1), "application/json")
+    db.add(
+        CaptureFile(
+            capture_id=capture.id,
+            filename="check_observations.json",
+            storage_key=key,
+            status=UploadStatus.COMPLETE,
+        )
+    )
+    db.commit()
+    said: list[str] = []
+    monkeypatch.setattr(site_context.log, "warning", lambda message, *a: said.append(message % a))
+    document = seeded(db, storage, capture, tmp_path)
+    assert document["observations"] == []
+    assert not (tmp_path / "site_context" / site_context.OBSERVATIONS_FILE).exists()
+    assert any("over the 5242880" in line and "not read" in line for line in said), said
+
+
+@pytest.mark.parametrize("vanishes", ["frames/frame_0001.jpg", "placement.json"])
+def test_a_reference_object_that_vanishes_mid_seed_falls_back_to_the_georeference(
+    db: Session,
+    storage: S3Storage,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    vanishes: str,
+) -> None:
+    """Listed, then gone before its download (a lifecycle rule, a person tidying the
+    bucket): the run is aligned by its own georeference, as when it was gone from the
+    start -- never dead-lettered on a scaffold that is not there."""
+    first, epoch = first_epoch(db, storage, tmp_path)
+    assert first.site_id is not None and epoch.job_id is not None
+    stage = "place" if vanishes == "placement.json" else "normalize"
+    doomed = f"runs/{epoch.job_id}/{stage}/{vanishes}"
+    real = storage.download_file
+
+    def download(key: str, target: Path) -> int:
+        if key == doomed:
+            storage.delete_object(key)
+        return real(key, target)
+
+    monkeypatch.setattr(storage, "download_file", download)
+    document = seeded(db, storage, second_capture(db, first.site_id), tmp_path)
+    assert document["reference"] is None
+    assert document["siteId"] == str(first.site_id)

@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from botocore.exceptions import ClientError
 from sqlalchemy.orm import Session
 
 from app.models import Capture
@@ -51,6 +52,10 @@ OBSERVATIONS_FILE = "check_observations.json"
 REFERENCE_DIR = "reference"
 #: Which epoch's files `reference/` holds, so an interrupted seed never mixes two.
 REFERENCE_MARKER = ".reference.json"
+#: The most a capture's clicks file may be and still be read: a click is ~100 bytes, so
+#: 5 MB is tens of thousands of them, and anything larger is not clicks. Checked before a
+#: byte is downloaded -- the file is read whole, on a worker with 2 GB.
+MAX_OBSERVATIONS_BYTES = 5 * 1024 * 1024
 #: The two reference artifacts that are directories (the others are single files).
 DIRECTORIES = frozenset({"frames", "poses"})
 
@@ -110,6 +115,23 @@ def _end_transaction(db: Session) -> None:
         db.commit()
 
 
+class Vanished(Exception):  # noqa: N818 - an event, as `LiveMoved` is
+    """An object that was there a moment ago is not: listed, then deleted before its
+    download (a lifecycle rule, a person tidying the bucket)."""
+
+
+def _download(storage: ObjectStorage, key: str, path: Path) -> None:
+    """`download_file`, with an object that is gone by the time it is fetched raised as
+    `Vanished`; any other failure is what it is (a transient one dead-letters the run as
+    a failed fetch of the capture's own files does)."""
+    try:
+        storage.download_file(key, path)
+    except ClientError:
+        if storage.head_object(key) is None:
+            raise Vanished(key) from None
+        raise
+
+
 def _download_tree(storage: ObjectStorage, prefix: str, target: Path) -> int:
     """Every object under `prefix/` into `target`, file by file, skipping what is there
     (a download writes beside its target and renames, so a present file is whole)."""
@@ -124,7 +146,7 @@ def _download_tree(storage: ObjectStorage, prefix: str, target: Path) -> int:
                 continue
             count += 1
             if not path.is_file():
-                storage.download_file(item.key, path)
+                _download(storage, item.key, path)
         token = page.next_continuation_token
         if token is None:
             return count
@@ -151,27 +173,23 @@ def _fetch_reference(
     names = epochs.REFERENCE_ARTIFACTS
     for role, key in reference.keys.items():
         path = root / names[role]
-        if role in DIRECTORIES:
-            if _download_tree(storage, key, path) == 0:
-                log.warning(
-                    "site context: reference epoch %s has no %s in the bucket (%s); "
-                    "the run is aligned by its own georeference",
-                    reference.epoch_id,
-                    role,
-                    key,
-                )
-                return None
-        elif not path.is_file():
-            if storage.head_object(key) is None:
-                log.warning(
-                    "site context: reference epoch %s has no %s in the bucket (%s); "
-                    "the run is aligned by its own georeference",
-                    reference.epoch_id,
-                    role,
-                    key,
-                )
-                return None
-            storage.download_file(key, path)
+        try:
+            if role in DIRECTORIES:
+                if _download_tree(storage, key, path) == 0:
+                    raise Vanished(key)
+            elif not path.is_file():
+                if storage.head_object(key) is None:
+                    raise Vanished(key)
+                _download(storage, key, path)
+        except Vanished as gone:
+            log.warning(
+                "site context: reference epoch %s has no %s in the bucket (%s is gone); "
+                "the run is aligned by its own georeference",
+                reference.epoch_id,
+                role,
+                gone,
+            )
+            return None
     return {
         "epochId": str(reference.epoch_id),
         "jobId": str(reference.job_id),
@@ -189,7 +207,30 @@ def _observations(storage: ObjectStorage, key: str, directory: Path) -> list[Any
     pipeline is as forgiving of a stray click)."""
     path = directory / OBSERVATIONS_FILE
     if not path.is_file():
-        storage.download_file(key, path)
+        found = storage.head_object(key)
+        if found is None:
+            log.warning(
+                "site context: %s is not in the bucket (%s); no observations",
+                OBSERVATIONS_FILE,
+                key,
+            )
+            return []
+        if found.size > MAX_OBSERVATIONS_BYTES:
+            log.warning(
+                "site context: %s is %d bytes, over the %d a clicks file may be; not read, "
+                "no observations",
+                OBSERVATIONS_FILE,
+                found.size,
+                MAX_OBSERVATIONS_BYTES,
+            )
+            return []
+        try:
+            _download(storage, key, path)
+        except Vanished:
+            log.warning(
+                "site context: %s vanished before its download; no observations", OBSERVATIONS_FILE
+            )
+            return []
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
