@@ -3,6 +3,7 @@ draws it, on a hand-made tree and on a packed tileset read back from `tileset.js
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -173,3 +174,39 @@ def test_a_far_tileset_is_read_in_the_root_frame(tmp_path: Path) -> None:
         a = {packed.uris[t] for t in lod_maths.cut(packed.tree, eye, 500.0, 16.0)}
         b = {tree.uris[t] for t in lod_maths.cut(tree, eye, 500.0, 16.0)}
         assert a == b
+
+
+def test_lod_compare_takes_two_merge_rules_of_one_tree(tmp_path: Path) -> None:
+    """Two merge rules give one tree different geometric errors, which `lod_compare` must
+    accept; a different tree (other uris or other children) it refuses."""
+    from experiments.lod_compare import Tileset, same_tree
+
+    fixture = Path(__file__).resolve().parents[3] / "data" / "tiles" / "synthetic-tree-lod"
+    document = json.loads((fixture / "tileset.json").read_text(encoding="utf-8"))
+    base = Tileset(fixture).tree
+    assert len(base.uris) > 1
+
+    def variant(name: str, edit: Any) -> lod_maths.Tree:
+        copy = json.loads(json.dumps(document))
+        edit(copy["root"])
+        folder = tmp_path / name
+        folder.mkdir()
+        (folder / "tileset.json").write_text(json.dumps(copy), encoding="utf-8")
+        return Tileset(folder).tree
+
+    def scale_errors(tile: dict[str, Any]) -> None:
+        tile["geometricError"] = 1.7 * float(tile["geometricError"])
+        for child in tile.get("children", []):
+            scale_errors(child)
+
+    def rename_first_child(tile: dict[str, Any]) -> None:
+        tile["children"][0]["content"]["uri"] = "other.glb"
+
+    def drop_last_child(tile: dict[str, Any]) -> None:
+        tile["children"].pop()
+
+    other_errors = variant("errors", scale_errors)
+    assert not np.array_equal(other_errors.error, base.error)
+    assert same_tree(base, other_errors)
+    assert not same_tree(base, variant("uris", rename_first_child))
+    assert not same_tree(base, variant("children", drop_last_child))

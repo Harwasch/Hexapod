@@ -28,7 +28,10 @@ tau = 16 is the number to compare with Phase 1's.
     $GSPLAT_PYTHON tools/pipeline/experiments/lod_compare.py a b --out lod_compare.json
 
 (`--tile-gaussians` and `--opacity-min` at the recipe's 100000 and 0.02, the defaults.) The
-two must be the same tree -- same tiles, same geometric errors -- or the script refuses.
+two must be the same tree -- the same tile uris with the same children -- or the script
+refuses (`same_tree`). Their geometric errors may differ: a parent's error comes from its
+merge (its boxes and widening), so two rules give two sets of errors, and each tileset's root
+is drawn from its own switch distance.
 
 **Tile transforms.** A far site's tiles carry translation-only `transform`s (ADR 0011).
 `Tileset` composes them (`splat_tiles.tile_offsets`): each box and each decoded position
@@ -131,6 +134,13 @@ class Tileset:
         return {key: np.concatenate([part[key] for part in parts]) for key in parts[0]}
 
 
+def same_tree(a: lod_maths.Tree, b: lod_maths.Tree) -> bool:
+    """Whether two packed tilesets are one tree: the same tile uris, in walk order, with the
+    same children. Geometric errors (and boxes) are not compared: they follow from the merge
+    rule, which is what the comparison varies."""
+    return a.uris == b.uris and a.children == b.children
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("a", type=Path, help="one splat/ folder")
@@ -187,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sets = {"a": Tileset(args.a), "b": Tileset(args.b)}
     base = sets["a"]
-    if base.tree.error.tolist() != sets["b"].tree.error.tolist():
+    if not same_tree(base.tree, sets["b"].tree):
         sys.stderr.write("lod_compare: the two tilesets are different trees\n")
         return 2
     leaves = base.content(list(base.tree.leaves))
@@ -206,14 +216,15 @@ def main(argv: list[str] | None = None) -> int:
 
     rows: list[dict[str, Any]] = []
     for tau in SWITCH_TAUS:
-        distance = float(base.tree.error[0]) * focal / tau
         for azimuth in AZIMUTHS_DEG:
-            eye = lod_maths.orbit_eye(
-                target, direction(azimuth), base.tree.low[0], base.tree.high[0], distance
-            )
-            view = lod_maths.look_at(eye, target)
-            reference, reference_alpha = render(leaves, view)
             for name, tileset in sets.items():
+                # Each root from its own switch distance: the two errors may differ.
+                distance = float(tileset.tree.error[0]) * focal / tau
+                eye = lod_maths.orbit_eye(
+                    target, direction(azimuth), tileset.tree.low[0], tileset.tree.high[0], distance
+                )
+                view = lod_maths.look_at(eye, target)
+                reference, reference_alpha = render(leaves, view)
                 image, alpha = render(tileset.content([0]), view)
                 rows.append(
                     {"test": "root-at-switch", "tau": tau, "azimuth": azimuth, "tileset": name,
