@@ -193,3 +193,72 @@ def test_a_job_can_still_override_the_site_frame() -> None:
 
     assert resolved["normalize"]["site_frame"] == other
     assert resolved["georeference"]["site_frame"] == FRAME
+
+
+# --- what a phone capture says about itself (M3a) ---------------------------------------
+
+PHONE = {"origin": "phone-key", "lat": 47.6, "lon": -122.3, "locationAccuracyM": 65.0}
+
+
+def test_the_phones_location_accuracy_reaches_both_georeference_impls() -> None:
+    """`api/v1/phone.py` writes `locationAccuracyM`; until M3a nothing read it."""
+    lane1 = _params("splat-ingest", PHONE)
+    lane2 = _params("photo-reconstruct", PHONE)
+
+    assert lane1["georeference"]["location_accuracy_m"] == 65.0
+    assert lane2["georeference"] == {"lat": 47.6, "lon": -122.3, "location_accuracy_m": 65.0}
+
+
+def test_a_phone_capture_is_hinted_as_a_phone() -> None:
+    assert _params("photo-reconstruct", PHONE)["normalize"]["platform_hint"] == "phone"
+    assert "platform_hint" not in _params("photo-reconstruct", {"lat": 1.0, "lon": 2.0}).get(
+        "normalize", {}
+    )
+    assert _params("photo-reconstruct", {"platform": "drone"})["normalize"]["platform"] == "drone"
+
+
+@pytest.mark.parametrize("recipe", ["splat-ingest", "photo-reconstruct"])
+def test_a_phone_captures_params_are_pinned_whole(recipe: str) -> None:
+    """Every key a phone-key capture's run is told, on purpose. The new facts reach
+    `ingest_splat` too (it also produces `source_meta.json`), which ignores them."""
+    assert _params(recipe, PHONE) == {
+        "normalize": {"platform_hint": "phone"},
+        "georeference": {"lat": 47.6, "lon": -122.3, "location_accuracy_m": 65.0},
+        "register": {"slug": "c", "title": "c"},
+    }
+    framed = _params(recipe, PHONE, frame=FRAME)
+    expected_georeference: dict[str, Any] = {
+        "lat": 47.6,
+        "lon": -122.3,
+        "location_accuracy_m": 65.0,
+        "site_frame": FRAME,
+    }
+    expected_normalize: dict[str, Any] = {"platform_hint": "phone"}
+    if recipe == "splat-ingest":
+        expected_normalize.update(site_frame=FRAME, lat=47.6, lon=-122.3)
+    assert framed == {
+        "normalize": expected_normalize,
+        "georeference": expected_georeference,
+        "register": {"slug": "c", "title": "c"},
+    }
+
+
+def test_the_worker_and_the_phone_route_agree_on_the_origin() -> None:
+    from app.api.v1 import phone
+    from app.worker import params
+
+    assert params.PHONE_ORIGIN == phone.ORIGIN
+    assert params.PHONE_HINT == import_module("capture_platform").PHONE_HINT
+
+
+def test_the_api_and_the_pipeline_agree_on_the_platform_names() -> None:
+    from app.models.enums import EpochPlatform
+
+    assert tuple(p.value for p in EpochPlatform) == import_module("capture_platform").PLATFORMS
+
+
+def test_an_unknown_metadata_platform_is_refused_at_capture_creation() -> None:
+    with pytest.raises(ValueError, match=r"metadata\.platform must be one of rtk-drone"):
+        CaptureCreate(name="x", kind=CaptureKind.VIDEO, metadata={"platform": "satellite"})
+    ok = CaptureCreate(name="x", kind=CaptureKind.VIDEO, metadata={"platform": "rtk-drone"})
+    assert ok.metadata["platform"] == "rtk-drone"

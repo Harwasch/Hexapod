@@ -2680,13 +2680,18 @@ def manual_placement(ctx: StageContext) -> StageOutcome:
             f"{offset[1]:.3f}) m from its origin"
         )
     _check_normalized_frame(ctx, site_echo)
+    accuracy = _location_accuracy(ctx.param("location_accuracy_m"))
     document: dict[str, object] = {
         "lat": lat,
         "lon": lon,
         "height": height,
         "georefMethod": "manual",
         "scaleSource": str(ctx.param("scale_source", "unresolved")),
-        "uncertaintyM": float(ctx.param("uncertainty_m", DEFAULT_MANUAL_UNCERTAINTY_M)),
+        # A phone's own accuracy can only widen it (`_widened`).
+        "uncertaintyM": _widened(
+            float(ctx.param("uncertainty_m", DEFAULT_MANUAL_UNCERTAINTY_M)), accuracy
+        ),
+        "locationAccuracyM": accuracy,
         "note": note,
     }
     if site_echo is not None:
@@ -2694,6 +2699,22 @@ def manual_placement(ctx: StageContext) -> StageOutcome:
     _write_json(ctx.output(GEOREF.name), document)
     ctx.log(f"placed at {lat}, {lon}, {height} m")
     return StageOutcome(metrics={"lat": lat, "lon": lon, "height": height})
+
+
+def _location_accuracy(value: object) -> float | None:
+    """A phone's reported horizontal accuracy in metres: positive and finite, else None."""
+    accuracy = _optional_float(value)
+    return accuracy if accuracy is not None and math.isfinite(accuracy) and accuracy > 0 else None
+
+
+def _widened(uncertainty_m: float, accuracy_m: float | None) -> float:
+    """The uncertainty a located capture carries, given the phone's own accuracy.
+
+    A phone's accuracy can only widen the uncertainty: a coordinate with no orientation
+    is never better than a dropped pin (`UNALIGNED_UNCERTAINTY_M`), however good the fix
+    -- but a fix the phone itself says is 65 m off is 65 m off, not 10.
+    """
+    return max(uncertainty_m, accuracy_m or 0.0)
 
 
 def _site_point(ctx: StageContext, frame: site_frame.SiteFrame) -> tuple[float, float]:
@@ -2826,6 +2847,15 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
             )
         located, method = placed, "manual"
     lat, lon, height = located
+    # How good the location is by its own account: the capture's `locationAccuracyM` (the
+    # phone's fix) for a hand placement, the video's QuickTime accuracy for a clip's
+    # location; EXIF fixes carry their own errors per frame and are not summarised here.
+    if method == "manual":
+        accuracy = _location_accuracy(ctx.param("location_accuracy_m"))
+    elif not fixes:
+        accuracy = _video_location_accuracy(ctx)
+    else:
+        accuracy = None
     site_echo: dict[str, object] | None = None
     if frame_given is not None:
         offset = site_frame.offset_m(frame_given, lat, lon)
@@ -2853,9 +2883,13 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
         # the run's own `scale` (`manual`), an estimate from the camera's height above the
         # ground (`camera-height-estimate`, evidence in `frame.scaleEstimate`), or neither.
         "scaleSource": scale_source,
-        "uncertaintyM": float(ctx.param("uncertainty_m", UNALIGNED_UNCERTAINTY_M))
-        if method == "manual"
-        else UNALIGNED_UNCERTAINTY_M,
+        "uncertaintyM": _widened(
+            float(ctx.param("uncertainty_m", UNALIGNED_UNCERTAINTY_M))
+            if method == "manual"
+            else UNALIGNED_UNCERTAINTY_M,
+            accuracy,
+        ),
+        "locationAccuracyM": accuracy,
         "note": (
             f"located from {source} but not aligned ({why}): levelled by how the camera "
             f"was held, facing an arbitrary heading unless one was given, "
@@ -3347,6 +3381,14 @@ def _sole_location(
     # every video's height came out 0. Still accepted, for a hand-written source_meta.json.
     altitude = location.get("altitudeM", location.get("alt"))
     return lat, lon, _optional_float(altitude) or 0.0
+
+
+def _video_location_accuracy(ctx: StageContext) -> float | None:
+    """`source_meta.location.accuracyM` (the iPhone's own horizontal accuracy), or None."""
+    if not ctx.has_input(SOURCE_META.name):
+        return None
+    location = _read_json(ctx.input(SOURCE_META.name)).get("location")
+    return _location_accuracy(location.get("accuracyM")) if isinstance(location, dict) else None
 
 
 def _count_files(directory: Path) -> int:

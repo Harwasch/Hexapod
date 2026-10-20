@@ -264,3 +264,23 @@ def test_the_three_new_stages_were_a_recipe_edit_and_three_decorators() -> None:
     assert impls["ground_samples"] == "splat_ground"
     assert impls["manifest"] == "capture_manifest"
     assert {"splat_thumbnail", "splat_ground", "capture_manifest"} <= set(known_impls())
+
+
+@pytest.mark.parametrize(("accuracy", "expected"), [(65.0, 65.0), (4.7, 10.0), (0.0, 10.0)])
+def test_a_hand_placement_carries_the_phones_accuracy(
+    tmp_path: Path, accuracy: float, expected: float
+) -> None:
+    """`locationAccuracyM` on a phone capture reaches `manual_placement`; it widens the
+    hand placement's ten metres and never narrows them. Zero is no accuracy at all."""
+    from conftest import make_recipe
+
+    workdir = Workdir.create(tmp_path / "run")
+    params = {"lat": LAT, "lon": LON, "uncertainty_m": 10.0, "location_accuracy_m": accuracy}
+    recipe = make_recipe(
+        [{"id": "georeference", "impl": "manual_placement", "params": params}], inputs=[]
+    )
+    execute(recipe, workdir, RunnerSet.local())
+
+    georef = _json(workdir, "georeference", "georef.json")
+    assert georef["uncertaintyM"] == expected
+    assert georef["locationAccuracyM"] == (accuracy or None)

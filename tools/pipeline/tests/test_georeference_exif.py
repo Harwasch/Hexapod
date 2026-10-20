@@ -763,3 +763,57 @@ def test_noisy_gps_still_aligns_and_says_how_noisy_it_was(
     assert georef["alignment"]["scale"] == pytest.approx(exact["alignment"]["scale"], rel=0.01)
     # ...and the reported uncertainty did not improve because the residual happened to.
     assert georef["uncertaintyM"] >= EXIF_GPS_UNCERTAINTY_FLOOR_M
+
+
+# --- the phone's own accuracy only ever widens the uncertainty -----------------------
+
+
+@pytest.mark.parametrize(("accuracy", "expected"), [(65.0, 65.0), (4.7, 10.0), (None, 10.0)])
+def test_a_phone_fix_widens_the_uncertainty_but_never_narrows_it(
+    tmp_path: Path, accuracy: float | None, expected: float
+) -> None:
+    """A phone that says its fix is 65 m off is 65 m off; one that says 4.7 m is still
+    no better than a dropped pin, because a coordinate has no orientation."""
+    frames = tmp_path / "frames"
+    tree_frames.render_orbit(FIXTURE_PLY, frames, count=3)
+    params: dict[str, object] = {"lat": 51.5007, "lon": -0.1246}
+    if accuracy is not None:
+        params["location_accuracy_m"] = accuracy
+
+    georef = json.loads(
+        _georeference_only(
+            tmp_path / "run", frames, source_meta={"location": None}, params=params
+        ).read_text()
+    )
+
+    assert georef["georefMethod"] == "manual"
+    assert georef["uncertaintyM"] == expected
+    assert georef["locationAccuracyM"] == accuracy
+
+
+def test_a_video_locations_own_accuracy_is_kept(tmp_path: Path) -> None:
+    frames = tmp_path / "frames"
+    tree_frames.render_orbit(FIXTURE_PLY, frames, count=3)
+    location = video.Location(
+        lat=37.8, lon=-122.4, altitude_m=12.5, source="iso6709", accuracy_m=30.0
+    )
+
+    georef = json.loads(
+        _georeference_only(
+            tmp_path / "run", frames, source_meta={"location": location.to_dict()}
+        ).read_text()
+    )
+
+    assert georef["georefMethod"] == "exif-gps"
+    assert (georef["uncertaintyM"], georef["locationAccuracyM"]) == (30.0, 30.0)
+    # The capture's own fix does not apply to a location the video carried itself.
+    good = video.Location(lat=37.8, lon=-122.4, altitude_m=None, source="iso6709", accuracy_m=3)
+    georef = json.loads(
+        _georeference_only(
+            tmp_path / "run2",
+            frames,
+            source_meta={"location": good.to_dict()},
+            params={"location_accuracy_m": 500.0},
+        ).read_text()
+    )
+    assert (georef["uncertaintyM"], georef["locationAccuracyM"]) == (UNALIGNED_UNCERTAINTY_M, 3.0)
