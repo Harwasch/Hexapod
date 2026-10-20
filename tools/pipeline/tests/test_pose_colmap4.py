@@ -562,3 +562,25 @@ def test_unrelated_frames_do_not_register(
 
     assert len(document["registeredNew"]) < 0.5 * 30
     assert document["referenceMovedMaxM"] < 1e-9
+
+
+@requires_pycolmap
+def test_frames_that_carry_exif_gps_still_register(
+    tmp_path: Path, two_epochs: dict[str, tuple[Path, Path, tree_frames.Truth]]
+) -> None:
+    """COLMAP 4 turns every frame's EXIF GPS into a WGS84 pose prior at extraction, and
+    with those in the database the fixed-reference mapping failed outright ("key was not
+    found in unordered_node_map"). The alignment is visual by decision (D4), so register
+    clears them and says how many it cleared."""
+    import gps_frames
+
+    reference, new = two_epochs["reference"], two_epochs["new"]
+    tagged = tmp_path / "tagged" / "frames"
+    shutil.copytree(new[0], tagged)
+    gps_frames.tag_orbit(tagged, {p.name: p.centre for p in new[2].poses}, (28.0, -82.0, 10.0))
+
+    document = _register(tmp_path / "reg", reference, (tagged, new[1], new[2]))
+
+    assert document["exifPosePriorsCleared"] == 30
+    assert len(document["registeredNew"]) == 30
+    assert document["referenceMovedMaxM"] < 1e-9

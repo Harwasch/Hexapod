@@ -378,6 +378,11 @@ def _register(pycolmap: Any, parsed: argparse.Namespace) -> int:
 
     db = pycolmap.Database.open(database)
     try:
+        # COLMAP 4 turns each frame's EXIF GPS into a WGS84 pose prior at extraction. The
+        # alignment is visual by decision (D4) -- GNSS only checks it -- and those priors
+        # broke the fixed-reference mapping (an unordered_node_map key error), so none.
+        priors_from_exif = db.num_pose_priors()
+        db.clear_pose_priors()
         by_id = {image.image_id: image for image in db.read_all_images()}
         cameras = db.read_all_cameras()
         rigs = db.read_all_rigs()
@@ -473,6 +478,7 @@ def _register(pycolmap: Any, parsed: argparse.Namespace) -> int:
         "verifiedPairs": verified,
         "crossInlierMatches": cross_matches,
         "triangulatedPoints": int(triangulated.num_points3D()),
+        "exifPosePriorsCleared": priors_from_exif,
         "registeredNew": dict(sorted(registered_new.items())),
         "registeredReference": registered_reference,
         "referenceMovedMaxM": moved,
