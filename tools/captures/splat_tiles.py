@@ -2497,16 +2497,33 @@ def _translation(transform: object, uri: str) -> np.ndarray:
     return m[:3, 3].copy()
 
 
-def tile_offsets(tileset: Mapping[str, Any]) -> dict[str, np.ndarray]:
+class TileOffsets(dict[str, np.ndarray]):
+    """`tile_offsets`' result: keyed by content uri without a leading `./`, and looked up
+    the same way, so a reader that asks with the uri as the tileset spells it
+    (`rig_tiles.tile_uris`: `./splat_0.glb` or `splat_0.glb`) gets that tile's offset and
+    never the site frame by default."""
+
+    def __getitem__(self, uri: str) -> np.ndarray:
+        return super().__getitem__(uri.removeprefix("./"))
+
+    def __contains__(self, uri: object) -> bool:
+        return super().__contains__(uri.removeprefix("./") if isinstance(uri, str) else uri)
+
+    def get(self, uri: str, default: Any = None) -> Any:  # type: ignore[override]
+        return super().get(uri.removeprefix("./"), default)
+
+
+def tile_offsets(tileset: Mapping[str, Any]) -> TileOffsets:
     """Each content uri's frame in the root's frame: the float64 sum of the translation-only
     `transform`s from the root down to its tile, the root's own (the globe placement)
     excluded. Zero for every tile of a tileset that fits SPZ's range (`tile_frame`).
 
     Reads `content.uri` and 3D Tiles 1.1 `contents[].uri`, a leading `./` removed (as
-    apps/api services/sidecars.py `content_uris` does). A child transform that is anything
-    but a translation is refused (`SplatFormatError`): no reader here composes rotations.
+    apps/api services/sidecars.py `content_uris` does) from the keys and from every lookup
+    (`TileOffsets`). A child transform that is anything but a translation is refused
+    (`SplatFormatError`): no reader here composes rotations.
     """
-    out: dict[str, np.ndarray] = {}
+    out = TileOffsets()
     root = tileset.get("root")
     stack: list[tuple[Any, np.ndarray]] = [(root, np.zeros(3))]
     while stack:

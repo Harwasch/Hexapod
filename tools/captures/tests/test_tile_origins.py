@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -172,6 +173,30 @@ def test_tile_offsets_composes_nested_translations() -> None:
         "splat_4-0.glb": [2548.0, 900.0, 0.0],
         "splat_0.glb": [0.0, 0.0, 0.0],
     }
+    # Looked up as the tileset spells it, `./` or not (`rig_tiles.tile_uris` keeps it).
+    found = splat_tiles.tile_offsets(tileset)
+    assert found["./splat_4.glb"].tolist() == [2548.0, 900.0, 0.0]
+    assert found.get("./splat_4.glb").tolist() == [2548.0, 900.0, 0.0]
+    assert "./splat_4-4.glb" in found and "./missing.glb" not in found
+
+
+def test_a_tileset_naming_its_tiles_dot_slash_is_read_in_the_site_frame(tmp_path: Path) -> None:
+    """A moved tile named `./splat_0.glb` was read in its own frame: every reader looks its
+    offset up by the uri as written, and the offsets were keyed without the `./`."""
+    import rig_tiles
+
+    far = REPO_ROOT / "data" / "tiles" / "synthetic-far"
+    expected = json.loads((far / "source" / "expected.json").read_text(encoding="utf-8"))
+    scan = tmp_path / "scan"
+    shutil.copytree(far / "splat", scan)
+    tileset = json.loads((scan / "tileset.json").read_text(encoding="utf-8"))
+    for tile in _tiles(tileset):
+        tile["content"]["uri"] = "./" + tile["content"]["uri"]
+    (scan / "tileset.json").write_text(json.dumps(tileset), encoding="utf-8")
+    assert all(uri.startswith("./") for uri in rig_tiles.tile_uris(tileset))
+    assert rig_tiles.tile_checksums(scan) == sorted(
+        {row["checksum"] for row in expected["tiles"].values()}
+    )
 
 
 def test_tile_offsets_refuses_a_rotating_child_transform() -> None:
