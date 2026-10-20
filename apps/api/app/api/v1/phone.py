@@ -25,7 +25,7 @@ from app.schemas.capture import QUALITY_BARS, QUALITY_MODES, CaptureCreate, Capt
 from app.schemas.common import Problem
 from app.schemas.job import JobCreate, JobRead
 from app.services import captures as capture_service
-from app.services import handoff, phone_key, worker_wake
+from app.services import epochs, handoff, phone_key, worker_wake
 from app.services import jobs as job_service
 from app.services import recipes as recipe_service
 from app.services.errors import ConflictError, NotFoundError, UnauthorizedError
@@ -347,6 +347,27 @@ def _check_phone_site(db: DbSession, site_id: uuid.UUID) -> None:
         )
 
 
+def _check_phone_run(db: DbSession, capture: Capture) -> None:
+    """A run the phone key starts goes into a site the key may still join.
+
+    A re-run of an epoch goes into that epoch's site, a capture the console put on a site
+    into that site, and one that named a site at creation into the named one. Each is held
+    to the rule its first join was (`_check_phone_site`) every time the key starts a run,
+    since what made it allowed can change: a site's metadata is replaced by PATCH, and the
+    console may move a phone capture onto any site. The write-token routes are not limited.
+    """
+    epoch = epochs.epoch_of_capture(db, capture.id)
+    if epoch is not None:
+        site_id: uuid.UUID | None = epoch.site_id
+    elif capture.site_id is not None:
+        site_id = capture.site_id
+    else:
+        named = epochs.requested_site(db, capture)
+        site_id = named.id if named is not None else None
+    if site_id is not None:
+        _check_phone_site(db, site_id)
+
+
 @router.post(
     "/captures/{capture_id}/process",
     response_model=JobRead,
@@ -361,6 +382,7 @@ def process_phone_capture(
     if (capture.metadata_ or {}).get("origin") != ORIGIN:
         # Same answer as a wrong key: the phone key does not reach other captures.
         raise UnauthorizedError("That phone key is not right.")
+    _check_phone_run(db, capture)
     if payload.recipe not in PHONE_RECIPES:
         raise ConflictError(f"A phone can start {', '.join(sorted(PHONE_RECIPES))}, not that.")
     params = _checked_options(payload.recipe, payload.params)
@@ -410,6 +432,7 @@ def refine_phone_capture(
     capture = capture_service.get_capture(db, capture_id)
     if (capture.metadata_ or {}).get("origin") != ORIGIN:
         raise UnauthorizedError("That phone key is not right.")
+    _check_phone_run(db, capture)
     job = db.scalars(
         select(Job).where(Job.capture_id == capture_id).order_by(Job.created_at.desc())
     ).first()
