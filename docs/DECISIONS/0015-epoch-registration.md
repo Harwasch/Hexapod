@@ -107,6 +107,13 @@ epoch's camera RMSE against the truth inside the uncertainty it claimed):
 | e2 phone `.mov` | visual        | coarse    | 30/30      | 0.018 m      | 0.028 m    | —                | —               | 0.062 m |
 | unrelated scene | none          | unaligned | 0/30       | —            | —          | —                | —               | 10 m    |
 
+**The ± column is computed uncertainty, not measured error.** The phone's ±0.062 m is
+√(reference² + (3·rms)²) — the reference's own claim and three times the fit's residual — not a
+measurement against held-out targets (the phone epoch has none). What was measured is the "truth
+RMSE" column: the placed cameras against the renders' true centres with no further fit, 0.028 m for
+the phone, on **one synthetic scene**. That is evidence the claim is not optimistic here; it is not
+evidence of a real iPhone's accuracy, nor a calibrated coverage probability.
+
 The whole demo (five epochs, rendering included) takes 33-45 s; registering one epoch into the
 reference about 3 s (extract 0.5, match 1.3, triangulate 0.1, map 0.8). The reference moved
 ≤ 2·10⁻¹⁴ m every time. Findings that changed the design (some from the independent review, which saw the demo test fail 3 of 6 runs before them): a sampled reference frame that no verified pair touched crashed the fixed-reference mapping, so only matched reference frames are seeded; COLMAP 4 turns EXIF GPS into WGS84 pose
