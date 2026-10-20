@@ -69,6 +69,12 @@ a fixed number of cells across the scene -- which made a building's voxels tens 
 coarser than a table's, and "X% of the scene met the bar" mean something different for
 each. `supportMask.sizing` and `keepPctVoxel` say what size was used and why.
 
+**What it measured is kept.** `support/` holds every trained gaussian's evidence, row
+for row with `trained.ply` -- centre, alpha, final tier, which keep criteria it failed
+(`support_reasons`), views, spread, GSD -- because the `confidence` stage bins it into
+the site's cells after `place`, and `gated.ply` cannot stand in for it: under
+`bar: strict` it holds keep only.
+
 The stage never fails a run for being strict: a bar that would leave fewer than
 `min_gaussians` falls back to the next looser one and says so (`barApplied`).
 
@@ -117,6 +123,9 @@ __all__ = [
     "GATED_PLY",
     "MODES",
     "QUALITY_JSON",
+    "SUPPORT",
+    "SUPPORT_FILE",
+    "SUPPORT_REASON_BITS",
     "Cameras",
     "Roi",
     "RoiStats",
@@ -131,6 +140,7 @@ __all__ = [
     "occupied_share_of",
     "read_coverage",
     "support_pass",
+    "support_reasons",
     "supported_extent",
     "write_coverage",
 ]
@@ -157,6 +167,36 @@ COVERAGE_PLY = ArtifactDecl(
     content_type="application/octet-stream",
     summary="a sample of gaussian centres coloured by tier, plus the camera path, for viewers",
     stub_bytes=512,
+)
+
+#: `support/`'s description of itself; the columns are raw little-endian files beside it.
+SUPPORT_FILE = "support.json"
+SUPPORT = ArtifactDecl(
+    "support",
+    kind="dir",
+    content_type="inode/directory",
+    summary="every trained gaussian's evidence, row for row with trained.ply (COLMAP frame): "
+    "centre, alpha, final tier, why it fell short of keep, views, spread and GSD -- what "
+    "`confidence` bins into the site's cells",
+    required_members=(SUPPORT_FILE,),
+    stub_members=(SUPPORT_FILE,),
+)
+
+#: Bits of `support/`'s `reasons` column: which keep criterion a gaussian failed, by the
+#: very comparisons `assign_tiers` makes (and `accuracy`: demoted by its held-out error).
+#: The first four bits of the confidence grid's (tools/captures cell_grid.REASON_BITS).
+SUPPORT_REASON_BITS: Mapping[str, int] = {"views": 1, "spread": 2, "gsd": 4, "accuracy": 8}
+#: `support/`'s columns, in the order they are written: name, little-endian dtype.
+SUPPORT_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("x", "<f4"),
+    ("y", "<f4"),
+    ("z", "<f4"),
+    ("alpha", "u1"),
+    ("tier", "u1"),
+    ("reasons", "u1"),
+    ("views", "<u2"),
+    ("spreadDeg", "u1"),
+    ("gsdMm", "<f2"),
 )
 
 #: What `bar` may be, loosest last. The fallback walks this order.
@@ -1509,7 +1549,7 @@ class _Tally:
     "support_gate",
     consumes=("trained.ply", "poses"),
     optional_consumes=("georef.json", "train_metrics.json", holdout.HOLDOUT.name),
-    produces=(GATED_PLY, QUALITY_JSON, COVERAGE_PLY),
+    produces=(GATED_PLY, QUALITY_JSON, COVERAGE_PLY, SUPPORT),
     summary="the quality bar: keep what enough frames saw well, and say what to capture next",
 )
 def support_gate(ctx: StageContext) -> StageOutcome:
@@ -1742,6 +1782,9 @@ def _grade(
         tally.verified += int(((bits & FLAG_VERIFIED) > 0).sum())
         tally.demoted += int(((bits & FLAG_DEMOTED) > 0).sum())
         tally.measured += int(((bits & FLAG_MEASURED) > 0).sum())
+    # Every gaussian's evidence, kept for `confidence`: what this stage measured is gone
+    # with its scratch columns the moment it returns.
+    _write_support(ctx, store, thresholds, scale, roi, held is not None)
     coverage_keep_count = sum(
         int(((bits & FLAG_COVERAGE_KEEP) > 0).sum()) for _, (bits,) in store.rows("flags")
     )
@@ -2025,6 +2068,99 @@ def _grade(
         else "nothing met the high-quality bar"
     )
     return StageOutcome(metrics=metrics, summary=summary)
+
+
+def support_reasons(
+    views: I32,
+    spread_deg: F32,
+    gsd_ratio: F32,
+    tiers: U8,
+    flags: U8,
+    thresholds: Thresholds,
+    gsd_mm: F32 | None = None,
+) -> U8:
+    """Which keep criteria each gaussian that is not keep failed (`SUPPORT_REASON_BITS`).
+
+    The negation of each comparison `assign_tiers` makes, so a NaN fails exactly as it
+    does there; and `accuracy` when held-out frames demoted it. Keep rows carry none.
+    (Opacity is not a reason: `confidence` counts only gaussians at least 0.05 opaque,
+    past `min_opacity`.)
+    """
+    bits = np.zeros(views.shape[0], dtype=np.uint8)
+    bits |= np.where(~(views >= thresholds.keep_min_views), 1, 0).astype(np.uint8)
+    bits |= np.where(~(spread_deg >= thresholds.keep_min_spread_deg), 2, 0).astype(np.uint8)
+    coarse = ~(gsd_ratio <= thresholds.keep_max_gsd_ratio)
+    if gsd_mm is not None and thresholds.keep_max_gsd_mm is not None:
+        coarse |= ~(gsd_mm <= thresholds.keep_max_gsd_mm)
+    bits |= np.where(coarse, 4, 0).astype(np.uint8)
+    bits |= np.where((flags & FLAG_DEMOTED) > 0, 8, 0).astype(np.uint8)
+    bits[tiers == TIER_KEEP] = 0
+    return bits
+
+
+def _write_support(
+    ctx: StageContext,
+    store: _Store,
+    thresholds: Thresholds,
+    scale: _Scale,
+    roi: Roi,
+    held: bool,
+) -> None:
+    """`support/`: one row per `trained.ply` row (drop included), in its order, a chunk at
+    a time. About 20 bytes a gaussian: positions as measured (float32, COLMAP frame),
+    alpha as `round(255 alpha)`, the final tier, `support_reasons`, views (clamped to
+    65535), spread in whole degrees and the GSD in mm/px as float16 (NaN when the scale
+    is not metric). `gated.ply`, `coverage.ply` and `quality.json` are untouched: a grid
+    built from all of it, not from what the bar let through, is what can say a part of
+    the scene was weak (`bar: strict` publishes keep only)."""
+    out = splat_io.ColumnStore(ctx.output(SUPPORT.name))
+    writers = {name: out.create(name, dtype) for name, dtype in SUPPORT_COLUMNS}
+    names = ("x", "y", "z", "alpha", "tiers", "flags", "views", "spread", "gsd")
+    for _, (x, y, z, alpha, tiers, flags, views, spread, gsd) in store.rows(*names):
+        writers["x"].append(x)
+        writers["y"].append(y)
+        writers["z"].append(z)
+        level = np.rint(np.nan_to_num(alpha, nan=0.0).astype(np.float64) * 255.0)
+        writers["alpha"].append(np.clip(level, 0, 255).astype(np.uint8))
+        writers["tier"].append(tiers)
+        millimetres = scale.millimetres(gsd)
+        writers["reasons"].append(
+            support_reasons(
+                views, spread, scale.ratio(gsd, views > 0), tiers, flags, thresholds, millimetres
+            )
+        )
+        writers["views"].append(np.clip(views, 0, 65535).astype(np.uint16))
+        degrees = np.rint(np.nan_to_num(spread, nan=0.0).astype(np.float64))
+        writers["spreadDeg"].append(np.clip(degrees, 0, 180).astype(np.uint8))
+        writers["gsdMm"].append(
+            np.full(gsd.shape, np.nan, dtype=np.float16)
+            if millimetres is None
+            else millimetres.astype(np.float16)
+        )
+    out.finish()
+    median = scale.median_gsd
+    document: dict[str, object] = {
+        "version": 1,
+        "frame": "colmap",
+        "source": GATED_PLY_SOURCE,
+        "rows": store.count,
+        "columns": {
+            name: {"dtype": dtype, "file": f"{name}.bin"} for name, dtype in SUPPORT_COLUMNS
+        },
+        "alphaScale": 255,
+        "reasonBits": dict(SUPPORT_REASON_BITS),
+        "thresholds": thresholds.to_dict(),
+        "medianGsd": median if math.isfinite(median) else None,
+        "metresPerUnit": scale.metres,
+        # Where the cameras pointed (COLMAP frame): what `confidence` calls should-have-
+        # been-seen, as a disc, for its `unseen` cells.
+        "roi": roi.to_dict(),
+        "heldOut": "used" if held else "not-used",
+        "status": "measured",
+    }
+    (ctx.output(SUPPORT.name) / SUPPORT_FILE).write_text(
+        json.dumps(document, indent=1, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _held_report(
