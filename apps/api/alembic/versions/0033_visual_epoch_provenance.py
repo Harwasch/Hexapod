@@ -12,8 +12,10 @@ member (`none`, `unresolved`), where `GeorefMethod` and `ScaleSource` declare th
 the database's enum order stays the Python order (`test_0010_*` reads it back).
 
 Downgrade folds the value into what 0032's schema can hold -- `none` and `unresolved`,
-in the capture columns and in every asset's `render_config.provenance` (which 0032's
-`Provenance` would refuse to read) -- then rebuilds both types, as 0010 does.
+in the capture columns and in every JSON record 0032's `Provenance` or `ScaleEvidence`
+would refuse to read (`JSON_FIELDS`: an asset's `render_config.provenance` and
+`scaleEvidence.registeredScaleSource`, a capture's `provenance`, a layer's
+`render.provenance`) -- then rebuilds both types, as 0010 does.
 """
 
 from __future__ import annotations
@@ -29,6 +31,16 @@ depends_on = None
 GEOREF_METHOD = ("exif-gps", "arkit", "manual", "none")
 SCALE_SOURCE = ("arkit", "exif-gps", "manual", "camera-height-estimate", "unresolved")
 VALUE = "visual-epoch"
+#: (table, JSONB column, path) of every stored field typed `GeorefMethod` or `ScaleSource`.
+JSON_FIELDS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("assets", "render_config", ("provenance", "georefMethod")),
+    ("assets", "render_config", ("provenance", "scaleSource")),
+    ("assets", "render_config", ("scaleEvidence", "registeredScaleSource")),
+    ("captures", "provenance", ("georefMethod",)),
+    ("captures", "provenance", ("scaleSource",)),
+    ("layers", "render", ("provenance", "georefMethod")),
+    ("layers", "render", ("provenance", "scaleSource")),
+)
 
 
 def upgrade() -> None:
@@ -57,15 +69,17 @@ def downgrade() -> None:
     op.execute(
         "UPDATE captures SET scale_source = 'unresolved' WHERE scale_source = 'visual-epoch'"
     )
-    op.execute(
-        "UPDATE assets SET render_config = jsonb_set(render_config, "
-        "'{provenance,georefMethod}', '\"none\"') "
-        "WHERE render_config -> 'provenance' ->> 'georefMethod' = 'visual-epoch'"
-    )
-    op.execute(
-        "UPDATE assets SET render_config = jsonb_set(render_config, "
-        "'{provenance,scaleSource}', '\"unresolved\"') "
-        "WHERE render_config -> 'provenance' ->> 'scaleSource' = 'visual-epoch'"
-    )
+    # Every JSON record 0032's code reads these enums from: a `Provenance` in an asset's
+    # render config, a capture's own column and a layer's render block; and the scale an
+    # asset was registered with, kept in its `scaleEvidence` (the R2 review of #52).
+    for table, column, path in JSON_FIELDS:
+        folded = "none" if path[-1] == "georefMethod" else "unresolved"
+        pointer = "{" + ",".join(path) + "}"
+        reach = "".join(f" -> '{key}'" for key in path[:-1]) + f" ->> '{path[-1]}'"
+        # Every name and value here is this module's own constant; nothing is input.
+        op.execute(
+            f"UPDATE {table} SET {column} = jsonb_set({column}, '{pointer}', '\"{folded}\"') "  # noqa: S608
+            f"WHERE {column}{reach} = '{VALUE}'"
+        )
     _rebuild("georef_method", GEOREF_METHOD)
     _rebuild("scale_source", SCALE_SOURCE)

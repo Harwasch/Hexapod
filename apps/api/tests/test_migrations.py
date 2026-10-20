@@ -765,3 +765,83 @@ def test_0033_downgrade_folds_visual_epoch(
     with engine.connect() as connection:
         assert labels(connection, "georef_method") == [m.value for m in GeorefMethod]
         assert labels(connection, "scale_source") == [s.value for s in ScaleSource]
+
+
+def test_0033_downgrade_folds_visual_epoch_out_of_every_json_record(
+    alembic_config: Config, engine: Engine
+) -> None:
+    """R2 review of #52: the downgrade folded only the capture columns and the assets'
+    `render_config.provenance`, but the same enums are read, by 0032's code, from the
+    capture's `provenance`, a layer's `render.provenance` and an asset's
+    `render_config.scaleEvidence.registeredScaleSource`. After the downgrade no record holds
+    a value 0032 cannot read; the upgrade back then round-trips."""
+    from app.models import Layer
+    from app.models.enums import GeorefMethod, LayerCategory, LayerSourceType
+
+    visual = {"georefMethod": "visual-epoch", "scaleSource": "visual-epoch", "uncertaintyM": 0.07}
+    with Session(engine) as session:
+        capture = Capture(
+            slug="aligned-json",
+            name="Aligned",
+            kind=CaptureKind.VIDEO,
+            georef_method=GeorefMethod.VISUAL_EPOCH,
+            scale_source=ScaleSource.VISUAL_EPOCH,
+            provenance=dict(visual),
+        )
+        asset = Asset(
+            name="Scaled splat",
+            representation=Representation.GAUSSIAN_SPLAT,
+            provider=AssetProvider.TILES_3D_URL,
+            source={"type": "3d-tiles-url", "url": "https://cdn.example.com/b/tileset.json"},
+            render_config={
+                "provenance": dict(visual),
+                "scale": 2.0,
+                "scaleEvidence": {
+                    "method": "typed",
+                    "registeredScaleSource": "visual-epoch",
+                    "registeredScaleUncertaintyPct": None,
+                },
+            },
+            attribution=[],
+            default_visible=True,
+        )
+        layer = Layer(
+            slug="aligned-layer",
+            name="Aligned layer",
+            category=LayerCategory.REALITY,
+            source_type=LayerSourceType.CESIUM_ION_3D_TILES,
+            source={"assetId": 1},
+            render={"provenance": dict(visual)},
+        )
+        session.add_all([capture, asset, layer])
+        session.commit()
+        ids = {"capture": capture.id, "asset": asset.id, "layer": layer.id}
+
+    command.downgrade(alembic_config, "0032")
+    try:
+        with engine.connect() as connection:
+            records = {
+                "capture": connection.execute(
+                    text("SELECT provenance::text FROM captures WHERE id = :id"),
+                    {"id": ids["capture"]},
+                ).scalar_one(),
+                "asset": connection.execute(
+                    text("SELECT render_config::text FROM assets WHERE id = :id"),
+                    {"id": ids["asset"]},
+                ).scalar_one(),
+                "layer": connection.execute(
+                    text("SELECT render::text FROM layers WHERE id = :id"), {"id": ids["layer"]}
+                ).scalar_one(),
+            }
+        for name, record in records.items():
+            assert "visual-epoch" not in record, (name, record)
+        assert json.loads(records["capture"]) == {
+            "georefMethod": "none",
+            "scaleSource": "unresolved",
+            "uncertaintyM": 0.07,
+        }
+        assert json.loads(records["layer"])["provenance"] == json.loads(records["capture"])
+        evidence = json.loads(records["asset"])["scaleEvidence"]
+        assert evidence["registeredScaleSource"] == "unresolved"
+    finally:
+        command.upgrade(alembic_config, "head")
