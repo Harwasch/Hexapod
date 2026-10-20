@@ -41,15 +41,21 @@ hAccuracyM, dop}`, `camera`, `exposure`, `focal` `{mm, mm35, px, pxFrom}`, `dji`
    34–49 float, 50 fixed) are Sitemark's. The calibrated focal is taken as pixels of the original
    (DJI's P4 RTK documentation); unverified for the M3E. **No real Mavic 3 Enterprise file has been
    read**: the fixtures are synthetic. Serial numbers are never read.
-5. **Platform** (`capture_platform.py`), first rule that matches: a requested `platform`; at least
-   half the frames RTK-fixed → `rtk-drone`; at least half with DJI flight XMP → `drone`; a DJI video
+5. **Platform** (`capture_platform.py`), first rule that matches: a requested `platform`; every
+   frame RTK-fixed (`RtkFlag` 50) with a stated accuracy inside one GPS L1 wavelength (0.19 m)
+   → `rtk-drone`; at least half with DJI flight XMP → `drone`; a DJI video
    make → `drone` (unverified, no sample); Apple QuickTime or Android keys → `phone-video`; a phone
    make on at least half the photos → `phone-photo`; a phone-key upload → by format; else
    `unknown`. "At least half" is a classification rule, not a tolerance. The value goes
    `source_meta` → manifest → `registration.json` → **`epochs.platform`**, on the first run and every
    re-run; a run that detects nothing or `unknown` keeps a known value. **No `captures.platform`
    column and no migration**: a mapped capture column breaks the 0007-revision ORM tests, and the
-   epoch is where D4 puts the tier.
+   epoch is where D4 puts the tier. **A platform label never makes a capture surveyed.** Each
+   platform carries `platformEvidence`: `metadata` (the frames' own XMP, EXIF or QuickTime keys
+   showed it), `claimed` (only a request — a capture's `metadata.platform`, which any write-token
+   client may set — or the phone-key route said so) or `none` (`unknown`). A request the frames
+   bear out is `metadata`. It travels with the value to `registration.json`, and the worker writes
+   `rtk-drone` onto the epoch only with `metadata` evidence; a claimed one is recorded as `drone`.
 6. **HDR**: an HLG or PQ clip is tonemapped before frames are taken (`zscale` linearise at
    `npl=100`, BT.709 primaries, Hable, BT.709 transfer and matrix), in extraction and in
    `max_side: auto`'s sampling. `npl=100` is untuned (BT.2408's 203 nits is the alternative). A

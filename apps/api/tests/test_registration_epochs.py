@@ -675,9 +675,10 @@ def test_each_epochs_asset_carries_that_epochs_own_footprint(
 # --- the detected platform (M3a) -------------------------------------------------------
 
 
-def _detected(platform: object) -> dict[str, Any]:
+def _detected(platform: object, evidence: str | None = "metadata") -> dict[str, Any]:
     document = _document()
     document["platform"] = platform
+    document["platformEvidence"] = evidence
     return document
 
 
@@ -729,6 +730,39 @@ def test_a_re_run_writes_what_it_detected_and_never_erases_a_known_platform(
     # A withheld re-run still records it: the platform is the capture's, not the tiles'.
     run(db, storage, tmp_path, capture, _detected("phone-photo"), withheld=True)
     assert [e.platform for e in _epochs(db, site_id)] == ["phone-photo"]
+
+
+@pytest.mark.parametrize(
+    ("evidence", "expected"),
+    [
+        ("metadata", "rtk-drone"),
+        # A write-token client's `metadata.platform`, or a document from before the
+        # field: a claim, which never makes the epoch the survey tier.
+        ("claimed", "drone"),
+        (None, "drone"),
+        ("none", "drone"),
+    ],
+)
+def test_only_an_rtk_drone_the_frames_showed_is_the_survey_tier_on_the_epoch(
+    db: Session, storage: S3Storage, tmp_path: Path, evidence: str | None, expected: str
+) -> None:
+    """`epochs.platform` is the tier D4 reads `survey` off, and it has no column for what
+    a platform rests on. So `rtk-drone` is written there only when the run's frames
+    showed it (`platformEvidence: metadata`); a claimed one is recorded as the `drone` it
+    claims to be, without the survey part. Other claimed platforms never upgrade anything
+    and are written as they are."""
+    capture = _capture(db)
+
+    run(db, storage, tmp_path, capture, _detected("rtk-drone", evidence))
+    assert capture.site_id is not None
+    [epoch] = _epochs(db, capture.site_id)
+    assert epoch.platform == expected
+
+    run(db, storage, tmp_path, capture, _detected("phone-photo", "claimed"))
+    assert [e.platform for e in _epochs(db, capture.site_id)] == ["phone-photo"]
+    # A re-run whose frames do not bear the claim out cannot raise it to the survey tier.
+    run(db, storage, tmp_path, capture, _detected("rtk-drone", "claimed"))
+    assert [e.platform for e in _epochs(db, capture.site_id)] == ["drone"]
 
 
 def test_the_files_utc_time_dates_the_epoch_and_never_becomes_the_captures_own(

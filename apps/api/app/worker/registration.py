@@ -103,6 +103,10 @@ class Registration:
     #: copied up by `catalog`); None when the lane detects nothing (`ingest_splat`) or
     #: the document names something outside the epoch vocabulary.
     platform: EpochPlatform | None = None
+    #: What that platform rests on (`capture_platform.PLATFORM_EVIDENCE`): `metadata`
+    #: when the frames' own metadata showed it, `claimed` when only a request or the
+    #: upload route said so, `none`; None in a document from before the field.
+    platform_evidence: str | None = None
 
     @staticmethod
     def read(path: Path) -> Registration:
@@ -127,6 +131,11 @@ class Registration:
             quality=document.get("quality") if isinstance(document.get("quality"), dict) else None,
             coverage=str(document["coverage"]) if document.get("coverage") else None,
             platform=_platform(document.get("platform")),
+            platform_evidence=(
+                str(document["platformEvidence"])
+                if isinstance(document.get("platformEvidence"), str)
+                else None
+            ),
         )
 
 
@@ -149,8 +158,20 @@ def epoch_platform(capture: Capture, registration: Registration, current: str | 
     the epoch already says (a re-run that detected nothing, or only `unknown`, does not
     erase a known platform); else, for a first run, what the capture row implies
     (`epochs.platform_of`: a phone-key upload is a phone video).
+
+    `rtk-drone` -- the survey tier -- only when the frames showed it (`platformEvidence:
+    metadata`, `capture_platform.rtk_evidence`): a platform label never makes a capture
+    surveyed, and the epoch has no column for what its platform rests on. A claimed one
+    (a write-token client's `metadata.platform`, or a document from before the field)
+    is recorded as the `drone` it claims to be, without the survey part.
     """
     detected = registration.platform
+    if detected is EpochPlatform.RTK_DRONE and registration.platform_evidence != "metadata":
+        log.warning(
+            "register: rtk-drone rests on %r, not the frames' metadata; recorded as drone",
+            registration.platform_evidence,
+        )
+        detected = EpochPlatform.DRONE
     if detected is not None and detected is not EpochPlatform.UNKNOWN:
         return detected.value
     if current is not None:
