@@ -13,8 +13,8 @@ name: Streamed LOD backfill
 #   tile's SPZ (the leaves hold every packaged gaussian once; each in its tile's own frame,
 #   which for a site past ~4 km may be offset from the site's by the tile transforms, so
 #   tools/captures/lod_leaves.py gives each such leaf the splat-transform --translate that
-#   puts it back, and checks the merge lands on the leaves' site-frame box), merges them
-#   with splat-transform, orders them along a Morton curve, halves them four
+#   puts it back, and checks each leaf's run of the merge against its site-frame box),
+#   merges them with splat-transform, orders them along a Morton curve, halves them four
 #   times (uniform decimation: adaptive decimation of a scan this size wants a GPU), and
 #   writes `sog/lod-meta.json` with the five levels, and the request beside them
 #   (`attach.json`: the asset, `basedOn` the tileset whose leaves it merged,
