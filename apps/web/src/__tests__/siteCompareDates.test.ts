@@ -621,6 +621,44 @@ describe("comparing two dates of a site", () => {
     expect(clipping.setFootprint.mock.calls.at(-1)?.[1]).toEqual({ withCanopy: june });
   });
 
+  it("a date hidden by the comparison is let go, drawn longest ago first, once splats outgrow the budget", async () => {
+    // The scene's one-second tick (with the calibration) is when the budget is checked.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const E3 = epoch("e3", {
+        ordinal: 3,
+        observedAt: "2026-09-01T15:00:00Z",
+        currentAssetId: "a3",
+      });
+      const A3 = splat("a3", { epochId: "e3", createdAt: "2026-09-02T00:00:00Z" });
+      const { manager, tileset } = harness(
+        twoEpochSite({ epochs: [E1, E2, E3], assets: [A1, A2, A3] }),
+      );
+      await open(manager);
+      // September is shown; comparing March and June hides it.
+      await manager.setCompareDates(BOTH);
+      await settle();
+      const ids = () => manager.loadedAssets().map((a) => a.assetId);
+      // Within the budget, the hidden date is kept for switching back.
+      tileset(A2.id)?.tileLoad.raiseEvent({ extras: { gaussians: 1_000 } });
+      vi.advanceTimersByTime(1_000);
+      expect(ids()).toContain(A3.id);
+      // Past it (more splats than any device keeps), the hidden date goes.
+      tileset(A2.id)?.tileLoad.raiseEvent({ extras: { gaussians: 100_000_000 } });
+      vi.advanceTimersByTime(1_000);
+      expect(ids()).not.toContain(A3.id);
+      // Ended, September is loaded again and drawn; June, hidden now, goes next. March is the
+      // frame's anchor, whose placement the others copy: it stays.
+      await manager.setCompareDates(null);
+      await settle();
+      expect(tileset(A3.id)?.show).toBe(true);
+      vi.advanceTimersByTime(1_000);
+      expect(ids().sort()).toEqual([A1.id, A3.id]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("the load pill follows a date the comparison has to load, until both are in", async () => {
     const E3 = epoch("e3", {
       ordinal: 3,

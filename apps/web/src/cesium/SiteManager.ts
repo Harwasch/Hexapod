@@ -475,7 +475,10 @@ export class SiteManager {
         log.info("splat budget", { budget: this.splatBudget.budget, ceiling: this.splatCeiling });
       }),
     );
-    const calibrationTimer = setInterval(() => this.refreshCalibration(), CALIBRATION_TICK_MS);
+    const calibrationTimer = setInterval(() => {
+      this.refreshCalibration();
+      this.evictHidden();
+    }, CALIBRATION_TICK_MS);
     this.unsubscribe.push(
       viewer.camera.changed.addEventListener(() => this.checkProximity()),
       viewer.camera.moveEnd.addEventListener(() => this.checkProximity(true)),
@@ -547,9 +550,7 @@ export class SiteManager {
         handle.asset = site.assets.find((asset) => asset.id === id) ?? handle.asset;
         continue;
       }
-      for (const other of entry.handles.values()) other.followers?.delete(handle);
-      this.disposeHandle(handle);
-      entry.handles.delete(id);
+      this.dropHandle(entry, handle);
     }
     if (entry.pinnedAssetId && !listed.has(entry.pinnedAssetId)) entry.pinnedAssetId = null;
     if (
@@ -1623,6 +1624,9 @@ export class SiteManager {
     )
       return;
     const main = this.mainAsset(active)?.id === asset.id;
+    // Last in its site's handles, which are so kept least recently drawn first (`evictHidden`).
+    const drawnHandle = active.handles.get(asset.id);
+    if (drawnHandle && active.handles.delete(asset.id)) active.handles.set(asset.id, drawnHandle);
     // Now that the scan's own bounds are known, it can be seen from afar.
     if (main) active.far = this.farFor(active);
     tileset.preloadWhenHidden = this.cesiumDraws(asset);
@@ -2837,6 +2841,37 @@ export class SiteManager {
       this.objectScale = near;
       this.camera.setObjectScale(near);
     }
+  }
+
+  /**
+   * Lets go of the splat models loaded sites keep hidden for switching back (another date or
+   * representation chosen, two others compared), each site's drawn longest ago first (its
+   * handles' order, kept by `presentAsset`), while the splats resident across the scene are
+   * more than the splat budget keeps (SPLAT_CACHE_FACTOR x the ceiling); checked each second,
+   * outside any frame. A hidden tileset is never updated, so its own cache (least recently
+   * used) never trims it: a date compared once stayed in memory until its site unloaded. The
+   * frame's anchor stays while other dates copy its placement.
+   */
+  private evictHidden(): void {
+    let resident = 0;
+    for (const { handle } of this.handles()) resident += handle.splats?.total ?? 0;
+    for (const { entry, handle } of this.handles())
+      if (
+        resident > SPLAT_CACHE_FACTOR * this.splatCeiling &&
+        handle.splats &&
+        !handle.followers?.size &&
+        !this.drawnAssets(entry).some((asset) => asset.id === handle.asset.id)
+      ) {
+        resident -= handle.splats.total;
+        this.dropHandle(entry, handle);
+      }
+  }
+
+  /** Disposes a model its site no longer keeps, and forgets it (as an anchor, too). */
+  private dropHandle(entry: ActiveSite, handle: AssetHandle): void {
+    for (const other of entry.handles.values()) other.followers?.delete(handle);
+    this.disposeHandle(handle);
+    entry.handles.delete(handle.asset.id);
   }
 
   private disposeHandle(handle: AssetHandle): void {
