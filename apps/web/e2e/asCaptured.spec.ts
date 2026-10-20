@@ -17,7 +17,8 @@
  *   so; the Inferred and Fill controls are disabled and say why;
  * - the viewer's own choices are untouched -- the Inferred style, the wind, the fill picked --
  *   and turning it off (the chip's button) draws all of it again;
- * - `?asCaptured=1` starts on: nothing inferred is drawn, and the wind moves nothing;
+ * - `?asCaptured=1` starts on: nothing inferred is drawn, and the wind moves nothing; the
+ *   switch keeps the address in step;
  * - under PlayCanvas, the renderer that draws the scan's layers itself (scanView/scanLayers.ts)
  *   takes them off screen, by its own status and by pixels;
  * - on the demo ranch, nothing the simulated fleet did is drawn (machines, tracks, zones'
@@ -403,6 +404,8 @@ test("under cesium, a layer the scan's primitive draws leaves its companion list
   test.info().annotations.push({ type: "before", description: JSON.stringify(before) });
   const withFill = await shot(page, "cesium-companion-before");
   await page.getByTestId("views").getByRole("switch", { name: "As captured" }).click();
+  // The address follows the switch, so a reload or a copied link shows the same.
+  await expect.poll(() => new URL(page.url()).searchParams.get("asCaptured")).toBe("1");
   await expect
     .poll(async () => {
       const d = await drawn(page);
@@ -540,8 +543,13 @@ test("?asCaptured=1 starts on: nothing inferred is drawn, and the wind does not 
   await expect(page.getByTestId("simulated-badge")).toHaveCount(0);
   await shot(page, "cesium-url-start");
   await railUnchanged(page);
-  // And off: the layer the viewer's Show asks for, its swap, and the badge.
+  // And off: the layer the viewer's Show asks for, its swap, and the badge; the address says
+  // so too, replaced in place (no history entry to step back into it).
+  const depth = await page.evaluate(() => window.history.length);
   await chip.getByRole("button", { name: "Turn off" }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("asCaptured")).toBeNull();
+  expect(new URL(page.url()).searchParams.get("renderer")).toBe("cesium");
+  expect(await page.evaluate(() => window.history.length)).toBe(depth);
   await expect
     .poll(async () => {
       const d = await drawn(page);

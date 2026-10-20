@@ -25,8 +25,9 @@ import { useSkinPoke } from "@/state/skinPoke";
  * as set, so turning it off gives back exactly what was drawn before. The Simulated motion
  * badge is not told: it goes because nothing animates, which is the check that this works.
  *
- * Not persisted: a reload that kept it would hide fills from someone who never asked. A page
- * address can ask for it (`?asCaptured=1`), for a link that shows the data alone.
+ * Kept only in the page address: `?asCaptured=1` turns it on, and the switch keeps the address
+ * in step (replaced, not a new history entry), so a reload or a copied link shows what is on
+ * screen. Nothing is stored on the device: a later visit without the address has it off.
  */
 interface AsCapturedState {
   on: boolean;
@@ -41,9 +42,24 @@ function fromLocation(): boolean {
   }
 }
 
+function toLocation(on: boolean): void {
+  try {
+    const url = new URL(window.location.href);
+    if (on) url.searchParams.set("asCaptured", "1");
+    else url.searchParams.delete("asCaptured");
+    if (url.href !== window.location.href)
+      window.history.replaceState(window.history.state, "", url);
+  } catch {
+    // No address to keep it in.
+  }
+}
+
 export const useAsCaptured = create<AsCapturedState>()((set) => ({
   on: fromLocation(),
-  set: (on) => set({ on }),
+  set: (on) => {
+    set({ on });
+    toLocation(on);
+  },
 }));
 
 /** What a control of something As captured hides says while it is on. */
