@@ -126,10 +126,15 @@ def update_asset(db: Session, asset_id: uuid.UUID, payload: AssetUpdate) -> Asse
     (`observedAt`, `validFrom`, `validTo`, `footprint`). Its name, default visibility,
     render config, resolution, licence and credits stay editable. No PATCH changes an
     asset's `source`: `AssetUpdate` has no such field.
+
+    The asset is locked first (`_lock`), as a scale, an attach and a re-run lock it, so an
+    edit is checked against the row as it is once they are done: never written onto a
+    revision a re-run superseded meanwhile, nor over a scale set meanwhile.
     """
-    asset = get_asset(db, asset_id)
+    asset = _lock(db, asset_id)
     data = payload.model_dump(exclude_unset=True)
     if epochs.is_superseded(asset):
+        db.rollback()
         raise ConflictError(
             f"asset {asset.id} is a superseded revision of its epoch; it is history",
             code=EPOCH_MANAGED,
@@ -137,6 +142,7 @@ def update_asset(db: Session, asset_id: uuid.UUID, payload: AssetUpdate) -> Asse
     owned = [field for field in EPOCH_FIELDS if field in data]
     if asset.epoch_id is not None and owned:
         names = ", ".join(_camel(field) for field in owned)
+        db.rollback()
         raise ConflictError(
             f"asset {asset.id} is epoch {asset.epoch_id}'s, and its {names} belong to that epoch",
             code=EPOCH_MANAGED,
@@ -173,6 +179,7 @@ def update_asset(db: Session, asset_id: uuid.UUID, payload: AssetUpdate) -> Asse
             geometry.footprint_to_wkb(payload.footprint) if payload.footprint else None
         )
     if asset.valid_from and asset.valid_to and asset.valid_to < asset.valid_from:
+        db.rollback()
         raise InvalidInputError("validTo must not precede validFrom")
     db.commit()
     db.refresh(asset)
