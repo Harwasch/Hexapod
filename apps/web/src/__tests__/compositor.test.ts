@@ -104,6 +104,35 @@ describe("the owner plane", () => {
     ]);
   });
 
+  it("a dated date always wins a cell over an undated one; an undated one fills where none saw", async () => {
+    // September's scan carries only its upload time (`observedAtSource: "created"`): newer on
+    // paper, but nobody knows when it was captured.
+    const upload: CompositorSource = {
+      source: 3,
+      epochId: "sep",
+      observedAt: SEP,
+      inferred: false,
+      dated: false,
+      grid: await grid(() => true),
+    };
+    const sources = [...(await site()), upload];
+    const plane = ownerPlane("latest", sources, null);
+    expect(ownerAt(plane, 15.5, 5.5)).toBe(1);
+    expect(ownerAt(plane, 5.5, 5.5)).toBe(0);
+    // Where no dated date saw anything (March blind there), the undated scan fills in.
+    const [mar, jun] = sources;
+    if (!mar || !jun) throw new Error("fixture");
+    const blind = { ...mar, grid: await grid((i, j) => !(i < 4 && j < 4)) };
+    const holed = ownerPlane("latest", [blind, jun, upload], null);
+    expect(ownerAt(holed, 1, 1)).toBe(3);
+    expect(ownerAt(holed, 6, 6)).toBe(0);
+    // Under Data age it has no age to show: its upload is not when the ground looked so.
+    const now = Date.parse("2026-10-20T00:00:00Z");
+    const { rg } = ownerAgeGrid(holed, [blind, jun, upload], null, now);
+    const cell = (1 - holed.j0) * holed.ni + (1 - holed.i0);
+    expect(rg[cell * 2]).toBe(0);
+  });
+
   it("an inferred layer owns only where nothing observed saw, and never under ground truth", async () => {
     const [mar, jun, fill] = await site();
     if (!mar || !jun || !fill) throw new Error("fixture");

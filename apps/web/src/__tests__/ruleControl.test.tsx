@@ -131,6 +131,30 @@ describe("Per cell", () => {
     );
   });
 
+  it("says a date dated only by its upload has no known capture time, and shows it no age", async () => {
+    const upload = { ...E2, observedAtSource: "created" } as typeof E2;
+    show("cesium", twoEpochSite({ epochs: [E1, upload] }));
+    await screen.findByTestId("views");
+    ruleOn("data-age");
+    act(() =>
+      useViewRule.setState({
+        legend: {
+          cellM: 1,
+          dates: [
+            { epochId: E1.id, coverage: "grid", cells: 120, ageBucket: 3 },
+            { epochId: E2.id, coverage: "grid", cells: 4, ageBucket: null },
+          ],
+          inferredCells: 0,
+          left: 0,
+          leftOut: [],
+        },
+      }),
+    );
+    expect(screen.getAllByTestId("rule-legend-date")[1]?.textContent).toBe(
+      "Uploaded Jun 1, 2026, capture time unknown: 4 cells",
+    );
+  });
+
   it("names each date it leaves out and why, and says when it is the As of date", async () => {
     show();
     await screen.findByTestId("views");

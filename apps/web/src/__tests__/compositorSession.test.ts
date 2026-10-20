@@ -217,6 +217,25 @@ describe("a view rule's session", () => {
     expect(ruledObjects.get(june)).toBeUndefined();
   });
 
+  it("an upload-dated date fills only where no dated one saw, and has no age in the key", async () => {
+    const { march, handle, frame, entry } = await harness();
+    // June's date is only its upload's: when it was captured is not known.
+    entry.epochs = [E1, { ...E2, observedAtSource: "created" }];
+    await frame();
+    hostOf(march)._tileSlots = new Map([[{ tileset: march }, { start: 0, count: 10 }]]);
+    await frame();
+    const plane = handle.compositor()?.plane;
+    const at = (x: number, y: number) =>
+      plane?.owners[(Math.floor(y) - plane.j0) * plane.ni + (Math.floor(x) - plane.i0)];
+    // March saw June's box too: March is drawn there, though June's upload is newer.
+    expect(at(12, 5)).toBe(0);
+    expect(useViewRule.getState().legend?.dates).toEqual([
+      { epochId: E1.id, coverage: "grid", cells: 200, ageBucket: 3 },
+      { epochId: E2.id, coverage: "tile-bounds", cells: 0, ageBucket: null },
+    ]);
+    handle.dispose();
+  });
+
   it("as of the earlier date, draws only it", async () => {
     const { march, handle, frame, entry } = await harness();
     entry.epochId = E1.id;

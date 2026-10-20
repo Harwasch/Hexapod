@@ -46,7 +46,13 @@ import {
   type ViewRuleEnd,
 } from "@/lib/compositor";
 import { ageBucket, laterDates, loadLaterGrids } from "@/lib/dataAge";
-import { epochOf, epochOptions, frameAnchor, shownOption } from "@/lib/epochs";
+import {
+  epochOf,
+  epochOptions,
+  frameAnchor,
+  observedAtFromUpload,
+  shownOption,
+} from "@/lib/epochs";
 import { createLogger } from "@/lib/log";
 import { useSettings } from "@/state/settings";
 import { useViewMode } from "@/state/viewMode";
@@ -484,6 +490,8 @@ export function startCompositor(
         epochId: e.epoch.id,
         observedAt: e.epoch.observedAt,
         inferred: e.inferred,
+        // Dated only by its upload: it fills where no dated date saw, and has no age.
+        dated: !observedAtFromUpload(e.epoch),
         grid: c.grid ?? null,
         boxes: c.boxes ?? null,
       };
@@ -571,7 +579,7 @@ export function startCompositor(
       byId.set(s.epochId, {
         epochId: s.epochId,
         coverage: pending.has(s.source) ? "loading" : taken.coverage,
-        ageBucket: ageBucket(s.observedAt, now()),
+        ageBucket: s.dated === false ? null : ageBucket(s.observedAt, now()),
         cells: taken.cells,
       });
     }

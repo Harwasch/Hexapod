@@ -4,13 +4,24 @@ import { useScene } from "@/cesium/SceneContext";
 import type { ViewRule } from "@/lib/compositor";
 import { AGE_RAMP, rampCss } from "@/lib/cellRamps";
 import { AGE_BUCKETS } from "@/lib/dataAge";
-import { formatEpochDate } from "@/lib/epochs";
+import { formatEpochDate, observedAtFromUpload } from "@/lib/epochs";
 import type { Epoch } from "@twin/contracts";
 import { useLiving } from "@/state/living";
 import { useSites } from "@/state/sites";
 import { useViewRule, type ViewRuleLegend } from "@/state/viewRule";
 
 import { VIEW_RULE_ENDED, VIEW_RULE_TEXT as RULE_TEXT, VIEW_RULES } from "./ruleText";
+
+/**
+ * A date as the key names it: its capture date, or -- dated only by its upload -- said to be
+ * the upload's, its capture time unknown (the rule ranks it below every dated date).
+ */
+function dateOf(epochs: readonly Epoch[], epochId: string): string {
+  const epoch = epochs.find((e) => e.id === epochId);
+  if (!epoch) return epochId;
+  const date = formatEpochDate(epoch.observedAt);
+  return observedAtFromUpload(epoch) ? `Uploaded ${date}, capture time unknown` : date;
+}
 
 /**
  * The key to a rule: each date taking part, the cells it owns and how its coverage was read
@@ -30,7 +41,6 @@ function RuleLegend({
     <div className="cell-legend" role="note" aria-label="Per-cell key" data-testid="rule-legend">
       <ul className="cell-legend__rows">
         {legend.dates.map((d) => {
-          const epoch = epochs.find((e) => e.id === d.epochId);
           const bucket = d.ageBucket;
           return (
             <li key={d.epochId} data-testid="rule-legend-date">
@@ -41,7 +51,7 @@ function RuleLegend({
                   aria-hidden="true"
                 />
               )}
-              {epoch ? formatEpochDate(epoch.observedAt) : d.epochId}:{" "}
+              {dateOf(epochs, d.epochId)}:{" "}
               {d.coverage === "loading"
                 ? "reading what it covers…"
                 : `${String(d.cells)} cells${d.coverage === "tile-bounds" ? ` (${RULE_TEXT.tileBounds})` : ""}`}
@@ -57,8 +67,7 @@ function RuleLegend({
           </li>
         )}
         {legend.leftOut.map((d) => {
-          const epoch = epochs.find((e) => e.id === d.epochId);
-          const date = epoch ? formatEpochDate(epoch.observedAt) : d.epochId;
+          const date = dateOf(epochs, d.epochId);
           return (
             <li key={d.epochId} className="cell-legend__skipped" data-testid="rule-legend-left-out">
               {d.reason === "frame"

@@ -20,8 +20,10 @@
  *
  * **The rules.** Only dates observed at or before `asOf` (the date chosen in the capture-date
  * control, which reads "As of" while a rule is on) take part.
- * - `latest`: the newest observed date that covers the cell; else an older one; else, where
- *   inferred layers are drawn at all, the newest inferred layer that covers it.
+ * - `latest`: the newest observed date that covers the cell; else an older one; else a scan
+ *   whose date is only its upload's (`dated: false`: when it was captured is unknown), which
+ *   never outranks a dated one however new its upload; else, where inferred layers are drawn
+ *   at all, the newest inferred layer that covers it.
  * - `ground-truth`: as `latest`, never an inferred layer.
  * - `highlight-invented`: as `latest`; the scene tints the inferred owners' splats.
  * - `data-age`: as `latest`; the scene colours each cell by its owner's age (`ownerAgeGrid`).
@@ -74,6 +76,11 @@ export interface CompositorSource {
   observedAt: string;
   /** An inferred layer: what an image model filled in, not observed. */
   inferred: boolean;
+  /**
+   * False when `observedAt` is only the upload's (`observedAtSource: "created"`): when it was
+   * captured is unknown. It owns a cell only where no dated date covers it, and has no age.
+   */
+  dated?: boolean;
   /** Its confidence grid, when its root carries one. */
   grid?: CellGrid | null;
   /** Its leaf tiles' boxes: what it covers without a grid. */
@@ -198,10 +205,11 @@ export function ownerPlane(
     if (ni * nj <= MAX_PLANE_CELLS) break;
     level += 1;
   }
-  // Newest first; an observed date before any inferred layer.
+  // Newest first; a dated date before an undated one, an observed one before any inferred.
   const order = [...taking].sort(
     (a, b) =>
       Number(a.inferred) - Number(b.inferred) ||
+      Number(a.dated === false) - Number(b.dated === false) ||
       time(b.observedAt) - time(a.observedAt) ||
       b.source - a.source,
   );
@@ -358,9 +366,9 @@ export function leafTileBoxes(
 /**
  * Data age under a rule: the owner plane as a one-level cell grid, for W4a's colour part
  * (`cesium/splatCellView.ts`) to draw in its Data age mode. R = 1 + the age bucket of the
- * cell's owner (`lib/dataAge.ts`), 0 where no observed date owns it; G = 255 where a date
- * observed after `asOf` -- one the rule leaves out -- has evidence (striped, "newer data
- * here").
+ * cell's owner (`lib/dataAge.ts`), 0 where no observed date with a capture time owns it (an
+ * upload's date is not when the ground looked so); G = 255 where a date observed after
+ * `asOf` -- one the rule leaves out -- has evidence (striped, "newer data here").
  */
 export function ownerAgeGrid(
   plane: OwnerPlane,
@@ -400,7 +408,8 @@ export function ownerAgeGrid(
     const index = plane.owners[c] ?? NO_OWNER;
     // A cell nobody owns is nobody's age, whatever else the sources list (a later date).
     const owner = index === NO_OWNER ? undefined : bySource.get(index);
-    const bucket = owner && !owner.inferred ? ageBucket(owner.observedAt, now) : null;
+    const bucket =
+      owner && !owner.inferred && owner.dated !== false ? ageBucket(owner.observedAt, now) : null;
     planes[c] = owner ? 1 : 0;
     rg[c * 2] = bucket === null ? 0 : bucket + 1;
     rg[c * 2 + 1] = masks.some((m) => m[c] === 1) ? 255 : 0;
