@@ -442,17 +442,26 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     # measure motion along, and their matching is exhaustive, so `keep` stays their cap.
     applied = "sharpness-windowed" if select == "viewpoint" and not source.is_video else select
 
+    hdr_rule = str(ctx.param("hdr", "auto"))
+    if hdr_rule not in HDR_RULES:
+        raise ValueError(f"hdr must be one of {', '.join(HDR_RULES)}, not {hdr_rule!r}")
     meta = video.VideoMeta()
     rate: float | None = None
     size: resolution.SizeDecision | None = None
+    hdr: dict[str, object] | None = None
     if source.is_video:
         ctx.log(f"$ {' '.join(video.probe_argv(source.path))}")
         text = video.probe_text(source.path)
         for line in text.splitlines():
             ctx.log(line)
         meta = video.parse_probe(text)
+        hdr = _hdr_decision(meta, hdr_rule)
+        tonemap = video.TONEMAP_FILTER if hdr["tonemapped"] else None
+        ctx.log(f"hdr: {hdr['reason']}")
         if size_rule == "auto":
-            size = _video_frame_size(ctx, source.path, meta, base=base, ceiling=size_ceiling)
+            size = _video_frame_size(
+                ctx, source.path, meta, base=base, ceiling=size_ceiling, tonemap=tonemap
+            )
         max_side = size.max_side if size is not None else _fixed_side(size_rule)
         rate = _candidate_rate(ctx, fps, meta) if applied == "viewpoint" else fps
         extracted = ctx.work_dir / "extracted"
@@ -464,6 +473,7 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
                 fps=rate,
                 quality=int(ctx.param("quality", 2)),
                 max_side=max_side,
+                tonemap=tonemap,
             )
         )
         candidates = sorted(extracted.glob("frame_*.jpg"))
@@ -575,7 +585,7 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
             "kept": video.summarise(kept_scores),
             "rejected": video.summarise(dropped_scores),
         },
-        "video": meta.to_dict() if source.is_video else None,
+        "video": {**meta.to_dict(), "hdr": hdr} if source.is_video else None,
         "location": None if meta.location is None else meta.location.to_dict(),
         # The capture-level facts, same convention as `ingest_splat`: what the capture row
         # says wins, and the container's own answer is the fallback rather than the other
@@ -642,6 +652,7 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     }
     if source.is_video:
         metrics["fps"] = rate if rate is not None else fps
+        metrics["hdrTonemapped"] = bool(hdr and hdr["tonemapped"])
         if meta.duration_s is not None:
             metrics["durationS"] = meta.duration_s
     if segmentation is not None:
@@ -649,6 +660,42 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         metrics["motionScale"] = round(segmentation.scale, 4)
         metrics["unmeasuredPairs"] = segmentation.unmeasured_pairs
     return StageOutcome(metrics=metrics, summary=f"{len(written)} frames by {applied}")
+
+
+#: `hdr`: `auto` tonemaps an HLG or PQ clip to 8-bit BT.709 before frames are taken;
+#: `off` takes them as they are.
+HDR_RULES: tuple[str, ...] = ("auto", "off")
+
+
+def _hdr_decision(meta: video.VideoMeta, rule: str) -> dict[str, object]:
+    """Whether this clip is tonemapped, and why -- what `source_meta.video.hdr` records.
+
+    Not tonemapping is never fatal: a binary without the filters (a different wheel)
+    takes the frames as they are and says so, rather than failing a capture that would
+    still reconstruct, only with flatter colour.
+    """
+    record: dict[str, object] = {
+        "transfer": meta.color_transfer,
+        "primaries": meta.color_primaries,
+        "matrix": meta.color_matrix,
+        "pixelFormat": meta.pixel_format,
+        "tonemapped": False,
+        "filter": None,
+    }
+    if not meta.is_hdr:
+        record["reason"] = f"not an HDR transfer ({meta.color_transfer or 'none given'})"
+    elif rule == "off":
+        record["reason"] = f"{meta.color_transfer} clip, but hdr: off"
+    elif not video.ffmpeg_filters() >= video.TONEMAP_NEEDS:
+        missing = ", ".join(sorted(video.TONEMAP_NEEDS - video.ffmpeg_filters()))
+        record["reason"] = f"{meta.color_transfer} clip, but this ffmpeg lacks {missing}"
+    else:
+        record.update(
+            tonemapped=True,
+            filter=video.TONEMAP_FILTER,
+            reason=f"{meta.color_transfer} clip tonemapped to 8-bit BT.709 (hable, npl=100)",
+        )
+    return record
 
 
 #: The shape of `frames_meta.json`; bumped when a field changes meaning.
@@ -803,7 +850,13 @@ def _candidate_rate(ctx: StageContext, fps: float, meta: video.VideoMeta) -> flo
 
 
 def _video_frame_size(
-    ctx: StageContext, source: Path, meta: video.VideoMeta, *, base: int, ceiling: int
+    ctx: StageContext,
+    source: Path,
+    meta: video.VideoMeta,
+    *,
+    base: int,
+    ceiling: int,
+    tonemap: str | None = None,
 ) -> resolution.SizeDecision:
     """`max_side: auto` for a clip: frames sampled across it at the size that would be
     kept, the sharpest half measured. Eight seeks, not a decode of the whole clip."""
@@ -824,7 +877,7 @@ def _video_frame_size(
     for index, at in enumerate(times):
         target = folder / f"sample_{index:02d}.png"
         try:
-            ctx.run(video.grab_frame_argv(source, at, target, max_side=side))
+            ctx.run(video.grab_frame_argv(source, at, target, max_side=side, tonemap=tonemap))
         except subprocess.CalledProcessError:
             continue
         if target.is_file():

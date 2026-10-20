@@ -24,6 +24,7 @@ path, so reading one of them is reading half the captures.
 
 from __future__ import annotations
 
+import functools
 import math
 import re
 import shutil
@@ -44,6 +45,7 @@ __all__ = [
     "ACCURACY_KEY",
     "HDR_TRANSFERS",
     "IMAGE_SUFFIXES",
+    "TONEMAP_FILTER",
     "VIDEO_SUFFIXES",
     "VIDEO_TAG_KEYS",
     "Location",
@@ -53,6 +55,7 @@ __all__ = [
     "evenly_spaced",
     "extract_frames_argv",
     "ffmpeg_exe",
+    "ffmpeg_filters",
     "ffmpeg_version",
     "grab_frame_argv",
     "laplacian_variance",
@@ -116,6 +119,22 @@ VIDEO_TAG_KEYS: tuple[str, ...] = (
 #: in) and PQ (SMPTE ST 2084, Dolby Vision's base layer and HDR10). ffmpeg's names.
 HDR_TRANSFERS: tuple[str, ...] = ("arib-std-b67", "smpte2084")
 
+#: HLG or PQ to 8-bit BT.709, before frames are taken: the widely used zimg recipe --
+#: linearise (`npl=100`: 100 nits nominal peak), convert primaries to BT.709 in float,
+#: Hable's tonemap curve with no desaturation, then BT.709 transfer and matrix, limited
+#: range, 4:2:0. `npl=100` is not tuned on any capture (BT.2408's 203-nit HLG reference
+#: white is the obvious alternative). Verified 2026-10-19 with the wheel's ffmpeg 7.0.2 on
+#: an HLG clip, a PQ clip and a clip with a -90 display rotation (autorotate still
+#: applies after it). Without it, frames cut from an iPhone's HDR video are washed out and
+#: flat -- the transfer is read as if it were BT.709.
+TONEMAP_FILTER = (
+    "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
+    "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
+)
+#: The filters `TONEMAP_FILTER` needs, checked against the binary before it is used.
+TONEMAP_NEEDS: frozenset[str] = frozenset({"zscale", "tonemap"})
+_FILTER_LINE_RE = re.compile(r"^\s*[TSC.|]{2,3}\s+(?P<name>[A-Za-z0-9_]+)\s+\S*->\S*")
+
 #: The pixel formats a video stream's colour group can open with (`yuv420p10le(...)`).
 _PIXEL_FORMAT_PREFIXES: tuple[str, ...] = ("yuv", "rgb", "bgr", "gbr", "nv", "p0", "gray")
 #: ffmpeg's colour-space names (`av_color_space_name`). A lone token in the colour group
@@ -151,6 +170,15 @@ def ffmpeg_exe() -> str:
     that is the call that makes a stage pass here and fail on `ubuntu-latest`.
     """
     return str(imageio_ffmpeg.get_ffmpeg_exe())
+
+
+@functools.cache
+def ffmpeg_filters() -> frozenset[str]:
+    """The filter names the wheel's ffmpeg was built with (`ffmpeg -filters`)."""
+    text = _run([ffmpeg_exe(), "-hide_banner", "-filters"])
+    return frozenset(
+        match.group("name") for line in text.splitlines() if (match := _FILTER_LINE_RE.match(line))
+    )
 
 
 def ffmpeg_version() -> str:
@@ -266,7 +294,7 @@ class VideoMeta:
             "colorMatrix": self.color_matrix,
             "colorPrimaries": self.color_primaries,
             "colorTransfer": self.color_transfer,
-            "hdr": self.is_hdr,
+            "isHdr": self.is_hdr,
             "creationDate": self.creation_date,
             "creationTime": self.creation_time,
             "focal35mm": self.focal_35mm,
@@ -524,14 +552,19 @@ def extract_frames_argv(
     fps: float,
     quality: int = 2,
     max_side: int | None = None,
+    tonemap: str | None = None,
 ) -> list[str]:
     """The argv that turns a clip into numbered JPEGs. Built here so a test can read it.
 
     `-vsync vfr` with an `fps` filter is deliberately *not* used: constant-rate sampling
     is what makes "4 fps" mean the same number of frames for the same clip on any
     machine, which is what the frame count in `source_meta.json` is worth anything for.
+    `tonemap` (`TONEMAP_FILTER` for an HDR clip) sits between the rate and the size, so
+    only the frames kept are converted and they are scaled in 8-bit BT.709.
     """
     chain = [f"fps={fps:g}"]
+    if tonemap:
+        chain.append(tonemap)
     if max_side is not None:
         chain.append(scale_filter(max_side))
     return [
@@ -561,14 +594,18 @@ def scale_filter(max_side: int) -> str:
     return f"scale=w='if(gte(iw,ih),min({m},iw),-2)':h='if(gte(iw,ih),-2,min({m},ih))'"
 
 
-def grab_frame_argv(source: Path, at_s: float, target: Path, *, max_side: int) -> list[str]:
+def grab_frame_argv(
+    source: Path, at_s: float, target: Path, *, max_side: int, tonemap: str | None = None
+) -> list[str]:
     """The argv that writes the one frame at `at_s` seconds, losslessly, to `target`.
 
     `-ss` before `-i` seeks the demuxer to the keyframe before `at_s` and decodes only
     from there, so sampling eight frames across a two-minute 4K clip decodes eight GOPs
     rather than the whole clip. PNG, not JPEG: the frames are measured for fine detail
     (`resolution.py`), and a JPEG's own quantisation is exactly the band being measured.
+    `tonemap` comes first, so `max_side: auto` measures the frames training will see.
     """
+    chain = [tonemap, scale_filter(max_side)] if tonemap else [scale_filter(max_side)]
     return [
         ffmpeg_exe(),
         "-hide_banner",
@@ -581,7 +618,7 @@ def grab_frame_argv(source: Path, at_s: float, target: Path, *, max_side: int) -
         "-frames:v",
         "1",
         "-vf",
-        scale_filter(max_side),
+        ",".join(chain),
         str(target),
     ]
 
