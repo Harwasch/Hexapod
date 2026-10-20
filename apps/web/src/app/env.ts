@@ -45,6 +45,12 @@ export interface AppEnv {
    * viewer of this build — a deployment-wide kill switch that needs nobody's local settings.
    */
   splatGpuMotion: boolean;
+  /**
+   * Drone missions (the DJI route export). Off by default: there is no drone yet, and the
+   * export has not been checked against DJI's spec or imported into DJI Pilot 2. Read
+   * docs/DRONES.md before turning it on (`VITE_ENABLE_DRONE_EXPORT=true`).
+   */
+  droneExportEnabled: boolean;
   isDev: boolean;
 }
 
@@ -64,6 +70,7 @@ export function readEnv(source: ImportMetaEnv = import.meta.env): AppEnv {
     landOidcClientId: optionalString(source.VITE_LAND_OIDC_CLIENT_ID),
     landOidcAudience: optionalString(source.VITE_LAND_OIDC_AUDIENCE),
     splatGpuMotion: flag(source.VITE_SPLAT_GPU_MOTION, true),
+    droneExportEnabled: flag(source.VITE_ENABLE_DRONE_EXPORT),
     isDev: source.DEV,
   };
 }
