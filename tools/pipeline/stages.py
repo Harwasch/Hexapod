@@ -53,6 +53,7 @@ import quality
 import resolution
 import scale_estimate
 import sfm
+import site_frame
 import splat_io
 import splat_stream
 import support_mask
@@ -257,7 +258,26 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
     degree 3 -- turned with the splat by the up-axis and heading rotation
     (`harmonics.rotate`); an upload with fewer bands ships what it has, and
     `source_meta.json`'s `shDegree` says which.
+
+    `site_frame` (the worker's, when the capture is an epoch of a site that already has a
+    frame) keeps the recentring and then moves the capture by the east/north/up offset of
+    its `lat`/`lon` from that frame's origin (`site_frame.offset_m`), so every epoch of
+    the site is expressed about one origin. `source_meta.json` echoes it as `siteFrame`;
+    without one, nothing here changes and no `siteFrame` key is written.
     """
+    frame_given = site_frame.from_param(ctx.param("site_frame"))
+    offset: tuple[float, float, float] | None = None
+    site_echo: dict[str, object] | None = None
+    if frame_given is not None:
+        located_lat, located_lon = _site_point(ctx, frame_given)
+        offset = site_frame.offset_m(frame_given, located_lat, located_lon)
+        origin = site_frame.is_origin(frame_given, located_lat, located_lon)
+        site_echo = site_frame.echo(
+            frame_given,
+            offset=offset,
+            offset_source="site-origin" if origin else "capture",
+            located=(located_lat, located_lon, frame_given.height),
+        )
     # A chunk at a time (`splat_stream`): a phone app's PLY of several million gaussians
     # is placed in the worker's fixed memory, with the same bytes out as `gaussians.orient`.
     splat = splat_stream.open_splat(
@@ -273,6 +293,7 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
         up_axis=None if requested in (None, "") else str(requested),
         heading_deg=float(ctx.param("heading_deg", 0.0) or 0.0),
         recentre=bool(ctx.param("recentre", True)),
+        offset=None if offset is None or site_frame.is_zero(offset) else offset,
     )
     assert placed.frame is not None
     frame = placed.frame
@@ -305,6 +326,9 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
         "device": _optional_str(ctx.param("device")),
         "capturedAt": _optional_str(ctx.param("captured_at")),
     }
+    if site_echo is not None:
+        # The site frame this capture was placed in, and how far from its origin.
+        document["siteFrame"] = site_echo
     _write_json(ctx.output(SOURCE_META.name), document)
     ctx.log(
         f"{splat.source_format}: {splat.count} gaussians from {splat.source_name} "
@@ -2267,18 +2291,74 @@ def manual_placement(ctx: StageContext) -> StageOutcome:
     lat = float(ctx.param("lat", 0.0))
     lon = float(ctx.param("lon", 0.0))
     height = float(ctx.param("height", 0.0))
-    document = {
+    note = str(ctx.param("note", "placed by hand; not surveyed"))
+    frame_given = site_frame.from_param(ctx.param("site_frame"))
+    site_echo: dict[str, object] | None = None
+    if frame_given is not None:
+        # In a site's frame, `georef.json` is about the frame's origin, and the capture's
+        # own coordinate is how far from it `normalize` moved the splat (`ingest_splat`).
+        located_lat, located_lon = _site_point(ctx, frame_given)
+        offset = site_frame.offset_m(frame_given, located_lat, located_lon)
+        origin = site_frame.is_origin(frame_given, located_lat, located_lon)
+        site_echo = site_frame.echo(
+            frame_given,
+            offset=offset,
+            offset_source="site-origin" if origin else "capture",
+            located=(located_lat, located_lon, frame_given.height),
+        )
+        lat, lon, height = frame_given.lat, frame_given.lon, frame_given.height
+        note += (
+            f"; in site {frame_given.site_id}'s frame, offset ({offset[0]:.3f}, "
+            f"{offset[1]:.3f}) m from its origin"
+        )
+    _check_normalized_frame(ctx, site_echo)
+    document: dict[str, object] = {
         "lat": lat,
         "lon": lon,
         "height": height,
         "georefMethod": "manual",
         "scaleSource": str(ctx.param("scale_source", "unresolved")),
         "uncertaintyM": float(ctx.param("uncertainty_m", DEFAULT_MANUAL_UNCERTAINTY_M)),
-        "note": str(ctx.param("note", "placed by hand; not surveyed")),
+        "note": note,
     }
+    if site_echo is not None:
+        document["siteFrame"] = site_echo
     _write_json(ctx.output(GEOREF.name), document)
     ctx.log(f"placed at {lat}, {lon}, {height} m")
     return StageOutcome(metrics={"lat": lat, "lon": lon, "height": height})
+
+
+def _site_point(ctx: StageContext, frame: site_frame.SiteFrame) -> tuple[float, float]:
+    """The capture's own `lat`/`lon` (the worker sends them with a frame), else the frame's
+    origin: a capture with no coordinate of its own sits at its site's origin."""
+    lat, lon = _optional_float(ctx.param("lat")), _optional_float(ctx.param("lon"))
+    if lat is None or lon is None:
+        return frame.lat, frame.lon
+    return lat, lon
+
+
+def _check_normalized_frame(ctx: StageContext, expected: dict[str, object] | None) -> None:
+    """Refuse a georeference about a site frame `normalize` did not place the splat in.
+
+    `normalize` moved the splat by the offset it echoed; a georeference about another
+    frame or offset, or about none (a resumed job whose frame changed between attempts),
+    would put tiles somewhere neither stage meant. Only checked when `source_meta.json`
+    is an input and is `ingest_splat`'s (it describes a placed splat, `bboxLocalM`): a
+    video's `source_meta.json` (`ffmpeg_frames`) places nothing, and in Lane 2 the offset
+    is applied later, by `place_splat`, from this stage's own `georef.json`.
+    """
+    if not ctx.has_input(SOURCE_META.name):
+        return
+    meta = _read_json(ctx.input(SOURCE_META.name))
+    if "bboxLocalM" not in meta:
+        return
+    placed = meta.get("siteFrame")
+    if placed != expected:
+        raise ValueError(
+            f"normalize placed the splat in site frame {json.dumps(placed, sort_keys=True)} "
+            f"but georeference was given {json.dumps(expected, sort_keys=True)}; re-run "
+            f"from normalize"
+        )
 
 
 @stage_impl(

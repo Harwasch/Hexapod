@@ -459,6 +459,7 @@ def orient_to(
     heading_deg: float = 0.0,
     recentre: bool = True,
     cell_m: float = 2.0,
+    offset: Sequence[float] | None = None,
     on_chunk: Callable[[Columns], None] | None = None,
 ) -> Written:
     """`gaussians.orient` of the splat after `before`, written to `out` as canonical.ply.
@@ -466,6 +467,12 @@ def orient_to(
     The same validation, rotation, recentring and `Frame` as `orient`; the rows are those
     `write_ply(orient(...)[0].columns)` writes, byte for byte. `on_chunk` sees each
     written chunk.
+
+    `offset` (east/north/up metres) then moves the recentred splat to where it belongs in
+    its site's frame (`site_frame.offset_m`). It is folded into the recentring's own
+    translation in float64 -- one step, so one float32 rounding of each centre, not two --
+    and `Frame.translation` is the total. None (or a zero offset) is today's path, byte
+    for byte.
     """
     axis = up_axis if up_axis is not None else gaussians.default_up_axis(source.source_format)
     if axis not in gaussians.UP_AXES:
@@ -480,14 +487,24 @@ def orient_to(
     rotation = gaussians.heading_rotation(heading) @ gaussians.UP_AXES[axis]
     steps = [*before, Step(rotation)]
     translation = np.zeros(3)
+    shift = None
+    if offset is not None and any(float(v) != 0.0 for v in offset):
+        shift = np.asarray([float(v) for v in offset], dtype=np.float64)
+        if shift.shape != (3,) or not np.isfinite(shift).all():
+            raise ValueError(f"offset must be three finite metres, not {offset!r}")
+    measured = False
     if recentre:
         moved = _recentre(source, steps, cell_m)
         if moved is not None:
-            translation = moved
+            measured = True
+            translation = moved if shift is None else moved + shift
             # `orient` applies the translation as a second transform, and only when there
             # was a finite gaussian to measure it from: an identity step is not a no-op on
             # a non-finite row (0 * inf), so it is not added where `orient` would not.
             steps.append(Step(np.eye(3), translation))
+    if shift is not None and not measured:
+        translation = shift
+        steps.append(Step(np.eye(3), translation))
     written = _write(source, out, steps, on_chunk)
     frame = gaussians.Frame(
         up_axis=axis,
