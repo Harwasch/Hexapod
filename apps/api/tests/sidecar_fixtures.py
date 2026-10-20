@@ -293,8 +293,9 @@ def splat_glb(
 
 
 def waive_fill_gate(monkeypatch: pytest.MonkeyPatch) -> list[list[Any]]:
-    """Admit every inferred layer at the API's recompute of the fill gate
-    (`fill_gate.verify`) and record the layers it was asked to judge, one list per attach.
+    """Admit every inferred layer at the API's recompute of the fill gate -- on attach
+    (`fill_gate.verify`) and on a republish (`fill_gate.carry_check`) -- and record the
+    layers it was asked to judge, one list per attach (one entry per carried layer).
 
     For the attach's and the carry's own mechanics (merging layers by uri, the row lock,
     what a republish keeps), whose fills sit on single scans with no re-scan. The gate
@@ -309,5 +310,18 @@ def waive_fill_gate(monkeypatch: pytest.MonkeyPatch) -> list[list[Any]]:
         if layers:
             asked.append(list(layers))
 
+    def carry_check(*_args: Any, **_kwargs: Any) -> Any:
+        def check(entry: Any, *_: Any) -> None:
+            asked.append([entry])
+
+        return check
+
     monkeypatch.setattr(fill_gate, "verify", admit)
+    monkeypatch.setattr(fill_gate, "carry_check", carry_check)
     return asked
+
+
+def admit_fills(_entry: Any, *_args: Any) -> None:
+    """A carry's `fill_check` that admits every layer: for the carry's own rules (the
+    metadata half, what goes with a split), the recompute waived as `waive_fill_gate` does."""
+    return None

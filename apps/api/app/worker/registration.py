@@ -52,12 +52,12 @@ from app.schemas.capture import QUALITY_BARS, QUALITY_MODES, CaptureQuality
 from app.schemas.common import Provenance
 from app.schemas.geojson import Polygon
 from app.schemas.site import SiteCreate
-from app.services import epoch_maps, epochs, geometry, placement, sidecars
+from app.services import epoch_maps, epochs, fill_gate, geometry, placement, sidecars
 from app.services import sites as site_service
 from app.services.assets import build_asset
 from app.services.slugs import slugify
 from app.storage import ObjectStorage
-from app.worker.carry import CarryPlan, plan_carry
+from app.worker.carry import CarryPlan, FillCheck, plan_carry
 from app.worker.outputs import artifact_key, stage_prefix
 from app.worker.pipeline_bridge import PLATFORM_WORDS
 from app.worker.publish import Publisher, PublishError
@@ -668,8 +668,11 @@ def publish_outputs(
     coverage_stage_id: str | None = None,
     carry_from: str | None = None,
     tiles_dir: Path | None = None,
+    fill_check: FillCheck | None = None,
 ) -> Published:
-    """Copy the run's browser-facing outputs to the public bucket. No database here.
+    """Copy the run's browser-facing outputs to the public bucket. No database here --
+    except what `fill_check` (the fill gate each carried inferred layer must pass,
+    `fill_gate.carry_check`) reads, which ends its own transaction where the caller asks.
 
     `carry_from` is the tileset the site shows now (`live_tileset_url`): the sidecars beside
     it that still hold for the new tiles go into the new generation with them
@@ -711,6 +714,7 @@ def publish_outputs(
                 tiles_prefix=tiles,
                 entry=f"{tiles}/tileset.json",
                 tiles_dir=tiles_dir,
+                fill_check=fill_check,
             )
             if tiles is not None
             else CarryPlan(based_on=carry_from)
@@ -1312,6 +1316,9 @@ def register(
             thumbnail_stage_id=thumbnail_stage_id,
             coverage_stage_id=coverage_stage_id,
             carry_from=live_tileset_url(db, capture),
+            fill_check=fill_gate.carry_check(
+                db, (publish or Publisher(private=storage, public=storage)).public, capture.id
+            ),
         )
     url, thumbnail, coverage = published.tileset, published.thumbnail, published.coverage
     registration = as_aligned(db, registration)

@@ -77,7 +77,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import Capture, Job, JobStep
 from app.models.enums import CaptureStatus, RunStatus, UploadStatus
-from app.services import epochs
+from app.services import epochs, fill_gate
 from app.storage import ObjectStorage
 from app.storage.null import StorageUnavailableError
 from app.worker import (
@@ -838,6 +838,14 @@ class JobSupervisor:
                     coverage_stage_id=state.stage_producing("coverage_enu.ply"),
                     carry_from=live,
                     tiles_dir=self._tiles_dir(job, state),
+                    # Reads the site's maps only if a carried layer is asked about, and
+                    # ends that transaction before the copy goes on.
+                    fill_check=fill_gate.carry_check(
+                        db,
+                        self._publish.public,
+                        job.capture_id,
+                        after=lambda: _end_transaction(db),
+                    ),
                 )
                 if self._stopping(db, job, stop):
                     return "lost"

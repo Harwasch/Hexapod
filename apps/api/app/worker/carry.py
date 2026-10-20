@@ -27,10 +27,13 @@ So before the copy, the live generation is read and each sidecar kind in it is d
   keeps them; anything else drops them;
 * **keyed by instance ids** (`INSTANCES`: materials, telemetry): carried exactly when
   `instances` is;
-* **in the scan's frame only** (`FRAME`: inferred layers): carried -- each layer only while
-  the new tiles carry the confidence grid its fill gate was checked against (ADR 0016
-  § Fill); one that was never gated, or whose grid a re-run replaced, is dropped and the
-  asset flagged to fill again.
+* **in the scan's frame only** (`FRAME`: inferred layers): carried -- each layer, and each
+  layer of a fill variant (`extras.variants.fill`), only while the API's own fill gate
+  admits it on the new revision (ADR 0016 § Fill, `fill_check`: the epoch's targets
+  recomputed on the grid the new tiles carry, every gaussian of every tile in them). One
+  the gate refuses -- never gated, gated on a grid a re-run replaced, or with gaussians
+  outside the targets -- is dropped with its files and the asset flagged to fill again; a
+  fill variant goes whole. With no gate to ask, no layer is carried.
 
 When the tiles are the same, everything the live generation has beyond them is carried,
 known kind or not: nothing about the scan changed. When they differ, a root extras key no
@@ -47,7 +50,9 @@ raise `registration.LiveMoved`, and the runner plans and publishes again on top 
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+import posixpath
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,6 +78,14 @@ SINGLE_BUCKET = (
 
 #: Which `POSITIONS` kinds still hold for the new tiles, of the ones asked about.
 PositionCheck = Callable[[Collection[str]], frozenset[str]]
+#: The API's fill gate for one carried layer (`app.services.fill_gate.carry_check`): the
+#: entry, the new tileset's root transform, a reader of the live generation's files, and the
+#: sha256 of the grid the new tiles carry; None to carry the layer, else why not.
+FillCheck = Callable[
+    [Mapping[str, Any], object, Callable[[str], bytes | None], str | None], str | None
+]
+#: The flag a dropped fill variant leaves on the asset.
+VARIANT_AGAIN = "Fill variant needs filling again"
 
 
 @dataclass(frozen=True)
@@ -120,6 +133,7 @@ def plan_carry(
     tiles_prefix: str,
     entry: str,
     tiles_dir: Path | None = None,
+    fill_check: FillCheck | None = None,
 ) -> CarryPlan:
     """Decide what of the live generation at `live_url` goes into the run's new one.
 
@@ -129,7 +143,8 @@ def plan_carry(
     is read from the bucket). A live URL outside the bucket a browser reads (an ion asset, a
     seeded `sites/` scan) has nothing here to carry. A store that cannot be read raises
     `PublishError`, which withholds the publish: dropping every sidecar because R2 had a
-    bad minute would take objects off a site that has nothing wrong with it.
+    bad minute would take objects off a site that has nothing wrong with it. `fill_check`
+    is the fill gate each inferred layer must pass to be carried; without one, none is.
     """
     if live_url is None:
         return CarryPlan(based_on=None)
@@ -178,6 +193,8 @@ def plan_carry(
             tiles_dir=tiles_dir,
             live_url=live_url,
         ),
+        source=source,
+        fill_check=fill_check,
     )
 
 
@@ -290,6 +307,8 @@ def _decide(
     new_entry: str,
     unreadable: str | None = None,
     held: PositionCheck | None = None,
+    source: ObjectStorage | None = None,
+    fill_check: FillCheck | None = None,
 ) -> CarryPlan:
     live_extras, new_extras = sidecars.root_extras(live), sidecars.root_extras(new)
     live_rels = set(live_objects) - {live_entry} - sidecars.content_uris(live)
@@ -382,13 +401,23 @@ def _decide(
         if stray:
             log.warning("carry: %s: not carried, belonging to no sidecar kind: %s", live_url, stray)
 
-    gone_fills = _gate_fills(new_extras, extras)
-    if gone_fills is not None:
-        folders, reason = gone_fills
-        files = [rel for rel in files if not any(rel.startswith(f) for f in folders)]
-        if "inferredLayers" not in extras and "inferredLayers" in carried:
-            carried.remove("inferredLayers")
-        dropped.append(Dropped(kind="inferredLayers", action=sidecars.FILL_AGAIN, reason=reason))
+    def read(rel: str) -> bytes | None:
+        found = live_objects.get(rel)
+        if found is None or source is None:
+            return None
+        try:
+            return source.get_object(found.key)
+        except Exception as error:
+            raise PublishError(f"could not read {rel} beside {live_url}: {error}") from error
+
+    gone_fills, gone_files = _gate_fills(
+        new, new_extras, extras, files, read=read, check=fill_check
+    )
+    files = [rel for rel in files if rel not in gone_files]
+    for key in ("inferredLayers", "variants"):
+        if key not in extras and key in carried:
+            carried.remove(key)
+    dropped += gone_fills
 
     document = None
     if extras:
@@ -418,35 +447,121 @@ def _decide(
 
 
 def _gate_fills(
-    new_extras: Mapping[str, Any], extras: dict[str, Any]
-) -> tuple[list[str], str] | None:
-    """The fill gate on a republish (ADR 0016 § Fill): a carried inferred layer stays only
-    while the new generation's tiles carry the very confidence grid it was gated by
-    (`sidecars.fill_gate_problem`). The rest are taken out of `extras` (in place); returns
-    their folders and why, or None when every layer holds."""
-    layers = extras.get("inferredLayers")
-    if not isinstance(layers, list) or "inferredLayers" in new_extras:
-        return None
+    new: Mapping[str, Any],
+    new_extras: Mapping[str, Any],
+    extras: dict[str, Any],
+    files: list[str],
+    *,
+    read: Callable[[str], bytes | None],
+    check: FillCheck | None,
+) -> tuple[list[Dropped], set[str]]:
+    """The fill gate on a republish (ADR 0016 § Fill). Every inferred layer `extras` would
+    carry -- `inferredLayers`, and each fill variant's (`variants.fill[].inferredLayers`) --
+    must pass the metadata half (`sidecars.fill_gate_problem`, against the grid the new
+    tiles carry) and then `check`, the API's own gate on the new revision; a split's hole
+    fill (a plain `fills/` path) goes with its split. What fails is taken out of `extras`
+    (in place): a layer alone, a fill variant whole (it is one method; half of it would be
+    another). Returns what was dropped, and the files among `files` that went with it."""
     sha = sidecars.grid_sha256({**new_extras, **extras})
-    kept: list[Any] = []
-    folders: list[str] = []
-    reasons: list[str] = []
-    for entry in layers:
+    root = new.get("root")
+    transform = root.get("transform") if isinstance(root, Mapping) else None
+
+    def judge(entry: object) -> str | None:
         why = sidecars.fill_gate_problem(entry, grid_sha=sha)
-        if why is None:
-            kept.append(entry)
-            continue
-        uri = entry.get("uri") if isinstance(entry, dict) else None
-        if isinstance(uri, str) and "/" in uri and uri.startswith("inferred/"):
-            folders.append(uri.rsplit("/", 1)[0] + "/")
-        reasons.append(f"{uri}: {why}")
-    if not reasons:
-        return None
-    if kept:
-        extras["inferredLayers"] = kept
-    else:
-        extras.pop("inferredLayers")
-    return folders, "; ".join(reasons)
+        if why is not None or not isinstance(entry, Mapping):
+            return why
+        if str(entry.get("uri")).removeprefix("./").startswith("fills/"):
+            return None
+        if check is None:
+            return "no fill gate was given to hold it to the new revision's fill targets"
+        return check(entry, transform, read, sha)
+
+    dropped: list[Dropped] = []
+    gone: set[str] = set()
+    layers = extras.get("inferredLayers")
+    if isinstance(layers, list) and "inferredLayers" not in new_extras:
+        kept: list[Any] = []
+        reasons: list[str] = []
+        for entry in layers:
+            why = judge(entry)
+            if why is None:
+                kept.append(entry)
+                continue
+            reasons.append(f"{_uri(entry)}: {why}")
+            gone |= _layer_files(entry, files, read)
+        if kept:
+            extras["inferredLayers"] = kept
+        else:
+            extras.pop("inferredLayers")
+        if reasons:
+            dropped.append(
+                Dropped(
+                    kind="inferredLayers", action=sidecars.FILL_AGAIN, reason="; ".join(reasons)
+                )
+            )
+    variants = extras.get("variants")
+    if (
+        isinstance(variants, dict)
+        and isinstance(variants.get("fill"), list)
+        and "variants" not in new_extras
+    ):
+        kept_variants: list[Any] = []
+        reasons = []
+        for variant in variants["fill"]:
+            listed = variant.get("inferredLayers") if isinstance(variant, dict) else None
+            refused = [
+                (entry, why)
+                for entry in (listed if isinstance(listed, list) else [])
+                if (why := judge(entry)) is not None
+            ]
+            if not refused:
+                kept_variants.append(variant)
+                continue
+            name = variant.get("name") if isinstance(variant, dict) else None
+            reasons += [f"{name}: {_uri(entry)}: {why}" for entry, why in refused]
+            for entry in listed if isinstance(listed, list) else []:
+                gone |= _layer_files(entry, files, read)
+        if reasons:
+            rest = {k: v for k, v in variants.items() if k != "fill"}
+            if kept_variants:
+                rest["fill"] = kept_variants
+            if rest:
+                extras["variants"] = rest
+            else:
+                extras.pop("variants")
+            dropped.append(
+                Dropped(kind="variants", action=VARIANT_AGAIN, reason="; ".join(reasons))
+            )
+    return dropped, gone
+
+
+def _uri(entry: object) -> object:
+    return entry.get("uri") if isinstance(entry, Mapping) else None
+
+
+def _layer_files(entry: object, files: list[str], read: Callable[[str], bytes | None]) -> set[str]:
+    """The carried files a dropped layer takes with it: its folder (what no other kind owns
+    there), or -- for a layer with no folder -- its tileset and the tiles it names."""
+    uri = _uri(entry)
+    if not isinstance(uri, str):
+        return set()
+    rel = uri.removeprefix("./")
+    folder = posixpath.dirname(rel)
+    if folder:
+        return {
+            name
+            for name in files
+            if name.startswith(folder + "/")
+            and next((kind for kind in sidecars.KINDS if kind.owns(name)), sidecars.INFERRED)
+            is sidecars.INFERRED
+        }
+    data = read(rel)
+    try:
+        document = json.loads(data) if data is not None else None
+    except ValueError:
+        document = None
+    tiles = sidecars.content_uris(document) if isinstance(document, dict) else set()
+    return {rel, *tiles} & set(files)
 
 
 def _why_not(

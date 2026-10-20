@@ -23,6 +23,10 @@ it. It recomputes the gate itself and holds the layer's geometry to it:
 
 Only step 3 reads the client's metadata, and only to refuse: nothing it says admits a layer.
 A layer whose tiles cannot be read as splats is refused, not waved through.
+
+A republish asks the same of every layer it would carry (`carry_check`, used by
+`app/worker/carry.py`): the targets of the run's epoch, recomputed, computed on the very grid
+the new tiles carry, and every gaussian in them -- or the layer is not carried.
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ import hashlib
 import json
 import math
 import posixpath
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -41,7 +46,7 @@ from numpy.typing import NDArray
 from sqlalchemy.orm import Session
 
 from app.analysis import cell_grid, rescan_gate
-from app.models import Asset
+from app.models import Asset, Epoch
 from app.schemas.confidence import FillTargetsRead
 from app.services import confidence_maps, epochs, sidecars
 from app.services.errors import ConflictError, InvalidInputError
@@ -66,6 +71,8 @@ class Targets:
     read: FillTargetsRead
     mask: NDArray[np.bool_]
     mask_sha256: str
+    #: The sha256 of the epoch's confidence grid the targets were computed on.
+    grid_sha256: str | None = None
 
     def evidence(self) -> dict[str, object]:
         """What a layer filled for these targets says in `rescanGate` (`_SAME`'s keys)."""
@@ -113,8 +120,10 @@ def targets_for(db: Session, storage: ObjectStorage, asset: Asset) -> Targets:
             f"the asset is not the current revision of epoch {asset.epoch_id}: fill targets "
             "are the current revision's"
         )
+    epoch = db.get(Epoch, asset.epoch_id)
     try:
         read = confidence_maps.fill_targets(db, storage, asset.site_id, asset.epoch_id)
+        grid = confidence_maps.measured_map(db, epoch).descriptor if epoch is not None else {}
     except ConflictError as error:
         raise InvalidInputError(f"the API has no fill targets for it: {error}") from error
     if read.cells == 0:
@@ -124,7 +133,13 @@ def targets_for(db: Session, storage: ObjectStorage, asset: Asset) -> Targets:
         )
     mask = rescan_gate.unpack(read.mask, read.ni, read.nj)
     digest = hashlib.sha256(base64.b64decode(read.mask)).hexdigest()
-    return Targets(read=read, mask=mask, mask_sha256=digest)
+    sha = grid.get("sha256")
+    return Targets(
+        read=read,
+        mask=mask,
+        mask_sha256=digest,
+        grid_sha256=sha if isinstance(sha, str) else None,
+    )
 
 
 def check_layer(
@@ -225,3 +240,64 @@ def verify(
     targets = targets_for(db, storage, asset)
     for entry in layers:
         check_layer(entry, targets=targets, scan_transform=scan_transform, read=read)
+
+
+#: What a republish asks of one inferred layer it would carry (`app/worker/carry.py`
+#: `FillCheck`): the entry, the new tileset's root transform, a reader of the live
+#: generation's files and the sha256 of the grid the new tiles carry; None to carry it, else
+#: why not.
+CarryCheck = Callable[[Mapping[str, Any], object, Reader, str | None], str | None]
+
+
+def carry_check(
+    db: Session,
+    storage: ObjectStorage,
+    capture_id: uuid.UUID | None,
+    *,
+    after: Callable[[], None] | None = None,
+) -> CarryCheck:
+    """The gate a republish of `capture_id`'s epoch holds each carried layer to: the API's
+    targets for the epoch, recomputed once (and only when a layer is asked about), from the
+    maps in `storage` -- `after` then runs, so a caller that must not sit in a transaction
+    can end the one the reads opened. A layer is carried only when those targets were
+    computed on the very grid the new tiles carry (a re-run that measured its own grid has
+    other targets, not yet recorded) and it passes `check_layer` on them."""
+    found: list[Targets | str] = []
+
+    def targets() -> Targets | str:
+        if found:
+            return found[0]
+        try:
+            epoch = epochs.epoch_of_capture(db, capture_id) if capture_id is not None else None
+            current = epochs.current_asset(db, epoch.id) if epoch is not None else None
+            if current is None:
+                raise InvalidInputError(
+                    "the run's capture is no epoch with a current revision: nothing it shows "
+                    "was measured, so no fill holds on it"
+                )
+            found.append(targets_for(db, storage, current))
+        except InvalidInputError as error:
+            found.append(str(error))
+        finally:
+            if after is not None:
+                after()
+        return found[0]
+
+    def check(
+        entry: Mapping[str, Any], scan_transform: object, read: Reader, grid_sha: str | None
+    ) -> str | None:
+        got = targets()
+        if isinstance(got, str):
+            return got
+        if grid_sha is None or got.grid_sha256 != grid_sha:
+            return (
+                "the epoch's fill targets were computed on a confidence grid the new tiles do "
+                "not carry: the cells it filled may no longer be weak"
+            )
+        try:
+            check_layer(entry, targets=got, scan_transform=scan_transform, read=read)
+        except InvalidInputError as error:
+            return str(error)
+        return None
+
+    return check

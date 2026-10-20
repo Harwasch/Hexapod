@@ -305,3 +305,182 @@ def test_an_unchanged_variant_declaration_does_not_carry_new_files_past_the_gate
         _attach_files(db, storage, asset, {f"{folder}f1.glb": splat_glb([outside])}, extras)
     with pytest.raises(InvalidInputError, match="outside the cells"):
         _attach_files(db, storage, asset, {f"{folder}f1.glb": splat_glb([outside])}, {})
+
+
+# --- a republish carries a layer only if the same gate admits it (Codex R3 #60, 7) --------
+
+RUNS = "twin-f4-runs"
+
+
+def _run_bucket() -> S3Storage:
+    """A private bucket beside `storage` (inside the same moto): the run's own outputs."""
+    import boto3
+
+    boto3.client("s3", region_name="us-east-1").create_bucket(Bucket=RUNS)
+    return S3Storage(
+        bucket=RUNS,
+        endpoint_url=None,
+        access_key="key",
+        secret_key="secret",
+        region="us-east-1",
+        public_base_url=None,
+    )
+
+
+def _live(
+    storage: S3Storage, asset: Asset, files: dict[str, bytes], extras: dict[str, Any]
+) -> None:
+    """The live generation of `asset` as it stands, with `files` and `extras` beside its
+    tiles -- written straight to the bucket, as a layer from before the gate (or one that
+    reached it some other way) would be."""
+    directory = str(asset.source["url"]).removeprefix(BASE).rsplit("/", 1)[0] + "/"
+    put_scan(storage, directory, sidecars=files, extras={"confidence": descriptor("e2"), **extras})
+
+
+def _republish(db: Session, storage: S3Storage, asset: Asset) -> Any:
+    """What a re-run of `asset`'s epoch carries: the same tiles and the same grid, so every
+    sidecar would be carried were it not for the gate."""
+    from app.services import fill_gate
+    from app.worker.carry import plan_carry
+    from app.worker.publish import Publisher
+    from tests.confidence_fixtures import blob
+
+    private = _run_bucket()
+    run = f"runs/{uuid.uuid4()}/package/splat/"
+    put_scan(
+        private,
+        run,
+        sidecars={"confidence.bin": blob("e2")},
+        extras={"confidence": descriptor("e2")},
+    )
+    epoch = db.get(Epoch, asset.epoch_id)
+    assert epoch is not None
+    return plan_carry(
+        Publisher(private=private, public=storage),
+        live_url=str(asset.source["url"]),
+        tiles_prefix=run,
+        entry=f"{run}tileset.json",
+        fill_check=fill_gate.carry_check(db, storage, epoch.capture_id),
+    )
+
+
+def _extras(plan: Any) -> dict[str, Any]:
+    """The new tileset's root extras; the run's own (no layers) when nothing was merged."""
+    if plan.document is None:
+        return {}
+    extras: dict[str, Any] = json.loads(plan.document)["root"]["extras"]
+    return extras
+
+
+def _entry(read: FillTargetsRead, folder: str = LAYER) -> dict[str, Any]:
+    return {
+        "uri": f"{folder}tileset.json",
+        "evidence": {"kind": "inferred", "rescanGate": gate_of(read)},
+    }
+
+
+def test_a_republish_carries_a_layer_the_gate_admits(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    _, asset = site(db, storage, tmp_path)
+    read = targets(db, storage, asset)
+    inside = centre(read, target=True)
+    _live(storage, asset, layer_files([inside], [inside]), {"inferredLayers": [_entry(read)]})
+
+    plan = _republish(db, storage, asset)
+
+    assert _extras(plan)["inferredLayers"] == [_entry(read)]
+    assert {f"{LAYER}f0.glb", f"{LAYER}f1.glb"} <= {rel for _, rel in plan.objects}
+    assert not [gone for gone in plan.dropped if gone.kind == "inferredLayers"]
+
+
+def test_a_republish_never_carries_a_layer_the_gate_refuses(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Metadata that names the API's targets exactly, on a layer whose gaussians are not in
+    them: the republish recomputes the gate, drops the layer and its files, and says why."""
+    _, asset = site(db, storage, tmp_path)
+    read = targets(db, storage, asset)
+    inside, outside = centre(read, target=True), centre(read, target=False)
+    _live(storage, asset, layer_files([outside], [inside]), {"inferredLayers": [_entry(read)]})
+
+    plan = _republish(db, storage, asset)
+
+    assert "inferredLayers" not in _extras(plan)
+    assert not any(rel.startswith(LAYER) for _, rel in plan.objects)
+    (gone,) = [gone for gone in plan.dropped if gone.kind == "inferredLayers"]
+    assert "outside the cells" in gone.reason
+    assert gone.action == "Inferred fill needs filling again"
+    assert "inferredLayers" not in plan.carried
+
+
+def test_a_republish_holds_fill_variants_to_the_gate(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Codex R3 #60 finding 7: the republish judged top-level `inferredLayers` only, and
+    carried `variants` -- a fill variant's layers included -- as it found them."""
+    _, asset = site(db, storage, tmp_path)
+    read = targets(db, storage, asset)
+    inside, outside = centre(read, target=True), centre(read, target=False)
+    good, bad = "variants/fill/good/", "variants/fill/bad/"
+    files = {
+        **{k.replace(LAYER, good): v for k, v in layer_files([inside], [inside]).items()},
+        **{k.replace(LAYER, bad): v for k, v in layer_files([inside], [outside]).items()},
+    }
+    fill = [
+        {"name": "good", "label": "Good", "inferredLayers": [_entry(read, good)]},
+        {"name": "bad", "label": "Bad", "inferredLayers": [_entry(read, bad)]},
+    ]
+    _live(storage, asset, files, {"variants": {"fill": fill}})
+
+    plan = _republish(db, storage, asset)
+
+    assert _extras(plan)["variants"] == {"fill": [fill[0]]}
+    carried = {rel for _, rel in plan.objects}
+    assert f"{good}f1.glb" in carried and not any(rel.startswith(bad) for rel in carried)
+    (gone,) = [gone for gone in plan.dropped if gone.kind == "variants"]
+    assert "bad" in gone.reason and "outside the cells" in gone.reason
+
+
+def test_a_republish_with_no_earlier_epoch_carries_no_fill(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """On the site's first epoch nothing was re-scanned: no fill holds there, whatever its
+    evidence says."""
+    first, second = site(db, storage, tmp_path)
+    read = targets(db, storage, second)
+    inside = centre(read, target=True)
+    directory = str(first.source["url"]).removeprefix(BASE).rsplit("/", 1)[0] + "/"
+    forged = {**_entry(read), "evidence": {"kind": "inferred", "rescanGate": gate_of(read)}}
+    forged["evidence"]["rescanGate"]["confidenceSha256"] = descriptor("e1")["sha256"]
+    put_scan(
+        storage,
+        directory,
+        sidecars=layer_files([inside], [inside]),
+        extras={"confidence": descriptor("e1"), "inferredLayers": [forged]},
+    )
+    from app.services import fill_gate
+    from app.worker.carry import plan_carry
+    from app.worker.publish import Publisher
+    from tests.confidence_fixtures import blob
+
+    private = _run_bucket()
+    run = f"runs/{uuid.uuid4()}/package/splat/"
+    put_scan(
+        private,
+        run,
+        sidecars={"confidence.bin": blob("e1")},
+        extras={"confidence": descriptor("e1")},
+    )
+    epoch = db.get(Epoch, first.epoch_id)
+    assert epoch is not None
+    plan = plan_carry(
+        Publisher(private=private, public=storage),
+        live_url=str(first.source["url"]),
+        tiles_prefix=run,
+        entry=f"{run}tileset.json",
+        fill_check=fill_gate.carry_check(db, storage, epoch.capture_id),
+    )
+    assert "inferredLayers" not in _extras(plan)
+    (gone,) = [gone for gone in plan.dropped if gone.kind == "inferredLayers"]
+    assert "re-scanned" in gone.reason

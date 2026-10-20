@@ -46,14 +46,17 @@ from tests.sidecar_fixtures import (
     FILL_FILES,
     GRID_EXTRAS,
     GRID_FILES,
+    GRID_SHA,
     INSTANCES_EXTRAS,
     LEGACY_DIR,
     LEGACY_URL,
     PUBLIC_URL,
     TILES,
+    TRANSFORM,
     TREE_LOD,
     TREE_SH,
     UNGATED_FILL_EXTRAS,
+    admit_fills,
     directory_of,
     files_under,
     fixture_scan,
@@ -491,6 +494,7 @@ def test_a_split_fill_goes_with_the_split(buckets: Publisher) -> None:
         live_url=f"{PUBLIC_URL}/{live_dir}tileset.json",
         tiles_prefix=RUN_DIR,
         entry=f"{RUN_DIR}tileset.json",
+        fill_check=admit_fills,
     )
     assert sorted(rel for _, rel in plan.objects) == sorted(FILL_FILES)
     assert plan.document is not None
@@ -1030,6 +1034,7 @@ def plan_onto(
     *,
     run_grid: dict[str, Any] | None,
     tag: bytes = b"new ",
+    fill_check: Any = admit_fills,
 ) -> Any:
     """A live generation with a grid and `layers`, and a run whose tiles carry `run_grid`
     (or none): what the carry plans."""
@@ -1055,6 +1060,7 @@ def plan_onto(
         live_url=f"{PUBLIC_URL}/{GATED_LIVE_DIR}tileset.json",
         tiles_prefix=RUN_DIR,
         entry=f"{RUN_DIR}tileset.json",
+        fill_check=fill_check,
     )
 
 
@@ -1073,6 +1079,31 @@ def test_a_gated_fill_is_carried_while_the_new_tiles_carry_its_grid(buckets: Pub
     assert "inferredLayers" in plan.carried
     assert "inferredLayers" not in {gone.kind for gone in plan.dropped}
     assert set(FILL_FILES) <= {rel for _, rel in plan.objects}
+
+
+def test_with_no_fill_gate_to_ask_no_fill_is_carried(buckets: Publisher) -> None:
+    """A carry that cannot recompute the gate never carries a layer on its metadata alone."""
+    plan = plan_onto(buckets, FILL_EXTRAS, run_grid=GRID_EXTRAS, tag=b"", fill_check=None)
+    assert not _layers(plan)
+    assert not any(rel.startswith("inferred/") for _, rel in plan.objects)
+    (gone,) = [gone for gone in plan.dropped if gone.kind == "inferredLayers"]
+    assert "no fill gate" in gone.reason
+
+
+def test_a_fill_the_gate_refuses_is_not_carried(buckets: Publisher) -> None:
+    asked: list[Any] = []
+
+    def refuse(entry: Any, transform: Any, read: Any, grid: Any) -> str:
+        asked.append((entry, transform, read(entry["uri"]), grid))
+        return "3 of its 9 gaussians are outside the cells a re-scan left weak"
+
+    plan = plan_onto(buckets, FILL_EXTRAS, run_grid=GRID_EXTRAS, tag=b"", fill_check=refuse)
+    assert not _layers(plan)
+    (gone,) = [gone for gone in plan.dropped if gone.kind == "inferredLayers"]
+    assert "outside the cells" in gone.reason
+    # Asked with the new tileset's frame, the live layer's own bytes and the new grid.
+    (entry, transform, data, grid), *_ = asked
+    assert (entry, transform, data, grid) == (FILL_EXTRAS[0], TRANSFORM, b"{}", GRID_SHA)
 
 
 def test_a_fill_gated_by_another_grid_is_dropped_and_flagged(buckets: Publisher) -> None:
