@@ -411,8 +411,8 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
 
 ### Context
 
-A splat scan looks equally certain everywhere. Where the capture saw a part from few views, at
-a narrow spread or too coarse a ground sample, the reconstruction is a guess that looks like a
+A splat scan looks equally certain everywhere. Where the capture saw a part from few views, at a
+narrow spread or too coarse a ground sample, the reconstruction is a guess that looks like a
 measurement. The pipeline writes, per 2.5D column of the site lattice (C1: 0.25 m × 2^level
 cells in the tileset frame), a score and the reasons it is low, as one container
 (`hexapod.cellgrid` v1, C2) declared on the root tile. The globe needs to show it.
@@ -426,15 +426,20 @@ cells in the tileset frame), a score and the reasons it is low, as one container
    (`apps/web/src/dev/cellGridFixture.ts`) builds grids from the spec, deterministically; a
    cross-language test is the rescan PR's (W4b).
 2. **CesiumJS draws the views, as a colour-chain part** (`cesium/splatCellView.ts`), not an
-   engine-patch change: per splat, its cell by the root frame (`T⁻¹ · R`), its level by distance
-   (6 px a cell), the `weak-v1` colour (weak below 128 or unseen: red; above, amber to green;
-   no evidence: grey). PlayCanvas and Spark get a disabled control with the reason and a
-   one-click switch (C5).
-3. **Data age is one age per date, plus "newer data here".** It reads the later dates' grids
-   straight from their tilesets (no API), compares only those in the same frame, and says which
-   it left out.
-4. **Not persisted.** The view is a question asked now; a reload starts on Photo.
-5. **Cost.** A few lines on the globe's first load; the rest loads on demand.
+   engine-patch change: per splat, its cell through the root frame (`T⁻¹ · R`), its level by
+   distance (a cell must cover 6 px at the size it is drawn, the model's runtime scale
+   included), the `weak-v1` colour (weak below 128 or unseen: red; above, amber to green; no
+   evidence: grey). PlayCanvas and Spark get a disabled control with the reason and a one-click
+   switch (C5).
+3. **The notice names the real setting.** It reads "Needs the CesiumJS renderer (Settings ›
+   Advanced › Splat renderer)", not the design's "Settings › Renderer": the Settings sheet lists
+   the renderer under Advanced, as "Splat renderer".
+4. **Data age is one age per date, plus "newer data here".** It reads the later dates' grids
+   straight from their tilesets (no API), compares only those in the same frame (a root without
+   a transform is the identity), says which it left out, and is built again when the site's
+   dates change while the model stays loaded (the scene's `site-dates` event).
+5. **Not persisted.** The view is a question asked now; a reload starts on Photo.
+6. **Cost.** A few lines on the globe's first load; the rest loads on demand.
 
 ### Consequences
 
