@@ -11,7 +11,7 @@ import gzip
 import json
 import struct
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -235,17 +235,19 @@ def fixture_scan(directory: Path) -> tuple[dict[str, Any], dict[str, bytes]]:
 SPZ_MAGIC = 0x5053474E
 
 
-def splat_glb(
+#: `splat_tiles.build_glb`'s node matrix (column-major): the z-up data turned y-up, which
+#: the viewer's axis correction turns back.
+Z_UP_TO_Y_UP = [1.0, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1]
+
+
+def _spz(
     positions: np.ndarray | list[list[float]],
     *,
-    version: int = 2,
-    fractional_bits: int = 12,
-    fill: int = 0,
-    sh_degree: int = 0,
+    version: int,
+    fractional_bits: int,
+    fill: int,
+    sh_degree: int,
 ) -> bytes:
-    """A one-primitive splat GLB as `splat_tiles.build_glb` lays it out: an SPZ stream of
-    these positions (24-bit fixed point), every other byte `fill`, `sh_degree` bands of
-    harmonics after them -- so two tiles can hold the same positions in different bytes."""
     xyz = np.asarray(positions, dtype=np.float64).reshape(-1, 3)
     count = xyz.shape[0]
     fixed = np.round(xyz * (1 << fractional_bits)).astype(np.int64) & 0xFFFFFF
@@ -254,11 +256,47 @@ def splat_glb(
     rest = bytes([fill]) * ((1 + 3 + 3 + rotation) * count)
     harmonics = bytes([fill]) * (3 * (0, 3, 8, 15)[sh_degree] * count)
     header = struct.pack("<IIIBBBB", SPZ_MAGIC, version, count, sh_degree, fractional_bits, 0, 0)
-    spz = gzip.compress(header + packed.astype(np.uint8).tobytes() + rest + harmonics, mtime=0)
-    gltf = {
+    return gzip.compress(header + packed.astype(np.uint8).tobytes() + rest + harmonics, mtime=0)
+
+
+def splat_glb(
+    positions: np.ndarray | list[list[float]],
+    *,
+    version: int = 2,
+    fractional_bits: int = 12,
+    fill: int = 0,
+    sh_degree: int = 0,
+    also: tuple[np.ndarray | list[list[float]], ...] = (),
+    edit: Callable[[dict[str, Any]], None] | None = None,
+) -> bytes:
+    """A splat GLB as `splat_tiles.build_glb` lays it out: one scene, one node (its
+    z-up-to-y-up matrix) and one primitive holding an SPZ stream of these positions (24-bit
+    fixed point), every other byte `fill`, `sh_degree` bands of harmonics after them -- so
+    two tiles can hold the same positions in different bytes. `also`: more primitives in
+    the same mesh, a buffer view each; `edit` changes the glTF JSON before it is written
+    (another node matrix, a node hierarchy)."""
+    streams = [
+        _spz(
+            points,
+            version=version,
+            fractional_bits=fractional_bits,
+            fill=fill,
+            sh_degree=sh_degree,
+        )
+        for points in (positions, *also)
+    ]
+    views: list[dict[str, Any]] = []
+    binary = b""
+    for spz in streams:
+        views.append({"buffer": 0, "byteOffset": len(binary), "byteLength": len(spz)})
+        binary += spz + b"\0" * (-len(spz) % 4)
+    gltf: dict[str, Any] = {
         "asset": {"version": "2.0"},
-        "buffers": [{"byteLength": len(spz)}],
-        "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": len(spz)}],
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0, "matrix": list(Z_UP_TO_Y_UP)}],
+        "buffers": [{"byteLength": len(binary)}],
+        "bufferViews": views,
         "meshes": [
             {
                 "primitives": [
@@ -267,18 +305,20 @@ def splat_glb(
                         "extensions": {
                             "KHR_gaussian_splatting": {
                                 "extensions": {
-                                    "KHR_gaussian_splatting_compression_spz_2": {"bufferView": 0}
+                                    "KHR_gaussian_splatting_compression_spz_2": {"bufferView": n}
                                 }
                             }
                         },
                     }
+                    for n in range(len(streams))
                 ]
             }
         ],
     }
+    if edit is not None:
+        edit(gltf)
     text = json.dumps(gltf).encode()
     text += b" " * (-len(text) % 4)
-    binary = spz + b"\0" * (-len(spz) % 4)
     total = 12 + 8 + len(text) + 8 + len(binary)
     return (
         struct.pack("<4sII", b"glTF", 2, total)

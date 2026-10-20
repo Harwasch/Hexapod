@@ -194,3 +194,211 @@ def tile_checksum(data: bytes, offset: np.ndarray | None) -> str:
     """The position checksum a binding keys this tile (its GLB bytes, at `offset` in the
     site frame) by."""
     return checksum_positions(tile_positions(data, offset))
+
+
+# --- what the viewer draws of a tile: the fill gate's reader -----------------------------
+#
+# The checksums above read the one SPZ block `splat_tiles.build_glb` writes, as the packer
+# meant it. A fill gate cannot assume the packer wrote the GLB: it must see every splat any
+# viewer draws, where it draws it. Cesium (GaussianSplat3DTileContent, GaussianSplatPrimitive)
+# draws the first primitive of the scene's first node, placed by that node's own `matrix`
+# and turned z-up (`Axis.Y_UP_TO_Z_UP`, always, whatever the tileset's `gltfUpAxis`); a glTF
+# viewer that follows the spec draws every primitive of every node, through the hierarchy,
+# `matrix` or TRS. `tile_draws` reads both, so a gaussian is held to the targets wherever
+# either would put it, and refuses what neither can be read for: an instanced, skinned,
+# animated or morphed node, a primitive that is not an SPZ splat, a node hierarchy that is
+# not a forest.
+
+#: glTF is y-up; the viewer turns a splat tile z-up: `(x, y, z) -> (x, -z, y)`.
+Y_UP_TO_Z_UP = np.array(
+    [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, -1.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+)
+#: Nodes a splat tile may hold: the packer writes one. Each placement is a pass over its
+#: primitive's gaussians, so the count bounds the work a small file can ask for.
+MAX_NODES = 64
+
+
+def _numbers(value: object, count: int, what: str) -> np.ndarray:
+    if (
+        not isinstance(value, list)
+        or len(value) != count
+        or not all(
+            isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v)
+            for v in value
+        )
+    ):
+        raise TileFormatError(f"{what} is not {count} finite numbers")
+    return np.asarray(value, dtype=np.float64)
+
+
+def _local(node: Mapping[str, Any], index: int) -> np.ndarray:
+    """A node's own transform, `matrix` (column-major) or translation x rotation x scale."""
+    what = f"node {index}"
+    trs = [key for key in ("translation", "rotation", "scale") if key in node]
+    if "matrix" in node:
+        if trs:
+            raise TileFormatError(f"{what} has both a matrix and {', '.join(trs)}")
+        out: np.ndarray = _numbers(node["matrix"], 16, f"{what}'s matrix").reshape(4, 4).T
+        return out
+    t = _numbers(node.get("translation", [0.0, 0.0, 0.0]), 3, f"{what}'s translation")
+    x, y, z, w = _numbers(node.get("rotation", [0.0, 0.0, 0.0, 1.0]), 4, f"{what}'s rotation")
+    scale = _numbers(node.get("scale", [1.0, 1.0, 1.0]), 3, f"{what}'s scale")
+    norm = x * x + y * y + z * z + w * w
+    if not abs(norm - 1.0) < 1e-6:
+        raise TileFormatError(f"{what}'s rotation is not a unit quaternion")
+    rotation = np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ]
+    )
+    out = np.eye(4)
+    out[:3, :3] = rotation * scale
+    out[:3, 3] = t
+    return out
+
+
+def _glb_json(data: bytes) -> tuple[dict[str, Any], int]:
+    if len(data) < 20:
+        raise TileFormatError("not a GLB: shorter than its header")
+    magic, _version, _total = struct.unpack_from("<4sII", data, 0)
+    if magic != b"glTF":
+        raise TileFormatError("not a GLB")
+    json_length, _json_type = struct.unpack_from("<II", data, 12)
+    try:
+        gltf = json.loads(data[20 : 20 + json_length])
+    except ValueError as error:
+        raise TileFormatError(f"not a splat GLB: {error!r}") from error
+    if not isinstance(gltf, dict):
+        raise TileFormatError("not a splat GLB: its JSON is not an object")
+    return gltf, 20 + json_length + 8
+
+
+def _spz_of(gltf: Mapping[str, Any], bin_offset: int, data: bytes, primitive: object) -> bytes:
+    """The SPZ block a primitive's splats are in; a `TileFormatError` for any primitive
+    that is not an SPZ splat (a mesh of its own would be drawn wherever it says)."""
+    try:
+        if not isinstance(primitive, Mapping) or primitive.get("targets"):
+            raise TypeError("a morphed primitive, or not one")
+        view_index = primitive["extensions"]["KHR_gaussian_splatting"]["extensions"][
+            "KHR_gaussian_splatting_compression_spz_2"
+        ]["bufferView"]
+        view = gltf["bufferViews"][view_index]
+        start = bin_offset + int(view.get("byteOffset", 0))
+        length = int(view["byteLength"])
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise TileFormatError(f"a primitive that is not an SPZ splat: {error!r}") from error
+    if start < bin_offset or length < 0 or start + length > len(data):
+        raise TileFormatError("an SPZ block runs past the end of the GLB")
+    return data[start : start + length]
+
+
+def tile_draws(data: bytes) -> list[tuple[bytes, np.ndarray]]:
+    """Every `(SPZ block, matrix)` a viewer may draw of this GLB: the matrix (4 x 4, into
+    the tile's z-up frame) of each primitive of each node, composed from the root of its
+    hierarchy, and Cesium's own reading (the module note above), each placement once.
+    `TileFormatError` for a GLB the gate cannot place every splat of."""
+    gltf, bin_offset = _glb_json(data)
+    if gltf.get("animations") or gltf.get("skins"):
+        raise TileFormatError("an animated or skinned GLB: its splats move as it plays")
+    nodes = gltf.get("nodes")
+    meshes = gltf.get("meshes")
+    if not isinstance(nodes, list) or not nodes:
+        raise TileFormatError("no node places its splats (the viewer draws the first node's)")
+    if len(nodes) > MAX_NODES:
+        raise TileFormatError(f"{len(nodes)} nodes, over {MAX_NODES}")
+    if not isinstance(meshes, list):
+        raise TileFormatError("no meshes")
+    parent: dict[int, int] = {}
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            raise TileFormatError(f"node {index} is not an object")
+        if node.get("extensions") or "skin" in node or "weights" in node:
+            raise TileFormatError(
+                f"node {index} carries an extension, a skin or morph weights (instancing "
+                "draws its mesh many times over)"
+            )
+        children = node.get("children", [])
+        if not isinstance(children, list):
+            raise TileFormatError(f"node {index}'s children are not a list")
+        for child in children:
+            if (
+                isinstance(child, bool)
+                or not isinstance(child, int)
+                or not 0 <= child < len(nodes)
+                or child in parent
+                or child == index
+            ):
+                raise TileFormatError(f"node {index}: child {child!r} is not a node of one parent")
+            parent[child] = index
+    world: dict[int, np.ndarray] = {}
+    order = [index for index in range(len(nodes)) if index not in parent]
+    for index in order:  # grows as children are reached: breadth first from each root
+        local = _local(nodes[index], index)
+        world[index] = world[parent[index]] @ local if index in parent else local
+        order.extend(nodes[index].get("children", []))
+    if len(world) != len(nodes):
+        raise TileFormatError("the node hierarchy has a cycle")
+    draws: list[tuple[int, int, np.ndarray]] = []
+    placed: set[int] = set()
+    for index, node in enumerate(nodes):
+        mesh = node.get("mesh")
+        if mesh is None:
+            continue
+        if isinstance(mesh, bool) or not isinstance(mesh, int) or not 0 <= mesh < len(meshes):
+            raise TileFormatError(f"node {index}'s mesh {mesh!r} is not one of the GLB's")
+        placed.add(mesh)
+        primitives = meshes[mesh].get("primitives") if isinstance(meshes[mesh], dict) else None
+        if not isinstance(primitives, list) or not primitives:
+            raise TileFormatError(f"mesh {mesh} has no primitives")
+        draws.extend((mesh, n, world[index]) for n in range(len(primitives)))
+    if placed != set(range(len(meshes))):
+        raise TileFormatError("a mesh no node places, or no mesh at all")
+    # Cesium: the scene's first root node, its own `matrix` only, its first primitive. Its
+    # roots are `scenes[scene].nodes` when both are given, else every node (`nodes[0]`).
+    scenes, scene = gltf.get("scenes"), gltf.get("scene")
+    first: object = 0
+    if isinstance(scenes, list) and scene is not None:
+        listed = scenes[scene] if isinstance(scene, int) and 0 <= scene < len(scenes) else None
+        ids = listed.get("nodes") if isinstance(listed, dict) else None
+        first = ids[0] if isinstance(ids, list) and ids else None
+    if isinstance(first, bool) or not isinstance(first, int) or not 0 <= first < len(nodes):
+        raise TileFormatError(f"the scene's first node {first!r} is not one of the GLB's")
+    cesium = nodes[first]
+    if cesium.get("mesh") is None:
+        raise TileFormatError("the scene's first node has no mesh (the viewer draws its)")
+    own = cesium.get("matrix")
+    matrix = (
+        np.eye(4) if own is None else _numbers(own, 16, "the first node's matrix").reshape(4, 4).T
+    )
+    draws.append((int(cesium["mesh"]), 0, matrix))
+    out: list[tuple[bytes, np.ndarray]] = []
+    seen: list[tuple[int, int, np.ndarray]] = []
+    for mesh, n, at in draws:
+        if any(m == mesh and k == n and np.array_equal(a, at) for m, k, a in seen):
+            continue
+        seen.append((mesh, n, at))
+        spz = _spz_of(gltf, bin_offset, data, meshes[mesh]["primitives"][n])
+        out.append((spz, Y_UP_TO_Z_UP @ at))
+    return out
+
+
+def drawn_positions(data: bytes, offset: np.ndarray | None) -> list[np.ndarray]:
+    """Each of `tile_draws`' placements as `(n, 3)` float32 positions in the site frame:
+    the matrix applied in float64, `offset` added, rounded once to float32 -- for the
+    packer's GLB (its matrix undone by the viewer's turn) exactly `tile_positions`."""
+    out: list[np.ndarray] = []
+    shift = np.zeros(3) if offset is None else np.asarray(offset, np.float64)
+    for spz, matrix in tile_draws(data):
+        local = spz_positions(spz).astype("<f4")
+        local[local == 0.0] = 0.0
+        xyz = local.astype(np.float64)
+        if not np.array_equal(matrix, np.eye(4)):
+            if not np.array_equal(matrix[3], [0.0, 0.0, 0.0, 1.0]):
+                raise TileFormatError("a node matrix with a projective row")
+            xyz = xyz @ matrix[:3, :3].T + matrix[:3, 3]
+        moved = (xyz + shift).astype("<f4")
+        moved[moved == 0.0] = 0.0
+        out.append(moved)
+    return out

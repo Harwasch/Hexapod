@@ -20,7 +20,9 @@ it. It recomputes the gate itself and holds the layer's geometry to it:
 5. **Every gaussian of every tile** -- parents as well as leaves, each tile's origin
    composed (`app/worker/positions.py`, the reader the carry's checksums use), and at
    every place a tile is drawn (`tile_placements`: two tiles naming one GLB draw it at
-   both) -- is in a target cell. Nothing outside them reaches the live site.
+   both), each primitive where the GLB's nodes put it (`positions.tile_draws`: every
+   primitive through the node hierarchy, and Cesium's own reading) -- is in a target cell.
+   Nothing outside them reaches the live site.
 
 Only step 3 reads the client's metadata, and only to refuse: nothing it says admits a layer.
 A layer whose tiles cannot be read as splats is refused, not waved through.
@@ -213,14 +215,22 @@ def check_layer(
                 "too large to check, so not attached"
             )
         try:
-            xyz = positions.tile_positions(data, offset)
+            drawn = positions.drawn_positions(data, offset)
         except positions.TileFormatError as error:
             raise InvalidInputError(
                 f"inferred layer {uri!r}: its tile {path} cannot be read as splats ({error}), "
                 "so its gaussians cannot be held to the fill targets"
             ) from error
-        count += int(xyz.shape[0])
-        outside += targets.outside(xyz)
+        # Each further draw of the tile is another pass over its gaussians.
+        total += len(data) * (len(drawn) - 1)
+        if total > MAX_LAYER_BYTES:
+            raise InvalidInputError(
+                f"inferred layer {uri!r} draws more than {MAX_LAYER_BYTES} bytes of tiles: "
+                "too large to check, so not attached"
+            )
+        for xyz in drawn:
+            count += int(xyz.shape[0])
+            outside += targets.outside(xyz)
     if outside:
         raise InvalidInputError(
             f"inferred layer {uri!r}: {outside} of its {count} gaussians are outside the "

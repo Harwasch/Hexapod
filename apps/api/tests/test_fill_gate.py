@@ -216,6 +216,97 @@ def test_a_tile_named_twice_is_checked_at_every_place_it_is_drawn(
         attach(db, storage, asset, files, gate_of(read))
 
 
+def _with_leaf(files: dict[str, bytes], glb: bytes) -> dict[str, bytes]:
+    return {**files, f"{LAYER}f1.glb": glb}
+
+
+def _moved(matrix: list[float], east: float, north: float) -> list[float]:
+    """`matrix` (column-major, glTF's y-up node space) translated `east`, `north` as the
+    viewer shows it: y-up north is -z."""
+    return [*matrix[:12], matrix[12] + east, matrix[13], matrix[14] - north, matrix[15]]
+
+
+def test_a_glb_node_matrix_that_moves_its_splats_is_seen(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Codex B5b N2: the gate read the SPZ positions and never the node matrix the viewer
+    applies to them. The same allowed positions, moved off the targets by the node."""
+    from tests.sidecar_fixtures import Z_UP_TO_Y_UP
+
+    _, asset = site(db, storage, tmp_path)
+    read = targets(db, storage, asset)
+    inside, outside = centre(read, target=True), centre(read, target=False)
+    east, north = outside[0] - inside[0], outside[1] - inside[1]
+
+    def move(gltf: dict[str, Any]) -> None:
+        gltf["nodes"][0]["matrix"] = _moved(Z_UP_TO_Y_UP, east, north)
+
+    files = _with_leaf(layer_files([inside], [inside]), splat_glb([inside], edit=move))
+    with pytest.raises(InvalidInputError, match="1 of its 2 gaussians are outside"):
+        attach(db, storage, asset, files, gate_of(read))
+
+
+def test_a_node_hierarchy_is_composed_and_every_primitive_read(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """A second primitive outside the targets, and a child node whose translation moves a
+    second copy of the splats off them: each is drawn by a glTF viewer, so each is
+    checked."""
+    _, asset = site(db, storage, tmp_path)
+    read = targets(db, storage, asset)
+    inside, outside = centre(read, target=True), centre(read, target=False)
+    two = splat_glb([inside], also=([outside],))
+    with pytest.raises(InvalidInputError, match="1 of its 3 gaussians are outside"):
+        attach(db, storage, asset, _with_leaf(layer_files([inside], [inside]), two), gate_of(read))
+
+    # A child node drawing the mesh again, its translation composed under its parent's
+    # matrix: in the data's own z-up frame, since the parent's turn is the viewer's undone.
+    shift = [outside[0] - inside[0], outside[1] - inside[1], 0.0]
+
+    def nest(gltf: dict[str, Any]) -> None:
+        gltf["nodes"][0]["children"] = [1]
+        gltf["nodes"].append({"mesh": 0, "translation": shift})
+
+    nested = splat_glb([inside], edit=nest)
+    with pytest.raises(InvalidInputError, match="1 of its 3 gaussians are outside"):
+        attach(
+            db, storage, asset, _with_leaf(layer_files([inside], [inside]), nested), gate_of(read)
+        )
+    # The same hierarchy moving nothing draws the child where its parent is: attached.
+    shift = [0.0, 0.0, 0.0]
+    still = splat_glb([inside], edit=nest)
+    assert attach(
+        db, storage, asset, _with_leaf(layer_files([inside], [inside]), still), gate_of(read)
+    )
+
+
+@pytest.mark.parametrize(
+    ("edit", "message"),
+    [
+        (lambda g: g["nodes"][0].update(extensions={"EXT_mesh_gpu_instancing": {}}), "extension"),
+        (lambda g: g.update(animations=[{"channels": [], "samplers": []}]), "animat"),
+        (
+            lambda g: g["nodes"].append({"children": [0]}) or g["nodes"].append({"children": [0]}),
+            "parent",
+        ),
+        (lambda g: g.pop("nodes"), "no node"),
+        (lambda g: g["meshes"][0]["primitives"][0].pop("extensions"), "not an SPZ splat"),
+        (lambda g: g["nodes"][0].update(translation=[1.0, 0, 0]), "both"),
+    ],
+)
+def test_a_glb_the_gate_cannot_place_every_splat_of_is_refused(
+    db: Session, storage: S3Storage, tmp_path: Path, edit: Callable[[Any], Any], message: str
+) -> None:
+    """Instanced, animated, ill-formed, unplaced or non-splat: what the viewer draws of it is
+    not something the gate can hold to the targets, so it is not attached."""
+    _, asset = site(db, storage, tmp_path)
+    read = targets(db, storage, asset)
+    inside = centre(read, target=True)
+    glb = splat_glb([inside], edit=edit)
+    with pytest.raises(InvalidInputError, match=message):
+        attach(db, storage, asset, _with_leaf(layer_files([inside], [inside]), glb), gate_of(read))
+
+
 def test_a_fill_for_other_targets_is_filled_again(
     db: Session, storage: S3Storage, tmp_path: Path
 ) -> None:

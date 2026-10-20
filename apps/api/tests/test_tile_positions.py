@@ -184,3 +184,18 @@ def test_a_rotating_child_transform_is_refused() -> None:
         positions.tile_offsets(document)
     document["root"]["children"] = []
     assert positions.tile_offsets(document)["splat.glb"].tolist() == [0.0, 0.0, 0.0]
+
+
+def test_the_gate_draws_a_packer_written_tile_exactly_where_its_checksum_puts_it() -> None:
+    """`drawn_positions` (the fill gate's reader, every node and primitive placed as the
+    viewer places them) on the GLBs tools/captures wrote: one draw each -- the node's turn
+    undone by the viewer's -- bit for bit `tile_positions`, near tiles and far."""
+    document, tiles, _ = _far()
+    offsets = positions.tile_offsets(document)
+    _, near = fixture_scan(TREE_LOD)
+    for data, offset in [
+        *((d, offsets[u]) for u, d in tiles.items()),
+        *((d, None) for d in near.values()),
+    ]:
+        (drawn,) = positions.drawn_positions(data, offset)
+        assert drawn.tobytes() == positions.tile_positions(data, offset).tobytes()
