@@ -1,6 +1,5 @@
 /**
- * A site whose shown model is an ion asset the map key cannot see (the seeded San Francisco
- * site, ion asset 1415196: apps/api/app/seed/data.py).
+ * A site whose shown model is an ion asset the map key cannot see (a made-up asset id).
  *
  * Ion's 404 for such an asset is skipped quietly -- logged once, remembered on this device so
  * it is not asked for again (cesium/ion.ts), no toast -- since it also loads by proximity near
@@ -25,7 +24,7 @@ import type { SceneEvents } from "@/cesium/types";
 import { Emitter } from "@/lib/emitter";
 import type { SiteLoad } from "@/state/sites";
 
-const ION_ASSET = 1415196;
+const ION_ASSET = 9000001;
 
 vi.mock("@/cesium/providers/tiles", async (importOriginal) => {
   const ion = await import("@/cesium/ion");
@@ -54,7 +53,7 @@ function harness() {
   const mesh = {
     id: `${SITE_ID}-mesh`,
     siteId: SITE_ID,
-    name: "San Francisco mesh",
+    name: "Test survey mesh",
     representation: "mesh",
     source: { type: "cesium-ion", assetId: ION_ASSET },
     renderConfig: { maximumScreenSpaceError: 16, clipsWorld: false, heightOffsetM: 0 },
@@ -156,7 +155,7 @@ describe("a shown ion asset the map key cannot see", () => {
     // retry on a timer can fix, so the record says so (Retry then shows the asset again).
     expect(last).toMatchObject({ phase: "error", retryable: false });
     expect(last?.error).toBe(
-      "San Francisco mesh did not load: Cesium ion has no asset with this ID that the map key can see.",
+      "Test survey mesh did not load: Cesium ion has no asset with this ID that the map key can see.",
     );
     expect(assetStates.at(-1)).toBe("error");
     // Quiet: no toast, one request, remembered on this device.

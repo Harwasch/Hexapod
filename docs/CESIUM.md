@@ -201,9 +201,10 @@ walks on its own with its own loading state and memory budget, so the world fill
 cache never holds a survey mesh at a coarse level. No tileset is asked for finer than 2
 device pixels, except through an asset's `screenSpaceErrorScale`: a tiler assigns geometric
 error from geometry alone, so a survey mesh with centimetre textures but conservative errors
-looks soft next to the Google world at the same error. The Aerometrex San Francisco mesh is
-seeded at 0.25 (measured 7 km up: 2 px draws 17k triangles and a grey blob, 0.5 px draws
-119k and the real detail, still a quarter of what Google draws in the same view). The factor
+looks soft next to the Google world at the same error. A helicopter survey mesh (a Cesium
+ion sample, since withdrawn) was seeded at 0.25 (measured 7 km up: 2 px draws 17k triangles
+and a grey blob, 0.5 px draws 119k and the real detail, still a quarter of what Google draws
+in the same view). The factor
 is a distance measure (`calibrationFor`): it fades from the asset's value at 8 m per pixel
 to 1 at 0.5 m per pixel, because up close the finest levels already carry textures many
 times finer than a screen pixel and asking for 0.5 px there fetches several times the data

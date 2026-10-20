@@ -1440,9 +1440,9 @@ export class SiteManager {
       })
       .catch((error: unknown) => {
         if (asset.source.type === "cesium-ion" && isIonNotFound(error)) {
-          // An asset the catalog names but the key's account was never given (the seeded San
-          // Francisco mesh, ion asset 1415196, loads by proximity near the Bay Area scans):
-          // skipped quietly, remembered so it is not asked for again, said once.
+          // An asset the catalog names but the key's account was never given (an ion asset
+          // the catalog names, loaded by proximity): skipped quietly, remembered so it is not
+          // asked for again, said once.
           const message = "Cesium ion has no asset with this ID that the map key can see.";
           rememberIonAssetMissing(asset.source.assetId);
           if (!this.missingIonLogged.has(asset.id)) {

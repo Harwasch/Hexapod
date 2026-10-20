@@ -77,15 +77,15 @@ describe("ion assets the key cannot see", () => {
   it("are remembered per key for a while, and count as not found", () => {
     localStorage.removeItem("hexapod.ion.missing");
     const now = 1_000_000;
-    expect(ionAssetKnownMissing(1415196, now)).toBe(false);
-    rememberIonAssetMissing(1415196, now);
-    expect(ionAssetKnownMissing(1415196, now + 1000)).toBe(true);
+    expect(ionAssetKnownMissing(9000001, now)).toBe(false);
+    rememberIonAssetMissing(9000001, now);
+    expect(ionAssetKnownMissing(9000001, now + 1000)).toBe(true);
     expect(ionAssetKnownMissing(42, now)).toBe(false);
-    expect(ionAssetKnownMissing(1415196, now + ION_MISSING_TTL_MS + 1)).toBe(false);
+    expect(ionAssetKnownMissing(9000001, now + ION_MISSING_TTL_MS + 1)).toBe(false);
     // Another key may see it.
     Ion.defaultAccessToken = "another-key-entirely";
-    expect(ionAssetKnownMissing(1415196, now + 1000)).toBe(false);
-    expect(isIonNotFound(new IonAssetMissingError(1415196))).toBe(true);
+    expect(ionAssetKnownMissing(9000001, now + 1000)).toBe(false);
+    expect(isIonNotFound(new IonAssetMissingError(9000001))).toBe(true);
     localStorage.removeItem("hexapod.ion.missing");
   });
 });
