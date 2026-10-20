@@ -10,6 +10,11 @@
  *
  * Draft, not flight-tested: nobody has imported this into DJI Pilot 2 or FlightHub 2 yet, so
  * the files say so, and so does the console. Terrain following is not attempted.
+ *
+ * A stub until there is a drone: offered only with `VITE_ENABLE_DRONE_EXPORT` on (off by
+ * default). docs/DRONES.md "Drone missions: before first flight" lists what must be checked
+ * first: the WPML fields DJI's spec does not show, the required ones missing, the drone and
+ * app, and the test import into DJI Pilot 2.
  */
 
 import type { CoverageLane } from "@twin/geo";

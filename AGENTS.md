@@ -38,6 +38,7 @@ Start with `README.md`, then `docs/HANDOFF.md` and `docs/DEPLOYMENT.md`.
   tool-rail button count; the repo's `.env` leaks into `apps/api` settings tests, so override explicitly.
 - `VITE_` variables are public. Server secrets never carry that prefix.
 - Past experiments and parked work: `docs/ARCHIVE.md`; check it before starting research or a bake-off.
+- Drone missions are a stub behind `VITE_ENABLE_DRONE_EXPORT` (off): read `docs/DRONES.md` before turning it on.
 
 ## Branches and PRs
 
