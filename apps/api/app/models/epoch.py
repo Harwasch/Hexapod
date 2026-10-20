@@ -24,6 +24,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -116,3 +117,9 @@ class Epoch(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     alignment: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # A `CaptureQuality` dump, the same shape as `captures.quality`.
     quality: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Append-only: what `job_id`, `footprint` and `quality` said before each re-run
+    # replaced them, oldest first (`registration.register`). Those three describe the
+    # epoch's current revision; this keeps what they said of the ones before it.
+    history: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )

@@ -25,7 +25,10 @@ the opposite of both.
    pass for a date a person gave), its footprint, platform (`phone-video` or `unknown` until
    M3), status (`published`; `rejected` and `superseded` are reserved for M3's gates), how it found
    its site (`explicit`, `spatial`, `new-site`), alignment (M3) and quality. One capture is one
-   epoch; `captures.epoch_id`, for several captures of one day, is future work.
+   epoch; `captures.epoch_id`, for several captures of one day, is future work. The run, footprint
+   and quality describe the epoch's current revision, so a re-run replaces them; what they said
+   before is appended to the epoch's `history` (JSONB, append-only, oldest first: `jobId`,
+   `footprint`, `quality`, `replacedAt`, `replacedByJobId`), so no earlier run's view is lost.
 3. **An asset is one tileset of one epoch and one source kind** (`assets.epoch_id`,
    `assets.source_kind`: `observed`, or `inferred` from M5). A re-run of the same capture inserts a
    new asset revision of its epoch and supersedes the old one by setting its `valid_to` (and
