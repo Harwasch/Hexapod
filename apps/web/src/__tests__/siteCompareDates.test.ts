@@ -703,4 +703,37 @@ describe("comparing two dates of a site", () => {
     june?.allTilesLoaded.raiseEvent();
     expect(loads.at(-1)).toBe("ready");
   });
+
+  it("the load pill is ready when the last of two dates is in, whichever streamed again", async () => {
+    const E3 = epoch("e3", {
+      ordinal: 3,
+      observedAt: "2026-09-01T15:00:00Z",
+      currentAssetId: "a3",
+    });
+    const A3 = splat("a3", { epochId: "e3", createdAt: "2026-09-02T00:00:00Z" });
+    const { manager, loads, tileset } = harness(
+      twoEpochSite({ epochs: [E1, E2, E3], assets: [A1, A2, A3] }),
+    );
+    await open(manager);
+    let release = (): void => undefined;
+    made.held.set(A2.id, (r) => (release = r));
+    const comparing = manager.setCompareDates(BOTH);
+    await settle();
+    const june = tileset(A2.id);
+    const march = tileset(A1.id);
+    if (!june || !march) throw new Error("both dates are loaded");
+    june.tilesLoaded = false;
+    release();
+    await comparing;
+    expect(loads.at(-1)).toBe("streaming");
+    // March, in already, streams again (the camera moved) while June is still coming in.
+    march.tilesLoaded = false;
+    june.tilesLoaded = true;
+    june.allTilesLoaded.raiseEvent();
+    expect(loads.at(-1)).toBe("streaming");
+    // March is the last in: the pill says so.
+    march.tilesLoaded = true;
+    march.allTilesLoaded.raiseEvent();
+    expect(loads.at(-1)).toBe("ready");
+  });
 });

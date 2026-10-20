@@ -1218,41 +1218,50 @@ export class SiteManager {
         handles.every((h) => !this.cesiumDraws(h.handle.asset) || h.tileset.tilesLoaded)
       );
     };
-    if (!this.cesiumDraws(asset) || tileset.tilesLoaded) {
-      if (allIn()) this.reportLoad(siteId, { phase: "ready" });
+    const settled = !this.cesiumDraws(asset) || tileset.tilesLoaded;
+    if (settled && allIn()) {
+      this.reportLoad(siteId, { phase: "ready" });
       return;
     }
-    this.reportLoad(siteId, { phase: "streaming", progress: LOAD_PROGRESS.streaming });
-    let peak = 0;
-    const span = 1 - LOAD_PROGRESS.streaming;
     // Only while this asset is drawn: Splat / Mesh / Points can change mid-stream, and the
     // record then belongs to the representation shown now (`restartLoad`).
     const shown = (): boolean => {
       const entry = this.loaded.get(siteId);
       return entry !== undefined && this.drawnAssets(entry).some((a) => a.id === asset.id);
     };
-    const offProgress = tileset.loadProgress.addEventListener(
-      (pending: number, processing: number) => {
-        if (!shown()) return;
-        const left = pending + processing;
-        peak = Math.max(peak, left);
-        if (peak > 0) {
-          this.reportLoad(siteId, { progress: LOAD_PROGRESS.streaming + span * (1 - left / peak) });
-        }
-      },
-    );
+    const offs: (() => void)[] = [];
+    if (!settled) {
+      this.reportLoad(siteId, { phase: "streaming", progress: LOAD_PROGRESS.streaming });
+      let peak = 0;
+      const span = 1 - LOAD_PROGRESS.streaming;
+      offs.push(
+        tileset.loadProgress.addEventListener((pending: number, processing: number) => {
+          if (!shown()) return;
+          const left = pending + processing;
+          peak = Math.max(peak, left);
+          if (peak > 0) {
+            this.reportLoad(siteId, {
+              progress: LOAD_PROGRESS.streaming + span * (1 - left / peak),
+            });
+          }
+        }),
+      );
+    }
     // `initialTilesLoaded` is raised once in a tileset's life; a model shown again later (a
     // representation switched back to) finishes on `allTilesLoaded`, raised on every drain.
+    // Each drawn model listens until all are in: with two dates compared, one in already may
+    // stream again while the other comes in, and the last of them to finish says so.
     const done = (): void => {
-      offProgress();
-      offReady();
-      offAll();
-      if (shown() && allIn() && this.loads.get(siteId)?.phase === "streaming")
-        this.reportLoad(siteId, { phase: "ready" });
+      const phase = this.loads.get(siteId)?.phase;
+      if (shown() && phase !== "ready" && phase !== "error" && !allIn()) return;
+      for (const off of offs) off();
+      if (shown() && phase === "streaming") this.reportLoad(siteId, { phase: "ready" });
     };
-    const offReady = tileset.initialTilesLoaded.addEventListener(done);
-    const offAll = tileset.allTilesLoaded.addEventListener(done);
-    handle.unsubscribe.push(offProgress, offReady, offAll);
+    offs.push(
+      tileset.initialTilesLoaded.addEventListener(done),
+      tileset.allTilesLoaded.addEventListener(done),
+    );
+    handle.unsubscribe.push(...offs);
   }
 
   /** Bounding sphere of the active representation (loaded tileset) or the footprint. */
