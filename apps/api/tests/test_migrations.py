@@ -597,3 +597,11 @@ def test_0032_downgrade_keeps_every_asset_and_its_source(
     finally:
         command.upgrade(alembic_config, "head")
 
+
+def test_0032_phone_origin_is_the_routes() -> None:
+    """The backfill spells the phone origin as a literal (migrations import no app code);
+    it must stay the constant the phone route marks its captures with."""
+    from app.api.v1.phone import ORIGIN
+
+    path = Path(__file__).parents[1] / "alembic" / "versions" / "0032_site_frames_and_epochs.py"
+    assert f"c.metadata ->> 'origin' = '{ORIGIN}'" in path.read_text(encoding="utf-8")
