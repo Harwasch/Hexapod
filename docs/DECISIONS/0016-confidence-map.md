@@ -306,20 +306,37 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
    gate's epoch and site, its current tileset must carry that very grid, the targets fetched
    now must be the ones it was filled for, and every gaussian must be in a target cell. Fill
    time cannot tell an earlier epoch whose grid shares the window (its targets are weak there
-   too, by definition); publish can, and nothing reaches the live site without it.
+   too, by definition); publish can.
 4. **The evidence says so**: `extras.evidence.rescanGate` {policy, siteId, epochId, weakIn,
    comparedWith, level, cellM, i0, j0, ni, nj, cells, maskSha256, confidenceSha256}.
-5. **Where it is enforced.** `teacher_fill.py fill` requires `--still-weak FILE`;
-   `infra/modal/fill.py` takes `--still-weak <scan>=<file>`, checks every file before anything
-   starts on Modal and forwards it; `fill.yml` gains `fill_targets_url` and fetches each fill
-   job's targets from the API's own route (no new secret). `drop` (the evaluation harness) and
-   `split` (an object's hole) stay ungated: neither is published.
+5. **The API holds it too, so nothing new reaches the live site without it.** An attach
+   (`POST /assets/{id}/sidecars`) refuses with a 422 any `inferredLayers` entry, and any layer
+   of a fill variant it adds or changes (`extras.variants.fill`), that has no `rescan-gate-v1`
+   `rescanGate` gated against the confidence grid the asset's tiles carry now, for the asset's
+   epoch (`sidecars.fill_gate_problem`). A republish carries an `inferred/` layer only while
+   the new generation's tiles carry that very grid — a re-run that measured its own drops it,
+   with its files, and flags the asset "Inferred fill needs filling again"; so does any
+   republish of a layer that was never gated, the same tiles included. Layers live from before
+   the gate (the camp's) stay until that first republish, or until an attach sets
+   `inferredLayers` to null.
+6. **Where it is enforced in the tools.** `teacher_fill.py fill` requires `--still-weak FILE`;
+   `infra/modal/fill.py` takes `--still-weak <scan>=<file>`, checks each file's shape with the
+   standard library alone (it runs where fill.yml runs it, with nothing but modal installed)
+   before anything starts on Modal, and forwards it; the job's `teacher_fill.py` reads every
+   bit. `fill.yml` gains `fill_targets_url` and fetches each fill job's targets from the API's
+   own route (no new secret); its jobs have no default, so a push runs nothing and says so.
+7. **What stays ungated.** `drop`, the evaluation harness, is never published. A split
+   object's hole fill (`fill_hole`, declared under `fills/`) stays ungated while splits are
+   unpublished (the attach refuses `fills/` and `objects/`; carry sends it with its split);
+   gating it is the first step of ever publishing a split. `FillTargetsRead` stays as it is:
+   the exact binding to a revision is at publish and in the API, not at fill time.
 
 ### Consequences
 
 - A scan with no measured epoch — every legacy scan, the camp included — cannot be filled or
-  published until it has two measured epochs on one site. A `wm-*` push (no inputs) now fails
-  its default `fill:camp` before any GPU starts. There is no override (design open question 8).
+  published until it has two measured epochs on one site, and its existing fill goes on its
+  next republish. A `wm-*` push (no inputs) runs no job. There is no override (design open
+  question 8).
 - On the yard at the fill size (CPU renderer, Telea, 8 views at 1024×576): every cell still
   weak gave 1,833 faded targets and an 11,746-gaussian layer, much of it discs lifted along
   the ground; the API's 90 cells gave 87 targets and a 380-gaussian layer, all inside them.
@@ -328,8 +345,9 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
 ### Not done here
 
 - Fill execution on a GPU (Modal): only the gate runs locally, with the Telea stand-in.
-- An exact fill-time binding: `FillTargetsRead` could carry B's confidence sha256 and asset id.
-- Gating `fill_hole` (split objects' holes) and the yard's fixture variants: not published.
+- Gating `fill_hole` (split objects' holes): only once a split is published.
+- A carry rule for fill variants on new tiles: `variants` is an extras key the API does not
+  own, so new tiles drop it whole (flagged), and the same tiles keep it.
 
 ## Web
 

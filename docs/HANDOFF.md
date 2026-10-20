@@ -298,8 +298,12 @@ pnpm lint && pnpm typecheck && pnpm test`, `pnpm e2e` if `apps/web` changed, plu
   `HEXAPOD_WRITE_FILL_TARGETS=1`, and tools/captures' fill gate (`rescan_gate.py`) is held to it.
 - An inferred fill from outside is gated (ADR 0016 § Fill): `teacher_fill.py fill` needs
   `--still-weak`, fill.yml needs `fill_targets_url` for every `fill:` job, and publish-fill.yml
-  refuses a layer without `evidence.rescanGate`. Never add an override; never put the
-  publish-fill commit token in a commit message (it starts a GPU run).
+  refuses a layer without `evidence.rescanGate`. The API holds it too: an attach refuses an
+  ungated or mismatched inferred layer (or fill variant) with a 422, and a republish drops a
+  layer whose confidence grid the new tiles do not carry (`sidecars.fill_gate_problem`), so a
+  test fixture that attaches a fill needs a grid on its tiles and a gate against it. Never add
+  an override; never put the publish-fill commit token in a commit message (it starts a GPU
+  run). infra/modal/fill.py's local side imports the standard library and modal only.
 - A new contract route that documents its own error responses names `Problem` as their model
   (`responses={409: {"model": Problem, ...}}`): one bodiless error response turns an untyped
   `vi.spyOn(api, "POST")` into `undefined` data and breaks every web test that mocks POST.
