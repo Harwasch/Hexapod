@@ -508,3 +508,29 @@ def test_a_later_epoch_leaves_the_mirror_of_the_splat_the_site_shows(
     site = db.get(Site, first.site_id)
     assert site is not None
     assert "coverageUrl" not in site.metadata_ and site.metadata_["jobId"] == str(again)
+
+
+def test_a_legacy_capture_that_made_its_site_joins_it_as_new_site(
+    db: Session, storage: S3Storage, tmp_path: Path, client: Any
+) -> None:
+    """A capture registered before 0032 into a site the backfill could not read adopts the
+    site's legacy splat on its next run. It made that site, so its epoch is `new-site`, as
+    the backfill labels the sites it could read; `explicit` would say it named the site."""
+    from tests.conftest import site_payload
+
+    capture = _capture(db)
+    created = client.post(
+        "/api/v1/sites",
+        json={**site_payload(slug="legacy"), "metadata": {"captureId": str(capture.id)}},
+    )
+    assert created.status_code == 201, created.text
+    site_id = uuid.UUID(created.json()["id"])
+    capture.site_id = site_id
+    db.commit()
+    [legacy] = _assets(db, site_id)
+
+    run(db, storage, tmp_path, capture)
+
+    [epoch] = _epochs(db, site_id)
+    assert (epoch.ordinal, epoch.join_method) == (1, "new-site")
+    assert {a.id: a.epoch_id for a in _assets(db, site_id)}[legacy.id] == epoch.id
