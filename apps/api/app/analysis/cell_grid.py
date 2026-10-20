@@ -48,6 +48,10 @@ WEAK_BELOW = 128
 #: bytes a cell: ~17 MB of planes. Four times that is not a grid it wrote.
 MAX_RAW_BYTES = 64 * 1024 * 1024
 
+#: The channels a grid of each kind is read by (ADR 0016, C2): one without them is refused
+#: here, as unreadable, not later when a reader asks for the channel.
+REQUIRED: Mapping[str, tuple[str, ...]] = {"confidence": ("score", "reasons", "relief")}
+
 TYPES: Mapping[str, str] = {
     "u1": "<u1",
     "i1": "<i1",
@@ -156,6 +160,9 @@ def decode(descriptor: Mapping[str, Any], blob: bytes) -> Grid:
         types.append(TYPES[str(entry["type"])])
     if len(set(names)) != len(names):
         raise CellGridError(f"channel names must be unique: {names}")
+    missing = [name for name in REQUIRED.get(str(descriptor.get("kind")), ()) if name not in names]
+    if missing:
+        raise CellGridError(f"a {descriptor.get('kind')} grid needs channels {missing}: {names}")
     record = np.dtype(list(zip(names, types, strict=True)))
     levels = descriptor.get("levels")
     if not isinstance(levels, list) or not levels:

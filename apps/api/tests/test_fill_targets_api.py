@@ -310,3 +310,18 @@ def test_at_most_eight_earlier_epochs_are_compared_and_it_says_so(
     assert read["comparedWith"] == [str(i) for i in reversed(ids[1:9])]
     fewer = api.get(f"/api/v1/sites/{site_id}/fill-targets", params={"epochId": str(ids[5])}).json()
     assert fewer["capped"] is False and len(fewer["comparedWith"]) == 5
+
+
+def test_a_re_scan_grid_without_its_channels_is_a_409_not_a_500(
+    api: TestClient, db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    first = _capture(db, "first", FIRST)
+    register_run(db, storage, tmp_path, first, measured("e1"), grid=blob("e1"))
+    site_id = _epoch(db, first).site_id
+    second = _capture(db, "second", SECOND)
+    document = measured("e2", _echoed(site_id))
+    document["confidence"]["channels"][1]["name"] = "why"
+    register_run(db, storage, tmp_path, second, document, grid=blob("e2"))
+    response = api.get(f"/api/v1/sites/{site_id}/fill-targets")
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "confidence-unreadable"

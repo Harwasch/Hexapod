@@ -334,3 +334,18 @@ def test_a_grid_rewritten_at_the_same_url_is_read_again(storage: S3Storage) -> N
     assert confidence_maps.load_grid(storage, row("e2")).finest.level == 1
     assert confidence_maps.load_grid(storage, row("e2")).finest.level == 1
     assert confidence_maps.GRIDS.hits == hits + 1
+
+
+def test_a_confidence_grid_without_its_channels_is_a_409_not_a_500(
+    api: TestClient, db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Bytes and sha256 intact, but `score` renamed: a grid this API cannot read weak cells
+    from, refused when it is read, not when the weak mask asks for the channel."""
+    capture = _capture(db)
+    document = measured("e1")
+    document["confidence"]["channels"][0]["name"] = "quality"
+    register_run(db, storage, tmp_path, capture, document, grid=blob("e1"))
+    response = ask(api, _epoch(db, capture))
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "confidence-unreadable"
+    assert "score" in response.json()["detail"]

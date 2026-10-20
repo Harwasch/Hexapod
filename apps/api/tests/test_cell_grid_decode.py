@@ -138,3 +138,11 @@ def test_a_decoded_grid_holds_no_more_than_its_planes(epoch: str) -> None:
     grid = cell_grid.decode(descriptor(epoch), blob(epoch))
     raw = gzip.decompress(blob(epoch))
     assert _decoded_bytes(grid) <= len(raw) <= cell_grid.MAX_RAW_BYTES
+
+
+def test_a_confidence_grid_must_carry_its_three_channels() -> None:
+    for index, name in enumerate(("score", "reasons", "relief")):
+        renamed = descriptor("e1")
+        renamed["channels"][index]["name"] = "other"
+        with pytest.raises(cell_grid.CellGridError, match=name):
+            cell_grid.decode(renamed, blob("e1"))
