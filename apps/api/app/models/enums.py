@@ -222,6 +222,15 @@ class ObservedAtSource(StrEnum):
     CREATED = "created"
 
 
+class CheckTargetRole(StrEnum):
+    """What a surveyed ground mark is for (M3b). A ``check`` target only scores an epoch's
+    alignment against its survey; a ``control`` target would also constrain it, but until
+    bundle adjustment takes ground control it is stored and scored exactly like a check."""
+
+    CHECK = "check"
+    CONTROL = "control"
+
+
 class AssetSourceKind(StrEnum):
     """Whether an asset shows what was captured (``observed``) or what was inferred to fill
     it (``inferred``, M5). One asset is one tileset of one epoch and one source kind."""

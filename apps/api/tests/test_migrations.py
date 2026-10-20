@@ -38,6 +38,7 @@ def test_migrations_round_trip(alembic_config: Config, engine: Engine) -> None:
         "artifacts",
         "site_frames",
         "epochs",
+        "site_check_targets",
     ):
         assert inspector.has_table(table)
     index_names = {index["name"] for index in inspector.get_indexes("sites")}
@@ -45,6 +46,11 @@ def test_migrations_round_trip(alembic_config: Config, engine: Engine) -> None:
     assert "ix_assets_epoch_id" in {index["name"] for index in inspector.get_indexes("assets")}
     epoch_indexes = {index["name"] for index in inspector.get_indexes("epochs")}
     assert {"idx_epochs_footprint", "ix_epochs_site_id"} <= epoch_indexes
+    target_indexes = {i["name"]: i for i in inspector.get_indexes("site_check_targets")}
+    assert {"ix_site_check_targets_site_id", "uq_site_check_targets_active_label"} <= set(
+        target_indexes
+    )
+    assert target_indexes["uq_site_check_targets_active_label"]["unique"]
 
 
 def test_models_match_migrations(alembic_config: Config, engine: Engine) -> None:
@@ -530,6 +536,7 @@ def test_the_epoch_vocabularies_match_their_check_constraints(engine: Engine) ->
     """The enums the API reads and writes are exactly what the database accepts."""
     from app.models.enums import (
         AssetSourceKind,
+        CheckTargetRole,
         EpochJoinMethod,
         EpochPlatform,
         EpochStatus,
@@ -546,6 +553,8 @@ def test_the_epoch_vocabularies_match_their_check_constraints(engine: Engine) ->
         "ck_epochs_platform": EpochPlatform,
         "ck_epochs_observed_at_source": ObservedAtSource,
         "ck_assets_source_kind": AssetSourceKind,
+        "ck_site_check_targets_role": CheckTargetRole,
+        "ck_site_check_targets_height_datum": HeightDatum,
     }
     with engine.connect() as connection:
         rows = connection.execute(
