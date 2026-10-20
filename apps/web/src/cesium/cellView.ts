@@ -16,7 +16,7 @@
 
 import type { Cesium3DTileset, Scene } from "cesium";
 
-import { cellGridMeta, loadCellGrid, type CellGrid } from "@/lib/cellGrid";
+import { cellGridMeta, DEFAULT_WEAK_BELOW, loadCellGrid, type CellGrid } from "@/lib/cellGrid";
 import {
   ageBucket,
   comparedGrids,
@@ -161,7 +161,11 @@ export function startCellView(
         place();
         scene.requestRender();
         if (next === "confidence") {
-          report(assetId, { kind: "ready", mode: "confidence" });
+          report(assetId, {
+            kind: "ready",
+            mode: "confidence",
+            weakBelow: g.meta.weakBelow ?? DEFAULT_WEAK_BELOW,
+          });
           return;
         }
         const building = buildAge(g);

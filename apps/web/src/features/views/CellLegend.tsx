@@ -1,3 +1,4 @@
+import { DEFAULT_WEAK_BELOW, strongFrom } from "@/lib/cellGrid";
 import { AGE_RAMP, CONFIDENCE_RAMP, rampCss } from "@/lib/cellRamps";
 import { AGE_BUCKETS } from "@/lib/dataAge";
 import type { CellViewReport, ViewMode } from "@/state/viewMode";
@@ -16,21 +17,25 @@ function Swatch({ color, striped = false }: { color: string; striped?: boolean }
 
 const GREY = "rgb(128 128 128)";
 
-/** The confidence key: what `weak-v1` calls each colour (design M4-6 C3). */
-function ConfidenceKey() {
+/**
+ * The confidence key: what `weak-v1` calls each colour, with the scores (1-255) each covers
+ * under this grid's threshold (design M4-6 C3).
+ */
+function ConfidenceKey({ weakBelow }: { weakBelow: number }) {
+  const strong = strongFrom(weakBelow);
   return (
     <ul className="cell-legend__rows">
       <li>
         <Swatch color={rampCss(CONFIDENCE_RAMP[1] ?? [1, 0, 0])} />
-        Weak: under half its splats pass the capture checks, or unseen
+        Weak: score under {weakBelow} (under half its splats pass the capture checks), or unseen
       </li>
       <li>
         <Swatch color={rampCss(CONFIDENCE_RAMP[3] ?? [1, 1, 0])} />
-        Fair
+        Fair: score {weakBelow}–{strong - 1}
       </li>
       <li>
         <Swatch color={rampCss(CONFIDENCE_RAMP[5] ?? [0, 1, 0])} />
-        Strong
+        Strong: score {strong}–255
       </li>
       <li>
         <Swatch color={GREY} />
@@ -99,7 +104,7 @@ export function CellLegend({
   } else if (report.kind === "failed") {
     body = <p className="cell-legend__state">Could not load: {report.message}</p>;
   } else if (mode === "confidence") {
-    body = <ConfidenceKey />;
+    body = <ConfidenceKey weakBelow={report.weakBelow ?? DEFAULT_WEAK_BELOW} />;
   } else if (report.mode === "data-age") {
     body = <AgeKey report={report} />;
   } else {

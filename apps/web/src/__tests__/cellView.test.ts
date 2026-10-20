@@ -97,7 +97,11 @@ describe("Confidence, then Data age, then Photo", () => {
     const dispose = attachCellView(asCesium, { requestRender }, A1.id, context, { load });
     useViewMode.getState().set("confidence");
     await vi.waitFor(() =>
-      expect(useViewMode.getState().cells[A1.id]).toEqual({ kind: "ready", mode: "confidence" }),
+      expect(useViewMode.getState().cells[A1.id]).toEqual({
+        kind: "ready",
+        mode: "confidence",
+        weakBelow: 128,
+      }),
     );
     expect(fetched).toEqual(["https://tiles.example/a1/confidence.bin"]);
     // No primitive yet: nothing to join. Its first tile brings it.
@@ -129,7 +133,11 @@ describe("Confidence, then Data age, then Photo", () => {
     // Back to Confidence: uniforms only, nothing fetched again.
     useViewMode.getState().set("confidence");
     await vi.waitFor(() =>
-      expect(useViewMode.getState().cells[A1.id]).toEqual({ kind: "ready", mode: "confidence" }),
+      expect(useViewMode.getState().cells[A1.id]).toEqual({
+        kind: "ready",
+        mode: "confidence",
+        weakBelow: 128,
+      }),
     );
     expect(part?.mode).toBe("confidence");
     expect(fetched).toHaveLength(3);

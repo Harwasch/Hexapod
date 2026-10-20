@@ -258,7 +258,15 @@ export function cellVerdict(score: number, reasons: number, meta: CellGridMeta):
   if ((reasons & unseen) !== 0) return "weak";
   if (score === 0) return "none";
   if (score < weakBelow) return "weak";
-  return score >= weakBelow + (256 - weakBelow) / 2 ? "strong" : "fair";
+  return score >= strongFrom(weakBelow) ? "strong" : "fair";
+}
+
+/**
+ * The least score `weak-v1` calls strong: the upper half of the range above the weak
+ * threshold (192 for 128), as the shader's two strong colour steps start. What the legend says.
+ */
+export function strongFrom(weakBelow: number): number {
+  return Math.ceil(weakBelow + (256 - weakBelow) / 2);
 }
 
 /**

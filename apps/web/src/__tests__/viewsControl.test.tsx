@@ -67,9 +67,14 @@ describe("under CesiumJS", () => {
     await userEvent.click(screen.getByRole("radio", { name: "Confidence" }));
     expect(useViewMode.getState().mode).toBe("confidence");
     expect(screen.getByTestId("cell-legend")).toHaveTextContent("Loading…");
-    report({ kind: "ready", mode: "confidence" });
+    report({ kind: "ready", mode: "confidence", weakBelow: 128 });
     expect(screen.getByTestId("cell-legend")).toHaveTextContent(
-      /Weak: under half its splats pass the capture checks, or unseen.*Fair.*Strong.*No evidence.*weak-v1/,
+      /Weak: score under 128 \(under half its splats pass the capture checks\), or unseen.*Fair: score 128–191.*Strong: score 192–255.*No evidence.*weak-v1/,
+    );
+    // The thresholds are the grid's own.
+    report({ kind: "ready", mode: "confidence", weakBelow: 100 });
+    expect(screen.getByTestId("cell-legend")).toHaveTextContent(
+      /Weak: score under 100 .*Fair: score 100–177.*Strong: score 178–255/,
     );
     report({ kind: "not-measured" });
     expect(screen.getByTestId("cell-legend")).toHaveTextContent(/^Not measured/);

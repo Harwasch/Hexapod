@@ -274,9 +274,11 @@ test("under cesium, Confidence and Data age tint the shown date, keyed, and Phot
   // Confidence: the key, and the part in the shown date's primitive.
   await radio("Confidence").click();
   const legend = page.getByTestId("cell-legend");
-  await expect(legend).toContainText("Weak: under half its splats pass the capture checks", {
-    timeout: 60_000,
-  });
+  await expect(legend).toContainText(
+    "Weak: score under 128 (under half its splats pass the capture checks)",
+    { timeout: 60_000 },
+  );
+  await expect(legend).toContainText("Strong: score 192–255");
   await expect(legend).toContainText("weak-v1");
   await expect
     .poll(async () => (await parts(page)).parts[A2] ?? [], poll)

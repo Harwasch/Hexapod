@@ -21,6 +21,8 @@ export type CellViewReport =
       mode: Exclude<ViewMode, "photo">;
       /** Data age: the shown date's age bucket (lib/dataAge.ts), null when it has no date. */
       ageBucket?: number | null;
+      /** Confidence: the grid's weak threshold (`weakBelow`), for the legend's score ranges. */
+      weakBelow?: number;
       /** Data age: the date is the upload's (`observedAtSource: "created"`), not the capture's. */
       ageFromUpload?: boolean;
       /** Data age: later dates of the site, and how many of them could be compared. */
