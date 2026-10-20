@@ -390,6 +390,23 @@ describe("a per-cell view rule", () => {
     expect(rules).toEqual([{ rule: "latest" }, { rule: null }]);
   });
 
+  it("lets go of no date while on: each is loaded to learn whether it shares the placement", async () => {
+    // Evicted, a date after "As of" would be loaded again by the next draw, and again.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { manager, tileset } = harness();
+      await open(manager);
+      await manager.setViewRule("latest");
+      await manager.setEpoch(E1.id);
+      await settle();
+      tileset(A2.id)?.tileLoad.raiseEvent({ extras: { gaussians: 100_000_000 } });
+      vi.advanceTimersByTime(1_000);
+      expect(manager.loadedAssets().map((a) => a.assetId)).toContain(A2.id);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("counts a date another primitive draws once in the splat budget", async () => {
     const { manager, tileset } = harness();
     await open(manager);

@@ -2961,7 +2961,9 @@ export class SiteManager {
    * more than the splat budget keeps (SPLAT_CACHE_FACTOR x the ceiling); checked each second,
    * outside any frame. A hidden tileset is never updated, so its own cache (least recently
    * used) never trims it: a date compared once stayed in memory until its site unloaded. The
-   * frame's anchor stays while other dates copy its placement.
+   * frame's anchor stays while other dates copy its placement, and a site under a view rule
+   * keeps every date, each loaded to learn whether it shares that placement
+   * (`showRepresentation` would load one let go again at once).
    */
   private evictHidden(): void {
     let resident = 0;
@@ -2969,6 +2971,7 @@ export class SiteManager {
     for (const { entry, handle } of this.handles())
       if (
         resident > SPLAT_CACHE_FACTOR * this.splatCeiling &&
+        !entry.rule &&
         handle.splats &&
         !handle.followers?.size &&
         !this.drawnAssets(entry).some((asset) => asset.id === handle.asset.id)
