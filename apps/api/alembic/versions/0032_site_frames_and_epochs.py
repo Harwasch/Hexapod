@@ -1,7 +1,8 @@
 """Site frames and epochs: a second capture of a site is a new epoch of it (decision D3).
 
 `site_frames` is 1:1 with sites: the WGS84 origin every epoch of the site is placed about,
-fixed once created. `epochs` is one dated capture of a site in that frame. `assets` gains
+fixed once created. `epochs` is one dated capture of a site in that frame, with an
+append-only `history` of what a re-run replaced on it. `assets` gains
 `epoch_id` (which epoch an asset is a revision of; NULL for seeded, catalog and hand-made
 assets) and `source_kind` (`observed` | `inferred`).
 
@@ -110,6 +111,12 @@ def upgrade() -> None:
         sa.Column("join_method", sa.String(20), nullable=False),
         sa.Column("alignment", postgresql.JSONB(), nullable=True),
         sa.Column("quality", postgresql.JSONB(), nullable=True),
+        sa.Column(
+            "history",
+            postgresql.JSONB(),
+            nullable=False,
+            server_default=sa.text("'[]'::jsonb"),
+        ),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
         ),

@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from geoalchemy2 import WKBElement
 from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -953,6 +954,32 @@ def _supersede(
     return revision
 
 
+def _replace_run(
+    epoch: Epoch,
+    producing: uuid.UUID | None,
+    footprint: WKBElement,
+    quality: dict[str, Any] | None,
+    now: datetime,
+) -> None:
+    """A re-run's run, footprint and quality on its epoch, with what they replace kept.
+
+    The three describe the epoch's current revision, so a re-run sets them; what they said
+    of the revision before is appended to `epoch.history` (never rewritten), so the epoch
+    still records how each earlier run saw the ground."""
+    previous = geometry.wkb_to_footprint(epoch.footprint)
+    entry = {
+        "jobId": str(epoch.job_id) if epoch.job_id is not None else None,
+        "footprint": previous.model_dump(mode="json") if previous is not None else None,
+        "quality": epoch.quality,
+        "replacedAt": now.isoformat(),
+        "replacedByJobId": str(producing) if producing is not None else None,
+    }
+    epoch.history = [*(epoch.history or []), entry]
+    epoch.job_id = producing
+    epoch.footprint = footprint
+    epoch.quality = quality
+
+
 def _grow_boundary(site: Site, footprint: Any) -> None:
     """The site's boundary, grown to cover an epoch's footprint (never shrunk, so every
     epoch stays inside it). The centroid stays, which keeps fly-to where it was."""
@@ -1103,9 +1130,7 @@ def register(
             current.epoch_id = epoch.id
             current.observed_at = current.observed_at or epoch.observed_at
     elif url is not None:
-        epoch.job_id = producing
-        epoch.footprint = footprint
-        epoch.quality = quality
+        _replace_run(epoch, producing, footprint, quality, now)
     if url is not None and current is not None and url != tileset_url(current):
         _supersede(db, site, epoch, current, url, registration, published.carry, job_id, now)
     elif url is not None and current is not None:
