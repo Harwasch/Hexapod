@@ -82,6 +82,8 @@ export const DEFAULT_SCOUT: Scout = {
 
 /** What a scout area's chip on the map says: its passes are a forecast, not evidence. */
 export const SCOUT_SHORT = "would lift fog";
+/** What a re-scan area's chip on the map says: its passes are a forecast, not evidence. */
+export const RESCAN_SHORT = "would re-scan";
 
 function cmPerPixel(gsdM: number): number {
   return Math.round(gsdM * 1000) / 10;

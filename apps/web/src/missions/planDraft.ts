@@ -17,7 +17,7 @@ import { isAreaZone, LAND_AREA_PREFIX, nextAreaId, zoneFromFootprint } from "./a
 import { bookedWindows } from "./conflicts";
 import { isLandZone, isPrivateZone, landIdOfProject } from "./landGround";
 import { learnedRates, type LearnedRate } from "./rates";
-import { SCOUT_SHORT } from "./scout";
+import { RESCAN_SHORT, SCOUT_SHORT } from "./scout";
 import type { Plan, PlanOverlay, Project, Zone } from "./types";
 
 export interface DraftSeed {
@@ -358,7 +358,11 @@ export function zonesFromRecord(record: PlanRecord): Zone[] {
       ...zone,
       ...(a.attribution ? { attribution: a.attribution, note: a.attribution } : {}),
       ...(record.private ? { private: true } : {}),
-      ...(a.capture ? { scout: a.capture, task: "Scout", short: SCOUT_SHORT } : {}),
+      ...(a.capture
+        ? a.capture.purpose === "re-scan-weak"
+          ? { scout: a.capture, task: "Re-scan", short: RESCAN_SHORT }
+          : { scout: a.capture, task: "Scout", short: SCOUT_SHORT }
+        : {}),
     };
   });
 }

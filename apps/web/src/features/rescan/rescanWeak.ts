@@ -32,6 +32,7 @@ import {
   DEFAULT_SCOUT,
   MAX_ALTITUDE_M,
   MIN_ALTITUDE_M,
+  RESCAN_SHORT,
   SCOUT_CAMERAS,
   scoutBudgetM2,
   scoutGeometry,
@@ -49,8 +50,6 @@ import { adoptAreas } from "../mission/planFlow";
 import { startPlanDraft } from "../mission/planDrafting";
 
 export const RESCAN_ATTRIBUTION = "Confidence map weak-v1";
-/** What a re-scan area's chip on the map says: its passes are a forecast, not evidence. */
-export const RESCAN_SHORT = "would re-scan";
 /** Patches asked for, as "Lift the fog" asks. */
 export const RESCAN_MAX_AREAS = 3;
 
