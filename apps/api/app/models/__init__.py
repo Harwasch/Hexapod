@@ -11,6 +11,7 @@ from app.models.enums import (
     CaptureStatus,
     CheckTargetRole,
     EpochJoinMethod,
+    EpochMapKind,
     EpochPlatform,
     EpochStatus,
     GeorefMethod,
@@ -25,6 +26,7 @@ from app.models.enums import (
     UploadStatus,
 )
 from app.models.epoch import Epoch, SiteFrame
+from app.models.epoch_map import EpochMap
 from app.models.job import Artifact, Job, JobStep
 from app.models.land import LandArea, LandBoundaryRevision
 from app.models.land_action import LandAction, LandActionRevision
@@ -78,6 +80,8 @@ __all__ = [
     "CheckTargetRole",
     "Epoch",
     "EpochJoinMethod",
+    "EpochMap",
+    "EpochMapKind",
     "EpochPlatform",
     "EpochStatus",
     "Evidence",

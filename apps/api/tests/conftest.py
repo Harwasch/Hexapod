@@ -70,6 +70,7 @@ TABLES = (
     "plan_revisions",
     "plans",
     "camera_bookmarks",
+    "epoch_maps",
     "epochs",
     "site_check_targets",
     "site_frames",

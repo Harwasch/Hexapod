@@ -39,6 +39,7 @@ def test_migrations_round_trip(alembic_config: Config, engine: Engine) -> None:
         "site_frames",
         "epochs",
         "site_check_targets",
+        "epoch_maps",
     ):
         assert inspector.has_table(table)
     index_names = {index["name"] for index in inspector.get_indexes("sites")}
@@ -51,6 +52,8 @@ def test_migrations_round_trip(alembic_config: Config, engine: Engine) -> None:
         target_indexes
     )
     assert target_indexes["uq_site_check_targets_active_label"]["unique"]
+    map_indexes = {i["name"] for i in inspector.get_indexes("epoch_maps")}
+    assert "ix_epoch_maps_epoch_id" in map_indexes
 
 
 def test_models_match_migrations(alembic_config: Config, engine: Engine) -> None:
@@ -538,6 +541,7 @@ def test_the_epoch_vocabularies_match_their_check_constraints(engine: Engine) ->
         AssetSourceKind,
         CheckTargetRole,
         EpochJoinMethod,
+        EpochMapKind,
         EpochPlatform,
         EpochStatus,
         HeightDatum,
@@ -555,6 +559,7 @@ def test_the_epoch_vocabularies_match_their_check_constraints(engine: Engine) ->
         "ck_assets_source_kind": AssetSourceKind,
         "ck_site_check_targets_role": CheckTargetRole,
         "ck_site_check_targets_height_datum": HeightDatum,
+        "ck_epoch_maps_kind": EpochMapKind,
     }
     with engine.connect() as connection:
         rows = connection.execute(
@@ -845,3 +850,119 @@ def test_0033_downgrade_folds_visual_epoch_out_of_every_json_record(
         assert evidence["registeredScaleSource"] == "unresolved"
     finally:
         command.upgrade(alembic_config, "head")
+
+
+def test_0035_downgrade_drops_the_maps_and_nothing_else(
+    alembic_config: Config, engine: Engine, db: Session
+) -> None:
+    """An epoch with a confidence map, then down to 0034: the table goes, the epoch and its
+    asset stay; up again, the table is back, empty. A map dies with its epoch or its asset
+    and outlives the run that measured it."""
+    from app.models import EpochMap
+    from tests.test_epochs import T0, make_asset, make_epoch, make_site
+
+    site = make_site(db, "mapped")
+    epoch = make_epoch(db, site, 1, observed=T0)
+    asset = make_asset(db, site, epoch, "https://cdn.example.com/m/tileset.json", created=T0)
+    capture = Capture(slug="mapped", name="Mapped", kind=CaptureKind.VIDEO)
+    db.add(capture)
+    db.flush()
+    job = Job(
+        capture_id=capture.id,
+        recipe="photo-reconstruct",
+        recipe_version="14",
+        params={},
+        status=RunStatus.COMPLETE,
+    )
+    db.add(job)
+    db.flush()
+    row = EpochMap(
+        epoch_id=epoch.id,
+        asset_id=asset.id,
+        job_id=job.id,
+        kind="confidence",
+        format="hexapod.cellgrid",
+        version=1,
+        url="https://cdn.example.com/m/confidence.bin",
+        cell_m=1.0,
+        level=2,
+        descriptor={},
+        summary={},
+    )
+    db.add(row)
+    db.commit()
+    db.delete(job)
+    db.commit()
+    db.expire_all()
+    kept = db.get(EpochMap, row.id)
+    assert kept is not None and kept.job_id is None
+    epoch_id, asset_id = epoch.id, asset.id
+    db.close()
+
+    command.downgrade(alembic_config, "0034")
+    try:
+        inspector = inspect(engine)
+        assert not inspector.has_table("epoch_maps")
+        with engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text("SELECT count(*) FROM epochs WHERE id = :id"), {"id": epoch_id}
+                ).scalar_one()
+                == 1
+            )
+            assert (
+                connection.execute(
+                    text("SELECT count(*) FROM assets WHERE id = :id"), {"id": asset_id}
+                ).scalar_one()
+                == 1
+            )
+    finally:
+        command.upgrade(alembic_config, "head")
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM epoch_maps")).scalar_one() == 0
+
+
+def test_an_epoch_map_goes_with_its_asset_and_refuses_a_bad_cell(
+    engine: Engine, db: Session
+) -> None:
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models import EpochMap
+    from tests.test_epochs import T0, make_asset, make_epoch, make_site
+
+    site = make_site(db, "cascade")
+    epoch = make_epoch(db, site, 1, observed=T0)
+    asset = make_asset(db, site, epoch, "https://cdn.example.com/c/tileset.json", created=T0)
+    db.commit()
+
+    def a_map(**fields: object) -> EpochMap:
+        values: dict[str, object] = {
+            "epoch_id": epoch.id,
+            "asset_id": asset.id,
+            "kind": "confidence",
+            "format": "hexapod.cellgrid",
+            "version": 1,
+            "url": "https://cdn.example.com/c/confidence.bin",
+            "cell_m": 0.5,
+            "level": 1,
+            "descriptor": {},
+            "summary": {},
+            **fields,
+        }
+        return EpochMap(**values)
+
+    for bad in ({"cell_m": 0.0}, {"kind": "surface"}):
+        db.add(a_map(**bad))
+        with pytest.raises(IntegrityError):
+            db.commit()
+        db.rollback()
+    db.add(a_map())
+    db.commit()
+    db.add(a_map())
+    with pytest.raises(IntegrityError):  # one map of a kind per revision
+        db.commit()
+    db.rollback()
+    db.execute(text("DELETE FROM assets WHERE id = :id"), {"id": asset.id})
+    db.commit()
+    assert db.execute(text("SELECT count(*) FROM epoch_maps")).scalar_one() == 0
