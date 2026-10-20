@@ -153,7 +153,7 @@ describe("the view rules' shader parts", () => {
     expect(p.vertexColor).toBeUndefined();
   });
 
-  it("read the owner plane's cell and feather, and act only once the frame is known", () => {
+  it("read the owner plane's cell and feather, and draw nothing until the frame is known", () => {
     const { g, made } = gpu();
     const frame: { root?: number[] } = {};
     const compositor = new SplatCompositor(g, () => frame.root);
@@ -163,8 +163,14 @@ describe("the view rules' shader parts", () => {
     compositor.sources.setSources(["host", "later", "layer"]);
     p._tileSlots = new Map([[{ tileset: "host" }, { start: 0, count: 40 }]]);
     const { uniforms } = build(p.vertexVisibility as SplatVisibilityChain);
-    // No frame yet: the shader leaves every splat alone.
+    // No frame yet: the rule is on and owns no cell, so nothing is drawn -- fail closed,
+    // never two dates blended where the cells cannot be read.
+    expect((uniforms.u_compParams?.() as number[])[0]).toBe(1);
+    expect(uniforms.u_compPlane?.()).toEqual([0, 0, 0, 0]);
+    // Off (a harness's comparison) leaves every splat alone.
+    compositor.enabled = false;
     expect((uniforms.u_compParams?.() as number[])[0]).toBe(0);
+    compositor.enabled = true;
     frame.root = IDENTITY;
     p._rootTransform = IDENTITY;
     expect(uniforms.u_compParams?.()).toEqual([1, 1, featherWidth(1), 40]);

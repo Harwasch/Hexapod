@@ -11,8 +11,9 @@
  * texture of the owner plane, one byte a cell). Weight 0 unless the two agree; else a feather
  * at a seam: `mix(0.5, 1, smoothstep(0, w, d))`, `d` the distance to the nearest cell edge
  * across which the owner differs, `w` the feather width (`featherWidth`, a UX constant). A
- * splat whose slot holds no listed source, or that sits outside the plane, is not drawn: the
- * rule fails closed, never by blending two dates.
+ * splat whose slot holds no listed source, or that sits outside the plane, is not drawn, nor
+ * is any while the frame its cells are read in is unknown: the rule fails closed, never by
+ * blending two dates.
  *
  * Its colour part (Highlight invented) tints the inferred owners' splats as the inferred
  * highlight does (`lib/inferred.ts` `INFERRED_HIGHLIGHT`), by the sources flagged in a mask.
@@ -188,6 +189,7 @@ export class SplatCompositor implements SplatVisibilityPart {
   #identity: unknown;
   #params: { key: string; value: unknown } = { key: "", value: undefined };
   #planeValue: unknown;
+  #noPlane: unknown;
   #pattern: { mask: number; value: unknown } = { mask: -1, value: undefined };
   readonly #tint: unknown;
   /** The sources whose splats Highlight invented tints (bit k: source k); 0 for none. */
@@ -229,7 +231,11 @@ export class SplatCompositor implements SplatVisibilityPart {
     uniformMap.u_compSources = () => this.#sourceTexture();
     uniformMap.u_compOwners = () => this.#ownerTexture();
     uniformMap.u_compFromModel = () => this.#frameMatrix();
-    uniformMap.u_compPlane = () => (this.#planeValue ??= this.#gpu.vec4(0, 0, 0, 0));
+    // Until the frame is known no cell can be read: an empty plane, so nothing is drawn.
+    uniformMap.u_compPlane = () =>
+      this.#readFrame() === undefined
+        ? (this.#noPlane ??= this.#gpu.vec4(0, 0, 0, 0))
+        : (this.#planeValue ??= this.#gpu.vec4(0, 0, 0, 0));
     uniformMap.u_compParams = () => this.#paramsValue();
     if (this.#building) {
       shaderBuilder.addVertexLines(COMPOSITOR_COLOR_GLSL);
@@ -323,7 +329,9 @@ export class SplatCompositor implements SplatVisibilityPart {
     // Whichever uniform the draw reads first, the slots covered are this frame's.
     this.sources.sync(this.#primitive);
     const plane = this.#plane;
-    const active = this.enabled && this.#readFrame() !== undefined;
+    // On whenever enabled: without a frame the plane is empty and nothing is drawn (fail
+    // closed), never every date at once.
+    const active = this.enabled;
     const cell = plane?.cellM ?? 1;
     const key = `${String(active)}:${String(cell)}:${String(this.sources.covered)}`;
     if (key !== this.#params.key) {
