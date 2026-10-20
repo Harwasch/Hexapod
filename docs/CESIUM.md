@@ -739,6 +739,20 @@ Evidence: `e2e/sunlightScene.spec.ts` (an east-facing slab under CesiumJS and Pl
 against evening and with Confidence over it, by pixel brightness against the mirror) and
 `e2e/sunlight.spec.ts`.
 
+## The change drape
+
+Layers › Compare › Dates also offers the **Change map** between its two dates once both measured
+a height surface (ADR 0018): `GET /sites/{id}/change`, from the older date to the newer, drawn as
+`GroundPrimitive`s on terrain and 3D tiles (`cesium/changeDrape.ts`, one per class and
+confidence; low-confidence areas hatched in their class's colour, in screen space) with a legend in
+the details dock (`features/change/ChangeDrape.tsx`, loaded on demand). It is ground geometry, so
+it is offered under every splat renderer and sits beside the date swipe and a per-cell view rule
+rather than ending them; it ends with its site or from its own Hide. The legend says it is derived
+and uncalibrated, the least change it can show (`minDetectableM`), and which date is not
+survey-grade. The read is behind the write token: a 401 asks for it in the legend and in Compare.
+The drape lies on the ground, so splats over the ground (a yard's grass) cover it where they are
+dense: it shows through gaps and where nothing was scanned. Evidence: `e2e/changeDrape.spec.ts`.
+
 ## Patched engine
 
 `patches/@cesium__engine@26.3.0.patch` (applied by pnpm on install) guards

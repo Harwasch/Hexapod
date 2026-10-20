@@ -64,9 +64,9 @@ function refusal(error: unknown): string {
  * between those dates, what is uncalibrated, and which date's placement is not survey-grade.
  * Asked for from Compare › Dates (`useChangeDrape`); mounted by `ChangeDrapeSlot` while asked.
  *
- * It ends with its site (another becomes the active one), from its own Hide, or when a date
- * loses its surface; a refusal (the write token, a 409) is said here and in Compare, never a
- * blank drape. Ground geometry: drawn under every splat renderer, beside the date swipe and a
+ * It ends with its site (another becomes the active one) or from its own Hide. A date that
+ * no longer lists a surface, or a refusal (the write token, a 409), is said here and in
+ * Compare, with nothing drawn: never a blank drape. Ground geometry: drawn under every splat renderer, beside the date swipe and a
  * per-cell view rule alike, which draw splats and leave the ground to it.
  */
 export function ChangeDrape() {
