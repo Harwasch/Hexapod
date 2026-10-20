@@ -144,8 +144,9 @@ worth 3 cm, hence the anchor floor in item 6.
   (`epochs.site_for_run`, the same answer its frame comes from): the reference epoch's frames,
   model, `placement.json` and `georef.json` from the bucket, the site's active
   `site_check_targets`, and the capture's uploaded `check_observations.json`. Frozen once
-  written. The reference is a published epoch whose run is complete and kept all four, best
-  verdict then oldest (open question 2's default); a re-run of an epoch only takes one that joined
+  written. The reference is a published epoch whose run kept all four, is not in flight (a Refine writes
+  the same keys), and whose files are no newer than the tiles it shows (a failed Refine leaves it
+  the reference unless it replaced the placement); best verdict then oldest (open question 2's default); a re-run of an epoch only takes one that joined
   before it, so the frame-defining epoch never aligns onto one aligned to it. `survey` is passed
   on only for an `rtk-drone` epoch, else as `coarse`, which keeps item 6's RTK rule true end to
   end.
