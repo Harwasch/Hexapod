@@ -10,6 +10,7 @@ import {
   alignmentLabel,
   currentAsset,
   epochOptions,
+  epochDateLabel,
   formatEpochDate,
   formatEpochDateTime,
   frameAnchor,
@@ -234,5 +235,12 @@ describe("which asset of a site is shown", () => {
     expect(formatEpochDateTime("2026-03-01T15:04:00Z")).toMatch(/Mar 1, 2026.*03:04\sPM UTC$/);
     expect(observedAtFromUpload({ ...E1, observedAtSource: "created" })).toBe(true);
     expect(observedAtFromUpload(E1)).toBe(false);
+  });
+
+  it("an upload date is never called a capture date", () => {
+    expect(epochDateLabel(E1)).toBe(formatEpochDate(E1.observedAt));
+    expect(epochDateLabel({ ...E1, observedAtSource: "created" })).toBe(
+      `Uploaded ${formatEpochDate(E1.observedAt)} (capture time not recorded)`,
+    );
   });
 });

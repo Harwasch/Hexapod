@@ -69,6 +69,16 @@ describe("the capture-date control", () => {
     expect(mar).toHaveTextContent("Drone · site frame");
   });
 
+  it("says a date that is only the upload's is one, on screen and in its name", () => {
+    show(twoEpochSite({ epochs: [E1, { ...E2, observedAtSource: "created" }] }));
+    const jun = screen.getByRole("radio", {
+      name: /^Uploaded Jun 1, 2026 \(capture time not recorded\), Phone video/,
+    });
+    expect(jun).toHaveTextContent("Uploaded Jun 1, 2026 (capture time not recorded)");
+    // A date the capture recorded is said as before.
+    expect(screen.getByRole("radio", { name: /^Mar 1, 2026, Drone/ })).toBeInTheDocument();
+  });
+
   it("choosing a date asks the scene for that epoch", async () => {
     show(twoEpochSite());
     await userEvent.click(screen.getByRole("radio", { name: /Mar 1, 2026/ }));

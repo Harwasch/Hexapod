@@ -21,7 +21,7 @@ import type { Capture, Site, SiteSummary } from "@twin/contracts";
 
 import { loadCollision } from "@/lib/collision";
 import { deviceSplatBudget } from "@/lib/detail";
-import { formatEpochDate } from "@/lib/epochs";
+import { epochDateLabel } from "@/lib/epochs";
 import { siteFramePositions } from "@/lib/spzPositions";
 import { tileUrl } from "@/lib/tileProxy";
 import { productHeader } from "@/shared/product";
@@ -293,10 +293,9 @@ async function showScan(siteId: string): Promise<void> {
     // parents) keeps the static plan: its parents are drawn under their children anyway.
     const scanShown = shownScan(site);
     const tileset = await splatTileset(scanShown);
-    // The date of the capture shown, when the site has several; else when the site was made.
-    const shownDate = scanShown.epoch
-      ? formatEpochDate(scanShown.epoch.observedAt)
-      : date(site.createdAt);
+    // The date of the capture shown, when the site has several (said to be the upload's when
+    // the capture's was not recorded); else when the site was made.
+    const shownDate = scanShown.epoch ? epochDateLabel(scanShown.epoch) : date(site.createdAt);
     el("scan-date").textContent = shownDate;
     const scan = new THREE.Group();
     // The pipeline's splats are east/north/up with z up (see splat_tiles.py, whose glTF
