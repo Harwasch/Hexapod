@@ -29,10 +29,13 @@ type Answer =
 export function DescentForm({
   reducedMotion,
   onDescend,
+  label: asked,
 }: {
   reducedMotion: boolean;
   /** Called as the flight leaves (the onboarding card makes itself inert). */
   onDescend?: () => void;
+  /** The question over the field, where the page knows better than the Land flag. */
+  label?: string;
 }) {
   const scene = useScene();
   const id = useId();
@@ -94,7 +97,8 @@ export function DescentForm({
   };
 
   const inputId = `${id}-place`;
-  const label = env.landExplorationEnabled ? "Where is your land?" : "Where do you want to go?";
+  const label =
+    asked ?? (env.landExplorationEnabled ? "Where is your land?" : "Where do you want to go?");
   return (
     <form className="descent-form" onSubmit={submit} role="search" data-testid="descent-form">
       <GlassField
