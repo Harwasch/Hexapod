@@ -11,10 +11,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { env } from "@/app/env";
 import { ScoutExport } from "@/features/mission/ScoutExport";
+import type * as Wpml from "@/missions/wpml";
 import { DEFAULT_SCOUT } from "@/missions/scout";
 import type { Zone } from "@/missions/types";
 
 vi.mock("@/cesium/SceneContext", () => ({ useScene: () => null }));
+// The writer as it is, unless a test makes it fail (as a chunk that cannot load does).
+const writer = vi.hoisted(() => ({ fail: null as Error | null }));
+vi.mock("@/missions/wpml", async (importOriginal) => {
+  const actual = await importOriginal<typeof Wpml>();
+  return {
+    ...actual,
+    buildScoutKmz: (...args: Parameters<typeof actual.buildScoutKmz>) => {
+      if (writer.fail) throw writer.fail;
+      return actual.buildScoutKmz(...args);
+    },
+  };
+});
 
 const droneExport = env.droneExportEnabled;
 beforeEach(() => {
@@ -158,5 +171,22 @@ it("writes the KMZ on the download click, its writer loaded then", async () => {
   expect(made[0]?.type).toBe("application/vnd.google-earth.kmz");
   expect(made[0]?.size).toBeGreaterThan(1000);
   expect(screen.queryByRole("alert")).toBeNull();
+  vi.restoreAllMocks();
+});
+
+it("says when the route cannot be written, and downloads nothing", async () => {
+  writer.fail = new Error("Failed to fetch dynamically imported module");
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ScoutExport zones={[patch]} />
+    </QueryClientProvider>,
+  );
+  fireEvent.click(screen.getByTestId("scout-download"));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Failed to fetch dynamically imported module",
+  );
+  expect(click).not.toHaveBeenCalled();
+  writer.fail = null;
   vi.restoreAllMocks();
 });
