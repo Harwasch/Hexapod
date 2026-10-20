@@ -460,13 +460,14 @@ path: the worker runs these stages in that environment. Nothing under `app/api` 
 
 - **`splat-ingest`** — Lane 1, no GPU: `normalize → georeference → package → thumbnail →
 ground_samples → manifest → register`. Every stage is real.
-- **`photo-reconstruct`** (v13) — Lane 2: `normalize → pose → georeference → align → mask →
-train → compensate → quality → place → optimise_lod → package → thumbnail → ground_samples →
-manifest → register`, with inputs `upload` and `site_context`. `train` and `optimise_lod` run
-  on an L4; `pose`, `align` and `quality` on Modal's CPU box (`cpu4`); `compensate` gains a
+- **`photo-reconstruct`** (v14) — Lane 2: `normalize → pose → georeference → align → mask →
+train → compensate → quality → place → confidence → package → thumbnail → ground_samples →
+manifest → register`, with inputs `upload` and `site_context`. `train` runs on an L4; `pose`, `align` and `quality` on Modal's CPU box (`cpu4`); `compensate` gains a
   `gpu:` block when its impl becomes `imc` (B3), since asking for an L4 to run `none` would be
   billing a GPU to do nothing. `align` registers each epoch to its site's reference epoch and
-  writes its verdict (`epoch_alignment.json`; ADR 0015). Both lanes end in the same artifact
+  writes its verdict (`epoch_alignment.json`; ADR 0015). `confidence` bins the quality
+  stage's per-gaussian evidence (`support/`) into the site's cells, capped by that verdict's
+  uncertainty, and `package` ships the grid beside the tiles (`confidence.bin`; ADR 0016). Both lanes end in the same artifact
   set, so the console cannot tell which one made a site except by reading its manifest.
 
 `thumbnail`, `ground_samples` and `manifest` were added in A8 as **a recipe edit and three

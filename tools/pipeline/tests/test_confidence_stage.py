@@ -369,3 +369,73 @@ def test_a_cell_is_weak_below_a_keep_majority_and_says_the_majoritys_reasons() -
 def test_the_support_reason_bits_are_the_grids() -> None:
     for name, bit in quality.SUPPORT_REASON_BITS.items():
         assert cell_grid.REASON_BITS[name] == bit
+
+
+# --- package and catalog -----------------------------------------------------------------
+
+
+def _package(root: Path, epoch: Workdir, *, grid: Path | None) -> Workdir:
+    """package -> register over an epoch's canonical.ply, with or without its grid."""
+    workdir = Workdir.create(root)
+    inputs = workdir.root / "inputs"
+    inputs.mkdir(parents=True, exist_ok=True)
+    shutil.copy(epoch.out_dir("place") / "canonical.ply", inputs / "canonical.ply")
+    shutil.copy(epoch.input_path("georef.json"), inputs / "georef.json")
+    names = ["canonical.ply", "georef.json"]
+    if grid is not None:
+        shutil.copytree(grid, inputs / "confidence")
+        names.append("confidence")
+    execute(
+        make_recipe(
+            [
+                {"id": "package", "impl": "splat_tiles", "params": {"tile_gaussians": 4000}},
+                {"id": "register", "impl": "catalog"},
+            ],
+            inputs=names,
+        ),
+        workdir,
+        RunnerSet.local(),
+    )
+    return workdir
+
+
+def test_package_ships_the_grid_and_catalog_registers_it(arc: Workdir, tmp_path: Path) -> None:
+    grid_dir = arc.out_dir("confidence") / "confidence"
+    shipped = _package(tmp_path / "with", arc, grid=grid_dir)
+    plain = _package(tmp_path / "without", arc, grid=None)
+
+    splat = shipped.out_dir("package") / "splat"
+    tileset = json.loads((splat / "tileset.json").read_text())
+    descriptor = json.loads((grid_dir / "confidence.json").read_text())
+    assert tileset["root"]["extras"]["confidence"] == descriptor
+    assert (splat / "confidence.bin").read_bytes() == (grid_dir / "confidence.bin").read_bytes()
+    assert "confidenceMin" in tileset["root"]["extras"]
+    registration = json.loads((shipped.out_dir("register") / "registration.json").read_text())
+    assert registration["confidence"] == descriptor
+    assert "confidence.bin" in registration["artifacts"]
+    # Not measured: no grid, no key on any tile, and the registration says null.
+    plain_tiles = json.loads((plain.out_dir("package") / "splat" / "tileset.json").read_text())
+    assert "confidence" not in plain_tiles["root"]["extras"]
+    assert "confidenceMin" not in json.dumps(plain_tiles)
+    plain_registration = json.loads((plain.out_dir("register") / "registration.json").read_text())
+    assert plain_registration["confidence"] is None
+    for name in ("splat.glb", "collision.bin", "viewcones.bin"):
+        assert (splat / name).read_bytes() == (
+            plain.out_dir("package") / "splat" / name
+        ).read_bytes()
+
+
+def test_a_grid_package_cannot_read_is_left_out_not_fatal(arc: Workdir, tmp_path: Path) -> None:
+    broken = tmp_path / "broken"
+    shutil.copytree(arc.out_dir("confidence") / "confidence", broken)
+    raw = bytearray((broken / "confidence.bin").read_bytes())
+    raw[-12] ^= 0xFF  # inside the deflate stream: the planes no longer hash to the sha256
+    (broken / "confidence.bin").write_bytes(bytes(raw))
+    run = _package(tmp_path / "run", arc, grid=broken)
+    splat = run.out_dir("package") / "splat"
+    assert "confidence" not in json.loads((splat / "tileset.json").read_text())["root"]["extras"]
+    assert not (splat / "confidence.bin").exists()
+    log = run.log_path("package").read_text()
+    assert "confidence grid was not shipped" in log
+    registration = json.loads((run.out_dir("register") / "registration.json").read_text())
+    assert registration["confidence"] is None

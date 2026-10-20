@@ -61,7 +61,7 @@ def test_photo_reconstruct_sends_pose_align_train_and_quality_off_the_worker() -
     recipe = load_recipe("photo-reconstruct")
     plan = plan_recipe(recipe)
 
-    assert recipe.version == 13
+    assert recipe.version == 14
     assert plan.gpu_stages == ("pose", "align", "train", "quality")
     tiers = {stage.id: stage.gpu.tier for stage in plan.stages if stage.gpu is not None}
     assert tiers == {"pose": "cpu4", "align": "cpu4", "train": "l4", "quality": "cpu4"}
@@ -80,6 +80,26 @@ def test_photo_reconstruct_sends_pose_align_train_and_quality_off_the_worker() -
     assert "lod_parents" not in plan.origins
     package = next(stage for stage in plan.stages if stage.id == "package")
     assert "lod_parents" not in package.inputs
+    # The confidence grid: binned from quality's evidence after place, shipped by package.
+    assert plan.origins["support"] == "quality"
+    assert plan.origins["confidence"] == "confidence"
+    assert package.inputs["confidence"] == "stages/confidence/out/confidence"
+    grid = next(stage for stage in plan.stages if stage.id == "confidence")
+    assert grid.gpu is None
+    assert grid.inputs == {
+        "support": "stages/quality/out/support",
+        "placement.json": "stages/place/out/placement.json",
+        "epoch_alignment.json": "stages/align/out/epoch_alignment.json",
+        "site_context": "inputs/site_context",
+        "georef.json": "stages/georeference/out/georef.json",
+    }
+    assert order.index("place") < order.index("confidence") < order.index("package")
+    assert grid.params == {
+        "base_cell_m": 0.25,
+        "min_cell_gaussians": 16,
+        "max_cells": 1 << 22,
+        "pyramid_levels": 8,
+    }
     # The trainer's splat is in COLMAP's frame; `quality` gates it and `place` is what
     # makes the gated one canonical.
     assert plan.origins["trained.ply"] == "train"
@@ -94,6 +114,12 @@ def test_photo_reconstruct_sends_pose_align_train_and_quality_off_the_worker() -
 
 def test_splat_ingest_needs_no_gpu_at_all() -> None:
     assert plan_recipe(load_recipe("splat-ingest")).gpu_stages == ()
+
+
+def test_splat_ingest_measures_no_confidence() -> None:
+    """A splat upload carries no capture evidence: no support, no grid -- "not measured"."""
+    plan = plan_recipe(load_recipe("splat-ingest"))
+    assert "confidence" not in plan.origins and "support" not in plan.origins
 
 
 def test_a_gpu_stage_with_no_gpu_runner_is_refused_before_anything_runs(tmp_path: Path) -> None:
@@ -139,7 +165,7 @@ def test_photo_reconstruct_describes_every_frame_and_seeds_pose_from_it() -> Non
     plan = plan_recipe(load_recipe("photo-reconstruct"))
     by_id = {stage.id: stage for stage in plan.stages}
 
-    assert plan.recipe.version == 13
+    assert plan.recipe.version == 14
     assert plan.origins["frames_meta.json"] == "normalize"
     assert by_id["pose"].inputs["frames_meta.json"] == "stages/normalize/out/frames_meta.json"
     assert by_id["pose"].params["focal_from"] == "exif"
