@@ -64,6 +64,32 @@ def _epoch(db: Session, capture: Capture) -> Epoch:
     return db.query(Epoch).filter(Epoch.capture_id == capture.id).one()
 
 
+#: Each fixture epoch's own alignment claim: RTK drones, survey grade (e1 made the frame).
+CLAIM_M = {"e1": 0.03, "e2": 0.05}
+
+
+def alignment(verdict: str, uncertainty_m: float | None, platform: str = "rtk-drone") -> Any:
+    """The part of `epoch_alignment.json` the API keeps: a survey verdict needs an RTK
+    drone with RTK evidence in its frames' metadata (D4); anything else is coarse."""
+    return {
+        "version": 1,
+        "method": "gnss-prior-ba",
+        "referenceEpochId": None,
+        "platform": platform,
+        "tier": "survey" if platform == "rtk-drone" else "coarse",
+        "rtkEvidence": "30/30 frames carry an RTK fixed solution"
+        if platform == "rtk-drone"
+        else None,
+        "platformEvidence": "metadata",
+        "verdict": verdict,
+        "confidence": 0.9 if verdict != "unaligned" else 0.0,
+        "uncertaintyM": uncertainty_m,
+        "label": f"{platform}, {verdict}",
+        "reasons": [],
+        "frameSource": "georef",
+    }
+
+
 def surveyed(
     epoch: str,
     document: dict[str, Any] | None = None,
@@ -72,7 +98,10 @@ def surveyed(
     confidence: bool = True,
     uncertainty_m: float | None = None,
     origin_height_m: float = HEIGHT,
+    aligned: Any = "survey",
 ) -> dict[str, Any]:
+    """The epoch's registration.json: its grids, and an alignment (`aligned`: a verdict,
+    surveyed by default; an alignment dict; or None for a run that recorded none)."""
     out = measured(epoch if confidence else None, document)
     if confidence and uncertainty_m is not None:
         out["confidence"]["alignmentCap"] = {
@@ -81,15 +110,25 @@ def surveyed(
         }
     if surface:
         out["surface"] = surface_descriptor(epoch, origin_height_m)
+    if isinstance(aligned, str):
+        out["alignment"] = alignment(aligned, CLAIM_M[epoch])
+    elif aligned is not None:
+        out["alignment"] = aligned
     return out
 
 
 def two_epochs(
-    db: Session, storage: S3Storage, tmp_path: Path, **second: Any
+    db: Session, storage: S3Storage, tmp_path: Path, first_aligned: Any = "survey", **second: Any
 ) -> tuple[Epoch, Epoch]:
     first = _capture(db, "first", FIRST)
     register_run(
-        db, storage, tmp_path, first, surveyed("e1"), grid=blob("e1"), surface=surface_blob("e1")
+        db,
+        storage,
+        tmp_path,
+        first,
+        surveyed("e1", aligned=first_aligned),
+        grid=blob("e1"),
+        surface=surface_blob("e1"),
     )
     site_id = _epoch(db, first).site_id
     later = _capture(db, "second", SECOND)
@@ -132,14 +171,22 @@ def test_the_change_from_e1_to_e2_is_p5_s_reference(
     assert (read["level"], read["nativeLevel"], read["cellM"]) == (2, 2, 1.0)
     assert read["counts"] == reference["counts"]
     assert read["lowConfidence"]["raised"] == reference["weakChanged"] == 23
-    assert read["uncertainty"] == {"fromM": 0.0, "toM": 0.062}
+    # The larger of each epoch's uncertainty from the frame and its own survey claim.
+    assert read["uncertainty"] == {
+        "fromM": 0.03,
+        "toM": 0.062,
+        "fromVerdict": "survey",
+        "toVerdict": "survey",
+        "fromFrameM": 0.0,
+        "toFrameM": 0.062,
+    }
     assert read["thresholdSigma"] == 3
     assert read["appearance"]["status"] == "not-computed"
     assert "never splat pixels" in read["appearance"]["reason"]
     # The least: e1's 2 cm against 4 cm of e2's (its four 0.5 m children by max: a whole
-    # child set always holds one at 4), u 0.062 m.
+    # child set always holds one at 4), u 0.03 and 0.062 m.
     assert read["minDetectableM"] == pytest.approx(
-        3 * (0.02**2 + 0.04**2 + 0.062**2) ** 0.5, abs=1e-3
+        3 * (0.02**2 + 0.04**2 + 0.03**2 + 0.062**2) ** 0.5, abs=1e-3
     )
     assert read["areaLevel"] == 2 and read["areaCellM"] == 1.0
 
@@ -172,19 +219,66 @@ def test_from_and_to_the_other_way_round_swap_raised_and_lowered(
     forward, back = get(api, e1, e2).json(), get(api, e2, e1).json()
     assert back["counts"]["raised"] == forward["counts"]["lowered"]
     assert back["counts"]["lowered"] == forward["counts"]["raised"]
-    assert back["uncertainty"] == {"fromM": 0.062, "toM": 0.0}
+    assert (back["uncertainty"]["fromM"], back["uncertainty"]["toM"]) == (0.062, 0.03)
 
 
 def test_an_unaligned_re_scan_sees_no_change_and_says_how_much_it_could(
     api: TestClient, db: Session, storage: S3Storage, tmp_path: Path
 ) -> None:
-    """e2 placed by GPS alone at +/-10 m: the threshold is ~30 m, so the 2.5 m shed is not
-    a change it can see -- and nothing is called changed."""
+    """e2 surveyed, but its confidence grid puts it +/-10 m from the site frame (the cap it
+    was placed by): the threshold is ~30 m, so the 2.5 m shed is not a change it can see --
+    and nothing is called changed."""
     e1, e2 = two_epochs(db, storage, tmp_path, uncertainty_m=10.0)
     read = get(api, e1, e2).json()
     assert read["minDetectableM"] == pytest.approx(30.0, abs=0.01)
     assert read["counts"]["raised"] == read["counts"]["lowered"] == 0
     assert read["uncertainty"]["toM"] == 10.0
+
+
+def test_a_coarse_epoch_brings_its_metres_whatever_its_frame_says(
+    api: TestClient, db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Review B5a's ruling, the coarse-vs-survey pair: e2 a phone epoch aligned only
+    coarsely (its alignment claims +/-5 m), though its confidence grid puts it 6 cm from
+    the frame. Its floor is its metres: no change under ~15 m is claimed -- the 2.5 m shed
+    is not one it can see -- and the answer says why (verdicts and both figures)."""
+    e1, e2 = two_epochs(db, storage, tmp_path, aligned=alignment("coarse", 5.0, platform="phone"))
+    response = get(api, e1, e2)
+    assert response.status_code == 200, response.text
+    read = response.json()
+    assert read["uncertainty"]["toVerdict"] == "coarse"
+    assert (read["uncertainty"]["toM"], read["uncertainty"]["toFrameM"]) == (5.0, 0.062)
+    assert read["minDetectableM"] == pytest.approx(3 * 5.0, rel=0.01)
+    assert read["counts"]["raised"] == read["counts"]["lowered"] == 0
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("unaligned", "survey"),  # placed by its georeference alone
+        ("survey", None),  # no alignment recorded at all: its class is unknown
+    ],
+)
+def test_an_epoch_never_aligned_to_the_site_is_refused_not_compared(
+    api: TestClient,
+    db: Session,
+    storage: S3Storage,
+    tmp_path: Path,
+    first: Any,
+    second: Any,
+) -> None:
+    """Review B5a's ruling: an unaligned epoch (or one whose alignment is not recorded) has
+    no place in the frame that another epoch's heights could be compared with: 409."""
+    e1, e2 = two_epochs(
+        db,
+        storage,
+        tmp_path,
+        first_aligned=first if first != "unaligned" else alignment("unaligned", 10.0),
+        aligned=second,
+    )
+    response = get(api, e1, e2)
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "epoch-unaligned"
 
 
 @pytest.mark.parametrize(

@@ -13,13 +13,26 @@ weak areas use (`confidence_maps.load_grid`), and measures the change between th
   (it shows no tiles, or its run measured none) -- one side missing everywhere is not a
   map of insufficient cells, it is no map;
 * 409 `confidence-not-measured` when either has no confidence grid: its uncertainty from
-  the site frame (`alignmentCap`) is the `u` of the threshold, and nothing vouches for its
-  cells without one;
+  the site frame (`alignmentCap`) is part of the `u` of the threshold, and nothing vouches
+  for its cells without one;
+* 409 `epoch-unaligned` when either epoch was never aligned to the site (its alignment's
+  verdict, as far as it may claim one -- `epochs.claimed_verdict` -- is `unaligned`, or
+  none was recorded): placed by its georeference alone, its heights have no place in the
+  frame another epoch's could be compared with (review B5a's ruling);
 * 409 `frames-differ` when a surface's heights are above another origin height than the
   site frame's (its `vertical.originHeightM`; to the millimetre, a tenth of the heights'
   own unit) -- the two would differ by the offset everywhere;
 * 409 `surface-unreadable` / `confidence-unreadable` when a grid cannot be read, or an
   epoch's confidence grid is coarser than its surface (they must be one plane).
+
+**Each epoch's `u`** is the larger of its uncertainty from the site frame (its confidence
+grid's `alignmentCap.uncertaintyM`: 0 for the epoch that made the frame) and its
+alignment's own claim (`alignment.uncertaintyM`, `UNRECORDED_UNCERTAINTY_M` when it states
+none). A `survey` epoch's claim is centimetres; a `coarse` one's -- a phone, a drone
+without RTK evidence, anything aligned into a coarse reference -- is metres, so a pair
+with a coarse epoch claims no change under metres however well it was aligned visually
+(Harrison's rule: a phone epoch is never presented as survey grade). The answer states
+each epoch's verdict and both figures.
 
 Every answer says it is derived, not observed, and uncalibrated.
 """
@@ -28,6 +41,7 @@ from __future__ import annotations
 
 import math
 import uuid
+from dataclasses import dataclass
 
 from shapely.geometry import mapping
 from shapely.geometry.base import BaseGeometry
@@ -55,6 +69,7 @@ from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.storage import ObjectStorage
 
 NOT_PUBLISHED = "epoch-not-published"
+UNALIGNED = "epoch-unaligned"
 SURFACE_NOT_MEASURED = "surface-not-measured"
 SURFACE_UNREADABLE = "surface-unreadable"
 FRAMES_DIFFER = "frames-differ"
@@ -127,6 +142,44 @@ def _uncertainty(epoch: Epoch, graded: EpochMap) -> float:
     return float(value)
 
 
+@dataclass(frozen=True)
+class _Placement:
+    """How well an epoch is placed for a comparison: `u`, and what it was made of."""
+
+    verdict: str
+    frame_m: float
+    claim_m: float
+
+    @property
+    def u_m(self) -> float:
+        return max(self.frame_m, self.claim_m)
+
+
+def _placement(epoch: Epoch, graded: EpochMap) -> _Placement:
+    """The epoch's alignment class and `u` (module docstring), or a 409 when it was never
+    aligned to the site."""
+    verdict = epochs.claimed_verdict(epoch.alignment, epoch.platform)
+    if verdict not in ("survey", "coarse"):
+        label = (epoch.alignment or {}).get("label") if isinstance(epoch.alignment, dict) else None
+        raise ConflictError(
+            f"epoch {epoch.id} was never aligned to its site ({label or verdict or 'no alignment recorded'}): "
+            "placed by its georeference alone, its heights cannot be compared with another "
+            "epoch's",
+            code=UNALIGNED,
+        )
+    alignment = epoch.alignment if isinstance(epoch.alignment, dict) else {}
+    claim = alignment.get("uncertaintyM")
+    claim_m = (
+        float(claim)
+        if not isinstance(claim, bool)
+        and isinstance(claim, int | float)
+        and math.isfinite(claim)
+        and claim > 0
+        else epochs.UNRECORDED_UNCERTAINTY_M
+    )
+    return _Placement(verdict, _uncertainty(epoch, graded), claim_m)
+
+
 def _same_frame(epoch: Epoch, surface: EpochMap, frame: SiteFrame) -> None:
     origin = (surface.descriptor.get("vertical") or {}).get("originHeightM")
     if (
@@ -184,7 +237,8 @@ def change(
     asset_b, surface_b, graded_b = _maps(db, after)
     for epoch, surface in ((before, surface_a), (after, surface_b)):
         _same_frame(epoch, surface, frame)
-    ua, ub = _uncertainty(before, graded_a), _uncertainty(after, graded_b)
+    placed_a, placed_b = _placement(before, graded_a), _placement(after, graded_b)
+    ua, ub = placed_a.u_m, placed_b.u_m
     grids = [load_grid(storage, row) for row in (surface_a, surface_b, graded_a, graded_b)]
     for epoch, heights, graded in ((before, grids[0], grids[2]), (after, grids[1], grids[3])):
         # A surface is written on its confidence grid's finest plane; one finer than its
@@ -229,7 +283,14 @@ def change(
         cell_m=planes.cell_m,
         threshold_sigma=analysis.THRESHOLD_SIGMA,
         min_detectable_m=_metres(planes.min_detectable_m),
-        uncertainty=ChangeUncertaintyRead(from_m=ua, to_m=ub),
+        uncertainty=ChangeUncertaintyRead(
+            from_m=ua,
+            to_m=ub,
+            from_verdict=placed_a.verdict,
+            to_verdict=placed_b.verdict,
+            from_frame_m=placed_a.frame_m,
+            to_frame_m=placed_b.frame_m,
+        ),
         counts=ChangeCountsRead(**counts),
         low_confidence=ChangeLowConfidenceRead(**lows),
         appearance=ChangeAppearanceRead(status="not-computed", reason=APPEARANCE_REASON),

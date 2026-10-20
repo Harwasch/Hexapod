@@ -5034,16 +5034,33 @@ export interface components {
         };
         /**
          * ChangeUncertaintyRead
-         * @description Each epoch's placement uncertainty from the site frame, metres, as its confidence
-         *     grid states it (`alignmentCap.uncertaintyM`): 0 for the epoch that made the frame.
+         * @description Each epoch's placement uncertainty `u`, metres, as the threshold takes it: the larger
+         *     of its uncertainty from the site frame (`fromFrameM`, its confidence grid's
+         *     `alignmentCap.uncertaintyM`: 0 for the epoch that made the frame) and its alignment's
+         *     own claim -- so a `coarse` epoch (a phone, a drone without RTK evidence) brings its
+         *     metres, however well it was aligned visually. An `unaligned` epoch is refused (409).
          *
          *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
          */
         ChangeUncertaintyRead: {
+            /** Fromframem */
+            fromFrameM: number;
             /** Fromm */
             fromM: number;
+            /**
+             * Fromverdict
+             * @enum {string}
+             */
+            fromVerdict: "survey" | "coarse";
+            /** Toframem */
+            toFrameM: number;
             /** Tom */
             toM: number;
+            /**
+             * Toverdict
+             * @enum {string}
+             */
+            toVerdict: "survey" | "coarse";
         };
         /** ChartOutput */
         ChartOutput: {
