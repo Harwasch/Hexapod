@@ -74,16 +74,18 @@ export function startSunlight(
   const frame = (_scene: unknown, time: JulianDate): void => {
     if (!on || !part.installed) return;
     // A tileset kept hidden (another date shown, the site out of reach) draws no relight, so
-    // it says none: the badge and the clock it holds follow only what is on screen.
-    if (!tileset.show) {
+    // it says none: the badge and the clock it holds follow only what is on screen. Nor does a
+    // frame with no sun to light by (NaN: not placed, the engine's sun not a number), which
+    // draws the colours untouched (`sunUp` NaN is strength 0).
+    const sine = tileset.show ? sunSine(time, tileset.boundingSphere.center) : Number.NaN;
+    part.sunUp = Number.isFinite(sine) ? sunUpFactor(sine) : Number.NaN;
+    if (!Number.isFinite(sine)) {
       if (last) {
         last = undefined;
         report(assetId, null);
       }
       return;
     }
-    const sine = sunSine(time, tileset.boundingSphere.center);
-    part.sunUp = Number.isFinite(sine) ? sunUpFactor(sine) : 1;
     const at = minuteOf(time);
     if (last?.at !== at || last.sine > 0 !== sine > 0) {
       last = { at, sine };

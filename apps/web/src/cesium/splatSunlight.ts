@@ -1,7 +1,7 @@
 /**
- * Sunlight on a splat scan: each clearly flat splat shaded by the engine's sun at the scene clock's
- * time, in the CesiumJS splat primitive's vertex shader, as one part of its colour chain
- * (`splatColor.ts`). ADR 0019 "Sunlight".
+ * Sunlight on a splat scan: each clearly flat splat shaded by the engine's sun at the scene
+ * clock's time, in the CesiumJS splat primitive's vertex shader, as one part of its colour chain
+ * (`splatColor.ts`). ADR 0019 "Sunlight", labelled "Simulated lighting".
  *
  * A splat carries no normal, so the part makes one from what the engine already holds: it
  * fetches the splat's covariance texel again (the odd column of `u_splatAttributeTexture`, at
@@ -160,15 +160,20 @@ export class SplatSunlight implements SplatColorPart {
     this.#value = vec4(this.#strength, this.#sunUp, 0, 0);
   }
 
-  /** How much of the direct term the sun gives now (`sunUpFactor`); uniforms only. */
+  /**
+   * How much of the direct term the sun gives now (`sunUpFactor`); uniforms only. NaN, no sun
+   * to light by (not placed, or the engine's sun not a number): strength 0, colour untouched.
+   */
   get sunUp(): number {
     return this.#sunUp;
   }
 
   set sunUp(value: number) {
-    if (value === this.#sunUp) return;
+    if (Object.is(value, this.#sunUp)) return;
     this.#sunUp = value;
-    this.#value = this.#vec4(this.#strength, value, 0, 0);
+    this.#value = Number.isFinite(value)
+      ? this.#vec4(this.#strength, value, 0, 0)
+      : this.#vec4(0, 1, 0, 0);
   }
 
   addToShader(
@@ -205,14 +210,18 @@ const up = new Cartesian3();
 /**
  * The sine of the sun's elevation at `position` (Earth-fixed metres) at `time`, by the engine's
  * own arithmetic (UniformState `setSunAndMoonDirections`), so it is the sun the shader is lit
- * by. NaN where there is no surface normal (the Earth's centre: a scan not placed yet).
+ * by: before the Earth-orientation (XYS, EOP) data has loaded there is no ICRF matrix, and the
+ * engine turns by TEME, as this does. NaN where there is no surface normal (the Earth's
+ * centre: a scan not placed yet) or the arithmetic gives no number: never a sun made up.
  */
 export function sunSine(time: JulianDate, position: Cartesian3): number {
   const normal = Ellipsoid.WGS84.geodeticSurfaceNormal(position, up);
   if (!normal || !Number.isFinite(normal.x)) return Number.NaN;
-  Transforms.computeIcrfToCentralBodyFixedMatrix(time, icrfToFixed);
+  if (!Transforms.computeIcrfToCentralBodyFixedMatrix(time, icrfToFixed))
+    Transforms.computeTemeToPseudoFixedMatrix(time, icrfToFixed);
   Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(time, sun);
   Matrix3.multiplyByVector(icrfToFixed, sun, sun);
-  Cartesian3.normalize(sun, sun);
-  return Cartesian3.dot(sun, normal);
+  // Not `normalize`, which throws on a vector that is not a number.
+  const sine = Cartesian3.dot(sun, normal) / Cartesian3.magnitude(sun);
+  return Number.isFinite(sine) ? sine : Number.NaN;
 }

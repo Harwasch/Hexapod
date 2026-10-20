@@ -5,7 +5,15 @@
  * is on and As captured is off, reports what it drew, and leaves nothing behind. The GLSL
  * compiles and lights an east-facing slab in a real engine in e2e/sunlightScene.spec.ts.
  */
-import { Cartesian3, Event, JulianDate, type Cesium3DTileset, type Scene } from "cesium";
+import {
+  Cartesian3,
+  Event,
+  JulianDate,
+  Matrix3,
+  Transforms,
+  type Cesium3DTileset,
+  type Scene,
+} from "cesium";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { colorChainOf, composeColorGlsl, type SplatVertexColor } from "@/cesium/splatColor";
@@ -69,6 +77,7 @@ afterEach(() => {
   useAsCaptured.setState({ on: false });
   useSunReport.setState({ reports: {} });
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("the colour part", () => {
@@ -104,6 +113,12 @@ describe("the colour part", () => {
     const before = uniforms.u_sunlight?.();
     part.sunUp = 0;
     expect(uniforms.u_sunlight?.()).toBe(before);
+    // No sun to light by: strength 0, so the shader leaves the colour as it is.
+    part.sunUp = Number.NaN;
+    expect(uniforms.u_sunlight?.()).toEqual({ vec4: [0, 1, 0, 0] });
+    const unlit = uniforms.u_sunlight?.();
+    part.sunUp = Number.NaN;
+    expect(uniforms.u_sunlight?.()).toBe(unlit);
   });
 
   it("runs after the objects' highlight and before Confidence / Data age", () => {
@@ -143,6 +158,25 @@ describe("the sun", () => {
 
   it("is NaN for a model that is not placed yet", () => {
     expect(sunSine(JulianDate.fromIso8601("2026-06-21T20:00:00Z"), Cartesian3.ZERO)).toBeNaN();
+  });
+
+  it("turns by TEME before the engine's Earth-orientation data has loaded, as the engine does", () => {
+    // No ICRF matrix yet (the XYS and EOP data still loading): the engine lights by TEME.
+    const icrf = vi
+      .spyOn(Transforms, "computeIcrfToCentralBodyFixedMatrix")
+      .mockReturnValue(undefined);
+    expect(degrees(sine("2026-06-21T20:21:00Z"))).toBeCloseTo(67.3, 0);
+    icrf.mockRestore();
+  });
+
+  it("is NaN, never a made-up sun, when the engine's matrix is not a number", () => {
+    const icrf = vi
+      .spyOn(Transforms, "computeIcrfToCentralBodyFixedMatrix")
+      .mockImplementation((_time, result) =>
+        Matrix3.fromArray(new Array<number>(9).fill(Number.NaN), 0, result),
+      );
+    expect(sine("2026-06-21T20:21:00Z")).toBeNaN();
+    icrf.mockRestore();
   });
 });
 
@@ -188,6 +222,33 @@ describe("the relight", () => {
     useSettings.getState().set({ splatRenderer: "playcanvas" });
     useSettings.getState().set({ splatRenderer: "cesium" });
     expect(s.functions()).toEqual([]);
+  });
+
+  it("draws no relight and claims none for a frame whose sun is not a number", () => {
+    const s = scan();
+    const part = { value: undefined as unknown };
+    const handle = startSunlight(s.tileset, s.scene, "a", {
+      vec4: (...v) => (part.value = vec4(...v)),
+    });
+    handle.sync(true);
+    const noon = JulianDate.fromIso8601("2026-06-21T20:21:00Z");
+    s.preRender.raiseEvent(s.scene, noon);
+    expect(part.value).toEqual({ vec4: [1, 1, 0, 0] });
+    expect(useSunReport.getState().reports.a).toBeDefined();
+    // The engine's sun not yet a number: strength 0 (the colour untouched), and no report.
+    const icrf = vi
+      .spyOn(Transforms, "computeIcrfToCentralBodyFixedMatrix")
+      .mockImplementation((_time, result) =>
+        Matrix3.fromArray(new Array<number>(9).fill(Number.NaN), 0, result),
+      );
+    s.preRender.raiseEvent(s.scene, noon);
+    expect(part.value).toEqual({ vec4: [0, 1, 0, 0] });
+    expect(useSunReport.getState().reports.a).toBeUndefined();
+    icrf.mockRestore();
+    s.preRender.raiseEvent(s.scene, noon);
+    expect(part.value).toEqual({ vec4: [1, 1, 0, 0] });
+    expect(useSunReport.getState().reports.a?.sine).toBeGreaterThan(0.9);
+    handle.dispose();
   });
 
   it("reports only while its tileset is shown, so a hidden date claims no relight", () => {
