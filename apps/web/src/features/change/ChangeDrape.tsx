@@ -32,9 +32,19 @@ function endChangeDrape(): void {
   useChangeDrape.setState({ request: null, error: null });
 }
 
-function useChangeMap(request: ChangeDrapeRequest, enabled: boolean) {
+/**
+ * A short fingerprint of the write token for the query key, so a token entered or changed asks
+ * again (even while a request without it is in flight) without the token itself in the key.
+ */
+function tokenKey(token: string): string {
+  let hash = 5381;
+  for (let i = 0; i < token.length; i++) hash = ((hash * 33) ^ token.charCodeAt(i)) >>> 0;
+  return token ? hash.toString(36) : "";
+}
+
+function useChangeMap(request: ChangeDrapeRequest, token: string, enabled: boolean) {
   return useQuery({
-    queryKey: ["change-map", request.siteId, request.from, request.to],
+    queryKey: ["change-map", request.siteId, request.from, request.to, tokenKey(token)],
     queryFn: () =>
       unwrap<ChangeMap>(
         api.GET("/api/v1/sites/{site_id}/change", {
@@ -81,7 +91,7 @@ function Drape({ request }: { request: ChangeDrapeRequest }) {
   const token = useSettings((s) => s.writeToken.trim());
   const epochs = siteEpochs(site);
   const offer = site ? changeOffer(epochs, request.from, request.to) : null;
-  const query = useChangeMap(request, offer?.offered === true);
+  const query = useChangeMap(request, token, offer?.offered === true);
   const layer = useRef<ChangeDrapeLayer | null>(null);
   const map = offer?.offered ? query.data : undefined;
   const error = offer && !offer.offered ? offer.why : query.isError ? refusal(query.error) : null;
@@ -111,15 +121,7 @@ function Drape({ request }: { request: ChangeDrapeRequest }) {
     useChangeDrape.setState({ error });
   }, [error]);
 
-  // A token entered (or changed) after a refusal for want of one: asked again.
-  const { refetch, isError } = query;
   const needsToken = error === NEEDS_TOKEN;
-  const lastToken = useRef(token);
-  useEffect(() => {
-    if (token === lastToken.current) return;
-    lastToken.current = token;
-    if (isError && needsToken) void refetch();
-  }, [token, isError, needsToken, refetch]);
 
   const byId = (id: string) => epochs.find((e) => e.id === id);
   const [from, to] = [byId(request.from), byId(request.to)];

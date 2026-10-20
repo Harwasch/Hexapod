@@ -382,6 +382,22 @@ describe("the drape and its legend", () => {
     expect(screen.queryByTestId("compare-change-refused")).toBeNull();
   });
 
+  it("asks again with a token entered while a request without it is still on its way", async () => {
+    let answerFirst: (value: GetResult) => void = () => undefined;
+    get.mockImplementationOnce(
+      () => new Promise<GetResult>((resolve) => (answerFirst = resolve)) as never,
+    );
+    show();
+    await userEvent.click(changeSwitch());
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+    get.mockResolvedValue(answer(changeMap));
+    act(() => useSettings.getState().set({ writeToken: "pilot" }));
+    // The first request, sent without the token, is refused only now.
+    act(() => answerFirst(refuse(401)));
+    await waitFor(() => expect(layer.show).toHaveBeenCalledWith(changeMap));
+    expect(screen.queryByTestId("change-drape-error")).toBeNull();
+  });
+
   it("says a refusal in words rather than drawing a blank drape", async () => {
     get.mockResolvedValue(refuse(409, "confidence-not-measured"));
     show();
