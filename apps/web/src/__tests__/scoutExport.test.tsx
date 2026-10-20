@@ -10,6 +10,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { env } from "@/app/env";
+import { DroneScoutExport } from "@/features/mission/DroneScoutExport";
 import { ScoutExport } from "@/features/mission/ScoutExport";
 import type * as Wpml from "@/missions/wpml";
 import { DEFAULT_SCOUT } from "@/missions/scout";
@@ -60,7 +61,7 @@ const patch = {
 it("shows the return-home height, capped at 120 m above take-off", () => {
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <ScoutExport zones={[patch]} onAltitude={() => undefined} />
+      <DroneScoutExport zones={[patch]} onAltitude={() => undefined} />
     </QueryClientProvider>,
   );
   const facts = screen.getByTestId("scout-facts");
@@ -73,7 +74,7 @@ it("shows the return-home height, capped at 120 m above take-off", () => {
 function card(zones: Zone[]) {
   return render(
     <QueryClientProvider client={new QueryClient()}>
-      <ScoutExport zones={zones} />
+      <DroneScoutExport zones={zones} />
     </QueryClientProvider>,
   );
 }
@@ -108,8 +109,18 @@ it("still exports a straight-down capture", () => {
   expect(screen.getByTestId("scout-download")).toBeInTheDocument();
 });
 
-describe("with drone missions off (the default)", () => {
-  it("offers no drone export, and says drone missions are not available yet", () => {
+describe("drone missions behind their flag", () => {
+  it("with the flag on, loads the drone card and its download", async () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ScoutExport zones={[patch]} />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByTestId("scout-download")).toBeInTheDocument();
+    expect(screen.queryByTestId("scout-drone-stub")).toBeNull();
+  });
+
+  it("with the flag off (the default), offers no drone export, and says drone missions are not available yet", () => {
     env.droneExportEnabled = false;
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -129,7 +140,7 @@ it("says when areas are flown as their re-scan asks, and counts the crossing pas
   const facts = (scout: Zone["scout"]) => {
     render(
       <QueryClientProvider client={new QueryClient()}>
-        <ScoutExport zones={[{ ...patch, scout }]} />
+        <DroneScoutExport zones={[{ ...patch, scout }]} />
       </QueryClientProvider>,
     );
     const card = screen.getByTestId("scout-export").textContent ?? "";
@@ -163,7 +174,7 @@ it("writes the KMZ on the download click, its writer loaded then", async () => {
   const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <ScoutExport zones={[patch]} />
+      <DroneScoutExport zones={[patch]} />
     </QueryClientProvider>,
   );
   fireEvent.click(screen.getByTestId("scout-download"));
@@ -179,7 +190,7 @@ it("says when the route cannot be written, and downloads nothing", async () => {
   const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <ScoutExport zones={[patch]} />
+      <DroneScoutExport zones={[patch]} />
     </QueryClientProvider>,
   );
   fireEvent.click(screen.getByTestId("scout-download"));
