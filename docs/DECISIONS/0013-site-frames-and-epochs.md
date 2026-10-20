@@ -18,8 +18,11 @@ the opposite of both.
    every frame today: GPS altitude is above the geoid and no geoid model is applied) and its UTM
    zone. It is a table, not `sites.metadata`, because `PATCH /sites` replaces metadata wholesale.
 2. **Each capture of a site is an epoch** (`epochs`): ordinal, the capture, the run behind its
-   current revision, `observed_at` (with where it came from: the capture, the run's manifest, or
-   the upload time, labelled `created`), its footprint, platform (`phone-video` or `unknown` until
+   current revision, `observed_at` (with where it came from, first that applies: the run
+   manifest's tz-aware `capturedAtUtc`, labelled `manifest`; the capture row's `captured_at`; the
+   manifest's naive `capturedAt`; the upload time, labelled `created`. `capturedAtUtc` is read
+   before the capture row because M3a also copies it into `captures.captured_at`, where it would
+   pass for a date a person gave), its footprint, platform (`phone-video` or `unknown` until
    M3), status (`published`; `rejected` and `superseded` are reserved for M3's gates), how it found
    its site (`explicit`, `spatial`, `new-site`), alignment (M3) and quality. One capture is one
    epoch; `captures.epoch_id`, for several captures of one day, is future work.

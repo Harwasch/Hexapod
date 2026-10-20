@@ -210,6 +210,37 @@ def test_observed_at_comes_from_the_capture_then_the_manifest_then_the_upload(
     assert epoch.observed_at == expected
 
 
+@pytest.mark.parametrize(
+    ("utc", "source", "expected"),
+    [
+        # M3a copies `capturedAtUtc` into `capture.captured_at` too; read first, it keeps
+        # the `manifest` label rather than passing for a date a person gave.
+        ("2026-08-30T14:05:00+00:00", "manifest", datetime(2026, 8, 30, 14, 5, tzinfo=UTC)),
+        ("2026-08-30T07:05:00-07:00", "manifest", datetime(2026, 8, 30, 14, 5, tzinfo=UTC)),
+        # Not tz-aware, so not a `capturedAtUtc`: the capture row's date is next.
+        ("2026-08-30T14:05:00", "captured-at", datetime(2026, 9, 12, tzinfo=UTC)),
+        ("not a time", "captured-at", datetime(2026, 9, 12, tzinfo=UTC)),
+    ],
+)
+def test_the_manifests_utc_capture_time_is_read_first_and_labelled_manifest(
+    db: Session,
+    storage: S3Storage,
+    tmp_path: Path,
+    utc: str,
+    source: str,
+    expected: datetime,
+) -> None:
+    capture = _capture(db, captured_at=datetime(2026, 9, 12, tzinfo=UTC))
+    document = _document()
+    document["manifest"] = {"capture": {"capturedAtUtc": utc, "capturedAt": "2026-01-01"}}
+
+    run(db, storage, tmp_path, capture, document)
+
+    assert capture.site_id is not None
+    [epoch] = _epochs(db, capture.site_id)
+    assert (epoch.observed_at, epoch.observed_at_source) == (expected, source)
+
+
 def test_a_run_placed_about_another_origin_is_refused_and_writes_nothing(
     db: Session, storage: S3Storage, tmp_path: Path
 ) -> None:
