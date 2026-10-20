@@ -840,6 +840,12 @@ class JobSupervisor:
                         coverage_stage_id=state.stage_producing("coverage_enu.ply"),
                         published=published,
                     )
+                except registration.FrameMismatch as error:
+                    # The run's tiles are about another origin than its site's frame (a
+                    # job whose params named another frame, a frame that changed under a
+                    # resumed run). Registering them would put them in the wrong place.
+                    db.rollback()
+                    return self._dead_letter(db, job, f"registration refused: {error}")
                 except registration.LiveMoved as moved:
                     # An attach cut a generation while this run was publishing, and
                     # repointing would drop what it attached. Nothing was written; publish
@@ -871,18 +877,22 @@ class JobSupervisor:
                 return "lost"
             capture = db.get(Capture, job.capture_id)
             if capture is not None and document is not None:
-                registration.register(
-                    db,
-                    self._storage,
-                    publish=self._publish,
-                    capture=capture,
-                    job_id=job.id,
-                    registration=document,
-                    tiles_stage_id=state.stage_producing("splat"),
-                    published=registration.Published(
-                        tileset=None, thumbnail=None, coverage=None, withheld=True
-                    ),
-                )
+                try:
+                    registration.register(
+                        db,
+                        self._storage,
+                        publish=self._publish,
+                        capture=capture,
+                        job_id=job.id,
+                        registration=document,
+                        tiles_stage_id=state.stage_producing("splat"),
+                        published=registration.Published(
+                            tileset=None, thumbnail=None, coverage=None, withheld=True
+                        ),
+                    )
+                except registration.FrameMismatch as error:
+                    db.rollback()
+                    return self._dead_letter(db, job, f"registration refused: {error}")
         job.status = RunStatus.COMPLETE
         job.error = None
         self._close(job)

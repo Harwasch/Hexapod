@@ -97,6 +97,14 @@ def union_footprints(a: WKBElement, b: WKBElement) -> WKBElement:
     return from_shape(merged, srid=SRID)
 
 
+#: How far outside `a` a point of `b` may be and `contains` still say yes, in degrees:
+#: ~0.1 mm, under the SPZ position quantum (2^-12 m, 0.24 mm), so no growth a tileset could
+#: actually show is ignored. It absorbs the rounding a footprint gets from being resized
+#: about an origin and back (`placement.rescale_site`), which is of order 1e-15 degrees.
+CONTAINS_TOLERANCE_DEG = 1e-9
+
+
 def contains(a: WKBElement, b: WKBElement) -> bool:
-    """Whether footprint `a` covers footprint `b` (boundary included)."""
-    return bool(to_shape(a).covers(to_shape(b)))
+    """Whether footprint `a` covers footprint `b` (boundary included), to within
+    `CONTAINS_TOLERANCE_DEG`."""
+    return bool(to_shape(a).buffer(CONTAINS_TOLERANCE_DEG).covers(to_shape(b)))

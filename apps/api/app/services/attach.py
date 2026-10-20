@@ -56,7 +56,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Asset
 from app.schemas.sidecar import SidecarAttach, SidecarAttachment
-from app.services import sidecars
+from app.services import epochs, sidecars
 from app.services.assets import asset_to_read
 from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.services.published import IMMUTABLE_CACHE
@@ -152,6 +152,15 @@ def _attach(
     staging: ObjectStorage,
     public: ObjectStorage,
 ) -> tuple[SidecarAttachment, list[str]]:
+    if epochs.is_superseded(asset):
+        # History (decision D3): a re-run replaced this revision, and attaching to it would
+        # cut a generation nothing shows.
+        live = epochs.current_asset(db, asset.epoch_id) if asset.epoch_id else None
+        raise ConflictError(
+            f"asset {asset.id} is a superseded revision of its epoch; attach to its current "
+            f"asset {live.id if live is not None else '(none)'}",
+            code=NOT_ATTACHABLE,
+        )
     source = asset.source if isinstance(asset.source, dict) else {}
     url = source.get("url")
     if source.get("type") != "3d-tiles-url" or not isinstance(url, str):

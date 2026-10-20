@@ -31,7 +31,7 @@ from geoalchemy2.shape import from_shape, to_shape
 from pydantic import ValidationError
 from shapely import affinity
 
-from app.models import Asset, Site
+from app.models import Asset, Site, SiteFrame
 from app.schemas.asset import GroundSample
 from app.schemas.geojson import Polygon
 from app.services import geometry
@@ -120,6 +120,11 @@ def registered_origin(metadata: Mapping[str, Any] | None) -> Origin | None:
     if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return None
     return Origin(lat=lat, lon=lon, height=_number(georef.get("height")) or 0.0)
+
+
+def frame_origin(frame: SiteFrame) -> Origin:
+    """A site frame's origin: what every epoch of the site has its tiles placed about."""
+    return Origin(lat=frame.lat, lon=frame.lon, height=frame.height)
 
 
 def _number(value: object) -> float | None:
