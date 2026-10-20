@@ -309,8 +309,9 @@ def _expected_root(columns: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     """The root's merged gaussians, from the leaves, by the maths written out per cell:
     weight alpha * S(sigma clipped to SPZ's range), S Thomsen's ellipsoid area (p 1.6075);
     the weighted mean, and the weighted covariance by the law of total covariance; axes by
-    `eigh`, variances floored at SPZ's smallest and at 2^-20 of the largest; opacity W / S,
-    widened by at most 2 past 511/512. Returned in SPZ's byte units where SPZ quantises."""
+    `eigh` (a proper rotation), variances floored at SPZ's smallest and at 2^-20 of the
+    largest; opacity W / S, widened by at most 2 past 511/512. Also each cell's axes, its
+    smallest relative eigenvalue gap, and the covariance its clipped scales describe."""
     xyz = np.stack([columns[a] for a in "xyz"], axis=1).astype(np.float64)
     origin = xyz.min(axis=0)
     edge = max(float((xyz.max(axis=0) - origin).max()), 1e-3)
@@ -348,7 +349,7 @@ def _expected_root(columns: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     cov = np.einsum("nij,nj,nkj->nik", r, s * s, r)
     dc = np.stack([columns[f"f_dc_{i}"] for i in range(3)], 1).astype(np.float64)
     cells = np.unique(keys)
-    out = {name: [] for name in ("xyz", "colour", "scale", "alpha")}
+    out = {name: [] for name in ("xyz", "colour", "scale", "alpha", "axes", "gap", "cov")}
     for key in cells:
         rows = keys == key
         weight = w[rows]
@@ -356,40 +357,128 @@ def _expected_root(columns: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         mean = (weight[:, None] * xyz[rows]).sum(0) / total
         d = xyz[rows] - mean
         sigma = (weight[:, None, None] * (cov[rows] + d[:, :, None] * d[:, None, :])).sum(0) / total
-        values = np.linalg.eigvalsh(sigma)
-        scales = np.sqrt(np.maximum(values, max(math.exp(2 * lo), 2.0**-20 * values[-1])))
+        values, axes = np.linalg.eigh(sigma)
+        if np.linalg.det(axes) < 0:
+            axes[:, 0] *= -1
+        floored = np.maximum(values, max(math.exp(2 * lo), 2.0**-20 * values[-1]))
+        scales = np.sqrt(floored)
         fill = total / area(scales)
         k = min(max(math.sqrt(fill / (511 / 512)), 1.0), 2.0)
         a = min(max(fill / k**2, 1e-6), 511 / 512)
+        log_scale = np.clip(np.log(k * scales), lo, hi)
         out["xyz"].append(mean)
         out["colour"].append((weight[:, None] * dc[rows]).sum(0) / total)
-        out["scale"].append(np.log(k * scales))
+        out["scale"].append(log_scale)
         out["alpha"].append(a)
+        out["axes"].append(axes)
+        out["gap"].append(float(np.diff(floored).min() / floored[-1]))
+        out["cov"].append(axes @ np.diag(np.exp(2 * log_scale)) @ axes.T)
     return {name: np.asarray(values) for name, values in out.items()}
 
 
+def _rotation(q: np.ndarray) -> np.ndarray:
+    """Rotations of quaternions (w, x, y, z), (n, 4) -> (n, 3, 3), normalised first."""
+    q = q / np.linalg.norm(q, axis=1, keepdims=True)
+    w, x, y, z = q.T
+    return np.stack(
+        [
+            np.stack([1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)], -1),
+            np.stack([2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)], -1),
+            np.stack([2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)], -1),
+        ],
+        axis=1,
+    )
+
+
+def _quaternion(r: np.ndarray) -> np.ndarray:
+    """The unit quaternion (w, x, y, z), w >= 0, of one proper rotation: from the largest of
+    the four 4 q_i^2 terms, so no square root of a small number is taken."""
+    t = np.trace(r)
+    terms = [1 + t, 1 + 2 * r[0, 0] - t, 1 + 2 * r[1, 1] - t, 1 + 2 * r[2, 2] - t]
+    i = int(np.argmax(terms))
+    s = 2 * math.sqrt(terms[i])
+    if i == 0:
+        q = [s / 4, (r[2, 1] - r[1, 2]) / s, (r[0, 2] - r[2, 0]) / s, (r[1, 0] - r[0, 1]) / s]
+    elif i == 1:
+        q = [(r[2, 1] - r[1, 2]) / s, s / 4, (r[0, 1] + r[1, 0]) / s, (r[0, 2] + r[2, 0]) / s]
+    elif i == 2:
+        q = [(r[0, 2] - r[2, 0]) / s, (r[0, 1] + r[1, 0]) / s, s / 4, (r[1, 2] + r[2, 1]) / s]
+    else:
+        q = [(r[1, 0] - r[0, 1]) / s, (r[0, 2] + r[2, 0]) / s, (r[1, 2] + r[2, 1]) / s, s / 4]
+    out = np.asarray(q) / np.linalg.norm(q)
+    return -out if out[0] < 0 else out
+
+
+#: An eigenvector's sign is arbitrary, so a gaussian's axes are equally any of these four
+#: proper sign patterns of them; each gives a different quaternion of the same gaussian.
+AXIS_SIGNS = ([1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1])
+
+
 def test_a_parent_tile_is_its_subtree_merged(packed: tuple[Path, dict, dict]) -> None:
-    """The root of the packed scene, decoded, against its cells recomputed here. Within
-    SPZ's quanta, which are the tolerances: 1/4096 m of position (1.5 allowing the float32
-    centre), and one byte of colour, scale and alpha."""
+    """The root of the packed scene, decoded, against its cells recomputed here, within
+    SPZ's quanta, which are the tolerances:
+
+    * position: half of SPZ's 1/4096 m step, plus the float32 rounding of the centre before
+      it is quantised (2^-24 of its magnitude; measured 0.4949 of a step at most);
+    * colour, alpha, and each axis's log-scale *on its own axis* (not sorted): one byte;
+    * rotation: one byte of each of x, y, z (127.5 a unit), against the quaternion of the
+      cell's eigenvectors under the sign pattern that matches (any is the same gaussian), for
+      every cell whose floored eigenvalues are at least 1e-6 of the largest apart -- below
+      that the axes are not unique, and only the covariance below pins them;
+    * covariance, R diag(e^(2 s)) R^T rebuilt from the decoded bytes, against the cell's:
+      within (e^(1/16) - 1) + 2 rho + rho^2 of its Frobenius norm. e^(1/16) is half a scale
+      step on a variance; rho = 2 |q_decoded - q| bounds |R_decoded - R| (2 sin(theta/2) <=
+      2 |dq|), with |dq| from the rotation quantum: x, y, z each within 1/255, and w, which
+      SPZ rebuilds from them, within min(sqrt(d), d / w), d = 2 |xyz| sqrt(3)/255 + 3/255^2.
+    """
     out, _, stats = packed
     assert stats["dropped"] == 0
     expected = _expected_root(stats["columns"])
     _, decoded = glb_splats(out / "splat.glb")
+    n = expected["xyz"].shape[0]
     got_xyz = np.stack([decoded[a] for a in "xyz"], axis=1).astype(np.float64)
-    assert got_xyz.shape[0] == expected["xyz"].shape[0]
-    assert np.abs(got_xyz - expected["xyz"]).max() <= 1.5 / 4096
+    assert got_xyz.shape[0] == n
+    position = np.abs(got_xyz - expected["xyz"])
+    assert (position <= 0.5 / 4096 + 2.0**-24 * np.abs(expected["xyz"])).all()
     colour_byte = splat_tiles.SPZ_COLOR_SCALE * 255.0
     got_colour = np.stack([decoded[f"f_dc_{i}"] for i in range(3)], 1).astype(np.float64)
     assert np.abs(got_colour - expected["colour"]).max() * colour_byte <= 1.0 + 1e-6
-    got_scale = np.sort(np.stack([decoded[f"scale_{i}"] for i in range(3)], 1), axis=1)
-    want_scale = np.sort(np.clip(expected["scale"], *splat_tiles.SPZ_LOG_SCALE_RANGE), axis=1)
-    assert np.abs(got_scale - want_scale).max() * 16.0 <= 1.0 + 1e-6
+    got_scale = np.stack([decoded[f"scale_{i}"] for i in range(3)], 1).astype(np.float64)
+    assert np.abs(got_scale - expected["scale"]).max() * 16.0 <= 1.0 + 1e-6
     got_alpha = 1 / (1 + np.exp(-decoded["opacity"].astype(np.float64)))
     assert np.abs(got_alpha - expected["alpha"]).max() * 255.0 <= 1.0 + 1e-6
-    # A real comparison: the root merges many leaves per cell, and some widen.
-    assert got_xyz.shape[0] < stats["columns"]["x"].shape[0] / 10
+
+    got_q = np.stack([decoded[f"rot_{i}"] for i in range(4)], 1).astype(np.float64)
+    got_bytes = np.round(got_q[:, 1:] * 127.5 + 127.5)
+    distinct = expected["gap"] >= 1e-6
+    rotation_bytes = []
+    for i in np.flatnonzero(distinct):
+        candidates = [_quaternion(expected["axes"][i] * np.array(signs)) for signs in AXIS_SIGNS]
+        candidates += [-q for q in candidates if abs(q[0]) < 1e-6]  # w = 0: both signs are w >= 0
+        rotation_bytes.append(
+            min(
+                float(np.abs(np.round(q[1:] * 127.5 + 127.5) - got_bytes[i]).max())
+                for q in candidates
+            )
+        )
+    assert max(rotation_bytes) <= 1.0
+
+    got_cov = np.einsum(
+        "nij,nj,nkj->nik", _rotation(got_q), np.exp(2 * got_scale), _rotation(got_q)
+    )
+    want_cov = np.asarray(expected["cov"])
+    error = np.linalg.norm(got_cov - want_cov, axis=(1, 2)) / np.linalg.norm(want_cov, axis=(1, 2))
+    w = np.array([_quaternion(axes)[0] for axes in expected["axes"]])
+    d = 2 * math.sqrt(3) / 255 + 3 / 255**2
+    dw = np.minimum(math.sqrt(d), d / np.maximum(w, 1e-12))
+    rho = 2 * np.sqrt(3 / 255**2 + dw**2)
+    assert (error <= math.expm1(1 / 16) + 2 * rho + rho**2).all()
+
+    # A real comparison: the root merges many leaves per cell, some widen, and nearly every
+    # cell's axes are distinct enough to check its rotation bytes.
+    assert n < stats["columns"]["x"].shape[0] / 10
     assert (expected["alpha"] >= 0.99).any()
+    assert distinct.sum() >= 0.9 * n
 
 
 def test_the_output_is_byte_stable(tmp_path: Path) -> None:

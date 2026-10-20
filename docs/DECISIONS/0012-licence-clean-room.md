@@ -300,7 +300,7 @@ An empty input returns itself. Use run-wise reductions; no Python loop over cell
 10. `test_colour_and_sh_are_weighted_means`.
 11. `test_opacity_stays_finite_and_in_range`: random F spanning 1e-9 to 1e3 gives α_out in [α_min, α_max] and finite logits.
 
-Also, in `test_splat_tiles_lod.py`, new `test_a_parent_tile_is_its_subtree_merged`: decode `splat.glb` (the root) of the `packed` fixture and recompute its cells in the test (Morton keys at `plan_tree`'s root level). Each decoded parent matches the per-cell maths above, after SPZ quantisation: position within 1.5/4096 m; colour, scale and alpha bytes within ±1. These are SPZ's quanta, so first-principles tolerances, not tuned ones.
+Also, in `test_splat_tiles_lod.py`, new `test_a_parent_tile_is_its_subtree_merged`: decode `splat.glb` (the root) of the `packed` fixture and recompute its cells in the test (Morton keys at `plan_tree`'s root level). Each decoded parent matches the per-cell maths above, after SPZ quantisation: position within 1.5/4096 m; colour, scale and alpha bytes within ±1. These are SPZ's quanta, so first-principles tolerances, not tuned ones. (Amended after review: position within 0.5/4096 m plus the float32 rounding of the centre; each scale on its own axis, not sorted; rotation within one byte of x, y and z under the matching axis-sign pattern; and the rebuilt covariance within the bound the scale and rotation quanta give. The test's docstring derives each.)
 
 ### 5B. CLEAN-ROOM SPEC — `tools/pipeline/block_maths.py` (block-training geometry)
 
