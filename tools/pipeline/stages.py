@@ -2800,8 +2800,18 @@ def _aligned_origin(
     fixes: tuple[exif.Fix, ...], frame: site_frame.SiteFrame | None
 ) -> tuple[float, float, float]:
     """The origin the aligned branch expresses its fixes about: the site's frame when the
-    capture is an epoch of one, else the fixes' own median (epoch 1 defines the frame)."""
+    capture is an epoch of one, else the fixes' own median (epoch 1 defines the frame).
+
+    In a frame, every fix is checked against the frame's packable range first, exactly as
+    the located branch checks its one point (`site_frame.offset_m`): the similarity puts
+    the reconstruction where its fixes are, so a capture whose fixes lie kilometres from
+    the origin would otherwise reach the packer that far out. The fixes are a necessary
+    check, not a sufficient one -- the scene reaches past its cameras -- and `pack_spz`'s
+    refusal to wrap is what catches the rest.
+    """
     if frame is not None:
+        for fix in fixes:
+            site_frame.offset_m(frame, fix.lat, fix.lon)
         return frame.lat, frame.lon, frame.height
     return exif.median_fix(fixes)
 
