@@ -350,6 +350,11 @@ class Published:
     #: (`app/worker/carry.py`); its `based_on` is the URL `register` checks the asset
     #: still points at before repointing it.
     carry: CarryPlan = field(default_factory=lambda: CarryPlan(based_on=None))
+    #: True when the tileset went into a content-hashed generation (two buckets,
+    #: `Publisher.generation`), where the same URL is the same bytes. With one bucket a
+    #: site points at the run's own keys, which a Refine rewrites in place, so a URL
+    #: says nothing about what is behind it; False is the answer that is always safe.
+    content_addressed: bool = False
 
 
 class LiveMoved(Exception):  # noqa: N818 - an event, as `StopRequested` is
@@ -533,7 +538,13 @@ def publish_outputs(
         )
     except PublishError:
         coverage = None
-    return Published(tileset=url, thumbnail=thumbnail, coverage=coverage, carry=plan)
+    return Published(
+        tileset=url,
+        thumbnail=thumbnail,
+        coverage=coverage,
+        carry=plan,
+        content_addressed=publisher.splits_buckets,
+    )
 
 
 class FrameMismatch(Exception):  # noqa: N818 - a refusal, as `LiveMoved` is an event
@@ -1044,7 +1055,8 @@ def register(
     run was placed in. A re-run of the same capture (a Refine, a retry) is a new
     *revision* of that epoch: a new asset row, the old one superseded (`valid_to` set),
     never rewritten. A republish onto the URL the epoch already shows is no revision at
-    all: two-bucket generations are content-hashed, so the same URL is the same bytes.
+    all when it is content-addressed (two buckets: the same URL is the same bytes); with
+    one bucket it is a revision all the same, since the URL cannot vouch for the bytes.
 
     Returns the site id, or None when there was nothing registerable.
 
@@ -1140,7 +1152,11 @@ def register(
             )
     elif url is not None:
         _replace_run(epoch, producing, footprint, quality, now)
-    if url is not None and current is not None and url != tileset_url(current):
+    same_tiles = published.content_addressed and url == tileset_url(current)
+    if url is not None and current is not None and not same_tiles:
+        # New tiles -- or, with one bucket, a republish onto the run's own keys, which a
+        # Refine rewrites in place: the URL cannot vouch for the bytes, so the new run's
+        # render config gets a revision of its own rather than the old run's.
         _supersede(db, site, epoch, current, url, registration, published.carry, job_id, now)
     elif url is not None and current is not None:
         # The very same tiles (a content-hashed generation it already shows): no new
