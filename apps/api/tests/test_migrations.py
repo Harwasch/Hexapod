@@ -40,6 +40,7 @@ def test_migrations_round_trip(alembic_config: Config, engine: Engine) -> None:
         assert inspector.has_table(table)
     index_names = {index["name"] for index in inspector.get_indexes("sites")}
     assert {"idx_sites_boundary", "ix_sites_boundary_geography"} <= index_names
+    assert "ix_assets_epoch_id" in {index["name"] for index in inspector.get_indexes("assets")}
     epoch_indexes = {index["name"] for index in inspector.get_indexes("epochs")}
     assert {"idx_epochs_footprint", "ix_epochs_site_id"} <= epoch_indexes
 
