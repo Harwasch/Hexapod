@@ -177,7 +177,8 @@ a {
   text-overflow: ellipsis;
 }
 
-.title span {
+.title span,
+.title .dates {
   color: var(--text-secondary);
   font-size: 0.8125rem;
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Site } from "@twin/contracts";
 
-import { shownScan } from "@/view/shown";
+import { datesNotice, shownScan } from "@/view/shown";
 
 type SiteAsset = Site["assets"][number];
 
@@ -52,6 +52,22 @@ describe("which scan view.html shows, and whose coverage", () => {
     expect(shown.asset?.id).toBe("e2-asset");
     expect(shown.epoch?.id).toBe("e2");
     expect(shown.coverage).toBeNull();
+  });
+
+  it("says it shows the latest of several dates, and where the others are", () => {
+    const two = shownScan(
+      site(
+        [splat("e1-asset", "e1"), splat("e2-asset", "e2")],
+        [epoch("e1", 1, "e1-asset"), epoch("e2", 2, "e2-asset")],
+      ),
+    );
+    expect(two.dates).toBe(2);
+    expect(datesNotice(two)).toBe("Latest of 2 dates · the globe shows the others");
+    // One date, or none (a legacy site), needs no notice.
+    const one = shownScan(site([splat("e1-asset", "e1")], [epoch("e1", 1, "e1-asset")]));
+    expect(one.dates).toBe(1);
+    expect(datesNotice(one)).toBeNull();
+    expect(datesNotice(shownScan(site([splat("legacy", null)], undefined)))).toBeNull();
   });
 
   it("shows epoch 1's coverage when epoch 1's current revision is the scan shown", () => {
