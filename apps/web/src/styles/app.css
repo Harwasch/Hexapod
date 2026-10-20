@@ -2366,6 +2366,74 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   color: var(--text-tertiary);
 }
 
+/* ---- Splat view (Photo / Confidence / Data age) -------------------------- */
+.views {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  max-width: min(92vw, 40rem);
+}
+
+.views__notice {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.cell-legend {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.cell-legend__rows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cell-legend__rows li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.cell-legend__swatch {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 0.15rem;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.2);
+}
+
+/* "Newer data here": the light bands the shader lays over a later date's evidence. */
+.cell-legend__swatch--striped {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.75) 0 2px,
+    transparent 2px 4px
+  ) !important;
+}
+
+.cell-legend__state,
+.cell-legend__policy {
+  margin: 0;
+}
+
+.cell-legend__policy,
+.cell-legend__skipped {
+  color: var(--text-tertiary);
+}
+
 /* ---- Compare slider ------------------------------------------------------ */
 .split-slider {
   position: absolute;

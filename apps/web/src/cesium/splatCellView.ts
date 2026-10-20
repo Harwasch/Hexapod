@@ -44,6 +44,8 @@ import {
   type CellGrid,
 } from "@/lib/cellGrid";
 
+import { AGE_RAMP, CONFIDENCE_RAMP, type Rgb } from "@/lib/cellRamps";
+
 import {
   addColorPart,
   hasColorPart,
@@ -57,6 +59,7 @@ import type { SplatPrimitive, SplatShaderBuilder } from "./splatInternals";
 import { COMPANION_SLOT_VECS, companionSlots, companionSlotsGlsl } from "./splatViewCones";
 
 export type CellViewMode = "confidence" | "data-age";
+export { AGE_RAMP, CONFIDENCE_RAMP };
 
 /** The shader's mode numbers. */
 const MODE: Record<CellViewMode | "off", number> = { off: 0, confidence: 1, "data-age": 2 };
@@ -65,31 +68,6 @@ const MODE: Record<CellViewMode | "off", number> = { off: 0, confidence: 1, "dat
 export const CELL_MIN_PX = 6;
 /** Data age's "newer data here" stripes: one light and one plain band per this many metres. */
 export const NEWER_STRIPE_M = 0.6;
-
-type Rgb = readonly [number, number, number];
-
-/**
- * Confidence: [unused: no evidence is the splat desaturated], weak, then four steps from the
- * weak threshold to 255 -- two "fair" (amber, yellow), two "strong" (yellow-green, green).
- */
-export const CONFIDENCE_RAMP: readonly Rgb[] = [
-  [0.5, 0.5, 0.5],
-  [0.93, 0.13, 0.1],
-  [0.97, 0.55, 0.12],
-  [0.95, 0.82, 0.2],
-  [0.55, 0.84, 0.28],
-  [0.12, 0.72, 0.33],
-];
-
-/** Data age, by bucket (`lib/dataAge.ts` `AGE_BUCKETS`): fresh cool, old warm and dull. */
-export const AGE_RAMP: readonly Rgb[] = [
-  [0.16, 0.78, 0.92],
-  [0.25, 0.55, 0.96],
-  [0.5, 0.42, 0.92],
-  [0.76, 0.38, 0.78],
-  [0.78, 0.55, 0.36],
-  [0.55, 0.5, 0.44],
-];
 
 /** How the part makes its texture and uniform values. The real one wraps CesiumJS. */
 export interface CellViewGpu {
