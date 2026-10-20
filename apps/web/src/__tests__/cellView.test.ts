@@ -184,4 +184,19 @@ describe("Confidence, then Data age, then Photo", () => {
     expect(primitive.vertexColor).toBeUndefined();
     expect(useViewMode.getState().cells[A1.id]).toBeUndefined();
   });
+
+  it("says when the view's code did not load, and forgets it with the model", async () => {
+    const { asCesium } = scan({ confidence: served.meta });
+    const load = () => Promise.reject(new Error("chunk failed"));
+    const dispose = attachCellView(asCesium, { requestRender: vi.fn() }, A1.id, context, load);
+    useViewMode.getState().set("confidence");
+    await vi.waitFor(() =>
+      expect(useViewMode.getState().cells[A1.id]).toEqual({
+        kind: "failed",
+        message: "chunk failed",
+      }),
+    );
+    dispose();
+    expect(useViewMode.getState().cells[A1.id]).toBeUndefined();
+  });
 });

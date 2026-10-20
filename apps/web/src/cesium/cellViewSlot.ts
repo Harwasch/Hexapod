@@ -50,5 +50,7 @@ export function attachCellView(
     unsubscribe();
     handle?.dispose();
     handle = undefined;
+    // A load that failed before there was a handle reported too; the model is gone either way.
+    useViewMode.getState().report(assetId, null);
   };
 }
