@@ -76,6 +76,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import Capture, Job, JobStep
 from app.models.enums import CaptureStatus, RunStatus, UploadStatus
+from app.services import epochs
 from app.storage import ObjectStorage
 from app.storage.null import StorageUnavailableError
 from app.worker import alerts, claim, events, outputs, params, reaper, registration, retry, steps
@@ -1047,7 +1048,10 @@ class JobSupervisor:
         capture = db.get(Capture, job.capture_id)
         if capture is None:
             return {}
-        resolved = params.stage_params(plan, capture, job)
+        # The site frame the capture is placed in (decision D3): decided now, because the
+        # pipeline places the capture in it, and the same on every attempt of a re-run.
+        frame = epochs.frame_for_run(db, capture)
+        resolved = params.stage_params(plan, capture, job, frame=frame.param() if frame else None)
         # Refused here rather than in the child, so a `params` naming a stage the recipe
         # does not have dead-letters with the recipe error instead of a failed run.
         plan.recipe.with_params(resolved)
