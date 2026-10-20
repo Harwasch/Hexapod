@@ -44,6 +44,7 @@ def run(
     url: str | None = "new",
     coverage: str | None = None,
     withheld: bool = False,
+    content_addressed: bool = True,
 ) -> uuid.UUID:
     """One run of the capture registered as the worker registers it; its job id."""
     job = _job(db, capture)
@@ -70,6 +71,7 @@ def run(
             coverage=coverage,
             withheld=withheld,
             carry=CarryPlan(based_on=live),
+            content_addressed=content_addressed,
         ),
     )
     return job.id
@@ -214,6 +216,27 @@ def test_a_republish_of_the_same_url_makes_no_revision(
 
     [asset] = _assets(db, capture.site_id)
     assert asset.valid_to is None and asset.source["url"] == same
+
+
+def test_with_one_bucket_the_same_url_is_still_a_new_revision(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """With one bucket nothing is copied into a content-hashed generation: a site points
+    at the run's own keys, and a Refine re-runs the same job and rewrites them. The URL
+    then says nothing about the bytes, so a republish onto it is a new revision -- with
+    the new run's ground samples and provenance -- not "the very same tiles"."""
+    capture = _capture(db)
+    same = "https://cdn.example.com/twin-worker-test/runs/x/package/splat/tileset.json"
+    run(db, storage, tmp_path, capture, url=same, content_addressed=False)
+    assert capture.site_id is not None
+
+    run(db, storage, tmp_path, capture, url=same, content_addressed=False)
+
+    old, new = _assets(db, capture.site_id)
+    assert old.valid_to is not None and new.valid_to is None
+    assert old.source["url"] == new.source["url"] == same
+    [epoch] = _epochs(db, capture.site_id)
+    assert new.epoch_id == epoch.id and len(epoch.history) == 1
 
 
 @pytest.mark.parametrize(
