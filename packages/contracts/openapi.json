@@ -4078,6 +4078,193 @@
         "title": "ChartSeries",
         "type": "object"
       },
+      "CheckTargetCreate": {
+        "additionalProperties": false,
+        "description": "One surveyed mark: where it is in WGS84, from which height datum, and how well.\n\n`sigmaHM` / `sigmaVM` are the survey's own one-sigma, in metres, as its instrument\nreported them: they decide the tolerance an epoch's check RMSE is held to (3 sigma of\nthe declared uncertainties, `tools/pipeline/check_targets.survey_tolerance`), so a\nwrong one makes a wrong claim.",
+        "properties": {
+          "height": {
+            "title": "Height",
+            "type": "number"
+          },
+          "heightDatum": {
+            "$ref": "#/components/schemas/HeightDatum"
+          },
+          "label": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "lat": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lon",
+            "type": "number"
+          },
+          "role": {
+            "$ref": "#/components/schemas/CheckTargetRole",
+            "default": "check"
+          },
+          "sigmaHM": {
+            "exclusiveMinimum": 0.0,
+            "title": "Sigmahm",
+            "type": "number"
+          },
+          "sigmaVM": {
+            "exclusiveMinimum": 0.0,
+            "title": "Sigmavm",
+            "type": "number"
+          },
+          "source": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Source",
+            "type": "string"
+          },
+          "surveyedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Surveyedat"
+          }
+        },
+        "required": [
+          "label",
+          "lat",
+          "lon",
+          "height",
+          "heightDatum",
+          "sigmaHM",
+          "sigmaVM",
+          "source"
+        ],
+        "title": "CheckTargetCreate",
+        "type": "object"
+      },
+      "CheckTargetRead": {
+        "additionalProperties": false,
+        "description": "An active check target. Read model: every field is explicit (no defaults) so the\nOpenAPI contract marks it required.",
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "height": {
+            "title": "Height",
+            "type": "number"
+          },
+          "heightDatum": {
+            "$ref": "#/components/schemas/HeightDatum"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "title": "Lon",
+            "type": "number"
+          },
+          "role": {
+            "$ref": "#/components/schemas/CheckTargetRole"
+          },
+          "sigmaHM": {
+            "title": "Sigmahm",
+            "type": "number"
+          },
+          "sigmaVM": {
+            "title": "Sigmavm",
+            "type": "number"
+          },
+          "siteId": {
+            "format": "uuid",
+            "title": "Siteid",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "surveyedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Surveyedat"
+          }
+        },
+        "required": [
+          "id",
+          "siteId",
+          "label",
+          "role",
+          "lat",
+          "lon",
+          "height",
+          "heightDatum",
+          "sigmaHM",
+          "sigmaVM",
+          "source",
+          "surveyedAt",
+          "createdAt"
+        ],
+        "title": "CheckTargetRead",
+        "type": "object"
+      },
+      "CheckTargetRole": {
+        "description": "What a surveyed ground mark is for (M3b). A ``check`` target only scores an epoch's\nalignment against its survey; a ``control`` target would also constrain it, but until\nbundle adjustment takes ground control it is stored and scored exactly like a check.",
+        "enum": [
+          "check",
+          "control"
+        ],
+        "title": "CheckTargetRole",
+        "type": "string"
+      },
+      "CheckTargetSet": {
+        "additionalProperties": false,
+        "description": "The site's whole active set. A label sent with the same values is kept as it is; a\nlabel sent with different values retires its row and starts a new one; a label not\nsent is retired. Rows are never deleted, so what an epoch was scored with stays.",
+        "properties": {
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/CheckTargetCreate"
+            },
+            "maxItems": 200,
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "targets"
+        ],
+        "title": "CheckTargetSet",
+        "type": "object"
+      },
       "Clarification": {
         "additionalProperties": false,
         "description": "A question the planner asks with a structured answer: a choice (chips), a range\n(slider) or an area choice (how the ground is picked). Never free text.",
@@ -40883,6 +41070,175 @@
           }
         ],
         "summary": "Delete a camera bookmark",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/api/v1/sites/{site_id}/check-targets": {
+      "get": {
+        "description": "The surveyed ground marks the site's epochs are scored against (M3b), by label.",
+        "operationId": "list_check_targets_api_v1_sites__site_id__check_targets_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CheckTargetRead"
+                  },
+                  "title": "Response List Check Targets Api V1 Sites  Site Id  Check Targets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "List a site's active check targets",
+        "tags": [
+          "sites"
+        ]
+      },
+      "put": {
+        "description": "The whole active set. A target sent unchanged keeps its row; a changed one retires\nits row for a new one; one left out is retired. Nothing is deleted. The next run of a\ncapture of this site is scored against the set as it is when that run starts.",
+        "operationId": "replace_check_targets_api_v1_sites__site_id__check_targets_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckTargetSet"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CheckTargetRead"
+                  },
+                  "title": "Response Replace Check Targets Api V1 Sites  Site Id  Check Targets Put",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Replace a site's active check targets",
         "tags": [
           "sites"
         ]

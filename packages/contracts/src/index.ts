@@ -36,6 +36,8 @@ export type AssetSourceKind = Schemas["AssetSourceKind"];
 
 export type Epoch = Schemas["EpochRead"];
 export type SiteFrame = Schemas["SiteFrameRead"];
+export type CheckTarget = Schemas["CheckTargetRead"];
+export type CheckTargetRole = Schemas["CheckTargetRole"];
 export type EpochStatus = Schemas["EpochStatus"];
 export type EpochJoinMethod = Schemas["EpochJoinMethod"];
 export type EpochPlatform = Schemas["EpochPlatform"];

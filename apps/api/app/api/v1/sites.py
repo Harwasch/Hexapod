@@ -8,10 +8,12 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from app.api.deps import DbSession, PublicStorage, RequireWriteToken
 from app.schemas.asset import AssetRead
 from app.schemas.bookmark import CameraBookmarkCreate, CameraBookmarkRead
+from app.schemas.check_target import CheckTargetRead, CheckTargetSet
 from app.schemas.epoch import EpochRead
 from app.schemas.site import SiteCreate, SiteRead, SiteSummary, SiteUpdate
 from app.services import assets as asset_service
 from app.services import bookmarks as bookmark_service
+from app.services import check_targets as check_target_service
 from app.services import epochs as epoch_service
 from app.services import sites as site_service
 from app.storage import StorageUnavailableError
@@ -84,6 +86,34 @@ def list_site_epochs(site_id: uuid.UUID, db: DbSession) -> list[EpochRead]:
     currently shows. Empty for a legacy (seeded, catalog, hand-made) site."""
     site = site_service.get_site(db, site_id)
     return [epoch_service.epoch_to_read(e, site.assets) for e in site.epochs]
+
+
+@router.get(
+    "/{site_id}/check-targets",
+    response_model=list[CheckTargetRead],
+    summary="List a site's active check targets",
+)
+def list_check_targets(site_id: uuid.UUID, db: DbSession) -> list[CheckTargetRead]:
+    """The surveyed ground marks the site's epochs are scored against (M3b), by label."""
+    return [
+        check_target_service.to_read(t) for t in check_target_service.list_for_site(db, site_id)
+    ]
+
+
+@router.put(
+    "/{site_id}/check-targets",
+    response_model=list[CheckTargetRead],
+    summary="Replace a site's active check targets",
+    dependencies=[RequireWriteToken],
+)
+def replace_check_targets(
+    site_id: uuid.UUID, payload: CheckTargetSet, db: DbSession
+) -> list[CheckTargetRead]:
+    """The whole active set. A target sent unchanged keeps its row; a changed one retires
+    its row for a new one; one left out is retired. Nothing is deleted. The next run of a
+    capture of this site is scored against the set as it is when that run starts."""
+    rows = check_target_service.replace_active(db, site_id, payload)
+    return [check_target_service.to_read(t) for t in rows]
 
 
 @router.get(
