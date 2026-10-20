@@ -52,6 +52,7 @@ import { useSettings } from "@/state/settings";
 import { followSupersedes } from "@/state/supersedes";
 import { onPickChange, pickedVariant, useVariants, type VariantStatus } from "@/state/variants";
 
+import { setCompanions } from "./companions";
 import {
   addColorPart,
   hasColorPart,
@@ -273,6 +274,8 @@ export function attachInferredLayers(
   let style: InferredStyle = useSettings.getState().inferredStyle;
   /** Highlight on the scan's primitive, for the layers it draws (one for them all). */
   const companionHighlight = new CompanionHighlight();
+  /** This scan's place in the host's companion list (companions.ts), beside other owners'. */
+  const owner = Symbol("inferred");
   /** The scan's primitive while it draws the layers, or undefined. */
   let host: CompanionPrimitive | undefined;
   const sync = (): void => {
@@ -282,7 +285,7 @@ export function attachInferredLayers(
     const together = wanted && layers.length > 0 && drawsCompanions(primitive);
     const next = together ? primitive : undefined;
     if (host && host !== next) {
-      host.companions = [];
+      setCompanions(host, owner, []);
       companionHighlight.uninstall();
     }
     host = next;
@@ -307,11 +310,12 @@ export function attachInferredLayers(
       layer.cones.sync();
     }
     if (host) {
-      const companions = layers.map((l) => l.tileset);
-      const same =
-        host.companions?.length === companions.length &&
-        companions.every((t, i) => host?.companions?.[i] === t);
-      if (!same) host.companions = companions;
+      setCompanions(
+        host,
+        owner,
+        layers.map((l) => l.tileset),
+        parent,
+      );
       companionHighlight.install(host);
     }
   };
@@ -326,7 +330,7 @@ export function attachInferredLayers(
   };
   const unload = (): void => {
     if (host) {
-      host.companions = [];
+      setCompanions(host, owner, []);
       companionHighlight.uninstall();
       host = undefined;
     }
