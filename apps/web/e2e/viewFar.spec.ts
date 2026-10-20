@@ -44,6 +44,7 @@ interface ViewerDebug {
   __viewer: {
     lookAt(target: [number, number, number], distance: number): void;
     drawn(): { uri: string; min: number[]; max: number[] }[];
+    hitAhead(): number | null;
   };
 }
 
@@ -193,5 +194,57 @@ test("a far tile is drawn where it is: its frame composed and its header's bits 
   console.info(JSON.stringify({ plot: here, misplaced }));
   expect(here).toBeGreaterThan(0.05);
   for (const share of misplaced) expect(share).toBeLessThan(0.01);
+  expect(errors).toEqual([]);
+});
+
+test("an ADD tileset's far tile is a surface where it is drawn", async ({ page }) => {
+  test.setTimeout(180_000);
+  // Without a packaged grid, view.html builds collision from each tile's own splats. It reads
+  // them as it loads each tile of an ADD tileset (main.ts `tileMesh`), the path that must have
+  // them in the scan's frame; a REPLACE tileset streams its tiles without them. So the far
+  // tileset is served as ADD, without its hexapod.collision declaration: every tile loads,
+  // and the leaves' splats are the surfaces near the plot.
+  const tileset = JSON.parse(readFileSync(resolve(TILES, "tileset.json"), "utf8")) as {
+    root: { refine?: string; extras?: { collision?: unknown } };
+  };
+  tileset.root.refine = "ADD";
+  delete tileset.root.extras?.collision;
+  await page.route(TILESET, (route) =>
+    route.fulfill({ json: tileset, headers: { "access-control-allow-origin": "*" } }),
+  );
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(`/view.html#${SITE}`);
+  await expect(page.locator("#viewer-status")).toContainText("Drag to turn", { timeout: 60_000 });
+  const plot = expected.plots["north-east"] ?? [0, 0, 0];
+  const leaves = expected.plotLeaves["north-east"] ?? [];
+  const viewer = page.locator("#viewer");
+  for (const leaf of leaves) {
+    await expect(viewer).toHaveAttribute(
+      "data-tiles",
+      new RegExp(`(^| )${leaf.replace(/\./g, "\\.")}( |$)`),
+      { timeout: 60_000 },
+    );
+  }
+  const lookAt = (target: [number, number, number]): Promise<void> =>
+    page.evaluate((at) => (window as unknown as ViewerDebug).__viewer.lookAt(at, 20), target);
+  const hitAhead = (): Promise<number | null> =>
+    page.evaluate(() => (window as unknown as ViewerDebug).__viewer.hitAhead());
+  // Looking at the plot from 20 m: the first surface is the plot's, a little nearer than that
+  // (a cell's clearance, and the plot's splats have size).
+  await lookAt(plot);
+  const hit = await hitAhead();
+  // Where each leaf's splats would be had its offset been ignored: nothing to stop at.
+  const misplaced: (number | null)[] = [];
+  for (const leaf of leaves) {
+    const offset = expected.tiles[leaf]?.offset ?? [0, 0, 0];
+    await lookAt([plot[0] - offset[0], plot[1] - offset[1], plot[2] - offset[2]]);
+    misplaced.push(await hitAhead());
+  }
+  console.info(JSON.stringify({ hit, misplaced }));
+  expect(hit).not.toBeNull();
+  expect(hit ?? Number.NaN).toBeGreaterThan(5);
+  expect(hit ?? Number.NaN).toBeLessThan(20);
+  for (const miss of misplaced) expect(miss).toBeNull();
   expect(errors).toEqual([]);
 });
