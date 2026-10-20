@@ -278,7 +278,10 @@ def test_crossed_combs_are_kept_unvalidated_in_seconds_not_minutes(
     response = send(client, request(boundary=crossed_combs(40), parcelIds=[]))
     elapsed = time.monotonic() - started
     assert response.status_code == 202, response.text
-    assert elapsed < 6, elapsed
+    # The flag is the proof the timeout fired: these combs take 16.5 s to dissolve. The wall
+    # clock is loose on purpose: GEOS notices a cancel only between steps, so the request took
+    # 2.3-7.5 s under load (Codex, 2026-10-20) and 6.1 s in a full local run; never 16.5 s.
+    assert elapsed < 15, elapsed
     (row,) = listed(client)
     assert row["outlineUnvalidated"] is True
     assert row["boundary"] is None and row["areaM2"] is None
