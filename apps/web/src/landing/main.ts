@@ -11,13 +11,12 @@ import "./landing.css";
 import { BRAND } from "./brand";
 import type { FoundLand } from "../finder/handoff";
 import {
-  REQUEST_ENDPOINT,
   buildPayload,
   formatAcres,
   validateRequest,
   type RequestErrors,
   type RequestField,
-  type ScanRequestPayload,
+  sendRequest,
 } from "./form";
 import { startFinder } from "./finder";
 import type * as SceneModule from "./scene.js";
@@ -146,7 +145,11 @@ function showErrors(errors: RequestErrors) {
   }
 }
 
+const submit = $("#f button[type=submit]", HTMLButtonElement);
+let sending = false;
+
 form.addEventListener("submit", () => {
+  if (sending) return;
   const request = {
     name: fields.name.value,
     organization: $("#f-org", HTMLInputElement).value,
@@ -167,18 +170,29 @@ form.addEventListener("submit", () => {
     status.hidden = true;
     return;
   }
-  // What would be sent, kept on the notice (and read by e2e) until the form has somewhere to go.
-  const payload: ScanRequestPayload = buildPayload(request, land);
-  status.dataset.request = JSON.stringify(payload);
-  if (REQUEST_ENDPOINT === null) {
-    const where = land
-      ? `${land.label}, ${acresOf(land.areaM2)} acres`
-      : `${fields.acres.value} acres`;
-    status.textContent =
-      `Your request is complete (${where}), ` +
-      "but this form is not connected yet, so nothing was sent.";
+  const payload = buildPayload(request, land);
+  const where = land
+    ? `${land.label}, ${acresOf(land.areaM2)} acres`
+    : `${fields.acres.value} acres`;
+  sending = true;
+  submit.disabled = true;
+  submit.textContent = "Sending…";
+  status.hidden = true;
+  void sendRequest(payload, $("#f-website", HTMLInputElement).value, {
+    base: import.meta.env.VITE_API_BASE_URL ?? "",
+  }).then((outcome) => {
+    sending = false;
+    submit.disabled = false;
+    submit.textContent = "Request a site scan";
+    if (outcome.kind === "received") {
+      status.dataset.state = "received";
+      status.textContent = `Thank you, ${payload.name}. We have your request (${where}) and will reply to ${payload.email}.`;
+    } else {
+      status.dataset.state = "error";
+      status.textContent = outcome.message;
+    }
     status.hidden = false;
-  }
+  });
 });
 
 // ── brand ──

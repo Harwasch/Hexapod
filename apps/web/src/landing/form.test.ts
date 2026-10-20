@@ -1,4 +1,11 @@
-import { buildPayload, formatAcres, parseAcres, validateRequest, type SiteRequest } from "./form";
+import {
+  buildPayload,
+  formatAcres,
+  parseAcres,
+  sendRequest,
+  validateRequest,
+  type SiteRequest,
+} from "./form";
 
 const complete: SiteRequest = {
   name: "Ada",
@@ -98,5 +105,48 @@ describe("formatAcres", () => {
     expect(validateRequest({ ...complete, hasBoundary: false, acres: formatAcres(150) })).toEqual(
       {},
     );
+  });
+});
+
+describe("sendRequest", () => {
+  const payload = buildPayload({ ...complete, acres: "12" }, null);
+  const answering = (response: Response | Error) => {
+    const calls: { input: string; init: RequestInit }[] = [];
+    const fetchImpl = (input: string, init: RequestInit) => {
+      calls.push({ input, init });
+      return response instanceof Error ? Promise.reject(response) : Promise.resolve(response);
+    };
+    return { calls, fetchImpl };
+  };
+
+  it("posts the payload and the honeypot as JSON to the API's scan requests", async () => {
+    const { calls, fetchImpl } = answering(Response.json({ status: "received" }, { status: 202 }));
+    const outcome = await sendRequest(payload, "", { base: "https://api.example", fetchImpl });
+    expect(outcome).toEqual({ kind: "received" });
+    const [call] = calls;
+    expect(call?.input).toBe("https://api.example/api/v1/scan-requests");
+    expect(call?.init.method).toBe("POST");
+    expect(JSON.parse(call?.init.body as string)).toEqual({ ...payload, website: "" });
+  });
+
+  it("says what to do when the request was refused", async () => {
+    const said = async (response: Response | Error) =>
+      sendRequest(payload, "", answering(response)).then((outcome) =>
+        outcome.kind === "error" ? outcome.message : "received",
+      );
+    expect(await said(new Response(null, { status: 429 }))).toMatch(/Wait a minute/);
+    expect(await said(new Response(null, { status: 413 }))).toMatch(/too detailed/);
+    expect(
+      await said(
+        Response.json(
+          { errors: [{ msg: "Value error, must be an email address like name@example.com" }] },
+          { status: 422 },
+        ),
+      ),
+    ).toBe(
+      "Part of this could not be accepted: must be an email address like name@example.com. Check it and send it again.",
+    );
+    expect(await said(new Response(null, { status: 500 }))).toMatch(/HTTP 500/);
+    expect(await said(new TypeError("Failed to fetch"))).toMatch(/could not reach the server/);
   });
 });
