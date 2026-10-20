@@ -1573,7 +1573,10 @@ export class SiteManager {
       },
     )
       .then((tileset) => {
-        if (this.loaded.get(active.site.id) !== active) {
+        // A site let go meanwhile, or a fresh record that no longer lists this model (a date
+        // run again, `applyDatesRecord`) and so dropped its handle: added now, it would be
+        // drawn and listened to by a handle nothing disposes.
+        if (this.loaded.get(active.site.id) !== active || active.handles.get(asset.id) !== handle) {
           tileset.destroy();
           return null;
         }
@@ -1587,6 +1590,8 @@ export class SiteManager {
         return tileset;
       })
       .catch((error: unknown) => {
+        // A model a fresh record dropped while it loaded is nobody's to report.
+        if (active.handles.get(asset.id) !== handle) return null;
         if (asset.source.type === "cesium-ion" && isIonNotFound(error)) {
           // An asset the catalog names but the key's account was never given (the seeded San
           // Francisco mesh, ion asset 1415196, loads by proximity near the Bay Area scans):

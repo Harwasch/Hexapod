@@ -582,6 +582,32 @@ describe("a loaded site takes a fresh record of its dates", () => {
     expect(Matrix4.equals(tileset(A2.id)?.modelMatrix, tileset("a1b")?.modelMatrix)).toBe(true);
   });
 
+  it("a model still loading when a fresh record drops it is let go, never added", async () => {
+    const { manager, site, tileset, viewer } = harness();
+    await open(manager);
+    // E2 is run again (a2b), and again before a2b's tiles are in (a2c).
+    let release = (): void => undefined;
+    made.held.set("a2b", (r) => (release = r));
+    const rerun = (id: string) => ({
+      ...site,
+      epochs: [E1, { ...E2, currentAssetId: id }],
+      assets: [site.assets[0] ?? A1, splat(id, { epochId: "e2" })],
+    });
+    manager.updateRecord(rerun("a2b"));
+    await settle();
+    manager.updateRecord(rerun("a2c"));
+    await settle();
+    release();
+    await settle();
+    await settle();
+    const late = tileset("a2b");
+    expect(late).toBeDefined();
+    expect(viewer.scene.primitives.add).not.toHaveBeenCalledWith(late);
+    expect(late?.destroy).toHaveBeenCalled();
+    expect(manager.loadedAssets().map((a) => a.assetId)).not.toContain("a2b");
+    expect(manager.shownAsset()?.id).toBe("a2c");
+  });
+
   it("a record that changes nothing of the dates moves nothing", async () => {
     const { manager, site, tilesetEvents } = harness();
     await open(manager);
