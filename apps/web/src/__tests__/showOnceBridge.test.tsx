@@ -1,8 +1,8 @@
 /**
  * Show once, everywhere on the map: a tap on the Land compares that place and drapes the
  * answer; the slider moves only the drape's uniform; a protect tap swaps the texture; hiding
- * the card lifts the drape and the taps; the fog taking the ground, Escape or a switch to another
- * project ends it.
+ * the card lifts the drape and the taps, as As captured does; the fog taking the ground, Escape
+ * or a switch to another project ends it.
  */
 
 import { act, cleanup, render } from "@testing-library/react";
@@ -14,6 +14,7 @@ import type { LandArea, SignatureSimilarity } from "@twin/contracts";
 
 import { ShowOnceBridge } from "@/cesium/ShowOnceBridge";
 import { rampThreshold } from "@/features/showOnce/grid";
+import { useAsCaptured } from "@/state/asCaptured";
 import { useGridDrape } from "@/state/gridDrape";
 import { useLand } from "@/state/land";
 import { useMission } from "@/state/mission";
@@ -187,6 +188,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useAsCaptured.getState().set(false);
   useShowOnce.getState().stop();
   useShowOnce.getState().setShown(false);
   useLand.getState().clear();
@@ -274,6 +276,25 @@ it("lifts the drape and the taps while the card is hidden, and keeps the answer"
   expect(useShowOnce.getState().result).not.toBeNull();
   act(() => useShowOnce.getState().setShown(true));
   expect(fixture.primitives).toHaveLength(2);
+});
+
+it("draws no inferred answer while As captured is on, and the same answer after", async () => {
+  render(<ShowOnceBridge />);
+  await tap(-120.045, 34.698);
+  expect(fixture.entities?.getById("grid-outline:signature")).toBeDefined();
+  // The answer is a similarity inferred from satellite signatures, not something measured.
+  act(() => useAsCaptured.getState().set(true));
+  expect(fixture.removed).toHaveLength(1);
+  expect(fixture.entities?.getById("grid-outline:signature")).toBeUndefined();
+  expect(fixture.released).toBe(1);
+  expect(fixture.canvas.style.cursor).toBe("");
+  // The session and its answer wait, as under a hidden card.
+  expect(useShowOnce.getState().session).not.toBeNull();
+  expect(useShowOnce.getState().result).not.toBeNull();
+  act(() => useAsCaptured.getState().set(false));
+  expect(fixture.primitives).toHaveLength(2);
+  expect(fixture.entities?.getById("grid-outline:signature")).toBeDefined();
+  expect(fixture.similar).toHaveBeenCalledTimes(1);
 });
 
 it("ends when the fog takes the ground, on Escape, and with another land", async () => {

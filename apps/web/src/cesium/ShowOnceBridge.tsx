@@ -6,6 +6,7 @@ import { cellAt, cellRing } from "@/features/knowledge/grid";
 import { NO_SCORE, rampImage, rampThreshold } from "@/features/showOnce/grid";
 import { compareAt, dropPendingTaps, protectAt } from "@/features/showOnce/session";
 import { isTyping } from "@/lib/hotkeys";
+import { useAsCaptured } from "@/state/asCaptured";
 import { useGridDrape } from "@/state/gridDrape";
 import { useLand } from "@/state/land";
 import { missionLandId, useMission } from "@/state/mission";
@@ -28,6 +29,7 @@ import { POPOVER_SELECTOR } from "./uiActivity";
  * it first), as does the fog taking the ground back (one drape at a time, `state/gridDrape.ts`)
  * and a switch to a project the Land is not engaged on (another site from the switcher).
  * Hiding the card only lifts the drape and the taps; its answer waits for the card to come back.
+ * As captured does the same while it is on.
  */
 /** The map's cursor while it takes taps (the area editor's pick uses the same crosshair). */
 function setCursor(canvas: HTMLCanvasElement, cursor: string): void {
@@ -58,8 +60,11 @@ export function ShowOnceBridge() {
   const result = useShowOnce((s) => s.result);
   const guarded = useShowOnce((s) => s.guarded);
   const threshold = useShowOnce((s) => s.threshold);
+  const asCaptured = useAsCaptured((s) => s.on);
   const layerRef = useRef<GroundGridLayer | null>(null);
-  const active = Boolean(host && session && shown && land?.id === session.landId);
+  // The answer is inferred (a similarity of satellite signatures): As captured lifts it with
+  // the taps, as a hidden card does, and the answer waits for it to be off (ADR 0019).
+  const active = Boolean(host && session && shown && !asCaptured && land?.id === session.landId);
 
   useEffect(() => {
     if (!host) return;

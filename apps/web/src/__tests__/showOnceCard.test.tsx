@@ -15,6 +15,7 @@ import { api } from "@/api/client";
 import { signaturePeriods } from "@/features/land/rasterRuns";
 import { useLens } from "@/features/land/surface/lenses";
 import { ShowOnceCard } from "@/features/showOnce/ShowOnceCard";
+import { HIDDEN_AS_CAPTURED, useAsCaptured } from "@/state/asCaptured";
 import { useLand } from "@/state/land";
 import { useLandContext } from "@/state/landContext";
 import { useShowOnce } from "@/state/showOnce";
@@ -158,6 +159,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useAsCaptured.getState().set(false);
   useShowOnce.getState().stop();
   useShowOnce.getState().setJob(null);
   useLandContext.getState().clear();
@@ -487,4 +489,15 @@ it("still says what the job made when the card is on screen again", async () => 
   fireEvent.click(await screen.findByTestId("show-once-start"));
   expect(useShowOnce.getState().job).toBeNull();
   expect(screen.queryByTestId("show-once-done")).toBeNull();
+});
+
+it("says the inferred answer is not drawn while As captured is on", async () => {
+  rasters = [signatureRaster()];
+  mount();
+  await screen.findByTestId("show-once-start");
+  expect(screen.queryByTestId("show-once-as-captured")).toBeNull();
+  act(() => useAsCaptured.getState().set(true));
+  expect(screen.getByTestId("show-once-as-captured").textContent).toContain(HIDDEN_AS_CAPTURED);
+  act(() => useAsCaptured.getState().set(false));
+  expect(screen.queryByTestId("show-once-as-captured")).toBeNull();
 });
