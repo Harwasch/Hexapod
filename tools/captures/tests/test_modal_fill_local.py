@@ -91,3 +91,19 @@ def test_the_local_pre_check_needs_nothing_but_the_standard_library(tmp_path: Pa
         ("unknown scan", "<scan>=<file>"),
     ]:
         assert result[name][0] == "refused" and words in str(result[name][1]), (name, result)
+
+
+def test_a_push_runs_no_fill_job_and_says_so() -> None:
+    """fill.yml's jobs have no default: a push to a `wm-*` branch (no inputs) runs nothing
+    -- its old default, fill:camp, can no longer pass the gate -- and every step but the
+    notice that says so is skipped."""
+    text = (REPO / ".github" / "workflows" / "fill.yml").read_text(encoding="utf-8")
+    assert "JOBS: ${{ inputs.jobs || '' }}" in text
+    defaults = [line for line in text.splitlines() if line.strip().startswith("default:")]
+    assert not any("fill:" in line for line in defaults), defaults
+    steps = text.split("    steps:\n", 1)[1]
+    names = [line for line in steps.splitlines() if line.startswith("      - ")]
+    guards = [line for line in steps.splitlines() if line.startswith("        if:")]
+    assert len(guards) == len(names)
+    assert guards[0].strip() == "if: env.JOBS == ''" and "Nothing to run" in names[0]
+    assert all("env.JOBS != ''" in guard for guard in guards[1:])
