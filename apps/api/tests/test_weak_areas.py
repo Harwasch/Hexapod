@@ -203,3 +203,38 @@ def test_quarter_metre_cells_are_closed_into_zones_a_drone_can_fly() -> None:
     [patch] = cell_patches(plane, weak_mask(plane), PROJECTION).patches
     assert patch.area_m2 == pytest.approx(36.0, abs=2.0)
     assert weak_areas.MIN_SMOOTHING_M == 0.5
+
+
+def test_a_large_plane_is_drawn_a_level_up_by_majority(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Past `MAX_ZONE_CELLS` zones are drawn on coarser cells, weak where at least half of
+    the children the epoch speaks for are: a block of weak cells stays one zone the same
+    size, a lone weak cell among strong ones does not make its parent weak, and the counts
+    are still of the finest cells."""
+    monkeypatch.setattr(weak_areas, "MAX_ZONE_CELLS", 100)
+    plane = a_plane(level=0, i0=0, j0=0, ni=40, nj=40)
+    weaken(plane, (8, 24), (8, 16), score=50, bits=BITS["views"])  # 4 m x 2 m
+    weaken(plane, (33, 34), (33, 34), score=50, bits=BITS["views"])  # one stray cell
+    found = cell_patches(plane, weak_mask(plane), PROJECTION)
+    assert found.zone_level == 2  # 40 x 40 -> 20 x 20 -> 10 x 10 cells
+    [patch] = found.patches
+    assert patch.metric.symmetric_difference(box(2, 2, 6, 4)).area < 1e-9
+    assert patch.cells == 128 and found.weak_cells == 129
+
+
+def test_a_noisy_plane_at_the_ceiling_is_answered_in_seconds() -> None:
+    """2^22 cells of scattered weakness: the zones are drawn a level up, in well under the
+    minutes outlining every region took."""
+    import time
+
+    rng = np.random.default_rng(1)
+    n = 2048
+    plane = a_plane(level=0, i0=-n // 2, j0=-n // 2, ni=n, nj=n)
+    yy, xx = np.mgrid[0:n, 0:n]
+    noisy = np.sin(xx / 37.0) * np.cos(yy / 53.0) + 0.3 * rng.standard_normal((n, n)) > 0.6
+    plane.channels["score"][noisy] = 60
+    plane.channels["reasons"][noisy] = BITS["views"]
+    started = time.perf_counter()
+    found = cell_patches(plane, weak_mask(plane), PROJECTION, max_areas=8, budget_m2=2000)
+    assert time.perf_counter() - started < 20
+    assert found.truncated_by_budget
+    assert found.patches and sum(p.area_m2 for p in found.patches) <= 2000 + 1.0
