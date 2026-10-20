@@ -37,7 +37,8 @@ the coarse level never shows a weak patch as strong.
 **Surface** is the second (tools/pipeline surface.py writes it, ADR 0018): per cell the
 epoch's measured heights, on the very plane of its confidence grid -- `dsm` and `ground`
 (`i2`, centimetres above the tileset frame's origin, `NO_HEIGHT` where the cell has no
-surface), `sigma` (`u1`, centimetres, saturating: 255 means at least 2.55 m; 0 only where
+surface; `ground` alone `NO_HEIGHT` under a surface where its ground was never observed),
+`sigma` (`u1`, centimetres, saturating: 255 means at least 2.55 m; 0 only where
 there is no surface) and `support` (`u1`: `SURFACE_SOURCE_BITS` in the low nibble, the floor
 of log2 of the samples in the high one, saturating at 15). One plane, no pyramid: how two
 epochs' surfaces are brought to a common level is the change map's decision (A5).
@@ -217,7 +218,8 @@ CONFIDENCE_CHANNELS: tuple[Channel, ...] = (
 #: `surface`'s height unit: `dsm`, `ground` and `sigma` are whole centimetres.
 HEIGHT_UNIT_M = 0.01
 #: `dsm` and `ground` where a cell has no surface (too few samples, or a height `i2`
-#: centimetres cannot hold: more than 327.67 m from the frame origin's height).
+#: centimetres cannot hold: more than 327.67 m from the frame origin's height); `ground`
+#: alone where the cell has a surface but its ground was never observed (surface.py).
 NO_HEIGHT = -32768
 #: `support`'s low nibble: which samples a cell's surface came from.
 SURFACE_SOURCE_BITS: Mapping[str, int] = {"sfm": 1, "splat": 2}

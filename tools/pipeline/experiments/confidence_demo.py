@@ -247,8 +247,9 @@ def _surface(run: Path) -> tuple[dict[str, Any], cell_grid.CellGrid]:
 
 def coarsen_surface(plane: cell_grid.CellPlane, level: int) -> cell_grid.CellPlane:
     """`plane` at `level` (>= its own): dsm the highest, ground the lowest and sigma the
-    largest of the children that have a surface; support's bits OR'd, its count the
-    largest child's (a floor). A cell with no child surfaced has none."""
+    largest of the children that have a surface (ground of those whose ground was
+    observed: none when no child's was); support's bits OR'd, its count the largest
+    child's (a floor). A cell with no child surfaced has none."""
     no = cell_grid.NO_HEIGHT
     while plane.level < level:
         pi0, pj0 = plane.i0 >> 1, plane.j0 >> 1
@@ -262,11 +263,12 @@ def coarsen_surface(plane: cell_grid.CellPlane, level: int) -> cell_grid.CellPla
         has = quads[..., 2] > 0
         out = np.zeros((nj, ni, 4), dtype=np.int64)
         out[..., 0] = np.where(has, quads[..., 0], no - 1).max(axis=(1, 3))
-        out[..., 1] = np.where(has, quads[..., 1], 1 << 20).min(axis=(1, 3))
+        grounded = has & (quads[..., 1] != no)  # a child whose ground was observed
+        out[..., 1] = np.where(grounded, quads[..., 1], 1 << 20).min(axis=(1, 3))
         out[..., 2] = np.where(has, quads[..., 2], 0).max(axis=(1, 3))
         any_has = has.any(axis=(1, 3))
         out[..., 0] = np.where(any_has, out[..., 0], no)
-        out[..., 1] = np.where(any_has, out[..., 1], no)
+        out[..., 1] = np.where(grounded.any(axis=(1, 3)), out[..., 1], no)
         support = quads[..., 3]
         bits = np.bitwise_or.reduce(np.bitwise_or.reduce(support & 0x0F, axis=3), axis=1)
         out[..., 3] = bits | ((support >> 4).max(axis=(1, 3)) << 4)

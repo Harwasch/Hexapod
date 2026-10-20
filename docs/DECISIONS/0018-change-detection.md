@@ -41,8 +41,12 @@ how well each cell was seen (ADR 0016).
      along each axis (a 5 m square): bare ground under a crown or a roof up to 5 m across. That
      holds at levels 0 to 3 (0.25 to 2 m cells: 21, 11, 5 and 3 cells a side). At level 4 and
      coarser (4 m cells and up) no other cell's centre is within 2.5 m, the window is the cell
-     alone, and `ground` is just the cell's own 2nd-lowest sample: under a crown wider than the
-     cell it reads the crown. The descriptor records the window it used (`groundWindowCells`);
+     alone, and `ground` is just the cell's own 2nd-lowest sample. The descriptor records the
+     window it used (`groundWindowCells`). Where the window saw only canopy or roof, the ground
+     was **never observed** and says so: `ground` is `-32768` under a `dsm` that is there, when
+     the window's least is higher than any slope up to 1 in 2 (`GROUND_MAX_GRADE`) from a lower
+     2nd-lowest sample anywhere allows (`summary.groundUnobserved` counts them; review B5a: a
+     10 m canopy at 4 m with ground seen only around it gave its middle cells 4 m of "ground");
    - `sigma = max(1 cm, (z1 − zm) · RMS2(n) / SPAN(n))`, `m = min(n, 8)`: the root-mean-square
      distance of `z2` from the surface, **its bias included**, under Gaussian noise of the scale
      the top eight's spread shows. `RMS2(n) = √E[Z(2:n)²]` and `SPAN(n) = E[Z(1:n)] − E[Z(m:n)]`
@@ -109,9 +113,12 @@ how well each cell was seen (ADR 0016).
 - **Appearance-only change is stubbed.** The class is reserved and never emitted: telling a repaint
   or a dried lawn from no change needs the new photos compared with the old epoch at fixed geometry,
   which is a photo comparison, never a splat-pixel one. Not built.
-- **The ground is biased low, never high.** A lower envelope reads low on a slope (up to 2.5·g m
-  along each axis on grade `g`), and a low outlier that survives the 2nd-lowest rule spreads over
-  its 5 m square. `ground` does not enter the change threshold; it is for the bare-earth view.
+- **The ground is biased low, never high, or unobserved.** A lower envelope reads low on a slope
+  (up to 2.5·g m along each axis on grade `g`), and a low outlier that survives the 2nd-lowest
+  rule spreads over its 5 m square. The unobserved test (a slope of 1 in 2 from lower ground)
+  catches a canopy or roof of height `H` wherever ground is within `2H` metres of the cell; deeper
+  inside a plateau than that nothing tells canopy from ground, and ground steeper than 1 in 2 beside
+  a drop reads as unobserved (lost, never wrong).
 - **Under noise both surfaces are biased, and sigma says by how much.** With height noise σ the
   2nd highest of `n` samples reads `σ·E[Z(2:n)]` high (1.4σ at 20, 3.2σ at 2,000), and the
   ground, a lower envelope over 441 cells' 2nd-lowest values at 0.25 m, about 3σ low (the demo:

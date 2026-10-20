@@ -602,6 +602,16 @@ def test_coarsening_a_surface_takes_the_highest_top_the_lowest_ground_the_widest
     empty[..., :2] = NO
     nothing = confidence_demo.coarsen_surface(cell_grid.CellPlane(0, 0, 0, 2, 2, empty), 1)
     assert nothing.data[0, 0].tolist() == [NO, NO, 0, 0]
+    # A child whose ground was never observed (NO_HEIGHT under a surface) gives no ground:
+    # the lowest is of the children that have one, and none when no child has.
+    unseen = data.copy()
+    unseen[0, 1, :] = [50, NO, 3, 0x12]
+    unseen[1, 0, 1] = NO
+    coarse = confidence_demo.coarsen_surface(cell_grid.CellPlane(0, 0, 0, 2, 2, unseen), 1)
+    assert coarse.data[0, 0].tolist()[:3] == [50, 0, 4]
+    unseen[..., 1] = NO
+    coarse = confidence_demo.coarsen_surface(cell_grid.CellPlane(0, 0, 0, 2, 2, unseen), 1)
+    assert coarse.data[0, 0].tolist()[:3] == [50, NO, 4]
 
 
 # --- boundaries (review) -----------------------------------------------------------------
@@ -747,3 +757,48 @@ def test_the_noise_model_tables_are_the_normal_order_statistics(n: int) -> None:
         assert 0.0 <= rms - math.sqrt(top_second) < 2e-4
         assert 0.0 <= top_span - span < 2e-4
         assert rms >= math.sqrt(second) and span <= span_n
+
+
+# --- where the ground was not seen (review B5a) ------------------------------------------
+
+
+def _surface_of(xyz: np.ndarray, level: int, half_m: float) -> surface.Surfaced:
+    """`surface_plane` over the square `+/- half_m` at `level`, from these samples."""
+    cells = round(2 * half_m / cell_grid.Lattice(level).cell_m)
+    window = surface.Window(level=level, i0=-cells // 2, j0=-cells // 2, ni=cells, nj=cells)
+    return surface.surface_plane(lambda: iter([(xyz, surface.SPLAT)]), window)
+
+
+def test_ground_deep_under_a_canopy_wider_than_the_window_is_unobserved_not_the_canopy() -> None:
+    """Review B5a: a 10 m canopy at 4 m, dense enough that nothing under it was sampled,
+    with ground seen only around it. Its cells within 2.5 m of its edge take the ground
+    their window sees; the cells further in see only canopy, and their ground was never
+    observed -- `NO_HEIGHT`, with the canopy's dsm still there -- never 4 m of "ground"."""
+    centre, side = (0.0, 0.0), 10.0
+    canopy = _plane(spacing=0.1, half_m=5.0, z=4.0)
+    points = np.concatenate([_off_box(_plane(spacing=0.1, half_m=8.0), centre, side), canopy])
+    found = _surface_of(points, level=0, half_m=8.0)
+    plane = found.plane
+    dsm, ground = plane.data[..., 0], plane.data[..., 1]
+    east = (np.arange(plane.ni) + plane.i0 + 0.5) * plane.cell_m
+    north = (np.arange(plane.nj) + plane.j0 + 0.5) * plane.cell_m
+    inside = np.maximum(np.abs(east)[None, :], np.abs(north)[:, None])  # L-inf from centre
+    deep = inside < 5.0 - 2.5 - 0.25  # more than 2.5 m (and a cell) inside the edge
+    near = (inside > 5.0 - 2.5 + 0.25) & (inside < 5.0 - 0.25)
+    assert (dsm[deep] == 400).all() and (dsm[near] == 400).all()
+    assert (ground[deep] == NO).all(), np.unique(ground[deep])
+    assert (ground[near] == 0).all()  # within the window's reach: the ground beside it
+    assert (ground[inside > 5.25] == 0).all()  # open ground
+    assert found.ground_unobserved == int((ground == NO).sum()) > 0
+
+
+def test_ground_on_a_steep_even_slope_is_never_called_unobserved() -> None:
+    """The lower envelope reads low on a slope (2.5 g m along each axis); a slope up to the
+    grade the unobserved test allows (`GROUND_MAX_GRADE`, 1 in 2) is ground everywhere."""
+    points = _plane(spacing=0.1, half_m=8.0)
+    for grade in (0.2, surface.GROUND_MAX_GRADE):
+        tilted = points.copy()
+        tilted[:, 2] = grade * (tilted[:, 0] + 0.6 * tilted[:, 1])
+        found = _surface_of(tilted, level=0, half_m=8.0)
+        assert found.ground_unobserved == 0, grade
+        assert (found.plane.data[..., 1] != NO).all()

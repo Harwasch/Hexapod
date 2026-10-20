@@ -37,7 +37,20 @@ a crown or a roof no wider than that, some neighbour saw the ground. That needs 
 its own 2nd-lowest sample (`groundWindowCells` in the descriptor says which). It is a lower
 envelope, so it is biased **low, never high**: on a slope of grade `g` by up to `2.5 g`
 metres along each axis, and a low outlier that survives the 2nd-lowest rule spreads over
-its whole square. A cell with fewer than `MIN_SAMPLES` (3) samples has no surface
+its whole square.
+
+**Ground that was never seen.** Under a crown or a roof wider than the window, every cell
+of the window sees only it, and the least of them is the canopy, not the ground. That is
+told from the ground around it: a cell's ground is **unobserved** -- `NO_HEIGHT` in
+`ground`, with its `dsm` still there -- when it is higher than any slope up to
+`GROUND_MAX_GRADE` (1 in 2) from a lower 2nd-lowest sample anywhere allows
+(`grade_envelope`: the least of `low(c') + grade * L1 distance`). A slope that steep or
+gentler never trips it (its own samples are such a slope); a 4 m canopy does, wherever the
+ground beside it is closer than 8 m. Limits: deeper inside a plateau than its height over
+the grade, nothing tells canopy from ground, and ground steeper than 1 in 2 beside a drop
+reads as unobserved (a loss, never a wrong height). `summary.groundUnobserved` counts them.
+
+A cell with fewer than `MIN_SAMPLES` (3) samples has no surface
 (`NO_HEIGHT`, sigma 0): with two, the 2nd highest is the lower and the 2nd lowest the
 higher of them, so the ground would stand above the top. From three up,
 `ground <= 2nd lowest <= dsm`. `sigma` is `dsm`'s: the root-mean-square distance of `z2`
@@ -89,6 +102,7 @@ from registry import stage_impl
 
 __all__ = [
     "BAND_CELLS",
+    "GROUND_MAX_GRADE",
     "GROUND_WINDOW_M",
     "MIN_SAMPLES",
     "SIGMA_FLOOR_M",
@@ -96,6 +110,7 @@ __all__ = [
     "TOP_K",
     "Surfaced",
     "Window",
+    "grade_envelope",
     "ground_filter",
     "ground_half_cells",
     "read_window",
@@ -128,6 +143,9 @@ MIN_SAMPLES = 3
 SIGMA_FLOOR_M = 0.01
 #: The side of the square of cell centres `ground` is the least over (module docstring).
 GROUND_WINDOW_M = 5.0
+#: The steepest ground the unobserved test takes as ground, rise over run (module
+#: docstring): 1 in 2, about 27 degrees.
+GROUND_MAX_GRADE = 0.5
 #: Opaque enough to be a surface: a gaussian at least half opaque.
 MIN_SPLAT_ALPHA = 0.5
 #: Cells whose extremes are held in one pass: 2^19 (137 bytes each) is 72 MB.
@@ -468,6 +486,8 @@ class Surfaced:
     out_of_range: int
     sigma_saturated: int
     ground_half: int
+    #: Surfaced cells whose ground was never observed (module docstring): `NO_HEIGHT` ground.
+    ground_unobserved: int = 0
 
 
 def ground_half_cells(cell_m: float, window_m: float = GROUND_WINDOW_M) -> int:
@@ -502,6 +522,29 @@ def ground_filter(ground: npt.NDArray[np.int32], half: int) -> npt.NDArray[np.in
     return filtered
 
 
+def grade_envelope(low: npt.NDArray[np.int32], step: float) -> F64:
+    """Per cell, the least over every cell `c'` with a ground (not `_NO_GROUND`) of
+    `low(c') + step * (|di| + |dj|)`: the highest a slope of `step` per cell from any
+    lower sample anywhere lets this cell's ground be. Infinite where no cell has one.
+
+    The L1 distance is separable, so it is two 1D passes, each a forward and a backward
+    running minimum (`h[i] = min_k (f[k] + step |i - k|)` is `step i + cummin(f - step k)`
+    from the left, and its mirror from the right). Every value is a whole centimetre plus
+    a multiple of `step` (12.5 cm at 0.25 m cells and a grade of 1 in 2), exact in float64,
+    so the result depends on no order of operations. L1 is at least the straight-line
+    distance, so a real slope up to the grade in any direction stays under it."""
+    out: F64 = np.where(low == _NO_GROUND, np.inf, low.astype(np.float64))
+    for axis in (1, 0):
+        n = out.shape[axis]
+        ramp = np.arange(n, dtype=np.float64) * step
+        ramp = ramp[None, :] if axis == 1 else ramp[:, None]
+        with np.errstate(invalid="ignore"):
+            out = np.minimum.accumulate(out - ramp, axis=axis) + ramp
+            back = np.flip(np.minimum.accumulate(np.flip(out + ramp, axis), axis=axis), axis)
+            out = back - ramp
+    return out
+
+
 def surface_plane(
     samples: Samples,
     window: Window,
@@ -509,6 +552,7 @@ def surface_plane(
     min_samples: int = MIN_SAMPLES,
     sigma_floor_m: float = SIGMA_FLOOR_M,
     ground_window_m: float = GROUND_WINDOW_M,
+    ground_max_grade: float = GROUND_MAX_GRADE,
     band_cells: int = BAND_CELLS,
 ) -> Surfaced:
     """Every sample binned on `window`, and the four channels (module docstring).
@@ -524,6 +568,8 @@ def surface_plane(
         raise ValueError(f"sigma_floor_m must be a positive length, not {sigma_floor_m}")
     if not (math.isfinite(ground_window_m) and ground_window_m >= 0):
         raise ValueError(f"ground_window_m must be a length, not {ground_window_m}")
+    if not (math.isfinite(ground_max_grade) and ground_max_grade > 0):
+        raise ValueError(f"ground_max_grade must be a positive grade, not {ground_max_grade}")
     ni, nj = window.ni, window.nj
     dsm = np.full((nj, ni), cell_grid.NO_HEIGHT, dtype=np.int16)
     ground = np.full((nj, ni), _NO_GROUND, dtype=np.int32)
@@ -565,11 +611,15 @@ def surface_plane(
         del band
     half = ground_half_cells(window.cell_m, ground_window_m)
     filtered = ground_filter(ground, half)
+    # Ground the window saw only canopy or roof for: higher than any slope up to
+    # GROUND_MAX_GRADE from a lower 2nd-lowest anywhere allows (module docstring).
+    step_cm = ground_max_grade * window.cell_m / cell_grid.HEIGHT_UNIT_M
+    unobserved = (filtered != _NO_GROUND) & (filtered > grade_envelope(ground, step_cm))
     del ground
     data = np.empty((nj, ni, len(cell_grid.SURFACE_CHANNELS)), dtype=np.int16)
     data[..., 0] = dsm
     del dsm
-    data[..., 1] = np.where(filtered == _NO_GROUND, cell_grid.NO_HEIGHT, filtered)
+    data[..., 1] = np.where((filtered == _NO_GROUND) | unobserved, cell_grid.NO_HEIGHT, filtered)
     del filtered
     data[..., 2] = sigma
     data[..., 3] = support
@@ -583,6 +633,7 @@ def surface_plane(
         out_of_range=out_of_range,
         sigma_saturated=saturated,
         ground_half=half,
+        ground_unobserved=int(unobserved.sum()),
     )
 
 
@@ -606,6 +657,7 @@ def summarise(surfaced: Surfaced, metric: bool | None) -> dict[str, Any]:
         "nonFinite": surfaced.non_finite,
         "outOfRange": surfaced.out_of_range,
         "sigmaSaturated": surfaced.sigma_saturated,
+        "groundUnobserved": surfaced.ground_unobserved,
         "medianSigmaCm": median,
         "metric": metric,
     }
@@ -641,6 +693,7 @@ def height_surface(ctx: StageContext) -> StageOutcome:
     min_samples = int(ctx.param("min_samples", MIN_SAMPLES))
     sigma_floor = float(ctx.param("sigma_floor_m", SIGMA_FLOOR_M))
     window_m = float(ctx.param("ground_window_m", GROUND_WINDOW_M))
+    max_grade = float(ctx.param("ground_max_grade", GROUND_MAX_GRADE))
     min_alpha = float(ctx.param("min_splat_alpha", MIN_SPLAT_ALPHA))
     max_cells = int(ctx.param("max_cells", MAX_CELLS))
     graded = _read_json(ctx.input(confidence.CONFIDENCE.name) / confidence.DESCRIPTOR_FILE)
@@ -663,6 +716,7 @@ def height_surface(ctx: StageContext) -> StageOutcome:
         min_samples=min_samples,
         sigma_floor_m=sigma_floor,
         ground_window_m=window_m,
+        ground_max_grade=max_grade,
         band_cells=band,
     )
     grid_summary = graded.get("summary")
@@ -684,6 +738,11 @@ def height_surface(ctx: StageContext) -> StageOutcome:
             "minSamples": min_samples,
             "groundWindowM": window_m,
             "groundWindowCells": cells,
+            "groundUnobserved": f"no ground ({cell_grid.NO_HEIGHT}) under a surface where "
+            "the window's least is higher than a slope of "
+            f"{max_grade:g} from any lower 2nd-lowest sample allows: canopy or roof "
+            "wider than the window, the ground under it never seen",
+            "groundMaxGrade": max_grade,
             "samples": "SfM points3D placed by placement.json, and canonical.ply centres "
             f"at least {min_alpha:g} opaque",
         },
