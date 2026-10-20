@@ -291,8 +291,10 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
    requires a `rescan_gate.RescanGate`: the API's fill targets for the scan's epoch
    (`rescan-gate-v1`, § API 8), read exactly as the API's `unpack` (rows south to north, least
    significant bit first; held to the endpoint's own committed answer over the yard fixtures,
-   `data/tiles/synthetic-yard-epochs/fill-targets.json`). A point is a target when its cell on
-   the site lattice, in the **tileset frame** with every tile's origin composed, is one.
+   `data/tiles/synthetic-yard-epochs/fill-targets.json`), `satisfiedBy` included: each target's
+   index into `comparedWith`, and `weakIn` exactly the epochs those name. A point is a target
+   when its cell on the site lattice, in the **tileset frame** with every tile's origin
+   composed, is one.
 2. **Only what is faded and in a target cell is a hole.** Every other gaussian is rendered as
    seen, so the image model is never shown a hole there; a lifted disc whose centre is not
    `INSET_M` = 2^-10 m inside the targets is dropped, before and after distill. The inset is the
@@ -300,8 +302,9 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
    stated from first principles, so the stored layer is still inside when publish checks it
    exactly. No target is a skipped result that says why, not an error.
 3. **The targets are bound to the tiles twice.** At fill time against the tileset's own
-   confidence grid (`check_tileset`: its plane at the gate's level has the gate's window, and
-   every target is weak and covered there); the layer records that grid's sha256. At publish
+   confidence grid (`check_tileset`: the gate is at the grid's finest level, as § API 8's
+   targets always are, its plane there has the gate's window, and every target is weak and
+   covered there); the layer records that grid's sha256. At publish
    (`publish-fill.yml`, `verify_layer`), the scan's asset must be a current revision of the
    gate's epoch and site, its current tileset must carry that very grid, the targets fetched
    now must be the ones it was filled for, and every gaussian of every tile -- parents as well

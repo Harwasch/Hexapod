@@ -27,6 +27,8 @@ REPO = Path(__file__).resolve().parents[3]
 EPOCHS = REPO / "data" / "tiles" / "synthetic-yard-epochs"
 PAYLOAD = EPOCHS / "fill-targets.json"
 FAR = REPO / "data" / "tiles" / "synthetic-far"
+#: A third epoch, newer than `gf.A`, for answers compared with two.
+C = "00000000-0000-4000-8000-00000000000c"
 
 
 def _fixture(name: str) -> cell_grid.CellGrid:
@@ -113,6 +115,7 @@ def _payload(ni: int, nj: int, rows: list[bytes], **overrides: Any) -> dict[str,
         "bitOrder": "little",
         "mask": base64.b64encode(b"".join(rows)).decode("ascii"),
         "cells": cells,
+        "satisfiedBy": base64.b64encode(bytes(cells)).decode("ascii"),
         "reason": "test",
     }
     out.update(overrides)
@@ -224,6 +227,11 @@ def test_tiles_with_their_own_origins_are_gated_in_the_site_frame() -> None:
         ({"comparedWith": [gf.A, gf.B]}, "itself"),
         ({"epochId": "e2"}, "UUID"),
         ({"ni": -1}, "window"),
+        ({"satisfiedBy": "AAA="}, "satisfiedBy holds 2"),
+        ({"satisfiedBy": "!!"}, "base64"),
+        ({"satisfiedBy": 0}, "base64 string"),
+        ({"satisfiedBy": "AQ=="}, "index 1"),
+        ({"comparedWith": [C, gf.A], "weakIn": [C], "satisfiedBy": "AQ=="}, "weakIn"),
     ],
 )
 def test_a_payload_that_does_not_add_up_is_refused(change: dict[str, Any], message: str) -> None:
@@ -231,6 +239,23 @@ def test_a_payload_that_does_not_add_up_is_refused(change: dict[str, Any], messa
     rg.RescanGate.from_payload(payload)
     with pytest.raises(rg.RescanGateError, match=message):
         rg.RescanGate.from_payload({**payload, **change})
+
+
+def test_each_target_names_the_earlier_epoch_it_re_scanned() -> None:
+    """#59: `satisfiedBy` is one byte per target, in the mask's order (rows south to north,
+    `i` ascending), indexing `comparedWith` (newest first); `weakIn` is exactly the epochs
+    some target re-scanned, in that order."""
+    rows = [bytes([0b0000_0101, 0]), bytes(2), bytes([0b0000_0010, 0])]
+    payload = _payload(
+        10, 3, rows, comparedWith=[C, gf.A], weakIn=[C, gf.A], satisfiedBy="AQAB"
+    )  # [1, 0, 1]
+    gate = rg.RescanGate.from_payload(payload)
+    assert gate.satisfied_by == (1, 0, 1)
+    assert gate.rescanned() == {(-3, 5): gf.A, (-1, 5): C, (-2, 7): gf.A}
+    only_a = _payload(10, 3, rows, comparedWith=[C, gf.A], weakIn=[gf.A], satisfiedBy="AQEB")
+    assert set(rg.RescanGate.from_payload(only_a).rescanned().values()) == {gf.A}
+    with pytest.raises(rg.RescanGateError, match="missing satisfiedBy"):
+        rg.RescanGate.from_payload({k: v for k, v in payload.items() if k != "satisfiedBy"})
 
 
 def test_capped_is_read_and_refuses_nothing() -> None:
@@ -293,6 +318,34 @@ def test_a_tileset_is_held_to_its_own_confidence_grid(tmp_path: Path) -> None:
     )
     with pytest.raises(rg.RescanGateError, match="not weak"):
         gate.check_tileset(gf.bare_tileset(tmp_path / "strong", strong))
+    # #59: the targets are the re-scan's own finest cells. Its grid's coarser plane, with
+    # every weak cell there a target, is a window that tileset has, and still refused.
+    plane2 = cell_grid.plane_at(e2, 2)
+    weak2 = cell_grid.weak_mask(plane2) & cell_grid.covered_mask(plane2)
+    coarser = rg.RescanGate.from_payload(
+        {
+            **_committed(),
+            **_payload(
+                plane2.ni,
+                plane2.nj,
+                [
+                    r.tobytes()
+                    for r in np.packbits(weak2.astype(np.uint8), axis=1, bitorder="little")
+                ],
+                siteId=gate.site_id,
+                epochId=gate.epoch_id,
+                weakIn=list(gate.weak_in),
+                comparedWith=list(gate.compared_with),
+                level=2,
+                cellM=1.0,
+                i0=plane2.i0,
+                j0=plane2.j0,
+            ),
+        }
+    )
+    assert coarser.cells > 0
+    with pytest.raises(rg.RescanGateError, match="finest"):
+        coarser.check_tileset(gf.bare_tileset(tmp_path / "coarser", e2))
     # A grid finer than nothing the gate can be read at: the gate's level is finer.
     coarse = gf.confidence_grid(3, 0, 0, [[60]], [[1]])
     with pytest.raises(rg.RescanGateError, match="finer"):
@@ -414,6 +467,8 @@ def test_publish_refuses_a_layer_filled_for_targets_that_changed_since() -> None
         **payload,
         "mask": base64.b64encode(rows.tobytes()).decode(),
         "cells": payload["cells"] - 1,
+        # The last target in the mask's order is the one gone, and its index with it.
+        "satisfiedBy": base64.b64encode(base64.b64decode(payload["satisfiedBy"])[:-1]).decode(),
     }
     case["current"] = lambda site, epoch: changed
     case["positions"] = case["positions"][:-1]

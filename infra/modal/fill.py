@@ -881,7 +881,7 @@ def main(
 #: `rescan_gate.RescanGate.from_payload` reads, all of it required.
 TARGET_KEYS = (
     "policy", "siteId", "epochId", "weakIn", "comparedWith", "frame", "cellM", "level",
-    "i0", "j0", "ni", "nj", "rowBytes", "bitOrder", "mask", "cells", "reason",
+    "i0", "j0", "ni", "nj", "rowBytes", "bitOrder", "mask", "cells", "satisfiedBy", "reason",
 )  # fmt: skip
 
 

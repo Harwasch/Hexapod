@@ -78,6 +78,11 @@ def test_the_local_pre_check_needs_nothing_but_the_standard_library(tmp_path: Pa
     capped.write_text(json.dumps({**json.loads(TARGETS.read_text()), "capped": True}))
     broken = tmp_path / "broken.json"
     broken.write_text("{")
+    # An answer from before #59's finest-cell rule names no epoch per target.
+    older = tmp_path / "older.json"
+    older.write_text(
+        json.dumps({k: v for k, v in json.loads(TARGETS.read_text()).items() if k != "satisfiedBy"})
+    )
     result = _probe(
         [
             ("drop only", "", "drop:yard,drop:spool"),
@@ -86,6 +91,7 @@ def test_the_local_pre_check_needs_nothing_but_the_standard_library(tmp_path: Pa
             ("no targets", "", "fill:camp"),
             ("wrong policy", f"camp={bad}", "fill:camp"),
             ("not json", f"camp={broken}", "fill:camp"),
+            ("before #59", f"camp={older}", "fill:camp"),
             ("unknown scan", f"nope={TARGETS}", "fill:camp"),
         ]
     )
@@ -96,6 +102,7 @@ def test_the_local_pre_check_needs_nothing_but_the_standard_library(tmp_path: Pa
         ("no targets", "a fill runs only where a re-scan left cells weak"),
         ("wrong policy", "rescan-gate-v1"),
         ("not json", "not JSON"),
+        ("before #59", "missing satisfiedBy"),
         ("unknown scan", "<scan>=<file>"),
     ]:
         assert result[name][0] == "refused" and words in str(result[name][1]), (name, result)

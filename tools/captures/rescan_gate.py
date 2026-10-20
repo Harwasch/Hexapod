@@ -2,17 +2,21 @@
 
 ADR 0016 § Fill. Generation is never asked to cover what nobody has tried to capture again.
 Which cells those are is the API's to say: `GET /api/v1/sites/{id}/fill-targets?epochId=B`
-(policy `rescan-gate-v1`, apps/api/app/analysis/rescan_gate.py) answers with the cells of
-epoch B that are weak in B, covered by B, and were weak in at least one earlier measured
-epoch, compared at the coarsest of their levels. This module reads that answer
-(`RescanGate.from_json`) exactly as the API's own `unpack` does:
+(policy `rescan-gate-v1`, apps/api/app/analysis/rescan_gate.py) answers with epoch B's own
+**finest** cells that are weak in B, where the newest earlier measured epoch whose footprint
+covers the cell was weak there too (one that never reached it says nothing; one that saw it
+well fixed it). A target is never a coarsened parent of a cell B saw well. This module reads
+that answer (`RescanGate.from_json`) exactly as the API's own `unpack` does:
 
 * the window is `ni x nj` cells of the site lattice at `level` (`cell_grid`: cells of
   `0.25 m * 2**level`, `i = floor(x / cell)` east and `j = floor(y / cell)` north of the
   tileset frame's origin), starting at cell `(i0, j0)`;
 * `mask` is base64 of `nj` rows, **south to north** (row 0 is `j0`), each `rowBytes`
   bytes; in a row, bit `k` (**least significant first**) of byte `b` is cell
-  `i0 + 8 b + k`. 1 is a target. The bits past `ni` in a row's last byte are 0.
+  `i0 + 8 b + k`. 1 is a target. The bits past `ni` in a row's last byte are 0;
+* `satisfiedBy` is base64 of one byte per target, in the mask's order (rows south to north,
+  `i` ascending): the index into `comparedWith` of the earlier epoch whose weak cell it
+  re-scanned. `weakIn` is exactly those epochs, in `comparedWith`'s order.
 
 `RescanGate.mask(xyz)` says, per point in the **tileset frame** -- the frame the root
 transform places, which is the site frame whenever the run had one; the frame
@@ -21,8 +25,8 @@ is in a target cell. A point outside the window is in none.
 
 `RescanGateError` is every refusal: a payload that is not `rescan-gate-v1` or does not add
 up (`from_payload`); a tileset whose own confidence grid disagrees with the targets
-(`check_tileset`: they were computed for another epoch, or another revision of it, so this
-tileset is not the one they gate); and, when a layer is published, evidence without the
+(`check_tileset`: they are not at its finest level, or were computed for another epoch, or
+another revision of it, so this tileset is not the one they gate); and, when a layer is published, evidence without the
 gate, for another epoch than the asset's, for targets the API no longer gives, or a layer
 holding a gaussian outside them (`verify_layer`, over `layer_positions`: every tile's
 gaussians, parents as well as leaves).
@@ -84,6 +88,7 @@ _KEYS = (
     "bitOrder",
     "mask",
     "cells",
+    "satisfiedBy",
     "reason",
 )
 
@@ -117,6 +122,27 @@ def _uuids(value: object, what: str) -> tuple[str, ...]:
     return out
 
 
+def _satisfied(encoded: object, cells: int, compared: int) -> tuple[int, ...]:
+    """`satisfiedBy` read: one index into `comparedWith` per target."""
+    if not isinstance(encoded, str):
+        raise RescanGateError("fill targets: satisfiedBy must be a base64 string")
+    try:
+        data = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise RescanGateError(f"fill targets: satisfiedBy is not base64: {error}") from error
+    if len(data) != cells:
+        raise RescanGateError(
+            f"fill targets: satisfiedBy holds {len(data)} indices, not one per target ({cells})"
+        )
+    beyond = [index for index in data if index >= compared]
+    if beyond:
+        raise RescanGateError(
+            f"fill targets: satisfiedBy names index {beyond[0]}, but only {compared} earlier "
+            "epochs were compared with"
+        )
+    return tuple(data)
+
+
 def _points(xyz: Any) -> np.ndarray:
     array = np.asarray(xyz, dtype=np.float64)
     points = array.reshape(-1, array.shape[-1]) if array.size else np.zeros((0, 3))
@@ -140,6 +166,9 @@ class RescanGate:
     #: sha256 of the packed rows exactly as served (`mask`, base64-decoded).
     mask_sha256: str
     reason: str = ""
+    #: Per target, in the mask's order, the index into `compared_with` of the earlier epoch
+    #: whose weak cell it re-scanned (`satisfiedBy`).
+    satisfied_by: tuple[int, ...] = ()
 
     @property
     def ni(self) -> int:
@@ -156,6 +185,14 @@ class RescanGate:
     @property
     def cell_m(self) -> float:
         return cell_grid.Lattice(self.level).cell_m
+
+    def rescanned(self) -> dict[tuple[int, int], str]:
+        """Per target cell `(i, j)`, the earlier epoch whose weak cell it re-scanned."""
+        jj, ii = np.nonzero(self.targets)  # row-major: rows south to north, `i` ascending
+        return {
+            (self.i0 + int(di), self.j0 + int(dj)): self.compared_with[index]
+            for dj, di, index in zip(jj, ii, self.satisfied_by, strict=True)
+        }
 
     @classmethod
     def from_json(cls, path: Path) -> RescanGate:
@@ -245,6 +282,13 @@ class RescanGate:
                 "fill targets: weakIn and cells disagree (a target is weak in an earlier "
                 "epoch by definition)"
             )
+        satisfied = _satisfied(payload["satisfiedBy"], cells, len(compared_with))
+        named = tuple(compared_with[k] for k in sorted(set(satisfied)))
+        if weak_in != named:
+            raise RescanGateError(
+                f"fill targets: weakIn {list(weak_in)} is not the epochs satisfiedBy names "
+                f"{list(named)}"
+            )
         reason = payload["reason"]
         return cls(
             site_id=_uuid(payload["siteId"], "siteId"),
@@ -257,6 +301,7 @@ class RescanGate:
             targets=targets,
             mask_sha256=hashlib.sha256(data).hexdigest(),
             reason=reason if isinstance(reason, str) else "",
+            satisfied_by=satisfied,
         )
 
     def mask(self, xyz: Any) -> np.ndarray:
@@ -283,8 +328,8 @@ class RescanGate:
 
     def check_tileset(self, tileset: Path) -> str:
         """Refuses unless these can be this tileset's targets: it carries a confidence grid
-        (`extras.confidence` -- only a measured epoch has fill targets), whose plane at the
-        gate's level has the gate's window, and every target cell is weak and covered there
+        (`extras.confidence` -- only a measured epoch has fill targets) whose finest level is
+        the gate's and whose plane there has the gate's window, and every target cell is weak and covered there
         (the API takes B's targets from B's own grid, so a genuine answer always is). Returns
         the grid's sha256, which the layer's evidence records (`confidenceSha256`).
 
@@ -307,6 +352,12 @@ class RescanGate:
             plane = cell_grid.plane_at(grid, self.level)
         except (KeyError, cell_grid.CellGridError) as error:
             raise RescanGateError(f"{tileset}: {error}") from error
+        if self.level != grid.level:
+            raise RescanGateError(
+                f"the fill targets are at level {self.level}, but {tileset}'s finest is "
+                f"{grid.level}: a re-scan's targets are its own finest cells (#59), never a "
+                "coarsened parent of cells it saw well"
+            )
         window = (plane.i0, plane.j0, plane.ni, plane.nj)
         if window != (self.i0, self.j0, self.ni, self.nj):
             raise RescanGateError(
