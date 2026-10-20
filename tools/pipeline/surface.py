@@ -39,7 +39,9 @@ its whole square. A cell with fewer than `MIN_SAMPLES` (3) samples has no surfac
 higher of them, so the ground would stand above the top. From three up,
 `ground <= 2nd lowest <= dsm`. `sigma` is `dsm`'s: a floater does not move `dsm` but widens
 `sigma`, which makes the cell slower to call changed rather than wrongly changed. Only `dsm`
-and `sigma` enter the change threshold.
+and `sigma` enter the change threshold. Under height noise both surfaces are biased (dsm a
+little high, the ground envelope low) alike in every epoch with that noise, and `sigma` is
+the top four's spread, not a noise estimate (ADR 0018, Consequences).
 
 **Heights** are `z` of the tileset frame in centimetres: above the frame origin's height
 (georef.json `height`, in whatever datum the site frame names), along the origin's up. That

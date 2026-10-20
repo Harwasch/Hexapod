@@ -100,6 +100,13 @@ how well each cell was seen (ADR 0016).
 - **The ground is biased low, never high.** A lower envelope reads low on a slope (up to 2.5·g m
   along each axis on grade `g`), and a low outlier that survives the 2nd-lowest rule spreads over
   its 5 m square. `ground` does not enter the change threshold; it is for the bare-earth view.
+- **Under noise both surfaces are biased, alike in every epoch.** With height noise σ the 2nd
+  highest of a cell's samples reads about σ to 2σ high, and the ground, a lower envelope over 441
+  cells' 2nd-lowest values at 0.25 m, about 3σ low (the demo: 1 cm noise, flat ground at −3 cm,
+  the tree's 4 m top at 4.01 m). Epochs with the same noise share the bias, so `Δ` does not; an
+  epoch much noisier than another does not. `sigma` is the spread of the top four, not a noise
+  estimate: under σ with ~20 samples a cell it is about σ/2, so the 1 cm floor is what it mostly
+  reads. Calibrating either needs a site surveyed twice.
 - **Floaters.** One floater in a cell moves neither surface but widens `sigma` (to "at least
   2.55 m" when it is high enough), which makes the cell slower to call changed rather than wrongly
   changed. Two or more floaters in one cell are a surface as far as this rule can tell.
