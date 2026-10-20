@@ -246,6 +246,9 @@ pnpm lint && pnpm typecheck && pnpm test`, `pnpm e2e` if `apps/web` changed, plu
   are over site-frame positions (`splat_tiles.tile_offsets`, `site_positions`). A new reader
   of tile positions composes the offsets: `data/tiles/synthetic-far` is the fixture to test
   it on (ADR 0011).
+- LOD and SH fixtures are regenerated under `OPENBLAS_CORETYPE=Sandybridge`, the yard under
+  Haswell, the yard's sidecars under Sandybridge; commands in
+  docs/DECISIONS/0012-licence-clean-room.md.
 - `packages/contracts/openapi.json` is committed; any schema change needs
   `export_openapi` + `pnpm contracts:generate`.
 - `pnpm format:check` runs **before** lint in CI and covers YAML and Markdown.
