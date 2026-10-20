@@ -3,9 +3,9 @@
  *
  * `tools/captures/splat_tiles.py` packs every gaussian of a scan into an octree of tiles with
  * REPLACE refinement: the leaves hold every gaussian once, as trained, and each parent holds
- * its subtree *merged* (Hierarchical 3DGS moment matching, one gaussian per occupied cell), so
- * any cut through the tree -- a set of tiles meeting every root-to-leaf path exactly once -- is
- * the whole scan at some resolution, and the cut of all leaves is the scan itself.
+ * its subtree *merged* (moment-matched, one gaussian per occupied cell), so any cut through
+ * the tree -- a set of tiles meeting every root-to-leaf path exactly once -- is the whole scan
+ * at some resolution, and the cut of all leaves is the scan itself.
  *
  * Deciding what to *draw* is no longer this module's job. Spark 2.2 has level of detail built
  * in (`SparkRenderer.lodSplatCount`, `SplatMesh({ lod: true })`): it builds a merged LoD tree

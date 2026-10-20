@@ -3404,9 +3404,13 @@ def _tool_versions() -> dict[str, str]:
     pyproject = Path(__file__).resolve().parent / "pyproject.toml"
     version = str(tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"])
     packer = (CAPTURES_DIR / "splat_tiles.py").read_bytes()
+    # The parents' maths lives in its own file since recipe 11: a change to either changes
+    # what a re-pack writes.
+    merge = (CAPTURES_DIR / "splat_merge.py").read_bytes()
     return {
         "pipeline": version,
         "splatTiles": f"sha256:{hashlib.sha256(packer).hexdigest()}",
+        "splatMerge": f"sha256:{hashlib.sha256(merge).hexdigest()}",
         "numpy": np.__version__,
         "pillow": PIL.__version__,
     }

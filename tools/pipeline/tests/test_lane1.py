@@ -179,6 +179,7 @@ def test_the_manifest_is_honest_about_a_hand_placed_capture(run: Workdir) -> Non
         == (run.out_dir("package") / "splat" / "splat.glb").stat().st_size
     )
     assert manifest["tools"]["splatTiles"].startswith("sha256:")
+    assert manifest["tools"]["splatMerge"].startswith("sha256:")
     assert manifest["run"]["recipe"] == "splat-ingest"
     assert "runId" not in manifest["run"], "a run id would make two identical runs differ"
 

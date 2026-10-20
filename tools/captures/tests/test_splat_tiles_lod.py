@@ -3,8 +3,9 @@
 What the hierarchy promises, and what CesiumJS and the Spark viewer lean on:
 
 * refinement is REPLACE: the leaves hold every kept gaussian exactly once, as it was, and
-  a parent holds its subtree *merged* (Hierarchical 3DGS moment matching), one gaussian a
-  cell -- checked here against a brute-force merge written the way ClusterMerger.cpp is;
+  a parent holds its subtree merged by moment matching, one gaussian a cell -- checked
+  against a direct per-cell computation of the same maths (`splat_merge`, written out
+  again here);
 * every tile's box holds its own gaussians and its children's boxes (Cesium culls and
   measures distance by them);
 * geometric error falls, never rises, from the root to the leaves, and leaves are 0;
@@ -17,6 +18,7 @@ What the hierarchy promises, and what CesiumJS and the Spark viewer lean on:
 from __future__ import annotations
 
 import json
+import math
 import struct
 from pathlib import Path
 from typing import Any
@@ -303,6 +305,93 @@ def test_no_budget_means_one_tile(tmp_path: Path) -> None:
     assert stats["tiles"] == 1 and stats["gaussians"] == 5_000
 
 
+def _expected_root(columns: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """The root's merged gaussians, from the leaves, by the maths written out per cell:
+    weight alpha * S(sigma clipped to SPZ's range), S Thomsen's ellipsoid area (p 1.6075);
+    the weighted mean, and the weighted covariance by the law of total covariance; axes by
+    `eigh`, scales floored at SPZ's smallest; opacity W / S, widened by at most 2 past
+    511/512. Returned in SPZ's byte units where SPZ quantises."""
+    xyz = np.stack([columns[a] for a in "xyz"], axis=1).astype(np.float64)
+    origin = xyz.min(axis=0)
+    edge = max(float((xyz.max(axis=0) - origin).max()), 1e-3)
+    codes = splat_tiles.morton_codes(xyz.astype(np.float32), origin, edge)
+    plan = splat_tiles.plan_tree(np.sort(codes), BUDGET)
+    keys = codes >> np.uint64(3 * (splat_tiles.GRID_BITS - plan.level))
+    lo, hi = splat_tiles.SPZ_LOG_SCALE_RANGE
+    log_s = np.stack([columns[f"scale_{i}"] for i in range(3)], 1).astype(np.float64)
+    s = np.exp(np.clip(log_s, lo, hi))
+    p = 1.6075
+
+    def area(v: np.ndarray) -> np.ndarray:
+        a, b, c = v[..., 0], v[..., 1], v[..., 2]
+        return 4 * np.pi * (((a * b) ** p + (a * c) ** p + (b * c) ** p) / 3) ** (1 / p)
+
+    alpha = 1 / (1 + np.exp(-columns["opacity"].astype(np.float64)))
+    w = np.maximum(alpha * area(s), 1e-30)
+    q = np.stack([columns[f"rot_{i}"] for i in range(4)], 1).astype(np.float64)
+    q /= np.linalg.norm(q, axis=1, keepdims=True)
+    qw, qx, qy, qz = q.T
+    r = np.stack(
+        [
+            np.stack(
+                [1 - 2 * (qy**2 + qz**2), 2 * (qx * qy - qw * qz), 2 * (qx * qz + qw * qy)], -1
+            ),
+            np.stack(
+                [2 * (qx * qy + qw * qz), 1 - 2 * (qx**2 + qz**2), 2 * (qy * qz - qw * qx)], -1
+            ),
+            np.stack(
+                [2 * (qx * qz - qw * qy), 2 * (qy * qz + qw * qx), 1 - 2 * (qx**2 + qy**2)], -1
+            ),
+        ],
+        axis=1,
+    )
+    cov = np.einsum("nij,nj,nkj->nik", r, s * s, r)
+    dc = np.stack([columns[f"f_dc_{i}"] for i in range(3)], 1).astype(np.float64)
+    cells = np.unique(keys)
+    out = {name: [] for name in ("xyz", "colour", "scale", "alpha")}
+    for key in cells:
+        rows = keys == key
+        weight = w[rows]
+        total = weight.sum()
+        mean = (weight[:, None] * xyz[rows]).sum(0) / total
+        d = xyz[rows] - mean
+        sigma = (weight[:, None, None] * (cov[rows] + d[:, :, None] * d[:, None, :])).sum(0) / total
+        values = np.linalg.eigvalsh(sigma)
+        scales = np.sqrt(np.maximum(values, np.exp(2 * lo)))
+        fill = total / area(scales)
+        k = min(max(math.sqrt(fill / (511 / 512)), 1.0), 2.0)
+        a = min(max(fill / k**2, 1e-6), 511 / 512)
+        out["xyz"].append(mean)
+        out["colour"].append((weight[:, None] * dc[rows]).sum(0) / total)
+        out["scale"].append(np.log(k * scales))
+        out["alpha"].append(a)
+    return {name: np.asarray(values) for name, values in out.items()}
+
+
+def test_a_parent_tile_is_its_subtree_merged(packed: tuple[Path, dict, dict]) -> None:
+    """The root of the packed scene, decoded, against its cells recomputed here. Within
+    SPZ's quanta, which are the tolerances: 1/4096 m of position (1.5 allowing the float32
+    centre), and one byte of colour, scale and alpha."""
+    out, _, stats = packed
+    assert stats["dropped"] == 0
+    expected = _expected_root(stats["columns"])
+    _, decoded = glb_splats(out / "splat.glb")
+    got_xyz = np.stack([decoded[a] for a in "xyz"], axis=1).astype(np.float64)
+    assert got_xyz.shape[0] == expected["xyz"].shape[0]
+    assert np.abs(got_xyz - expected["xyz"]).max() <= 1.5 / 4096
+    colour_byte = splat_tiles.SPZ_COLOR_SCALE * 255.0
+    got_colour = np.stack([decoded[f"f_dc_{i}"] for i in range(3)], 1).astype(np.float64)
+    assert np.abs(got_colour - expected["colour"]).max() * colour_byte <= 1.0 + 1e-6
+    got_scale = np.sort(np.stack([decoded[f"scale_{i}"] for i in range(3)], 1), axis=1)
+    want_scale = np.sort(np.clip(expected["scale"], *splat_tiles.SPZ_LOG_SCALE_RANGE), axis=1)
+    assert np.abs(got_scale - want_scale).max() * 16.0 <= 1.0 + 1e-6
+    got_alpha = 1 / (1 + np.exp(-decoded["opacity"].astype(np.float64)))
+    assert np.abs(got_alpha - expected["alpha"]).max() * 255.0 <= 1.0 + 1e-6
+    # A real comparison: the root merges many leaves per cell, and some widen.
+    assert got_xyz.shape[0] < stats["columns"]["x"].shape[0] / 10
+    assert (expected["alpha"] >= 0.99).any()
+
+
 def test_the_output_is_byte_stable(tmp_path: Path) -> None:
     ply = write_ply(tmp_path / "scene.ply", scene(6_000))
     splat_tiles.convert(ply, tmp_path / "a", 1.0, 2.0, 3.0, tile_gaussians=500)
@@ -314,9 +403,11 @@ def test_the_output_is_byte_stable(tmp_path: Path) -> None:
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 #: The level-of-detail fixture apps/web's e2e/splatLod.spec.ts renders in CesiumJS: the
-#: committed synthetic tree, packed at 1,500 gaussians a tile. Regenerated by:
-#:   uv run python splat_tiles.py ../../data/tiles/synthetic-tree/source/splat.ply \
-#:     ../../data/tiles/synthetic-tree-lod --lat 28.0389 --lon -82.6966 --tile-gaussians 1500
+#: committed synthetic tree, packed at 1,500 gaussians a tile. Regenerated by (parents go
+#: through `eigh`, so the kernel is pinned as tests/conftest.py pins it):
+#:   OPENBLAS_CORETYPE=Sandybridge uv run python splat_tiles.py \
+#:     ../../data/tiles/synthetic-tree/source/splat.ply ../../data/tiles/synthetic-tree-lod \
+#:     --lat 28.0389 --lon -82.6966 --tile-gaussians 1500
 LOD_FIXTURE = REPO_ROOT / "data" / "tiles" / "synthetic-tree-lod"
 
 
@@ -360,182 +451,3 @@ def test_coincident_gaussians_end_in_an_over_budget_leaf_not_a_loop() -> None:
 
 
 # ----------------------------------------------------------------------- the merge itself
-
-
-def brute_force_merge(
-    xyz: np.ndarray, sh0: np.ndarray, opacity: np.ndarray, log_scales: np.ndarray, quat: np.ndarray
-) -> dict[str, np.ndarray]:
-    """One cell merged the way gaussian-hierarchy ClusterMerger.cpp `mergeRec` does it.
-
-    Deliberately naive -- one gaussian at a time, normalised weights, a 3x3 matrix each --
-    so it shares nothing with the vectorised code it checks but the paper's equations.
-    """
-    scales = np.exp(np.clip(log_scales.astype(np.float64), *splat_tiles.SPZ_LOG_SCALE_RANGE))
-    weights = []
-    covs = []
-    for s, q, o in zip(scales, quat.astype(np.float64), opacity, strict=True):
-        w, x, y, z = q / np.linalg.norm(q)
-        rot = np.array(
-            [
-                [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-                [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
-                [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
-            ]
-        )
-        covs.append(rot @ np.diag(s * s) @ rot.T)
-        # ellipseSurface: s0 s1 + s0 s2 + s1 s2, times opacity.
-        weights.append(
-            splat_tiles.sigmoid(np.float64(o)) * (s[0] * s[1] + s[0] * s[2] + s[1] * s[2])
-        )
-    total = float(sum(weights))
-    a = np.array(weights) / total
-    mean = sum(ai * p for ai, p in zip(a, xyz.astype(np.float64), strict=True))
-    colour = sum(ai * c for ai, c in zip(a, sh0.astype(np.float64), strict=True))
-    cov = sum(
-        ai * (c + np.outer(p - mean, p - mean))
-        for ai, c, p in zip(a, covs, xyz.astype(np.float64), strict=True)
-    )
-    return {"mean": mean, "colour": colour, "cov": cov, "weight": np.float64(total)}
-
-
-def records_of(columns: dict[str, np.ndarray], rows: np.ndarray) -> np.ndarray:
-    out = np.empty(rows.size, dtype=splat_tiles.RECORD)
-    out["row"] = rows
-    out["xyz"] = np.stack([columns[a][rows] for a in "xyz"], axis=1)
-    out["f_dc"] = np.stack([columns[f"f_dc_{i}"][rows] for i in range(3)], axis=1)
-    out["opacity"] = columns["opacity"][rows]
-    out["scale"] = np.stack([columns[f"scale_{i}"][rows] for i in range(3)], axis=1)
-    out["rot"] = np.stack([columns[f"rot_{i}"][rows] for i in range(4)], axis=1)
-    return out
-
-
-def test_merging_merged_cells_is_merging_their_gaussians() -> None:
-    """Eqs. 3-4 hierarchically (fine cells, then coarsened, as parents are built) against
-    the brute-force merge of every gaussian in each coarse cell at once."""
-    columns = scene(4_000, seed=21)
-    xyz = np.stack([columns[a] for a in "xyz"], axis=1)
-    origin = xyz.min(axis=0).astype(np.float64)
-    edge = float(np.ptp(xyz, axis=0).max())
-    codes = splat_tiles.morton_codes(xyz, origin, edge)
-    order = np.argsort(codes, kind="stable")
-    codes = codes[order]
-    shift = 3 * (splat_tiles.GRID_BITS - 5)
-    fine = splat_tiles.merge_cells(
-        splat_tiles.gaussian_moments(records_of(columns, order), (codes >> np.uint64(shift)))
-    )
-    coarse = splat_tiles.coarsen(fine, 2)  # level 5 -> level 3
-    keys = (codes >> np.uint64(3 * (splat_tiles.GRID_BITS - 3))).astype(np.int64)
-    assert np.array_equal(coarse.key, np.unique(keys))
-    for index, key in enumerate(coarse.key[:40]):
-        rows = order[keys == key]
-        expected = brute_force_merge(
-            xyz[rows],
-            np.stack([columns[f"f_dc_{i}"][rows] for i in range(3)], axis=1),
-            columns["opacity"][rows],
-            np.stack([columns[f"scale_{i}"][rows] for i in range(3)], axis=1),
-            np.stack([columns[f"rot_{i}"][rows] for i in range(4)], axis=1),
-        )
-        c = coarse.cov[index]
-        got = np.array([[c[0], c[1], c[2]], [c[1], c[3], c[4]], [c[2], c[4], c[5]]])
-        assert coarse.weight[index] == pytest.approx(expected["weight"], rel=1e-9)
-        assert np.allclose(coarse.mean[index], expected["mean"], rtol=0, atol=1e-9)
-        assert np.allclose(coarse.colour[index], expected["colour"], rtol=0, atol=1e-9)
-        assert np.allclose(got, expected["cov"], rtol=1e-9, atol=1e-12)
-
-
-def covariance_of(log_scales: np.ndarray, quat_xyzw: np.ndarray) -> np.ndarray:
-    rot = splat_tiles._rotation_matrices(quat_xyzw[:, [3, 0, 1, 2]])
-    axes = rot * np.exp(log_scales.astype(np.float64))[:, None, :]
-    return axes @ axes.transpose(0, 2, 1)
-
-
-def test_a_merged_cell_becomes_the_gaussian_its_moments_describe() -> None:
-    """Axes and scales from the eigendecomposition, opacity from H3DGS's falloff."""
-    rng = np.random.default_rng(4)
-    quat = rng.normal(size=(1, 4))
-    one = {
-        "xyz": np.array([[1.0, 2.0, 3.0]]),
-        "f_dc": np.array([[0.1, 0.2, 0.3]]),
-        "opacity": np.array([np.log(0.6 / 0.4)]),
-        "scale": np.log(np.array([[0.02, 0.05, 0.3]])),
-        "rot": quat,
-    }
-    record = np.empty(1, dtype=splat_tiles.RECORD)
-    for name, value in one.items():
-        record[name] = value
-    alone = splat_tiles.to_gaussians(
-        splat_tiles.gaussian_moments(record, np.zeros(1, dtype=np.int64))
-    )
-    # A cell of one is that gaussian: same place, shape, colour and opacity (falloff o S / S).
-    assert np.allclose(alone.xyz, one["xyz"], atol=1e-6)
-    assert np.allclose(alone.sh0, one["f_dc"], atol=1e-6)
-    assert splat_tiles.sigmoid(alone.opacity_logit[0]) == pytest.approx(0.6, rel=1e-5)
-    wanted = covariance_of(one["scale"], quat[:, [1, 2, 3, 0]])
-    assert np.allclose(covariance_of(alone.log_scales, alone.quat_xyzw), wanted, rtol=1e-5)
-    # Two coincident copies: the same covariance, twice the weight, so falloff 1.2 --
-    # cut to 0.99 with the surface widened by 1.2 / 0.99 (opacity x surface is conserved).
-    two = splat_tiles.to_gaussians(
-        splat_tiles.merge_cells(
-            splat_tiles.gaussian_moments(np.r_[record, record], np.zeros(2, dtype=np.int64))
-        )
-    )
-    assert splat_tiles.sigmoid(two.opacity_logit[0]) == pytest.approx(0.99, rel=1e-5)
-    widened = covariance_of(two.log_scales, two.quat_xyzw)
-    assert np.allclose(widened, wanted * (1.2 / 0.99), rtol=1e-5)
-
-
-def test_quaternions_round_trip_through_rotation_matrices() -> None:
-    rng = np.random.default_rng(8)
-    quat = rng.normal(size=(2_000, 4))
-    quat /= np.linalg.norm(quat, axis=1, keepdims=True)
-    back = splat_tiles._quaternions(splat_tiles._rotation_matrices(quat))
-    # q and -q are the same rotation.
-    assert np.allclose(np.abs(np.sum(back * quat, axis=1)), 1.0, atol=1e-9)
-
-
-def test_a_parent_tile_is_its_subtree_merged(packed: tuple[Path, dict, dict]) -> None:
-    """End to end: the root's decoded gaussians against a brute-force merge of the scan.
-
-    Through SPZ, so within its quantisation: positions to half a 1/4096 m step, alpha to a
-    byte, colour to a byte, covariance to the 1/16 log-scale and 8-bit rotation steps.
-    """
-    out, tileset, stats = packed
-    columns = stats["columns"]
-    xyz = np.stack([columns[a] for a in "xyz"], axis=1)
-    origin = xyz.min(axis=0).astype(np.float64)
-    edge = max(float((xyz.max(axis=0).astype(np.float64) - origin).max()), 1e-3)
-    codes = splat_tiles.morton_codes(xyz, origin, edge)
-    order = np.argsort(codes, kind="stable")
-    root_plan = splat_tiles.plan_tree(codes[order], BUDGET)
-    keys = codes >> np.uint64(3 * (splat_tiles.GRID_BITS - root_plan.level))
-    cells = np.unique(keys)
-    _, decoded = glb_splats(out / "splat.glb")
-    assert decoded["x"].size == cells.size == tileset["root"]["extras"]["gaussians"]
-    decoded_cov = covariance_of(
-        np.stack([decoded[f"scale_{i}"] for i in range(3)], axis=1),
-        np.stack([decoded[f"rot_{i}"] for i in (1, 2, 3, 0)], axis=1),
-    )
-    for index, key in enumerate(cells):
-        rows = np.flatnonzero(keys == key)
-        expected = brute_force_merge(
-            xyz[rows],
-            np.stack([columns[f"f_dc_{i}"][rows] for i in range(3)], axis=1),
-            columns["opacity"][rows],
-            np.stack([columns[f"scale_{i}"][rows] for i in range(3)], axis=1),
-            np.stack([columns[f"rot_{i}"][rows] for i in range(4)], axis=1),
-        )
-        position = np.array([decoded[a][index] for a in "xyz"])
-        assert np.all(np.abs(position - expected["mean"]) <= 0.5 / GRID + 1e-6)
-        colour = np.array([decoded[f"f_dc_{i}"][index] for i in range(3)])
-        assert np.all(np.abs(colour - expected["colour"]) <= 1.0 / (0.15 * 255) + 1e-6)
-        values = np.linalg.eigvalsh(expected["cov"])
-        falloff = expected["weight"] / (
-            np.sqrt(values[0] * values[1]) + np.sqrt(values[0] * values[2])
-            + np.sqrt(values[1] * values[2])
-        )  # fmt: skip
-        widen = min(max(falloff / splat_tiles.MERGED_OPACITY_MAX, 1.0), 4.0)
-        alpha = min(falloff / widen, splat_tiles.MERGED_OPACITY_MAX)
-        assert splat_tiles.sigmoid(decoded["opacity"][index]) == pytest.approx(alpha, abs=1 / 255)
-        wanted = expected["cov"] * widen
-        error = np.linalg.norm(decoded_cov[index] - wanted) / np.linalg.norm(wanted)
-        assert error < 0.25, f"cell {key}: covariance off by {error:.0%}"
