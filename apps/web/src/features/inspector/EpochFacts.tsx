@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+
 import type { Site, SiteAsset } from "@twin/contracts";
 
 import { useScene } from "@/cesium/SceneContext";
@@ -35,6 +37,9 @@ function placementLine(
   // date did not load (SiteManager.followAnchor, which logs which).
   if (shares === false || !anchorDate)
     return "Placed on its own, not with the placement the site's other dates share";
+  // Not decided yet (the frame's own date still loading), or not in the scene: claim nothing.
+  if (shares === null)
+    return `Not placed yet: waiting for the ${anchorDate} capture, whose placement every date shares`;
   return clamped
     ? `Shares the site frame's placement, rested on the ${anchorDate} capture's ground`
     : `Shares the placement of the ${anchorDate} capture, which made the site frame`;
@@ -48,6 +53,10 @@ function placementLine(
  */
 export function EpochFacts({ site }: { site: Site }) {
   const scene = useScene();
+  // Whether the shown date shares the placement is the scene's to say, and it may say so
+  // after this renders (its anchor still loading): read again whenever its models change.
+  const [, refresh] = useState(0);
+  useEffect(() => scene?.events.on("tilesets", () => refresh((n) => n + 1)), [scene]);
   const representation = useSites((s) => s.representation[site.id]);
   const shownEpoch = useSites((s) => s.epoch[site.id] ?? null);
   const epochs = siteEpochs(site);
