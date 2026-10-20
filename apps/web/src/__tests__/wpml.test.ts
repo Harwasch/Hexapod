@@ -316,4 +316,21 @@ describe("DJI WPML re-scan patterns", () => {
     expect(now.workingM).toBeCloseTo(old.workingM, -1);
     expect(now.transitM).toBeCloseTo(old.transitM, 3);
   });
+
+  it("numbers action groups once across the KMZ, as WPML asks (unique within a file)", () => {
+    const waylines = scoutWaylines([
+      { footprint: holed, scout: DEFAULT_SCOUT },
+      { footprint: second, scout: rescan("oblique", -45) },
+      { footprint: second, scout: rescan("orbit", -30) },
+    ]);
+    expect(waylines).toHaveLength(4);
+    for (const xml of [
+      waylinesWpml(waylines, DEFAULT_SCOUT),
+      templateKml(waylines, DEFAULT_SCOUT, new Date(2026, 9, 16)),
+    ]) {
+      const ids = wpml(parse(xml), "actionGroupId").map((e) => Number(e.textContent));
+      // Monotonic and continuous from 0, as the reference recommends.
+      expect(ids).toEqual(ids.map((_, i) => i));
+    }
+  });
 });

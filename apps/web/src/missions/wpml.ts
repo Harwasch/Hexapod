@@ -100,10 +100,10 @@ function missionConfig(scout: Scout): string {
 }
 
 /** The camera to `pitchDeg` at the wayline's first waypoint. */
-function gimbalTo(pitchDeg: number): string {
+function gimbalTo(groupId: number, pitchDeg: number): string {
   return [
     "<wpml:actionGroup>",
-    el("actionGroupId", 0),
+    el("actionGroupId", groupId),
     el("actionGroupStartIndex", 0),
     el("actionGroupEndIndex", 0),
     el("actionGroupMode", "sequence"),
@@ -156,16 +156,25 @@ function photosAlong(groupId: number, start: number, end: number, spacingM: numb
   ].join("\n");
 }
 
-/** The action groups that start at waypoint `index` of `wayline`. */
-function groupsAt(wayline: ScoutWayline, index: number, spacingM: number): string {
+/**
+ * The action groups that start at waypoint `index` of `wayline`; `ids` numbers them once
+ * across the whole file (WPML: an actionGroupId is unique within a KMZ).
+ */
+function groupsAt(
+  wayline: ScoutWayline,
+  index: number,
+  spacingM: number,
+  ids: { next: number },
+): string {
   const groups: string[] = [];
-  if (index === 0) groups.push(gimbalTo(wayline.gimbalPitchDeg));
+  if (index === 0) groups.push(gimbalTo(ids.next++, wayline.gimbalPitchDeg));
   if (wayline.photos === "along") {
     // Round the whole orbit, from its first waypoint to its last.
-    if (index === 0) groups.push(photosAlong(1, 0, wayline.waypoints.length - 1, spacingM));
+    if (index === 0)
+      groups.push(photosAlong(ids.next++, 0, wayline.waypoints.length - 1, spacingM));
   } else if (index % 2 === 0) {
     // Every lane starts at an even index: its photos run to the next waypoint, the lane's end.
-    groups.push(photosAlong(index / 2 + 1, index, index + 1, spacingM));
+    groups.push(photosAlong(ids.next++, index, index + 1, spacingM));
   }
   return groups.join("\n");
 }
@@ -200,6 +209,7 @@ function lengthM(waypoints: readonly LonLat[]): number {
 /** `wpmz/waylines.wpml`: what the aircraft executes, one `Folder` a wayline. */
 export function waylinesWpml(waylines: readonly ScoutWayline[], scout: Scout): string {
   const geometry = scoutGeometry(scout);
+  const ids = { next: 0 };
   const folders = waylines.map((wayline, id) => {
     const placemarks = wayline.waypoints.map((waypoint, index) =>
       [
@@ -220,7 +230,7 @@ export function waylinesWpml(waylines: readonly ScoutWayline[], scout: Scout): s
         el("waypointTurnDampingDist", 0),
         "</wpml:waypointTurnParam>",
         el("useStraightLine", 1),
-        groupsAt(wayline, index, geometry.photoSpacingM),
+        groupsAt(wayline, index, geometry.photoSpacingM, ids),
         "</Placemark>",
       ]
         .filter(Boolean)
@@ -249,6 +259,7 @@ export function templateKml(
   createdAt: Date = new Date(),
 ): string {
   const geometry = scoutGeometry(scout);
+  const ids = { next: 0 };
   const folders = waylines.map((wayline, id) => {
     const placemarks = wayline.waypoints.map((waypoint, index) =>
       [
@@ -262,7 +273,7 @@ export function templateKml(
         el("useGlobalHeadingParam", 1),
         el("useGlobalTurnParam", 1),
         el("gimbalPitchAngle", wayline.gimbalPitchDeg),
-        groupsAt(wayline, index, geometry.photoSpacingM),
+        groupsAt(wayline, index, geometry.photoSpacingM, ids),
         "</Placemark>",
       ]
         .filter(Boolean)
