@@ -619,15 +619,27 @@ def uncertainty(
     reference_m: float | None,
     rms_m: float,
     georef_m: float,
+    anchor_m: float = 0.0,
 ) -> float:
-    """`uncertaintyM` (module docstring)."""
+    """`uncertaintyM` (module docstring).
+
+    With check targets: their RMSE, floored at their own declared sigma (they cannot
+    measure better than they were surveyed) **and at the anchor's sigma** -- a deviation
+    from the design, which floored at the targets only. A few targets' RMSE can come out
+    below what anchors the frame (it did here: 1.3 cm for an epoch aligned into a
+    reference worth 3 cm, whose cameras were 1.9 cm from the truth), and an epoch
+    aligned into another is not more accurate than the frame it was aligned into."""
     if int(checks.get("evaluated") or 0) >= check_targets.MIN_CHECK_TARGETS:
         rmse = checks.get("rmseM") or {}
         labels = {e.get("label") for e in checks.get("perTarget") or [] if "errorM" in e}
         sigmas = [
             math.sqrt(2.0 * t.sigma_h_m**2 + t.sigma_v_m**2) for t in targets if t.label in labels
         ]
-        return max(float(rmse.get("total") or 0.0), statistics.median(sigmas) if sigmas else 0.0)
+        return max(
+            float(rmse.get("total") or 0.0),
+            statistics.median(sigmas) if sigmas else 0.0,
+            anchor_m,
+        )
     if verdict != "unaligned" and method == "visual" and reference_m is not None:
         return math.sqrt(reference_m**2 + (SIGMA_K * rms_m) ** 2)
     return georef_m
@@ -847,6 +859,7 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
         reference_m=reference.uncertainty_m if reference is not None else None,
         rms_m=rms,
         georef_m=georef_m,
+        anchor_m=chosen.anchor_h if chosen.aligned else 0.0,
     )
     score = confidence(chosen, verdict=verdict, checks=checks)
     words = label(

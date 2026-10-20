@@ -236,6 +236,10 @@ def test_uncertainty_follows_the_evidence() -> None:
     assert alignment.uncertainty(verdict="survey", method="visual", checks=checks, **common) == (
         pytest.approx(floor)
     )
+    # And at the anchor's: an epoch is no more accurate than the frame it is aligned into.
+    assert alignment.uncertainty(
+        verdict="survey", method="visual", checks=checks, anchor_m=0.03, **common
+    ) == pytest.approx(0.03)
     assert alignment.uncertainty(verdict="coarse", method="visual", checks={}, **common) == (
         pytest.approx(math.hypot(0.03, 0.03))
     )
