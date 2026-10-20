@@ -609,3 +609,41 @@ def test_a_legacy_capture_that_made_its_site_joins_it_as_new_site(
     [epoch] = _epochs(db, site_id)
     assert (epoch.ordinal, epoch.join_method) == (1, "new-site")
     assert {a.id: a.epoch_id for a in _assets(db, site_id)}[legacy.id] == epoch.id
+
+
+def test_each_epochs_asset_carries_that_epochs_own_footprint(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """The site's boundary grows to the union of its epochs; each epoch's asset is drawn,
+    clipped and counted as knowledge (`land_knowledge`) by its own footprint, else its
+    site's boundary. So every revision an epoch's run makes carries that run's footprint --
+    the epoch's at the time -- and a re-run's new revision carries the new one while the
+    old revision keeps what it had."""
+    from geoalchemy2.shape import to_shape
+
+    first = _capture(db, "first")
+    run(db, storage, tmp_path, first)
+    assert first.site_id is not None
+    north = _echoed(first.site_id)
+    north["bboxLocalM"] = {"min": [-4.0, 40.0, -1.0], "max": [6.0, 50.0, 3.0]}
+    run(db, storage, tmp_path, _capture(db, "second"), north)
+    epoch1, epoch2 = _epochs(db, first.site_id)
+    original = to_shape(epoch1.footprint)
+    wider = _document()
+    wider["bboxLocalM"] = {"min": [-8.0, -4.0, -1.0], "max": [12.0, 16.0, 3.0]}
+
+    run(db, storage, tmp_path, first, wider)
+
+    epoch1, epoch2 = _epochs(db, first.site_id)
+    site = db.get(Site, first.site_id)
+    assert site is not None
+    by_epoch: dict[uuid.UUID | None, list[Asset]] = {}
+    for asset in _assets(db, first.site_id):
+        by_epoch.setdefault(asset.epoch_id, []).append(asset)
+    old, new = by_epoch[epoch1.id]
+    [joined] = by_epoch[epoch2.id]
+    assert old.footprint is not None and to_shape(old.footprint).equals(original)
+    assert new.footprint is not None and to_shape(new.footprint).equals(to_shape(epoch1.footprint))
+    assert joined.footprint is not None
+    assert to_shape(joined.footprint).equals(to_shape(epoch2.footprint))
+    assert to_shape(joined.footprint).area < to_shape(site.boundary).area

@@ -56,6 +56,7 @@ from app.analysis.knowledge import (
 from app.analysis.lonlat_grid import encode, reproject_band
 from app.models.asset import Asset
 from app.models.capture import Capture
+from app.models.epoch import Epoch
 from app.models.land import LandArea
 from app.models.land_archive_image import LandArchiveImage
 from app.models.land_feature import FeatureInspection, LandFeature, LandFeatureRevision
@@ -243,7 +244,10 @@ def _captures(
         .group_by(Capture.site_id)
         .subquery()
     )
-    footprint = func.coalesce(Asset.footprint, Site.boundary)
+    # An asset is knowledge of its own footprint; an epoch's asset without one (the 0032
+    # backfill adopted it as it was) of its epoch's. Only a legacy asset falls back to its
+    # site's boundary -- which, once a second epoch joins, is the union of all of them.
+    footprint = func.coalesce(Asset.footprint, Epoch.footprint, Site.boundary)
     rows = db.execute(
         select(
             Asset,
@@ -255,6 +259,7 @@ def _captures(
             stats.c.uncertainty_m,
         )
         .join(Site, Site.id == Asset.site_id)
+        .outerjoin(Epoch, Epoch.id == Asset.epoch_id)
         .outerjoin(stats, stats.c.site_id == Site.id)
         .where(func.ST_Intersects(footprint, land))
         # A superseded revision of an epoch is history, not knowledge of the land.
