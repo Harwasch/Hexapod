@@ -25,10 +25,18 @@ samples) in a CPU container; `--renderer gsplat` runs the same job in a GPU cont
 (`SPLIT_ARGS`) out into tilesets of their own and the holes they leave filled with the same
 filler, renderer and distill; the split tileset comes back as `split.tar.gz`.
 
+**Fill jobs are gated** (ADR 0016 § Fill): `fill:<scan>` needs the scan's epoch's fill
+targets (`GET /api/v1/sites/{id}/fill-targets?epochId=`, saved to a file; fill.yml fetches
+them), given as `--still-weak <scan>=<file>` and forwarded to `teacher_fill.py fill
+--still-weak`, which fills only the cells a re-scan left weak. A fill job without them is
+refused here, before any container starts. `drop` (the evaluation) and `split` (the hole
+an object leaves, never published) are not gated.
+
 Run from the repository root (`.github/workflows/fill.yml` does):
 
     modal run infra/modal/fill.py --jobs drop:yard,drop:spool
-    modal run infra/modal/fill.py --jobs fill:camp --renderer gsplat --distill 1500
+    modal run infra/modal/fill.py --jobs fill:camp --still-weak camp=fill-targets/camp.json \
+        --renderer gsplat --distill 1500
     modal run infra/modal/fill.py --jobs split:pumpkin --fillers fixer-t50 --renderer gsplat
 """
 
@@ -601,6 +609,19 @@ def parity() -> str:
 
 
 def _run_job(kind: str, scan: str, filler: str, options: dict) -> dict:
+    if kind == "fill" and not options.get("still_weak"):
+        # `main` refuses this before any container starts; a direct call is refused too.
+        return {
+            "kind": kind,
+            "scan": scan,
+            "filler": filler,
+            "ok": False,
+            "argv": [],
+            "result": None,
+            "timings": {},
+            "files": {},
+            "log": "refused: a fill job needs its scan's fill targets (--still-weak)",
+        }
     _remote_classes()
     REMOTE_SECONDS.clear()  # a container may run several jobs
     os.chdir(CAPTURES)
@@ -647,7 +668,11 @@ def _run_job(kind: str, scan: str, filler: str, options: dict) -> dict:
         else:
             width, height = FILL_SIZE
             out = root / "inferred"
+            targets = root / "fill-targets.json"
+            targets.write_text(options["still_weak"], encoding="utf-8")
+            files["fill-targets.json"] = targets.read_bytes()
             argv = ["fill", str(tileset), str(out), "--filler", spec]
+            argv += ["--still-weak", str(targets)]
             argv += ["--views", str(options.get("views", 8)), "--mode", "ring"]
             if options.get("max_scale_m"):
                 argv += ["--max-scale-m", str(options["max_scale_m"])]
@@ -755,14 +780,19 @@ def main(
     renderer: str = "cpu",
     parity_test: bool = False,
     max_scale_m: float = 0.0,
+    still_weak: str = "",
 ) -> None:
     """Every `kind:scan` in `jobs` with every filler, in parallel containers; each result
     under `out/<kind>-<scan>-<filler>/`, and `out/summary.json`. `selftest`: also Fixer on
     its repository's examples, under `out/selftest/`. `renderer`: `cpu` or `gsplat` (the
     jobs on a GPU). `parity_test`: CPU against gsplat on the yard, in `out/parity.txt`.
-    `max_scale_m` (fill jobs, 0 = off): condition without gaussians larger than this."""
+    `max_scale_m` (fill jobs, 0 = off): condition without gaussians larger than this.
+    `still_weak`: `<scan>=<file>` pairs, comma-separated -- each fill job's fill targets
+    (required for every `fill:<scan>`; checked here, sent to its job)."""
     if renderer not in ("cpu", "gsplat"):
         raise SystemExit(f"renderer {renderer!r}: cpu or gsplat")
+    # Before anything runs on a GPU: a fill job without its targets is refused.
+    targets = _fill_targets(still_weak, jobs)
     if parity_test:
         Path(out).mkdir(parents=True, exist_ok=True)
         text = parity.remote()
@@ -792,6 +822,8 @@ def main(
             options["distill"] = distill
         if kind in ("fill", "split") and max_scale_m > 0:
             options["max_scale_m"] = max_scale_m
+        if kind == "fill":
+            options["still_weak"] = targets[scan]
         calls += [(kind, scan, f.strip(), options) for f in fillers.split(",") if f.strip()]
     summary, failed = [], []
     calls, skipped = _prepare_inpainting(calls, Path(out))
@@ -819,6 +851,35 @@ def main(
     (Path(out) / "summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
     if failed:
         raise SystemExit(f"failed: {', '.join(failed)}")
+
+
+def _fill_targets(still_weak: str, jobs: str) -> dict[str, str]:
+    """`<scan>=<file>` pairs read and checked (`rescan_gate.RescanGate.from_json`): the text
+    of each fill job's targets by scan. A fill job without them, or with targets that are
+    not `rescan-gate-v1`, is a refusal before anything runs."""
+    sys.path.insert(0, str(LOCAL_CAPTURES))
+    import rescan_gate
+
+    given: dict[str, str] = {}
+    for pair in (p.strip() for p in still_weak.split(",") if p.strip()):
+        scan, sep, path = pair.partition("=")
+        if not sep or scan not in SCANS or not path:
+            raise SystemExit(f"--still-weak {pair!r}: <scan>=<file>, scans {sorted(SCANS)}")
+        try:
+            rescan_gate.RescanGate.from_json(Path(path))
+        except rescan_gate.RescanGateError as error:
+            raise SystemExit(f"--still-weak {scan}: refused: {error}") from None
+        given[scan] = Path(path).read_text(encoding="utf-8")
+    listed = (j.strip() for j in jobs.split(","))
+    fills = sorted({j.partition(":")[2] for j in listed if j.startswith("fill:")})
+    missing = [scan for scan in fills if scan not in given]
+    if missing:
+        raise SystemExit(
+            f"fill:{', fill:'.join(missing)} refused: a fill runs only where a re-scan left "
+            "cells weak; give each its epoch's fill targets, --still-weak <scan>=<file> "
+            "(GET /api/v1/sites/{id}/fill-targets?epochId=..., ADR 0016 Fill)"
+        )
+    return given
 
 
 def _inpaint_key(filler: str) -> str | None:

@@ -6,6 +6,12 @@ name: Fill scans (Modal GPU, NVIDIA Fixer)
 # inferred tilesets as an artifact. Nothing is published. See infra/modal/fill.py and
 # docs/WORLD_MODEL_RUNBOOK.md.
 #
+# A `fill:<scan>` job fills only the cells a re-scan left weak (ADR 0016, Fill): give each
+# its scan's epoch's fill targets as `fill_targets_url` (`<scan>=<URL>` pairs, the URL
+# `$TWIN_API_URL/api/v1/sites/<site>/fill-targets?epochId=<epoch>`). They are fetched here,
+# one file per scan, and forwarded to its job; a fill job without them fails here, before
+# Modal starts anything. drop and split jobs are not gated (neither is published).
+#
 # On a push to a `wm-*` working branch that touches the fill code (not `living-models`,
 # so merges there start no GPU run)
 # (workflow_dispatch only works once this file is on the default branch). The Modal token
@@ -17,6 +23,7 @@ on:
     paths:
       - infra/modal/fill.py
       - tools/captures/teacher_fill.py
+      - tools/captures/rescan_gate.py
       - tools/captures/split_objects.py
       - tools/captures/splat_render.py
       - tools/captures/tests/test_gsplat_parity.py
@@ -42,6 +49,10 @@ on:
         description: Render the views on the CPU or with gsplat on a GPU (cpu, gsplat)
         type: string
         default: gsplat
+      fill_targets_url:
+        description: "Fill jobs' targets: <scan>=<API fill-targets URL> pairs, comma-separated (one bare URL for one fill job)"
+        type: string
+        default: ""
 
 concurrency:
   group: fill-${{ github.ref }}
@@ -59,6 +70,9 @@ env:
   # Fill jobs: condition without gaussians larger than this (m; 0 = keep all). The camp's
   # edge floaters (scale 0.5-2.7 m) cover most of a gsplat view from outside.
   MAX_SCALE: "0.5"
+  # `<scan>=<URL>` pairs: each fill job's GET /api/v1/sites/{id}/fill-targets?epochId=.
+  FILL_TARGETS_URL: ${{ inputs.fill_targets_url || '' }}
+  TWIN_API_URL: ${{ vars.TWIN_API_URL || 'https://twin-api.fly.dev' }}
 
 jobs:
   fill:
@@ -78,6 +92,53 @@ jobs:
         run: |
           test -n "$MODAL_TOKEN_ID" -a -n "$MODAL_TOKEN_SECRET" \
             || { echo "::error::MODAL_TOKEN_ID / MODAL_TOKEN_SECRET are not set"; exit 1; }
+      - name: Fetch each fill job's fill targets
+        # Read as data, validated here, never interpolated into a shell line. Only the API's
+        # own fill-targets route is fetched; a 409 (nothing re-scanned, not measured) fails.
+        run: |
+          python3 - <<'PY'
+          import json, os, re, urllib.error, urllib.request
+          from pathlib import Path
+
+          api = os.environ["TWIN_API_URL"].rstrip("/")
+          route = re.compile(re.escape(api) + r"/api/v1/sites/[0-9a-f-]{36}/fill-targets"
+                             r"(\?epochId=[0-9a-f-]{36})?")
+          jobs = [j.strip() for j in os.environ["JOBS"].split(",") if j.strip()]
+          fills = sorted({j.partition(":")[2] for j in jobs if j.startswith("fill:")})
+          given = {}
+          for part in (p.strip() for p in os.environ["FILL_TARGETS_URL"].split(",") if p.strip()):
+              scan, sep, url = part.partition("=")
+              if not sep or "://" in scan:
+                  if len(fills) != 1:
+                      raise SystemExit("::error::a bare fill_targets_url needs exactly one fill job; "
+                                       "name each: <scan>=<URL>")
+                  scan, url = fills[0], part
+              if not re.fullmatch(r"[a-z0-9-]+", scan) or not route.fullmatch(url):
+                  raise SystemExit(f"::error::fill_targets_url {part!r}: <scan>=<URL>, the URL "
+                                   f"{api}/api/v1/sites/<site>/fill-targets[?epochId=<epoch>]")
+              given[scan] = url
+          missing = [s for s in fills if s not in given]
+          if missing:
+              raise SystemExit(f"::error::fill:{', fill:'.join(missing)} has no fill targets: a "
+                               "fill runs only where a re-scan left cells weak (fill_targets_url)")
+          out = Path("fill-targets")
+          out.mkdir(exist_ok=True)
+          pairs = []
+          for scan in fills:
+              request = urllib.request.Request(given[scan], headers={"Accept": "application/json"})
+              try:
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      body = response.read()
+              except urllib.error.HTTPError as error:
+                  raise SystemExit(f"::error::{given[scan]}: {error.code} "
+                                   f"{error.read().decode(errors='replace')[:500]}")
+              json.loads(body)
+              (out / f"{scan}.json").write_bytes(body)
+              pairs.append(f"{scan}=fill-targets/{scan}.json")
+              print(f"{scan}: {len(body)} bytes of fill targets from {given[scan]}")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"STILL_WEAK={','.join(pairs)}\n")
+          PY
       - name: Modal secrets present (names only)
         continue-on-error: true
         run: uv run --with modal==1.5.5 modal secret list
@@ -99,7 +160,7 @@ jobs:
           uv run --with modal==1.5.5 modal run infra/modal/fill.py \
             --jobs "$JOBS" --fillers "$FILLERS" --distill "$DISTILL" --out fill-out \
             --probes "$PROBES" --renderer "$RENDERER" ${PARITY:+--parity-test} \
-            --max-scale-m "$MAX_SCALE"
+            --max-scale-m "$MAX_SCALE" --still-weak "${STILL_WEAK:-}"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
