@@ -35,5 +35,6 @@ export const VIEW_RULE_TEXT = {
   compare: "Choosing a rule ends Compare › Dates: the two are one or the other",
   tileBounds: "tile bounds, overstates what it saw",
   ownFrame: "placed in its own frame, not the site's",
-  holdsViews: "Per-cell dates are on: a date's own Confidence and Data age come back with One date",
+  holdsViews:
+    "Per-cell dates are on: a date's own Confidence and Data age can be chosen again with One date",
 } as const;

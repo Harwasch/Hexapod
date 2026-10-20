@@ -96,7 +96,11 @@ describe("Per cell", () => {
     ruleOn();
     expect(screen.getByRole("radio", { name: "Photo" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("radio", { name: "Confidence" })).toHaveAttribute("disabled");
-    expect(screen.getByTestId("views-rule-holds")).toHaveTextContent(VIEW_RULE_TEXT.holdsViews);
+    // Said as it is: the views wait, and Photo is what comes back (the view chosen before is
+    // not restored).
+    expect(screen.getByTestId("views-rule-holds")).toHaveTextContent(
+      "Per-cell dates are on: a date's own Confidence and Data age can be chosen again with One date",
+    );
     act(() =>
       useViewRule.setState({
         legend: {
