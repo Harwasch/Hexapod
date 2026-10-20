@@ -145,7 +145,7 @@ export function definesFrame(epoch: Epoch, epochs: readonly Epoch[]): boolean {
  *
  * 1. Candidates: the site's assets of the representation. An epoch's asset stays only while it
  *    is the current asset of a published epoch; when the record lists no epochs at all, while it
- *    has no `validTo`. Assets of no epoch (seeded, hand-made, legacy) always stay.
+ *    has no `validTo` and is observed. Assets of no epoch (seeded, hand-made, legacy) always stay.
  * 2. A pinned asset among them wins (the load pill's Retry asks for one by id).
  * 3. A site with epochs on offer shows the chosen one, else the latest.
  * 4. Epoch assets but no epoch list: the newest-created of them, so the site is never empty.
@@ -162,7 +162,7 @@ export function pickShownAsset(
   const candidates = assets.filter((asset) => {
     if (asset.representation !== representation) return false;
     if (!asset.epochId) return true;
-    if (epochs.length === 0) return (asset.validTo ?? null) === null;
+    if (epochs.length === 0) return isLive(asset);
     const epoch = byId.get(asset.epochId);
     return (
       epoch?.status === "published" && currentAsset(epoch, assets, representation)?.id === asset.id
