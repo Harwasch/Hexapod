@@ -420,3 +420,81 @@ def test_publish_refuses_a_layer_filled_for_targets_that_changed_since() -> None
     case["positions"] = case["positions"][:-1]
     with pytest.raises(rg.RescanGateError, match="changed since"):
         rg.verify_layer(**case)
+
+
+def _layer(folder: Path, parent: Any, leaf: Any) -> Path:
+    """A two-level inferred layer as the packer writes one: `parent` gaussians in the root
+    tile (drawn at coarse detail), `leaf` in its child."""
+    from splat_tiles import build_glb, pack_spz
+
+    folder.mkdir(parents=True, exist_ok=True)
+
+    def glb(points: Any) -> bytes:
+        p = np.asarray(points, dtype=np.float32).reshape(-1, 3)
+        n = p.shape[0]
+        quats = np.tile([0.0, 0.0, 0.0, 1.0], (n, 1))
+        spz = pack_spz(p, np.zeros((n, 3)), np.zeros(n), np.zeros((n, 3)), quats)
+        return build_glb(n, p.min(axis=0).tolist(), p.max(axis=0).tolist(), spz)
+
+    (folder / "f0.glb").write_bytes(glb(parent))
+    (folder / "f1.glb").write_bytes(glb(leaf))
+    box = [0.0, 0, 0, 50, 0, 0, 0, 50, 0, 0, 0, 50]
+    document = {
+        "asset": {"version": "1.1"},
+        "geometricError": 10,
+        "root": {
+            "boundingVolume": {"box": box},
+            "geometricError": 1,
+            "refine": "REPLACE",
+            "content": {"uri": "f0.glb"},
+            "children": [
+                {"boundingVolume": {"box": box}, "geometricError": 0, "content": {"uri": "f1.glb"}}
+            ],
+        },
+    }
+    (folder / "tileset.json").write_text(json.dumps(document), encoding="utf-8")
+    return folder / "tileset.json"
+
+
+def test_publish_holds_every_tile_not_only_the_leaves(tmp_path: Path) -> None:
+    """Codex R3 #60: publish-fill.yml handed `verify_layer` `load_tileset(...).positions`,
+    which are the leaves alone; a parent tile's gaussians outside the targets were
+    published unchecked. `layer_positions` reads every tile."""
+    from splat_render import load_tileset
+
+    case = _publish_case()
+    inside = case["positions"][:1]
+    outside = inside + [1000.0, 0.0, 0.0]
+    tileset = _layer(tmp_path / "layer", parent=outside, leaf=inside)
+
+    assert rg.verify_layer(**{**case, "positions": load_tileset(tileset).positions})
+    every = rg.layer_positions(tileset)
+    assert every.shape == (2, 3)
+    with pytest.raises(rg.RescanGateError, match="1 of the layer's 2 gaussians are outside"):
+        rg.verify_layer(**{**case, "positions": every})
+
+
+def test_layer_positions_compose_each_tiles_origin(tmp_path: Path) -> None:
+    case = _publish_case()
+    inside = case["positions"][:1]
+    tileset = _layer(tmp_path / "layer", parent=inside, leaf=inside - [100.0, 0.0, 0.0])
+    document = json.loads(tileset.read_text(encoding="utf-8"))
+    shift = [1.0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 100, 0, 0, 1]
+    document["root"]["children"][0]["transform"] = shift
+    tileset.write_text(json.dumps(document), encoding="utf-8")
+    assert rg.verify_layer(**{**case, "positions": rg.layer_positions(tileset)})
+
+
+def test_a_layer_tile_outside_its_folder_is_refused(tmp_path: Path) -> None:
+    tileset = _layer(tmp_path / "layer", parent=[[0.0, 0.0, 0.0]], leaf=[[0.0, 0.0, 0.0]])
+    document = json.loads(tileset.read_text(encoding="utf-8"))
+    document["root"]["content"]["uri"] = "../f0.glb"
+    tileset.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(rg.RescanGateError, match="beside"):
+        rg.layer_positions(tileset)
+
+
+def test_the_publish_workflow_checks_every_tile() -> None:
+    text = (REPO / ".github" / "workflows" / "publish-fill.yml").read_text(encoding="utf-8")
+    assert 'positions=rescan_gate.layer_positions(dest / "tileset.json")' in text
+    assert "load_tileset(" not in text

@@ -152,7 +152,6 @@ jobs:
           import attach_sidecars
           import rescan_gate
           import rig_tiles
-          from splat_render import load_tileset
 
           # The scans' legacy URLs (to find the scan's asset by its run) and the user agent
           # the bucket accepts, from the segmentation app.
@@ -244,7 +243,8 @@ jobs:
                   asset=record,
                   tileset=current,
                   current=lambda site, epoch: targets(site, epoch),
-                  positions=load_tileset(dest / "tileset.json").positions,
+                  # Every tile, parents too: a parent is drawn at coarse detail.
+                  positions=rescan_gate.layer_positions(dest / "tileset.json"),
               )
           except rescan_gate.RescanGateError as error:
               raise SystemExit(f"refused by the fill gate: {error}") from None

@@ -24,7 +24,8 @@ up (`from_payload`); a tileset whose own confidence grid disagrees with the targ
 (`check_tileset`: they were computed for another epoch, or another revision of it, so this
 tileset is not the one they gate); and, when a layer is published, evidence without the
 gate, for another epoch than the asset's, for targets the API no longer gives, or a layer
-holding a gaussian outside them (`verify_layer`).
+holding a gaussian outside them (`verify_layer`, over `layer_positions`: every tile's
+gaussians, parents as well as leaves).
 """
 
 from __future__ import annotations
@@ -50,6 +51,7 @@ __all__ = [
     "POLICY",
     "RescanGate",
     "RescanGateError",
+    "layer_positions",
     "verify_layer",
 ]
 
@@ -430,3 +432,32 @@ def verify_layer(
     if points.shape[0] == 0:
         raise RescanGateError("the layer holds no gaussians")
     return fresh
+
+
+def layer_positions(tileset: Path) -> np.ndarray:
+    """Every gaussian of **every tile** a layer's `tileset.json` names -- parents, drawn at
+    coarse detail, as well as leaves; `content` and 3D Tiles 1.1 `contents` -- in its
+    tileset frame, each tile's origin composed (`splat_tiles.tile_offsets`): what publish
+    holds to the targets (`verify_layer`). `splat_render.load_tileset` reads the leaves
+    alone, which is what a renderer needs and not what is published. A tile uri that is
+    not beside the tileset is a `RescanGateError`."""
+    from rig_tiles import tile_positions
+    from splat_tiles import SplatFormatError, tile_offsets
+
+    path = Path(tileset)
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        offsets = tile_offsets(document)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, SplatFormatError) as error:
+        raise RescanGateError(f"{path}: {error}") from error
+    folder = path.parent.resolve()
+    parts: list[np.ndarray] = []
+    for uri in sorted(offsets):
+        target = (folder / uri).resolve()
+        if not target.is_relative_to(folder):
+            raise RescanGateError(f"{path}: tile {uri!r} is not beside the layer's tileset")
+        try:
+            parts.append(tile_positions(target, offsets[uri]))
+        except (OSError, ValueError, KeyError) as error:
+            raise RescanGateError(f"{path}: tile {uri!r} cannot be read: {error}") from error
+    return np.concatenate(parts) if parts else np.zeros((0, 3), dtype=np.float32)
