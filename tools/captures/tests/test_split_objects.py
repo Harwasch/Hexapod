@@ -594,3 +594,12 @@ def test_split_gathers_an_object_from_tiles_with_origins(tmp_path: Path) -> None
     # Every tile of the result, rewritten or not, is bound by its site-frame checksum.
     new_doc = json.loads((out / "instances.json").read_text(encoding="utf-8"))
     assert len(so.read_tiles(out, after, new_doc)) == len(so._nodes(after))
+    # The object's own tileset is a frame of its own (its root is the scan's root times
+    # T(origin)), and its one tile has no transform under that root: its checksum is over
+    # its positions as stored, object-local -- the same basis as before tile origins.
+    tile = out / so.OBJECTS_DIR / "1" / so.OBJECT_CONTENT
+    own = json.loads((out / so.OBJECTS_DIR / "1" / "tileset.json").read_text(encoding="utf-8"))
+    assert own["root"]["content"]["uri"] == so.OBJECT_CONTENT and not own["root"].get("children")
+    assert splat_tiles.tile_offsets(own)[so.OBJECT_CONTENT].tolist() == [0.0, 0.0, 0.0]
+    assert obj.checksum == checksum_positions(tile_positions(tile, None))
+    assert obj.checksum in new_doc["tiles"]

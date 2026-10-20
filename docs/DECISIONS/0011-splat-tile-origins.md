@@ -3,8 +3,6 @@
 **Status:** accepted (Part A: packer, Python readers, API, backfill; Part B, the web readers,
 follows) · **Date:** 2026-10-19
 
-> The number may collide with another branch's ADR; renumber at merge.
-
 ## Context
 
 SPZ, the splat compression every tile here carries, stores each position as 24-bit two's
@@ -41,7 +39,10 @@ origin, so nothing noticed that the packer cast to int32 and kept the low 24 bit
    `float32(local + composed offset)` (`splat_tiles.site_positions`). For an origin-0 tile
    that is the decoded array itself. It is exact wherever |site| < 4,096 m (an origin is whole
    metres and `local` is on the 2^-12 grid) and the correctly rounded float32 of the exact sum
-   beyond, which `Float32Array` of the same double reproduces bit for bit.
+   beyond, which `Float32Array` of the same double reproduces bit for bit. The site frame is
+   each tileset's own root frame, so a split object's tileset (`split_objects`: its root is the
+   scan's root times `T(origin)`, its one tile untransformed) keeps object-local checksums, as
+   it always had.
 7. **Every reader composes the translations.** `splat_tiles.tile_offsets` (Python),
    `app/worker/positions.tile_offsets` (API) and, in Part B, `parseTileset` and the renderers.
    Each refuses a child transform that is not a pure translation: a tile may be moved, never
@@ -75,6 +76,10 @@ bits and decode error; the worst is exactly half a quantum, on the 11-bit tiles.
   limit that predates this; PlayCanvas and Spark read SPZ directly and are not affected.
 - **Mixed fractional bits.** `split_objects` refuses an object gathered from tiles of different
   bits rather than re-quantise it.
+- **`tools/pipeline/experiments/lod_compare.py` does not compose.** It reads
+  `boundingVolume.box` and decodes tiles without their transforms, so its cut is wrong for a
+  far site. It is an experiment, and M1b rewrites it (and adds synthetic-far to its parity
+  run), so it is left to M1b rather than changed twice.
 - **Spark memory.** Part B's 32-bit centres in view.html double Spark's per-splat memory; not
   re-measured on a phone.
 - **SOG precision** for very large sites is not addressed.
