@@ -8,6 +8,11 @@
  *   view is mixed (purple) -- the check below means nothing without it.
  * - Latest, March everywhere and June the east half, looking north: the left of the screen is
  *   red and the right blue, each cell's pixels from one date, almost no mix.
+ * - The seam between them, measured (ADR 0017): of the covered pixels within one cell (1 m) of
+ *   it on screen, the share that blend both dates (`seamMixed`: after the background's own red
+ *   and blue are taken out, the lesser of red and blue is at least a tenth of their sum). With
+ *   splats kept by their centres alone (reach 0) a footprint's tail lies over the next date's
+ *   splats and some 6% blend; with `SEAM_REACH` under 1% must, at the cost of a darker line.
  * - March only north-west, June east, an inferred layer over all by its tile bounds: Latest
  *   fills the south-west green; Ground truth draws nothing there.
  *
@@ -59,6 +64,7 @@ interface Counts {
   right: Region;
   southWest: Region;
   all: Region;
+  seam: { pixels: number; covered: number; mixed: number; profile: number[] };
   companion: boolean;
   sources: { march: number; june: number; fill: number };
 }
@@ -66,9 +72,9 @@ interface Counts {
 test("under Latest each cell's pixels come from one date; Ground truth hides the inferred", async ({
   page,
 }) => {
-  // Four views on software GL, each waiting for three tilesets to refine: about six minutes
+  // Five views on software GL, each waiting for three tilesets to refine: about seven minutes
   // here (2026-10-20), twice that allowed for a slower runner.
-  test.setTimeout(720_000);
+  test.setTimeout(840_000);
   await page.setViewportSize({ width: 960, height: 640 });
   const errors: string[] = [];
   page.on("console", (message) => {
@@ -95,29 +101,31 @@ test("under Latest each cell's pixels come from one date; Ground truth hides the
   await page.goto("/compositor-harness.html");
   await page.waitForFunction(() => "__compositor" in window, undefined, { timeout: 90_000 });
 
-  const view = async (scenario: string): Promise<Counts> => {
+  const view = async (scenario: string, seamReach?: number): Promise<Counts> => {
     const counts = await page.evaluate(
-      (s) =>
+      ([s, reach]) =>
         (
-          window as unknown as { __compositor: { view(s: string): Promise<Counts> } }
-        ).__compositor.view(s),
-      scenario,
+          window as unknown as {
+            __compositor: { view(s: string, o: { seamReach?: number }): Promise<Counts> };
+          }
+        ).__compositor.view(s, { seamReach: reach }),
+      [scenario, seamReach] as const,
     );
-    const path = EVIDENCE
-      ? `${EVIDENCE}/scene-${scenario}.png`
-      : test.info().outputPath(`${scenario}.png`);
+    const name = seamReach === undefined ? scenario : `${scenario}-reach-${String(seamReach)}`;
+    const path = EVIDENCE ? `${EVIDENCE}/scene-${name}.png` : test.info().outputPath(`${name}.png`);
     await page.screenshot({ path });
-    await test.info().attach(scenario, { path, contentType: "image/png" });
+    await test.info().attach(name, { path, contentType: "image/png" });
     return counts;
   };
 
   const both = await view("both");
   const latest = await view("latest");
+  const centres = await view("latest", 0);
   const gapLatest = await view("gap-latest");
   const gapTruth = await view("gap-truth");
   test.info().annotations.push({
     type: "pixels",
-    description: JSON.stringify({ both, latest, gapLatest, gapTruth }),
+    description: JSON.stringify({ both, latest, centres, gapLatest, gapTruth }),
   });
 
   expect(errors.filter((e) => /shader|compile|link|uniform/i.test(e))).toEqual([]);
@@ -136,6 +144,13 @@ test("under Latest each cell's pixels come from one date; Ground truth hides the
   expect(latest.right.red).toBeLessThan(0.05);
   expect(latest.left.mixed + latest.right.mixed).toBeLessThan(0.05);
   expect(latest.all.mixed).toBeLessThan(both.all.mixed / 5);
+  // The seam: kept by centres alone, footprints blend there -- the measure bites; with the
+  // seam's reach, under 1% of the covered pixels within a metre of it blend both dates, and
+  // the seam is a line, not a hole (most of that band is still drawn).
+  expect(centres.seam.covered).toBeGreaterThan(5_000);
+  expect(centres.seam.mixed).toBeGreaterThan(0.02);
+  expect(latest.seam.mixed).toBeLessThan(0.01);
+  expect(latest.seam.covered).toBeGreaterThan(0.7 * centres.seam.covered);
   // Where no date saw, Latest draws the inferred layer; Ground truth draws nothing.
   expect(gapLatest.southWest.green).toBeGreaterThan(0.6);
   expect(gapTruth.southWest.green).toBeLessThan(0.02);

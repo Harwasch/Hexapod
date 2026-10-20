@@ -8,9 +8,11 @@
  * Per splat: its source (`splatSources.ts`: which tileset its slot holds), the cell it sits in
  * (its position through `u_compFromModel`, the model frame to the tileset frame, as the
  * confidence view does: `splatCellView.ts` `cellFromModel`), and that cell's owner (an R8
- * texture of the owner plane, one byte a cell). Weight 0 unless the two agree; else a feather
- * at a seam: `mix(0.5, 1, smoothstep(0, w, d))`, `d` the distance to the nearest cell edge
- * across which the owner differs, `w` the feather width (`featherWidth`, a UX constant). A
+ * texture of the owner plane, one byte a cell). Weight 0 unless the two agree; else, near a
+ * seam, `smoothstep(reach / 2, reach, d)`: `d` the distance to the nearest cell edge across
+ * which another date owns the cell, in the splat's own standard deviations across it (its
+ * covariance from the engine's attribute texture, turned into the plane's frame), so no
+ * splat's footprint carries its date over the seam (`SEAM_REACH`, measured in ADR 0017). A
  * splat whose slot holds no listed source, or that sits outside the plane, is not drawn, nor
  * is any while the frame its cells are read in is unknown: the rule fails closed, never by
  * blending two dates.
@@ -25,7 +27,7 @@
 
 import { Cartesian4, Matrix4, PixelDatatype, PixelFormat, Sampler, Texture } from "cesium";
 
-import { featherWidth, NO_OWNER, type OwnerPlane } from "@/lib/compositor";
+import { NO_OWNER, SEAM_REACH, type OwnerPlane } from "@/lib/compositor";
 import { INFERRED_HIGHLIGHT } from "@/lib/inferred";
 
 import {
@@ -71,8 +73,8 @@ export type CompositorPrimitive = VisibilityPrimitive &
 const ownerShift = String(Math.log2(OWNER_TEXTURE_WIDTH));
 
 /**
- * Uniforms and helpers both parts use. `u_compParams`: (active, cell m, feather m, slots the
- * source texture covers); `u_compPlane`: (i0, j0, ni, nj).
+ * Uniforms and helpers both parts use. `u_compParams`: (active, cell m, seam reach in sigmas,
+ * slots the source texture covers); `u_compPlane`: (i0, j0, ni, nj).
  */
 export const COMPOSITOR_HELPERS_GLSL = `
 #ifndef HEXAPOD_SPLAT_COMPOSITOR
@@ -94,8 +96,14 @@ int splatCompOwner(ivec2 c) {
 #endif
 `;
 
-/** The visibility part: the owner's splats only, feathered at seams. */
+/** The visibility part: the owner's splats only, none whose spread reaches across a seam. */
 export const COMPOSITOR_VISIBILITY_GLSL = `
+// Whether cell c is across a seam from owner: another date owns it (nobody is no seam).
+bool splatCompSeam(ivec2 c, int owner) {
+    int other = splatCompOwner(c);
+    return other != owner && other != ${String(NO_OWNER)};
+}
+
 float splatCompositorVisibility(uint splatIndex, vec3 position) {
     if (u_compParams.x < 0.5) {
         return 1.0;
@@ -112,21 +120,35 @@ float splatCompositorVisibility(uint splatIndex, vec3 position) {
     if (owner != source) {
         return 0.0;
     }
+    // The splat's spread across the plane: its covariance (the engine's attribute texture),
+    // turned into the plane's frame.
+    uvec4 packed = texelFetch(
+        u_splatAttributeTexture,
+        ivec2(int(((splatIndex & uint(u_splatRowMask)) << 1) | 1u), int(splatIndex >> uint(u_splatRowShift))),
+        0
+    );
+    vec2 u1 = unpackHalf2x16(packed.x);
+    vec2 u2 = unpackHalf2x16(packed.y);
+    vec2 u3 = unpackHalf2x16(packed.z);
+    mat3 v = mat3(u1.x, u1.y, u2.x, u1.y, u2.y, u3.x, u2.x, u3.x, u3.y);
+    mat3 m = mat3(u_compFromModel);
+    mat3 spread = m * v * transpose(m);
+    vec2 sigma = sqrt(max(vec2(spread[0][0], spread[1][1]), vec2(1.0e-12)));
     vec2 t = (g - f) * cell;
     float d = 1.0e9;
-    if (splatCompOwner(c - ivec2(1, 0)) != owner) {
-        d = min(d, t.x);
+    if (splatCompSeam(c - ivec2(1, 0), owner)) {
+        d = min(d, t.x / sigma.x);
     }
-    if (splatCompOwner(c + ivec2(1, 0)) != owner) {
-        d = min(d, cell - t.x);
+    if (splatCompSeam(c + ivec2(1, 0), owner)) {
+        d = min(d, (cell - t.x) / sigma.x);
     }
-    if (splatCompOwner(c - ivec2(0, 1)) != owner) {
-        d = min(d, t.y);
+    if (splatCompSeam(c - ivec2(0, 1), owner)) {
+        d = min(d, t.y / sigma.y);
     }
-    if (splatCompOwner(c + ivec2(0, 1)) != owner) {
-        d = min(d, cell - t.y);
+    if (splatCompSeam(c + ivec2(0, 1), owner)) {
+        d = min(d, (cell - t.y) / sigma.y);
     }
-    return mix(0.5, 1.0, smoothstep(0.0, u_compParams.z, d));
+    return u_compParams.z > 0.0 ? smoothstep(0.5 * u_compParams.z, u_compParams.z, d) : 1.0;
 }
 `;
 
@@ -196,6 +218,8 @@ export class SplatCompositor implements SplatVisibilityPart {
   tinted = 0;
   /** Off draws every splat as it was (the parts stay installed): a harness's comparison. */
   enabled = true;
+  /** The seam's reach, sigmas (`SEAM_REACH` when undefined): a harness measuring the seam. */
+  seamReach: number | undefined;
   #building = false;
 
   /** `rootOf`: the host's root tile's computed transform now (the tileset frame). */
@@ -333,11 +357,12 @@ export class SplatCompositor implements SplatVisibilityPart {
     // closed), never every date at once.
     const active = this.enabled;
     const cell = plane?.cellM ?? 1;
-    const key = `${String(active)}:${String(cell)}:${String(this.sources.covered)}`;
+    const reach = this.seamReach ?? SEAM_REACH;
+    const key = `${String(active)}:${String(cell)}:${String(reach)}:${String(this.sources.covered)}`;
     if (key !== this.#params.key) {
       this.#params = {
         key,
-        value: this.#gpu.vec4(active ? 1 : 0, cell, featherWidth(cell), this.sources.covered),
+        value: this.#gpu.vec4(active ? 1 : 0, cell, reach, this.sources.covered),
       };
     }
     return this.#params.value;

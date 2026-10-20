@@ -24,11 +24,14 @@
 
 import type { Epoch, SiteAsset } from "@twin/contracts";
 import {
+  Cartesian3,
   Cesium3DTileset,
   CesiumWidget,
   Color,
   HeadingPitchRange,
   Math as CesiumMath,
+  Matrix4,
+  SceneTransforms,
   type Scene,
 } from "cesium";
 
@@ -66,13 +69,31 @@ export interface CompositorCounts {
   /** The south-west quarter (left, lower half), where only the inferred layer may draw. */
   southWest: Region;
   all: Region;
+  /**
+   * Latest's seam (x = 16 m), by `seamMixed`: of the covered pixels within one cell (1 m) of
+   * it on screen, the share mixed; and that share in 0.1 m bands across it, west to east.
+   */
+  seam: { pixels: number; covered: number; mixed: number; profile: number[] };
   /** Whether June's own primitive is drawn by March's, and the slots know their sources. */
   companion: boolean;
   sources: { march: number; june: number; fill: number };
 }
 
 export interface CompositorHarness {
-  view(scenario: Scenario): Promise<CompositorCounts>;
+  /** `seamReach` overrides the compositor's (`SEAM_REACH`; 0: centres only), to measure it. */
+  view(scenario: Scenario, options?: { seamReach?: number }): Promise<CompositorCounts>;
+}
+
+/**
+ * Whether a pixel blends both debug colours (March red, June blue) -- the seam's measure, not
+ * the coarse `mixed` class: after the background's own red and blue are taken out, the lesser
+ * of red and blue is at least a tenth of their sum. A tenth of a date's colour in another's
+ * pixel is about where a viewer sees the tint; less is under the background's own level here.
+ */
+export function seamMixed(rgb: readonly [number, number, number], background: readonly number[]) {
+  const red = Math.max(0, rgb[0] - (background[0] ?? 0));
+  const blue = Math.max(0, rgb[2] - (background[2] ?? 0));
+  return red + blue > 0 && Math.min(red, blue) >= 0.1 * (red + blue);
 }
 
 const BACKGROUND = "#10141a";
@@ -220,6 +241,31 @@ export async function startCompositorHarness(options: {
     );
   };
 
+  /**
+   * Where the seam at x = 16 m (the tileset frame, on the ground) is on the canvas: its x at a
+   * pixel row, and how many pixels a metre east is there. A line stays a line in perspective.
+   */
+  function seamOnCanvas(): (row: number) => { x: number; metre: number } {
+    const root = (march.root as { computedTransform?: Matrix4 }).computedTransform;
+    const scale = scene.canvas.width / scene.canvas.clientWidth;
+    const at = (x: number, y: number) => {
+      const world = Matrix4.multiplyByPoint(
+        root ?? Matrix4.IDENTITY,
+        new Cartesian3(x, y, 0),
+        new Cartesian3(),
+      );
+      const p = SceneTransforms.worldToWindowCoordinates(scene, world);
+      return { x: (p?.x ?? Number.NaN) * scale, y: (p?.y ?? Number.NaN) * scale };
+    };
+    const [a, b, a1, b1] = [at(16, 0), at(16, 24), at(17, 0), at(17, 24)];
+    return (row) => {
+      const t = (row - a.y) / (b.y - a.y);
+      const x = a.x + t * (b.x - a.x);
+      const metre = Math.abs(a1.x - a.x) + t * (Math.abs(b1.x - b.x) - Math.abs(a1.x - a.x));
+      return { x, metre };
+    };
+  }
+
   function count(): Omit<CompositorCounts, "companion" | "sources"> {
     const canvas = scene.canvas;
     const copy = document.createElement("canvas");
@@ -235,13 +281,20 @@ export async function startCompositorHarness(options: {
     const [br, bgG, bb] = [bg.red * 255, bg.green * 255, bg.blue * 255];
     const w = copy.width;
     const h = copy.height;
+    const seamAt = seamOnCanvas();
+    const seam = { pixels: 0, covered: 0, mixed: 0 };
+    const bands = Array.from({ length: 20 }, () => ({ covered: 0, mixed: 0 }));
     for (let p = 0; p < data.length; p += 4) {
       const r = data[p] ?? 0;
       const g = data[p + 1] ?? 0;
       const b = data[p + 2] ?? 0;
-      if (Math.abs(r - br) + Math.abs(g - bgG) + Math.abs(b - bb) <= 24) continue;
       const x = (p / 4) % w;
       const y = Math.floor(p / 4 / w);
+      const line = seamAt(y);
+      const off = (x - line.x) / line.metre;
+      const nearSeam = Number.isFinite(off) && Math.abs(off) < 1;
+      if (nearSeam) seam.pixels += 1;
+      if (Math.abs(r - br) + Math.abs(g - bgG) + Math.abs(b - bb) <= 24) continue;
       const max = Math.max(r, g, b);
       const kind =
         r > 40 && b > 40 && Math.min(r, b) / Math.max(r, b) > 0.45
@@ -262,6 +315,17 @@ export async function startCompositorHarness(options: {
         r0.covered += 1;
         if (kind) r0[kind] += 1;
       }
+      // Within a metre of the seam, east positive.
+      if (nearSeam) {
+        const mixed = seamMixed([r, g, b], [br, bgG, bb]);
+        seam.covered += 1;
+        if (mixed) seam.mixed += 1;
+        const band = bands[Math.min(19, Math.floor((off + 1) * 10))];
+        if (band) {
+          band.covered += 1;
+          if (mixed) band.mixed += 1;
+        }
+      }
     }
     const share = (r0: Region): Region => ({
       covered: r0.covered,
@@ -276,11 +340,19 @@ export async function startCompositorHarness(options: {
       right: share(n.right),
       southWest: share(n.southWest),
       all: share(n.all),
+      seam: {
+        pixels: seam.pixels,
+        covered: seam.covered,
+        mixed: seam.covered ? seam.mixed / seam.covered : 0,
+        profile: bands.map((band) =>
+          band.covered ? Math.round((band.mixed / band.covered) * 1000) / 1000 : 0,
+        ),
+      },
     };
   }
 
   return {
-    async view(scenario) {
+    async view(scenario, viewOptions = {}) {
       // Looking north, nearly straight down: east is the right of the screen.
       scene.camera.lookAt(
         march.boundingSphere.center,
@@ -318,6 +390,7 @@ export async function startCompositorHarness(options: {
       const parts = session?.compositor();
       if (!host || !parts) throw new Error("no compositor on the host");
       parts.enabled = scenario !== "both";
+      parts.seamReach = viewOptions.seamReach;
       if (!addColorPart(host, DEBUG)) throw new Error("the engine refused the debug colour");
       // The draw command is rebuilt on the next render; the sort settles over a few more.
       for (let frame = 0; frame < 40; frame += 1) await nextFrame(scene);

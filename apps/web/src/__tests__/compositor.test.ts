@@ -6,7 +6,7 @@
  * ones where it did not, inferred layers only where nothing observed did and the rule allows
  * them, nothing observed after "As of"; a date without a grid covers its leaf tiles' boxes
  * and says so; the plane is at the coarsest finest level, coarser while too big; the seam
- * feather.
+ * seam's reach.
  */
 import { describe, expect, it } from "vitest";
 
@@ -14,7 +14,6 @@ import { encodeConfidenceGrid } from "@/dev/cellGridFixture";
 import { decodeCellGrid, type CellGrid } from "@/lib/cellGrid";
 import {
   compositorWeight,
-  featherWidth,
   leafTileBoxes,
   MAX_PLANE_CELLS,
   NO_OWNER,
@@ -22,6 +21,7 @@ import {
   ownerAt,
   ownerPlane,
   planeLevel,
+  SEAM_REACH,
   type CompositorSource,
   type ViewRule,
 } from "@/lib/compositor";
@@ -80,7 +80,9 @@ describe("the owner plane", () => {
       for (let k = 0; k < 4000; k += 1) {
         const x = -2 + ((k * 7919) % 2400) / 100;
         const y = -2 + ((k * 104729) % 1400) / 100;
-        const drawn = [0, 1, 2, NO_OWNER].filter((s) => compositorWeight(plane, s, x, y) > 0);
+        const drawn = [0, 1, 2, NO_OWNER].filter(
+          (s) => compositorWeight(plane, s, x, y, [0.05, 0.05]) > 0,
+        );
         expect(drawn.length).toBeLessThanOrEqual(1);
         // And the one drawn is the cell's owner.
         if (drawn.length === 1) expect(drawn[0]).toBe(ownerAt(plane, x, y));
@@ -227,19 +229,24 @@ describe("the owner plane", () => {
     expect(plane.cellM).toBe(2);
   });
 
-  it("feathers a splat near a seam to half its opacity, and leaves the inside alone", async () => {
+  it("fades out a splat whose own spread would carry its date across a seam", async () => {
     const plane = ownerPlane("latest", await site(), null);
-    const w = featherWidth(plane.cellM);
-    expect(w).toBe(0.25);
-    expect(featherWidth(4)).toBe(0.5);
-    // June's west edge is at x = 10: right on it, half; a feather's width in, whole.
-    expect(compositorWeight(plane, 1, 10.0001, 5.5)).toBeCloseTo(0.5, 2);
-    expect(compositorWeight(plane, 1, 10 + w, 5.5)).toBe(1);
-    expect(compositorWeight(plane, 0, 9.9999, 5.5)).toBeCloseTo(0.5, 2);
+    expect(SEAM_REACH).toBe(2);
+    // A splat 10 cm across (sigma) on June's side of its west edge at x = 10: within one sigma
+    // of it, not drawn; from two, whole; between, faded in.
+    const sigma = [0.1, 0.1] as const;
+    expect(compositorWeight(plane, 1, 10.05, 5.5, sigma)).toBe(0);
+    expect(compositorWeight(plane, 1, 10.15, 5.5, sigma)).toBeCloseTo(0.5, 2);
+    expect(compositorWeight(plane, 1, 10.2, 5.5, sigma)).toBe(1);
+    expect(compositorWeight(plane, 0, 9.95, 5.5, sigma)).toBe(0);
+    // Its spread across the seam is what counts: one long north-south reaches no further east.
+    expect(compositorWeight(plane, 1, 10.25, 5.5, [0.1, 3])).toBe(1);
     // An edge between two cells of one owner is no seam.
-    expect(compositorWeight(plane, 1, 15.0001, 5.5)).toBe(1);
-    // The site's outer edge is a seam with nobody.
-    expect(compositorWeight(plane, 1, 19.9999, 5.5)).toBeCloseTo(0.5, 2);
+    expect(compositorWeight(plane, 1, 15.01, 5.5, sigma)).toBe(1);
+    // The site's outer edge is no seam: there is no other date there to blend with.
+    expect(compositorWeight(plane, 1, 19.95, 5.5, sigma)).toBe(1);
+    // Reach 0 keeps every splat its centre's cell owns, whatever it spreads over.
+    expect(compositorWeight(plane, 1, 10.01, 5.5, sigma, 0)).toBe(1);
   });
 
   it("colours each cell by its owner's age under data age, striped where a later date saw", async () => {

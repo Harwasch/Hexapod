@@ -51,13 +51,16 @@ export const MAX_PLANE_CELLS = 2 ** 22;
 export const DEFAULT_PLANE_LEVEL = 2;
 
 /**
- * Seam feather width, metres: a UX constant, not a measurement. A splat within it of an edge
- * where the next cell has another owner is drawn at up to half opacity, so a seam reads as a
- * soft line rather than a cut.
+ * How far from a seam a splat is drawn whole, in its own standard deviations across the plane
+ * (its spread east-west from a north-south seam, north-south from an east-west one): within
+ * half of it a splat is not drawn, between half and all of it it fades in. A splat owns a cell
+ * by its centre, but its footprint reaches past the cell's edge; drawn whole there, its tail
+ * lies over the next date's splats and the seam's pixels blend two dates. Measured on the
+ * synthetic yard (ADR 0017, `e2e/compositorScene.spec.ts`): with centres alone 6.3% of the
+ * pixels within a metre of a seam blend both dates; with this reach none do, for a seam
+ * line darker where neither date's splats reach. A neighbour no date owns is no seam.
  */
-export function featherWidth(cellM: number): number {
-  return Math.min(cellM / 4, 0.5);
-}
+export const SEAM_REACH = 2;
 
 /** An axis-aligned box in the tileset frame (metres, x east, y north). */
 export interface TileBox {
@@ -259,17 +262,20 @@ function smoothstep(e0: number, e1: number, x: number): number {
 }
 
 /**
- * The opacity weight a splat of `source` at `(x, y)` gets under `plane` -- what the
- * compositor's visibility part computes (`cesium/splatCompositor.ts`): 0 unless its source owns
- * the cell; else `mix(0.5, 1, smoothstep(0, w, d))`, with `d` the distance to the nearest edge
- * of the cell whose 4-neighbour across it has another owner, `w` the feather width.
+ * The opacity weight a splat of `source` at `(x, y)`, spread `sigma` (its standard deviations
+ * across the plane, metres: x east, y north), gets under `plane` -- what the compositor's
+ * visibility part computes (`cesium/splatCompositor.ts`): 0 unless its source owns the cell;
+ * else `smoothstep(reach / 2, reach, d)`, with `d` the distance to the nearest edge of the
+ * cell whose 4-neighbour across it has another owner, in the splat's sigmas across that edge.
+ * A reach of 0 keeps every splat of the cell's owner.
  */
 export function compositorWeight(
   plane: OwnerPlane,
   source: number,
   x: number,
   y: number,
-  featherM: number = featherWidth(plane.cellM),
+  sigma: readonly [number, number],
+  reach: number = SEAM_REACH,
 ): number {
   if (source === NO_OWNER) return 0;
   const gx = x / plane.cellM;
@@ -280,14 +286,18 @@ export function compositorWeight(
     ownerAtIndex(plane, fi - plane.i0 + di, fj - plane.j0 + dj);
   const owner = at(0, 0);
   if (owner !== source) return 0;
+  const seam = (di: number, dj: number) => {
+    const other = at(di, dj);
+    return other !== owner && other !== NO_OWNER;
+  };
   const tx = (gx - fi) * plane.cellM;
   const ty = (gy - fj) * plane.cellM;
   let d = Number.POSITIVE_INFINITY;
-  if (at(-1, 0) !== owner) d = Math.min(d, tx);
-  if (at(1, 0) !== owner) d = Math.min(d, plane.cellM - tx);
-  if (at(0, -1) !== owner) d = Math.min(d, ty);
-  if (at(0, 1) !== owner) d = Math.min(d, plane.cellM - ty);
-  return 0.5 + 0.5 * smoothstep(0, featherM, d);
+  if (seam(-1, 0)) d = Math.min(d, tx / sigma[0]);
+  if (seam(1, 0)) d = Math.min(d, (plane.cellM - tx) / sigma[0]);
+  if (seam(0, -1)) d = Math.min(d, ty / sigma[1]);
+  if (seam(0, 1)) d = Math.min(d, (plane.cellM - ty) / sigma[1]);
+  return reach > 0 ? smoothstep(reach / 2, reach, d) : 1;
 }
 
 /** A node of a tileset.json, as far as its boxes go. */

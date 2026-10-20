@@ -3,7 +3,7 @@
  * a splat primitive's chains: the visibility part after a hidden instance and before the view
  * cones, the colour part after the inferred highlight; their shared helpers declared once
  * whichever chain the build reaches first; the uniforms saying what lib/compositor.ts says
- * (cell, feather, plane, slots covered, the tinted sources), and nothing acting until the
+ * (cell, seam reach, plane, slots covered, the tinted sources), and nothing acting until the
  * frame is known. Compiling and drawing is e2e/compositorScene.spec.ts's, in a real engine.
  */
 import { describe, expect, it } from "vitest";
@@ -24,7 +24,7 @@ import {
   SplatVisibilityChain,
   type SplatVisibilityPart,
 } from "@/cesium/splatVisibility";
-import { featherWidth, NO_OWNER, type OwnerPlane } from "@/lib/compositor";
+import { NO_OWNER, SEAM_REACH, type OwnerPlane } from "@/lib/compositor";
 import { INFERRED_HIGHLIGHT } from "@/lib/inferred";
 
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
@@ -153,7 +153,7 @@ describe("the view rules' shader parts", () => {
     expect(p.vertexColor).toBeUndefined();
   });
 
-  it("read the owner plane's cell and feather, and draw nothing until the frame is known", () => {
+  it("read the owner plane's cell and seam reach, and draw nothing until the frame is known", () => {
     const { g, made } = gpu();
     const frame: { root?: number[] } = {};
     const compositor = new SplatCompositor(g, () => frame.root);
@@ -173,7 +173,10 @@ describe("the view rules' shader parts", () => {
     compositor.enabled = true;
     frame.root = IDENTITY;
     p._rootTransform = IDENTITY;
-    expect(uniforms.u_compParams?.()).toEqual([1, 1, featherWidth(1), 40]);
+    expect(uniforms.u_compParams?.()).toEqual([1, 1, SEAM_REACH, 40]);
+    // A harness measuring the seam may set another reach (0: centres only).
+    compositor.seamReach = 0;
+    expect(uniforms.u_compParams?.()).toEqual([1, 1, 0, 40]);
     expect(uniforms.u_compPlane?.()).toEqual([-2, -3, 3, 2]);
     expect(uniforms.u_compFromModel?.()).toEqual(IDENTITY);
     // The owner texture is the plane's bytes, in whole rows, NO_OWNER after.
@@ -215,9 +218,12 @@ describe("the view rules' shader parts", () => {
     );
     expect(COMPOSITOR_VISIBILITY_GLSL).toContain("if (owner != source) {\n        return 0.0;");
     expect(COMPOSITOR_HELPERS_GLSL).toContain(`return ${String(NO_OWNER)};`);
-    // The feather is lib/compositor.ts's: mix(0.5, 1, smoothstep(0, w, d)).
+    // The seam is lib/compositor.ts's `compositorWeight`: distance in the splat's own sigmas
+    // across the plane (its covariance, through the model-to-plane rotation), faded from half
+    // the reach to all of it.
+    expect(COMPOSITOR_VISIBILITY_GLSL).toContain("mat3 spread = m * v * transpose(m);");
     expect(COMPOSITOR_VISIBILITY_GLSL).toContain(
-      "return mix(0.5, 1.0, smoothstep(0.0, u_compParams.z, d));",
+      "return u_compParams.z > 0.0 ? smoothstep(0.5 * u_compParams.z, u_compParams.z, d) : 1.0;",
     );
     const big = { owners: new Uint8Array(OWNER_TEXTURE_WIDTH + 1).fill(3) };
     const texels = ownerTexels(big);
