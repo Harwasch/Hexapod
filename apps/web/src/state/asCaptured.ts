@@ -14,9 +14,9 @@ import { useSkinPoke } from "@/state/skinPoke";
  *   `effectiveInferredStyle` is Hide, under CesiumJS (`cesium/inferredLayers.ts`) and under
  *   PlayCanvas or Spark (`cesium/scanView/scanLayers.ts`); supersedes swaps end with it
  *   (`state/supersedes.ts`); the per-cell view rules own no inferred cell (`compositorSession.ts`);
- * - motion: the wind calm (`SceneBridge.tsx`), the poke tool off (below), telemetry and split
- *   objects held at their measured rest pose (`cesium/telemetry.ts`, `cesium/splitObjects.ts`,
- *   `cesium/scanView/scanObjects.ts`);
+ * - motion: the wind calm (`SceneBridge.tsx`), the poke tool off and given back (below),
+ *   telemetry and split objects held at their measured rest pose (`cesium/telemetry.ts`,
+ *   `cesium/splitObjects.ts`, `cesium/scanView/scanObjects.ts`);
  * - agents: a rehearsal's simulated machines hidden (`cesium/RehearsalManager.ts`);
  * - the per-cell view rule drawn as Ground truth (`compositorSession.ts`);
  * - the sunlight relight (W6b) is to subscribe here and draw nothing while it is on.
@@ -80,10 +80,19 @@ export function onInferredStyle(listener: (style: InferredStyle) => void): () =>
 }
 
 // The poke tool rings an object under a modelled material: off while As captured is on, and
-// turned straight off again if asked meanwhile (`K`, the Settings switch).
+// turned straight off again if asked meanwhile (`K`, the Settings switch). It is the viewer's
+// choice, so it is given back once As captured is off: on if it was on, or was asked for.
+let pokeWanted = false;
 const pokeOff = (): void => {
-  if (useAsCaptured.getState().on && useSkinPoke.getState().active)
+  if (useAsCaptured.getState().on && useSkinPoke.getState().active) {
+    pokeWanted = true;
     useSkinPoke.getState().setActive(false);
+  }
 };
-useAsCaptured.subscribe(pokeOff);
+useAsCaptured.subscribe(({ on }, prev) => {
+  if (on === prev.on) return;
+  if (!on && pokeWanted) useSkinPoke.getState().setActive(true);
+  pokeWanted = false;
+  pokeOff();
+});
 useSkinPoke.subscribe(pokeOff);

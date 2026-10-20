@@ -71,9 +71,30 @@ describe("the store", () => {
     expect(useSkinPoke.getState().active).toBe(false);
     useSkinPoke.getState().toggle();
     expect(useSkinPoke.getState().active).toBe(false);
+  });
+
+  it("gives the poke tool back as the viewer left it, or asked for it meanwhile", () => {
+    // On before: on again after.
+    useSkinPoke.getState().setActive(true);
+    useAsCaptured.getState().set(true);
     useAsCaptured.getState().set(false);
-    useSkinPoke.getState().toggle();
     expect(useSkinPoke.getState().active).toBe(true);
+    // Off before, and not asked for: off after.
+    useSkinPoke.getState().setActive(false);
+    useAsCaptured.getState().set(true);
+    useAsCaptured.getState().set(false);
+    expect(useSkinPoke.getState().active).toBe(false);
+    // Off before, asked for meanwhile (`K`): on after, as asked.
+    useAsCaptured.getState().set(true);
+    useSkinPoke.getState().toggle();
+    expect(useSkinPoke.getState().active).toBe(false);
+    useAsCaptured.getState().set(false);
+    expect(useSkinPoke.getState().active).toBe(true);
+    // Turned off by hand (Escape) once it is given back: kept off.
+    useSkinPoke.getState().setActive(false);
+    useAsCaptured.getState().set(true);
+    useAsCaptured.getState().set(false);
+    expect(useSkinPoke.getState().active).toBe(false);
   });
 });
 
