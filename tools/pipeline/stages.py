@@ -1473,7 +1473,12 @@ def _focal_seed(
     """
     if focal_from != "exif" or not ctx.has_input(FRAMES_META.name):
         return None
-    document = _read_json(ctx.input(FRAMES_META.name))
+    path = ctx.input(FRAMES_META.name)
+    if not path.is_file():
+        # Planned but absent: a run whose normalize finished before it wrote one.
+        ctx.log("colmap: focal_from: exif, but normalize wrote no frames_meta.json")
+        return None
+    document = _read_json(path)
     summary = document.get("focal")
     frames = document.get("frames")
     if not isinstance(summary, dict) or not isinstance(frames, list) or not frames:

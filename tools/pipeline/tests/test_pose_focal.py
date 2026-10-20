@@ -65,6 +65,16 @@ def test_the_exif_focal_seeds_the_camera_without_holding_it(tmp_path: Path) -> N
     assert _seed(None, tmp_path) is None
 
 
+def test_a_planned_frames_meta_that_is_not_there_seeds_nothing(tmp_path: Path) -> None:
+    """A job resumed across a deploy: normalize finished before it wrote frames_meta.json,
+    and the new recipe plans one for pose. Nothing to seed from, and no crash."""
+    context = _Context(None, tmp_path)
+    context.has_input = lambda name: True  # type: ignore[method-assign]
+
+    assert stages._focal_seed(context, "exif", 2400, 1798) is None  # type: ignore[arg-type]
+    assert "wrote no frames_meta.json" in context.logged[0]
+
+
 def test_an_unknown_focal_source_is_refused(tmp_path: Path) -> None:
     workdir = Workdir.create(tmp_path / "run")
     frames = workdir.input_path("frames")
