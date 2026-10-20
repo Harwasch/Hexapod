@@ -1,5 +1,10 @@
 Hexapod capture tools -- third-party notices
 
+This file lists the third-party code contained in tools/captures; everything not listed is
+this project's own work. splat_merge.py (the level-of-detail merge) was written in October
+2026 from published mathematics alone, by an implementer who did not read the code it
+replaced (docs/DECISIONS/0012-licence-clean-room.md).
+
 kaolin_rkpm.py
 --------------
 Contains code from NVIDIA Kaolin (https://github.com/NVIDIAGameWorks/kaolin), master branch,
