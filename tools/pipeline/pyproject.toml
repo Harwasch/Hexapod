@@ -76,6 +76,7 @@ known-first-party = [
   "quality",
   "quality_in_memory",
   "recipe",
+  "registration_scene",
   "registry",
   "run_recipe",
   "run_stage",
