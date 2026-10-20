@@ -70,11 +70,14 @@ how well each cell was seen (ADR 0016).
    for measured accuracies.
 
 4. **The threshold.** Between epochs `a` and `b`, at the coarser of their levels (dsm by maximum,
-   ground by minimum, sigma by maximum over the children that have a surface):
+   ground by minimum, sigma by maximum over the children that have a surface; a coarse cell is
+   compared only when the finer epoch measured every one of its children, else it is
+   `insufficient`: its top would be the measured children's alone against the whole cell):
    `Δ = dsm_b − dsm_a`, and the cell is **changed** when `|Δ| > 3·√(σa² + σb² + ua² + ub²)`, where
    `u` is each epoch's uncertainty **from the site frame** (its confidence grid's
    `alignmentCap.uncertaintyM`, ADR 0016 §5: 0 for the epoch that made the frame). Classes:
-   `raised`, `lowered`, `unchanged`, `insufficient` (either epoch has no surface in the cell), and
+   `raised`, `lowered`, `unchanged`, `insufficient` (either epoch has no surface in the cell, or
+   the finer measured only part of it), and
    `appearance-only`, reserved and never emitted (below). Three sigma is a first-principles choice
    (about one false call in 370 cells of Gaussian noise), not a calibrated one. A5 computes the
    map; the demo computes it the same way to show it works.

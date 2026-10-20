@@ -25,7 +25,8 @@ change map (A5) measures it: both surfaces at the coarser level (dsm by max, gro
 sigma by max), and `delta = dsm_e2 - dsm_e1` against `3 sqrt(sigma_e1^2 + sigma_e2^2 +
 u_e1^2 + u_e2^2)`, where `u` is each epoch's uncertainty from the site frame (its confidence
 grid's `alignmentCap.uncertaintyM`: 0 for e1, which made the frame; 0.062 m for e2). A cell
-is `insufficient` when either epoch has no surface there. The report also counts the changed
+is `insufficient` when either epoch has no surface there, or when the finer epoch measured
+only some of the coarse cell's children (its top would be theirs alone against the whole). The report also counts the changed
 cells either epoch's confidence grid calls weak -- whether those may be called changed is
 the change map's decision (A5), not this demo's -- and the changed cells that do not touch
 the crate: what the noise did.
@@ -278,6 +279,23 @@ def coarsen_surface(plane: cell_grid.CellPlane, level: int) -> cell_grid.CellPla
     return plane
 
 
+def measured_children(plane: cell_grid.CellPlane, level: int) -> cell_grid.CellPlane:
+    """Per cell of `level` (>= the plane's), how many of its children at the plane's own
+    level have a surface, as a one-channel plane."""
+    counts = (plane.data[..., 2:3] > 0).astype(np.int64)
+    out = cell_grid.CellPlane(plane.level, plane.i0, plane.j0, plane.ni, plane.nj, counts)
+    while out.level < level:
+        pi0, pj0 = out.i0 >> 1, out.j0 >> 1
+        ni = ((out.i0 + out.ni - 1) >> 1) - pi0 + 1
+        nj = ((out.j0 + out.nj - 1) >> 1) - pj0 + 1
+        padded = np.zeros((2 * nj, 2 * ni, 1), dtype=np.int64)
+        di, dj = out.i0 - 2 * pi0, out.j0 - 2 * pj0
+        padded[dj : dj + out.nj, di : di + out.ni] = out.data
+        summed = padded.reshape(nj, 2, ni, 2, 1).sum(axis=(1, 3))
+        out = cell_grid.CellPlane(out.level + 1, pi0, pj0, ni, nj, summed)
+    return out
+
+
 def _window(
     plane: cell_grid.CellPlane, i0: int, j0: int, ni: int, nj: int, fill: Sequence[int]
 ) -> np.ndarray:
@@ -304,7 +322,9 @@ def surface_change(
 ) -> dict[str, Any]:
     """Per cell of the coarser of the two surfaces' levels: the change in dsm, the
     threshold `sigmas * sqrt(sa^2 + sb^2 + ua^2 + ub^2)` and the class (module docstring);
-    and, per changed cell, whether either confidence grid calls it weak."""
+    and, per changed cell, whether either confidence grid calls it weak. A coarse cell is
+    compared only when the finer epoch measured every one of its children (else
+    insufficient), as the change map (A5) does."""
     level = max(a.level, b.level)
     pa, pb = coarsen_surface(a.planes[0], level), coarsen_surface(b.planes[0], level)
     i0, j0 = min(pa.i0, pb.i0), min(pa.j0, pb.j0)
@@ -320,6 +340,13 @@ def surface_change(
         )
         weak |= cell_grid.weak_mask(window)
     both = (wa[..., 2] > 0) & (wb[..., 2] > 0)
+    # A coarse cell the finer epoch measured only some children of is not compared: its
+    # top would be the measured children's alone against the whole cell (review B5a).
+    for grid in (a, b):
+        whole = 4 ** (level - grid.level)
+        if whole > 1:
+            children = _window(measured_children(grid.planes[0], level), i0, j0, ni, nj, (0,))
+            both &= children[..., 0] == whole
     delta = (wb[..., 0] - wa[..., 0]) * cell_grid.HEIGHT_UNIT_M
     sa, sb = wa[..., 2] * cell_grid.HEIGHT_UNIT_M, wb[..., 2] * cell_grid.HEIGHT_UNIT_M
     threshold = sigmas * np.sqrt(sa**2 + sb**2 + ua**2 + ub**2)

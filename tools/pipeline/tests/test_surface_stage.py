@@ -835,3 +835,48 @@ def test_no_change_control_for_the_ground_its_own_sigma_carries_the_envelopes_bi
     assert (sa > 0).all() and (sb > 0).all()
     threshold = 3.0 * np.sqrt(sa**2 + sb**2 + ub**2)
     assert int((np.abs(gb - ga) > threshold).sum()) <= 1
+
+
+# --- the demo's comparison (review B5a) ---------------------------------------------------
+
+
+def _heights(level: int, cells: dict[tuple[int, int], tuple[int, int]], n: int = 2) -> Any:
+    """A surface grid at `level` over cells `0 .. n-1` square: `cells` maps (i, j) to
+    (dsm, sigma) in centimetres (ground at 0, groundSigma 1); every other cell has none."""
+    data = np.zeros((n, n, len(cell_grid.SURFACE_CHANNELS)), dtype=np.int64)
+    data[..., 0] = data[..., 1] = NO
+    for (i, j), (top, spread) in cells.items():
+        data[j, i] = [top, 0, spread, 0x42, 1]
+    plane = cell_grid.CellPlane(level, 0, 0, n, n, data)
+    meta = {"vertical": {"originHeightM": 180.0}, "summary": {"metric": True}}
+    return cell_grid.CellGrid("surface", cell_grid.SURFACE_CHANNELS, (plane,), meta)
+
+
+def _vouched(level: int, n: int = 2) -> Any:
+    """A confidence grid at `level` that calls every cell strong."""
+    plane = cell_grid.CellPlane(level, 0, 0, n, n, np.full((n, n, 3), 200, dtype=np.uint8))
+    return cell_grid.CellGrid(
+        "confidence",
+        cell_grid.CONFIDENCE_CHANNELS,
+        tuple(cell_grid.min_pyramid(plane, 4)),
+        {"policy": cell_grid.WEAK_POLICY},
+    )
+
+
+def test_the_demo_compares_a_coarse_cell_only_with_every_child_the_finer_epoch_measured() -> None:
+    """Review B5a: the demo coarsened each epoch on its own, so a finer epoch that measured
+    only a 2 m child of a cell stood for the whole cell against the coarser epoch's ground
+    there: "lowered 2 m", a difference in what was measured. A coarse cell is compared only
+    when the finer epoch measured all of its children; otherwise it is insufficient."""
+    from experiments import confidence_demo
+
+    fine = _heights(0, {(0, 0): (200, 1)}, n=2)  # one child of coarse cell (0, 0), 2 m up
+    coarse = _heights(1, {(0, 0): (0, 1)}, n=1)  # the whole coarse cell, at the ground
+    found = confidence_demo.surface_change(coarse, fine, _vouched(1, 1), _vouched(0), 0.0, 0.0)
+    assert found["counts"]["insufficient"] == 1 and found["changed"] == []
+    # All four children measured: compared, and the 2 m child is the coarse cell's top.
+    whole = _heights(
+        0, {(i, j): (200 if (i, j) == (0, 0) else 0, 1) for i in (0, 1) for j in (0, 1)}
+    )
+    found = confidence_demo.surface_change(coarse, whole, _vouched(1, 1), _vouched(0), 0.0, 0.0)
+    assert found["counts"]["raised"] == 1
