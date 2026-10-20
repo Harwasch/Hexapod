@@ -18,9 +18,10 @@ the other side's crate in a sibling, or set one side's uphill children against t
 downhill ones: a change that is only a difference in what was measured. So the finer epoch
 is first brought to the coarser one's level over the children whose coarse cell the coarser
 one measured, then both go up together over the children both measured. A coarse cell where
-each side measured something but no child is shared is `insufficient`; one whose shared
-children are fewer than either side measured (the coarser epoch counts as having measured
-all of its cell) is compared and flagged `lowConfidence`. If the two windows together would
+each side measured something but no child is shared is `insufficient`, and so is one whose
+shared children are fewer than either side measured (the coarser epoch counts as having
+measured all of its cell): its value would be those children's alone against the whole
+(review B5a; it was compared and only flagged). If the two windows together would
 still be over `MAX_CHANGE_CELLS` cells, both go up further until they are not (and say so).
 
 **The rule** (`change-v1`). Where both epochs have a surface, `delta = dsm_to - dsm_from`
@@ -29,7 +30,8 @@ sqrt(sigma_from^2 + sigma_to^2 + u_from^2 + u_to^2)`, where `u` is each epoch's
 uncertainty from the site frame (its confidence grid's `alignmentCap.uncertaintyM`: 0 for
 the epoch that made the frame, its alignment's for one aligned to it, its GPS's for one
 nobody could align). `raised` when `delta > t`, `lowered` when `delta < -t`, else
-`unchanged`; `insufficient` where either epoch measured something but they share no child;
+`unchanged`; `insufficient` where either epoch measured something but they share no child,
+or share fewer than either measured;
 no class where neither measured anything. The 3 is a first-principles choice (three
 standard deviations of the sum of two independent errors), not a measurement: the map says
 `uncalibrated` until a site scanned twice measures it. `minDetectableM` is the least `t`
@@ -40,8 +42,7 @@ change rather than false ones.
 **Low confidence is flagged, not hidden.** A compared cell is `lowConfidence` when either
 epoch's confidence grid does not vouch for it at the compared level (weak-v1: scored under
 128, or unseen, or no evidence at all; the grid's own min-of-children pyramid, so a coarse
-cell is as weak as its weakest child), when it was compared over fewer children than either
-side measured (above), or when either sigma is saturated (255 cm means at least 2.55 m: the
+cell is as weak as its weakest child), or when either sigma is saturated (255 cm means at least 2.55 m: the
 threshold is then a lower bound). It is still classified: P5's demo found
 the weak cells of a real change were its crate's own sides, so hiding them would hide the
 change.
@@ -520,7 +521,8 @@ def change_planes(
     for r0 in range(0, jw[3], step):
         r1 = min(jw[3], r0 + step)
         band = (jw[0], jw[1] + r0, jw[2], r1 - r0)
-        both = joint.shared[r0:r1]
+        # Compared only over every child the finer epoch (or, coarser, either) measured.
+        both = joint.shared[r0:r1] & ~joint.partial[r0:r1]
         delta = db[r0:r1].astype(np.int32) - da[r0:r1].astype(np.int32)
         ground = gb[r0:r1].astype(np.int32) - ga[r0:r1].astype(np.int32)
         s_a, s_b = sa[r0:r1], sb[r0:r1]
@@ -542,7 +544,7 @@ def change_planes(
             else:
                 strong &= _place(grid.channels["strong"], grid.i0, grid.j0, band, False)
         low[dj + r0 : dj + r1, di : di + jw[2]] = both & (
-            joint.partial[r0:r1] | ~strong | (s_a >= SATURATED) | (s_b >= SATURATED)
+            ~strong | (s_a >= SATURATED) | (s_b >= SATURATED)
         )
     return ChangePlanes(
         level=at,

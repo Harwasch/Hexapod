@@ -269,9 +269,9 @@ def only(fields: dict[str, Any], measured: set[tuple[int, int]]) -> dict[str, An
 def test_a_coarse_cell_compares_only_the_children_both_epochs_measured() -> None:
     """The review's case: a measured all four children of a 1 m cell, one of them a 2 m
     crate; b measured one ground child. At 0.5 m that is insufficient where only a has a
-    surface. At 1 m, b's one child must not stand for the whole cell against a's crate:
-    the cell is compared over the child both measured (unchanged), and flagged low
-    confidence because that is a strict subset of what a measured."""
+    surface. At 1 m, b's one child must not stand for the whole cell against a's crate,
+    and the one child both measured is not the cell either: fewer shared children than a
+    measured is insufficient (review B5a; it was compared and only flagged)."""
     a = crate(flat(level=0, ni=2, nj=2), slice(0, 1), slice(0, 1), 200)
     b = only(flat(level=0, ni=2, nj=2), {(1, 1)})
     native = change_planes(surface(a), surface(b), 0.0, 0.0, confidence_a=strong(a))
@@ -285,9 +285,12 @@ def test_a_coarse_cell_compares_only_the_children_both_epochs_measured() -> None
         confidence_b=strong(flat(level=0, ni=2, nj=2)),
         level=1,
     )
-    assert coarse.counts() == {"unchanged": 1, "raised": 0, "lowered": 0, "insufficient": 0}
-    assert coarse.low_counts()["unchanged"] == 1
-    assert int(coarse.delta_cm[0, 0]) == 0
+    assert coarse.counts() == {"unchanged": 0, "raised": 0, "lowered": 0, "insufficient": 1}
+    # Every child both measured: compared, the crate child the cell's top in both.
+    whole = change_planes(
+        surface(a), surface(a), 0.0, 0.0, confidence_a=strong(a), confidence_b=strong(a), level=1
+    )
+    assert whole.counts()["unchanged"] == 1 and whole.low_counts()["unchanged"] == 0
 
 
 def test_a_coarse_cell_whose_children_neither_epoch_shares_is_insufficient() -> None:
@@ -304,9 +307,9 @@ def test_a_coarse_cell_whose_children_neither_epoch_shares_is_insufficient() -> 
     assert coarse.counts() == {"unchanged": 0, "raised": 0, "lowered": 0, "insufficient": 1}
 
 
-def test_on_a_slope_a_partial_child_set_is_compared_like_for_like() -> None:
-    """a measured the whole 1 m cell on a slope, b only its lowest child: compared over that
-    child the slope cancels (unchanged), and it is low confidence."""
+def test_on_a_slope_a_partial_child_set_is_insufficient() -> None:
+    """a measured the whole 1 m cell on a slope, b only its lowest child: the one child is
+    not the cell, so it is insufficient rather than compared like for like."""
     a, b = flat(level=0, ni=2, nj=2), flat(level=0, ni=2, nj=2)
     for f in (a, b):
         f["dsm"] = f["dsm"].copy()
@@ -315,13 +318,13 @@ def test_on_a_slope_a_partial_child_set_is_compared_like_for_like() -> None:
         f["ground"] = f["dsm"].copy()
     b = only(b, {(0, 0)})
     coarse = change_planes(surface(a), surface(b), 0.0, 0.0, level=1)
-    assert coarse.counts()["unchanged"] == 1 and coarse.counts()["lowered"] == 0
-    assert bool(coarse.low[0, 0])
+    assert coarse.counts() == {"unchanged": 0, "raised": 0, "lowered": 0, "insufficient": 1}
 
 
-def test_a_coarser_epoch_against_part_of_its_cell_is_low_confidence() -> None:
-    """a at 1 m (one cell, its top a crate somewhere in it), b at 0.5 m measuring one ground
-    child of it: a has nothing finer to compare, so the cell is compared but flagged."""
+def test_a_coarser_epoch_against_part_of_its_cell_is_insufficient() -> None:
+    """Review B5a: a at 1 m (one cell, its top a crate somewhere in it), b at 0.5 m
+    measuring one ground child of it. a has nothing finer to compare, and b's one child is
+    not the whole cell: insufficient, never "lowered" (it was classified, and flagged)."""
     a = crate(flat(level=1, ni=1, nj=1), slice(0, 1), slice(0, 1), 200)
     b = only(flat(level=0, ni=2, nj=2), {(1, 1)})
     planes = change_planes(
@@ -332,8 +335,8 @@ def test_a_coarser_epoch_against_part_of_its_cell_is_low_confidence() -> None:
         confidence_a=strong(a),
         confidence_b=strong(flat(level=0, ni=2, nj=2)),
     )
-    assert planes.level == 1 and planes.counts()["lowered"] == 1
-    assert planes.low_counts()["lowered"] == 1
+    assert planes.level == 1
+    assert planes.counts() == {"unchanged": 0, "raised": 0, "lowered": 0, "insufficient": 1}
     whole = change_planes(
         surface(a),
         surface(flat(level=0, ni=2, nj=2)),
@@ -342,7 +345,7 @@ def test_a_coarser_epoch_against_part_of_its_cell_is_low_confidence() -> None:
         confidence_a=strong(a),
         confidence_b=strong(flat(level=0, ni=2, nj=2)),
     )
-    assert whole.low_counts()["lowered"] == 0  # every child measured: vouched as before
+    assert whole.counts()["lowered"] == 1 and whole.low_counts()["lowered"] == 0
 
 
 def test_windows_too_large_together_are_compared_coarser(monkeypatch: pytest.MonkeyPatch) -> None:
