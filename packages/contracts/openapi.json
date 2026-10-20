@@ -6171,6 +6171,16 @@
           "status": {
             "$ref": "#/components/schemas/EpochStatus"
           },
+          "surface": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EpochSurfaceRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "updatedAt": {
             "format": "date-time",
             "title": "Updatedat",
@@ -6195,6 +6205,7 @@
           "quality",
           "currentAssetId",
           "confidence",
+          "surface",
           "createdAt",
           "updatedAt"
         ],
@@ -6210,6 +6221,80 @@
         ],
         "title": "EpochStatus",
         "type": "string"
+      },
+      "EpochSurfaceRead": {
+        "additionalProperties": false,
+        "description": "The height surface an epoch's current revision shipped: per cell of its confidence\ngrid's finest plane, its top surface (`dsm`), bare ground and spread, in centimetres\nabove the site frame's origin. Null on an epoch means not measured: the run that made\nits current revision measured none (a splat upload, or a run before the surface stage).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "assetId": {
+            "format": "uuid",
+            "title": "Assetid",
+            "type": "string"
+          },
+          "calibration": {
+            "title": "Calibration",
+            "type": "string"
+          },
+          "cellM": {
+            "title": "Cellm",
+            "type": "number"
+          },
+          "cells": {
+            "title": "Cells",
+            "type": "integer"
+          },
+          "level": {
+            "title": "Level",
+            "type": "integer"
+          },
+          "medianSigmaM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediansigmam"
+          },
+          "originHeightM": {
+            "title": "Originheightm",
+            "type": "number"
+          },
+          "policy": {
+            "title": "Policy",
+            "type": "string"
+          },
+          "status": {
+            "const": "measured",
+            "title": "Status",
+            "type": "string"
+          },
+          "surfacedCells": {
+            "title": "Surfacedcells",
+            "type": "integer"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "assetId",
+          "url",
+          "cellM",
+          "level",
+          "policy",
+          "calibration",
+          "cells",
+          "surfacedCells",
+          "medianSigmaM",
+          "originHeightM"
+        ],
+        "title": "EpochSurfaceRead",
+        "type": "object"
       },
       "EventLocation": {
         "additionalProperties": false,

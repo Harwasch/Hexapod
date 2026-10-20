@@ -82,18 +82,22 @@ def register_run(
     grid: bytes | None = None,
     carried: tuple[str, ...] = (),
     content_addressed: bool = False,
+    surface: bytes | None = None,
 ) -> uuid.UUID:
     """One run registered as the worker registers it (published to `url`, by default the
-    run's own key in the one test bucket), with `grid` written beside the tiles; its job."""
+    run's own key in the one test bucket), with `grid` (its confidence grid) and `surface`
+    (its height surface) written beside the tiles; its job."""
     document = over_its_grid(document)
     job = _job(db, capture)
     tileset = url or tiles_url(job.id)
-    if grid is not None:
-        directory = tileset.removeprefix("https://cdn.example.com/twin-worker-test/").rsplit(
-            "/", 1
-        )[0]
-        uri = str(document.get("confidence", {}).get("uri") or "confidence.bin")
-        storage.put_object(f"{directory}/{uri}", grid, "application/octet-stream")
+    directory = tileset.removeprefix("https://cdn.example.com/twin-worker-test/").rsplit("/", 1)[0]
+    for key, blob, default in (
+        ("confidence", grid, "confidence.bin"),
+        ("surface", surface, "surface.bin"),
+    ):
+        if blob is not None:
+            uri = str((document.get(key) or {}).get("uri") or default)
+            storage.put_object(f"{directory}/{uri}", blob, "application/octet-stream")
     live = registration.live_tileset_url(db, capture)
     registration.register(
         db,

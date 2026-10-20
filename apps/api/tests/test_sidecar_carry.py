@@ -936,6 +936,7 @@ def a_measured_run(
 def a_measured_scan(db: Session, buckets: Publisher, *, surface: bool = False) -> Capture:
     """The measured run published and registered, its grid recorded as the epoch's map."""
     from tests.confidence_fixtures import descriptor
+    from tests.surface_fixtures import surface_descriptor
 
     a_measured_run(buckets, surface=surface)
     capture = Capture(slug="field", name="Field", kind=CaptureKind.GAUSSIAN_SPLAT)
@@ -947,10 +948,24 @@ def a_measured_scan(db: Session, buckets: Publisher, *, surface: bool = False) -
         publish=buckets,
         capture=capture,
         job_id=RUN,
-        registration=dataclasses.replace(a_registration(), confidence=descriptor("e1")),
+        registration=dataclasses.replace(
+            a_registration(),
+            confidence=descriptor("e1"),
+            surface=surface_descriptor("e1", 0.0) if surface else None,
+        ),
         tiles_stage_id="package",
     )
     return capture
+
+
+def the_map_urls(db: Session, asset: Asset) -> dict[str, str]:
+    from app.models import EpochMap
+
+    db.expire_all()
+    return {
+        row.kind: row.url
+        for row in db.scalars(select(EpochMap).where(EpochMap.asset_id == asset.id))
+    }
 
 
 def the_map_url(db: Session, asset: Asset) -> str | None:
@@ -1044,6 +1059,13 @@ def test_a_height_surface_is_the_run_s_own_and_bound_to_its_tiles(
     assert files_under(buckets.public, directory_of(live.source["url"]))["surface.bin"] == (
         b"heights "
     )
+    # An attach moves the revision's surface map with its generation, as its grid's.
+    attach(db, buckets, live, INSTANCES_FILES, extras={"instances": INSTANCES_EXTRAS})
+    attached = the_splat(db, capture)
+    assert the_map_urls(db, attached) == {
+        kind: attached.source["url"].replace("tileset.json", f"{kind}.bin")
+        for kind in ("confidence", "surface")
+    }
 
     a_measured_run(buckets, tag=b"refined ", surface=True)
     republish(db, buckets, capture)
@@ -1052,7 +1074,8 @@ def test_a_height_surface_is_the_run_s_own_and_bound_to_its_tiles(
     assert files["surface.bin"] == b"heights refined "
     extras = tileset_at(buckets.public, refined.source["url"])["root"]["extras"]
     assert extras["surface"] == SURFACE_EXTRAS
-    assert refined.sidecar_flags == []
+    # (The objects attached above do not survive new tiles; the surface is the run's.)
+    assert "surface" not in {flag["kind"] for flag in refined.sidecar_flags}
 
     # The same tiles from a run that measured nothing: carried.
     a_measured_run(buckets, tag=b"refined ", confidence=False)
@@ -1063,7 +1086,7 @@ def test_a_height_surface_is_the_run_s_own_and_bound_to_its_tiles(
     assert tileset_at(buckets.public, same.source["url"])["root"]["extras"]["surface"] == (
         SURFACE_EXTRAS
     )
-    assert same.sidecar_flags == []
+    assert "surface" not in {flag["kind"] for flag in same.sidecar_flags}
 
     # New tiles with neither grid: both dropped, each flagged with its own action.
     a_measured_run(buckets, tag=b"new ", confidence=False)
@@ -1074,7 +1097,7 @@ def test_a_height_surface_is_the_run_s_own_and_bound_to_its_tiles(
     extras = tileset_at(buckets.public, moved.source["url"])["root"]["extras"]
     assert "surface" not in extras
     flags = {flag["kind"]: flag for flag in moved.sidecar_flags}
-    assert set(flags) == {"confidence", "surface"}
+    assert {"confidence", "surface"} <= set(flags)
     assert flags["surface"]["action"] == "Height surface needs re-measuring"
     assert "new tiles" in flags["surface"]["reason"]
 

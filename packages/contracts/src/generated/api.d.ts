@@ -5711,6 +5711,7 @@ export interface components {
              */
             siteId: string;
             status: components["schemas"]["EpochStatus"];
+            surface: components["schemas"]["EpochSurfaceRead"] | null;
             /**
              * Updatedat
              * Format: date-time
@@ -5723,6 +5724,45 @@ export interface components {
          * @enum {string}
          */
         EpochStatus: "published" | "rejected" | "superseded";
+        /**
+         * EpochSurfaceRead
+         * @description The height surface an epoch's current revision shipped: per cell of its confidence
+         *     grid's finest plane, its top surface (`dsm`), bare ground and spread, in centimetres
+         *     above the site frame's origin. Null on an epoch means not measured: the run that made
+         *     its current revision measured none (a splat upload, or a run before the surface stage).
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        EpochSurfaceRead: {
+            /**
+             * Assetid
+             * Format: uuid
+             */
+            assetId: string;
+            /** Calibration */
+            calibration: string;
+            /** Cellm */
+            cellM: number;
+            /** Cells */
+            cells: number;
+            /** Level */
+            level: number;
+            /** Mediansigmam */
+            medianSigmaM: number | null;
+            /** Originheightm */
+            originHeightM: number;
+            /** Policy */
+            policy: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "measured";
+            /** Surfacedcells */
+            surfacedCells: number;
+            /** Url */
+            url: string;
+        };
         /**
          * EventLocation
          * @description Where on the map a research step is looking or what it found.
@@ -12337,6 +12377,7 @@ export type SchemaEpochJoinMethod = components['schemas']['EpochJoinMethod'];
 export type SchemaEpochPlatform = components['schemas']['EpochPlatform'];
 export type SchemaEpochRead = components['schemas']['EpochRead'];
 export type SchemaEpochStatus = components['schemas']['EpochStatus'];
+export type SchemaEpochSurfaceRead = components['schemas']['EpochSurfaceRead'];
 export type SchemaEventLocation = components['schemas']['EventLocation'];
 export type SchemaEventLocationRef = components['schemas']['EventLocationRef'];
 export type SchemaEventRead = components['schemas']['EventRead'];

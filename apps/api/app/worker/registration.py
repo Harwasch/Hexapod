@@ -38,6 +38,7 @@ from app.models.enums import (
     CaptureKind,
     CaptureStatus,
     EpochJoinMethod,
+    EpochMapKind,
     EpochPlatform,
     EpochStatus,
     GeorefMethod,
@@ -118,6 +119,9 @@ class Registration:
     #: (`extras.confidence`, copied up by `catalog`; ADR 0016), or None when the run
     #: measured none (`splat-ingest`). `register` records it as the revision's map.
     confidence: dict[str, Any] | None = None
+    #: The height surface the run shipped beside its tiles (`extras.surface`, copied up by
+    #: `catalog`; ADR 0018), or None when it measured none. Recorded like `confidence`.
+    surface: dict[str, Any] | None = None
 
     @staticmethod
     def read(path: Path) -> Registration:
@@ -153,6 +157,7 @@ class Registration:
             confidence=document.get("confidence")
             if isinstance(document.get("confidence"), dict)
             else None,
+            surface=document.get("surface") if isinstance(document.get("surface"), dict) else None,
         )
 
 
@@ -1436,32 +1441,38 @@ def register(
         shown = _new_asset(site, epoch, capture, url, registration, published.carry, job_id, now)
         db.add(shown)
     if shown is not None and url is not None:
-        # What the run measured on the tiles it published is that revision's map; a
-        # superseded revision keeps the one it was measured with (ADR 0016, `epoch_maps`).
+        # What the run measured on the tiles it published is that revision's maps -- its
+        # confidence grid and its height surface; a superseded revision keeps the ones it
+        # was measured with (ADR 0016, 0018, `epoch_maps`).
         db.flush()
-        carried_grid = (
-            registration.confidence is None
-            and current is not None
-            and "confidence" in published.carry.carried
-        )
-        if carried_grid and current is not None and shown is not current:
-            # The same tiles republished by a run that measured nothing: the grid the
-            # publish carried into the new generation is still the old revision's map.
-            epoch_maps.carry_map(db, epoch=epoch, source=current, target=shown, tileset_url=url)
-        elif carried_grid:
-            # That publish retried: its deterministic URL is the revision the first attempt
-            # made, which already holds the carried map, and the retry carried the grid
-            # again. Nothing was measured anew, so nothing about the map changes.
-            pass
-        else:
-            epoch_maps.record_map(
-                db,
-                epoch=epoch,
-                asset=shown,
-                job_id=producing,
-                descriptor=registration.confidence,
-                tileset_url=url,
+        for kind, measured in (
+            (EpochMapKind.CONFIDENCE, registration.confidence),
+            (EpochMapKind.SURFACE, registration.surface),
+        ):
+            carried = (
+                measured is None and current is not None and kind.value in published.carry.carried
             )
+            if carried and current is not None and shown is not current:
+                # The same tiles republished by a run that measured nothing: the grid the
+                # publish carried into the new generation is still the old revision's map.
+                epoch_maps.carry_map(
+                    db, epoch=epoch, source=current, target=shown, tileset_url=url, kind=kind
+                )
+            elif carried:
+                # That publish retried: its deterministic URL is the revision the first
+                # attempt made, which already holds the carried map, and the retry carried
+                # the grid again. Nothing was measured anew, so nothing about the map changes.
+                pass
+            else:
+                epoch_maps.record_map(
+                    db,
+                    epoch=epoch,
+                    asset=shown,
+                    job_id=producing,
+                    descriptor=measured,
+                    tileset_url=url,
+                    kind=kind,
+                )
     capture.site_id = site.id
     if url is not None:
         _grow_boundary(site, epoch.footprint)

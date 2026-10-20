@@ -17,6 +17,7 @@ from app.models.enums import (
 )
 from app.schemas.base import CamelModel
 from app.schemas.capture import CaptureQuality
+from app.schemas.change import EpochSurfaceRead
 from app.schemas.confidence import EpochConfidenceRead
 from app.schemas.geojson import Footprint
 
@@ -73,5 +74,8 @@ class EpochRead(CamelModel):
     #: measured (ADR 0016), summarised. Null is "not measured" -- that run measured none
     #: (a splat upload carries no capture evidence).
     confidence: EpochConfidenceRead | None
+    #: Its heights per cell: the height surface its current revision's run measured
+    #: (ADR 0018), summarised. Null is "not measured" -- that run measured none.
+    surface: EpochSurfaceRead | None
     created_at: datetime
     updated_at: datetime
