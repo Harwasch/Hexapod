@@ -163,6 +163,44 @@ def test_a_republish_that_carried_the_grid_carries_the_map(
     assert maps[new.id].url == new.source["url"].replace("tileset.json", "confidence.bin")
 
 
+def test_a_retried_publish_that_carried_the_grid_keeps_the_map(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """The carrying publish run again: the generation's URL is deterministic (content-
+    hashed, #52's very same tiles), so the retry lands on the revision the first attempt
+    made. It carried the grid again, so the map stays; only a run that neither measured
+    nor carried one leaves the tiles unmeasured."""
+    capture = _capture(db)
+    register_run(db, storage, tmp_path, capture, measured("e1"))
+    register_run(db, storage, tmp_path, capture, measured(None), carried=("confidence",))
+    old, new = _assets(db, capture.site_id)
+    before = {row.asset_id: (row.id, row.url, row.descriptor) for row in _maps(db)}
+
+    register_run(
+        db,
+        storage,
+        tmp_path,
+        capture,
+        measured(None),
+        url=new.source["url"],
+        carried=("confidence",),
+        content_addressed=True,
+    )
+    assert len(_assets(db, capture.site_id)) == 2
+    assert {row.asset_id: (row.id, row.url, row.descriptor) for row in _maps(db)} == before
+
+    register_run(
+        db,
+        storage,
+        tmp_path,
+        capture,
+        measured(None),
+        url=new.source["url"],
+        content_addressed=True,
+    )
+    assert {row.asset_id for row in _maps(db)} == {old.id}
+
+
 @pytest.mark.parametrize(
     ("change", "words"),
     [

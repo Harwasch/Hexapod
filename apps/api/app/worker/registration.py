@@ -1427,15 +1427,20 @@ def register(
         # What the run measured on the tiles it published is that revision's map; a
         # superseded revision keeps the one it was measured with (ADR 0016, `epoch_maps`).
         db.flush()
-        if (
+        carried_grid = (
             registration.confidence is None
             and current is not None
-            and shown is not current
             and "confidence" in published.carry.carried
-        ):
+        )
+        if carried_grid and current is not None and shown is not current:
             # The same tiles republished by a run that measured nothing: the grid the
             # publish carried into the new generation is still the old revision's map.
             epoch_maps.carry_map(db, epoch=epoch, source=current, target=shown, tileset_url=url)
+        elif carried_grid:
+            # That publish retried: its deterministic URL is the revision the first attempt
+            # made, which already holds the carried map, and the retry carried the grid
+            # again. Nothing was measured anew, so nothing about the map changes.
+            pass
         else:
             epoch_maps.record_map(
                 db,
