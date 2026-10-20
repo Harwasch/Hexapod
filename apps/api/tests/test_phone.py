@@ -409,7 +409,9 @@ def test_a_phone_capture_can_name_its_site(client: TestClient, db: Session) -> N
     and the worker makes it the site's next epoch (decision D3)."""
     from tests.test_epochs import make_site
 
-    site = make_site(db)
+    first = client.post("/api/v1/phone/captures", json={}, headers=PHONE)
+    assert first.status_code == 201, first.text
+    site = make_site(db, metadata={"captureId": first.json()["capture"]["id"]})
     db.commit()
 
     created = client.post(
@@ -427,3 +429,34 @@ def test_a_phone_capture_can_name_its_site(client: TestClient, db: Session) -> N
     assert capture["metadata"]["origin"] == "phone-key"
     assert capture["siteId"] is None
     assert missing.status_code == 404, missing.text
+
+
+def test_the_phone_key_cannot_name_a_site_a_phone_did_not_make(
+    client: TestClient, db: Session
+) -> None:
+    """The phone key is a weak shared credential. Naming a seeded or hand-made site would
+    let it fix that site's frame where the phone is, add a default-visible splat to it and
+    grow its boundary; naming a desktop upload's site would write into someone else's. All
+    are refused (409 `site_not_phone`); the write-token route can still name them."""
+    from app.models import Capture
+    from app.models.enums import CaptureKind
+    from tests.test_epochs import make_site
+
+    seeded = make_site(db, "demo-ranch", metadata={"origin": "demo-ranch"})
+    desktop = Capture(slug="desk", name="Desk", kind=CaptureKind.VIDEO, metadata_={})
+    db.add(desktop)
+    db.flush()
+    uploaded = make_site(db, "uploaded", metadata={"captureId": str(desktop.id)})
+    odd = make_site(db, "odd", metadata={"captureId": "not-a-uuid"})
+    db.commit()
+
+    for site in (seeded, uploaded, odd):
+        refused = client.post(
+            "/api/v1/phone/captures", json={"siteId": str(site.id)}, headers=PHONE
+        )
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["code"] == "site_not_phone"
+    assert (
+        db.query(Capture).filter(Capture.metadata_["origin"].as_string() == "phone-key").count()
+        == 0
+    )
