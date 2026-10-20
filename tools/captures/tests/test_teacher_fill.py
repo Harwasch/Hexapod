@@ -4,20 +4,25 @@ What must hold whatever the image model is: a dropped region is masked where it 
 fill is scored against what was there, a fill that repaints what it was told is refused,
 lifted gaussians sit at the scan's depth facing their camera, and the inferred layer is its
 own tileset -- in the measured frame, with view cones from its virtual cameras and
-`extras.evidence`.
+`extras.evidence`. The fill from outside is gated (`rescan_gate`): every `fill_scan` here
+is given a real gate, built from two confidence grids (an earlier epoch A weak everywhere,
+its re-scan B weak in part) the way the API builds one, and fills only B's still-weak cells.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
+import gate_fixtures as gf
 import numpy as np
 import pytest
 
 import splat_tiles
 import teacher_fill as tf
 import view_cones as vc
+from rescan_gate import RescanGate, RescanGateError, verify_layer
 from splat_render import Camera, Splats, load_ply, load_tileset, save_ply
 
 YARD = Path(__file__).resolve().parents[3] / "data" / "tiles" / "synthetic-yard"
@@ -279,25 +284,65 @@ def test_package_inferred_is_its_own_layer_in_the_measured_frame(tmp_path: Path)
     assert seen.mean() > 0.9 and behind.mean() < 0.1
 
 
-def test_fill_scan_fills_the_side_a_capture_never_saw(tmp_path: Path) -> None:
-    """A wall photographed from +x only: from -x it is faded, so the ring's far cameras
-    are asked to fill it, and the inferred layer is drawn only from their side."""
+def _measured_and_gate(
+    tmp_path: Path,
+    ply: Path,
+    positions: np.ndarray,
+    still_weak: Callable[[np.ndarray, np.ndarray], np.ndarray],
+    name: str = "measured",
+) -> tuple[Path, RescanGate]:
+    """`ply` packed as epoch B's measured tileset with B's confidence grid (1 m cells over
+    the scene), and B's fill targets against an earlier epoch A that was weak everywhere:
+    B is weak (so the targets are) where `still_weak(i, j)`, strong elsewhere."""
+    low = np.floor(positions[:, :2].min(axis=0)).astype(int) - 1
+    high = np.floor(positions[:, :2].max(axis=0)).astype(int) + 1
+    (i0, j0), (ni, nj) = low, high - low + 1
+    jj, ii = np.meshgrid(np.arange(j0, j0 + nj), np.arange(i0, i0 + ni), indexing="ij")
+    weak = still_weak(ii, jj)
+    a = gf.confidence_grid(2, int(i0), int(j0), np.full((nj, ni), 60), np.ones((nj, ni)))
+    b = gf.confidence_grid(2, int(i0), int(j0), np.where(weak, 60, 200), np.where(weak, 1, 0))
+    measured = tmp_path / name
+    grid = gf.grid_json(tmp_path / f"{name}-grid", b)
+    splat_tiles.convert(ply, measured, 0.0, 0.0, 0.0, opacity_min=0.0, confidence=grid)
+    targets = gf.write_payload(tmp_path / f"{name}-targets.json", gf.still_weak_payload(b, [a]))
+    return measured, RescanGate.from_json(targets)
+
+
+def _north(i: np.ndarray, j: np.ndarray) -> np.ndarray:
+    return j >= 0
+
+
+def _everywhere(i: np.ndarray, j: np.ndarray) -> np.ndarray:
+    return np.ones(i.shape, dtype=bool)
+
+
+def _nowhere(i: np.ndarray, j: np.ndarray) -> np.ndarray:
+    return np.zeros(i.shape, dtype=bool)
+
+
+def _photographed_wall(n: int = 6000) -> Splats:
+    """A wall in the y-z plane at x = 0, 2 m long north-south and 2 m high."""
     rng = np.random.default_rng(1)
-    n = 6000
     positions = np.column_stack(
         [rng.normal(0, 0.01, n), rng.uniform(-1, 1, n), rng.uniform(0, 2, n)]
     )
-    wall = Splats(
+    return Splats(
         positions,
         np.tile([1.0, 0.0, 0.0, 0.0], (n, 1)),
         np.full((n, 3), 0.03),
         np.tile([0.6, 0.3, 0.2], (n, 1)),
         np.full(n, 0.9),
     )
+
+
+def test_fill_scan_fills_the_side_a_capture_never_saw(tmp_path: Path) -> None:
+    """A wall photographed from +x only: from -x it is faded, so the ring's far cameras
+    are asked to fill it, and the inferred layer is drawn only from their side. Every cell
+    of it is still weak after a re-scan, so the gate leaves all of it to fill."""
+    wall = _photographed_wall()
     ply = tmp_path / "wall.ply"
     save_ply(ply, wall, comment="test wall")
-    measured = tmp_path / "measured"
-    splat_tiles.convert(ply, measured, 0.0, 0.0, 0.0, opacity_min=0.0)
+    measured, gate = _measured_and_gate(tmp_path, ply, wall.positions, _everywhere)
     layout = splat_tiles.ply_layout(ply)
     eye = np.array([[6.0, 0.0, 1.0]])
     grid = vc.cone_grid(layout, np.ones(layout.count, bool), observers=eye)
@@ -308,18 +353,24 @@ def test_fill_scan_fills_the_side_a_capture_never_saw(tmp_path: Path) -> None:
         tf.InpaintFiller(),
         measured / "tileset.json",
         out,
+        gate=gate,
         views=4,
         width=96,
         height=72,
         stride=2,
     )
     assert evidence["gaussians"] > 0, evidence
+    assert evidence["gated"]["targets"] == evidence["gated"]["faded"] > 0
     accepted = [v for v in evidence["perView"] if v["accepted"]]
     assert accepted and all(v["maskPx"] > 0 for v in accepted)
     assert evidence["views"] == len(accepted)
     lifted = load_tileset(out / "tileset.json")
-    behind = lifted.positions[:, 0].mean()
-    assert behind < 0.0  # discs on the wall's unseen face, towards the cameras that made them
+    # On the wall, and only in its cells. (Ungated, a few dozen discs at the silhouette's
+    # edge were lifted metres off it towards the cameras; their mean was what once said
+    # "towards the cameras". The gate drops them: they are in no target cell.)
+    assert abs(float(np.median(lifted.positions[:, 0]))) < 0.05
+    assert gate.mask(lifted.positions).all()
+    assert evidence["gated"]["liftedOutside"] > 0
 
 
 class _Painter:
@@ -342,28 +393,16 @@ class _Painter:
 
 
 def test_fill_scan_chains_a_filler_that_asks_and_tells_it_the_void(tmp_path: Path) -> None:
-    rng = np.random.default_rng(1)
-    n = 6000
-    positions = np.column_stack(
-        [rng.normal(0, 0.01, n), rng.uniform(-1, 1, n), rng.uniform(0, 2, n)]
-    )
-    wall = Splats(
-        positions,
-        np.tile([1.0, 0.0, 0.0, 0.0], (n, 1)),
-        np.full((n, 3), 0.03),
-        np.tile([0.6, 0.3, 0.2], (n, 1)),
-        np.full(n, 0.9),
-    )
+    wall = _photographed_wall()
     ply = tmp_path / "wall.ply"
     save_ply(ply, wall, comment="test wall")
-    measured = tmp_path / "measured"
-    splat_tiles.convert(ply, measured, 0.0, 0.0, 0.0, opacity_min=0.0)
+    measured, gate = _measured_and_gate(tmp_path, ply, wall.positions, _north)
     layout = splat_tiles.ply_layout(ply)
     grid = vc.cone_grid(layout, np.ones(layout.count, bool), observers=np.array([[6.0, 0, 1]]))
     painter = _Painter()
     evidence = tf.fill_scan(
         wall, grid, painter, measured / "tileset.json", tmp_path / "inferred",
-        views=6, width=96, height=72, stride=2,
+        gate=gate, views=6, width=96, height=72, stride=2,
     )  # fmt: skip
     asked_total = [v["maskPx"] for v in evidence["perView"]]
     assert len(painter.asked) == 6 and all(v > 0 for v in painter.voids)
@@ -386,8 +425,8 @@ def test_fill_scan_can_condition_without_floaters(tmp_path: Path) -> None:
     scene = Splats.concat([wall, floater])
     ply = tmp_path / "scene.ply"
     save_ply(ply, scene, comment="test floater")
-    measured = tmp_path / "measured"
-    splat_tiles.convert(ply, measured, 0.0, 0.0, 0.0, opacity_min=0.0)
+    # The wall runs east-west at y = 0: its east half is still weak.
+    measured, gate = _measured_and_gate(tmp_path, ply, scene.positions, lambda i, j: i >= 0)
     layout = splat_tiles.ply_layout(ply)
     grid = vc.cone_grid(layout, np.ones(layout.count, bool), observers=np.array([[0.0, -6.0, 1.0]]))
     largest: list[float] = []
@@ -398,10 +437,111 @@ def test_fill_scan_can_condition_without_floaters(tmp_path: Path) -> None:
 
     evidence = tf.fill_scan(
         scene, grid, tf.InpaintFiller(), measured / "tileset.json", tmp_path / "inferred",
-        views=4, width=64, height=48, renderer=spy, max_scale_m=1.0,
+        gate=gate, views=4, width=64, height=48, renderer=spy, max_scale_m=1.0,
     )  # fmt: skip
     assert evidence["gaussians"] > 0
     assert largest and max(largest) < 1.0
+
+
+def _wall_case(tmp_path: Path, still_weak: Callable[[np.ndarray, np.ndarray], np.ndarray]):
+    wall = _photographed_wall()
+    ply = tmp_path / "wall.ply"
+    save_ply(ply, wall, comment="test wall")
+    measured, gate = _measured_and_gate(tmp_path, ply, wall.positions, still_weak)
+    layout = splat_tiles.ply_layout(ply)
+    grid = vc.cone_grid(layout, np.ones(layout.count, bool), observers=np.array([[6.0, 0, 1]]))
+    return wall, measured / "tileset.json", gate, grid
+
+
+def test_fill_scan_will_not_run_without_a_gate(tmp_path: Path) -> None:
+    wall, tileset, _, grid = _wall_case(tmp_path, _north)
+    with pytest.raises(TypeError, match="gate"):
+        tf.fill_scan(wall, grid, tf.InpaintFiller(), tileset, tmp_path / "inferred")  # type: ignore[call-arg]
+    assert not (tmp_path / "inferred").exists()
+
+
+def test_fill_scan_fills_only_the_cells_a_re_scan_left_weak(tmp_path: Path) -> None:
+    """The wall's north half is still weak, its south half was fixed by the re-scan: the
+    fill is asked only for the north, every gaussian of the layer is in a target cell,
+    and its evidence names the gate it was held to."""
+    wall, tileset, gate, grid = _wall_case(tmp_path, _north)
+    out = tmp_path / "inferred"
+    evidence = tf.fill_scan(
+        wall, grid, tf.InpaintFiller(), tileset, out,
+        gate=gate, views=4, width=96, height=72, stride=2,
+    )  # fmt: skip
+    gated = evidence["gated"]
+    assert 0 < gated["targets"] < gated["faded"]
+    assert gated["targets"] == int((gate.mask(wall.positions)).sum())
+    assert evidence["gaussians"] > 0, evidence
+    layer = load_tileset(out / "tileset.json")
+    assert gate.mask(layer.positions).all()
+    assert (layer.positions[:, 1] >= 0).all()
+    stored = json.loads((out / "tileset.json").read_text())["root"]["extras"]["evidence"]
+    confidence = json.loads(tileset.read_text())["root"]["extras"]["confidence"]
+    assert stored["rescanGate"] == gate.evidence(confidence_sha256=confidence["sha256"])
+    assert stored["rescanGate"]["cells"] == gate.cells > 0
+    assert set(stored["rescanGate"]) >= {"policy", "epochId", "weakIn", "cells", "maskSha256"}
+    # What publish asks of it: its tiles' grid and gate hold, against targets fetched now.
+    asset = {"epochId": gate.epoch_id, "siteId": gate.site_id, "validTo": None}
+    current = json.loads(tileset.read_text())
+    a, b = (
+        gf.confidence_grid(
+            2, gate.i0, gate.j0, np.full(gate.targets.shape, score), np.ones(gate.targets.shape)
+        )
+        for score in (60, 60)
+    )
+    then = json.loads((tmp_path / "measured-targets.json").read_text())
+    verify_layer(stored, asset=asset, tileset=current, current=then, positions=layer.positions)
+    now = gf.still_weak_payload(b, [a])  # the targets grew since: every cell is weak now
+    with pytest.raises(RescanGateError, match="changed since"):
+        verify_layer(stored, asset=asset, tileset=current, current=now, positions=layer.positions)
+
+
+def test_fill_scan_with_no_cell_still_weak_is_skipped_not_refused(tmp_path: Path) -> None:
+    wall, tileset, gate, grid = _wall_case(tmp_path, _nowhere)
+    assert gate.cells == 0
+    out = tmp_path / "inferred"
+    evidence = tf.fill_scan(wall, grid, tf.InpaintFiller(), tileset, out, gate=gate, views=4)
+    assert evidence["kind"] == "inferred" and evidence["gaussians"] == 0
+    assert evidence["skipped"] == "no cell is still weak after a re-scan"
+    assert evidence["gated"]["targets"] == 0 and evidence["rescanGate"]["cells"] == 0
+    assert not out.exists()
+
+
+def test_fill_scan_refuses_another_tileset_s_targets(tmp_path: Path) -> None:
+    """Targets computed for another epoch (another window) or for a tileset never measured
+    are refused before anything is rendered."""
+    wall, tileset, gate, grid = _wall_case(tmp_path, _north)
+    other = gf.confidence_grid(2, 40, 40, np.full((3, 3), 60), np.ones((3, 3)))
+    elsewhere = RescanGate.from_payload(gf.still_weak_payload(other, [other]))
+    with pytest.raises(RescanGateError, match="window"):
+        tf.fill_scan(wall, grid, tf.InpaintFiller(), tileset, tmp_path / "x", gate=elsewhere)
+    plain = tmp_path / "plain"
+    splat_tiles.convert(tmp_path / "wall.ply", plain, 0.0, 0.0, 0.0, opacity_min=0.0)
+    with pytest.raises(RescanGateError, match="no confidence grid"):
+        tf.fill_scan(
+            wall, grid, tf.InpaintFiller(), plain / "tileset.json", tmp_path / "y", gate=gate
+        )
+    assert not (tmp_path / "x").exists() and not (tmp_path / "y").exists()
+
+
+def test_the_fill_command_needs_the_targets_and_drop_says_it_is_not_gated(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, tileset, _, _ = _wall_case(tmp_path, _north)
+    with pytest.raises(SystemExit) as exited:
+        tf.main(["fill", str(tileset), str(tmp_path / "inferred")])
+    assert exited.value.code == 2
+    assert "--still-weak" in capsys.readouterr().err
+    other = gf.confidence_grid(2, 40, 40, np.full((3, 3), 60), np.ones((3, 3)))
+    targets = gf.write_payload(tmp_path / "t.json", gf.still_weak_payload(other, [other]))
+    code = tf.main(["fill", str(tileset), str(tmp_path / "inferred"), "--still-weak", str(targets)])
+    assert code == 2 and "refused" in capsys.readouterr().err
+    assert not (tmp_path / "inferred").exists()
+    with pytest.raises(SystemExit):
+        tf.main(["drop", "--help"])
+    assert "not gated" in capsys.readouterr().out
 
 
 def test_make_filler_names_the_stand_in_and_imports_the_rest() -> None:

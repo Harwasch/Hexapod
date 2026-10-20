@@ -29,9 +29,15 @@ say so. Every stage runs on the CPU with the image model behind one interface (`
 6. **package** (`package_inferred`) -- the gaussians as their own tileset in the scan's frame,
    with view cones whose observers are the virtual cameras and `extras.evidence`.
 
+**The fill from outside is gated** (`fill_scan`, `rescan_gate`; ADR 0016 § Fill): it fills only
+cells a re-scan left weak -- the API's fill targets for the scan's epoch (`rescan-gate-v1`),
+checked against the tileset's own confidence grid first -- and its evidence says so
+(`rescanGate`). Nothing to target is a skipped result, not an error.
+
 `drop_and_fill` is the evaluation that needs no photographs: remove a region the capture
 did see, fill it, and compare with what was there -- in the views used to fill it and, after
-lifting, in a held-out view (S1/S6 in LIVING_ENGINE.md, without a GPU).
+lifting, in a held-out view (S1/S6 in LIVING_ENGINE.md, without a GPU). It is never
+published, so it is not gated.
 """
 
 from __future__ import annotations
@@ -47,6 +53,7 @@ from typing import Protocol
 import numpy as np
 
 import view_cones as vc
+from rescan_gate import RescanGate, RescanGateError
 from splat_render import Camera, Frame, Splats, render, save_ply
 
 #: What every view is rendered with: `(splats, camera, *, opacity_scale=None) -> Frame`.
@@ -1070,11 +1077,13 @@ def package_inferred(
     *,
     rule: str | None = None,
     extra: dict[str, object] | None = None,
+    rescan_gate: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """The lifted gaussians as their own tileset beside the measured one: the same frame
     (the measured root transform), view cones from the virtual cameras that made them, and
     `extras.evidence` saying what they are (`rule` replaces the fill-from-outside rule;
-    `extra` adds keys, e.g. the instance whose hole it fills)."""
+    `extra` adds keys, e.g. the instance whose hole it fills; `rescan_gate`, the fill targets
+    it was restricted to, `RescanGate.evidence` -- what publish-fill.yml requires)."""
     import splat_tiles
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1106,6 +1115,7 @@ def package_inferred(
             "filled by an image model, gated on the unmasked pixels, lifted at the scan's "
             "depth as discs facing their camera, opacity by distance from measured pixels"
         ),
+        **({"rescanGate": rescan_gate} if rescan_gate is not None else {}),
         **(extra or {}),
     }
     document["root"]["extras"]["viewCones"] = cone_extras
@@ -1163,6 +1173,7 @@ def fill_scan(
     measured_tileset: Path,
     out_dir: Path,
     *,
+    gate: RescanGate,
     views: int = 8,
     mode: str = "ring",
     width: int = 640,
@@ -1179,17 +1190,43 @@ def fill_scan(
     gated, lifted and packaged beside `measured_tileset` in `out_dir`. Returns the
     evidence block, with a per-view report under `views`.
 
+    **Gated.** `gate` (`rescan_gate.RescanGate`, the API's fill targets for the scan's
+    epoch) is checked against `measured_tileset`'s own confidence grid first (refused,
+    `RescanGateError`, when they are another epoch's). Then only what the view cones fade
+    *and* what lies in a target cell is to be filled: every other gaussian is rendered as
+    seen in every view, so it is no hole and no pixel of it is asked for; and a lifted disc
+    whose centre is not inside the target cells (by `rescan_gate.INSET_M`) is dropped,
+    before and after any distill. No target is a skipped result, not an error. The
+    evidence carries `rescanGate` and the result `gated` (the counts at each step).
+
     `max_scale_m`: condition on the scan without its gaussians larger than this (largest
     axis) -- the floaters at a capture's edge, which a rasterizer draws as blobs over most
     of a view from outside (the camp: 0.4% of its gaussians at 0.5 m). The CPU renderer
     all but hides them (few samples, spread thin); gsplat does not."""
+    gate_evidence = gate.evidence(confidence_sha256=gate.check_tileset(measured_tileset))
     if max_scale_m is not None:
         splats = splats.take(np.flatnonzero(splats.scales.max(axis=1) <= max_scale_m))
     texels = vc.lookup(grid.texels, grid.origin, grid.cell, grid.dims, splats.positions)
     faded = texels[:, 2] != vc.OMNI
+    in_cells = gate.mask(splats.positions)
+    chosen = faded & in_cells
+    gated: dict[str, int] = {
+        "targetCells": gate.cells,
+        "faded": int(faded.sum()),
+        "inTargetCells": int(in_cells.sum()),
+        "targets": int(chosen.sum()),
+    }
+    skipped = {"kind": "inferred", "gaussians": 0, "rescanGate": gate_evidence, "gated": gated}
+    if gate.cells == 0:
+        return {**skipped, "skipped": "no cell is still weak after a re-scan"}
     if not faded.any():
-        return {"kind": "inferred", "gaussians": 0, "skipped": "nothing is faded"}
-    targets = splats.positions[faded]
+        return {**skipped, "skipped": "nothing is faded"}
+    if not chosen.any():
+        return {
+            **skipped,
+            "skipped": "nothing the scan fades is in a cell still weak after a re-scan",
+        }
+    targets = splats.positions[chosen]
     centre = targets.mean(axis=0)
     reach = float(np.percentile(np.linalg.norm(splats.positions - centre, axis=1), 95))
     cameras = plan_views(
@@ -1201,7 +1238,17 @@ def fill_scan(
         width=width,
         height=height,
     )
-    conds = [condition(splats, camera, grid, renderer=renderer) for camera in cameras]
+    # Outside the targets, everything is drawn as seen: no hole, so never asked for.
+    conds = [
+        condition(
+            splats,
+            camera,
+            grid,
+            seen_opacity=np.where(chosen, seen_weights(splats, camera, grid), 1.0),
+            renderer=renderer,
+        )
+        for camera in cameras
+    ]
     context: dict[str, object] | None = None
     if hasattr(filler, "context") and (instances := read_instances(measured_tileset)):
         # A generative filler is told what the scan holds (what its views look at).
@@ -1218,6 +1265,10 @@ def fill_scan(
             seen = to_u8(f.conditioning.seen.rgb)
             _save_strip(save_dir / f"view{k}.png", [given, seen, f.rgb], f.conditioning.mask)
     lifted, confidence = lift(filled, stride=stride)
+    gated["lifted"] = len(lifted)
+    keep = gate.inside(lifted.positions)
+    lifted, confidence = lifted.take(np.flatnonzero(keep)), confidence[keep]
+    gated["liftedOutside"] = int((~keep).sum())
     per_view = [
         {
             "maskPx": int(f.conditioning.mask.sum()),
@@ -1227,12 +1278,7 @@ def fill_scan(
         for f in filled
     ]
     if len(lifted) == 0:
-        return {
-            "kind": "inferred",
-            "gaussians": 0,
-            "skipped": "no accepted fill",
-            "views": per_view,
-        }
+        return {**skipped, "skipped": "no accepted fill", "views": per_view}
     distilled: dict[str, object] | None = None
     if distill_iterations > 0:
         import distill_fill
@@ -1240,11 +1286,19 @@ def fill_scan(
         lifted, distilled = refine(
             lifted, splats, filled, distill_iterations, distill_runner or distill_fill.run
         )
+        # Refined positions may drift: the gate holds after it too.
+        keep = gate.inside(lifted.positions)
+        lifted, confidence = lifted.take(np.flatnonzero(keep)), confidence[keep]
+        gated["refinedOutside"] = int((~keep).sum())
+        if len(lifted) == 0:
+            return {**skipped, "skipped": "nothing refined stayed in a target cell"}
     used = [f.conditioning.camera for f in filled if f.accepted]
-    evidence = package_inferred(lifted, confidence, used, measured_tileset, out_dir, filler.name)
+    evidence = package_inferred(
+        lifted, confidence, used, measured_tileset, out_dir, filler.name, rescan_gate=gate_evidence
+    )
     if save_dir is not None:
         _save_before_after(save_dir, splats, lifted, grid, filled, renderer)
-    extra: dict[str, object] = {"perView": per_view}
+    extra: dict[str, object] = {"perView": per_view, "gated": gated}
     if distilled:
         extra["distill"] = distilled
     if context is not None:
@@ -1311,6 +1365,7 @@ def _distill_runner(where: str) -> Callable[[dict], dict]:
 
 def main(argv: list[str] | None = None) -> int:
     import argparse
+    import sys
 
     from splat_render import load_tileset
 
@@ -1319,8 +1374,14 @@ def main(argv: list[str] | None = None) -> int:
     link = sub.add_parser("link", help="declare an inferred layer on its measured tileset")
     link.add_argument("tileset", type=Path, help="the measured tileset.json")
     link.add_argument("inferred", type=Path, help="the inferred layer's tileset.json")
+    helps = {
+        "drop": "the evaluation harness: remove a region the capture saw, fill it, and score "
+        "the fill against what was there. Never published, so not gated (no --still-weak)",
+        "fill": "fill from outside what the view cones fade, only in the cells a re-scan "
+        "left weak (--still-weak), as an inferred layer beside the scan",
+    }
     for name in ("drop", "fill"):
-        p = sub.add_parser(name)
+        p = sub.add_parser(name, help=helps[name], description=helps[name])
         p.add_argument("tileset", type=Path, help="the measured tileset.json (with viewcones.bin)")
         p.add_argument("--filler", default="telea", help="'telea' or module:Class")
         p.add_argument("--views", type=int, default=4 if name == "drop" else 8)
@@ -1339,6 +1400,14 @@ def main(argv: list[str] | None = None) -> int:
         "--centre", type=float, nargs=3, help="local ENU; default: beside the main observer"
     )
     sub.choices["fill"].add_argument("out", type=Path, help="the inferred tileset's directory")
+    sub.choices["fill"].add_argument(
+        "--still-weak",
+        type=Path,
+        required=True,
+        metavar="FILE",
+        help="the scan's epoch's fill targets, GET /api/v1/sites/{id}/fill-targets?epochId= "
+        "(rescan-gate-v1): only cells a re-scan left weak are filled (ADR 0016, Fill)",
+    )
     sub.choices["fill"].add_argument("--mode", choices=("ring", "near"), default="ring")
     sub.choices["fill"].add_argument(
         "--max-scale-m",
@@ -1356,6 +1425,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "link":
         print(json.dumps(link_inferred(args.tileset, args.inferred), indent=1))
         return 0
+    if args.command == "fill":
+        # Refused before anything is rendered or any image model is called.
+        try:
+            gate = RescanGate.from_json(args.still_weak)
+            gate.check_tileset(args.tileset)
+        except RescanGateError as error:
+            print(f"teacher_fill fill: refused: {error}", file=sys.stderr)
+            return 2
     splats = load_tileset(args.tileset)
     grid = vc.cone_grid_from_tileset(args.tileset)
     filler = make_filler(args.filler)
@@ -1388,6 +1465,7 @@ def main(argv: list[str] | None = None) -> int:
             filler,
             args.tileset,
             args.out,
+            gate=gate,
             views=args.views,
             mode=args.mode,
             width=args.width,

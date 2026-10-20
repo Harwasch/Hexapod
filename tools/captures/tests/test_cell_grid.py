@@ -263,3 +263,31 @@ def test_a_corrupt_stream_or_a_malformed_descriptor_is_a_cell_grid_error() -> No
 
 def cell_grid_fixture() -> Path:
     return Path(__file__).resolve().parents[3] / "data" / "tiles" / "synthetic-yard-epochs"
+
+
+def test_plane_at_reads_a_level_the_pyramid_stopped_short_of() -> None:
+    """`plane_at` is the stored plane where there is one, else the nearest finer one
+    coarsened min-of-children up to the level -- what a longer pyramid would have held."""
+    rng = np.random.default_rng(7)
+    data = rng.integers(0, 256, (6, 9, 3)).astype(np.uint8)
+    data[..., 1] &= 31
+    plane = cell_grid.CellPlane(1, -5, 3, 9, 6, data)
+    short = cell_grid.CellGrid(
+        "confidence", cell_grid.CONFIDENCE_CHANNELS, tuple(cell_grid.min_pyramid(plane, 1))
+    )
+    full = cell_grid.min_pyramid(plane, 3)
+    assert cell_grid.plane_at(short, 2) is short.planes[1]
+    found = cell_grid.plane_at(short, 4)
+    assert (found.level, found.i0, found.j0, found.ni, found.nj) == (
+        full[3].level,
+        full[3].i0,
+        full[3].j0,
+        full[3].ni,
+        full[3].nj,
+    )
+    assert np.array_equal(found.data, full[3].data)
+    with pytest.raises(cell_grid.CellGridError, match="finer"):
+        cell_grid.plane_at(short, 0)
+    covered = cell_grid.covered_mask(plane)
+    assert np.array_equal(covered, (data[..., 0] > 0) | ((data[..., 1] & 16) > 0))
+    assert not (cell_grid.weak_mask(plane) & ~covered).any()
