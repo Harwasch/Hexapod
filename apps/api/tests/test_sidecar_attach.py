@@ -1086,3 +1086,12 @@ def test_an_attach_whose_new_generation_holds_other_tiles_is_refused(
     stored = db.get(Asset, asset.id)
     assert stored is not None
     assert stored.source["url"] == LIVE_URL and stored.url_history == []
+
+
+def test_a_tiles_confidence_min_is_the_tilesets_own_not_a_sidecar() -> None:
+    """`extras.confidenceMin` is a per-tile value the packer writes on every tile, the root
+    included (tools/captures splat_tiles `write_tiles`): never flagged, carried or attached."""
+    extras = {"gaussians": 3, "confidenceMin": 40, "collision": {"uri": "collision.bin"}}
+    assert "confidenceMin" not in sidecars.unknown_extras(extras)
+    with pytest.raises(sidecars.SidecarPathError, match="belongs to the tileset"):
+        sidecars.check_extras_key("confidenceMin")

@@ -262,6 +262,8 @@ def test_a_republish_from_a_legacy_prefix_carries_the_fill_and_flags_the_rest(
             "collision": COLLISION_EXTRAS,
             "inferredLayers": FILL_EXTRAS,
             "mystery": {"note": "nobody knows"},
+            # The root tile's own least-confident cell (P4): the tileset's, not a sidecar.
+            "confidenceMin": 37,
         },
     )
     before = files_under(buckets.public, LEGACY_DIR)

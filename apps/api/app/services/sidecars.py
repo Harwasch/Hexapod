@@ -263,9 +263,10 @@ KINDS_BY_NAME: dict[str, SidecarKind] = {kind.name: kind for kind in KINDS}
 KINDS_BY_EXTRAS: dict[str, SidecarKind] = {key: kind for kind in KINDS for key in kind.extras}
 
 #: Root extras that belong to the tileset itself rather than to a sidecar: the packer's
-#: gaussian count on the root tile (tools/captures/splat_tiles.py). Never patched, never
-#: carried: the new tileset has its own.
-TILESET_EXTRAS = frozenset({"gaussians"})
+#: gaussian count on the root tile and, when the run measured a confidence grid, the root
+#: tile's least confident cell (`confidenceMin`, written on every tile; tools/captures/
+#: splat_tiles.py). Never patched, never carried: the new tileset has its own.
+TILESET_EXTRAS = frozenset({"gaussians", "confidenceMin"})
 
 # --- what a staged file may be ------------------------------------------------------
 
