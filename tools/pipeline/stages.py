@@ -2414,24 +2414,39 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
     non-robust mode on 3.9.1, so the similarity comes out of a RANSAC, and the last digits
     of the scale and the residuals move between runs over the same frames. The Lane 1
     byte-identity gate is unaffected -- `manual_placement` writes parameters.
+
+    `site_frame` (an epoch of a site that already has a frame): the aligned branch
+    expresses the fixes about the frame's origin instead of their median, so the
+    similarity lands the reconstruction in the site's frame directly; the located branch
+    writes the frame's origin as the georeference and the located point's offset from it
+    as `siteFrame.offsetM`, which `place` adds after recentring. With a frame and no
+    location at all, the capture sits at the site's origin rather than being refused.
     """
     frames = ctx.input(FRAMES.name)
     fixes = exif.read_fixes(frames)
     min_images = int(ctx.param("min_images", 3))
+    frame_given = site_frame.from_param(ctx.param("site_frame"))
     ctx.log(f"{len(fixes)} of {_count_files(frames)} frames carry an EXIF GPS fix")
 
     model_dir = ctx.input(POSES.name) if ctx.has_input(POSES.name) else None
     if len(fixes) >= max(min_images, 3) and model_dir is not None:
-        return _exif_gps_aligned(ctx, fixes, model_dir)
+        return _exif_gps_aligned(ctx, fixes, model_dir, frame_given)
 
     located = _sole_location(ctx, fixes)
     method = "exif-gps"
+    offset_source = ("exif" if fixes else "video") if located is not None else None
     if located is None:
         # The capture's own coordinate -- the console sends where its camera was looking
         # -- is the last resort, and it is recorded as the hand placement it is. A video
         # with no location must neither land in the Gulf of Guinea nor fail silently, so
-        # with no coordinate at all this is still a refusal, and it says what to do.
+        # with no coordinate at all this is still a refusal, and it says what to do --
+        # unless the capture is an epoch of a site with a frame: then it sits at the
+        # site's origin, recorded as the hand placement that is.
         placed = _placed_coordinate(ctx)
+        offset_source = "capture"
+        if placed is None and frame_given is not None:
+            placed = (frame_given.lat, frame_given.lon, frame_given.height)
+            offset_source = "site-origin"
         if placed is None:
             raise ValueError(
                 f"no EXIF GPS on any of {_count_files(frames)} frames, no location in "
@@ -2443,6 +2458,15 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
             )
         located, method = placed, "manual"
     lat, lon, height = located
+    site_echo: dict[str, object] | None = None
+    if frame_given is not None:
+        offset = site_frame.offset_m(frame_given, lat, lon)
+        if offset_source != "site-origin" and site_frame.is_origin(frame_given, lat, lon):
+            offset_source = "site-origin"
+        site_echo = site_frame.echo(
+            frame_given, offset=offset, offset_source=offset_source, located=located
+        )
+        lat, lon, height = frame_given.lat, frame_given.lon, frame_given.height
     why = "fewer than three EXIF fixes" if model_dir else "no pose model to align against"
     frame = _frame_from_poses(ctx, model_dir, estimate_scale=True)
     source = (
@@ -2473,6 +2497,14 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
         "alignment": None,
         "frame": frame,
     }
+    if site_echo is not None:
+        document["siteFrame"] = site_echo
+        offset_m = site_echo["offsetM"]
+        assert isinstance(offset_m, list)
+        document["note"] = (
+            f"{document['note']}; in site {site_echo['siteId']}'s frame, offset "
+            f"({offset_m[0]:.3f}, {offset_m[1]:.3f}) m from its origin"
+        )
     _write_json(ctx.output(GEOREF.name), document)
     ctx.log(f"located at {lat}, {lon}, {height} m from {source}; not aligned ({why})")
     ctx.log(
@@ -2570,13 +2602,25 @@ def place_splat(ctx: StageContext) -> StageOutcome:
     scale = float(_number(frame.get("scale")) or 1.0)
     offset = frame.get("translationM")
     translation = None if offset is None else np.asarray(offset, dtype=np.float64)
+    # In a site's frame (D3): where the located capture sits relative to the frame origin
+    # `georef.json` is about. None outside a frame, and for the EXIF-aligned branch.
+    site_offset = _site_offset(georef)
+    if site_offset is not None and not frame.get("recentre"):
+        # Folded into the georeferenced step itself, so `_place_coverage` and the LOD
+        # placement see the same total move as the splat.
+        translation = (np.zeros(3) if translation is None else translation) + site_offset
     georeferenced = splat_stream.Step(rotation, translation, scale)
     moved = [0.0, 0.0, 0.0]
     recentred: gaussians.Frame | None = None
     if frame.get("recentre"):
-        # `gaussians.orient(placed, up_axis="z")` of the georeferenced splat.
+        # `gaussians.orient(placed, up_axis="z")` of the georeferenced splat, then moved
+        # by the site offset in the same step as the recentring.
         placed = splat_stream.orient_to(
-            trained, ctx.output(CANONICAL_PLY.name), before=[georeferenced], up_axis="z"
+            trained,
+            ctx.output(CANONICAL_PLY.name),
+            before=[georeferenced],
+            up_axis="z",
+            offset=None if site_offset is None else site_offset.tolist(),
         )
         recentred = placed.frame
         assert recentred is not None
@@ -2611,6 +2655,22 @@ def place_splat(ctx: StageContext) -> StageOutcome:
         "shDegree": trained.sh_degree,
     }
     return StageOutcome(metrics=metrics, summary=f"placed by {frame.get('source')}")
+
+
+def _site_offset(georef: dict[str, object]) -> npt.NDArray[np.float64] | None:
+    """`siteFrame.offsetM` of a georef.json when it is three finite metres and not zero."""
+    echo = georef.get("siteFrame")
+    if not isinstance(echo, dict):
+        return None
+    offset = echo.get("offsetM")
+    if not isinstance(offset, list) or len(offset) != 3:
+        return None
+    if not all(isinstance(v, int | float) and not isinstance(v, bool) for v in offset):
+        return None
+    values = np.asarray([float(v) for v in offset], dtype=np.float64)
+    if not np.isfinite(values).all() or site_frame.is_zero(values.tolist()):
+        return None
+    return values
 
 
 def place_points(
@@ -2736,11 +2796,24 @@ def _camera_height_scale(
     )
 
 
+def _aligned_origin(
+    fixes: tuple[exif.Fix, ...], frame: site_frame.SiteFrame | None
+) -> tuple[float, float, float]:
+    """The origin the aligned branch expresses its fixes about: the site's frame when the
+    capture is an epoch of one, else the fixes' own median (epoch 1 defines the frame)."""
+    if frame is not None:
+        return frame.lat, frame.lon, frame.height
+    return exif.median_fix(fixes)
+
+
 def _exif_gps_aligned(
-    ctx: StageContext, fixes: tuple[exif.Fix, ...], model_dir: Path
+    ctx: StageContext,
+    fixes: tuple[exif.Fix, ...],
+    model_dir: Path,
+    frame_given: site_frame.SiteFrame | None = None,
 ) -> StageOutcome:
     """The aligned branch: fixes define the frame, COLMAP solves for the similarity."""
-    lat, lon, height = exif.median_fix(fixes)
+    lat, lon, height = _aligned_origin(fixes, frame_given)
     reference = exif.enu_offsets(fixes, (lat, lon, height))
     model = sfm.read_model(model_dir)
     centres = {image.name: tuple(float(v) for v in image.centre) for image in model.images}
@@ -2841,6 +2914,15 @@ def _exif_gps_aligned(
             "up": None,
         },
     }
+    if frame_given is not None:
+        # The fixes were expressed in the site's frame directly, so nothing is offset.
+        document["siteFrame"] = site_frame.echo(
+            frame_given, offset=None, offset_source=None, located=exif.median_fix(fixes)
+        )
+        document["note"] = (
+            f"{document['note']}; the fixes are expressed about site "
+            f"{frame_given.site_id}'s frame origin, not their own median"
+        )
     _write_json(ctx.output(GEOREF.name), document)
     ctx.log(
         f"aligned {len(common)} fixes: scale {similarity.scale:.6g}, residual "
