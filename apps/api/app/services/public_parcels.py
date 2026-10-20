@@ -41,7 +41,7 @@ QUEUE_WAIT_S = 2.0
 #: What a refused lookup is told to wait (s).
 BUSY_RETRY_S = 5
 
-CacheKey = tuple[float, float, float, bool]
+CacheKey = tuple[float, float, float]
 
 
 class Busy(Exception):  # noqa: N818 - a condition, answered 503, not an error
@@ -65,14 +65,9 @@ class PublicParcels:
         self._lock = threading.Lock()
 
     @staticmethod
-    def key(request: PublicParcelRequest, include_unverified: bool) -> CacheKey:
+    def key(request: PublicParcelRequest) -> CacheKey:
         lon, lat = request.point.coordinates[:2]
-        return (
-            round(lon, CACHE_DECIMALS),
-            round(lat, CACHE_DECIMALS),
-            request.radius_m,
-            include_unverified,
-        )
+        return (round(lon, CACHE_DECIMALS), round(lat, CACHE_DECIMALS), request.radius_m)
 
     def lookup(self, key: CacheKey, ask: Callable[[], CandidateResult]) -> CandidateResult:
         """The cached answer for `key`, or `ask()`'s, run in a free slot (raises `Busy`)."""

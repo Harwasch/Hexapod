@@ -1932,8 +1932,8 @@ export interface paths {
          * @description County assessor parcels near a point, with their source, attribution and any notice
          *     their terms require.
          *
-         *     California only (elsewhere the answer is `uncovered`), and only the counties the public
-         *     list allows (`public_counties`; `PUBLIC_PARCELS_UNVERIFIED` widens it).
+         *     California only (elsewhere the answer is `uncovered`), and only the counties whose terms
+         *     were verified (`public_counties`; docs/PUBLIC_PARCELS.md).
          */
         post: operations["parcels_near_api_v1_public_parcels_near_post"];
         delete?: never;

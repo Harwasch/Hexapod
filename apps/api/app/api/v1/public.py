@@ -14,7 +14,7 @@ from typing import Annotated
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.api.deps import DbSession, LimitPublicParcels, SettingsDep
+from app.api.deps import DbSession, LimitPublicParcels
 from app.schemas.land_selection import CandidateResult, PublicParcelRequest
 from app.services import land_selection
 from app.services.public_parcels import BUSY_RETRY_S, Busy, PublicParcels
@@ -49,20 +49,18 @@ def parcels_near(
     request: Request,
     db: DbSession,
     client: ParcelHttp,
-    settings: SettingsDep,
 ) -> CandidateResult:
     """County assessor parcels near a point, with their source, attribution and any notice
     their terms require.
 
-    California only (elsewhere the answer is `uncovered`), and only the counties the public
-    list allows (`public_counties`; `PUBLIC_PARCELS_UNVERIFIED` widens it).
+    California only (elsewhere the answer is `uncovered`), and only the counties whose terms
+    were verified (`public_counties`; docs/PUBLIC_PARCELS.md).
     """
     shared: PublicParcels = request.app.state.public_parcels
-    include = settings.public_parcels_unverified
     try:
         return shared.lookup(
-            PublicParcels.key(payload, include),
-            lambda: land_selection.public_parcels(db, payload, client, include_unverified=include),
+            PublicParcels.key(payload),
+            lambda: land_selection.public_parcels(db, payload, client),
         )
     except Busy as busy:
         raise HTTPException(

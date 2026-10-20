@@ -2,8 +2,8 @@
 
 Open to anyone, so the tests hold what makes that safe: no token is needed and none is
 looked at, the search area and the body are capped, each client is rate-limited, the counties
-asked are an explicit list (a county whose terms restrict redistribution never, unverified ones
-only behind a setting), a required disclaimer travels with its parcels, answers are cached,
+asked are an explicit list of counties whose terms were verified (one that restricts
+redistribution never, ones pending terms not yet), a required disclaimer travels with its parcels, answers are cached,
 lookups running at once are capped, and outside California no provider is called.
 """
 
@@ -27,7 +27,7 @@ from app.main import create_app
 from app.models.land import LandArea
 from app.research.providers.parcels import (
     NO_PUBLIC_REUSE,
-    PUBLIC_UNVERIFIED,
+    PENDING_TERMS,
     PUBLIC_VERIFIED,
     available_sources,
 )
@@ -119,14 +119,6 @@ def client(db: Session, clock: Clock, provider: dict[str, Answer]) -> Iterator[T
         yield test_client
 
 
-@pytest.fixture
-def client_unverified(
-    db: Session, clock: Clock, provider: dict[str, Answer]
-) -> Iterator[TestClient]:
-    with make_client(db, clock, provider, public_parcels_unverified=True) as test_client:
-        yield test_client
-
-
 def ask(
     client: TestClient, point: tuple[float, float], ip: str = "203.0.113.7", **extra: object
 ) -> Response:
@@ -182,24 +174,23 @@ def test_a_county_whose_terms_restrict_reuse_is_never_asked(client: TestClient) 
 def test_every_available_county_is_placed_in_exactly_one_public_list() -> None:
     available = {source.fips for source in available_sources()}
     never = set(NO_PUBLIC_REUSE)
-    assert not PUBLIC_VERIFIED & PUBLIC_UNVERIFIED
-    assert not (PUBLIC_VERIFIED | PUBLIC_UNVERIFIED) & never
-    assert PUBLIC_VERIFIED | PUBLIC_UNVERIFIED | never == available
+    pending = set(PENDING_TERMS)
+    assert not PUBLIC_VERIFIED & pending
+    assert not (PUBLIC_VERIFIED | pending) & never
+    assert PUBLIC_VERIFIED | pending | never == available
+    # Harrison's decision (2026-10-20): the 13 counties whose terms could not be read, and
+    # Sonoma, wait for their terms; El Dorado is out.
+    assert len(pending) == 14 and "06097" in pending
+    assert never == {"06017"}
 
 
-def test_unverified_counties_and_sonoma_are_asked_only_behind_the_setting(
-    client: TestClient, client_unverified: TestClient, provider: dict[str, Answer]
-) -> None:
+def test_counties_pending_terms_and_sonoma_are_not_asked(client: TestClient) -> None:
+    # The provider fixture fails the test if any county service is asked.
     for point, county in ((SAN_RAFAEL, "Marin"), (SANTA_ROSA, "Sonoma")):
         result = ask(client, point).json()
         assert result["status"] == "uncovered", county
         assert f"{county} County parcel records are not offered here yet" in result["message"]
-    provider["answer"] = parcels(*SANTA_ROSA)
-    (parcel,) = ask(client_unverified, SANTA_ROSA).json()["candidates"]
-    # Sonoma's licence asks for this attribution wherever its data is shared.
-    assert parcel["source"]["attribution"].startswith("County of Sonoma")
-    # El Dorado stays out whatever the setting says.
-    assert "does not allow" in ask(client_unverified, PLACERVILLE).json()["message"]
+    assert "does not allow" in ask(client, PLACERVILLE).json()["message"]
 
 
 def test_kerns_disclaimer_travels_with_its_parcels(
@@ -274,7 +265,7 @@ def test_when_every_lookup_slot_is_taken_the_answer_is_busy(client: TestClient) 
         release.wait(5)
         return empty
 
-    held = threading.Thread(target=lambda: shared.lookup((0.0, 0.0, 250.0, False), slow))
+    held = threading.Thread(target=lambda: shared.lookup((0.0, 0.0, 250.0), slow))
     held.start()
     started.wait(5)
     try:
@@ -282,19 +273,17 @@ def test_when_every_lookup_slot_is_taken_the_answer_is_busy(client: TestClient) 
         assert response.status_code == 503
         assert response.headers["Retry-After"] == "5"
         with pytest.raises(Busy):
-            shared.lookup((1.0, 1.0, 250.0, False), lambda: empty)
+            shared.lookup((1.0, 1.0, 250.0), lambda: empty)
     finally:
         release.set()
         held.join(5)
     # The slot is free again once the slow lookup ends.
-    assert shared.lookup((1.0, 1.0, 250.0, False), lambda: empty) is empty
+    assert shared.lookup((1.0, 1.0, 250.0), lambda: empty) is empty
 
 
 def test_the_cache_key_rounds_to_about_eleven_metres() -> None:
-    def key(lon: float, lat: float) -> tuple[float, float, float, bool]:
-        return PublicParcels.key(
-            PublicParcelRequest(point=Point(coordinates=[lon, lat])), include_unverified=False
-        )
+    def key(lon: float, lat: float) -> tuple[float, float, float]:
+        return PublicParcels.key(PublicParcelRequest(point=Point(coordinates=[lon, lat])))
 
     assert key(-122.27111, 37.80441) == key(-122.27109, 37.80439)
     assert key(-122.2711, 37.8044) != key(-122.2713, 37.8044)

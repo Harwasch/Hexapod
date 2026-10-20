@@ -88,10 +88,6 @@ class Settings(BaseSettings):
     )
     land_archive_workspace_quota_bytes: int = Field(default=512 * 1024 * 1024, ge=21 * 1024 * 1024)
     land_auth_mode: Literal["pilot", "oidc"] = "pilot"
-    #: Whether the public parcel lookup (the landing page's site finder) also asks the counties
-    #: whose data terms could not be verified, and Sonoma (app/research/providers/parcels.py,
-    #: PUBLIC_UNVERIFIED). Off: verified counties only.
-    public_parcels_unverified: bool = False
     land_oidc_issuer: str | None = None
     land_oidc_audience: str | None = None
     land_oidc_jwks_url: str | None = None

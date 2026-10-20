@@ -39143,7 +39143,7 @@
     },
     "/api/v1/public/parcels/near": {
       "post": {
-        "description": "County assessor parcels near a point, with their source, attribution and any notice\ntheir terms require.\n\nCalifornia only (elsewhere the answer is `uncovered`), and only the counties the public\nlist allows (`public_counties`; `PUBLIC_PARCELS_UNVERIFIED` widens it).",
+        "description": "County assessor parcels near a point, with their source, attribution and any notice\ntheir terms require.\n\nCalifornia only (elsewhere the answer is `uncovered`), and only the counties whose terms\nwere verified (`public_counties`; docs/PUBLIC_PARCELS.md).",
         "operationId": "parcels_near_api_v1_public_parcels_near_post",
         "requestBody": {
           "content": {

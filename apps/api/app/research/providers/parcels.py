@@ -93,14 +93,16 @@ def _registry() -> _Registry:
 
 
 # Which counties the public parcel lookup (`POST /public/parcels/near`, the landing page's site
-# finder) asks. Every available county's layer, service and ArcGIS item metadata was read on
-# 2026-10-20, and each available county is in exactly one of the three sets below (a test holds
-# that, so a county added to the registry has to be placed). Sierra County, whose data is sold,
-# is not `available` at all.
+# finder) asks: verified counties only, Harrison's decision of 2026-10-20. Every available
+# county's layer, service and ArcGIS item metadata was read on 2026-10-20, and each available
+# county is in exactly one of the three sets below (a test holds that, so a county added to the
+# registry has to be placed). docs/PUBLIC_PARCELS.md lists the excluded counties and why. A
+# county pending terms is enabled by moving it to PUBLIC_VERIFIED once its terms are confirmed.
+# Sierra County, whose data is sold, is not `available` at all.
 
-#: Terms read, and they allow showing the outlines with attribution: no terms stated, or only
-#: disclaimers (no warranty, not a survey). Kern's terms also require its disclaimer statement
-#: with any copy, which the lookup returns as a notice (`ParcelSource.disclaimer`).
+#: Asked. Terms read, and they allow showing the outlines with attribution: no terms stated, or
+#: only disclaimers (no warranty, not a survey). Kern's terms also require its disclaimer
+#: statement with any copy, which the lookup returns as a notice (`ParcelSource.disclaimer`).
 PUBLIC_VERIFIED: frozenset[str] = frozenset(
     {
         "06001", "06003", "06005", "06007", "06009", "06011", "06013", "06015", "06019",
@@ -111,28 +113,34 @@ PUBLIC_VERIFIED: frozenset[str] = frozenset(
     }
 )  # fmt: skip
 
-#: Asked only with `Settings.public_parcels_unverified` on (Harrison's decision, pending on
-#: 2026-10-20): the counties whose terms could not be read (no reachable ArcGIS item: Humboldt,
-#: Los Angeles, Madera, Marin, Mono, Monterey, Napa, Orange, Sacramento, San Diego, San Luis
-#: Obispo, Santa Cruz, Ventura), and Sonoma, whose licence allows sharing with attribution but
-#: not redistributing modified data.
-PUBLIC_UNVERIFIED: frozenset[str] = frozenset(
-    {
-        "06023", "06037", "06039", "06041", "06051", "06053", "06055", "06059", "06067",
-        "06073", "06079", "06087", "06111", "06097",
-    }
+#: Counties whose terms could not be read: no reachable ArcGIS item, and the layer and service
+#: state none. Humboldt, Los Angeles, Madera, Marin, Mono, Monterey, Napa, Orange, Sacramento,
+#: San Diego, San Luis Obispo, Santa Cruz, Ventura.
+_TERMS_UNREAD = (
+    "06023", "06037", "06039", "06041", "06051", "06053", "06055", "06059", "06067",
+    "06073", "06079", "06087", "06111",
 )  # fmt: skip
 
-#: Never asked by the public lookup, whatever the setting, with the words that say why.
+#: Not asked until their terms are confirmed, with why.
+PENDING_TERMS: dict[str, str] = {
+    **dict.fromkeys(
+        _TERMS_UNREAD,
+        "Terms could not be read: no reachable ArcGIS item, and the layer and service state none.",
+    ),
+    "06097": "Sonoma County's licence allows sharing with attribution but not redistributing "
+    "modified data; whether showing chosen parcels together counts needs confirming.",
+}
+
+#: Never asked by the public lookup, with the words that say why.
 NO_PUBLIC_REUSE: dict[str, str] = {
     "06017": "El Dorado County's item licence: 'These results are not to be redistributed "
     "unless agreed upon with the originator.'",
 }
 
 
-def public_counties(include_unverified: bool) -> frozenset[str]:
+def public_counties() -> frozenset[str]:
     """The counties (FIPS) the public parcel lookup may ask."""
-    return PUBLIC_VERIFIED | PUBLIC_UNVERIFIED if include_unverified else PUBLIC_VERIFIED
+    return PUBLIC_VERIFIED
 
 
 def available_sources() -> tuple[ParcelSource, ...]:

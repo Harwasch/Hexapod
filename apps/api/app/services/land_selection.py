@@ -250,15 +250,11 @@ PUBLIC_TIMEOUT_S = 7.0
 
 
 def public_parcels(
-    db: Session,
-    request: PublicParcelRequest,
-    client: httpx.Client,
-    *,
-    include_unverified: bool = False,
+    db: Session, request: PublicParcelRequest, client: httpx.Client
 ) -> CandidateResult:
     """Parcels near a point for a visitor who has not signed in: the same county services,
     provenance and attribution as `candidates`, from the counties `public_counties` allows."""
-    counties = public_counties(include_unverified)
+    counties = public_counties()
     return _parcels(
         db,
         CandidateRequest(point=request.point, kind="parcel", radius_m=request.radius_m),
