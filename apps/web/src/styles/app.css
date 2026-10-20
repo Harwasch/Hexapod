@@ -2337,6 +2337,35 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   gap: 0.25rem;
 }
 
+/* A site's dated captures can be several: the row scrolls rather than crowding the HUD. */
+.timeline .glass-segment {
+  max-width: min(60vw, 36rem);
+  overflow-x: auto;
+}
+
+.timeline .glass-segment__item {
+  min-height: 2.4rem;
+}
+
+/* Each date over what captured it and how it is placed. */
+.timeline__option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+}
+
+.timeline__date {
+  line-height: 1;
+}
+
+.timeline__meta {
+  font-size: var(--text-xs);
+  font-weight: 400;
+  line-height: 1;
+  color: var(--text-tertiary);
+}
+
 /* ---- Compare slider ------------------------------------------------------ */
 .split-slider {
   position: absolute;
