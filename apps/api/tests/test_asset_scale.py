@@ -590,6 +590,45 @@ def test_a_site_with_two_epochs_refuses_a_scale(
     assert "2 epochs in one frame" in response.json()["detail"]
 
 
+def test_a_re_run_of_a_scaled_epoch_leaves_the_boundary_other_epochs_grew(
+    client: TestClient,
+    db: Session,
+    storage: S3Storage,
+    tmp_path: Path,
+    scan: tuple[Capture, Asset],
+) -> None:
+    """Epoch 1 is resized while it is the site's only epoch; epoch 2 then joins and grows
+    the boundary to the north. A re-run of epoch 1 used to undo epoch 1's scale on the
+    whole boundary, which resized epoch 2's part of it too: 2.5 times as far north, and
+    off the ground epoch 2 covers. With another epoch on the site a re-run leaves the
+    boundary as it is and only grows it to cover the new revision."""
+    from geoalchemy2.shape import to_shape
+
+    from tests.test_registration_epochs import _capture, _echoed, _epochs, run
+
+    capture, splat = scan
+    assert capture.site_id is not None
+    assert _put(client, splat, {"scale": 0.4}).status_code == 200
+    north = _echoed(capture.site_id)
+    north["bboxLocalM"] = {"min": [-4.0, 40.0, -1.0], "max": [6.0, 50.0, 3.0]}
+    run(db, storage, tmp_path, _capture(db, "october"), north)
+    db.expire_all()
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    before, centroid = to_shape(site.boundary), to_shape(site.centroid)
+
+    _register(db, storage, tmp_path, capture)
+
+    db.expire_all()
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    after = to_shape(site.boundary)
+    assert after.buffer(1e-9).covers(before)
+    for epoch in _epochs(db, capture.site_id):
+        assert after.buffer(1e-9).covers(to_shape(epoch.footprint))
+    assert to_shape(site.centroid).equals(centroid)
+
+
 def test_a_superseded_revision_is_not_scalable(
     client: TestClient,
     db: Session,
