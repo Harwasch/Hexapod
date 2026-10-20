@@ -41,6 +41,7 @@ ignore = ["ANN401", "RUF012", "S101"]
 # so ruff cannot tell them from third-party packages without being told.
 known-first-party = [
   "adapters",
+  "alignment",
   "artifacts",
   "block_maths",
   "block_trainer",

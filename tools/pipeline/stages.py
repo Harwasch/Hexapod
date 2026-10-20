@@ -37,6 +37,7 @@ import numpy.typing as npt
 import PIL
 import PIL.Image
 
+import alignment  # noqa: F401 - registers align_epoch; place and catalog read it next
 import blocks
 import capture_platform
 import colmap4
