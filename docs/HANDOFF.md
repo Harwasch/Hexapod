@@ -301,8 +301,8 @@ pnpm lint && pnpm typecheck && pnpm test`, `pnpm e2e` if `apps/web` changed, plu
   refuses a layer without `evidence.rescanGate`. The API holds it too, and never on the
   client's word: an attach recomputes the targets from the stored `epoch_maps` and refuses
   (422) any inferred layer (or fill variant) it declares or stages files for unless every
-  gaussian of every tile is in one (`app/services/fill_gate.py`); a republish drops a layer
-  whose confidence grid the new tiles do not carry (`sidecars.fill_gate_problem`). A test of
+  gaussian of every tile is in one (`app/services/fill_gate.py`); a republish carries a layer
+  or fill variant only if the same gate admits it on the new revision (`carry_check`). A test of
   the attach's or carry's mechanics that attaches a fill on a single scan waives the
   recompute (`waive_fill_gate`); tests/test_fill_gate.py holds it on a real two-epoch site.
   Never add an override; never put the publish-fill commit token in a commit message (it

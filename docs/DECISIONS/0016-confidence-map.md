@@ -322,12 +322,15 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
    over the stored `epoch_maps` (no earlier measured epoch, or no cell still weak, is a 422),
    requires the asset to be its epoch's current revision, the evidence to name exactly those
    targets, the layer's root transform to be the scan's, and every gaussian of every tile to
-   be in a target cell. A republish carries an `inferred/` layer only while
-   the new generation's tiles carry that very grid — a re-run that measured its own drops it,
-   with its files, and flags the asset "Inferred fill needs filling again"; so does any
-   republish of a layer that was never gated, the same tiles included. Layers live from before
-   the gate (the camp's) stay until that first republish, or until an attach sets
-   `inferredLayers` to null.
+   be in a target cell. A republish carries a layer -- `inferredLayers`, and each fill
+   variant's -- only if the same gate admits it on the new revision (`fill_gate.carry_check`:
+   the epoch's targets recomputed, computed on the very grid the new tiles carry, every
+   gaussian of every tile in them). A re-run that measured its own grid drops it, with its
+   files, and flags the asset "Inferred fill needs filling again" (a fill variant goes whole:
+   "Fill variant needs filling again"); so does any republish of a layer that was never gated,
+   or whose targets changed because an earlier epoch was measured since, the same tiles
+   included. With no gate to ask, nothing is carried. Layers live from before the gate (the
+   camp's) stay until that first republish, or until an attach sets `inferredLayers` to null.
 6. **Where it is enforced in the tools.** `teacher_fill.py fill` requires `--still-weak FILE`;
    `infra/modal/fill.py` takes `--still-weak <scan>=<file>`, checks each file's shape with the
    standard library alone (it runs where fill.yml runs it, with nothing but modal installed)
@@ -357,9 +360,6 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
 
 - Fill execution on a GPU (Modal): only the gate runs locally, with the Telea stand-in.
 - Gating `fill_hole` (split objects' holes): only once a split is published.
-- A republish judges only top-level `inferredLayers` (`carry._gate_fills`): a fill variant's
-  layers are carried as they are (Codex R3 on #60, finding 7), and a carried layer is not
-  re-held to targets that changed because an earlier epoch was measured since.
 - A carry rule for fill variants on new tiles: `variants` is an extras key the API does not
   own, so new tiles drop it whole (flagged), and the same tiles keep it.
 
