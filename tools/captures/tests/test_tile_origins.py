@@ -285,25 +285,73 @@ CAPTURES = Path(__file__).resolve().parents[1]
 FAR = REPO_ROOT / "data" / "tiles" / "synthetic-far"
 
 
+#: Package calls that may pass a literal None offset, each with why its positions still end
+#: in the site frame. Anything else that passes None reads a far tile in its own frame.
+LOCAL_READS = {
+    # `rebind`'s default `positions_of` is tile-local by contract: `rebind` itself adds the
+    # offset (`site_positions(positions_of(..), offsets.get(uri))`) before it checksums.
+    ("rebind_instances.py", "rebind"),
+}
+
+
 def test_every_tile_positions_call_passes_an_offset() -> None:
     """`rig_tiles.tile_positions(path, offset)` has no default for its offset, so a reader
     cannot forget a far tile's transform -- but a call is only checked when it runs, so
-    every call in the package is checked here, whether a test reaches it or not."""
+    every call in the package is checked here, whether a test reaches it or not. A literal
+    None is the same omission spelled out, so it is refused too, outside `LOCAL_READS`."""
     import ast
 
     calls = 0
     for path in sorted(CAPTURES.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        functions = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-            if name != "tile_positions":
+            if name not in ("tile_positions", "site_positions"):
                 continue
-            calls += 1
-            given = len(node.args) + sum(1 for k in node.keywords if k.arg == "offset")
-            assert given == 2, f"{path.name}:{node.lineno} reads a tile without its offset"
+            where = f"{path.name}:{node.lineno}"
+            given = [*node.args[1:2], *(k.value for k in node.keywords if k.arg == "offset")]
+            if name == "tile_positions":
+                calls += 1
+                assert len(node.args) + len(node.keywords) == 2 and len(given) == 1, (
+                    f"{where} reads a tile without its offset"
+                )
+            if given and isinstance(given[0], ast.Constant) and given[0].value is None:
+                owner = next(
+                    (
+                        f.name
+                        for f in functions
+                        if f.lineno <= node.lineno <= (f.end_lineno or f.lineno)
+                        and not any(
+                            g is not f
+                            and f.lineno < g.lineno <= node.lineno <= (g.end_lineno or g.lineno)
+                            for g in functions
+                        )
+                    ),
+                    None,
+                )
+                assert (path.name, owner) in LOCAL_READS, (
+                    f"{where} passes no offset (None): a far tile would be read in its own "
+                    "frame. Pass its tile_offsets entry, or add the call to LOCAL_READS "
+                    "with the reason its positions still reach the site frame."
+                )
     assert calls >= 7
+
+
+def test_no_workflow_reads_tile_positions_inline() -> None:
+    """Inline Python in a workflow is not under the guard above, and no test runs it; it
+    once called `tile_positions` without an offset (publish-instances.yml). A workflow that
+    needs a tile's positions or checksum calls a tested module instead
+    (`rebind_instances.check_binding`)."""
+    readers = ("tile_positions(", "site_positions(", "unpack_spz(", "glb_spz(", "tile_offsets(")
+    workflows = sorted((REPO_ROOT / ".github" / "workflows").glob("*.y*ml"))
+    assert workflows
+    for path in workflows:
+        text = path.read_text(encoding="utf-8")
+        for reader in readers:
+            assert reader not in text, f"{path.name} calls {reader[:-1]} inline"
 
 
 def test_load_tileset_reads_far_leaves_in_the_site_frame() -> None:

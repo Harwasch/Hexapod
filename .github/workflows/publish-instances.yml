@@ -136,11 +136,9 @@ jobs:
           import importlib.util, json, os, shutil, urllib.request
           from pathlib import Path
 
-          import numpy as np
-
           import attach_sidecars
+          import rebind_instances
           import rig_tiles
-          from synthetic_tree import checksum_positions
 
           # The scans' legacy URLs (to find each one's asset by its run) and the user agent
           # the bucket accepts, from the segmentation app.
@@ -174,15 +172,13 @@ jobs:
               for uri in uris:
                   (tiles / uri).parent.mkdir(parents=True, exist_ok=True)
                   (tiles / uri).write_bytes(get(f"{base}/{uri}"))
-                  positions = rig_tiles.tile_positions(tiles / uri)
-                  runs = doc["tiles"].get(checksum_positions(positions))
-                  if runs is None:
-                      raise SystemExit(f"{name}: {uri} is not in instances.json's binding: "
-                                       f"the asset's tiles ({url}) are not the ones segmented")
-                  if int(np.sum(runs[1::2])) != positions.shape[0]:
-                      raise SystemExit(f"{name}: {uri}'s runs do not cover its gaussians")
-              if len(doc["tiles"]) != len(set(doc["tiles"])) or len(doc["tiles"]) < len(set(uris)):
-                  raise SystemExit(f"{name}: the binding does not match the tiles")
+              # Checksums over site-frame positions, each tile's transform composed
+              # (docs/DECISIONS/0011-splat-tile-origins.md); tested in test_rebind_instances.
+              try:
+                  rebind_instances.check_binding(tiles, doc)
+              except ValueError as error:
+                  raise SystemExit(f"{name}: {error}: the asset's tiles ({url}) "
+                                   "are not the ones segmented") from None
               out = temp / "out" / name
               variant = os.environ.get("VARIANT", "")
               folder = attach_sidecars.variant_folder("objects", variant) if variant else ""

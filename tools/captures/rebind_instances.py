@@ -139,6 +139,33 @@ def rebind(
     return dict(sorted(out.items()))
 
 
+def check_binding(tiles_dir: Path, document: dict) -> None:
+    """Refuse an `instances.json` that is not bound to the tiles in `tiles_dir` (a tileset
+    as published: tileset.json and every tile it names). Every tile's checksum, over its
+    site-frame positions (each tile's transform composed, `splat_tiles.tile_offsets`), must
+    be a key of `tiles`, and its runs must cover exactly the tile's gaussians.
+    publish-instances.yml runs this before it stages a segmentation, so a run made against
+    other tiles never reaches the asset. Raises ValueError.
+    """
+    from rig_tiles import tile_positions, tile_uris
+    from splat_tiles import tile_offsets
+    from synthetic_tree import checksum_positions
+
+    tileset = json.loads((tiles_dir / "tileset.json").read_text(encoding="utf-8"))
+    offsets = tile_offsets(tileset)
+    binding = document["tiles"]
+    uris = tile_uris(tileset)
+    for uri in uris:
+        positions = tile_positions(tiles_dir / uri, offsets.get(uri))
+        runs = binding.get(checksum_positions(positions))
+        if runs is None:
+            raise ValueError(f"{uri} is not in instances.json's binding")
+        if int(np.sum(np.asarray(runs, np.int64)[1::2])) != positions.shape[0]:
+            raise ValueError(f"{uri}'s runs do not cover its gaussians")
+    if len(binding) < len(set(uris)):
+        raise ValueError("the binding does not match the tiles")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("tiles", type=Path, help="the scan's tileset directory")
