@@ -250,13 +250,14 @@ export function SceneBridge() {
   // Wind → scene. Reduced motion and As captured (state/asCaptured.ts) win outright: they
   // force the scene calm while leaving the person's chosen wind in the store, so turning them
   // back off restores it. As captured also hides simulated machines: a rehearsal's, and a
-  // simulated fleet's tracks (its markers: MissionOverlays).
+  // simulated fleet's tracks (its markers: MissionOverlays), and procedural fixtures.
   const wind = useLiving((s) => s.wind);
   const asCaptured = useAsCaptured((s) => s.on);
   useEffect(() => {
     if (!scene) return;
     scene.living.setWind(reducedMotion || asCaptured ? WIND_CALM : wind);
     scene.rehearsal.hideAgents(asCaptured);
+    scene.sites.hideFixtures(asCaptured);
     // A frame for what reads As captured as it draws: split objects and telemetry at rest.
     scene.scene.requestRender();
   }, [scene, wind, reducedMotion, asCaptured]);

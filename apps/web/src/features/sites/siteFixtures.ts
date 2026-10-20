@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import type { SiteSummary } from "@twin/contracts";
 
 import { useSites as useSiteCatalog } from "@/api/queries";
+import { PROCEDURAL_SLUGS } from "@/lib/procedural";
 import { useSettings } from "@/state/settings";
 import { useSites } from "@/state/sites";
 
@@ -25,7 +26,7 @@ import { useSites } from "@/state/sites";
 type Described = Pick<SiteSummary, "slug" | "latestObservedAt">;
 
 /** Fixtures known by their catalog slug. */
-const FIXTURE_SLUGS = new Set(["synthetic-tree"]);
+const FIXTURE_SLUGS = PROCEDURAL_SLUGS;
 
 /** The slug prefixes audit and probe scripts give the sites they create. */
 const SCRIPT_SLUG = /^(audit|probe)-/;
