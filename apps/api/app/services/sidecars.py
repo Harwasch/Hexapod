@@ -134,8 +134,11 @@ INSTANCES = SidecarKind(
     files=("instances.json", "instances.emb"),
     depends=Dependence.POSITIONS,
     checksums=(("instances.json", "tiles"),),
+    # Every position checksum is over the tile's positions in the site frame (the root's):
+    # a far tile's translation-only transform is composed in (app/worker/positions.py).
     basis=(
-        "`tiles` maps each tile's position checksum (FNV-1a of its decoded float32 positions) "
+        "`tiles` maps each tile's position checksum (FNV-1a of its decoded float32 positions "
+        "in the site frame) "
         "to run-length instance ids in that tile's gaussian order (segment_scene.tile_binding, "
         "rebind_instances.py); instances.emb rows are instance ids"
     ),

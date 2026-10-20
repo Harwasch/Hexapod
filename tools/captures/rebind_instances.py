@@ -97,17 +97,24 @@ def rebind(
     neighbours: int = NEIGHBOURS,
 ) -> dict[str, list[int]]:
     """`tiles` (checksum to runs) with every non-leaf tile's ids taken from the leaf splats
-    nearest to its splats. Leaf tiles, and tiles `tiles` does not list, are left as they are."""
+    nearest to its splats. Leaf tiles, and tiles `tiles` does not list, are left as they are.
+
+    `positions_of` returns a tile's positions as its SPZ stores them (tile-local); each is
+    moved into the site frame here (`splat_tiles.site_positions`), which is what both the
+    checksums and the nearest-leaf search are over."""
+    from splat_tiles import site_positions, tile_offsets
+
     if positions_of is None or checksum_of is None:
         from rig_tiles import tile_positions
         from synthetic_tree import checksum_positions
 
-        positions_of = positions_of or tile_positions
+        positions_of = positions_of or (lambda path: tile_positions(path, None))
         checksum_of = checksum_of or checksum_positions
     tileset = json.loads((tiles_dir / "tileset.json").read_text(encoding="utf-8"))
+    offsets = tile_offsets(tileset)
     entries = []
     for uri, leaf in tile_tree(tileset):
-        at = positions_of(tiles_dir / uri)
+        at = site_positions(positions_of(tiles_dir / uri), offsets.get(uri))
         entries.append((checksum_of(at), at, leaf))
     leaf_positions, leaf_ids = [], []
     for checksum, at, leaf in entries:
@@ -130,6 +137,33 @@ def rebind(
         labels = np.where(np.atleast_2d(distance)[:, 0] == 0.0, near[:, 0], plurality(near))
         out[checksum] = encode_runs(labels)
     return dict(sorted(out.items()))
+
+
+def check_binding(tiles_dir: Path, document: dict) -> None:
+    """Refuse an `instances.json` that is not bound to the tiles in `tiles_dir` (a tileset
+    as published: tileset.json and every tile it names). Every tile's checksum, over its
+    site-frame positions (each tile's transform composed, `splat_tiles.tile_offsets`), must
+    be a key of `tiles`, and its runs must cover exactly the tile's gaussians.
+    publish-instances.yml runs this before it stages a segmentation, so a run made against
+    other tiles never reaches the asset. Raises ValueError.
+    """
+    from rig_tiles import tile_positions, tile_uris
+    from splat_tiles import tile_offsets
+    from synthetic_tree import checksum_positions
+
+    tileset = json.loads((tiles_dir / "tileset.json").read_text(encoding="utf-8"))
+    offsets = tile_offsets(tileset)
+    binding = document["tiles"]
+    uris = tile_uris(tileset)
+    for uri in uris:
+        positions = tile_positions(tiles_dir / uri, offsets.get(uri))
+        runs = binding.get(checksum_positions(positions))
+        if runs is None:
+            raise ValueError(f"{uri} is not in instances.json's binding")
+        if int(np.sum(np.asarray(runs, np.int64)[1::2])) != positions.shape[0]:
+            raise ValueError(f"{uri}'s runs do not cover its gaussians")
+    if len(binding) < len(set(uris)):
+        raise ValueError("the binding does not match the tiles")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

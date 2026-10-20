@@ -178,9 +178,14 @@ def _noise(rows: np.ndarray) -> np.ndarray:
 _SH_C0 = 0.28209479177387814
 
 
-def _from_columns(c: dict[str, np.ndarray]) -> Splats:
+def _from_columns(c: dict[str, np.ndarray], offset: np.ndarray | None = None) -> Splats:
+    """`offset` moves a tile's stored positions into the site frame (exact in float64: an
+    origin is whole metres, `splat_tiles.tile_offsets`)."""
+    positions = np.stack([c["x"], c["y"], c["z"]], axis=1).astype(np.float64)
+    if offset is not None:
+        positions += offset
     return Splats(
-        np.stack([c["x"], c["y"], c["z"]], axis=1).astype(np.float64),
+        positions,
         np.stack([c["rot_0"], c["rot_1"], c["rot_2"], c["rot_3"]], axis=1).astype(np.float64),
         np.exp(np.stack([c["scale_0"], c["scale_1"], c["scale_2"]], axis=1).astype(np.float64)),
         np.clip(0.5 + _SH_C0 * np.stack([c["f_dc_0"], c["f_dc_1"], c["f_dc_2"]], axis=1), 0, 1),
@@ -196,13 +201,15 @@ def load_ply(path: Path) -> Splats:
 
 
 def load_tileset(tileset: Path) -> Splats:
-    """Every leaf gaussian of a `splat_tiles.py` tileset, in its local ENU frame."""
+    """Every leaf gaussian of a `splat_tiles.py` tileset, in its local ENU frame: the site
+    frame, the root's, with each tile's transform composed (`splat_tiles.tile_offsets`)."""
     import json
 
     from rig_tiles import glb_spz
-    from splat_tiles import unpack_spz
+    from splat_tiles import tile_offsets, unpack_spz
 
     document = json.loads(tileset.read_text(encoding="utf-8"))
+    offsets = tile_offsets(document)
     leaves: list[str] = []
     stack = [document["root"]]
     while stack:
@@ -212,7 +219,10 @@ def load_tileset(tileset: Path) -> Splats:
         else:
             leaves.append(tile["content"]["uri"])
     return Splats.concat(
-        [_from_columns(unpack_spz(glb_spz(tileset.parent / uri))) for uri in sorted(leaves)]
+        [
+            _from_columns(unpack_spz(glb_spz(tileset.parent / uri)), offsets.get(uri))
+            for uri in sorted(leaves)
+        ]
     )
 
 

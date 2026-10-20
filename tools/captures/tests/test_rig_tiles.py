@@ -30,7 +30,7 @@ def test_a_decoded_tile_digests_as_the_runtime_unbakes_it() -> None:
     makes a per-tile checksum computed offline mean the same thing in the browser.
     """
     rig = json.loads((TREE / "source" / "rig.json").read_text(encoding="utf-8"))
-    positions = rig_tiles.tile_positions(TREE / "splat" / "splat.glb")
+    positions = rig_tiles.tile_positions(TREE / "splat" / "splat.glb", None)
     assert checksum_positions(positions) == rig["canonicalChecksum"]
 
 
@@ -41,7 +41,7 @@ def test_leaves_hold_every_gaussian_once_and_parents_are_new() -> None:
     parents: list[np.ndarray] = []
 
     def walk(tile: dict) -> None:
-        positions = rig_tiles.tile_positions(LOD / tile["content"]["uri"])
+        positions = rig_tiles.tile_positions(LOD / tile["content"]["uri"], None)
         (parents if tile.get("children") else leaves).append(positions)
         for child in tile.get("children", []):
             walk(child)
@@ -69,8 +69,26 @@ def test_stamping_a_fresh_pack(tmp_path: Path) -> None:
     checksums = set(rig_tiles.tile_checksums(tmp_path / "lod"))
     tileset = json.loads((tmp_path / "lod" / "tileset.json").read_text(encoding="utf-8"))
     for uri in rig_tiles.tile_uris(tileset):
-        positions = rig_tiles.tile_positions(tmp_path / "lod" / uri)
+        positions = rig_tiles.tile_positions(tmp_path / "lod" / uri, None)
         assert checksum_positions(positions) in checksums
         nudged = positions.copy()
         nudged[0, 0] += 1 / 4096
         assert checksum_positions(nudged) not in checksums
+
+
+def test_far_fixture_checksums_compose_tile_transforms() -> None:
+    """A tile written in a frame of its own (synthetic-far, 10.4 km) is checksummed in the
+    site frame: the set is expected.json's, which the web runtime is held to as well."""
+    far = REPO_ROOT / "data" / "tiles" / "synthetic-far"
+    expected = json.loads((far / "source" / "expected.json").read_text(encoding="utf-8"))
+    assert rig_tiles.tile_checksums(far / "splat") == sorted(
+        {row["checksum"] for row in expected["tiles"].values()}
+    )
+    tileset = json.loads((far / "splat" / "tileset.json").read_text(encoding="utf-8"))
+    offsets = splat_tiles.tile_offsets(tileset)
+    moved = [uri for uri in rig_tiles.tile_uris(tileset) if offsets[uri].any()]
+    assert moved
+    for uri in moved:
+        # Without the offset, the tile does not hash to its binding.
+        local = rig_tiles.tile_positions(far / "splat" / uri, None)
+        assert checksum_positions(local) != expected["tiles"][uri]["checksum"]

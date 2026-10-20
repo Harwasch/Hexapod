@@ -242,6 +242,10 @@ pnpm lint && pnpm typecheck && pnpm test`, `pnpm e2e` if `apps/web` changed, plu
 
 - `data/tiles/synthetic-tree` is byte-identity gated (`git diff --exit-code`). Regenerate
   and confirm if you touch `synthetic_tree.py`.
+- Splat tile transforms are translation-only and the root never moves; position checksums
+  are over site-frame positions (`splat_tiles.tile_offsets`, `site_positions`). A new reader
+  of tile positions composes the offsets: `data/tiles/synthetic-far` is the fixture to test
+  it on (ADR 0011).
 - `packages/contracts/openapi.json` is committed; any schema change needs
   `export_openapi` + `pnpm contracts:generate`.
 - `pnpm format:check` runs **before** lint in CI and covers YAML and Markdown.

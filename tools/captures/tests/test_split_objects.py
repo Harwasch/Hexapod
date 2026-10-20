@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import scene_plants
 import segment_scene as ss
 import skin_scene
 import splat_tiles
@@ -145,7 +146,31 @@ def test_spz_records_round_trip_to_the_same_bytes() -> None:
         blob = glb_spz(tiles / uri)
         spz = so.read_spz(blob)
         assert so.write_spz(spz) == blob
-        assert np.array_equal(spz.positions(), tile_positions(tiles / uri))
+        assert np.array_equal(spz.positions(), tile_positions(tiles / uri, None))
+
+
+def test_write_spz_refuses_a_record_past_24_bits() -> None:
+    tiles = YARD / "splat"
+    uri = tile_uris(json.loads((tiles / "tileset.json").read_text(encoding="utf-8")))[0]
+    spz = so.read_spz(glb_spz(tiles / uri))
+    # 3000 m at 12 fractional bits: 12,288,000, past the 24-bit field's 8,388,607. Before
+    # the refusal the top bit was masked away and the record read back as -1096 m.
+    spz.fixed[0, 0] = 3000 << spz.fractional_bits
+    with pytest.raises(ValueError, match="24-bit"):
+        so.write_spz(spz)
+
+
+def test_write_spz_takes_the_most_negative_24_bit_value_and_no_further() -> None:
+    tiles = YARD / "splat"
+    uri = tile_uris(json.loads((tiles / "tileset.json").read_text(encoding="utf-8")))[0]
+    spz = so.read_spz(glb_spz(tiles / uri))
+    # Two's complement: the field holds -2^23 to 2^23 - 1, and -2^23 reads back as itself.
+    spz.fixed[0, 0] = -(1 << 23)
+    assert so.read_spz(so.write_spz(spz)).fixed[0, 0] == -(1 << 23)
+    for past in (1 << 23, -(1 << 23) - 1):
+        spz.fixed[0, 0] = past
+        with pytest.raises(ValueError, match="24-bit"):
+            so.write_spz(spz)
 
 
 def test_default_choice_is_the_movable_objects_of_a_useful_size(scan: Path) -> None:
@@ -243,7 +268,7 @@ def test_every_tile_is_bound_and_untouched_tiles_keep_their_bytes(result, scan: 
     tileset = json.loads((out / "tileset.json").read_text(encoding="utf-8"))
     checksums = set()
     for uri in tile_uris(tileset):
-        positions = tile_positions(out / uri)
+        positions = tile_positions(out / uri, None)
         checksum = checksum_positions(positions)
         checksums.add(checksum)
         assert skin_scene.decode_runs(doc["tiles"][checksum]).size == positions.shape[0]
@@ -251,7 +276,7 @@ def test_every_tile_is_bound_and_untouched_tiles_keep_their_bytes(result, scan: 
             assert (scan / uri).read_bytes() == (out / uri).read_bytes()
     obj = split.objects[0]
     tile = out / so.OBJECTS_DIR / str(SHRUB_ID) / so.OBJECT_CONTENT
-    object_checksum = checksum_positions(tile_positions(tile))
+    object_checksum = checksum_positions(tile_positions(tile, None))
     assert object_checksum == obj.checksum
     assert np.array_equal(skin_scene.decode_runs(doc["tiles"][object_checksum]), obj.labels)
     # Nothing stale: every bound tile is drawn by the scene or the object.
@@ -281,7 +306,7 @@ def test_the_object_tileset_puts_it_back_where_it_stood(result) -> None:
     assert extras["instances"]["uri"] == "../../instances.json"
     # On the SPZ grid, so the shift is exact; its base sits at the origin.
     assert np.array_equal(np.round(origin * 4096), origin * 4096)
-    local = tile_positions(out / so.OBJECTS_DIR / str(SHRUB_ID) / so.OBJECT_CONTENT)
+    local = tile_positions(out / so.OBJECTS_DIR / str(SHRUB_ID) / so.OBJECT_CONTENT, None)
     assert abs(float(local[:, 2].min())) < 1e-6
     assert np.allclose(np.median(local[:, :2], axis=0), 0.0, atol=0.3)
 
@@ -477,3 +502,117 @@ def test_skins_are_rebound_with_the_tiles(tmp_path: Path) -> None:
         assert np.array_equal(rows, old[t.checksum][1][keep])
     # The shrub's own skin rows left with it.
     assert new_doc["weights"]["rows"] < old_doc["weights"]["rows"]
+
+
+FAR = Path(__file__).resolve().parents[3] / "data" / "tiles" / "synthetic-far"
+
+
+def _far_instances(path: Path) -> dict:
+    """synthetic-far bound to two instances: 1, the north-east plot (movable), and 2, the
+    rest; merged parents unbound (0). Keyed by site-frame checksums, as segment_scene binds."""
+    import synthetic_far
+
+    tiles_dir = FAR / "splat"
+    tileset = json.loads((tiles_dir / "tileset.json").read_text(encoding="utf-8"))
+    offsets = splat_tiles.tile_offsets(tileset)
+    x, y, z = synthetic_far.PLOTS["north-east"]
+    binding, plot = {}, []
+    for node, leaf in so._nodes(tileset):
+        uri = node["content"]["uri"]
+        site = tile_positions(tiles_dir / uri, offsets[uri])
+        mine = (np.hypot(site[:, 0] - x, site[:, 1] - y) <= synthetic_far.PLOT_RADIUS_M + 0.01) & (
+            np.abs(site[:, 2] - z) < 1e-6
+        )
+        labels = np.where(mine, 1, 2) if leaf else np.zeros(len(site), np.int64)
+        binding[checksum_positions(site)] = scene_plants._rle(labels)
+        if leaf:
+            plot.append(site[mine])
+    at = np.concatenate(plot).astype(np.float64)
+    rows = [
+        {
+            "id": 1,
+            "parent": None,
+            "level": 0,
+            "splats": int(at.shape[0]),
+            "bounds": {"min": at.min(0).tolist(), "max": at.max(0).tolist()},
+            "centroid": at.mean(0).tolist(),
+            "tags": [{"label": "plot", "score": 1.0}],
+            "properties": {"movable": 1.0},
+            "behaviour": "movable",
+            "views": 1,
+        },
+        {
+            "id": 2,
+            "parent": None,
+            "level": 0,
+            "splats": 7901 - int(at.shape[0]),
+            "bounds": {"min": [-5200.0, -3.0, 0.0], "max": [5200.0, 1803.0, 1.0]},
+            "centroid": [0.0, 0.0, 0.0],
+            "tags": [{"label": "ground", "score": 1.0}],
+            "properties": {"movable": 0.0},
+            "behaviour": "static",
+            "views": 1,
+        },
+    ]
+    doc = {
+        "format": ss.FORMAT,
+        "version": ss.VERSION,
+        "frame": ss.FRAME,
+        "instances": rows,
+        "tiles": binding,
+        "tilesEncoding": ss.TILES_ENCODING,
+    }
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    return {"plot": at}
+
+
+def test_split_gathers_an_object_from_tiles_with_origins(tmp_path: Path) -> None:
+    """A movable plot 3.2 km from the site origin, drawn by two leaves each in a frame of
+    its own, is gathered where it stood: its records moved into the site frame exactly,
+    its origin the plot's base centre, and the rewritten tiles keep their transforms."""
+    import synthetic_far
+
+    made = _far_instances(tmp_path / "instances.json")
+    out = tmp_path / "out"
+    result = so.split(FAR / "splat", out, ids=[1], instances=tmp_path / "instances.json")
+    (obj,) = result.objects
+    assert obj.from_tiles == 2
+    plot = made["plot"]
+    expected_origin = np.array(
+        [*((plot.min(0)[:2] + plot.max(0)[:2]) / 2), plot.min(0)[2]], np.float64
+    )
+    assert np.abs(obj.origin - expected_origin).max() <= 1e-3
+    assert np.abs(obj.origin[:2] - synthetic_far.PLOTS["north-east"][:2]).max() < 0.05
+    back = obj.spz.positions().astype(np.float64) + obj.origin
+
+    def rows(a: np.ndarray) -> np.ndarray:
+        return a[np.lexsort(a.T[::-1])]
+
+    assert np.array_equal(rows(back), rows(plot))
+
+    before = json.loads((FAR / "splat" / "tileset.json").read_text(encoding="utf-8"))
+    after = json.loads((out / "tileset.json").read_text(encoding="utf-8"))
+    transforms = {n["content"]["uri"]: n.get("transform") for n, _ in so._nodes(before)}
+    rewritten = 0
+    for node, _leaf in so._nodes(after):
+        uri = node["content"]["uri"]
+        if uri in transforms:
+            assert node.get("transform") == transforms[uri]
+            continue
+        rewritten += 1
+        original = uri.rsplit(".", 2)[0] + ".glb"
+        assert transforms[original] is not None
+        assert node.get("transform") == transforms[original]
+    assert rewritten >= 2
+    # Every tile of the result, rewritten or not, is bound by its site-frame checksum.
+    new_doc = json.loads((out / "instances.json").read_text(encoding="utf-8"))
+    assert len(so.read_tiles(out, after, new_doc)) == len(so._nodes(after))
+    # The object's own tileset is a frame of its own (its root is the scan's root times
+    # T(origin)), and its one tile has no transform under that root: its checksum is over
+    # its positions as stored, object-local -- the same basis as before tile origins.
+    tile = out / so.OBJECTS_DIR / "1" / so.OBJECT_CONTENT
+    own = json.loads((out / so.OBJECTS_DIR / "1" / "tileset.json").read_text(encoding="utf-8"))
+    assert own["root"]["content"]["uri"] == so.OBJECT_CONTENT and not own["root"].get("children")
+    assert splat_tiles.tile_offsets(own)[so.OBJECT_CONTENT].tolist() == [0.0, 0.0, 0.0]
+    assert obj.checksum == checksum_positions(tile_positions(tile, None))
+    assert obj.checksum in new_doc["tiles"]

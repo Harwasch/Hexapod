@@ -36,11 +36,11 @@ import math
 import struct
 import sys
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 
@@ -308,6 +308,21 @@ SPZ_MAGIC = 0x5053474E  # "NGSP"
 SPZ_VERSION = 2
 SPZ_FRACTIONAL_BITS = 12
 SPZ_COLOR_SCALE = 0.15
+#: The largest magnitude a 24-bit two's-complement position component stores. At
+#: `SPZ_FRACTIONAL_BITS` that is 8,388,607 / 4096 = 2047.99976 m either side of the tile's
+#: frame; `pack_spz` refuses anything past it rather than letting the top bits fall away.
+SPZ_FIXED_MAX = (1 << 23) - 1
+#: The most negative one, a step further out than `SPZ_FIXED_MAX`: -2048 m exactly at 12
+#: bits. The range checks take it; `fractional_bits_for` sizes a tile by magnitude alone,
+#: so it keeps a tile clear of it on both sides and never relies on the extra step.
+SPZ_FIXED_MIN = -(1 << 23)
+#: The fewest fractional bits a header can declare: whole metres, +/-8,388 km.
+SPZ_MIN_FRACTIONAL_BITS = 0
+#: How far from its frame a tile's centres may reach before the tile is given an origin of
+#: its own (`tile_frame`). Not a calibration: `SPZ_FIXED_MAX` steps of 2^-12 m is
+#: 2047.99976 m, and the metre short of it keeps a whole-metre origin and float32 rounding
+#: of a centre clear of the edge.
+TILE_FIT_M = 2047.0
 
 # ------------------------------------------------------------- spherical harmonics (SH)
 
@@ -408,6 +423,7 @@ def pack_spz(
     log_scales: np.ndarray,
     quat_xyzw: np.ndarray,
     sh_rest: np.ndarray | None = None,
+    fractional_bits: int = SPZ_FRACTIONAL_BITS,
 ) -> bytes:
     """SPZ version 2 (nianticlabs/spz): 24-bit fixed-point positions, byte alphas, colours,
     log-scales and the xyz of a w-positive quaternion, gzip-compressed after a 16-byte header.
@@ -415,15 +431,44 @@ def pack_spz(
     `sh_rest`, (n, K, 3) with K one of 3/8/15, adds SH degree 1-3: the header's degree
     byte says which, and a byte a coefficient follows the rotations, coefficient-major and
     colour innermost (`quantize_sh`). Without it the output is what it always was, degree 0.
+
+    Positions are stored at `fractional_bits` (the header byte says how many), so they
+    span `SPZ_FIXED_MAX * 2^-bits` m either side of the tile's frame: +/-2047.99976 m at
+    the default 12. Nothing wraps: a position past that range, or one that is not finite,
+    is refused (`SplatFormatError`), and a tile that must hold one is given an origin of
+    its own (`tile_frame`). Until 2026-10 the top bits were masked away silently, so 3000 m
+    read back as -1096 m.
     """
     count = positions.shape[0]
     degree = 0 if sh_rest is None else SH_DIMS.index(sh_rest.shape[1])
     if sh_rest is not None and sh_rest.shape != (count, SH_DIMS[degree], 3):
         raise ValueError(f"sh_rest must be (n, K, 3) for n = {count}, not {sh_rest.shape}")
-    header = struct.pack(
-        "<IIIBBBB", SPZ_MAGIC, SPZ_VERSION, count, degree, SPZ_FRACTIONAL_BITS, 0, 0
-    )
-    fixed = np.round(positions * (1 << SPZ_FRACTIONAL_BITS)).astype(np.int32).reshape(-1)
+    if not SPZ_MIN_FRACTIONAL_BITS <= fractional_bits <= 23:
+        raise ValueError(
+            f"fractional_bits must be {SPZ_MIN_FRACTIONAL_BITS} to 23 (a 24-bit field), "
+            f"not {fractional_bits}"
+        )
+    header = struct.pack("<IIIBBBB", SPZ_MAGIC, SPZ_VERSION, count, degree, fractional_bits, 0, 0)
+    # Positions times an int, exactly as before the range check existed: for float32 input
+    # that stays float32 arithmetic, so every tileset that fits packs to the same bytes.
+    scaled = np.round(positions * (1 << fractional_bits))
+    # The range and finiteness checks read only the extremes: a NaN propagates through
+    # `max`/`min`, and an infinity is an extreme. No (n, 3) temporaries -- `np.abs` and
+    # `np.isfinite` of the whole array put the packer's peak memory past its bound.
+    high = float(scaled.max()) if scaled.size else 0.0
+    low = float(scaled.min()) if scaled.size else 0.0
+    if not (math.isfinite(high) and math.isfinite(low)):
+        raise SplatFormatError("SPZ positions must be finite; a NaN or infinity cannot be packed")
+    if high > SPZ_FIXED_MAX or low < SPZ_FIXED_MIN:
+        reach = float(np.abs(positions).max())
+        step = float(1 << fractional_bits)
+        raise SplatFormatError(
+            f"an SPZ position reaches {reach:.3f} m from the tile's frame, past the "
+            f"{SPZ_FIXED_MIN / step:.5f} to +{SPZ_FIXED_MAX / step:.5f} m that 24-bit "
+            f"fixed point holds at {fractional_bits} fractional bits; give the tile an "
+            "origin (tile_frame) or fewer fractional bits"
+        )
+    fixed = scaled.astype(np.int32).reshape(-1)
     fixed_u = fixed.astype(np.uint32)
     pos_bytes = np.stack(
         [fixed_u & 0xFF, (fixed_u >> 8) & 0xFF, (fixed_u >> 16) & 0xFF], axis=1
@@ -839,7 +884,15 @@ class Tile:
     one per occupied cell of its grid at `level`, standing in for everything below it until
     all its children have loaded. `ranges` are the tile's gaussians as half-open runs of
     positions in Morton order: one run for a cell, several for a leaf packed from small
-    octants. `low`/`high` bound what the tile and its subtree draw.
+    octants. `low`/`high` bound what the tile and its subtree draw, in the site frame (the
+    PLY's), whatever frame the tile is written in.
+
+    `origin` is the tile's frame in the site frame, whole metres: zero for every tile whose
+    content fits SPZ's range as it is (every tileset of a scan under ~4 km), else the
+    centre of its content (`tile_frame`); the tileset states it as a translation-only
+    `transform` relative to the parent's origin. `fractional_bits` is what its SPZ header
+    declares: 12, or fewer for a tile whose own content spans more than 4 km. Both are set
+    when the tile is written (`_write_tile`).
     """
 
     path: tuple[str, ...]
@@ -851,6 +904,8 @@ class Tile:
     geometric_error: float = 0.0
     low: np.ndarray = field(default_factory=lambda: np.zeros(3))
     high: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    origin: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    fractional_bits: int = SPZ_FRACTIONAL_BITS
 
     @property
     def uri(self) -> str:
@@ -1388,7 +1443,10 @@ def _sort_to_disk(
             for index in range(buckets):
                 part = out[order[edges[index] : edges[index + 1]]]
                 if part.size:
-                    handles[index].write(part.tobytes())
+                    part.tofile(handles[index])
+            # Freed before the next window is read, not when its names are rebound: a
+            # window's arrays and the next one's never coexist.
+            del out, part, order, which, edges, positions, rows, good, chunk
     finally:
         for handle in handles:
             handle.close()
@@ -1401,7 +1459,10 @@ def _sort_to_disk(
             slots = part["pos"] - index * per_bucket
             for name in record.names:
                 block[name][slots] = part[name]
-            sink.write(block.tobytes())
+            block.tofile(sink)
+            # The bucket and its block go before the next bucket is read: two of each
+            # alive at once was the packer's peak.
+            del part, block, slots
     return store
 
 
@@ -1424,25 +1485,108 @@ def _box(low: np.ndarray, high: np.ndarray) -> list[float]:
     ]
 
 
+def fractional_bits_for(reach_m: float) -> int:
+    """The most fractional bits (12 at most) at which 24-bit fixed point still holds a
+    position `reach_m` from the tile's frame: 12 to 2047.99 m, 11 to 4095.99 m, and so on
+    down to whole metres. Each step down halves the precision and doubles the range."""
+    bits = SPZ_FRACTIONAL_BITS
+    while round(reach_m * (1 << bits)) > SPZ_FIXED_MAX and bits > SPZ_MIN_FRACTIONAL_BITS:
+        bits -= 1
+    if round(reach_m * (1 << bits)) > SPZ_FIXED_MAX:
+        raise SplatFormatError(
+            f"a tile reaches {reach_m:.0f} m from its own centre, past what SPZ's 24-bit "
+            f"positions hold even in whole metres (+/-{SPZ_FIXED_MAX} m)"
+        )
+    return bits
+
+
+def tile_frame(xyz: np.ndarray, may_move: bool) -> tuple[np.ndarray, int]:
+    """The frame a tile's content is written in: its origin in the site frame (whole metres)
+    and the fractional bits its SPZ declares.
+
+    A tile whose centres all lie within `TILE_FIT_M` of the site origin stays there, at 12
+    bits -- every scan under ~4 km across, so every tileset packed before origins existed
+    packs to the same bytes. Otherwise a tile that `may_move` is moved to the centre of its
+    centres' box, snapped to whole metres (so `local + origin` is exact on SPZ's grid), and
+    keeps 12 bits unless its own half-extent passes the range too. The root may not move:
+    its frame is the tileset's, the one `root.transform` places on the globe and every
+    root-level extra (collision grid, view cones, instance bounds) is in; it takes fewer
+    bits instead (docs/DECISIONS/0011-splat-tile-origins.md, R1).
+
+    The rule reads the tile's own content in the site frame, not its parent's frame,
+    because children are written before their parents (`build_tiles`): a parent's origin
+    does not exist yet when its child is quantised. The tileset still states each origin
+    relative to the parent's (`convert`).
+    """
+    if xyz.size == 0:
+        return np.zeros(3), SPZ_FRACTIONAL_BITS
+    centres = xyz.astype(np.float64)
+    return _frame(centres.min(axis=0), centres.max(axis=0), may_move)
+
+
+def _frame(low: np.ndarray, high: np.ndarray, may_move: bool) -> tuple[np.ndarray, int]:
+    """`tile_frame` from the centres' box alone: the farthest a centre reaches from any
+    point is from a corner, and rounding is monotone, so `|c - o|.max()` over the centres is
+    `max(|low - o|, |high - o|)` exactly. `_bounds` reads it to know the tile's quantum."""
+    zero = np.zeros(3)
+    reach = float(max(np.abs(low).max(), np.abs(high).max()))
+    if reach <= TILE_FIT_M:
+        return zero, SPZ_FRACTIONAL_BITS
+    if not may_move:
+        return zero, fractional_bits_for(reach)
+    # `+ 0.0` turns a -0.0 from rounding into 0.0, so no transform carries a negative zero.
+    origin = np.round((low + high) / 2) + 0.0
+    return origin, fractional_bits_for(
+        float(max(np.abs(low - origin).max(), np.abs(high - origin).max()))
+    )
+
+
 def _write_tile(out_dir: Path, tile: Tile, gaussians: Gaussians) -> None:
     xyz = gaussians.xyz
     g = gaussians
-    spz = pack_spz(xyz, g.sh0, g.opacity_logit, g.log_scales, g.quat_xyzw, g.sh_rest)
+    tile.origin, tile.fractional_bits = tile_frame(xyz, may_move=bool(tile.path))
+    # A tile in the site frame packs its positions exactly as it always did (no float64
+    # round trip), so every tileset that fits is the bytes it was.
+    local = xyz if not tile.origin.any() else xyz.astype(np.float64) - tile.origin
+    spz = pack_spz(
+        local,
+        g.sh0,
+        g.opacity_logit,
+        g.log_scales,
+        g.quat_xyzw,
+        g.sh_rest,
+        fractional_bits=tile.fractional_bits,
+    )
     degree = 0 if g.sh_rest is None else SH_DIMS.index(g.sh_rest.shape[1])
+    # The accessor's bounds are of what the SPZ stores: the tile-local positions.
+    bounds = local if not tile.origin.any() else local.astype(np.float32)
     (out_dir / tile.uri).write_bytes(
         build_glb(
-            int(xyz.shape[0]), xyz.min(axis=0).tolist(), xyz.max(axis=0).tolist(), spz, degree
+            int(xyz.shape[0]),
+            bounds.min(axis=0).tolist(),
+            bounds.max(axis=0).tolist(),
+            spz,
+            degree,
         )
     )
     tile.count = int(xyz.shape[0])
 
 
-def _bounds(xyz: np.ndarray, reach: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _bounds(xyz: np.ndarray, reach: np.ndarray, may_move: bool) -> tuple[np.ndarray, np.ndarray]:
     """Centres' box padded by the 99th percentile of reach, not the maximum: one 10 m
-    background gaussian must not make every box it falls in 20 m wider than the data."""
-    pad = float(np.percentile(reach, 99))
+    background gaussian must not make every box it falls in 20 m wider than the data.
+
+    The pad is never less than half the tile's SPZ quantum, which is as far as packing
+    moves a centre, so the box holds every centre as decoded, not only as given. At 12
+    fractional bits that is 2^-13 = 1.2e-4 m, under the smallest reach SPZ stores (3 e^-10
+    = 1.4e-4 m), so a 12-bit tile's box is the one it always had; at 11 bits and fewer
+    (a tile past 2048 m) it can be the larger. `may_move` is the tile's, as `tile_frame`
+    reads it, so the quantum is the one `_write_tile` packs at."""
     centres = xyz.astype(np.float64)
-    return centres.min(axis=0) - pad, centres.max(axis=0) + pad
+    low, high = centres.min(axis=0), centres.max(axis=0)
+    _, bits = _frame(low, high, may_move)
+    pad = max(float(np.percentile(reach, 99)), 2.0 ** -(bits + 1))
+    return low - pad, high + pad
 
 
 #: What `build_tiles` hands each tile to: the tile (its box, error and count filled in),
@@ -1479,7 +1623,7 @@ def build_tiles(root: Tile, codes: np.ndarray, store: SortedStore, edge: float, 
             order = np.argsort(records["row"], kind="stable")
             gaussians = records_gaussians(records[order])
             tile.count = int(gaussians.xyz.shape[0])
-            tile.low, tile.high = _bounds(gaussians.xyz, gaussians.reach)
+            tile.low, tile.high = _bounds(gaussians.xyz, gaussians.reach, bool(tile.path))
             tile.geometric_error = 0.0
             emit(tile, gaussians, None)
             if parent_level < 0:
@@ -1500,7 +1644,7 @@ def build_tiles(root: Tile, codes: np.ndarray, store: SortedStore, edge: float, 
         cell = edge / (1 << tile.level)
         width = 2.0 * float(np.median(np.exp(gaussians.log_scales.astype(np.float64).max(axis=1))))
         tile.geometric_error = max(cell, width)
-        low, high = _bounds(gaussians.xyz, gaussians.reach)
+        low, high = _bounds(gaussians.xyz, gaussians.reach, bool(tile.path))
         for child in tile.children:
             low = np.minimum(low, child.low)
             high = np.maximum(high, child.high)
@@ -2186,9 +2330,23 @@ def convert(
     Two further facts from the Cesium source this layout honours: `transformTile` bakes
     each tile through its own `computedTransform` but the spherical-harmonic frame is taken
     from the *first* selected tile ("All tiles in a typical GS tileset share the same root
-    coordinate frame"), so only the root carries a transform and every GLB has the same
-    node matrix; and site tilesets keep `skipLevelOfDetail` off for splats (apps/web
-    providers/tiles.ts), which is the traversal quoted above.
+    coordinate frame"), so every GLB has the same node matrix and no tile below the root
+    carries anything but a translation -- `getRotation` of a computed transform ignores its
+    translation, so every tile shares the root's SH frame; and site tilesets keep
+    `skipLevelOfDetail` off for splats (apps/web providers/tiles.ts), which is the
+    traversal quoted above.
+
+    **Per-tile origins.** SPZ stores positions as 24-bit fixed point: +/-2047.99976 m from
+    the tile's frame at 12 fractional bits. A tile whose content reaches past that is
+    written in a frame of its own (`tile_frame`): its centre, in whole metres, stated as a
+    translation-only `transform` relative to its parent's frame. A scan under ~4 km across
+    has no such tile, and its tileset is the bytes it always was. The root never moves --
+    its frame is the tileset's, which the root transform places on the globe and every
+    root extra (collision grid, view cones, instance bounds) is expressed in -- so a root
+    whose own content passes the range is written at fewer fractional bits instead, as is
+    any tile whose own half-extent does (docs/DECISIONS/0011-splat-tile-origins.md).
+    Readers compose the translations (`tile_offsets`) and checksum site-frame positions
+    (`site_positions`).
 
     **Out of core.** The PLY is read in windows (`iter_ply_rows`), twice: once for the
     filters and the Morton codes, once to spill every kept gaussian, in Morton order, to a
@@ -2261,9 +2419,21 @@ def convert(
     del keep
     seen_from = view_cones.write_view_cones(cones, out_dir)
 
-    def node(tile: Tile) -> dict[str, object]:
-        entry: dict[str, object] = {
-            "boundingVolume": {"box": _box(tile.low, tile.high)},
+    def node(tile: Tile, parent_origin: np.ndarray) -> dict[str, object]:
+        entry: dict[str, object] = {}
+        if not np.array_equal(tile.origin, parent_origin):
+            # 3D Tiles 1.1 column-major, translation only, relative to the parent's frame;
+            # whole metres, so `+ 0.0` (no negative zero) is all the cleaning it needs.
+            d = [float(v) + 0.0 for v in tile.origin - parent_origin]
+            entry["transform"] = [
+                *(1.0, 0.0, 0.0, 0.0),
+                *(0.0, 1.0, 0.0, 0.0),
+                *(0.0, 0.0, 1.0, 0.0),
+                *(d[0], d[1], d[2], 1.0),
+            ]
+        entry |= {
+            # In the tile's own frame, as 3D Tiles reads a bounding volume.
+            "boundingVolume": {"box": _box(tile.low - tile.origin, tile.high - tile.origin)},
             "geometricError": tile.geometric_error,
             "content": {"uri": tile.uri},
             # How many gaussians the content holds, so a viewer can spend a budget on the
@@ -2272,7 +2442,7 @@ def convert(
             "extras": {"gaussians": tile.count},
         }
         if tile.children:
-            entry["children"] = [node(child) for child in tile.children]
+            entry["children"] = [node(child, tile.origin) for child in tile.children]
         return entry
 
     tiles = root.walk()
@@ -2297,7 +2467,13 @@ def convert(
             }
         },
         # Refinement is stated once, on the root; every tile below inherits it.
-        "root": {"transform": enu_to_ecef(lat, lon, height), "refine": "REPLACE", **node(root)},
+        # The root's origin is always zero (`tile_frame`), so its entry has no transform of
+        # its own to collide with this one.
+        "root": {
+            "transform": enu_to_ecef(lat, lon, height),
+            "refine": "REPLACE",
+            **node(root, np.zeros(3)),
+        },
     }
     # What the web clients collide with: the leaves' gaussians as solid cells, precomputed
     # (see `COLLISION_FORMAT`). On the root, so a viewer has it before any tile loads.
@@ -2331,7 +2507,95 @@ def convert(
         # viewer fades when seen from where the capture never looked.
         "view_cones_cell_m": cones.cell,
         "view_cones_directional_share": cast(float, cones.stats.get("directionalShare", 0.0)),
+        # Tiles written in a frame of their own (`tile_frame`), and the fewest fractional
+        # bits any tile's SPZ declares: 0 and 12 for every scan under ~4 km across.
+        "offset_tiles": sum(1 for tile in tiles if tile.origin.any()),
+        "min_fractional_bits": min(tile.fractional_bits for tile in tiles),
     }
+
+
+def _translation(transform: object, uri: str) -> np.ndarray:
+    """The translation of a tile's 3D Tiles `transform`, refusing anything else."""
+    if (
+        not isinstance(transform, list)
+        or len(transform) != 16
+        or not all(
+            isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v)
+            for v in transform
+        )
+    ):
+        raise SplatFormatError(f"{uri}: its tile transform is not 16 finite numbers")
+    m = np.asarray(transform, dtype=np.float64).reshape(4, 4).T  # column-major
+    if not (np.array_equal(m[:3, :3], np.eye(3)) and not m[3, :3].any() and float(m[3, 3]) == 1.0):
+        raise SplatFormatError(
+            f"{uri}: its tile transform is not a pure translation; a splat tile may only be "
+            "moved, never turned or scaled (every tile shares the root's SH frame)"
+        )
+    return m[:3, 3].copy()
+
+
+class TileOffsets(dict[str, np.ndarray]):
+    """`tile_offsets`' result: keyed by content uri without a leading `./`, and looked up
+    the same way, so a reader that asks with the uri as the tileset spells it
+    (`rig_tiles.tile_uris`: `./splat_0.glb` or `splat_0.glb`) gets that tile's offset and
+    never the site frame by default."""
+
+    def __getitem__(self, uri: str) -> np.ndarray:
+        return super().__getitem__(uri.removeprefix("./"))
+
+    def __contains__(self, uri: object) -> bool:
+        return super().__contains__(uri.removeprefix("./") if isinstance(uri, str) else uri)
+
+    def get(self, uri: str, default: Any = None) -> Any:  # type: ignore[override]
+        return super().get(uri.removeprefix("./"), default)
+
+
+def tile_offsets(tileset: Mapping[str, Any]) -> TileOffsets:
+    """Each content uri's frame in the root's frame: the float64 sum of the translation-only
+    `transform`s from the root down to its tile, the root's own (the globe placement)
+    excluded. Zero for every tile of a tileset that fits SPZ's range (`tile_frame`).
+
+    Reads `content.uri` and 3D Tiles 1.1 `contents[].uri`, a leading `./` removed (as
+    apps/api services/sidecars.py `content_uris` does) from the keys and from every lookup
+    (`TileOffsets`). A child transform that is anything but a translation is refused
+    (`SplatFormatError`): no reader here composes rotations.
+    """
+    out = TileOffsets()
+    root = tileset.get("root")
+    stack: list[tuple[Any, np.ndarray]] = [(root, np.zeros(3))]
+    while stack:
+        tile, offset = stack.pop()
+        if not isinstance(tile, dict):
+            continue
+        if tile is not root and tile.get("transform") is not None:
+            name = (tile.get("content") or {}).get("uri", "a tile")
+            offset = offset + _translation(tile["transform"], str(name))
+        for content in [tile.get("content"), *(tile.get("contents") or [])]:
+            uri = content.get("uri") if isinstance(content, dict) else None
+            if isinstance(uri, str) and uri:
+                out[uri.removeprefix("./")] = offset
+        children = tile.get("children")
+        if isinstance(children, list):
+            stack.extend((child, offset) for child in children)
+    return out
+
+
+def site_positions(local: np.ndarray, offset: np.ndarray | None) -> np.ndarray:
+    """A tile's decoded positions moved into the site frame (the root's): the basis every
+    position checksum is defined over (rig `tileChecksums`, instances, skins, plants).
+
+    `float32(float64(local) + offset)`, negative zero cleared. For a tile with no offset
+    (every tile of a scan under ~4 km) that is `local` itself, unchanged. Otherwise it is
+    exact -- equal to the float64 sum -- wherever |site| < 4096 m (an origin is whole
+    metres and `local` lies on the 2^-12 grid, so the sum is on it too, within float32's
+    24 bits); further out it is the correctly rounded float32 of the exact sum, which
+    TypeScript's `Float32Array` of the same double gives bit for bit.
+    """
+    if offset is None or not np.asarray(offset).any():
+        return local
+    out = (local.astype(np.float64) + np.asarray(offset, dtype=np.float64)).astype("<f4")
+    out[out == 0.0] = 0.0
+    return out
 
 
 def collision_main(argv: list[str]) -> None:

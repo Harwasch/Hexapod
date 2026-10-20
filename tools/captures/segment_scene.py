@@ -2463,9 +2463,10 @@ def tile_binding_by_position(
     tree = cKDTree(np.asarray(positions, np.float64))
     ids = np.asarray(splat_id, np.int64)
     tileset = json.loads((tiles_dir / "tileset.json").read_text(encoding="utf-8"))
+    offsets = splat_tiles.tile_offsets(tileset)
     tiles: dict[str, list[int]] = {}
     for uri in tile_uris(tileset):
-        at = tile_positions(tiles_dir / uri)
+        at = tile_positions(tiles_dir / uri, offsets.get(uri))
         distance, index = tree.query(at.astype(np.float64), k=BIND_NEIGHBOURS)
         near = ids[index]
         agreed = np.where((near == near[:, :1]).all(axis=1), near[:, 0], 0)

@@ -402,7 +402,7 @@ def test_every_isolated_splat_is_a_leaf_of_a_stamped_lod_tileset(
 
     def walk(tile: dict) -> None:
         if not tile.get("children"):
-            leaves.append(rig_tiles.tile_positions(out / "splat" / tile["content"]["uri"]))
+            leaves.append(rig_tiles.tile_positions(out / "splat" / tile["content"]["uri"], None))
         for child in tile.get("children", []):
             walk(child)
 

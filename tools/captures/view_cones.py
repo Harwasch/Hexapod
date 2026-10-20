@@ -519,9 +519,12 @@ def cone_grid(layout: object, keep: np.ndarray, observers: np.ndarray | None = N
 def cone_grid_from_tileset(tileset: Path, observers: np.ndarray | None = None) -> ConeGrid:
     """The cone grid of a packed tileset's leaves -- for a scan whose PLY is gone."""
     from rig_tiles import glb_spz
-    from splat_tiles import unpack_spz
+    from splat_tiles import tile_offsets, unpack_spz
 
     document = json.loads(tileset.read_text(encoding="utf-8"))
+    # The grid is in the site frame, as `cone_grid` builds it from the PLY: a far leaf's
+    # positions are its own frame's, so its composed offset is added back.
+    offsets = tile_offsets(document)
     leaves: list[str] = []
     count = 0
     stack = [document["root"]]
@@ -538,6 +541,7 @@ def cone_grid_from_tileset(tileset: Path, observers: np.ndarray | None = None) -
         for uri in leaves:
             data = unpack_spz(glb_spz(tileset.parent / uri))
             xyz = np.stack([data["x"], data["y"], data["z"]], axis=1).astype(np.float64)
+            xyz += offsets.get(uri, np.zeros(3))
             scales = np.stack([data["scale_0"], data["scale_1"], data["scale_2"]], axis=1)
             yield xyz, _middle_axis(scales)
 

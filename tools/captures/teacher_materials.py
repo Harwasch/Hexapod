@@ -161,7 +161,7 @@ def load_scene(tiles_dir: Path, skin_dir: Path) -> Scene:
     from rig_tiles import glb_spz
     from skin_scene import QUANT, ROW_BYTES, decode_runs
     from splat_render import _from_columns
-    from splat_tiles import unpack_spz
+    from splat_tiles import site_positions, tile_offsets, unpack_spz
     from synthetic_tree import checksum_positions
 
     tileset = json.loads((tiles_dir / "tileset.json").read_text(encoding="utf-8"))
@@ -177,10 +177,13 @@ def load_scene(tiles_dir: Path, skin_dir: Path) -> Scene:
         else:
             leaves.append(tile["content"]["uri"])
     parts, owners, weights = [], [], []
+    offsets = tile_offsets(tileset)
     for uri in sorted(leaves):
         columns = unpack_spz(glb_spz(tiles_dir / uri))
         positions = np.stack([columns["x"], columns["y"], columns["z"]], axis=1).astype("<f4")
         positions[positions == 0.0] = 0.0
+        # Site frame: what skin.json's checksums are over, and the frame of the scene.
+        positions = site_positions(positions, offsets.get(uri))
         entry = skin_doc["tiles"].get(checksum_positions(positions))
         n = positions.shape[0]
         owner = np.zeros(n, np.int64)
@@ -191,7 +194,7 @@ def load_scene(tiles_dir: Path, skin_dir: Path) -> Scene:
             start = int(entry["row"])
             w[skinned] = rows[start : start + int(skinned.sum())].astype(np.float64) / QUANT
             owner[skinned] = [instance_of_skin[int(s)] for s in which[skinned]]
-        parts.append(_from_columns(columns))
+        parts.append(_from_columns(columns, offsets.get(uri)))
         owners.append(owner)
         weights.append(w)
     splats = Splats.concat(parts)

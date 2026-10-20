@@ -1472,6 +1472,7 @@ def crop_binding(
     they are within `CROP_REACH_M` (`rebind_instances`' rule, on the crop alone); every
     tile wholly outside is one run of 0. The scan stays whole: the rest of it simply has no
     objects in this variant."""
+    import splat_tiles
     from rebind_instances import encode_runs, plurality, tile_tree
     from rig_tiles import tile_positions
     from synthetic_tree import checksum_positions
@@ -1480,9 +1481,10 @@ def crop_binding(
     ids = np.asarray(splat_id, np.int64)
     x0, y0, x1, y1 = (float(v) for v in box)
     tileset = json.loads((tiles_dir / "tileset.json").read_text(encoding="utf-8"))
+    offsets = splat_tiles.tile_offsets(tileset)
     out: dict[str, list[int]] = {}
     for uri, leaf in tile_tree(tileset):
-        at = tile_positions(tiles_dir / uri)
+        at = tile_positions(tiles_dir / uri, offsets.get(uri))
         labels = np.zeros(len(at), np.int64)
         near = (
             (at[:, 0] >= x0 - CROP_REACH_M) & (at[:, 0] <= x1 + CROP_REACH_M)

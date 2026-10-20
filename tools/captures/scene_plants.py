@@ -1310,8 +1310,9 @@ def plant_binding(
         )
     tiles: dict[str, list[int]] = {}
     checksums: dict[str, str] = {}
+    offsets = splat_tiles.tile_offsets(tileset)
     for uri in uris:
-        positions = rig_tiles.tile_positions(tiles_dir / uri)
+        positions = rig_tiles.tile_positions(tiles_dir / uri, offsets.get(uri))
         if positions.shape[0] != labels[uri].size:
             raise SystemExit(
                 f"{uri} holds {positions.shape[0]} gaussians, the plan {labels[uri].size}: "

@@ -53,7 +53,15 @@ from scipy.spatial import cKDTree
 import scene_plants
 from rig_tiles import glb_spz
 from skin_scene import decode_runs
-from splat_tiles import SH_DIMS, SPZ_MAGIC, build_glb
+from splat_tiles import (
+    SH_DIMS,
+    SPZ_FIXED_MAX,
+    SPZ_FIXED_MIN,
+    SPZ_MAGIC,
+    build_glb,
+    site_positions,
+    tile_offsets,
+)
 from synthetic_tree import checksum_positions
 
 FORMAT = "hexapod.split"
@@ -184,6 +192,15 @@ def write_spz(spz: Spz) -> bytes:
     header = struct.pack(
         "<IIIBBBB", SPZ_MAGIC, spz.version, n, spz.degree, spz.fractional_bits, spz.flags, 0
     )
+    # The mask below keeps a record's low 24 bits; a record past them would come back as
+    # a different position, so it is refused, as `pack_spz` refuses one (no wrap).
+    top, bottom = (int(spz.fixed.max()), int(spz.fixed.min())) if n else (0, 0)
+    if top > SPZ_FIXED_MAX or bottom < SPZ_FIXED_MIN:
+        worst = top if top > SPZ_FIXED_MAX else bottom
+        raise ValueError(
+            f"an SPZ record ({worst}) is past the 24-bit field's {SPZ_FIXED_MIN} to "
+            f"{SPZ_FIXED_MAX}; it belongs in a tile with an origin of its own"
+        )
     u = (spz.fixed & 0xFFFFFF).astype(np.uint32)
     pos = np.stack([u & 0xFF, (u >> 8) & 0xFF, (u >> 16) & 0xFF], axis=2).astype(np.uint8)
     raw = header + b"".join(
@@ -334,6 +351,19 @@ class TileRef:
     labels: np.ndarray
     #: Per gaussian: the object it goes with (index into the choices), or -1.
     owner: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64))
+    #: The tile's frame in the site frame (`splat_tiles.tile_offsets`): zero unless the
+    #: scan is past ~4 km across and this tile was written in a frame of its own.
+    offset: np.ndarray = field(default_factory=lambda: np.zeros(3))
+
+    def site_positions(self) -> np.ndarray:
+        """Its positions in the site frame: what checksums and object geometry are over."""
+        return site_positions(self.spz.positions(), self.offset)
+
+    def site_fixed(self) -> np.ndarray:
+        """Its fixed-point records moved into the site frame, int64 and exact (an origin is
+        whole metres, so a whole number of steps at any fractional bits)."""
+        shift = np.round(self.offset * (1 << self.spz.fractional_bits)).astype(np.int64)
+        return self.spz.fixed + shift
 
 
 def _nodes(tileset: dict) -> list[tuple[dict, bool]]:
@@ -350,19 +380,22 @@ def _nodes(tileset: dict) -> list[tuple[dict, bool]]:
 
 
 def read_tiles(tiles_dir: Path, tileset: dict, doc: dict) -> list[TileRef]:
-    """Every tile's records and instance ids (refused when instances.json does not list it)."""
+    """Every tile's records and instance ids (refused when instances.json does not list it),
+    bound by the checksum of its site-frame positions."""
     out = []
+    offsets = tile_offsets(tileset)
     for node, leaf in _nodes(tileset):
         uri = node["content"]["uri"]
         spz = read_tile(tiles_dir / uri)
-        checksum = checksum_positions(spz.positions())
+        offset = offsets.get(uri, np.zeros(3))
+        checksum = checksum_positions(site_positions(spz.positions(), offset))
         runs = doc["tiles"].get(checksum)
         if runs is None:
             raise ValueError(f"tile {uri} ({checksum}) is not in instances.json: segment first")
         labels = decode_runs(runs)
         if labels.size != len(spz):
             raise ValueError(f"tile {uri}: {labels.size} ids for {len(spz)} gaussians")
-        out.append(TileRef(node, uri, leaf, spz, checksum, labels))
+        out.append(TileRef(node, uri, leaf, spz, checksum, labels, offset=offset))
     return out
 
 
@@ -373,7 +406,7 @@ def absorb(tiles: Sequence[TileRef], choices: Sequence[Choice]) -> dict[int, lis
     Geometry only. Returns, per chosen instance, the ids it took (they are added to its
     `ids`)."""
     leaves = [t for t in tiles if t.leaf]
-    positions = np.concatenate([t.spz.positions() for t in leaves]).astype(np.float64)
+    positions = np.concatenate([t.site_positions() for t in leaves]).astype(np.float64)
     labels = np.concatenate([t.labels for t in leaves])
     counts = np.bincount(labels)
     taken: set[int] = {k for c in choices for k in c.ids}
@@ -408,7 +441,7 @@ def assign(tiles: Sequence[TileRef], choices: Sequence[Choice], max_id: int) -> 
     for t in tiles:
         t.owner = of_id[t.labels]
     leaves = [t for t in tiles if t.leaf]
-    positions = np.concatenate([t.spz.positions() for t in leaves]).astype(np.float64)
+    positions = np.concatenate([t.site_positions() for t in leaves]).astype(np.float64)
     owners = np.concatenate([t.owner for t in leaves])
     if not (owners >= 0).any():
         return
@@ -420,7 +453,7 @@ def assign(tiles: Sequence[TileRef], choices: Sequence[Choice], max_id: int) -> 
         unbound = np.flatnonzero(t.labels == 0)
         if unbound.size == 0:
             continue
-        _, index = tree.query(t.spz.positions()[unbound].astype(np.float64), k=k)
+        _, index = tree.query(t.site_positions()[unbound].astype(np.float64), k=k)
         near = owners[np.asarray(index).reshape(unbound.size, k)]
         for j in range(len(choices)):
             votes = (near == j).sum(axis=1)
@@ -460,7 +493,9 @@ class SplitObject:
     fill: dict | None = None
 
     def scene_spz(self) -> Spz:
-        """Its gaussians back in the scene's frame."""
+        """Its gaussians back in the scene's frame, as records. For an object of a far site
+        these may pass the 24-bit field (`write_spz` refuses them): compare records, or add
+        `origin` to positions, rather than packing this."""
         shift = np.round(self.origin * (1 << self.spz.fractional_bits)).astype(np.int64)
         moved = self.spz.take(np.arange(len(self.spz)))
         moved.fixed = self.spz.fixed + shift
@@ -468,14 +503,21 @@ class SplitObject:
 
 
 def gather(tiles: Sequence[TileRef], k: int, choice: Choice, uri: str) -> SplitObject:
-    """Object `k`'s leaf gaussians, in tile order, moved into its own frame."""
+    """Object `k`'s leaf gaussians, in tile order, moved into its own frame.
+
+    Each tile's records are first moved into the site frame (`TileRef.site_fixed`, exact),
+    so an object drawn by tiles in different frames comes together where it stood. Tiles
+    of different fractional bits cannot be joined without re-quantising, and are refused
+    (`Spz.concat`)."""
     parts, labels, sources = [], [], 0
     for t in tiles:
         if not t.leaf:
             continue
         mine = np.flatnonzero(t.owner == k)
         if mine.size:
-            parts.append(t.spz.take(mine))
+            part = t.spz.take(mine)
+            part.fixed = t.site_fixed()[mine]
+            parts.append(part)
             labels.append(t.labels[mine])
             sources += 1
     if not parts:
@@ -658,7 +700,9 @@ def split(
             del t.node["content"]
             changes[t.checksum] = ("", keep)
         else:
-            checksum = checksum_positions(kept.positions())
+            # Site frame, as every binding is; the node keeps its `transform`, so the
+            # rewritten tile is still drawn in its own frame.
+            checksum = checksum_positions(site_positions(kept.positions(), t.offset))
             uri = _content_name(t.uri, checksum)
             (out_dir / uri).parent.mkdir(parents=True, exist_ok=True)
             (out_dir / uri).write_bytes(tile_bytes(kept))
@@ -839,8 +883,10 @@ def fill_holes(
         if distill:
             runner = tf._distill_runner(distill_on)
         for obj in result.objects:
-            columns = unpack_spz(write_spz(obj.scene_spz()))
-            removed: Splats = _from_columns(columns)
+            # Packed in its own frame (which fits: it is vehicle-sized) and moved back by
+            # its origin, so an object of a far site is not refused by `write_spz`.
+            columns = unpack_spz(write_spz(obj.spz))
+            removed: Splats = _from_columns(columns, obj.origin)
             save = save_dir / str(obj.choice.instance) if save_dir else None
             context = None
             if hasattr(filler, "context"):

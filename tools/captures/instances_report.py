@@ -27,6 +27,7 @@ import numpy as np
 import rebind_instances
 import scene_categories
 import segment_scene
+import splat_tiles
 from rig_tiles import tile_positions
 from splat_render import Camera, Splats, load_tileset
 from synthetic_tree import checksum_positions
@@ -61,8 +62,9 @@ def tile_depths(tileset: dict) -> list[tuple[str, int, bool]]:
 def tile_checksums(tiles_dir: Path) -> dict[str, str]:
     """Per content uri, its position checksum (the binding's key)."""
     tileset = json.loads((tiles_dir / "tileset.json").read_text(encoding="utf-8"))
+    offsets = splat_tiles.tile_offsets(tileset)
     return {
-        uri: checksum_positions(tile_positions(tiles_dir / uri))
+        uri: checksum_positions(tile_positions(tiles_dir / uri, offsets.get(uri)))
         for uri, _, _ in tile_depths(tileset)
     }
 
