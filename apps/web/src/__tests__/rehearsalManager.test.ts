@@ -45,6 +45,36 @@ function rehearsal(machineIds = ["TR-04"]) {
   });
 }
 
+/**
+ * Eight lanes side by side, 10 m apart, each crossing the same creek: eight hands, one band of
+ * neighbouring lanes, so one marker that counts them as the ghost reaches them.
+ */
+function eightHands() {
+  const lanes = Array.from({ length: 8 }, (_, i) => ({
+    points:
+      i % 2 === 0
+        ? [at(-200 + i * 10, -300), at(-200 + i * 10, 300)]
+        : [at(-200 + i * 10, 300), at(-200 + i * 10, -300)],
+    pass: i,
+  }));
+  return planRehearsal({
+    zones: [{ zoneId: "A-01", label: "A-01", lanes, machineIds: ["TR-04"], classId: "mower" }],
+    machines: [{ id: "TR-04", name: "TR-04 Kestrel", model: "Ranger 2 · mower" }],
+    elevation: null,
+    creeks: {
+      label: "USGS NHD flowlines, 1:24,000",
+      lines: [
+        {
+          id: "nhd-1",
+          name: "Figueroa Creek",
+          kind: "intermittent",
+          coordinates: [at(-300, 0), at(0, 0)],
+        },
+      ],
+    },
+  });
+}
+
 let frames: FrameRequestCallback[] = [];
 
 function setup() {
@@ -118,6 +148,22 @@ describe("RehearsalManager", () => {
     expect(shown("rehearsal:done:A-01:0")).toBe(true);
     expect(shown("rehearsal:lane:A-01:0")).toBe(false);
     expect(shown(`rehearsal:hand:${hand.id}`)).toBe(true);
+  });
+
+  it("counts the hands raised while As captured hid them once it is off", () => {
+    const run = eightHands();
+    const { manager, ids, entities } = setup();
+    manager.load(run, look);
+    const marker = entities.getById(ids().find((id) => id.startsWith("rehearsal:hand:")) ?? "");
+    const image = () => decodeURIComponent(String(marker?.billboard?.image?.getValue()));
+    manager.seek((run.hands[2]?.t ?? 0) + 1);
+    expect(image()).toContain(">3</text>");
+    // The clock runs on while hidden; the marker drawn again counts every hand up by then.
+    manager.hideAgents(true);
+    manager.seek(Number.POSITIVE_INFINITY);
+    manager.hideAgents(false);
+    expect(marker?.show).toBe(true);
+    expect(image()).toContain(">8</text>");
   });
 
   it("hides the hand open in the card with the rest of the run while As captured is on", () => {
@@ -230,31 +276,7 @@ describe("RehearsalManager", () => {
   });
 
   it("stands one counting marker per cluster of hands, never one per hand", () => {
-    // Eight lanes side by side, 10 m apart, each crossing the same creek: eight hands, one
-    // band of neighbouring lanes, so one marker that counts them as the ghost reaches them.
-    const lanes = Array.from({ length: 8 }, (_, i) => ({
-      points:
-        i % 2 === 0
-          ? [at(-200 + i * 10, -300), at(-200 + i * 10, 300)]
-          : [at(-200 + i * 10, 300), at(-200 + i * 10, -300)],
-      pass: i,
-    }));
-    const run = planRehearsal({
-      zones: [{ zoneId: "A-01", label: "A-01", lanes, machineIds: ["TR-04"], classId: "mower" }],
-      machines: [{ id: "TR-04", name: "TR-04 Kestrel", model: "Ranger 2 · mower" }],
-      elevation: null,
-      creeks: {
-        label: "USGS NHD flowlines, 1:24,000",
-        lines: [
-          {
-            id: "nhd-1",
-            name: "Figueroa Creek",
-            kind: "intermittent",
-            coordinates: [at(-300, 0), at(0, 0)],
-          },
-        ],
-      },
-    });
+    const run = eightHands();
     expect(run.hands).toHaveLength(8);
     const { manager, ids, entities } = setup();
     manager.load(run, look);

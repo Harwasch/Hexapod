@@ -691,9 +691,13 @@ export class RehearsalManager {
       const count = counts[index] ?? 0;
       const shown = count > 0 && !this.agentsHidden;
       if (item.entity.show !== shown) item.entity.show = shown;
-      if (shown && item.count !== count && item.entity.billboard)
-        item.entity.billboard.image = new ConstantProperty(cachedHandImage(count));
-      item.count = count;
+      // The count is the one the marker shows: while hidden it waits, so the marker drawn
+      // again (As captured off) counts the hands up by then.
+      if (shown && item.count !== count) {
+        if (item.entity.billboard)
+          item.entity.billboard.image = new ConstantProperty(cachedHandImage(count));
+        item.count = count;
+      }
       const label = shown && index === speaking ? clusterLabel(item.cluster, count) : null;
       if (item.label !== label && item.entity.label) {
         item.entity.label.show = new ConstantProperty(label !== null);
