@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ResearchArtifact } from "@twin/contracts";
 import { useScene } from "@/cesium/SceneContext";
+import { HIDDEN_AS_CAPTURED, useAsCaptured } from "@/state/asCaptured";
 import { useLandContext } from "@/state/landContext";
 import { mapValue, researchMapBounds } from "./researchMap";
 
@@ -16,6 +17,7 @@ export function ResearchMapExplorer({
 }) {
   const scene = useScene();
   const layer = useLandContext((state) => state.layers[artifactId]);
+  const asCaptured = useAsCaptured((s) => s.on);
   const selection = useLandContext((state) => state.selectedMapFeature);
   const [search, setSearch] = useState(""),
     [page, setPage] = useState(0);
@@ -90,6 +92,11 @@ export function ResearchMapExplorer({
           Fit all features
         </button>
       </div>
+      {layer && asCaptured && (
+        <p className="land-footnote" role="status">
+          {HIDDEN_AS_CAPTURED}: the agent made this map, so it is drawn once that is off.
+        </p>
+      )}
       <details open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
         <summary>Explore mapped features</summary>
         <p>Select a feature here or on the map. Selected features appear in gold.</p>

@@ -3,6 +3,7 @@ import { Cartesian3, Color, PolygonHierarchy, type Entity } from "cesium";
 
 import { polygonsOf } from "@twin/geo";
 
+import { useAsCaptured } from "@/state/asCaptured";
 import { useLandMap, type MapTone } from "@/state/landMap";
 
 import { repaintUntilDrawn } from "./repaintUntilDrawn";
@@ -15,7 +16,10 @@ const TONES: Record<MapTone, string> = {
   neutral: "#f2f6ef",
 };
 
-/** Outlines the place a card is pointing at; the leader line ends inside it. */
+/**
+ * Outlines the place a card is pointing at; the leader line ends inside it. A card in the
+ * agent's tone points at the agent's work, which As captured does not draw (ADR 0019).
+ */
 export function LandFocusBridge() {
   const host = useScene();
   useEffect(() => {
@@ -29,7 +33,7 @@ export function LandFocusBridge() {
       entities.forEach((entity) => host.viewer.entities.remove(entity));
       entities = [];
       const focus = useLandMap.getState().focus;
-      if (focus) {
+      if (focus && !(focus.tone === "agent" && useAsCaptured.getState().on)) {
         const color = Color.fromCssColorString(TONES[focus.tone]);
         const add = (options: Entity.ConstructorOptions) =>
           entities.push(
@@ -76,9 +80,13 @@ export function LandFocusBridge() {
     const off = useLandMap.subscribe((next, previous) => {
       if (next.focus !== previous.focus) show();
     });
+    const offAsCaptured = useAsCaptured.subscribe((next, previous) => {
+      if (next.on !== previous.on) show();
+    });
     show();
     return () => {
       off();
+      offAsCaptured();
       stopRepaint();
       if (!host.isDestroyed) entities.forEach((entity) => host.viewer.entities.remove(entity));
     };

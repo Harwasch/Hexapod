@@ -17,7 +17,11 @@ import { useSkinPoke } from "@/state/skinPoke";
  * - motion: the wind calm (`SceneBridge.tsx`), the poke tool off and given back (below),
  *   telemetry and split objects held at their measured rest pose (`cesium/telemetry.ts`,
  *   `cesium/splitObjects.ts`, `cesium/scanView/scanObjects.ts`);
- * - agents: a rehearsal's simulated machines hidden (`cesium/RehearsalManager.ts`);
+ * - agents: a rehearsal's simulated machines hidden (`cesium/RehearsalManager.ts`); the Land
+ *   agent's pins, outlines and research maps (`agentMade`, `cesium/LandContextBridge.tsx`,
+ *   `LandOverlays.tsx`, `cesium/LandFocusBridge.tsx`);
+ * - Show once's inferred heatmap lifted (`cesium/ShowOnceBridge.tsx`);
+ * - procedural fixtures, the synthetic tree, withheld (`SiteManager.hideFixtures`);
  * - the per-cell view rule drawn as Ground truth (`compositorSession.ts`);
  * - the sunlight relight (W6b) is to subscribe here and draw nothing while it is on.
  *
