@@ -118,7 +118,8 @@ mypy_path = ["../captures"]
 # Type-check calls into splat_tiles against its real signatures, but do not report errors
 # inside tools/captures -- that project does not run mypy and is not this project's to fix.
 # splat_tiles imports splat_merge and view_cones, which reaches rig_tiles, synthetic_tree and
-# motion_params; the same rule holds for each of them.
+# motion_params, and cell_grid (the site lattice's container, which confidence.py writes
+# too); the same rule holds for each of them.
 module = [
   "splat_tiles",
   "splat_merge",
@@ -126,6 +127,7 @@ module = [
   "rig_tiles",
   "synthetic_tree",
   "motion_params",
+  "cell_grid",
 ]
 follow_imports = "silent"
 
