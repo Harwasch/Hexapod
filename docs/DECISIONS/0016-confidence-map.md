@@ -159,8 +159,8 @@ weak, in a frame another epoch could be compared in.
 - `confidenceMin` is the grid's, not the tiles': the API's tile fingerprint
   (`sidecars.tiles_fingerprint`) leaves it out on every tile, so a re-pack that changes only the
   grid keeps what is bound to the tiles (`nativeLod`, the rig, objects).
-- Until A4 adds a `confidence` sidecar kind, a re-publish that carries sidecars from a previous
-  generation reports `extras.confidence` as an unrecognised sidecar if the new run has none.
+- A re-publish of new tiles without a grid drops the old one with "Confidence needs
+  re-measuring" (the `confidence` sidecar kind, A4; until A4 it was an unrecognised sidecar).
 - New trip-wires: `docs/HANDOFF.md` § 6.
 
 ### Not done here (stubs and later PRs)
@@ -172,7 +172,87 @@ weak, in a frame another epoch could be compared in.
 
 ## API
 
-Filled by `claude/feat-splat-confidence-api`.
+Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 A4), branch
+`claude/feat-splat-confidence-api`.
+
+### Decision
+
+1. **A map per epoch revision, as rows** (`epoch_maps`, migration 0035; `docs/DATA_MODEL.md`).
+   One row per **asset** and kind: the descriptor verbatim, its summary, the file's URL, the
+   finest cell and level. A grid is measured on one reconstruction, so a re-run (a new asset)
+   has its own map and the superseded revision keeps the one it was measured with, as it keeps
+   its tiles. The planes stay in the bucket.
+2. **`register` records it** from `registration.json`'s `confidence`: on a first run's asset,
+   on a re-run's new revision, and — for the very URL the epoch already shows — whatever the
+   run that last published those tiles says (one bucket rewrites a run's keys in place). A
+   republish of the same tiles by a run that measured nothing, whose publish carried the grid
+   into the new generation, carries the map; an attach moves the map's URL with its
+   generation. A descriptor is checked first (the container and version, a `uri` that is a
+   file beside the tiles and nothing else, a cell on the lattice, the summary keys every
+   reader uses); one that fails is logged and **not recorded**, so the epoch reads "not
+   measured" rather than pointing at a grid nobody can read. `priorEpochs` in
+   `site_context.json` was seeded by the pipeline PR and is unchanged here.
+3. **Every epoch says `confidence`**: its current revision's map summarised
+   (`EpochConfidenceRead`), or null — not measured. Null is said plainly: the run that made the
+   revision measured none (a splat upload has no capture evidence). Read with the epochs in one
+   eager load.
+4. **`confidence.bin` is a sidecar of kind `confidence`**, bound to the tiles (`TILES`, like
+   collision and view cones): carried onto the same tiles, replaced by a run's own, dropped from
+   new tiles with "Confidence needs re-measuring". Not attachable: only a run ships one, because
+   only `register` records the row that describes it.
+5. **Weak areas** — `POST /sites/{id}/epochs/{epoch}/weak-areas` `{budgetM2?, focus?,
+maxAreas 1..8}`. The finest level's weak cells (weak-v1, where the summary is stated), closed
+   on the raster by whole cells (≥ 0.5 m each way — exactly a mitred buffer out and back in, so
+   a block keeps its area), outlined region by region, simplified by half a cell, parts under
+   1 m² dropped, largest first; over 2^20 cells, drawn a level up where at least half of the
+   children the epoch speaks for are weak (weak-v1's own majority; the min-of-children pyramid
+   would mark a whole coarse cell weak for one child). Counts are of the finest cells inside.
+   To the globe through the **site frame's own tangent plane** (PROJ `topocentric`, inverted):
+   the exact inverse of how the pipeline placed the tiles. The design's azimuthal-equidistant
+   projection is not that plane — it measures on the ellipsoid, and at a 1,500 m origin a point
+   1 km east lands 23 cm short. A budget keeps the weakest cells first, then those nearest
+   `focus`, trimming as the fog scout does, and only zones that fit when closing grows a sparse
+   selection past it. 409 `confidence-not-measured`, `confidence-unreadable`, `no-site-frame`.
+6. **Patterns are UX heuristics, labelled so in every answer** (`heuristic`, each `hint`):
+   mostly `views`/`spread` → `orbit` when the patch stands ≥ 3 m and is ≤ 40 m across, else
+   crossing `oblique` passes; `gsd` → `nadir`, lower, `targetGsdM` = the capture's median (null
+   without a metric scale); `unseen`/`accuracy` → `nadir`; `alignment` → `nadir` overlapping
+   the reference area. Ties go to `alignment` first (it caps every score). Suggested pitch:
+   −90, −45, −30.
+7. **A scout capture can be a re-scan**: `purpose: re-scan-weak`, `pattern`, `gimbalPitchDeg`
+   (−90..−30) and `rescanOf {siteId, epochId, policy, cells, reasons}` — a reference, **not a
+   foreign key**: plans are a workspace's and sites are public (the privacy split), and the
+   re-scan of a cell is any later epoch of the site that covers it (C7). The planner sizes
+   oblique as two crossing sets of the nadir lines and an orbit as two rings round the convex
+   hull at the stand-off where the pitched camera meets the ground (altitude / tan pitch,
+   ≥ 5 m) — rules of thumb too.
+8. **Fill targets** — `GET /sites/{id}/fill-targets?epochId=` (`rescan-gate-v1`): the cells of
+   epoch B (default the latest published) weak in B, covered by B, and weak in at least one
+   earlier measured epoch, at the coarsest of their levels through each grid's pyramid. 409
+   `no-rescan-yet` when nothing earlier was measured. A bit-packed window in the tileset frame
+   (rows south to north, least significant bit first). F4's fill gate fills only these.
+9. **Reading grids**: from the public bucket by the URL's own key (the published, immutable
+   copy — not the run's private key a Refine rewrites; the design said the unpublished key), a
+   HEAD refusing anything over 32 MB, a bounded ranged GET, inflated no further than the
+   descriptor declares (≤ 64 MB) and checked against its sha256. Decoded grids sit in a
+   per-process LRU bounded by bytes (96 MB), keyed by URL **and** sha256 so a rewritten grid is
+   never a stale hit. Both routes compute and store nothing, so they are open like every read
+   of a site, but they read and outline up to 2^22 cells: a per-client token bucket (20, then
+   60 a minute) like the other routes whose cost is the attack.
+
+### Why not fog-v2
+
+The Fog of Knowing stays "how fresh" (C6; no `POLICY_VERSION` bump). Crediting a capture by its
+confidence would mix two questions — when was this seen, and how well — in one layer whose
+policy readers already rely on. Confidence is its own layer and its own endpoints; open question
+2 of the design stays at its default.
+
+### Not done here
+
+- The re-scan flow in the console (W4b), the DJI export of obliques and orbits (W4c; the export
+  still flies nadir whatever the pattern), the fill gate itself (F4).
+- Any measurement behind the pattern rules, the 0.5 m closing or the 1 m² smallest zone: UX
+  heuristics until a pilot site re-scanned by them says otherwise.
 
 ## Web
 

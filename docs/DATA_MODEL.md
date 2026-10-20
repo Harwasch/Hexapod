@@ -8,6 +8,7 @@ Python models are snake_case (`CamelModel` handles both).
 sites 1 ──── * assets            (site_id nullable: assets can exist before a site)
 sites 1 ──── 0..1 site_frames    (the fixed origin every epoch is placed about)
 sites 1 ──── * epochs 1 ──── * assets (revisions of one epoch; epoch_id nullable: legacy)
+epochs 1 ──── * epoch_maps * ──── 1 assets (one map per revision and kind: its confidence grid)
 sites 1 ──── * site_check_targets (surveyed ground marks; retired, never deleted)
 sites 1 ──── * camera_bookmarks
 layers                           (independent catalog entries)
@@ -109,7 +110,10 @@ visual-epoch` on its capture and asset, and `scaleSource: visual-epoch` when its
 was measured (`arkit`, `exif-gps`, `visual-epoch`); otherwise it inherits the reference's word.
 
 Read as `SiteRead.epochs` and `GET /api/v1/sites/{id}/epochs`, each with `currentAssetId`: the
-epoch's newest observed asset with no `valid_to`. A capture names its site with `siteId` on
+epoch's newest observed asset with no `valid_to`, and `confidence`: that revision's confidence map
+summarised (`{status: measured, assetId, url, cellM, level, policy, weakShare, weakCells,
+scoredCells, unseenCells, reasons, alignmentCap {uncertaintyM, factor, priorEpochs, source}}`), or
+null — not measured. A capture names its site with `siteId` on
 `POST /captures` (or the phone route), kept in `captures.metadata.siteId`; `captures.site_id` is
 still the site a run registered it into.
 
@@ -164,10 +168,44 @@ write token (survey marks on private land are not public, unlike the site's othe
 A run is given the set as it is when it starts (`site_context`), with the capture's own clicks
 from an uploaded `check_observations.json` (`{"version": 1, "observations": [...]}`).
 
+## epoch_maps
+
+An epoch revision's per-cell maps (A4, migration 0035): one row per asset and kind, recorded by
+`register` from the grid the run shipped beside its tiles. A re-run is a new asset with its own
+map; the superseded revision keeps the one it was measured with.
+
+| Column     | Type                           | Notes                                                                                   |
+| ---------- | ------------------------------ | --------------------------------------------------------------------------------------- |
+| id         | uuid                           |                                                                                         |
+| epoch_id   | uuid → epochs (cascade), index |                                                                                         |
+| asset_id   | uuid → assets (cascade)        | the revision; unique with `kind`                                                        |
+| job_id     | uuid → jobs (set null)         | the run that measured it                                                                |
+| kind       | varchar(20)                    | `confidence` (M5 adds `surface`)                                                        |
+| format     | varchar(40), version int       | `hexapod.cellgrid` v1                                                                   |
+| url        | text                           | the file beside the tiles, in the generation the asset shows (an attach moves it along) |
+| cell_m     | float8 > 0, level int          | the finest level                                                                        |
+| descriptor | jsonb                          | the tileset's root `extras.confidence`, verbatim, checked before it is recorded         |
+| summary    | jsonb                          | `descriptor.summary`                                                                    |
+| created_at | timestamptz                    |                                                                                         |
+
+A descriptor the API cannot vouch for (another container, a `uri` that is not a file beside the
+tiles, a cell off the lattice, missing summary keys) is logged and not recorded: the epoch reads as
+not measured. `confidence.bin` is a sidecar of kind `confidence` (bound to the tiles, not
+attachable).
+
+- `POST /api/v1/sites/{id}/epochs/{epoch}/weak-areas` `{budgetM2?, focus?: [lon, lat], maxAreas
+1..8 = 3}` → `{epochId, assetId, policy, cellM, level, weakCells, totalCells,
+truncatedByBudget, heuristic, areas: [{footprint, areaM2, cells, meanScore, reasons, reliefM,
+diameterM, pattern (nadir · oblique · orbit), targetGsdM, gimbalPitchDeg, hint}]}`. 409
+  `confidence-not-measured` · `confidence-unreadable` · `no-site-frame`.
+- `GET /api/v1/sites/{id}/fill-targets?epochId=` → `rescan-gate-v1`: `{siteId, epochId, weakIn,
+comparedWith, frame: tileset, cellM, level, i0, j0, ni, nj, rowBytes, bitOrder: little, mask
+(base64, rows south to north), cells, reason}`. 409 `confidence-not-measured` · `no-rescan-yet`.
+
 ## Confidence grid
 
-Per epoch revision, how well each part of the capture was seen (ADR 0016). Not a table yet (A4
-records it per asset): a file beside the tiles, `confidence.bin`, declared on the tileset's root as
+Per epoch revision, how well each part of the capture was seen (ADR 0016), recorded per asset in
+`epoch_maps`: a file beside the tiles, `confidence.bin`, declared on the tileset's root as
 `extras.confidence` and copied to the top level of `registration.json` as `confidence` (null:
 not measured — every `splat-ingest` epoch).
 
