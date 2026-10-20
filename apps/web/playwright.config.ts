@@ -37,7 +37,7 @@ const SOFTWARE_WEBGPU = [
  * until it is listed here.
  */
 const SCENE_SPECS =
-  /(^|[\\/])(confidenceViewScene|epochSlider|instances|instancesPublished|instancesScan|livingCompare|livingSurvey|livingSurveyPerf|livingSurveyScene|livingSurveyTiles|livingSurveyYard|motionRenderers|navigationPerf|poke|realSize|scanFarTiles|scanFarView|scanOverlayIdle|scanRenderers|sceneSelect|skin|skinsScan|splatLod|splatNavigation|splatStreaming|telemetry|undoYard|variants|viewCones|wind)\.spec\.ts$/;
+  /(^|[\\/])(compositorScene|confidenceViewScene|epochSlider|instances|instancesPublished|instancesScan|livingCompare|livingSurvey|livingSurveyPerf|livingSurveyScene|livingSurveyTiles|livingSurveyYard|motionRenderers|navigationPerf|poke|realSize|scanFarTiles|scanFarView|scanOverlayIdle|scanRenderers|sceneSelect|skin|skinsScan|splatLod|splatNavigation|splatStreaming|telemetry|undoYard|variants|viewCones|wind)\.spec\.ts$/;
 
 /**
  * End-to-end tests run against the Vite dev server with the catalog API

@@ -192,6 +192,8 @@ export class SplatCompositor implements SplatVisibilityPart {
   readonly #tint: unknown;
   /** The sources whose splats Highlight invented tints (bit k: source k); 0 for none. */
   tinted = 0;
+  /** Off draws every splat as it was (the parts stay installed): a harness's comparison. */
+  enabled = true;
   #building = false;
 
   /** `rootOf`: the host's root tile's computed transform now (the tileset frame). */
@@ -321,7 +323,7 @@ export class SplatCompositor implements SplatVisibilityPart {
     // Whichever uniform the draw reads first, the slots covered are this frame's.
     this.sources.sync(this.#primitive);
     const plane = this.#plane;
-    const active = this.#readFrame() !== undefined;
+    const active = this.enabled && this.#readFrame() !== undefined;
     const cell = plane?.cellM ?? 1;
     const key = `${String(active)}:${String(cell)}:${String(this.sources.covered)}`;
     if (key !== this.#params.key) {
