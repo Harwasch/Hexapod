@@ -60,7 +60,7 @@ def test_photo_reconstruct_sends_pose_train_and_quality_off_the_worker() -> None
     recipe = load_recipe("photo-reconstruct")
     plan = plan_recipe(recipe)
 
-    assert recipe.version == 11
+    assert recipe.version == 12
     assert plan.gpu_stages == ("pose", "train", "quality")
     tiers = {stage.id: stage.gpu.tier for stage in plan.stages if stage.gpu is not None}
     assert tiers == {"pose": "cpu4", "train": "l4", "quality": "cpu4"}
@@ -122,3 +122,18 @@ def test_an_override_for_a_stage_the_recipe_does_not_have_is_refused() -> None:
 
     with pytest.raises(RecipeError, match="does not have"):
         load_recipe("splat-ingest").with_params({"trian": {"iterations": 1}})
+
+
+def test_photo_reconstruct_describes_every_frame_and_seeds_pose_from_it() -> None:
+    plan = plan_recipe(load_recipe("photo-reconstruct"))
+    by_id = {stage.id: stage for stage in plan.stages}
+
+    assert plan.recipe.version == 12
+    assert plan.origins["frames_meta.json"] == "normalize"
+    assert by_id["pose"].inputs["frames_meta.json"] == "stages/normalize/out/frames_meta.json"
+    assert by_id["pose"].params["focal_from"] == "exif"
+    assert by_id["pose"].params.get("hold_focal") is None
+    normalize = by_id["normalize"].params
+    assert normalize["hdr"] == "auto"
+    # The exposure gate ships off: no measurement backs a threshold.
+    assert normalize.get("max_clipped_frames_fraction") is None
