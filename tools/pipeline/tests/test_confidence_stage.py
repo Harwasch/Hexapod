@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 from pathlib import Path
 from typing import Any
@@ -354,7 +355,7 @@ def _binned(alpha: int, keep: int, failed: list[int], z: tuple[float, float]) ->
 def test_a_cell_is_weak_below_a_keep_majority_and_says_the_majoritys_reasons() -> None:
     none = np.zeros((1, 1), dtype=bool)
     half = confidence.score_plane(_binned(200, 100, [51, 50, 0, 0], (0.0, 1.0)), 1.0, none)
-    assert half.data[0, 0, 0] == 128  # 1 + round(254 x 0.5): exactly half is not weak
+    assert half.data[0, 0, 0] == 128  # 1 + floor(254 x 0.5): exactly half is not weak
     assert not cell_grid.weak_mask(half)[0, 0]
     # More than half of the non-keep alpha failed views; exactly half failed spread: not a reason.
     assert half.data[0, 0, 1] == cell_grid.REASON_BITS["views"]
@@ -363,8 +364,28 @@ def test_a_cell_is_weak_below_a_keep_majority_and_says_the_majoritys_reasons() -
     assert short.data[0, 0, 0] == 125 and cell_grid.weak_mask(short)[0, 0]
     assert short.data[0, 0, 1] == cell_grid.REASON_BITS["gsd"]
     capped = confidence.score_plane(_binned(200, 200, [0, 0, 0, 0], (0.0, 0.0)), 0.25, none)
-    assert capped.data[0, 0, 0] == 1 + round(254 * 0.25)
+    assert capped.data[0, 0, 0] == 1 + math.floor(254 * 0.25)
     assert capped.data[0, 0, 1] == cell_grid.REASON_BITS["alignment"]
+
+
+def test_the_weak_threshold_is_exactly_a_keep_majority() -> None:
+    """Review R3 #54 (low): rounding put 49.9% keep at 128, strong. The score floors, so
+    `score < 128` is exactly `keepShare * f < 1/2`, for every share an integer sum gives."""
+    none = np.zeros((1, 1), dtype=bool)
+    below = confidence.score_plane(_binned(1000, 499, [0, 0, 0, 0], (0.0, 0.0)), 1.0, none)
+    assert below.data[0, 0, 0] == 127 and cell_grid.weak_mask(below)[0, 0]
+    for factor in (1.0, 0.75, 0.5):
+        for alpha in range(1, 260):
+            for keep in range(alpha + 1):
+                plane = confidence.score_plane(
+                    _binned(alpha, keep, [0, 0, 0, 0], (0.0, 0.0)), factor, none
+                )
+                majority = 2 * keep * factor >= alpha  # exact: factor is a binary fraction
+                assert bool(cell_grid.weak_mask(plane)[0, 0]) is not majority, (factor, alpha, keep)
+    full = confidence.score_plane(_binned(200, 200, [0, 0, 0, 0], (0.0, 0.0)), 1.0, none)
+    assert full.data[0, 0, 0] == 255
+    nothing = confidence.score_plane(_binned(200, 0, [0, 0, 0, 0], (0.0, 0.0)), 1.0, none)
+    assert nothing.data[0, 0, 0] == 1
 
 
 def test_the_support_reason_bits_are_the_grids() -> None:

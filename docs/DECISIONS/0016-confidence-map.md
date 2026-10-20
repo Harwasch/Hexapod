@@ -39,9 +39,11 @@ weak, in a frame another epoch could be compared in.
    about 20 bytes a gaussian — before its scratch columns go. All rows, not `gated.ply`: under
    `bar: strict` that holds keep only, and a map of it would call every published cell strong.
 4. **weak-v1 (C3), from first principles, not calibrated.** Per cell, over the gaussians at least
-   0.05 opaque: `keepShare = Σα[keep] / Σα`, `score = 1 + round(254 · keepShare · f)`, 0 for no
+   0.05 opaque: `keepShare = Σα[keep] / Σα`, `score = 1 + floor(254 · keepShare · f)`, 0 for no
    evidence. **Weak** is `score < 128` — fewer than half of what is visible there, by alpha, passed
-   keep: a majority rule — or **unseen**: the cell's centre is inside the disc the cameras were
+   keep: a majority rule, exact because the score floors (`254 · keepShare · f ≥ 127` is
+   `keepShare · f ≥ ½`; rounding, as first written, put a 49.9 % share at 128, strong) — or
+   **unseen**: the cell's centre is inside the disc the cameras were
    pointed at (the quality stage's pointed ROI, placed like the gaussians) and nothing is in it. A
    reason bit is set when more than half of the cell's non-keep alpha failed that criterion. The
    level is the finest at which the median occupied cell holds at least 16 visible gaussians (a

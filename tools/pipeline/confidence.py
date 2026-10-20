@@ -13,10 +13,11 @@ docs/DECISIONS/0016-confidence-map.md). Over the gaussians in a cell at least 0.
 (the coverage-candidate rule; as stored, `round(255 alpha) >= 13`):
 
     keepShare = sum(alpha [tier == keep]) / sum(alpha)
-    score     = 1 + round(254 keepShare f)          (0: no evidence at all)
+    score     = 1 + floor(254 keepShare f)          (0: no evidence at all)
 
 where `f` is the alignment factor below. A cell is **weak** when `score < 128` -- fewer
-than half of what is visible in it, by alpha, passed keep: a majority rule -- or when it
+than half of what is visible in it, by alpha, passed keep: a majority rule, exact because
+the score floors (`1 + floor(254 x 0.499)` is 127; rounding made it 128) -- or when it
 is **unseen**: inside the disc the cameras were pointed at (the quality stage's region of
 interest, placed like the gaussians) with no evidence. **Reasons**: bit `k` is set when
 more than half of the cell's non-keep alpha failed criterion `k` (views, spread, GSD,
@@ -593,10 +594,16 @@ def score_plane(
     """The channels (`cell_grid.CONFIDENCE_CHANNELS`) of the binned level (module docstring)."""
     occupied = binned.count > 0
     alpha = binned.alpha.astype(np.float64)
+    # Floored, not rounded, so `score < WEAK_BELOW` is exactly `keepShare f < 1/2`. With
+    # f = 1, 254 keep is exact and a share under a half is at most 127 - 127 / alpha: one
+    # correctly rounded division cannot lift it to 127 while alpha (1/255ths) is < 2^47.
     share = np.divide(
-        binned.keep.astype(np.float64), alpha, out=np.zeros_like(alpha), where=alpha > 0
+        254.0 * binned.keep.astype(np.float64) * factor,
+        alpha,
+        out=np.zeros_like(alpha),
+        where=alpha > 0,
     )
-    score = np.where(occupied, 1 + np.floor(254.0 * share * factor + 0.5), 0).astype(np.int64)
+    score = np.where(occupied, 1 + np.floor(share), 0).astype(np.int64)
     reasons = np.zeros(binned.count.shape, dtype=np.int64)
     short = binned.alpha - binned.keep
     for column, (_, bit) in enumerate(_KEEP_BITS):

@@ -184,7 +184,7 @@ alignment 32`), `policy: weak-v1`, `weakBelow: 128`,
   `unseen` was expected), `summary {cells, scored, weak, unseen, weakShare, reasons, gaussians,
 outside, medianGsdMm, metric}` (finest level; `weakShare` is weak over scored + unseen;
   `reasons` counts weak cells per bit).
-- **Channels:** `score` u1 (0 no evidence, else `1 + round(254 · keepShare · f)`), `reasons` u1,
+- **Channels:** `score` u1 (0 no evidence, else `1 + floor(254 · keepShare · f)`), `reasons` u1,
   `relief` u1 (height range of the cell's gaussians, 0.25 m, saturating). Coarser levels are
   min-of-children (min of scored children, OR, max). Weak: `0 < score < 128` or `unseen`.
 - **Per tile:** `extras.confidenceMin` (after `gaussians`): the lowest score of the finest-level
