@@ -14,6 +14,7 @@ import type { SplatCellView } from "@/cesium/splatCellView";
 import { colorChainOf, type SplatVertexColor } from "@/cesium/splatColor";
 import { encodeConfidenceGrid, REASON_BITS } from "@/dev/cellGridFixture";
 import type { CellGridMeta } from "@/lib/cellGrid";
+import { useRendererOverride, useSettings } from "@/state/settings";
 import { useViewMode } from "@/state/viewMode";
 
 import { A1, A2, E1, E2, epoch, splat } from "./epochFixtures";
@@ -24,6 +25,8 @@ let served: { meta: CellGridMeta; planes: Uint8Array };
 let fetched: string[];
 
 beforeEach(async () => {
+  // The analytic views are CesiumJS's (lib/viewModes.ts): drawn only while it is the renderer.
+  useSettings.getState().set({ splatRenderer: "cesium" });
   served = await encodeConfidenceGrid({
     level: 2,
     i0: 0,
@@ -52,6 +55,8 @@ beforeEach(async () => {
 afterEach(() => {
   vi.unstubAllGlobals();
   useViewMode.setState({ mode: "photo", cells: {} });
+  useSettings.getState().reset();
+  useRendererOverride.setState({ renderer: null });
 });
 
 function scan(extras: unknown) {
@@ -238,6 +243,39 @@ describe("Confidence, then Data age, then Photo", () => {
     );
     dispose();
     expect(listeners.size).toBe(0);
+  });
+
+  it("is drawn only while CesiumJS is the renderer, as the control says, rigged model or not", async () => {
+    // A rigged model is drawn by CesiumJS whatever the renderer (SiteManager `cesiumDraws`);
+    // under PlayCanvas the control says Photo, so Photo is what it must show.
+    const { asCesium, tileset, primitive } = scan({ confidence: served.meta });
+    tileset.gaussianSplatPrimitive = primitive;
+    const dispose = attachCellView(asCesium, { requestRender: vi.fn() }, A1.id, context);
+    useViewMode.getState().set("confidence");
+    await vi.waitFor(() => expect(parts(primitive)).toEqual(["splatCellViewColor"]));
+    useSettings.getState().set({ splatRenderer: "playcanvas" });
+    expect(primitive.vertexColor).toBeUndefined();
+    // A `?renderer=` choice counts as the renderer too.
+    useSettings.getState().set({ splatRenderer: "cesium" });
+    await vi.waitFor(() => expect(parts(primitive)).toEqual(["splatCellViewColor"]));
+    useRendererOverride.setState({ renderer: "spark" });
+    expect(primitive.vertexColor).toBeUndefined();
+    useRendererOverride.setState({ renderer: null });
+    await vi.waitFor(() => expect(parts(primitive)).toEqual(["splatCellViewColor"]));
+    dispose();
+  });
+
+  it("does not load the view at all under another renderer", async () => {
+    useSettings.getState().set({ splatRenderer: "playcanvas" });
+    const { asCesium, tileset, primitive } = scan({ confidence: served.meta });
+    tileset.gaussianSplatPrimitive = primitive;
+    const load = vi.fn(() => import("@/cesium/cellView"));
+    const dispose = attachCellView(asCesium, { requestRender: vi.fn() }, A1.id, context, { load });
+    useViewMode.getState().set("confidence");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(load).not.toHaveBeenCalled();
+    expect(primitive.vertexColor).toBeUndefined();
+    dispose();
   });
 
   it("says when the shown date's age is counted from its upload", async () => {
