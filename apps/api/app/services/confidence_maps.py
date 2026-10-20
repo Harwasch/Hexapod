@@ -27,12 +27,13 @@ import uuid
 from collections import OrderedDict
 from typing import Any
 
+from geoalchemy2.shape import to_shape
 from shapely.geometry import mapping
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.analysis import cell_grid, rescan_gate
-from app.analysis.weak_areas import cell_patches, site_projection
+from app.analysis.weak_areas import cell_patches, site_plane, site_projection
 from app.models import Asset, Epoch, EpochMap, Site, SiteFrame
 from app.models.enums import AssetSourceKind, EpochMapKind, EpochStatus
 from app.schemas.confidence import (
@@ -232,10 +233,16 @@ def weak_areas(
         0.25,
     )
     gsd = summary.get("medianGsdMm")
+    projection = site_projection(frame.lat, frame.lon, frame.height)
+    site = db.get(Site, site_id)
+    assert site is not None  # epoch_of_site found it
     found = cell_patches(
         plane,
         mask,
-        site_projection(frame.lat, frame.lon, frame.height),
+        projection,
+        # The site's boundary is the ground a re-scan may fly: zones are clipped to it and
+        # kept out of its holes (its exclusions), as the fog scout's are.
+        allowed=site_plane(to_shape(site.boundary), projection),
         max_areas=request.max_areas,
         budget_m2=request.budget_m2,
         focus=(request.focus[0], request.focus[1]) if request.focus is not None else None,

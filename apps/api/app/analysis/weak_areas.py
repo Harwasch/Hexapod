@@ -521,6 +521,28 @@ def choose_zones(
     return chosen, chosen != ranked[:max_areas]
 
 
+def site_plane(geometry: BaseGeometry, projection: SiteProjection) -> BaseGeometry:
+    """`geometry` (lon/lat) in the site frame's metres, valid: what `allowed` takes."""
+
+    def apply(points: NDArray[np.float64]) -> NDArray[np.float64]:
+        x, y = projection.to_metric(points[:, 0], points[:, 1])
+        return np.column_stack([x, y])
+
+    return make_valid(shapely.transform(geometry, apply))
+
+
+def clip_to(polygons: list[Polygon], allowed: BaseGeometry) -> list[Polygon]:
+    """Each zone's part inside `allowed`, parts under `MIN_AREA_M2` dropped, largest
+    first. Clipped after closing, so a gap closing bridged across a hole is cut again."""
+    parts = [
+        orient(part)
+        for polygon in polygons
+        for part in _polygons(make_valid(polygon.intersection(allowed)))
+        if part.area >= MIN_AREA_M2
+    ]
+    return sorted(parts, key=lambda part: part.area, reverse=True)
+
+
 def cell_patches(
     plane: Plane,
     mask: NDArray[np.bool_],
@@ -532,10 +554,13 @@ def cell_patches(
     median_gsd_mm: float | None = None,
     relief_unit_m: float = 0.25,
     total_cells: int | None = None,
+    allowed: BaseGeometry | None = None,
 ) -> Patches:
     """The weak cells `mask` (over `plane`) as at most `max_areas` patches, together within
     `budget_m2` plus at most one zone cell (module docstring). Each patch's counts are of
-    `plane`'s own weak cells whose centres it holds."""
+    `plane`'s own weak cells whose centres it holds. With `allowed` (site-frame metres:
+    the ground a robot may fly, `site_plane`), every zone is clipped to it before the
+    budget is spent, so no zone reaches outside it or into one of its holes."""
     zone = zone_plane(plane, mask)
     cell = zone.cell_m
     smoothing = smoothing_cells(zone.level) * cell
@@ -543,9 +568,12 @@ def cell_patches(
     if focus is not None:
         fx, fy = projection.to_metric(focus[0], focus[1])
         focus_xy = (float(fx), float(fy))
+    drawn = zone_polygons(zone, min_area_m2=MIN_AREA_M2)
+    if allowed is not None:
+        drawn = clip_to(drawn, allowed)
     polygons, truncated = choose_zones(
         zone,
-        zone_polygons(zone, min_area_m2=MIN_AREA_M2),
+        drawn,
         max_areas=max_areas,
         budget_m2=budget_m2,
         focus_xy=focus_xy,

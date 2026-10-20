@@ -48,6 +48,29 @@ def tiles_url(job_id: uuid.UUID) -> str:
     return f"https://cdn.example.com/twin-worker-test/runs/{job_id}/package/splat/tileset.json"
 
 
+def over_its_grid(document: dict[str, Any]) -> dict[str, Any]:
+    """`document` with its splat's box grown to hold its confidence grid's finest level, as
+    a run's grid lies over the splat it measured: the site boundary registration grows from
+    that box is then the ground the grid's weak areas are clipped to (ADR 0016). With a
+    metre to spare: registration places the footprint by its own degree arithmetic, a few
+    centimetres off the frame's tangent plane over these grids, and these tests are about
+    the grid, not that edge (test_weak_areas_api clips to a boundary on purpose)."""
+    grid = document.get("confidence")
+    box = document.get("bboxLocalM")
+    if not isinstance(grid, dict) or not isinstance(box, dict):
+        return document
+    level = grid["levels"][0]
+    cell = float(grid["cellM"])
+    west, south = level["i0"] * cell - 1.0, level["j0"] * cell - 1.0
+    east, north = west + level["ni"] * cell + 2.0, south + level["nj"] * cell + 2.0
+    out = copy.deepcopy(document)
+    out["bboxLocalM"] = {
+        "min": [min(box["min"][0], west), min(box["min"][1], south), box["min"][2]],
+        "max": [max(box["max"][0], east), max(box["max"][1], north), box["max"][2]],
+    }
+    return out
+
+
 def register_run(
     db: Session,
     storage: S3Storage,
@@ -62,6 +85,7 @@ def register_run(
 ) -> uuid.UUID:
     """One run registered as the worker registers it (published to `url`, by default the
     run's own key in the one test bucket), with `grid` written beside the tiles; its job."""
+    document = over_its_grid(document)
     job = _job(db, capture)
     tileset = url or tiles_url(job.id)
     if grid is not None:

@@ -364,3 +364,26 @@ def test_a_clip_at_a_zone_s_edge_still_spends_most_of_the_budget() -> None:
     weaken(plane, (-10, -9), (-10, -9), score=0, bits=BITS["unseen"])  # weakest, a corner
     [patch] = cell_patches(plane, weak_mask(plane), PROJECTION, budget_m2=100.0).patches
     assert 50.0 <= patch.area_m2 <= 101.0
+
+
+def test_zones_are_clipped_to_the_ground_a_robot_may_fly() -> None:
+    """A weak block straddling the site's edge, with a no-go hole in it, and a block wholly
+    outside: the zones are the allowed part only, closing never bridges the hole, and the
+    cells counted are the ones inside what is returned."""
+    plane = a_plane()
+    weaken(plane, (-8, 8), (0, 6), score=50, bits=BITS["views"])  # 16 m x 6 m
+    weaken(plane, (-10, -6), (-10, -6), score=50, bits=BITS["views"])  # south-west, outside
+    hole = box(-1, 1, 1, 5)
+    allowed = Polygon(box(-4, -4, 10, 10).exterior.coords, [hole.exterior.coords])
+    found = cell_patches(plane, weak_mask(plane), PROJECTION, allowed=allowed)
+
+    [zone] = found.patches
+    assert allowed.buffer(1e-6).covers(zone.metric)
+    assert zone.metric.intersection(hole).area < 1e-9
+    assert zone.area_m2 == pytest.approx(12 * 6 - 2 * 4)
+    assert zone.cells == 12 * 6 - 2 * 4
+    assert found.weak_cells == 16 * 6 + 16  # the grid's own, clipped or not
+    # Nothing allowed: no zone at all.
+    assert (
+        cell_patches(plane, weak_mask(plane), PROJECTION, allowed=box(50, 50, 60, 60)).patches == []
+    )

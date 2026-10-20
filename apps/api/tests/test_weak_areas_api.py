@@ -349,3 +349,43 @@ def test_a_confidence_grid_without_its_channels_is_a_409_not_a_500(
     assert response.status_code == 409, response.text
     assert response.json()["code"] == "confidence-unreadable"
     assert "score" in response.json()["detail"]
+
+
+def test_weak_areas_stay_inside_the_site_boundary(
+    api: TestClient, db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """The yard's weak north half, on a site whose boundary takes in only its western half
+    and has a no-go hole: every zone is inside the boundary and outside the hole."""
+    from geoalchemy2.shape import from_shape
+    from shapely.geometry import Polygon as ShapelyPolygon
+    from shapely.geometry import box
+
+    from app.analysis.weak_areas import site_projection
+    from app.models import Site, SiteFrame
+
+    capture = _capture(db)
+    register_run(db, storage, tmp_path, capture, measured("e1"), grid=blob("e1"))
+    epoch = _epoch(db, capture)
+    frame = db.get(SiteFrame, epoch.site_id)
+    assert frame is not None
+    projection = site_projection(frame.lat, frame.lon, frame.height)
+
+    def globe(polygon: ShapelyPolygon) -> list[tuple[float, float]]:
+        xs, ys = polygon.exterior.coords.xy
+        lon, lat = projection.to_geographic(np.asarray(xs), np.asarray(ys))
+        return list(zip(lon.tolist(), lat.tolist(), strict=True))
+
+    hole = box(2, 20, 6, 24)
+    boundary = ShapelyPolygon(globe(box(-10, -10, 15, 50)), [globe(hole)])
+    site = db.get(Site, epoch.site_id)
+    assert site is not None
+    site.boundary = from_shape(boundary, srid=4326)
+    db.commit()
+
+    read = ask(api, epoch).json()
+    assert read["areas"], read
+    for area in read["areas"]:
+        polygon = shape(area["footprint"])
+        assert boundary.buffer(1e-9).covers(polygon)
+        assert polygon.intersection(ShapelyPolygon(globe(hole))).area < 1e-14
+        assert area["areaM2"] < 640.0
