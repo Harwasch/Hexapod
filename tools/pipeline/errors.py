@@ -6,7 +6,10 @@ reading a job's failure in the console (A7/A10), not a Python traceback.
 
 from __future__ import annotations
 
+import math
+import re
 from collections.abc import Iterable
+from typing import Literal
 
 __all__ = [
     "BAD_INPUT_ERRORS",
@@ -20,6 +23,7 @@ __all__ = [
     "NoRunnerError",
     "PipelineError",
     "PreemptedError",
+    "QualityGateError",
     "RecipeError",
     "RemoteStageError",
     "RemoteTimeoutError",
@@ -30,6 +34,8 @@ __all__ = [
     "UndeclaredArtifactError",
     "UnknownImplError",
     "UnresolvedArtifactError",
+    "check_gate",
+    "parse_quality_gate",
 ]
 
 
@@ -231,6 +237,105 @@ class CostCapError(PipelineError):
         self.cap_usd = cap_usd
 
 
+class QualityGateError(PipelineError):
+    """A measured property of the capture failed a gate the recipe turned on; another
+    attempt measures the same bytes the same way.
+
+    The message is a fixed format so it survives the worker's line protocol and a remote
+    provider's wrapping (`RemoteStageError` carries it inside its own text) and can be
+    read back by `parse_quality_gate`:
+    `quality gate <gate>: measured <m>[ <unit>], limit <l>[ <unit>] -- <reason>`.
+    """
+
+    def __init__(
+        self, gate: str, measured: float, limit: float, *, unit: str = "", reason: str
+    ) -> None:
+        if not _GATE_NAME.fullmatch(gate):
+            raise ValueError(f"a gate is named by one word (letters, digits, _.-), not {gate!r}")
+        if unit and not _GATE_UNIT.fullmatch(unit):
+            raise ValueError(f"a gate's unit is one token with no comma, not {unit!r}")
+        suffix = f" {unit}" if unit else ""
+        one_line = " ".join(reason.split())
+        super().__init__(
+            f"quality gate {gate}: measured {measured:.6g}{suffix}, limit {limit:.6g}{suffix} "
+            f"-- {one_line}"
+        )
+        self.gate = gate
+        self.measured = measured
+        self.limit = limit
+        self.unit = unit
+        self.reason = one_line
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "gate": self.gate,
+            "measured": self.measured,
+            "limit": self.limit,
+            "unit": self.unit,
+            "reason": self.reason,
+        }
+
+
+_GATE_NAME = re.compile(r"[A-Za-z0-9_.\-]+")
+_GATE_UNIT = re.compile(r"[^\s,]+")
+_NUMBER = r"[-+]?(?:inf|nan|\d+(?:\.\d*)?(?:e[-+]?\d+)?)"
+_GATE_MESSAGE = re.compile(
+    rf"quality gate (?P<gate>[A-Za-z0-9_.\-]+): measured (?P<measured>{_NUMBER})"
+    rf"(?: (?P<unit>[^\s,]+))?, limit (?P<limit>{_NUMBER})(?: [^\s,]+)? -- (?P<reason>[^\n]*)",
+    re.I,
+)
+
+
+def parse_quality_gate(text: str) -> dict[str, object] | None:
+    """A `QualityGateError` message read back out of any text that carries one -- its own
+    `str()`, or a `RemoteStageError`'s `"... failed on 'modal': QualityGateError: ..."` --
+    as `{gate, measured, limit, unit, reason}`; None when there is none."""
+    match = _GATE_MESSAGE.search(text)
+    if match is None:
+        return None
+    return {
+        "gate": match.group("gate"),
+        "measured": float(match.group("measured")),
+        "limit": float(match.group("limit")),
+        "unit": match.group("unit") or "",
+        "reason": match.group("reason").strip(),
+    }
+
+
+def check_gate(
+    gate: str,
+    measured: float | None,
+    limit: float | None,
+    *,
+    fail_when: Literal["below", "above"],
+    unit: str = "",
+    reason: str,
+) -> dict[str, object]:
+    """Apply one gate, and say what it did: `{name, enabled, limit, measured, passed}`.
+
+    A gate is **off** when its limit is None, which is every gate's default unless a
+    recorded measurement backs a threshold (DECISIONS: tolerances). An enabled gate whose
+    measurement does not exist (None, or not a finite number) is not applied -- `passed`
+    None -- rather than failing a run for what it could not measure. Raises
+    `QualityGateError` when enabled and the measurement is `below` / `above` the limit.
+    """
+    finite = measured is not None and math.isfinite(measured)
+    record: dict[str, object] = {
+        "name": gate,
+        "enabled": limit is not None,
+        "limit": limit,
+        "measured": measured if finite else None,
+        "passed": None,
+    }
+    if limit is None or measured is None or not finite:
+        return record
+    failed = measured < limit if fail_when == "below" else measured > limit
+    record["passed"] = not failed
+    if failed:
+        raise QualityGateError(gate, measured, limit, unit=unit, reason=reason)
+    return record
+
+
 #: The errors that say the recipe, its parameters or its stage code are wrong rather than
 #: that a run was unlucky: another attempt fails the same way, so the worker dead-letters
 #: on the first one instead of spending the attempt budget on it. Kept to the classes
@@ -248,6 +353,9 @@ BAD_INPUT_ERRORS: frozenset[str] = frozenset(
         "MissingInputError",
         "StageContractError",
         "NoRunnerError",
+        # Not a mistake in the recipe, but just as deterministic: the gate measured the
+        # capture's own bytes, and the next attempt measures the same bytes the same way.
+        "QualityGateError",
     }
 )
 

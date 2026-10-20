@@ -42,6 +42,7 @@ import capture_platform
 import colmap4
 import convergence
 import exif
+import exposure
 import frame_meta
 import gaussian_budget
 import gaussians
@@ -70,6 +71,7 @@ from captures_bridge import (
     tile_offsets,
 )
 from contracts import FANOUT_METRIC, MetricValue, StageContext, StageOutcome, fanout_role
+from errors import QualityGateError, check_gate
 from phases import Phases
 from registry import stage_impl
 
@@ -530,6 +532,33 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     )
 
     records = _frame_records(source, upload, candidates, chosen, written, meta, rate)
+    records, linear = _measure_exposure(records, written)
+    thresholds = _exposure_thresholds(ctx)
+    clip_pct = thresholds["clip_pct"]
+    exposure_summary = exposure.summarise(records, linear, **thresholds)
+    gate_failure: QualityGateError | None = None
+    names = exposure.clipped_frames(records, clip_pct)
+    flagged = len(names)
+    limit = _optional_float(ctx.param("max_clipped_frames_fraction"))
+    if limit is not None and not 0.0 <= limit <= 1.0:
+        raise ValueError(f"max_clipped_frames_fraction must be between 0 and 1, not {limit}")
+    try:
+        gate = check_gate(
+            "clipped_frames_fraction",
+            flagged / len(written),
+            limit,
+            fail_when="above",
+            reason=(
+                f"{flagged} of {len(written)} kept frames are more than {clip_pct:g}% clipped "
+                f"({', '.join(names[:10])}{', ...' if len(names) > 10 else ''}); "
+                f"max_clipped_frames_fraction is set to {limit}"
+            ),
+        )
+    except QualityGateError as error:
+        gate_failure = error
+        gate = {"name": error.gate, "enabled": True, "limit": limit, "measured": error.measured}
+        gate["passed"] = False
+    exposure_summary["gate"] = {**gate, "param": "max_clipped_frames_fraction"}
     platform = capture_platform.detect(
         fmt="video" if source.is_video else "images",
         records=records,
@@ -602,6 +631,7 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         "capturedAtUtc": time_range["firstUtc"],
         "platform": platform.to_dict(),
         "focal": focal_summary,
+        "exposure": exposure_summary,
         "tools": {"ffmpeg": video.ffmpeg_version(), "ffmpegFrom": "imageio-ffmpeg"},
     }
     _write_json(ctx.output(SOURCE_META.name), document)
@@ -613,6 +643,7 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
             "platform": platform.to_dict(),
             "frames": [record.to_dict() for record in records],
             "focal": focal_summary,
+            "exposure": exposure_summary,
             "timeRange": time_range,
             "masks": {
                 "convention": "COLMAP ImageReader.mask_path: <frame name>.png; 0 = ignore, "
@@ -623,6 +654,14 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         },
     )
     ctx.log(f"platform: {platform.value} ({platform.source}: {platform.evidence})")
+    ctx.log(
+        f"exposure: {flagged} of {len(written)} frame(s) clipped past {clip_pct:g}%, EV "
+        f"spread {exposure_summary['evSpread']}, brightness spread "
+        f"{exposure_summary['lumaSpreadStops']} stops; gate "
+        + ("off" if limit is None else f"at {limit}")
+    )
+    if gate_failure is not None:
+        raise gate_failure
     ctx.log(
         f"{source.kind}: {len(candidates)} candidate frame(s) -> {len(written)} kept "
         f"by {applied} ({first[0]}x{first[1]})"
@@ -649,6 +688,7 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         "maxSide": max_side if max_side is not None else max(first),
         "maxSideRule": "auto" if size is not None else "fixed" if max_side else "source",
         "platform": platform.value,
+        "exposureFlaggedFrames": flagged,
     }
     if source.is_video:
         metrics["fps"] = rate if rate is not None else fps
@@ -700,6 +740,40 @@ def _hdr_decision(meta: video.VideoMeta, rule: str) -> dict[str, object]:
 
 #: The shape of `frames_meta.json`; bumped when a field changes meaning.
 FRAMES_META_SCHEMA = "frames_meta/1"
+
+
+def _measure_exposure(
+    records: Sequence[frame_meta.FrameRecord], written: Sequence[Path]
+) -> tuple[list[frame_meta.FrameRecord], dict[str, float]]:
+    """Each kept frame's luma statistics, on the 8-bit frame training reads; a frame that
+    does not open keeps its record as it was and is left out of the linear means."""
+    measured: list[frame_meta.FrameRecord] = []
+    linear: dict[str, float] = {}
+    for record, frame in zip(records, written, strict=True):
+        try:
+            with PIL.Image.open(frame) as image:
+                grey = np.asarray(image.convert("L"))
+        except (OSError, ValueError, SyntaxError):
+            measured.append(record)
+            continue
+        measured.append(record.with_luma(*exposure.luma_stats(grey)))
+        linear[record.name] = exposure.linear_mean(grey)
+    return measured, linear
+
+
+def _exposure_thresholds(ctx: StageContext) -> dict[str, float]:
+    """The exposure flags' thresholds (first principles: `exposure.BASIS`), checked."""
+    thresholds = {
+        "clip_pct": float(ctx.param("exposure_clip_pct", 5.0)),
+        "ev_spread": float(ctx.param("exposure_ev_spread", 1.0)),
+        "luma_spread_stops": float(ctx.param("exposure_luma_spread_stops", 1.0)),
+    }
+    if not 0.0 < thresholds["clip_pct"] <= 100.0:
+        raise ValueError(f"exposure_clip_pct must be in (0, 100], not {thresholds['clip_pct']}")
+    for name in ("ev_spread", "luma_spread_stops"):
+        if not thresholds[name] > 0.0:
+            raise ValueError(f"exposure_{name} must be above 0, not {thresholds[name]}")
+    return thresholds
 
 
 def _frame_records(

@@ -17,6 +17,7 @@ import pytest
 from test_normalize import make_clip, run_normalize
 
 from drone_frames import dji_m3e_photo, iphone_photo
+from errors import QualityGateError
 from workdir import Workdir
 
 
@@ -164,3 +165,69 @@ def test_an_unreadable_original_is_a_thin_record_not_a_failure(tmp_path: Path) -
     assert records[1]["unreadable"] is not None
     assert records[1]["camera"] == {"make": None, "model": None, "lens": None}
     assert records[0]["unreadable"] is None and records[2]["camera"]["make"] == "Apple"
+
+
+# --- exposure ------------------------------------------------------------------------
+
+
+def test_an_exposure_swing_is_flagged_not_failed_by_default(tmp_path: Path) -> None:
+    upload = tmp_path / "upload"
+    iphone_photo(upload / "IMG_0000.JPG", 0, size=(320, 240), level=40)
+    iphone_photo(upload / "IMG_0001.JPG", 1, size=(320, 240), level=200)
+
+    workdir = run_normalize(tmp_path, {"select": "all", "keep": 2}, upload)
+
+    summary = _out(workdir, "source_meta.json")["exposure"]
+    assert summary["flags"]["brightnessSwing"] is True
+    assert summary["lumaSpreadStops"] > 1.0
+    assert summary["gate"]["enabled"] is False
+    assert summary == _out(workdir, "frames_meta.json")["exposure"]
+    lumas = [r["exposure"]["lumaMean"] for r in _out(workdir, "frames_meta.json")["frames"]]
+    assert lumas[0] == pytest.approx(40, abs=2) and lumas[1] == pytest.approx(200, abs=2)
+
+
+def test_the_clipping_gate_fails_the_run_only_when_asked(tmp_path: Path) -> None:
+    upload = tmp_path / "upload"
+    for index in range(4):
+        iphone_photo(
+            upload / f"IMG_{index:04d}.JPG",
+            index,
+            size=(320, 240),
+            level=255 if index % 2 else None,
+        )
+    params: dict[str, object] = {"select": "all", "keep": 4}
+
+    passed = run_normalize(tmp_path / "off", params, upload)
+    summary = _out(passed, "source_meta.json")["exposure"]
+    assert summary["flags"]["clippedHighlights"] == ["frame_0001.jpg", "frame_0003.jpg"]
+    assert summary["gate"]["measured"] == 0.5 and summary["gate"]["passed"] is None
+
+    loose = run_normalize(
+        tmp_path / "loose", {**params, "max_clipped_frames_fraction": 0.5}, upload
+    )
+    assert _out(loose, "source_meta.json")["exposure"]["gate"]["passed"] is True
+
+    with pytest.raises(QualityGateError, match="max_clipped_frames_fraction") as raised:
+        run_normalize(tmp_path / "on", {**params, "max_clipped_frames_fraction": 0.2}, upload)
+    assert (raised.value.gate, raised.value.measured, raised.value.limit) == (
+        "clipped_frames_fraction",
+        0.5,
+        0.2,
+    )
+    assert "frame_0001.jpg, frame_0003.jpg" in raised.value.reason
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"max_clipped_frames_fraction": 1.5},
+        {"exposure_clip_pct": 0},
+        {"exposure_ev_spread": -1},
+    ],
+)
+def test_nonsense_exposure_params_are_refused(tmp_path: Path, params: dict[str, object]) -> None:
+    upload = tmp_path / "upload"
+    iphone_photo(upload / "IMG_0000.JPG", 0, size=(64, 48))
+
+    with pytest.raises(Exception, match="must be"):
+        run_normalize(tmp_path, {"select": "all", **params}, upload)
