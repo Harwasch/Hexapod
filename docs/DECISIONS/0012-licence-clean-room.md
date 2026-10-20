@@ -492,7 +492,7 @@ This is the basis 3DGS trainers fit and CesiumJS's `PrimitiveGaussianSplatVS.gls
 | `SH_C2` | (√(15/4π), −√(15/4π), √(5/16π), −√(15/4π), √(15/16π))                             |
 | `SH_C3` | (−√(35/32π), √(105/4π), −√(21/32π), √(7/16π), −√(21/32π), √(105/16π), −√(35/32π)) |
 
-**`basis(degree, dirs) -> float64 (n, SH_DIMS[degree])`**, for unit directions (x, y, z). Columns in this order, evaluated in these Cartesian forms (do not simplify with x² + y² + z² = 1, so the values stay bit-identical):
+**`basis(degree, dirs) -> float64 (n, SH_DIMS[degree])`**, for unit directions (x, y, z). Columns in this order, evaluated in these Cartesian forms, not simplified with x² + y² + z² = 1. The spec asked for values bit-identical to the previous basis; they are not quite: forming xy, yz and xz once and reusing them orders the multiplies differently, and a review measured differences of up to 2.2e-16 (1 ulp of 1.0) in columns 3, 4, 6 and 9. So the claim is equality to 1 ulp, not bit identity; the test holds every column to 1e-12 of a reference built from the Legendre recurrence, and claims nothing about the previous code.
 
 - band 1: −C1·y, C1·z, −C1·x;
 - band 2: C2₀·xy, C2₁·yz, C2₂·(2z² − x² − y²), C2₃·xz, C2₄·(x² − y²);
