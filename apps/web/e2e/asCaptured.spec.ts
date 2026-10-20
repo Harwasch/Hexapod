@@ -11,7 +11,8 @@
  * What must hold, through `window.__twin` and the stores the app runs on:
  *
  * - turning it on (the switch in the Splat view control) leaves no inferred tileset drawn --
- *   by the scan's primitive as a companion or by its own -- and no superseded splat hidden;
+ *   by the scan's primitive as a companion (no rig: the scan stays incremental) or by its own
+ *   (with the rig) -- and no superseded splat hidden;
  *   the Simulated motion badge goes because nothing animates (it is not told); the chip says
  *   so; the Inferred and Fill controls are disabled and say why;
  * - the viewer's own choices are untouched -- the Inferred style, the wind, the fill picked --
@@ -378,7 +379,54 @@ async function railUnchanged(page: Page): Promise<void> {
 
 const poll = { timeout: 180_000, intervals: [250, 500, 1000] };
 
-test("under cesium, As captured draws nothing inferred or simulated, and gives it all back after", async ({
+test("under cesium, a layer the scan's primitive draws leaves its companion list, and comes back", async ({
+  page,
+}) => {
+  test.setTimeout(480_000);
+  await route(page, "highlight", { rig: false });
+  await arrive(page, "renderer=cesium");
+  // Today's layer, then the hedge method's with its swap: drawn by the scan's own primitive.
+  await expect
+    .poll(async () => {
+      const d = await drawn(page);
+      return [d.shown, d.companions];
+    }, poll)
+    .toEqual([1, 1]);
+  await pickFill(page, "hedge");
+  await expect
+    .poll(async () => {
+      const d = await drawn(page);
+      return [d.shown, d.companions, d.superseding];
+    }, poll)
+    .toEqual([1, 1, [ASSET]]);
+  const before = await drawn(page);
+  test.info().annotations.push({ type: "before", description: JSON.stringify(before) });
+  const withFill = await shot(page, "cesium-companion-before");
+  await page.getByTestId("views").getByRole("switch", { name: "As captured" }).click();
+  await expect
+    .poll(async () => {
+      const d = await drawn(page);
+      return { shown: d.shown, companions: d.companions, superseding: d.superseding };
+    }, poll)
+    .toEqual({ shown: 0, companions: 0, superseding: [] });
+  const on = await drawn(page);
+  test.info().annotations.push({ type: "on", description: JSON.stringify(on) });
+  expect(on).toMatchObject({ inferredStyle: "highlight", fill: "hedge", asCaptured: true });
+  const asCaptured = await shot(page, "cesium-companion-as-captured");
+  const changed = await differ(page, withFill, asCaptured);
+  test.info().annotations.push({ type: "pixels changed", description: String(changed) });
+  expect(changed).toBeGreaterThan(0.001);
+  await page.getByTestId("as-captured-chip").getByRole("button", { name: "Turn off" }).click();
+  await expect
+    .poll(async () => {
+      const d = await drawn(page);
+      return [d.shown, d.companions, d.superseding];
+    }, poll)
+    .toEqual([1, 1, [ASSET]]);
+  await railUnchanged(page);
+});
+
+test("under cesium with the rig in the wind, the badge goes because nothing moves, and all comes back", async ({
   page,
 }) => {
   test.setTimeout(600_000);
@@ -403,6 +451,9 @@ test("under cesium, As captured draws nothing inferred or simulated, and gives i
   const before = await drawn(page);
   test.info().annotations.push({ type: "before", description: JSON.stringify(before) });
   expect(before).toMatchObject({ inferredStyle: "highlight", asCaptured: false, fill: "hedge" });
+  // A rigged scan's primitive leaves incremental mode, so the layer draws itself here (shown,
+  // on no companion list); the companion path is the test before this one.
+  expect(before).toMatchObject({ shown: 1, companions: 0 });
   expect(before.animating).toBe(true);
   const withFill = await shot(page, "cesium-before");
   await railUnchanged(page);
@@ -469,19 +520,34 @@ test("?asCaptured=1 starts on: nothing inferred is drawn, and the wind does not 
   await setWind(page, 0.3);
   const toggle = page.getByTestId("views").getByRole("switch", { name: "As captured" });
   await expect(toggle).toHaveAttribute("aria-checked", "true");
-  // Wait for the scan to be drawn, then check what it draws over it.
+  // The hedge method picked (the Fill row is held while on; a pick kept from before is this):
+  // its layer is loaded, and its supersedes file is what would hide the tree.
   await expect.poll(() => page.evaluate(`window.__twin.sites.loadedAssets().length`), poll).toBe(1);
+  await pickFill(page, "hedge");
+  await expect.poll(async () => (await drawn(page)).layers, poll).toBe(1);
   await page.waitForTimeout(3_000);
   const start = await drawn(page);
   test.info().annotations.push({ type: "start", description: JSON.stringify(start) });
-  expect(start).toMatchObject({ shown: 0, companions: 0, superseding: [], asCaptured: true });
+  expect(start).toMatchObject({
+    layers: 1,
+    shown: 0,
+    companions: 0,
+    superseding: [],
+    asCaptured: true,
+    fill: "hedge",
+  });
   expect(start.animating).toBe(false);
   await expect(page.getByTestId("simulated-badge")).toHaveCount(0);
   await shot(page, "cesium-url-start");
   await railUnchanged(page);
-  // And off: the layer the viewer's Show asks for, and the badge.
+  // And off: the layer the viewer's Show asks for, its swap, and the badge.
   await chip.getByRole("button", { name: "Turn off" }).click();
-  await expect.poll(async () => (await drawn(page)).shown, poll).toBe(1);
+  await expect
+    .poll(async () => {
+      const d = await drawn(page);
+      return [d.shown, d.superseding];
+    }, poll)
+    .toEqual([1, [ASSET]]);
   await expect(page.getByTestId("simulated-badge")).toBeVisible({ timeout: 180_000 });
 });
 
@@ -556,9 +622,8 @@ test("on the demo ranch, nothing the simulated fleet did is drawn; the plan's zo
   expect(before.tracks.length).toBeGreaterThan(0);
   expect(before.tracks.every(Boolean)).toBe(true);
   expect(before.solidZones).toBeGreaterThan(0);
-  await app.screenshot({
-    path: EVIDENCE ? `${EVIDENCE}/ranch-before.png` : test.info().outputPath("ranch-before.png"),
-  });
+  // Ground polylines are batched and built over a few frames: shots wait for them.
+  await shot(app, "ranch-before");
   await setAsCaptured(app, true);
   await expect(markers).toHaveCount(0);
   // Each zone keeps its outline and its name; its simulated status and progress go.
@@ -573,9 +638,7 @@ test("on the demo ranch, nothing the simulated fleet did is drawn; the plan's zo
   await expect(chip).toContainText(
     "As captured — only what was measured is drawn; plans stay as annotations",
   );
-  await app.screenshot({
-    path: EVIDENCE ? `${EVIDENCE}/ranch-as-captured.png` : test.info().outputPath("ranch.png"),
-  });
+  await shot(app, "ranch-as-captured");
   await chip.getByRole("button", { name: "Turn off" }).click();
   await expect(markers).toHaveCount(6);
   await expect(progress).toHaveCount(zoneChips);
