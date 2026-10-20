@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -44,6 +45,8 @@ def aligned(
         "rtkEvidence": "30/30 frames carry an RTK fixed solution (RtkFlag 50)"
         if platform == "rtk-drone"
         else None,
+        # #49: what the platform rests on; align_epoch (#51) writes it beside rtkEvidence.
+        "platformEvidence": "metadata",
         "verdict": verdict,
         "confidence": 0.9 if verdict != "unaligned" else 0.0,
         "uncertaintyM": uncertainty,
@@ -319,3 +322,28 @@ def test_survey_is_never_recorded_without_rtk_evidence_in_the_data(
     assert epoch.alignment is not None and "no RTK evidence" in epoch.alignment["reasons"][-1]
     assert epochs.claimed_verdict(epoch.alignment, "rtk-drone") == "coarse"
     assert epochs.claimed_verdict({"verdict": "survey"}, "rtk-drone") == "coarse"
+
+
+@pytest.mark.parametrize("evidence", ["claimed", None])
+def test_survey_is_never_recorded_for_a_platform_the_frames_did_not_show(
+    db: Session, storage: S3Storage, tmp_path: Path, evidence: str | None
+) -> None:
+    """#49's `platformEvidence`, held at the API too: a survey claim whose platform rests on
+    a claim, or on nothing recorded (read as `none`), is recorded coarse."""
+
+    def claimed(ref: uuid.UUID) -> dict[str, Any]:
+        block = aligned(method="visual", verdict="survey", platform="rtk-drone",
+                        uncertainty=0.04, label="RTK drone, surveyed, check targets ±0.04 m",
+                        reference=ref)  # fmt: skip
+        if evidence is None:
+            del block["platformEvidence"]
+        else:
+            block["platformEvidence"] = evidence
+        return block
+
+    _first, second = second_epoch(db, storage, tmp_path, claimed)
+    epoch = _epoch_of(db, second)
+    assert epoch.alignment is not None and epoch.alignment["verdict"] == "coarse"
+    assert "frames' metadata" in epoch.alignment["reasons"][-1]
+    claim = {**epoch.alignment, "verdict": "survey"}
+    assert epochs.claimed_verdict(claim, "rtk-drone") == "coarse"

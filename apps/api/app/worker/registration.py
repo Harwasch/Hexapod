@@ -257,8 +257,9 @@ def _survey_only_for_rtk(alignment: dict[str, Any]) -> dict[str, Any]:
         return alignment
     platform = str(alignment.get("platform") or EpochPlatform.UNKNOWN.value)
     why = (
-        "survey needs RTK evidence in the data and the alignment records no RTK evidence "
-        "(rtkEvidence); recorded coarse"
+        "survey needs evidence in the data: an RTK fix in the frames (rtkEvidence) on a "
+        "platform the frames' metadata showed (platformEvidence metadata); the alignment "
+        "records no RTK evidence or no such platform; recorded coarse"
         if platform == EpochPlatform.RTK_DRONE.value
         else f"survey is only an RTK drone's; recorded coarse for platform {platform!r}"
     )

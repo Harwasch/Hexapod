@@ -253,6 +253,7 @@
     "lon": -82.69659969444444
   },
   "platform": "rtk-drone",
+  "platformEvidence": "metadata",
   "platformSource": "frames_meta",
   "ransac": {
     "agreeDeg": 0.8087,

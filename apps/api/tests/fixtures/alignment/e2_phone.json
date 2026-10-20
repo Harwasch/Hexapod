@@ -110,6 +110,7 @@
     "lon": -82.69659969444444
   },
   "platform": "phone-video",
+  "platformEvidence": "metadata",
   "platformSource": "frames_meta",
   "ransac": {
     "agreeDeg": 0.8082,

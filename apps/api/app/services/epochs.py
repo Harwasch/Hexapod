@@ -455,11 +455,13 @@ class ReferenceChoice:
 
 
 def survey_evidenced(alignment: dict[str, Any]) -> bool:
-    """Whether an alignment records the RTK fix `align_epoch` found in its frames'
-    metadata (`rtkEvidence`), which a `survey` needs beside platform `rtk-drone`: the
-    platform string alone -- a param, an override -- never makes survey."""
+    """Whether an alignment records the evidence a `survey` needs beside platform
+    `rtk-drone`: the RTK fix `align_epoch` found in its frames' metadata (`rtkEvidence`),
+    and a platform the frames themselves showed (#49's `platformEvidence` `metadata`; a
+    missing one reads `none`). The platform string alone never makes survey."""
     evidence = alignment.get("rtkEvidence")
-    return isinstance(evidence, str) and bool(evidence.strip())
+    shown = alignment.get("platformEvidence") == "metadata"
+    return shown and isinstance(evidence, str) and bool(evidence.strip())
 
 
 def claimed_verdict(alignment: object, platform: str) -> str | None:
