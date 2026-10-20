@@ -18,9 +18,37 @@ blend width and its cap, merge order -- are this project's own, stated as maths.
 * **Ring.** The prior's gaussians within a square annulus round the block (block-
   normalised L-infinity distance <= outer), outside its trainable region.
 * **Blend.** Across each interior edge, a linear ramp of half-width h = min(blend * D,
-  margin * w): D the spacing of the adjacent cell centres, w the narrower cell's width.
-  The per-cell weights telescope, so the blocks' weights sum to exactly 1 everywhere, and
-  the cap keeps the band inside both blocks' trained margins.
+  margin * w, w / 2): D the spacing of the adjacent cell centres, w the narrower cell's
+  width. The per-cell weights telescope, so the blocks' weights sum to exactly 1
+  everywhere, and the cap keeps the band inside both blocks' trained margins.
+
+Derivations (the ring and the blend, written from the papers' prose and this module's
+stated rules, not from any implementation):
+
+* Ring. Hierarchical 3DGS (arXiv 2406.12080) trains each chunk against frozen content
+  round it, so a chunk does not invent its own surroundings. Measure "round it" in the
+  block's own size, so one rule fits a long block and a square one: with centre c and
+  size s per axis, d(p) = max_a |p_a - c_a| / s_a, the L-infinity distance in block
+  units, whose level sets are squares like the grid's cells. The ring is
+  {p : d(p) <= outer} minus the trainable region (`in_expanded`): a point is either
+  optimised or held fixed, never both. Tested as |p_a - c_a| <= outer * s_a, the same
+  set without a division.
+* Blend. Where two blocks meet, each point's contribution must be a convex combination of
+  the blocks' gaussians, weights >= 0 summing to 1, or the band doubles (or loses)
+  density. Take per edge j a step-like S_j(x) in [0, 1], "how far x has crossed edge j",
+  with S_0 = 1 and S_K = 0 on the open outer edges, and give cell k the weight
+  S_k - S_{k+1}: the sum over cells telescopes to S_0 - S_K = 1 whatever the S_j are,
+  and each weight is >= 0 when S_k >= S_{k+1}. The fewest-assumption S_j is a linear ramp
+  from 0 at e_j - h to 1 at e_j + h, centred on the edge so neither side is favoured.
+  h = 0 is the hard crop of VastGaussian (arXiv 2402.17427) and of the CityGaussian paper
+  (arXiv 2404.01133); a point on the edge then goes to the cell after it, as in
+  `cell_of`. Scaling h with the centre spacing D keeps the band the same fraction of a
+  block on any grid; capping it at margin * w keeps the fading gaussians inside the
+  region both neighbours trained; capping it at w / 2 means the two ramps bounding a
+  cell never overlap (h_k + h_{k+1} <= w_k), so S_k >= S_{k+1} and no weight is negative
+  for any margin. Two axes: the weight of cell (i, j) is the product of its per-axis
+  weights, a product of two partitions of unity is one, and a block's weight is the sum
+  over its cells.
 """
 
 from __future__ import annotations
@@ -43,13 +71,20 @@ B = npt.NDArray[np.bool_]
 DEFAULT_MARGIN = 0.1
 #: The frozen ring reaches this many block sizes from the block's centre: one full block
 #: width beyond each edge, so a camera anywhere in the block sees at least a block width
-#: of frozen surroundings in every ground direction.
+#: of frozen surroundings in every ground direction. The frozen surroundings are
+#: Hierarchical 3DGS's (arXiv 2406.12080, which also takes cameras from within 2x the
+#: chunk bounds); the value 1.5 is this project's.
 DEFAULT_RING_OUTER = 1.5
 #: Half-width of the cross-fade, as a fraction of the spacing of adjacent cell centres.
+#: This project's value: VastGaussian (arXiv 2402.17427) and CityGaussian (arXiv
+#: 2404.01133) crop each block to its bounds and concatenate, the limit blend = 0.
 DEFAULT_BLEND = 0.0125
-#: The camera test's 1 - SSIM threshold (`block_epsilon` is the knob).
+#: The camera test's 1 - SSIM threshold (`block_epsilon` is the knob): Table S3 of
+#: CityGaussian, arXiv 2404.01133, which uses 0.05 for MatrixCity and Sci-Art.
 DEFAULT_EPSILON = 0.05
-#: The fewest training cameras a block may have; fewer and it joins a neighbour.
+#: The fewest training cameras a block may have; fewer and it joins a neighbour. This
+#: project's value: none of the three papers states a minimum per block (Hierarchical
+#: 3DGS, arXiv 2406.12080, uses 50 as a count of SfM points for its camera rule).
 MIN_IMAGES = 50
 #: Robust outer bounds of the points, per axis.
 OUTER_QUANTILES = (0.01, 0.99)
@@ -431,34 +466,40 @@ def ring(part: Partition, uv: npt.ArrayLike, block: int, *, margin: float, outer
     """The frozen ring: points within `outer` block sizes of the block's centre (block-
     normalised L-infinity distance) that are not in its trainable region."""
     coords = np.asarray(uv, dtype=np.float64).reshape(-1, 2)
-    u0, u1, v0, v1 = part.rect(block)
-    cu, cv = 0.5 * (u0 + u1), 0.5 * (v0 + v1)
-    wu, wv = max(u1 - u0, 1e-12), max(v1 - v0, 1e-12)
-    with np.errstate(invalid="ignore"):
-        d = np.maximum(np.abs(coords[:, 0] - cu) / wu, np.abs(coords[:, 1] - cv) / wv)
-        near = d <= outer
-    out: B = near & ~part.in_expanded(coords, block, margin)
-    return out
+    lo_u, hi_u, lo_v, hi_v = part.rect(block)
+    mid_u, mid_v = part.centre(block)
+    # max(|du| / size_u, |dv| / size_v) <= outer, written without the division so that a
+    # block of zero width along an axis is a limit, not a NaN.
+    reach_u = outer * (hi_u - lo_u)
+    reach_v = outer * (hi_v - lo_v)
+    in_square = (np.abs(coords[:, 0] - mid_u) <= reach_u) & (
+        np.abs(coords[:, 1] - mid_v) <= reach_v
+    )
+    frozen: B = in_square & ~part.in_expanded(coords, block, margin)
+    return frozen
 
 
 def _cell_weights(edges: Sequence[float], x: F64, blend: float, margin: float) -> F64:
     """(n, cells) weights of one axis: S_j - S_{j+1}, S_j the ramp across edge j."""
     e = np.asarray(edges, dtype=np.float64)
     cells = e.size - 1
-    widths = np.diff(e)
-    centres = 0.5 * (e[:-1] + e[1:])
-    x = np.where(np.isfinite(x), x, 0.0)
-    steps = [np.ones_like(x)]
-    for k in range(1, cells):
-        spacing = centres[k] - centres[k - 1]
-        h = min(blend * spacing, margin * min(widths[k - 1], widths[k]))
-        if h == 0.0:
-            steps.append((x >= e[k]).astype(np.float64))
+    # Read a non-finite coordinate as 0, as `Partition.cell_of` does.
+    at = np.where(np.isfinite(x), np.asarray(x, dtype=np.float64), 0.0)
+    # past[:, j] = S_j(x), how far x has crossed edge j. The outer edges are open: every
+    # point is past edge 0 and none past the last, so the columns telescope to exactly 1.
+    past = np.zeros((at.size, cells + 1), dtype=np.float64)
+    past[:, 0] = 1.0
+    for j in range(1, cells):
+        narrower = min(e[j] - e[j - 1], e[j + 1] - e[j])
+        spacing = 0.5 * (e[j + 1] - e[j - 1])
+        half = min(blend * spacing, margin * narrower, 0.5 * narrower)
+        if half > 0.0:
+            foot = e[j] - half
+            past[:, j] = np.clip((at - foot) / (2.0 * half), 0.0, 1.0)
         else:
-            steps.append(np.clip(0.5 + (x - e[k]) / (2.0 * h), 0.0, 1.0))
-    steps.append(np.zeros_like(x))
-    out: F64 = np.stack([steps[j] - steps[j + 1] for j in range(cells)], axis=1)
-    return out
+            past[:, j] = at >= e[j]
+    share: F64 = past[:, :-1] - past[:, 1:]
+    return share
 
 
 def weights(
