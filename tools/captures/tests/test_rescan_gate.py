@@ -330,15 +330,31 @@ def _publish_case() -> dict[str, Any]:
         "evidence": {"kind": "inferred", "rescanGate": gate.evidence(confidence_sha256=e2_sha)},
         "asset": {"epochId": payload["epochId"], "siteId": payload["siteId"], "validTo": None},
         "tileset": {"root": {"extras": {"confidence": {"sha256": e2_sha}}}},
-        "current": payload,
+        "current": lambda site, epoch: payload,
         "positions": centres,
     }
 
 
 def test_a_gated_layer_on_its_epoch_s_current_tiles_is_published() -> None:
     case = _publish_case()
+    asked: list[tuple[str, str]] = []
+    case["current"] = lambda site, epoch: asked.append((site, epoch)) or _committed()
     fresh = rg.verify_layer(**case)
     assert fresh.cells == _committed()["cells"]
+    # The targets are fetched for the asset's own site and epoch, once.
+    assert asked == [(_committed()["siteId"], _committed()["epochId"])]
+
+
+def test_an_ungated_layer_is_refused_before_anything_is_fetched() -> None:
+    case = _publish_case()
+    case["evidence"] = {"kind": "inferred", "filler": "fixer"}
+
+    def fetch(site: str, epoch: str) -> object:
+        raise AssertionError("fetched for an ungated layer")
+
+    case["current"] = fetch
+    with pytest.raises(rg.RescanGateError, match="no rescanGate"):
+        rg.verify_layer(**case)
 
 
 def _broken(**changes: Any) -> dict[str, Any]:
@@ -362,7 +378,7 @@ def _broken(**changes: Any) -> dict[str, Any]:
         ({"asset__siteId": gf.B}, "site"),
         ({"tileset": {"root": {"extras": {}}}}, "carries no confidence grid"),
         ({"tileset": {"root": {"extras": {"confidence": {"sha256": "0" * 64}}}}}, "not the one"),
-        ({"current": {**_committed(), "cells": 0}}, "cells"),
+        ({"current": lambda site, epoch: {**_committed(), "cells": 0}}, "cells"),
         ({"positions": np.array([[-100.0, -100.0, 0.0]])}, "outside"),
         ({"positions": np.zeros((0, 3))}, "no gaussians"),
     ],
@@ -384,11 +400,12 @@ def test_publish_refuses_a_layer_filled_for_targets_that_changed_since() -> None
     last = tuple(np.argwhere(targets)[-1])
     targets[last] = False
     rows = np.packbits(targets.astype(np.uint8), axis=1, bitorder="little")
-    case["current"] = {
+    changed = {
         **payload,
         "mask": base64.b64encode(rows.tobytes()).decode(),
         "cells": payload["cells"] - 1,
     }
+    case["current"] = lambda site, epoch: changed
     case["positions"] = case["positions"][:-1]
     with pytest.raises(rg.RescanGateError, match="changed since"):
         rg.verify_layer(**case)

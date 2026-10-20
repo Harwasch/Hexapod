@@ -35,7 +35,7 @@ import hashlib
 import json
 import math
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -358,7 +358,7 @@ def verify_layer(
     *,
     asset: Mapping[str, Any],
     tileset: Mapping[str, Any],
-    current: object,
+    current: Callable[[str, str], object],
     positions: Any,
 ) -> RescanGate:
     """What publish-fill.yml asks before an inferred layer goes beside a scan's tiles:
@@ -367,9 +367,10 @@ def verify_layer(
     * the scan's asset is a current revision of that very epoch, on that site, and its
       current `tileset` (the document) carries the very confidence grid the fill was
       checked against (`confidenceSha256`): the layer was made on these tiles' epoch;
-    * `current` -- the API's fill targets for that epoch, fetched now -- are the targets it
-      was filled for (same window and the same mask bytes): targets that changed since the
-      fill ran (a re-run of the epoch, an earlier epoch measured since) are a refusal;
+    * `current(site_id, epoch_id)` -- the API's fill targets for that epoch, fetched now,
+      only once the checks above hold -- are the targets it was filled for (same window
+      and the same mask bytes): targets that changed since the fill ran (a re-run of the
+      epoch, an earlier epoch measured since) are a refusal;
     * every gaussian of the layer (`positions`, in its tileset frame) is in a target cell.
 
     Returns the current gate; anything else is a `RescanGateError`."""
@@ -411,7 +412,7 @@ def verify_layer(
             "the layer was filled on tiles whose confidence grid is not the one the scan's "
             "current tileset carries: another epoch's or another revision's tiles"
         )
-    fresh = RescanGate.from_payload(current)
+    fresh = RescanGate.from_payload(current(str(asset.get("siteId")), str(epoch)))
     now = fresh.evidence()
     changed = [key for key in _SAME if now[key] != gate.get(key)]
     if changed:

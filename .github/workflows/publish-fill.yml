@@ -10,7 +10,12 @@ name: Publish fill
 #   sidecar it names is there and is what it says, its evidence says `inferred`), finds the
 #   scan's asset (the `SCAN_ASSET_IDS` variable, else the one asset showing the scan's run)
 #   and its CURRENT tileset from the API, and checks the layer's root transform is that
-#   tileset's. It writes the request beside the layer's files (`attach.json`: the asset,
+#   tileset's. **The fill gate** (ADR 0016, Fill; tools/captures/rescan_gate.py
+#   `verify_layer`): a layer whose evidence lacks `rescanGate` is refused, and so is one
+#   gated for another epoch or site than the asset's, filled on tiles whose confidence grid
+#   is not the current tileset's, filled for targets the API no longer gives
+#   (`GET /api/v1/sites/{id}/fill-targets?epochId=`, fetched here), or holding a gaussian
+#   outside them; there is no override. It writes the request beside the layer's files (`attach.json`: the asset,
 #   `basedOn` that URL, and only this layer's entry of `extras.inferredLayers`, uri
 #   `inferred/<name>/tileset.json` relative to the tileset as apps/web/src/lib/inferred.ts
 #   resolves it -- the API merges the list by uri, so another fill's entry stays) and keeps
@@ -141,7 +146,9 @@ jobs:
           from pathlib import Path
 
           import attach_sidecars
+          import rescan_gate
           import rig_tiles
+          from splat_render import load_tileset
 
           # The scans' legacy URLs (to find the scan's asset by its run) and the user agent
           # the bucket accepts, from the segmentation app.
@@ -203,6 +210,23 @@ jobs:
           current = json.loads(get(url))
           if inferred["root"]["transform"] != current["root"]["transform"]:
               raise SystemExit("the layer is not in the scan's current tileset's frame")
+
+          # The fill gate: filled only where a re-scan left this epoch's cells weak, and
+          # still so. No override: a layer this refuses is filled again, or not published.
+          api = attach_sidecars.api_url(None)
+          record = attach_sidecars.get_json(f"{api}/api/v1/assets/{asset['assetId']}")
+          try:
+              gate = rescan_gate.verify_layer(
+                  evidence,
+                  asset=record,
+                  tileset=current,
+                  current=lambda site, epoch: attach_sidecars.get_json(
+                      f"{api}/api/v1/sites/{site}/fill-targets?epochId={epoch}"
+                  ),
+                  positions=load_tileset(dest / "tileset.json").positions,
+              )
+          except rescan_gate.RescanGateError as error:
+              raise SystemExit(f"refused by the fill gate: {error}") from None
           entry = {"uri": f"inferred/{layer}/tileset.json", "evidence": evidence}
           attach_sidecars.write_manifest(
               out, asset_id=asset["assetId"], based_on=url, extras={"inferredLayers": [entry]}
@@ -214,6 +238,9 @@ jobs:
           print(f"- layer `inferred/{layer}/`: {len(uris)} tiles, {len(sidecars)} sidecars, "
                 f"{size:,} bytes; {evidence['filler']}, {evidence['views']} views, "
                 f"{evidence['gaussians']:,} gaussians, mean confidence {evidence['meanConfidence']}")
+          print(f"- fill gate: epoch `{gate.epoch_id}`, {gate.cells} cells still weak after a "
+                f"re-scan ({gate.cell_m:g} m, weak in {len(gate.weak_in)} earlier epoch(s)); "
+                "every gaussian inside them")
           print(f"- layers declared now: {declared}"
                 f"{' (this one is replaced)' if entry['uri'] in declared else ''}")
           PY

@@ -492,10 +492,18 @@ def test_fill_scan_fills_only_the_cells_a_re_scan_left_weak(tmp_path: Path) -> N
         for score in (60, 60)
     )
     then = json.loads((tmp_path / "measured-targets.json").read_text())
-    verify_layer(stored, asset=asset, tileset=current, current=then, positions=layer.positions)
+    verify_layer(
+        stored, asset=asset, tileset=current, current=lambda s, e: then, positions=layer.positions
+    )
     now = gf.still_weak_payload(b, [a])  # the targets grew since: every cell is weak now
     with pytest.raises(RescanGateError, match="changed since"):
-        verify_layer(stored, asset=asset, tileset=current, current=now, positions=layer.positions)
+        verify_layer(
+            stored,
+            asset=asset,
+            tileset=current,
+            current=lambda s, e: now,
+            positions=layer.positions,
+        )
 
 
 def test_fill_scan_with_no_cell_still_weak_is_skipped_not_refused(tmp_path: Path) -> None:
