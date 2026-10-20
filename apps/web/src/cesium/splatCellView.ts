@@ -452,9 +452,17 @@ export class SplatCellView implements SplatColorPart {
     if (key !== this.#fillsOf) {
       this.#fillsOf = key;
       const owners = new Set<unknown>(key ? companions : []);
-      this.#fills = companionSlots(primitive, owners).vecs.map(([a, b, c, d]) =>
-        this.#gpu.vec4(a, b, c, d),
-      );
+      const slots = companionSlots(primitive, owners);
+      // More layer ranges than the uniform holds: the last range is stretched over all those
+      // past it. Fails closed -- an inferred splat is never given a measured colour; scan
+      // splats between them go grey, which claims no evidence rather than false evidence.
+      const last = slots.vecs[slots.vecs.length - 1];
+      if (slots.overflow > 0 && last) {
+        for (const [tile, slot] of primitive?._tileSlots ?? []) {
+          if (owners.has(tile.tileset)) last[3] = Math.max(last[3], slot.start + slot.count);
+        }
+      }
+      this.#fills = slots.vecs.map(([a, b, c, d]) => this.#gpu.vec4(a, b, c, d));
     }
     return this.#fills;
   }

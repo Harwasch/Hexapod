@@ -18,6 +18,7 @@ import {
   type CellViewPrimitive,
 } from "@/cesium/splatCellView";
 import { colorChainOf, type SplatColorPart } from "@/cesium/splatColor";
+import { inCompanionSlots } from "@/cesium/splatSlots";
 import type { SplatShaderBuilder } from "@/cesium/splatInternals";
 import { encodeConfidenceGrid, REASON_BITS } from "@/dev/cellGridFixture";
 import {
@@ -326,6 +327,32 @@ describe("in the colour chain", () => {
     // Without companions, nothing is greyed.
     Object.assign(target, { companions: [], _tileSlots: new Map(target._tileSlots) });
     expect((uniforms.u_cellFills?.() as { vec4: number[] }[])[0]?.vec4).toEqual([0, 0, 0, 0]);
+  });
+
+  it("greys every splat of a layer with more ranges than the uniform holds, never colours one", async () => {
+    const part = new SplatCellView(await yardGrid(), gpu, () => translation(0, 0, 0));
+    const scan = {};
+    const layer = {};
+    const target = primitive();
+    // Nine disjoint layer ranges (100-110, 200-210, ... 900-910) between the scan's tiles: one
+    // more than the eight the shader can tell apart.
+    const slots = new Map<{ tileset: object }, { start: number; count: number }>();
+    for (let k = 0; k < 10; k += 1) slots.set({ tileset: scan }, { start: k * 100, count: 100 });
+    for (let k = 1; k <= 9; k += 1) slots.set({ tileset: layer }, { start: k * 100, count: 10 });
+    Object.assign(target, { _tileset: scan, companions: [layer], _tileSlots: slots });
+    part.install(target);
+    const { uniforms } = build(part);
+    const vecs = (uniforms.u_cellFills?.() as { vec4: [number, number, number, number] }[]).map(
+      (v) => v.vec4,
+    );
+    // Every inferred splat is grey, the ninth range's too: no measured colour on inferred
+    // content. What that costs is scan splats past the eighth range drawn grey (no evidence
+    // claimed), never the other way round.
+    for (let k = 1; k <= 9; k += 1) {
+      for (const index of [k * 100, k * 100 + 9]) expect(inCompanionSlots(vecs, index)).toBe(true);
+    }
+    expect(inCompanionSlots(vecs, 50)).toBe(false);
+    expect(inCompanionSlots(vecs, 150)).toBe(false);
   });
 
   it("is refused by an engine without the colour slot", async () => {
