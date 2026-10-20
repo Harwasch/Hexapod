@@ -597,6 +597,17 @@ Evidence: `e2e/confidenceViewScene.spec.ts` (scene: weak cells red-dominant by p
 each splat by its own cell) and `e2e/confidenceView.spec.ts` (the app under all three
 renderers).
 
+## Comparing two dates
+
+Layers › Compare › Dates draws two dated captures of the active site at once, one each side of
+the divider (`features/compare/CompareDates.tsx`, `SiteManager.setCompareDates`). Each is its
+own tileset with the stock `splitDirection` (`LEFT`, `RIGHT`), which the splat primitive copies
+every frame; the divider sets `scene.splitPosition`. Both share the frame anchor's placement,
+so what differs between the halves is the data. CesiumJS only: under PlayCanvas or Spark the
+section is disabled with the same notice and switch as the analytic views. Choosing one date,
+another renderer or a representation one date lacks ends the comparison and draws the date shown
+before. See [ADR 0017](DECISIONS/0017-compare-dates.md). Evidence: `e2e/compareDates.spec.ts`.
+
 ## Patched engine
 
 `patches/@cesium__engine@26.3.0.patch` (applied by pnpm on install) guards
