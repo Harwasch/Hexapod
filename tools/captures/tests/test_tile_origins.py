@@ -354,9 +354,9 @@ FAR = REPO_ROOT / "data" / "tiles" / "synthetic-far"
 #: Package calls that may pass a literal None offset, each with why its positions still end
 #: in the site frame. Anything else that passes None reads a far tile in its own frame.
 LOCAL_READS = {
-    # `rebind`'s default `positions_of` is tile-local by contract: `rebind` itself adds the
-    # offset (`site_positions(positions_of(..), offsets.get(uri))`) before it checksums.
-    ("rebind_instances.py", "rebind"),
+    # `rebind`'s and `rekey`'s default `positions_of` is tile-local by contract: each adds
+    # the offset (`site_positions(positions_of(..), offsets.get(uri))`) before it checksums.
+    ("rebind_instances.py", "_readers"),
 }
 
 
