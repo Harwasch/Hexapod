@@ -78,6 +78,13 @@ export interface CellGrid {
 export const LATTICE_BASE_M = 0.25;
 /** The finest level plus up to eight coarser (C3's pyramid): what the shader can address. */
 export const MAX_CELL_LEVELS = 9;
+/**
+ * The coarsest finest level a grid may have: 0.25 m x 2^16, 16 km cells. Past it a cell's size
+ * runs to Infinity (level 1024) and comparing two grids' levels to unbounded work.
+ */
+export const MAX_LATTICE_LEVEL = 16;
+/** Cells a level's plane may hold (C3's level choice keeps `ni * nj` within it). */
+export const MAX_PLANE_CELLS = 2 ** 22;
 /** `weak-v1`'s threshold when a file does not state one (C3). */
 export const DEFAULT_WEAK_BELOW = 128;
 /** `reasonBits.unseen` when a file does not state it (C2). */
@@ -104,6 +111,7 @@ export function cellGridMeta(extras: unknown, key = "confidence"): CellGridMeta 
   if (typeof raw.uri !== "string" || raw.frame !== "tileset") return null;
   const lattice = raw.lattice as { baseM?: unknown; level?: unknown } | undefined;
   if (!finite(lattice?.baseM) || !(lattice.baseM > 0) || !int(lattice.level)) return null;
+  if (lattice.level < 0 || lattice.level > MAX_LATTICE_LEVEL) return null;
   const channels = raw.channels as CellGridChannel[] | undefined;
   if (!Array.isArray(channels) || channels.length === 0) return null;
   if (!channels.every((c) => typeof c?.name === "string" && c.type in CHANNEL_BYTES)) return null;
@@ -114,6 +122,7 @@ export function cellGridMeta(extras: unknown, key = "confidence"): CellGridMeta 
   for (const [k, l] of sorted.entries()) {
     if (![l.level, l.i0, l.j0, l.ni, l.nj, l.offset, l.bytes].every(int)) return null;
     if (l.ni <= 0 || l.nj <= 0 || l.offset < 0 || l.bytes !== l.ni * l.nj * stride) return null;
+    if (l.ni * l.nj > MAX_PLANE_CELLS) return null;
     const expected = lattice.baseM * 2 ** l.level;
     if (!finite(l.cellM) || Math.abs(l.cellM - expected) > expected * 1e-9) return null;
     // The shader steps one lattice level at a time from the finest.
@@ -271,10 +280,13 @@ export function evidenceAt(grid: CellGrid, level: number, i: number, j: number):
     const f = 2 ** (finest.level - level);
     return scored(finest, Math.floor(i / f), Math.floor(j / f));
   }
+  // Only the coarsest cells the grid has: a far coarser request covers more than it holds.
   const f = 2 ** (level - coarsest.level);
-  for (let dj = 0; dj < f; dj += 1) {
-    for (let di = 0; di < f; di += 1) {
-      if (scored(coarsest, i * f + di, j * f + dj)) return true;
+  const a1 = Math.min((i + 1) * f, coarsest.i0 + coarsest.ni);
+  const b1 = Math.min((j + 1) * f, coarsest.j0 + coarsest.nj);
+  for (let cj = Math.max(j * f, coarsest.j0); cj < b1; cj += 1) {
+    for (let ci = Math.max(i * f, coarsest.i0); ci < a1; ci += 1) {
+      if (scored(coarsest, ci, cj)) return true;
     }
   }
   return false;

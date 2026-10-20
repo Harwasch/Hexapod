@@ -18,6 +18,7 @@ import {
   decodeCellGrid,
   evidenceAt,
   loadCellGrid,
+  MAX_LATTICE_LEVEL,
   type CellGridMeta,
 } from "@/lib/cellGrid";
 
@@ -52,6 +53,28 @@ describe("the descriptor", () => {
     // Listed coarsest first: sorted, not refused.
     const reversed = cellGridMeta({ confidence: { ...meta, levels: [...meta.levels].reverse() } });
     expect(reversed?.levels[0]?.level).toBe(2);
+  });
+
+  it("refuses a level or a plane size no site lattice has", async () => {
+    const { meta } = await encodeConfidenceGrid({ ...fixture, coarser: 0 });
+    const [first] = meta.levels;
+    if (!first) throw new Error("no levels");
+    const at = (level: number, extra: Record<string, unknown> = {}) => ({
+      confidence: {
+        ...meta,
+        lattice: { ...meta.lattice, level },
+        levels: [{ ...first, level, cellM: 0.25 * 2 ** level, ...extra }],
+      },
+    });
+    // Level 1024 with a finite cell size: 0.25 m x 2^1024 is Infinity, and |1 - Inf| is not
+    // more than Inf x 1e-9, so it used to pass, and comparing grids then walked forever.
+    expect(cellGridMeta(at(1024, { cellM: 1 }))).toBeNull();
+    expect(cellGridMeta(at(MAX_LATTICE_LEVEL + 1))).toBeNull();
+    expect(cellGridMeta(at(-1))).toBeNull();
+    expect(cellGridMeta(at(MAX_LATTICE_LEVEL))).not.toBeNull();
+    // More cells in a plane than C3 lets a level hold (2^22).
+    const big = { ni: 4096, nj: 1025, bytes: 4096 * 1025 * 3 };
+    expect(cellGridMeta(at(2, big))).toBeNull();
   });
 
   it("is the same bytes every time it is built", async () => {
@@ -161,5 +184,9 @@ describe("evidence across two grids' levels", () => {
     // Coarser than the grid's coarsest (level 4, 4 m): any 4 m cell under it.
     expect(evidenceAt(grid, 5, 0, 0)).toBe(true);
     expect(evidenceAt(grid, 5, 1, 0)).toBe(false);
+    // Far coarser (2^36 of the grid's coarsest cells a side): only the cells the grid has are
+    // read, never every cell the request covers.
+    expect(evidenceAt(grid, 40, 0, 0)).toBe(true);
+    expect(evidenceAt(grid, 40, -1, 0)).toBe(false);
   });
 });
