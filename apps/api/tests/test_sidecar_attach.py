@@ -607,6 +607,9 @@ def test_an_attach_computed_on_tiles_a_republish_replaced_is_refused(
         ({"instances.json": b"{}"}, {"files": ["instances.json", "instances.emb"]}, "missing"),
         ({"instances.json": b"{}"}, {"extras": {"gaussians": 9}}, "belongs to the tileset"),
         ({"instances.json": b"{}"}, {"extras": {"objects": []}}, "cannot be attached"),
+        # A confidence grid is the run's own, recorded as its revision's map (A4).
+        ({"confidence.bin": b"cells"}, {}, "only a run of the capture ships one"),
+        ({"a.json": b"{}"}, {"extras": {"confidence": {"uri": "a.json"}}}, "epoch_maps"),
         ({"a.json": b"{}"}, {"extras": {"instances": {"uri": "nope.json"}}}, "neither staged"),
         ({"a.json": b"{}"}, {"extras": {"instances": {"uri": "../x.json"}}}, "plain path"),
         ({"a.json": b"{}"}, {"rigUrl": "rig.json"}, "neither staged"),
@@ -922,11 +925,15 @@ def test_every_kind_is_classified_by_what_it_depends_on() -> None:
         "objects": "tiles",
         "collision": "tiles",
         "viewCones": "tiles",
+        "confidence": "tiles",
         "inferredLayers": "frame",
         "nativeLod": "tiles",
         "rig": "positions",
     }
-    assert {kind.name for kind in sidecars.KINDS if not kind.attachable} == {"objects"}
+    assert {kind.name for kind in sidecars.KINDS if not kind.attachable} == {
+        "objects",
+        "confidence",
+    }
     # A kind keyed by ids says whose; an attach that replaces those drops it.
     follows = {kind.name: kind.follows for kind in sidecars.KINDS if kind.follows}
     # The skin is also bound to the splats (positions), and moves instances ids.

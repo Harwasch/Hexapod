@@ -830,3 +830,100 @@ def test_an_attach_to_another_epoch_does_not_stall_a_re_run(
     )
 
     assert the_splat(db, october).source["url"] == published.tileset
+
+
+# --- the confidence grid: the run's own, bound to its tiles ---------------------------------
+
+CONFIDENCE_EXTRAS = {"format": "hexapod.cellgrid", "version": 1, "uri": "confidence.bin"}
+
+
+def a_measured_run(buckets: Publisher, *, tag: bytes = b"", confidence: bool = True) -> None:
+    """The run's package with its collision grid and, when it measured one, its confidence
+    grid beside the tiles (P4: `splat_tiles.convert(confidence=...)`)."""
+    put_scan(
+        buckets.private,
+        RUN_DIR,
+        tiles={name: b"glb " + tag + name.encode() for name in TILES},
+        sidecars={
+            "collision.bin": b"grid " + tag,
+            **({"confidence.bin": b"cells " + tag} if confidence else {}),
+        },
+        extras={
+            "collision": COLLISION_EXTRAS,
+            **({"confidence": CONFIDENCE_EXTRAS} if confidence else {}),
+        },
+    )
+    if not confidence:
+        buckets.private.delete_object(f"{RUN_DIR}confidence.bin")
+
+
+def a_measured_scan(db: Session, buckets: Publisher) -> Capture:
+    a_measured_run(buckets)
+    capture = Capture(slug="field", name="Field", kind=CaptureKind.GAUSSIAN_SPLAT)
+    db.add(capture)
+    db.commit()
+    republish(db, buckets, capture)
+    return capture
+
+
+def test_a_new_run_s_own_confidence_grid_replaces_the_old_one(
+    db: Session, buckets: Publisher
+) -> None:
+    """A Refine measured again: its grid is the run's, the old one is not carried."""
+    capture = a_measured_scan(db, buckets)
+    a_measured_run(buckets, tag=b"refined ")
+
+    republish(db, buckets, capture)
+
+    moved = the_splat(db, capture)
+    files = files_under(buckets.public, directory_of(moved.source["url"]))
+    assert files["confidence.bin"] == b"cells refined "
+    extras = tileset_at(buckets.public, moved.source["url"])["root"]["extras"]
+    assert extras["confidence"] == CONFIDENCE_EXTRAS
+    assert moved.sidecar_flags == []
+
+
+def test_new_tiles_without_a_grid_drop_the_old_one_and_say_so(
+    db: Session, buckets: Publisher
+) -> None:
+    """A grid of the old reconstruction is not true of new tiles: dropped and flagged,
+    never shown over splats it was not measured on."""
+    capture = a_measured_scan(db, buckets)
+    a_measured_run(buckets, tag=b"new ", confidence=False)
+
+    republish(db, buckets, capture)
+
+    moved = the_splat(db, capture)
+    files = files_under(buckets.public, directory_of(moved.source["url"]))
+    assert "confidence.bin" not in files
+    extras = tileset_at(buckets.public, moved.source["url"])["root"]["extras"]
+    assert "confidence" not in extras
+    flags = {flag["kind"]: flag for flag in moved.sidecar_flags}
+    assert set(flags) == {"confidence"}
+    assert flags["confidence"]["action"] == "Confidence needs re-measuring"
+    assert "new tiles" in flags["confidence"]["reason"]
+
+
+def test_the_same_tiles_keep_their_grid_through_an_attach_and_a_republish(
+    db: Session, buckets: Publisher
+) -> None:
+    capture = a_measured_scan(db, buckets)
+    attach(
+        db,
+        buckets,
+        the_splat(db, capture),
+        INSTANCES_FILES,
+        extras={"instances": INSTANCES_EXTRAS},
+    )
+    attached = the_splat(db, capture)
+    files = files_under(buckets.public, directory_of(attached.source["url"]))
+    assert files["confidence.bin"] == b"cells "
+
+    republish(db, buckets, capture)
+
+    moved = the_splat(db, capture)
+    files = files_under(buckets.public, directory_of(moved.source["url"]))
+    assert files["confidence.bin"] == b"cells " and "instances.json" in files
+    extras = tileset_at(buckets.public, moved.source["url"])["root"]["extras"]
+    assert extras["confidence"] == CONFIDENCE_EXTRAS
+    assert moved.sidecar_flags == []

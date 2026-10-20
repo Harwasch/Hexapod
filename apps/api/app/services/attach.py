@@ -203,10 +203,7 @@ def _attach(
             )
         kind = sidecars.KINDS_BY_NAME.get(owners.get(rel, ""))
         if kind is not None and not kind.attachable:
-            raise InvalidInputError(
-                f"{rel} is part of a {kind.name} sidecar, which rewrites the scan's tiles and "
-                "cannot be attached beside them"
-            )
+            raise InvalidInputError(f"{rel} is part of a {kind.name} sidecar, which {kind.refusal}")
 
     # What the request replaces, and what was keyed by that and goes with it (`_plan`).
     plan = _plan(current, here.entry, tiles, old_extras, staged, owners, patch)
