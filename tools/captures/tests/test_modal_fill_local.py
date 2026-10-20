@@ -9,10 +9,14 @@ modal replaced by a stub that accepts whatever fill.py declares at import.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
+import types
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 FILL = REPO / "infra" / "modal" / "fill.py"
@@ -111,3 +115,96 @@ def test_a_push_runs_no_fill_job_and_says_so() -> None:
     assert len(guards) == len(names)
     assert guards[0].strip() == "if: env.JOBS == ''" and "Nothing to run" in names[0]
     assert all("env.JOBS != ''" in guard for guard in guards[1:])
+
+
+# --- the remote job's fetch: everything the gate reads comes down with the tiles ---------
+
+BASE = "https://scans.example.com/runs/yard/package/splat"
+GRIDS = REPO / "data" / "tiles" / "synthetic-yard-epochs"
+
+
+class _Anything:
+    """Whatever fill.py declares at import, accepted (a decorator returns what it wraps)."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def __call__(self, *args: object, **kwargs: object) -> object:
+        return args[0] if len(args) == 1 and callable(args[0]) and not kwargs else _Anything()
+
+    def __getattr__(self, name: str) -> object:
+        return _Anything()
+
+
+def _fill_app(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
+    modal = types.ModuleType("modal")
+    modal.__getattr__ = lambda name: _Anything()  # type: ignore[method-assign]
+    modal.is_local = lambda: True  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "modal", modal)
+    spec = importlib.util.spec_from_file_location("fill_fetch_under_test", FILL)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _served(grid_uri: str = "confidence.bin") -> dict[str, bytes]:
+    descriptor = json.loads((GRIDS / "grids.json").read_text())["epochs"]["e2"]["descriptor"]
+    document = {
+        "asset": {"version": "1.1"},
+        "geometricError": 10,
+        "root": {
+            "boundingVolume": {"box": [0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5]},
+            "geometricError": 1,
+            "content": {"uri": "0/0.glb"},
+            "children": [{"geometricError": 0, "content": {"uri": "0/1.glb"}}],
+            "extras": {
+                "viewCones": {"uri": "viewcones.bin"},
+                "confidence": {**descriptor, "uri": grid_uri},
+            },
+        },
+    }
+    return {
+        f"{BASE}/tileset.json": json.dumps(document).encode(),
+        f"{BASE}/0/1.glb": b"leaf",
+        f"{BASE}/viewcones.bin": b"cones",
+        f"{BASE}/confidence.bin": (GRIDS / "e2" / "confidence.bin").read_bytes(),
+    }
+
+
+def test_a_remote_fill_fetches_the_confidence_grid_its_gate_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex R3 #60: `_fetch` brought the tiles, view cones and instances, never the
+    confidence grid, so `teacher_fill fill`'s gate (`RescanGate.check_tileset`) could not
+    read it and refused every remote fill. Fetched with a fake fetcher, the scan the job
+    sees passes the gate for the targets its epoch has."""
+    import rescan_gate
+
+    fill = _fill_app(monkeypatch)
+    served = _served()
+    asked: list[str] = []
+
+    def get(url: str, timeout: float) -> bytes:
+        asked.append(url)
+        return served[url]
+
+    monkeypatch.setattr(fill, "_get", get)
+    tileset = fill._fetch(f"{BASE}/tileset.json", tmp_path / "scan")
+
+    assert f"{BASE}/confidence.bin" in asked
+    gate = rescan_gate.RescanGate.from_json(TARGETS)
+    descriptor = json.loads(served[f"{BASE}/tileset.json"])["root"]["extras"]["confidence"]
+    assert gate.check_tileset(tileset) == descriptor["sha256"]
+
+
+@pytest.mark.parametrize("uri", ["../confidence.bin", "/etc/confidence.bin", "a/../../x.bin"])
+def test_a_grid_uri_that_leaves_the_scan_is_not_fetched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uri: str
+) -> None:
+    fill = _fill_app(monkeypatch)
+    served = _served(uri)
+    monkeypatch.setattr(fill, "_get", lambda url, timeout: served.get(url, b""))
+    with pytest.raises(RuntimeError, match="beside the tileset"):
+        fill._fetch(f"{BASE}/tileset.json", tmp_path / "scan")
+    assert not (tmp_path / "confidence.bin").exists()

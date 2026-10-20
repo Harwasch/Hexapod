@@ -491,9 +491,26 @@ def _get(url: str, timeout: float) -> bytes:
     raise AssertionError("unreachable")
 
 
+#: `cell_grid.FORMAT`: a root extras value in this format is a cell grid the tileset carries
+#: (`confidence.bin`, ADR 0016), restated so the local side needs nothing of tools/captures.
+CELL_GRID_FORMAT = "hexapod.cellgrid"
+
+
+def _beside(uri: str) -> str:
+    """`uri` as a plain path beside the tileset, or a RuntimeError: nothing fetched may be
+    written outside the scan's folder."""
+    rel = uri.removeprefix("./")
+    parts = rel.split("/")
+    if not rel or "\\" in rel or any(part in ("", ".", "..") for part in parts):
+        raise RuntimeError(f"{uri!r} must name a file beside the tileset")
+    return rel
+
+
 def _fetch(url: str, out: Path, every: bool = False) -> Path:
-    """The tileset, its leaves and its view cones (what teacher_fill reads); `every`: its
-    merged parents too (what split_objects rewrites)."""
+    """The tileset, its leaves, its view cones and every cell grid it declares (what
+    teacher_fill reads: the fill gate's `check_tileset` reads `extras.confidence`, and
+    `cell_grid.from_tileset` decodes every grid declared); `every`: its merged parents too
+    (what split_objects rewrites)."""
     import concurrent.futures
 
     if not url.startswith("https://"):
@@ -512,12 +529,19 @@ def _fetch(url: str, out: Path, every: bool = False) -> Path:
         uri = tile.get("content", {}).get("uri")
         if uri and (every or not tile.get("children")):
             uris.append(uri)
-    if cones := document["root"].get("extras", {}).get("viewCones", {}).get("uri"):
+    extras = document["root"].get("extras", {})
+    if cones := extras.get("viewCones", {}).get("uri"):
         uris.append(cones)
+    # The confidence grid (and any other cell grid): without it the gate refuses the job.
+    for value in extras.values():
+        if isinstance(value, dict) and value.get("format") == CELL_GRID_FORMAT:
+            uris.append(str(value.get("uri") or ""))
     # The instances, for `split` (and the embedding beside them).
     if instances := document["root"].get("extras", {}).get("instances", {}).get("uri"):
         uris.append(instances)
         uris.append(str(PurePosixPath(instances).with_name("instances.emb")))
+
+    uris = [_beside(uri) for uri in uris]
 
     def get(uri: str) -> None:
         (out / uri).parent.mkdir(parents=True, exist_ok=True)
