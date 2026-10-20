@@ -46,9 +46,9 @@ class CaptureBase(CamelModel):
     def _orientation(cls, value: dict[str, Any]) -> dict[str, Any]:
         """Refuse an orientation the pipeline would refuse, while the request is open.
 
-        `metadata` is otherwise free-form. These two keys are not: the worker hands them
-        to the normalize stage, and a bad one there fails the run an hour later instead of
-        the upload now.
+        `metadata` is otherwise free-form. These keys are not: the worker hands them to
+        the normalize stage, and a bad one there fails the run an hour later instead of the
+        upload now.
         """
         axis = value.get("upAxis")
         if axis is not None and axis not in UP_AXES:
