@@ -287,3 +287,143 @@ def test_manual_placement_refuses_a_frame_normalize_was_never_given(tmp_path: Pa
 
     with pytest.raises(Exception, match="re-run from normalize"):
         _run(tmp_path / "run", params)
+
+
+# --- Lane 2: exif_gps and place in a site frame ----------------------------------------
+
+
+def test_the_aligned_origin_is_the_frame_when_one_is_given() -> None:
+    import exif
+    from stages import _aligned_origin
+
+    fixes = (
+        exif.Fix(name="a", lat=LAT, lon=LON, alt=10.0),
+        exif.Fix(name="b", lat=LAT + 0.001, lon=LON, alt=12.0),
+        exif.Fix(name="c", lat=LAT + 0.002, lon=LON, alt=14.0),
+    )
+    frame = _frame()
+
+    assert _aligned_origin(fixes, frame) == (frame.lat, frame.lon, frame.height)
+    assert _aligned_origin(fixes, None) == exif.median_fix(fixes)
+
+
+def _georeference(root: Path, params: dict[str, Any], location: dict[str, Any] | None) -> Any:
+    import tree_frames
+    from conftest import make_recipe
+
+    workdir = Workdir.create(root)
+    frames = workdir.input_path("frames")
+    tree_frames.render_orbit(FIXTURE_PLY, frames, count=3)
+    inputs = ["frames"]
+    if location is not None:
+        workdir.input_path("source_meta.json").write_text(json.dumps({"location": location}))
+        inputs.append("source_meta.json")
+    execute(
+        make_recipe([{"id": "georeference", "impl": "exif_gps", "params": params}], inputs=inputs),
+        workdir,
+        RunnerSet.local(),
+    )
+    return json.loads(workdir.artifact_path("georeference", "georef.json").read_text())
+
+
+def test_a_located_video_in_a_site_frame_is_offset_from_its_origin(tmp_path: Path) -> None:
+    """The iPhone case of `test_georeference_exif`, as epoch 2 of a site 100 m east."""
+    east = gps_frames.enu_to_geodetic(100.0, 0.0, 0.0, 37.8, -122.4, 12.5)
+    frame = {"siteId": "site-v", "lat": east[0], "lon": east[1], "height": 12.5}
+
+    georef = _georeference(
+        tmp_path / "run",
+        {"site_frame": frame},
+        {"lat": 37.8, "lon": -122.4, "altitudeM": 12.5, "source": "iso6709"},
+    )
+
+    assert (georef["lat"], georef["lon"], georef["height"]) == (east[0], east[1], 12.5)
+    assert georef["georefMethod"] == "exif-gps"
+    echo = georef["siteFrame"]
+    # 100 m in the video's tangent plane, read back in the frame's (see the Lane 1 test):
+    # the two planes differ by d / R of tilt and turn, which moves the far point by about
+    # d^2 / R = 1.6 mm over 100 m. 5 mm is that with margin.
+    assert echo["offsetM"][0] == pytest.approx(-100.0, abs=5e-3)
+    assert abs(echo["offsetM"][1]) < 5e-3
+    assert echo["offsetSource"] == "video"
+    assert echo["located"] == {"lat": 37.8, "lon": -122.4, "height": 12.5}
+    assert georef["frame"]["recentre"] is True
+    assert "in site site-v's frame" in georef["note"]
+
+
+def test_a_frame_and_no_location_places_the_capture_at_the_site_origin(tmp_path: Path) -> None:
+    georef = _georeference(tmp_path / "run", {"site_frame": FRAME}, None)
+
+    assert (georef["lat"], georef["lon"], georef["height"]) == (
+        FRAME["lat"],
+        FRAME["lon"],
+        HEIGHT,
+    )
+    assert georef["georefMethod"] == "manual"
+    assert georef["siteFrame"]["offsetM"] == [0.0, 0.0, 0.0]
+    assert georef["siteFrame"]["offsetSource"] == "site-origin"
+
+
+def test_a_frame_and_the_captures_own_coordinate_is_offset_as_a_capture(tmp_path: Path) -> None:
+    georef = _georeference(tmp_path / "run", {"site_frame": FRAME, "lat": LAT, "lon": LON}, None)
+
+    assert georef["georefMethod"] == "manual"
+    assert georef["siteFrame"]["offsetSource"] == "capture"
+    assert georef["siteFrame"]["offsetM"][1] == pytest.approx(30.0, abs=1e-3)
+
+
+def test_place_adds_the_site_offset_after_recentring(tmp_path: Path) -> None:
+    """`test_up_axis`'s levelled tree, with the georeference's `siteFrame.offsetM`."""
+    from test_up_axis import _tree
+
+    from conftest import make_recipe
+    from sfm import rotation_onto_z
+
+    # One tree for all three placements (`_tree` draws from a module-level generator).
+    tree_ply = tmp_path / "tree.ply"
+    gaussians.write_ply(tree_ply, _tree("-y"))
+
+    def place(root: Path, offset: list[float] | None) -> Any:
+        workdir = Workdir.create(root)
+        trained = workdir.input_path("trained.ply")
+        trained.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(tree_ply, trained)
+        frame = {
+            "source": "camera-up",
+            "scale": 2.0,
+            "rotation": rotation_onto_z([0.0, -1.0, 0.0]).tolist(),
+            "translationM": None,
+            "recentre": True,
+        }
+        georef: dict[str, Any] = {"lat": 1.0, "frame": frame}
+        if offset is not None:
+            georef["siteFrame"] = {**FRAME, "offsetM": offset}
+        workdir.input_path("georef.json").write_text(json.dumps(georef))
+        execute(
+            make_recipe(
+                [{"id": "place", "impl": "place_splat"}], inputs=["trained.ply", "georef.json"]
+            ),
+            workdir,
+            RunnerSet.local(),
+        )
+        return workdir
+
+    plain = place(tmp_path / "plain", None)
+    moved = place(tmp_path / "moved", [10.0, -5.0, 0.0])
+    zero = place(tmp_path / "zero", [0.0, 0.0, 0.0])
+
+    placed = gaussians.read_splat(moved.out_dir("place") / "canonical.ply")
+    ground = placed.xyz[:-600]
+    assert np.median(ground[:, 0]) == pytest.approx(10.0, abs=0.6)
+    assert np.median(ground[:, 1]) == pytest.approx(-5.0, abs=0.6)
+    assert np.median(ground[:, 2]) == pytest.approx(0.0, abs=0.2)
+    base = gaussians.read_splat(plain.out_dir("place") / "canonical.ply").xyz
+    shifted = base.astype(np.float64) + np.asarray([10.0, -5.0, 0.0])
+    assert np.abs(placed.xyz.astype(np.float64) - shifted).max() < 1e-4
+    # A zero offset is no offset, byte for byte.
+    assert (zero.out_dir("place") / "canonical.ply").read_bytes() == (
+        plain.out_dir("place") / "canonical.ply"
+    ).read_bytes()
+    # The LOD placement records the same total move as the splat.
+    placement = json.loads((moved.out_dir("place") / "placement.json").read_text())
+    assert placement != json.loads((plain.out_dir("place") / "placement.json").read_text())

@@ -562,6 +562,65 @@ def test_exact_gps_recovers_the_frame_it_was_written_in(
 
 
 @requires_colmap
+def test_exact_gps_in_a_site_frame_recovers_the_scene_in_that_frame(
+    orbit: tuple[Path, Path, tree_frames.Truth], tmp_path: Path
+) -> None:
+    """Epoch 2 of a site whose origin is 40 m from this capture's fixes (decision D3).
+
+    The fixes are expressed about the site's frame instead of their own median, so the
+    similarity COLMAP solves for takes the reconstruction straight into that frame: the
+    georeference is the frame's origin, nothing is offset, and the aligned camera centres
+    are the true ones expressed about the frame. The bounds are the exact-GPS test's.
+    """
+    frames, poses, _ = orbit
+    median = exif.median_fix(exif.read_fixes(frames))
+    away = gps_frames.enu_to_geodetic(40.0, 0.0, 0.0, *median)
+    frame = {"siteId": "site-x", "lat": away[0], "lon": away[1], "height": median[2]}
+    workdir = Workdir.create(tmp_path / "framed")
+    target = workdir.input_path("frames")
+    target.mkdir(parents=True, exist_ok=True)
+    for path in sorted(frames.iterdir()):
+        (target / path.name).write_bytes(path.read_bytes())
+    seeded = workdir.input_path("poses")
+    seeded.mkdir(parents=True, exist_ok=True)
+    for path in sorted(poses.iterdir()):
+        (seeded / path.name).write_bytes(path.read_bytes())
+    execute(
+        make_recipe(
+            [{"id": "georeference", "impl": "exif_gps", "params": {"site_frame": frame}}],
+            inputs=["frames", "poses"],
+        ),
+        workdir,
+        RunnerSet(cpu=LocalRunner()),
+    )
+    georef = json.loads(workdir.artifact_path("georeference", "georef.json").read_text())
+
+    assert (georef["lat"], georef["lon"], georef["height"]) == (away[0], away[1], median[2])
+    assert georef["siteFrame"]["offsetM"] is None
+    assert georef["siteFrame"]["siteId"] == "site-x"
+    assert georef["alignment"]["inliers"] == FRAMES
+    residual = georef["alignment"]["residualM"]
+    assert residual["median"] < 0.5, f"median residual {residual['median']} m"
+    assert residual["max"] < 2.0
+
+    # The placed centres are the truth, expressed about the frame: the fixes' median sits
+    # 40 m west of the frame's origin.
+    model = sfm.read_model(poses)
+    similarity = georef["frame"]
+    rotation = np.asarray(similarity["rotation"], dtype=np.float64)
+    placed = {
+        image.name: similarity["scale"] * rotation @ np.asarray(image.centre, dtype=np.float64)
+        + np.asarray(similarity["translationM"], dtype=np.float64)
+        for image in model.images
+    }
+    fixes = {fix.name: fix for fix in exif.read_fixes(frames)}
+    expected = exif.enu_offsets([fixes[name] for name in placed], (away[0], away[1], median[2]))
+    errors = [float(np.linalg.norm(placed[name] - np.asarray(expected[name]))) for name in placed]
+    assert float(np.median(errors)) < 0.5
+    assert float(np.mean([placed[name][0] for name in placed])) == pytest.approx(-40.0, abs=0.5)
+
+
+@requires_colmap
 def test_placing_by_the_similarity_puts_the_reconstruction_on_the_scene_it_came_from(
     orbit: tuple[Path, Path, tree_frames.Truth], tmp_path: Path
 ) -> None:
