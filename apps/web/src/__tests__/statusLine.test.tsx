@@ -26,6 +26,8 @@ import { defaultAssetRuntime, useSites } from "@/state/sites";
 import { useUi } from "@/state/ui";
 import { useViewer } from "@/state/viewer";
 
+import { A1, A2, E1, E2 } from "./epochFixtures";
+
 function wrap(children: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return (
@@ -208,6 +210,13 @@ describe("site model load feedback", () => {
     expect(shownAsset(assets, "mesh", "old-mesh")?.id).toBe("old-mesh");
     expect(shownAsset(assets, "gaussian-splat", undefined)?.id).toBe("splat");
     expect(shownAsset(assets, undefined, undefined)).toBeNull();
+  });
+
+  it("shownAsset follows the shown epoch", () => {
+    // Both default-visible, the older listed first: the latest date is shown unless the scene
+    // says another is.
+    expect(shownAsset([A1, A2], "gaussian-splat", undefined, [E1, E2])?.id).toBe(A2.id);
+    expect(shownAsset([A1, A2], "gaussian-splat", undefined, [E1, E2], E1.id)?.id).toBe(A1.id);
   });
 });
 

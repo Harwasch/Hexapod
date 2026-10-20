@@ -5,6 +5,7 @@ import { GlassPanel } from "@twin/ui";
 
 import { useSite } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
+import { siteEpochs } from "@/lib/epochs";
 import { useSites, type AssetRuntime } from "@/state/sites";
 
 import { fromSiteRecord, outstanding, retrySiteLoad, shownAsset, siteLoad } from "./siteLoad";
@@ -48,8 +49,11 @@ export function SiteLoadStatus() {
   const representation = useSites((s) =>
     activeSiteId ? s.representation[activeSiteId] : undefined,
   );
+  const shownEpoch = useSites((s) => (activeSiteId ? (s.epoch[activeSiteId] ?? null) : null));
   const site = useSite(activeSiteId).data;
-  const asset = site ? shownAsset(site.assets, representation, undefined) : null;
+  const asset = site
+    ? shownAsset(site.assets, representation, undefined, siteEpochs(site), shownEpoch)
+    : null;
   const assetId = asset?.id ?? null;
   const runtime = useSites((s) => (assetId ? s.assets[assetId] : undefined));
 
