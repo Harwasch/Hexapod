@@ -125,6 +125,13 @@ describe("which asset of a site is shown", () => {
       validTo: "2026-09-02T00:00:00Z",
     });
     expect(pickShownAsset([A1, A2, superseded], [], "gaussian-splat")?.id).toBe("a2");
+    // Nor ever an inferred one, however new.
+    const filled = splat("filled", {
+      epochId: "e2",
+      sourceKind: "inferred",
+      createdAt: "2026-09-03T00:00:00Z",
+    });
+    expect(pickShownAsset([A1, A2, filled], [], "gaussian-splat")?.id).toBe("a2");
     // A record that does not carry `epochs` at all reads as none.
     expect(siteEpochs({ ...twoEpochSite(), epochs: undefined } as never)).toEqual([]);
     expect(siteEpochs(twoEpochSite())).toEqual([E1, E2]);
