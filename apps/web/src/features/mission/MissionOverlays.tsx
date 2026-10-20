@@ -38,7 +38,8 @@ export function MissionOverlays() {
   const hovered = useMission((s) => s.hoveredMachineId);
   const setHovered = useMission((s) => s.setHoveredMachine);
   const zonesOn = useMission((s) => s.layers.zones);
-  // A simulated fleet's machines are not drawn while As captured is on (state/asCaptured.ts).
+  // Nothing a simulated fleet did is drawn while As captured is on (state/asCaptured.ts): no
+  // machine, no zone's status or progress; each zone's name stays, the plan's annotation.
   const asCaptured = useAsCaptured((s) => s.on);
   const collapsed = useViewer((s) => collapsesToPin(s.camera.altitude));
   const { selectMachine, selectZone, flyToProject } = useMissionActions();
@@ -80,9 +81,10 @@ export function MissionOverlays() {
   );
 
   if (!project) return null;
+  const held = asCaptured && project.simulated;
 
   if (collapsed) {
-    const counts = pinCounts(project, zonesOn);
+    const counts = pinCounts(held ? { ...project, machines: [] } : project, zonesOn);
     // The "Anywhere" project has nothing on the ground to stand for until an area is drawn.
     if (counts.total === 0) return null;
     const label = pinLabel(project.name, counts);
@@ -122,7 +124,7 @@ export function MissionOverlays() {
               className={`mc-chip mc-chip--${zone.tone} ${selected ? "is-selected" : ""}`}
               style={{ visibility: "hidden" }}
               onClick={() => selectZone(zone.id)}
-              aria-label={`${zone.name}: ${zone.short}`}
+              aria-label={held ? zone.name : `${zone.name}: ${zone.short}`}
               data-testid={`zone-chip-${zone.id}`}
             >
               <span className="mc-chip__dot" aria-hidden="true" />
@@ -132,11 +134,11 @@ export function MissionOverlays() {
               ) : (
                 <span className="mc-mono mc-chip__id">{zone.id}</span>
               )}
-              <span className="mc-chip__short">{zone.short}</span>
+              {!held && <span className="mc-chip__short">{zone.short}</span>}
             </button>
           );
         })}
-      {!(asCaptured && project.simulated) &&
+      {!held &&
         project.machines.map((machine: Machine) => {
           const selected = selection?.kind === "machine" && selection.id === machine.id;
           const labelOn = selected || hovered === machine.id;

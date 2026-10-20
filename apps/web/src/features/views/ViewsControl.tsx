@@ -27,7 +27,7 @@ import { VIEW_RULE_TEXT } from "./ruleText";
  * with the key to what is drawn. The analytic views are CesiumJS's alone (lib/viewModes.ts):
  * under another renderer they are offered disabled, with the reason and the one-click switch,
  * and Photo is what the control says is shown, because it is. Beside them, the As captured
- * switch (state/asCaptured.ts): the scan as measured, nothing simulated or inferred drawn.
+ * switch (state/asCaptured.ts): only what was measured drawn, plans kept as annotations.
  */
 export function ViewsControl({ siteId }: { siteId: string }) {
   const mode = useViewMode((s) => s.mode);

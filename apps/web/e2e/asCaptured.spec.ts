@@ -1,6 +1,6 @@
 /**
  * As captured in the app itself (state/asCaptured.ts, ADR 0019 "Living map, scoped"): one
- * switch under which nothing simulated or inferred is drawn.
+ * switch under which only what was measured is drawn (plans stay, as annotations).
  *
  * The site is the synthetic yard with what a viewer can have drawn over its measured splats:
  * Today's inferred layer (the fixture mound), fill methods to compare (`variants/`, the hedge
@@ -19,7 +19,8 @@
  * - `?asCaptured=1` starts on: nothing inferred is drawn, and the wind moves nothing;
  * - under PlayCanvas, the renderer that draws the scan's layers itself (scanView/scanLayers.ts)
  *   takes them off screen, by its own status and by pixels;
- * - on the demo ranch, the simulated fleet's markers and tracks are not drawn;
+ * - on the demo ranch, nothing the simulated fleet did is drawn (machines, tracks, zones'
+ *   progress), while the zones' outlines and names stay as the plan's annotations;
  * - the tool rail is as it was.
  *
  * Screenshots go to `AS_CAPTURED_EVIDENCE_DIR` when set. Headless GL is SwiftShader: pixels are
@@ -413,7 +414,9 @@ test("under cesium, As captured draws nothing inferred or simulated, and gives i
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await expect(chip).toBeVisible();
-  await expect(chip).toContainText("As captured — nothing simulated or inferred is drawn");
+  await expect(chip).toContainText(
+    "As captured — only what was measured is drawn; plans stay as annotations",
+  );
   await expect
     .poll(async () => {
       const d = await drawn(page);
@@ -525,27 +528,59 @@ test("under playcanvas, the renderer that draws the scan's layers takes them off
   await railUnchanged(page);
 });
 
-test("on the demo ranch, the simulated fleet's machines and tracks are not drawn", async ({
+test("on the demo ranch, nothing the simulated fleet did is drawn; the plan's zones stay", async ({
   app,
 }) => {
   await app.getByTestId("onboarding-demo").click();
   await expect(app.getByTestId("project-card")).toBeVisible({ timeout: 30_000 });
   const markers = app.locator('[data-testid^="machine-marker-"]');
+  const chips = app.locator('[data-testid^="zone-chip-"]');
+  const progress = app.locator('[data-testid^="zone-chip-"] .mc-chip__short');
   await expect(markers).toHaveCount(6);
-  const tracks = (): Promise<boolean[]> =>
-    app.evaluate(`window.__twin.viewer.entities.values
-      .filter((e) => String(e.id).startsWith("mission:track"))
-      .map((e) => e.show)`);
-  expect((await tracks()).length).toBeGreaterThan(0);
-  expect((await tracks()).every(Boolean)).toBe(true);
+  const zoneChips = await chips.count();
+  expect(zoneChips).toBeGreaterThan(0);
+  await expect(progress).toHaveCount(zoneChips);
+  /** Each track's show, and each zone outline: solid (treated by the fleet) or dashed. */
+  const drawn = (): Promise<{ tracks: boolean[]; solidZones: number; zones: number }> =>
+    app.evaluate(`(() => {
+      const values = window.__twin.viewer.entities.values;
+      const zones = values.filter((e) => String(e.id).startsWith("mission:zone:") && e.polyline);
+      return {
+        tracks: values.filter((e) => String(e.id).startsWith("mission:track")).map((e) => e.show),
+        zones: zones.length,
+        solidZones: zones.filter((e) => e.polyline.material.constructor.name !== "PolylineDashMaterialProperty").length,
+      };
+    })()`);
+  const before = await drawn();
+  test.info().annotations.push({ type: "ranch before", description: JSON.stringify(before) });
+  expect(before.tracks.length).toBeGreaterThan(0);
+  expect(before.tracks.every(Boolean)).toBe(true);
+  expect(before.solidZones).toBeGreaterThan(0);
+  await app.screenshot({
+    path: EVIDENCE ? `${EVIDENCE}/ranch-before.png` : test.info().outputPath("ranch-before.png"),
+  });
   await setAsCaptured(app, true);
   await expect(markers).toHaveCount(0);
-  expect((await tracks()).some(Boolean)).toBe(false);
-  await expect(app.getByTestId("as-captured-chip")).toBeVisible();
-  const path = EVIDENCE ? `${EVIDENCE}/ranch-as-captured.png` : test.info().outputPath("ranch.png");
-  await app.screenshot({ path });
-  await app.getByTestId("as-captured-chip").getByRole("button", { name: "Turn off" }).click();
+  // Each zone keeps its outline and its name; its simulated status and progress go.
+  await expect(chips).toHaveCount(zoneChips);
+  await expect(progress).toHaveCount(0);
+  const on = await drawn();
+  test.info().annotations.push({ type: "ranch as captured", description: JSON.stringify(on) });
+  expect(on.tracks.some(Boolean)).toBe(false);
+  expect(on.zones).toBe(before.zones);
+  expect(on.solidZones).toBe(0);
+  const chip = app.getByTestId("as-captured-chip");
+  await expect(chip).toContainText(
+    "As captured — only what was measured is drawn; plans stay as annotations",
+  );
+  await app.screenshot({
+    path: EVIDENCE ? `${EVIDENCE}/ranch-as-captured.png` : test.info().outputPath("ranch.png"),
+  });
+  await chip.getByRole("button", { name: "Turn off" }).click();
   await expect(markers).toHaveCount(6);
-  expect((await tracks()).every(Boolean)).toBe(true);
+  await expect(progress).toHaveCount(zoneChips);
+  const after = await drawn();
+  expect(after.tracks.every(Boolean)).toBe(true);
+  expect(after.solidZones).toBe(before.solidZones);
   await railUnchanged(app);
 });

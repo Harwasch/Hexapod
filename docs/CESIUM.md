@@ -629,8 +629,10 @@ pixel counts, and the pixels within a metre of a seam that blend both dates: 0 o
 The splat view control's **As captured** switch (`state/asCaptured.ts`; `?asCaptured=1` in the
 address) draws only what a capture measured: no inferred layer or hole fill (under CesiumJS and
 under PlayCanvas or Spark, `scanView/scanLayers.ts`), no supersedes swap, a view rule as Ground
-truth, the wind calm, the poke tool off, telemetry and split objects at rest, no rehearsal ghost
-and no simulated fleet. It writes none of the viewer's own choices, so turning it off draws what
+truth, the wind calm, the poke tool off, telemetry and split objects at rest, and nothing a
+simulated machine did (a rehearsal's ghosts, finished lanes and raised hands; a simulated fleet's
+machines, tracks and zone progress). Plans and zones' outlines and names stay, as annotations,
+and the chip says so. It writes none of the viewer's own choices, so turning it off draws what
 was drawn before; a HUD chip says it is on, with the way back. Not persisted. The Simulated
 motion badge is not told: it goes because nothing animates. See
 [ADR 0019](DECISIONS/0019-living-map-scoped.md) § As captured. Evidence: `e2e/asCaptured.spec.ts`.

@@ -8,6 +8,7 @@ import {
   ConstantProperty,
   type Entity,
   HorizontalOrigin,
+  JulianDate,
   PolygonHierarchy,
   PolylineDashMaterialProperty,
   SceneTransforms,
@@ -123,8 +124,10 @@ export class MissionManager {
   /** Zones another layer draws (the selected Land's boundary): no entity, no chip anchor. */
   private hiddenZoneIds: ReadonlySet<string> = new Set();
   private tracksVisible = true;
-  /** Whether a simulated project's machines' tracks are hidden (As captured). */
+  /** Whether a simulated fleet's work is hidden (As captured): its tracks, its zones' progress. */
   private agentsHidden = false;
+  /** The zone highlighted (`setSelectedZone`), so a restyle keeps it. */
+  private selectedZoneId: string | null = null;
   private readonly planEntities: Entity[] = [];
   /** The lanes drawn for each zone of the plan overlay (`previewLanes`). */
   private readonly drawnLanes = new Map<string, CoverageLane[]>();
@@ -256,13 +259,13 @@ export class MissionManager {
               (hole) => new PolygonHierarchy(Cartesian3.fromDegreesArray(flattenRing(hole))),
             ),
           ),
-          material: tone.withAlpha(zone.treated ? 0.22 : 0.14),
+          material: tone.withAlpha(this.treated(zone) ? 0.22 : 0.14),
           classificationType: undefined,
         },
         polyline: {
           positions: [...positions, first],
-          width: zone.treated ? 2.4 : 1.8,
-          material: zone.treated
+          width: this.treated(zone) ? 2.4 : 1.8,
+          material: this.treated(zone)
             ? tone
             : new PolylineDashMaterialProperty({ color: tone, dashLength: 14 }),
           clampToGround: true,
@@ -282,28 +285,45 @@ export class MissionManager {
     this.scene.requestRender();
   }
 
-  /** Hides a simulated project's machine tracks, or draws them again (state/asCaptured.ts). */
+  /**
+   * Hides what a simulated fleet did (state/asCaptured.ts), or draws it again: its machines'
+   * tracks, and its zones' progress -- a zone it treated is drawn as the plan's, dashed and
+   * faint, the outline kept. A project whose fleet is real is left as it is.
+   */
   hideAgents(hidden: boolean): void {
     this.agentsHidden = hidden;
     this.setLayer("tracks", this.tracksVisible);
+    this.setSelectedZone(this.selectedZoneId);
   }
 
   private get tracksOn(): boolean {
     return this.tracksVisible && !(this.agentsHidden && this.project?.simulated);
   }
 
-  /** Highlights the selected zone outline. */
+  /** Whether `zone` is drawn as treated: as its fleet says, unless that fleet's work is hidden. */
+  private treated(zone: Zone): boolean {
+    return zone.treated && !(this.agentsHidden && this.project?.simulated);
+  }
+
+  /** Highlights the selected zone outline (and draws each zone as treated or not). */
   setSelectedZone(zoneId: string | null): void {
+    this.selectedZoneId = zoneId;
     for (const entity of this.zoneEntities) {
       const id = typeof entity.id === "string" ? zoneIdOfEntity(entity.id) : null;
       const zone = this.project?.zones.find((z) => z.id === id);
       if (!zone || !entity.polyline) continue;
       const selected = zone.id === zoneId;
-      entity.polyline.width = new ConstantProperty(selected ? 3 : zone.treated ? 2.4 : 1.8);
+      const treated = this.treated(zone);
+      entity.polyline.width = new ConstantProperty(selected ? 3 : treated ? 2.4 : 1.8);
       entity.polyline.material =
-        selected || zone.treated
+        selected || treated
           ? new ColorMaterialProperty(TONE[zone.tone])
           : new PolylineDashMaterialProperty({ color: TONE[zone.tone], dashLength: 14 });
+      const fill = TONE[zone.tone].withAlpha(treated ? 0.22 : 0.14);
+      const now = (entity.polygon?.material as ColorMaterialProperty | undefined)?.color;
+      const was = now?.getValue(JulianDate.now()) as Color | undefined;
+      if (entity.polygon && !Color.equals(was, fill))
+        entity.polygon.material = new ColorMaterialProperty(fill);
     }
     this.scene.requestRender();
   }

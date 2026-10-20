@@ -28,8 +28,10 @@ it.
    forgets it, so nobody is left looking at a scan with its fills hidden without having asked.
    `?asCaptured=1` turns it on for the visit; nothing else in the address does. The switch is in
    the Splat view control (`ViewsControl`), beside Photo · Confidence · Data age; while it is on,
-   a chip in the HUD strip says **"As captured — nothing simulated or inferred is drawn"**, on any
-   site, with **Turn off** (a link may land someone on it who never saw the switch).
+   a chip in the HUD strip says **"As captured — only what was measured is drawn; plans stay as
+   annotations"**, on any site, with **Turn off** (a link may land someone on it who never saw
+   the switch). It claims exactly what is drawn: an earlier "nothing simulated or inferred is
+   drawn" was not true while the plan's zones stayed on the map.
 2. **It never writes a viewer's choice.** Each effect reads the switch where it decides; the
    Inferred style, the wind, the fill picked, a view rule, a pose set by a person stay as they
    were, so turning it off draws exactly what was drawn before. `effectiveInferredStyle()` is the
@@ -53,17 +55,23 @@ WIND_CALM : wind`, the reduced-motion rule extended), which stills the Living Su
      reading, so turning it off shows the pose of now (`cesium/telemetry.ts`); split objects are
      drawn at rest, where they were measured, under every renderer (`state/sceneObjects.ts`
      `objectPose`).
-   - **Agents**: a dress rehearsal's machine ghosts are not drawn (`RehearsalManager`
-     `hideAgents`; the run, its lanes and hands, and its card stay), and a simulated
-     project's fleet markers and tracks are not drawn (`MissionOverlays`,
-     `MissionManager.hideAgents`, told by the rehearsal's).
+   - **Agents, and what they did**: a dress rehearsal draws only the plan's lanes, all pending --
+     no ghost, no lane done, no hand raised, nor the hand open in the card (`RehearsalManager`
+     `hideAgents`; the run's own clock, hands and card are untouched and are drawn as they stand
+     once it is off). A simulated project's fleet draws no machine marker, no track, and none of
+     its zones' progress: each zone chip keeps its name and drops its status ("mowing 58%"), a
+     zone the fleet "treated" is drawn as the plan's (dashed, faint), and the site's pin counts
+     no machine (`MissionOverlays`; `MissionManager.hideAgents`, told by the rehearsal's). A
+     project whose fleet is real keeps all of it: what its machines reported is data.
 4. **The badge is the test.** The Simulated motion badge is not told about the switch. It goes
    because `status.animating` becomes false once the wind is calm: if it stayed, something still
    moved, and the e2e spec would fail.
 5. **What it does not change.** W4a's analytic views (Confidence, Data age of one date) are
-   readings of the capture, not additions to it: they stay. Zones, plans and the site's own
-   footprint are annotations, not depictions of the place: they stay, labelled simulated where
-   they are (the status line, the plan card). The Inferred style and Compare methods' Fill row
+   readings of the capture, not additions to it: they stay. Plans, zones' outlines and names,
+   the plan preview's lanes and the site's own footprint are annotations, not depictions of the
+   place: they stay drawn, which is what the chip says. HUD text about a simulated fleet (the
+   status line, the agent's line, the plan card) is not drawn on the map and stays, labelled
+   simulated where it is. The Inferred style and Compare methods' Fill row
    are disabled while on, each saying "Hidden while As captured is on".
 6. **Renderer-independent** (C5): every effect acts under CesiumJS, PlayCanvas and Spark; the
    motion drivers are shared (they write the parts every renderer reads, `scanMotion.ts`).
@@ -81,11 +89,12 @@ WIND_CALM : wind`, the reduced-motion rule extended), which stills the Living Su
 - A fill picked while it is on is kept for after: Compare methods' Fill row waits, disabled.
 - An object a person drags while it is on is drawn at rest; the pose they set is drawn once it
   is off.
-- Turning it on during a rehearsal leaves the clock running: only the ghosts are not drawn.
+- Turning it on during a rehearsal leaves the clock running and the card counting: the map draws
+  the plan's lanes only, until it is off.
 - Not covered: a whole asset of `sourceKind: "inferred"`, which the app never draws as a site's
   model already (`lib/epochs.ts`), and the Time Lantern's dated imagery, which is observed.
 
 Evidence: `e2e/asCaptured.spec.ts` (the yard with Today's inferred layer, fill methods, a
 supersedes swap and the forest rig in the wind, under CesiumJS and PlayCanvas; `?asCaptured=1`;
-the demo ranch's simulated fleet), `e2e/poke.spec.ts` (a ring stops), and the unit tests beside
+the demo ranch's simulated fleet and its zones' progress), `e2e/poke.spec.ts` (a ring stops), and the unit tests beside
 each effect.

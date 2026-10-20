@@ -78,28 +78,63 @@ afterEach(() => {
 });
 
 describe("RehearsalManager", () => {
-  it("draws no simulated machine while As captured hides them; the run and its lanes go on", () => {
-    const { manager, entities, requestRender, shown } = setup();
+  it("draws none of its simulated run while As captured hides it, and the run as it is after", () => {
+    const { manager, entities, requestRender, shown, heard } = setup();
     const run = rehearsal();
     manager.load(run, look);
     const ghost = entities.getById("rehearsal:ghost:TR-04");
     const now = JulianDate.now();
     expect(ghost?.position?.getValue(now)).toBeDefined();
+    const first = run.lanes[0];
+    const hand = run.hands[0];
+    if (!first || !hand) throw new Error("expected a lane and a hand");
+    manager.seek(first.t1 + 1);
+    expect(shown("rehearsal:done:A-01:0")).toBe(true);
+    expect(shown(`rehearsal:hand:${hand.id}`)).toBe(true);
     requestRender.mockClear();
     manager.hideAgents(true);
     expect(requestRender).toHaveBeenCalled();
-    // No position, nothing drawn: the billboard and its label go with it.
+    // No ghost (no position: the billboard and its label go with it), no lane done, no hand
+    // raised: every lane is the plan's, pending. The mapped creek stays.
     expect(ghost?.position?.getValue(now)).toBeUndefined();
-    const first = run.lanes[0];
-    if (!first) throw new Error("expected a lane");
-    manager.seek(first.t1 + 1);
-    expect(shown("rehearsal:done:A-01:0")).toBe(true);
-    // A rehearsal loaded meanwhile is hidden too, until they are shown again.
-    manager.load(rehearsal(), look);
+    expect(shown("rehearsal:done:A-01:0")).toBe(false);
+    expect(shown("rehearsal:lane:A-01:0")).toBe(true);
+    expect(shown(`rehearsal:hand:${hand.id}`)).toBe(false);
+    expect(shown("rehearsal:creek:0")).not.toBe(false);
+    // Its own state is untouched: the clock and the hands raised are where they were.
+    expect(heard.at(-1)).toMatchObject({ raised: 1 });
+    expect(manager.frame).toMatchObject({ t: first.t1 + 1, raised: 1 });
+    // The clock moved meanwhile draws nothing of it either.
+    manager.seek(run.durationS);
+    expect(shown("rehearsal:done:A-01:1")).toBe(false);
+    expect(shown("rehearsal:lane:A-01:1")).toBe(true);
+    // A rehearsal loaded meanwhile is hidden too, until it is shown again, as it stands.
+    manager.load(rehearsal(), look, first.t1 + 1);
     const again = entities.getById("rehearsal:ghost:TR-04");
     expect(again?.position?.getValue(now)).toBeUndefined();
+    expect(shown("rehearsal:done:A-01:0")).toBe(false);
     manager.hideAgents(false);
     expect(again?.position?.getValue(now)).toBeDefined();
+    expect(shown("rehearsal:done:A-01:0")).toBe(true);
+    expect(shown("rehearsal:lane:A-01:0")).toBe(false);
+    expect(shown(`rehearsal:hand:${hand.id}`)).toBe(true);
+  });
+
+  it("hides the hand open in the card with the rest of the run while As captured is on", () => {
+    const { manager, shown, ids } = setup();
+    const run = rehearsal();
+    manager.load(run, look);
+    const hand = run.hands[0];
+    if (!hand) throw new Error("expected a hand");
+    manager.seek(hand.t + 1);
+    manager.focus(hand.id, false);
+    const focus = ids().find((id) => id.startsWith("rehearsal:focus:"));
+    if (!focus) throw new Error("no focus marker");
+    expect(shown(focus)).not.toBe(false);
+    manager.hideAgents(true);
+    expect(shown(focus)).toBe(false);
+    manager.hideAgents(false);
+    expect(shown(focus)).toBe(true);
   });
 
   it("draws pending lanes, ghosts and the checked creek, hides the plan's passes", () => {

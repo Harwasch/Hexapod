@@ -4,8 +4,9 @@
  */
 export const AS_CAPTURED_TEXT = {
   label: "As captured",
-  chip: "As captured — nothing simulated or inferred is drawn",
-  hint: "Only what the capture measured: no inferred fill, no modelled motion, no simulated machine",
+  // Exactly what it does: plans, zones' outlines and names stay drawn, as annotations.
+  chip: "As captured — only what was measured is drawn; plans stay as annotations",
+  hint: "Only what was measured: no inferred fill, no modelled motion, nothing a simulated machine did",
   off: "Turn off",
   rule: "Drawn as Ground truth while As captured is on",
 } as const;

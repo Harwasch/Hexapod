@@ -277,7 +277,7 @@ export class RehearsalManager {
   private readonly leftOut: Entity[] = [];
   /** The ghosts, and the creek lines drawn with them. */
   private readonly ghosts: Entity[] = [];
-  /** Whether the simulated machines' ghosts are hidden (As captured). */
+  /** Whether the simulated run is hidden (As captured): ghosts, lanes done, hands raised. */
   private agentsHidden = false;
   private readonly listeners = new Set<RehearsalFrameListener>();
 
@@ -637,13 +637,16 @@ export class RehearsalManager {
   }
 
   /**
-   * Hides the simulated machines (state/asCaptured.ts), or draws them again: this rehearsal's
-   * ghosts (the run goes on) and a simulated fleet's tracks (MissionManager; its markers are
+   * Hides what simulated machines did (state/asCaptured.ts), or draws it again: this
+   * rehearsal's ghosts, the lanes they finished and the hands they raised -- every lane drawn
+   * as the plan's, pending; the run itself (its clock, its card) goes on untouched -- and a
+   * simulated fleet's tracks and zone progress (MissionManager; its markers and chips are
    * MissionOverlays').
    */
   hideAgents(hidden: boolean): void {
     this.agentsHidden = hidden;
     this.mission.hideAgents(hidden);
+    this.sync();
     this.scene.requestRender();
   }
 
@@ -660,8 +663,9 @@ export class RehearsalManager {
     if (!rehearsal) return;
     for (const lane of rehearsal.lanes) {
       const id = laneId(lane.zoneId, lane.index);
-      // At the end every lane is done, whatever rounding left in its finishing time.
-      const finished = this.t >= lane.t1 || this.t >= rehearsal.durationS;
+      // At the end every lane is done, whatever rounding left in its finishing time; none while
+      // As captured hides the run.
+      const finished = !this.agentsHidden && (this.t >= lane.t1 || this.t >= rehearsal.durationS);
       const done = this.done.get(id);
       if (done && done.show !== finished) done.show = finished;
       const pending = this.pending.get(id);
@@ -682,9 +686,10 @@ export class RehearsalManager {
       }
     });
     if (this.focused) speaking = null;
+    if (this.focusEntity?.show === this.agentsHidden) this.focusEntity.show = !this.agentsHidden;
     this.clusters.forEach((item, index) => {
       const count = counts[index] ?? 0;
-      const shown = count > 0;
+      const shown = count > 0 && !this.agentsHidden;
       if (item.entity.show !== shown) item.entity.show = shown;
       if (shown && item.count !== count && item.entity.billboard)
         item.entity.billboard.image = new ConstantProperty(cachedHandImage(count));
