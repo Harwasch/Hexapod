@@ -25,6 +25,7 @@ import type { CameraController } from "@/cesium/CameraController";
 import type { ClippingManager } from "@/cesium/ClippingManager";
 import type { PerformanceManager } from "@/cesium/PerformanceManager";
 import type * as Tiles from "@/cesium/providers/tiles";
+import type * as Footprints from "@/cesium/scanFootprint";
 import { SiteManager } from "@/cesium/SiteManager";
 import type { SceneEvents } from "@/cesium/types";
 import { Emitter } from "@/lib/emitter";
@@ -74,18 +75,39 @@ function fakeTileset(root: Matrix4) {
     tileUnload: new Event(),
     isDestroyed: () => false,
     destroy: vi.fn(),
+    // The root tile, as the clip's canopy reads it (`loadCanopy`; its parsing is mocked).
+    resource: {
+      fetchJson: () => Promise.resolve({ root: { content: { uri: "splat.glb" } } }),
+      getDerivedResource: () => ({ fetchArrayBuffer: () => Promise.resolve(new ArrayBuffer(8)) }),
+    },
   };
 }
 type FakeTileset = ReturnType<typeof fakeTileset>;
 
-const made = vi.hoisted(() => ({ tilesets: new Map<string, unknown>() }));
+const made = vi.hoisted(() => ({
+  tilesets: new Map<string, unknown>(),
+  /** An asset whose tileset is held back until `release` is called. */
+  held: new Map<string, (release: () => void) => void>(),
+}));
 vi.mock("@/cesium/providers/tiles", async (importOriginal) => ({
   ...(await importOriginal<typeof Tiles>()),
   createSiteTileset: vi.fn((asset: SiteAsset) => {
     const tileset = fakeTileset(ROOT);
     made.tilesets.set(asset.id, tileset);
-    return Promise.resolve(tileset);
+    const hold = made.held.get(asset.id);
+    if (!hold) return Promise.resolve(tileset);
+    return new Promise((resolve) => hold(() => resolve(tileset)));
   }),
+}));
+// A scan's tall things, outlined for the clip under it (scanFootprint.ts): one, always.
+vi.mock("@/lib/spzPositions", () => ({ spzPickData: () => Promise.resolve({}) }));
+vi.mock("@/view/glb", () => ({ spzFromGlb: () => ({}) }));
+vi.mock("@/cesium/scanFootprint", async (importOriginal) => ({
+  ...(await importOriginal<typeof Footprints>()),
+  canopyOutlines: () => [[[0, 0]]],
+  groundOf: () => 0,
+  outlinesOnGlobe: () => [],
+  withOutlines: (footprint: unknown) => ({ withCanopy: footprint }),
 }));
 vi.mock("@/cesium/scanView/ScanRendererHost", () => ({
   prefetchScanDestination: () => () => undefined,
@@ -93,6 +115,7 @@ vi.mock("@/cesium/scanView/ScanRendererHost", () => ({
 
 function harness(record: Site = twoEpochSite(), others: Site[] = []) {
   made.tilesets.clear();
+  made.held.clear();
   const d = 0.0005;
   const site = {
     ...record,
@@ -141,8 +164,15 @@ function harness(record: Site = twoEpochSite(), others: Site[] = []) {
       sampleHeightSupported: false,
     },
   };
+  /** Where the camera is: at the site, 50 m up, unless a test moves it. */
+  const at = { altitude: 50 };
   const camera = {
-    pose: () => ({ longitude: LON, latitude: LAT, altitude: 50, height: 60 }),
+    pose: () => ({
+      longitude: LON,
+      latitude: LAT,
+      altitude: at.altitude,
+      height: at.altitude + 10,
+    }),
     isMoving: false,
     refreshPose: vi.fn(),
     setObjectScale: vi.fn(),
@@ -158,11 +188,14 @@ function harness(record: Site = twoEpochSite(), others: Site[] = []) {
     resetBenchmark: vi.fn(),
     splatMinimumScreenSpaceError: 8,
   };
+  const clipping = { setFootprint: vi.fn() };
+  const loads: (string | null)[] = [];
+  events.on("site-load", ({ load }) => loads.push(load?.phase ?? null));
   const manager = new SiteManager(
     viewer as never,
     events,
     camera as unknown as CameraController,
-    { setFootprint: vi.fn() } as unknown as ClippingManager,
+    clipping as unknown as ClippingManager,
     performance as unknown as PerformanceManager,
   );
   const records = [site, ...others.map((other) => ({ ...site, ...other }))];
@@ -179,7 +212,13 @@ function harness(record: Site = twoEpochSite(), others: Site[] = []) {
         return [id, { show: t?.show, split: t?.splitDirection }];
       }),
     );
-  return { manager, said, epochs, tileset, drawn, site };
+  /** Moves the camera to `altitude` m and lets the scene take it in (`checkProximity`). */
+  const fly = (altitude: number) => {
+    at.altitude = altitude;
+    viewer.camera.positionWC = Cartesian3.fromDegrees(LON, LAT, altitude + 10);
+    (manager as unknown as { checkProximity(force: boolean): void }).checkProximity(true);
+  };
+  return { manager, said, epochs, tileset, drawn, site, clipping, loads, fly };
 }
 
 const settle = () => new Promise((done) => setTimeout(done, 0));
@@ -386,5 +425,188 @@ describe("comparing two dates of a site", () => {
     await manager.setCompareDates(BOTH);
     await manager.setRepresentation("mesh");
     expect(said).toEqual([BOTH, null]);
+  });
+
+  it("says which date a tileset draws, so a pick on either side is about that date", async () => {
+    const { manager, tileset } = harness();
+    await open(manager);
+    const [march, june] = [tileset(A1.id), tileset(A2.id)];
+    expect(manager.drawnAssetOf(june ?? {})?.id).toBe(A2.id);
+    // The frame's own date, loaded hidden for the placement, is not drawn.
+    expect(manager.drawnAssetOf(march ?? {})).toBeNull();
+    await manager.setCompareDates(BOTH);
+    expect(manager.drawnAssetOf(march ?? {})?.id).toBe(A1.id);
+    expect(manager.drawnAssetOf(june ?? {})?.id).toBe(A2.id);
+    expect(manager.drawnAssetOf({})).toBeNull();
+  });
+
+  it("ends when an asset is asked for by id (the load pill's Retry)", async () => {
+    const { manager, said, drawn } = harness();
+    await open(manager);
+    await manager.setCompareDates(BOTH);
+    await manager.setTemporalAsset(A1.id);
+    expect(said).toEqual([BOTH, null]);
+    expect(drawn()).toEqual({
+      [A1.id]: { show: true, split: SplitDirection.NONE },
+      [A2.id]: ALONE,
+    });
+  });
+
+  it("both dates are hidden when the camera leaves the site, and drawn again on its return", async () => {
+    const { manager, drawn, fly } = harness();
+    await open(manager);
+    await manager.setCompareDates(BOTH);
+    fly(100_000);
+    expect(drawn()).toEqual({
+      [A1.id]: { show: false, split: SplitDirection.LEFT },
+      [A2.id]: { show: false, split: SplitDirection.RIGHT },
+    });
+    fly(50);
+    expect(drawn()).toEqual({
+      [A1.id]: { show: true, split: SplitDirection.LEFT },
+      [A2.id]: { show: true, split: SplitDirection.RIGHT },
+    });
+  });
+
+  it("the left date is hidden when the camera leaves while the right one is still loading", async () => {
+    const E3 = epoch("e3", {
+      ordinal: 3,
+      observedAt: "2026-09-01T15:00:00Z",
+      currentAssetId: "a3",
+    });
+    const A3 = splat("a3", { epochId: "e3", createdAt: "2026-09-02T00:00:00Z" });
+    const { manager, tileset, fly } = harness(
+      twoEpochSite({ epochs: [E1, E2, E3], assets: [A1, A2, A3] }),
+    );
+    await open(manager);
+    let release = (): void => undefined;
+    made.held.set(A2.id, (r) => (release = r));
+    const comparing = manager.setCompareDates(BOTH);
+    await settle();
+    expect(tileset(A1.id)?.show).toBe(true);
+    fly(100_000);
+    expect(tileset(A1.id)?.show).toBe(false);
+    release();
+    await comparing;
+    expect(tileset(A2.id)?.show).toBe(false);
+    fly(50);
+    expect(tileset(A1.id)?.show).toBe(true);
+    expect(tileset(A2.id)?.show).toBe(true);
+  });
+
+  it("stays across Splat / Mesh when both dates have the representation", async () => {
+    const mesh = (id: string, epochId: string) =>
+      ({ ...splat(id, { epochId }), representation: "mesh" }) as SiteAsset;
+    const [m1, m2] = [mesh("m1", E1.id), mesh("m2", E2.id)];
+    const { manager, said, drawn } = harness(twoEpochSite({ assets: [A1, A2, m1, m2] }));
+    await open(manager);
+    await manager.setCompareDates(BOTH);
+    await manager.setRepresentation("mesh");
+    await settle();
+    expect(said).toEqual([BOTH]);
+    expect(drawn()).toMatchObject({
+      [A1.id]: ALONE,
+      [A2.id]: ALONE,
+      m1: { show: true, split: SplitDirection.LEFT },
+      m2: { show: true, split: SplitDirection.RIGHT },
+    });
+    await manager.setRepresentation("gaussian-splat");
+    expect(drawn()).toMatchObject({
+      [A1.id]: { show: true, split: SplitDirection.LEFT },
+      [A2.id]: { show: true, split: SplitDirection.RIGHT },
+      m1: ALONE,
+      m2: ALONE,
+    });
+  });
+
+  it("a date still loading when the comparison is turned off is not drawn when it arrives", async () => {
+    const E3 = epoch("e3", {
+      ordinal: 3,
+      observedAt: "2026-09-01T15:00:00Z",
+      currentAssetId: "a3",
+    });
+    const A3 = splat("a3", { epochId: "e3", createdAt: "2026-09-02T00:00:00Z" });
+    const { manager, drawn } = harness(
+      twoEpochSite({ epochs: [E1, E2, E3], assets: [A1, A2, A3] }),
+    );
+    await open(manager);
+    let release = (): void => undefined;
+    made.held.set(A2.id, (r) => (release = r));
+    const on = manager.setCompareDates(BOTH);
+    await settle();
+    const off = manager.setCompareDates(null);
+    release();
+    await Promise.all([on, off]);
+    await settle();
+    expect(drawn()).toEqual({
+      [A1.id]: ALONE,
+      [A2.id]: ALONE,
+      [A3.id]: { show: true, split: SplitDirection.NONE },
+    });
+  });
+
+  it("on, off and on again while a date loads: drawn on its side once it arrives", async () => {
+    const E3 = epoch("e3", {
+      ordinal: 3,
+      observedAt: "2026-09-01T15:00:00Z",
+      currentAssetId: "a3",
+    });
+    const A3 = splat("a3", { epochId: "e3", createdAt: "2026-09-02T00:00:00Z" });
+    const { manager, drawn } = harness(
+      twoEpochSite({ epochs: [E1, E2, E3], assets: [A1, A2, A3] }),
+    );
+    await open(manager);
+    let release = (): void => undefined;
+    made.held.set(A2.id, (r) => (release = r));
+    const steps = [manager.setCompareDates(BOTH)];
+    await settle();
+    steps.push(manager.setCompareDates(null));
+    await settle();
+    steps.push(manager.setCompareDates(BOTH));
+    release();
+    await Promise.all(steps);
+    await settle();
+    expect(drawn()).toEqual({
+      [A1.id]: { show: true, split: SplitDirection.LEFT },
+      [A2.id]: { show: true, split: SplitDirection.RIGHT },
+      [A3.id]: ALONE,
+    });
+  });
+
+  it("the clip under two dates takes the right-hand date's tall things, as it is that date's", async () => {
+    const clips = (asset: SiteAsset, footprint: unknown = null) =>
+      ({
+        ...asset,
+        footprint,
+        renderConfig: { ...asset.renderConfig, clipsWorld: true },
+      }) as SiteAsset;
+    const june = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [0, 0],
+          [1, 0],
+          [1, 1],
+          [0, 0],
+        ],
+      ],
+    };
+    // A third date is shown first, so June's tall things are read only once it is compared.
+    const E3 = epoch("e3", {
+      ordinal: 3,
+      observedAt: "2026-09-01T15:00:00Z",
+      currentAssetId: "a3",
+    });
+    const A3 = splat("a3", { epochId: "e3", createdAt: "2026-09-02T00:00:00Z" });
+    const { manager, clipping } = harness(
+      twoEpochSite({ epochs: [E1, E2, E3], assets: [clips(A1), clips(A2, june), clips(A3)] }),
+    );
+    await open(manager);
+    // March is the one date chosen; then the two are compared, June on the right.
+    await manager.setEpoch(E1.id);
+    await settle();
+    await manager.setCompareDates(BOTH);
+    for (let i = 0; i < 5; i++) await settle();
+    expect(clipping.setFootprint.mock.calls.at(-1)?.[1]).toEqual({ withCanopy: june });
   });
 });

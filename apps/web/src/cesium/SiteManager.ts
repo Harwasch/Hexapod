@@ -1684,18 +1684,20 @@ export class SiteManager {
     const farBefore = entry.far;
     entry.engaged = engaged;
     entry.far = far;
+    // Both dates when two are compared, each as soon as it is in: the right-hand one (the
+    // main, which carries the clip) may still be loading while the left one is drawn.
+    for (const other of this.drawnHandles(entry)) {
+      if (drawn(entry) !== wasDrawn)
+        other.tileset.show = drawn(entry) && this.cesiumDraws(other.handle.asset);
+      setSeenFromAfar(other.tileset, !engaged && far);
+    }
     const handle = this.handleFor(entry);
     const tileset = handle?.tileset;
     if (!handle || !tileset) return;
-    // Both dates when two are compared; the main one carries the clip.
-    const shown = this.drawnHandles(entry);
     if (drawn(entry) !== wasDrawn) {
-      for (const other of shown)
-        other.tileset.show = drawn(entry) && this.cesiumDraws(other.handle.asset);
       if (drawn(entry)) this.applyClip(entry, handle.asset, tileset);
       else this.clipping.setFootprint(entry.site.id, null);
     }
-    for (const other of shown) setSeenFromAfar(other.tileset, !engaged && far);
     if (engaged !== engagedBefore)
       log.info(engaged ? "site engaged" : "site disengaged", { site: entry.site.slug });
     if (far !== farBefore)
@@ -2518,7 +2520,8 @@ export class SiteManager {
     }
     if (handle.canopy.outlines.length === 0) return;
     if (this.loaded.get(entry.site.id) !== entry || !drawn(entry) || tileset.isDestroyed()) return;
-    if (this.pickAsset(entry, entry.representation)?.id !== handle.asset.id) return;
+    // The clip is the main drawn model's (with two dates compared, the right-hand one's).
+    if (this.mainAsset(entry)?.id !== handle.asset.id) return;
     this.applyClip(entry, handle.asset, tileset);
     this.scene.requestRender();
   }
