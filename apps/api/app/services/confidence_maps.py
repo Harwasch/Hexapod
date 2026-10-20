@@ -33,8 +33,8 @@ from sqlalchemy.orm import Session
 
 from app.analysis import cell_grid, rescan_gate
 from app.analysis.weak_areas import cell_patches, site_projection
-from app.models import Epoch, EpochMap, Site, SiteFrame
-from app.models.enums import EpochMapKind, EpochStatus
+from app.models import Asset, Epoch, EpochMap, Site, SiteFrame
+from app.models.enums import AssetSourceKind, EpochMapKind, EpochStatus
 from app.schemas.confidence import (
     HEURISTIC_LABEL,
     FillTargetsRead,
@@ -294,6 +294,42 @@ def _latest_published(db: Session, site_id: uuid.UUID) -> Epoch:
     return epoch
 
 
+def earlier_measured(db: Session, epoch: Epoch, limit: int) -> list[tuple[Epoch, EpochMap]]:
+    """At most `limit` published epochs of `epoch`'s site observed before it whose current
+    revision has a confidence map, newest first, with that map: one query, however many
+    unmeasured epochs lie between (`measured_map`'s rule, in SQL)."""
+    current = (
+        select(Asset.id.label("asset_id"), Asset.epoch_id.label("epoch_id"))
+        .join(Epoch, Epoch.id == Asset.epoch_id)
+        .where(
+            Epoch.site_id == epoch.site_id,
+            Asset.valid_to.is_(None),
+            Asset.source_kind == AssetSourceKind.OBSERVED.value,
+        )
+        .distinct(Asset.epoch_id)
+        .order_by(Asset.epoch_id, Asset.created_at.desc(), Asset.id.desc())
+        .subquery()
+    )
+    rows = db.execute(
+        select(Epoch, EpochMap)
+        .join(current, current.c.epoch_id == Epoch.id)
+        .join(
+            EpochMap,
+            (EpochMap.asset_id == current.c.asset_id)
+            & (EpochMap.kind == EpochMapKind.CONFIDENCE.value),
+        )
+        .where(
+            Epoch.site_id == epoch.site_id,
+            Epoch.status == EpochStatus.PUBLISHED.value,
+            Epoch.observed_at < epoch.observed_at,
+            Epoch.id != epoch.id,
+        )
+        .order_by(Epoch.observed_at.desc(), Epoch.ordinal.desc())
+        .limit(limit)
+    ).all()
+    return [(found_epoch, found_map) for found_epoch, found_map in rows]
+
+
 def fill_targets(
     db: Session, storage: ObjectStorage, site_id: uuid.UUID, epoch_id: uuid.UUID | None
 ) -> FillTargetsRead:
@@ -308,26 +344,9 @@ def fill_targets(
         else _latest_published(db, site_id)
     )
     row = measured_map(db, epoch)
-    earlier_rows: list[tuple[Epoch, EpochMap]] = []
-    capped = False
-    for candidate in db.scalars(
-        select(Epoch)
-        .where(
-            Epoch.site_id == site_id,
-            Epoch.status == EpochStatus.PUBLISHED.value,
-            Epoch.observed_at < epoch.observed_at,
-            Epoch.id != epoch.id,
-        )
-        .order_by(Epoch.observed_at.desc(), Epoch.ordinal.desc())
-    ):
-        try:
-            found = measured_map(db, candidate)
-        except ConflictError:
-            continue
-        if len(earlier_rows) == MAX_EARLIER:
-            capped = True
-            break
-        earlier_rows.append((candidate, found))
+    found = earlier_measured(db, epoch, MAX_EARLIER + 1)
+    earlier_rows = found[:MAX_EARLIER]
+    capped = len(found) > MAX_EARLIER
     if not earlier_rows:
         raise ConflictError(
             f"epoch {epoch.id} has no earlier measured epoch on its site: nothing has been "

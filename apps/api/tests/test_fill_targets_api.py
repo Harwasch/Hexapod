@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
 from app.analysis import cell_grid, rescan_gate
@@ -325,3 +326,38 @@ def test_a_re_scan_grid_without_its_channels_is_a_409_not_a_500(
     response = api.get(f"/api/v1/sites/{site_id}/fill-targets")
     assert response.status_code == 409, response.text
     assert response.json()["code"] == "confidence-unreadable"
+
+
+def test_the_earlier_epochs_are_found_in_a_bounded_number_of_queries(
+    api: TestClient, db: Session, engine: Engine, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Unmeasured uploads between a measured epoch and its re-scan are skipped in SQL, not
+    one map lookup each: the statements one answer costs do not grow with them."""
+    from datetime import timedelta
+
+    from tests.test_query_counts import counting
+
+    first = _capture(db, "first", FIRST)
+    register_run(db, storage, tmp_path, first, measured("e1"), grid=blob("e1"))
+    site_id = _epoch(db, first).site_id
+    second = _capture(db, "second", SECOND)
+    register_run(db, storage, tmp_path, second, measured("e2", _echoed(site_id)), grid=blob("e2"))
+    path = f"/api/v1/sites/{site_id}/fill-targets"
+
+    def uploads(start: int, count: int) -> None:
+        for index in range(start, start + count):
+            capture = _capture(db, f"upload-{index}", FIRST + timedelta(hours=index + 1))
+            register_run(db, storage, tmp_path, capture, measured(None, _echoed(site_id)))
+
+    uploads(0, 2)
+    db.expunge_all()
+    confidence_maps.GRIDS.clear()
+    with counting(engine) as few:
+        assert api.get(path).status_code == 200
+    uploads(2, 12)
+    db.expunge_all()
+    confidence_maps.GRIDS.clear()
+    with counting(engine) as many:
+        read = api.get(path).json()
+    assert read["comparedWith"] == [str(_epoch(db, first).id)] and read["capped"] is False
+    assert len(many) == len(few)
