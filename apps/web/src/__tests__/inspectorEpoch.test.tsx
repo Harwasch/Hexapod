@@ -22,7 +22,11 @@ import { A1, A2, E1, E2, SITE_ID, twoEpochSite } from "./epochFixtures";
 const scene = vi.hoisted(() => {
   const listeners = new Map<string, Set<() => void>>();
   return {
-    sites: { sharesPlacement: vi.fn((): boolean | null => true), previewScale: vi.fn() },
+    sites: {
+      sharesPlacement: vi.fn((): boolean | null => true),
+      previewScale: vi.fn(),
+      loadedAssets: vi.fn((): { assetId: string; tileset: { root: { extras?: unknown } } }[] => []),
+    },
     camera: { flyTo: vi.fn() },
     selection: { clear: vi.fn() },
     events: {
@@ -79,7 +83,10 @@ function inspect(site: Site, epochId: string | null = null) {
   );
 }
 
-beforeEach(() => scene.sites.sharesPlacement.mockReturnValue(true));
+beforeEach(() => {
+  scene.sites.sharesPlacement.mockReturnValue(true);
+  scene.sites.loadedAssets.mockReturnValue([]);
+});
 
 afterEach(() => {
   cleanup();
@@ -158,5 +165,54 @@ describe("Date shown", () => {
     expect(screen.queryByTestId("inspector-epoch")).toBeNull();
     // The card's own Observed row stays, as before.
     expect(screen.getByText("Observed")).toBeInTheDocument();
+  });
+});
+
+describe("Confidence, in Date shown", () => {
+  /** The design's example summary (M4-6 C2). */
+  const confidence = {
+    format: "hexapod.cellgrid",
+    version: 1,
+    policy: "weak-v1",
+    summary: {
+      cells: 5600,
+      scored: 4800,
+      weak: 620,
+      unseen: 80,
+      weakShare: 0.129,
+      reasons: { views: 300, spread: 210, gsd: 40, accuracy: 0, unseen: 80, alignment: 0 },
+    },
+  };
+  const loaded = (extras: unknown) =>
+    scene.sites.loadedAssets.mockReturnValue([{ assetId: A2.id, tileset: { root: { extras } } }]);
+
+  it("says how much of the shown model is weak, and mostly why", () => {
+    loaded({ confidence });
+    inspect(twoEpochSite({ assets: [clamped, A2] }));
+    expect(screen.getByTestId("inspector-epoch-confidence")).toHaveTextContent(
+      "13% weak: views 6%, spread 4%, unseen 2% · weak-v1",
+    );
+  });
+
+  it("says a model without capture evidence was not measured, and waits for one to load", () => {
+    loaded({ viewCones: {} });
+    inspect(twoEpochSite({ assets: [clamped, A2] }));
+    expect(screen.getByTestId("inspector-epoch-confidence")).toHaveTextContent(
+      /^Not measured: this model came without capture evidence/,
+    );
+    cleanup();
+    scene.sites.loadedAssets.mockReturnValue([]);
+    inspect(twoEpochSite({ assets: [clamped, A2] }));
+    expect(screen.getByTestId("inspector-epoch-confidence")).toHaveTextContent(
+      "Known once the model has loaded",
+    );
+  });
+
+  it("says when nothing was weak", () => {
+    loaded({ confidence: { ...confidence, summary: { scored: 10, weak: 0, weakShare: 0 } } });
+    inspect(twoEpochSite({ assets: [clamped, A2] }));
+    expect(screen.getByTestId("inspector-epoch-confidence")).toHaveTextContent(
+      "Nothing weak · weak-v1",
+    );
   });
 });
