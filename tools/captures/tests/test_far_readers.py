@@ -7,6 +7,7 @@ reader drops a tile's offset (review's mutations of 589947d0)."""
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -104,3 +105,147 @@ def test_check_binding_accepts_site_frame_checksums_and_refuses_local_ones(
     short["tiles"][first] = [1, short["tiles"][first][1] - 1]
     with pytest.raises(ValueError, match="do not cover"):
         rebind_instances.check_binding(TILES, short)
+
+
+def test_instances_report_checksums_are_the_site_frames(checksums: dict[str, str]) -> None:
+    import instances_report
+
+    assert instances_report.tile_checksums(TILES) == checksums
+
+
+def test_rebind_keeps_site_frame_checksums_and_reads_far_leaves(
+    expected: dict, checksums: dict[str, str]
+) -> None:
+    """Every leaf is instance 1 and every parent 0: rebinding takes each parent's ids from
+    the leaves nearest it, which it can only do with every far tile in the site frame."""
+    import rebind_instances
+
+    leaves = _leaves(_tileset())
+    tiles = {
+        row["checksum"]: [1 if uri in leaves else 0, row["gaussians"]]
+        for uri, row in expected["tiles"].items()
+    }
+    out = rebind_instances.rebind(TILES, tiles)
+    assert sorted(out) == sorted(checksums.values())
+    for uri, checksum in checksums.items():
+        assert out[checksum] == [1, expected["tiles"][uri]["gaussians"]], uri
+
+
+# ------------------------------------------------------------------------- segmentations
+
+
+def test_segment_scene_binds_by_position_in_the_site_frame(
+    expected: dict, checksums: dict[str, str]
+) -> None:
+    import rebind_instances
+    import segment_scene
+
+    positions, ids = _site_leaves()
+    tiles = segment_scene.tile_binding_by_position(TILES, positions, ids)
+    assert sorted(tiles) == sorted(checksums.values())
+    for uri in expected["plotLeaves"]["north-east"]:
+        assert (rebind_instances.decode_runs(tiles[checksums[uri]]) == 2).any(), uri
+    for uri in _leaves(_tileset()):
+        assert (rebind_instances.decode_runs(tiles[checksums[uri]]) > 0).all(), uri
+
+
+def test_segment_ground_first_crop_binds_the_far_plot(
+    expected: dict, checksums: dict[str, str]
+) -> None:
+    import rebind_instances
+    import segment_ground_first
+
+    positions, ids = _site_leaves()
+    x, y, _ = synthetic_far.PLOTS["north-east"]
+    box = (x - 60.0, y - 60.0, x + 60.0, y + 60.0)
+    tiles = segment_ground_first.crop_binding(TILES, positions, ids, box)
+    assert sorted(tiles) == sorted(checksums.values())
+    for uri in expected["plotLeaves"]["north-east"]:
+        assert (rebind_instances.decode_runs(tiles[checksums[uri]]) == 2).any(), uri
+
+
+def test_scene_plants_binds_the_site_frame_checksums(
+    tmp_path: Path, checksums: dict[str, str]
+) -> None:
+    import scene_plants
+    import splat_tiles
+    from splat_render import save_ply
+
+    ply = tmp_path / "far.ply"
+    save_ply(ply, synthetic_far.scene())
+    labels = np.ones(len(synthetic_far.scene()), np.int64)
+    document, by_uri = scene_plants.plant_binding(
+        TILES,
+        ply,
+        labels,
+        opacity_min=0.02,
+        tile_gaussians=synthetic_far.TILE_GAUSSIANS,
+    )
+    assert by_uri == checksums
+    assert sorted(document["tiles"]) == sorted(checksums.values())
+    assert splat_tiles.tile_offsets(_tileset())  # the fixture really has moved tiles
+
+
+# --------------------------------------------------------------------------------- skins
+
+
+def test_skin_scene_reads_tiles_bound_by_site_frame_checksums(
+    expected: dict, checksums: dict[str, str]
+) -> None:
+    import skin_scene
+
+    tiles = skin_scene.read_tiles(TILES, _instances(expected))
+    assert {t.uri: t.checksum for t in tiles} == checksums
+    leaves = np.concatenate([t.positions for t in tiles if t.leaf]).astype(np.float64)
+    box = expected["bboxSiteM"]
+    assert leaves.min(axis=0).tolist() == box["min"]
+    assert leaves.max(axis=0).tolist() == box["max"]
+
+
+def test_skin_variants_reads_a_far_scan_whole_and_by_its_instances(
+    tmp_path: Path, expected: dict, checksums: dict[str, str]
+) -> None:
+    import skin_variants
+
+    scan = tmp_path / "scan"
+    shutil.copytree(TILES, scan)
+    whole, doc, _ = skin_variants.read_scan(scan, whole=True)
+    assert {t.uri: t.checksum for t in whole} == checksums
+    assert sorted(doc["tiles"]) == sorted(checksums.values())
+    instances = tmp_path / "instances.json"
+    instances.write_text(json.dumps(_instances(expected)), encoding="utf-8")
+    bound, _, _ = skin_variants.read_scan(scan, instances=instances)
+    assert {t.uri: t.checksum for t in bound} == checksums
+
+
+def test_teacher_materials_loads_a_far_scene_with_its_skins(tmp_path: Path, expected: dict) -> None:
+    """The scene lands where synthetic_far put it, and a skin bound to a moved leaf's
+    site-frame checksum owns that leaf's gaussians."""
+    import skin_scene
+    import teacher_materials
+
+    moved = next(
+        uri for uri in sorted(_leaves(_tileset())) if any(expected["tiles"][uri]["offset"])
+    )
+    n = expected["tiles"][moved]["gaussians"]
+    skin_dir = tmp_path / "skin"
+    skin_dir.mkdir()
+    (skin_dir / "skin.json").write_text(
+        json.dumps(
+            {
+                "skins": [{"id": 1, "instance": 7}],
+                "tiles": {expected["tiles"][moved]["checksum"]: {"skins": [1, n], "row": 0}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (skin_dir / "skin.bin").write_bytes(bytes(n * skin_scene.ROW_BYTES))
+    scene = teacher_materials.load_scene(TILES, skin_dir)
+
+    def rows(a: np.ndarray) -> np.ndarray:
+        return a[np.lexsort(a.T[::-1])]
+
+    truth = synthetic_far.scene().positions.astype(np.float64)
+    loaded = scene.splats.positions.astype(np.float64)
+    assert np.array_equal(rows(loaded), rows(truth))
+    assert int((scene.owner == 7).sum()) == n
