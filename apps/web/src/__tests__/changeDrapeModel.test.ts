@@ -133,6 +133,10 @@ describe("the label", () => {
       "Derived from height surfaces — not observed · changes under ±0.23 m cannot be seen between these dates",
     );
     expect(changeLabel(map({ minDetectableM: 30 }))).toContain("changes under ±30 m cannot");
+    // Rounded up, never down: the floor is not understated.
+    expect(changeLabel(map({ minDetectableM: 0.124 }))).toContain("changes under ±0.13 m cannot");
+    expect(changeLabel(map({ minDetectableM: 0.191 }))).toContain("changes under ±0.2 m cannot");
+    expect(changeLabel(map({ minDetectableM: 0.12 }))).toContain("changes under ±0.12 m cannot");
   });
 
   it("says so when no cell could be compared", () => {

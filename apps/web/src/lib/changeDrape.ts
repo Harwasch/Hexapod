@@ -75,9 +75,12 @@ export function changeOffer(epochs: readonly Epoch[], left: string, right: strin
   return { offered: true, from: from.id, to: to.id };
 }
 
-/** `±X m`, X to two significant figures. */
+/** `±X m`, X to two significant figures, rounded up: the floor is never understated. */
 function plusMinus(m: number): string {
-  return `±${String(Number(m.toPrecision(2)))} m`;
+  if (!(m > 0)) return `±${String(m)} m`;
+  const step = 10 ** (Math.floor(Math.log10(m)) - 1);
+  // Through toPrecision, so 0.13 is not printed 0.13000000000000003.
+  return `±${String(Number((Math.ceil(m / step - 1e-9) * step).toPrecision(2)))} m`;
 }
 
 /** The drape's one line on what it is, and the least change it can show. */
