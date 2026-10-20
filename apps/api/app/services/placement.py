@@ -82,7 +82,13 @@ def rectangle(
     return Polygon(type="Polygon", coordinates=[ring])
 
 
-def boundary(lat: float, lon: float, box: tuple[list[float], list[float]] | None) -> Polygon:
+def boundary(
+    lat: float,
+    lon: float,
+    box: tuple[list[float], list[float]] | None,
+    *,
+    frame_height: float | None = None,
+) -> Polygon:
     """A site's footprint: the capture's measured extent, or the placeholder square.
 
     A7 drew a 60 m square around the placed coordinate and said in a comment that it was
@@ -90,12 +96,57 @@ def boundary(lat: float, lon: float, box: tuple[list[float], list[float]] | None
     bounding box (`box`, east/north/up metres about the origin), which is the thing the
     console will draw a site outline around, offset from the placed origin exactly as the
     gaussians are.
+
+    `frame_height` says the origin is a site frame's (decision D3), at that height: the
+    corners are then placed by the exact inverse of the tiles' root transform
+    (`enu_to_lonlat`), because a joined epoch's box sits up to 2 km from the origin, where
+    the flat `METRES_PER_DEGREE` rule is metres out. Without it, the rectangle is what it
+    always was.
     """
     if box is None:
         half = PLACEHOLDER_HALF_EXTENT_M
-        return rectangle(lat, lon, (-half, half), (-half, half))
-    (min_e, min_n, _), (max_e, max_n, _) = box
-    return rectangle(lat, lon, _widen(min_e, max_e), _widen(min_n, max_n))
+        east, north = (-half, half), (-half, half)
+    else:
+        (min_e, min_n, _), (max_e, max_n, _) = box
+        east, north = _widen(min_e, max_e), _widen(min_n, max_n)
+    if frame_height is None:
+        return rectangle(lat, lon, east, north)
+    origin = Origin(lat=lat, lon=lon, height=frame_height)
+    corners = [(east[0], north[0]), (east[1], north[0]), (east[1], north[1]), (east[0], north[1])]
+    ring = [list(enu_to_lonlat(origin, e, n)) for e, n in corners]
+    return Polygon(type="Polygon", coordinates=[[*ring, ring[0]]])
+
+
+#: WGS84, as the tiles' root transform (`tools/captures/splat_tiles.enu_to_ecef`) uses it.
+WGS84_A = 6_378_137.0
+WGS84_E2 = (1.0 / 298.257223563) * (2.0 - 1.0 / 298.257223563)
+#: Fixed-point iterations of the geodetic latitude: each gains about three orders of
+#: magnitude near the ellipsoid, so six are far below a micrometre, deterministically.
+_LATITUDE_ITERATIONS = 6
+
+
+def enu_to_lonlat(
+    origin: Origin, east: float, north: float, up: float = 0.0
+) -> tuple[float, float]:
+    """The WGS84 (lon, lat) of a point `east`/`north`/`up` metres about `origin`, exactly:
+    ENU about the origin, to earth-centred metres, to geodetic."""
+    phi, lam = math.radians(origin.lat), math.radians(origin.lon)
+    sin_phi, cos_phi = math.sin(phi), math.cos(phi)
+    sin_lam, cos_lam = math.sin(lam), math.cos(lam)
+    prime = WGS84_A / math.sqrt(1.0 - WGS84_E2 * sin_phi * sin_phi)
+    x0 = (prime + origin.height) * cos_phi * cos_lam
+    y0 = (prime + origin.height) * cos_phi * sin_lam
+    z0 = (prime * (1.0 - WGS84_E2) + origin.height) * sin_phi
+    x = x0 - sin_lam * east - sin_phi * cos_lam * north + cos_phi * cos_lam * up
+    y = y0 + cos_lam * east - sin_phi * sin_lam * north + cos_phi * sin_lam * up
+    z = z0 + cos_phi * north + sin_phi * up
+    radius = math.hypot(x, y)
+    latitude = math.atan2(z, radius * (1.0 - WGS84_E2))
+    for _ in range(_LATITUDE_ITERATIONS):
+        sin_lat = math.sin(latitude)
+        n = WGS84_A / math.sqrt(1.0 - WGS84_E2 * sin_lat * sin_lat)
+        latitude = math.atan2(z + WGS84_E2 * n * sin_lat, radius)
+    return math.degrees(math.atan2(y, x)), math.degrees(latitude)
 
 
 def _widen(low: float, high: float) -> tuple[float, float]:
