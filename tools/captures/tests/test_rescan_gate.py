@@ -234,6 +234,17 @@ def test_a_payload_that_does_not_add_up_is_refused(change: dict[str, Any], messa
         rg.RescanGate.from_payload({**payload, **change})
 
 
+def test_capped_is_read_and_refuses_nothing() -> None:
+    """`capped` (more earlier epochs than the API compares with) says nothing about the
+    cells: the gate reads the same either way, and an answer without it is still read."""
+    payload = _payload(10, 3, [bytes([1, 0]), bytes(2), bytes(2)])
+    plain = rg.RescanGate.from_payload(payload)
+    for capped in (True, False):
+        gate = rg.RescanGate.from_payload({**payload, "capped": capped})
+        assert np.array_equal(gate.targets, plain.targets)
+        assert gate.mask_sha256 == plain.mask_sha256
+
+
 def test_a_missing_field_or_file_is_refused(tmp_path: Path) -> None:
     payload = _payload(10, 3, [bytes([1, 0]), bytes(2), bytes(2)])
     del payload["bitOrder"]

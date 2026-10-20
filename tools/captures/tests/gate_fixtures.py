@@ -85,6 +85,8 @@ def still_weak_payload(
         "epochId": epoch,
         "weakIn": weak_in,
         "comparedWith": list(earlier_ids),
+        # The API compares with at most its eight most recent earlier epochs.
+        "capped": False,
         "frame": "tileset",
         "cellM": cell_m,
         "level": level,

@@ -70,12 +70,15 @@ def _probe(cases: list[tuple[str, str, str]]) -> dict[str, list[object]]:
 def test_the_local_pre_check_needs_nothing_but_the_standard_library(tmp_path: Path) -> None:
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps({**json.loads(TARGETS.read_text()), "policy": "weak-v1"}))
+    capped = tmp_path / "capped.json"
+    capped.write_text(json.dumps({**json.loads(TARGETS.read_text()), "capped": True}))
     broken = tmp_path / "broken.json"
     broken.write_text("{")
     result = _probe(
         [
             ("drop only", "", "drop:yard,drop:spool"),
             ("gated", f"camp={TARGETS}", "fill:camp,drop:yard"),
+            ("capped", f"camp={capped}", "fill:camp"),
             ("no targets", "", "fill:camp"),
             ("wrong policy", f"camp={bad}", "fill:camp"),
             ("not json", f"camp={broken}", "fill:camp"),
@@ -84,6 +87,7 @@ def test_the_local_pre_check_needs_nothing_but_the_standard_library(tmp_path: Pa
     )
     assert result["drop only"] == ["ok", []]
     assert result["gated"] == ["ok", ["camp"]]
+    assert result["capped"] == ["ok", ["camp"]]
     for name, words in [
         ("no targets", "a fill runs only where a re-scan left cells weak"),
         ("wrong policy", "rescan-gate-v1"),
