@@ -29,7 +29,7 @@ import {
   deviceSplatCeiling,
   isHandheld,
 } from "@/lib/detail";
-import { epochOptions, pickShownAsset, siteEpochs } from "@/lib/epochs";
+import { epochOptions, frameAnchor, pickShownAsset, siteEpochs } from "@/lib/epochs";
 import { assetScale, scalableAsset } from "@/lib/realSize";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 
@@ -91,6 +91,7 @@ import {
   liftAt,
   placedMatrix,
   placementFrame,
+  sameRootFrame,
   samePlacement,
   scaledBottom,
   scaledCenter,
@@ -202,6 +203,13 @@ interface AssetHandle {
   splats?: SplatCount;
   /** How the tileset is placed: its runtime scale and the lift it rests at (`placeTileset`). */
   placement?: TilesetPlacement;
+  /**
+   * Another date of the site drawn with the frame's anchor (`followAnchor`): the anchor's asset
+   * id, whose model matrix this one copies and is never clamped on its own.
+   */
+  follows?: string;
+  /** The dates of the site that copy this anchor's model matrix (`followAnchor`). */
+  followers?: Set<AssetHandle>;
   /**
    * A splat scan's tall things (scanFootprint.ts), in its own frame, at the height of the ground
    * it rests on: the clip under it covers them too. Undefined until asked for, null while being
@@ -1495,7 +1503,7 @@ export class SiteManager {
         if (!this.cesiumDraws(asset) || (asset.epochId && !this.showsAsset(active, asset)))
           tileset.preloadWhenHidden = false;
         this.scene.primitives.add(tileset);
-        this.attachTileset(handle, tileset, asset);
+        this.attachTileset(active, handle, tileset, asset);
         return tileset;
       })
       .catch((error: unknown) => {
@@ -1565,10 +1573,15 @@ export class SiteManager {
     );
   }
 
-  private attachTileset(handle: AssetHandle, tileset: Cesium3DTileset, asset: SiteAsset): void {
+  private attachTileset(
+    active: ActiveSite,
+    handle: AssetHandle,
+    tileset: Cesium3DTileset,
+    asset: SiteAsset,
+  ): void {
     handle.tileset = tileset;
     this.applyScreenSpaceError(this.screenSpaceError, this.pixelRatio);
-    this.placeTileset(handle, tileset);
+    this.placeTileset(active, handle, tileset);
     const radius = tileset.boundingSphere.radius;
     this.events.emit("asset", {
       id: asset.id,
@@ -1662,12 +1675,35 @@ export class SiteManager {
   }
 
   /**
+   * Places a tileset as its catalog record says (`placeOwn`) -- unless it is one of a site's
+   * dated captures other than the one that made the site's frame (lib/epochs.ts
+   * `frameAnchor`). Every date of a site is drawn with that one's model matrix (`followAnchor`),
+   * so the difference between two dates is the data's own, never the viewer's terrain, and
+   * publishing a new date never moves the ones already there.
+   */
+  private placeTileset(entry: ActiveSite, handle: AssetHandle, tileset: Cesium3DTileset): void {
+    const asset = handle.asset;
+    const anchor = asset.epochId
+      ? frameAnchor(entry.epochs, entry.site.assets, asset.representation)
+      : null;
+    if (anchor && anchor.asset.id !== asset.id) {
+      this.followAnchor(entry, handle, tileset, anchor.asset);
+      return;
+    }
+    this.placeOwn(handle, tileset);
+  }
+
+  /**
    * Places a tileset as its catalog record says: drawn at its runtime scale about its root
    * transform's origin (`renderConfig.scale`; tilesetScale.ts), then rested on the ground
    * (`clampToGround`) or raised by `heightOffsetM`. An asset with none of the three keeps the
-   * identity model matrix it was loaded with.
+   * identity model matrix it was loaded with. Resolves (`placed`, and `roughly` first) once it
+   * rests where it will.
    */
-  private placeTileset(handle: AssetHandle, tileset: Cesium3DTileset): void {
+  private placeOwn(
+    handle: AssetHandle,
+    tileset: Cesium3DTileset,
+  ): { placed: Promise<void>; roughly: Promise<void> } {
     const asset = handle.asset;
     const scale = assetScale(asset);
     const placement: TilesetPlacement = {
@@ -1682,21 +1718,110 @@ export class SiteManager {
     handle.unsubscribe.push(() => {
       if (placement.timer !== null) clearTimeout(placement.timer);
     });
-    this.applyPlacement(tileset, placement);
-    if (asset.renderConfig.clampToGround) {
-      let rough = (): void => undefined;
-      handle.placedRoughly = new Promise<void>((resolve) => (rough = resolve));
-      handle.placed = this.clampToGround(handle, tileset, asset, rough).finally(rough);
-    }
+    this.applyPlacement(handle, tileset, placement);
+    if (!asset.renderConfig.clampToGround)
+      return { placed: Promise.resolve(), roughly: Promise.resolve() };
+    let rough = (): void => undefined;
+    const roughly = new Promise<void>((resolve) => (rough = resolve));
+    const placed = this.clampToGround(handle, tileset, asset, rough).finally(rough);
+    handle.placedRoughly = roughly;
+    handle.placed = placed;
+    return { placed, roughly };
   }
 
-  /** Sets the model matrix a placement asks for, when it is not the one already set. */
-  private applyPlacement(tileset: Cesium3DTileset, placement: TilesetPlacement): void {
-    const matrix = placedMatrix(placement.frame, placement.scale, placement.liftM);
-    if (Matrix4.equals(tileset.modelMatrix ?? Matrix4.IDENTITY, matrix)) return;
-    tileset.modelMatrix = matrix;
-    syncRootTransform(tileset);
+  /**
+   * Draws a date of a site with the model matrix of the date that made the site's frame (the
+   * anchor; lib/epochs.ts `frameAnchor`), copied exactly, and never clamps it on its own.
+   *
+   * The clamp corrects the frame's height (an `msl-unverified` datum, GNSS height error): a
+   * property of the frame, measured once, on the capture it belongs to. With one matrix the
+   * vertical difference between two dates is the data's own. The anchor is loaded for this if
+   * it is not shown (hidden, never preloading: `ensureTileset`), as it is after switching
+   * away from it.
+   *
+   * Copying is only right for tiles expressed in the same frame (`sameRootFrame`). One that is
+   * not -- the pipeline did not place the date in the site frame -- or whose anchor did not
+   * load is placed on its own, and the log says so (a label for it is M3's).
+   */
+  private followAnchor(
+    entry: ActiveSite,
+    handle: AssetHandle,
+    tileset: Cesium3DTileset,
+    anchor: SiteAsset,
+  ): void {
+    const scale = assetScale(handle.asset);
+    handle.placement = {
+      frame: placementFrame(tileset, lowestHeight(tileset)),
+      saved: scale,
+      scale,
+      liftM: 0,
+      serial: 0,
+      timer: null,
+    };
+    handle.follows = anchor.id;
+    let rough = (): void => undefined;
+    handle.placedRoughly = new Promise<void>((resolve) => (rough = resolve));
+    const alone = async (message: string): Promise<void> => {
+      log.warn(message, { asset: handle.asset.id, anchor: anchor.id });
+      handle.follows = undefined;
+      const own = this.placeOwn(handle, tileset);
+      void own.roughly.then(rough);
+      await own.placed;
+    };
+    const follow = async (): Promise<void> => {
+      const anchorTileset = await this.ensureTileset(entry, anchor);
+      if (tileset.isDestroyed() || this.loaded.get(entry.site.id) !== entry) return;
+      const anchorHandle = entry.handles.get(anchor.id);
+      if (!anchorTileset || anchorTileset.isDestroyed() || !anchorHandle) {
+        await alone("the site frame's own epoch did not load; this date is placed on its own");
+        return;
+      }
+      if (!sameRootFrame(rootTransform(anchorTileset), rootTransform(tileset))) {
+        await alone("an epoch's tiles are not in its site's frame; placed on its own");
+        return;
+      }
+      (anchorHandle.followers ??= new Set()).add(handle);
+      // At once, then each time the anchor moves (`applyPlacement` copies to its followers).
+      this.copyPlacement(anchorTileset, tileset);
+      await anchorHandle.placedRoughly;
+      this.copyPlacement(anchorTileset, tileset);
+      rough();
+      await anchorHandle.placed;
+      this.copyPlacement(anchorTileset, tileset);
+    };
+    handle.placed = follow().finally(rough);
+  }
+
+  /** Gives `to` exactly the model matrix `from` is drawn with. */
+  private copyPlacement(from: Cesium3DTileset, to: Cesium3DTileset): void {
+    if (Matrix4.equals(to.modelMatrix ?? Matrix4.IDENTITY, from.modelMatrix ?? Matrix4.IDENTITY))
+      return;
+    to.modelMatrix = Matrix4.clone(from.modelMatrix ?? Matrix4.IDENTITY);
+    // What reads the scan's frame -- a dedicated renderer drawing it, the collider -- sees it
+    // at once, as after any placement.
+    syncRootTransform(to);
     this.scene.requestRender();
+  }
+
+  /**
+   * Sets the model matrix a placement asks for, when it is not the one already set, and on
+   * every date of the site that follows this one (`followAnchor`).
+   */
+  private applyPlacement(
+    handle: AssetHandle,
+    tileset: Cesium3DTileset,
+    placement: TilesetPlacement,
+  ): void {
+    const matrix = placedMatrix(placement.frame, placement.scale, placement.liftM);
+    if (!Matrix4.equals(tileset.modelMatrix ?? Matrix4.IDENTITY, matrix)) {
+      tileset.modelMatrix = matrix;
+      syncRootTransform(tileset);
+      this.scene.requestRender();
+    }
+    for (const follower of handle.followers ?? []) {
+      if (follower.tileset && !follower.tileset.isDestroyed())
+        this.copyPlacement(tileset, follower.tileset);
+    }
   }
 
   /**
@@ -1761,6 +1886,14 @@ export class SiteManager {
     const placement = handle.placement;
     if (!placement) return;
     const asset = handle.asset;
+    if (handle.follows) {
+      // Drawn with the frame's anchor, never rested on its own: it moves when the anchor does.
+      const anchor = entry.handles.get(handle.follows)?.tileset;
+      if (anchor && !anchor.isDestroyed()) this.copyPlacement(anchor, tileset);
+      if (entry.engaged && this.pickAsset(entry, entry.representation)?.id === asset.id)
+        this.applyClip(entry, asset, tileset);
+      return;
+    }
     const offset = asset.renderConfig.heightOffsetM ?? 0;
     // A clamp still sampling was for the scale before.
     placement.serial += 1;
@@ -1779,7 +1912,7 @@ export class SiteManager {
     } else {
       placement.liftM = offset;
     }
-    this.applyPlacement(tileset, placement);
+    this.applyPlacement(handle, tileset, placement);
     if (entry.engaged && this.pickAsset(entry, entry.representation)?.id === asset.id)
       this.applyClip(entry, asset, tileset);
   }
@@ -1921,15 +2054,18 @@ export class SiteManager {
       const rough = restOn(wanted.map((_, i) => plausible(terrain?.[i]?.height)));
       if (rough) {
         placement.liftM = rough.lift;
-        this.applyPlacement(tileset, placement);
+        this.applyPlacement(handle, tileset, placement);
         onRough?.();
       }
     }
     // The ground that is actually drawn may be a mesh (the photorealistic world, another
     // site's model) sitting metres from the terrain; rest on what is visible when there is
-    // something plausible there.
+    // something plausible there -- but never on another date of the same site, drawn where
+    // this one will be.
     const drawn = this.scene.sampleHeightSupported
-      ? await this.scene.sampleHeightMostDetailed(cartographics(), [tileset]).catch(() => undefined)
+      ? await this.scene
+          .sampleHeightMostDetailed(cartographics(), [tileset, ...this.otherDates(handle)])
+          .catch(() => undefined)
       : undefined;
     // A later clamp (another scale tried meanwhile) has the model now.
     if (tileset.isDestroyed() || placement.serial !== serial) return;
@@ -1958,7 +2094,24 @@ export class SiteManager {
       });
     }
     placement.liftM = rested.lift;
-    this.applyPlacement(tileset, placement);
+    this.applyPlacement(handle, tileset, placement);
+  }
+
+  /** The tilesets of the other dates of `handle`'s site, of its representation. */
+  private otherDates(handle: AssetHandle): Cesium3DTileset[] {
+    if (!handle.asset.epochId) return [];
+    for (const entry of this.loaded.values()) {
+      if (entry.handles.get(handle.asset.id) !== handle) continue;
+      return [...entry.handles.values()]
+        .filter(
+          (other) =>
+            other !== handle &&
+            other.asset.epochId &&
+            other.asset.representation === handle.asset.representation,
+        )
+        .flatMap((other) => (other.tileset && !other.tileset.isDestroyed() ? [other.tileset] : []));
+    }
+    return [];
   }
 
   private applyClip(active: ActiveSite, asset: SiteAsset, tileset: Cesium3DTileset): void {
@@ -2475,6 +2628,11 @@ function bboxArea(footprint: Footprint): number {
 }
 
 /** Ellipsoid height of the lowest corner of a tileset's root oriented bounding box. */
+/** The transform a tileset's root tile declares (its `tileset.json`), or none. */
+function rootTransform(tileset: Cesium3DTileset): Matrix4 | undefined {
+  return (tileset.root as { transform?: Matrix4 } | undefined)?.transform;
+}
+
 function lowestHeight(tileset: Cesium3DTileset): number | undefined {
   const inner = (tileset.root as unknown as { boundingVolume?: TileVolume } | undefined)
     ?.boundingVolume?.boundingVolume;
