@@ -22,7 +22,12 @@ never written in place. Instead, holding the asset's row lock:
    (the whole file set, or the directory unit), and every kind keyed by the ids of a kind
    it replaces -- the skin, materials and telemetry, when it replaces `instances` --
    unless it sends those too;
-5. the asset's URL moves to the new `tileset.json`, each kind dropped that way is flagged
+5. the new generation is listed back and refused unless its tiles are byte-identical to
+   the current ones (`sidecars.tiles_fingerprint`);
+6. the asset's URL moves to the new `tileset.json` -- the one exception ADR 0013 makes to
+   an asset's URL never being rewritten, because the tiles are the same bytes and the old
+   generation stays, immutable, in storage -- with the URL it left appended to its
+   `url_history` (when, and why: `sidecar-attach`); each kind dropped that way is flagged
    on the asset (`sidecar_flags`, as a republish flags what it cannot carry), and the
    transaction commits.
 
@@ -90,6 +95,9 @@ LEADER_REPLACED = (
     "ones ({basis})"
 )
 LEADER_REMOVED = "it names {follows} ids, and an attach removed {follows} ({basis})"
+
+#: Why an attach moved the asset off a URL, as its `url_history` records it.
+REASON = "sidecar-attach"
 
 _URL = TypeAdapter(HttpUrl)
 
@@ -229,6 +237,14 @@ def _attach(
             f"{too_big[0]} is too large for one server-side copy", code=NOT_ATTACHABLE
         )
 
+    # What the new generation's tiles must be, to the byte (ADR 0013's exception).
+    tiles_now = sidecars.tiles_fingerprint(current.document, current.objects)
+    if tiles_now is None:
+        raise ConflictError(
+            f"the store cannot vouch for the bytes of {url}'s tiles (an object without an "
+            "ETag), so a new generation could not be shown to hold them unchanged",
+            code=NOT_ATTACHABLE,
+        )
     body = sidecars.serialize(sidecars.with_extras(current.document, extras))
     generation = sidecars.generation_from(
         [f"from\t{here.key}"]
@@ -259,6 +275,7 @@ def _attach(
     # The barrier: the root goes up only once everything it can name is there.
     public.put_object(target.key, body, "application/json", cache_control=IMMUTABLE_CACHE)
     new_url = public.public_url(target.key)
+    _check_identical(public, target, tiles_now, url)
 
     attached = sorted(sidecars.discover({k: v for k, v in patch.items() if v is not None}, staged))
     present = sidecars.discover(extras, final - tiles - {here.entry})
@@ -278,6 +295,10 @@ def _attach(
     ]
 
     asset.source = {**dict(asset.source), "url": new_url}
+    asset.url_history = [
+        *(asset.url_history or []),
+        {"url": url, "movedTo": new_url, "replacedAt": now.isoformat(), "reason": REASON},
+    ]
     if rig_set:
         render = dict(asset.render_config)
         if payload.rig_url is None:
@@ -459,6 +480,26 @@ def _check_base(public: ObjectStorage, based_on: str, url: str, current: _Direct
             "which a republish wrote. Compute the sidecars against that tileset and stage "
             "them again.",
             code=TILES_CHANGED,
+        )
+
+
+def _check_identical(
+    public: ObjectStorage, target: sidecars.TilesetLocation, tiles_now: str, url: str
+) -> None:
+    """Refuse unless the generation just written holds the current tiles, to the byte.
+
+    ADR 0013 never rewrites an asset's URL but for an attach, and an attach only because
+    it adds files beside the very same tiles. So the new generation is listed back, as it
+    now is in the bucket, and its tiles' fingerprint (`sidecars.tiles_fingerprint`: the
+    tree, and every tile's size and ETag) must be the current one's before the asset may
+    move to it. What was written stays as keys nothing points at, like any failed attach.
+    """
+    written = _read(public, target)
+    if sidecars.tiles_fingerprint(written.document, written.objects) != tiles_now:
+        raise ConflictError(
+            f"the new generation at {target.key} does not hold the tiles of {url} unchanged "
+            "(not the tiles' bytes, or not their tree), so the asset stays where it is",
+            code=NOT_ATTACHABLE,
         )
 
 

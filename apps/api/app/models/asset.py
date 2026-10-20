@@ -71,5 +71,12 @@ class Asset(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     source_kind: Mapped[str] = mapped_column(
         String(10), nullable=False, default="observed", server_default=text("'observed'")
     )
+    # Append-only: every URL a sidecar attach moved this asset off, oldest first, each with
+    # when, why (`sidecar-attach`) and where to (`services/attach.py`). ADR 0013's one
+    # exception to "an asset's URL is never rewritten": an attach repoints only to a
+    # generation holding byte-identical tiles, and the generation it left stays in storage.
+    url_history: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
 
     site: Mapped[Site | None] = relationship(back_populates="assets")
