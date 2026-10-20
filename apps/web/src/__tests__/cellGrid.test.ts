@@ -77,6 +77,23 @@ describe("the descriptor", () => {
     expect(cellGridMeta(at(2, big))).toBeNull();
   });
 
+  it("refuses a score or reasons channel that is not one unsigned byte", async () => {
+    const { meta } = await encodeConfidenceGrid(fixture);
+    const typed = (name: string, type: string) => ({
+      confidence: {
+        ...meta,
+        channels: meta.channels.map((c) => (c.name === name ? { ...c, type } : c)),
+      },
+    });
+    // Every reader of the score takes its first byte as 0-255: a signed 0xff is -1, not 255.
+    expect(cellGridMeta(typed("score", "i1"))).toBeNull();
+    expect(cellGridMeta(typed("reasons", "i1"))).toBeNull();
+    // Two bytes would also move every channel after it: still refused, not misread.
+    expect(cellGridMeta(typed("score", "u2"))).toBeNull();
+    // Another channel may be any type the container has.
+    expect(cellGridMeta(typed("relief", "i1"))).not.toBeNull();
+  });
+
   it("is the same bytes every time it is built", async () => {
     const a = await encodeConfidenceGrid(fixture);
     const b = await encodeConfidenceGrid(fixture);

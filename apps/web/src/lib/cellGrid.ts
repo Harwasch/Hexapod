@@ -115,6 +115,11 @@ export function cellGridMeta(extras: unknown, key = "confidence"): CellGridMeta 
   const channels = raw.channels as CellGridChannel[] | undefined;
   if (!Array.isArray(channels) || channels.length === 0) return null;
   if (!channels.every((c) => typeof c?.name === "string" && c.type in CHANNEL_BYTES)) return null;
+  // The score and the reason bits are read as one unsigned byte each (the textures,
+  // `evidenceAt`): one declared otherwise is refused rather than misread (a signed 0xff
+  // would count as a strong 255).
+  if (channels.some((c) => (c.name === "score" || c.name === "reasons") && c.type !== "u1"))
+    return null;
   const stride = cellStride(channels);
   const levels = raw.levels as CellGridLevel[] | undefined;
   if (!Array.isArray(levels) || levels.length === 0 || levels.length > MAX_CELL_LEVELS) return null;
