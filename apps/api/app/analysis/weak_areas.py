@@ -20,6 +20,10 @@ made of at any origin height. (An azimuthal-equidistant projection at the origin
 that plane: it measures on the ellipsoid, and at a 1,500 m origin it puts a point 1 km
 east 23 cm short.)
 
+**The antimeridian.** A zone that crosses longitude 180 is cut there in the site plane,
+into a zone each side (RFC 7946 3.1.9), and each part's longitudes are unwrapped about the
+origin's and put back in [-180, 180] as a whole, so no zone is drawn the long way round.
+
 **Budget.** Over `budget_m2`, whole zones are taken in rank order -- the one under
 `focus` first, then the largest, then the nearest `focus` -- while they fit (within one
 zone cell); the first that does not is clipped to a disc about the focus or its weakest
@@ -56,6 +60,7 @@ from typing import Literal
 
 import numpy as np
 import shapely
+import shapely.ops
 from numpy.typing import ArrayLike, NDArray
 from pyproj import Transformer
 from rasterio.features import rasterize, shapes
@@ -109,6 +114,8 @@ class SiteProjection:
 
     to_geographic: Callable[[ArrayLike, ArrayLike], tuple[Coordinates, Coordinates]]
     to_metric: Callable[[ArrayLike, ArrayLike], tuple[Coordinates, Coordinates]]
+    #: The origin's longitude: where a zone's longitudes are unwrapped about (`_to_globe`).
+    origin_lon: float = 0.0
 
 
 def site_projection(lat: float, lon: float, height: float) -> SiteProjection:
@@ -133,7 +140,7 @@ def site_projection(lat: float, lon: float, height: float) -> SiteProjection:
         x, y, _ = forward.transform(lons, lats, np.full_like(lons, height))
         return np.asarray(x, dtype=np.float64), np.asarray(y, dtype=np.float64)
 
-    return SiteProjection(to_geographic=to_geographic, to_metric=to_metric)
+    return SiteProjection(to_geographic=to_geographic, to_metric=to_metric, origin_lon=lon)
 
 
 @dataclass(frozen=True)
@@ -404,24 +411,65 @@ def _diameter_m(polygon: Polygon) -> float:
     return max(sides, default=0.0)
 
 
+def _unwrapped(lon: NDArray[np.float64], origin_lon: float) -> NDArray[np.float64]:
+    """Longitudes made continuous about the origin's: within 180 degrees of it, so a zone
+    beside the antimeridian is one run of numbers, past 180 or under -180 if need be."""
+    out: NDArray[np.float64] = origin_lon + (np.mod(lon - origin_lon + 180.0, 360.0) - 180.0)
+    return out
+
+
 def _projected(
     projection: SiteProjection,
 ) -> Callable[[NDArray[np.float64]], NDArray[np.float64]]:
     def apply(points: NDArray[np.float64]) -> NDArray[np.float64]:
         lon, lat = projection.to_geographic(points[:, 0], points[:, 1])
-        return np.column_stack([lon, lat])
+        return np.column_stack([_unwrapped(lon, projection.origin_lon), lat])
 
     return apply
 
 
+#: How far past the antimeridian a cut vertex may land from rounding, degrees (~1 um).
+_ON_THE_CUT = 1e-11
+
+
+def split_at_antimeridian(polygon: Polygon, projection: SiteProjection) -> list[Polygon]:
+    """`polygon` (site-frame metres) cut where it crosses longitude 180, so each part lies
+    on one side: one part when it does not cross. The meridian is drawn into the plane
+    through the projection itself, sampled over the polygon's latitudes and past them."""
+    if polygon.is_empty:
+        return []
+    xs, ys = np.asarray(polygon.exterior.coords).T
+    lon, lat = projection.to_geographic(xs, ys)
+    unwrapped = _unwrapped(lon, projection.origin_lon)
+    if unwrapped.max() <= 180.0 + _ON_THE_CUT and unwrapped.min() >= -180.0 - _ON_THE_CUT:
+        return [polygon]
+    margin = max(float(lat.max() - lat.min()), 1e-6)
+    lats = np.linspace(float(lat.min()) - margin, float(lat.max()) + margin, 65)
+    mx, my = projection.to_metric(np.full_like(lats, 180.0), lats)
+    cut = shapely.LineString(np.column_stack([mx, my]))
+    parts = _polygons(shapely.ops.split(polygon, cut))
+    return [orient(part) for part in parts] if parts else [polygon]
+
+
 def _to_globe(polygon: Polygon, projection: SiteProjection) -> Polygon:
-    """The polygon's vertices through the site's tangent plane; the largest part should
-    the projection make it more than one (it does not at site scale)."""
+    """The polygon's vertices through the site's tangent plane, longitudes unwrapped about
+    the origin's and then put back in [-180, 180] as a whole (a part never straddles 180:
+    `split_at_antimeridian` cut it there), so a zone is never drawn the long way round.
+    The largest part should the projection make it more than one (it does not at site
+    scale)."""
     globe = make_valid(shapely.transform(polygon, _projected(projection)))
     parts = _polygons(globe)
     if not parts:
         raise ValueError("a weak area did not survive projection to the globe")
-    return orient(max(parts, key=lambda part: part.area))
+    part = max(parts, key=lambda each: each.area)
+    middle = part.centroid.x
+    turn = -360.0 if middle > 180.0 else 360.0 if middle < -180.0 else 0.0
+
+    def back(points: NDArray[np.float64]) -> NDArray[np.float64]:
+        lon = np.clip(points[:, 0] + turn, -180.0, 180.0)
+        return np.column_stack([lon, points[:, 1]])
+
+    return orient(shapely.transform(part, back))
 
 
 def _ranked(polygons: list[Polygon], focus_xy: Point | None) -> list[Polygon]:
@@ -600,6 +648,18 @@ def cell_patches(
     drawn = zone_polygons(zone, min_area_m2=MIN_AREA_M2)
     if allowed is not None:
         drawn = clip_to(drawn, allowed)
+    # A zone across the antimeridian is a zone each side of it (GeoJSON's rule, RFC 7946
+    # 3.1.9): each is a polygon on the globe with its own cells and its own place in a budget.
+    drawn = sorted(
+        (
+            part
+            for polygon in drawn
+            for part in split_at_antimeridian(polygon, projection)
+            if part.area >= MIN_AREA_M2
+        ),
+        key=lambda part: part.area,
+        reverse=True,
+    )
     polygons, truncated = choose_zones(
         zone,
         drawn,

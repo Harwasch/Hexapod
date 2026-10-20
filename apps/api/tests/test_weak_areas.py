@@ -420,3 +420,28 @@ def test_no_zone_without_a_weak_cell_is_returned() -> None:
     found = cell_patches(plane, weak_mask(plane), PROJECTION, allowed=gap)
     assert all(patch.cells > 0 for patch in found.patches)
     assert found.patches == []
+
+
+@pytest.mark.parametrize("origin_lon", [180.0, -180.0, 179.99999])
+def test_a_zone_across_the_antimeridian_is_split_there(origin_lon: float) -> None:
+    """A 4 m weak square straddling east = 0 at a site on the antimeridian: its corners land
+    near both +180 and -180. As one planar polygon it would span the globe while `areaM2`
+    said 16; it is two zones instead, one each side, each a few metres across."""
+    projection = site_projection(0.0, origin_lon, 0.0)
+    plane = a_plane()
+    lon0 = float(projection.to_geographic(0.0, 0.0)[0])
+    shift = round((180.0 - abs(lon0)) * 111_320.0 / 1.0) if abs(lon0) < 180 else 0
+    weaken(plane, (shift - 2, shift + 2), (-2, 2), score=50, bits=BITS["views"])
+    found = cell_patches(plane, weak_mask(plane), projection)
+
+    assert len(found.patches) == 2
+    assert sum(p.area_m2 for p in found.patches) == pytest.approx(16.0)
+    assert sum(p.cells for p in found.patches) == 16
+    sides = set()
+    for patch in found.patches:
+        west, south, east, north = patch.footprint.bounds
+        assert -180.0 <= west <= east <= 180.0
+        assert east - west < 1e-4 and north - south < 1e-4  # metres, not the globe
+        sides.add(west > 0)
+        assert patch.footprint.is_valid
+    assert sides == {True, False}

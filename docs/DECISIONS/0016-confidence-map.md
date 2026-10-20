@@ -212,7 +212,9 @@ maxAreas 1..8}`. The finest level's weak cells (weak-v1, where the summary is st
    To the globe through the **site frame's own tangent plane** (PROJ `topocentric`, inverted):
    the exact inverse of how the pipeline placed the tiles. The design's azimuthal-equidistant
    projection is not that plane — it measures on the ellipsoid, and at a 1,500 m origin a point
-   1 km east lands 23 cm short. Zones are then **clipped to the site's boundary**, holes
+   1 km east lands 23 cm short. A zone across longitude 180 is cut there into one zone each
+   side (RFC 7946 § 3.1.9), each unwrapped and put back in [−180, 180] whole; projected
+   naively, a 4 m square at the antimeridian was a polygon spanning the globe. Zones are then **clipped to the site's boundary**, holes
    (its exclusions) included, before any budget is spent: the boundary is the ground a re-scan
    may fly, as it is for the fog scout, and clipping after closing cuts any gap closing bridged
    across a hole. A budget takes whole zones in rank order — under `focus`, then largest, then nearest —
