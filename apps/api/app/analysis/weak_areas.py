@@ -22,8 +22,8 @@ east 23 cm short.)
 
 **Budget.** Over `budget_m2`, whole zones are taken in rank order -- the one under
 `focus` first, then the largest, then the nearest `focus` -- while they fit (within one
-zone cell); the first that does not is clipped to a square of what is left, about the
-focus or its weakest cell (unseen first, then by score). So a budget is a promise, it is
+zone cell); the first that does not is clipped to a disc about the focus or its weakest
+cell (unseen first, then by score), grown until it holds what is left. So a budget is a promise, it is
 spent on the zones that rank first, and any budget that can hold a zone gets one.
 (Trimming cells and outlining again, as the fog scout does, left nothing: closing grows
 scattered cells into zones larger than themselves, faster than the trimming shrank them.)
@@ -56,7 +56,7 @@ from pyproj import Transformer
 from rasterio.features import rasterize, shapes
 from rasterio.transform import Affine
 from shapely.geometry import Point as ShapelyPoint
-from shapely.geometry import Polygon, box
+from shapely.geometry import Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.geometry.polygon import orient
 from shapely.validation import make_valid
@@ -461,31 +461,31 @@ def _anchor(zone: ZonePlane, polygon: Polygon, focus_xy: Point | None) -> Point:
 def _clip(
     zone: ZonePlane, polygon: Polygon, area_m2: float, focus_xy: Point | None
 ) -> Polygon | None:
-    """The largest part of `polygon` inside a square of `area_m2` about its anchor
-    (`_anchor`), or None when that is no zone (under the smallest). When the anchor is the
-    zone's weakest cell (not the focus) at its edge and the square holds under half of
-    `area_m2`, the square about the zone's own representative point is tried as well, and
-    the larger piece kept: the operator's focus is never moved."""
+    """The part of `polygon` within a disc about its anchor (`_anchor`) grown until it
+    holds `area_m2` (a bisection on the radius, to a hundredth of the budget), or None when
+    that is no zone (under the smallest). A disc, not a square: grown about a weakest cell
+    at a zone's edge, or into a ring-shaped zone, it follows the zone instead of covering
+    the strong ground beside it (a square about e2's edge cell held 36 m2 of 100)."""
     smallest = max(MIN_AREA_M2, 2 * zone.cell_m * zone.cell_m)
-    half = math.sqrt(area_m2) / 2
+    x, y = _anchor(zone, polygon, focus_xy)
+    centre = ShapelyPoint(x, y)
 
-    def piece(x: float, y: float) -> Polygon | None:
-        square = box(x - half, y - half, x + half, y + half)
-        parts = [
-            orient(part)
-            for part in _polygons(make_valid(polygon.intersection(square)))
-            if part.area >= smallest
-        ]
-        return max(parts, key=lambda part: part.area) if parts else None
+    def piece(radius: float) -> Polygon | None:
+        parts = _polygons(make_valid(polygon.intersection(centre.buffer(radius, quad_segs=16))))
+        return orient(max(parts, key=lambda part: part.area)) if parts else None
 
-    at_focus = focus_xy is not None and polygon.covers(ShapelyPoint(focus_xy))
-    best = piece(*_anchor(zone, polygon, focus_xy))
-    if not at_focus and (best is None or best.area < area_m2 / 2):
-        middle = polygon.representative_point()
-        other = piece(float(middle.x), float(middle.y))
-        if other is not None and (best is None or other.area > best.area):
-            best = other
-    return best
+    low, high = 0.0, float(centre.hausdorff_distance(polygon)) + zone.cell_m
+    best: Polygon | None = None
+    for _ in range(40):
+        middle = (low + high) / 2
+        found = piece(middle)
+        if found is not None and found.area <= area_m2:
+            best, low = found, middle
+            if found.area >= 0.99 * area_m2:
+                break
+        else:
+            high = middle
+    return best if best is not None and best.area >= smallest else None
 
 
 def choose_zones(

@@ -213,8 +213,9 @@ maxAreas 1..8}`. The finest level's weak cells (weak-v1, where the summary is st
    the exact inverse of how the pipeline placed the tiles. The design's azimuthal-equidistant
    projection is not that plane — it measures on the ellipsoid, and at a 1,500 m origin a point
    1 km east lands 23 cm short. A budget takes whole zones in rank order — under `focus`, then largest, then nearest —
-   while they fit (within one zone cell), and clips the first that does not to a square of
-   what is left, about the focus or its weakest cell: the budget goes on the zones that rank
+   while they fit (within one zone cell), and clips the first that does not to a disc about
+   the focus or its weakest cell, grown until it holds what is left (a disc follows a
+   ring-shaped zone where a square would cover the strong ground beside it): the budget goes on the zones that rank
    first, never on a speck behind a zone too large for it, and any budget that can hold a
    zone gets one. (Trimming cells and outlining again, as the fog scout does, left nothing on
    scattered weakness: closing grows the cells faster.) 409 `confidence-not-measured`, `confidence-unreadable`, `no-site-frame`.
