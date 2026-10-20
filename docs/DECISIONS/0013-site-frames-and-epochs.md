@@ -32,9 +32,10 @@ the opposite of both.
 3. **An asset is one tileset of one epoch and one source kind** (`assets.epoch_id`,
    `assets.source_kind`: `observed`, or `inferred` from M5). A re-run of the same capture inserts a
    new asset revision of its epoch and supersedes the old one by setting its `valid_to` (and
-   `default_visible = false`) — the only two writes ever made to it. Its URL is never rewritten.
-   The epoch's current asset is its newest observed asset with no `valid_to`. A republish onto the
-   URL the epoch already shows is no revision: generations are content-hashed.
+   `default_visible = false`) — the only two writes ever made to it. Its URL is never rewritten,
+   with one narrow exception (below: a sidecar attach). The epoch's current asset is its newest
+   observed asset with no `valid_to`. A republish onto the URL the epoch already shows is no
+   revision: generations are content-hashed.
 4. **The site is resolved when the job starts**, because the pipeline has to place the capture in
    the frame while it runs (`services/epochs.frame_for_run`): a re-run keeps its epoch's frame; a
    capture that names a site (`siteId` on capture create and on the phone route, kept in
@@ -70,6 +71,27 @@ heightDatum, epsg}`) to the stages that write the placement: `ingest_splat`, `ma
    as the epoch's asset unless it has a `valid_to` (a validity window before 0032; on an epoch
    asset it would read as superseded, so such a splat stays legacy). Seeded and catalog sites stay legacy. The downgrade drops only the new
    tables and columns: no asset row and no `source` is touched.
+
+## The one exception: a sidecar attach repoints the asset's URL
+
+`POST /assets/{id}/sidecars` (`services/attach.py`) moves the current asset's `source.url` to a new
+generation instead of adding a revision. It is allowed because nothing the URL identifies changes:
+an attach adds files (instances, a fill, a collision grid, a rig) beside the very same tiles, and
+the generation it leaves stays, immutable, in storage. A revision per attach would instead make
+every sidecar a new "run" of the epoch, with its own row and supersession, for tiles that did not
+change. The exception is held to that reason, and checked rather than assumed:
+
+- the new generation is listed back before the asset moves, and the attach is refused (409
+  `not_attachable`, the asset untouched) unless its tiles' fingerprint (`sidecars.tiles_fingerprint`:
+  the tile tree and every tile's size and ETag) is the current generation's; tiles the store cannot
+  vouch for (an object without an ETag) are refused the same way;
+- every URL the asset is moved off is appended to `assets.url_history` (JSONB, append-only, oldest
+  first: `url`, `movedTo`, `replacedAt`, `reason: "sidecar-attach"`), so what the asset pointed at
+  on any day can still be found.
+
+A store that recomputed a multipart object's ETag on a server-side copy would make the check refuse
+an attach whose tiles are in fact identical. That fails safe (the asset stays put) and the existing
+`basedOn` check already depends on copies keeping ETags.
 
 ## Two deviations from D3, stated loudly
 

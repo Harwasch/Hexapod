@@ -4,7 +4,8 @@
 fixed once created. `epochs` is one dated capture of a site in that frame, with an
 append-only `history` of what a re-run replaced on it. `assets` gains
 `epoch_id` (which epoch an asset is a revision of; NULL for seeded, catalog and hand-made
-assets) and `source_kind` (`observed` | `inferred`).
+assets), `source_kind` (`observed` | `inferred`) and `url_history` (the URLs a sidecar
+attach moved it off: ADR 0013's one exception to a URL never being rewritten).
 
 Backfill. Every site the pipeline registered -- `metadata.captureId` naming a capture of
 that site, and a numeric `metadata.registration.georef` lat/lon in range -- gets a frame
@@ -149,6 +150,15 @@ def upgrade() -> None:
         "assets",
         sa.Column("source_kind", sa.String(10), nullable=False, server_default="observed"),
     )
+    op.add_column(
+        "assets",
+        sa.Column(
+            "url_history",
+            postgresql.JSONB(),
+            nullable=False,
+            server_default=sa.text("'[]'::jsonb"),
+        ),
+    )
     op.create_check_constraint(
         "ck_assets_source_kind", "assets", "source_kind IN ('observed', 'inferred')"
     )
@@ -254,6 +264,7 @@ def downgrade() -> None:
     # Tables and columns only: every asset row, and every asset's `source`, survives.
     op.drop_index("ix_assets_epoch_id", table_name="assets")
     op.drop_constraint("ck_assets_source_kind", "assets", type_="check")
+    op.drop_column("assets", "url_history")
     op.drop_column("assets", "source_kind")
     op.drop_column("assets", "epoch_id")
     op.drop_index("idx_epochs_footprint", table_name="epochs")
