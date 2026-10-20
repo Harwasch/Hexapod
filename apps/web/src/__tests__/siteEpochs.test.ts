@@ -608,6 +608,42 @@ describe("a loaded site takes a fresh record of its dates", () => {
     expect(manager.shownAsset()?.id).toBe("a2c");
   });
 
+  it("a date waiting on an anchor that a fresh record replaced keeps the new anchor's placement", async () => {
+    const { manager, site, tileset } = harness(
+      withConfigs({ clampToGround: false, heightOffsetM: 3 }, { heightOffsetM: 9 }),
+    );
+    // The anchor A1 is still loading when its date is run again (a1b, raised 5 m).
+    let release = (): void => undefined;
+    made.held.set(A1.id, (r) => (release = r));
+    await open(manager);
+    const anchor = splat("a1b", {
+      epochId: "e1",
+      renderConfig: { ...A1.renderConfig, clampToGround: false, heightOffsetM: 5 },
+    });
+    manager.updateRecord({
+      ...site,
+      epochs: [{ ...E1, currentAssetId: "a1b" }, E2],
+      assets: [anchor, site.assets[1] ?? A2],
+    });
+    await settle();
+    await settle();
+    expect(originHeight(tileset(A2.id))).toBeCloseTo(15, 3);
+    const alone = () =>
+      recentLogs().filter(
+        (event) =>
+          event.message ===
+          "the site frame's own epoch did not load; this date is placed on its own",
+      ).length;
+    const before = alone();
+    // The old anchor's load ends now: the wait that began for it must change nothing.
+    release();
+    await settle();
+    await settle();
+    expect(originHeight(tileset(A2.id))).toBeCloseTo(15, 3);
+    expect(manager.sharesPlacement(SITE_ID, A2.id)).toBe(true);
+    expect(alone()).toBe(before);
+  });
+
   it("a record that changes nothing of the dates moves nothing", async () => {
     const { manager, site, tilesetEvents } = harness();
     await open(manager);
