@@ -24,6 +24,7 @@ import {
 } from "@/missions/scout";
 import { siteProject, siteProjectId } from "@/missions/siteProject";
 import { useMission } from "@/state/mission";
+import { useSites } from "@/state/sites";
 import { useToasts } from "@/state/toasts";
 
 const startPlanDraft = vi.fn((..._args: unknown[]) => Promise.resolve());
@@ -185,6 +186,7 @@ describe("Plan a re-scan of weak areas", () => {
     useToasts.setState({ items: [] });
     useMission.setState({ composer: null, landGround: null });
     useMission.getState().setProject(siteProject(site));
+    useSites.setState({ activeSiteId: SITE_ID, epoch: { [SITE_ID]: EPOCH_ID } });
   });
 
   const toasts = () => useToasts.getState().items.map((t) => t.title);
@@ -326,6 +328,26 @@ describe("Plan a re-scan of weak areas", () => {
     answer(read([area()]));
     await planning;
     expect(useMission.getState().project?.id).toBe(other.id);
+    expect(useMission.getState().composer).toBeNull();
+    expect(startPlanDraft).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "the date shown changed",
+      () => useSites.getState().setEpoch(SITE_ID, "99999999-9999-4999-8999-000000000002"),
+    ],
+    ["another site became active", () => useSites.getState().setActiveSite("other-site")],
+  ])("adopts nothing when %s while the API answered", async (_what, move) => {
+    let answer: (value: WeakAreas) => void = () => undefined;
+    requestWeakAreas.mockImplementationOnce(
+      () => new Promise<WeakAreas>((resolve) => (answer = resolve)),
+    );
+    const planning = rescanWeak(null, site, EPOCH_ID);
+    // Same project, so only the date or site says the old answer is not for this view.
+    move();
+    answer(read([area()]));
+    await planning;
     expect(useMission.getState().composer).toBeNull();
     expect(startPlanDraft).not.toHaveBeenCalled();
   });

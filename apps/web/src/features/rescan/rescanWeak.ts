@@ -42,6 +42,7 @@ import {
 import { siteProject } from "@/missions/siteProject";
 import type { Zone } from "@/missions/types";
 import { useMission } from "@/state/mission";
+import { useSites } from "@/state/sites";
 import { useToasts } from "@/state/toasts";
 
 import { adoptAreas } from "../mission/planFlow";
@@ -164,6 +165,12 @@ export async function rescanWeak(
     useToasts.getState().push({ tone: "info", title: "The map is still starting; try again." });
     return;
   }
+  // What the view showed when asked: the date on screen and the active site.
+  const shown = () => {
+    const sites = useSites.getState();
+    return { epoch: sites.epoch[site.id] ?? null, active: sites.activeSiteId };
+  };
+  const asked = shown();
   const center = scene?.camera.viewCenter() ?? null;
   // One battery's lanes bound a drone's patches; walked or filmed (no drone yet, drone
   // missions off) a battery is nobody's limit, so none is asked for or claimed. The budget is
@@ -190,9 +197,16 @@ export async function rescanWeak(
     );
     return;
   }
-  // The view went to another project while the API answered: the patches are not for it. By
-  // id: the same project is composed afresh when its plans arrive or its site is renamed.
-  if (useMission.getState().project?.id !== before.id) return;
+  // The view went to another project, date or site while the API answered: the patches are
+  // not for it. The project by id: it is composed afresh when its plans arrive or its site
+  // is renamed. An old date's patches would open over another date's confidence.
+  const now = shown();
+  if (
+    useMission.getState().project?.id !== before.id ||
+    now.epoch !== asked.epoch ||
+    (now.active !== asked.active && now.active !== site.id)
+  )
+    return;
   if (read.areas.length === 0) {
     // No area back is not "nothing weak": the API drops parts under 1 m² (MIN_AREA_M2) and
     // what the site's boundary clips away, so weak cells may remain that no patch holds.
