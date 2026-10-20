@@ -357,9 +357,14 @@ async function showScan(siteId: string): Promise<void> {
        */
       drawn: () =>
         [...drawnMeshes].flatMap(([uri, tileMeshDrawn]) => {
-          let box: THREE.Box3;
+          // Its LoD tree's centres, as `robustBounds` reads them: the leaves are its splats.
+          const box = new THREE.Box3();
+          const splats =
+            tileMeshDrawn.packedSplats?.lodSplats ??
+            tileMeshDrawn.extSplats?.lodSplats ??
+            tileMeshDrawn;
           try {
-            box = tileMeshDrawn.getBoundingBox(true);
+            splats.forEachSplat((_index, centre) => box.expandByPoint(centre));
           } catch {
             return []; // let go of (disposed) since it was drawn
           }
