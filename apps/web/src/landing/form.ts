@@ -26,6 +26,20 @@ export type RequestErrors = Partial<Record<RequestField, string>>;
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+const M2_PER_ACRE = 4046.856;
+
+/**
+ * An area in acres as the form shows and fills it: whole acres from 100, one decimal from 1,
+ * and two significant figures below that, so a small lot reads 0.034 rather than 0.0 (which
+ * the acres check would refuse).
+ */
+export function formatAcres(m2: number): string {
+  const acres = m2 / M2_PER_ACRE;
+  if (acres >= 100) return acres.toFixed(0);
+  if (acres >= 1) return acres.toFixed(1);
+  return Number(acres.toPrecision(2)).toString();
+}
+
 /** The acres as a number, ignoring thousands separators; NaN when it is not one. */
 export function parseAcres(value: string): number {
   const text = value.trim().replace(/,/g, "");

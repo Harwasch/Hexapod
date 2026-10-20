@@ -13,6 +13,7 @@ import type { FoundLand } from "../finder/handoff";
 import {
   REQUEST_ENDPOINT,
   buildPayload,
+  formatAcres,
   validateRequest,
   type RequestErrors,
   type RequestField,
@@ -48,10 +49,7 @@ const errorOf: Record<RequestField, HTMLElement> = {
 
 /** The land the finder handed back, if any. */
 let land: FoundLand | null = null;
-const acresOf = (m2: number) => {
-  const acres = m2 / 4046.856;
-  return acres >= 100 ? acres.toFixed(0) : acres.toFixed(1);
-};
+const acresOf = formatAcres;
 
 /** Shows the land found (or that there is none yet) under the finder's button. */
 function showLand() {
@@ -64,6 +62,20 @@ function showLand() {
   credit.textContent = land?.attributions.length
     ? `Parcel records: ${land.attributions.join("; ")}. County assessor mapping, not a survey.`
     : "";
+  // What a source's terms require with any copy of its parcels (Kern County's disclaimer).
+  const notices = $("#pk-notices", HTMLElement);
+  notices.replaceChildren(
+    ...(land?.notices ?? []).map((notice) => {
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = `${notice.source}: the disclaimer that comes with these records`;
+      const text = document.createElement("p");
+      text.textContent = notice.text;
+      details.append(summary, text);
+      return details;
+    }),
+  );
+  notices.hidden = !land?.notices.length;
   if (!land) return;
   const item = document.createElement("li");
   const what = document.createElement("span");

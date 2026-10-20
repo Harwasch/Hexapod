@@ -1331,6 +1331,15 @@ textarea[aria-invalid="true"] {
   font: 500 11px/1.4 var(--mono);
   color: var(--muted);
 }
+.pk-notices summary {
+  cursor: pointer;
+}
+.pk-notices p {
+  max-height: 240px;
+  margin: 6px 0 0;
+  overflow-y: auto;
+  white-space: pre-line;
+}
 .pk-dialog {
   width: min(1200px, calc(100vw - 32px));
   height: min(820px, calc(100dvh - 32px));

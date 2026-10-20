@@ -1,4 +1,4 @@
-import { buildPayload, parseAcres, validateRequest, type SiteRequest } from "./form";
+import { buildPayload, formatAcres, parseAcres, validateRequest, type SiteRequest } from "./form";
 
 const complete: SiteRequest = {
   name: "Ada",
@@ -86,5 +86,17 @@ describe("buildPayload", () => {
     expect(payload.notes).toBe("Organization: Oak Bench Ranch\nArea (acres): 40\nWeeds.");
     expect(payload.boundary).toBeNull();
     expect(payload.parcelIds).toEqual([]);
+  });
+});
+
+describe("formatAcres", () => {
+  it("keeps a small lot from rounding to zero, so the acres check accepts it", () => {
+    expect(formatAcres(4046.856 * 250)).toBe("250");
+    expect(formatAcres(4046.856 * 12.44)).toBe("12.4");
+    expect(formatAcres(4046.856 * 0.0342)).toBe("0.034");
+    expect(formatAcres(150)).toBe("0.037");
+    expect(validateRequest({ ...complete, hasBoundary: false, acres: formatAcres(150) })).toEqual(
+      {},
+    );
   });
 });
