@@ -78,6 +78,7 @@ import {
   coneEye,
   eyeMoved,
   LAYER_LOOK_GLSL,
+  layerEye,
   layerUniforms,
   type LayerCones,
   type LayerLook,
@@ -891,7 +892,8 @@ function assemble(
 
   /**
    * The tiles of inferred layers (scanLayers.ts): bound to none of the scan's objects, each
-   * with its layer's look and the eye it was last worked out from.
+   * with its layer's look and the eye it was last worked out from. `lastEye` and `centre` (the
+   * tile's origin) are in the layer's frame, where `eyeMoved` measures (`layerEye`).
    */
   const layers = new Map<
     pc.Entity,
@@ -1036,7 +1038,7 @@ function assemble(
       component.setParameter("uInstanceDim", dim);
       component.setParameter("uInstanceParams", params);
       // Last: setting a parameter has the tile copied into the work buffer again.
-      state.lastEye = lastPoseEye ? [...lastPoseEye] : null;
+      state.lastEye = lastPoseEye ? layerEye(look, lastPoseEye) : null;
       component.setParameter("uLayerConeEye", coneEye(look, lastPoseEye ?? [0, 0, 0], state.eye));
       if (previous !== look.cones) releaseCones(previous);
     },
@@ -1141,8 +1143,10 @@ function assemble(
       // this frame, once the eye has moved enough to show (layerLook.ts `eyeMoved`).
       lastPoseEye = pose.eye;
       for (const [entity, layer] of layers) {
-        if (!layer.look.cones || !eyeMoved(layer.lastEye, pose.eye, layer.centre)) continue;
-        layer.lastEye = [...pose.eye];
+        if (!layer.look.cones) continue;
+        const eye = layerEye(layer.look, pose.eye);
+        if (!eyeMoved(layer.lastEye, eye, layer.centre)) continue;
+        layer.lastEye = eye;
         entity.gsplat?.setParameter("uLayerConeEye", coneEye(layer.look, pose.eye, layer.eye));
       }
       framesDrawn += 1;

@@ -12,12 +12,15 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BackendHooks } from "@/cesium/scanView/types";
+import { layerCones } from "@/cesium/scanView/layerLook";
+import type { BackendHooks, ScanPose } from "@/cesium/scanView/types";
 import type { TileWork } from "@/cesium/scanView/tileWork";
 import { checksumPositions } from "@twin/world";
 
+import { invertAffine, transformPoint } from "@/cesium/splatFrames";
 import { centreColumns, mortonOrder, reorderColumns, tileFrame } from "@/lib/splatLayout";
 import { castRay, labelsNear, type PickTile } from "@/lib/splatPick";
+import { cellCount, type ViewConesMeta } from "@/lib/viewCones";
 import type { TileNode } from "@/view/tiles";
 
 vi.mock("playcanvas", () => {
@@ -116,6 +119,18 @@ vi.mock("playcanvas", () => {
   class Color {
     readonly rgba = [0, 0, 0, 0];
   }
+  /** A layer's view cones are uploaded as one (playcanvasBackend.ts `dataTexture`). */
+  class Texture {
+    private readonly data: Uint8Array;
+    constructor(_device: unknown, options: { width: number; height: number }) {
+      this.data = new Uint8Array(options.width * options.height * 16);
+    }
+    lock(): Uint8Array {
+      return this.data;
+    }
+    unlock = (): void => undefined;
+    destroy = (): void => undefined;
+  }
   return {
     Application,
     Entity,
@@ -125,6 +140,10 @@ vi.mock("playcanvas", () => {
     Mat4,
     Quat,
     Color,
+    Texture,
+    PIXELFORMAT_RGBA8: 7,
+    FILTER_NEAREST: 0,
+    ADDRESS_CLAMP_TO_EDGE: 1,
     FILLMODE_NONE: "NONE",
     RESOLUTION_AUTO: "AUTO",
     ASPECT_AUTO: 0,
@@ -333,6 +352,76 @@ describe("picking in a scan PlayCanvas draws in Morton order", () => {
     if (!entity) throw new Error("no layer loaded");
     b.place?.(entity, null);
     expect((entity as unknown as { position: number[] }).position[0]).toBeGreaterThan(2600);
+    b.destroy();
+  });
+});
+
+describe("a placed layer's fade in PlayCanvas", () => {
+  beforeEach(() => vi.stubGlobal("Worker", FakeWorker));
+  afterEach(() => vi.unstubAllGlobals());
+
+  const poseAt = (eye: [number, number, number]): ScanPose => ({
+    eye,
+    direction: [0, 1, 0],
+    up: [0, 0, 1],
+    fovy: 1,
+    near: 0.1,
+    far: 1000,
+    width: 960,
+    height: 600,
+    pixelRatio: 1,
+  });
+
+  it("is measured in the layer's frame, eye and tile alike", async () => {
+    const offset: [number, number, number] = [2601, 1550, 0];
+    const b = await backend();
+    const entity = await b.loadLayer?.("https://scan.test/tileset.json", tile("far.glb", offset));
+    if (!entity) throw new Error("no layer loaded");
+    // The tile's middle in the layer's own frame, where it was decoded about.
+    const own = [...(entity as unknown as { position: number[] }).position] as [
+      number,
+      number,
+      number,
+    ];
+    const fades: unknown[] = [];
+    Object.assign(entity.gsplat ?? {}, {
+      setWorkBufferModifier: () => undefined,
+      setParameter: (name: string, value: unknown) => {
+        if (name === "uLayerConeEye") fades.push(value);
+      },
+    });
+    const meta: ViewConesMeta = {
+      format: "hexapod.viewcones",
+      version: 1,
+      uri: "viewcones.bin",
+      origin: [2500, 1400, -10],
+      cell: 50,
+      dims: [8, 8, 1],
+      fadeDeg: 20,
+    };
+    // The layer's frame turned a quarter and 3 km off the scan's (scanLayers.ts: `fromScan`
+    // is the inverse of the placement the layer's tiles are drawn at). Column-major.
+    const placement = [0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, -3000, 500, 0, 1];
+    const fromScan = invertAffine(placement);
+    if (!fromScan) throw new Error("no inverse");
+    b.place?.(entity, placement);
+    b.setLayerLook?.(entity, {
+      highlight: false,
+      cones: layerCones(meta, new Uint8Array(cellCount(meta) * 4)),
+      fromScan,
+    });
+    // Ten metres above the tile where it is drawn, then a metre over: it fades again.
+    const drawn = transformPoint(placement, ...own, [0, 0, 0]);
+    b.render(poseAt([drawn[0], drawn[1], drawn[2] + 10]));
+    let faded = fades.length;
+    b.render(poseAt([drawn[0] + 1, drawn[1], drawn[2] + 10]));
+    expect(fades.length).toBe(faded + 1);
+    // Above where the tile's own coordinates would be in the scan's frame, kilometres from
+    // where it is drawn: a metre is far under a hundredth of the way, so no fade.
+    b.render(poseAt([own[0], own[1], own[2] + 10]));
+    faded = fades.length;
+    b.render(poseAt([own[0] + 1, own[1], own[2] + 10]));
+    expect(fades.length).toBe(faded);
     b.destroy();
   });
 });

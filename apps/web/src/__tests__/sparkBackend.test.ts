@@ -392,4 +392,69 @@ describe("the Spark back-end and tile frames", () => {
     expect(mesh.position.toArray()).toEqual(offset);
     backend.destroy();
   });
+
+  it("a placed layer's fade is measured in the layer's frame, eye and tile alike", async () => {
+    const far = resolve(process.cwd(), "../../data/tiles/synthetic-far");
+    const uri = "splat_4-4-2.glb";
+    const offset = (
+      JSON.parse(readFileSync(resolve(far, "source/expected.json"), "utf8")) as {
+        tiles: Record<string, { offset: [number, number, number] }>;
+      }
+    ).tiles[uri]?.offset;
+    if (!offset) throw new Error("the fixture has no such tile");
+    const glb = readFileSync(resolve(far, "splat", uri));
+    const bytes = spzFromGlb(glb.buffer.slice(glb.byteOffset, glb.byteOffset + glb.byteLength));
+    const local = spzPickDataOf(await gunzip(bytes))?.positions;
+    if (!local) throw new Error("no positions");
+    const box = new THREE.Box3().setFromArray(local);
+    const updateVersion = vi.fn();
+    const mesh = Object.assign(new THREE.Object3D(), {
+      maxSh: 0,
+      updateGenerator: vi.fn(),
+      updateVersion,
+      dispose: vi.fn(),
+      worldModifier: undefined,
+      getBoundingBox: () => box.clone(),
+    });
+    mesh.position.set(...offset);
+    vi.mocked(loadSplatTile).mockResolvedValue({ mesh: mesh as unknown as SplatMesh, bytes });
+
+    const { backend } = await rig();
+    const tile = { uri, gaussians: 552, geometricError: 0, children: [], offset };
+    const layer = await backend.loadLayer?.("https://tiles.example/far/tileset.json", tile);
+    if (!layer) throw new Error("no layer loaded");
+    const meta: ViewConesMeta = {
+      format: "hexapod.viewcones",
+      version: 1,
+      uri: "viewcones.bin",
+      origin: [2500, 700, -10],
+      cell: 50,
+      dims: [2, 12, 1],
+      fadeDeg: 20,
+    };
+    // The layer's frame turned a quarter and 3 km off the scan's (scanLayers.ts: `fromScan`
+    // is the inverse of the placement the layer's tiles are drawn at).
+    const placement = new THREE.Matrix4().makeRotationZ(Math.PI / 2).setPosition(-3000, 500, 0);
+    const look = {
+      highlight: false,
+      cones: layerCones(meta, new Uint8Array(cellCount(meta) * 4)),
+      fromScan: placement.clone().invert().toArray(),
+    };
+    backend.place?.(layer, placement.toArray());
+    backend.setLayerLook?.(layer, look);
+    const own = box.getCenter(new THREE.Vector3()).add(new THREE.Vector3(...offset));
+    // Ten metres above the tile where it is drawn, then a metre over: it fades again.
+    const drawn = own.clone().applyMatrix4(placement);
+    backend.render(poseAt([drawn.x, drawn.y, drawn.z + 10]));
+    let faded = updateVersion.mock.calls.length;
+    backend.render(poseAt([drawn.x + 1, drawn.y, drawn.z + 10]));
+    expect(updateVersion.mock.calls.length).toBe(faded + 1);
+    // Above where the tile's own coordinates would be in the scan's frame, kilometres from
+    // where it is drawn: a metre is far under a hundredth of the way, so no fade.
+    backend.render(poseAt([own.x, own.y, own.z + 10]));
+    faded = updateVersion.mock.calls.length;
+    backend.render(poseAt([own.x + 1, own.y, own.z + 10]));
+    expect(updateVersion.mock.calls.length).toBe(faded);
+    backend.destroy();
+  });
 });

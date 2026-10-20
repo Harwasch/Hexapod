@@ -55,6 +55,7 @@ import {
   coneEye,
   eyeMoved,
   LAYER_LOOK_GLSL,
+  layerEye,
   layerUniforms,
   type LayerCones,
   type LayerLook,
@@ -572,7 +573,8 @@ export function createBackend(
         const uniforms = layerDynos();
         state = { look, uniforms, lastEye: null, centre: [0, 0, 0] };
         // How far the eye is from the tile (`eyeMoved`): its box in the layer's root frame,
-        // where the eye is measured, so moved by the tile's offset.
+        // moved by the tile's offset. The eye is taken into that frame to be measured
+        // (`layerEye`): a pose's is in the scan's, which a placement can turn and move.
         const box = mesh.getBoundingBox(true);
         const [ox, oy, oz] = offsets.get(mesh) ?? [0, 0, 0];
         if (!box.isEmpty())
@@ -585,7 +587,7 @@ export function createBackend(
         mesh.updateGenerator();
       }
       state.look = look;
-      state.lastEye = lastPoseEye ? [...lastPoseEye] : null;
+      state.lastEye = lastPoseEye ? layerEye(look, lastPoseEye) : null;
       writeLook(state.uniforms, look, lastPoseEye ?? [0, 0, 0]);
       mesh.updateVersion();
       if (previous !== look.cones) releaseCones(previous);
@@ -757,8 +759,10 @@ export function createBackend(
       // eye has moved enough to show (layerLook.ts `eyeMoved`).
       lastPoseEye = pose.eye;
       for (const [mesh, layer] of layers) {
-        if (!layer.look.cones || !eyeMoved(layer.lastEye, pose.eye, layer.centre)) continue;
-        layer.lastEye = [...pose.eye];
+        if (!layer.look.cones) continue;
+        const eye = layerEye(layer.look, pose.eye);
+        if (!eyeMoved(layer.lastEye, eye, layer.centre)) continue;
+        layer.lastEye = eye;
         layer.uniforms.eye.value.fromArray(coneEye(layer.look, pose.eye));
         mesh.updateVersion();
       }
