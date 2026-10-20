@@ -373,7 +373,13 @@ def fill_targets(
         )
     grid = load_grid(storage, row)
     earlier = [load_grid(storage, found) for _, found in earlier_rows]
-    result = rescan_gate.still_weak(grid, earlier)
+    try:
+        result = rescan_gate.still_weak(grid, earlier)
+    except cell_grid.CellGridError as error:
+        log.warning("confidence: epoch %s cannot be compared: %s", epoch.id, error)
+        raise ConflictError(
+            f"epoch {epoch.id}'s confidence grids cannot be compared: {error}", code=UNREADABLE
+        ) from error
     return FillTargetsRead(
         policy="rescan-gate-v1",
         site_id=site_id,

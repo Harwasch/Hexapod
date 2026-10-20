@@ -16,8 +16,10 @@ Levels nest (the site lattice, C1), so an earlier grid is read at B's level with
 resampling. A coarser one: the cell of it that holds B's cell. A finer one: the B cell is
 covered when any of its children is, and weak only when none of the children it saw was
 strong -- part of the cell seen well is not a weak cell, and the gate never widens one weak
-child to its parent. Generation is never asked to cover what nobody tried to capture again,
-nor anything the re-scan itself saw well.
+child to its parent. A comparison costs about what the two grids hold, however many levels
+apart (`_any_up`), and one past `MAX_COMPARE_CELLS` is refused as an unreadable grid.
+Generation is never asked to cover what nobody tried to capture again, nor anything the
+re-scan itself saw well.
 """
 
 from __future__ import annotations
@@ -29,9 +31,22 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-from app.analysis.cell_grid import Grid, Plane, covered_mask, weak_mask, window
+from app.analysis.cell_grid import (
+    MAX_LEVEL,
+    MAX_RAW_BYTES,
+    CellGridError,
+    Grid,
+    Plane,
+    covered_mask,
+    weak_mask,
+    window,
+)
 
 POLICY = "rescan-gate-v1"
+#: The most cells one comparison's masks may span: the decoder's cap, as one bool a cell.
+#: A decoded plane never comes near it (three bytes a cell); a grid that would is refused
+#: as unreadable (`CellGridError`), never allocated.
+MAX_COMPARE_CELLS = MAX_RAW_BYTES
 
 
 @dataclass(frozen=True)
@@ -83,26 +98,44 @@ def _any_up(
     mask: NDArray[np.bool_], i0: int, j0: int, shift: int
 ) -> tuple[NDArray[np.bool_], int, int]:
     """`mask` (a window at `i0, j0`) read `shift` levels coarser: a cell is True when any
-    of its children is. Its window's origin with it."""
-    if mask.size == 0:
-        return mask, i0 >> shift, j0 >> shift
-    nj, ni = mask.shape
+    of its children is. Its window's origin with it.
+
+    Each run of columns, then rows, that one coarse cell holds is OR-reduced where it lies
+    in `mask` (`reduceat` at the coarse lattice's lines), so nothing larger than `mask` is
+    built, however many levels apart: never the fine lattice under the coarse window."""
     pi0, pj0 = i0 >> shift, j0 >> shift
+    if mask.size == 0:
+        return mask, pi0, pj0
+    nj, ni = mask.shape
     pi1, pj1 = (i0 + ni - 1) >> shift, (j0 + nj - 1) >> shift
-    side = 1 << shift
-    padded = np.zeros(((pj1 - pj0 + 1) * side, (pi1 - pi0 + 1) * side), dtype=bool)
-    di, dj = i0 - pi0 * side, j0 - pj0 * side
-    padded[dj : dj + nj, di : di + ni] = mask
-    out: NDArray[np.bool_] = padded.reshape(pj1 - pj0 + 1, side, pi1 - pi0 + 1, side).any(
-        axis=(1, 3)
-    )
+    cols = np.concatenate(([0], (np.arange(pi0 + 1, pi1 + 1, dtype=np.int64) << shift) - i0))
+    rows = np.concatenate(([0], (np.arange(pj0 + 1, pj1 + 1, dtype=np.int64) << shift) - j0))
+    by_col = np.logical_or.reduceat(mask, cols, axis=1)
+    out: NDArray[np.bool_] = np.logical_or.reduceat(by_col, rows, axis=0)
     return out, pi0, pj0
+
+
+def _bounded(grid: Plane, target: Plane) -> None:
+    """Refuse, before allocating, a comparison this gate would not run on decoded grids:
+    levels further apart than the lattice has, or a target window over `MAX_COMPARE_CELLS`
+    (each mask it builds is one bool a target cell, or smaller than `grid`'s planes)."""
+    if abs(grid.level - target.level) > MAX_LEVEL:
+        raise CellGridError(
+            f"levels {grid.level} and {target.level} are further apart than the lattice's "
+            f"{MAX_LEVEL}"
+        )
+    if target.cells > MAX_COMPARE_CELLS:
+        raise CellGridError(
+            f"comparing at level {target.level} needs {target.cells} cells, over "
+            f"{MAX_COMPARE_CELLS}"
+        )
 
 
 def seen_at(grid: Grid, target: Plane) -> tuple[NDArray[np.bool_], NDArray[np.bool_]]:
     """Over `target`'s window and level, `(covered, weak)` as `grid` saw each cell (module
     docstring): from its finest level, held or aggregated, never resampled."""
     plane = grid.finest
+    _bounded(plane, target)
     covered, weak = covered_mask(plane), weak_mask(plane)
     if plane.level >= target.level:
         shift = plane.level - target.level

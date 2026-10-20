@@ -361,3 +361,38 @@ def test_the_earlier_epochs_are_found_in_a_bounded_number_of_queries(
         read = api.get(path).json()
     assert read["comparedWith"] == [str(_epoch(db, first).id)] and read["capped"] is False
     assert len(many) == len(few)
+
+
+def test_a_far_finer_earlier_grid_is_compared_without_padding_it_out() -> None:
+    """A malformed or just very different stored grid: one 0.25 m cell earlier, a 16 km
+    re-scan cell now. The earlier cell is read up to B's level by its coarse index, so the
+    comparison allocates about what the two grids hold, not the 65536 x 65536 cells of
+    fine lattice under B's one cell (4 GiB)."""
+    import tracemalloc
+
+    earlier = _grid(0, [[60]], [[1]])
+    b = _grid(16, [[50]], [[1]])
+    tracemalloc.start()
+    try:
+        result = rescan_gate.still_weak(b, [earlier])
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert result.mask.tolist() == [[True]] and result.contributed == [0]
+    assert peak < 1024 * 1024, peak
+
+
+def test_a_comparison_larger_than_a_decoded_grid_is_unreadable_not_allocated(
+    api: TestClient,
+    db: Session,
+    storage: S3Storage,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate refuses, before allocating, a comparison window over its cell budget (the
+    decoder's 64 MiB): the same 409 `confidence-unreadable` as a grid it cannot decode."""
+    _, e2 = two_epochs(db, storage, tmp_path)
+    monkeypatch.setattr(rescan_gate, "MAX_COMPARE_CELLS", 1)
+    response = api.get(f"/api/v1/sites/{e2.site_id}/fill-targets")
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "confidence-unreadable"
