@@ -45,13 +45,19 @@ reports, strips and inferred tileset as the `fill` artifact.
    ```
    Pass: `psnrFill > psnrHole` in the held-out view, by more than Telea's margin
    (Telea on the yard: 14.94 vs 14.78 dB). Then repeat on the spool scan (phone0924).
-2. **Fixer on the camp, from outside.** The real target.
+2. **Fixer on a re-scanned site, from outside.** The real target. Since the fill gate (ADR
+   0016 § Fill) a fill runs only in the cells a re-scan left weak, so it needs the epoch's fill
+   targets, and a scan with no measured epoch (the camp, every legacy scan) cannot be filled.
    ```sh
-   uv run --with modal python teacher_fill.py fill <camp>/tileset.json <camp>/../inferred \
-     --filler world_model_client:FixerFiller --views 8 --save /tmp/camp-fixer
-   uv run python teacher_fill.py link <camp>/tileset.json <camp>/../inferred/tileset.json
+   curl -fsS "$TWIN_API_URL/api/v1/sites/<site>/fill-targets?epochId=<epoch>" > /tmp/targets.json
+   uv run --with modal python teacher_fill.py fill <scan>/tileset.json <scan>/../inferred \
+     --still-weak /tmp/targets.json --filler world_model_client:FixerFiller --views 8 \
+     --save /tmp/scan-fixer
+   uv run python teacher_fill.py link <scan>/tileset.json <scan>/../inferred/tileset.json
    ```
-   Inspect the strips in `--save` (full render | seen + mask | fill), then the globe.
+   Inspect the strips in `--save` (full render | seen + mask | fill), then the globe. On CI:
+   fill.yml's `fill_targets_url` input (`<scan>=<URL>`); publish-fill.yml refuses a layer
+   that was not gated, or whose targets have changed since.
 3. **Distill.** Same command plus `--distill 1500` (runs `Distill.run` on an L40S).
    Pass: every view's `maskedL1After < maskedL1Before` and `outsideL1After ≤ outsideL1Before`.
 4. **Wan on the synthetic tree (test L1, real model).**

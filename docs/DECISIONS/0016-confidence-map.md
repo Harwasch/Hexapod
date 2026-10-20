@@ -280,6 +280,57 @@ policy readers already rely on. Confidence is its own layer and its own endpoint
 - Any measurement behind the pattern rules, the 0.5 m closing or the 1 m² smallest zone: UX
   heuristics until a pilot site re-scanned by them says otherwise.
 
+## Fill
+
+Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branch
+`claude/feat-splat-fill-gate`.
+
+### Decision
+
+1. **A generative fill runs only where a re-scan left cells weak.** `teacher_fill.fill_scan`
+   requires a `rescan_gate.RescanGate`: the API's fill targets for the scan's epoch
+   (`rescan-gate-v1`, § API 8), read exactly as the API's `unpack` (rows south to north, least
+   significant bit first; held to the endpoint's own committed answer over the yard fixtures,
+   `data/tiles/synthetic-yard-epochs/fill-targets.json`). A point is a target when its cell on
+   the site lattice, in the **tileset frame** with every tile's origin composed, is one.
+2. **Only what is faded and in a target cell is a hole.** Every other gaussian is rendered as
+   seen, so the image model is never shown a hole there; a lifted disc whose centre is not
+   `INSET_M` = 2^-10 m inside the targets is dropped, before and after distill. The inset is the
+   float32 and SPZ rounding bound (2^-11 m within 8 km of the origin at 12 fractional bits),
+   stated from first principles, so the stored layer is still inside when publish checks it
+   exactly. No target is a skipped result that says why, not an error.
+3. **The targets are bound to the tiles twice.** At fill time against the tileset's own
+   confidence grid (`check_tileset`: its plane at the gate's level has the gate's window, and
+   every target is weak and covered there); the layer records that grid's sha256. At publish
+   (`publish-fill.yml`, `verify_layer`), the scan's asset must be a current revision of the
+   gate's epoch and site, its current tileset must carry that very grid, the targets fetched
+   now must be the ones it was filled for, and every gaussian must be in a target cell. Fill
+   time cannot tell an earlier epoch whose grid shares the window (its targets are weak there
+   too, by definition); publish can, and nothing reaches the live site without it.
+4. **The evidence says so**: `extras.evidence.rescanGate` {policy, siteId, epochId, weakIn,
+   comparedWith, level, cellM, i0, j0, ni, nj, cells, maskSha256, confidenceSha256}.
+5. **Where it is enforced.** `teacher_fill.py fill` requires `--still-weak FILE`;
+   `infra/modal/fill.py` takes `--still-weak <scan>=<file>`, checks every file before anything
+   starts on Modal and forwards it; `fill.yml` gains `fill_targets_url` and fetches each fill
+   job's targets from the API's own route (no new secret). `drop` (the evaluation harness) and
+   `split` (an object's hole) stay ungated: neither is published.
+
+### Consequences
+
+- A scan with no measured epoch — every legacy scan, the camp included — cannot be filled or
+  published until it has two measured epochs on one site. A `wm-*` push (no inputs) now fails
+  its default `fill:camp` before any GPU starts. There is no override (design open question 8).
+- On the yard at the fill size (CPU renderer, Telea, 8 views at 1024×576): every cell still
+  weak gave 1,833 faded targets and an 11,746-gaussian layer, much of it discs lifted along
+  the ground; the API's 90 cells gave 87 targets and a 380-gaussian layer, all inside them.
+  Synthetic, not measured.
+
+### Not done here
+
+- Fill execution on a GPU (Modal): only the gate runs locally, with the Telea stand-in.
+- An exact fill-time binding: `FillTargetsRead` could carry B's confidence sha256 and asset id.
+- Gating `fill_hole` (split objects' holes) and the yard's fixture variants: not published.
+
 ## Web
 
 Filled by `claude/feat-splat-confidence-view`.
