@@ -10,6 +10,7 @@
 import {
   BoundingSphere,
   Cartesian3,
+  Cartographic,
   Event,
   Math as CesiumMath,
   Matrix3,
@@ -27,9 +28,11 @@ import { createSiteTileset } from "@/cesium/providers/tiles";
 import type * as Tiles from "@/cesium/providers/tiles";
 import { SiteManager } from "@/cesium/SiteManager";
 import type { SceneEvents } from "@/cesium/types";
+import { sameRootFrame } from "@/cesium/tilesetScale";
 import { Emitter } from "@/lib/emitter";
+import { recentLogs } from "@/lib/log";
 
-import { A1, A2, E1, E2, SITE_ID, twoEpochSite } from "./epochFixtures";
+import { A1, A2, E1, E2, SITE_ID, epoch, splat, twoEpochSite } from "./epochFixtures";
 
 const LON = -123.88;
 const LAT = 46.1335;
@@ -84,10 +87,14 @@ const made = vi.hoisted(() => ({
   roots: new Map<string, unknown>(),
   /** An asset whose tileset is held back until `release` is called. */
   held: new Map<string, (release: () => void) => void>(),
+  /** Assets whose tileset is gone for good (a 404). */
+  missing: new Set<string>(),
 }));
 vi.mock("@/cesium/providers/tiles", async (importOriginal) => ({
   ...(await importOriginal<typeof Tiles>()),
   createSiteTileset: vi.fn((asset: SiteAsset) => {
+    if (made.missing.has(asset.id))
+      return Promise.reject(new Error("Request failed with status 404"));
     const tileset = fakeTileset((made.roots.get(asset.id) as Matrix4 | undefined) ?? ROOT);
     made.tilesets.set(asset.id, tileset);
     const hold = made.held.get(asset.id);
@@ -99,10 +106,11 @@ vi.mock("@/cesium/scanView/ScanRendererHost", () => ({
   prefetchScanDestination: () => () => undefined,
 }));
 
-function harness(record: Site = twoEpochSite()) {
+function harness(record: Site = twoEpochSite(), options: { sampling?: boolean } = {}) {
   made.tilesets.clear();
   made.roots.clear();
   made.held.clear();
+  made.missing.clear();
   vi.mocked(createSiteTileset).mockClear();
   const d = 0.0005;
   const site = {
@@ -149,7 +157,11 @@ function harness(record: Site = twoEpochSite()) {
       globe: { getHeight: () => undefined },
       primitives: { add: vi.fn(), remove: vi.fn() },
       requestRender: vi.fn(),
-      sampleHeightSupported: false,
+      // The drawn ground, when sampled: 4 m above the ellipsoid everywhere.
+      sampleHeightSupported: options.sampling ?? false,
+      sampleHeightMostDetailed: vi.fn((points: Cartographic[]) =>
+        Promise.resolve(points.map((p) => new Cartographic(p.longitude, p.latitude, 4))),
+      ),
     },
   };
   const camera = {
@@ -178,8 +190,31 @@ function harness(record: Site = twoEpochSite()) {
   );
   manager.setCatalog([summary], () => Promise.resolve(site));
   const tileset = (id: string) => made.tilesets.get(id) as FakeTileset | undefined;
-  return { manager, epochs, tilesetEvents, tileset, site };
+  return { manager, epochs, tilesetEvents, tileset, site, viewer };
 }
+
+/** The two-epoch site with each splat's render config changed as given. */
+function withConfigs(a1: Record<string, unknown>, a2: Record<string, unknown> = {}): Site {
+  return twoEpochSite({
+    assets: [
+      { ...A1, renderConfig: { ...A1.renderConfig, ...a1 } },
+      { ...A2, renderConfig: { ...A2.renderConfig, ...a2 } },
+    ],
+  });
+}
+
+/** How high the model matrix puts the site's origin above the ellipsoid (m). */
+function originHeight(tileset: FakeTileset | undefined): number {
+  const moved = Matrix4.multiplyByPoint(
+    tileset?.modelMatrix ?? Matrix4.IDENTITY,
+    ORIGIN,
+    new Cartesian3(),
+  );
+  return Cartographic.fromCartesian(moved).height;
+}
+
+const warned = (message: string) =>
+  recentLogs().some((event) => event.level === "warn" && event.message === message);
 
 /** Lets the manager's promise chains (tileset created, placed, shown) run. */
 const settle = () => new Promise((done) => setTimeout(done, 0));
@@ -244,23 +279,32 @@ describe("a site with two epochs", () => {
   });
 
   it("the dedicated renderer is pointed at the shown epoch, and drops the old one at once", async () => {
-    const { manager, tilesetEvents } = harness();
+    // A third date, the latest: E1 is loaded as the frame's anchor, E2 not until it is chosen.
+    const E3 = epoch("e3", {
+      ordinal: 3,
+      observedAt: "2026-09-01T15:00:00Z",
+      currentAssetId: "a3",
+    });
+    const A3 = splat("a3", { epochId: "e3", createdAt: "2026-09-02T00:00:00Z" });
+    const { manager, tilesetEvents } = harness(
+      twoEpochSite({ epochs: [E1, E2, E3], assets: [A1, A2, A3] }),
+    );
     await open(manager);
     // PlayCanvas, the default, draws the scan: CesiumJS keeps it hidden.
-    expect(manager.scanTarget()?.assetId).toBe(A2.id);
-    expect(manager.scanTarget()?.key).toBe(`${SITE_ID}:${A2.id}`);
+    expect(manager.scanTarget()?.assetId).toBe(A3.id);
+    expect(manager.scanTarget()?.key).toBe(`${SITE_ID}:${A3.id}`);
     let release = (): void => undefined;
-    made.held.set(A1.id, (r) => (release = r));
+    made.held.set(A2.id, (r) => (release = r));
     tilesetEvents.mockClear();
-    const switching = manager.setEpoch(E1.id);
+    const switching = manager.setEpoch(E2.id);
     await settle();
-    // Told at once, before A1 is in: the overlay has nothing to draw rather than the old date.
+    // Told at once, before A2 is in: the overlay has nothing to draw rather than the old date.
     expect(tilesetEvents).toHaveBeenCalled();
     expect(manager.scanTarget()).toBeNull();
     release();
     await switching;
-    expect(manager.scanTarget()?.assetId).toBe(A1.id);
-    expect(manager.scanTarget()?.key).toBe(`${SITE_ID}:${A1.id}`);
+    expect(manager.scanTarget()?.assetId).toBe(A2.id);
+    expect(manager.scanTarget()?.key).toBe(`${SITE_ID}:${A2.id}`);
   });
 
   it("a hidden epoch does not preload under CesiumJS", async () => {
@@ -297,8 +341,12 @@ describe("a site with two epochs", () => {
   });
 
   it("a site without epochs is shown as before, and says it shows none", async () => {
-    const legacy = (id: string, extra: Partial<SiteAsset>) =>
-      ({ ...A1, id, epochId: null, ...extra });
+    const legacy = (id: string, extra: Partial<SiteAsset>) => ({
+      ...A1,
+      id,
+      epochId: null,
+      ...extra,
+    });
     const { manager, epochs } = harness(
       twoEpochSite({
         epochs: [],
@@ -311,5 +359,108 @@ describe("a site with two epochs", () => {
     await open(manager);
     expect(manager.shownAsset()?.id).toBe("default");
     expect(epochs).toEqual([null]);
+  });
+});
+
+describe("every epoch of a site is drawn with one placement", () => {
+  it("every epoch is drawn with the frame-defining epoch's model matrix", async () => {
+    // The anchor is raised 3 m; the phone epoch says nothing. No terrain is needed.
+    const { manager, tileset } = harness(
+      withConfigs({ clampToGround: false, heightOffsetM: 3 }, { heightOffsetM: 0 }),
+    );
+    await open(manager);
+    expect(manager.shownAsset()?.id).toBe(A2.id);
+    // The anchor was loaded for this, hidden, and never streams.
+    expect(tileset(A1.id)?.show).toBe(false);
+    expect(tileset(A1.id)?.preloadWhenHidden).toBe(false);
+    expect(Matrix4.equals(tileset(A1.id)?.modelMatrix, Matrix4.IDENTITY)).toBe(false);
+    expect(Matrix4.equals(tileset(A2.id)?.modelMatrix, tileset(A1.id)?.modelMatrix)).toBe(true);
+    expect(originHeight(tileset(A2.id))).toBeCloseTo(13, 3);
+    // What reads the frame of the scan drawn saw the new matrix at once.
+    expect(tileset(A2.id)?.root.updateTransform).toHaveBeenCalled();
+  });
+
+  it("a later change to the anchor's placement moves every epoch with it", async () => {
+    const { manager, tileset, site } = harness(
+      withConfigs({ clampToGround: false, heightOffsetM: 3 }),
+    );
+    await open(manager);
+    const raised = {
+      ...A1,
+      renderConfig: { ...A1.renderConfig, clampToGround: false, heightOffsetM: 5 },
+    };
+    manager.updateRecord({ ...site, assets: [raised, A2] });
+    expect(originHeight(tileset(A1.id))).toBeCloseTo(15, 3);
+    expect(Matrix4.equals(tileset(A2.id)?.modelMatrix, tileset(A1.id)?.modelMatrix)).toBe(true);
+    // A change to the follower's own record does not rest it on its own.
+    const nudged = { ...A2, renderConfig: { ...A2.renderConfig, heightOffsetM: 9 } };
+    manager.updateRecord({ ...site, assets: [raised, nudged] });
+    expect(originHeight(tileset(A2.id))).toBeCloseTo(15, 3);
+  });
+
+  it("an epoch whose tiles are not in the site frame is placed on its own", async () => {
+    const { manager, tileset } = harness(withConfigs({ clampToGround: false, heightOffsetM: 3 }));
+    // A2's root is 10 m east of the frame's.
+    made.roots.set(
+      A2.id,
+      Matrix4.multiply(ROOT, Matrix4.fromTranslation(new Cartesian3(10, 0, 0)), new Matrix4()),
+    );
+    await open(manager);
+    expect(Matrix4.equals(tileset(A2.id)?.modelMatrix, Matrix4.IDENTITY)).toBe(true);
+    expect(warned("an epoch's tiles are not in its site's frame; placed on its own")).toBe(true);
+  });
+
+  it("an epoch whose anchor did not load is placed on its own", async () => {
+    const { manager, tileset } = harness(
+      withConfigs({}, { clampToGround: false, heightOffsetM: 2 }),
+    );
+    made.missing.add(A1.id);
+    await open(manager);
+    expect(manager.shownAsset()?.id).toBe(A2.id);
+    expect(originHeight(tileset(A2.id))).toBeCloseTo(12, 3);
+    expect(warned("the site frame's own epoch did not load; this date is placed on its own")).toBe(
+      true,
+    );
+  });
+
+  it("the anchor shown alone is placed exactly as before", async () => {
+    const { manager, tileset } = harness(withConfigs({ clampToGround: false, heightOffsetM: 3 }));
+    await open(manager);
+    await manager.setEpoch(E1.id);
+    expect(manager.shownAsset()?.id).toBe(A1.id);
+    // Its own placement: its own 3 m about its own frame.
+    expect(originHeight(tileset(A1.id))).toBeCloseTo(13, 3);
+    expect(Matrix4.equals(tileset(A2.id)?.modelMatrix, tileset(A1.id)?.modelMatrix)).toBe(true);
+  });
+
+  it("the anchor rests on the drawn ground, never on another date of its site", async () => {
+    const { manager, tileset, viewer } = harness(withConfigs({ clampToGround: true }), {
+      sampling: true,
+    });
+    await open(manager);
+    await vi.waitFor(() => expect(viewer.scene.sampleHeightMostDetailed).toHaveBeenCalled());
+    await settle();
+    const [, excluded] = viewer.scene.sampleHeightMostDetailed.mock.calls.at(-1) as unknown as [
+      unknown,
+      unknown[],
+    ];
+    expect(excluded).toContain(tileset(A1.id));
+    expect(excluded).toContain(tileset(A2.id));
+    // Rested (the box's lowest corner, 10 m up, on the 4 m ground), and the phone epoch with it.
+    await vi.waitFor(() => expect(originHeight(tileset(A1.id))).toBeCloseTo(4, 3));
+    expect(Matrix4.equals(tileset(A2.id)?.modelMatrix, tileset(A1.id)?.modelMatrix)).toBe(true);
+  });
+
+  it("sameRootFrame: a millimetre and 1e-9 in rotation are one frame; 1.1 mm or a 1e-8 turn is another", () => {
+    const base = Matrix4.toArray(ROOT);
+    const moved = (i: number, by: number) => base.map((v, j) => (j === i ? v + by : v));
+    expect(sameRootFrame(base, base)).toBe(true);
+    expect(sameRootFrame(undefined, undefined)).toBe(true);
+    // Under a millimetre: 0.001 itself is not one in doubles 2,500 km from the centre of the earth.
+    expect(sameRootFrame(moved(12, 0.00099), base)).toBe(true);
+    expect(sameRootFrame(moved(0, 1e-9), base)).toBe(true);
+    expect(sameRootFrame(moved(13, 0.0011), base)).toBe(false);
+    expect(sameRootFrame(moved(5, 1e-8), base)).toBe(false);
+    expect(sameRootFrame(base, undefined)).toBe(false);
   });
 });
