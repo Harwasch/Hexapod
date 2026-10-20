@@ -90,17 +90,50 @@ def test_the_packed_tileset_and_the_in_memory_tree_cut_alike(tmp_path: Path) -> 
     rng = np.random.default_rng(3)
     for _ in range(50):
         eye = rng.normal(size=3) * 20
-        tau = lod_maths.sample_tau(rng, 3.0, 64.0)
+        tau = float(np.exp(rng.uniform(np.log(3.0), np.log(64.0))))
         a = {packed.uris[t] for t in lod_maths.cut(packed.tree, eye, 500.0, tau)}
         b = {tree.uris[t] for t in lod_maths.cut(tree, eye, 500.0, tau)}
         assert a == b
     rows = [
         {"test": "root-at-switch", "tau": 16.0, "tileset": name, "lpips": v, "psnr": 20.0,
          "ssim": 0.9, "holes": 0.1}
-        for name, v in (("merged", 0.3), ("merged", 0.32), ("optimised", 0.2))
+        for name, v in (("a", 0.3), ("a", 0.32), ("b", 0.2))
     ]  # fmt: skip
     lines = summarise(rows)
-    assert len(lines) == 2 and "lpips 0.310" in lines[0] and "optimised" in lines[1]
+    assert len(lines) == 2 and "lpips 0.310" in lines[0] and " b " in lines[1]
+
+
+def test_orbit_eye_is_at_the_asked_distance_from_the_box() -> None:
+    rng = np.random.default_rng(5)
+    low, high = np.array([-1.0, -2.0, 0.0]), np.array([3.0, 1.0, 0.5])
+    target = 0.5 * (low + high)
+    for _ in range(20):
+        direction = rng.normal(size=3)
+        distance = float(rng.uniform(0.01, 500.0))
+        eye = lod_maths.orbit_eye(target, direction, low, high, distance)
+        got = lod_maths.box_distance(eye, low, high)
+        assert abs(got - distance) <= 1e-9 * max(1.0, distance)
+        # On the ray from the target, in the asked direction.
+        along = (eye - target) / np.linalg.norm(eye - target)
+        np.testing.assert_allclose(along, direction / np.linalg.norm(direction), atol=1e-12)
+
+
+def test_look_at_is_a_rigid_opencv_camera() -> None:
+    eye, target = np.array([4.0, -3.0, 2.0]), np.array([0.5, 0.5, 0.0])
+    view = lod_maths.look_at(eye, target)
+    rotation = view[:3, :3]
+    np.testing.assert_allclose(rotation @ rotation.T, np.eye(3), atol=1e-12)
+    assert np.linalg.det(rotation) == pytest.approx(1.0)
+    # The eye maps to the camera's origin; the target lies straight ahead (+z).
+    np.testing.assert_allclose(view @ np.append(eye, 1.0), [0, 0, 0, 1], atol=1e-12)
+    ahead = view @ np.append(target, 1.0)
+    np.testing.assert_allclose(ahead[:2], [0.0, 0.0], atol=1e-12)
+    assert ahead[2] > 0
+    # World up is camera up, i.e. -y (OpenCV's y points down).
+    assert (rotation @ np.array([0.0, 0.0, 1.0]))[1] < 0
+    # Looking straight down still gives a camera.
+    down = lod_maths.look_at(np.array([0.0, 0.0, 10.0]), np.zeros(3))
+    np.testing.assert_allclose(down[:3, :3] @ down[:3, :3].T, np.eye(3), atol=1e-12)
 
 
 def test_a_far_tileset_is_read_in_the_root_frame(tmp_path: Path) -> None:
