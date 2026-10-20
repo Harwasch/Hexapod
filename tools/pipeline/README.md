@@ -73,7 +73,14 @@ it.
 uv run python run_recipe.py splat-ingest --workdir /tmp/run-1 --runner local \
   --seed upload=./capture.ply
 uv run python run_recipe.py photo-reconstruct --workdir /tmp/run-2 --plan-only
+# A later epoch of a site: its context (reference epoch, check targets, clicks) as a
+# directory holding site_context.json (alignment.py); without it, an empty one is seeded.
+uv run --no-sync python run_recipe.py photo-reconstruct --workdir /tmp/run-3 --runner local \
+  --seed upload=./photos --seed site_context=./site_context
 ```
+
+`--no-sync` matters wherever pycolmap is installed by hand (`uv pip install pycolmap==4.2.0`, as
+CI does): a plain `uv run` syncs the environment and removes it.
 
 The recipe's placement parameters are the deployment's defaults; a run overrides them per
 capture (see [Parameters per run](#parameters-per-run)), which is how the worker hands a
@@ -453,12 +460,14 @@ path: the worker runs these stages in that environment. Nothing under `app/api` 
 
 - **`splat-ingest`** — Lane 1, no GPU: `normalize → georeference → package → thumbnail →
 ground_samples → manifest → register`. Every stage is real.
-- **`photo-reconstruct`** — Lane 2: `normalize → pose → mask → train → compensate →
-georeference → place → package → thumbnail → ground_samples → manifest → register`. Only `train`
-  declares `gpu:`; `compensate` gains one when its impl becomes `imc` (B3), since asking
-  for an L4 to run `none` would be billing a GPU to do nothing. Both lanes end in the same
-  artifact set, so the console cannot tell which one made a site except by reading its
-  manifest.
+- **`photo-reconstruct`** (v13) — Lane 2: `normalize → pose → georeference → align → mask →
+train → compensate → quality → place → optimise_lod → package → thumbnail → ground_samples →
+manifest → register`, with inputs `upload` and `site_context`. `train` and `optimise_lod` run
+  on an L4; `pose`, `align` and `quality` on Modal's CPU box (`cpu4`); `compensate` gains a
+  `gpu:` block when its impl becomes `imc` (B3), since asking for an L4 to run `none` would be
+  billing a GPU to do nothing. `align` registers each epoch to its site's reference epoch and
+  writes its verdict (`epoch_alignment.json`; ADR 0015). Both lanes end in the same artifact
+  set, so the console cannot tell which one made a site except by reading its manifest.
 
 `thumbnail`, `ground_samples` and `manifest` were added in A8 as **a recipe edit and three
 decorators**: `stages.py` gained three `@stage_impl`s and three `ArtifactDecl`s, and the

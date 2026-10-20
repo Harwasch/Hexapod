@@ -312,6 +312,8 @@ What Cesium supports today, and what is custom:
 which `exif_gps` already does. Use ellipsoidal heights, never MSL (the repo already warns about
 this). Report `uncertaintyM` as RMSE on **2–3 held-out checkpoints**, because the repo notes
 that a fit residual is not an accuracy. The site root is the existing ENU root transform.
+(Built in M3b: GNSS pose priors, check targets and visual cross-epoch alignment, with the
+verdict each epoch may claim — ADR 0015, `docs/DECISIONS/0015-epoch-registration.md`.)
 Placement stays `ground_samples`, the median against terrain. ADR 0003's footprint clip cuts
 the world tileset, and terrain stays under splats. Inside the footprint the capture is truth;
 outside it the global terrain and 3D tiles are.
