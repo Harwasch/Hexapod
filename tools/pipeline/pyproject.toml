@@ -78,6 +78,7 @@ known-first-party = [
   "run_stage",
   "runners",
   "sfm",
+  "sim3",
   "site_frame",
   "splat_tiles",
   "stages",
