@@ -67,7 +67,7 @@ georef`). **An RTK epoch never trades its own GNSS frame for a reference that is
    priors in BA or a similarity after it, whichever it has, when that frame is anchored tighter than
    the reference — and records the visual fit as `visualCheck`. Whatever it keeps, an epoch aligned
    visually to a reference that is not `survey` is never `survey` itself. `uncertaintyM` starts from what anchors the frame —
-   √(reference² + (3·rms)²) aligned visually, the priors' sigma or the georeference's own (≥ 5 m)
+   √(reference² + (3·rms)²) aligned visually, the priors' sigma (the larger of horizontal and vertical) or the georeference's own (≥ 5 m)
    with GNSS — and check targets (their RMSE, their own sigma) can only raise it; an unaligned
    epoch carries the georeference's own. Confidence is a heuristic score in [0, 1], documented as
    not a probability.

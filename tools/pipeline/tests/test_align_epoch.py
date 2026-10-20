@@ -1026,3 +1026,19 @@ def test_a_gnss_similarity_with_fewer_than_three_inliers_is_not_aligned() -> Non
     assert "2 of 10 fixes agree" in candidate.reasons[0]
     georef["alignment"]["inliers"] = 3
     assert alignment.gnss_candidate(georef, {}).aligned is True
+
+
+def test_the_claim_is_floored_by_the_vertical_anchor_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R2 review (#51, medium): the GNSS floor passed only the horizontal anchor sigma,
+    so priors of 0.02 m horizontal and 0.20 m vertical, with three targets scoring 0.01 m,
+    claimed ±0.02 m. The scalar claim is never better than either axis's anchor."""
+    monkeypatch.setattr(alignment.check_targets, "evaluate", _perfect_checks)
+    names = [f"frame_{i:04d}.jpg" for i in range(COUNT)]
+    priors = {
+        "priors": {"used": True, "sigmaM": {"horizontalMedian": 0.02, "verticalMedian": 0.20}}
+    }
+    _, document = _run(tmp_path / "w", _georef_aligned(IDENTITY, names), poses_json=priors)
+    assert document["method"] == "gnss-prior-ba"
+    assert document["uncertaintyM"] == pytest.approx(0.20)

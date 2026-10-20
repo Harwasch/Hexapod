@@ -768,7 +768,8 @@ def uncertainty(
     lower it (deviations from the design, which let targets replace it):
 
     * visually aligned: `sqrt(reference^2 + (3 rms)^2)`, the frame it was aligned into
-      and its own fit's error; with GNSS: the anchor's sigma;
+      and its own fit's error; with GNSS: the anchor's sigma, the larger of horizontal and
+      vertical (`anchor_m`, from the caller);
     * with three or more targets: also their RMSE and their own declared sigma (they
       cannot measure better than they were surveyed). A few targets can score below
       what anchors the frame -- 1.3 cm for an epoch aligned into a reference worth 3 cm,
@@ -1035,7 +1036,13 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
         reference_m=reference.uncertainty_m if reference is not None else None,
         rms_m=rms,
         georef_m=georef_m,
-        anchor_m=chosen.anchor_h if chosen.aligned else 0.0,
+        # Both axes (R2 review of #51): a scalar claim is never better than either
+        # anchor sigma; a vertical left free is the georeference floor's business.
+        anchor_m=(
+            (chosen.anchor_h if chosen.vertical_free else max(chosen.anchor_h, chosen.anchor_v))
+            if chosen.aligned
+            else 0.0
+        ),
         vertical_free=chosen.vertical_free is not None,
     )
     verdict, why = decide(
