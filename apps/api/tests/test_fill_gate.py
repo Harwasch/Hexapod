@@ -88,6 +88,7 @@ def gate_of(read: FillTargetsRead, **changes: Any) -> dict[str, Any]:
         "nj": read.nj,
         "cells": read.cells,
         "maskSha256": hashlib.sha256(base64.b64decode(read.mask)).hexdigest(),
+        "satisfiedBy": read.satisfied_by,
         "confidenceSha256": descriptor("e2")["sha256"],
     }
     return {**gate, **changes}
@@ -317,6 +318,32 @@ def test_a_fill_for_other_targets_is_filled_again(
     stale = gate_of(read, maskSha256="00" * 32, cells=read.cells + 1)
     with pytest.raises(InvalidInputError, match="cells, maskSha256 differ"):
         attach(db, storage, asset, layer_files([inside], [inside]), stale)
+
+
+@pytest.mark.parametrize(
+    ("change", "differ"),
+    [
+        ({"weakIn": [str(uuid.uuid4())]}, "weakIn"),
+        ({"comparedWith": []}, "comparedWith"),
+        ({"satisfiedBy": None}, "satisfiedBy"),
+        ({"satisfiedBy": "AQ=="}, "satisfiedBy"),
+    ],
+)
+def test_the_provenance_a_layer_records_is_the_apis_own(
+    db: Session, storage: S3Storage, tmp_path: Path, change: dict[str, Any], differ: str
+) -> None:
+    """Codex B5b N6: the earlier epochs a fill says it re-scanned (`weakIn`,
+    `comparedWith`) and which one each target re-scanned (`satisfiedBy`) were stored as
+    the client sent them -- invented, or missing. The API holds them to its recompute, so
+    what it stores is what it would answer."""
+    _, asset = site(db, storage, tmp_path)
+    read = targets(db, storage, asset)
+    inside = centre(read, target=True)
+    gate = gate_of(read, **change)
+    if change.get("satisfiedBy", "") is None:
+        gate.pop("satisfiedBy")
+    with pytest.raises(InvalidInputError, match=f"{differ} differ"):
+        attach(db, storage, asset, layer_files([inside], [inside]), gate)
 
 
 def test_a_layer_in_another_frame_is_refused(

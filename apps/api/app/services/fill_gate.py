@@ -13,8 +13,10 @@ it. It recomputes the gate itself and holds the layer's geometry to it:
 2. **The asset is the epoch's current revision**, so the map the targets came from is the one
    its tiles carry.
 3. **The evidence names exactly these targets** (same site, epoch, level, window, cell count
-   and mask bytes): a layer filled for targets the API no longer gives -- a re-run of the
-   epoch, an earlier epoch measured since -- is filled again, not attached.
+   and mask bytes) and their provenance (`weakIn`, `comparedWith`, `satisfiedBy`): a layer
+   filled for targets the API no longer gives -- a re-run of the epoch, an earlier epoch
+   measured since -- is filled again, not attached, and what an attach stores of the
+   re-scan is the API's own answer.
 4. **The layer is in the scan's frame**: its root transform is the scan's, so its positions
    are in the tileset frame the targets are cells of.
 5. **Every gaussian of every tile** -- parents as well as leaves, each tile's origin
@@ -65,8 +67,25 @@ from app.worker import positions
 #: Bytes of one layer's tiles read to check its gaussians: far past any fill (the yard's is
 #: kilobytes; a million gaussians are ~30 MB), short of reading a whole scan.
 MAX_LAYER_BYTES = 512 * 1024 * 1024
-#: What the evidence must name the same as the API's targets (`rescan_gate.verify_layer`).
-_SAME = ("policy", "siteId", "epochId", "level", "i0", "j0", "ni", "nj", "cells", "maskSha256")
+#: What the evidence must name the same as the API's targets (`rescan_gate.verify_layer`):
+#: the targets themselves, and their provenance -- the earlier epochs compared with, those a
+#: target re-scanned, and which one each target re-scanned -- so the evidence an attach
+#: stores is the API's own answer, never an invented or missing one.
+_SAME = (
+    "policy",
+    "siteId",
+    "epochId",
+    "weakIn",
+    "comparedWith",
+    "level",
+    "i0",
+    "j0",
+    "ni",
+    "nj",
+    "cells",
+    "maskSha256",
+    "satisfiedBy",
+)
 
 #: The bytes of a file of the new generation, by its path beside `tileset.json`; None when
 #: it is not there.
@@ -91,6 +110,8 @@ class Targets:
             "policy": read.policy,
             "siteId": str(read.site_id),
             "epochId": str(read.epoch_id),
+            "weakIn": [str(epoch) for epoch in read.weak_in],
+            "comparedWith": [str(epoch) for epoch in read.compared_with],
             "level": read.level,
             "i0": read.i0,
             "j0": read.j0,
@@ -98,6 +119,7 @@ class Targets:
             "nj": read.nj,
             "cells": read.cells,
             "maskSha256": self.mask_sha256,
+            "satisfiedBy": read.satisfied_by,
         }
 
     def outside(self, xyz: NDArray[Any]) -> int:

@@ -396,14 +396,31 @@ class RescanGate:
             "nj": self.nj,
             "cells": self.cells,
             "maskSha256": self.mask_sha256,
+            # Which earlier epoch each target re-scanned, encoded as the API answers it.
+            "satisfiedBy": base64.b64encode(bytes(self.satisfied_by)).decode("ascii"),
         }
         if confidence_sha256 is not None:
             out["confidenceSha256"] = confidence_sha256
         return out
 
 
-#: What a layer's `rescanGate` and the targets fetched at publish must agree on.
-_SAME = ("policy", "siteId", "epochId", "level", "i0", "j0", "ni", "nj", "cells", "maskSha256")
+#: What a layer's `rescanGate` and the targets fetched at publish must agree on: the
+#: targets and their provenance (the API's `fill_gate._SAME`).
+_SAME = (
+    "policy",
+    "siteId",
+    "epochId",
+    "weakIn",
+    "comparedWith",
+    "level",
+    "i0",
+    "j0",
+    "ni",
+    "nj",
+    "cells",
+    "maskSha256",
+    "satisfiedBy",
+)
 
 
 def verify_layer(

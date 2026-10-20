@@ -370,6 +370,8 @@ def test_the_evidence_names_the_targets_and_the_grid_it_was_checked_against() ->
         "nj": payload["nj"],
         "cells": payload["cells"],
         "maskSha256": gate.mask_sha256,
+        # Codex B5b N6: which earlier epoch each target re-scanned, as the API answers it.
+        "satisfiedBy": payload["satisfiedBy"],
         "confidenceSha256": "ab" * 32,
     }
     assert "confidenceSha256" not in gate.evidence()
@@ -473,6 +475,15 @@ def test_publish_refuses_a_layer_filled_for_targets_that_changed_since() -> None
     case["current"] = lambda site, epoch: changed
     case["positions"] = case["positions"][:-1]
     with pytest.raises(rg.RescanGateError, match="changed since"):
+        rg.verify_layer(**case)
+
+
+@pytest.mark.parametrize("key", ["weakIn", "comparedWith", "satisfiedBy"])
+def test_publish_refuses_provenance_the_api_does_not_give(key: str) -> None:
+    """Codex B5b N6: the epochs a layer says it re-scanned are held to the API's answer."""
+    case = _publish_case()
+    case["evidence"]["rescanGate"][key] = [gf.B] if key != "satisfiedBy" else "AQ=="
+    with pytest.raises(rg.RescanGateError, match=f"{key} differ"):
         rg.verify_layer(**case)
 
 
