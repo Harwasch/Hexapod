@@ -434,10 +434,16 @@ def quality_of(capture: Capture) -> CaptureQuality | None:
     The worker writes this already validated, so a failure here is a schema that moved
     under old rows; a capture list that 500s over one of them would be the worse answer.
     """
-    if not capture.quality:
+    return quality_from(capture.quality)
+
+
+def quality_from(raw: object) -> CaptureQuality | None:
+    """A stored `CaptureQuality` dump (a capture's or an epoch's), or None when there is
+    none or it no longer parses."""
+    if not raw:
         return None
     try:
-        return CaptureQuality.model_validate(capture.quality)
+        return CaptureQuality.model_validate(raw)
     except ValidationError:
         return None
 

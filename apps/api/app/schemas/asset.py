@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, HttpUrl, model_validator
 
-from app.models.enums import AssetProvider, Representation, ScaleSource
+from app.models.enums import AssetProvider, AssetSourceKind, Representation, ScaleSource
 from app.schemas.base import CamelModel
 from app.schemas.common import Attribution, LicenseMetadata, Provenance
 from app.schemas.geojson import Footprint
@@ -339,5 +339,9 @@ class AssetRead(CamelModel):
     default_visible: bool
     #: Sidecars the last republish dropped; empty when nothing needs redoing.
     sidecar_flags: list[SidecarFlag]
+    #: The epoch this asset is a revision of; null for seeded, catalog and hand-made assets.
+    #: A revision with `validTo` set is superseded: history, no longer what its epoch shows.
+    epoch_id: uuid.UUID | None
+    source_kind: AssetSourceKind
     created_at: datetime
     updated_at: datetime

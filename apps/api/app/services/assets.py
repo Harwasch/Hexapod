@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Asset, Site
-from app.models.enums import AssetProvider, Representation, ScaleSource
+from app.models.enums import AssetProvider, AssetSourceKind, Representation, ScaleSource
 from app.schemas.asset import (
     AssetBase,
     AssetCreate,
@@ -78,6 +78,7 @@ def build_asset(payload: AssetBase, site_id: uuid.UUID | None) -> Asset:
         attribution=[a.model_dump(mode="json", by_alias=True) for a in payload.attribution],
         render_config=render,
         default_visible=payload.default_visible,
+        source_kind=AssetSourceKind.OBSERVED.value,
     )
 
 
@@ -325,6 +326,8 @@ def asset_to_read(asset: Asset) -> AssetRead:
         render_config=RenderConfig.model_validate(render_raw),
         default_visible=asset.default_visible,
         sidecar_flags=[SidecarFlag.model_validate(entry) for entry in asset.sidecar_flags or []],
+        epoch_id=asset.epoch_id,
+        source_kind=AssetSourceKind(asset.source_kind or AssetSourceKind.OBSERVED.value),
         created_at=asset.created_at,
         updated_at=asset.updated_at,
     )

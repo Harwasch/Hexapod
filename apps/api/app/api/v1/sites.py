@@ -8,9 +8,11 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from app.api.deps import DbSession, PublicStorage, RequireWriteToken
 from app.schemas.asset import AssetRead
 from app.schemas.bookmark import CameraBookmarkCreate, CameraBookmarkRead
+from app.schemas.epoch import EpochRead
 from app.schemas.site import SiteCreate, SiteRead, SiteSummary, SiteUpdate
 from app.services import assets as asset_service
 from app.services import bookmarks as bookmark_service
+from app.services import epochs as epoch_service
 from app.services import sites as site_service
 from app.storage import StorageUnavailableError
 
@@ -74,6 +76,14 @@ def delete_site(site_id: uuid.UUID, db: DbSession) -> None:
 def list_site_assets(site_id: uuid.UUID, db: DbSession) -> list[AssetRead]:
     site_service.get_site(db, site_id)
     return [asset_service.asset_to_read(a) for a in asset_service.list_assets(db, site_id=site_id)]
+
+
+@router.get("/{site_id}/epochs", response_model=list[EpochRead], summary="List a site's epochs")
+def list_site_epochs(site_id: uuid.UUID, db: DbSession) -> list[EpochRead]:
+    """The site's dated captures in its one frame, oldest first, each with the asset it
+    currently shows. Empty for a legacy (seeded, catalog, hand-made) site."""
+    site = site_service.get_site(db, site_id)
+    return [epoch_service.epoch_to_read(e, site.assets) for e in site.epochs]
 
 
 @router.get(

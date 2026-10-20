@@ -718,3 +718,29 @@ def test_unlocated_records_share_one_read_only_mask() -> None:
     mask = knowledge.footprint_mask(grid, source)
     assert mask is grid.inside and not mask.flags.writeable
     assert knowledge.footprint_mask(grid, source) is mask
+
+
+def test_a_superseded_revision_is_not_knowledge(client: TestClient, db: Session) -> None:
+    """A re-run's old revision is history: the fog counts the epoch once, by its current
+    asset, however many times it was re-run."""
+    from tests.test_epochs import make_asset, make_epoch, make_site
+
+    land = make_land(client)
+    observed = datetime.now(UTC) - timedelta(days=30)
+    site = make_site(db, "pole", at=POINT)
+    epoch = make_epoch(db, site, 1, observed=observed)
+    make_asset(
+        db,
+        site,
+        epoch,
+        "https://tiles.example.com/old/tileset.json",
+        created=observed,
+        valid_to=observed + timedelta(days=1),
+    )
+    db.commit()
+    assert fog(client, land["id"])["records"] == []
+
+    make_asset(db, site, epoch, "https://tiles.example.com/new/tileset.json", created=observed)
+    db.commit()
+    [record] = fog(client, land["id"])["records"]
+    assert record["kind"] == "capture"
