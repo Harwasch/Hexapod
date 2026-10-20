@@ -2389,6 +2389,9 @@ export interface paths {
         /**
          * List a site's active check targets
          * @description The surveyed ground marks the site's epochs are scored against (M3b), by label.
+         *
+         *     Behind the write token, unlike the site's other reads: these are survey marks on
+         *     private land, and their coordinates are not public (the R2 review of #52).
          */
         get: operations["list_check_targets_api_v1_sites__site_id__check_targets_get"];
         /**

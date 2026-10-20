@@ -158,7 +158,8 @@ retires its row and gets a new one, so what an epoch was scored with stays reada
 | retired_at             | timestamptz, nullable  | set when re-surveyed or left out of a replacement; never deleted               |
 | created_at, updated_at | timestamptz            |                                                                                |
 
-`GET /api/v1/sites/{id}/check-targets` lists the active set; `PUT` (write token) replaces it:
+`GET /api/v1/sites/{id}/check-targets` lists the active set and `PUT` replaces it, both behind the
+write token (survey marks on private land are not public, unlike the site's other reads):
 `{targets: [{label, role, lat, lon, height, heightDatum, sigmaHM, sigmaVM, source, surveyedAt?}]}`.
 A run is given the set as it is when it starts (`site_context`), with the capture's own clicks
 from an uploaded `check_observations.json` (`{"version": 1, "observations": [...]}`).

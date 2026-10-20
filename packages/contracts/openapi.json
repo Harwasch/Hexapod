@@ -41077,7 +41077,7 @@
     },
     "/api/v1/sites/{site_id}/check-targets": {
       "get": {
-        "description": "The surveyed ground marks the site's epochs are scored against (M3b), by label.",
+        "description": "The surveyed ground marks the site's epochs are scored against (M3b), by label.\n\nBehind the write token, unlike the site's other reads: these are survey marks on\nprivate land, and their coordinates are not public (the R2 review of #52).",
         "operationId": "list_check_targets_api_v1_sites__site_id__check_targets_get",
         "parameters": [
           {
@@ -41147,6 +41147,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "List a site's active check targets",
         "tags": [
           "sites"

@@ -72,10 +72,10 @@ def _rows(db: Session) -> list[SiteCheckTarget]:
 
 def test_put_then_get_round_trips_the_set(client: TestClient) -> None:
     site_id = _site(client)
-    assert client.get(f"/api/v1/sites/{site_id}/check-targets").json() == []
+    assert client.get(f"/api/v1/sites/{site_id}/check-targets", headers=AUTH).json() == []
 
     put = _put(client, site_id, _target("T2"), _target("T1", role="control"))
-    got = client.get(f"/api/v1/sites/{site_id}/check-targets").json()
+    got = client.get(f"/api/v1/sites/{site_id}/check-targets", headers=AUTH).json()
 
     assert got == put
     assert [t["label"] for t in got] == ["T1", "T2"]
@@ -115,19 +115,25 @@ def test_a_target_left_out_is_retired_not_deleted(client: TestClient, db: Sessio
     assert all(row.retired_at is not None for row in _rows(db))
 
 
-def test_writes_need_the_token_and_reads_do_not(client: TestClient) -> None:
+def test_reads_and_writes_both_need_the_token(client: TestClient) -> None:
+    """Coordinator (R2 review of #52): check targets are survey marks on private land, so
+    their coordinates are not public: the list needs the write token, the API's one guard
+    on private data, as the replacement does."""
     site_id = _site(client)
     url = f"/api/v1/sites/{site_id}/check-targets"
     assert client.put(url, json={"targets": [_target("T1")]}).status_code == 401
     wrong = {"Authorization": "Bearer nope"}
     assert client.put(url, json={"targets": [_target("T1")]}, headers=wrong).status_code == 401
-    assert client.get(url).status_code == 200
+    _put(client, site_id, _target("T1"))
+    assert client.get(url).status_code == 401
+    assert client.get(url, headers=wrong).status_code == 401
+    assert client.get(url, headers=AUTH).status_code == 200
 
 
 def test_an_unknown_site_is_404(client: TestClient) -> None:
     missing = uuid.uuid4()
     url = f"/api/v1/sites/{missing}/check-targets"
-    assert client.get(url).status_code == 404
+    assert client.get(url, headers=AUTH).status_code == 404
     assert client.put(url, json={"targets": [_target("T1")]}, headers=AUTH).status_code == 404
 
 

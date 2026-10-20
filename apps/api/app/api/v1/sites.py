@@ -92,9 +92,13 @@ def list_site_epochs(site_id: uuid.UUID, db: DbSession) -> list[EpochRead]:
     "/{site_id}/check-targets",
     response_model=list[CheckTargetRead],
     summary="List a site's active check targets",
+    dependencies=[RequireWriteToken],
 )
 def list_check_targets(site_id: uuid.UUID, db: DbSession) -> list[CheckTargetRead]:
-    """The surveyed ground marks the site's epochs are scored against (M3b), by label."""
+    """The surveyed ground marks the site's epochs are scored against (M3b), by label.
+
+    Behind the write token, unlike the site's other reads: these are survey marks on
+    private land, and their coordinates are not public (the R2 review of #52)."""
     return [
         check_target_service.to_read(t) for t in check_target_service.list_for_site(db, site_id)
     ]
