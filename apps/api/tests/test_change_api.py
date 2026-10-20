@@ -441,3 +441,27 @@ def test_an_unknown_epoch_is_a_404_whatever_the_other_one_is(
     )
     assert response.status_code == 404, response.text
     assert str(missing) in response.text
+
+
+@pytest.mark.parametrize("scale", [0.5, 2.0])
+def test_an_epoch_drawn_at_a_runtime_scale_is_refused_its_surface_is_not_the_shown_model(
+    api: TestClient, db: Session, storage: S3Storage, tmp_path: Path, scale: float
+) -> None:
+    """Review B5a: "Set real size" (`renderConfig.scale`) resizes what an epoch shows about
+    the frame origin, but its surface was measured on the files as registered. Compared
+    as stored, an unchanged 2 m post scaled by 0.5 against a re-scan aligned to the scaled
+    model reads as lowered 1 m. The heights would need the scale, and the cells resampling
+    by it; neither is done, so the pair is refused, and a scale of 1 (reset) is not."""
+    from app.services import epochs
+
+    e1, e2 = two_epochs(db, storage, tmp_path)
+    shown = epochs.current_asset(db, e1.id)
+    assert shown is not None
+    shown.render_config = {**(shown.render_config or {}), "scale": scale}
+    db.commit()
+    response = get(api, e1, e2)
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "scale-corrected"
+    shown.render_config = {**shown.render_config, "scale": 1.0}
+    db.commit()
+    assert get(api, e1, e2).status_code == 200

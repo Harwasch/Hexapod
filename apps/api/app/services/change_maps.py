@@ -22,6 +22,10 @@ weak areas use (`confidence_maps.load_grid`), and measures the change between th
 * 409 `not-metric` when either surface's heights are not metres (its summary's `metric` is
   not true: a run whose scale was never resolved, COLMAP's own units): no change in metres
   can be read from it, and none in any other unit is offered (review B5a's ruling);
+* 409 `scale-corrected` when either epoch is drawn at a runtime scale (`renderConfig.scale`,
+  "Set real size", other than 1): its surface was measured on the files as registered,
+  so its heights and cells are not the model it shows; comparing them would need the
+  heights scaled and the cells resampled about the frame origin, which is not done;
 * 409 `frames-differ` when a surface's heights are above another origin height than the
   site frame's (its `vertical.originHeightM`; to the millimetre, a tenth of the heights'
   own unit) -- the two would differ by the offset everywhere;
@@ -74,6 +78,7 @@ from app.storage import ObjectStorage
 NOT_PUBLISHED = "epoch-not-published"
 UNALIGNED = "epoch-unaligned"
 NOT_METRIC = "not-metric"
+SCALE_CORRECTED = "scale-corrected"
 SURFACE_NOT_MEASURED = "surface-not-measured"
 SURFACE_UNREADABLE = "surface-unreadable"
 FRAMES_DIFFER = "frames-differ"
@@ -113,6 +118,17 @@ def _maps(db: Session, epoch: Epoch) -> tuple[uuid.UUID, EpochMap, EpochMap]:
             f"epoch {epoch.id} has no height surface: the run that made what it shows "
             "measured none (a splat upload, or a run from before the surface stage)",
             code=SURFACE_NOT_MEASURED,
+        )
+    scale = (current.render_config or {}).get("scale")
+    if (
+        isinstance(scale, int | float)
+        and not isinstance(scale, bool)
+        and (not math.isfinite(scale) or scale != 1.0)
+    ):
+        raise ConflictError(
+            f"epoch {epoch.id} is drawn at a runtime scale of {scale}, but its height surface "
+            "was measured on the model as registered: its heights are not the shown model's",
+            code=SCALE_CORRECTED,
         )
     graded = epoch_maps.map_of(rows, current.id, EpochMapKind.CONFIDENCE)
     if graded is None:
