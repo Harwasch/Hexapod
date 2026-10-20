@@ -67,7 +67,10 @@ hAccuracyM, dop}`, `camera`, `exposure`, `focal` `{mm, mm35, px, pxFrom}`, `dji`
    bundle adjustment refine it (`hold_focal: true` holds it). A 35 mm focal converts by the diagonal
    with COLMAP's own 43.27 mm constant (pycolmap 4.2 reads 443.7254 px for 24 mm at 640×480).
    `poses.json` records `initialPx`, `initialFrom`, `held` and `recoveredOverInitial`, the ratio
-   that will decide, across captures, whether holding is ever right.
+   that will decide, across captures, whether holding is ever right. A focal is used only when it
+   gives a field of view across the long side of 0.1°–179° (`frame_meta.FOCAL_FIELD_OF_VIEW_DEG`: a
+   pinhole camera sees less than 180°); one outside is dropped and named in the frame's
+   `implausible` list, the next source is tried, and `pose` checks the seed again before using it.
 9. **Phone accuracy** (`metadata.locationAccuracyM`, and a video's QuickTime accuracy) widens the
    georeference's `uncertaintyM`, never narrows it below a dropped pin's 10 m.
 

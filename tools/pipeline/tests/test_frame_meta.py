@@ -441,3 +441,63 @@ def test_an_implausible_exif_exposure_is_dropped_with_its_reason(tmp_path: Path)
     [reason] = record.implausible
     assert reason.startswith("fNumber 2.5e-10") and "0.5" in reason
     assert record.to_dict()["implausible"] == [reason]
+
+
+def test_an_impossible_calibrated_focal_is_dropped_and_the_next_source_used(
+    tmp_path: Path,
+) -> None:
+    """A CalibratedFocalLength of 1e308 px is no lens: a field of view of 0 degrees. It
+    is dropped with its reason, and the 35 mm focal the photo also carries seeds instead."""
+    photo = write_jpeg(
+        tmp_path / "odd.jpg",
+        size=(3000, 2250),
+        exif={0x010F: "DJI", 0x0110: "M3E"},
+        exif_ifd={0xA405: 24},
+        xmp=dji_xmp(extra={"CalibratedFocalLength": "1e308"}),
+    )
+
+    record = frame_meta.read_photo(
+        photo, frame_name="frame_0000.jpg", upload_root=tmp_path, frame_size=(1600, 1200)
+    )
+
+    assert record.focal.px_from == "exif-35mm"
+    assert record.focal.px == pytest.approx(frame_meta.focal_px_from_35mm(24, 1600, 1200))
+    [reason] = record.implausible
+    assert reason.startswith("dji-calibrated focal") and "field of view" in reason
+
+
+@pytest.mark.parametrize(
+    ("px", "plausible"),
+    [
+        (1200.0, True),  # a 24 mm-equivalent at 1600 px
+        (8.0, True),  # a 178-degree fisheye-wide view across 1600 px
+        (800_000.0, True),  # 0.11 degrees: a long telescope
+        (6.0, False),  # wider than 179 degrees: no pinhole camera sees that
+        (1e7, False),
+        (float("inf"), False),
+        (float("nan"), False),
+        (0.0, False),
+    ],
+)
+def test_a_focal_is_held_to_a_field_of_view_a_pinhole_camera_has(
+    px: float, plausible: bool
+) -> None:
+    assert (frame_meta.implausible_focal(px, (1600, 1200)) is None) is plausible
+
+
+def test_frames_that_agree_on_an_impossible_focal_seed_nothing() -> None:
+    """Built by hand (a record from before the guard, or from another writer), frames
+    that all say inf or 1e308 px do not "agree" on a focal: none of them has one."""
+    for value in (float("inf"), 1e308):
+        records = [
+            frame_meta.FrameRecord(
+                name=f"f{i}.jpg",
+                original="o.jpg",
+                frame_size=(1600, 1200),
+                focal=frame_meta.Focal(px=value, px_from="dji-calibrated"),
+            )
+            for i in range(3)
+        ]
+        summary = frame_meta.capture_focal(records)
+        assert summary["px"] is None, value
+        assert summary["frames"] == 0

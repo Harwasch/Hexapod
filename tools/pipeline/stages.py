@@ -813,12 +813,14 @@ def _frame_records(
     started, started_from = meta.started_at(), meta.started_from()
     size = _safe_image_size(written[0]) if written else None
     focal = frame_meta.Focal(mm35=meta.focal_35mm)
+    implausible: tuple[str, ...] = ()
     if meta.focal_35mm is not None and size is not None:
-        focal = frame_meta.Focal(
-            mm35=meta.focal_35mm,
-            px=frame_meta.focal_px_from_35mm(meta.focal_35mm, *size),
-            px_from="quicktime-35mm",
-        )
+        px = frame_meta.focal_px_from_35mm(meta.focal_35mm, *size)
+        reason = frame_meta.implausible_focal(px, size)
+        if reason is None:
+            focal = frame_meta.Focal(mm35=meta.focal_35mm, px=px, px_from="quicktime-35mm")
+        else:
+            implausible = (f"quicktime-35mm focal {reason}",)
     coded = (meta.width, meta.height) if meta.width and meta.height else None
     records: list[frame_meta.FrameRecord] = []
     for index, frame in zip(chosen, written, strict=True):
@@ -839,6 +841,7 @@ def _frame_records(
                 model=meta.model,
                 lens=meta.lens_model,
                 focal=focal,
+                implausible=implausible,
             )
         )
     return records
@@ -1502,6 +1505,12 @@ def _focal_seed(
             f"colmap: frames_meta.json's focal is for frames of {first.get('frameSize')}, "
             f"not {width}x{height}; not seeding from it"
         )
+        return None
+    # Read again here: the file may predate the guard in `frame_meta`, or come from
+    # anything else, and a camera started at inf px is no camera.
+    reason = frame_meta.implausible_focal(px, (width, height))
+    if reason is not None:
+        ctx.log(f"colmap: frames_meta.json's focal is not a camera's ({reason}); not seeding")
         return None
     return px, source
 

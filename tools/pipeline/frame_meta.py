@@ -48,6 +48,7 @@ import site_frame
 __all__ = [
     "DJI_ALTITUDE_DATUM",
     "EXPOSURE_RANGES",
+    "FOCAL_FIELD_OF_VIEW_DEG",
     "FOCAL_SPREAD_LIMIT",
     "GPS_ALTITUDE_DATUM",
     "META_BYTES",
@@ -65,6 +66,7 @@ __all__ = [
     "exif_time",
     "focal_px_from_35mm",
     "implausible_exposure",
+    "implausible_focal",
     "offset_text",
     "read_dji_xmp",
     "read_photo",
@@ -608,6 +610,29 @@ def focal_px_from_35mm(f35: float, width: int, height: int) -> float:
     return f35 * math.hypot(width, height) / DIAGONAL_35MM
 
 
+#: The field of view across a frame's long side a focal must give, in degrees,
+#: `(low, high)`. A pinhole camera -- the model COLMAP seeds -- sees less than 180
+#: degrees, so 179 is the widest; 0.1 degrees is a 20 m full-frame-equivalent focal, past
+#: any camera lens. Wide on purpose: they keep out what no lens is, not what is rare.
+FOCAL_FIELD_OF_VIEW_DEG = (0.1, 179.0)
+
+
+def implausible_focal(px: float | None, frame_size: tuple[int, int]) -> str | None:
+    """Why `px` cannot be a focal of a `frame_size` frame, or None (also for no focal)."""
+    if px is None:
+        return None
+    low, high = FOCAL_FIELD_OF_VIEW_DEG
+    if math.isfinite(px) and px > 0:
+        fov = 2.0 * math.degrees(math.atan(max(frame_size) / (2.0 * px)))
+        if low <= fov <= high:
+            return None
+        return (
+            f"{px:.6g} px gives a field of view of {fov:.3g} degrees across {max(frame_size)} "
+            f"px, outside the {low:g}-{high:g} a pinhole camera has"
+        )
+    return f"{px} px is no focal (field of view undefined)"
+
+
 def calibrated_focal_px(
     focal_px: float, original_size: tuple[int, int], frame_size: tuple[int, int]
 ) -> float:
@@ -769,14 +794,30 @@ def _read_photo(
     focal_35 = _positive(_rational(exif_ifd.get(FOCAL_35MM)))
     px: float | None = None
     px_from: FocalFrom | None = None
-    if frame_size is None:
-        pass
-    elif dji is not None and dji.calibrated_focal_px is not None:
-        px = calibrated_focal_px(dji.calibrated_focal_px, size, frame_size)
-        px_from = "dji-calibrated"
-    elif focal_35 is not None:
-        px, px_from = focal_px_from_35mm(focal_35, *frame_size), "exif-35mm"
     implausible: list[str] = []
+    if frame_size is not None:
+        # The first source that gives a focal a camera can have; one that does not is
+        # dropped, with why, and the next is tried.
+        candidates: list[tuple[FocalFrom, float | None]] = [
+            (
+                "dji-calibrated",
+                None
+                if dji is None or dji.calibrated_focal_px is None
+                else calibrated_focal_px(dji.calibrated_focal_px, size, frame_size),
+            ),
+            (
+                "exif-35mm",
+                None if focal_35 is None else focal_px_from_35mm(focal_35, *frame_size),
+            ),
+        ]
+        for source, value in candidates:
+            if value is None:
+                continue
+            reason = implausible_focal(value, frame_size)
+            if reason is None:
+                px, px_from = value, source
+                break
+            implausible.append(f"{source} focal {reason}")
 
     def plausible(name: str, value: float | None) -> float | None:
         reason = implausible_exposure(name, value)
@@ -811,6 +852,15 @@ def _read_photo(
     )
 
 
+def _usable_focal(record: FrameRecord) -> bool:
+    px = record.focal.px
+    if px is None:
+        return False
+    if record.frame_size is None:
+        return math.isfinite(px) and px > 0
+    return implausible_focal(px, record.frame_size) is None
+
+
 def capture_focal(records: Sequence[FrameRecord]) -> dict[str, object]:
     """One focal length for the capture, or None when its frames disagree.
 
@@ -819,8 +869,11 @@ def capture_focal(records: Sequence[FrameRecord]) -> dict[str, object]:
     `SINGLE` camera must not be seeded from them) or when the frames disagree on where it
     came from. `frames` is how many had one, of `of`.
     """
-    values = [r.focal.px for r in records if r.focal.px is not None]
-    sources = sorted({r.focal.px_from for r in records if r.focal.px_from is not None})
+    # Only focals a camera can have: a record built before `implausible_focal`, or by
+    # anything else, may say inf, and frames that all say inf do not agree on a focal.
+    usable = [r for r in records if _usable_focal(r)]
+    values = [r.focal.px for r in usable if r.focal.px is not None]
+    sources = sorted({r.focal.px_from for r in usable if r.focal.px_from is not None})
     summary: dict[str, object] = {
         "px": None,
         "from": sources[0] if len(sources) == 1 else ("mixed" if sources else None),

@@ -96,3 +96,13 @@ def test_pose_reads_frames_meta_when_a_recipe_hands_it_over() -> None:
     impl = lookup("colmap")
     assert impl is not None
     assert "frames_meta.json" in impl.optional_consumes
+
+
+@pytest.mark.parametrize("px", [1e308, float("inf"), 1e-3])
+def test_an_impossible_focal_in_frames_meta_seeds_nothing(tmp_path: Path, px: float) -> None:
+    """A frames_meta.json written before the guard (or by anything else) may name a focal
+    no camera has: pose does not start a camera from it."""
+    context = _Context(frames_meta(px, "dji-calibrated", [2400, 1798]), tmp_path)
+
+    assert stages._focal_seed(context, "exif", 2400, 1798) is None  # type: ignore[arg-type]
+    assert "field of view" in context.logged[0]
