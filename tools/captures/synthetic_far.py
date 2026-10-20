@@ -11,18 +11,42 @@ Deterministic with no RNG: every gaussian is placed by formula (the plots on gol
 discs) and snapped to the 1/4096 m grid, and every coordinate is under 4096 m or a whole
 number, so float32 holds each one exactly.
 
+It emits, into ``<out_dir>``::
+
+    splat/tileset.json, splat/*.glb, collision.bin, viewcones.bin   splat_tiles.convert
+    source/expected.json   what a reader must find: per tile its composed offset, its
+                           fractional bits, its gaussian count and the site-frame checksum
+                           of its positions; the plots and the leaves that draw them; the
+                           site-frame box of everything
+
+The PLY is written to a temporary directory and never committed: `scene()` is its source.
+Parents go through `eigh`, so the bytes depend on the OpenBLAS kernel; tests/conftest.py
+pins Sandybridge, and the fixture is written under the same pin.
+
 Usage:
-    python synthetic_far.py OUT_DIR             # the fixture: OUT_DIR/splat, OUT_DIR/source
-    python synthetic_far.py report TILES_DIR    # per tile: origin, bits, decode error
+    OPENBLAS_CORETYPE=Sandybridge python synthetic_far.py ../../data/tiles/synthetic-far
+    python synthetic_far.py report ../../data/tiles/synthetic-far/splat
 """
 
 from __future__ import annotations
 
+import argparse
+import gzip
+import json
 import math
+import sys
+import tempfile
+from pathlib import Path
 
 import numpy as np
 
-from splat_render import Splats
+import splat_tiles
+from rig_tiles import glb_spz, tile_uris
+from splat_render import Splats, save_ply
+from synthetic_tree import checksum_positions
+
+FORMAT = 1
+GENERATOR = "tools/captures/synthetic_far.py"
 
 LAT, LON, HEIGHT = 28.0389, -82.6966, 0.0
 #: Gaussians a tile: small, so a 10.4 km site is a tree several levels deep.
@@ -81,3 +105,163 @@ def scene() -> Splats:
         colours.astype(np.float32),
         np.full(n, OPACITY, np.float32),
     )
+
+
+def _decoded(path: Path) -> tuple[np.ndarray, int]:
+    """A tile's stored (tile-local) positions, float32, and its header's fractional bits."""
+    blob = glb_spz(path)
+    columns = splat_tiles.unpack_spz(blob)
+    local = np.stack([columns["x"], columns["y"], columns["z"]], axis=1).astype("<f4")
+    local[local == 0.0] = 0.0
+    return local, gzip.decompress(blob)[13]
+
+
+def _plot_leaves(tiles_dir: Path, tileset: dict, offsets: dict[str, np.ndarray]) -> dict:
+    """Per plot, the leaves that draw any of its gaussians (site frame, at its height)."""
+    leaves: list[str] = []
+    stack = [tileset["root"]]
+    while stack:
+        tile = stack.pop()
+        if tile.get("children"):
+            stack.extend(tile["children"])
+        else:
+            leaves.append(tile["content"]["uri"])
+    out: dict[str, list[str]] = {}
+    for name, (x, y, z) in PLOTS.items():
+        found = []
+        for uri in sorted(leaves):
+            local, _bits = _decoded(tiles_dir / uri)
+            site = local.astype(np.float64) + offsets[uri]
+            near = (np.hypot(site[:, 0] - x, site[:, 1] - y) <= PLOT_RADIUS_M + QUANTUM) & (
+                np.abs(site[:, 2] - z) < QUANTUM
+            )
+            if near.any():
+                found.append(uri)
+        out[name] = found
+    return out
+
+
+def generate(out_dir: Path) -> dict:
+    """Write the fixture (see the module docstring) and return `splat_tiles.convert`'s stats."""
+    splat_dir = out_dir / "splat"
+    source = out_dir / "source"
+    source.mkdir(parents=True, exist_ok=True)
+    splats = scene()
+    with tempfile.TemporaryDirectory(prefix=".synthetic_far-") as scratch:
+        ply = Path(scratch) / "far.ply"
+        save_ply(ply, splats, comment=GENERATOR)
+        stats = splat_tiles.convert(
+            ply,
+            splat_dir,
+            LAT,
+            LON,
+            HEIGHT,
+            tile_gaussians=TILE_GAUSSIANS,
+            work_dir=Path(scratch),
+        )
+    if stats["dropped"]:
+        raise SystemExit(f"the packer dropped {stats['dropped']} gaussians; nothing should go")
+    tileset = json.loads((splat_dir / "tileset.json").read_text(encoding="utf-8"))
+    offsets = splat_tiles.tile_offsets(tileset)
+    tiles = {}
+    for uri in tile_uris(tileset):
+        local, bits = _decoded(splat_dir / uri)
+        site = splat_tiles.site_positions(local, offsets[uri])
+        tiles[uri] = {
+            "offset": [float(v) for v in offsets[uri]],
+            "fractionalBits": bits,
+            "gaussians": int(local.shape[0]),
+            "checksum": checksum_positions(site),
+        }
+    positions = splats.positions.astype(np.float64)
+    expected = {
+        "format": FORMAT,
+        "generator": GENERATOR,
+        "lat": LAT,
+        "lon": LON,
+        "height": HEIGHT,
+        "tileGaussians": TILE_GAUSSIANS,
+        "plots": {name: list(centre) for name, centre in PLOTS.items()},
+        "plotLeaves": _plot_leaves(splat_dir, tileset, offsets),
+        "bboxSiteM": {
+            "min": positions.min(axis=0).tolist(),
+            "max": positions.max(axis=0).tolist(),
+        },
+        "tiles": tiles,
+    }
+    (source / "expected.json").write_text(
+        json.dumps(expected, indent=1, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return stats
+
+
+def report(tiles_dir: Path) -> list[dict]:
+    """Per tile of a packed far scene: where its frame is, how precisely it stores
+    positions, and how far its decoded positions land from what the packer was given (the
+    tree `splat_tiles.hierarchy` builds from `scene()`, in the site frame). The last line
+    is the summary. Every `maxDecodeErrorM` is at most half its tile's `quantumM`."""
+    tileset = json.loads((tiles_dir / "tileset.json").read_text(encoding="utf-8"))
+    offsets = splat_tiles.tile_offsets(tileset)
+    own: dict[str, list[float] | None] = {}
+    stack = [tileset["root"]]
+    while stack:
+        tile = stack.pop()
+        stack.extend(tile.get("children", []))
+        transform = tile.get("transform") if tile is not tileset["root"] else None
+        own[tile["content"]["uri"]] = None if transform is None else transform[12:15]
+    truth: dict[str, np.ndarray] = {}
+
+    def emit(tile: splat_tiles.Tile, gaussians: splat_tiles.Gaussians, _keys: object) -> None:
+        truth[tile.uri] = gaussians.xyz.astype(np.float64)
+
+    with tempfile.TemporaryDirectory(prefix=".synthetic_far-") as scratch:
+        ply = Path(scratch) / "far.ply"
+        save_ply(ply, scene(), comment=GENERATOR)
+        splat_tiles.hierarchy(ply, 0.02, TILE_GAUSSIANS, Path(scratch), emit)
+    rows = []
+    low, high = np.full(3, np.inf), np.full(3, -np.inf)
+    for uri in tile_uris(tileset):
+        local, bits = _decoded(tiles_dir / uri)
+        site = local.astype(np.float64) + offsets[uri]
+        low, high = np.minimum(low, site.min(axis=0)), np.maximum(high, site.max(axis=0))
+        rows.append(
+            {
+                "uri": uri,
+                "origin": [float(v) for v in offsets[uri]],
+                "transform": own[uri],
+                "bits": bits,
+                "quantumM": 2.0**-bits,
+                "gaussians": int(local.shape[0]),
+                "maxDecodeErrorM": float(np.abs(site - truth[uri]).max()),
+            }
+        )
+    rows.append(
+        {
+            # Of the decoded centres in the site frame, as `convert`'s `extent_m` is.
+            "extentM": float((high - low).max()),
+            "offsetTiles": sum(1 for row in rows if any(row["origin"])),
+            "minBits": min(row["bits"] for row in rows),
+            "worstErrorOverHalfQuantum": max(
+                row["maxDecodeErrorM"] / (row["quantumM"] / 2) for row in rows
+            ),
+        }
+    )
+    return rows
+
+
+def main(argv: list[str]) -> None:
+    if argv[:1] == ["report"]:
+        parser = argparse.ArgumentParser(prog="synthetic_far.py report")
+        parser.add_argument("tiles_dir", type=Path)
+        args = parser.parse_args(argv[1:])
+        for row in report(args.tiles_dir):
+            print(json.dumps(row))
+        return
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("out_dir", type=Path)
+    args = parser.parse_args(argv)
+    print(json.dumps(generate(args.out_dir)))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

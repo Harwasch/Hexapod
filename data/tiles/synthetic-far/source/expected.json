@@ -1,0 +1,233 @@
+{
+ "bboxSiteM": {
+  "max": [
+   5200.0,
+   1802.965576171875,
+   1.0
+  ],
+  "min": [
+   -5200.0,
+   -2.974853515625,
+   0.0
+  ]
+ },
+ "format": 1,
+ "generator": "tools/captures/synthetic_far.py",
+ "height": 0.0,
+ "lat": 28.0389,
+ "lon": -82.6966,
+ "plotLeaves": {
+  "north-east": [
+   "splat_4-0-46.glb",
+   "splat_4-4-2.glb"
+  ],
+  "origin": [
+   "splat_0-4-4.glb",
+   "splat_4-0-0.glb"
+  ],
+  "west": [
+   "splat_0-0-4.glb",
+   "splat_0-4-0.glb"
+  ]
+ },
+ "plots": {
+  "north-east": [
+   2600.0,
+   1800.0,
+   1.0
+  ],
+  "origin": [
+   0.0,
+   0.0,
+   1.0
+  ],
+  "west": [
+   -2600.0,
+   0.0,
+   1.0
+  ]
+ },
+ "tileGaussians": 1000,
+ "tiles": {
+  "splat.glb": {
+   "checksum": "fnv1a32:4:b883d9fa",
+   "fractionalBits": 11,
+   "gaussians": 4,
+   "offset": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "splat_0-0-0.glb": {
+   "checksum": "fnv1a32:650:45bdd1dc",
+   "fractionalBits": 12,
+   "gaussians": 650,
+   "offset": [
+    -4551.0,
+    0.0,
+    0.0
+   ]
+  },
+  "splat_0-0-4.glb": {
+   "checksum": "fnv1a32:950:1e0bccad",
+   "fractionalBits": 12,
+   "gaussians": 950,
+   "offset": [
+    -3250.0,
+    0.0,
+    0.0
+   ]
+  },
+  "splat_0-0.glb": {
+   "checksum": "fnv1a32:128:158d2e03",
+   "fractionalBits": 12,
+   "gaussians": 128,
+   "offset": [
+    -3896.0,
+    0.0,
+    0.0
+   ]
+  },
+  "splat_0-4-0.glb": {
+   "checksum": "fnv1a32:950:83a1bb35",
+   "fractionalBits": 12,
+   "gaussians": 950,
+   "offset": [
+    -1951.0,
+    0.0,
+    0.0
+   ]
+  },
+  "splat_0-4-4.glb": {
+   "checksum": "fnv1a32:950:a8fcffb2",
+   "fractionalBits": 12,
+   "gaussians": 950,
+   "offset": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "splat_0-4.glb": {
+   "checksum": "fnv1a32:128:ae981ba1",
+   "fractionalBits": 12,
+   "gaussians": 128,
+   "offset": [
+    -1300.0,
+    0.0,
+    0.0
+   ]
+  },
+  "splat_0.glb": {
+   "checksum": "fnv1a32:32:638692b0",
+   "fractionalBits": 11,
+   "gaussians": 32,
+   "offset": [
+    -2569.0,
+    0.0,
+    0.0
+   ]
+  },
+  "splat_4-0-0.glb": {
+   "checksum": "fnv1a32:950:7c3a50dd",
+   "fractionalBits": 12,
+   "gaussians": 950,
+   "offset": [
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "splat_4-0-46.glb": {
+   "checksum": "fnv1a32:950:28fe047a",
+   "fractionalBits": 12,
+   "gaussians": 950,
+   "offset": [
+    1950.0,
+    901.0,
+    0.0
+   ]
+  },
+  "splat_4-0.glb": {
+   "checksum": "fnv1a32:129:a24ddf7e",
+   "fractionalBits": 12,
+   "gaussians": 129,
+   "offset": [
+    1300.0,
+    900.0,
+    0.0
+   ]
+  },
+  "splat_4-4-0-02.glb": {
+   "checksum": "fnv1a32:973:cd563123",
+   "fractionalBits": 12,
+   "gaussians": 973,
+   "offset": [
+    2924.0,
+    648.0,
+    0.0
+   ]
+  },
+  "splat_4-4-0-4.glb": {
+   "checksum": "fnv1a32:325:a0bc1205",
+   "fractionalBits": 12,
+   "gaussians": 325,
+   "offset": [
+    3574.0,
+    0.0,
+    0.0
+   ]
+  },
+  "splat_4-4-0.glb": {
+   "checksum": "fnv1a32:127:0449e452",
+   "fractionalBits": 12,
+   "gaussians": 127,
+   "offset": [
+    3244.0,
+    644.0,
+    0.0
+   ]
+  },
+  "splat_4-4-2.glb": {
+   "checksum": "fnv1a32:552:159fe6ff",
+   "fractionalBits": 12,
+   "gaussians": 552,
+   "offset": [
+    2601.0,
+    1550.0,
+    0.0
+   ]
+  },
+  "splat_4-4-4.glb": {
+   "checksum": "fnv1a32:651:30bf6728",
+   "fractionalBits": 12,
+   "gaussians": 651,
+   "offset": [
+    4550.0,
+    0.0,
+    0.0
+   ]
+  },
+  "splat_4-4.glb": {
+   "checksum": "fnv1a32:108:05b63b11",
+   "fractionalBits": 12,
+   "gaussians": 108,
+   "offset": [
+    3890.0,
+    900.0,
+    0.0
+   ]
+  },
+  "splat_4.glb": {
+   "checksum": "fnv1a32:22:118de595",
+   "fractionalBits": 11,
+   "gaussians": 22,
+   "offset": [
+    2548.0,
+    900.0,
+    0.0
+   ]
+  }
+ }
+}
