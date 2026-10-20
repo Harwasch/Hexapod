@@ -35,10 +35,13 @@ interface Stubs {
   sent: string[];
   /** CesiumJS requests made by the landing page itself (not the finder frame). */
   landingCesium: string[];
+  /** Uncaught errors in either page. */
+  errors: string[];
 }
 
 async function stub(page: Page, answer: "parcels" | "uncovered"): Promise<Stubs> {
-  const stubs: Stubs = { asked: [], sent: [], landingCesium: [] };
+  const stubs: Stubs = { asked: [], sent: [], landingCesium: [], errors: [] };
+  page.on("pageerror", (error) => stubs.errors.push(error.message));
   page.on("request", (request) => {
     const url = request.url();
     // Allowed out: the public parcel route, and the Descent's own Overpass query for the mapped
@@ -127,15 +130,26 @@ async function openFinder(page: Page): Promise<Frame> {
 
 /**
  * Goes to a place by coordinates (no geocoder) and waits for the camera to be down over it and
- * still: "not gliding" alone is also true in the moment before the flight leaves.
+ * still. Height and "not gliding" alone are not enough: the finder opens low over the app's
+ * default site, so both can be true before the flight has left.
  */
-async function goTo(frame: Frame, coordinates: string) {
+async function goTo(frame: Frame, lat: number, lon: number) {
   // The app's Descent search, asking the finder's own question.
   await expect(frame.getByLabel("Where is your land?")).toBeVisible();
-  await frame.getByTestId("descent-input").fill(coordinates);
+  await frame.getByTestId("descent-input").fill(`${lat}, ${lon}`);
   await frame.getByTestId("descent-submit").click();
   await frame.waitForFunction(
-    "window.__twin.viewer.camera.positionCartographic.height < 5000 && !window.__twin.camera.gliding",
+    `(() => {
+      const twin = window.__twin;
+      const at = twin.viewer.camera.positionCartographic;
+      const degrees = 180 / Math.PI;
+      return (
+        !twin.camera.gliding &&
+        at.height < 5000 &&
+        Math.abs(at.latitude * degrees - ${lat}) < 0.03 &&
+        Math.abs(at.longitude * degrees - ${lon}) < 0.03
+      );
+    })()`,
     null,
     { timeout: 60_000 },
   );
@@ -151,17 +165,22 @@ async function clickMap(page: Page, fx: number, fy: number) {
 test("finds a parcel on the map, selects it, and hands it to the form", async ({ page }) => {
   const stubs = await stub(page, "parcels");
   const frame = await openFinder(page);
-  await goTo(frame, "37.8044, -122.2711");
+  await goTo(frame, 37.8044, -122.2711);
   const picker = frame.getByTestId("land-parcel-picker");
   await expect(picker).toContainText("near your land on the map");
 
   await clickMap(page, 0.7, 0.5);
   const parcel = picker.getByRole("checkbox", { name: "Parcel 2-51-1" });
   await expect(parcel).toBeVisible({ timeout: 30_000 });
-  // The public route, asked about the spot tapped, near where the search went.
+  // The public route, asked once, about the tapped spot in the searched region. Not closer than
+  // that: offline (imagery and terrain blocked) the globe's depth pick under a tap is coarse.
+  // Measured 2026-10-20 on SwiftShader, the same tap landed 0.01-0.19 degrees from the target
+  // from run to run; with live terrain it lands on the tap. Pick precision is the app's own,
+  // tested in land.spec.ts; this spec is about the finder's wiring.
+  expect(stubs.asked).toHaveLength(1);
   const [lon = 0, lat = 0] = stubs.asked[0]?.point.coordinates ?? [];
-  expect(Math.abs(lon + 122.2711)).toBeLessThan(0.05);
-  expect(Math.abs(lat - 37.8044)).toBeLessThan(0.05);
+  expect(Math.abs(lon + 122.2711)).toBeLessThan(0.5);
+  expect(Math.abs(lat - 37.8044)).toBeLessThan(0.5);
   await expect(frame.getByTestId("finder-attribution")).toContainText(ATTRIBUTION);
   await parcel.check();
   await picker.getByRole("button", { name: /^Use this/ }).click();
@@ -192,12 +211,13 @@ test("finds a parcel on the map, selects it, and hands it to the form", async ({
 
   expect(stubs.sent).toEqual([]);
   expect(stubs.landingCesium).toEqual([]);
+  expect(stubs.errors).toEqual([]);
 });
 
 test("outside California, the outline can be drawn instead", async ({ page }) => {
   const stubs = await stub(page, "uncovered");
   const frame = await openFinder(page);
-  await goTo(frame, "47.645, -122.135");
+  await goTo(frame, 47.645, -122.135);
   const picker = frame.getByTestId("land-parcel-picker");
   await clickMap(page, 0.7, 0.5);
   await expect(picker).toContainText("Parcel records are available for California");
@@ -220,4 +240,5 @@ test("outside California, the outline can be drawn instead", async ({ page }) =>
   await expect(page.locator("#pk-list")).toContainText("Drawn outline");
   await expect(page.locator("#pk-attr")).toBeHidden();
   expect(stubs.sent).toEqual([]);
+  expect(stubs.errors).toEqual([]);
 });

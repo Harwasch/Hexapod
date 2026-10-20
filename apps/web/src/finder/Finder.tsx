@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import type { Layer } from "@twin/contracts";
 import { GlassButton, GlassPanel } from "@twin/ui";
 
 import { useLayers } from "@/api/queries";
@@ -31,7 +32,11 @@ function FinderGround() {
   const catalog = useLayers();
   useEffect(() => {
     if (!scene || catalog.isLoading) return;
-    const ground = catalog.data.filter(
+    // An API that answers with an error (rather than not at all) leaves no catalog, whatever
+    // the hook's type says: the fallback basemap is then the ground.
+    const catalogued: Layer[] | undefined = catalog.data;
+    const layers = catalogued ?? [];
+    const ground = layers.filter(
       (layer) =>
         layer.render.exclusiveGroup === "basemap" || layer.render.exclusiveGroup === "terrain",
     );
