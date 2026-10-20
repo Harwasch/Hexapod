@@ -1839,7 +1839,7 @@ export class SiteManager {
     anchor: SiteAsset,
   ): void {
     const scale = assetScale(handle.asset);
-    handle.placement = {
+    const placement: TilesetPlacement = {
       frame: placementFrame(tileset, lowestHeight(tileset)),
       saved: scale,
       scale,
@@ -1847,6 +1847,16 @@ export class SiteManager {
       serial: 0,
       timer: null,
     };
+    handle.placement = placement;
+    // Still this placement's to decide after each wait: a fresh record that changed the
+    // anchor (a date run again, `applyDatesRecord`) has begun another one, and the old
+    // anchor's load or clamp ending must neither place the date on its own nor copy the old
+    // anchor's matrix over the new one's.
+    const current = (anchorHandle?: AssetHandle): boolean =>
+      handle.placement === placement &&
+      !tileset.isDestroyed() &&
+      this.loaded.get(entry.site.id) === entry &&
+      (!anchorHandle || entry.handles.get(anchor.id) === anchorHandle);
     // Following only once the guard below has passed: until then it is undecided.
     handle.followPending = true;
     let rough = (): void => undefined;
@@ -1866,7 +1876,7 @@ export class SiteManager {
     };
     const follow = async (): Promise<void> => {
       const anchorTileset = await this.ensureTileset(entry, anchor);
-      if (tileset.isDestroyed() || this.loaded.get(entry.site.id) !== entry) return;
+      if (!current()) return;
       const anchorHandle = entry.handles.get(anchor.id);
       if (!anchorTileset || anchorTileset.isDestroyed() || !anchorHandle) {
         await alone("the site frame's own epoch did not load; this date is placed on its own");
@@ -1882,10 +1892,11 @@ export class SiteManager {
       // At once, then each time the anchor moves (`applyPlacement` copies to its followers).
       this.copyPlacement(anchorTileset, tileset);
       await anchorHandle.placedRoughly;
+      if (!current(anchorHandle)) return;
       this.copyPlacement(anchorTileset, tileset);
       rough();
       await anchorHandle.placed;
-      this.copyPlacement(anchorTileset, tileset);
+      if (current(anchorHandle)) this.copyPlacement(anchorTileset, tileset);
     };
     handle.placed = follow().finally(rough);
   }
