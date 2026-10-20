@@ -355,9 +355,10 @@ def fill_targets(
         bit_order="little",
         mask=result.packed(),
         cells=result.cells,
+        satisfied_by=result.satisfied_packed(),
         reason=(
-            "weak in this epoch, which covers them, and weak in at least one earlier "
-            f"measured epoch: a re-scan that did not fix them ({rescan_gate.POLICY}, compared "
-            f"at {math.ldexp(cell_grid.LATTICE_BASE_M, result.level):g} m cells)"
+            "weak in this epoch, and weak in the newest earlier measured epoch that covers "
+            f"them: a re-scan that did not fix them ({rescan_gate.POLICY}, at this epoch's "
+            f"own {math.ldexp(cell_grid.LATTICE_BASE_M, result.level):g} m cells)"
         ),
     )

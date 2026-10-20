@@ -2,7 +2,8 @@
 
 The yard's two fixture epochs registered through `register` on one site: e1 (1 m cells,
 weak in its north half) and its re-scan e2 (0.5 m cells, weak only in a north-east patch).
-The targets are checked cell by cell against a brute-force reading of both grids.
+The targets are e2's own finest cells, checked cell by cell against a brute-force reading of
+both grids.
 """
 
 from __future__ import annotations
@@ -69,14 +70,15 @@ def two_epochs(db: Session, storage: S3Storage, tmp_path: Path) -> tuple[Epoch, 
     return e1, e2
 
 
-def brute_force(level: int) -> dict[tuple[int, int], bool]:
-    """Every cell of e2's plane at `level`: is it weak there, and weak in e1 there too?"""
-    planes = {
-        name: cell_grid.decode(descriptor(name), blob(name)).at(level) for name in ("e1", "e2")
-    }
+def brute_force() -> dict[tuple[int, int], bool]:
+    """Every cell of e2's finest plane: is it weak there, and weak in the e1 cell that
+    holds it? e1 is the coarser (1 m against 0.5 m), so each e2 cell sits in one e1 cell."""
+    e1 = cell_grid.decode(descriptor("e1"), blob("e1")).finest
+    e2 = cell_grid.decode(descriptor("e2"), blob("e2")).finest
+    shift = e1.level - e2.level
+    assert shift > 0
 
-    def weak(name: str, i: int, j: int) -> bool:
-        plane = planes[name]
+    def weak(plane: cell_grid.Plane, i: int, j: int) -> bool:
         di, dj = i - plane.i0, j - plane.j0
         if not (0 <= di < plane.ni and 0 <= dj < plane.nj):
             return False
@@ -84,11 +86,10 @@ def brute_force(level: int) -> dict[tuple[int, int], bool]:
         unseen = bool(int(plane.channels["reasons"][dj, di]) & 16)
         return (0 < score < 128) or unseen
 
-    b = planes["e2"]
     return {
-        (i, j): weak("e2", i, j) and weak("e1", i, j)
-        for j in range(b.j0, b.j0 + b.nj)
-        for i in range(b.i0, b.i0 + b.ni)
+        (i, j): weak(e2, i, j) and weak(e1, i >> shift, j >> shift)
+        for j in range(e2.j0, e2.j0 + e2.nj)
+        for i in range(e2.i0, e2.i0 + e2.ni)
     }
 
 
@@ -108,11 +109,15 @@ def test_the_re_scan_s_still_weak_cells_are_the_targets(
     )
     assert read["epochId"] == str(e2.id)  # the latest published, by default
     assert read["weakIn"] == [str(e1.id)] and read["comparedWith"] == [str(e1.id)]
-    # Compared at the coarser of 1 m (e1) and 0.5 m (e2).
-    assert (read["level"], read["cellM"]) == (2, 1.0)
+    # At e2's own 0.5 m cells, not e1's 1 m: a fill touches only what the re-scan saw weak.
+    assert (read["level"], read["cellM"]) == (1, 0.5)
+    e2_finest = descriptor("e2")["levels"][0]
+    assert (read["i0"], read["j0"], read["ni"], read["nj"]) == tuple(
+        e2_finest[k] for k in ("i0", "j0", "ni", "nj")
+    )
     mask = rescan_gate.unpack(read["mask"], read["ni"], read["nj"])
     assert read["rowBytes"] == (read["ni"] + 7) // 8
-    expected = brute_force(2)
+    expected = brute_force()
     found = {
         (read["i0"] + di, read["j0"] + dj): bool(mask[dj, di])
         for dj in range(read["nj"])
@@ -120,8 +125,11 @@ def test_the_re_scan_s_still_weak_cells_are_the_targets(
     }
     assert found == expected
     assert read["cells"] == sum(expected.values()) > 0
-    # Only the north-east patch e2 left weak, and only where e1 was weak too.
-    assert read["cells"] < descriptor("e1")["summary"]["weak"]
+    # e2's weak north-east patch lies wholly in e1's weak north half: every cell e2 left
+    # weak is a target, and not one it saw well.
+    assert read["cells"] == descriptor("e2")["summary"]["weak"]
+    # Each target says which earlier epoch's weak cell it re-scanned: here always e1.
+    assert rescan_gate.unpack_satisfied(read["satisfiedBy"], read["cells"]) == [0] * read["cells"]
 
     same = api.get(f"/api/v1/sites/{e2.site_id}/fill-targets", params={"epochId": str(e2.id)})
     assert same.json() == read
@@ -193,20 +201,57 @@ def test_a_cell_fixed_by_the_re_scan_or_weak_only_in_it_is_not_a_target() -> Non
     assert rescan_gate.unpack(result.packed(), 4, 1).tolist() == result.mask.tolist()
 
 
-def test_grids_at_different_levels_compare_at_the_coarser() -> None:
-    """A 0.5 m epoch over a 2 m one: read at 2 m through its min-of-children pyramid, so a
-    coarse cell with one weak child is weak."""
+def _grid(level: int, score: object, reasons: object) -> cell_grid.Grid:
+    data, desc = encode_grid(level, 0, 0, score, reasons)
+    return cell_grid.decode(desc, data)
+
+
+def test_a_finer_re_scan_opens_only_its_own_weak_cells() -> None:
+    """A 0.5 m re-scan of one weak 2 m cell: fifteen of its sixteen cells now strong. Only
+    the one still weak is a target; the gate never widens a weak child to its parent."""
     fine_score = np.full((4, 4), 200, dtype=np.uint8)
     fine_reasons = np.zeros((4, 4), dtype=np.uint8)
-    fine_score[0, 0] = 40
-    fine_reasons[0, 0] = 1
-    coarse_blob, coarse_desc = encode_grid(3, 0, 0, [[50]], [[2]])
-    fine_blob, fine_desc = encode_grid(1, 0, 0, fine_score, fine_reasons)
-    fine = cell_grid.decode(fine_desc, fine_blob)
-    coarse = cell_grid.decode(coarse_desc, coarse_blob)
+    fine_score[1, 2] = 40
+    fine_reasons[1, 2] = 1
+    fine = _grid(1, fine_score, fine_reasons)
+    coarse = _grid(3, [[50]], [[2]])
     result = rescan_gate.still_weak(fine, [coarse])
-    assert (result.level, result.i0, result.j0, result.ni, result.nj) == (3, 0, 0, 1, 1)
-    assert result.mask.tolist() == [[True]]
+    assert (result.level, result.i0, result.j0, result.ni, result.nj) == (1, 0, 0, 4, 4)
+    expected = np.zeros((4, 4), dtype=bool)
+    expected[1, 2] = True
+    assert result.mask.tolist() == expected.tolist()
+    assert result.cells == 1 and result.contributed == [0]
+    assert rescan_gate.unpack_satisfied(result.satisfied_packed(), 1) == [0]
+
+
+def test_a_coarser_re_scan_needs_the_whole_cell_weak_before() -> None:
+    """A 2 m re-scan over a 0.5 m epoch: its weak cell re-scanned weak cells only when no
+    part the earlier epoch saw in it was strong (cells it had no evidence for do not count
+    either way)."""
+    coarse = _grid(3, [[60]], [[1]])
+    partly = np.full((4, 4), 40, dtype=np.uint8)
+    partly[3, 3] = 220  # one quarter-metre strip seen well
+    assert rescan_gate.still_weak(coarse, [_grid(1, partly, np.ones((4, 4)))]).cells == 0
+    wholly = np.full((4, 4), 40, dtype=np.uint8)
+    wholly[0, :] = 0  # no evidence there: neither strong nor weak
+    result = rescan_gate.still_weak(coarse, [_grid(1, wholly, np.ones((4, 4)))])
+    assert result.mask.tolist() == [[True]] and result.level == 3
+
+
+def test_the_latest_epoch_to_cover_a_cell_is_the_one_re_scanned() -> None:
+    """An earlier epoch counts for a cell only when its footprint covers that cell, and the
+    newest that does is what the re-scan is a re-scan of; each target records it."""
+    views = 1
+    oldest = _grid(2, [[60, 60, 60]], [[views, views, views]])
+    # Newer: saw cell 0 well, never reached cell 1, saw cell 2 weak.
+    newer = _grid(2, [[220, 0, 70]], [[0, 0, views]])
+    b = _grid(2, [[50, 50, 50]], [[views, views, views]])
+    result = rescan_gate.still_weak(b, [newer, oldest])  # newest first
+    # Cell 0: the newer epoch fixed it, so B's weakness there is new, not a re-scan's.
+    # Cell 1: the newer epoch's footprint misses it, so the oldest speaks for it.
+    assert result.mask.tolist() == [[False, True, True]]
+    assert rescan_gate.unpack_satisfied(result.satisfied_packed(), result.cells) == [1, 0]
+    assert result.contributed == [0, 1]
 
 
 def test_only_published_epochs_are_earlier_evidence(

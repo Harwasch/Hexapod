@@ -200,7 +200,8 @@ diameterM, pattern (nadir · oblique · orbit), targetGsdM, gimbalPitchDeg, hint
   `confidence-not-measured` · `confidence-unreadable` · `no-site-frame`.
 - `GET /api/v1/sites/{id}/fill-targets?epochId=` (write token) → `rescan-gate-v1`: `{siteId,
 epochId, weakIn, comparedWith (at most the eight most recent earlier epochs), capped, frame: tileset, cellM, level, i0, j0, ni, nj, rowBytes, bitOrder: little, mask
-(base64, rows south to north), cells, reason}`. 409 `confidence-not-measured` · `no-rescan-yet`.
+(base64, rows south to north, at the epoch's own finest level), cells, satisfiedBy (a byte per
+target: which of `comparedWith` it re-scanned), reason}`. 409 `confidence-not-measured` · `no-rescan-yet`.
 
 ## Confidence grid
 

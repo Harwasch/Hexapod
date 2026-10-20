@@ -232,9 +232,15 @@ maxAreas 1..8}`. The finest level's weak cells (weak-v1, where the summary is st
    oblique as two crossing sets of the nadir lines and an orbit as two rings round the convex
    hull at the stand-off where the pitched camera meets the ground (altitude / tan pitch,
    ≥ 5 m) — rules of thumb too.
-8. **Fill targets** — `GET /sites/{id}/fill-targets?epochId=` (`rescan-gate-v1`): the cells of
-   epoch B (default the latest published) weak in B, covered by B, and weak in at least one
-   earlier measured epoch, at the coarsest of their levels through each grid's pyramid. 409
+8. **Fill targets** — `GET /sites/{id}/fill-targets?epochId=` (`rescan-gate-v1`): cells of
+   epoch B's **own finest level** (default B: the latest published) that are weak in B and
+   were weak in the newest earlier measured epoch whose footprint covers the cell. An earlier
+   epoch counts for a cell only when it covers it; one that saw it well fixed it, so B's
+   weakness there is not a re-scan's. A coarser earlier grid is read by the cell holding B's;
+   a finer one is weak in B's cell only when none of the children it saw there was strong.
+   The gate never coarsens B: one weak child never opens its parent (the first build compared
+   at the coarser level and did; review R3). Each target records the earlier epoch it
+   re-scanned (`satisfiedBy`, one byte per target, an index into `comparedWith`). 409
    `no-rescan-yet` when nothing earlier was measured. A bit-packed window in the tileset frame
    (rows south to north, least significant bit first). Compared with at most the **eight**
    most recent earlier measured epochs (`comparedWith`; `capped` says there were more): each

@@ -7107,7 +7107,7 @@
       },
       "FillTargetsRead": {
         "additionalProperties": false,
-        "description": "The cells a re-scan left weak (`rescan-gate-v1`): weak in this epoch, covered by it,\nand weak in at least one earlier measured epoch of the site, compared at the coarser of\ntheir levels. The fill gate (F4) only fills these.\n\n`mask` is base64 of `nj` rows, south to north (`j0` first), each `rowBytes` bytes; in a\nrow, bit `k` (least significant first) of byte `b` is cell `i0 + 8 b + k`. 1 is a\ntarget. Cells are in the tileset frame of the site lattice (`0.25 m * 2**level`).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "description": "The cells a re-scan left weak (`rescan-gate-v1`): this epoch's own finest cells that\nare weak in it, where the newest earlier measured epoch of the site whose footprint covers\nthe cell was weak too. The fill gate (F4) only fills these.\n\n`mask` is base64 of `nj` rows, south to north (`j0` first), each `rowBytes` bytes; in a\nrow, bit `k` (least significant first) of byte `b` is cell `i0 + 8 b + k`. 1 is a\ntarget. Cells are in the tileset frame of the site lattice (`0.25 m * 2**level`), at\nthis epoch's finest level. `satisfiedBy` is base64 of one byte per target, in the same\norder (row by row, `i` ascending): the index into `comparedWith` of the earlier epoch\nwhose weak cell it re-scanned.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
         "properties": {
           "bitOrder": {
             "const": "little",
@@ -7181,6 +7181,10 @@
             "title": "Rowbytes",
             "type": "integer"
           },
+          "satisfiedBy": {
+            "title": "Satisfiedby",
+            "type": "string"
+          },
           "siteId": {
             "format": "uuid",
             "title": "Siteid",
@@ -7213,6 +7217,7 @@
           "bitOrder",
           "mask",
           "cells",
+          "satisfiedBy",
           "reason"
         ],
         "title": "FillTargetsRead",

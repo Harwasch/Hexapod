@@ -5,8 +5,8 @@ import) is a gzip of level planes, finest first, each `nj x ni` cells row-major 
 i inner) with its channels interleaved little-endian, all described by a JSON descriptor
 (the tileset's root `extras.confidence`, stored as the epoch map's `descriptor`). A level's
 cell is `LATTICE_BASE_M * 2**level` metres in the tileset frame, east (`i`) and north
-(`j`) from the frame origin, so the levels nest and two epochs compare at the coarser of
-their levels.
+(`j`) from the frame origin, so the levels nest and one epoch's cells can be read at
+another's level without resampling.
 
 This reader is the second of three (Python pipeline, API, TypeScript web), held to the
 pipeline's bytes by the committed cross-language fixture `data/tiles/synthetic-yard-epochs`

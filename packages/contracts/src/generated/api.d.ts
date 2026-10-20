@@ -6032,13 +6032,16 @@ export interface components {
         };
         /**
          * FillTargetsRead
-         * @description The cells a re-scan left weak (`rescan-gate-v1`): weak in this epoch, covered by it,
-         *     and weak in at least one earlier measured epoch of the site, compared at the coarser of
-         *     their levels. The fill gate (F4) only fills these.
+         * @description The cells a re-scan left weak (`rescan-gate-v1`): this epoch's own finest cells that
+         *     are weak in it, where the newest earlier measured epoch of the site whose footprint covers
+         *     the cell was weak too. The fill gate (F4) only fills these.
          *
          *     `mask` is base64 of `nj` rows, south to north (`j0` first), each `rowBytes` bytes; in a
          *     row, bit `k` (least significant first) of byte `b` is cell `i0 + 8 b + k`. 1 is a
-         *     target. Cells are in the tileset frame of the site lattice (`0.25 m * 2**level`).
+         *     target. Cells are in the tileset frame of the site lattice (`0.25 m * 2**level`), at
+         *     this epoch's finest level. `satisfiedBy` is base64 of one byte per target, in the same
+         *     order (row by row, `i` ascending): the index into `comparedWith` of the earlier epoch
+         *     whose weak cell it re-scanned.
          *
          *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
          */
@@ -6087,6 +6090,8 @@ export interface components {
             reason: string;
             /** Rowbytes */
             rowBytes: number;
+            /** Satisfiedby */
+            satisfiedBy: string;
             /**
              * Siteid
              * Format: uuid
