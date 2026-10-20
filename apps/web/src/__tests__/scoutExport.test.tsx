@@ -46,3 +46,37 @@ it("shows the return-home height, capped at 120 m above take-off", () => {
     "Returnflies home at 120 m above take-off, at the end or if the controller link is lost",
   );
 });
+
+function card(zones: Zone[]) {
+  return render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ScoutExport zones={zones} />
+    </QueryClientProvider>,
+  );
+}
+
+it.each([
+  ["orbit", -30, "orbit"],
+  ["oblique", -45, "oblique"],
+  ["nadir", -60, "pitched −60°"],
+] as const)(
+  "refuses to export a %s capture as straight-down lanes",
+  (pattern, gimbalPitchDeg, words) => {
+    const planned = {
+      ...patch,
+      scout: { ...DEFAULT_SCOUT, altitudeM: 120, purpose: "re-scan-weak", pattern, gimbalPitchDeg },
+    } as unknown as Zone;
+    card([patch, planned]);
+    const refusal = screen.getByTestId("scout-unsupported");
+    expect(refusal).toHaveTextContent(words);
+    expect(refusal).toHaveTextContent("only straight-down");
+    expect(screen.queryByTestId("scout-download")).toBeNull();
+    expect(screen.queryByTestId("scout-facts")).toBeNull();
+  },
+);
+
+it("still exports a straight-down capture", () => {
+  card([patch]);
+  expect(screen.queryByTestId("scout-unsupported")).toBeNull();
+  expect(screen.getByTestId("scout-download")).toBeInTheDocument();
+});

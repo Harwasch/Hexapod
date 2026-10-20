@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { MACHINE_CLASSES } from "@/missions/machineClasses";
 import {
   DEFAULT_SCOUT,
+  kmzRefusal,
   RELIEF_MAX_SAMPLES,
   reliefFrom,
   reliefPoints,
@@ -217,5 +218,16 @@ describe("relief samples", () => {
         "terrain",
       ),
     ).toBeNull();
+  });
+});
+
+describe("what the KMZ export can fly", () => {
+  it("is straight-down lanes only, and says why for anything else", () => {
+    expect(kmzRefusal([{}])).toBeNull();
+    expect(kmzRefusal([{ scout: { ...DEFAULT_SCOUT } }])).toBeNull();
+    const orbit = { scout: { ...DEFAULT_SCOUT, pattern: "orbit" as const, gimbalPitchDeg: -30 } };
+    expect(kmzRefusal([{}, orbit])).toMatch(/orbit/);
+    const pitched = { scout: { ...DEFAULT_SCOUT, gimbalPitchDeg: -70 } };
+    expect(kmzRefusal([pitched])).toMatch(/pitched −70°/);
   });
 });

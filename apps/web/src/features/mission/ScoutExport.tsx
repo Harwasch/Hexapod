@@ -8,6 +8,7 @@ import type { LonLat } from "@twin/geo";
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import { useScene } from "@/cesium/SceneContext";
 import {
+  kmzRefusal,
   reliefFrom,
   reliefPoints,
   routeStats,
@@ -156,9 +157,14 @@ export function ScoutExport({
         : "unknown";
   const [error, setError] = useState<string | null>(null);
   if (!first) return null;
+  const refusal = kmzRefusal(scouts);
   const camera = SCOUT_CAMERAS[scout.camera];
   const download = () => {
     setError(null);
+    if (refusal) {
+      setError(refusal);
+      return;
+    }
     try {
       const bytes = buildScoutKmz(routes, scout);
       const blob = new Blob([bytes as BlobPart], { type: "application/vnd.google-earth.kmz" });
@@ -218,7 +224,12 @@ export function ScoutExport({
             : "Revise the plan to give them one height, then export it."}
         </p>
       )}
-      {shared && (
+      {refusal && (
+        <p className="mc-note mc-note--warn" role="status" data-testid="scout-unsupported">
+          {refusal}
+        </p>
+      )}
+      {shared && !refusal && (
         <>
           <dl className="mc-scout__facts mc-mono" data-testid="scout-facts">
             <dt>Height</dt>

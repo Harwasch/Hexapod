@@ -269,8 +269,8 @@ policy readers already rely on. Confidence is its own layer and its own endpoint
 
 ### Not done here
 
-- The re-scan flow in the console (W4b), the DJI export of obliques and orbits (W4c; the export
-  still flies nadir whatever the pattern), the fill gate itself (F4).
+- The re-scan flow in the console (W4b), the DJI export of obliques and orbits (W4c; until then
+  the export refuses any capture that is not straight down, saying why, rather than fly it nadir), the fill gate itself (F4).
 - Any measurement behind the pattern rules, the 0.5 m closing or the 1 m² smallest zone: UX
   heuristics until a pilot site re-scanned by them says otherwise.
 

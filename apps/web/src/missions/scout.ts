@@ -238,6 +238,25 @@ export function sharedScout(zones: readonly Pick<Zone, "scout">[]): Scout | null
   return scouts.every(same) ? first : null;
 }
 
+/**
+ * Why a set of scout areas cannot be written as a DJI route, or null when it can. The KMZ
+ * (`buildScoutKmz`) flies parallel lanes with the gimbal straight down, so an oblique or orbit
+ * capture, or a nadir one at another pitch, would export a different flight than the plan holds.
+ * Refused, not flown nadir: oblique and orbit routes are not written yet.
+ */
+export function kmzRefusal(zones: readonly Pick<Zone, "scout">[]): string | null {
+  const odd = zones
+    .map((zone) => scoutOf(zone.scout))
+    .find((scout) => scout.pattern !== "nadir" || scout.gimbalPitchDeg !== -90);
+  if (!odd) return null;
+  const pitch = `${Math.round(odd.gimbalPitchDeg)}`.replace("-", "−");
+  const what =
+    odd.pattern === "nadir"
+      ? `a nadir capture pitched ${pitch}°`
+      : `an ${odd.pattern} capture (camera pitched ${pitch}°)`;
+  return `This route includes ${what}. The DJI export writes only straight-down lanes, so it would fly something other than the plan; oblique and orbit routes cannot be exported yet.`;
+}
+
 /** The lanes a scout area is flown in: one image footprint apart, less the side overlap. */
 export function scoutLanes(footprint: Footprint, scout: Scout): CoverageLane[] {
   const geometry = scoutGeometry(scout);
