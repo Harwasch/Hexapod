@@ -41,6 +41,17 @@ def get_asset(asset_id: uuid.UUID, db: DbSession) -> AssetRead:
 @router.patch(
     "/{asset_id}",
     response_model=AssetRead,
+    responses={
+        404: {"model": Problem, "description": "No such asset"},
+        409: {
+            "model": Problem,
+            "description": (
+                "`epoch_managed`: a superseded revision of an epoch (history), or an epoch "
+                "asset's `observedAt`, `validFrom`, `validTo` or `footprint`, which belong "
+                "to its epoch"
+            ),
+        },
+    },
     dependencies=[RequireWriteToken],
     summary="Update an asset",
 )
@@ -55,7 +66,8 @@ SCALE_RESPONSES: dict[int | str, dict[str, Any]] = {
         "description": (
             "`not_scalable`: not the splat a pipeline run registered (a seeded or hand-made "
             "asset, a mesh, a Cesium ion asset), so nothing records the origin its tiles are "
-            "placed at"
+            "placed at; or a superseded revision of an epoch; or an epoch asset whose site "
+            "has no frame, or more than one published epoch in its frame"
         ),
     },
 }

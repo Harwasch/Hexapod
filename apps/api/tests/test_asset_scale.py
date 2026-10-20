@@ -28,8 +28,9 @@ from app.config import Settings
 from app.main import create_app
 from app.models import Asset, Capture, Job, Site
 from app.models.enums import CaptureKind, Representation, RunStatus
+from app.schemas.geojson import Polygon
 from app.seed import seed
-from app.services import placement
+from app.services import geometry, placement
 from app.storage import S3Storage
 from app.worker import registration
 from app.worker.carry import CarryPlan
@@ -281,11 +282,14 @@ def test_scales_compose_to_the_last_one_not_their_product(
 
 
 def test_a_scale_moves_the_boundary_centroid_footprint_and_ground_about_the_origin(
-    client: TestClient, scan: tuple[Capture, Asset]
+    client: TestClient, db: Session, scan: tuple[Capture, Asset]
 ) -> None:
+    """Changed with site epochs (decision D3): the footprint is set on the row rather than
+    through `PATCH /assets/{id}`, which now refuses it on an epoch's asset (the footprint is
+    the epoch's). What is under test, that a scale moves it, is unchanged."""
     _, splat = scan
-    patched = client.patch(f"/api/v1/assets/{splat.id}", json={"footprint": SQUARE})
-    assert patched.status_code == 200, patched.text
+    splat.footprint = geometry.footprint_to_wkb(Polygon.model_validate(SQUARE))
+    db.commit()
     before_site = _site(client, splat)
     before = client.get(f"/api/v1/assets/{splat.id}").json()
 
@@ -558,3 +562,66 @@ def test_seeding_twice_stores_no_scale_keys_on_unscaled_assets(db: Session) -> N
     for asset in assets:
         assert "scale" not in asset.render_config
         assert "scaleEvidence" not in asset.render_config
+
+
+# --- epochs (decision D3) ------------------------------------------------------------------
+
+
+def test_a_site_with_two_epochs_refuses_a_scale(
+    client: TestClient,
+    db: Session,
+    storage: S3Storage,
+    tmp_path: Path,
+    scan: tuple[Capture, Asset],
+) -> None:
+    """Two epochs share one frame: resizing one would move it against the other."""
+    from tests.test_registration_epochs import _capture, _echoed, run
+
+    capture, splat = scan
+    assert capture.site_id is not None
+    october = _capture(db, "october")
+    run(db, storage, tmp_path, october, _echoed(capture.site_id))
+
+    for asset in (splat, registration.splat_asset(db, capture.site_id)):
+        assert asset is not None
+        response = _put(client, asset, {"scale": 0.5})
+        assert response.status_code == 409, response.text
+        assert response.json()["code"] == "not_scalable"
+    assert "2 epochs in one frame" in response.json()["detail"]
+
+
+def test_a_superseded_revision_is_not_scalable(
+    client: TestClient,
+    db: Session,
+    storage: S3Storage,
+    tmp_path: Path,
+    scan: tuple[Capture, Asset],
+) -> None:
+    capture, splat = scan
+    _register(db, storage, tmp_path, capture)
+    assert capture.site_id is not None
+    current = registration.splat_asset(db, capture.site_id)
+    assert current is not None and current.id != splat.id
+
+    response = _put(client, splat, {"scale": 0.5})
+
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "not_scalable"
+    assert f"superseded by {current.id}" in response.json()["detail"]
+
+
+def test_a_single_epoch_scales_about_its_site_frame_not_its_metadata(
+    client: TestClient, db: Session, scan: tuple[Capture, Asset]
+) -> None:
+    """The frame is the record of where the tiles are placed; the site's metadata is a
+    mirror a PATCH can replace, and losing it must not lose the origin."""
+    _, splat = scan
+    site = _site(client, splat)
+    metadata = {k: v for k, v in site["metadata"].items() if k != "registration"}
+    patched = client.patch(f"/api/v1/sites/{splat.site_id}", json={"metadata": metadata})
+    assert patched.status_code == 200, patched.text
+
+    response = _put(client, splat, {"scale": 0.5})
+
+    assert response.status_code == 200, response.text
+    _assert_scaled(_ring(_site(client, splat)), 0.5)

@@ -4,11 +4,17 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Asset, Epoch, Site
-from app.models.enums import AssetProvider, AssetSourceKind, Representation, ScaleSource
+from app.models.enums import (
+    AssetProvider,
+    AssetSourceKind,
+    EpochStatus,
+    Representation,
+    ScaleSource,
+)
 from app.schemas.asset import (
     AssetBase,
     AssetCreate,
@@ -36,6 +42,12 @@ NOT_SCALABLE = "not_scalable"
 
 #: The render config keys `set_scale` owns. A PATCH of the render config keeps them.
 SCALE_KEYS = ("scale", "scaleEvidence")
+
+#: The Problem `code` of an edit refused because the epoch owns it (decision D3): a
+#: superseded revision is history, and an epoch asset's dates and footprint are its epoch's.
+EPOCH_MANAGED = "epoch_managed"
+#: The fields of an epoch asset that its epoch owns.
+EPOCH_FIELDS = ("observed_at", "valid_from", "valid_to", "footprint")
 
 
 def render_config_document(config: RenderConfig) -> dict[str, Any]:
@@ -107,8 +119,28 @@ def get_asset(db: Session, asset_id: uuid.UUID) -> Asset:
 
 
 def update_asset(db: Session, asset_id: uuid.UUID, payload: AssetUpdate) -> Asset:
+    """Edit an asset in place.
+
+    Refused (409, `epoch_managed`) for a superseded revision of an epoch -- it is history
+    -- and, on an epoch's asset, for the dates and footprint, which are the epoch's
+    (`observedAt`, `validFrom`, `validTo`, `footprint`). Its name, default visibility,
+    render config, resolution, licence and credits stay editable. No PATCH changes an
+    asset's `source`: `AssetUpdate` has no such field.
+    """
     asset = get_asset(db, asset_id)
     data = payload.model_dump(exclude_unset=True)
+    if epochs.is_superseded(asset):
+        raise ConflictError(
+            f"asset {asset.id} is a superseded revision of its epoch; it is history",
+            code=EPOCH_MANAGED,
+        )
+    owned = [field for field in EPOCH_FIELDS if field in data]
+    if asset.epoch_id is not None and owned:
+        names = ", ".join(_camel(field) for field in owned)
+        raise ConflictError(
+            f"asset {asset.id} is epoch {asset.epoch_id}'s, and its {names} belong to that epoch",
+            code=EPOCH_MANAGED,
+        )
     for field in ("name", "observed_at", "valid_from", "valid_to", "default_visible"):
         if field in data:
             setattr(asset, field, data[field])
@@ -250,12 +282,23 @@ def _lock(db: Session, asset_id: uuid.UUID) -> Asset:
     return asset
 
 
+def _camel(field: str) -> str:
+    head, *rest = field.split("_")
+    return head + "".join(part.capitalize() for part in rest)
+
+
 def _placed(db: Session, asset: Asset) -> tuple[Site, placement.Origin]:
     """The site of a pipeline-placed splat and the origin its tiles are placed at, or 409.
 
-    The splat a run registered and repoints -- the site's first gaussian-splat, a 3D Tiles
-    URL -- on a site whose metadata carries the run's registration and so its origin.
+    An epoch's asset (decision D3) is resized about its site's frame, and only when it is
+    its epoch's current revision on a site of one published epoch: every epoch is placed
+    in one frame, and resizing one would move it against the others.
+
+    A legacy asset: the splat a run registered -- the site's first gaussian-splat, a 3D
+    Tiles URL -- on a site whose metadata carries the run's registration and its origin.
     """
+    if asset.epoch_id is not None:
+        return _placed_epoch(db, asset)
     why = None
     site = db.get(Site, asset.site_id) if asset.site_id is not None else None
     origin = placement.registered_origin(site.metadata_) if site is not None else None
@@ -278,6 +321,43 @@ def _placed(db: Session, asset: Asset) -> tuple[Site, placement.Origin]:
             code=NOT_SCALABLE,
         )
     return site, origin
+
+
+def _placed_epoch(db: Session, asset: Asset) -> tuple[Site, placement.Origin]:
+    """`_placed` for an epoch's asset: about the site's frame, never its metadata."""
+    site = db.get(Site, asset.site_id) if asset.site_id is not None else None
+    why = None
+    if asset.representation != Representation.GAUSSIAN_SPLAT:
+        why = f"it is a {asset.representation.value}, and only a splat's tiles are resized"
+    elif asset.provider != AssetProvider.TILES_3D_URL:
+        why = "its tiles are not a 3D Tiles URL a pipeline run published"
+    elif site is None:
+        why = "it is on no site"
+    elif epochs.is_superseded(asset):
+        current = epochs.current_asset(db, asset.epoch_id) if asset.epoch_id else None
+        why = (
+            f"it is a superseded revision of its epoch, superseded by "
+            f"{current.id if current is not None else 'a later run'}"
+        )
+    elif site.frame is None:
+        why = "its site has no frame, so nothing records the origin its tiles are placed at"
+    else:
+        published = db.scalar(
+            select(func.count())
+            .select_from(Epoch)
+            .where(Epoch.site_id == site.id, Epoch.status == EpochStatus.PUBLISHED.value)
+        )
+        if (published or 0) > 1:
+            why = (
+                f"its site has {published} epochs in one frame; resizing one would move it "
+                "against the others"
+            )
+    if why is not None or site is None or site.frame is None:
+        raise ConflictError(
+            f"asset {asset.id} cannot be rescaled: {why or 'it has no placement'}",
+            code=NOT_SCALABLE,
+        )
+    return site, placement.frame_origin(site.frame)
 
 
 def _registered_splat(db: Session, site: Site) -> uuid.UUID | None:
