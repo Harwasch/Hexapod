@@ -18,6 +18,7 @@ import {
   siteEpochs,
 } from "@/lib/epochs";
 import { useSites } from "@/state/sites";
+import { useToasts } from "@/state/toasts";
 
 /** How the shown date is placed, in words: with the frame's own date, or on its own. */
 function placementLine(
@@ -164,11 +165,14 @@ function DateFacts({
         <GlassButton
           size="sm"
           disabled={planning}
-          style={{ marginTop: "0.4rem" }}
           onClick={() => {
             setPlanning(true);
             void import("@/features/rescan/rescanWeak")
               .then((m) => m.rescanWeak(scene, site, epoch.id))
+              // A chunk gone after a deploy: say so rather than nothing happening.
+              .catch(() =>
+                useToasts.getState().push({ tone: "error", title: "Could not plan the re-scan" }),
+              )
               .finally(() => setPlanning(false));
           }}
         >

@@ -15,6 +15,7 @@ import { queryKeys } from "@/api/queries";
 import { InspectorPanel } from "@/features/inspector/InspectorPanel";
 import { useSelection } from "@/state/selection";
 import { useSites } from "@/state/sites";
+import { useToasts } from "@/state/toasts";
 import { useUi } from "@/state/ui";
 
 import { A1, A2, E1, E2, SITE_ID, twoEpochSite } from "./epochFixtures";
@@ -249,6 +250,21 @@ describe("Plan a re-scan, in Date shown", () => {
     expect((site as Site).id).toBe(SITE_ID);
     expect(epochId).toBe(E2.id);
     await waitFor(() => expect(button).toBeEnabled());
+  });
+
+  it("says so when the re-scan flow cannot be loaded", async () => {
+    useToasts.setState({ items: [] });
+    // A chunk gone after a deploy rejects the import, as the flow failing does here.
+    rescanWeak.mockRejectedValueOnce(new Error("Failed to fetch dynamically imported module"));
+    inspect(twoEpochSite({ assets: [clamped, A2] }));
+    const button = screen.getByRole("button", { name: "Plan a re-scan of weak areas" });
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(useToasts.getState().items.map((t) => t.title)).toEqual([
+        "Could not plan the re-scan",
+      ]),
+    );
+    expect(button).toBeEnabled();
   });
 
   it("asks for the date on screen", async () => {
