@@ -29,7 +29,8 @@ name: Publish fill
 #   to name the folder (default: the job folder without `fill-<scan>-`) and `|publish` to
 #   publish.
 #
-# Variables: TWIN_API_URL, SCAN_ASSET_IDS (JSON, {"camp": "<asset id>", ...}). For `publish`
+# Variables: TWIN_API_URL, SCAN_ASSET_IDS (JSON, {"camp": "<asset id>", ...}); `build` reads
+# the secret API_WRITE_TOKEN to fetch the fill targets. For `publish`
 # only, secrets CLOUDFLARE_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, API_WRITE_TOKEN
 # and the variable R2_BUCKET (the private bucket).
 
@@ -139,10 +140,13 @@ jobs:
           github-token: ${{ github.token }}
       - name: The layer checked, the scan's current tileset, and the request
         working-directory: tools/captures
+        env:
+          # Only to read the fill targets (the route takes the write token); never printed.
+          API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
         run: |
           uv sync --frozen
           uv run --with modal==1.5.5 python - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
-          import importlib.util, json, os, struct, tarfile, urllib.request
+          import importlib.util, json, os, struct, tarfile, urllib.error, urllib.request
           from pathlib import Path
 
           import attach_sidecars
@@ -215,14 +219,31 @@ jobs:
           # still so. No override: a layer this refuses is filled again, or not published.
           api = attach_sidecars.api_url(None)
           record = attach_sidecars.get_json(f"{api}/api/v1/assets/{asset['assetId']}")
+
+          def targets(site, epoch):
+              # The fill-targets route takes the write token; read from the environment,
+              # never printed.
+              token = os.environ.get("API_WRITE_TOKEN", "")
+              if not token:
+                  raise SystemExit("API_WRITE_TOKEN is not set: fetching the fill targets "
+                                   "needs the API write token. See docs/DEPLOYMENT.md.")
+              request = urllib.request.Request(
+                  f"{api}/api/v1/sites/{site}/fill-targets?epochId={epoch}",
+                  headers={"Accept": "application/json", "User-Agent": attach_sidecars.USER_AGENT,
+                           "Authorization": f"Bearer {token}"},
+              )
+              try:
+                  with urllib.request.urlopen(request, timeout=60) as response:
+                      return json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as error:
+                  raise SystemExit(f"GET fill targets for epoch {epoch}: {error.code} "
+                                   f"{error.read().decode(errors='replace')[:500]}") from None
           try:
               gate = rescan_gate.verify_layer(
                   evidence,
                   asset=record,
                   tileset=current,
-                  current=lambda site, epoch: attach_sidecars.get_json(
-                      f"{api}/api/v1/sites/{site}/fill-targets?epochId={epoch}"
-                  ),
+                  current=lambda site, epoch: targets(site, epoch),
                   positions=load_tileset(dest / "tileset.json").positions,
               )
           except rescan_gate.RescanGateError as error:

@@ -104,6 +104,8 @@ jobs:
             || { echo "::error::MODAL_TOKEN_ID / MODAL_TOKEN_SECRET are not set"; exit 1; }
       - name: Fetch each fill job's fill targets
         if: env.JOBS != ''
+        env:
+          API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
         # Read as data, validated here, never interpolated into a shell line. Only the API's
         # own fill-targets route is fetched; a 409 (nothing re-scanned, not measured) fails.
         run: |
@@ -132,13 +134,23 @@ jobs:
           if missing:
               raise SystemExit(f"::error::fill:{', fill:'.join(missing)} has no fill targets: a "
                                "fill runs only where a re-scan left cells weak (fill_targets_url)")
+          # The fill-targets route takes the write token (as publish-fill.yml's attach
+          # does); it is read from the environment and never printed.
+          token = os.environ.get("API_WRITE_TOKEN", "")
+          if fills and not token:
+              raise SystemExit("::error::API_WRITE_TOKEN is not set: the fill-targets route "
+                               "needs the API write token. See docs/DEPLOYMENT.md.")
           out = Path("fill-targets")
           out.mkdir(exist_ok=True)
           pairs = []
           for scan in fills:
               request = urllib.request.Request(
                   given[scan],
-                  headers={"Accept": "application/json", "User-Agent": "hexapod-fill-targets/1"},
+                  headers={
+                      "Accept": "application/json",
+                      "User-Agent": "hexapod-fill-targets/1",
+                      "Authorization": f"Bearer {token}",
+                  },
               )
               try:
                   with urllib.request.urlopen(request, timeout=60) as response:
