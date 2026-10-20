@@ -69,7 +69,7 @@ const drone = MACHINE_CLASSES.drone;
 export const DEFAULT_SCOUT: Scout = {
   purpose: "lift-knowledge-fog",
   // Nadir lines, camera straight down; a re-scan of weak areas (M4) may ask for crossing
-  // obliques or an orbit, which the planner sizes and the DJI export does not fly yet.
+  // obliques or an orbit, which the planner sizes and the DJI export flies (scoutWaylines).
   pattern: "nadir",
   gimbalPitchDeg: -90,
   rescanOf: null,
