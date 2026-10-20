@@ -23,6 +23,7 @@ import { addVisibilityPart, visibilityChainOf } from "@/cesium/splatVisibility";
 import { encodeConfidenceGrid } from "@/dev/cellGridFixture";
 import { decodeCellGrid } from "@/lib/cellGrid";
 import type { ViewRule } from "@/lib/compositor";
+import { useAsCaptured } from "@/state/asCaptured";
 import { useSettings } from "@/state/settings";
 import { useViewMode } from "@/state/viewMode";
 import { useViewRule } from "@/state/viewRule";
@@ -148,6 +149,7 @@ async function harness(rule: ViewRule = "latest") {
 const hostOf = (t: FakeTileset) => t.gaussianSplatPrimitive!;
 
 afterEach(() => {
+  useAsCaptured.getState().set(false);
   useSettings.getState().set({ inferredStyle: "hide" });
   useViewRule.setState({ legend: null });
 });
@@ -320,6 +322,35 @@ describe("a view rule's session", () => {
     expect(useViewRule.getState().legend?.leftOut).toEqual([
       { epochId: E2.id, reason: "loading", asOf: true },
     ]);
+    handle.dispose();
+  });
+
+  it("draws the rule chosen as Ground truth while As captured is on, and the rule after", async () => {
+    useSettings.getState().set({ inferredStyle: "show" });
+    const { march, june, handle, frame, entry } = await harness("data-age");
+    await frame();
+    const host = hostOf(march);
+    const colours = () => colorChainOf(host as never)?.parts.map((p) => p.colorFunction) ?? [];
+    expect(colours()).toContain("splatCellViewColor");
+    useAsCaptured.getState().set(true);
+    await frame();
+    // No Data age colour, and the viewer's rule is still theirs.
+    expect(colours()).not.toContain("splatCellViewColor");
+    expect(entry.rule?.rule).toBe("data-age");
+    useAsCaptured.getState().set(false);
+    await frame();
+    expect(colours()).toContain("splatCellViewColor");
+    // Highlight invented: no inferred layer tinted while it is on.
+    if (entry.rule) entry.rule.rule = "highlight-invented";
+    setCompanions(host, Symbol("inferred"), [tileset("june-fill") as never], june);
+    await frame();
+    expect(handle.compositor()?.tinted).toBe(1 << 2);
+    useAsCaptured.getState().set(true);
+    await frame();
+    expect(handle.compositor()?.tinted).toBe(0);
+    useAsCaptured.getState().set(false);
+    await frame();
+    expect(handle.compositor()?.tinted).toBe(1 << 2);
     handle.dispose();
   });
 
