@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -143,6 +144,8 @@ def test_a_published_reference_is_seeded_with_its_files_and_paths(
 
     document = seeded(db, storage, capture, tmp_path)
 
+    chosen = _reference(db, first.site_id, capture)
+    assert chosen is not None and len(chosen.revision) == 16
     assert document["siteId"] == str(first.site_id)
     assert document["reference"] == {
         "epochId": str(epoch.id),
@@ -151,6 +154,7 @@ def test_a_published_reference_is_seeded_with_its_files_and_paths(
         "platform": "drone",
         "verdict": "coarse",
         "uncertaintyM": 0.065,
+        "revision": chosen.revision,
         "frames": "reference/frames",
         "poses": "reference/poses",
         "placement": "reference/placement.json",
@@ -554,3 +558,46 @@ def test_a_reference_object_that_vanishes_mid_seed_falls_back_to_the_georeferenc
     document = seeded(db, storage, second_capture(db, first.site_id), tmp_path)
     assert document["reference"] is None
     assert document["siteId"] == str(first.site_id)
+
+
+def test_an_interrupted_seed_never_mixes_two_revisions_of_one_reference(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """R2 review of #52: the files a seed had already downloaded were kept by epoch and job
+    alone. A retry of the reference's run rewrites the same keys under the same ids, so a
+    seed interrupted before the retry resumed with the old revision's files beside the new
+    one's. The cache is keyed by the revision -- the artifact rows it was read from."""
+    first, epoch = first_epoch(db, storage, tmp_path)
+    assert first.site_id is not None and epoch.job_id is not None
+    capture = second_capture(db, first.site_id)
+    before = _reference(db, first.site_id, capture)
+    assert before is not None
+    directory = tmp_path / "site_context"
+    assert site_context._fetch_reference(storage, before, directory) is not None  # then cut off
+
+    # The reference's run is retried and rewrites its frames under the same key.
+    job = db.get(Job, epoch.job_id)
+    assert job is not None
+    step = db.scalars(
+        select(JobStep).where(JobStep.job_id == job.id, JobStep.stage_id == "normalize")
+    ).one()
+    key = artifact_key(job.id, "normalize", "frames")
+    storage.put_object(f"{key}/frame_0000.jpg", b"retried-0", "application/octet-stream")
+    db.add(
+        Artifact(
+            job_step_id=step.id,
+            kind=kind_for("frames"),
+            storage_key=key,
+            # Newer than the first row, and no newer than the tiles the epoch shows.
+            created_at=job.created_at + timedelta(milliseconds=1),
+        )
+    )
+    db.commit()
+    after = _reference(db, first.site_id, capture)
+    assert after is not None and after.revision != before.revision
+
+    document = seeded(db, storage, capture, tmp_path)
+
+    assert document["reference"]["revision"] == after.revision
+    frames = directory / document["reference"]["frames"]
+    assert (frames / "frame_0000.jpg").read_bytes() == b"retried-0"

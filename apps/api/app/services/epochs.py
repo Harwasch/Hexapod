@@ -14,6 +14,7 @@ superseded by setting its `valid_to`; nothing about the old row is rewritten. So
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import uuid
@@ -435,7 +436,8 @@ class ReferenceChoice:
     """The earlier epoch a run is aligned to, as plain values read in one transaction.
 
     `keys` maps each of `REFERENCE_ARTIFACTS` to its storage key: a prefix for the two
-    directories (`frames`, `poses`), a key for the two files.
+    directories (`frames`, `poses`), a key for the two files. `revision` names the
+    artifact rows those keys were read from: a retry that rewrites the keys changes it.
     """
 
     epoch_id: uuid.UUID
@@ -446,6 +448,7 @@ class ReferenceChoice:
     verdict: str | None
     uncertainty_m: float
     keys: dict[str, str]
+    revision: str = ""
 
 
 def claimed_verdict(alignment: object, platform: str) -> str | None:
@@ -491,26 +494,32 @@ def _confirmed_at(epoch: Epoch, shown_at: datetime) -> datetime:
     return confirmed
 
 
-def _reference_keys(db: Session, job_id: uuid.UUID) -> tuple[dict[str, str], datetime | None]:
-    """Each reference artifact's storage key for the run, from its newest row, and when
-    the newest of those rows was written; only the names it has. A directory artifact's
-    key is its prefix (`worker/outputs`). A retried stage writes the same key again, so
-    the newest row is the one whose bytes the bucket holds."""
+def _reference_keys(db: Session, job_id: uuid.UUID) -> tuple[dict[str, str], datetime | None, str]:
+    """Each reference artifact's storage key for the run, from its newest row, when the
+    newest of those rows was written, and the revision they make; only the names it has.
+    A directory artifact's key is its prefix (`worker/outputs`). A retried stage writes
+    the same key again, so the newest row is the one whose bytes the bucket holds -- and
+    a new row, so the revision (a digest of the rows chosen) changes with every rewrite
+    while the keys, the epoch and the job do not."""
     rows = db.execute(
-        select(Artifact.storage_key, Artifact.created_at)
+        select(Artifact.storage_key, Artifact.created_at, Artifact.id)
         .join(JobStep, Artifact.job_step_id == JobStep.id)
         .where(JobStep.job_id == job_id)
         .order_by(Artifact.created_at.desc(), Artifact.id.desc())
     ).all()
     keys: dict[str, str] = {}
+    ids: dict[str, str] = {}
     written: datetime | None = None
-    for key, created in rows:
+    for key, created, artifact_id in rows:
         name = str(key).rsplit("/", 1)[-1]
         for role, wanted in REFERENCE_ARTIFACTS.items():
             if name == wanted and role not in keys:
                 keys[role] = str(key)
+                ids[role] = str(artifact_id)
                 written = created if written is None else max(written, created)
-    return keys, written
+    listed = ";".join(f"{role}={ids[role]}" for role in sorted(ids))
+    revision = hashlib.sha256(listed.encode("utf-8")).hexdigest()[:16]
+    return keys, written, revision
 
 
 def reference_epoch(
@@ -557,7 +566,7 @@ def reference_epoch(
     candidates: list[ReferenceChoice] = []
     for epoch in db.scalars(statement):
         assert epoch.job_id is not None
-        keys, written = _reference_keys(db, epoch.job_id)
+        keys, written, revision = _reference_keys(db, epoch.job_id)
         if set(keys) != set(REFERENCE_ARTIFACTS):
             continue
         shown = current_asset(db, epoch.id)
@@ -581,6 +590,7 @@ def reference_epoch(
                 verdict=claimed_verdict(epoch.alignment, epoch.platform),
                 uncertainty_m=_reference_uncertainty(epoch, capture),
                 keys=keys,
+                revision=revision,
             )
         )
     if not candidates:

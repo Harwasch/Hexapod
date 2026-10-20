@@ -50,7 +50,8 @@ log = logging.getLogger("app.worker")
 OBSERVATIONS_FILE = "check_observations.json"
 #: Where the reference epoch's files go, relative to `site_context/`.
 REFERENCE_DIR = "reference"
-#: Which epoch's files `reference/` holds, so an interrupted seed never mixes two.
+#: Which epoch's files, of which revision, `reference/` holds, so an interrupted seed
+#: never mixes two references, nor two revisions of one.
 REFERENCE_MARKER = ".reference.json"
 #: The most a capture's clicks file may be and still be read: a click is ~100 bytes, so
 #: 5 MB is tens of thousands of them, and anything larger is not clicks. Checked before a
@@ -160,7 +161,13 @@ def _fetch_reference(
     own georeference rather than failing on a scaffold that is gone."""
     root = directory / REFERENCE_DIR
     marker = root / REFERENCE_MARKER
-    whose = {"epochId": str(reference.epoch_id), "jobId": str(reference.job_id)}
+    # By revision, not only by epoch and job: a retry of the reference's run rewrites the
+    # same keys under the same ids, and files of two revisions must never be mixed.
+    whose = {
+        "epochId": str(reference.epoch_id),
+        "jobId": str(reference.job_id),
+        "revision": reference.revision,
+    }
     try:
         held = json.loads(marker.read_text(encoding="utf-8")) if marker.is_file() else None
     except ValueError:
@@ -197,6 +204,7 @@ def _fetch_reference(
         "platform": reference.platform,
         "verdict": reference.verdict,
         "uncertaintyM": reference.uncertainty_m,
+        "revision": reference.revision,
         **{role: f"{REFERENCE_DIR}/{names[role]}" for role in epochs.REFERENCE_ARTIFACTS},
     }
 
