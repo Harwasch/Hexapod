@@ -5,6 +5,7 @@ import {
   Math as CesiumMath,
   Matrix3,
   Matrix4,
+  SplitDirection,
   type Cesium3DTileset,
   type Rectangle,
   type Scene,
@@ -29,7 +30,13 @@ import {
   deviceSplatCeiling,
   isHandheld,
 } from "@/lib/detail";
-import { epochOptions, frameAnchor, pickShownAsset, siteEpochs } from "@/lib/epochs";
+import {
+  epochOptions,
+  frameAnchor,
+  pickShownAsset,
+  siteEpochs,
+  type CompareDates,
+} from "@/lib/epochs";
 import { assetScale, scalableAsset } from "@/lib/realSize";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 
@@ -275,6 +282,11 @@ interface ActiveSite {
   epochId: string | null;
   /** The epoch last said to be shown (`epoch` event); undefined until one has been. */
   shownEpochId?: string | null;
+  /**
+   * Two dates drawn side by side, split at the scene's divider (`setCompareDates`); null while
+   * one date is drawn. `epochId` is kept meanwhile: it is the date shown again after.
+   */
+  compare: CompareDates | null;
   handles: Map<string, AssetHandle>;
   /** Radius of the authored footprint (at least MIN_SITE_RADIUS_M), the yardstick for engagement. */
   radius: number;
@@ -563,6 +575,8 @@ export class SiteManager {
       if (handle.placement) handle.placement.serial += 1;
       this.placeTileset(entry, handle, tileset);
     }
+    // Two dates compared stay while both are still offered, each drawn as its current model.
+    this.keepCompare(entry);
     this.restartLoad(entry);
     void this.showRepresentation(entry, entry.representation);
     this.events.emit("site-dates", entry.site.id);
@@ -696,6 +710,7 @@ export class SiteManager {
       // The site starts at its latest date every time it is loaded.
       epochs: siteEpochs(site),
       epochId: null,
+      compare: null,
       handles: new Map(),
       radius: Math.max(boundingRadiusM(site.boundary), MIN_SITE_RADIUS_M),
       engaged: false,
@@ -727,6 +742,9 @@ export class SiteManager {
     this.primaryId = siteId;
     // Only the primary site's scan is drawn from afar (`farFor`).
     if (previous) this.setView(previous, previous.engaged, false);
+    // Only the primary site's dates are compared: the divider and its controls are its.
+    if (previous && this.endCompare(previous))
+      void this.showRepresentation(previous, previous.representation);
     this.setView(entry, entry.engaged, this.farFor(entry));
     this.performance.resetBenchmark();
     this.events.emit("site-active", siteId);
@@ -743,6 +761,7 @@ export class SiteManager {
       for (const handle of entry.handles.values()) this.disposeHandle(handle);
       this.clipping.setFootprint(id, null);
       this.loaded.delete(id);
+      this.endCompare(entry);
       if (this.loads.delete(id)) this.events.emit("site-load", { siteId: id, load: null });
       if (this.flightSiteId === id) this.setFlightSite(null);
     }
@@ -1198,7 +1217,7 @@ export class SiteManager {
     // the record then belongs to the representation shown now (`restartLoad`).
     const shown = (): boolean => {
       const entry = this.loaded.get(siteId);
-      return entry !== undefined && this.pickAsset(entry, entry.representation)?.id === asset.id;
+      return entry !== undefined && this.mainAsset(entry)?.id === asset.id;
     };
     const offProgress = tileset.loadProgress.addEventListener(
       (pending: number, processing: number) => {
@@ -1303,6 +1322,8 @@ export class SiteManager {
     // The date chosen stays: Splat / Mesh switches what is drawn of it, not when.
     this.active.pinnedAssetId = null;
     this.events.emit("representation", { siteId: this.active.site.id, representation });
+    // Compared in the new representation too, while both dates have it.
+    this.keepCompare(this.active);
     this.restartLoad(this.active);
     await this.showRepresentation(this.active, representation);
   }
@@ -1322,6 +1343,8 @@ export class SiteManager {
     }
     active.epochId = epochId;
     active.pinnedAssetId = null;
+    // One date asked for: the comparison, if any, ends with it.
+    this.endCompare(active);
     this.restartLoad(active);
     await this.showRepresentation(active, active.representation);
   }
@@ -1345,6 +1368,7 @@ export class SiteManager {
     ).some((option) => option.asset.id === asset.id);
     this.active.epochId = ofEpoch ? asset.epochId : this.active.epochId;
     this.active.pinnedAssetId = ofEpoch ? null : assetId;
+    this.endCompare(this.active);
     if (asset.representation !== this.active.representation) {
       this.active.representation = asset.representation;
       this.events.emit("representation", {
@@ -1354,6 +1378,106 @@ export class SiteManager {
     }
     this.restartLoad(this.active);
     await this.showRepresentation(this.active, asset.representation);
+  }
+
+  /**
+   * Draws two of the primary site's dates at once, either side of the scene's split divider
+   * (`scene.splitPosition`, which the Compare panel's divider sets): `left` of it and `right` of
+   * it, each its epoch's current model of the representation shown, both with the site's one
+   * placement (`followAnchor`), so what differs between the halves is the data's own. Null
+   * draws the single date chosen before (`setEpoch`) again. ADR 0017.
+   *
+   * The split is CesiumJS's own: `tileset.splitDirection`, which the splat primitive copies
+   * from its tileset every frame and its fragment shader cuts at the divider. So two dates are
+   * refused where another renderer draws the scan (lib/viewModes.ts says so in the control),
+   * as are two dates that are not both offered, or one date twice.
+   */
+  async setCompareDates(dates: CompareDates | null): Promise<void> {
+    const active = this.active;
+    if (!active) return;
+    if (dates && !this.comparedAssets(active, dates)) {
+      log.info("cannot compare these dates", { site: active.site.slug, ...dates });
+      return;
+    }
+    const same = dates
+      ? active.compare?.left === dates.left && active.compare.right === dates.right
+      : active.compare === null;
+    if (same) return;
+    active.compare = dates ? { left: dates.left, right: dates.right } : null;
+    this.events.emit("compare-dates", { siteId: active.site.id, dates: active.compare });
+    this.restartLoad(active);
+    await this.showRepresentation(active, active.representation);
+  }
+
+  /** The two dates a loaded site draws side by side (the primary's unless named), or null. */
+  compareDates(siteId?: string): CompareDates | null {
+    const entry = siteId ? this.loaded.get(siteId) : this.active;
+    return entry?.compare ?? null;
+  }
+
+  /**
+   * The models two dates are drawn with: each epoch's current asset of `representation`,
+   * both drawn by CesiumJS. Null when the two are one, or either is not offered or not drawn
+   * here (another renderer draws splat scans).
+   */
+  private comparedAssets(
+    entry: ActiveSite,
+    dates: CompareDates | null = entry.compare,
+    representation: Representation = entry.representation,
+  ): { left: SiteAsset; right: SiteAsset } | null {
+    if (!dates || dates.left === dates.right) return null;
+    const offered = epochOptions(entry.epochs, entry.site.assets, representation);
+    const left = offered.find((option) => option.epoch.id === dates.left)?.asset;
+    const right = offered.find((option) => option.epoch.id === dates.right)?.asset;
+    if (!left || !right || !this.cesiumDraws(left) || !this.cesiumDraws(right)) return null;
+    return { left, right };
+  }
+
+  /** Ends a site's comparison, saying so; whether there was one. Its caller shows again. */
+  private endCompare(entry: ActiveSite): boolean {
+    if (!entry.compare) return false;
+    entry.compare = null;
+    this.events.emit("compare-dates", { siteId: entry.site.id, dates: null });
+    return true;
+  }
+
+  /** Ends a site's comparison once its two dates can no longer both be drawn. */
+  private keepCompare(entry: ActiveSite): boolean {
+    if (!entry.compare || this.comparedAssets(entry)) return false;
+    log.info("date comparison ended: the two dates cannot both be drawn", {
+      site: entry.site.slug,
+    });
+    return this.endCompare(entry);
+  }
+
+  /**
+   * What a loaded site draws now: the two dates compared, left then right, or its one shown
+   * model (`pickAsset`), or nothing.
+   */
+  private drawnAssets(
+    entry: ActiveSite,
+    representation: Representation = entry.representation,
+  ): SiteAsset[] {
+    const pair = this.comparedAssets(entry, entry.compare, representation);
+    if (pair) return [pair.left, pair.right];
+    const asset = this.pickAsset(entry, representation);
+    return asset ? [asset] : [];
+  }
+
+  /**
+   * The drawn model a site's one-model parts speak for -- the clip under it, the load pill,
+   * the view from afar: the one shown, or the right-hand date of two compared.
+   */
+  private mainAsset(entry: ActiveSite): SiteAsset | null {
+    return this.drawnAssets(entry).at(-1) ?? null;
+  }
+
+  /** Which side of the divider a drawn model keeps: LEFT, RIGHT, or NONE for all of it. */
+  private splitOf(entry: ActiveSite, asset: SiteAsset): SplitDirection {
+    const pair = this.comparedAssets(entry);
+    if (pair?.left.id === asset.id) return SplitDirection.LEFT;
+    if (pair?.right.id === asset.id) return SplitDirection.RIGHT;
+    return SplitDirection.NONE;
   }
 
   /**
@@ -1397,9 +1521,19 @@ export class SiteManager {
     return labels;
   }
 
+  /** The handle of the site's main drawn model (`mainAsset`). */
   private handleFor(entry: ActiveSite): AssetHandle | null {
-    const asset = this.pickAsset(entry, entry.representation);
+    const asset = this.mainAsset(entry);
     return asset ? (entry.handles.get(asset.id) ?? null) : null;
+  }
+
+  /** The handles of what a site draws (`drawnAssets`) whose tilesets are in the scene. */
+  private drawnHandles(entry: ActiveSite): { handle: AssetHandle; tileset: Cesium3DTileset }[] {
+    return this.drawnAssets(entry).flatMap((asset) => {
+      const handle = entry.handles.get(asset.id);
+      const tileset = handle?.tileset;
+      return handle && tileset && !tileset.isDestroyed() ? [{ handle, tileset }] : [];
+    });
   }
 
   private pickAsset(entry: ActiveSite, representation: Representation): SiteAsset | null {
@@ -1414,9 +1548,12 @@ export class SiteManager {
     representation: Representation,
   ): Promise<void> {
     const asset = this.pickAsset(active, representation);
+    const assets = this.drawnAssets(active, representation);
     for (const handle of active.handles.values()) {
-      if (!handle.tileset || handle.asset.id === asset?.id) continue;
+      if (!handle.tileset || assets.some((a) => a.id === handle.asset.id)) continue;
       handle.tileset.show = false;
+      // Only what is drawn is split: a date hidden is whole when it is next shown.
+      handle.tileset.splitDirection = SplitDirection.NONE;
       // Another date of the site, kept for switching back: it never streams tiles for a view
       // it is not drawn in (Cesium preloads hidden tilesets otherwise).
       if (handle.asset.epochId) handle.tileset.preloadWhenHidden = false;
@@ -1430,29 +1567,43 @@ export class SiteManager {
     // (scanTarget) drops the old one at once, as CesiumJS just hid it, rather than drawing
     // the date that was while the control already names the next.
     this.events.emit("tilesets", this.activeTilesetLabels());
-    if (!asset) {
+    if (assets.length === 0) {
       this.clipping.setFootprint(active.site.id, null);
       // Nothing to load for this representation: the site's load is as done as it gets.
       if (this.loads.get(active.site.id)?.phase === "model")
         this.reportLoad(active.site.id, { phase: "ready" });
       return;
     }
+    await Promise.all(assets.map((shown) => this.presentAsset(active, shown)));
+  }
+
+  /**
+   * Loads one model a site draws (`drawnAssets`) and draws it, once it is in, if it is still
+   * one of them: shown when the site is drawn, split at the divider when two dates are
+   * compared (`splitOf`), and -- the main one (`mainAsset`) -- clipped under, watched for its
+   * first tiles, and measured for the view from afar.
+   */
+  private async presentAsset(active: ActiveSite, asset: SiteAsset): Promise<void> {
     const tileset = await this.ensureTileset(active, asset);
     if (
       !tileset ||
       this.loaded.get(active.site.id) !== active ||
-      this.pickAsset(active, active.representation)?.id !== asset.id
+      !this.drawnAssets(active).some((a) => a.id === asset.id)
     )
       return;
+    const main = this.mainAsset(active)?.id === asset.id;
     // Now that the scan's own bounds are known, it can be seen from afar.
-    active.far = this.farFor(active);
+    if (main) active.far = this.farFor(active);
     tileset.preloadWhenHidden = this.cesiumDraws(asset);
     tileset.show = drawn(active) && this.cesiumDraws(asset);
+    tileset.splitDirection = this.splitOf(active, asset);
     setSeenFromAfar(tileset, !active.engaged && active.far);
-    if (drawn(active)) this.applyClip(active, asset, tileset);
-    else this.clipping.setFootprint(active.site.id, null);
-    const handle = active.handles.get(asset.id);
-    if (handle) this.watchFirstTiles(active.site.id, handle, tileset, asset);
+    if (main) {
+      if (drawn(active)) this.applyClip(active, asset, tileset);
+      else this.clipping.setFootprint(active.site.id, null);
+      const handle = active.handles.get(asset.id);
+      if (handle) this.watchFirstTiles(active.site.id, handle, tileset, asset);
+    }
     this.events.emit("tilesets", this.activeTilesetLabels());
     this.scene.requestRender();
   }
@@ -1524,12 +1675,15 @@ export class SiteManager {
     const handle = this.handleFor(entry);
     const tileset = handle?.tileset;
     if (!handle || !tileset) return;
+    // Both dates when two are compared; the main one carries the clip.
+    const shown = this.drawnHandles(entry);
     if (drawn(entry) !== wasDrawn) {
-      tileset.show = drawn(entry) && this.cesiumDraws(handle.asset);
+      for (const other of shown)
+        other.tileset.show = drawn(entry) && this.cesiumDraws(other.handle.asset);
       if (drawn(entry)) this.applyClip(entry, handle.asset, tileset);
       else this.clipping.setFootprint(entry.site.id, null);
     }
-    setSeenFromAfar(tileset, !engaged && far);
+    for (const other of shown) setSeenFromAfar(other.tileset, !engaged && far);
     if (engaged !== engagedBefore)
       log.info(engaged ? "site engaged" : "site disengaged", { site: entry.site.slug });
     if (far !== farBefore)
@@ -1660,7 +1814,7 @@ export class SiteManager {
   private showsAsset(active: ActiveSite, asset: SiteAsset): boolean {
     return (
       this.loaded.get(active.site.id) === active &&
-      this.pickAsset(active, active.representation)?.id === asset.id
+      this.drawnAssets(active).some((drawnAsset) => drawnAsset.id === asset.id)
     );
   }
 
@@ -2016,7 +2170,7 @@ export class SiteManager {
       // Still undecided, it waits for that (`followAnchor`).
       const anchor = handle.follows ? entry.handles.get(handle.follows)?.tileset : undefined;
       if (anchor && !anchor.isDestroyed()) this.copyPlacement(anchor, tileset);
-      if (entry.engaged && this.pickAsset(entry, entry.representation)?.id === asset.id)
+      if (entry.engaged && this.mainAsset(entry)?.id === asset.id)
         this.applyClip(entry, asset, tileset);
       return;
     }
@@ -2039,7 +2193,7 @@ export class SiteManager {
       placement.liftM = offset;
     }
     this.applyPlacement(handle, tileset, placement);
-    if (entry.engaged && this.pickAsset(entry, entry.representation)?.id === asset.id)
+    if (entry.engaged && this.mainAsset(entry)?.id === asset.id)
       this.applyClip(entry, asset, tileset);
   }
 
@@ -2595,14 +2749,19 @@ export class SiteManager {
   setSplatRenderer(kind: SplatRendererKind): void {
     if (kind === this.splatRenderer) return;
     this.splatRenderer = kind;
+    // Two dates side by side are CesiumJS's split: under a renderer that draws the scan itself
+    // the site shows its one date again, which that renderer draws (loaded if it was not).
+    for (const entry of this.loaded.values())
+      if (this.keepCompare(entry)) void this.showRepresentation(entry, entry.representation);
     for (const { entry, handle } of this.handles()) {
       const tileset = handle.tileset;
       if (!tileset || handle.asset.representation !== "gaussian-splat") continue;
-      const current = this.pickAsset(entry, entry.representation)?.id === handle.asset.id;
+      const current = this.drawnAssets(entry).some((asset) => asset.id === handle.asset.id);
       // A date of the site not shown never streams, whoever draws the one that is.
       tileset.preloadWhenHidden =
         this.cesiumDraws(handle.asset) && (current || !handle.asset.epochId);
       tileset.show = current && drawn(entry) && this.cesiumDraws(handle.asset);
+      tileset.splitDirection = current ? this.splitOf(entry, handle.asset) : SplitDirection.NONE;
     }
     this.scene.requestRender();
   }

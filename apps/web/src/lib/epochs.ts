@@ -20,6 +20,15 @@ export interface ShownSelection {
   assetId?: string | null;
 }
 
+/**
+ * Two of a site's dates drawn at once, either side of the scene's split divider (SiteManager
+ * `setCompareDates`; ADR 0017): `left` of it and `right` of it, each an epoch id.
+ */
+export interface CompareDates {
+  left: string;
+  right: string;
+}
+
 /** An epoch offered for a representation, with the asset that shows it. */
 export interface EpochOption {
   epoch: Epoch;
