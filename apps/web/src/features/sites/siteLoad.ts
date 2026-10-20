@@ -1,6 +1,7 @@
-import type { Representation, SiteAsset } from "@twin/contracts";
+import type { Epoch, Representation, SiteAsset } from "@twin/contracts";
 
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
+import { pickShownAsset } from "@/lib/epochs";
 import type { AssetRuntime, SiteLoad as SiteLoadRecord } from "@/state/sites";
 
 /**
@@ -27,20 +28,21 @@ export function fromSiteRecord(record: SiteLoadRecord | undefined): SiteLoad {
   return { phase: "loading", percent: percent > 0 ? percent : null };
 }
 
-/** The asset the scene shows for a representation, chosen the way `SiteManager.pickAsset` does. */
+/**
+ * The asset the scene shows for a representation, by the scene's own rule
+ * (lib/epochs.ts `pickShownAsset`, which `SiteManager.pickAsset` is): the pinned asset, else
+ * the epoch shown (`epochId`, as the scene says it), else the latest, else the rule from before
+ * epochs.
+ */
 export function shownAsset(
   assets: readonly SiteAsset[],
   representation: Representation | undefined,
-  temporalAssetId: string | undefined,
+  pinnedAssetId: string | undefined,
+  epochs: readonly Epoch[] = [],
+  epochId: string | null = null,
 ): SiteAsset | null {
   if (!representation) return null;
-  const candidates = assets.filter((a) => a.representation === representation);
-  return (
-    candidates.find((a) => a.id === temporalAssetId) ??
-    candidates.find((a) => a.defaultVisible) ??
-    [...candidates].sort((a, b) => (b.observedAt ?? "").localeCompare(a.observedAt ?? ""))[0] ??
-    null
-  );
+  return pickShownAsset(assets, epochs, representation, { assetId: pinnedAssetId, epochId });
 }
 
 /** Tiles still on their way: requested, or arrived and being processed. */

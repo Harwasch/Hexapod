@@ -13,7 +13,14 @@ import {
   sampleTerrainMostDetailed,
 } from "cesium";
 
-import type { Footprint, Representation, Site, SiteAsset, SiteSummary } from "@twin/contracts";
+import type {
+  Epoch,
+  Footprint,
+  Representation,
+  Site,
+  SiteAsset,
+  SiteSummary,
+} from "@twin/contracts";
 import { boundingRadiusM, centerOf, circleFootprint, haversineDistance } from "@twin/geo";
 
 import {
@@ -22,6 +29,7 @@ import {
   deviceSplatCeiling,
   isHandheld,
 } from "@/lib/detail";
+import { epochOptions, pickShownAsset, siteEpochs } from "@/lib/epochs";
 import { assetScale, scalableAsset } from "@/lib/realSize";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 
@@ -244,7 +252,15 @@ export interface LoadedSiteAsset {
 interface ActiveSite {
   site: Site;
   representation: Representation;
-  temporalAssetId: string | null;
+  /** An asset asked for by id (the load pill's Retry), shown while it is of the
+   *  representation shown; null otherwise. */
+  pinnedAssetId: string | null;
+  /** The site's dated captures, from the record the site was loaded with (lib/epochs.ts). */
+  epochs: readonly Epoch[];
+  /** The epoch chosen (`setEpoch`); null for the latest. Kept across Splat / Mesh. */
+  epochId: string | null;
+  /** The epoch last said to be shown (`epoch` event); undefined until one has been. */
+  shownEpochId?: string | null;
   handles: Map<string, AssetHandle>;
   /** Radius of the authored footprint (at least MIN_SITE_RADIUS_M), the yardstick for engagement. */
   radius: number;
@@ -533,13 +549,13 @@ export class SiteManager {
     return views;
   }
 
-  /** Temporal versions of the active representation, newest first. */
-  temporalVersions(): SiteAsset[] {
-    if (!this.active) return [];
-    const rep = this.active.representation;
-    return this.active.site.assets
-      .filter((a) => a.representation === rep && a.observedAt)
-      .sort((a, b) => (b.observedAt ?? "").localeCompare(a.observedAt ?? ""));
+  /**
+   * The asset a loaded site shows now, for its representation (lib/epochs.ts `pickShownAsset`):
+   * the primary site's unless `siteId` names another. Null when nothing is shown.
+   */
+  shownAsset(siteId?: string): SiteAsset | null {
+    const entry = siteId ? this.loaded.get(siteId) : this.active;
+    return entry ? this.pickAsset(entry, entry.representation) : null;
   }
 
   /**
@@ -586,7 +602,10 @@ export class SiteManager {
     const entry: ActiveSite = {
       site,
       representation,
-      temporalAssetId: null,
+      pinnedAssetId: null,
+      // The site starts at its latest date every time it is loaded.
+      epochs: siteEpochs(site),
+      epochId: null,
       handles: new Map(),
       radius: Math.max(boundingRadiusM(site.boundary), MIN_SITE_RADIUS_M),
       engaged: false,
@@ -1191,12 +1210,37 @@ export class SiteManager {
   async setRepresentation(representation: Representation): Promise<void> {
     if (!this.active || this.active.representation === representation) return;
     this.active.representation = representation;
-    this.active.temporalAssetId = null;
+    // The date chosen stays: Splat / Mesh switches what is drawn of it, not when.
+    this.active.pinnedAssetId = null;
     this.events.emit("representation", { siteId: this.active.site.id, representation });
     this.restartLoad(this.active);
     await this.showRepresentation(this.active, representation);
   }
 
+  /**
+   * Shows one of the primary site's dated captures (lib/epochs.ts): its current asset of the
+   * representation shown, the others hidden and kept, so switching back is instant under
+   * CesiumJS. An epoch with nothing of that representation is not offered, and is refused.
+   */
+  async setEpoch(epochId: string): Promise<void> {
+    const active = this.active;
+    if (!active) return;
+    const offered = epochOptions(active.epochs, active.site.assets, active.representation);
+    if (!offered.some((option) => option.epoch.id === epochId)) {
+      log.info("no such date to show", { site: active.site.slug, epoch: epochId });
+      return;
+    }
+    active.epochId = epochId;
+    active.pinnedAssetId = null;
+    this.restartLoad(active);
+    await this.showRepresentation(active, active.representation);
+  }
+
+  /**
+   * Shows one asset of the primary site by id (the load pill's Retry). An asset that is an
+   * epoch's current one is shown by choosing its epoch, so the date control says which; any
+   * other is pinned while its representation is shown.
+   */
   async setTemporalAsset(assetId: string): Promise<void> {
     if (!this.active) return;
     const asset = this.active.site.assets.find((a) => a.id === assetId);
@@ -1204,7 +1248,13 @@ export class SiteManager {
     // Chosen on purpose (a version, the load pill's Retry): an ion asset found missing lately
     // is asked for again rather than refused from memory (ion.ts).
     if (asset.source.type === "cesium-ion") forgetIonAssetMissing(asset.source.assetId);
-    this.active.temporalAssetId = assetId;
+    const ofEpoch = epochOptions(
+      this.active.epochs,
+      this.active.site.assets,
+      asset.representation,
+    ).some((option) => option.asset.id === asset.id);
+    this.active.epochId = ofEpoch ? asset.epochId : this.active.epochId;
+    this.active.pinnedAssetId = ofEpoch ? null : assetId;
     if (asset.representation !== this.active.representation) {
       this.active.representation = asset.representation;
       this.events.emit("representation", {
@@ -1263,16 +1313,10 @@ export class SiteManager {
   }
 
   private pickAsset(entry: ActiveSite, representation: Representation): SiteAsset | null {
-    const candidates = entry.site.assets.filter((a) => a.representation === representation);
-    if (entry.temporalAssetId) {
-      const chosen = candidates.find((a) => a.id === entry.temporalAssetId);
-      if (chosen) return chosen;
-    }
-    return (
-      candidates.find((a) => a.defaultVisible) ??
-      candidates.sort((a, b) => (b.observedAt ?? "").localeCompare(a.observedAt ?? ""))[0] ??
-      null
-    );
+    return pickShownAsset(entry.site.assets, entry.epochs, representation, {
+      epochId: entry.epochId,
+      assetId: entry.pinnedAssetId,
+    });
   }
 
   private async showRepresentation(
@@ -1281,11 +1325,23 @@ export class SiteManager {
   ): Promise<void> {
     const asset = this.pickAsset(active, representation);
     for (const handle of active.handles.values()) {
-      if (handle.tileset && handle.asset.id !== asset?.id) handle.tileset.show = false;
+      if (!handle.tileset || handle.asset.id === asset?.id) continue;
+      handle.tileset.show = false;
+      // Another date of the site, kept for switching back: it never streams tiles for a view
+      // it is not drawn in (Cesium preloads hidden tilesets otherwise).
+      if (handle.asset.epochId) handle.tileset.preloadWhenHidden = false;
     }
+    const shownEpoch = asset?.epochId ?? null;
+    if (active.shownEpochId !== shownEpoch) {
+      active.shownEpochId = shownEpoch;
+      this.events.emit("epoch", { siteId: active.site.id, epochId: shownEpoch });
+    }
+    // Said now, not once the new model has loaded: a renderer drawing the scan for CesiumJS
+    // (scanTarget) drops the old one at once, as CesiumJS just hid it, rather than drawing
+    // the date that was while the control already names the next.
+    this.events.emit("tilesets", this.activeTilesetLabels());
     if (!asset) {
       this.clipping.setFootprint(active.site.id, null);
-      this.events.emit("tilesets", this.activeTilesetLabels());
       // Nothing to load for this representation: the site's load is as done as it gets.
       if (this.loads.get(active.site.id)?.phase === "model")
         this.reportLoad(active.site.id, { phase: "ready" });
@@ -1300,6 +1356,7 @@ export class SiteManager {
       return;
     // Now that the scan's own bounds are known, it can be seen from afar.
     active.far = this.farFor(active);
+    tileset.preloadWhenHidden = this.cesiumDraws(asset);
     tileset.show = drawn(active) && this.cesiumDraws(asset);
     setSeenFromAfar(tileset, !active.engaged && active.far);
     if (drawn(active)) this.applyClip(active, asset, tileset);
@@ -1432,8 +1489,11 @@ export class SiteManager {
           tileset.destroy();
           return null;
         }
-        // Drawn by another renderer: loaded for its frame and solids, never streamed here.
-        if (!this.cesiumDraws(asset)) tileset.preloadWhenHidden = false;
+        // Drawn by another renderer: loaded for its frame and solids, never streamed here. A
+        // date of the site that is not shown (loaded as the frame's anchor) is not streamed
+        // either.
+        if (!this.cesiumDraws(asset) || (asset.epochId && !this.showsAsset(active, asset)))
+          tileset.preloadWhenHidden = false;
         this.scene.primitives.add(tileset);
         this.attachTileset(handle, tileset, asset);
         return tileset;
@@ -2259,8 +2319,10 @@ export class SiteManager {
     for (const { entry, handle } of this.handles()) {
       const tileset = handle.tileset;
       if (!tileset || handle.asset.representation !== "gaussian-splat") continue;
-      tileset.preloadWhenHidden = this.cesiumDraws(handle.asset);
       const current = this.pickAsset(entry, entry.representation)?.id === handle.asset.id;
+      // A date of the site not shown never streams, whoever draws the one that is.
+      tileset.preloadWhenHidden =
+        this.cesiumDraws(handle.asset) && (current || !handle.asset.epochId);
       tileset.show = current && drawn(entry) && this.cesiumDraws(handle.asset);
     }
     this.scene.requestRender();
