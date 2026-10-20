@@ -175,6 +175,13 @@ jobs:
           volume=$(flyctl volumes list --json | jq -r '.[] | select(.name == "twin_worlds_data") | .id')
           mounted=$(printf '%s' "$machines" | jq -r '.[] | select(.config.metadata.fly_process_group == "app") | .config.mounts[]? | select(.path == "/worlds-data") | .volume')
           [ -n "$volume" ] && [ "$mounted" = "$volume" ] || { echo "::error::Worlds ledger is not on its expected persistent volume"; exit 1; }
+          # The API suspends when idle (fly.toml), and `fly deploy` leaves a machine it
+          # found stopped or suspended stopped. `ssh console` needs it running.
+          state=$(printf '%s' "$machines" | jq -r '.[] | select(.config.metadata.fly_process_group == "app") | .state')
+          if [ "$state" != "started" ]; then
+            echo "starting API machine $machine (was $state)"
+            flyctl machines start "$machine"
+          fi
           flyctl ssh console --machine "$machine" --user root --command "chown 1000:1000 /worlds-data"
           flyctl ssh console --machine "$machine" --user root --command "chmod 700 /worlds-data"
           flyctl ssh console --machine "$machine" --user api --command "/app/.venv/bin/python -c 'from pathlib import Path; p=Path(\"/worlds-data/.release-write-check\"); p.write_text(\"ok\"); p.unlink()'"
