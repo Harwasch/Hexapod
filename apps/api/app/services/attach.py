@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import json
 import logging
+import posixpath
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -233,6 +234,7 @@ def _attach(
         db,
         asset,
         _fills_judged(patch, old_extras),
+        extras=extras,
         document=current.document,
         staged=staged,
         kept=kept,
@@ -564,6 +566,46 @@ def _fills_judged(patch: dict[str, Any], current: dict[str, Any]) -> list[Any]:
     return layers
 
 
+def _declared_fills(extras: dict[str, Any]) -> list[Any]:
+    """Every inferred layer a root's extras declare: `inferredLayers`, and the layers of each
+    fill variant (`variants.fill[].inferredLayers`)."""
+    layers = list(extras.get("inferredLayers") or [])
+    variants = extras.get("variants")
+    if isinstance(variants, dict) and isinstance(variants.get("fill"), list):
+        for variant in variants["fill"]:
+            listed = variant.get("inferredLayers") if isinstance(variant, dict) else None
+            layers += listed if isinstance(listed, list) else []
+    return layers
+
+
+def _touched_fills(
+    layers: list[Any], staged: dict[str, ObjectSummary], read: Callable[[str], bytes | None]
+) -> list[Any]:
+    """The `layers` the request stages a file of: the layer's tileset, a file in its folder,
+    or -- for a layer beside `tileset.json` itself, with no folder -- a tile it names."""
+    touched: list[Any] = []
+    for entry in layers:
+        uri = entry.get("uri") if isinstance(entry, dict) else None
+        if not isinstance(uri, str):
+            continue
+        rel = uri.removeprefix("./")
+        folder = posixpath.dirname(rel)
+        if rel in staged or (folder and any(name.startswith(folder + "/") for name in staged)):
+            touched.append(entry)
+            continue
+        if folder:
+            continue
+        data = read(rel)
+        try:
+            document = json.loads(data) if data is not None else None
+        except ValueError:
+            document = None
+        tiles = sidecars.content_uris(document) if isinstance(document, dict) else set()
+        if tiles & set(staged):
+            touched.append(entry)
+    return touched
+
+
 def _check_fills(patch: dict[str, Any], current: dict[str, Any], asset: Asset) -> None:
     """The fill gate's cheap half, before anything is read: every layer the request adds or
     changes (`_fills_judged`) carries a `rescan-gate-v1` gate against the confidence grid
@@ -586,6 +628,7 @@ def _verify_fills(
     asset: Asset,
     layers: list[Any],
     *,
+    extras: dict[str, Any],
     document: dict[str, Any],
     staged: dict[str, ObjectSummary],
     kept: dict[str, ObjectSummary],
@@ -595,14 +638,13 @@ def _verify_fills(
     """The fill gate's second barrier (ADR 0016 § Fill; the first is publish-fill.yml), as
     the API computes it (`fill_gate`): the targets recomputed from the stored maps, every
     gaussian of every tile of each layer held to them, read from the new generation's
-    files -- staged, or kept from the current one. A split's own hole fill (`fills/`) goes
-    with its split and is not judged."""
-    judged = [
-        entry
-        for entry in layers
-        if isinstance(entry, dict)
-        and not str(entry.get("uri") or "").removeprefix("./").startswith("fills/")
-    ]
+    files -- staged, or kept from the current one.
+
+    Judged: every layer the request declares anew (`layers`), and every layer the new
+    generation declares (`extras`) any of whose files the request stages -- an empty
+    `extras` that replaces a layer's tiles, or an unchanged variant entry sent again with
+    new files, changes what the viewer shows as surely as a new declaration does. A
+    split's own hole fill (`fills/`) goes with its split and is not judged."""
 
     def read(rel: str) -> bytes | None:
         if rel in staged:
@@ -610,6 +652,20 @@ def _verify_fills(
         if rel in kept:
             return public.get_object(kept[rel].key)
         return None
+
+    judged: list[dict[str, Any]] = []
+    for entry in [*layers, *_touched_fills(_declared_fills(extras), staged, read)]:
+        if not isinstance(entry, dict) or entry in judged:
+            continue
+        if str(entry.get("uri") or "").removeprefix("./").startswith("fills/"):
+            continue
+        judged.append(entry)
+    sha = sidecars.grid_sha256(extras)
+    epoch = str(asset.epoch_id) if asset.epoch_id is not None else None
+    for entry in judged:
+        why = sidecars.fill_gate_problem(entry, grid_sha=sha, epoch_id=epoch)
+        if why is not None:
+            raise InvalidInputError(f"inferred layer {entry.get('uri')!r} is refused: {why}")
 
     root = document.get("root")
     transform = root.get("transform") if isinstance(root, dict) else None

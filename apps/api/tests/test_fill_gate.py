@@ -243,3 +243,65 @@ def test_a_fill_variants_layers_are_held_to_the_same_targets(
         variant(layer_files([inside], [outside]))
     db.refresh(asset)
     assert variant(layer_files([inside], [inside]))
+
+
+def _attach_files(
+    db: Session, storage: S3Storage, asset: Asset, files: dict[str, bytes], extras: dict[str, Any]
+) -> str:
+    db.refresh(asset)
+    return attach_service.attach_sidecars(
+        db,
+        asset.id,
+        SidecarAttach(
+            staging_prefix=stage(storage, asset.id, files, uuid.uuid4().hex),
+            based_on=asset.source["url"],
+            extras=extras,
+        ),
+        staging=storage,
+        public=storage,
+    ).url
+
+
+def test_replacing_a_layers_files_with_no_extras_is_still_gated(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Codex R3 #60: an attach that stages new files for a declared layer and sends an
+    empty `extras` replaced the layer's tiles while its declaration -- and the evidence in
+    it -- stayed, so nothing judged the new geometry."""
+    _, asset = site(db, storage, tmp_path)
+    read = targets(db, storage, asset)
+    inside, outside = centre(read, target=True), centre(read, target=False)
+    attach(db, storage, asset, layer_files([inside], [inside]), gate_of(read))
+
+    # A staged file replaces the layer's whole folder (`inferred/<name>/`, its unit).
+    with pytest.raises(InvalidInputError, match="outside the cells"):
+        _attach_files(db, storage, asset, layer_files([inside], [outside]), {})
+    with pytest.raises(InvalidInputError, match="outside the cells"):
+        _attach_files(db, storage, asset, layer_files([outside], [inside]), {})
+    # Files for the layer that stay inside the targets are a fine re-attach.
+    assert _attach_files(db, storage, asset, layer_files([inside], [inside, inside]), {})
+
+
+def test_an_unchanged_variant_declaration_does_not_carry_new_files_past_the_gate(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """The variant shortcut skipped an entry the asset already had; its files are judged
+    whenever the request stages any of them."""
+    _, asset = site(db, storage, tmp_path)
+    read = targets(db, storage, asset)
+    inside, outside = centre(read, target=True), centre(read, target=False)
+    folder = "variants/fill/hedge/"
+    layer = {
+        "uri": f"{folder}tileset.json",
+        "evidence": {"kind": "inferred", "rescanGate": gate_of(read)},
+    }
+    extras = {
+        "variants": {"fill": [{"name": "hedge", "label": "Hedge", "inferredLayers": [layer]}]}
+    }
+    files = {k.replace(LAYER, folder): v for k, v in layer_files([inside], [inside]).items()}
+    _attach_files(db, storage, asset, files, extras)
+
+    with pytest.raises(InvalidInputError, match="outside the cells"):
+        _attach_files(db, storage, asset, {f"{folder}f1.glb": splat_glb([outside])}, extras)
+    with pytest.raises(InvalidInputError, match="outside the cells"):
+        _attach_files(db, storage, asset, {f"{folder}f1.glb": splat_glb([outside])}, {})
