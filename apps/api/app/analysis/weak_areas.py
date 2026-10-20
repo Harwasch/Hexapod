@@ -25,6 +25,11 @@ east 23 cm short.)
 zone cell); the first that does not is clipped to a disc about the focus or its weakest
 cell (unseen first, then by score), grown until it holds what is left. So a budget is a promise, it is
 spent on the zones that rank first, and any budget that can hold a zone gets one.
+
+**Every zone holds a weak cell.** The answer is the best non-empty set, never a refusal: a
+zone that holds no weak cell's centre (clipped by the boundary down to ground closing
+bridged) is skipped, and a disc about a focus on that strong ground is grown again about
+the zone's weakest cell. A zone that still holds none is dropped, so `cells` is never 0.
 (Trimming cells and outlining again, as the fog scout does, left nothing: closing grows
 scattered cells into zones larger than themselves, faster than the trimming shrank them.)
 
@@ -431,22 +436,33 @@ def _ranked(polygons: list[Polygon], focus_xy: Point | None) -> list[Polygon]:
     )
 
 
+def _weak_inside(zone: ZonePlane, polygon: Polygon) -> NDArray[np.bool_]:
+    """The zone plane's weak cells whose centres `polygon` holds (rasterize's own rule)."""
+    nj, ni = zone.weak.shape
+    inside: NDArray[np.bool_] = (
+        rasterize(
+            [(polygon, 1)],
+            out_shape=(nj, ni),
+            transform=_affine(zone.cell_m, zone.i0, zone.j0),
+            dtype=np.uint8,
+        ).astype(bool)
+        & zone.weak
+    )
+    return inside
+
+
+def holds_weak(zone: ZonePlane, polygon: Polygon) -> bool:
+    """Whether `polygon` holds the centre of at least one weak cell of the zone plane."""
+    return bool(_weak_inside(zone, polygon).any())
+
+
 def _anchor(zone: ZonePlane, polygon: Polygon, focus_xy: Point | None) -> Point:
     """Where a zone too large for the budget is clipped about: the focus when it is in the
     zone, else its weakest cell (unseen first, then by score) nearest its middle."""
     if focus_xy is not None and polygon.covers(ShapelyPoint(focus_xy)):
         return focus_xy
     cell = zone.cell_m
-    nj, ni = zone.weak.shape
-    inside = (
-        rasterize(
-            [(polygon, 1)],
-            out_shape=(nj, ni),
-            transform=_affine(cell, zone.i0, zone.j0),
-            dtype=np.uint8,
-        ).astype(bool)
-        & zone.weak
-    )
+    inside = _weak_inside(zone, polygon)
     rows, columns = np.nonzero(inside)
     if rows.size == 0:
         middle = polygon.representative_point()
@@ -463,11 +479,24 @@ def _clip(
 ) -> Polygon | None:
     """The part of `polygon` within a disc about its anchor (`_anchor`) grown until it
     holds `area_m2` (a bisection on the radius, to a hundredth of the budget), or None when
-    that is no zone (under the smallest). A disc, not a square: grown about a weakest cell
+    that is no zone (under the smallest, or holding no weak cell: a disc about a focus on
+    the strong ground closing bridged is tried again about the weakest cell, and refused
+    only when that holds none either). A disc, not a square: grown about a weakest cell
     at a zone's edge, or into a ring-shaped zone, it follows the zone instead of covering
     the strong ground beside it (a square about e2's edge cell held 36 m2 of 100)."""
+    found = _clip_about(zone, polygon, area_m2, _anchor(zone, polygon, focus_xy))
+    if found is not None and not holds_weak(zone, found):
+        # The focus sat on strong ground the zone's closing bridged: the disc about it held
+        # no weak cell. Clip about the zone's weakest cell instead, which always holds one.
+        found = _clip_about(zone, polygon, area_m2, _anchor(zone, polygon, None))
+    return found if found is not None and holds_weak(zone, found) else None
+
+
+def _clip_about(zone: ZonePlane, polygon: Polygon, area_m2: float, anchor: Point) -> Polygon | None:
+    """`_clip`'s disc about `anchor`, grown until it holds `area_m2`; None when that is
+    under the smallest zone."""
     smallest = max(MIN_AREA_M2, 2 * zone.cell_m * zone.cell_m)
-    x, y = _anchor(zone, polygon, focus_xy)
+    x, y = anchor
     centre = ShapelyPoint(x, y)
 
     def piece(radius: float) -> Polygon | None:
@@ -501,7 +530,7 @@ def choose_zones(
     while it fits; the first that does not is clipped to what is left of the budget, about
     its anchor (`_anchor`) -- so the budget goes on the zones that rank first, never on a
     speck behind a zone too large for it, and any budget that can hold a zone gets one."""
-    ranked = _ranked(polygons, focus_xy)
+    ranked = [polygon for polygon in _ranked(polygons, focus_xy) if holds_weak(zone, polygon)]
     if budget_m2 is None:
         return ranked[:max_areas], False
     allowance = budget_m2 + zone.cell_m * zone.cell_m
@@ -590,6 +619,10 @@ def cell_patches(
         ).astype(bool)
         cells = inside & mask
         count = int(np.count_nonzero(cells))
+        if count == 0:
+            # Weak at the zone level drawn by majority, but none of the finest cells: no
+            # re-scan zone (zones with no weak cell are never returned).
+            continue
         scores = score[cells]
         scored = scores[scores > 0]
         relief_max = float(relief[cells].max(initial=0)) * relief_unit_m

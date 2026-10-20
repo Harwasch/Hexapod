@@ -387,3 +387,36 @@ def test_zones_are_clipped_to_the_ground_a_robot_may_fly() -> None:
     assert (
         cell_patches(plane, weak_mask(plane), PROJECTION, allowed=box(50, 50, 60, 60)).patches == []
     )
+
+
+def test_a_clip_about_a_focus_on_strong_ground_still_holds_weak_cells() -> None:
+    """Two 0.25 m weak strips 1 m apart, which closing bridges into one zone, and a focus
+    in the strong gap between them with a 1.1 m2 budget: a disc about the focus would hold
+    no weak cell. The budget goes on the best zone that does hold some (a disc about the
+    weakest cell); a zone with no weak cell is never returned."""
+    plane = a_plane(level=0, i0=-20, j0=-30, ni=40, nj=60)
+    weaken(plane, (-3, -2), (-20, 20), score=50, bits=BITS["views"])
+    weaken(plane, (2, 3), (-20, 20), score=50, bits=BITS["views"])
+    lon, lat = PROJECTION.to_geographic(0.0, 0.0)
+    found = cell_patches(
+        plane,
+        weak_mask(plane),
+        PROJECTION,
+        budget_m2=1.1,
+        focus=(float(lon), float(lat)),
+    )
+    assert found.truncated_by_budget
+    [patch] = found.patches
+    assert patch.cells > 0 and patch.area_m2 <= 1.1 + 0.0625
+
+
+def test_no_zone_without_a_weak_cell_is_returned() -> None:
+    """A zone the boundary clips down to the bridged gap between two strips holds no weak
+    cell: it is dropped, not returned with `cells == 0`."""
+    plane = a_plane(level=0, i0=-20, j0=-30, ni=40, nj=60)
+    weaken(plane, (-3, -2), (-20, 20), score=50, bits=BITS["views"])
+    weaken(plane, (2, 3), (-20, 20), score=50, bits=BITS["views"])
+    gap = box(-0.45, -5, 0.45, 5)
+    found = cell_patches(plane, weak_mask(plane), PROJECTION, allowed=gap)
+    assert all(patch.cells > 0 for patch in found.patches)
+    assert found.patches == []

@@ -221,7 +221,10 @@ maxAreas 1..8}`. The finest level's weak cells (weak-v1, where the summary is st
    ring-shaped zone where a square would cover the strong ground beside it): the budget goes on the zones that rank
    first, never on a speck behind a zone too large for it, and any budget that can hold a
    zone gets one. (Trimming cells and outlining again, as the fog scout does, left nothing on
-   scattered weakness: closing grows the cells faster.) 409 `confidence-not-measured`, `confidence-unreadable`, `no-site-frame`.
+   scattered weakness: closing grows the cells faster.) Every zone holds at least one weak cell:
+   the answer is the best non-empty set, not a refusal — a zone holding none (clipped down to
+   ground closing bridged) is skipped, and a disc about a focus on strong ground is grown again
+   about the zone's weakest cell. 409 `confidence-not-measured`, `confidence-unreadable`, `no-site-frame`.
 6. **Patterns are UX heuristics, labelled so in every answer** (`heuristic`, each `hint`):
    mostly `views`/`spread` → `orbit` when the patch stands ≥ 3 m and is ≤ 40 m across, else
    crossing `oblique` passes; `gsd` → `nadir`, lower, `targetGsdM` = the capture's median (null
