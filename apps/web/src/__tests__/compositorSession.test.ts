@@ -238,6 +238,27 @@ describe("a view rule's session", () => {
     handle.dispose();
   });
 
+  it("under Latest, gives the viewer's own Highlight to the other dates' inferred layers", async () => {
+    // Their scans' own highlight parts are not on the host (inferredLayers.ts): without the
+    // rule's tint, Layers › Inferred › Highlight would do nothing to them under a rule.
+    useSettings.getState().set({ inferredStyle: "highlight" });
+    const { march, june, handle, frame } = await harness("latest");
+    await frame();
+    const host = hostOf(march);
+    const layer = tileset("june-fill");
+    const own = tileset("march-fill");
+    setCompanions(host, Symbol("inferred"), [layer as never], june);
+    setCompanions(host, Symbol("inferred"), [own as never], march);
+    await frame();
+    expect(host.companions).toEqual([june, layer, own]);
+    // June's layer (source 2) tinted; March's own (3) keeps its scan's highlight part.
+    expect(handle.compositor()?.tinted).toBe(1 << 2);
+    useSettings.getState().set({ inferredStyle: "show" });
+    await frame();
+    expect(handle.compositor()?.tinted).toBe(0);
+    handle.dispose();
+  });
+
   it("turns the host's view cones off while it is on, and back after", async () => {
     const { march, handle, frame } = await harness();
     const cones = {
