@@ -214,7 +214,8 @@ def _bring_in_step(db: Session, existing: Site, wanted: SiteCreate) -> list[str]
         existing.centroid = geometry.position_to_wkb(centroid)
         existing.centroid_height = centroid.height
         changed.append("boundary")
-    by_name = {asset.name: asset for asset in existing.assets}
+    # The seed's own assets only: an epoch's asset is a capture's, whatever it is called.
+    by_name = {asset.name: asset for asset in existing.assets if asset.epoch_id is None}
     for payload in wanted.assets:
         built = build_asset(payload, site_id=existing.id)
         asset = by_name.get(payload.name)

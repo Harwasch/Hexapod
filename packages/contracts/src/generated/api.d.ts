@@ -12692,7 +12692,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Not found */
+            /** @description No such asset */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -12701,7 +12701,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Conflict */
+            /** @description `epoch_managed`: a superseded revision of an epoch (history), or an epoch asset's `observedAt`, `validFrom`, `validTo` or `footprint`, which belong to its epoch */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -12763,7 +12763,7 @@ export interface operations {
                     "application/json": components["schemas"]["Problem"];
                 };
             };
-            /** @description `not_scalable`: not the splat a pipeline run registered (a seeded or hand-made asset, a mesh, a Cesium ion asset), so nothing records the origin its tiles are placed at */
+            /** @description `not_scalable`: not the splat a pipeline run registered (a seeded or hand-made asset, a mesh, a Cesium ion asset), so nothing records the origin its tiles are placed at; or a superseded revision of an epoch; or an epoch asset whose site has no frame, or more than one published epoch in its frame */
             409: {
                 headers: {
                     [name: string]: unknown;

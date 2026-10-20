@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from tests.conftest import SQUARE, site_payload
 
@@ -73,3 +74,73 @@ def test_asset_validation_errors(client: TestClient) -> None:
     bad_window = {**base, "validFrom": "2026-01-01T00:00:00Z", "validTo": "2025-01-01T00:00:00Z"}
     assert client.post("/api/v1/assets", json=bad_window).status_code == 422
     assert client.post("/api/v1/assets", json={**base, "unknownField": 1}).status_code == 422
+
+
+# --- epoch assets (decision D3) ------------------------------------------------------------
+
+
+def test_an_epoch_assets_dates_and_footprint_belong_to_its_epoch(
+    client: TestClient, db: Session
+) -> None:
+    """Which day an epoch shows, and where, is the epoch's: an edit to its asset's dates or
+    footprint would make the two disagree. What the asset is called and whether it shows
+    by default stay editable."""
+    from tests.test_epochs import T0, make_asset, make_epoch, make_site
+
+    site = make_site(db)
+    epoch = make_epoch(db, site, 1, observed=T0)
+    asset = make_asset(db, site, epoch, "https://cdn.example.com/a/tileset.json", created=T0)
+    db.commit()
+
+    for body in (
+        {"observedAt": "2026-01-01T00:00:00Z"},
+        {"validFrom": "2026-01-01T00:00:00Z"},
+        {"validTo": "2027-01-01T00:00:00Z"},
+        {"footprint": SQUARE},
+    ):
+        refused = client.patch(f"/api/v1/assets/{asset.id}", json=body)
+        assert refused.status_code == 409, (body, refused.text)
+        assert refused.json()["code"] == "epoch_managed"
+    renamed = client.patch(
+        f"/api/v1/assets/{asset.id}", json={"name": "September", "defaultVisible": False}
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["name"] == "September" and renamed.json()["defaultVisible"] is False
+
+
+def test_a_superseded_revision_cannot_be_patched(client: TestClient, db: Session) -> None:
+    from datetime import timedelta
+
+    from tests.test_epochs import T0, make_asset, make_epoch, make_site
+
+    site = make_site(db)
+    epoch = make_epoch(db, site, 1, observed=T0)
+    old = make_asset(
+        db,
+        site,
+        epoch,
+        "https://cdn.example.com/a/tileset.json",
+        created=T0,
+        valid_to=T0 + timedelta(days=1),
+    )
+    db.commit()
+
+    refused = client.patch(f"/api/v1/assets/{old.id}", json={"name": "Renamed"})
+
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["code"] == "epoch_managed"
+    assert "superseded" in refused.json()["detail"]
+
+
+def test_a_patch_cannot_change_an_assets_source(client: TestClient) -> None:
+    """Pinned: `AssetUpdate` has no `source`, and unknown fields are refused, so no PATCH
+    can repoint an asset at other tiles (a re-run adds a revision instead)."""
+    site = client.post("/api/v1/sites", json=site_payload()).json()
+    asset = site["assets"][0]
+
+    response = client.patch(
+        f"/api/v1/assets/{asset['id']}",
+        json={"source": {"type": "3d-tiles-url", "url": "https://example.com/other.json"}},
+    )
+
+    assert response.status_code == 422, response.text
