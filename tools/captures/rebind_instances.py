@@ -97,17 +97,24 @@ def rebind(
     neighbours: int = NEIGHBOURS,
 ) -> dict[str, list[int]]:
     """`tiles` (checksum to runs) with every non-leaf tile's ids taken from the leaf splats
-    nearest to its splats. Leaf tiles, and tiles `tiles` does not list, are left as they are."""
+    nearest to its splats. Leaf tiles, and tiles `tiles` does not list, are left as they are.
+
+    `positions_of` returns a tile's positions as its SPZ stores them (tile-local); each is
+    moved into the site frame here (`splat_tiles.site_positions`), which is what both the
+    checksums and the nearest-leaf search are over."""
+    from splat_tiles import site_positions, tile_offsets
+
     if positions_of is None or checksum_of is None:
         from rig_tiles import tile_positions
         from synthetic_tree import checksum_positions
 
-        positions_of = positions_of or tile_positions
+        positions_of = positions_of or (lambda path: tile_positions(path, None))
         checksum_of = checksum_of or checksum_positions
     tileset = json.loads((tiles_dir / "tileset.json").read_text(encoding="utf-8"))
+    offsets = tile_offsets(tileset)
     entries = []
     for uri, leaf in tile_tree(tileset):
-        at = positions_of(tiles_dir / uri)
+        at = site_positions(positions_of(tiles_dir / uri), offsets.get(uri))
         entries.append((checksum_of(at), at, leaf))
     leaf_positions, leaf_ids = [], []
     for checksum, at, leaf in entries:

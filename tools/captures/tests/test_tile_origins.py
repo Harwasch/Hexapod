@@ -277,3 +277,60 @@ def test_a_ten_kilometre_site_decodes_back_within_each_tiles_quantum(
     assert not offsets["splat.glb"].any() and _header_bits(tiles_dir / "splat.glb") < 12
     exact_leaves = sum(1 for uri in leaves if _header_bits(tiles_dir / uri) == 12)
     assert exact_leaves == len(leaves)
+
+
+# ---------------------------------------------------------------- every reader composes
+
+CAPTURES = Path(__file__).resolve().parents[1]
+FAR = REPO_ROOT / "data" / "tiles" / "synthetic-far"
+
+
+def test_every_tile_positions_call_passes_an_offset() -> None:
+    """`rig_tiles.tile_positions(path, offset)` has no default for its offset, so a reader
+    cannot forget a far tile's transform -- but a call is only checked when it runs, so
+    every call in the package is checked here, whether a test reaches it or not."""
+    import ast
+
+    calls = 0
+    for path in sorted(CAPTURES.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if name != "tile_positions":
+                continue
+            calls += 1
+            given = len(node.args) + sum(1 for k in node.keywords if k.arg == "offset")
+            assert given == 2, f"{path.name}:{node.lineno} reads a tile without its offset"
+    assert calls >= 7
+
+
+def test_load_tileset_reads_far_leaves_in_the_site_frame() -> None:
+    from splat_render import load_tileset
+
+    loaded = load_tileset(FAR / "splat" / "tileset.json").positions
+    truth = synthetic_far.scene().positions.astype(np.float64)
+
+    def rows(a: np.ndarray) -> np.ndarray:
+        return a[np.lexsort(a.T[::-1])]
+
+    assert loaded.shape == truth.shape
+    assert np.array_equal(rows(loaded), rows(truth))
+
+
+def test_tile_boxes_for_fetching_are_in_the_site_frame() -> None:
+    """skin_variants fetches the tiles an instance's bounds meet, so it reads their boxes
+    in the site frame: the north-east plot's leaves are among those whose box holds it."""
+    import skin_variants
+
+    tileset = json.loads((FAR / "splat" / "tileset.json").read_text(encoding="utf-8"))
+    expected = json.loads((FAR / "source" / "expected.json").read_text(encoding="utf-8"))
+    x, y, z = expected["plots"]["north-east"]
+    holding = {
+        uri
+        for uri, low, high in skin_variants._boxes(tileset)
+        if (low <= [x, y, z]).all() and (high >= [x, y, z]).all()
+    }
+    assert set(expected["plotLeaves"]["north-east"]) <= holding
+    assert "splat.glb" in holding

@@ -9,10 +9,13 @@ viewer only ever has some of them loaded -- so the rig carries one checksum per 
 
     rig.tileChecksums = [checksum_positions(tile positions) for every tile content]
 
-in the tile's own gaussian order, in the rig's local east-north-up frame, which is exactly
-what the SPZ block stores: ``splat_tiles`` snaps every coordinate to the 1/4096 m grid and the
-GLB's node matrix is the only axis swap. The runtime un-bakes each selected tile and looks its
-digest up in this set (apps/web/src/cesium/splatTiles.ts).
+in the tile's own gaussian order, in the rig's local east-north-up frame -- the **site
+frame**, the tileset root's: what the SPZ block stores (``splat_tiles`` snaps every coordinate
+to the 1/4096 m grid and the GLB's node matrix is the only axis swap) plus the tile's composed
+offset, for a tile of a site past ~4 km that is written in a frame of its own
+(``splat_tiles.tile_offsets``, ``site_positions``; zero, and so nothing added, for every tile
+of a smaller scan). The runtime un-bakes each selected tile and looks its digest up in this
+set (apps/web/src/cesium/splatTiles.ts).
 
 Only identity is packaged. Which rig node a gaussian follows is *not* written here: the
 runtime binds every gaussian, leaf or merged parent, to its nearest node from its own
@@ -35,7 +38,7 @@ from pathlib import Path
 
 import numpy as np
 
-from splat_tiles import unpack_spz
+from splat_tiles import site_positions, tile_offsets, unpack_spz
 from synthetic_tree import checksum_positions
 
 
@@ -57,13 +60,18 @@ def glb_spz(path: Path) -> bytes:
     return data[start : start + view["byteLength"]]
 
 
-def tile_positions(path: Path) -> np.ndarray:
-    """A tile's canonical positions, ``(n, 3)`` float32, in its own order."""
+def tile_positions(path: Path, offset: np.ndarray | None) -> np.ndarray:
+    """A tile's canonical positions, ``(n, 3)`` float32, in its own order, in the site frame.
+
+    ``offset`` is the tile's entry in ``splat_tiles.tile_offsets`` of its tileset. It is
+    required, though it may be None (a tile known to be in the site frame), so that no
+    reader can forget a tile's transform: tests/test_tile_origins.py checks every call.
+    """
     columns = unpack_spz(glb_spz(path))
     positions = np.stack([columns["x"], columns["y"], columns["z"]], axis=1).astype("<f4")
     # SPZ's integer round trip has no negative zero; neither does the runtime's un-bake.
     positions[positions == 0.0] = 0.0
-    return positions
+    return site_positions(positions, offset)
 
 
 def tile_uris(tileset: dict) -> list[str]:
@@ -84,8 +92,12 @@ def tile_uris(tileset: dict) -> list[str]:
 def tile_checksums(tileset_dir: Path) -> list[str]:
     """``checksum_positions`` of every tile's canonical positions, sorted and de-duplicated."""
     tileset = json.loads((tileset_dir / "tileset.json").read_text(encoding="utf-8"))
+    offsets = tile_offsets(tileset)
     return sorted(
-        {checksum_positions(tile_positions(tileset_dir / uri)) for uri in tile_uris(tileset)}
+        {
+            checksum_positions(tile_positions(tileset_dir / uri, offsets.get(uri)))
+            for uri in tile_uris(tileset)
+        }
     )
 
 

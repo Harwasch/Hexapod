@@ -182,14 +182,19 @@ def _get(url: str) -> bytes:
 
 
 def _boxes(tileset: dict) -> list[tuple[str, np.ndarray, np.ndarray]]:
-    """Every content tile's uri and its box (min, max) in the tileset's frame."""
+    """Every content tile's uri and its box (min, max) in the tileset's frame: the site
+    frame, each tile's box moved by its composed transform (`splat_tiles.tile_offsets`),
+    since a far tile's box is in its own frame."""
+    from splat_tiles import tile_offsets
+
+    offsets = tile_offsets(tileset)
     out: list[tuple[str, np.ndarray, np.ndarray]] = []
 
     def walk(tile: dict) -> None:
         uri = tile.get("content", {}).get("uri")
         box = tile.get("boundingVolume", {}).get("box")
         if uri and box:
-            c = np.array(box[:3], np.float64)
+            c = np.array(box[:3], np.float64) + offsets.get(uri, np.zeros(3))
             axes = np.array(box[3:12], np.float64).reshape(3, 3)
             half = np.abs(axes).sum(0)
             out.append((uri, c - half, c + half))
@@ -272,9 +277,11 @@ def read_scan(
     """The fetched tiles (only those `fetch` wrote), the instances document (made here for a
     `whole` scan: every splat one object) and the materials by instance."""
     from rig_tiles import tile_positions
+    from splat_tiles import tile_offsets
     from synthetic_tree import checksum_positions
 
     tileset = json.loads((directory / "tileset.json").read_text(encoding="utf-8"))
+    offsets = tile_offsets(tileset)
     fetched = directory / "fetched.json"
     uris = (
         json.loads(fetched.read_text(encoding="utf-8"))["tiles"]
@@ -287,7 +294,7 @@ def read_scan(
         bounds_low, bounds_high = np.full(3, np.inf), np.full(3, -np.inf)
         tile_runs: dict[str, list[int]] = {}
         for uri in uris:
-            positions = tile_positions(directory / uri)
+            positions = tile_positions(directory / uri, offsets.get(uri))
             checksum = checksum_positions(positions)
             ids = np.ones(len(positions), np.int64)
             tiles.append(skin_scene.TileSplats(uri, checksum, positions, ids, uri in leaves))
@@ -317,7 +324,7 @@ def read_scan(
     else:
         doc = json.loads((instances or directory / "instances.json").read_text(encoding="utf-8"))
         for uri in uris:
-            positions = tile_positions(directory / uri)
+            positions = tile_positions(directory / uri, offsets.get(uri))
             checksum = checksum_positions(positions)
             runs = doc["tiles"].get(checksum)
             if runs is None:

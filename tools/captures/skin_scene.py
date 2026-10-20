@@ -189,13 +189,16 @@ def read_tiles(tiles_dir: Path, instances_doc: dict) -> list[TileSplats]:
     """Every tile's positions and ids, refusing a tile `instances.json` does not list (or
     lists with another count): skins are bound by the same checksums."""
     from rig_tiles import tile_positions, tile_uris
+    from splat_tiles import tile_offsets
     from synthetic_tree import checksum_positions
 
     tileset = json.loads((tiles_dir / "tileset.json").read_text(encoding="utf-8"))
     leaves = _leaf_uris(tileset)
+    offsets = tile_offsets(tileset)
     out: list[TileSplats] = []
     for uri in tile_uris(tileset):
-        positions = tile_positions(tiles_dir / uri)
+        # Site frame: a far tile's transform composed, so a skin binds where the splats are.
+        positions = tile_positions(tiles_dir / uri, offsets.get(uri))
         checksum = checksum_positions(positions)
         runs = instances_doc["tiles"].get(checksum)
         if runs is None:

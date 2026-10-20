@@ -232,3 +232,21 @@ def test_the_cli_backfills_a_published_tileset(tmp_path: Path) -> None:
                     "dims"
                 ]
             )
+
+
+def test_a_far_tilesets_cone_grid_sits_where_the_plys_does(tmp_path: Path) -> None:
+    """A backfill from the leaves (`cone_grid_from_tileset`) of a site 10.4 km across, whose
+    tiles are written in frames of their own, builds the grid the packer built from the
+    PLY: in the site frame, the same origin and dims."""
+    import splat_tiles
+    import synthetic_far
+    from splat_render import save_ply
+
+    far = Path(__file__).resolve().parents[3] / "data" / "tiles" / "synthetic-far" / "splat"
+    ply = tmp_path / "far.ply"
+    save_ply(ply, synthetic_far.scene())
+    layout = splat_tiles.ply_layout(ply)
+    from_ply = vc.cone_grid(layout, np.ones(layout.count, bool))
+    from_tiles = vc.cone_grid_from_tileset(far / "tileset.json")
+    assert from_tiles.origin == pytest.approx(from_ply.origin, abs=1e-6)
+    assert from_tiles.dims == from_ply.dims and from_tiles.cell == from_ply.cell

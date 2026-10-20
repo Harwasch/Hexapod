@@ -341,7 +341,7 @@ def test_tile_rle_covers_every_gaussian(written: Path, run: dict) -> None:
     n = len(document["instances"])
     leaf_counts = np.zeros(n + 1, np.int64)
     for uri in uris:
-        positions = rig_tiles.tile_positions(written / uri)
+        positions = rig_tiles.tile_positions(written / uri, None)
         rle = document["tiles"][checksum_positions(positions)]
         ids, counts = np.asarray(rle[0::2]), np.asarray(rle[1::2])
         assert counts.sum() == positions.shape[0], uri
