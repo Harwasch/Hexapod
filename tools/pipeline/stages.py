@@ -66,6 +66,7 @@ import site_frame
 import splat_io
 import splat_stream
 import support_mask
+import surface
 import training
 import video
 from artifacts import ArtifactDecl
@@ -169,7 +170,8 @@ SPLAT_TILES = ArtifactDecl(
     # what a capture never saw with (`viewcones.bin`, `extras.viewCones`; tools/captures
     # view_cones.py). A scan within one tile's budget (the stub, the committed tree) is
     # exactly these four, plus `confidence.bin` (`extras.confidence`) when a `confidence`
-    # stage measured the epoch -- optional, so not pinned; a bigger one adds
+    # stage measured the epoch and `surface.bin` (`extras.surface`) when a `surface` stage
+    # did -- optional, so not pinned; a bigger one adds
     # `splat_<octant path>.glb` children, which `tileset.json` names and
     # tests/test_captures_bridge.py checks it names all of. The whole directory is
     # published (app/worker/registration.py `_publish_tileset`), so all of it is served.
@@ -3674,7 +3676,7 @@ def _median_or_none(values: list[float]) -> float | None:
 @stage_impl(
     "splat_tiles",
     consumes=("canonical.ply", "georef.json"),
-    optional_consumes=(confidence.CONFIDENCE.name,),
+    optional_consumes=(confidence.CONFIDENCE.name, surface.SURFACE.name),
     produces=(SPLAT_TILES,),
     summary="pack every gaussian into a level-of-detail KHR_gaussian_splatting 3D Tileset",
 )
@@ -3719,6 +3721,11 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
     not match) is logged and left out -- the map is evidence about the tiles, never a
     reason not to publish them -- and an epoch with no confidence stage (splat-ingest)
     packs exactly as before, which reads as "not measured".
+
+    **Surface.** Likewise the epoch's height surfaces when a `surface` stage measured them
+    (`surface.py`): `surface.bin`, declared as `extras.surface` after the confidence grid,
+    left out (and logged) when the packer refuses it, without touching the confidence
+    grid or the tiles.
     """
     georef = _read_json(ctx.input(GEOREF.name))
     cap = ctx.param("ship_sh_degree")
@@ -3734,9 +3741,10 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
         # still carry these. Say so, rather than silently honouring or refusing them.
         if ctx.param(retired) is not None:
             ctx.log(f"{retired} is no longer read: every gaussian is packed, in tiles")
-    grid = _confidence_descriptor(ctx)
+    grid = _grid_descriptor(ctx, confidence.CONFIDENCE.name, confidence.DESCRIPTOR_FILE)
+    heights = _grid_descriptor(ctx, surface.SURFACE.name, surface.DESCRIPTOR_FILE)
 
-    def pack(grid: Path | None) -> dict[str, float | int]:
+    def pack(grid: Path | None, heights: Path | None) -> dict[str, float | int]:
         return splat_tiles_convert(
             ctx.input(CANONICAL_PLY.name),
             ctx.output(SPLAT_TILES.name),
@@ -3748,17 +3756,27 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
             parents=None,
             sh_degree=sh_cap,
             confidence=grid,
+            surface=heights,
         )
 
-    try:
-        stats = pack(grid)
-    except cell_grid.CellGridError as problem:
-        if grid is None:
-            raise
-        # Evidence about the tiles, never a reason not to publish them.
-        ctx.log(f"WARNING: the confidence grid was not shipped ({problem}); packing without")
+    while True:
+        try:
+            stats = pack(grid, heights)
+            break
+        except cell_grid.CellGridError as problem:
+            # Evidence about the tiles, never a reason not to publish them; the packer
+            # names which grid it refused (`splat_tiles.GridRefused`).
+            if getattr(problem, "key", None) == surface.SURFACE.name and heights is not None:
+                ctx.log(f"WARNING: the surface grid was not shipped ({problem}); packing without")
+                heights = None
+            elif grid is not None:
+                ctx.log(
+                    f"WARNING: the confidence grid was not shipped ({problem}); packing without"
+                )
+                grid = None
+            else:
+                raise
         shutil.rmtree(ctx.output(SPLAT_TILES.name))
-        stats = pack(None)
     ctx.log(
         f"packaged {stats['gaussians']} gaussians ({stats['dropped']} dropped) in "
         f"{stats['tiles']} tiles, {stats['depth']} levels deep, "
@@ -3770,24 +3788,25 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
             f"shipped the confidence grid (level {stats['confidence_level']}); the root's least "
             f"confident cell scores {stats['confidence_min']}"
         )
+    if "surface_level" in stats:
+        ctx.log(f"shipped the surface grid (level {stats['surface_level']})")
     metrics: dict[str, MetricValue] = {key: value for key, value in stats.items()}
     return StageOutcome(metrics=metrics, summary=f"{stats['gaussians']} gaussians packaged")
 
 
-def _confidence_descriptor(ctx: StageContext) -> Path | None:
-    """`confidence/confidence.json` when the stage ran and wrote a cell grid; None (and
-    why) when it did not, or wrote something else (a stub's)."""
-    if not ctx.has_input(confidence.CONFIDENCE.name):
+def _grid_descriptor(ctx: StageContext, name: str, descriptor: str) -> Path | None:
+    """`<name>/<descriptor>` (`confidence/confidence.json`, `surface/surface.json`) when
+    that stage ran and wrote a cell grid; None (and why) when it did not, or wrote
+    something else (a stub's)."""
+    if not ctx.has_input(name):
         return None
-    path = ctx.input(confidence.CONFIDENCE.name) / confidence.DESCRIPTOR_FILE
+    path = ctx.input(name) / descriptor
     try:
         document = _read_json(path)
     except (OSError, ValueError):
         document = {}
     if document.get("format") != cell_grid.FORMAT:
-        ctx.log(
-            f"no confidence grid in {path.parent.name}/ (not a {cell_grid.FORMAT}); not shipped"
-        )
+        ctx.log(f"no {name} grid in {path.parent.name}/ (not a {cell_grid.FORMAT}); not shipped")
         return None
     return path
 
@@ -4064,7 +4083,10 @@ def catalog(ctx: StageContext) -> StageOutcome:
         # The epoch's confidence grid as the tileset declares it (`extras.confidence`):
         # what A4 records per asset. Not inside `quality`, and null when nothing measured
         # one (splat-ingest, or a grid package refused): "not measured".
-        "confidence": _shipped_confidence(ctx),
+        "confidence": _shipped_grid(ctx, "confidence"),
+        # Its height surfaces likewise (`extras.surface`, ADR 0018): what A5 records and
+        # measures change from. Null when nothing measured them.
+        "surface": _shipped_grid(ctx, "surface"),
     }
     _write_json(ctx.output(REGISTRATION.name), document)
     return StageOutcome(metrics={"artifacts": len(tiles)})
@@ -4089,14 +4111,15 @@ _QUALITY_SUMMARY_KEYS = (
 )
 
 
-def _shipped_confidence(ctx: StageContext) -> dict[str, object] | None:
+def _shipped_grid(ctx: StageContext, key: str) -> dict[str, object] | None:
+    """The cell grid the tileset declares as root `extras.<key>`, or None."""
     try:
         tileset = _read_json(ctx.input(SPLAT_TILES.name) / "tileset.json")
     except (OSError, ValueError):
         return None
     root = tileset.get("root")
     extras = root.get("extras") if isinstance(root, dict) else None
-    found = extras.get("confidence") if isinstance(extras, dict) else None
+    found = extras.get(key) if isinstance(extras, dict) else None
     if isinstance(found, dict) and found.get("format") == cell_grid.FORMAT:
         return found
     return None

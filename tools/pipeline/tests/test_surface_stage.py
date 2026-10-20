@@ -442,3 +442,109 @@ def test_copy_of_box_inputs_reruns_identically(box: Workdir, tmp_path: Path) -> 
         first = (box.out_dir("surface") / "surface" / name).read_bytes()
         assert (again.out_dir("surface") / "surface" / name).read_bytes() == first
 
+
+# --- package and catalog -----------------------------------------------------------------
+
+
+def _package(root: Path, epoch: Workdir, *, heights: Path | None, grid: bool = True) -> Workdir:
+    """package -> register over the box epoch's canonical.ply, with its confidence grid
+    (unless not `grid`) and the surface folder `heights` (when given)."""
+    workdir = Workdir.create(root)
+    inputs = workdir.root / "inputs"
+    inputs.mkdir(parents=True, exist_ok=True)
+    shutil.copy(epoch.input_path("canonical.ply"), inputs / "canonical.ply")
+    shutil.copy(epoch.input_path("georef.json"), inputs / "georef.json")
+    names = ["canonical.ply", "georef.json"]
+    if grid:
+        shutil.copytree(epoch.input_path("confidence"), inputs / "confidence")
+        names.append("confidence")
+    if heights is not None:
+        shutil.copytree(heights, inputs / "surface")
+        names.append("surface")
+    execute(
+        make_recipe(
+            [
+                {"id": "package", "impl": "splat_tiles", "params": {"tile_gaussians": 4000}},
+                {"id": "register", "impl": "catalog"},
+            ],
+            inputs=names,
+        ),
+        workdir,
+        RunnerSet.local(),
+    )
+    return workdir
+
+
+def test_package_ships_the_surface_after_the_confidence_grid_and_catalog_registers_it(
+    box: Workdir, tmp_path: Path
+) -> None:
+    heights = box.out_dir("surface") / "surface"
+    shipped = _package(tmp_path / "with", box, heights=heights)
+    plain = _package(tmp_path / "without", box, heights=None)
+    splat = shipped.out_dir("package") / "splat"
+    tileset = json.loads((splat / "tileset.json").read_text())
+    extras = tileset["root"]["extras"]
+    descriptor = json.loads((heights / "surface.json").read_text())
+    assert list(extras)[-2:] == ["confidence", "surface"]
+    assert extras["surface"] == descriptor
+    assert (splat / "surface.bin").read_bytes() == (heights / "surface.bin").read_bytes()
+    registration = json.loads((shipped.out_dir("register") / "registration.json").read_text())
+    assert registration["surface"] == descriptor
+    assert "surface.bin" in registration["artifacts"]
+    # Not measured: no file, no key, null in the registration; every other byte the same.
+    plain_splat = plain.out_dir("package") / "splat"
+    plain_tiles = json.loads((plain_splat / "tileset.json").read_text())
+    assert "surface" not in plain_tiles["root"]["extras"]
+    plain_registration = json.loads((plain.out_dir("register") / "registration.json").read_text())
+    assert plain_registration["surface"] is None
+    assert plain_registration["confidence"] == registration["confidence"] is not None
+    del extras["surface"]
+    assert tileset == plain_tiles
+    for path in plain_splat.iterdir():
+        assert (splat / path.name).read_bytes() == path.read_bytes() or path.name == "tileset.json"
+    grids = cell_grid.from_tileset(splat / "tileset.json")
+    assert set(grids) == {"confidence", "surface"}
+
+
+def test_a_surface_without_a_confidence_grid_follows_the_collision_grid(
+    box: Workdir, tmp_path: Path
+) -> None:
+    run = _package(tmp_path / "run", box, heights=box.out_dir("surface") / "surface", grid=False)
+    extras = json.loads((run.out_dir("package") / "splat" / "tileset.json").read_text())["root"][
+        "extras"
+    ]
+    assert list(extras)[-2:] == ["collision", "surface"]
+
+
+@pytest.mark.parametrize("damage", ["sha", "kind", "uri-taken", "stub"])
+def test_a_surface_package_refuses_is_left_out_and_the_confidence_grid_still_ships(
+    box: Workdir, tmp_path: Path, damage: str
+) -> None:
+    broken = tmp_path / "broken"
+    shutil.copytree(box.out_dir("surface") / "surface", broken)
+    descriptor = json.loads((broken / "surface.json").read_text())
+    if damage == "sha":
+        descriptor["sha256"] = "0" * 64
+    elif damage == "kind":
+        descriptor["kind"] = "confidence"
+    elif damage == "uri-taken":
+        # The confidence grid's file name: two grids cannot both be confidence.bin.
+        shutil.copy(broken / "surface.bin", broken / "confidence.bin")
+        descriptor["uri"] = "confidence.bin"
+    if damage == "stub":
+        (broken / "surface.json").write_bytes(b"\x00stub")
+    else:
+        (broken / "surface.json").write_text(json.dumps(descriptor))
+    run = _package(tmp_path / "run", box, heights=broken)
+    splat = run.out_dir("package") / "splat"
+    extras = json.loads((splat / "tileset.json").read_text())["root"]["extras"]
+    assert "surface" not in extras and "confidence" in extras
+    assert not (splat / "surface.bin").exists()
+    log = run.log_path("package").read_text()
+    if damage == "stub":
+        assert "no surface grid in surface/" in log
+    else:
+        assert "surface grid was not shipped" in log
+        assert "confidence grid was not shipped" not in log
+    registration = json.loads((run.out_dir("register") / "registration.json").read_text())
+    assert registration["surface"] is None and registration["confidence"] is not None

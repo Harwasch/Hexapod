@@ -85,6 +85,7 @@ def splat_tiles_convert(
     parents: ParentOverrides | None = None,
     sh_degree: int | None = None,
     confidence: Path | None = None,
+    surface: Path | None = None,
 ) -> dict[str, float | int]:
     """Call the sibling project's packer and return its statistics.
 
@@ -99,7 +100,8 @@ def splat_tiles_convert(
     `sh_degree` caps the SH bands the tiles carry (None: every band the PLY has, which
     is the run's own `ship_sh_degree`); `sh_degree` in the statistics is what they carry.
     `confidence` is the epoch's confidence grid descriptor (`confidence.py`'s
-    `confidence.json`, its file beside it), declared on the root and summarised per tile.
+    `confidence.json`, its file beside it), declared on the root and summarised per tile;
+    `surface` the epoch's height surfaces (`surface.py`'s `surface.json`), declared after it.
     """
     return convert(
         ply,
@@ -112,4 +114,5 @@ def splat_tiles_convert(
         parents=parents,
         sh_degree=sh_degree,
         confidence=confidence,
+        surface=surface,
     )

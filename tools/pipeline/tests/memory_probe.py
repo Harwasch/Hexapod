@@ -11,7 +11,7 @@ Run by `tests/test_bounded_memory.py` (and by hand, to measure) as
 a time (so making an 8M-gaussian splat does not itself need gigabytes): `trained.ply` in the
 canonical fourteen properties, or with `--sh3` an `upload/capture.ply` in gsplat's own
 degree-3 export layout (59 floats a row), which is what a phone app's Lane 1 upload is.
-`chunked` runs the named stages -- quality, place, confidence, thumbnail, ground,
+`chunked` runs the named stages -- quality, place, confidence, surface, thumbnail, ground,
 normalize -- through the executor, as the worker does. `whole` runs the frozen whole-splat
 quality stage (`quality_in_memory.py`) and the whole-splat place; `whole-lane1` the
 whole-splat ingest, thumbnail and ground samples (`gaussians.read_splat`, `orient`,
@@ -46,6 +46,7 @@ STAGES: dict[str, dict[str, Any]] = {
     "quality": {"id": "quality", "impl": "support_gate", "params": {"bar": "balanced"}},
     "place": {"id": "place", "impl": "place_splat", "params": {}},
     "confidence": {"id": "confidence", "impl": "confidence_grid", "params": {}},
+    "surface": {"id": "surface", "impl": "height_surface", "params": {}},
     "normalize": {"id": "normalize", "impl": "ingest_splat", "params": {"up_axis": "z"}},
     "thumbnail": {"id": "thumbnail", "impl": "splat_thumbnail", "params": {}},
     "ground": {"id": "ground", "impl": "splat_ground", "params": {"cell_m": 0.5}},

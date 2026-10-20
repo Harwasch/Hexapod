@@ -9,7 +9,7 @@
 # `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
 # run `none` would be billing a GPU to do nothing.
 name: photo-reconstruct
-version: 14
+version: 15
 description: Reconstruct a splat from a raw capture, then package and register it.
 
 # `site_context` is what the worker knows about the site before the run: its reference
@@ -414,6 +414,29 @@ stages:
       min_cell_gaussians: 16
       max_cells: 4194304
       pyramid_levels: 8
+
+  # This epoch's heights per cell (surface.py, docs/DECISIONS/0018-change-detection.md):
+  # the geometry change between epochs is measured in, never splat pixels. Samples are
+  # the pose model's SfM points, placed by `place`'s similarity, and canonical.ply's
+  # centres at least half opaque; the plane is the confidence grid's own (same level, same
+  # cells), so two epochs' surfaces nest as their confidence grids do. Per cell, from the
+  # four highest and four lowest samples: dsm the 2nd highest, ground the 2nd lowest and
+  # then the least over a 5 m square, sigma max(1 cm, (z1 - z4) / 2). First-principles
+  # estimators, uncalibrated. No `gpu:`: a few passes over the samples on the worker.
+  # `package` ships the grid beside the confidence grid.
+  #   ground_window_m: the square of cell centres the ground is the least over -- under a
+  #     crown or a roof no wider, a neighbour saw the ground.
+  #   min_samples: fewer samples than this, no surface (3: the 2nd highest and 2nd lowest
+  #     of two cross).
+  #   sigma_floor_m: the least sigma, the unit it is stored in.
+  #   min_splat_alpha: a gaussian at least this opaque is a surface sample.
+  - id: surface
+    impl: height_surface
+    params:
+      ground_window_m: 5.0
+      min_samples: 3
+      sigma_floor_m: 0.01
+      min_splat_alpha: 0.5
 
   - id: package
     impl: splat_tiles

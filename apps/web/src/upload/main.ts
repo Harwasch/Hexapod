@@ -448,6 +448,10 @@ const STAGE_TEXT: Record<string, StageText> = {
     name: "Map how well each part was seen",
     what: "Marks, square by square across the ground, where the photos saw the model well and where they did not, so a re-scan can aim at the weak parts. A scan placed only by GPS is marked weak everywhere.",
   },
+  height_surface: {
+    name: "Measure the ground and what stands on it",
+    what: "Measures, square by square, the height of the top surface and of the bare ground under it, so a later scan can show what grew, fell or moved. The heights are estimates nobody has checked against a survey yet.",
+  },
   splat_tiles: {
     name: "Package it for viewing",
     what: "Compresses all of the model into levels of detail the map and the 3D viewer stream.",
