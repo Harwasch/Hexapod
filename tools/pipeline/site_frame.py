@@ -132,6 +132,39 @@ def offset_m(frame: SiteFrame, lat: float, lon: float) -> tuple[float, float, fl
     return east, north, up
 
 
+#: Fixed-point iterations of the geodetic latitude in `enu_to_lonlat`. Each one gains
+#: roughly three orders of magnitude for a point near the ellipsoid, so six take the
+#: latitude far below a micrometre on the ground; a fixed count keeps it deterministic.
+_LATITUDE_ITERATIONS = 6
+
+
+def enu_to_lonlat(
+    frame: SiteFrame, east: float, north: float, up: float = 0.0
+) -> tuple[float, float]:
+    """The WGS84 longitude and latitude of a point given in the frame's east/north/up.
+
+    The exact inverse of the tiles' root transform -- ENU about the origin, then ECEF, then
+    geodetic -- rather than the flat 111,320 m a degree `gaussians` uses about a capture's
+    own centre. That flat rule is about 0.4% long north-south at 28 degrees: harmless over
+    a capture's own extent, but a joined epoch sits up to 2 km from its frame's origin,
+    where it would put the ground samples metres away from the gaussians they describe.
+    """
+    phi, lam = math.radians(frame.lat), math.radians(frame.lon)
+    sin_phi, cos_phi = math.sin(phi), math.cos(phi)
+    sin_lam, cos_lam = math.sin(lam), math.cos(lam)
+    origin = exif.geodetic_to_ecef(frame.lat, frame.lon, frame.height)
+    x = float(origin[0]) - sin_lam * east - sin_phi * cos_lam * north + cos_phi * cos_lam * up
+    y = float(origin[1]) + cos_lam * east - sin_phi * sin_lam * north + cos_phi * sin_lam * up
+    z = float(origin[2]) + cos_phi * north + sin_phi * up
+    radius = math.hypot(x, y)
+    latitude = math.atan2(z, radius * (1.0 - exif.WGS84_E2))
+    for _ in range(_LATITUDE_ITERATIONS):
+        sin_lat = math.sin(latitude)
+        prime = exif.WGS84_A / math.sqrt(1.0 - exif.WGS84_E2 * sin_lat * sin_lat)
+        latitude = math.atan2(z + exif.WGS84_E2 * prime * sin_lat, radius)
+    return math.degrees(math.atan2(y, x)), math.degrees(latitude)
+
+
 def is_zero(offset: Sequence[float]) -> bool:
     """Whether an offset moves nothing (`-0.0 == 0.0`, so a negative zero is zero too)."""
     return all(v == 0.0 for v in offset)

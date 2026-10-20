@@ -250,6 +250,7 @@ def ground_samples(
     min_points: int = 8,
     max_cells: int = 64,
     positions: bool = True,
+    to_lonlat: Callable[[float, float, float], tuple[float, float]] | None = None,
 ) -> tuple[gaussians.GroundSample, ...]:
     """`gaussians.ground_samples` of the splat after `steps`, in passes over its chunks.
 
@@ -260,6 +261,11 @@ def ground_samples(
     a float64 sum rounded to float32 at the end, which differs from that in the last bit
     or two of a float32: under a micrometre on a metres-wide cell. `positions=False` skips
     that pass for a caller that wants only the heights (`orient_to`'s recentring).
+
+    `to_lonlat` turns a cell's mean (east, north, up) into its (lon, lat) when the flat
+    metres-per-degree rule about (`lat`, `lon`) is not good enough: in a site frame, whose
+    epochs sit up to 2 km from the origin (`site_frame.enu_to_lonlat`). Without it the
+    output is what it always was.
     """
     count = 0
     east_low = north_low = None
@@ -339,14 +345,13 @@ def ground_samples(
             east_total, north_total = sums[cell]
             east_mean = float(np.float32(east_total / int(n)))
             north_mean = float(np.float32(north_total / int(n)))
-        samples.append(
-            gaussians.GroundSample(
-                lon=gaussians._offset_lon(lon, lat, east_mean),
-                lat=gaussians._offset_lat(lat, north_mean),
-                z=float(found[cell][0]),
-                n=int(n),
-            )
-        )
+        height = float(found[cell][0])
+        if to_lonlat is None:
+            sample_lon = gaussians._offset_lon(lon, lat, east_mean)
+            sample_lat = gaussians._offset_lat(lat, north_mean)
+        else:
+            sample_lon, sample_lat = to_lonlat(east_mean, north_mean, height)
+        samples.append(gaussians.GroundSample(lon=sample_lon, lat=sample_lat, z=height, n=int(n)))
     return tuple(samples)
 
 
