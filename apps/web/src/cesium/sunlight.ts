@@ -9,9 +9,10 @@
  * is rebuilt either way); the primitive appears with the first tile, so a tile load places it
  * again. Each frame drawn while on, the sun's height at the scan's centre is worked out for
  * that frame's scene time (`sunSine`, the engine's own sun) and set as a uniform, and what was
- * drawn is reported (state/sunReport.ts) for the badge: the minute and the sun's height. The
- * scene renders on request, so while on it is asked for a frame each minute: "now" keeps up
- * with the sun even when nothing else moves.
+ * drawn is reported (state/sunReport.ts) for the badge: the minute and the sun's height, while
+ * the tileset is shown (a hidden one withdraws its report). The scene renders on request, so
+ * while on it is asked for a frame each minute: "now" keeps up with the sun even when nothing
+ * else moves.
  */
 
 import { JulianDate, type Cesium3DTileset, type Scene } from "cesium";
@@ -72,6 +73,15 @@ export function startSunlight(
 
   const frame = (_scene: unknown, time: JulianDate): void => {
     if (!on || !part.installed) return;
+    // A tileset kept hidden (another date shown, the site out of reach) draws no relight, so
+    // it says none: the badge and the clock it holds follow only what is on screen.
+    if (!tileset.show) {
+      if (last) {
+        last = undefined;
+        report(assetId, null);
+      }
+      return;
+    }
     const sine = sunSine(time, tileset.boundingSphere.center);
     part.sunUp = Number.isFinite(sine) ? sunUpFactor(sine) : 1;
     const at = minuteOf(time);

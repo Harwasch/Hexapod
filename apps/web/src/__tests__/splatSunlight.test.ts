@@ -43,6 +43,7 @@ function scan() {
     gaussianSplatPrimitive: primitive as typeof primitive | undefined,
     tileLoad,
     boundingSphere: { center: YARD },
+    show: true,
   } as unknown as Cesium3DTileset & { gaussianSplatPrimitive?: typeof primitive };
   const preRender = new Event();
   const renders = { count: 0 };
@@ -187,6 +188,35 @@ describe("the relight", () => {
     useSettings.getState().set({ splatRenderer: "playcanvas" });
     useSettings.getState().set({ splatRenderer: "cesium" });
     expect(s.functions()).toEqual([]);
+  });
+
+  it("reports only while its tileset is shown, so a hidden date claims no relight", () => {
+    const s = scan();
+    const handle = startSunlight(s.tileset, s.scene, "a", { vec4 });
+    handle.sync(true);
+    const noon = JulianDate.fromIso8601("2026-06-21T20:21:00Z");
+    s.preRender.raiseEvent(s.scene, noon);
+    expect(useSunReport.getState().reports.a).toBeDefined();
+    // Hidden (another date shown, the site left behind, a representation switched): its
+    // report goes at the next frame, and none comes while it stays hidden.
+    s.tileset.show = false;
+    s.preRender.raiseEvent(s.scene, noon);
+    expect(useSunReport.getState().reports.a).toBeUndefined();
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601("2026-06-21T20:25:00Z"));
+    expect(useSunReport.getState().reports.a).toBeUndefined();
+    // A hidden tileset loaded on start reports nothing at all.
+    const other = scan();
+    other.tileset.show = false;
+    const cached = startSunlight(other.tileset, other.scene, "b", { vec4 });
+    cached.sync(true);
+    other.preRender.raiseEvent(other.scene, noon);
+    expect(useSunReport.getState().reports.b).toBeUndefined();
+    // Shown again: reported again.
+    s.tileset.show = true;
+    s.preRender.raiseEvent(s.scene, noon);
+    expect(useSunReport.getState().reports.a).toBeDefined();
+    handle.dispose();
+    cached.dispose();
   });
 
   it("waits for the primitive, which comes with the first tile", () => {
