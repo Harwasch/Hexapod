@@ -6,6 +6,7 @@ import { MOTION_EVIDENCE_LABEL } from "@twin/world";
 
 import { useLayers as useLayerCatalog, useSite } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
+import { epochOf, pickShownAsset, siteEpochs } from "@/lib/epochs";
 import { formatDate } from "@/lib/format";
 import { geometryProvenance, placementProvenance } from "@/lib/provenance";
 import { useLiving } from "@/state/living";
@@ -15,6 +16,7 @@ import { useSites } from "@/state/sites";
 import { useUi } from "@/state/ui";
 
 import { FloatingPanel } from "../shell/FloatingPanel";
+import { EpochFacts } from "./EpochFacts";
 import { PlaceFacts } from "./PlaceFacts";
 import { RealSize } from "./RealSize";
 
@@ -50,6 +52,15 @@ export function InspectorPanel() {
   const layers = useLayerCatalog();
   const activeSiteId = useSites((s) => s.activeSiteId);
   const site = useSite(selection?.siteId ?? activeSiteId).data;
+  // The model the scene shows at that site (lib/epochs.ts): on a site with several dates, the
+  // shown one's. Placement and Date shown describe it.
+  const shownRep = useSites((s) => (site ? s.representation[site.id] : undefined));
+  const shownEpoch = useSites((s) => (site ? (s.epoch[site.id] ?? null) : null));
+  const epochs = siteEpochs(site);
+  const shownAsset =
+    site && shownRep
+      ? pickShownAsset(site.assets, epochs, shownRep, { epochId: shownEpoch })
+      : null;
   const layer = selection?.layerId
     ? layers.data?.find((l) => l.id === selection.layerId)
     : undefined;
@@ -74,7 +85,12 @@ export function InspectorPanel() {
   // both a hand-dropped pin and an EXIF-GPS alignment "Measured capture", and they are not the
   // same claim. Null when the catalog records no georeference provenance at all — every asset
   // that predates the pipeline — and then no row is shown rather than a row reading "unknown".
-  const placement = placementProvenance(site, livingSite?.assetId, units);
+  const placement = placementProvenance(site, livingSite?.assetId ?? shownAsset?.id, units);
+  // Date shown: where the card is about the site, and its shown model is one of its dates. Its
+  // Date row then speaks for the card's Observed row, so two dates never disagree.
+  const dated = Boolean(
+    site && epochOf(shownAsset, epochs) && (selection?.kind === "site" || livingSite),
+  );
   // Shown only where it can be read as being about the site: a site selection, or the
   // section below, which names the site it is describing. A splat is invisible to picking,
   // so "What's here" off the scan's solids lands on the terrain behind it as a `ground`
@@ -144,7 +160,7 @@ export function InspectorPanel() {
                 ? formatLength(selection.terrainHeight, units)
                 : "sampling…"}
             </dd>
-            {selection.observedAt !== undefined && (
+            {selection.observedAt !== undefined && !dated && (
               <>
                 <dt>Observed</dt>
                 <dd>{selection.observedAt ? formatDate(selection.observedAt) : "Unknown"}</dd>
@@ -226,6 +242,7 @@ export function InspectorPanel() {
           )}
           {/* The site's scan at its real size, when it is one the API can resize. Named by
               the site, like the section above, so it never reads as about the clicked point. */}
+          {site && dated && <EpochFacts site={site} />}
           {site && <RealSize site={site} />}
           {attribution && attribution.length > 0 && (
             <section aria-label="Attribution">
