@@ -57,6 +57,7 @@ import quality
 import resolution
 import scale_estimate
 import sfm
+import sim3
 import site_frame
 import splat_io
 import splat_stream
@@ -200,6 +201,11 @@ REGISTRATION = ArtifactDecl(
 #: a clear sky, and a phone's first frame -- taken before the GPS has locked, at the last
 #: cell-tower position -- is exactly the outlier this exists to drop.
 DEFAULT_ALIGNMENT_MAX_ERROR_M = 5.0
+
+#: `exif_gps`'s `aligner`: COLMAP 3.9.1's `model_aligner` (the default, so a job written
+#: before this existed runs as it did), or the seeded numpy RANSAC in `sim3.py`, which is
+#: byte-reproducible on one machine and needs no COLMAP binary.
+ALIGNERS: tuple[str, ...] = ("model_aligner", "ransac")
 
 #: The best horizontal uncertainty an EXIF GPS georeference will ever claim, in metres.
 #:
@@ -2782,7 +2788,8 @@ def _check_normalized_frame(ctx: StageContext, expected: dict[str, object] | Non
     summary="georeference from EXIF GPS, or an iPhone video's location metadata",
 )
 def exif_gps(ctx: StageContext) -> StageOutcome:
-    """Real: the frames' own GPS, through `colmap model_aligner`, into a placed frame.
+    """Real: the frames' own GPS, through `colmap model_aligner` or the seeded RANSAC of
+    `sim3.py` (`aligner: ransac`), into a placed frame.
 
     Two outcomes, and which one happens is a property of the capture rather than a
     setting:
@@ -2823,10 +2830,13 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
       (0, 0).
 
     One consequence worth stating: `georef.json` out of the aligned branch is **not**
-    byte-reproducible the way the rest of a run's outputs are. `model_aligner` has no
-    non-robust mode on 3.9.1, so the similarity comes out of a RANSAC, and the last digits
-    of the scale and the residuals move between runs over the same frames. The Lane 1
-    byte-identity gate is unaffected -- `manual_placement` writes parameters.
+    byte-reproducible the way the rest of a run's outputs are, unless `aligner: ransac`.
+    `model_aligner` has no non-robust mode on 3.9.1 and no seed, so the similarity comes
+    out of a RANSAC whose last digits of scale and residual move between runs over the
+    same frames. `aligner: ransac` solves the same similarity with `sim3.fit_sim3` --
+    seeded by the run's `seed` (0), same `max_error_m` threshold -- and is byte-identical
+    across runs on one machine. The Lane 1 byte-identity gate is unaffected either way --
+    `manual_placement` writes parameters.
 
     `site_frame` (an epoch of a site that already has a frame): the aligned branch
     expresses the fixes about the frame's origin instead of their median, so the
@@ -2835,6 +2845,9 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
     as `siteFrame.offsetM`, which `place` adds after recentring. With a frame and no
     location at all, the capture sits at the site's origin rather than being refused.
     """
+    aligner = str(ctx.param("aligner", "model_aligner"))
+    if aligner not in ALIGNERS:
+        raise ValueError(f"aligner must be model_aligner or ransac, not {aligner!r}")
     frames = ctx.input(FRAMES.name)
     fixes = exif.read_fixes(frames)
     min_images = int(ctx.param("min_images", 3))
@@ -3262,25 +3275,45 @@ def _exif_gps_aligned(
             f"between `normalize` and `pose`"
         )
 
-    work = ctx.work_dir / "align"
-    work.mkdir(parents=True, exist_ok=True)
-    ref_path = work / "ref_positions.txt"
-    sfm.write_ref_positions(ref_path, common)
     max_error_m = float(ctx.param("max_error_m", DEFAULT_ALIGNMENT_MAX_ERROR_M))
-    # COLMAP 3.9.1 aborts (SIGABRT, no message) rather than creating `--output_path`, and
-    # the directory it writes there is never read -- see `sfm`'s module docstring.
-    aligned = work / "aligned"
-    aligned.mkdir(parents=True, exist_ok=True)
-    argv = sfm.model_aligner_argv(
-        model_dir,
-        aligned,
-        ref_path,
-        work / "transform.txt",
-        max_error_m=max_error_m,
-        min_common_images=3,
-    )
-    ctx.run(argv)
-    similarity = sfm.read_similarity(work / "transform.txt")
+    aligner = str(ctx.param("aligner", "model_aligner"))
+    tool: dict[str, object]
+    if aligner == "ransac":
+        seed = int(ctx.param("seed", sim3.DEFAULT_SEED))
+        fit = sim3.fit_sim3(
+            {name: centres[name] for name in common}, common, max_error_m=max_error_m, seed=seed
+        )
+        similarity = fit.similarity
+        tool = {
+            "tool": "numpy ransac (sim3.py)",
+            "version": None,
+            "seed": seed,
+            "iterations": fit.iterations,
+        }
+    else:
+        work = ctx.work_dir / "align"
+        work.mkdir(parents=True, exist_ok=True)
+        ref_path = work / "ref_positions.txt"
+        sfm.write_ref_positions(ref_path, common)
+        # COLMAP 3.9.1 aborts (SIGABRT, no message) rather than creating `--output_path`,
+        # and the directory it writes there is never read -- see `sfm`'s module docstring.
+        aligned = work / "aligned"
+        aligned.mkdir(parents=True, exist_ok=True)
+        argv = sfm.model_aligner_argv(
+            model_dir,
+            aligned,
+            ref_path,
+            work / "transform.txt",
+            max_error_m=max_error_m,
+            min_common_images=3,
+        )
+        ctx.run(argv)
+        similarity = sfm.read_similarity(work / "transform.txt")
+        tool = {
+            "tool": "colmap model_aligner",
+            "version": sfm.colmap_version(),
+            "alignmentType": "custom",
+        }
     residuals = sfm.alignment_residuals(similarity, centres, common)
     values = np.asarray(sorted(residuals.values()), dtype=np.float64)
     rms = float(np.sqrt(float((values**2).mean()))) if values.size else 0.0
@@ -3297,7 +3330,7 @@ def _exif_gps_aligned(
         "scaleSource": "exif-gps",
         "uncertaintyM": round(uncertainty, 3),
         "note": (
-            f"aligned to {len(common)} EXIF GPS fixes with colmap model_aligner; "
+            f"aligned to {len(common)} EXIF GPS fixes with {tool['tool']}; "
             f"residual {float(np.median(values)):.2f} m median, {rms:.2f} m rms. The "
             f"reported uncertainty is floored at {EXIF_GPS_UNCERTAINTY_FLOOR_M:g} m "
             f"because a residual measures consistency, not accuracy"
@@ -3309,9 +3342,7 @@ def _exif_gps_aligned(
             "dopMedian": _median_or_none([f.dop for f in fixes if f.dop is not None]),
         },
         "alignment": {
-            "tool": "colmap model_aligner",
-            "version": sfm.colmap_version(),
-            "alignmentType": "custom",
+            **tool,
             "maxErrorM": max_error_m,
             "images": len(common),
             "inliers": inliers,
