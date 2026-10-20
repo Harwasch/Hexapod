@@ -28,6 +28,15 @@ import { flattenRing } from "@twin/geo";
 
 import { CHANGE_COLORS, changeBuckets, type ChangeClass } from "@/lib/changeDrape";
 
+import { ChangeOverlay } from "./changeOverlay";
+
+/** What draws the map over the scan as well (cesium/changeOverlay.ts). */
+export interface ChangeOverlayLike {
+  show(map: Pick<ChangeMap, "areas">): void;
+  clear(): void;
+  destroy(): void;
+}
+
 /** The property each drape primitive carries, saying what it draws (tests, e2e). */
 export const CHANGE_DRAPE_TAG = "changeDrape";
 
@@ -77,7 +86,17 @@ export class ChangeDrapeLayer {
   private primitives: { primitive: GroundPrimitive; tag: ChangeDrapeTag }[] = [];
   private destroyed = false;
 
-  constructor(private readonly scene: Scene) {}
+  /**
+   * `overlay` draws the same areas over the scan, above every renderer's canvas: splats cover
+   * the ground, so the drape alone shows only where nothing was scanned. Made here for a scene
+   * with a canvas.
+   */
+  constructor(
+    private readonly scene: Scene,
+    private readonly overlay: ChangeOverlayLike | null = (scene as Partial<Scene>).canvas
+      ? new ChangeOverlay(scene)
+      : null,
+  ) {}
 
   /** Draws `map`'s areas, replacing whatever was drawn before. */
   show(map: Pick<ChangeMap, "areas">): void {
@@ -118,6 +137,7 @@ export class ChangeDrapeLayer {
       this.scene.groundPrimitives.add(primitive);
       this.primitives.push({ primitive, tag });
     }
+    this.overlay?.show(map);
     this.scene.requestRender();
   }
 
@@ -128,6 +148,7 @@ export class ChangeDrapeLayer {
 
   /** Takes everything drawn off the ground. */
   clear(): void {
+    this.overlay?.clear();
     if (!this.primitives.length) return;
     // The viewer went first (the app closing): its collections, and what they held, with it.
     if (this.scene.isDestroyed()) {
@@ -142,6 +163,7 @@ export class ChangeDrapeLayer {
 
   destroy(): void {
     this.clear();
+    if (!this.destroyed) this.overlay?.destroy();
     this.destroyed = true;
   }
 }

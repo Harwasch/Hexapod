@@ -143,6 +143,21 @@ describe("the change drape", () => {
     layer.destroy();
   });
 
+  it("draws the same map over the scan too, and clears and destroys it with the drape", () => {
+    const { scene } = fakeScene();
+    const overlay = { show: vi.fn(), clear: vi.fn(), destroy: vi.fn() };
+    const layer = new ChangeDrapeLayer(scene, overlay);
+    const shown = map([area("raised", false, 0)]);
+    layer.show(shown);
+    expect(overlay.show).toHaveBeenCalledWith(shown);
+    layer.clear();
+    expect(overlay.clear).toHaveBeenCalled();
+    layer.destroy();
+    expect(overlay.destroy).toHaveBeenCalledTimes(1);
+    layer.show(shown);
+    expect(overlay.show).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps a polygon's holes open", () => {
     const { scene, added } = fakeScene();
     const [outer] = square(0);
