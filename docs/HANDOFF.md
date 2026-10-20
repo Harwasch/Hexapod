@@ -249,6 +249,10 @@ pnpm lint && pnpm typecheck && pnpm test`, `pnpm e2e` if `apps/web` changed, plu
 - LOD and SH fixtures are regenerated under `OPENBLAS_CORETYPE=Sandybridge`, the yard under
   Haswell, the yard's sidecars under Sandybridge; commands in
   docs/DECISIONS/0012-licence-clean-room.md.
+- `scripts/licence_scan.py` fails on a stale allowlist entry. A change that edits an
+  allowlisted line (`gaussians.py`, `splat_io.py`, `harmonics.py`, `experiments/benchmark.py`,
+  the seed's `WITHDRAWN_SITES`, `worlds/core/catalog.ts`, the research JSON) updates
+  `scripts/licence_allowlist.json` in the same commit.
 - `packages/contracts/openapi.json` is committed; any schema change needs
   `export_openapi` + `pnpm contracts:generate`.
 - `pnpm format:check` runs **before** lint in CI and covers YAML and Markdown.

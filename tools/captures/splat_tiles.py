@@ -354,8 +354,9 @@ def sh_degree_for_dim(dim: int) -> int:
 def ply_sh_degree(layout: PlyLayout) -> int:
     """The SH degree a trained PLY carries in its `f_rest_*` properties; 0 without them.
 
-    3DGS trainers (Inria, gsplat's exporter, OpenSplat) write the rest of the SH as
-    `f_rest_0..f_rest_{3K-1}`, channel-major: all K of red, then green, then blue.
+    3DGS trainers (the paper's own, arXiv 2308.04079; gsplat's exporter; OpenSplat) write
+    the rest of the SH as `f_rest_0..f_rest_{3K-1}`, channel-major: all K of red, then
+    green, then blue.
     """
     rest = [name for name in layout.names if name.startswith("f_rest_")]
     if not rest:

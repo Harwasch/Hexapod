@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "rule": "nc-code-marker",
+      "path": "docs/living-world/components.json",
+      "contains": "diff-gaussian-rasterization",
+      "reason": "Research catalogue describing a third-party project's dependency; nothing here uses it"
+    },
+    {
+      "rule": "nc-model-id",
+      "path": "docs/WORLDS_MODELS.md",
+      "contains": "FLUX.1-Redux-dev",
+      "reason": "Worlds research catalogue lists a third-party model's gated dependency; nothing here runs it"
+    },
+    {
+      "rule": "nc-licence-in-source",
+      "path": "apps/api/tests/test_land_archives.py",
+      "contains": "licenses/by-nc",
+      "reason": "Test input: a non-commercial photo licence the archive search must recognise"
+    },
+    {
+      "rule": "nc-licence-in-source",
+      "path": "apps/api/tests/test_research_worker.py",
+      "contains": "licenses/by-nc",
+      "reason": "Test input: a non-commercial record licence the research worker must recognise"
+    },
+    {
+      "rule": "nc-licence-in-source",
+      "path": "apps/web/src/worlds/core/catalog.ts",
+      "contains": "noncommercial",
+      "reason": "Worlds research catalogue labels a research-only candidate as such (ADR 0012; open question Q3)"
+    },
+    {
+      "rule": "nc-licence-in-source",
+      "path": "workers/worlds/research-registry.json",
+      "contains": "cc-by-nc-sa-4.0",
+      "reason": "Research registry records a candidate's licence (ADR 0012; open question Q3)"
+    },
+    {
+      "rule": "nc-project-in-source",
+      "path": "tools/pipeline/gaussians.py",
+      "contains": "Inria/COLMAP",
+      "reason": "Names the PLY axis convention a file format uses; no code"
+    },
+    {
+      "rule": "nc-project-in-source",
+      "path": "tools/pipeline/gaussians.py",
+      "contains": "Inria's `save_ply`",
+      "reason": "Names the PLY column order a file format uses; no code"
+    },
+    {
+      "rule": "nc-project-in-source",
+      "path": "tools/pipeline/gaussians.py",
+      "contains": "Inria's 3DGS, and gsplat",
+      "reason": "Names the PLY axis convention trained files use; no code"
+    },
+    {
+      "rule": "nc-project-in-source",
+      "path": "tools/pipeline/gaussians.py",
+      "contains": "Inria's Tanks-and-Temples",
+      "reason": "A measurement of a public dataset; no code"
+    },
+    {
+      "rule": "nc-project-in-source",
+      "path": "tools/pipeline/gaussians.py",
+      "contains": "measured on Inria's `train`",
+      "reason": "A measurement of a public dataset; no code"
+    },
+    {
+      "rule": "nc-project-in-source",
+      "path": "tools/pipeline/splat_io.py",
+      "contains": "Inria's adds normals",
+      "reason": "PLY layout fact; no code"
+    },
+    {
+      "rule": "nc-project-in-source",
+      "path": "tools/pipeline/harmonics.py",
+      "contains": "3DGS trainers (Inria,",
+      "reason": "SH column-layout convention of trained PLYs; no code"
+    },
+    {
+      "rule": "nc-project-in-source",
+      "path": "tools/pipeline/experiments/benchmark.py",
+      "contains": "repo-sam.inria.fr",
+      "reason": "Offline experiment downloads a public research dataset; not shipped"
+    },
+    {
+      "rule": "withdrawn-asset",
+      "path": "apps/api/app/seed/__init__.py",
+      "contains": "san-francisco-aerometrex-mesh",
+      "reason": "WITHDRAWN_SITES must keep the slug so old databases delete the row"
+    }
+  ]
+}
