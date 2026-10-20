@@ -30,8 +30,9 @@ hAccuracyM, dop}`, `camera`, `exposure`, `focal` `{mm, mm35, px, pxFrom}`, `dji`
    epoch first (ADR 0013) and is **not** copied into `captures.captured_at`, which stays what a
    person said.
 3. **Heights use the site frame's datum vocabulary**: an EXIF fix's `altitudeDatum` is
-   `msl-unverified`, with the words in `altitudeNote`. DJI's `AbsoluteAltitude` datum is recorded as
-   unverified (a forum claim says ellipsoidal when RTK-fixed).
+   `msl-unverified`, with the words in `altitudeNote`. DJI's `AbsoluteAltitude` datum is
+   `dji.absoluteAltitudeDatum: "unverified"`, deliberately outside the site-frame datums so it never
+   compares equal to one, with the forum claim (ellipsoidal when RTK-fixed) in `absoluteAltitudeNote`.
 4. **DJI field status.** Checked against ExifTool's DJI table: `RtkFlag`, `RtkStdLon/Lat/Hgt`,
    `CalibratedFocalLength`, `CalibratedOpticalCenterX/Y`, `Gimbal*`, `Flight*`,
    `Absolute/RelativeAltitude`, `GpsLatitude/GpsLongitude` and the misspelt `GpsLongtitude`,

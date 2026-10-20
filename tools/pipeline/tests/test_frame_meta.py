@@ -15,6 +15,7 @@ from PIL.TiffImagePlugin import IFDRational
 
 import exif
 import frame_meta
+import site_frame
 from drone_frames import dji_m3e_photo, dji_xmp, iphone_photo, write_jpeg
 
 
@@ -42,7 +43,10 @@ def test_dji_rtk_fields_are_read_from_attribute_xmp() -> None:
         "stdHgtM": 0.02,
         "diffAgeS": None,
     }
-    assert str(record["absoluteAltitudeDatum"]).startswith("unverified")
+    # A vocabulary value that is no site-frame datum, and the words beside it.
+    assert record["absoluteAltitudeDatum"] == "unverified"
+    assert record["absoluteAltitudeDatum"] not in site_frame.HEIGHT_DATUMS
+    assert "ellipsoidal when RTK-fixed" in str(record["absoluteAltitudeNote"])
 
 
 def test_element_form_xmp_is_read_too() -> None:

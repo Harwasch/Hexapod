@@ -46,6 +46,7 @@ import exif
 import site_frame
 
 __all__ = [
+    "DJI_ALTITUDE_DATUM",
     "FOCAL_SPREAD_LIMIT",
     "GPS_ALTITUDE_DATUM",
     "META_BYTES",
@@ -107,6 +108,16 @@ GPS_ALTITUDE_NOTE = (
 )
 if GPS_ALTITUDE_DATUM not in site_frame.HEIGHT_DATUMS:  # pragma: no cover - import-time guard
     raise RuntimeError(f"{GPS_ALTITUDE_DATUM!r} is not one of {site_frame.HEIGHT_DATUMS}")
+
+#: The datum of DJI's `AbsoluteAltitude`, which no primary source states: deliberately
+#: outside `site_frame.HEIGHT_DATUMS`, so it never compares equal to a frame's datum.
+DJI_ALTITUDE_DATUM = "unverified"
+DJI_ALTITUDE_NOTE = (
+    "DJI AbsoluteAltitude: forum reports say ellipsoidal when RTK-fixed / XMP >= 1.5 and "
+    "above mean sea level otherwise; not confirmed by DJI or ExifTool"
+)
+if DJI_ALTITUDE_DATUM in site_frame.HEIGHT_DATUMS:  # pragma: no cover - import-time guard
+    raise RuntimeError("the DJI altitude datum must not pass for a verified one")
 
 #: DJI XMP fields whose spelling or meaning no primary source confirms: `RtkDiffAge`
 #: (inferred from Sitemark's `rtk_diff_age`), `GpsStatus` and `AltitudeType` (an Emlid
@@ -242,9 +253,10 @@ class DjiXmp:
         return {
             "relativeAltitudeM": self.relative_altitude_m,
             "absoluteAltitudeM": self.absolute_altitude_m,
-            "absoluteAltitudeDatum": (
-                "unverified (forum reports ellipsoidal when RTK-fixed / XMP >= 1.5; not confirmed)"
-            ),
+            # Not one of the site frame's datums: nobody has confirmed which this is, so
+            # a stage comparing datums sees a mismatch and leaves the vertical free.
+            "absoluteAltitudeDatum": DJI_ALTITUDE_DATUM,
+            "absoluteAltitudeNote": DJI_ALTITUDE_NOTE,
             "altitudeType": self.altitude_type,
             "gpsStatus": self.gps_status,
             "latitude": self.latitude,
