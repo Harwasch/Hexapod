@@ -21,10 +21,13 @@ it. It recomputes the gate itself and holds the layer's geometry to it:
    are in the tileset frame the targets are cells of.
 5. **Every gaussian of every tile** -- parents as well as leaves, each tile's origin
    composed (`app/worker/positions.py`, the reader the carry's checksums use), and at
-   every place a tile is drawn (`tile_placements`: two tiles naming one GLB draw it at
-   both), each primitive where the GLB's nodes put it (`positions.tile_draws`: every
-   primitive through the node hierarchy, and Cesium's own reading) -- is in a target cell.
-   Nothing outside them reaches the live site.
+   every place a tile is drawn (two tiles naming one GLB draw it at both) -- is in a target
+   cell. Nothing outside them reaches the live site. The gate reads no general tileset or
+   glTF to say so: the layer's tileset and every GLB in it must be laid out exactly as the
+   tiler and `build_glb` write them (`positions.packer_placements`, `packer_spz`), on which
+   the SPZ positions and each tile's translation are the whole placement; anything else
+   Cesium could honour (`content.url`, multiple contents, a second buffer, a node
+   transform, an extension) is refused, never read.
 
 Only step 3 reads the client's metadata, and only to refuse: nothing it says admits a layer.
 A layer whose tiles cannot be read as splats is refused, not waved through.
@@ -58,7 +61,7 @@ from sqlalchemy.orm import Session
 from app.analysis import cell_grid, rescan_gate
 from app.models import Asset, Epoch
 from app.schemas.confidence import FillTargetsRead
-from app.services import confidence_maps, epochs, sidecars
+from app.services import confidence_maps, epochs
 from app.services.errors import ConflictError, InvalidInputError
 from app.storage import ObjectStorage
 from app.storage.base import StoredObject
@@ -215,9 +218,12 @@ def check_layer(
             "the scan's tileset's"
         )
     try:
-        placements = positions.tile_placements(document)
+        # Only what the tiler writes: content by plain `uri`, the tiler's keys (`positions`).
+        placements = positions.packer_placements(document)
     except positions.TileFormatError as error:
-        raise InvalidInputError(f"inferred layer {uri!r}: {error}") from error
+        raise InvalidInputError(
+            f"inferred layer {uri!r}: its tileset is not one the tiler writes ({error})"
+        ) from error
     if not placements:
         raise InvalidInputError(f"inferred layer {uri!r} names no tiles")
     folder = posixpath.dirname(rel)
@@ -225,10 +231,6 @@ def check_layer(
     files: dict[str, bytes] = {}
     # Every place a tile is drawn, not every uri: two tiles naming one GLB draw it twice.
     for content, offset in placements:
-        try:
-            sidecars.check_relative(content)
-        except sidecars.SidecarPathError as error:
-            raise InvalidInputError(f"inferred layer {uri!r}: tile {error}") from error
         path = posixpath.join(folder, content) if folder else content
         data = files.get(path)
         if data is None:
@@ -244,22 +246,14 @@ def check_layer(
                 "too large to check, so not attached"
             )
         try:
-            drawn = positions.drawn_positions(data, offset)
+            xyz = positions.packer_positions(data, offset)
         except positions.TileFormatError as error:
             raise InvalidInputError(
                 f"inferred layer {uri!r}: its tile {path} cannot be read as splats ({error}), "
                 "so its gaussians cannot be held to the fill targets"
             ) from error
-        # Each further draw of the tile is another pass over its gaussians.
-        total += len(data) * (len(drawn) - 1)
-        if total > MAX_LAYER_BYTES:
-            raise InvalidInputError(
-                f"inferred layer {uri!r} draws more than {MAX_LAYER_BYTES} bytes of tiles: "
-                "too large to check, so not attached"
-            )
-        for xyz in drawn:
-            count += int(xyz.shape[0])
-            outside += targets.outside(xyz)
+        count += int(xyz.shape[0])
+        outside += targets.outside(xyz)
     if outside:
         raise InvalidInputError(
             f"inferred layer {uri!r}: {outside} of its {count} gaussians are outside the "

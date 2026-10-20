@@ -316,9 +316,8 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
    gate's epoch and site, its current tileset must carry that very grid, the targets fetched
    now must be the ones it was filled for, with the same provenance, and every gaussian of
    every tile -- parents as well as leaves, a GLB two tiles name at each place it is drawn
-   (`layer_positions`) -- must be in a target cell. This pre-check reads only a tile's SPZ
-   block, so it refuses any tile GLB not laid out exactly as `build_glb` writes one (one
-   scene node with its matrix, one primitive); the API reads such a GLB in full. Fill
+   (`layer_positions`) -- must be in a target cell, on a layer laid out exactly as the tiler
+   writes one (`packer_layout`, the API's allowlist below, transcribed). Fill
    time cannot tell an earlier epoch whose grid shares the window (its targets are weak there
    too, by definition); publish can.
 4. **The evidence says so**: `extras.evidence.rescanGate` {policy, siteId, epochId, weakIn,
@@ -339,13 +338,22 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
    targets **and their provenance** (`weakIn`, `comparedWith`, `satisfiedBy` equal to its own
    answer, so what is stored is the API's, never invented or missing), the layer's root
    transform to be the scan's, and every gaussian it draws to be in a target cell: every
-   tile, at every place the tileset draws it (`positions.tile_placements`: two tiles naming
-   one GLB draw it twice), and every primitive of the GLB where its nodes put it
-   (`positions.tile_draws`: each node's transform composed through the hierarchy, and
-   Cesium's own reading -- the first scene node's own matrix on its first primitive -- since
-   a viewer may draw it either way). A GLB no reading can place (instancing or another node
-   extension, skins, animation, morph targets, a primitive that is not an SPZ splat, a
-   node hierarchy that is not a forest, over 64 nodes) is refused. A republish carries a
+   tile, at every place the tileset draws it (two tiles naming one GLB draw it twice).
+   **The gate reads only what the packer writes, an allowlist, not a denylist**
+   (`positions.packer_placements`, `packer_spz`): review found, round after round, something
+   Cesium honours that the gate did not read (a second copy of a tile, a node matrix,
+   `content.url`, `3DTILES_multiple_contents`, an SPZ block in a second, data-URI buffer).
+   So the layer's tileset may hold only the tiler's keys -- content by a plain relative
+   `uri` to a `.glb` alone (no `url`, `contents`, extension, `?`, `#`, `%`, `..`, `./`,
+   scheme, absolute path or backslash), a box, translation-only child transforms, 3D Tiles
+   1.1 and `3DTILES_content_gltf` declaring the two splat extensions -- and every GLB must
+   be `build_glb`'s: a JSON then a BIN chunk and nothing after, one buffer that is the BIN
+   chunk, one buffer view, exactly the packer's extensions used and required, one scene of
+   one node with its matrix, one point primitive of SPZ, accessors with no data of their
+   own (no sparse), no skins, animation, morph targets or instancing. On that layout the SPZ
+   positions and the tiles' translations are the whole placement. Anything else is refused,
+   even what would draw in the targets; a new packer feature widens the allowlist in both
+   transcriptions, with a test. A republish carries a
    layer -- `inferredLayers`, and each fill variant's -- only if the same gate admits it on
    the new revision (`fill_gate.carry_check`: the epoch's targets recomputed, computed on
    the very grid the new tiles carry -- the same whole descriptor, so the same planes at

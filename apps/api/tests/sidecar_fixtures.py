@@ -267,10 +267,11 @@ def splat_glb(
     fill: int = 0,
     sh_degree: int = 0,
     also: tuple[np.ndarray | list[list[float]], ...] = (),
-    edit: Callable[[dict[str, Any]], None] | None = None,
+    edit: Callable[[dict[str, Any]], object] | None = None,
 ) -> bytes:
-    """A splat GLB as `splat_tiles.build_glb` lays it out: one scene, one node (its
-    z-up-to-y-up matrix) and one primitive holding an SPZ stream of these positions (24-bit
+    """A splat GLB laid out exactly as `splat_tiles.build_glb` writes one (its JSON keys,
+    extensions, accessors and material): one scene, one node (its z-up-to-y-up matrix) and
+    one primitive holding an SPZ stream of these positions (24-bit
     fixed point), every other byte `fill`, `sh_degree` bands of harmonics after them -- so
     two tiles can hold the same positions in different bytes. `also`: more primitives in
     the same mesh, a buffer view each; `edit` changes the glTF JSON before it is written
@@ -290,18 +291,33 @@ def splat_glb(
     for spz in streams:
         views.append({"buffer": 0, "byteOffset": len(binary), "byteLength": len(spz)})
         binary += spz + b"\0" * (-len(spz) % 4)
+    counts = [np.asarray(points).reshape(-1, 3).shape[0] for points in (positions, *also)]
     gltf: dict[str, Any] = {
-        "asset": {"version": "2.0"},
+        "asset": {"version": "2.0", "generator": "twin splat_tiles"},
+        "extensionsUsed": [
+            "KHR_materials_unlit",
+            "KHR_gaussian_splatting",
+            "KHR_gaussian_splatting_compression_spz_2",
+        ],
+        "extensionsRequired": [
+            "KHR_gaussian_splatting",
+            "KHR_gaussian_splatting_compression_spz_2",
+        ],
         "scene": 0,
         "scenes": [{"nodes": [0]}],
         "nodes": [{"mesh": 0, "matrix": list(Z_UP_TO_Y_UP)}],
-        "buffers": [{"byteLength": len(binary)}],
-        "bufferViews": views,
         "meshes": [
             {
                 "primitives": [
                     {
-                        "attributes": {},
+                        "mode": 0,
+                        "material": 0,
+                        "attributes": {
+                            "POSITION": 4 * n,
+                            "COLOR_0": 4 * n + 1,
+                            "KHR_gaussian_splatting:SCALE": 4 * n + 2,
+                            "KHR_gaussian_splatting:ROTATION": 4 * n + 3,
+                        },
                         "extensions": {
                             "KHR_gaussian_splatting": {
                                 "extensions": {
@@ -314,6 +330,19 @@ def splat_glb(
                 ]
             }
         ],
+        "materials": [{"extensions": {"KHR_materials_unlit": {}}}],
+        "accessors": [
+            accessor
+            for count in counts
+            for accessor in (
+                {"componentType": 5126, "count": count, "type": "VEC3"},
+                {"componentType": 5121, "normalized": True, "count": count, "type": "VEC4"},
+                {"componentType": 5126, "count": count, "type": "VEC3"},
+                {"componentType": 5126, "count": count, "type": "VEC4"},
+            )
+        ],
+        "bufferViews": views,
+        "buffers": [{"byteLength": len(binary)}],
     }
     if edit is not None:
         edit(gltf)

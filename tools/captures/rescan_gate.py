@@ -502,64 +502,28 @@ def verify_layer(
     return fresh
 
 
-#: `splat_tiles.build_glb`'s one node: the z-up data turned y-up (column-major), which the
-#: viewer's own y-up-to-z-up turn undoes, so the SPZ positions are where it draws them.
-_PACKER_NODE = {"mesh": 0, "matrix": [1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1]}
-
-
-def _as_the_packer_writes(path: Path) -> None:
-    """Refuses a tile GLB unless it is laid out as `splat_tiles.build_glb` writes one: one
-    scene of one node, that node exactly `_PACKER_NODE`, one mesh of one primitive, nothing
-    animated or skinned. `rig_tiles.tile_positions` reads the SPZ block and nothing else, so
-    a node matrix, a node hierarchy, instancing or a second primitive would draw splats it
-    never saw (Codex B5b N2). The API's gate reads such a GLB in full
-    (apps/api app/worker/positions.py `tile_draws`); this pre-check need not."""
-    import struct
-
-    try:
-        data = path.read_bytes()
-        magic, _version, _total, length = struct.unpack_from("<4sIII", data, 0)
-        gltf = json.loads(data[20 : 20 + length]) if magic == b"glTF" else None
-    except (OSError, struct.error, ValueError) as error:
-        raise RescanGateError(f"{path.name} is not a GLB: {error}") from error
-    meshes = gltf.get("meshes") if isinstance(gltf, dict) else None
-    laid_out = (
-        isinstance(gltf, dict)
-        and gltf.get("scene", 0) == 0
-        and gltf.get("scenes") == [{"nodes": [0]}]
-        and gltf.get("nodes") == [_PACKER_NODE]
-        and isinstance(meshes, list)
-        and len(meshes) == 1
-        and isinstance(meshes[0], dict)
-        and len(meshes[0].get("primitives") or []) == 1
-        and not gltf.get("animations")
-        and not gltf.get("skins")
-    )
-    if not laid_out:
-        raise RescanGateError(
-            f"{path.name} is not laid out as the packer writes a splat tile (one scene node "
-            "with build_glb's matrix, one primitive): its splats may be drawn where its SPZ "
-            "positions do not say"
-        )
-
-
 def layer_positions(tileset: Path) -> np.ndarray:
     """Every gaussian of **every tile** a layer's `tileset.json` names -- parents, drawn at
-    coarse detail, as well as leaves; `content` and 3D Tiles 1.1 `contents`; a GLB two
-    tiles name, at both -- in its tileset frame, each tile's origin composed
-    (`splat_tiles.tile_placements`): what publish holds to the targets (`verify_layer`).
-    `splat_render.load_tileset` reads the leaves alone, which is what a renderer needs and
-    not what is published. A tile uri that is not beside the tileset, or a tile not laid
-    out as the packer writes one (`_as_the_packer_writes`), is a `RescanGateError`."""
+    coarse detail, as well as leaves; a GLB two tiles name, at both -- in its tileset frame,
+    each tile's origin composed (`splat_tiles.tile_placements`): what publish holds to the
+    targets (`verify_layer`). `splat_render.load_tileset` reads the leaves alone, which is
+    what a renderer needs and not what is published.
+
+    Only a layer laid out exactly as the tiler writes one is read (`packer_layout`: content
+    by a plain relative `uri` alone, the tiler's keys, `build_glb`'s GLB with one buffer and
+    one node); anything else, and a tile that is not beside the tileset, is a
+    `RescanGateError` -- what Cesium could draw of it is not what this reads."""
+    import packer_layout
     from rig_tiles import tile_positions
-    from splat_tiles import SplatFormatError, tile_placements
 
     path = Path(tileset)
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
-        placements = tile_placements(document)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, SplatFormatError) as error:
+        placements = packer_layout.packer_placements(document)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise RescanGateError(f"{path}: {error}") from error
+    except packer_layout.LayoutError as error:
+        raise RescanGateError(f"{path}: not a tileset the tiler writes: {error}") from error
     folder = path.parent.resolve()
     parts: list[np.ndarray] = []
     # Every place a tile is drawn: two tiles naming one GLB draw it at both.
@@ -567,9 +531,13 @@ def layer_positions(tileset: Path) -> np.ndarray:
         target = (folder / uri).resolve()
         if not target.is_relative_to(folder):
             raise RescanGateError(f"{path}: tile {uri!r} is not beside the layer's tileset")
-        _as_the_packer_writes(target)
         try:
+            packer_layout.packer_spz(target.read_bytes())
             parts.append(tile_positions(target, offset))
+        except packer_layout.LayoutError as error:
+            raise RescanGateError(
+                f"{path}: tile {uri!r} is not a GLB build_glb writes: {error}"
+            ) from error
         except (OSError, ValueError, KeyError) as error:
             raise RescanGateError(f"{path}: tile {uri!r} cannot be read: {error}") from error
     return np.concatenate(parts) if parts else np.zeros((0, 3), dtype=np.float32)

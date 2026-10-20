@@ -33,6 +33,7 @@ from app.services import attach as attach_service
 from app.services import confidence_maps, epochs
 from app.services.errors import InvalidInputError
 from app.storage import S3Storage
+from app.worker import positions
 from tests.confidence_fixtures import blob, descriptor
 from tests.sidecar_fixtures import TRANSFORM, a_tileset, put_scan, splat_glb, stage
 from tests.test_fill_targets_api import two_epochs
@@ -222,102 +223,73 @@ def _with_leaf(files: dict[str, bytes], glb: bytes) -> dict[str, bytes]:
     return {**files, f"{LAYER}f1.glb": glb}
 
 
-def _moved(matrix: list[float], east: float, north: float) -> list[float]:
-    """`matrix` (column-major, glTF's y-up node space) translated `east`, `north` as the
-    viewer shows it: y-up north is -z."""
-    return [*matrix[:12], matrix[12] + east, matrix[13], matrix[14] - north, matrix[15]]
+def _leaf_glb(glb: bytes) -> Callable[[dict[str, bytes], dict[str, Any]], None]:
+    return lambda files, _document: files.update({f"{LAYER}f1.glb": glb})
 
 
-def test_a_glb_node_matrix_that_moves_its_splats_is_seen(
-    db: Session, storage: S3Storage, tmp_path: Path
-) -> None:
-    """Codex B5b N2: the gate read the SPZ positions and never the node matrix the viewer
-    applies to them. The same allowed positions, moved off the targets by the node."""
-    from tests.sidecar_fixtures import Z_UP_TO_Y_UP
-
-    _, asset = site(db, storage, tmp_path)
-    read = targets(db, storage, asset)
-    inside, outside = centre(read, target=True), centre(read, target=False)
-    east, north = outside[0] - inside[0], outside[1] - inside[1]
-
-    def move(gltf: dict[str, Any]) -> None:
-        gltf["nodes"][0]["matrix"] = _moved(Z_UP_TO_Y_UP, east, north)
-
-    files = _with_leaf(layer_files([inside], [inside]), splat_glb([inside], edit=move))
-    with pytest.raises(InvalidInputError, match="1 of its 2 gaussians are outside"):
-        attach(db, storage, asset, files, gate_of(read))
+def _child_change(change: Callable[[dict[str, Any]], object]) -> Any:
+    return lambda _files, document: change(document["root"]["children"][0])
 
 
-def test_a_node_hierarchy_is_composed_and_every_primitive_read(
-    db: Session, storage: S3Storage, tmp_path: Path
-) -> None:
-    """A second primitive outside the targets, and a child node whose translation moves a
-    second copy of the splats off them: each is drawn by a glTF viewer, so each is
-    checked."""
-    _, asset = site(db, storage, tmp_path)
-    read = targets(db, storage, asset)
-    inside, outside = centre(read, target=True), centre(read, target=False)
-    two = splat_glb([inside], also=([outside],))
-    with pytest.raises(InvalidInputError, match="1 of its 3 gaussians are outside"):
-        attach(db, storage, asset, _with_leaf(layer_files([inside], [inside]), two), gate_of(read))
+def _moved_node(gltf: dict[str, Any]) -> None:
+    """Codex B5b N2: the node matrix the viewer applies, moving allowed positions 29.5 m."""
+    gltf["nodes"][0]["matrix"][12] = 29.5
 
-    # A child node drawing the mesh again, its translation composed under its parent's
-    # matrix: in the data's own z-up frame, since the parent's turn is the viewer's undone.
-    shift = [outside[0] - inside[0], outside[1] - inside[1], 0.0]
 
-    def nest(gltf: dict[str, Any]) -> None:
-        gltf["nodes"][0]["children"] = [1]
-        gltf["nodes"].append({"mesh": 0, "translation": shift})
+def _second_buffer(inside: list[float]) -> bytes:
+    """Codex R4: the SPZ the viewer draws in a second, data-URI buffer; the BIN chunk keeps
+    the allowed one."""
+    from tests.test_layer_allowlist import _chunks, _glb
 
-    nested = splat_glb([inside], edit=nest)
-    with pytest.raises(InvalidInputError, match="1 of its 3 gaussians are outside"):
-        attach(
-            db, storage, asset, _with_leaf(layer_files([inside], [inside]), nested), gate_of(read)
-        )
-    # The same hierarchy moving nothing draws the child where its parent is: attached.
-    shift = [0.0, 0.0, 0.0]
-    still = splat_glb([inside], edit=nest)
-    assert attach(
-        db, storage, asset, _with_leaf(layer_files([inside], [inside]), still), gate_of(read)
-    )
+    gltf, binary = _chunks(splat_glb([inside]))
+    evil = positions.glb_spz(splat_glb([[inside[0] + 29.5, inside[1], inside[2]]]))
+    uri = "data:application/octet-stream;base64," + base64.b64encode(evil).decode()
+    gltf["buffers"].append({"byteLength": len(evil), "uri": uri})
+    gltf["bufferViews"][0].update(buffer=1, byteLength=len(evil))
+    return _glb(gltf, binary)
 
 
 @pytest.mark.parametrize(
-    ("edit", "message"),
+    ("case", "message"),
     [
-        (lambda g: g["nodes"][0].update(extensions={"EXT_mesh_gpu_instancing": {}}), "extension"),
-        (lambda g: g.update(animations=[{"channels": [], "samplers": []}]), "animat"),
-        (
-            lambda g: g["nodes"].append({"children": [0]}) or g["nodes"].append({"children": [0]}),
-            "parent",
-        ),
-        (lambda g: g.pop("nodes"), "no node"),
-        (lambda g: g["meshes"][0]["primitives"][0].pop("extensions"), "not an SPZ splat"),
-        (lambda g: g["nodes"][0].update(translation=[1.0, 0, 0]), "both"),
+        ("node_matrix", "cannot be read as splats"),
+        ("second_primitive", "cannot be read as splats"),
+        ("external_spz_buffer", "cannot be read as splats"),
+        ("legacy_url_child", "not one the tiler writes"),
+        ("legacy_url_override", "not one the tiler writes"),
+        ("legacy_multiple_contents", "not one the tiler writes"),
+        ("uri_query_literal", "not one the tiler writes"),
     ],
 )
-def test_a_glb_the_gate_cannot_place_every_splat_of_is_refused(
-    db: Session, storage: S3Storage, tmp_path: Path, edit: Callable[[Any], Any], message: str
+def test_a_layer_not_laid_out_as_the_packer_writes_one_is_refused(
+    db: Session, storage: S3Storage, tmp_path: Path, case: str, message: str
 ) -> None:
-    """Instanced, animated, ill-formed, unplaced or non-splat: what the viewer draws of it is
-    not something the gate can hold to the targets, so it is not attached."""
+    """Codex B5b N2 and R4, through the attach: what Cesium may draw elsewhere than the gate
+    reads -- a node matrix, a second primitive, an SPZ in a second buffer, `content.url`
+    (alone, or over `uri`), multiple contents, a uri with a query -- is refused, not read.
+    Every case in tests/test_layer_allowlist.py is refused by the same two functions."""
     _, asset = site(db, storage, tmp_path)
     read = targets(db, storage, asset)
-    inside = centre(read, target=True)
-    glb = splat_glb([inside], edit=edit)
+    inside, outside = centre(read, target=True), centre(read, target=False)
+    edits: dict[str, Any] = {
+        "node_matrix": _leaf_glb(splat_glb([inside], edit=_moved_node)),
+        "second_primitive": _leaf_glb(splat_glb([inside], also=([outside],))),
+        "external_spz_buffer": _leaf_glb(_second_buffer(inside)),
+        "legacy_url_child": _child_change(lambda c: c.update(content={"url": "f1.glb"})),
+        "legacy_url_override": _child_change(lambda c: c["content"].update(url="f0.glb")),
+        "legacy_multiple_contents": _child_change(
+            lambda c: c.update(
+                extensions={"3DTILES_multiple_contents": {"contents": [{"uri": "f1.glb"}]}}
+            )
+        ),
+        "uri_query_literal": _child_change(lambda c: c["content"].update(uri="f1.glb?v=1")),
+    }
+    files = layer_files([inside], [inside])
+    document = json.loads(files[f"{LAYER}tileset.json"])
+    edits[case](files, document)
+    files[f"{LAYER}tileset.json"] = json.dumps(document).encode()
     with pytest.raises(InvalidInputError, match=message):
-        attach(db, storage, asset, _with_leaf(layer_files([inside], [inside]), glb), gate_of(read))
-
-
-def test_a_fill_for_other_targets_is_filled_again(
-    db: Session, storage: S3Storage, tmp_path: Path
-) -> None:
-    _, asset = site(db, storage, tmp_path)
-    read = targets(db, storage, asset)
-    inside = centre(read, target=True)
-    stale = gate_of(read, maskSha256="00" * 32, cells=read.cells + 1)
-    with pytest.raises(InvalidInputError, match="cells, maskSha256 differ"):
-        attach(db, storage, asset, layer_files([inside], [inside]), stale)
+        attach(db, storage, asset, files, gate_of(read))
 
 
 @pytest.mark.parametrize(

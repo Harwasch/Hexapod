@@ -567,59 +567,12 @@ def test_a_tile_named_twice_is_read_at_every_place_it_is_drawn(tmp_path: Path) -
         rg.verify_layer(**{**case, "positions": every})
 
 
-def _rewrite_glb(path: Path, edit: Any) -> None:
-    """`path`'s GLB with its JSON chunk changed by `edit`, the binary chunk kept."""
-    import struct
-
-    data = path.read_bytes()
-    (length,) = struct.unpack_from("<I", data, 12)
-    gltf = json.loads(data[20 : 20 + length])
-    edit(gltf)
-    text = json.dumps(gltf).encode()
-    text += b" " * (-len(text) % 4)
-    rest = data[20 + length :]
-    total = 12 + 8 + len(text) + len(rest)
-    path.write_bytes(
-        struct.pack("<4sII", b"glTF", 2, total)
-        + struct.pack("<II", len(text), 0x4E4F534A)
-        + text
-        + rest
-    )
-
-
-@pytest.mark.parametrize(
-    "edit",
-    [
-        # Codex B5b N2: a node matrix the viewer applies, moving the splats 1 km east.
-        lambda g: g["nodes"][0]["matrix"].__setitem__(12, 1000),
-        lambda g: g["meshes"][0]["primitives"].append(g["meshes"][0]["primitives"][0]),
-        lambda g: g["nodes"].append({"mesh": 0}),
-        lambda g: g["nodes"][0].update(extensions={"EXT_mesh_gpu_instancing": {}}),
-        lambda g: g["nodes"][0].update(children=[0]),
-        lambda g: g.update(animations=[{"channels": [], "samplers": []}]),
-    ],
-)
-def test_publish_refuses_a_tile_not_laid_out_as_the_packer_writes_one(
-    tmp_path: Path, edit: Any
-) -> None:
-    """The pre-check reads the SPZ block alone, so it holds every tile to `build_glb`'s
-    layout: one scene node with its matrix, one primitive. Anything else could draw splats
-    where the SPZ positions do not say; the API reads such a GLB in full, this refuses it."""
-    case = _publish_case()
-    inside = case["positions"][:1]
-    tileset = _layer(tmp_path / "layer", parent=inside, leaf=inside)
-    assert rg.layer_positions(tileset).shape == (2, 3)
-    _rewrite_glb(tileset.parent / "f1.glb", edit)
-    with pytest.raises(rg.RescanGateError, match="not laid out as the packer writes"):
-        rg.layer_positions(tileset)
-
-
 def test_a_layer_tile_outside_its_folder_is_refused(tmp_path: Path) -> None:
     tileset = _layer(tmp_path / "layer", parent=[[0.0, 0.0, 0.0]], leaf=[[0.0, 0.0, 0.0]])
     document = json.loads(tileset.read_text(encoding="utf-8"))
     document["root"]["content"]["uri"] = "../f0.glb"
     tileset.write_text(json.dumps(document), encoding="utf-8")
-    with pytest.raises(rg.RescanGateError, match="beside"):
+    with pytest.raises(rg.RescanGateError, match="not a plain relative path"):
         rg.layer_positions(tileset)
 
 
