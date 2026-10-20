@@ -409,6 +409,8 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
 
 ## Web
 
+Date 2026-10-20 · design M4–M6 §1 C1–C5, W4a; branch `claude/feat-splat-confidence-view`.
+
 ### Context
 
 A splat scan looks equally certain everywhere. Where the capture saw a part from few views, at a
