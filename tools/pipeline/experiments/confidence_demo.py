@@ -25,11 +25,13 @@ change map (A5) measures it: both surfaces at the coarser level (dsm by max, gro
 sigma by max), and `delta = dsm_e2 - dsm_e1` against `3 sqrt(sigma_e1^2 + sigma_e2^2 +
 u_e1^2 + u_e2^2)`, where `u` is each epoch's uncertainty from the site frame (its confidence
 grid's `alignmentCap.uncertaintyM`: 0 for e1, which made the frame; 0.062 m for e2). A cell
-is `insufficient` when either epoch has no surface there, or when the finer epoch measured
-only some of the coarse cell's children (its top would be theirs alone against the whole). The report also counts the changed
-cells either epoch's confidence grid calls weak -- whether those may be called changed is
-the change map's decision (A5), not this demo's -- and the changed cells that do not touch
-the crate: what the noise did.
+is `insufficient` when either epoch has no surface there, when either sigma saturates (255:
+"at least 2.55 m", a threshold that is only a lower bound), or when the finer epoch measured
+only some of the coarse cell's children (its top would be theirs alone against the whole).
+Surfaces not in metres (`summary.metric`) or above different origin heights are refused.
+The report also counts the changed cells either epoch's confidence grid calls weak --
+whether those may be called changed is the change map's decision (A5), not this demo's --
+and the changed cells that do not touch the crate: what the noise did.
 
 **Every capture is synthetic.** It shows the stage working against a scene whose answers
 are known; it is not a measurement of a real capture, and no threshold here was
@@ -306,6 +308,36 @@ def _window(
     return out
 
 
+#: A stored sigma that means "at least this" (cell_grid.py), and how far two origin
+#: heights may differ and still be one origin (a tenth of the heights' centimetre).
+SIGMA_SATURATED = 255
+ORIGIN_TOLERANCE_M = 0.001
+
+
+def _comparable(a: cell_grid.CellGrid, b: cell_grid.CellGrid) -> None:
+    """Both surfaces in metres, above one origin height, or a ValueError saying why not."""
+    for name, grid in (("a", a), ("b", b)):
+        summary = grid.meta.get("summary")
+        metric = summary.get("metric") if isinstance(summary, Mapping) else None
+        if metric is not True:
+            raise ValueError(
+                f"surface {name} is not metric (summary.metric {metric!r}): a run whose scale "
+                "was never resolved has no metres, so no change in metres can be read from it"
+            )
+    origins = []
+    for grid in (a, b):
+        vertical = grid.meta.get("vertical")
+        origin = vertical.get("originHeightM") if isinstance(vertical, Mapping) else None
+        if isinstance(origin, bool) or not isinstance(origin, int | float):
+            raise ValueError(f"a surface names no origin height ({origin!r})")
+        origins.append(float(origin))
+    if abs(origins[0] - origins[1]) > ORIGIN_TOLERANCE_M:
+        raise ValueError(
+            f"the surfaces' heights are above different origins ({origins[0]} m and "
+            f"{origins[1]} m): they would differ by the offset everywhere"
+        )
+
+
 #: The change classes A5 emits (`appearance-only` is reserved and never emitted here).
 CLASSES = ("raised", "lowered", "unchanged", "insufficient")
 
@@ -324,7 +356,12 @@ def surface_change(
     threshold `sigmas * sqrt(sa^2 + sb^2 + ua^2 + ub^2)` and the class (module docstring);
     and, per changed cell, whether either confidence grid calls it weak. A coarse cell is
     compared only when the finer epoch measured every one of its children (else
-    insufficient), as the change map (A5) does."""
+    insufficient), as the change map (A5) does.
+
+    Refused (ValueError) unless both surfaces are in metres (`summary.metric`) above one
+    origin height (`vertical.originHeightM`, to the millimetre); a cell where either sigma
+    saturates (255: at least 2.55 m, so its threshold only a lower bound) is insufficient."""
+    _comparable(a, b)
     level = max(a.level, b.level)
     pa, pb = coarsen_surface(a.planes[0], level), coarsen_surface(b.planes[0], level)
     i0, j0 = min(pa.i0, pb.i0), min(pa.j0, pb.j0)
@@ -340,6 +377,7 @@ def surface_change(
         )
         weak |= cell_grid.weak_mask(window)
     both = (wa[..., 2] > 0) & (wb[..., 2] > 0)
+    both &= (wa[..., 2] < SIGMA_SATURATED) & (wb[..., 2] < SIGMA_SATURATED)
     # A coarse cell the finer epoch measured only some children of is not compared: its
     # top would be the measured children's alone against the whole cell (review B5a).
     for grid in (a, b):

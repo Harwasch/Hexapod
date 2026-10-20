@@ -880,3 +880,33 @@ def test_the_demo_compares_a_coarse_cell_only_with_every_child_the_finer_epoch_m
     )
     found = confidence_demo.surface_change(coarse, whole, _vouched(1, 1), _vouched(0), 0.0, 0.0)
     assert found["counts"]["raised"] == 1
+
+
+def test_the_demo_refuses_heights_it_cannot_put_in_metres_on_one_origin() -> None:
+    """Review B5a (low): the demo compared heights above different origins (100 m and 99 m
+    read the same ground as "raised 1 m") and of runs whose scale was never resolved
+    (`summary.metric` false: not metres at all). It refuses both, as the change map does."""
+    from experiments import confidence_demo
+
+    a, b = _heights(0, {(0, 0): (0, 1)}), _heights(0, {(0, 0): (100, 1)})
+    a.meta["vertical"]["originHeightM"] = 100.0
+    b.meta["vertical"]["originHeightM"] = 99.0
+    with pytest.raises(ValueError, match="origin"):
+        confidence_demo.surface_change(a, b, _vouched(0), _vouched(0), 0.0, 0.0)
+    c, d = _heights(0, {(0, 0): (0, 1)}), _heights(0, {(0, 0): (100, 1)})
+    d.meta["summary"]["metric"] = False
+    with pytest.raises(ValueError, match="metric"):
+        confidence_demo.surface_change(c, d, _vouched(0), _vouched(0), 0.0, 0.0)
+
+
+def test_the_demo_takes_a_saturated_sigma_as_unbounded_not_as_2_55_m() -> None:
+    """Review B5a (low): sigma 255 means at least 2.55 m, so its threshold is only a lower
+    bound -- the review's two 30 m floaters made a 30 m dsm read as raised against 7.65 m.
+    A cell with a saturated sigma on either side cannot be classified: insufficient."""
+    from experiments import confidence_demo
+
+    a = _heights(0, {(0, 0): (0, 1), (1, 0): (0, 1)})
+    b = _heights(0, {(0, 0): (3000, 255), (1, 0): (3000, 254)})
+    found = confidence_demo.surface_change(a, b, _vouched(0), _vouched(0), 0.0, 0.0)
+    assert found["counts"]["insufficient"] == 2 + 1  # (0, 1) and (1, 1) have none; (0, 0)
+    assert [(row["i"], row["class"]) for row in found["changed"]] == [(1, "raised")]

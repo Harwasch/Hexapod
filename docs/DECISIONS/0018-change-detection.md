@@ -77,10 +77,13 @@ how well each cell was seen (ADR 0016).
    `u` is each epoch's uncertainty **from the site frame** (its confidence grid's
    `alignmentCap.uncertaintyM`, ADR 0016 §5: 0 for the epoch that made the frame). Classes:
    `raised`, `lowered`, `unchanged`, `insufficient` (either epoch has no surface in the cell, or
-   the finer measured only part of it), and
+   the finer measured only part of it, or either sigma saturates: "at least 2.55 m" makes the
+   threshold only a lower bound), and
    `appearance-only`, reserved and never emitted (below). Three sigma is a first-principles choice
    (about one false call in 370 cells of Gaussian noise), not a calibrated one. A5 computes the
-   map; the demo computes it the same way to show it works.
+   map; the demo computes it the same way to show it works. Both refuse surfaces whose heights
+   are not metres (`summary.metric` false: a run whose scale was never resolved) or are above
+   different origin heights (`vertical.originHeightM`): no change in metres can be read there.
 5. **Shipped beside the tiles, opt-in (C8).** `package` copies `surface.bin` beside the tiles and
    appends the descriptor to the root extras as `extras.surface`, after `confidence` (after
    `collision` when there is none). Nothing per tile. `catalog` writes it at the top level of
