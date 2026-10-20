@@ -175,7 +175,7 @@ def xmp_value(text: str, prefix: str, name: str) -> str | None:
     found = (
         re.search(rf"(?<![\w-]){p}:{n}\s*=\s*\"([^\"]*)\"", text, re.I)
         or re.search(rf"(?<![\w-]){p}:{n}\s*=\s*'([^']*)'", text, re.I)
-        or re.search(rf"<{p}:{n}(?:\s[^>]*)?>([^<]*)</{p}:{n}\s*>", text, re.I)
+        or re.search(rf"<{p}:{n}(?:\s[^<>]*)?>([^<]*)</{p}:{n}\s*>", text, re.I)
     )
     return found.group(1).strip() if found else None
 

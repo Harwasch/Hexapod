@@ -369,3 +369,22 @@ def test_a_time_at_the_edge_of_the_calendar_is_no_utc_time_not_a_lost_record(
     assert record.unreadable is None
     assert record.dji is not None and record.focal.px is not None
     assert record.time.utc is None
+
+
+def test_a_hostile_packet_is_read_in_linear_time() -> None:
+    """192 KiB (`META_BYTES`, all a photo's head is read for) of unclosed
+    `<drone-dji:RtkFlag ` tags. The element-form pattern once let its attribute run cross
+    `<`, which made every one of the ~10,000 starts scan to the end: quadratic, 6 s here.
+    Linear, the ~75 searches `read_dji_xmp` makes take tens of milliseconds; the bound is
+    two orders of magnitude above that, not a measurement of this machine."""
+    import time
+
+    unit = "<drone-dji:RtkFlag "
+    text = "<x:xmpmeta " + unit * (frame_meta.META_BYTES // len(unit))
+
+    began = time.perf_counter()
+    dji = frame_meta.read_dji_xmp(text)
+    elapsed = time.perf_counter() - began
+
+    assert dji is not None and dji.rtk_flag is None
+    assert elapsed < 2.0, f"{elapsed:.2f} s: the XMP patterns have gone quadratic again"
