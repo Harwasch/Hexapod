@@ -61,7 +61,8 @@ interface Harness {
 }
 
 test("weak cells draw red, strong ones green, each splat by its own cell", async ({ page }) => {
-  test.setTimeout(180_000);
+  // Seven views on software GL, the first waiting for the yard to refine: minutes, not seconds.
+  test.setTimeout(420_000);
   await page.setViewportSize({ width: 960, height: 640 });
   const errors: string[] = [];
   page.on("console", (message) => {
