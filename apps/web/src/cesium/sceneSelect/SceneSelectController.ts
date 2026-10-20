@@ -874,13 +874,23 @@ export class SceneSelectController {
     }
   }
 
+  /**
+   * The view a projection was made from: the camera's pose, the canvas, and which scans are
+   * drawn and by how many tiles. Another date of a site chosen with the camera standing still
+   * hides one scan and shows another; keyed on the pose alone, the brush went on painting the
+   * projection of the scan no longer drawn.
+   */
   #viewKey(): string {
     const camera = this.#viewer.camera;
     const p = camera.positionWC;
     const d = camera.directionWC;
     const c = this.#viewer.canvas;
+    const drawn = this.#assets().map(
+      (assetId) => `${assetId}:${String(pickSourceOf(assetId)?.tiles().length ?? 0)}`,
+    );
     return [p.x, p.y, p.z, d.x, d.y, d.z, c.clientWidth, c.clientHeight]
       .map((v) => v.toFixed(4))
+      .concat(drawn)
       .join(",");
   }
 
