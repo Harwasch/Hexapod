@@ -448,9 +448,14 @@ def pack_spz(
     # Positions times an int, exactly as before the range check existed: for float32 input
     # that stays float32 arithmetic, so every tileset that fits packs to the same bytes.
     scaled = np.round(positions * (1 << fractional_bits))
-    if scaled.size and not np.isfinite(scaled).all():
+    # The range and finiteness checks read only the extremes: a NaN propagates through
+    # `max`/`min`, and an infinity is an extreme. No (n, 3) temporaries -- `np.abs` and
+    # `np.isfinite` of the whole array put the packer's peak memory past its bound.
+    high = float(scaled.max()) if scaled.size else 0.0
+    low = float(scaled.min()) if scaled.size else 0.0
+    if not (math.isfinite(high) and math.isfinite(low)):
         raise SplatFormatError("SPZ positions must be finite; a NaN or infinity cannot be packed")
-    if scaled.size and np.abs(scaled).max() > SPZ_FIXED_MAX:
+    if max(high, -low) > SPZ_FIXED_MAX:
         reach = float(np.abs(positions).max())
         raise SplatFormatError(
             f"an SPZ position reaches {reach:.3f} m from the tile's frame, past the "
