@@ -82,8 +82,19 @@ def _withdraw(db: Session, wanted: list[SiteCreate]) -> None:
         # A capture built again on this machine (`data/tiles/<slug>/site.json`) is wanted.
         if site is not None and slug not in slugs:
             if site.epochs:
-                # Somebody captured it (decision D3): its epochs are theirs, not the seed's.
-                logger.info("kept withdrawn site %s: it holds %d epochs", slug, len(site.epochs))
+                # Somebody captured it (decision D3): the site and its epochs are theirs,
+                # but what the seed put there is still withdrawn (ion assets that 404,
+                # tiles that never reached the bucket), so only the seed's own go.
+                own = [asset for asset in site.assets if asset.epoch_id is None]
+                for asset in own:
+                    site.assets.remove(asset)
+                    removed.append(f"{slug}: {asset.name}")
+                logger.info(
+                    "kept withdrawn site %s: it holds %d epochs; removed %d seeded assets",
+                    slug,
+                    len(site.epochs),
+                    len(own),
+                )
                 continue
             db.delete(site)
             removed.append(slug)

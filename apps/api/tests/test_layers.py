@@ -236,3 +236,72 @@ def test_seed_removes_what_was_withdrawn_from_an_older_database(
     assert demo["license"] is None and demo["attribution"] == []
     assert db.scalar(select(Layer).where(Layer.slug == "sentinel-2")) is None
     assert seed(db) == {"sites": 0, "layers": 0}
+
+
+def test_a_withdrawn_site_that_holds_epochs_keeps_them_and_loses_the_seeds_assets(
+    client: TestClient, db: Session
+) -> None:
+    """A withdrawn site somebody has since captured again (decision D3) is theirs: the site
+    and its epoch's splat stay. What the seed put there is still withdrawn -- an ion asset
+    that 404s is no better for sharing a site with a capture -- so those rows go."""
+    from datetime import UTC, datetime
+
+    from app.models import Asset, Epoch, Site
+    from app.schemas.asset import AssetBase, CesiumIonSource
+    from app.seed.data import DEMO_SITE
+    from app.services import sites as site_service
+    from tests.test_epochs import make_asset, make_epoch
+
+    ion = AssetBase(
+        name="Mygla mesh", representation="mesh", source=CesiumIonSource(asset_id=96188)
+    )
+    site = site_service.create_site(
+        db, DEMO_SITE.model_copy(update={"slug": "mygla", "name": "Mygla", "assets": [ion]})
+    )
+    seeded = [asset.id for asset in site.assets]
+    assert seeded
+    epoch = make_epoch(db, site, 1, observed=datetime(2026, 10, 1, tzinfo=UTC))
+    joined = make_asset(
+        db, site, epoch, "https://cdn.example.com/mygla/tileset.json", created=datetime.now(UTC)
+    )
+    db.commit()
+    db.expire_all()  # as the seed's own session would load it
+
+    seed(db)
+
+    db.expire_all()
+    kept = db.get(Site, site.id)
+    assert kept is not None
+    assert [asset.id for asset in kept.assets] == [joined.id]
+    assert db.get(Epoch, epoch.id) is not None
+    assert all(db.get(Asset, asset_id) is None for asset_id in seeded)
+    assert seed(db) == {"sites": 0, "layers": 0}
+
+
+def test_a_withdrawn_asset_name_on_an_epoch_asset_is_not_withdrawn(
+    client: TestClient, db: Session
+) -> None:
+    """`WITHDRAWN_ASSETS` names the seed's own splat. An epoch asset that happens to carry
+    that name is a capture's, and the seed leaves it."""
+    from datetime import UTC, datetime
+
+    from app.models import Asset
+    from app.seed import WITHDRAWN_ASSETS
+    from app.seed.data import DEMO_SITE
+    from app.services import sites as site_service
+    from tests.test_epochs import make_asset, make_epoch
+
+    site = site_service.create_site(db, DEMO_SITE)
+    epoch = make_epoch(db, site, 1, observed=datetime(2026, 10, 1, tzinfo=UTC))
+    joined = make_asset(
+        db, site, epoch, "https://cdn.example.com/demo/tileset.json", created=datetime.now(UTC)
+    )
+    joined.name = WITHDRAWN_ASSETS[DEMO_SITE.slug][0]
+    db.commit()
+    db.expire_all()
+
+    seed(db)
+
+    db.expire_all()
+    survivor = db.get(Asset, joined.id)
+    assert survivor is not None and survivor.name == WITHDRAWN_ASSETS[DEMO_SITE.slug][0]
