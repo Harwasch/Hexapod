@@ -14,24 +14,28 @@ licences of what they install:
 
 A licence fails when it forbids commercial use (a Creative Commons NC licence, PolyForm
 Noncommercial, a custom identifier with an "NC" part, "non-commercial", "research use only",
-"not for commercial use"), and when a package declares no licence at all, which could be
-anything. Two phrases do not count: "commercial or non-commercial" (the Unlicense, SSLeay:
-permission for both) and the GPL's "occasionally and noncommercially" (a way of passing on
-object code, not a limit on use; numpy's and scipy's wheels carry it for libgfortran).
+"not for commercial use"), and when a package names no licence: none at all, a placeholder
+("UNKNOWN", whether as `License-Expression` or as text, "none", "unlicensed"), or a pointer to
+a file ("SEE LICENSE IN LICENSE"), any of which could be anything. Two phrases do not count:
+"commercial or non-commercial" (the Unlicense, SSLeay: permission for both) and the GPL's
+"occasionally and noncommercially" (a way of passing on object code, not a limit on use;
+numpy's and scipy's wheels carry it for libgfortran).
 
 Reviewed exceptions live in `scripts/dependency_licence_allowlist.json`: ecosystem, package
-name, a substring of the licence as reported, and why. An entry that allows nothing is stale
+name, a substring of the licence as reported, why, and who read the licence (`checked_by`) on
+which day (`checked_on`, YYYY-MM-DD). An entry that allows nothing is stale
 and fails, but only in a run that read every environment of its ecosystem (a CI job has one
 venv). Standard library only (Python 3.10+).
 
     python3 scripts/dependency_licences.py [--root DIR] [--project DIR]... [--python PY]...
         [--skip NAME]... [--pnpm | --pnpm-json FILE] [--allowlist FILE] [--json]
 
-`--project` reads that uv project's `.venv` (leaving out the project's own install),
-`--python` any interpreter's packages (`--skip NAME` leaves one out, such as the project the
-interpreter belongs to). With none of these: every project in `PROJECTS` that has a `.venv`,
-and pnpm when `node_modules` exists. Exit 0: clean. 1: a non-commercial or undeclared licence not on
-the allowlist. 2: a stale or invalid allowlist entry, or an environment that cannot be read.
+`--project` reads that uv project's `.venv` (leaving out the project's own install), `--python`
+any interpreter's packages (`--skip NAME` leaves one out, such as the project the interpreter
+belongs to). With none of these: every project in `PROJECTS` that has a `.venv`, and pnpm when
+`node_modules` exists. Exit 0: clean. 1: a non-commercial, undeclared or see-file licence not
+on the allowlist. 2: a stale or invalid allowlist entry, or an environment that cannot be read
+(a pnpm listing that names no package counts: it cannot be told from a failed listing).
 """
 
 from __future__ import annotations
@@ -43,12 +47,15 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Iterable, Sequence
+from datetime import date
 from pathlib import Path
 from typing import Any, NamedTuple
 
 #: The uv projects whose environments build or run what the product ships.
 PROJECTS = ("tools/pipeline", "tools/captures", "apps/api")
 ECOSYSTEMS = ("python", "npm")
+#: An allowlist entry's fields, all required.
+KEYS = ("ecosystem", "name", "licence", "reason", "checked_by", "checked_on")
 
 #: Wording of a licence that forbids commercial use; case-insensitive, any field.
 NON_COMMERCIAL = re.compile(
@@ -64,7 +71,10 @@ NC_TOKEN = re.compile(r"(?<![A-Za-z0-9])NC(?![A-Za-z])")
 PERMISSIVE = re.compile(r"(?i)\bcommercial (?:and|or) non-?commercial")
 #: A free-text `License` this long or shorter, on one line, is an identifier, not a text.
 SHORT = 100
-UNDECLARED = frozenset({"", "unknown", "none", "unlicensed", "see license", "see licence"})
+#: Placeholders that name no licence, compared lower-cased.
+UNDECLARED = frozenset({"", "unknown", "none", "unlicensed", "unlicenced", "n/a"})
+#: A pointer to a file instead of a licence ("SEE LICENSE IN LICENSE", npm's convention).
+SEE_FILE = re.compile(r"(?i)^see licen[cs]e\b")
 #: Classifiers that say nothing about which licence.
 VACUOUS = frozenset({"License ::", "License :: OSI Approved"})
 
@@ -89,7 +99,7 @@ class Package(NamedTuple):
     licence: str
     #: Where it was found: a project, an interpreter or "pnpm".
     where: str
-    #: "non-commercial", "undeclared", or "" when the licence is fine.
+    #: "non-commercial", "undeclared", "see-file", or "" when the licence is fine.
     problem: str
 
 
@@ -109,8 +119,11 @@ def normalise(name: str) -> str:
 def problem_of(
     expression: str | None, classifiers: Sequence[str] = (), text: str | None = None
 ) -> str:
-    """ "non-commercial", "undeclared" or "" for one package's licence fields: an SPDX-style
-    expression, `License ::` classifiers and a free text (which may be a whole licence)."""
+    """ "non-commercial", "undeclared", "see-file" or "" for one package's licence fields: an
+    SPDX-style expression, `License ::` classifiers and a free text (which may be a whole
+    licence). A licence is named only by a field that is neither a placeholder nor a pointer
+    to a file; with none, the package is "see-file" if some field points to a file, else
+    "undeclared"."""
     free = (text or "").strip()
     short = [field for field in [(expression or "").strip(), *classifiers] if field]
     if free and "\n" not in free and len(free) <= SHORT:
@@ -119,10 +132,14 @@ def problem_of(
         return "non-commercial"
     if any(NC_TOKEN.search(field) for field in short):
         return "non-commercial"
-    named = [c for c in classifiers if c.strip() not in VACUOUS]
-    if not (expression or "").strip() and not named and free.lower() in UNDECLARED:
-        return "undeclared"
-    return ""
+    fields = [
+        (expression or "").strip(),
+        free,
+        *(c for c in classifiers if c.strip() not in VACUOUS),
+    ]
+    if any(f.lower() not in UNDECLARED and not SEE_FILE.match(f) for f in fields):
+        return ""
+    return "see-file" if any(SEE_FILE.match(f) for f in fields) else "undeclared"
 
 
 def project_name(root: Path, project: str) -> str | None:
@@ -217,7 +234,7 @@ def run_pnpm(root: Path) -> dict[str, Any]:
             check=True,
             text=True,
         )
-        listing: dict[str, Any] = json.loads(done.stdout or "{}")
+        listing: dict[str, Any] = json.loads(done.stdout)
     except (OSError, subprocess.CalledProcessError, ValueError) as problem:
         raise UnreadableError(f"pnpm: cannot list licences ({problem})") from None
     return listing
@@ -225,7 +242,8 @@ def run_pnpm(root: Path) -> dict[str, Any]:
 
 def load_allowlist(path: Path) -> list[dict[str, str]]:
     """The entries, each checked: a known ecosystem, a package name, a substring of its
-    reported licence, and a reason, all non-empty strings."""
+    reported licence, a reason and who checked it, all non-empty strings, and the day they
+    checked it as YYYY-MM-DD."""
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as problem:
@@ -239,7 +257,7 @@ def load_allowlist(path: Path) -> list[dict[str, str]]:
     for number, entry in enumerate(entries):
         if not isinstance(entry, dict):
             raise AllowlistError(f"{path}: entry {number} is not an object")
-        for key in ("ecosystem", "name", "licence", "reason"):
+        for key in KEYS:
             value = entry.get(key)
             if not isinstance(value, str) or not value.strip():
                 raise AllowlistError(f"{path}: entry {number} needs a non-empty {key!r}")
@@ -247,7 +265,14 @@ def load_allowlist(path: Path) -> list[dict[str, str]]:
             raise AllowlistError(
                 f"{path}: entry {number} names no ecosystem: {entry['ecosystem']!r}"
             )
-        out.append({key: str(entry[key]) for key in ("ecosystem", "name", "licence", "reason")})
+        try:
+            date.fromisoformat(entry["checked_on"])
+        except ValueError:
+            raise AllowlistError(
+                f"{path}: entry {number} needs 'checked_on' as YYYY-MM-DD, not "
+                f"{entry['checked_on']!r}"
+            ) from None
+        out.append({key: str(entry[key]) for key in KEYS})
     return out
 
 
@@ -332,6 +357,8 @@ def collect(
         notes.append("pnpm: no node_modules (run `pnpm install`), not checked")
     if listing is not None:
         found = pnpm_packages(listing)
+        if not found:
+            raise UnreadableError("pnpm: the licence listing names no package")
         packages += found
         notes.append(f"pnpm: {len(found)} production packages")
     complete = {"python": read >= set(PROJECTS), "npm": listing is not None}

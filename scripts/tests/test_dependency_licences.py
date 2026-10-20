@@ -71,10 +71,41 @@ def test_a_permissive_licence_passes(
     assert deps.problem_of(expression, classifiers, text) == ""
 
 
-@pytest.mark.parametrize("text", [None, "", "UNKNOWN", "Unknown"])
+@pytest.mark.parametrize("text", [None, "", "UNKNOWN", "Unknown", "none"])
 def test_a_package_that_declares_no_licence_fails(text: str | None) -> None:
     assert deps.problem_of(None, [], text) == "undeclared"
     assert deps.problem_of(None, ["License :: OSI Approved"], text) == "undeclared"
+
+
+@pytest.mark.parametrize("expression", ["UNKNOWN", "unknown", " "])
+def test_a_placeholder_expression_names_no_licence(expression: str) -> None:
+    # `License-Expression: UNKNOWN` is what some build backends write when none was given.
+    assert deps.problem_of(expression, [], None) == "undeclared"
+    assert deps.problem_of(expression, [], "UNKNOWN") == "undeclared"
+    # A real licence in another field still names one.
+    assert deps.problem_of(expression, ["License :: OSI Approved :: MIT License"], None) == ""
+
+
+@pytest.mark.parametrize(
+    ("expression", "text"),
+    [
+        (None, "SEE LICENSE IN LICENSE"),
+        (None, "See license in LICENSE.txt"),
+        ("SEE LICENSE IN COPYING", None),
+        ("UNKNOWN", "see licence in LICENCE"),
+    ],
+)
+def test_a_pointer_to_a_licence_file_fails(expression: str | None, text: str | None) -> None:
+    assert deps.problem_of(expression, [], text) == "see-file"
+    assert deps.problem_of(expression, ["License :: OSI Approved"], text) == "see-file"
+
+
+def test_an_empty_pnpm_listing_is_an_error(tmp_path: Path) -> None:
+    empty = _allowlist(tmp_path, [])
+    for text in ("{}", ""):
+        listing = tmp_path / "pnpm.json"
+        listing.write_text(text, encoding="utf-8")
+        assert deps.main(["--pnpm-json", str(listing), "--allowlist", str(empty)]) == 2
 
 
 def test_installed_metadata_rows_become_packages() -> None:
@@ -112,7 +143,9 @@ LISTING = {
     "MIT": [{"name": "left-pad", "versions": ["1.3.0"]}],
     f"CC-BY-{NC}-SA-4.0": [{"name": "pretty-shapes", "versions": ["2.0.0"]}],
     "Unknown": [{"name": "mystery", "versions": ["0.1.0"]}],
+    "SEE LICENSE IN LICENSE": [{"name": "elsewhere", "versions": ["3.0.0"]}],
 }
+CHECKED = {"checked_by": "a reviewer", "checked_on": "2026-10-20"}
 
 
 def test_pnpm_packages_are_checked_by_their_licence(tmp_path: Path) -> None:
@@ -121,31 +154,46 @@ def test_pnpm_packages_are_checked_by_their_licence(tmp_path: Path) -> None:
         "left-pad": "",
         "pretty-shapes": "non-commercial",
         "mystery": "undeclared",
+        "elsewhere": "see-file",
     }
     listing = _listing(tmp_path, LISTING)
     empty = _allowlist(tmp_path, [])
     assert deps.main(["--pnpm-json", str(listing), "--allowlist", str(empty)]) == 1
 
 
-def test_a_reviewed_exception_needs_its_licence_and_a_reason(tmp_path: Path) -> None:
+def test_a_reviewed_exception_needs_its_licence_a_reason_and_who_checked_when(
+    tmp_path: Path,
+) -> None:
     listing = _listing(tmp_path, LISTING)
     entries = [
         {"ecosystem": "npm", "name": "pretty-shapes", "licence": f"BY-{NC}-SA", "reason": "dev"},
         {"ecosystem": "npm", "name": "mystery", "licence": "Unknown", "reason": "read its file"},
+        {"ecosystem": "npm", "name": "elsewhere", "licence": "SEE", "reason": "its LICENSE: MIT"},
     ]
+    entries = [{**entry, **CHECKED} for entry in entries]
     allow = _allowlist(tmp_path, entries)
     assert deps.main(["--pnpm-json", str(listing), "--allowlist", str(allow)]) == 0
-    wrong = _allowlist(tmp_path, [{**entries[0], "licence": "MIT"}, entries[1]])
+    # Without the see-file entry, the pointer to a file is a finding.
+    some = _allowlist(tmp_path, entries[:2])
+    assert deps.main(["--pnpm-json", str(listing), "--allowlist", str(some)]) == 1
+    wrong = _allowlist(tmp_path, [{**entries[0], "licence": "MIT"}, *entries[1:]])
     assert deps.main(["--pnpm-json", str(listing), "--allowlist", str(wrong)]) == 2  # stale
-    blank = _allowlist(tmp_path, [{**entries[0], "reason": " "}])
-    assert deps.main(["--pnpm-json", str(listing), "--allowlist", str(blank)]) == 2
-    other = _allowlist(tmp_path, [{**entries[0], "ecosystem": "cargo"}])
-    assert deps.main(["--pnpm-json", str(listing), "--allowlist", str(other)]) == 2
+    for key, value in [("reason", " "), ("ecosystem", "cargo"), ("checked_by", "")]:
+        bad = _allowlist(tmp_path, [{**entries[0], key: value}, *entries[1:]])
+        assert deps.main(["--pnpm-json", str(listing), "--allowlist", str(bad)]) == 2, key
+    for key in ("checked_by", "checked_on"):
+        unsigned = {k: v for k, v in entries[1].items() if k != key}
+        bad = _allowlist(tmp_path, [entries[0], unsigned, entries[2]])
+        assert deps.main(["--pnpm-json", str(listing), "--allowlist", str(bad)]) == 2, key
+    for day in ("yesterday", "20/10/2026", "2026-13-01"):
+        bad = _allowlist(tmp_path, [{**entries[0], "checked_on": day}, *entries[1:]])
+        assert deps.main(["--pnpm-json", str(listing), "--allowlist", str(bad)]) == 2, day
 
 
 def test_a_python_entry_is_stale_only_after_every_project_was_read(tmp_path: Path) -> None:
     listing = _listing(tmp_path, {"MIT": [{"name": "left-pad", "versions": ["1"]}]})
     entry = {"ecosystem": "python", "name": "gone", "licence": "X", "reason": "was reviewed"}
+    entry.update(CHECKED)
     allow = _allowlist(tmp_path, [entry])
     # One CI job reads one environment, so an entry for another one is not stale there.
     assert deps.main(["--pnpm-json", str(listing), "--allowlist", str(allow)]) == 0
@@ -173,4 +221,4 @@ def test_uv_lock_names_are_read(tmp_path: Path) -> None:
 
 def test_the_repository_allowlist_is_well_formed() -> None:
     for entry in deps.load_allowlist(ROOT / "scripts" / "dependency_licence_allowlist.json"):
-        assert entry["reason"].strip()
+        assert entry["reason"].strip() and entry["checked_by"].strip()
