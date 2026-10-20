@@ -271,6 +271,20 @@ pnpm lint && pnpm typecheck && pnpm test`, `pnpm e2e` if `apps/web` changed, plu
   (`worker/params.located_point`) or `manual_placement` refuses the run; and anything turned from
   frame metres into degrees uses the exact ENU inverse, never the flat 111,320 m/° (metres out at
   2 km).
+- A run's `site_context` (its site's reference epoch, check targets and the capture's clicks,
+  `worker/site_context.py`) is seeded once and frozen: a resumed or retried run keeps the
+  reference it started with, and a target edited meanwhile reaches only the next run. The
+  reference is the best-verdict, oldest published epoch whose run kept frames, poses,
+  `placement.json` and `georef.json`; a re-run of an epoch only takes one that joined before it.
+- Every quality gate ships **off** (D4). One turned on rejects the capture on its first
+  attempt (retry kind `quality-gate`, never retried) and keeps it as a `rejected` epoch, with
+  the gate in `alignment`; a later run that passes publishes the same epoch.
+- `uv run` in `tools/pipeline` without `--no-sync` removes pycolmap (installed by hand, as CI
+  does); `apps/api/tests/test_registration_live.py` runs only with `COLMAP_GLOBAL_PYTHON` set to
+  an interpreter that has pycolmap 4.2, and skips in CI.
+- `georef_method` and `scale_source` keep their Postgres enum order equal to the Python members'
+  (`test_0010_*`, `test_0033_*`): a new value goes in where the enum declares it, `BEFORE` the
+  "nothing" member, and its downgrade rebuilds the type.
 - Postgres may need `service postgresql start` before `apps/api` tests — and a fresh
   container may have no database at all. What worked here: `apt-get update && apt-get
 install -y postgresql-16-postgis-3`, then create a `twin` role with password `twin` and
