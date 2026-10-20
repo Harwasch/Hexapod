@@ -30,6 +30,10 @@ each, one machine: an order of magnitude, not a bound). The two indexes on table
 and `ix_sites_boundary_geography` -- are built CONCURRENTLY after that commit, so they do not
 add to it.
 
+Re-runs. If an index build fails after that commit, 0032 is not recorded; running
+`alembic upgrade` again skips the committed part, drops an index the failed build left
+INVALID, and builds both again (test_0032_re_runs_after_an_index_build_fails).
+
 Downgrade drops the tables and columns and nothing else: no asset row is deleted and no
 `source` is touched. A site with several revisions of one epoch is then a site with
 several splat assets; the newest stays `default_visible`, and a 0031 worker would repoint
@@ -60,7 +64,61 @@ PLATFORMS = ("rtk-drone", "drone", "phone-video", "phone-photo", "unknown")
 OBSERVED_AT_SOURCES = ("captured-at", "manifest", "created")
 
 
+#: The two indexes built CONCURRENTLY, after the transactional part commits: name, target.
+CONCURRENT_INDEXES = (
+    ("ix_assets_epoch_id", "assets (epoch_id)"),
+    # The one `services/epochs.nearest_framed_site` uses: it measures on the ellipsoid,
+    # `geography(boundary)`, which the geometry gist index (`idx_sites_boundary`) cannot
+    # answer.
+    ("ix_sites_boundary_geography", "sites USING gist (geography(boundary))"),
+)
+
+
 def upgrade() -> None:
+    # Re-runnable. Everything but the two indexes is one transaction, committed before
+    # they are built; if a build then fails, 0032 is never recorded and the next
+    # `alembic upgrade` runs it again. It then finds that transaction's work committed --
+    # all of it, since it is one transaction, so its first table stands for the rest --
+    # and goes straight to the indexes, rather than dying at CREATE TABLE or
+    # backfilling twice.
+    if not _committed_before():
+        _tables_and_backfill()
+    _build_indexes()
+
+
+def _committed_before() -> bool:
+    """True when an earlier run of 0032 committed its transactional part."""
+    if op.get_context().as_sql:
+        return False  # offline SQL: there is no database to ask
+    return bool(
+        op.get_bind().execute(sa.text("SELECT to_regclass('site_frames') IS NOT NULL")).scalar()
+    )
+
+
+def _build_indexes() -> None:
+    """The two indexes on tables that already hold rows, built CONCURRENTLY so neither
+    blocks writes while it is built: outside the transaction, which commits here (an
+    autocommit block). A concurrent build that failed leaves its index behind INVALID,
+    which `IF NOT EXISTS` would keep: such an index is dropped and built again."""
+    with op.get_context().autocommit_block():
+        for name, target in CONCURRENT_INDEXES:
+            if (
+                not op.get_context().as_sql
+                and op.get_bind()
+                .execute(
+                    sa.text(
+                        "SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+                        "WHERE c.relname = :name AND NOT i.indisvalid"
+                    ),
+                    {"name": name},
+                )
+                .first()
+            ):
+                op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
+            op.execute(f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON {target}")
+
+
+def _tables_and_backfill() -> None:
     op.create_table(
         "site_frames",
         sa.Column(
@@ -267,22 +325,6 @@ def upgrade() -> None:
         """
     )
     op.execute("DROP TABLE IF EXISTS _m0032_registered")
-
-    # The two indexes on tables that already hold rows, built CONCURRENTLY so neither
-    # blocks writes while it is built: outside the transaction, which commits here (an
-    # autocommit block). `IF NOT EXISTS` makes a re-run after a failure here safe; a build
-    # that failed leaves an INVALID index, which `DROP INDEX` and a re-run replace.
-    # `ix_sites_boundary_geography` is the one `services/epochs.nearest_framed_site` uses:
-    # it measures on the ellipsoid, `geography(boundary)`, which the geometry gist index
-    # (`idx_sites_boundary`) cannot answer.
-    with op.get_context().autocommit_block():
-        op.execute(
-            "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_assets_epoch_id ON assets (epoch_id)"
-        )
-        op.execute(
-            "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_sites_boundary_geography "
-            "ON sites USING gist (geography(boundary))"
-        )
 
 
 def downgrade() -> None:
