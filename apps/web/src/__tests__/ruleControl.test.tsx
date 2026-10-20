@@ -183,6 +183,10 @@ describe("Per cell", () => {
     expect(screen.getByTestId("views-rule-ended")).toHaveTextContent(VIEW_RULE_ENDED.compare);
     // Said once: the note before gives way to why the rule ended.
     expect(screen.queryByTestId("views-rule-compare")).toBeNull();
+    act(() => useViewRule.setState({ ended: { siteId: SITE_ID, reason: "one-model" } }));
+    expect(screen.getByTestId("views-rule-ended")).toHaveTextContent(
+      "Per-cell dates ended: one model was asked for by itself (a version, or Retry)",
+    );
     act(() => useViewRule.setState({ ended: { siteId: SITE_ID, reason: "living" } }));
     expect(screen.getByTestId("views-rule-ended")).toHaveTextContent(VIEW_RULE_ENDED.living);
     // Another site's rule that ended says nothing here.

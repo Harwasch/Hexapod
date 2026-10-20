@@ -374,6 +374,14 @@ describe("a per-cell view rule", () => {
     expect(drawn()).toEqual({ [A1.id]: DRAWN, [A2.id]: DRAWN, [A3.id]: ALONE });
   });
 
+  it("ends, saying why, when one model is asked for by itself (a version, Retry)", async () => {
+    const { manager, rules } = harness();
+    await open(manager);
+    await manager.setViewRule("latest");
+    await manager.setTemporalAsset(A1.id);
+    expect(rules).toEqual([{ rule: "latest" }, { rule: null, reason: "one-model" }]);
+  });
+
   it("ends when the site is no longer the primary one or unloads", async () => {
     const { manager, rules } = harness();
     await open(manager);

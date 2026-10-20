@@ -1407,7 +1407,7 @@ export class SiteManager {
     this.active.epochId = ofEpoch ? asset.epochId : this.active.epochId;
     this.active.pinnedAssetId = ofEpoch ? null : assetId;
     this.endCompare(this.active);
-    this.endRule(this.active);
+    this.endRule(this.active, "one-model");
     if (asset.representation !== this.active.representation) {
       this.active.representation = asset.representation;
       this.events.emit("representation", {

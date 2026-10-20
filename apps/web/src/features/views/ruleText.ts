@@ -22,6 +22,7 @@ export const VIEW_RULE_ENDED: Record<ViewRuleEnd, string> = {
   changed: "Per-cell dates ended: the dates can no longer be drawn as one here",
   living:
     "Per-cell dates ended: a Living Survey rig moves this scan, and its motion needs the scan drawn on its own",
+  "one-model": "Per-cell dates ended: one model was asked for by itself (a version, or Retry)",
   unsupported: "Per-cell dates ended: this CesiumJS build cannot draw them",
 };
 

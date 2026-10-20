@@ -39,7 +39,7 @@ import { ageBucket } from "./dataAge";
 export type ViewRule = "latest" | "ground-truth" | "highlight-invented" | "data-age";
 
 /** Why a rule ended without being turned off (SiteManager `setViewRule`). */
-export type ViewRuleEnd = "compare" | "changed" | "living" | "unsupported";
+export type ViewRuleEnd = "compare" | "changed" | "living" | "one-model" | "unsupported";
 
 /** A cell no date owns: nothing is drawn there under a rule. */
 export const NO_OWNER = 255;
