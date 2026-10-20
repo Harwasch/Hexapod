@@ -14,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { queryKeys } from "@/api/queries";
 import { RepresentationSwitcher } from "@/features/sites/RepresentationSwitcher";
 import { SiteLoadStatus } from "@/features/sites/SiteLoadStatus";
+import { useInferred } from "@/state/inferred";
+import { useSettings } from "@/state/settings";
 import { useSites } from "@/state/sites";
 
 import { A1, A2, E1, E2, SITE_ID, twoEpochSite } from "./epochFixtures";
@@ -50,7 +52,12 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  useInferred.setState({ layers: {} });
+  useSettings.getState().reset();
+  useSites.setState({ compareDates: null });
+});
 
 describe("the controls follow the shown epoch", () => {
   it("Methods and the objects search are handed the shown epoch's asset", () => {
@@ -62,6 +69,35 @@ describe("the controls follow the shown epoch", () => {
     expect(screen.getByTestId("methods-asset")).toHaveTextContent(A1.id);
     act(() => useSites.setState({ epoch: { [SITE_ID]: E2.id } }));
     expect(screen.getByTestId("search-asset")).toHaveTextContent(A2.id);
+  });
+
+  it("with two dates compared, the Inferred control and legend speak for either date's fill", () => {
+    // The older date has fill, the latest (the one date chosen) has none.
+    useInferred.setState({
+      layers: {
+        [A1.id]: [
+          {
+            kind: "inferred",
+            filler: "nvidia-fixer",
+            views: 3,
+            gaussians: 10,
+            meanConfidence: 0.5,
+          },
+        ],
+      },
+    });
+    useSettings.getState().set({ inferredStyle: "show" });
+    show(<RepresentationSwitcher />);
+    expect(screen.queryByTestId("inferred-style")).toBeNull();
+    // Compared, March's fill is drawn on its side: it is labelled as inferred.
+    act(() => useSites.setState({ compareDates: { siteId: SITE_ID, left: E1.id, right: E2.id } }));
+    expect(screen.getByTestId("inferred-style")).toBeInTheDocument();
+    expect(screen.getByTestId("inferred-legend")).toBeInTheDocument();
+    // Another site's comparison is not this one's.
+    act(() =>
+      useSites.setState({ compareDates: { siteId: "elsewhere", left: E1.id, right: E2.id } }),
+    );
+    expect(screen.queryByTestId("inferred-style")).toBeNull();
   });
 
   it("the load pill speaks for the shown epoch's model", () => {
