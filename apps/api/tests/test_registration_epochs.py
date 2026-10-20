@@ -302,3 +302,141 @@ def test_a_run_with_no_georef_leaves_its_site_frameless(
     assert db.get(SiteFrame, capture.site_id) is None
     [epoch] = _epochs(db, capture.site_id)
     assert epoch.ordinal == 1
+
+
+# ── Joining a site (the capture's first run, onto a site that exists) ──────────────────
+
+
+def _echoed(site_id: uuid.UUID, **georef: Any) -> dict[str, Any]:
+    """`_document()` as a run placed in `site_id`'s frame (about LAT, LON, HEIGHT) writes it."""
+    document = _document()
+    document["georef"].update(georef)
+    document["georef"]["siteFrame"] = {
+        "siteId": str(site_id),
+        "lat": document["georef"]["lat"],
+        "lon": document["georef"]["lon"],
+        "height": document["georef"]["height"],
+        "offsetM": [0.0, 10.0, 0.0],
+        "offsetSource": "capture",
+        "located": None,
+    }
+    return document
+
+
+def test_an_explicit_site_without_a_frame_gets_one_from_its_first_epoch(
+    db: Session, storage: S3Storage, tmp_path: Path, client: Any
+) -> None:
+    from tests.conftest import site_payload
+
+    created = client.post("/api/v1/sites", json=site_payload(slug="ranch"))
+    assert created.status_code == 201, created.text
+    site_id = uuid.UUID(created.json()["id"])
+    [legacy] = _assets(db, site_id)
+    legacy_row = db.execute(
+        text("SELECT to_jsonb(a) FROM assets a WHERE id = :id"), {"id": legacy.id}
+    ).scalar_one()
+    capture = _capture(db, metadata_={"siteId": str(site_id)})
+
+    run(db, storage, tmp_path, capture)
+
+    db.expire_all()
+    assert capture.site_id == site_id
+    frame = db.get(SiteFrame, site_id)
+    assert frame is not None and (frame.lat, frame.lon, frame.source) == (
+        LAT,
+        LON,
+        "registration",
+    )
+    [epoch] = _epochs(db, site_id)
+    assert (epoch.ordinal, epoch.join_method) == (1, "explicit")
+    # The seeded or hand-made asset is not this epoch's and is not touched.
+    after = db.execute(
+        text("SELECT to_jsonb(a) FROM assets a WHERE id = :id"), {"id": legacy.id}
+    ).scalar_one()
+    assert after == legacy_row
+    assert {a.epoch_id for a in _assets(db, site_id)} == {None, epoch.id}
+
+
+def test_an_echoed_frame_joins_that_site_as_the_next_epoch(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    first = _capture(db, "first")
+    run(db, storage, tmp_path, first)
+    assert first.site_id is not None
+    named = _capture(db, "named", metadata_={"siteId": str(first.site_id)})
+    matched = _capture(db, "matched")
+
+    run(db, storage, tmp_path, named, _echoed(first.site_id))
+    run(db, storage, tmp_path, matched, _echoed(first.site_id))
+
+    assert named.site_id == matched.site_id == first.site_id
+    epochs = _epochs(db, first.site_id)
+    assert [(e.ordinal, e.join_method) for e in epochs] == [
+        (1, "new-site"),
+        (2, "explicit"),
+        (3, "spatial"),
+    ]
+    assert [e.capture_id for e in epochs] == [first.id, named.id, matched.id]
+    # A later epoch is not the default view until the timeline exists (M2b).
+    visible = {a.epoch_id: a.default_visible for a in _assets(db, first.site_id)}
+    assert visible == {epochs[0].id: True, epochs[1].id: False, epochs[2].id: False}
+    assert _count(db, Site) == 1
+
+
+def test_an_echo_whose_site_has_another_frame_is_refused(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    first = _capture(db, "first")
+    run(db, storage, tmp_path, first)
+    assert first.site_id is not None
+    other = _capture(db, "other")
+    elsewhere = _echoed(first.site_id, lat=LAT + 0.001)
+
+    with pytest.raises(registration.FrameMismatch, match="that site now has"):
+        run(db, storage, tmp_path, other, elsewhere)
+    db.rollback()
+    assert len(_epochs(db, first.site_id)) == 1
+
+
+def test_an_echo_naming_a_deleted_site_makes_a_new_site_in_that_frame(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    gone = uuid.uuid4()
+    capture = _capture(db)
+
+    run(db, storage, tmp_path, capture, _echoed(gone))
+
+    assert capture.site_id is not None and capture.site_id != gone
+    frame = db.get(SiteFrame, capture.site_id)
+    assert frame is not None
+    assert (frame.lat, frame.lon, frame.height, frame.source) == (LAT, LON, HEIGHT, "echo")
+    [epoch] = _epochs(db, capture.site_id)
+    assert epoch.join_method == "new-site"
+
+
+def test_a_joined_epoch_grows_the_site_boundary(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    from geoalchemy2.shape import to_shape
+
+    first = _capture(db, "first")
+    run(db, storage, tmp_path, first)
+    assert first.site_id is not None
+    site = db.get(Site, first.site_id)
+    assert site is not None
+    before = to_shape(site.boundary)
+    centroid = to_shape(site.centroid)
+    north = _echoed(first.site_id)
+    north["bboxLocalM"] = {"min": [-4.0, 40.0, -1.0], "max": [6.0, 50.0, 3.0]}
+    second = _capture(db, "second")
+
+    run(db, storage, tmp_path, second, north)
+
+    db.expire_all()
+    site = db.get(Site, first.site_id)
+    assert site is not None
+    after = to_shape(site.boundary)
+    epochs = _epochs(db, first.site_id)
+    assert after.covers(before) and after.area > before.area
+    assert all(after.buffer(1e-9).covers(to_shape(e.footprint)) for e in epochs)
+    assert to_shape(site.centroid).equals(centroid)

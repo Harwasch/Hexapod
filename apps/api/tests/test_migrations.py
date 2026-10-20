@@ -4,6 +4,7 @@ import json
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from alembic.config import Config
 from fastapi.testclient import TestClient
@@ -13,6 +14,7 @@ from sqlalchemy.orm import Session
 from alembic import command
 from app.models import Asset, Capture, Job, JobStep
 from app.models.enums import AssetProvider, CaptureKind, Representation, RunStatus, ScaleSource
+from app.storage import S3Storage
 
 
 def test_migrations_round_trip(alembic_config: Config, engine: Engine) -> None:
@@ -541,3 +543,42 @@ def test_the_epoch_vocabularies_match_their_check_constraints(engine: Engine) ->
     for name, vocabulary in expected.items():
         quoted = set(re.findall(r"'([^']*)'", definitions[name]))
         assert quoted == {member.value for member in vocabulary}, name
+
+
+def test_0032_downgrade_keeps_every_asset_and_its_source(
+    alembic_config: Config, engine: Engine, db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Two epochs, one with two revisions, then down to 0031: every asset row and every
+    `source` survives; only the new tables and columns go."""
+    from tests.test_registration_epochs import _capture, _echoed, run
+
+    first = _capture(db, "first")
+    run(db, storage, tmp_path, first)
+    run(db, storage, tmp_path, first)
+    assert first.site_id is not None
+    second = _capture(db, "second")
+    run(db, storage, tmp_path, second, _echoed(first.site_id))
+    db.commit()
+    with engine.connect() as connection:
+        before = {
+            str(row.id): row.source
+            for row in connection.execute(text("SELECT id, source FROM assets")).all()
+        }
+    assert len(before) == 3
+    db.rollback()
+    db.close()
+
+    command.downgrade(alembic_config, "0031")
+    try:
+        inspector = inspect(engine)
+        assert not inspector.has_table("epochs") and not inspector.has_table("site_frames")
+        columns = {column["name"] for column in inspector.get_columns("assets")}
+        assert "epoch_id" not in columns and "source_kind" not in columns
+        with engine.connect() as connection:
+            after = {
+                str(row.id): row.source
+                for row in connection.execute(text("SELECT id, source FROM assets")).all()
+            }
+        assert after == before
+    finally:
+        command.upgrade(alembic_config, "head")

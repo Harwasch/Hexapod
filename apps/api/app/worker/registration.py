@@ -671,12 +671,88 @@ def _target(
     registration: Registration,
     echo: FrameEcho | None,
 ) -> tuple[Site, SiteFrame | None, EpochJoinMethod]:
-    """The site a capture's first registered run makes it an epoch of, and how it got there."""
+    """The site a capture's first registered run makes it an epoch of, and how it got there.
+
+    * The run was placed in a site's frame (`echo`): that site, locked, if it still has
+      that frame -- `explicit` when the capture named it, else `spatial` (the worker
+      matched it by location before the run). A site that has no frame or another one
+      is a `FrameMismatch`; a site deleted since is re-made in the echoed frame
+      (`SiteFrameSource.ECHO`), because the tiles are about that origin.
+    * No frame, but the capture named a site that has none: this run is that site's first
+      epoch and defines its frame (`explicit`). If that site gained a frame while the run
+      was going, the run's tiles are not in it: a new site, with a warning.
+    * Otherwise a new site, in a frame about this run's georeference. There is no spatial
+      match here: a run given no frame has tiles about its own origin.
+    """
+    explicit = epochs.requested_site(db, capture)
+    if echo is not None:
+        site = db.get(Site, echo.site_id, with_for_update=True, populate_existing=True)
+        if site is not None:
+            frame = site.frame
+            if frame is None or (frame.lat, frame.lon, frame.height) != (
+                echo.lat,
+                echo.lon,
+                echo.height,
+            ):
+                held = (
+                    "no frame" if frame is None else f"({frame.lat}, {frame.lon}, {frame.height})"
+                )
+                raise FrameMismatch(
+                    f"the run was placed in site {site.id}'s frame at ({echo.lat}, {echo.lon}, "
+                    f"{echo.height}), but that site now has {held}"
+                )
+            named = explicit is not None and explicit.id == site.id
+            return site, frame, EpochJoinMethod.EXPLICIT if named else EpochJoinMethod.SPATIAL
+        log.warning(
+            "register: capture %s was placed in site %s's frame, which is gone; a new site "
+            "is made in that frame",
+            capture.id,
+            echo.site_id,
+        )
+        site = _new_site(db, capture, job_id, registration)
+        frame = SiteFrame(
+            site_id=site.id,
+            lat=echo.lat,
+            lon=echo.lon,
+            height=echo.height,
+            height_datum=HeightDatum.MSL_UNVERIFIED.value,
+            epsg=epochs.utm_epsg(echo.lat, echo.lon),
+            source=SiteFrameSource.ECHO.value,
+        )
+        db.add(frame)
+        return site, frame, EpochJoinMethod.NEW_SITE
+    if explicit is not None:
+        site = db.get(Site, explicit.id, with_for_update=True, populate_existing=True)
+        if site is not None and site.frame is None:
+            frame = _frame_from_registration(site.id, registration, SiteFrameSource.REGISTRATION)
+            if frame is not None:
+                db.add(frame)
+            return site, frame, EpochJoinMethod.EXPLICIT
+        log.warning(
+            "register: capture %s named site %s, which gained a frame while the run was "
+            "going; its tiles are not in that frame, so it is a new site",
+            capture.id,
+            explicit.id,
+        )
+    elif _near_a_framed_site(db, registration) is not None:
+        log.info(
+            "register: capture %s lies within %g m of a framed site but its run was given no "
+            "frame; it is a new site",
+            capture.id,
+            epochs.SPATIAL_JOIN_BUFFER_M,
+        )
     site = _new_site(db, capture, job_id, registration)
     frame = _frame_from_registration(site.id, registration, SiteFrameSource.REGISTRATION)
     if frame is not None:
         db.add(frame)
     return site, frame, EpochJoinMethod.NEW_SITE
+
+
+def _near_a_framed_site(db: Session, registration: Registration) -> Site | None:
+    origin = placement.registered_origin({"registration": registration.document})
+    if origin is None:
+        return None
+    return epochs.nearest_framed_site(db, origin.lat, origin.lon)
 
 
 def _new_asset(
