@@ -212,11 +212,12 @@ maxAreas 1..8}`. The finest level's weak cells (weak-v1, where the summary is st
    To the globe through the **site frame's own tangent plane** (PROJ `topocentric`, inverted):
    the exact inverse of how the pipeline placed the tiles. The design's azimuthal-equidistant
    projection is not that plane — it measures on the ellipsoid, and at a 1,500 m origin a point
-   1 km east lands 23 cm short. A budget takes whole zones in rank order — under `focus`,
-   then largest, then nearest — while they fit (within one zone cell), and when none fits
-   clips the first to a square of the budget's area about the focus or its weakest cell, so
-   any budget that can hold a zone gets one. (Trimming cells and outlining again, as the fog
-   scout does, left nothing on scattered weakness: closing grows the cells faster.) 409 `confidence-not-measured`, `confidence-unreadable`, `no-site-frame`.
+   1 km east lands 23 cm short. A budget takes whole zones in rank order — under `focus`, then largest, then nearest —
+   while they fit (within one zone cell), and clips the first that does not to a square of
+   what is left, about the focus or its weakest cell: the budget goes on the zones that rank
+   first, never on a speck behind a zone too large for it, and any budget that can hold a
+   zone gets one. (Trimming cells and outlining again, as the fog scout does, left nothing on
+   scattered weakness: closing grows the cells faster.) 409 `confidence-not-measured`, `confidence-unreadable`, `no-site-frame`.
 6. **Patterns are UX heuristics, labelled so in every answer** (`heuristic`, each `hint`):
    mostly `views`/`spread` → `orbit` when the patch stands ≥ 3 m and is ≤ 40 m across, else
    crossing `oblique` passes; `gsd` → `nadir`, lower, `targetGsdM` = the capture's median (null
