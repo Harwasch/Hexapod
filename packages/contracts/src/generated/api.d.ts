@@ -2389,13 +2389,13 @@ export interface paths {
         /**
          * The change between two dates, from height surfaces
          * @description `change-v1` (ADR 0018): from epoch `from` to epoch `to`, both published, per cell of
-         *     the coarser of their height surfaces' levels, `dsm_to - dsm_from` against three times
-         *     the combined spread and placement uncertainty -- raised, lowered, unchanged, or
-         *     insufficient where only one has a surface -- with the cells either epoch's confidence
-         *     does not vouch for flagged, not hidden, and the regions outlined on the globe. Derived,
-         *     not observed; uncalibrated. Open like every read (the world is viewable without a
-         *     token: the change drape is a view), and it stores nothing; a call may decode four
-         *     grids (cached), so it spends the per-client cell-map bucket weak areas spend.
+         *     the coarser of their height surfaces' levels over the children both measured,
+         *     `dsm_to - dsm_from` against three times the combined spread and placement uncertainty
+         *     -- raised, lowered, unchanged, or insufficient where they share no measured child --
+         *     with the cells either epoch's confidence does not vouch for flagged, not hidden, and the
+         *     regions outlined on the globe. Derived, not observed; uncalibrated. It stores nothing, but a call may
+         *     decode four grids (more than the grid cache holds at their largest), so it takes the
+         *     write token like weak areas and fill targets and spends the same per-client bucket.
          */
         get: operations["site_change_api_v1_sites__site_id__change_get"];
         put?: never;

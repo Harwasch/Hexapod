@@ -42020,7 +42020,7 @@
     },
     "/api/v1/sites/{site_id}/change": {
       "get": {
-        "description": "`change-v1` (ADR 0018): from epoch `from` to epoch `to`, both published, per cell of\nthe coarser of their height surfaces' levels, `dsm_to - dsm_from` against three times\nthe combined spread and placement uncertainty -- raised, lowered, unchanged, or\ninsufficient where only one has a surface -- with the cells either epoch's confidence\ndoes not vouch for flagged, not hidden, and the regions outlined on the globe. Derived,\nnot observed; uncalibrated. Open like every read (the world is viewable without a\ntoken: the change drape is a view), and it stores nothing; a call may decode four\ngrids (cached), so it spends the per-client cell-map bucket weak areas spend.",
+        "description": "`change-v1` (ADR 0018): from epoch `from` to epoch `to`, both published, per cell of\nthe coarser of their height surfaces' levels over the children both measured,\n`dsm_to - dsm_from` against three times the combined spread and placement uncertainty\n-- raised, lowered, unchanged, or insufficient where they share no measured child --\nwith the cells either epoch's confidence does not vouch for flagged, not hidden, and the\nregions outlined on the globe. Derived, not observed; uncalibrated. It stores nothing, but a call may\ndecode four grids (more than the grid cache holds at their largest), so it takes the\nwrite token like weak areas and fill targets and spends the same per-client bucket.",
         "operationId": "site_change_api_v1_sites__site_id__change_get",
         "parameters": [
           {
@@ -42106,6 +42106,11 @@
             "description": "`from` and `to` are the same epoch."
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "The change between two dates, from height surfaces",
         "tags": [
           "sites"

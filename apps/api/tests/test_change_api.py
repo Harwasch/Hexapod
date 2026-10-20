@@ -256,11 +256,9 @@ def test_a_damaged_surface_is_unreadable_not_a_change(
     assert response.status_code == 409 and response.json()["code"] == "surface-unreadable"
 
 
-def test_the_change_is_open_without_the_write_token(
-    db: Session, storage: S3Storage, tmp_path: Path
-) -> None:
-    """A read of public data for the viewer's change drape: open, like every GET but the
-    fill workflow's targets."""
+def test_the_change_takes_the_write_token(db: Session, storage: S3Storage, tmp_path: Path) -> None:
+    """A call decodes four grids (the 96 MB cache cannot hold four of the largest), so it is
+    gated like weak areas and fill targets."""
     from app.config import Settings
 
     e1, e2 = two_epochs(db, storage, tmp_path)
@@ -273,13 +271,17 @@ def test_the_change_is_open_without_the_write_token(
     app.dependency_overrides[get_public_storage] = lambda: storage
     confidence_maps.GRIDS.clear()
     with TestClient(app) as client:
-        assert get(client, e1, e2).status_code == 200
+        path = f"/api/v1/sites/{e1.site_id}/change"
+        params = {"from": str(e1.id), "to": str(e2.id)}
+        assert client.get(path, params=params).status_code == 401
+        authorised = client.get(path, params=params, headers={"Authorization": "Bearer a5-token"})
+        assert authorised.status_code == 200, authorised.text
 
 
 def test_the_change_spends_the_cell_map_bucket(api: TestClient) -> None:
     spec = api.app.openapi()  # type: ignore[attr-defined]
     operation = spec["paths"]["/api/v1/sites/{site_id}/change"]["get"]
-    assert "security" not in operation
+    assert operation["security"] == [{"writeToken": []}]
     from app.api.v1 import sites
 
     [route] = [

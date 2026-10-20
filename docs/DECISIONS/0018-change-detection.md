@@ -260,10 +260,10 @@ cells, surfacedCells, medianSigmaM, originHeightM, groundWindowM}`, or null — 
    `confidence-not-measured` (its `u` and its vouching are unknown), `frames-differ` (a surface
    above another origin height than the site frame's, to the millimetre), `surface-unreadable` /
    `confidence-unreadable`.
-8. **Open, rate-limited.** No write token: reads stay open (the world is viewable without one) and
-   the drape is a view. Fill targets take the token because their one consumer holds it and a call
-   may decode nine grids; a change call decodes four, through the same bounded grid cache (keyed by
-   URL and sha256), and spends the per-client cell-map bucket weak areas and fill targets spend.
+8. **Behind the write token, rate-limited** (decided in review). It stores nothing, but a call
+   decodes four grids, and the 96 MB grid cache cannot hold four of the largest: the same cost and
+   the same pattern as weak areas (POST, token) and fill targets (GET, token). It also spends the
+   per-client cell-map bucket they spend. The drape (W5c) sends the console's token.
    The comparison holds about 30 bytes a cell for the window (both surfaces over their shared
    cells, the outputs, what each side measured) and classifies a band of rows at a time; a
    2048 × 2048 map with confidence pyramids peaked at about 150 MiB here.

@@ -208,7 +208,7 @@ diameterM, pattern (nadir · oblique · orbit), targetGsdM, gimbalPitchDeg, hint
 epochId, weakIn, comparedWith (at most the eight most recent earlier epochs), capped, frame: tileset, cellM, level, i0, j0, ni, nj, rowBytes, bitOrder: little, mask
 (base64, rows south to north, at the epoch's own finest level), cells, satisfiedBy (a byte per
 target: which of `comparedWith` it re-scanned), reason}`. 409 `confidence-not-measured` · `no-rescan-yet`.
-- `GET /api/v1/sites/{id}/change?from=&to=` (open, cell-map rate limit) → `change-v1` (ADR 0018
+- `GET /api/v1/sites/{id}/change?from=&to=` (write token, cell-map rate limit) → `change-v1` (ADR 0018
   § API): `{policy, derived: true, label, calibration: uncalibrated, siteId, fromEpochId,
 toEpochId, fromAssetId, toAssetId, frame, level, nativeLevel, cellM, thresholdSigma: 3,
 minDetectableM, uncertainty {fromM, toM}, counts {unchanged, raised, lowered, insufficient},
