@@ -80,9 +80,11 @@ SINGLE_BUCKET = (
 PositionCheck = Callable[[Collection[str]], frozenset[str]]
 #: The API's fill gate for one carried layer (`app.services.fill_gate.carry_check`): the
 #: entry, the new tileset's root transform, a reader of the live generation's files, and the
-#: sha256 of the grid the new tiles carry; None to carry the layer, else why not.
+#: descriptor of the grid the new tiles carry (`extras.confidence`, None without one); None
+#: to carry the layer, else why not.
 FillCheck = Callable[
-    [Mapping[str, Any], object, Callable[[str], bytes | None], str | None], str | None
+    [Mapping[str, Any], object, Callable[[str], bytes | None], Mapping[str, Any] | None],
+    str | None,
 ]
 #: The flag a dropped fill variant leaves on the asset.
 VARIANT_AGAIN = "Fill variant needs filling again"
@@ -463,6 +465,8 @@ def _gate_fills(
     (in place): a layer alone, a fill variant whole (it is one method; half of it would be
     another). Returns what was dropped, and the files among `files` that went with it."""
     sha = sidecars.grid_sha256({**new_extras, **extras})
+    declared = {**new_extras, **extras}.get("confidence")
+    grid = declared if isinstance(declared, Mapping) else None
     root = new.get("root")
     transform = root.get("transform") if isinstance(root, Mapping) else None
 
@@ -474,7 +478,7 @@ def _gate_fills(
             return None
         if check is None:
             return "no fill gate was given to hold it to the new revision's fill targets"
-        return check(entry, transform, read, sha)
+        return check(entry, transform, read, grid)
 
     dropped: list[Dropped] = []
     gone: set[str] = set()

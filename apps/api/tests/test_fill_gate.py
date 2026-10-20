@@ -466,11 +466,16 @@ def _live(
 
 
 def _republish(
-    db: Session, storage: S3Storage, asset: Asset, after: Callable[[], None] | None = None
+    db: Session,
+    storage: S3Storage,
+    asset: Asset,
+    after: Callable[[], None] | None = None,
+    grid: dict[str, Any] | None = None,
 ) -> Any:
     """What a re-run of `asset`'s epoch carries: the same tiles and the same grid, so every
     sidecar would be carried were it not for the gate. `after` is the check's
-    end-of-transaction hook, as the runner gives it."""
+    end-of-transaction hook, as the runner gives it; `grid`, the descriptor the run's
+    tiles declare instead of e2's own."""
     from app.services import fill_gate
     from app.worker.carry import plan_carry
     from app.worker.publish import Publisher
@@ -482,7 +487,7 @@ def _republish(
         private,
         run,
         sidecars={"confidence.bin": blob("e2")},
-        extras={"confidence": descriptor("e2")},
+        extras={"confidence": grid or descriptor("e2")},
     )
     epoch = db.get(Epoch, asset.epoch_id)
     assert epoch is not None
@@ -543,6 +548,28 @@ def test_a_republish_never_carries_a_layer_the_gate_refuses(
     assert "outside the cells" in gone.reason
     assert gone.action == "Inferred fill needs filling again"
     assert "inferredLayers" not in plan.carried
+
+
+def test_a_republish_whose_grid_is_placed_elsewhere_carries_no_fill(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Codex B5b N3: the carry compared the planes' sha256 alone. The same bytes declared
+    at other window origins are other cells -- the targets the fill was held to are not
+    this grid's -- so the layer is filled again, not carried."""
+    _, asset = site(db, storage, tmp_path)
+    read = targets(db, storage, asset)
+    inside = centre(read, target=True)
+    _live(storage, asset, layer_files([inside], [inside]), {"inferredLayers": [_entry(read)]})
+    moved = descriptor("e2")
+    for level in moved["levels"]:
+        level["i0"] += 4
+        level["j0"] -= 2
+
+    plan = _republish(db, storage, asset, grid=moved)
+
+    assert "inferredLayers" not in _extras(plan)
+    (gone,) = [gone for gone in plan.dropped if gone.kind == "inferredLayers"]
+    assert "confidence grid the new tiles do not carry" in gone.reason
 
 
 def test_a_republish_holds_fill_variants_to_the_gate(

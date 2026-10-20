@@ -46,7 +46,6 @@ from tests.sidecar_fixtures import (
     FILL_FILES,
     GRID_EXTRAS,
     GRID_FILES,
-    GRID_SHA,
     INSTANCES_EXTRAS,
     LEGACY_DIR,
     LEGACY_URL,
@@ -1101,9 +1100,10 @@ def test_a_fill_the_gate_refuses_is_not_carried(buckets: Publisher) -> None:
     assert not _layers(plan)
     (gone,) = [gone for gone in plan.dropped if gone.kind == "inferredLayers"]
     assert "outside the cells" in gone.reason
-    # Asked with the new tileset's frame, the live layer's own bytes and the new grid.
+    # Asked with the new tileset's frame, the live layer's own bytes and the new grid's
+    # whole descriptor (where its cells lie, not only their bytes' sha256).
     (entry, transform, data, grid), *_ = asked
-    assert (entry, transform, data, grid) == (FILL_EXTRAS[0], TRANSFORM, b"{}", GRID_SHA)
+    assert (entry, transform, data, grid) == (FILL_EXTRAS[0], TRANSFORM, b"{}", GRID_EXTRAS)
 
 
 def test_a_fill_gated_by_another_grid_is_dropped_and_flagged(buckets: Publisher) -> None:

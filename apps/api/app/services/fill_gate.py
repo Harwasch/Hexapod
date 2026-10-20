@@ -82,8 +82,9 @@ class Targets:
     read: FillTargetsRead
     mask: NDArray[np.bool_]
     mask_sha256: str
-    #: The sha256 of the epoch's confidence grid the targets were computed on.
-    grid_sha256: str | None = None
+    #: The epoch's confidence grid the targets were computed on, as `grid_identity` names
+    #: it: its planes' bytes and where they lie.
+    grid: str | None = None
 
     def evidence(self) -> dict[str, object]:
         """What a layer filled for these targets says in `rescanGate` (`_SAME`'s keys)."""
@@ -147,13 +148,21 @@ def targets_for(db: Session, storage: ObjectStorage, asset: Asset) -> Targets:
         )
     mask = rescan_gate.unpack(read.mask, read.ni, read.nj)
     digest = hashlib.sha256(base64.b64decode(read.mask)).hexdigest()
-    sha = grid.get("sha256")
-    return Targets(
-        read=read,
-        mask=mask,
-        mask_sha256=digest,
-        grid_sha256=sha if isinstance(sha, str) else None,
-    )
+    return Targets(read=read, mask=mask, mask_sha256=digest, grid=grid_identity(grid))
+
+
+def grid_identity(descriptor: object) -> str | None:
+    """Which grid `descriptor` is, as a carry must match it: the sha256 of the whole
+    descriptor (`confidence_maps.descriptor_sha256`, the grid cache's key), so the planes'
+    sha256 *and* every level's window origin (`i0`, `j0`), size and level, the lattice, the
+    frame and the channels. The same bytes at other origins are other cells. None for a
+    descriptor that is not one (no planes' sha256)."""
+    if not isinstance(descriptor, Mapping) or not isinstance(descriptor.get("sha256"), str):
+        return None
+    try:
+        return confidence_maps.descriptor_sha256(descriptor)
+    except (TypeError, ValueError):
+        return None
 
 
 def check_layer(
@@ -272,9 +281,9 @@ def verify(
 
 #: What a republish asks of one inferred layer it would carry (`app/worker/carry.py`
 #: `FillCheck`): the entry, the new tileset's root transform, a reader of the live
-#: generation's files and the sha256 of the grid the new tiles carry; None to carry it, else
-#: why not.
-CarryCheck = Callable[[Mapping[str, Any], object, Reader, str | None], str | None]
+#: generation's files and the descriptor of the grid the new tiles carry; None to carry it,
+#: else why not.
+CarryCheck = Callable[[Mapping[str, Any], object, Reader, Mapping[str, Any] | None], str | None]
 
 
 def carry_check(
@@ -288,8 +297,9 @@ def carry_check(
     targets for the epoch, recomputed once (and only when a layer is asked about), from the
     maps in `storage` -- `after` then runs, so a caller that must not sit in a transaction
     can end the one the reads opened. A layer is carried only when those targets were
-    computed on the very grid the new tiles carry (a re-run that measured its own grid has
-    other targets, not yet recorded) and it passes `check_layer` on them."""
+    computed on the very grid the new tiles carry -- the same planes at the same window
+    origins, level and frame (`grid_identity`); a re-run that measured its own grid has
+    other targets, not yet recorded -- and it passes `check_layer` on them."""
     found: list[Targets | str] = []
 
     def targets() -> Targets | str:
@@ -305,12 +315,16 @@ def carry_check(
         return found[0]
 
     def check(
-        entry: Mapping[str, Any], scan_transform: object, read: Reader, grid_sha: str | None
+        entry: Mapping[str, Any],
+        scan_transform: object,
+        read: Reader,
+        grid: Mapping[str, Any] | None,
     ) -> str | None:
         got = targets()
         if isinstance(got, str):
             return got
-        if grid_sha is None or got.grid_sha256 != grid_sha:
+        carried = grid_identity(grid)
+        if carried is None or got.grid != carried:
             return (
                 "the epoch's fill targets were computed on a confidence grid the new tiles do "
                 "not carry: the cells it filled may no longer be weak"
