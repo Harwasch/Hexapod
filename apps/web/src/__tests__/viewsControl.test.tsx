@@ -4,7 +4,7 @@
  * analytic views disabled, the reason, and a switch that works.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -58,8 +58,9 @@ describe("the slot", () => {
 describe("under CesiumJS", () => {
   it("offers all three views and keys the one drawn", async () => {
     show("cesium");
-    const group = await screen.findByTestId("views");
-    const radios = screen.getAllByRole("radio");
+    // The first test loads the control's chunk: its transform is slow on a loaded machine.
+    const group = await screen.findByTestId("views", {}, { timeout: 10_000 });
+    const radios = within(screen.getByTestId("views-modes")).getAllByRole("radio");
     expect(radios.map((r) => r.textContent)).toEqual(["Photo", "Confidence", "Data age"]);
     expect(radios.every((r) => !r.hasAttribute("disabled"))).toBe(true);
     expect(screen.queryByTestId("views-needs-cesium")).toBeNull();

@@ -5,6 +5,7 @@ import { GlassButton, GlassPanel, GlassSegmentedControl, GlassSwitch } from "@tw
 import { useSite } from "@/api/queries";
 import { AS_CAPTURED_TEXT } from "@/lib/asCapturedText";
 import { epochOptions, pickShownAsset, siteEpochs } from "@/lib/epochs";
+import { captureTimeOf } from "@/lib/sunlightText";
 import {
   DRAW_WITH_CESIUM,
   drawWithCesium,
@@ -20,14 +21,16 @@ import { useViewRule } from "@/state/viewRule";
 
 import { CellLegend } from "./CellLegend";
 import { RuleControl } from "./RuleControl";
+import { SunControl } from "./SunControl";
 import { VIEW_RULE_TEXT } from "./ruleText";
 
 /**
  * How the active splat scan is coloured: Photo, Confidence or Data age (state/viewMode.ts),
  * with the key to what is drawn. The analytic views are CesiumJS's alone (lib/viewModes.ts):
  * under another renderer they are offered disabled, with the reason and the one-click switch,
- * and Photo is what the control says is shown, because it is. Beside them, the As captured
- * switch (state/asCaptured.ts): only what was measured drawn, plans kept as annotations.
+ * and Photo is what the control says is shown, because it is. Beside them, the sun the scan is
+ * relit by (SunControl, CesiumJS's too) and the As captured switch (state/asCaptured.ts): only
+ * what was measured drawn, plans kept as annotations.
  */
 export function ViewsControl({ siteId }: { siteId: string }) {
   const mode = useViewMode((s) => s.mode);
@@ -82,6 +85,7 @@ export function ViewsControl({ siteId }: { siteId: string }) {
       )}
       {onCesium && shown !== "photo" && <CellLegend mode={shown} report={report} />}
       {dates >= 2 && <RuleControl siteId={siteId} epochs={epochs} onCesium={onCesium} />}
+      <SunControl onCesium={onCesium} captureTime={captureTimeOf(asset, epochs)} />
       <span className="views__rule" title={AS_CAPTURED_TEXT.hint}>
         <GlassSwitch
           id="views-as-captured"

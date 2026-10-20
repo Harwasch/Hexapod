@@ -51,7 +51,7 @@ import { OnboardingCard } from "../onboarding/OnboardingCard";
 import { RepresentationSwitcher } from "../sites/RepresentationSwitcher";
 import { SiteLoadStatus } from "../sites/SiteLoadStatus";
 import { TimelineControl } from "../timeline/TimelineControl";
-import { ViewsSlot } from "../views/ViewsSlot";
+import { RelitSlot, ViewsSlot } from "../views/ViewsSlot";
 import { DevReadouts } from "./DevReadouts";
 import { LandSurfaceSlot } from "./LandSurfaceSlot";
 import { MapCorner } from "./MapCorner";
@@ -303,6 +303,7 @@ export function AppShell() {
               <SimulatedBadge />
               <PokeBadge />
             </ErrorBoundary>
+            <RelitSlot />
             <Toasts />
           </div>
           <div className="hud-stack hud-detail">
