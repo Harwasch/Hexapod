@@ -1507,18 +1507,27 @@ def tile_frame(xyz: np.ndarray, may_move: bool) -> tuple[np.ndarray, int]:
     does not exist yet when its child is quantised. The tileset still states each origin
     relative to the parent's (`convert`).
     """
-    zero = np.zeros(3)
     if xyz.size == 0:
-        return zero, SPZ_FRACTIONAL_BITS
+        return np.zeros(3), SPZ_FRACTIONAL_BITS
     centres = xyz.astype(np.float64)
-    reach = float(np.abs(centres).max())
+    return _frame(centres.min(axis=0), centres.max(axis=0), may_move)
+
+
+def _frame(low: np.ndarray, high: np.ndarray, may_move: bool) -> tuple[np.ndarray, int]:
+    """`tile_frame` from the centres' box alone: the farthest a centre reaches from any
+    point is from a corner, and rounding is monotone, so `|c - o|.max()` over the centres is
+    `max(|low - o|, |high - o|)` exactly. `_bounds` reads it to know the tile's quantum."""
+    zero = np.zeros(3)
+    reach = float(max(np.abs(low).max(), np.abs(high).max()))
     if reach <= TILE_FIT_M:
         return zero, SPZ_FRACTIONAL_BITS
     if not may_move:
         return zero, fractional_bits_for(reach)
     # `+ 0.0` turns a -0.0 from rounding into 0.0, so no transform carries a negative zero.
-    origin = np.round((centres.min(axis=0) + centres.max(axis=0)) / 2) + 0.0
-    return origin, fractional_bits_for(float(np.abs(centres - origin).max()))
+    origin = np.round((low + high) / 2) + 0.0
+    return origin, fractional_bits_for(
+        float(max(np.abs(low - origin).max(), np.abs(high - origin).max()))
+    )
 
 
 def _write_tile(out_dir: Path, tile: Tile, gaussians: Gaussians) -> None:
@@ -1552,12 +1561,21 @@ def _write_tile(out_dir: Path, tile: Tile, gaussians: Gaussians) -> None:
     tile.count = int(xyz.shape[0])
 
 
-def _bounds(xyz: np.ndarray, reach: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _bounds(xyz: np.ndarray, reach: np.ndarray, may_move: bool) -> tuple[np.ndarray, np.ndarray]:
     """Centres' box padded by the 99th percentile of reach, not the maximum: one 10 m
-    background gaussian must not make every box it falls in 20 m wider than the data."""
-    pad = float(np.percentile(reach, 99))
+    background gaussian must not make every box it falls in 20 m wider than the data.
+
+    The pad is never less than half the tile's SPZ quantum, which is as far as packing
+    moves a centre, so the box holds every centre as decoded, not only as given. At 12
+    fractional bits that is 2^-13 = 1.2e-4 m, under the smallest reach SPZ stores (3 e^-10
+    = 1.4e-4 m), so a 12-bit tile's box is the one it always had; at 11 bits and fewer
+    (a tile past 2048 m) it can be the larger. `may_move` is the tile's, as `tile_frame`
+    reads it, so the quantum is the one `_write_tile` packs at."""
     centres = xyz.astype(np.float64)
-    return centres.min(axis=0) - pad, centres.max(axis=0) + pad
+    low, high = centres.min(axis=0), centres.max(axis=0)
+    _, bits = _frame(low, high, may_move)
+    pad = max(float(np.percentile(reach, 99)), 2.0 ** -(bits + 1))
+    return low - pad, high + pad
 
 
 #: What `build_tiles` hands each tile to: the tile (its box, error and count filled in),
@@ -1594,7 +1612,7 @@ def build_tiles(root: Tile, codes: np.ndarray, store: SortedStore, edge: float, 
             order = np.argsort(records["row"], kind="stable")
             gaussians = records_gaussians(records[order])
             tile.count = int(gaussians.xyz.shape[0])
-            tile.low, tile.high = _bounds(gaussians.xyz, gaussians.reach)
+            tile.low, tile.high = _bounds(gaussians.xyz, gaussians.reach, bool(tile.path))
             tile.geometric_error = 0.0
             emit(tile, gaussians, None)
             if parent_level < 0:
@@ -1615,7 +1633,7 @@ def build_tiles(root: Tile, codes: np.ndarray, store: SortedStore, edge: float, 
         cell = edge / (1 << tile.level)
         width = 2.0 * float(np.median(np.exp(gaussians.log_scales.astype(np.float64).max(axis=1))))
         tile.geometric_error = max(cell, width)
-        low, high = _bounds(gaussians.xyz, gaussians.reach)
+        low, high = _bounds(gaussians.xyz, gaussians.reach, bool(tile.path))
         for child in tile.children:
             low = np.minimum(low, child.low)
             high = np.maximum(high, child.high)

@@ -17,7 +17,7 @@ import pytest
 import splat_tiles
 import synthetic_far
 from rig_tiles import glb_spz
-from splat_render import save_ply
+from splat_render import Splats, save_ply
 from splat_tiles import SPZ_FIXED_MAX, SplatFormatError, pack_spz, unpack_spz
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -433,3 +433,55 @@ def test_tile_boxes_for_fetching_are_in_the_site_frame() -> None:
     }
     assert set(expected["plotLeaves"]["north-east"]) <= holding
     assert "splat.glb" in holding
+
+
+def _box_overshoot(tiles_dir: Path) -> dict[str, float]:
+    """Per tile, how far past its bounding box its decoded centres land (0 when inside).
+
+    Both are read in the tile's own frame -- the box as 3D Tiles states it, the centres as
+    the SPZ stores them -- which is the composed comparison less the same translation on
+    both sides."""
+    tileset = json.loads((tiles_dir / "tileset.json").read_text(encoding="utf-8"))
+    out = {}
+    for tile in _tiles(tileset):
+        uri = tile["content"]["uri"]
+        box = np.asarray(tile["boundingVolume"]["box"], dtype=np.float64)
+        mid, half = box[:3], box[[3, 7, 11]]
+        columns = unpack_spz(glb_spz(tiles_dir / uri))
+        local = np.stack([columns["x"], columns["y"], columns["z"]], axis=1).astype(np.float64)
+        out[uri] = float(np.maximum(np.abs(local - mid) - half, 0.0).max())
+    return out
+
+
+#: Float64 slack on a box edge: `mid +/- half` re-rounds the packer's `low` and `high` at
+#: ~1e-12 m for km-scale coordinates (an ulp of 4096 is 9e-13), three orders below this.
+BOX_SLACK_M = 1e-9
+
+
+def test_every_far_centre_decodes_inside_its_tiles_box() -> None:
+    overshoot = _box_overshoot(FAR / "splat")
+    assert overshoot and max(overshoot.values()) <= BOX_SLACK_M, overshoot
+
+
+def test_a_box_holds_its_centres_rounded_to_fewer_fractional_bits(tmp_path: Path) -> None:
+    """A tile's box is padded by its gaussians' reach, so it holds every centre as the
+    packer was given it; the SPZ moves each centre up to half its quantum. At 12 bits that
+    is 1.2e-4 m, under the smallest reach SPZ stores (3 e^-10 = 1.4e-4 m); at 11 bits it is
+    2.4e-4 m, past it. Here the smallest gaussians SPZ holds stand in a root reaching 2100 m
+    (11 bits), the easternmost on a half step that rounds outward (4301.5 to 4302)."""
+    east = 4301.5 / 2048  # 2100.0244140625, exact in float32 (1/4096 grid, under 4096 m)
+    positions = np.array([[-2100.0, 0.0, 0.0], [east, 0.0, 0.0], [0.0, 1.0, 0.5]], np.float32)
+    n = positions.shape[0]
+    splats = Splats(
+        positions,
+        np.tile(np.array([1.0, 0.0, 0.0, 0.0], np.float32), (n, 1)),
+        np.full((n, 3), 1e-6, np.float32),  # clipped up to e^-10 m, SPZ's smallest
+        np.full((n, 3), 0.5, np.float32),
+        np.full(n, 0.9, np.float32),
+    )
+    ply = tmp_path / "tiny.ply"
+    save_ply(ply, splats)
+    splat_tiles.convert(ply, tmp_path / "splat", 28.0, -82.0, 0.0)
+    assert _header_bits(tmp_path / "splat" / "splat.glb") == 11
+    overshoot = _box_overshoot(tmp_path / "splat")
+    assert max(overshoot.values()) <= BOX_SLACK_M, overshoot
