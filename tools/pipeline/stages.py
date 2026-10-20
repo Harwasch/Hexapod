@@ -65,6 +65,7 @@ from captures_bridge import (
     ParentOverrideError,
     ParentOverrides,
     splat_tiles_convert,
+    tile_offsets,
 )
 from contracts import FANOUT_METRIC, MetricValue, StageContext, StageOutcome, fanout_role
 from phases import Phases
@@ -3388,8 +3389,14 @@ def _tileset_summary(tiles: Path) -> dict[str, Any]:
     The root tile alone is only the coarsest level of a hierarchy -- a tenth of a 1M scene
     -- so reading `splat.glb` by itself, as this did when there was one tile, would have
     the manifest report a scan as a fraction of its size.
+
+    The box is in the site frame (the root's): a tile of a site past ~4 km is written in a
+    frame of its own, a translation-only transform its accessor bounds are relative to
+    (`splat_tiles.tile_offsets`), so each tile's composed offset is added to its box
+    before the union. `registration._boundary` draws the site's outline from it.
     """
     tileset = _read_json(tiles / "tileset.json")
+    offsets = tile_offsets(tileset)
     root = tileset.get("root")
     stack: list[object] = [root]
     summaries: list[dict[str, Any]] = []
@@ -3399,7 +3406,14 @@ def _tileset_summary(tiles: Path) -> dict[str, Any]:
             continue
         content = tile.get("content")
         if isinstance(content, dict) and isinstance(content.get("uri"), str):
-            summaries.append(_glb_summary(tiles / content["uri"]))
+            summary = _glb_summary(tiles / content["uri"])
+            offset = offsets.get(content["uri"].removeprefix("./"))
+            if offset is not None and offset.any():
+                summary["bbox"] = {
+                    edge: [v + float(o) for v, o in zip(summary["bbox"][edge], offset, strict=True)]
+                    for edge in ("min", "max")
+                }
+            summaries.append(summary)
         children = tile.get("children")
         if isinstance(children, list):
             stack.extend(children)

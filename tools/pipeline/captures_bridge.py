@@ -39,6 +39,7 @@ __all__ = [
     "read_ply",
     "sigmoid",
     "splat_tiles_convert",
+    "tile_offsets",
     "unpack_spz",
 ]
 
@@ -66,6 +67,7 @@ from splat_tiles import (  # noqa: E402
     pack_spz,
     read_ply,
     sigmoid,
+    tile_offsets,
     unpack_spz,
 )
 
