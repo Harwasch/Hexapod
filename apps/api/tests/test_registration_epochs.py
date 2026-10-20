@@ -471,3 +471,40 @@ def test_a_joined_epoch_grows_the_site_boundary(
     assert after.covers(before) and after.area > before.area
     assert all(after.buffer(1e-9).covers(to_shape(e.footprint)) for e in epochs)
     assert to_shape(site.centroid).equals(centroid)
+
+
+def test_a_later_epoch_leaves_the_mirror_of_the_splat_the_site_shows(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """`view.html` shows the site's first splat (epoch 1, `default_visible`) and reads its
+    coverage overlay off the site's metadata. A later epoch's run must not lay its own
+    coverage over epoch 1's tiles: the mirror is written for epoch 1 only, and the later
+    epoch keeps its coverage on its own row."""
+    first = _capture(db, "first")
+    epoch1 = "https://cdn.example.com/twin-worker-test/runs/1/quality/coverage_enu.ply"
+    epoch2 = "https://cdn.example.com/twin-worker-test/runs/2/quality/coverage_enu.ply"
+    measured = _document()
+    measured["quality"] = {"mode": "preview", "bar": "strict", "keepVerifiedPct": 81.5}
+    first_job = run(db, storage, tmp_path, first, measured, coverage=epoch1)
+    assert first.site_id is not None
+    second = _capture(db, "second", metadata_={"siteId": str(first.site_id)})
+    joined = _echoed(first.site_id)
+    joined["quality"] = {"mode": "preview", "bar": "strict", "keepVerifiedPct": 40.0}
+
+    run(db, storage, tmp_path, second, joined, coverage=epoch2)
+
+    db.expire_all()
+    site = db.get(Site, first.site_id)
+    assert site is not None
+    assert site.metadata_["coverageUrl"] == epoch1
+    assert site.metadata_["keepVerifiedPct"] == 81.5
+    assert site.metadata_["jobId"] == str(first_job)
+    later = _epochs(db, first.site_id)[1]
+    assert later.quality is not None and later.quality["coverageUrl"] == epoch2
+
+    # A re-run of epoch 1 still refreshes it.
+    again = run(db, storage, tmp_path, first, coverage=None)
+    db.expire_all()
+    site = db.get(Site, first.site_id)
+    assert site is not None
+    assert "coverageUrl" not in site.metadata_ and site.metadata_["jobId"] == str(again)
