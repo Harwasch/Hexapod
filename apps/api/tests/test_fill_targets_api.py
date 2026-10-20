@@ -207,3 +207,18 @@ def test_grids_at_different_levels_compare_at_the_coarser() -> None:
     result = rescan_gate.still_weak(fine, [coarse])
     assert (result.level, result.i0, result.j0, result.ni, result.nj) == (3, 0, 0, 1, 1)
     assert result.mask.tolist() == [[True]]
+
+
+def test_only_published_epochs_are_earlier_evidence(
+    api: TestClient, db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """An earlier epoch that is not published (rejected, or a future `superseded`) is not
+    what the site shows, so it is not compared with, map or no map."""
+    from sqlalchemy import text
+
+    e1, e2 = two_epochs(db, storage, tmp_path)
+    db.execute(text("UPDATE epochs SET status = 'rejected' WHERE id = :id"), {"id": e1.id})
+    db.commit()
+    response = api.get(f"/api/v1/sites/{e2.site_id}/fill-targets")
+    assert response.status_code == 409 and response.json()["code"] == "no-rescan-yet"
+

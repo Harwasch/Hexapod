@@ -316,3 +316,24 @@ def test_weak_areas_take_the_write_token_and_fill_targets_stay_open(
         assert allowed.status_code == 200
         # Open, and a 409 because nothing has been re-scanned: not a 401.
         assert client.get(f"/api/v1/sites/{epoch.site_id}/fill-targets").status_code == 409
+
+
+def test_a_grid_rewritten_at_the_same_url_is_read_again(storage: S3Storage) -> None:
+    """One bucket rewrites a run's keys in place (a Refine of the same job): the same URL
+    with another descriptor is another grid, never the cached one."""
+    from app.models import EpochMap
+    from tests.confidence_fixtures import descriptor
+
+    confidence_maps.GRIDS.clear()
+    key = "runs/refined/package/splat/confidence.bin"
+    url = storage.public_url(key)
+
+    def row(epoch: str) -> EpochMap:
+        return EpochMap(url=url, descriptor=descriptor(epoch), summary={})
+
+    storage.put_object(key, blob("e1"), "application/octet-stream")
+    assert confidence_maps.load_grid(storage, row("e1")).finest.level == 2
+    storage.put_object(key, blob("e2"), "application/octet-stream")
+    assert confidence_maps.load_grid(storage, row("e2")).finest.level == 1
+    assert confidence_maps.load_grid(storage, row("e2")).finest.level == 1
+    assert confidence_maps.GRIDS.hits == 1
