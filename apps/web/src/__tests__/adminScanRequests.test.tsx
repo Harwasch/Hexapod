@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { ScanRequestRead } from "@twin/contracts";
 
 import { api, ApiError } from "@/api/client";
-import { areaLabel } from "@/admin/format";
+import { areaLabel, mailtoHref } from "@/admin/format";
 import { RequestsView } from "@/admin/RequestsView";
 
 afterEach(() => {
@@ -42,6 +42,7 @@ const rows: ScanRequestRead[] = [
         ],
       ],
     },
+    boundaryUnreadable: false,
     areaM2: 50_342,
     parcelIds: ["ca-parcel/06001/2-51-1"],
   },
@@ -52,6 +53,7 @@ const rows: ScanRequestRead[] = [
     email: "grace@example.com",
     notes: "Area (acres): 40",
     boundary: null,
+    boundaryUnreadable: false,
     areaM2: null,
     parcelIds: [],
   },
@@ -92,4 +94,31 @@ it("labels an area in acres and hectares", () => {
   expect(areaLabel(null)).toBe("—");
   expect(areaLabel(4046.856 * 250)).toBe("250 ac · 101.2 ha");
   expect(areaLabel(1800)).toBe("0.44 ac · 0.2 ha");
+});
+
+it("links only a plain address, each part encoded", () => {
+  expect(mailtoHref("ada@example.com")).toBe("mailto:ada@example.com");
+  expect(mailtoHref("first.last+tag@sub.example.co")).toBe(
+    "mailto:first.last%2Btag@sub.example.co",
+  );
+  expect(mailtoHref("person@example.com?bcc=x")).toBeNull();
+  expect(mailtoHref("a@b.com\nBcc: x@y.com")).toBeNull();
+});
+
+it("shows an address that is not plain as text, and an unreadable outline as such", async () => {
+  vi.spyOn(api, "GET").mockResolvedValue({
+    data: [
+      {
+        ...rows[1],
+        email: "person@example.com?bcc=x",
+        boundaryUnreadable: true,
+      },
+    ],
+    response: new Response(),
+  });
+  renderView();
+  const row = await screen.findByTestId("request-row");
+  expect(within(row).queryByRole("link")).toBeNull();
+  expect(row).toHaveTextContent("person@example.com?bcc=x");
+  expect(row).toHaveTextContent("outline unreadable");
 });

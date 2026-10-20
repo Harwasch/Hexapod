@@ -22,7 +22,10 @@ export interface SiteRequest {
 export type RequestField = "name" | "email" | "acres" | "area";
 export type RequestErrors = Partial<Record<RequestField, string>>;
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** An address as the API checks it (apps/api/app/schemas/scan_request.py EMAIL): a plain local
+ * part, dot-separated domain labels and a letter TLD; no `?`, `&`, `<`, spaces or quotes. */
+export const EMAIL =
+  /^[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$/;
 
 const M2_PER_ACRE = 4046.856;
 
@@ -50,7 +53,8 @@ export function validateRequest(request: SiteRequest): RequestErrors {
   if (request.name.trim() === "") errors.name = "Enter your name.";
   const email = request.email.trim();
   if (email === "") errors.email = "Enter your email so we can reply.";
-  else if (!EMAIL.test(email)) errors.email = "Enter an email address like name@example.com.";
+  else if (!EMAIL.test(email) || email.includes(".."))
+    errors.email = "Enter an email address like name@example.com.";
   const typed = request.acres.trim() !== "";
   const acres = parseAcres(request.acres);
   if (typed && !(acres > 0)) errors.acres = "Enter the area in acres, as a number.";
@@ -124,6 +128,11 @@ export async function sendRequest(
     return {
       kind: "error",
       message: "Several requests came from here just now. Wait a minute, then send it again.",
+    };
+  if (response.status === 503)
+    return {
+      kind: "error",
+      message: "We cannot take more requests right now. Please try again later.",
     };
   if (response.status === 413)
     return {

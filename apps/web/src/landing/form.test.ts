@@ -26,6 +26,18 @@ describe("validateRequest", () => {
     expect(Object.keys(errors).sort()).toEqual(["email", "name"]);
   });
 
+  it("rejects an address that is not plain enough to email or link", () => {
+    for (const email of [
+      "person@example.com?bcc=x",
+      "person@example.com&cc=x",
+      "<person@example.com>",
+      "person@localhost",
+      "person@example..com",
+    ])
+      expect(validateRequest({ ...complete, email }).email, email).toBeDefined();
+    expect(validateRequest({ ...complete, email: "first.last+tag@sub.example.co" })).toEqual({});
+  });
+
   it("rejects an email without a domain", () => {
     expect(validateRequest({ ...complete, email: "ada@" }).email).toMatch(/name@example\.com/);
   });
@@ -136,6 +148,7 @@ describe("sendRequest", () => {
       );
     expect(await said(new Response(null, { status: 429 }))).toMatch(/Wait a minute/);
     expect(await said(new Response(null, { status: 413 }))).toMatch(/too detailed/);
+    expect(await said(new Response(null, { status: 503 }))).toMatch(/try again later/);
     expect(
       await said(
         Response.json(

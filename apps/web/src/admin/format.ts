@@ -58,6 +58,19 @@ export function formatValue(value: unknown): string {
 
 const M2_PER_ACRE = 4046.856;
 
+/** The API's check (apps/api/app/schemas/scan_request.py EMAIL), so a stored address that is
+ * somehow not plain is shown as text rather than linked. */
+const PLAIN_EMAIL =
+  /^[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$/;
+
+/** A mailto link for a plain address, each part encoded; null for anything else, so nothing a
+ * visitor typed can add headers (`?bcc=`) or recipients to the console's link. */
+export function mailtoHref(email: string): string | null {
+  if (!PLAIN_EMAIL.test(email)) return null;
+  const at = email.lastIndexOf("@");
+  return `mailto:${encodeURIComponent(email.slice(0, at))}@${encodeURIComponent(email.slice(at + 1))}`;
+}
+
 /** An outline's area as people read it: acres, and hectares beside them. */
 export function areaLabel(areaM2: number | null): string {
   if (areaM2 === null) return "—";

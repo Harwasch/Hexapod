@@ -6,7 +6,7 @@ import { EmptyState, GlassBadge, Spinner } from "@twin/ui";
 
 import { ApiError } from "@/api/client";
 
-import { areaLabel, formatDate } from "./format";
+import { areaLabel, formatDate, mailtoHref } from "./format";
 import { useScanRequests } from "./queries";
 
 export function RequestsView() {
@@ -58,11 +58,17 @@ export function RequestsView() {
                 <td className="admin-num">{formatDate(row.createdAt)}</td>
                 <td>{row.name}</td>
                 <td>
-                  <a href={`mailto:${row.email}`}>{row.email}</a>
+                  {mailtoHref(row.email) ? (
+                    <a href={mailtoHref(row.email) ?? undefined}>{row.email}</a>
+                  ) : (
+                    row.email
+                  )}
                 </td>
                 <td className="admin-num">
                   {row.boundary ? (
                     areaLabel(row.areaM2)
+                  ) : row.boundaryUnreadable ? (
+                    <GlassBadge tone="danger">outline unreadable</GlassBadge>
                   ) : (
                     <GlassBadge tone="warning">no outline</GlassBadge>
                   )}
