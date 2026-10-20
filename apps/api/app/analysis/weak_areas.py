@@ -22,11 +22,11 @@ east 23 cm short.)
 
 **Budget.** Over `budget_m2`, whole zones are taken in rank order -- the one under
 `focus` first, then the largest, then the nearest `focus` -- while they fit (within one
-zone cell). When none fits, the first is clipped to a square of the budget's area about
-the focus, or its weakest cell (unseen first, then by score): so a budget is a promise,
-and any budget that can hold a zone gets one. (Trimming cells and outlining again, as the
-fog scout does, left nothing: closing grows scattered cells into zones larger than
-themselves, faster than the trimming shrank them.)
+zone cell); the first that does not is clipped to a square of what is left, about the
+focus or its weakest cell (unseen first, then by score). So a budget is a promise, it is
+spent on the zones that rank first, and any budget that can hold a zone gets one.
+(Trimming cells and outlining again, as the fog scout does, left nothing: closing grows
+scattered cells into zones larger than themselves, faster than the trimming shrank them.)
 
 **Patterns are UX heuristics, not tolerances.** How a patch is best flown again is a rule
 of thumb from photogrammetry practice, stated here and labelled so in every hint; none of
@@ -458,6 +458,23 @@ def _anchor(zone: ZonePlane, polygon: Polygon, focus_xy: Point | None) -> Point:
     return float(x[order[0]]), float(y[order[0]])
 
 
+def _clip(
+    zone: ZonePlane, polygon: Polygon, area_m2: float, focus_xy: Point | None
+) -> Polygon | None:
+    """The largest part of `polygon` inside a square of `area_m2` about its anchor
+    (`_anchor`), or None when that is no zone (under the smallest)."""
+    x, y = _anchor(zone, polygon, focus_xy)
+    half = math.sqrt(area_m2) / 2
+    square = box(x - half, y - half, x + half, y + half)
+    smallest = max(MIN_AREA_M2, 2 * zone.cell_m * zone.cell_m)
+    parts = [
+        orient(part)
+        for part in _polygons(make_valid(polygon.intersection(square)))
+        if part.area >= smallest
+    ]
+    return max(parts, key=lambda part: part.area) if parts else None
+
+
 def choose_zones(
     zone: ZonePlane,
     polygons: list[Polygon],
@@ -467,32 +484,27 @@ def choose_zones(
     focus_xy: Point | None,
 ) -> tuple[list[Polygon], bool]:
     """At most `max_areas` of `polygons`, together within `budget_m2` plus one zone cell,
-    and whether the budget cut anything. In rank order (`_ranked`), each zone is taken
-    while it fits; when none fits, the first is clipped to a square of the budget's area
-    about its anchor (`_anchor`), so a budget that can hold a zone always gets one."""
+    and whether the budget cut anything. In rank order (`_ranked`) each zone is taken whole
+    while it fits; the first that does not is clipped to what is left of the budget, about
+    its anchor (`_anchor`) -- so the budget goes on the zones that rank first, never on a
+    speck behind a zone too large for it, and any budget that can hold a zone gets one."""
     ranked = _ranked(polygons, focus_xy)
     if budget_m2 is None:
         return ranked[:max_areas], False
     allowance = budget_m2 + zone.cell_m * zone.cell_m
+    smallest = max(MIN_AREA_M2, 2 * zone.cell_m * zone.cell_m)
     chosen: list[Polygon] = []
     for polygon in ranked:
-        if len(chosen) == max_areas:
+        left = allowance - sum(p.area for p in chosen)
+        if len(chosen) == max_areas or left < smallest:
             break
-        if sum(p.area for p in chosen) + polygon.area <= allowance:
+        if polygon.area <= left:
             chosen.append(polygon)
-    if not chosen and ranked:
-        best = ranked[0]
-        x, y = _anchor(zone, best, focus_xy)
-        half = math.sqrt(budget_m2) / 2
-        clipped = [
-            orient(part)
-            for part in _polygons(
-                make_valid(best.intersection(box(x - half, y - half, x + half, y + half)))
-            )
-            if part.area >= max(MIN_AREA_M2, 2 * zone.cell_m * zone.cell_m)
-        ]
-        if clipped:
-            chosen = [max(clipped, key=lambda part: part.area)]
+            continue
+        clipped = _clip(zone, polygon, min(left, budget_m2), focus_xy)
+        if clipped is not None:
+            chosen.append(clipped)
+            break
     return chosen, chosen != ranked[:max_areas]
 
 

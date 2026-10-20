@@ -275,10 +275,12 @@ def test_a_budget_keeps_the_largest_zone_that_fits_not_a_speck() -> None:
     assert [round(p.area_m2) for p in kept.patches] == [100] and kept.truncated_by_budget
     both = cell_patches(plane, mask, PROJECTION, budget_m2=104.0)
     assert [round(p.area_m2) for p in both.patches] == [100, 4]
-    # Smaller than any zone but the speck: the speck fits, and comes back.
-    assert [
-        round(p.area_m2) for p in cell_patches(plane, mask, PROJECTION, budget_m2=10).patches
-    ] == [4]
+    # Too small for the block: the block is clipped to the budget, not passed over for
+    # the speck behind it (the evidence run's 208 m2 zone at 100 m2).
+    for budget in (10.0, 50.0):
+        [clip] = cell_patches(plane, mask, PROJECTION, budget_m2=budget).patches
+        assert clip.metric.within(box(-8, -8, 2, 2).buffer(1e-9))
+        assert budget / 2 < clip.area_m2 <= budget + 1.0 and clip.reasons["gsd"] == clip.cells
 
 
 def test_a_budget_smaller_than_every_zone_clips_the_best_one() -> None:
