@@ -16,7 +16,7 @@ import { encodeConfidenceGrid, REASON_BITS } from "@/dev/cellGridFixture";
 import type { CellGridMeta } from "@/lib/cellGrid";
 import { useViewMode } from "@/state/viewMode";
 
-import { A1, A2, E1, E2 } from "./epochFixtures";
+import { A1, A2, E1, E2, epoch, splat } from "./epochFixtures";
 
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
@@ -230,5 +230,47 @@ describe("Confidence, then Data age, then Photo", () => {
     );
     dispose();
     expect(listeners.size).toBe(0);
+  });
+
+  it("a comparison overtaken by a newer one never says what it found", async () => {
+    const { asCesium, tileset, primitive } = scan({ confidence: served.meta });
+    tileset.gaussianSplatPrimitive = primitive;
+    // The first comparison's read of June's tileset is slow; the one after it is not.
+    let release = (): void => undefined;
+    const stub = vi.mocked(fetch);
+    const answer = stub.getMockImplementation();
+    let first = true;
+    stub.mockImplementation((url) => {
+      const reply = answer?.(url) ?? Promise.reject(new Error("no fetch"));
+      const href = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      if (!href.endsWith("a2/tileset.json") || !first) return reply;
+      first = false;
+      return new Promise((resolve) => (release = () => resolve(reply)));
+    });
+    let dates = { epochs: [E1, E2], assets: [A1, A2] };
+    const listeners = new Set<() => void>();
+    const dispose = attachCellView(asCesium, { requestRender: vi.fn() }, A1.id, () => dates, {
+      onDatesChange: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    });
+    useViewMode.getState().set("data-age");
+    await vi.waitFor(() => expect(first).toBe(false));
+    // September is published: compared again, and done first.
+    const E3 = epoch("e3", {
+      ordinal: 3,
+      observedAt: "2026-09-01T15:00:00Z",
+      currentAssetId: "a3",
+    });
+    dates = { epochs: [E1, E2, E3], assets: [A1, A2, splat("a3", { epochId: "e3" })] };
+    for (const listener of listeners) listener();
+    await vi.waitFor(() =>
+      expect(useViewMode.getState().cells[A1.id]).toMatchObject({ newer: { dates: 2 } }),
+    );
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(useViewMode.getState().cells[A1.id]).toMatchObject({ newer: { dates: 2 } });
+    dispose();
   });
 });

@@ -162,8 +162,11 @@ export function startCellView(
           report(assetId, { kind: "ready", mode: "confidence" });
           return;
         }
-        const found = await buildAge(g);
-        if (disposed || mode !== next) return;
+        const building = buildAge(g);
+        const found = await building;
+        // A comparison a newer one overtook (the site's dates changed meanwhile) says
+        // nothing: its texture was not applied, and its legend would describe other dates.
+        if (disposed || mode !== next || building !== age) return;
         report(assetId, found);
         scene.requestRender();
       })
