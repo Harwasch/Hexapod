@@ -223,6 +223,11 @@ export default defineConfig({
         // A separate neural-world product on the same host, with no globe dependency.
         worlds: resolve(import.meta.dirname, "worlds.html"),
       },
+      // Keep shared chunks out of the entries. From rolldown 1.2.9 the common-chunk merge
+      // (on by default) folded the globe page's lazy modules (demoRanchData, planFlow,
+      // landPlanning, queries, ...) into index-*.js: 190 kB gz to 238 kB, past check-bundle's
+      // INDEX_ENTRY_GZIP_BUDGET. https://rolldown.rs/reference/InputOptions.experimental
+      experimental: { chunkOptimization: { mergeCommonChunks: false } },
       output: {
         codeSplitting: {
           groups: [
