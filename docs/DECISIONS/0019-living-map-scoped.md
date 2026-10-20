@@ -24,10 +24,13 @@ it.
 
 ### Decision
 
-1. **One switch, not persisted** (`state/asCaptured.ts`): `useAsCaptured {on, set}`. A reload
-   forgets it, so nobody is left looking at a scan with its fills hidden without having asked.
-   `?asCaptured=1` turns it on for the visit; nothing else in the address does. The switch is in
-   the Splat view control (`ViewsControl`), beside Photo · Confidence · Data age; while it is on,
+1. **One switch, kept only in the page address** (`state/asCaptured.ts`):
+   `useAsCaptured {on, set}`. `?asCaptured=1` turns it on; nothing else in the address does.
+   The switch keeps the address in step (`history.replaceState`, so no history entry), so a
+   reload or a copied link shows what is on screen. Nothing is stored on the device: a later
+   visit without the address has it off, so nobody is left looking at a scan with its fills
+   hidden without having asked. The switch is in the Splat view control (`ViewsControl`),
+   beside Photo · Confidence · Data age; while it is on,
    a chip in the HUD strip says **"As captured — only what was measured is drawn; plans stay as
    annotations"**, on any site, with **Turn off** (a link may land someone on it who never saw
    the switch). It claims exactly what is drawn: an earlier "nothing simulated or inferred is
@@ -54,7 +57,8 @@ WIND_CALM : wind`, the reduced-motion rule extended), which stills the Living Su
      telemetry writes every bound object at rest, its measured frame, while the tracks keep
      reading, so turning it off shows the pose of now (`cesium/telemetry.ts`); split objects are
      drawn at rest, where they were measured, under every renderer (`state/sceneObjects.ts`
-     `objectPose`).
+     `objectPose`). The poke tool is the viewer's choice, so it is given back once it is off:
+     on if it was on, or was asked for meanwhile.
    - **Agents, and what they did**: a dress rehearsal draws only the plan's lanes, all pending --
      no ghost, no lane done, no hand raised, nor the hand open in the card (`RehearsalManager`
      `hideAgents`; the run's own clock, hands and card are untouched and are drawn as they stand
@@ -62,14 +66,33 @@ WIND_CALM : wind`, the reduced-motion rule extended), which stills the Living Su
      its zones' progress: each zone chip keeps its name and drops its status ("mowing 58%"), a
      zone the fleet "treated" is drawn as the plan's (dashed, faint), and the site's pin counts
      no machine (`MissionOverlays`; `MissionManager.hideAgents`, told by the rehearsal's). A
-     project whose fleet is real keeps all of it: what its machines reported is data.
+     project whose fleet is real keeps all of it: what its machines reported is data. A hand
+     marker counts the hands up by the time it is drawn again, not those up when it was hidden.
+   - **The Land surface's inferred and agent-made overlays**: Show once's heatmap, a similarity
+     inferred from satellite signatures (its card says "Inferred"), is lifted with its outline
+     and taps, as a hidden card lifts it; the session and its answer wait, and the card says why
+     (`ShowOnceBridge`, `ShowOnceCard`). The Land agent's work is not drawn: its findings' pins,
+     the outlines of what it found and where it is looking (layers marked `agent`), a research
+     map it produced (a layer with a `researchArtifactId`; its card says why), and the outline
+     and leader line of a card in the agent's tone (`agentMade` in `state/landContext.ts`;
+     `LandContextBridge`, `LandOverlays`, `LandFocusBridge`). Each bridge filters as it draws and
+     the stores keep everything, so turning it off draws the same again.
+   - **Procedural fixtures**: the synthetic tree ("procedural; no capture, no reconstruction",
+     `lib/procedural.ts`) is generated, not captured. Its model is withheld
+     (`SiteManager.hideFixtures`): tileset hidden, world unclipped, no renderer handed it.
 4. **The badge is the test.** The Simulated motion badge is not told about the switch. It goes
    because `status.animating` becomes false once the wind is calm: if it stayed, something still
    moved, and the e2e spec would fail.
 5. **What it does not change.** W4a's analytic views (Confidence, Data age of one date) are
-   readings of the capture, not additions to it: they stay. Plans, zones' outlines and names,
-   the plan preview's lanes and the site's own footprint are annotations, not depictions of the
-   place: they stay drawn, which is what the chip says. HUD text about a simulated fleet (the
+   readings of the capture, not additions to it: they stay, as does the Fog of Knowing (where
+   the Land's evidence is, and how old: a reading of the record). Plans, zones' outlines and
+   names, the plan preview's lanes and the site's own footprint are annotations, not depictions
+   of the place: they stay drawn, which is what the chip says. On the Land surface the same
+   holds: plans (the Plans lens' work areas and steps, a planned solar array and its modelled
+   size, a boundary split's pieces) are annotations and stay; what records and public datasets
+   say stays (parcels, old map sheets, soil units and samples, flood zones, the Overview's
+   terrain, land cover and greenness rasters and spot readings, mapped assets, survey plots, a
+   mapped parcel found on descent). Measurements and drawings a person makes are theirs. HUD text about a simulated fleet (the
    status line, the agent's line, the plan card) is not drawn on the map and stays, labelled
    simulated where it is. The Inferred style and Compare methods' Fill row
    are disabled while on, each saying "Hidden while As captured is on".
@@ -82,9 +105,12 @@ WIND_CALM : wind`, the reduced-motion rule extended), which stills the Living Su
    on). The globe's entry grows by the reads in the scene and the slot: index entry 194,589 B →
    195,112 B gzip (+523 B; budget 197,000 B). Of that, hiding what simulated machines did is
    about 240 B: the rehearsal's ghosts and the fleet's markers and tracks (about 100 B), then,
-   after review, the rehearsal's progress and the fleet's zone progress (143 B). The store is a
-   chunk of its own the page preloads (`asCaptured-*.js`, 453 B gzip), as the settings and
-   view-rule stores are.
+   after review, the rehearsal's progress and the fleet's zone progress (143 B). The second
+   review's fixes (Land overlays, the fixture, the poke tool given back, the address kept in
+   step, the hand count) add 71 B to the entry (195,359 B → 195,430 B), the scene's fixture
+   read; the Land bridges and cards are lazy chunks. The store is a chunk of its own the page
+   preloads (`asCaptured-*.js`, 453 B gzip, 572 B with the poke tool given back and the address
+   kept), as the settings and view-rule stores are.
 
 ### Consequences
 
@@ -93,10 +119,15 @@ WIND_CALM : wind`, the reduced-motion rule extended), which stills the Living Su
   is off.
 - Turning it on during a rehearsal leaves the clock running and the card counting: the map draws
   the plan's lanes only, until it is off.
+- A Show once session waits while it is on: taps on the map do nothing, and the card says why.
+- The agent's findings and research maps are still listed in the Land panel (text, labelled as
+  the agent's), as the simulated fleet's HUD text stays; only the map leaves them off.
 - Not covered: a whole asset of `sourceKind: "inferred"`, which the app never draws as a site's
   model already (`lib/epochs.ts`), and the Time Lantern's dated imagery, which is observed.
 
 Evidence: `e2e/asCaptured.spec.ts` (the yard with Today's inferred layer, fill methods, a
-supersedes swap and the forest rig in the wind, under CesiumJS and PlayCanvas; `?asCaptured=1`;
-the demo ranch's simulated fleet and its zones' progress), `e2e/poke.spec.ts` (a ring stops), and the unit tests beside
-each effect.
+supersedes swap and the forest rig in the wind, under CesiumJS and PlayCanvas; `?asCaptured=1`
+and the address following the switch; the demo ranch's simulated fleet and its zones'
+progress), `e2e/poke.spec.ts` (a ring stops), and the unit tests beside each effect
+(`showOnceBridge`, `showOnceCard`, `landAgentAsCaptured`, `researchMap`,
+`siteFixtureAsCaptured`, `rehearsalManager`, `asCaptured`, `asCapturedUrl`).
