@@ -15,7 +15,7 @@ import { useLayers as useLayerCatalog } from "@/api/queries";
 import { categoryLabel } from "@/lib/format";
 import { useUi, type LayersMode } from "@/state/ui";
 
-import { CompareControls } from "../compare/Compare";
+import { CompareMode } from "../compare/Compare";
 import { FloatingPanel } from "../shell/FloatingPanel";
 import { LayerCard } from "./LayerCard";
 import { LayerFavourites } from "./LayerFavourites";
@@ -90,7 +90,7 @@ export function LayersPanel() {
           }))}
         />
         {mode === "compare" ? (
-          <CompareControls />
+          <CompareMode />
         ) : (
           <LayerCatalog
             filter={filter}
