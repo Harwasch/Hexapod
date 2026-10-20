@@ -61,16 +61,38 @@ weak, in a frame another epoch could be compared in.
    as `frameRelativeUncertaintyM` (`alignment.frame_relative_uncertainty`):
    - the epoch that makes the frame (no earlier published epoch: `site_context.json`
      `priorEpochs` 0): **0**;
-   - aligned visually to a reference: **`sqrt(ref_rel² + (3 rms)²)`**, where `ref_rel` is the
-     reference's own frame-relative figure — 0 when the reference made the frame (ordinal 1), else
-     its alignment's `frameRelativeUncertaintyM`, else (an older alignment) its absolute
-     `uncertaintyM`, which is never smaller; the worker passes it in the reference block;
-   - not aligned to the reference it had (a failed fit, or an RTK epoch that kept its own GNSS
-     frame over a coarser reference): its own placement and the reference's absolute one in
-     quadrature — the frame is where an earlier epoch was placed, so it is never better than
-     either;
+   - aligned visually to a reference: **`v = sqrt(ref_rel² + (3 rms)²)`**, where `ref_rel` is
+     the reference's own frame-relative figure — 0 when the reference made the frame (ordinal 1),
+     else its alignment's `frameRelativeUncertaintyM`, else (an older alignment) its absolute
+     `uncertaintyM`, which is never smaller; the worker passes it in the reference block —
+     **unless the epoch's check targets refute the fit** (below);
+   - not aligned to the reference it had (a failed fit, a refuted one, or an RTK epoch that kept
+     its own GNSS frame over a coarser reference): its own placement and the reference's
+     absolute one in quadrature — the frame is where an earlier epoch was placed, so it is never
+     better than either;
    - not aligned and no reference, but the site has earlier epochs: **its own georeference
      uncertainty** (5 m EXIF, 10 m a located point or a pin).
+
+   **Check targets, from first principles.** A check target measures the epoch **on the
+   globe**: its RMSE `d` (`checkTargets.rmseM.total`, from however many were evaluated) is how
+   far this epoch's content is from where the targets were surveyed. The frame is not the
+   globe: it is where the frame-defining epoch was placed, which is at most `ref_abs + ref_rel`
+   from the globe (the reference's absolute placement, then the reference from the frame). So,
+   by the triangle inequality, the epoch is **at least `d − ref_abs − ref_rel` from the frame**.
+   - When that lower bound exceeds the fit's claim `v`, the claim is proven wrong — the
+     targets see an error the fit and the chain of placements cannot hold — and the epoch is
+     taken as not aligned to its reference (the quadrature rule above). Its own placement
+     `uncertaintyM` already carries `d` when three or more targets were evaluated; with fewer,
+     `d` is still the floor, since a measured disagreement is never less than the placement.
+   - When the chain explains it (a phone fitted to a ±5 m GPS frame is 2 m off its targets,
+     and so is the frame), the targets say nothing about the fit, and `v` stands: an error
+     every epoch of the site shares is no error between them.
+   - Past the frame-defining epoch, `d` is a floor on every branch; the frame-defining epoch
+     stays 0 — it is the frame, wherever the globe says it is.
+
+   The alignment's own `confidence` (0–1) does not enter the cap: it is a heuristic, not a
+   probability. A tight visual fit scores 0 there when its check targets' RMSE reaches the
+   length of their tolerance; those metres now enter `u_rel` themselves, through the rule above.
 
    So a phone aligned visually to the consumer-GPS epoch that made the frame (±5 m on the globe) is
    capped by its fit alone, and a later GPS-only epoch is weak everywhere with the `alignment`

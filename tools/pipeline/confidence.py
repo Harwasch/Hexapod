@@ -28,13 +28,14 @@ error is under half the cell: `f = min(1, cell / (2 u_rel))`, where `u_rel` is t
 epoch's uncertainty *relative to the site frame*, not to the globe -- 0 when
 `site_context.json` says no published epoch came before it (this epoch defines the frame),
 else what `align` measured from the frame (`frameRelativeUncertaintyM`: a visual fit's
-`sqrt(ref_rel^2 + (3 rms)^2)`, or an unaligned epoch's own placement; alignment.py
-`frame_relative_uncertainty`). So a phone aligned visually to the consumer-GPS epoch that
-made the frame is capped by its fit, not by that epoch's +/-5 m; and a later drone epoch
-placed only by its GPS (+/-10 m) scores `f = 0.05` on 1 m cells and is weak everywhere,
-with the `alignment` reason, which is the honest answer: nobody knows where its evidence
-is to a metre. An alignment from before the frame-relative figure existed is read at its
-absolute `uncertaintyM`, which is never smaller.
+`sqrt(ref_rel^2 + (3 rms)^2)` unless its check targets refute it, or an unaligned epoch's
+own placement; alignment.py `frame_relative_uncertainty`). So a phone aligned visually to
+the consumer-GPS epoch that made the frame is capped by its fit, not by that epoch's
++/-5 m; and a later drone epoch placed only by its GPS (+/-10 m) scores `f = 0.05` on 1 m
+cells and is weak everywhere, with the `alignment` reason, which is the honest answer:
+nobody knows where its evidence is to a metre. An alignment from before the
+frame-relative figure existed is read at its absolute `uncertaintyM`, which is never
+smaller.
 
 **Level.** The smallest level at which the median occupied cell holds at least
 `MIN_CELL_GAUSSIANS` (16) visible gaussians -- a binomial share from 16 has sigma <= 0.125,

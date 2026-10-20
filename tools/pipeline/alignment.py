@@ -67,8 +67,10 @@ and three times the fit's RMS in quadrature, for GNSS the georeference's own (fl
 only raise it. An anchor with no vertical never claims better than the georeference.
 **frameRelativeUncertaintyM** is the same question asked of the site frame rather than the
 globe (`frame_relative_uncertainty`; ADR 0016): 0 for the epoch that makes the frame, the
-reference's own figure and three times the fit's RMS for a visual alignment, the epoch's
-own placement (with the reference's) otherwise. It is what caps the confidence grid.
+reference's own figure and three times the fit's RMS for a visual alignment -- unless its
+check targets are further off than every placement in the chain can explain, which refutes
+the fit -- the epoch's own placement (with the reference's) otherwise. It is what caps the
+confidence grid.
 
 Every gate is a recipe param and **off**: no recorded measurement backs a threshold (D4).
 
@@ -245,21 +247,35 @@ def frame_relative_uncertainty(
     rms_m: float,
     own_m: float,
     reference: Reference | None,
+    check_rmse_m: float | None = None,
 ) -> tuple[float, str]:
     """How far this epoch may be from the site frame, not from the globe: what caps its
     confidence grid (confidence.py, ADR 0016). With its basis.
 
+    `check_rmse_m` is what the check targets measured (`checkTargets.rmseM.total`, from
+    any number evaluated; None for none). They measure this epoch **on the globe**; the
+    frame is where earlier epochs were placed, so their disagreement is evidence about the
+    frame only beyond what those placements explain. It is never less than the epoch's own
+    placement either way, so `own` below is `max(own_m, check_rmse_m)`.
+
     * the epoch that makes the frame (`prior` 0): 0 -- the frame is where it is;
-    * aligned visually to a reference: `sqrt(ref_rel^2 + (3 rms)^2)`, the reference's own
-      frame-relative figure (its absolute one when an older alignment did not record it:
-      conservative) and this fit's error;
-    * not aligned to the reference it had (or kept its own RTK frame over it): its own
-      placement and the reference's, in quadrature -- the frame is where an earlier epoch
-      was placed, so it is never better than either;
+    * aligned visually to a reference: the fit's claim `v = sqrt(ref_rel^2 + (3 rms)^2)`,
+      the reference's own frame-relative figure (its absolute one when an older alignment
+      did not record it: conservative) and this fit's error -- **unless the targets refute
+      it**. The frame-defining epoch is at most `ref_abs + ref_rel` from the globe (the
+      reference's absolute placement, then the reference from the frame), so by the
+      triangle inequality this epoch is at least `d - ref_abs - ref_rel` from the frame
+      when its targets are `d` off. When that lower bound exceeds `v`, the fit's claim is
+      proven wrong, and the epoch is taken as not aligned to the reference: the next rule;
+    * not aligned to the reference it had (or kept its own RTK frame over it, or refuted
+      as above): its own placement and the reference's, in quadrature -- the frame is
+      where an earlier epoch was placed, so it is never better than either;
     * not aligned and no reference, yet the site has earlier epochs: its own placement.
     """
     if prior == 0:
         return 0.0, "frame-defining"
+    measured = 0.0 if check_rmse_m is None else max(0.0, check_rmse_m)
+    own = max(own_m, measured)
     if visual and reference is not None:
         ref_rel = reference.frame_relative_uncertainty_m
         basis = "visual"
@@ -268,10 +284,13 @@ def frame_relative_uncertainty(
                 reference.uncertainty_m,
                 "visual, reference at its absolute uncertainty",
             )
-        return math.hypot(ref_rel, SIGMA_K * rms_m), basis
+        claim = math.hypot(ref_rel, SIGMA_K * rms_m)
+        if measured - reference.uncertainty_m - ref_rel <= claim:
+            return claim, basis
+        return math.hypot(own, reference.uncertainty_m), "visual, refuted by its check targets"
     if reference is not None:
-        return math.hypot(own_m, reference.uncertainty_m), "own and reference placements"
-    return own_m, "own placement"
+        return math.hypot(own, reference.uncertainty_m), "own and reference placements"
+    return own, "own placement"
 
 
 def read_site_context(directory: Path, log: Callable[[str], None] = print) -> SiteContext:
@@ -340,6 +359,12 @@ def _float(value: object) -> float | None:
         return None
     number = float(value)
     return number if math.isfinite(number) else None
+
+
+def _check_rmse(checks: Mapping[str, Any]) -> float | None:
+    """What the evaluated check targets measured on the globe (`rmseM.total`), if any."""
+    rmse = checks.get("rmseM") if int(checks.get("evaluated") or 0) > 0 else None
+    return _float(rmse.get("total")) if isinstance(rmse, Mapping) else None
 
 
 def _str(value: object) -> str | None:
@@ -1210,6 +1235,7 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
         rms_m=rms,
         own_m=uncertainty_m,
         reference=reference,
+        check_rmse_m=_check_rmse(checks),
     )
     words = label(
         platform=platform,

@@ -1194,3 +1194,89 @@ def test_an_unaligned_later_epoch_is_its_own_placement_from_the_frame(
         math.hypot(10.0, 0.024),
         abs=1e-4,  # REFERENCE["uncertaintyM"]
     )
+
+
+def test_check_targets_that_refute_a_visual_fit_raise_its_frame_relative_figure(
+    tmp_path: Path,
+) -> None:
+    """Review R3 #54 (high): the targets measure this epoch on the globe; the frame is at
+    most the reference's absolute plus its frame-relative figure from the globe. A
+    disagreement beyond that and the fit's own claim proves the claim wrong, and the
+    epoch is then no better placed in the frame than its placement and the reference's."""
+    precise = alignment.Reference(
+        epoch_id="e1", job_id="j1", observed_at=None, platform="rtk-drone", verdict="survey",
+        uncertainty_m=0.03, frames=tmp_path, poses=tmp_path, placement=tmp_path,
+        georef=tmp_path, frame_relative_uncertainty_m=0.0,
+    )  # fmt: skip
+
+    def fit(own_m: float, check_rmse_m: float | None = None) -> tuple[float, str]:
+        return alignment.frame_relative_uncertainty(
+            prior=1, visual=True, rms_m=0.01, own_m=own_m, reference=precise,
+            check_rmse_m=check_rmse_m,
+        )  # fmt: skip
+
+    claim = alignment.SIGMA_K * 0.01
+    # No targets, or targets the reference's own placement explains: the fit stands.
+    for stands in (fit(0.03), fit(0.05, 0.05)):
+        assert stands[0] == pytest.approx(claim) and stands[1] == "visual"
+    # Two metres off on targets against a 3 cm frame: the 3 cm fit is refuted.
+    refuted, basis = fit(2.0, 2.0)
+    assert refuted == pytest.approx(math.hypot(2.0, 0.03))
+    assert basis == "visual, refuted by its check targets"
+    # The measured disagreement is a floor even where `own_m` did not take it (fewer than
+    # three targets evaluated), and in every branch past the frame-defining one.
+    assert fit(0.03, 2.0)[0] == pytest.approx(math.hypot(2.0, 0.03))
+    kept = alignment.frame_relative_uncertainty(
+        prior=1, visual=False, rms_m=0.0, own_m=0.03, check_rmse_m=2.0, reference=precise
+    )
+    assert kept[0] == pytest.approx(math.hypot(2.0, 0.03))
+    alone = alignment.frame_relative_uncertainty(
+        prior=1, visual=False, rms_m=0.0, own_m=0.03, check_rmse_m=2.0, reference=None
+    )
+    assert alone[0] == pytest.approx(2.0)
+    # The frame-defining epoch is the frame, whatever the globe says of it.
+    assert alignment.frame_relative_uncertainty(
+        prior=0, visual=False, rms_m=0.0, own_m=2.0, check_rmse_m=2.0, reference=None
+    ) == (0.0, "frame-defining")
+    # A coarse frame explains metres: a phone fitted to the consumer-GPS epoch that made
+    # the frame (+/-5 m on the globe) is 2 m off its targets and still its fit from the frame.
+    coarse = alignment.Reference(
+        epoch_id="e1", job_id="j1", observed_at=None, platform="drone", verdict="coarse",
+        uncertainty_m=5.0, frames=tmp_path, poses=tmp_path, placement=tmp_path,
+        georef=tmp_path, frame_relative_uncertainty_m=0.0,
+    )  # fmt: skip
+    explained = alignment.frame_relative_uncertainty(
+        prior=1, visual=True, rms_m=0.01, own_m=5.0, check_rmse_m=2.0, reference=coarse
+    )
+    assert explained[0] == pytest.approx(claim) and explained[1] == "visual"
+
+
+def test_align_hands_its_check_targets_to_the_frame_relative_figure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stage end to end: a visual fit to a precise frame-defining reference whose
+    check targets are two metres out is not capped by the fit alone."""
+    _, model = _ring_model(tmp_path / "m")
+    names = [image.name for image in model.images]
+    monkeypatch.setattr(alignment, "_register", _fake_register(_registered(model, TRUE, names)))
+
+    def two_metres_out(*_: object, **__: object) -> dict[str, object]:
+        return {
+            "status": "evaluated", "reason": None, "targets": 3, "evaluated": 3, "checks": 3,
+            "verticalEvaluated": True, "verticalAnchorFree": None, "perTarget": [],
+            "rmseM": {"horizontal": 2.0, "vertical": 0.0, "total": 2.0},
+            "tolerance": {"horizontalM": 0.05, "verticalM": 0.1}, "withinTolerance": False,
+        }  # fmt: skip
+
+    monkeypatch.setattr(check_targets, "evaluate", two_metres_out)
+    framing = {**REFERENCE, "frameRelativeUncertaintyM": 0.0}
+    _, document = _run(
+        tmp_path / "w", _georef_located(), reference=framing, params={"platform": "phone-video"}
+    )
+    assert document["method"] == "visual" and document["verdict"] == "coarse"
+    assert document["confidence"] == 0.0  # the targets are past their tolerance
+    assert document["frameRelativeBasis"] == "visual, refuted by its check targets"
+    assert document["frameRelativeUncertaintyM"] == pytest.approx(
+        math.hypot(document["uncertaintyM"], 0.024), abs=1e-4
+    )
+    assert document["frameRelativeUncertaintyM"] >= 2.0
