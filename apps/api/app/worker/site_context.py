@@ -205,6 +205,7 @@ def _fetch_reference(
         "verdict": reference.verdict,
         "uncertaintyM": reference.uncertainty_m,
         "revision": reference.revision,
+        "heightDatum": reference.height_datum,
         **{role: f"{REFERENCE_DIR}/{names[role]}" for role in epochs.REFERENCE_ARTIFACTS},
     }
 

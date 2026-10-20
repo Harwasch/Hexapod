@@ -155,6 +155,7 @@ def test_a_published_reference_is_seeded_with_its_files_and_paths(
         "verdict": "coarse",
         "uncertaintyM": 0.065,
         "revision": chosen.revision,
+        "heightDatum": None,
         "frames": "reference/frames",
         "poses": "reference/poses",
         "placement": "reference/placement.json",
@@ -601,3 +602,27 @@ def test_an_interrupted_seed_never_mixes_two_revisions_of_one_reference(
     assert document["reference"]["revision"] == after.revision
     frames = directory / document["reference"]["frames"]
     assert (frames / "frame_0000.jpg").read_bytes() == b"retried-0"
+
+
+@pytest.mark.parametrize(
+    ("origin", "expected"),
+    [
+        ({"heightDatum": "msl-unverified"}, "msl-unverified"),
+        ({"heightDatum": "ellipsoid-wgs84"}, "ellipsoid-wgs84"),
+        ({"heightDatum": "geoid"}, None),
+        (None, None),
+    ],
+)
+def test_the_reference_states_the_height_datum_its_origin_is_on(
+    db: Session, storage: S3Storage, tmp_path: Path, origin: Any, expected: str | None
+) -> None:
+    """`align_epoch` refuses to reframe a reference across two height datums (the R2
+    review of #51), and accepts one that states none only at its own origin: the seed
+    passes on the datum the reference's own alignment recorded, never a guess."""
+    alignment: dict[str, Any] = {"verdict": "coarse", "uncertaintyM": 0.065}
+    if origin is not None:
+        alignment["origin"] = {"lat": 1.0, "lon": 2.0, "height": 3.0, **origin}
+    first, _epoch = first_epoch(db, storage, tmp_path, alignment=alignment)
+    assert first.site_id is not None
+    document = seeded(db, storage, second_capture(db, first.site_id), tmp_path)
+    assert document["reference"]["heightDatum"] == expected

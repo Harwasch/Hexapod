@@ -449,6 +449,9 @@ class ReferenceChoice:
     uncertainty_m: float
     keys: dict[str, str]
     revision: str = ""
+    #: The height datum its origin is on, as its own alignment recorded it (`origin.
+    #: heightDatum`), else None: `align_epoch` never reframes across two datums.
+    height_datum: str | None = None
 
 
 def claimed_verdict(alignment: object, platform: str) -> str | None:
@@ -472,6 +475,16 @@ def _reference_uncertainty(epoch: Epoch, capture: Capture | None) -> float:
         if number is not None and number > 0:
             return number
     return UNRECORDED_UNCERTAINTY_M
+
+
+def _reference_datum(epoch: Epoch) -> str | None:
+    """The height datum the reference's origin is on, from its alignment's `origin`, when
+    that names one of the site frames' datums; else None (never a guess)."""
+    alignment = epoch.alignment if isinstance(epoch.alignment, dict) else {}
+    origin = alignment.get("origin")
+    datum = origin.get("heightDatum") if isinstance(origin, dict) else None
+    known = {member.value for member in HeightDatum}
+    return datum if isinstance(datum, str) and datum in known else None
 
 
 def _confirmed_at(epoch: Epoch, shown_at: datetime) -> datetime:
@@ -591,6 +604,7 @@ def reference_epoch(
                 uncertainty_m=_reference_uncertainty(epoch, capture),
                 keys=keys,
                 revision=revision,
+                height_datum=_reference_datum(epoch),
             )
         )
     if not candidates:
