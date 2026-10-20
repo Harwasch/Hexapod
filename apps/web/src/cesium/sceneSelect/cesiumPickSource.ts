@@ -81,6 +81,7 @@ export function cesiumPickSource(tileset: Cesium3DTileset): PickSource {
   let last: readonly PickTile[] = [];
   return {
     renderer: "cesium",
+    split: () => tileset.splitDirection,
     toWorld: () =>
       tileset.isDestroyed()
         ? undefined

@@ -29,9 +29,9 @@ import {
   Cartesian3,
   Matrix4,
   PrimitiveCollection,
-  SplitDirection,
   type Ray,
   type Scene,
+  type SplitDirection,
 } from "cesium";
 
 import { PrecomputedSolids, collisionMetaOf, loadCollision, type Solids } from "@/lib/collision";
@@ -165,7 +165,7 @@ export class SplatCollider {
    * The nearest splat surface along a world ray, within `maxDistance` metres, and the tileset
    * it belongs to (whose scan the map menu's "What's here" is about). A ray through a point on
    * screen (`at`, window px) answers only from what is drawn there: with two dates compared,
-   * a tileset split to the other side of the divider is not there (`drawnAt`).
+   * a tileset split to the other side of the divider is not there.
    */
   raycast(
     ray: Ray,
@@ -175,7 +175,11 @@ export class SplatCollider {
     let best: { point: Cartesian3; distance: number; tileset: object } | null = null;
     for (const [tileset, entry] of this.tracked) {
       if ((!tileset.show && tileset !== this.solidWhileHidden) || entry.solids.empty) continue;
-      if (at && !this.drawnAt(tileset, at.x)) continue;
+      // Drawn where it is asked: CesiumJS discards LEFT (-1) fragments right of the divider
+      // (`splitPosition` of the canvas width) and RIGHT (1) ones left of it; NONE (0) nowhere.
+      const cut = at && (tileset.splitDirection ?? 0);
+      if (cut && cut * (at.x - this.scene.splitPosition * this.scene.canvas.clientWidth) < 0)
+        continue;
       const origin = Matrix4.multiplyByPoint(entry.toLocal, ray.origin, scratchA);
       const direction = Matrix4.multiplyByPointAsVector(entry.toLocal, ray.direction, scratchB);
       // The grid answers in its own units along the ray; a unit is `scale` metres as drawn.
@@ -226,17 +230,6 @@ export class SplatCollider {
    */
   setSolidWhileHidden(tileset: object | null): void {
     this.solidWhileHidden = tileset;
-  }
-
-  /**
-   * Whether `tileset` is drawn at window x `x`: the scene splits at `splitPosition` of the
-   * canvas width (CesiumJS discards LEFT fragments right of it, RIGHT ones left of it).
-   */
-  private drawnAt(tileset: SplatTilesetShape, x: number): boolean {
-    const side = tileset.splitDirection ?? SplitDirection.NONE;
-    if (side === SplitDirection.NONE) return true;
-    const divider = this.scene.splitPosition * this.scene.canvas.clientWidth;
-    return side === SplitDirection.LEFT ? x <= divider : x >= divider;
   }
 
   private near(world: Cartesian3, margin: number): Tracked[] {

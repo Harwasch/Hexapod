@@ -6,7 +6,7 @@
  * is the one picked from.
  */
 
-import type { Matrix4 } from "cesium";
+import type { Matrix4, SplitDirection } from "cesium";
 
 import type { PickTile } from "@/lib/splatPick";
 
@@ -17,6 +17,8 @@ export interface PickSource {
   tiles(): readonly PickTile[];
   /** The scan's frame (tileset local east/north/up metres) to Earth-fixed, when known. */
   toWorld(): Matrix4 | undefined;
+  /** Which side of the compare divider the scan is drawn on (ADR 0017); NONE when absent. */
+  split?(): SplitDirection;
 }
 
 /** Dedicated renderers outrank CesiumJS's own splats. */
