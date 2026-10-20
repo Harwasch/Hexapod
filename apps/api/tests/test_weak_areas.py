@@ -327,3 +327,27 @@ def test_a_dense_noisy_plane_past_the_ceiling_answers_in_seconds() -> None:
     smallest = max(weak_areas.MIN_AREA_M2, 2 * math.ldexp(0.25, found.zone_level) ** 2)
     for patch in found.patches:
         assert all(Polygon(ring).area >= smallest for ring in patch.metric.interiors)
+
+
+def test_a_clip_is_about_the_zone_s_weakest_cells_not_its_middle() -> None:
+    plane = a_plane()
+    weaken(plane, (-5, 5), (-5, 5), score=100, bits=BITS["views"])  # 100 m2 about the origin
+    weaken(plane, (3, 5), (3, 5), score=0, bits=BITS["unseen"])  # its weakest, a corner
+    [patch] = cell_patches(plane, weak_mask(plane), PROJECTION, budget_m2=10.0).patches
+    assert patch.metric.centroid.x > 2 and patch.metric.centroid.y > 2
+
+
+def test_with_a_focus_outside_every_zone_the_largest_comes_first() -> None:
+    plane = a_plane()
+    weaken(plane, (-10, -2), (-10, -2), score=60, bits=BITS["views"])  # 64 m2, far
+    weaken(plane, (6, 9), (6, 9), score=60, bits=BITS["views"])  # 9 m2, near the focus
+    lon, lat = PROJECTION.to_geographic(9.5, 9.5)
+    focus = (float(lon), float(lat))
+    found = cell_patches(plane, weak_mask(plane), PROJECTION, focus=focus, max_areas=1)
+    assert [round(p.area_m2) for p in found.patches] == [64]
+    # Under the focus, the zone it is in comes first, however small.
+    lon, lat = PROJECTION.to_geographic(7.5, 7.5)
+    inside = cell_patches(
+        plane, weak_mask(plane), PROJECTION, focus=(float(lon), float(lat)), max_areas=1
+    )
+    assert [round(p.area_m2) for p in inside.patches] == [9]

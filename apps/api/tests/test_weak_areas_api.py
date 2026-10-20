@@ -293,9 +293,7 @@ def test_a_rejected_epoch_shows_nothing_and_says_so(
     assert "shows no tiles (rejected)" in response.json()["detail"]
 
 
-def test_weak_areas_take_the_write_token(
-    db: Session, storage: S3Storage, tmp_path: Path
-) -> None:
+def test_weak_areas_take_the_write_token(db: Session, storage: S3Storage, tmp_path: Path) -> None:
     """Every POST is gated (test_write_token)."""
     from app.config import Settings
 
