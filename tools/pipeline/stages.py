@@ -621,14 +621,19 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         # way round -- a phone that was renamed is still the phone the row names.
         "sensor": _optional_str(ctx.param("sensor")) or meta.make,
         "device": _optional_str(ctx.param("device")) or meta.model,
-        # What the capture row says, else the container's date, else the first kept
-        # frame's own clock (a photo set's EXIF time, local unless it carried a zone).
+        # What the capture row says, else the container's date, else the frames' own UTC
+        # time. Never a frame's zoneless local time: the worker reads a naive
+        # `capturedAt` as UTC (`registration._observed_at`), which would date a DJI
+        # photo set -- whose EXIF carries no offset -- hours off and call it measured.
         "capturedAt": _optional_str(ctx.param("captured_at"))
         or meta.created_at
-        or _first_frame_time(records),
+        or time_range["firstUtc"],
         # The files' own clocks, in UTC, only when a zone was known (`frames_meta.json`
         # `timeRange`); what the worker dates the epoch by first (`_observed_at`).
         "capturedAtUtc": time_range["firstUtc"],
+        # The first kept frame's camera clock as written, zone unknown unless `offset`
+        # says: for a person to read, not for anything to date by.
+        "capturedAtLocal": _first_local_time(records),
         "platform": platform.to_dict(),
         "focal": focal_summary,
         "exposure": exposure_summary,
@@ -869,11 +874,8 @@ def _time_range(records: Sequence[frame_meta.FrameRecord]) -> dict[str, object]:
     }
 
 
-def _first_frame_time(records: Sequence[frame_meta.FrameRecord]) -> str | None:
-    for record in records:
-        if record.time.local or record.time.utc:
-            return record.time.local or record.time.utc
-    return None
+def _first_local_time(records: Sequence[frame_meta.FrameRecord]) -> str | None:
+    return next((record.time.local for record in records if record.time.local), None)
 
 
 def _safe_image_size(path: Path) -> tuple[int, int] | None:

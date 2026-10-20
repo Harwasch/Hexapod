@@ -73,9 +73,11 @@ def test_drone_photos_are_described_from_their_originals_before_shrinking(
     assert source["platform"]["value"] == "rtk-drone"
     assert frames["platform"] == source["platform"]
     assert source["focal"]["px"] == pytest.approx(3713.29 * 1600 / 5280, abs=1e-4)
-    # DJI EXIF carries no offset, so there is no UTC time and nothing claims one.
+    # DJI EXIF carries no offset, so there is no UTC time and nothing claims one: not
+    # `capturedAtUtc`, and not `capturedAt` either, which the worker would read as UTC.
     assert source["capturedAtUtc"] is None
-    assert source["capturedAt"] == "2026-10-01T10:20:30"
+    assert source["capturedAt"] is None
+    assert source["capturedAtLocal"] == "2026-10-01T10:20:30"
     assert frames["timeRange"]["firstUtc"] is None
 
 

@@ -21,7 +21,8 @@ def test_luma_stats_count_clipped_pixels() -> None:
 
     mean, high, low = exposure.luma_stats(grey)
 
-    assert (high, low) == (pytest.approx(11.0), pytest.approx(21.0))
+    assert high == pytest.approx(11.0)
+    assert low == pytest.approx(21.0)
     assert mean == pytest.approx(float(grey.mean()))
     assert exposure.luma_stats(np.zeros((0, 0), dtype=np.uint8)) == (0.0, 0.0, 0.0)
 
