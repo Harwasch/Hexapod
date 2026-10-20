@@ -292,8 +292,16 @@ def _scale_uncertainty_pct(georef: dict[str, Any]) -> float | None:
 def _boundary(registration: Registration) -> Polygon:
     """The site's footprint: the capture's measured extent about its placed coordinate, or
     the placeholder square (`placement.boundary`, which `set_scale` resizes about the same
-    origin)."""
-    return placement.boundary(registration.lat, registration.lon, registration.bbox_local_m)
+    origin). A run placed in a site frame (`georef.siteFrame`) has its box about the frame's
+    origin, up to 2 km from the capture, so its corners are placed exactly."""
+    georef = registration.document.get("georef")
+    in_frame = isinstance(georef, dict) and isinstance(georef.get("siteFrame"), dict)
+    return placement.boundary(
+        registration.lat,
+        registration.lon,
+        registration.bbox_local_m,
+        frame_height=registration.height if in_frame else None,
+    )
 
 
 def _tileset_prefix(job_id: uuid.UUID, stage_id: str) -> str:

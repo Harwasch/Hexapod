@@ -280,3 +280,53 @@ def test_no_coordinate_and_no_site_means_no_frame(db: Session) -> None:
     assert epochs.frame_for_run(db, capture) is None
     assert epochs.frame_for_run(db, dangling) is None
     assert epochs.frame_for_run(db, malformed) is None
+
+
+# ── An epoch's footprint in its site's frame ─────────────────────────────────────────────
+
+
+def test_a_footprint_in_a_frame_is_placed_by_the_exact_enu_inverse() -> None:
+    """A joined epoch's box is metres about its site's frame origin, up to 2 km away. The
+    flat 111,320 m a degree is ~0.4% long north-south at 28 deg N -- about 9 m at 2 km --
+    so in a frame the corners are placed exactly. Checked against pyproj (geocentric to
+    geodetic), an implementation that shares nothing with `placement.enu_to_lonlat`."""
+    import math
+
+    import numpy as np
+    from pyproj import Transformer
+
+    from app.services import placement
+
+    lat, lon, height = 28.0389, -82.6966, 22.5
+    to_geodetic = Transformer.from_crs("EPSG:4978", "EPSG:4979", always_xy=True)
+    to_ecef = Transformer.from_crs("EPSG:4979", "EPSG:4978", always_xy=True)
+    x0, y0, z0 = to_ecef.transform(lon, lat, height)
+    phi, lam = math.radians(lat), math.radians(lon)
+    # East/north/up unit vectors in ECEF.
+    axes = np.array(
+        [
+            [-math.sin(lam), math.cos(lam), 0.0],
+            [-math.sin(phi) * math.cos(lam), -math.sin(phi) * math.sin(lam), math.cos(phi)],
+        ]
+    )
+
+    def truth(east: float, north: float) -> tuple[float, float]:
+        x, y, z = np.array([x0, y0, z0]) + east * axes[0] + north * axes[1]
+        found_lon, found_lat, _ = to_geodetic.transform(x, y, z)
+        return found_lon, found_lat
+
+    box_m = ([1950.0, 1980.0, -2.0], [2010.0, 2040.0, 8.0])
+    exact = placement.boundary(lat, lon, box_m, frame_height=height)
+    ring = exact.coordinates[0]
+    corners = [(1950.0, 1980.0), (2010.0, 1980.0), (2010.0, 2040.0), (1950.0, 2040.0)]
+    for (found_lon, found_lat), (east, north) in zip(ring[:4], corners, strict=True):
+        want_lon, want_lat = truth(east, north)
+        # 1e-8 deg is about a millimetre.
+        assert abs(found_lon - want_lon) < 1e-8
+        assert abs(found_lat - want_lat) < 1e-8
+    assert ring[4] == ring[0]
+
+    # The flat rule it replaces is metres out there; outside a frame it is unchanged.
+    flat = placement.boundary(lat, lon, box_m)
+    assert abs(flat.coordinates[0][2][1] - ring[2][1]) * placement.METRES_PER_DEGREE > 5.0
+    assert flat == placement.rectangle(lat, lon, (1950.0, 2010.0), (1980.0, 2040.0))
