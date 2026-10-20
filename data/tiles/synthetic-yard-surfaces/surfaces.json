@@ -33,6 +33,11 @@
      {
       "name": "support",
       "type": "u1"
+     },
+     {
+      "name": "groundSigma",
+      "type": "u1",
+      "unitM": 0.01
      }
     ],
     "levels": [
@@ -41,10 +46,10 @@
       "cellM": 1.0,
       "i0": -4,
       "j0": -4,
-      "ni": 40,
+      "ni": 41,
       "nj": 32,
       "offset": 0,
-      "bytes": 7680
+      "bytes": 9184
      }
     ],
     "policy": "surface-v1",
@@ -66,11 +71,11 @@
     "alignedTo": {
      "kind": "confidence",
      "level": 2,
-     "sha256": "f365dccdba14be8d5384fad9e22227e9d8096e1653fb8dc51e69dbedf820f52a"
+     "sha256": "256c3a6ebdb2342ef0a17b81ff52bd87c05d81ac3a0bfe39c820c6e0fa1975e8"
     },
     "summary": {
-     "cells": 1280,
-     "surfaced": 1272,
+     "cells": 1312,
+     "surfaced": 1304,
      "thin": 8,
      "samples": {
       "sfm": 0,
@@ -81,15 +86,15 @@
      "outOfRange": 0,
      "sigmaSaturated": 0,
      "medianSigmaCm": 3.0,
-     "metric": false
+     "metric": true
     },
-    "sha256": "5b4eb61da3b28d4938edbe61aee60c7e1fdc7746b608b1725d0736f56ecd2e0b"
+    "sha256": "2fe57d2f2ffe689ef6812b653536905f03514f41e13ba2155bfe3e2814acd3de"
    },
    "file": "e1/surface.bin",
-   "fileSha256": "02627e69587ee3d06782f7c2e4088b5e0ca423e374c4178e998128041a1db678",
+   "fileSha256": "67c2f14fb6cab1da80fbc69cfad87d716968c02af08e3343eaed99b0593b643b",
    "plane": {
     "level": 2,
-    "sha256": "5b4eb61da3b28d4938edbe61aee60c7e1fdc7746b608b1725d0736f56ecd2e0b"
+    "sha256": "2fe57d2f2ffe689ef6812b653536905f03514f41e13ba2155bfe3e2814acd3de"
    },
    "uncertaintyM": 0.0
   },
@@ -124,6 +129,11 @@
      {
       "name": "support",
       "type": "u1"
+     },
+     {
+      "name": "groundSigma",
+      "type": "u1",
+      "unitM": 0.01
      }
     ],
     "levels": [
@@ -132,10 +142,10 @@
       "cellM": 0.5,
       "i0": -7,
       "j0": -7,
-      "ni": 79,
-      "nj": 62,
+      "ni": 80,
+      "nj": 63,
       "offset": 0,
-      "bytes": 29388
+      "bytes": 35280
      }
     ],
     "policy": "surface-v1",
@@ -157,12 +167,12 @@
     "alignedTo": {
      "kind": "confidence",
      "level": 1,
-     "sha256": "35c9ad001242f484b94f36d4d04490fe397535480b2aa775261bac5d9c5f6425"
+     "sha256": "22588fe50c15a9dbb905e97b92a76324e53005eed27a354176c34e74b24586ac"
     },
     "summary": {
-     "cells": 4898,
-     "surfaced": 4712,
-     "thin": 186,
+     "cells": 5040,
+     "surfaced": 4851,
+     "thin": 189,
      "samples": {
       "sfm": 0,
       "splat": 0
@@ -172,15 +182,15 @@
      "outOfRange": 0,
      "sigmaSaturated": 1,
      "medianSigmaCm": 3.0,
-     "metric": false
+     "metric": true
     },
-    "sha256": "6944b9b1f67f211ed322a92172e3e92abde99fce7e490e3beb2ecf7bb294ee19"
+    "sha256": "cb48f211467aa786fa06ddfa1693cbf38a0f67747e3cd5d055289eb41ac8936d"
    },
    "file": "e2/surface.bin",
-   "fileSha256": "e6c9bef63d8663dc54b2b6b164e68d2471495f03050e65b1b414ee0cfa2aa8a2",
+   "fileSha256": "24f85a1f8e89ab5755263e5290d41d9db2c43e0d5d9668a32d4e1fb3493b52d4",
    "plane": {
     "level": 1,
-    "sha256": "6944b9b1f67f211ed322a92172e3e92abde99fce7e490e3beb2ecf7bb294ee19"
+    "sha256": "cb48f211467aa786fa06ddfa1693cbf38a0f67747e3cd5d055289eb41ac8936d"
    },
    "uncertaintyM": 0.062
   }
@@ -191,10 +201,10 @@
   "window": [
    -4,
    -4,
-   40,
+   41,
    32
   ],
-  "sha256": "75130ea62b2d2689a7f7e6fd6aa4a4f6faad783ed503342a63d3fb36cad8eeea"
+  "sha256": "394f682be7e6e5a8da9803817ebf9e25634576bfc895d37466dc11de7965abe5"
  },
  "change": {
   "reference": "experiments.confidence_demo.surface_change (P5): dsm by max, ground by min, sigma by max at the coarser level; 3 sqrt(sa^2 + sb^2 + ua^2 + ub^2)",
@@ -205,8 +215,8 @@
   "counts": {
    "raised": 47,
    "lowered": 24,
-   "unchanged": 1137,
-   "insufficient": 72
+   "unchanged": 1098,
+   "insufficient": 143
   },
   "weakChanged": 23,
   "changed": [

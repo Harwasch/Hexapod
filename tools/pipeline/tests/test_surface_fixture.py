@@ -41,6 +41,17 @@ def test_the_reference_change_finds_what_was_built() -> None:
     tally = Counter((row["class"], row["weak"]) for row in change["changed"])
     # 6 x 4 one-metre cells each; one stack cell is where e1 saw nothing (insufficient).
     assert tally == {("raised", False): 24, ("lowered", False): 24, ("raised", True): 23}
-    # e2's 2 m strip along the west edge (64 cells) and e1's 8 unseen cells.
-    assert change["counts"]["insufficient"] == 72
+    # e2's 2 m strip along the west edge (64 cells), e1's 8 unseen cells, e2's saturated
+    # sigma (1), and e1's south row past the strip (39) and east column above that row
+    # (31), where e2's 0.5 m window covers half of each 1 m cell: a partial child set is
+    # insufficient (review B5a).
+    assert change["counts"]["insufficient"] == 64 + 8 + 1 + 39 + 31
     assert change["weakChanged"] == 23
+    for epoch in ("e1", "e2"):
+        channels = [
+            c["name"]
+            for c in json.loads((COMMITTED / "surfaces.json").read_text())["epochs"][epoch][
+                "descriptor"
+            ]["channels"]
+        ]
+        assert channels == ["dsm", "ground", "sigma", "support", "groundSigma"]

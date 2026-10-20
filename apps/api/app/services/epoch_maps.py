@@ -9,7 +9,7 @@ own.
 What a run says about a grid is checked before it is believed (`confidence_descriptor`,
 `surface_descriptor`): the container and version this API can read, a file name beside the
 tiles and nothing else, a cell on the site lattice, and the keys every reader of that kind
-relies on -- for a surface, its four channels in centimetres and the frame origin height
+relies on -- for a surface, its five channels in centimetres and the frame origin height
 its heights are above. A descriptor that fails is logged and not recorded -- the epoch
 then reads as not measured, which is what the API can vouch for -- and never fails the
 registration of tiles that are fine.
@@ -137,6 +137,7 @@ SURFACE_CHANNELS: tuple[tuple[str, str, float | None], ...] = (
     ("ground", "i2", 0.01),
     ("sigma", "u1", 0.01),
     ("support", "u1", None),
+    ("groundSigma", "u1", 0.01),
 )
 #: `dsm` and `ground` where a cell has no surface (tools/captures `NO_HEIGHT`).
 NO_HEIGHT = -32768
@@ -144,7 +145,7 @@ NO_HEIGHT = -32768
 
 def surface_descriptor(raw: object) -> dict[str, Any]:
     """`raw` (registration.json's `surface`, the tileset's `extras.surface`, ADR 0018) when
-    it is a height surface this API can read: its four channels at their types and units,
+    it is a height surface this API can read: its five channels at their types and units,
     `noData` the i2 sentinel, the counts of its summary, and the height of the frame origin
     its heights are above (`vertical.originHeightM`), which the change map checks against
     the site's frame. `DescriptorError` saying why not otherwise."""

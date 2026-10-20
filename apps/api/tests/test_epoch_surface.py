@@ -175,6 +175,17 @@ def test_a_republish_that_carried_the_surface_carries_its_map(
             },
             "in 0.01 m",
         ),
+        (
+            {
+                "channels": [
+                    {"name": "dsm", "type": "i2", "unitM": 0.01},
+                    {"name": "ground", "type": "i2", "unitM": 0.01},
+                    {"name": "sigma", "type": "u1", "unitM": 0.01},
+                    {"name": "support", "type": "u1"},
+                ]
+            },
+            "'groundSigma'",
+        ),
         ({"noData": 0}, "noData"),
         ({"vertical": None}, "no vertical"),
         ({"vertical": {"originHeightM": "high"}}, "originHeightM"),

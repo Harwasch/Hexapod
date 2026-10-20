@@ -56,6 +56,8 @@ def test_the_api_reads_p5_s_surface_planes(epoch: str) -> None:
     [
         (lambda d: d["channels"].pop(1), "'ground'"),
         (lambda d: d["channels"][0].update(type="u2"), "'dsm' of type i2"),
+        # The ground's own sigma (P5, review B5a): no ground change can be read without it.
+        (lambda d: d["channels"].pop(4), "'groundSigma'"),
     ],
 )
 def test_a_surface_grid_without_its_channels_is_refused(

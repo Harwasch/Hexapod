@@ -53,11 +53,12 @@ MAX_RAW_BYTES = 64 * 1024 * 1024
 
 #: Channels (and their types) a grid of a known kind cannot be read without: the
 #: confidence grid's (ADR 0016, C2) and the height surface's (ADR 0018; `dsm` and `ground`
-#: are i2 centimetres with `NO_HEIGHT` for no surface, `sigma` u1 centimetres, saturating).
+#: are i2 centimetres with `NO_HEIGHT` for no surface -- in `ground` alone, ground never
+#: observed under a surface -- and `sigma` and `groundSigma` u1 centimetres, saturating).
 #: One without them is refused here, as unreadable, not later when a reader asks for one.
 REQUIRED_CHANNELS: Mapping[str, Mapping[str, str]] = {
     "confidence": {"score": "u1", "reasons": "u1", "relief": "u1"},
-    "surface": {"dsm": "i2", "ground": "i2", "sigma": "u1", "support": "u1"},
+    "surface": {"dsm": "i2", "ground": "i2", "sigma": "u1", "support": "u1", "groundSigma": "u1"},
 }
 #: A surface cell's `dsm` and `ground` where it has no surface (i2's least value).
 NO_HEIGHT = -32768

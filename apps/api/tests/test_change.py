@@ -33,6 +33,7 @@ def flat(
     nj: int = 20,
     height_cm: int = 1000,
     sigma_cm: int = 2,
+    ground_sigma_cm: int = 4,
 ) -> dict[str, Any]:
     return {
         "level": level,
@@ -44,6 +45,7 @@ def flat(
         "ground": np.full((nj, ni), height_cm, dtype=np.int16),
         "sigma": np.full((nj, ni), sigma_cm, dtype=np.uint8),
         "support": np.full((nj, ni), 3 | (4 << 4), dtype=np.uint8),
+        "ground_sigma": np.full((nj, ni), ground_sigma_cm, dtype=np.uint8),
     }
 
 
@@ -63,6 +65,7 @@ def hole(fields: dict[str, Any], rows: slice, columns: slice) -> dict[str, Any]:
     out["ground"][rows, columns] = NO
     out["sigma"][rows, columns] = 0
     out["support"][rows, columns] = 0
+    out["ground_sigma"][rows, columns] = 0
     return out
 
 
@@ -270,6 +273,7 @@ def only(fields: dict[str, Any], measured: set[tuple[int, int]]) -> dict[str, An
         for c in range(ni):
             if (r, c) not in measured:
                 out["dsm"][r, c], out["ground"][r, c], out["sigma"][r, c] = NO, NO, 0
+                out["ground_sigma"][r, c] = 0
     return out
 
 
@@ -413,6 +417,7 @@ def test_every_outlined_cell_is_in_one_area_and_every_outline_is_valid(seed: int
     a = hole(a, slice(0, 0), slice(0, 0))
     gone = rng.random((n, n)) < 0.15
     a["dsm"][gone], a["ground"][gone], a["sigma"][gone] = NO, NO, 0
+    a["ground_sigma"][gone] = 0
     grid = confidence(a["level"], a["i0"], a["j0"], rng.integers(0, 256, (n, n)))
     found = change_map(
         surface(a), surface(b), 0.0, 0.0, PROJECTION, confidence_a=grid, confidence_b=grid
@@ -456,10 +461,17 @@ def test_the_api_coarsens_as_p5_s_demo_does() -> None:
     expected = DOCUMENT["coarsened"]
     window = [coarse.i0, coarse.j0, coarse.ni, coarse.nj]
     assert (coarse.level, window) == (expected["level"], expected["window"])
-    record = np.dtype([("dsm", "<i2"), ("ground", "<i2"), ("sigma", "<u1"), ("support", "<u1")])
+    names = {"dsm": "dsm", "ground": "ground", "sigma": "sigma", "support": "support"}
+    names["groundSigma"] = "ground_sigma"
+    record = np.dtype(
+        [
+            (name, cell_grid.TYPES[kind])
+            for name, kind in cell_grid.REQUIRED_CHANNELS["surface"].items()
+        ]
+    )
     rows = np.zeros((coarse.nj, coarse.ni), dtype=record)
-    for name in ("dsm", "ground", "sigma", "support"):
-        rows[name] = getattr(coarse, name)
+    for name, field in names.items():
+        rows[name] = getattr(coarse, field)
     assert hashlib.sha256(rows.tobytes()).hexdigest() == expected["sha256"]
 
 

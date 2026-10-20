@@ -136,8 +136,11 @@ def test_the_change_from_e1_to_e2_is_p5_s_reference(
     assert read["thresholdSigma"] == 3
     assert read["appearance"]["status"] == "not-computed"
     assert "never splat pixels" in read["appearance"]["reason"]
-    # The least: 3 cm of sigma each side at 1 m cells (e2's 0.5 m children by max), u 0.062 m.
-    assert read["minDetectableM"] == pytest.approx(3 * (2 * 0.03**2 + 0.062**2) ** 0.5, abs=1e-3)
+    # The least: e1's 2 cm against 4 cm of e2's (its four 0.5 m children by max: a whole
+    # child set always holds one at 4), u 0.062 m.
+    assert read["minDetectableM"] == pytest.approx(
+        3 * (0.02**2 + 0.04**2 + 0.062**2) ** 0.5, abs=1e-3
+    )
     assert read["areaLevel"] == 2 and read["areaCellM"] == 1.0
 
     areas = read["areas"]

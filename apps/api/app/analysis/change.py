@@ -118,6 +118,8 @@ class Surface:
     ground: NDArray[np.int16]
     sigma: NDArray[np.uint8]
     support: NDArray[np.uint8]
+    #: The ground's own sigma (P5): 0 where the ground is `NO`, observed or not.
+    ground_sigma: NDArray[np.uint8]
 
     @property
     def cells(self) -> int:
@@ -127,7 +129,14 @@ class Surface:
     def has(self) -> NDArray[np.bool_]:
         """Cells with a surface: a height for both and a spread (P5 writes sigma 0 and
         `NO` together; a cell that says otherwise is not believed)."""
-        found: NDArray[np.bool_] = (self.sigma > 0) & (self.dsm != NO) & (self.ground != NO)
+        found: NDArray[np.bool_] = (self.sigma > 0) & (self.dsm != NO)
+        return found
+
+    @property
+    def has_ground(self) -> NDArray[np.bool_]:
+        """Cells with a surface whose ground was observed (P5 writes `NO` ground and
+        groundSigma 0 under a surface where the window saw only canopy or roof)."""
+        found: NDArray[np.bool_] = self.has & (self.ground != NO) & (self.ground_sigma > 0)
         return found
 
     @staticmethod
@@ -137,6 +146,7 @@ class Surface:
         try:
             dsm, ground = plane.channels["dsm"], plane.channels["ground"]
             sigma, support = plane.channels["sigma"], plane.channels["support"]
+            ground_sigma = plane.channels["groundSigma"]
         except KeyError as error:
             raise cell_grid.CellGridError(f"not a surface plane: no {error}") from error
         for name, values, kind in (
@@ -144,11 +154,21 @@ class Surface:
             ("ground", ground, np.int16),
             ("sigma", sigma, np.uint8),
             ("support", support, np.uint8),
+            ("groundSigma", ground_sigma, np.uint8),
         ):
             if values.dtype != kind:
                 raise cell_grid.CellGridError(f"surface channel {name} is {values.dtype}")
         return Surface(
-            plane.level, plane.i0, plane.j0, plane.ni, plane.nj, dsm, ground, sigma, support
+            plane.level,
+            plane.i0,
+            plane.j0,
+            plane.ni,
+            plane.nj,
+            dsm,
+            ground,
+            sigma,
+            support,
+            ground_sigma,
         )
 
 
@@ -175,15 +195,21 @@ def _quads(values: NDArray[Any], s: Surface, fill: Any) -> NDArray[Any]:
 
 def coarsen_surface(s: Surface) -> Surface:
     """`s` one level up (module docstring): of the children with a surface, `dsm` the
-    highest, `ground` the lowest, `sigma` the largest; `support`'s source bits OR'd over the
-    children and its count nibble the largest child's. None where no child has one."""
+    highest and `sigma` the largest; of those whose ground was observed, `ground` the
+    lowest and `groundSigma` the largest; `support`'s source bits OR'd over the children
+    and its count nibble the largest child's. None where no child has one."""
     has = _quads(s.has, s, False)
+    grounded = _quads(s.has_ground, s, False)
     nj, _, ni, _ = has.shape
     top = np.int16(np.iinfo(np.int16).max)
     dsm = np.where(has, _quads(s.dsm, s, NO), np.int16(NO)).max(axis=(1, 3), initial=NO)
-    ground = np.where(has, _quads(s.ground, s, NO), top).min(axis=(1, 3), initial=top)
+    ground = np.where(grounded, _quads(s.ground, s, NO), top).min(axis=(1, 3), initial=top)
     sigma = np.where(has, _quads(s.sigma, s, 0), np.uint8(0)).max(axis=(1, 3), initial=0)
+    ground_sigma = np.where(grounded, _quads(s.ground_sigma, s, 0), np.uint8(0)).max(
+        axis=(1, 3), initial=0
+    )
     any_has = has.any(axis=(1, 3))
+    any_ground = grounded.any(axis=(1, 3))
     support = _quads(s.support, s, 0)
     bits = np.bitwise_or.reduce(np.bitwise_or.reduce(support & 0x0F, axis=3), axis=1)
     count = (support >> 4).max(axis=(1, 3), initial=0)
@@ -194,9 +220,10 @@ def coarsen_surface(s: Surface) -> Surface:
         ni,
         nj,
         np.where(any_has, dsm, np.int16(NO)).astype(np.int16),
-        np.where(any_has, ground, np.int16(NO)).astype(np.int16),
+        np.where(any_ground, ground, np.int16(NO)).astype(np.int16),
         np.where(any_has, sigma, np.uint8(0)).astype(np.uint8),
         (bits | (count << 4)).astype(np.uint8),
+        np.where(any_ground, ground_sigma, np.uint8(0)).astype(np.uint8),
     )
 
 
@@ -234,6 +261,7 @@ def _masked(s: Surface, keep: NDArray[np.bool_]) -> Surface:
         np.where(keep, s.ground, np.int16(NO)).astype(np.int16),
         np.where(keep, s.sigma, np.uint8(0)).astype(np.uint8),
         np.where(keep, s.support, np.uint8(0)).astype(np.uint8),
+        np.where(keep, s.ground_sigma, np.uint8(0)).astype(np.uint8),
     )
 
 
@@ -328,13 +356,14 @@ def _joint_up(joint: _Joint, measured_a: _Cells, measured_b: _Cells) -> _Joint:
         high = np.where(sq, _blocks(dsm, i0, j0, np.int16(NO)), np.int16(NO)).max(
             axis=(1, 3), initial=NO
         )
-        low = np.where(sq, _blocks(ground, i0, j0, np.int16(NO)), top).min(axis=(1, 3), initial=top)
+        grounds = _blocks(ground, i0, j0, np.int16(NO))
+        low = np.where(sq & (grounds != NO), grounds, top).min(axis=(1, 3), initial=top)
         spread = np.where(sq, _blocks(sigma, i0, j0, np.uint8(0)), np.uint8(0)).max(
             axis=(1, 3), initial=0
         )
         return (
             np.where(shared, high, np.int16(NO)).astype(np.int16),
-            np.where(shared, low, np.int16(NO)).astype(np.int16),
+            np.where(shared & (low != top), low, np.int16(NO)).astype(np.int16),
             np.where(shared, spread, np.uint8(0)).astype(np.uint8),
         )
 
@@ -527,6 +556,7 @@ def change_planes(
         both = joint.shared[r0:r1] & ~joint.partial[r0:r1] & (s_a < SATURATED) & (s_b < SATURATED)
         delta = db[r0:r1].astype(np.int32) - da[r0:r1].astype(np.int32)
         ground = gb[r0:r1].astype(np.int32) - ga[r0:r1].astype(np.int32)
+        grounded = (ga[r0:r1] != NO) & (gb[r0:r1] != NO)
         spread = (s_a.astype(np.float64) * CM) ** 2 + (s_b.astype(np.float64) * CM) ** 2
         threshold = sigmas * np.sqrt(spread + ua * ua + ub * ub)
         change_m = delta * CM
@@ -535,7 +565,7 @@ def change_planes(
         out[both & (change_m > threshold)] = RAISED
         out[both & (change_m < -threshold)] = LOWERED
         delta_cm[dj + r0 : dj + r1, di : di + jw[2]] = np.where(both, delta, 0)
-        ground_delta_cm[dj + r0 : dj + r1, di : di + jw[2]] = np.where(both, ground, 0)
+        ground_delta_cm[dj + r0 : dj + r1, di : di + jw[2]] = np.where(both & grounded, ground, 0)
         if both.any():
             least = min(least, float(threshold[both].min()))
         strong = np.ones(both.shape, dtype=bool)

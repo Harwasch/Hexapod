@@ -20,6 +20,7 @@ centimetres from integer arithmetic over the cells, so any machine writes the sa
 * in e1 a spoil heap 1.2 m tall in the south-east that e2 no longer has: lowered;
 * in e2 a 1 m stack in the north, where e1's confidence is weak: raised, low confidence;
 * a few centimetres of height "noise" each, different per epoch: unchanged;
+* the ground's own sigma (`groundSigma`) 5 cm in e1 and 6 cm in e2;
 * e1 has no surface where its confidence grid says unseen and e2 none in a strip along
   the west edge (insufficient where the other side has one), and one e2 cell's sigma is
   saturated (255 cm).
@@ -67,6 +68,8 @@ E2_WEST_EDGE_M = -2
 SATURATED = (30.0, 2.0)
 #: Both epochs' support: SfM points and splat centres, 2^4 samples.
 SUPPORT = 3 | (4 << 4)
+#: Each epoch's ground sigma (cm): a lower envelope's, larger than its top's.
+GROUND_SIGMA = {"e1": 5, "e2": 6}
 
 
 def origin_height(tileset: Path = YARD) -> float:
@@ -130,11 +133,12 @@ def surface_plane(epoch: str, graded: Any) -> Any:
         box, tall = SPOIL
         dsm = np.where(_inside(x, y, box), ground + tall + noise, dsm)
         none = (plane.data[..., 1].astype(np.int64) & cell_grid.REASON_BITS["unseen"]) > 0
-    data = np.zeros((plane.nj, plane.ni, 4), dtype=np.int64)
+    data = np.zeros((plane.nj, plane.ni, len(cell_grid.SURFACE_CHANNELS)), dtype=np.int64)
     data[..., 0] = np.where(none, NO, dsm)
     data[..., 1] = np.where(none, NO, ground)
     data[..., 2] = np.where(none, 0, sigma)
     data[..., 3] = np.where(none, 0, SUPPORT)
+    data[..., 4] = np.where(none, 0, GROUND_SIGMA[epoch])
     return cell_grid.CellPlane(plane.level, plane.i0, plane.j0, plane.ni, plane.nj, data)
 
 
@@ -171,7 +175,9 @@ def _meta(plane: Any, graded_descriptor: dict[str, Any], height: float) -> dict[
             "outOfRange": 0,
             "sigmaSaturated": int((sigma >= 255).sum()),
             "medianSigmaCm": float(np.median(sigma)) if sigma.size else None,
-            "metric": False,
+            # Built in metres, not reconstructed: its scale is the generator's own. The
+            # change map refuses a surface whose heights are not metres (review B5a).
+            "metric": True,
         },
     }
 

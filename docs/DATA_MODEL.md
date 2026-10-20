@@ -195,7 +195,7 @@ map; the superseded revision keeps the one it was measured with.
 
 A descriptor the API cannot vouch for (another container, a `uri` that is not a file beside the
 tiles, a cell off the lattice, missing summary keys) is logged and not recorded: the epoch reads as
-not measured. A surface must also carry its four channels at their types and units, `noData`
+not measured. A surface must also carry its five channels at their types and units, `noData`
 −32768 and `vertical.originHeightM`. `confidence.bin` and `surface.bin` are sidecars of kinds
 `confidence` and `surface` (bound to the tiles, not attachable).
 
