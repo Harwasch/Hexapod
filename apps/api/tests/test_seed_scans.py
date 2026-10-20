@@ -247,12 +247,18 @@ def test_seeding_scans_skips_epoch_assets(db: Session) -> None:
     joined its site) is not the seeded asset, and the snapshot never rewrites it."""
     from datetime import UTC, datetime, timedelta
 
+    from geoalchemy2.shape import from_shape, to_shape
+    from shapely import affinity
+
     from tests.test_epochs import T0, make_asset, make_epoch
 
     seed_scans(db)
     camp = site_service.get_site_by_slug(db, SCAN_SLUGS[0])
     seeded = camp.assets[0]
-    epoch = make_epoch(db, camp, 1, observed=T0)
+    # The joined capture grew the site's boundary to cover its footprint (D3).
+    grown = affinity.scale(to_shape(camp.boundary), xfact=2.0, yfact=2.0)
+    camp.boundary = from_shape(grown, srid=4326)
+    epoch = make_epoch(db, camp, 1, observed=T0, footprint=from_shape(grown, srid=4326))
     # Created after the seeded asset, so a lookup by name over every asset would find it.
     later = datetime.now(tz=UTC) + timedelta(days=1)
     joined = make_asset(
@@ -273,3 +279,6 @@ def test_seeding_scans_skips_epoch_assets(db: Session) -> None:
         "https://cdn.example.com/october/tileset.json"
     )
     assert db.get(Asset, seeded.id).source["url"] == rerun  # type: ignore[union-attr]
+    # And the snapshot's outline does not cut the epoch out of the boundary it grew.
+    after = site_service.get_site_by_slug(db, SCAN_SLUGS[0])
+    assert to_shape(after.boundary).equals(grown)
