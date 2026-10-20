@@ -312,6 +312,23 @@ describe("comparing two dates of a site", () => {
     });
   });
 
+  it("ended by another renderer, the load pill speaks for the one date again, not a failed one", async () => {
+    const { manager, loads } = harness();
+    await open(manager);
+    await manager.setCompareDates(BOTH);
+    // The date the comparison added did not load: the pill says so.
+    (manager as unknown as { failLoad(id: string, m: string, r: boolean): void }).failLoad(
+      SITE_ID,
+      "splat a1 did not load",
+      true,
+    );
+    expect(loads.at(-1)).toBe("error");
+    manager.setSplatRenderer("playcanvas");
+    await settle();
+    // The date shown alone loaded fine: its load is the record now.
+    expect(loads.at(-1)).toBe("ready");
+  });
+
   it("ends when one date is chosen", async () => {
     const { manager, said, drawn } = harness();
     await open(manager);

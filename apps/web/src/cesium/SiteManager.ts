@@ -2788,9 +2788,13 @@ export class SiteManager {
     if (kind === this.splatRenderer) return;
     this.splatRenderer = kind;
     // Two dates side by side are CesiumJS's split: under a renderer that draws the scan itself
-    // the site shows its one date again, which that renderer draws (loaded if it was not).
+    // the site shows its one date again, which that renderer draws (loaded if it was not),
+    // and its load record is that date's, not a compared one's that failed.
     for (const entry of this.loaded.values())
-      if (this.keepCompare(entry)) void this.showRepresentation(entry, entry.representation);
+      if (this.keepCompare(entry)) {
+        this.restartLoad(entry);
+        void this.showRepresentation(entry, entry.representation);
+      }
     for (const { entry, handle } of this.handles()) {
       const tileset = handle.tileset;
       if (!tileset || handle.asset.representation !== "gaussian-splat") continue;
