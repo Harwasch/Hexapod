@@ -43,7 +43,12 @@ RTK = "10/10 frames carry an RTK fixed solution (RtkFlag 50)"
 def test_rtk_with_passing_targets_is_survey() -> None:
     checks = {"checks": 3, "verticalChecks": 3, "withinTolerance": True}
     assert alignment.decide(
-        aligned=True, tier="survey", checks=checks, platform="rtk-drone", rtk_evidence=RTK
+        aligned=True,
+        tier="survey",
+        checks=checks,
+        platform="rtk-drone",
+        rtk_evidence=RTK,
+        uncertainty_m=0.03,
     ) == (
         "survey",
         [],
@@ -81,6 +86,44 @@ def test_survey_needs_three_check_targets_scored_vertically() -> None:
         assert verdict == "coarse", vertical
         assert "accuracy unverified vertically" in reasons[0]
         assert f"{vertical} check target(s)" in reasons[0]
+
+
+def test_survey_has_an_absolute_ceiling_half_an_l1_carrier_cycle() -> None:
+    """R2 review (#51, high): the tolerance grows with the anchor's sigma, so a 10 m
+    reference made a 42 m tolerance and a 5 m error was still 'surveyed'. Survey now also
+    needs the claim under `SURVEY_CEILING_M`, half the GPS L1 carrier wavelength (ADR
+    0015: a claim that wide cannot tell an RTK fixed solution from one a cycle wrong)."""
+    assert abs(alignment.SURVEY_CEILING_M - 299_792_458 / 1_575.42e6 / 2) < 1e-12
+    assert 0.095 < alignment.SURVEY_CEILING_M < 0.0952
+    perfect = {"checks": 8, "verticalChecks": 8, "withinTolerance": True}
+    common: dict[str, Any] = {
+        "aligned": True,
+        "tier": "survey",
+        "checks": perfect,
+        "platform": "rtk-drone",
+        "rtk_evidence": RTK,
+    }
+    assert alignment.decide(**common, uncertainty_m=0.05)[0] == "survey"
+    for claim in (0.0952, 10.0, None):
+        verdict, reasons = alignment.decide(**common, uncertainty_m=claim)
+        assert verdict == "coarse", claim
+        assert "survey ceiling" in reasons[-1], claim
+
+
+def test_an_epoch_aligned_to_a_reference_that_is_not_survey_is_not_survey() -> None:
+    perfect = {"checks": 8, "verticalChecks": 8, "withinTolerance": True}
+    for reference in ("coarse", "unaligned", None):
+        verdict, reasons = alignment.decide(
+            aligned=True, tier="survey", checks=perfect, platform="rtk-drone",
+            rtk_evidence=RTK, uncertainty_m=0.03, method="visual",
+            reference_verdict=reference,
+        )  # fmt: skip
+        assert verdict == "coarse", reference
+        assert "reference epoch that is not surveyed" in reasons[0], reference
+    assert alignment.decide(
+        aligned=True, tier="survey", checks=perfect, platform="rtk-drone", rtk_evidence=RTK,
+        uncertainty_m=0.03, method="visual", reference_verdict="survey",
+    )[0] == "survey"  # fmt: skip
 
 
 def test_the_rtk_drone_platform_alone_is_never_survey() -> None:
@@ -941,3 +984,32 @@ def test_a_platform_param_never_makes_survey_without_rtk_evidence_in_the_frames(
             assert document["rtkEvidence"] is None, case
         else:
             assert document["rtkEvidence"].startswith("10/10 frames"), case
+
+
+def test_an_rtk_epoch_without_priors_is_not_surveyed_through_a_coarse_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R2 review (#51, high): keeping its own RTK frame needed `gnss-prior-ba`, so an RTK
+    epoch with priors off (COLMAP 3.9, `pose_priors: off`) adopted a ±10 m phone
+    reference, whose sigma widened the check targets' tolerance to ~42 m: 'surveyed'.
+    Now a survey-tier epoch keeps whichever frame is anchored tighter, and neither path
+    reaches survey: not over the ceiling, not through a reference that is not survey."""
+    monkeypatch.setattr(alignment.check_targets, "evaluate", _perfect_checks)
+    _, model = _ring_model(tmp_path / "m")
+    names = [image.name for image in model.images]
+    monkeypatch.setattr(alignment, "_register", _fake_register(_registered(model, TRUE, names)))
+    fixed = {"frames": [{"name": n, "dji": {"rtk": {"flag": 50}}} for n in names]}
+    for index, (uncertainty_m, method) in enumerate(((10.0, "gnss-similarity"), (0.5, "visual"))):
+        coarse = {**REFERENCE, "platform": "phone-video", "verdict": "coarse",
+                  "uncertaintyM": uncertainty_m}  # fmt: skip
+        _, document = _run(
+            tmp_path / f"w{index}",
+            _georef_aligned(IDENTITY, names),
+            reference=coarse,
+            params={"platform": "rtk-drone"},
+            frames_meta=fixed,
+        )
+        assert document["rtkEvidence"] is not None
+        assert document["method"] == method, uncertainty_m
+        assert document["verdict"] == "coarse", uncertainty_m
+        assert "surveyed" not in document["label"], uncertainty_m

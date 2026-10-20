@@ -112,6 +112,7 @@ __all__ = [
     "SIGMA_K",
     "SITE_CONTEXT",
     "SITE_CONTEXT_FILE",
+    "SURVEY_CEILING_M",
     "TIER_OF",
     "Candidate",
     "Reference",
@@ -163,6 +164,15 @@ SIGMA_K = 3.0
 #: Pixel footprints within which a visual correspondence agrees with the fit (docstring).
 AGREE_K = SIGMA_K * math.sqrt(6.0)
 DEFAULT_MAX_FRAMES = 60
+#: The GPS L1 carrier wavelength, metres: c / 1575.42 MHz.
+L1_WAVELENGTH_M = 299_792_458.0 / 1_575.42e6
+#: The widest claim (`uncertaintyM`) a `survey` verdict may carry: half an L1 carrier
+#: cycle, 0.0951 m. An RTK *fixed* solution has resolved the carrier's whole cycles and is
+#: good to a small fraction of one (1-2 cm); a float or wrongly fixed one is off by the
+#: order of a cycle or more. A claim of half a cycle or wider cannot tell the two apart,
+#: so it is not evidence of survey grade, whatever tolerance the targets passed
+#: (first principles, ADR 0015; the R2 review of #51).
+SURVEY_CEILING_M = L1_WAVELENGTH_M / 2.0
 TOLERANCE_BASIS = "3-sigma of the declared input uncertainties (first principles; not calibrated)"
 NOT_EVALUATED = (
     "placement is recentred on the trained splat's footprint after training; an unaligned "
@@ -647,12 +657,18 @@ def decide(
     platform: str,
     visual_failed: bool = False,
     rtk_evidence: str | None = None,
+    uncertainty_m: float | None = None,
+    method: str = "",
+    reference_verdict: str | None = None,
 ) -> tuple[str, list[str]]:
     """The verdict, and a sentence for every rule that kept it from `survey`.
 
     `rtk_evidence` (`rtk_evidence()`): what in the frames' metadata shows an RTK fixed
     solution. None -- the default, so a caller that forgets it fails closed -- is never
-    survey, whatever the platform string says.
+    survey, whatever the platform string says. `uncertainty_m`, the claim the verdict
+    would carry: over `SURVEY_CEILING_M`, or None, is never survey. `method` "visual" with
+    a `reference_verdict` that is not survey is never survey either: an epoch aligned into
+    a reference is no better than that reference.
 
     `visual_failed`: the site had a reference and this epoch could not be aligned to it.
     D4: an epoch that fails alignment is `unaligned` -- kept, with its GNSS placement,
@@ -669,6 +685,12 @@ def decide(
         reasons.append(
             f"{PLATFORM_WORDS.get(platform, platform)} is the coarse tier: only an RTK drone "
             f"can be surveyed"
+        )
+        return "coarse", reasons
+    if method == "visual" and reference_verdict != "survey":
+        reasons.append(
+            f"aligned visually to a reference epoch that is not surveyed "
+            f"({reference_verdict or 'ungraded'}): it can be no better than that reference"
         )
         return "coarse", reasons
     if rtk_evidence is None:
@@ -706,6 +728,13 @@ def decide(
             f"check targets out of tolerance: RMSE {rmse.get('horizontal')} m horizontal "
             f"(tolerance {tolerance.get('horizontalM')} m), {rmse.get('vertical')} m vertical "
             f"(tolerance {tolerance.get('verticalM')} m)"
+        )
+        return "coarse", reasons
+    if uncertainty_m is None or not uncertainty_m <= SURVEY_CEILING_M:
+        claim = "unknown" if uncertainty_m is None else f"±{uncertainty_m:.3g} m"
+        reasons.append(
+            f"claim {claim} is over the survey ceiling of ±{SURVEY_CEILING_M:.4f} m (half "
+            f"an L1 carrier cycle): too wide to show an RTK fixed solution"
         )
         return "coarse", reasons
     return "survey", reasons
@@ -931,12 +960,15 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
     chosen = gnss
     visual_check: dict[str, object] | None = None
     if visual is not None and visual.aligned:
+        # Any GNSS frame of a survey-tier epoch (priors in BA or a similarity after it),
+        # when it is anchored tighter than a reference that is not itself survey.
         keeps_own = (
             tier == "survey"
-            and gnss.method == "gnss-prior-ba"
+            and gnss.method.startswith("gnss")
             and gnss.aligned
             and reference is not None
             and reference.verdict != "survey"
+            and max(gnss.anchor_h, gnss.anchor_v) < reference.uncertainty_m
         )
         if keeps_own and reference is not None:
             reasons.append(
@@ -981,19 +1013,12 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
             "checks": 0,
         }
     visual_failed = visual is not None and not visual.aligned
-    verdict, why = decide(
-        aligned=chosen.aligned,
-        tier=tier,
-        checks=checks,
-        platform=platform,
-        visual_failed=visual_failed,
-        rtk_evidence=evidence,
-    )
-    reasons.extend(why)
     rms = chosen.stats()["rms"] if chosen.aligned else 0.0
     georef_m = _float(georef.get("uncertaintyM")) or 10.0
+    # The claim first (it depends only on whether the epoch is aligned): the verdict
+    # may not be survey over the ceiling.
     uncertainty_m = uncertainty(
-        verdict=verdict,
+        verdict="unaligned" if not chosen.aligned or visual_failed else "aligned",
         method=chosen.method,
         checks=checks,
         targets=targets,
@@ -1003,6 +1028,18 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
         anchor_m=chosen.anchor_h if chosen.aligned else 0.0,
         vertical_free=chosen.vertical_free is not None,
     )
+    verdict, why = decide(
+        aligned=chosen.aligned,
+        tier=tier,
+        checks=checks,
+        platform=platform,
+        visual_failed=visual_failed,
+        rtk_evidence=evidence,
+        uncertainty_m=uncertainty_m,
+        method=chosen.method,
+        reference_verdict=reference.verdict if reference is not None else None,
+    )
+    reasons.extend(why)
     score = confidence(chosen, verdict=verdict, checks=checks)
     words = label(
         platform=platform,

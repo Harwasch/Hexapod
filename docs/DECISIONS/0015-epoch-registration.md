@@ -63,24 +63,36 @@ use_robust_loss_on_prior_position`; the Modal image's self-check builds each one
    its own GNSS** ("Drone, not aligned: placed by its GPS, ±5 m"), and one whose registration
    crashed, which is never a failed run. It keeps the georeference's frame (`frameSource:
 georef`). **An RTK epoch never trades its own GNSS frame for a reference that is not `survey`**
-   (the review's fix 11; the default until Harrison decides otherwise): it keeps `gnss-prior-ba`
-   and records the visual fit as `visualCheck`. `uncertaintyM` starts from what anchors the frame —
+   (the review's fix 11; the default until Harrison decides otherwise): it keeps its GNSS frame —
+   priors in BA or a similarity after it, whichever it has, when that frame is anchored tighter than
+   the reference — and records the visual fit as `visualCheck`. Whatever it keeps, an epoch aligned
+   visually to a reference that is not `survey` is never `survey` itself. `uncertaintyM` starts from what anchors the frame —
    √(reference² + (3·rms)²) aligned visually, the priors' sigma or the georeference's own (≥ 5 m)
    with GNSS — and check targets (their RMSE, their own sigma) can only raise it; an unaligned
    epoch carries the georeference's own. Confidence is a heuristic score in [0, 1], documented as
    not a probability.
-7. **Placement**: `place` applies the alignment's frame when it aligned visually, and then never
+7. **The survey ceiling: ±0.095 m.** A `survey` verdict also needs its claim (`uncertaintyM`) at
+   most `SURVEY_CEILING_M` = half the GPS L1 carrier wavelength, λ/2 = (c / 1575.42 MHz) / 2 =
+   0.0951 m. Why that number: "survey-grade" for RTK means a _fixed_ solution, one that has
+   resolved the carrier phase's whole cycles and is good to a small fraction of one (1–2 cm plus
+   1 ppm of baseline); a float solution, or one fixed to the wrong integer, is off by the order of
+   a cycle (19 cm) or more. A claim of half a cycle or wider cannot tell a fixed solution from one
+   a cycle wrong, so it is no evidence of survey grade, however wide the targets' tolerance (which
+   grows with the anchor's sigma: a ±10 m reference gave a 42 m tolerance and a 5 m error passed,
+   the R2 review of #51). First principles, not calibrated; the demo's survey epochs claim
+   0.03–0.05 m.
+8. **Placement**: `place` applies the alignment's frame when it aligned visually, and then never
    adds `georef.siteFrame.offsetM` (the review's fix 2: it would move a located phone epoch by its
    GPS error twice). `catalog` carries the alignment, less per-image residuals, to the API, where
    M3b.2 writes it onto `epochs.alignment`; the web reads only `label`, `verdict`, `uncertaintyM`.
-8. **Recipe** `photo-reconstruct` v13: `normalize, pose, georeference, align, mask, train, …`
+9. **Recipe** `photo-reconstruct` v13: `normalize, pose, georeference, align, mask, train, …`
    (`align` on cpu4). A gate failing there fails before any L4 time; a Refine resuming at `train`
    keeps poses, georeference and alignment, which is right because the poses are unchanged. A new
    recipe input, `site_context`, is seeded by every caller (empty until M3b.2 seeds a reference).
-9. **Gates are all off** (`fail_unaligned`, `max_check_target_rmse_m`,
-   `fail_check_targets_out_of_tolerance`, `max_alignment_rms_m`, `max_gnss_visual_offset_m`, and
-   pose's `fail_below_registered_fraction`, `max_mean_reprojection_error_px`): no recorded
-   measurement backs a threshold. A `QualityGateError` is bad input and never retried.
+10. **Gates are all off** (`fail_unaligned`, `max_check_target_rmse_m`,
+    `fail_check_targets_out_of_tolerance`, `max_alignment_rms_m`, `max_gnss_visual_offset_m`, and
+    pose's `fail_below_registered_fraction`, `max_mean_reprojection_error_px`): no recorded
+    measurement backs a threshold. A `QualityGateError` is bad input and never retried.
 
 ## Measured on this machine (16 cores, pycolmap 4.2.0; the synthetic tree, not a real capture)
 
