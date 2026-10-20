@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterator
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from httpx2 import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -93,7 +94,9 @@ def client(db: Session, clock: Clock, provider: dict[str, Answer]) -> Iterator[T
         yield test_client
 
 
-def ask(client: TestClient, point: tuple[float, float], ip: str = "203.0.113.7", **extra: object):
+def ask(
+    client: TestClient, point: tuple[float, float], ip: str = "203.0.113.7", **extra: object
+) -> Response:
     body = {"point": {"type": "Point", "coordinates": list(point)}, **extra}
     return client.post(URL, json=body, headers={"Fly-Client-IP": ip})
 

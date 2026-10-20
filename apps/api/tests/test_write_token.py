@@ -28,6 +28,12 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 #: `phoneKey` joined deliberately: it is a real gate (a PBKDF2-checked key; see
 #: app/services/phone_key.py), and the test below pins it to the /phone routes alone.
 GATING_SCHEMES = {"writeToken", "uploadToken", "phoneKey"}
+#: Mutating operations open to anyone, on purpose, each named here with a reviewer attached.
+#: Only under `/api/v1/public/` (app/api/v1/public.py), and each is rate-limited per client
+#: there instead: `POST /parcels/near` is the landing page's parcel lookup, approved by Harrison
+#: on 2026-10-20 ("Should the public landing page be allowed to look up land parcels? Add it."),
+#: a POST only because its body is a GeoJSON point; it reads county services and writes nothing.
+PUBLIC_OPERATIONS = {"POST /api/v1/public/parcels/near"}
 
 
 def no_tiles_source(**overrides: object) -> Settings:
@@ -318,7 +324,13 @@ def test_no_mutating_route_is_left_ungated(client: TestClient) -> None:
             target.add(f"{method.upper()} {path}")
 
     assert gated, "no gated operations in the document -- the check is looking in the wrong place"
-    assert not ungated, f"mutating operations with no write token: {sorted(ungated)}"
+    assert all(" /api/v1/public/" in operation for operation in PUBLIC_OPERATIONS)
+    # The exemptions are exact: each is really open (or it would not need to be listed).
+    assert ungated >= PUBLIC_OPERATIONS, (
+        f"listed as public but gated: {PUBLIC_OPERATIONS - ungated}"
+    )
+    unexpected = ungated - PUBLIC_OPERATIONS
+    assert not unexpected, f"mutating operations with no write token: {sorted(unexpected)}"
 
 
 def test_only_the_upload_endpoints_accept_anything_but_the_write_token(
