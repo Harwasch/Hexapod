@@ -35,6 +35,7 @@ __all__ = [
     "ParentOverrideError",
     "ParentOverrides",
     "SplatFormatError",
+    "cell_grid",
     "pack_spz",
     "read_ply",
     "sigmoid",
@@ -58,6 +59,7 @@ def _ensure_importable() -> None:
 
 _ensure_importable()
 
+import cell_grid  # noqa: E402 - the site lattice's container (confidence.py)
 from splat_tiles import (  # noqa: E402
     TILE_GAUSSIANS,
     ParentOverrideError,

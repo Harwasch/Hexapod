@@ -41,6 +41,7 @@ import alignment
 import blocks
 import capture_platform
 import colmap4
+import confidence  # noqa: F401 - registers confidence_grid
 import convergence
 import exif
 import exposure
