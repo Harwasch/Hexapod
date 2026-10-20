@@ -1,9 +1,10 @@
 """Fill gates for tests, built from confidence planes the way the API builds them.
 
 `still_weak_payload` is a test oracle for `rescan-gate-v1` (apps/api/app/analysis/
-rescan_gate.py `still_weak`, and its endpoint's `FillTargetsRead`): B's cells that are weak,
-covered by B and weak in at least one earlier grid, at the coarsest of their levels, packed
-rows south to north, least significant bit first. tests/test_rescan_gate.py holds it to the
+rescan_gate.py `still_weak`, and its endpoint's `FillTargetsRead`): B's own finest cells that
+are weak and covered by B, where the newest earlier grid that covers the cell was weak there
+too, packed rows south to north, least significant bit first, with the earlier grid each
+target re-scanned (`satisfiedBy`). It is written cell by cell, not from the API's code. tests/test_rescan_gate.py holds it to the
 API's own committed answer over the yard fixtures, so the tests that use it are gated the
 way a real fill is.
 """
@@ -42,15 +43,31 @@ def confidence_grid(level: int, i0: int, j0: int, score: Any, reasons: Any) -> c
     )
 
 
-def _placed(plane: cell_grid.CellPlane, window: cell_grid.CellPlane) -> np.ndarray:
-    out = np.zeros((window.nj, window.ni), dtype=bool)
-    weak = cell_grid.weak_mask(plane)
-    for dj in range(window.nj):
-        for di in range(window.ni):
-            i, j = window.i0 + di, window.j0 + dj
-            if plane.i0 <= i < plane.i0 + plane.ni and plane.j0 <= j < plane.j0 + plane.nj:
-                out[dj, di] = weak[j - plane.j0, i - plane.i0]
-    return out
+def _seen(grid: cell_grid.CellGrid, level: int, i: int, j: int) -> tuple[bool, bool]:
+    """`(covered, weak)` as `grid` saw cell `(i, j)` at `level`, from its finest plane: the
+    cell holding it when that plane is no finer; else covered when any child is, and weak
+    only when none of the children it saw was strong."""
+    plane = grid.plane()
+    weak, covered = cell_grid.weak_mask(plane), cell_grid.covered_mask(plane)
+
+    def at(ci: int, cj: int) -> tuple[bool, bool]:
+        di, dj = ci - plane.i0, cj - plane.j0
+        if 0 <= di < plane.ni and 0 <= dj < plane.nj:
+            return bool(covered[dj, di]), bool(weak[dj, di])
+        return False, False
+
+    if plane.level >= level:
+        shift = plane.level - level
+        return at(i >> shift, j >> shift)
+    side = 1 << (level - plane.level)
+    children = [
+        at(ci, cj)
+        for cj in range(j * side, (j + 1) * side)
+        for ci in range(i * side, (i + 1) * side)
+    ]
+    seen = any(c for c, _ in children)
+    strong = any(c and not w for c, w in children)
+    return seen, seen and not strong
 
 
 def still_weak_payload(
@@ -63,16 +80,24 @@ def still_weak_payload(
 ) -> dict[str, Any]:
     """The `FillTargetsRead` the API would answer for B over `earlier` (same order as
     `earlier_ids`, newest first as the API lists them)."""
-    level = max(grid.level for grid in (b, *earlier))
-    plane = cell_grid.plane_at(b, level)
+    plane = b.plane()
+    level = plane.level
     base = cell_grid.weak_mask(plane) & cell_grid.covered_mask(plane)
     hits = np.zeros(base.shape, dtype=bool)
-    weak_in: list[str] = []
-    for grid, ident in zip(earlier, earlier_ids, strict=True):
-        overlap = base & _placed(cell_grid.plane_at(grid, level), plane)
-        if overlap.any():
-            weak_in.append(ident)
-            hits |= overlap
+    satisfied: list[int] = []
+    for dj in range(plane.nj):
+        for di in range(plane.ni):
+            if not base[dj, di]:
+                continue
+            for index, grid in enumerate(earlier):
+                covered, weak = _seen(grid, level, plane.i0 + di, plane.j0 + dj)
+                if covered:  # the newest earlier epoch that reached the cell speaks for it
+                    if weak:
+                        hits[dj, di] = True
+                        satisfied.append(index)
+                    break
+    if len(earlier) != len(earlier_ids):
+        raise ValueError("one id per earlier grid")
     packed = (
         np.packbits(hits.astype(np.uint8), axis=1, bitorder="little").tobytes()
         if hits.size
@@ -83,7 +108,7 @@ def still_weak_payload(
         "policy": "rescan-gate-v1",
         "siteId": site,
         "epochId": epoch,
-        "weakIn": weak_in,
+        "weakIn": [earlier_ids[k] for k in sorted(set(satisfied))],
         "comparedWith": list(earlier_ids),
         # The API compares with at most its eight most recent earlier epochs.
         "capped": False,
@@ -98,10 +123,11 @@ def still_weak_payload(
         "bitOrder": "little",
         "mask": base64.b64encode(packed).decode("ascii"),
         "cells": int(hits.sum()),
+        "satisfiedBy": base64.b64encode(bytes(satisfied)).decode("ascii"),
         "reason": (
-            "weak in this epoch, which covers them, and weak in at least one earlier "
-            "measured epoch: a re-scan that did not fix them (rescan-gate-v1, compared "
-            f"at {cell_m:g} m cells)"
+            "weak in this epoch, and weak in the newest earlier measured epoch that covers "
+            "them: a re-scan that did not fix them (rescan-gate-v1, at this epoch's own "
+            f"{cell_m:g} m cells)"
         ),
     }
 

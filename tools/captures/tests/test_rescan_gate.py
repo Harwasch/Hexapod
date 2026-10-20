@@ -41,33 +41,31 @@ def _committed() -> dict[str, Any]:
     return payload
 
 
-def _brute_force(level: int) -> dict[tuple[int, int], bool]:
-    """Every cell of e2's plane at `level`: weak and covered in e2, and weak in e1."""
-    planes = {name: cell_grid.plane_at(_fixture(name), level) for name in ("e1", "e2")}
+def _brute_force() -> dict[tuple[int, int], bool]:
+    """Every cell of e2's finest plane (#59's rule, never a coarsened parent): weak in e2,
+    and weak in the e1 cell that holds it. e1 is the coarser (1 m against 0.5 m), so each
+    e2 cell sits in one e1 cell; e1 covers the whole yard, so it always speaks."""
+    e1, e2 = _fixture("e1").plane(), _fixture("e2").plane()
+    shift = e1.level - e2.level
+    assert shift > 0
 
-    def at(name: str, i: int, j: int) -> tuple[int, int]:
-        plane = planes[name]
+    def weak(plane: cell_grid.CellPlane, i: int, j: int) -> bool:
         if not (plane.i0 <= i < plane.i0 + plane.ni and plane.j0 <= j < plane.j0 + plane.nj):
-            return 0, 0
-        cell = plane.data[j - plane.j0, i - plane.i0]
-        return int(cell[0]), int(cell[1])
-
-    def weak(name: str, i: int, j: int) -> bool:
-        score, reasons = at(name, i, j)
+            return False
+        score, reasons = (int(v) for v in plane.data[j - plane.j0, i - plane.i0][:2])
         return 0 < score < 128 or bool(reasons & 16)
 
-    b = planes["e2"]
     return {
-        (i, j): weak("e2", i, j) and weak("e1", i, j)
-        for j in range(b.j0, b.j0 + b.nj)
-        for i in range(b.i0, b.i0 + b.ni)
+        (i, j): weak(e2, i, j) and weak(e1, i >> shift, j >> shift)
+        for j in range(e2.j0, e2.j0 + e2.nj)
+        for i in range(e2.i0, e2.i0 + e2.ni)
     }
 
 
 def test_the_api_s_answer_reads_as_the_fixture_grids_say() -> None:
     payload = _committed()
     gate = rg.RescanGate.from_json(PAYLOAD)
-    expected = _brute_force(payload["level"])
+    expected = _brute_force()
     found = {
         (gate.i0 + di, gate.j0 + dj): bool(gate.targets[dj, di])
         for dj in range(gate.nj)
@@ -75,7 +73,8 @@ def test_the_api_s_answer_reads_as_the_fixture_grids_say() -> None:
     }
     assert found == expected
     assert gate.cells == payload["cells"] == sum(expected.values()) > 0
-    assert (gate.level, gate.cell_m) == (2, 1.0)
+    # e2's own 0.5 m cells, not e1's 1 m: a fill touches only what the re-scan saw weak.
+    assert (gate.level, gate.cell_m) == (1, 0.5) == (_fixture("e2").level, 0.5)
     assert gate.epoch_id == payload["epochId"] and gate.weak_in == tuple(payload["weakIn"])
     assert gate.mask_sha256 == hashlib.sha256(base64.b64decode(payload["mask"])).hexdigest()
 
@@ -310,8 +309,8 @@ def test_the_evidence_names_the_targets_and_the_grid_it_was_checked_against() ->
         "epochId": payload["epochId"],
         "weakIn": payload["weakIn"],
         "comparedWith": payload["comparedWith"],
-        "level": 2,
-        "cellM": 1.0,
+        "level": 1,
+        "cellM": 0.5,
         "i0": payload["i0"],
         "j0": payload["j0"],
         "ni": payload["ni"],

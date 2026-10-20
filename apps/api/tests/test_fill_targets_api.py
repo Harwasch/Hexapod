@@ -190,12 +190,16 @@ def test_the_committed_payload_is_what_the_endpoint_answers(
     assert committed.pop("fixture") == FIXTURE_NOTE
     assert committed == held
     mask = rescan_gate.unpack(committed["mask"], committed["ni"], committed["nj"])
-    expected = brute_force(committed["level"])
+    # e2's own finest cells (#59's rule), never e1's coarser ones.
+    assert committed["level"] == descriptor("e2")["levels"][0]["level"]
+    expected = brute_force()
     assert {
         (committed["i0"] + di, committed["j0"] + dj): bool(mask[dj, di])
         for dj in range(committed["nj"])
         for di in range(committed["ni"])
     } == expected
+    satisfied = rescan_gate.unpack_satisfied(committed["satisfiedBy"], committed["cells"])
+    assert satisfied == [0] * committed["cells"]  # every target re-scanned e1
 
 
 def test_before_a_re_scan_there_is_nothing_to_fill(
