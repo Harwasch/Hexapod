@@ -122,7 +122,7 @@ class ChangeArea(CamelModel):
     low_confidence: bool
     low_confidence_cells: int
     #: The mean and the largest change of its top surface (dsm), metres, positive up; null
-    #: for an insufficient area (one side has no surface to compare).
+    #: for an insufficient area (no child both epochs measured, so nothing to compare).
     mean_delta_m: Finite | None
     max_abs_delta_m: Finite | None
     #: The mean change of its bare ground, metres; null where `meanDeltaM` is.
@@ -133,12 +133,14 @@ class ChangeMapRead(CamelModel):
     """The change from epoch `fromEpochId` to `toEpochId` of one site (`change-v1`, ADR 0018):
     derived from their height surfaces, never observed and never from splat pixels.
 
-    Per cell of the coarser of the two surfaces' levels: `delta = dsm_to - dsm_from` against
+    Per cell of the coarser of the two surfaces' levels, each side taken over only the
+    children both epochs measured: `delta = dsm_to - dsm_from` against
     `t = thresholdSigma * sqrt(sigma_from^2 + sigma_to^2 + u_from^2 + u_to^2)`, with `u` each
     epoch's uncertainty from the site frame (`uncertainty`): `raised` above `t`, `lowered`
-    below `-t`, else `unchanged`; `insufficient` where only one epoch has a surface. The 3
-    sigma rule is a first-principles choice, `uncalibrated` until a site scanned twice
-    measures it.
+    below `-t`, else `unchanged`; `insufficient` where either measured something but they
+    share no child. A cell compared over fewer children than either side measured is low
+    confidence. The 3 sigma rule is a first-principles choice, `uncalibrated` until a site
+    scanned twice measures it.
 
     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
     """

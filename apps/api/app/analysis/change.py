@@ -8,33 +8,41 @@ comparison cell by cell -- never of splat pixels, which would read a season or a
 geometry. Appearance is not compared at all (`appearance-only` is a reserved class that is
 never emitted): that needs the new photos compared with the old epoch at fixed geometry.
 
-**Resampling.** Both surfaces are brought to the coarser of their two levels
-(`coarsen_surface`): of the children that have a surface, `dsm` the highest, `ground` the
-lowest and `sigma` the largest -- a coarse cell is as tall as its tallest part, as low as
-its lowest, and as uncertain as its least certain; a cell none of whose children has a
-surface has none. This is P5's demo `coarsen_surface` (tools/pipeline
-`experiments/confidence_demo.py`), held to it by the committed fixture
-`data/tiles/synthetic-yard-surfaces`. If the two windows together would still be over
-`MAX_CHANGE_CELLS` cells, both go up further until they are not (and say so).
+**Resampling.** Both surfaces are brought to the coarser of their two levels, and each
+coarse cell is taken over **only the children both epochs measured**: of those, `dsm` the
+highest, `ground` the lowest and `sigma` the largest (P5's demo `coarsen_surface` rule,
+tools/pipeline `experiments/confidence_demo.py`, which `coarsen_surface` here matches byte
+for byte on the committed fixture `data/tiles/synthetic-yard-surfaces`). Coarsening each
+epoch on its own would let one side's single ground child stand for a whole cell against
+the other side's crate in a sibling, or set one side's uphill children against the other's
+downhill ones: a change that is only a difference in what was measured. So the finer epoch
+is first brought to the coarser one's level over the children whose coarse cell the coarser
+one measured, then both go up together over the children both measured. A coarse cell where
+each side measured something but no child is shared is `insufficient`; one whose shared
+children are fewer than either side measured (the coarser epoch counts as having measured
+all of its cell) is compared and flagged `lowConfidence`. If the two windows together would
+still be over `MAX_CHANGE_CELLS` cells, both go up further until they are not (and say so).
 
 **The rule** (`change-v1`). Where both epochs have a surface, `delta = dsm_to - dsm_from`
-(computed in 32 bits: two i2 heights can differ by more than i2 holds) against
-`t = 3 * sqrt(sigma_from^2 + sigma_to^2 + u_from^2 + u_to^2)`, where `u` is each epoch's
+(computed in 32 bits: two i2 heights can differ by more than i2 holds) against `t = 3 *
+sqrt(sigma_from^2 + sigma_to^2 + u_from^2 + u_to^2)`, where `u` is each epoch's
 uncertainty from the site frame (its confidence grid's `alignmentCap.uncertaintyM`: 0 for
 the epoch that made the frame, its alignment's for one aligned to it, its GPS's for one
 nobody could align). `raised` when `delta > t`, `lowered` when `delta < -t`, else
-`unchanged`; `insufficient` where exactly one epoch has a surface; no class where neither
-has. The 3 is a first-principles choice (three standard deviations of the sum of two
-independent errors), not a measurement: the map says `uncalibrated` until a site scanned
-twice measures it. `minDetectableM` is the least `t` over the compared cells: a change
-smaller than it cannot be seen anywhere between these two dates -- an epoch placed by GPS
-alone at +/-10 m makes it about 30 m, and so finds no change rather than false ones.
+`unchanged`; `insufficient` where either epoch measured something but they share no child;
+no class where neither measured anything. The 3 is a first-principles choice (three
+standard deviations of the sum of two independent errors), not a measurement: the map says
+`uncalibrated` until a site scanned twice measures it. `minDetectableM` is the least `t`
+over the compared cells: a change smaller than it cannot be seen anywhere between these
+two dates -- an epoch placed by GPS alone at +/-10 m makes it about 30 m, and so finds no
+change rather than false ones.
 
 **Low confidence is flagged, not hidden.** A compared cell is `lowConfidence` when either
 epoch's confidence grid does not vouch for it at the compared level (weak-v1: scored under
 128, or unseen, or no evidence at all; the grid's own min-of-children pyramid, so a coarse
-cell is as weak as its weakest child) or when either sigma is saturated (255 cm means at
-least 2.55 m: the threshold is then a lower bound). It is still classified: P5's demo found
+cell is as weak as its weakest child), when it was compared over fewer children than either
+side measured (above), or when either sigma is saturated (255 cm means at least 2.55 m: the
+threshold is then a lower bound). It is still classified: P5's demo found
 the weak cells of a real change were its crate's own sides, so hiding them would hide the
 change.
 
@@ -77,7 +85,8 @@ POLICY = "change-v1"
 THRESHOLD_SIGMA = 3.0
 #: The two windows together are compared on at most this many cells (2048 x 2048, the
 #: pipeline's own grid ceiling); past it both go up a level. `change_planes` holds about
-#: 12 bytes a cell (its outputs and each confidence grid's vouched cells) plus a band.
+#: 30 bytes a cell: both surfaces over the cells they share (12), its outputs (10), what
+#: each side measured and the vouched cells, plus a band of the classification.
 MAX_CHANGE_CELLS = 1 << 22
 ChangeClass = Literal["unchanged", "raised", "lowered", "insufficient"]
 #: Codes of the class plane, and no class (neither epoch has a surface there).
@@ -140,16 +149,25 @@ class Surface:
         )
 
 
-def _quads(values: NDArray[Any], s: Surface, fill: int) -> NDArray[Any]:
-    """`values` (over `s`) padded to whole parents with `fill`, shaped `(nj, 2, ni, 2)`."""
-    pi0, pj0 = s.i0 >> 1, s.j0 >> 1
-    ni = ((s.i0 + s.ni - 1) >> 1) - pi0 + 1 if s.cells else 0
-    nj = ((s.j0 + s.nj - 1) >> 1) - pj0 + 1 if s.cells else 0
+def _blocks(values: NDArray[Any], i0: int, j0: int, fill: Any) -> NDArray[Any]:
+    """`values` (a plane at `i0, j0`) padded to whole parents with `fill`, shaped
+    `(nj, 2, ni, 2)` over its parents."""
+    vj, vi = values.shape
+    pi0, pj0 = i0 >> 1, j0 >> 1
+    if vi == 0 or vj == 0:
+        return np.full((0, 2, 0, 2), fill, dtype=values.dtype)
+    ni = ((i0 + vi - 1) >> 1) - pi0 + 1
+    nj = ((j0 + vj - 1) >> 1) - pj0 + 1
     padded = np.full((2 * nj, 2 * ni), fill, dtype=values.dtype)
-    di, dj = s.i0 - 2 * pi0, s.j0 - 2 * pj0
-    padded[dj : dj + s.nj, di : di + s.ni] = values
+    di, dj = i0 - 2 * pi0, j0 - 2 * pj0
+    padded[dj : dj + vj, di : di + vi] = values
     out: NDArray[Any] = padded.reshape(nj, 2, ni, 2)
     return out
+
+
+def _quads(values: NDArray[Any], s: Surface, fill: Any) -> NDArray[Any]:
+    """`values` (over `s`) padded to whole parents with `fill`, shaped `(nj, 2, ni, 2)`."""
+    return _blocks(values, s.i0, s.j0, fill)
 
 
 def coarsen_surface(s: Surface) -> Surface:
@@ -179,12 +197,162 @@ def coarsen_surface(s: Surface) -> Surface:
     )
 
 
-def surface_at(s: Surface, level: int) -> Surface:
-    if level < s.level:
-        raise cell_grid.CellGridError(f"level {level} is finer than the surface's ({s.level})")
-    while s.level < level:
-        s = coarsen_surface(s)
-    return s
+@dataclass(frozen=True)
+class _Cells:
+    """One array over the cells `i0 ..`, `j0 ..` of one level."""
+
+    level: int
+    i0: int
+    j0: int
+    values: NDArray[Any]
+
+    @property
+    def window(self) -> tuple[int, int, int, int]:
+        nj, ni = self.values.shape
+        return self.i0, self.j0, ni, nj
+
+    def up(self, how: Literal["any", "sum"]) -> _Cells:
+        """One level up: whether any child is set, or how many children's values sum to."""
+        q = _blocks(self.values, self.i0, self.j0, 0)
+        out = q.any(axis=(1, 3)) if how == "any" else q.sum(axis=(1, 3), dtype=np.int32)
+        return _Cells(self.level + 1, self.i0 >> 1, self.j0 >> 1, out)
+
+
+def _masked(s: Surface, keep: NDArray[np.bool_]) -> Surface:
+    """`s` with a surface only where `keep` (and it had one)."""
+    keep = keep & s.has
+    return Surface(
+        s.level,
+        s.i0,
+        s.j0,
+        s.ni,
+        s.nj,
+        np.where(keep, s.dsm, np.int16(NO)).astype(np.int16),
+        np.where(keep, s.ground, np.int16(NO)).astype(np.int16),
+        np.where(keep, s.sigma, np.uint8(0)).astype(np.uint8),
+        np.where(keep, s.support, np.uint8(0)).astype(np.uint8),
+    )
+
+
+def _under(fine: Surface, coarse: Surface) -> tuple[Surface, _Cells]:
+    """`fine` brought up to `coarse`'s level over only the children whose coarse cell
+    `coarse` measured, and per coarse cell how many of its finest children that is."""
+    k = coarse.level - fine.level
+    keep = np.zeros((fine.nj, fine.ni), dtype=bool)
+    if coarse.cells and fine.cells:
+        rows = (np.arange(fine.j0, fine.j0 + fine.nj) >> k) - coarse.j0
+        columns = (np.arange(fine.i0, fine.i0 + fine.ni) >> k) - coarse.i0
+        inside = ((rows >= 0) & (rows < coarse.nj))[:, None] & (
+            (columns >= 0) & (columns < coarse.ni)
+        )[None, :]
+        lookup = coarse.has[
+            np.ix_(np.clip(rows, 0, coarse.nj - 1), np.clip(columns, 0, coarse.ni - 1))
+        ]
+        keep = lookup & inside
+    masked = _masked(fine, keep)
+    count = _Cells(fine.level, fine.i0, fine.j0, masked.has.astype(np.int32))
+    for _ in range(k):
+        masked = coarsen_surface(masked)
+        count = count.up("sum")
+    return masked, count
+
+
+@dataclass(frozen=True)
+class _Joint:
+    """Both epochs over one window of one level, each surface taken over the children both
+    measured only (`shared`); `partial` where that is fewer than either measured."""
+
+    level: int
+    i0: int
+    j0: int
+    a: tuple[NDArray[np.int16], NDArray[np.int16], NDArray[np.uint8]]
+    b: tuple[NDArray[np.int16], NDArray[np.int16], NDArray[np.uint8]]
+    shared: NDArray[np.bool_]
+    partial: NDArray[np.bool_]
+
+    @property
+    def window(self) -> tuple[int, int, int, int]:
+        nj, ni = self.shared.shape
+        return self.i0, self.j0, ni, nj
+
+
+def _intersection(*windows: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    i0 = max(w[0] for w in windows)
+    j0 = max(w[1] for w in windows)
+    i1 = min(w[0] + w[2] for w in windows)
+    j1 = min(w[1] + w[3] for w in windows)
+    return i0, j0, max(0, i1 - i0), max(0, j1 - j0)
+
+
+def _window(s: Surface) -> tuple[int, int, int, int]:
+    return s.i0, s.j0, s.ni, s.nj
+
+
+def _joint(pa: Surface, pb: Surface, partial: _Cells | None) -> _Joint:
+    """`pa` and `pb` (one level) over the intersection of their windows."""
+    w = _intersection(_window(pa), _window(pb))
+
+    def side(s: Surface) -> tuple[NDArray[np.int16], NDArray[np.int16], NDArray[np.uint8]]:
+        return (
+            _place(s.dsm, s.i0, s.j0, w, np.int16(NO)),
+            _place(s.ground, s.i0, s.j0, w, np.int16(NO)),
+            _place(s.sigma, s.i0, s.j0, w, np.uint8(0)),
+        )
+
+    shared = _place(pa.has, pa.i0, pa.j0, w, False) & _place(pb.has, pb.i0, pb.j0, w, False)
+    part = (
+        _place(partial.values, partial.i0, partial.j0, w, False) & shared
+        if partial is not None
+        else np.zeros(shared.shape, dtype=bool)
+    )
+    return _Joint(pa.level, w[0], w[1], side(pa), side(pb), shared, part)
+
+
+def _joint_up(joint: _Joint, measured_a: _Cells, measured_b: _Cells) -> _Joint:
+    """`joint` one level up, each side's dsm (max), ground (min) and sigma (max) over the
+    children both measured; partial where a parent's shared children are fewer than the
+    children either side measured (`measured_*`: per child, whether that side measured
+    anything under it), or where a shared child was already partial."""
+    i0, j0 = joint.i0, joint.j0
+    sq = _blocks(joint.shared, i0, j0, False)
+    shared = sq.any(axis=(1, 3))
+    top = np.int16(np.iinfo(np.int16).max)
+
+    def side(
+        values: tuple[NDArray[np.int16], NDArray[np.int16], NDArray[np.uint8]],
+    ) -> tuple[NDArray[np.int16], NDArray[np.int16], NDArray[np.uint8]]:
+        dsm, ground, sigma = values
+        high = np.where(sq, _blocks(dsm, i0, j0, np.int16(NO)), np.int16(NO)).max(
+            axis=(1, 3), initial=NO
+        )
+        low = np.where(sq, _blocks(ground, i0, j0, np.int16(NO)), top).min(axis=(1, 3), initial=top)
+        spread = np.where(sq, _blocks(sigma, i0, j0, np.uint8(0)), np.uint8(0)).max(
+            axis=(1, 3), initial=0
+        )
+        return (
+            np.where(shared, high, np.int16(NO)).astype(np.int16),
+            np.where(shared, low, np.int16(NO)).astype(np.int16),
+            np.where(shared, spread, np.uint8(0)).astype(np.uint8),
+        )
+
+    window = (i0 >> 1, j0 >> 1, shared.shape[1], shared.shape[0])
+    both = sq.sum(axis=(1, 3), dtype=np.int32)
+    fewer = np.zeros(shared.shape, dtype=bool)
+    for measured in (measured_a, measured_b):
+        counts = _Cells(
+            measured.level, measured.i0, measured.j0, measured.values.astype(np.int32)
+        ).up("sum")
+        fewer |= both < _place(counts.values, counts.i0, counts.j0, window, np.int32(0))
+    inherited = _blocks(joint.partial & joint.shared, i0, j0, False).any(axis=(1, 3))
+    return _Joint(
+        joint.level + 1,
+        window[0],
+        window[1],
+        side(joint.a),
+        side(joint.b),
+        shared,
+        shared & (inherited | fewer),
+    )
 
 
 def _place(
@@ -199,16 +367,6 @@ def _place(
     if a0 < a1 and b0 < b1:
         out[b0 - wj0 : b1 - wj0, a0 - wi0 : a1 - wi0] = values[b0 - j0 : b1 - j0, a0 - i0 : a1 - i0]
     return out
-
-
-def _window_of(a: Surface, b: Surface) -> tuple[int, int, int, int]:
-    i0, j0 = min(a.i0, b.i0), min(a.j0, b.j0)
-    return (
-        i0,
-        j0,
-        max(a.i0 + a.ni, b.i0 + b.ni) - i0,
-        max(a.j0 + a.nj, b.j0 + b.nj) - j0,
-    )
 
 
 def _union_cells(a: Surface, b: Surface, level: int) -> int:
@@ -236,8 +394,7 @@ def vouched(grid: cell_grid.Grid, level: int) -> cell_grid.Plane:
     return cell_grid.Plane(level, plane.i0, plane.j0, plane.ni, plane.nj, {"strong": strong})
 
 
-#: `change_planes` works a band of rows at a time, of about this many cells, so nothing
-#: but its outputs (10 bytes a cell) is ever held for the whole window.
+#: `change_planes` classifies a band of rows at a time, of about this many cells.
 BAND_CELLS = 1 << 16
 
 
@@ -305,36 +462,75 @@ def change_planes(
     at = max(native, level if level is not None else native)
     while _union_cells(a, b, at) > MAX_CHANGE_CELLS and at < cell_grid.MAX_LEVEL:
         at += 1
-    pa, pb = surface_at(a, at), surface_at(b, at)
-    i0, j0, ni, nj = _window_of(pa, pb)
-    grids = [vouched(g, at) if g is not None else None for g in (confidence_a, confidence_b)]
-    classes = np.full((nj, ni), NONE, dtype=np.int8)
+    # The finer epoch is brought to the coarser one's level over the children whose coarse
+    # cell the coarser one measured; then both go up together over the children both
+    # measured (module docstring), knowing per cell what each side measured at all.
+    swap = a.level < b.level
+    fine, coarse = (a, b) if swap else (b, a)
+    if fine.level < coarse.level:
+        lifted, count = _under(fine, coarse)
+        whole = 1 << (2 * (coarse.level - fine.level))
+        partial = _Cells(
+            count.level, count.i0, count.j0, (count.values > 0) & (count.values < whole)
+        )
+        seen = _Cells(fine.level, fine.i0, fine.j0, fine.has)
+        while seen.level < coarse.level:
+            seen = seen.up("any")
+        ca, cb = (lifted, coarse) if swap else (coarse, lifted)
+        seen_a, seen_b = (
+            (seen, _Cells(coarse.level, coarse.i0, coarse.j0, coarse.has))
+            if swap
+            else (
+                _Cells(coarse.level, coarse.i0, coarse.j0, coarse.has),
+                seen,
+            )
+        )
+        joint = _joint(ca, cb, partial)
+    else:
+        joint = _joint(a, b, None)
+        seen_a = _Cells(a.level, a.i0, a.j0, a.has)
+        seen_b = _Cells(b.level, b.i0, b.j0, b.has)
+    while joint.level < at:
+        joint = _joint_up(joint, seen_a, seen_b)
+        seen_a, seen_b = seen_a.up("any"), seen_b.up("any")
+    i0, j0 = min(seen_a.i0, seen_b.i0), min(seen_a.j0, seen_b.j0)
+    ni = max(seen_a.i0 + seen_a.window[2], seen_b.i0 + seen_b.window[2]) - i0
+    nj = max(seen_a.j0 + seen_a.window[3], seen_b.j0 + seen_b.window[3]) - j0
+    union = (i0, j0, ni, nj)
+    # Into the union window: insufficient where one side measured something and the two
+    # share no child; no class where neither measured anything.
+    anywhere = _place(seen_a.values, seen_a.i0, seen_a.j0, union, False) | _place(
+        seen_b.values, seen_b.i0, seen_b.j0, union, False
+    )
+    classes = np.where(anywhere, np.int8(INSUFFICIENT), np.int8(NONE)).astype(np.int8)
+    del anywhere
     delta_cm = np.zeros((nj, ni), dtype=np.int32)
     ground_delta_cm = np.zeros((nj, ni), dtype=np.int32)
     low = np.zeros((nj, ni), dtype=bool)
+    # Classified on the joint window (where alone both can have a surface), a band of rows
+    # at a time, so nothing but the outputs is held for the whole window.
+    jw = joint.window
+    di, dj = jw[0] - i0, jw[1] - j0
+    (da, ga, sa), (db, gb, sb) = joint.a, joint.b
+    grids = [vouched(g, at) if g is not None else None for g in (confidence_a, confidence_b)]
     least = math.inf
-    rows = max(1, BAND_CELLS // max(ni, 1))
-    for r0 in range(0, nj, rows):
-        r1 = min(nj, r0 + rows)
-        band = (i0, j0 + r0, ni, r1 - r0)
-        da, ga = _place(pa.dsm, pa.i0, pa.j0, band, NO), _place(pa.ground, pa.i0, pa.j0, band, NO)
-        db, gb = _place(pb.dsm, pb.i0, pb.j0, band, NO), _place(pb.ground, pb.i0, pb.j0, band, NO)
-        sa, sb = _place(pa.sigma, pa.i0, pa.j0, band, 0), _place(pb.sigma, pb.i0, pb.j0, band, 0)
-        ha = (sa > 0) & (da != NO) & (ga != NO)
-        hb = (sb > 0) & (db != NO) & (gb != NO)
-        both = ha & hb
-        out = classes[r0:r1]
-        out[ha ^ hb] = INSUFFICIENT
-        # Wide: two i2 heights can differ by more than an i2 holds.
-        delta = db.astype(np.int32) - da.astype(np.int32)
-        delta_cm[r0:r1] = np.where(both, delta, 0)
-        ground_delta_cm[r0:r1] = np.where(both, gb.astype(np.int32) - ga.astype(np.int32), 0)
-        spread = (sa.astype(np.float64) * CM) ** 2 + (sb.astype(np.float64) * CM) ** 2
+    step = max(1, BAND_CELLS // max(jw[2], 1))
+    for r0 in range(0, jw[3], step):
+        r1 = min(jw[3], r0 + step)
+        band = (jw[0], jw[1] + r0, jw[2], r1 - r0)
+        both = joint.shared[r0:r1]
+        delta = db[r0:r1].astype(np.int32) - da[r0:r1].astype(np.int32)
+        ground = gb[r0:r1].astype(np.int32) - ga[r0:r1].astype(np.int32)
+        s_a, s_b = sa[r0:r1], sb[r0:r1]
+        spread = (s_a.astype(np.float64) * CM) ** 2 + (s_b.astype(np.float64) * CM) ** 2
         threshold = sigmas * np.sqrt(spread + ua * ua + ub * ub)
         change_m = delta * CM
+        out = classes[dj + r0 : dj + r1, di : di + jw[2]]
         out[both] = UNCHANGED
         out[both & (change_m > threshold)] = RAISED
         out[both & (change_m < -threshold)] = LOWERED
+        delta_cm[dj + r0 : dj + r1, di : di + jw[2]] = np.where(both, delta, 0)
+        ground_delta_cm[dj + r0 : dj + r1, di : di + jw[2]] = np.where(both, ground, 0)
         if both.any():
             least = min(least, float(threshold[both].min()))
         strong = np.ones(both.shape, dtype=bool)
@@ -343,7 +539,9 @@ def change_planes(
                 strong[...] = False
             else:
                 strong &= _place(grid.channels["strong"], grid.i0, grid.j0, band, False)
-        low[r0:r1] = both & (~strong | (sa >= SATURATED) | (sb >= SATURATED))
+        low[dj + r0 : dj + r1, di : di + jw[2]] = both & (
+            joint.partial[r0:r1] | ~strong | (s_a >= SATURATED) | (s_b >= SATURATED)
+        )
     return ChangePlanes(
         level=at,
         native_level=native,

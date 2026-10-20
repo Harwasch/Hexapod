@@ -216,23 +216,29 @@ Date 2026-10-20 · M5 of the splat-pipeline build (design M4–M6 §3 A5, DECISI
    epoch says `surface: {status: measured, assetId, url, cellM, level, policy, calibration,
 cells, surfacedCells, medianSigmaM, originHeightM, groundWindowM}`, or null — not measured.
 2. **`GET /sites/{id}/change?from=&to=`** (`change-v1`) compares the current revisions of two
-   published epochs of one site. Both go to the coarser of their surfaces' levels by § Pipeline
-   4's rule — of the children with a surface, dsm the highest, ground the lowest, sigma the largest
-   — held byte for byte to P5's demo `coarsen_surface` by the committed fixture
-   `data/tiles/synthetic-yard-surfaces`. Where both have a surface, `Δ = dsm_to − dsm_from` (in 32
-   bits: two i2 heights can differ by more than i2 holds) against
+   published epochs of one site at the coarser of their surfaces' levels, each coarse cell taken
+   over **only the children both epochs measured** — of those, dsm the highest, ground the
+   lowest, sigma the largest (§ Pipeline 4's rule; `coarsen_surface` matches P5's demo byte for
+   byte on the committed fixture `data/tiles/synthetic-yard-surfaces`). Coarsening each epoch
+   on its own would let one side's single ground child stand for a whole cell against the
+   other's crate in a sibling (a 2 m "lowered" with nothing flagged, found in review), or set
+   one side's uphill children against the other's downhill ones. So the finer epoch is first
+   brought up over the children whose coarse cell the coarser one measured, then both go up
+   together over the children both measured. Where both have that, `Δ = dsm_to − dsm_from` (in
+   32 bits: two i2 heights can differ by more than i2 holds) against
    `t = 3·√(σ_from² + σ_to² + u_from² + u_to²)`, `u` each epoch's confidence grid's
    `alignmentCap.uncertaintyM`: `raised` above `t`, `lowered` below `−t`, else `unchanged`;
-   `insufficient` where exactly one has a surface; no class where neither has (the windows'
-   bounding box is not a place either epoch saw — P5's demo report counts those cells as
-   insufficient too; the API does not). `appearance-only` stays reserved: `appearance:
-{status: not-computed, reason}`. Two windows together over 2^22 cells are compared a level
-   up, and the answer says so (`level` above `nativeLevel`).
+   `insufficient` where either measured something but no child is shared; no class where
+   neither measured anything (the windows' bounding box is not a place either epoch saw — P5's
+   demo report counts those cells as insufficient too; the API does not). `appearance-only`
+   stays reserved: `appearance: {status: not-computed, reason}`. Two windows together over 2^22
+   cells are compared a level up, and the answer says so (`level` above `nativeLevel`).
 3. **Weak cells are classified and flagged, not hidden** (D7). A compared cell is `lowConfidence`
    when either epoch's confidence grid does not vouch for it at the compared level — weak-v1 weak,
    unseen, or no evidence at all, through the grid's own min-of-children pyramid, so a coarse cell
-   is as weak as its weakest child — or when either sigma is saturated (255 cm: the threshold is
-   then only a lower bound). The answer counts them per compared class beside the class counts.
+   is as weak as its weakest child — when it was compared over fewer children than either side
+   measured (the coarser epoch counting as having measured its whole cell), or when either sigma
+   is saturated (255 cm: the threshold is then only a lower bound). The answer counts them per compared class beside the class counts.
 4. **`minDetectableM`** is the least threshold over the compared cells: no change smaller can be
    seen anywhere between those dates (null when none was compared). An epoch placed by GPS alone
    at ±10 m makes it about 30 m, and so finds no change rather than false ones.
@@ -258,8 +264,9 @@ cells, surfacedCells, medianSigmaM, originHeightM, groundWindowM}`, or null — 
    the drape is a view. Fill targets take the token because their one consumer holds it and a call
    may decode nine grids; a change call decodes four, through the same bounded grid cache (keyed by
    URL and sha256), and spends the per-client cell-map bucket weak areas and fill targets spend.
-   The comparison works a band of rows at a time, holding only its outputs for the window (about
-   12 bytes a cell); a 2048 × 2048 map with confidence pyramids peaked under 90 MiB here.
+   The comparison holds about 30 bytes a cell for the window (both surfaces over their shared
+   cells, the outputs, what each side measured) and classifies a band of rows at a time; a
+   2048 × 2048 map with confidence pyramids peaked at about 150 MiB here.
 
 ### Evidence (synthetic)
 
