@@ -205,6 +205,8 @@ def upgrade() -> None:
             COALESCE(c.captured_at, c.created_at),
             CASE WHEN c.captured_at IS NULL THEN 'created' ELSE 'captured-at' END,
             s.boundary,
+            -- 'phone-key' is `app.api.v1.phone.ORIGIN`, as a literal: a migration is a
+            -- frozen snapshot and imports no app code (test_0032_phone_origin_is_the_routes).
             CASE WHEN c.metadata ->> 'origin' = 'phone-key' THEN 'phone-video' ELSE 'unknown' END,
             'published',
             'new-site',
