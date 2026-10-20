@@ -27,16 +27,46 @@ function byCreation(a: SiteAsset, b: SiteAsset): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
+/** A site's epochs, or none: read defensively, since an older record (a cached catalog, a
+ * test's partial site) may not carry them. */
+function epochsOf(site: Site): Site["epochs"] {
+  const listed: unknown = (site as { epochs?: unknown }).epochs;
+  return Array.isArray(listed) ? (listed as Site["epochs"]) : [];
+}
+
+/** A 3D Tiles gaussian splat: the only kind of asset a scale resizes. */
+function isTilesSplat(asset: SiteAsset | undefined): asset is SiteAsset {
+  return (
+    asset?.representation === "gaussian-splat" &&
+    asset.provider === "3d-tiles-url" &&
+    asset.source.type === "3d-tiles-url"
+  );
+}
+
 /**
- * The asset of a site that `PUT /assets/{id}/scale` resizes, or null when it has none: the splat
- * its pipeline run registered -- the site's first gaussian splat by creation, served as a 3D
- * Tiles URL -- on a site whose metadata records the run (`captureId`) and the origin its tiles
- * are placed at (`registration.georef`). That is the API's own rule (apps/api assets.py
- * `_placed`): anything else, a seeded or hand-made asset, a mesh, a Cesium ion asset, is a 409
- * `not_scalable`, so the tool is never offered for one.
+ * The asset of a site that `PUT /assets/{id}/scale` resizes, or null when it has none. That is
+ * the API's own rule (apps/api assets.py `_placed`), so the tool is never offered for an asset
+ * the API would refuse with a 409 `not_scalable`:
+ *
+ * - a site with epochs (decision D3): the current asset of its one published epoch, a 3D Tiles
+ *   splat, on a site with a frame. A site of two epochs offers nothing: every epoch is placed in
+ *   one frame, and resizing one would move it against the others. A superseded revision is
+ *   never offered (it is no epoch's current asset).
+ * - a legacy site: the splat its pipeline run registered -- the site's first gaussian splat by
+ *   creation, served as a 3D Tiles URL -- on a site whose metadata records the run (`captureId`)
+ *   and the origin its tiles are placed at (`registration.georef`). Anything else, a seeded or
+ *   hand-made asset, a mesh, a Cesium ion asset, is refused.
  */
 export function scalableAsset(site: Site | null | undefined): SiteAsset | null {
   if (!site) return null;
+  const epochs = epochsOf(site);
+  if (epochs.length > 0) {
+    const published = epochs.filter((epoch) => epoch.status === "published");
+    const [only] = published;
+    if (published.length !== 1 || !only?.currentAssetId || !site.frame) return null;
+    const current = site.assets.find((asset) => asset.id === only.currentAssetId);
+    return isTilesSplat(current) ? current : null;
+  }
   const metadata: unknown = site.metadata;
   if (!isRecord(metadata) || !metadata.captureId) return null;
   const registration = metadata.registration;

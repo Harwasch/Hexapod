@@ -81,12 +81,21 @@ def _withdraw(db: Session, wanted: list[SiteCreate]) -> None:
         site = db.scalar(select(Site).where(Site.slug == slug))
         # A capture built again on this machine (`data/tiles/<slug>/site.json`) is wanted.
         if site is not None and slug not in slugs:
+            if site.epochs:
+                # Somebody captured it (decision D3): its epochs are theirs, not the seed's.
+                logger.info("kept withdrawn site %s: it holds %d epochs", slug, len(site.epochs))
+                continue
             db.delete(site)
             removed.append(slug)
     for code in wanted:
         names = WITHDRAWN_ASSETS.get(code.slug or "", ())
         existing = db.scalar(select(Site).where(Site.slug == code.slug)) if names else None
-        gone = [asset for asset in existing.assets if asset.name in names] if existing else []
+        # Only the seed's own assets: an epoch's asset is never one it withdraws.
+        gone = (
+            [a for a in existing.assets if a.name in names and a.epoch_id is None]
+            if existing
+            else []
+        )
         if existing is None or not gone:
             continue
         for asset in gone:
@@ -145,7 +154,11 @@ def _refresh(db: Session, existing: Site, wanted: SiteCreate) -> None:
     if _bookmarks_differ(existing, wanted.camera_bookmarks):
         existing.bookmarks = [site_service.build_bookmark(b) for b in wanted.camera_bookmarks]
         changed.append("bookmarks")
-    if _rings(geometry.wkb_to_footprint(existing.boundary)) != _rings(wanted.boundary):
+    if existing.epochs:
+        # The boundary covers every epoch captured there (decision D3); the code's outline
+        # would cut them off, so a site that holds epochs keeps the one they grew.
+        logger.info("seeded site %s holds epochs: its boundary is left alone", wanted.slug)
+    elif _rings(geometry.wkb_to_footprint(existing.boundary)) != _rings(wanted.boundary):
         existing.boundary = geometry.footprint_to_wkb(wanted.boundary)
         centroid = wanted.centroid or geometry.centroid_of(wanted.boundary)
         existing.centroid = geometry.position_to_wkb(centroid)
@@ -179,7 +192,8 @@ def _refresh(db: Session, existing: Site, wanted: SiteCreate) -> None:
         existing.centroid = geometry.position_to_wkb(wanted.centroid)
         existing.centroid_height = wanted.centroid.height
         changed.append("centroid")
-    by_name = {asset.name: asset for asset in existing.assets}
+    # The seed's own assets only: an epoch's asset is a capture's, whatever it is called.
+    by_name = {asset.name: asset for asset in existing.assets if asset.epoch_id is None}
     for payload in wanted.assets:
         asset = by_name.get(payload.name)
         if asset is None:

@@ -240,3 +240,36 @@ def test_the_command_says_what_it_did(
     main([])
     assert "'created': 3" in capsys.readouterr().out
     assert _sites(db) == 3
+
+
+def test_seeding_scans_skips_epoch_assets(db: Session) -> None:
+    """An epoch asset that shares the seeded asset's name (a later capture of the scan
+    joined its site) is not the seeded asset, and the snapshot never rewrites it."""
+    from datetime import UTC, datetime, timedelta
+
+    from tests.test_epochs import T0, make_asset, make_epoch
+
+    seed_scans(db)
+    camp = site_service.get_site_by_slug(db, SCAN_SLUGS[0])
+    seeded = camp.assets[0]
+    epoch = make_epoch(db, camp, 1, observed=T0)
+    # Created after the seeded asset, so a lookup by name over every asset would find it.
+    later = datetime.now(tz=UTC) + timedelta(days=1)
+    joined = make_asset(
+        db, camp, epoch, "https://cdn.example.com/october/tileset.json", created=later
+    )
+    joined.name = seeded.name
+    db.commit()
+    rerun = f"{BUCKET}runs/rerun/pnew/package/splat/tileset.json"
+    documents = [site.model_dump(mode="json", by_alias=True) for site in load_snapshot()]
+    documents[0]["assets"][0]["source"]["url"] = rerun
+    newer = [SiteCreate.model_validate(document) for document in documents]
+    db.expire_all()
+
+    seed_scans(db, newer)
+
+    db.expire_all()
+    assert db.get(Asset, joined.id).source["url"] == (  # type: ignore[union-attr]
+        "https://cdn.example.com/october/tileset.json"
+    )
+    assert db.get(Asset, seeded.id).source["url"] == rerun  # type: ignore[union-attr]

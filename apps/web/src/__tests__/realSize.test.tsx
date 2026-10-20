@@ -439,3 +439,52 @@ describe("RealSize", () => {
     useSelection.getState().setSelection(null);
   });
 });
+
+describe("which scans can be resized, on a site with epochs", () => {
+  const frame = {
+    siteId: SITE_ID,
+    lat: 47.6,
+    lon: -122.1,
+    height: 30,
+    heightDatum: "msl-unverified",
+    epsg: 32610,
+    source: "registration",
+    createdAt: "2026-01-01T00:00:00Z",
+  };
+
+  function epoch(id: string, ordinal: number, currentAssetId: string | null) {
+    return { id, siteId: SITE_ID, ordinal, status: "published", currentAssetId };
+  }
+
+  function withEpochs(assets: SiteAsset[], epochs: unknown[], metadata?: Record<string, unknown>) {
+    return { ...registered(assets, metadata ?? {}), frame, epochs } as unknown as Site;
+  }
+
+  it("offers the one epoch's current splat", () => {
+    const current = splat({ id: "asset-current", createdAt: "2026-03-01T00:00:00Z" });
+    // Its metadata no longer records the run: the frame is what says where the tiles are.
+    const site = withEpochs([splat(), current], [epoch("e1", 1, "asset-current")]);
+    expect(scalableAsset(site)?.id).toBe("asset-current");
+    expect(scalableAsset({ ...site, frame: null })).toBeNull();
+  });
+
+  it("offers nothing on a site with two epochs", () => {
+    const october = splat({ id: "asset-october" });
+    const site = withEpochs(
+      [splat(), october],
+      [epoch("e1", 1, ASSET_ID), epoch("e2", 2, "asset-october")],
+    );
+    expect(scalableAsset(site)).toBeNull();
+  });
+
+  it("never offers a superseded revision", () => {
+    // The epoch's current asset is the newer revision; the first splat by creation, which a
+    // legacy site would offer, is history here.
+    const old = splat({ validTo: "2026-02-01T00:00:00Z" });
+    const current = splat({ id: "asset-current", createdAt: "2026-03-01T00:00:00Z" });
+    const site = withEpochs([old, current], [epoch("e1", 1, "asset-current")]);
+    expect(scalableAsset(site)?.id).toBe("asset-current");
+    const none = withEpochs([old], [epoch("e1", 1, null)]);
+    expect(scalableAsset(none)).toBeNull();
+  });
+});
