@@ -174,8 +174,11 @@ def utm_epsg(lat: float, lon: float) -> int:
 def platform_of(capture: Capture) -> EpochPlatform:
     """What captured it, as far as is known before M3 reads XMP and RTK: a phone-key
     upload is a phone video, everything else is `unknown`."""
+    # Imported here: the phone routes import the services, not the other way round.
+    from app.api.v1.phone import ORIGIN as PHONE_ORIGIN
+
     metadata: dict[str, Any] = capture.metadata_ or {}
-    if metadata.get("origin") == "phone-key":
+    if metadata.get("origin") == PHONE_ORIGIN:
         return EpochPlatform.PHONE_VIDEO
     return EpochPlatform.UNKNOWN
 
@@ -188,12 +191,19 @@ SPATIAL_JOIN_BUFFER_M = 25.0
 
 @dataclass(frozen=True)
 class RunFrame:
-    """The site frame a run is told to place its capture in (`site_frame` param)."""
+    """The site frame a run is told to place its capture in (`site_frame` param).
+
+    The param is the shared contract `{siteId, lat, lon, height, heightDatum, epsg}`; the
+    pipeline places by the first four (`tools/pipeline/site_frame.py`) and carries the
+    datum and zone for the stages that need them.
+    """
 
     site_id: uuid.UUID
     lat: float
     lon: float
     height: float
+    height_datum: str
+    epsg: int
 
     def param(self) -> dict[str, Any]:
         return {
@@ -201,11 +211,20 @@ class RunFrame:
             "lat": self.lat,
             "lon": self.lon,
             "height": self.height,
+            "heightDatum": self.height_datum,
+            "epsg": self.epsg,
         }
 
     @staticmethod
     def of(frame: SiteFrame) -> RunFrame:
-        return RunFrame(site_id=frame.site_id, lat=frame.lat, lon=frame.lon, height=frame.height)
+        return RunFrame(
+            site_id=frame.site_id,
+            lat=frame.lat,
+            lon=frame.lon,
+            height=frame.height,
+            height_datum=frame.height_datum,
+            epsg=frame.epsg,
+        )
 
 
 def epoch_of_capture(db: Session, capture_id: uuid.UUID, *, lock: bool = False) -> Epoch | None:

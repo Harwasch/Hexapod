@@ -221,6 +221,8 @@ def test_a_re_run_gets_its_epochs_frame(db: Session) -> None:
         "lat": ORIGIN[0],
         "lon": ORIGIN[1],
         "height": ORIGIN[2],
+        "heightDatum": "msl-unverified",
+        "epsg": 32610,
     }
 
 

@@ -34,7 +34,14 @@ def _params(
     return stage_params(plan_recipe(load_recipe(recipe)), capture, job, frame=frame)
 
 
-FRAME = {"siteId": "0c4f6d36-6f0e-4c4a-9d6b-4cbd7a4a8e11", "lat": 47.6, "lon": -122.3, "height": 30}
+FRAME = {
+    "siteId": "0c4f6d36-6f0e-4c4a-9d6b-4cbd7a4a8e11",
+    "lat": 47.6,
+    "lon": -122.3,
+    "height": 30,
+    "heightDatum": "msl-unverified",
+    "epsg": 32610,
+}
 
 
 def test_up_axis_and_heading_reach_the_normalize_stage() -> None:

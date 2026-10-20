@@ -113,11 +113,30 @@ def test_the_offset_of_the_capture_is_where_the_frame_was_put() -> None:
         ({**FRAME, "height": math.nan}, "height"),
         ({**FRAME, "lon": "east"}, "lon"),
         ({**FRAME, "height": True}, "height"),
+        ({**FRAME, "heightDatum": "geoid"}, "heightDatum"),
+        ({**FRAME, "epsg": 4326}, "epsg"),
+        ({**FRAME, "epsg": "32617"}, "epsg"),
     ],
 )
 def test_a_malformed_site_frame_is_refused(value: dict[str, Any], key: str) -> None:
     with pytest.raises(ValueError, match=f"site_frame.{key}"):
         site_frame.from_param(value)
+
+
+def test_the_frames_datum_and_zone_travel_with_it_but_not_into_the_echo() -> None:
+    frame = _frame(heightDatum="msl-unverified", epsg=32617)
+
+    assert (frame.height_datum, frame.epsg) == ("msl-unverified", 32617)
+    assert set(site_frame.echo(frame, offset=None, offset_source=None, located=None)) == {
+        "siteId",
+        "lat",
+        "lon",
+        "height",
+        "offsetM",
+        "offsetSource",
+        "located",
+    }
+    assert _frame().height_datum is None and _frame().epsg is None
 
 
 def test_no_site_frame_is_none_and_a_non_object_is_refused() -> None:
