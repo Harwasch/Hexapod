@@ -1,6 +1,7 @@
 import { GlassSegmentedControl } from "@twin/ui";
 
-import { SUNLIGHT_TEXT } from "@/lib/sunlightText";
+import { SUNLIGHT_TEXT, useSeveralDates } from "@/lib/sunlightText";
+import { useSites } from "@/state/sites";
 import { useAsCaptured } from "@/state/asCaptured";
 import { useLighting, type SunMode } from "@/state/lighting";
 
@@ -9,6 +10,8 @@ import { useLighting, type SunMode } from "@/state/lighting";
  * capture time was recorded. CesiumJS draws it; under another renderer the control is offered
  * disabled and the views control's shared notice gives the reason and the switch. Off while As
  * captured is on, and it says so: what it shows is drawn, never the choice it keeps for after.
+ * At capture is off while more than one date is drawn (Compare, a per-cell view rule), saying
+ * why: one scene clock cannot be each date's capture.
  */
 export function SunControl({
   onCesium,
@@ -20,6 +23,7 @@ export function SunControl({
   const sun = useLighting((s) => s.sun);
   const set = useLighting((s) => s.set);
   const held = useAsCaptured((s) => s.on);
+  const several = useSeveralDates(useSites((s) => s.activeSiteId));
   const usable = onCesium && !held;
   return (
     <span
@@ -42,7 +46,7 @@ export function SunControl({
           {
             value: "capture",
             label: SUNLIGHT_TEXT.capture,
-            disabled: !usable || captureTime === null,
+            disabled: !usable || captureTime === null || several,
           },
         ]}
       />
@@ -51,7 +55,12 @@ export function SunControl({
           {SUNLIGHT_TEXT.asCaptured}
         </span>
       )}
-      {usable && sun === "capture" && captureTime === null && (
+      {usable && sun === "capture" && several && (
+        <span className="views__notice" role="note" data-testid="views-sun-several">
+          {SUNLIGHT_TEXT.several}
+        </span>
+      )}
+      {usable && sun === "capture" && !several && captureTime === null && (
         <span className="views__notice" role="note" data-testid="views-sun-no-time">
           {SUNLIGHT_TEXT.nowInstead}
         </span>

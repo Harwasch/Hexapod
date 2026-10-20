@@ -8,7 +8,7 @@ import { useSite } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { holdClock } from "@/cesium/sunClock";
 import { pickShownAsset, siteEpochs } from "@/lib/epochs";
-import { captureTimeOf, relitSentence, SUNLIGHT_TEXT } from "@/lib/sunlightText";
+import { captureTimeOf, relitSentence, SUNLIGHT_TEXT, useSeveralDates } from "@/lib/sunlightText";
 import { useAsCaptured } from "@/state/asCaptured";
 import { useLighting } from "@/state/lighting";
 import { useSplatRenderer } from "@/state/settings";
@@ -26,7 +26,10 @@ import { useSunReport } from "@/state/sunReport";
  * "At capture" is held here: while it is chosen and the shown date has a capture time, the
  * scene clock stands at that time (cesium/sunClock.ts), and it is given back, exactly, when
  * this goes -- the sun turned off or to Now, As captured on, another renderer, another site
- * -- or moves to another date's time when the date changes.
+ * -- or moves to another date's time when the date changes. While more than one date is drawn
+ * (Compare, a per-cell view rule) nothing is held: one clock cannot be each date's capture, so
+ * the sun of now is drawn over every date, the badge says so, and it speaks for any of the
+ * site's dates the scene reports relit (only shown ones report).
  */
 export function RelitBadge() {
   const sun = useLighting((s) => s.sun);
@@ -43,9 +46,17 @@ export function RelitBadge() {
     ? pickShownAsset(site.assets, epochs, "gaussian-splat", { epochId: shownEpoch })
     : null;
   const captured = captureTimeOf(asset, epochs);
-  const report = useSunReport((s) => (asset ? s.reports[asset.id] : undefined));
+  const several = useSeveralDates(siteId);
+  const report = useSunReport((s) =>
+    several
+      ? site?.assets.map((a) => s.reports[a.id]).find(Boolean)
+      : asset
+        ? s.reports[asset.id]
+        : undefined,
+  );
   // Held only while the relight it is for is on screen: never a moved sky with nothing said.
-  const holding = drawn && sun === "capture" && captured !== null && report !== undefined;
+  const holding =
+    drawn && sun === "capture" && !several && captured !== null && report !== undefined;
 
   useEffect(() => {
     if (!holding || !scene || captured === null) return;
@@ -69,8 +80,10 @@ export function RelitBadge() {
     >
       <Sun className="notice__icon" size={16} aria-hidden="true" />
       <div className="notice__text">
-        <strong>{relitSentence(holding ? "at capture" : "now", captured)}</strong>
-        {sun === "capture" && !holding && <span>{SUNLIGHT_TEXT.nowInstead}</span>}
+        <strong>{relitSentence(holding ? "at capture" : "now", captured, several)}</strong>
+        {sun === "capture" && !holding && (
+          <span>{several ? SUNLIGHT_TEXT.several : SUNLIGHT_TEXT.nowInstead}</span>
+        )}
         {!(report.sine > 0) && <span data-testid="relit-night">{SUNLIGHT_TEXT.night}</span>}
       </div>
     </GlassPanel>

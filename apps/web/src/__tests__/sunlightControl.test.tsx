@@ -22,6 +22,7 @@ import { useLighting } from "@/state/lighting";
 import { useSettings, type SplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
 import { useSunReport } from "@/state/sunReport";
+import { useViewRule } from "@/state/viewRule";
 
 import { A1, A2, E1, E2, epoch, SITE_ID, splat, twoEpochSite } from "./epochFixtures";
 
@@ -99,8 +100,13 @@ afterEach(() => {
   useAsCaptured.setState({ on: false });
   useSunReport.setState({ reports: {} });
   useSettings.getState().reset();
-  useSites.setState({ activeSiteId: null, representation: {}, epoch: {} });
+  useSites.setState({ activeSiteId: null, representation: {}, epoch: {}, compareDates: null });
+  useViewRule.setState({ active: null });
 });
+
+/** Two dates drawn at once: compared across the divider, or one per cell under a view rule. */
+const comparing = () =>
+  act(() => useSites.setState({ compareDates: { siteId: SITE_ID, left: E1.id, right: E2.id } }));
 
 const sunGroup = () => screen.getByRole("radiogroup", { name: SUNLIGHT_TEXT.label });
 const sunRadio = (name: string) => screen.getByRole("radio", { name });
@@ -141,6 +147,26 @@ describe("the Sun control", () => {
     act(() => useAsCaptured.getState().set(false));
     expect(sunRadio("Now")).toHaveAttribute("aria-checked", "true");
     expect(useLighting.getState().sun).toBe("now");
+  });
+
+  it("offers no At capture while two dates are drawn, and says why", async () => {
+    show("cesium");
+    await screen.findByTestId("views-sun");
+    act(() => useLighting.getState().set("capture"));
+    expect(screen.queryByTestId("views-sun-several")).toBeNull();
+    comparing();
+    expect(sunRadio("At capture")).toBeDisabled();
+    expect(sunRadio("Now")).toBeEnabled();
+    expect(screen.getByTestId("views-sun-several")).toHaveTextContent(SUNLIGHT_TEXT.several);
+    // The choice is kept, and offered again once one date is drawn.
+    expect(useLighting.getState().sun).toBe("capture");
+    act(() => useSites.setState({ compareDates: null }));
+    expect(sunRadio("At capture")).toBeEnabled();
+    expect(screen.queryByTestId("views-sun-several")).toBeNull();
+    // A per-cell view rule draws several dates as one: the same.
+    act(() => useViewRule.setState({ active: { siteId: SITE_ID, rule: "latest" } }));
+    expect(sunRadio("At capture")).toBeDisabled();
+    expect(screen.getByTestId("views-sun-several")).toBeTruthy();
   });
 
   it("offers no At capture for a date whose capture time was not recorded", async () => {
@@ -224,6 +250,28 @@ describe("the badge", () => {
     act(() => useLighting.getState().set("off"));
     await waitFor(() => expect(scene.clock.shouldAnimate).toBe(true));
     expect(JulianDate.toDate(scene.clock.currentTime).getUTCMonth()).toBe(9);
+  });
+
+  it("holds no clock while two dates are drawn, and says the sun of now over each date's capture", async () => {
+    const scene = fakeScene();
+    // Compared: the halves' dates are drawn and report; the single date (e2) is hidden.
+    useSunReport.getState().report(A1.id, day);
+    show("cesium", { registry: scene.registry });
+    comparing();
+    act(() => useLighting.getState().set("capture"));
+    const badge = await screen.findByTestId("relit-badge");
+    expect(scene.clock.shouldAnimate).toBe(true);
+    expect(iso(scene.clock.currentTime)).toBe("2026-10-20T12:00:00.000Z");
+    expect(badge).toHaveTextContent(relitSentence("now", null, true));
+    expect(badge).toHaveTextContent(SUNLIGHT_TEXT.several);
+    // One date again, and reported relit: held at its capture.
+    act(() => useSites.setState({ compareDates: null }));
+    act(() => useSunReport.getState().report(A2.id, day));
+    await waitFor(() => expect(iso(scene.clock.currentTime)).toBe("2026-06-01T15:00:00.000Z"));
+    expect(screen.getByTestId("relit-badge")).not.toHaveTextContent(SUNLIGHT_TEXT.several);
+    // Comparing again gives the clock back.
+    comparing();
+    await waitFor(() => expect(scene.clock.shouldAnimate).toBe(true));
   });
 
   it("gives the clock back under another renderer, and draws the sun of now where no capture time is known", async () => {

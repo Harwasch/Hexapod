@@ -5,6 +5,8 @@
 import type { Epoch, SiteAsset } from "@twin/contracts";
 
 import { epochOf, formatEpochDateTime, observedAtFromUpload } from "@/lib/epochs";
+import { useSites } from "@/state/sites";
+import { useViewRule } from "@/state/viewRule";
 
 export const SUNLIGHT_TEXT = {
   label: "Sun",
@@ -16,6 +18,8 @@ export const SUNLIGHT_TEXT = {
   asCaptured: "Off while As captured is on",
   noCaptureTime: "This date's capture time was not recorded",
   nowInstead: "This date's capture time was not recorded: the sun of now is drawn",
+  several:
+    "At capture is off while more than one date is drawn: one scene clock holds one capture's sun, so the sun of now is drawn",
   night: "Sun below horizon",
 } as const;
 
@@ -35,10 +39,30 @@ export function captureTimeOf(
 }
 
 /**
- * The badge's sentence: whose sun, over what. `capturedAt` null says the capture's time is not
- * known rather than inventing one.
+ * Whether the site draws more than one date at once: two compared across the divider, or one
+ * per cell under a view rule. The scene has one clock, so "At capture" cannot be each date's
+ * own; it is off meanwhile, and the sun of now is drawn over every date.
  */
-export function relitSentence(sun: "now" | "at capture", capturedAt: string | null): string {
-  const when = capturedAt ? formatEpochDateTime(capturedAt) : "time not recorded";
+export function useSeveralDates(siteId: string | null): boolean {
+  const compared = useSites((s) => siteId !== null && s.compareDates?.siteId === siteId);
+  const ruled = useViewRule((s) => siteId !== null && s.active?.siteId === siteId);
+  return compared || ruled;
+}
+
+/**
+ * The badge's sentence: whose sun, over what. `capturedAt` null says the capture's time is not
+ * known rather than inventing one; `several`, that more than one date is drawn, each over the
+ * shadows of its own capture.
+ */
+export function relitSentence(
+  sun: "now" | "at capture",
+  capturedAt: string | null,
+  several = false,
+): string {
+  const when = several
+    ? "each date's own"
+    : capturedAt
+      ? formatEpochDateTime(capturedAt)
+      : "time not recorded";
   return `Relit by the sun (${sun}) over shadows baked in at capture, ${when}`;
 }
