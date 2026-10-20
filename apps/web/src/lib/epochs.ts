@@ -264,7 +264,8 @@ const NOT_YET: AlignmentLabel = {
  * Read from the alignment record M3 writes (decision D4; `epochs.alignment`), of which the web
  * reads three keys only: `verdict` (`survey` | `coarse` | `unaligned`), `uncertaintyM`, and a
  * ready-made `label`, which is preferred when there is one. A coarse epoch is "aligned
- * visually", never "surveyed". The epoch that made the site's frame (`anchor`, when it has the
+ * visually", never "surveyed", and only an `rtk-drone` epoch is ever survey tier. The epoch
+ * that made the site's frame (`anchor`, when it has the
  * lowest ordinal of all `epochs`) defines it rather than being aligned to it. An epoch with no
  * record, or a verdict this build does not know, is not aligned yet, and says so.
  */
@@ -280,6 +281,14 @@ export function alignmentLabel(
   const label =
     typeof alignment.label === "string" && alignment.label.trim() ? alignment.label.trim() : null;
   const x = plusMinus(alignment.uncertaintyM);
+  // Only the survey tier's own platform is ever called survey-grade (D4): anything else whose
+  // record says `survey` is shown at the coarse tier, and a ready-made label claiming more is
+  // not repeated.
+  if (alignment.verdict === "survey" && epoch.platform !== "rtk-drone")
+    return {
+      short: "aligned visually",
+      long: `${platformLabel(epoch.platform)}, aligned visually${x}`,
+    };
   switch (alignment.verdict) {
     case "survey": {
       const to = anchor ? formatEpochDate(anchor.observedAt) : "the site frame";

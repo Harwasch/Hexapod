@@ -177,6 +177,25 @@ describe("which asset of a site is shown", () => {
     expect(alignmentLabel(E2, E2, all).long).toBe("Not aligned yet: placed by its own GPS");
   });
 
+  it("never calls an epoch survey-grade unless an RTK drone captured it", () => {
+    const all = [E1, E2];
+    // A phone epoch whose record says survey (a bug upstream, or a tolerance too loose) is
+    // shown at the coarse tier, and a label claiming more is not repeated.
+    const phone = {
+      ...E2,
+      alignment: { verdict: "survey", uncertaintyM: 0.012, label: "Survey tier, ±0.012 m" },
+    };
+    expect(alignmentLabel(phone, E1, all)).toEqual({
+      short: "aligned visually",
+      long: "Phone video, aligned visually, ±0.012 m",
+    });
+    const drone = { ...E2, platform: "drone" as const, alignment: { verdict: "survey" } };
+    expect(alignmentLabel(drone, E1, all).short).toBe("aligned visually");
+    expect(alignmentLabel(drone, E1, all).long).not.toMatch(/survey/i);
+    const rtk = { ...E2, platform: "rtk-drone" as const, alignment: { verdict: "survey" } };
+    expect(alignmentLabel(rtk, E1, all).short).toBe("survey tier");
+  });
+
   it("prefers the ready-made label M3 writes (verdict, uncertaintyM, label)", () => {
     const m3 = {
       ...E2,
