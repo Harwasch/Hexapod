@@ -13,6 +13,7 @@ import pytest
 import confidence
 import confidence_scene as scene
 import quality
+import splat_io
 from captures_bridge import cell_grid, sigmoid
 from conftest import make_recipe
 from executor import execute
@@ -532,3 +533,66 @@ def test_any_broken_grid_is_left_out_by_package(arc: Workdir, tmp_path: Path, da
     assert "confidence" not in json.loads((splat / "tileset.json").read_text())["root"]["extras"]
     registration = json.loads((run.out_dir("register") / "registration.json").read_text())
     assert registration["confidence"] is None
+
+
+def _flat_support(folder: Path, n: int, side_m: float) -> None:
+    """A `support/` of `n` visible gaussians spread evenly over a `side_m` square."""
+    rng = np.random.default_rng(3)
+    store = splat_io.ColumnStore(folder)
+    columns = {
+        "x": rng.uniform(0, side_m, n).astype(np.float32),
+        "y": rng.uniform(0, side_m, n).astype(np.float32),
+        "z": rng.uniform(0, 2, n).astype(np.float32),
+        "alpha": np.full(n, 200, np.uint8),
+        "tier": rng.integers(0, 3, n).astype(np.uint8),
+        "reasons": rng.integers(0, 16, n).astype(np.uint8),
+        "views": np.full(n, 9, np.uint16),
+        "spreadDeg": np.full(n, 50, np.uint8),
+        "gsdMm": np.full(n, np.nan, np.float16),
+    }
+    for name, dtype in quality.SUPPORT_COLUMNS:
+        store.create(name, dtype).append(columns[name])
+    store.finish()
+    document = {
+        "version": 1,
+        "frame": "colmap",
+        "rows": n,
+        "status": "measured",
+        "columns": {
+            name: {"dtype": d, "file": f"{name}.bin"} for name, d in quality.SUPPORT_COLUMNS
+        },
+        "roi": None,
+    }
+    (folder / quality.SUPPORT_FILE).write_text(json.dumps(document))
+
+
+def test_the_sums_are_held_a_band_at_a_time_not_for_the_whole_plane(tmp_path: Path) -> None:
+    """Review finding: the band loop once bounded nothing (every accumulator was the whole
+    plane's, 72 bytes a cell). Each band now allocates its own; the peak is the finest
+    plane's counts plus one band, and the plane is the same bytes whatever the band."""
+    import tracemalloc
+
+    _flat_support(tmp_path / "support", 300_000, 128.0)
+    support = confidence.read_support(tmp_path / "support", chunk=1 << 14)
+    identity = confidence.Placement(1.0, np.eye(3), np.zeros(3))
+    planes = {}
+    peaks = {}
+    for band in (1 << 12, 1 << 20):
+        tracemalloc.start()
+        scored = confidence.bin_support(
+            support, identity, None, 0.0, min_cell_gaussians=1, max_cells=1 << 18, band_cells=band
+        )
+        peaks[band] = tracemalloc.get_traced_memory()[1]
+        tracemalloc.stop()
+        assert scored is not None
+        planes[band] = scored.plane
+    cells = planes[1 << 12].cells
+    assert cells == 512 * 512  # 0.25 m cells over 128 m: the whole 2^18
+    np.testing.assert_array_equal(planes[1 << 12].data, planes[1 << 20].data)
+    # The whole plane's accumulators alone would be 72 bytes a cell (18.9 MB here). With
+    # one band that big the peak passes it (measured 42 MB); with small bands the whole
+    # stage stays under it (measured 11 MB: the counts plane and outofcore's fixed
+    # selection buffer, not the sums).
+    whole = 72 * cells
+    assert peaks[1 << 20] > whole
+    assert peaks[1 << 12] < whole, (peaks, whole)

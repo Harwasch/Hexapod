@@ -43,12 +43,15 @@ Above it, `PYRAMID_LEVELS` coarser levels, min-of-children (`cell_grid.min_pyram
 disc; what lies past it is counted (`summary.outside`) and not binned, so one sky floater
 cannot make every cell coarse.
 
-**Memory and determinism.** `support/` is read a chunk at a time, in five passes: the
-median, the floater radius, the extent, the counts that choose the level, and the sums
-(integers: alpha in 1/255ths, so nothing depends on the order they are added in), in
-bands of at most `BAND_CELLS` cells -- so the stage holds a chunk and a few planes,
-whatever the size of the splat. No matrix products: the placement is written out per
-component, so no BLAS kernel can change a bit of it.
+**Memory and determinism.** `support/` is read a chunk at a time: the median, the floater
+radius, the extent, the counts that choose the level (int64 over the finest allowed plane,
+at most `MAX_CELLS`: 32 MB), then one pass per band of at most `BAND_CELLS` cells, whose
+sums (72 bytes a cell: 72 MB at 2^20) are allocated for that band alone and scored before
+the next; only the scored plane (3 bytes a cell) is whole. Measured on a 2^22-cell plane
+of 3M gaussians: a 176 MB peak (tracemalloc), against 364 MB when every accumulator was
+the plane's; it does not grow with the number of gaussians. The sums are integers (alpha
+in 1/255ths), so nothing depends on the order they are added in, and there are no matrix
+products: the placement is written out per component, so no BLAS kernel can change a bit.
 """
 
 from __future__ import annotations
@@ -83,6 +86,7 @@ __all__ = [
     "WEAK_BELOW",
     "Binned",
     "Placement",
+    "Scored",
     "alignment_factor",
     "bin_support",
     "choose_level",
@@ -112,8 +116,8 @@ WEAK_BELOW = cell_grid.WEAK_BELOW
 MIN_CELL_GAUSSIANS = 16
 MAX_CELLS = 1 << 22
 PYRAMID_LEVELS = 8
-#: Cells summed in one pass over `support/`: a band of rows of the plane. 2^20 cells of
-#: the accumulators (seven int64 and two float64) is 72 MB.
+#: Cells summed in one pass over `support/`: a band of rows of the plane, its accumulators
+#: allocated for it alone. 2^20 cells (seven int64 and two float64 each) is 72 MB.
 BAND_CELLS = 1 << 20
 #: Visible: at least 0.05 opaque, as `support/` stores alpha (`round(255 alpha)`).
 VISIBLE_ALPHA = 13
@@ -439,17 +443,91 @@ class Binned:
     binned: int
 
 
+@dataclass(frozen=True)
+class Scored:
+    """The finest level's channels, and what binning it counted."""
+
+    plane: cell_grid.CellPlane
+    factor: float
+    #: Visible gaussians the plane holds, and those past its rectangle (floaters).
+    binned: int
+    outside: int
+
+
+def _band(visible: Visible, level: int, i0: int, j0: int, ni: int, rows: tuple[int, int]) -> Binned:
+    """The sums of rows `rows` (of the plane's) alone, from one pass over `visible`: the
+    accumulators are the band's size, not the plane's."""
+    band0, band1 = rows
+    size = (band1 - band0) * ni
+    count = np.zeros(size, dtype=np.int64)
+    alpha_sum = np.zeros(size, dtype=np.int64)
+    keep_sum = np.zeros(size, dtype=np.int64)
+    failed = np.zeros((size, len(_KEEP_BITS)), dtype=np.int64)
+    zmin = np.full(size, np.inf)
+    zmax = np.full(size, -np.inf)
+    lattice = cell_grid.Lattice(level)
+    binned = 0
+    for placed, alpha, rest in visible():
+        i, j = lattice.index(placed)
+        di, dj = i - i0, j - j0 - band0
+        mine = (di >= 0) & (di < ni) & (dj >= 0) & (dj < band1 - band0)
+        if not mine.any():
+            continue
+        local = dj[mine] * ni + di[mine]
+        weight = alpha[mine].astype(np.int64)
+        tier, reasons = rest[mine, 0], rest[mine, 1]
+        binned += int(local.size)
+        count += np.bincount(local, minlength=size)
+        # Integer weights summed by bincount in float64: exact below 2^53, so the sums
+        # are the same whatever order the chunks or rows come in.
+        alpha_sum += np.rint(np.bincount(local, weights=weight, minlength=size)).astype(np.int64)
+        kept = tier == quality.TIER_KEEP
+        keep_sum += np.rint(np.bincount(local[kept], weights=weight[kept], minlength=size)).astype(
+            np.int64
+        )
+        for column, (_, bit) in enumerate(_KEEP_BITS):
+            hit = ~kept & ((reasons & bit) > 0)
+            failed[:, column] += np.rint(
+                np.bincount(local[hit], weights=weight[hit], minlength=size)
+            ).astype(np.int64)
+        z = placed[mine, 2]
+        np.minimum.at(zmin, local, z)
+        np.maximum.at(zmax, local, z)
+    return Binned(
+        level,
+        i0,
+        j0 + band0,
+        ni,
+        band1 - band0,
+        count,
+        alpha_sum,
+        keep_sum,
+        failed,
+        zmin,
+        zmax,
+        0,
+        binned,
+    )
+
+
 def bin_support(
     support: _Support,
     placement: Placement,
     roi: Disc | None,
+    u_rel: float,
     *,
     min_cell_gaussians: int = MIN_CELL_GAUSSIANS,
     max_cells: int = MAX_CELLS,
     band_cells: int = BAND_CELLS,
-) -> Binned | None:
-    """The sums of every visible gaussian per cell, at the level `choose_level` picks.
-    None when there is nothing to bin and no disc to expect anything in."""
+) -> Scored | None:
+    """Every visible gaussian binned at the level `choose_level` picks and scored there
+    (`score_plane`, capped by `alignment_factor` at that level's cell); None when there is
+    nothing to bin and no disc to expect anything in.
+
+    Memory: the finest allowed plane's counts (int64, at most `max_cells`: 32 MB at 2^22)
+    while the level is chosen, then a band of at most `band_cells` cells of accumulators at
+    a time (72 bytes a cell: 72 MB at 2^20) and the scored plane itself (3 bytes a cell),
+    whatever the number of gaussians."""
     visible = _visible(support, placement, ("tier", "reasons"))
     extent, total = _extent(visible, roi)
     if extent is None:
@@ -459,62 +537,26 @@ def bin_support(
     counts = np.zeros(ni * nj, dtype=np.int64)
     for placed, _, _ in visible():
         keys, inside = _keys(placed, finest, i0, j0, ni, nj)
-        counts += np.bincount(keys[inside], minlength=ni * nj).astype(np.int64)
+        counts += np.bincount(keys[inside], minlength=ni * nj)
     level = choose_level(
         counts.reshape(nj, ni), finest, i0, j0, min_cell_gaussians=min_cell_gaussians
     )
+    del counts
     i0, j0, ni, nj = extent.cells(level)
-    cells = ni * nj
-    count = np.zeros(cells, dtype=np.int64)
-    alpha_sum = np.zeros(cells, dtype=np.int64)
-    keep_sum = np.zeros(cells, dtype=np.int64)
-    failed = np.zeros((cells, len(_KEEP_BITS)), dtype=np.int64)
-    zmin = np.full(cells, np.inf)
-    zmax = np.full(cells, -np.inf)
+    factor = alignment_factor(cell_grid.Lattice(level).cell_m, u_rel)
+    data = np.zeros((nj, ni, len(cell_grid.CONFIDENCE_CHANNELS)), dtype=np.uint8)
     rows_per_band = max(1, band_cells // max(1, ni))
     binned = 0
     for band0 in range(0, nj, rows_per_band):
         band1 = min(nj, band0 + rows_per_band)
-        low, high = band0 * ni, band1 * ni
-        size = high - low
-        for placed, alpha, rest in visible():
-            keys, inside = _keys(placed, level, i0, j0, ni, nj)
-            mine = inside & (keys >= low) & (keys < high)
-            if not mine.any():
-                continue
-            local = keys[mine] - low
-            weight = alpha[mine].astype(np.int64)
-            tier, reasons = rest[mine, 0], rest[mine, 1]
-            binned += int(local.size)
-            count[low:high] += np.bincount(local, minlength=size)
-            # Integer weights summed by bincount in float64: exact below 2^53, so the
-            # sums are the same whatever order the chunks or rows come in.
-            alpha_sum[low:high] += np.rint(
-                np.bincount(local, weights=weight, minlength=size)
-            ).astype(np.int64)
-            kept = tier == quality.TIER_KEEP
-            keep_sum[low:high] += np.rint(
-                np.bincount(local[kept], weights=weight[kept], minlength=size)
-            ).astype(np.int64)
-            for column, (_, bit) in enumerate(_KEEP_BITS):
-                hit = ~kept & ((reasons & bit) > 0)
-                failed[low:high, column] += np.rint(
-                    np.bincount(local[hit], weights=weight[hit], minlength=size)
-                ).astype(np.int64)
-            z = placed[mine, 2]
-            np.minimum.at(zmin, local + low, z)
-            np.maximum.at(zmax, local + low, z)
+        band = _band(visible, level, i0, j0, ni, (band0, band1))
+        binned += band.binned
+        unseen = unseen_cells(roi, level, i0, band.j0, ni, band.nj, band.count > 0)
+        data[band0:band1] = score_plane(band, factor, unseen).data
+        del band
     # What the plane's rectangle left out: the floaters past the radius, in plan.
-    outside = total - binned
-    return Binned(
-        level, i0, j0, ni, nj, count, alpha_sum, keep_sum, failed, zmin, zmax, outside, binned
-    )
-
-
-def _empty() -> Binned:
-    none = np.zeros(1, dtype=np.int64)
-    failed = np.zeros((1, len(_KEEP_BITS)), dtype=np.int64)
-    return Binned(0, 0, 0, 1, 1, none, none, none, failed, np.zeros(1), np.zeros(1), 0, 0)
+    plane = cell_grid.CellPlane(level, i0, j0, ni, nj, data)
+    return Scored(plane, factor, binned, total - binned)
 
 
 def unseen_cells(
@@ -565,7 +607,11 @@ def score_plane(
 
 
 def summarise(
-    plane: cell_grid.CellPlane, binned: Binned, metres: float | None, median_gsd: float | None
+    plane: cell_grid.CellPlane,
+    binned: int,
+    outside: int,
+    metres: float | None,
+    median_gsd: float | None,
 ) -> dict[str, Any]:
     """`summary` of the finest level: counts, the weak share and why."""
     score = plane.data[..., 0].astype(np.int64)
@@ -588,8 +634,8 @@ def summarise(
             name: int((weak & ((reasons & bit) > 0)).sum())
             for name, bit in cell_grid.REASON_BITS.items()
         },
-        "gaussians": binned.binned,
-        "outside": binned.outside,
+        "gaussians": binned,
+        "outside": outside,
         "medianGsdMm": gsd_mm,
         "metric": metres is not None,
     }
@@ -643,23 +689,26 @@ def confidence_grid(ctx: StageContext) -> StageOutcome:
     georef = _read_optional(ctx, "georef.json")
     context = _read_optional(ctx, alignment.SITE_CONTEXT, alignment.SITE_CONTEXT_FILE)
     u_rel, source, prior = relative_uncertainty(aligned, georef, context)
-    binned = bin_support(
-        support, placement, roi, min_cell_gaussians=min_cell, max_cells=max_cells, band_cells=band
+    scored = bin_support(
+        support,
+        placement,
+        roi,
+        u_rel,
+        min_cell_gaussians=min_cell,
+        max_cells=max_cells,
+        band_cells=band,
     )
-    if binned is None:
+    if scored is None:
         # Nothing visible and nowhere it was expected: one empty cell at the origin, so
         # the artifact still has its shape and says it measured nothing.
-        binned = _empty()
-    cell_m = cell_grid.Lattice(binned.level).cell_m
-    factor = alignment_factor(cell_m, u_rel)
-    unseen = unseen_cells(
-        roi, binned.level, binned.i0, binned.j0, binned.ni, binned.nj, binned.count > 0
-    )
-    plane = score_plane(binned, factor, unseen)
+        empty = cell_grid.CellPlane(0, 0, 0, 1, 1, np.zeros((1, 1, 3), dtype=np.uint8))
+        scored = Scored(empty, alignment_factor(cell_grid.Lattice(0).cell_m, u_rel), 0, 0)
+    plane, factor = scored.plane, scored.factor
+    cell_m = plane.cell_m
     planes = cell_grid.min_pyramid(plane, levels)
     metres = _positive(support.document.get("metresPerUnit"))
     median_gsd = _positive(support.document.get("medianGsd"))
-    summary = summarise(plane, binned, metres, median_gsd)
+    summary = summarise(plane, scored.binned, scored.outside, metres, median_gsd)
     meta: dict[str, object] = {
         "reasonBits": dict(cell_grid.REASON_BITS),
         "policy": cell_grid.WEAK_POLICY,
@@ -682,13 +731,13 @@ def confidence_grid(ctx: StageContext) -> StageOutcome:
     (out / DESCRIPTOR_FILE).write_text(json.dumps(descriptor, indent=1) + "\n", encoding="utf-8")
     seconds = time.perf_counter() - started
     ctx.log(
-        f"confidence: level {binned.level} ({cell_m:g} m cells), {plane.ni}x{plane.nj}, "
+        f"confidence: level {plane.level} ({cell_m:g} m cells), {plane.ni}x{plane.nj}, "
         f"{summary['scored']} scored, {summary['weak']} weak ({summary['weakShare']:.1%}), "
         f"{summary['unseen']} unseen; cap f={factor:.3g} from u={u_rel:g} m ({source}, "
         f"{prior} prior epoch(s)); {len(planes)} levels; {seconds:.1f} s"
     )
     metrics: dict[str, MetricValue] = {
-        "level": binned.level,
+        "level": plane.level,
         "cellM": cell_m,
         "cells": plane.cells,
         "scored": int(summary["scored"]),
