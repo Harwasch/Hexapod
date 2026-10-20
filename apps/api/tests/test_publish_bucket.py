@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 from app.config import Settings
 from app.models import Capture, Site
 from app.models.enums import CaptureKind, GeorefMethod, ScaleSource
+from app.services import epochs
 from app.services.published import is_published, published_key, unpublished
 from app.storage import ObjectStorage, S3Storage
 from app.storage.base import ObjectPage, ObjectSummary
@@ -491,7 +492,10 @@ def a_published_site(db: Session, buckets: Publisher) -> tuple[Capture, Site]:
 
 
 def splat_of(site: Site) -> dict[str, Any]:
-    (asset,) = site.assets
+    """The splat the site shows. Since site epochs (decision D3) a republish onto new tiles
+    adds a revision and keeps the old row, superseded; what is shown is the one current
+    revision (`services/epochs.live_assets`)."""
+    (asset,) = epochs.live_assets(site)
     return {"url": asset.source["url"], "render": dict(asset.render_config)}
 
 
