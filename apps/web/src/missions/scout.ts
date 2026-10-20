@@ -222,8 +222,8 @@ export function scoutZonesInOrder(zones: readonly Zone[], overlay: PlanOverlay):
 
 /**
  * The one capture a set of scout areas shares, or null when they differ: a route is flown at
- * one height, speed and overlap. Only the heading may differ, since it turns each area's own
- * lanes.
+ * one height, speed and overlap, in one pattern at one camera pitch (the export writes the
+ * shared capture's). Only the heading may differ, since it turns each area's own lanes.
  */
 export function sharedScout(zones: readonly Pick<Zone, "scout">[]): Scout | null {
   const scouts = zones.map((zone) => scoutOf(zone.scout));
@@ -234,7 +234,9 @@ export function sharedScout(zones: readonly Pick<Zone, "scout">[]): Scout | null
     other.altitudeM === first.altitudeM &&
     other.speedMs === first.speedMs &&
     other.forwardOverlap === first.forwardOverlap &&
-    other.sideOverlap === first.sideOverlap;
+    other.sideOverlap === first.sideOverlap &&
+    other.pattern === first.pattern &&
+    other.gimbalPitchDeg === first.gimbalPitchDeg;
   return scouts.every(same) ? first : null;
 }
 
