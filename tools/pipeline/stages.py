@@ -37,7 +37,7 @@ import numpy.typing as npt
 import PIL
 import PIL.Image
 
-import alignment  # noqa: F401 - registers align_epoch; place and catalog read it next
+import alignment
 import blocks
 import capture_platform
 import colmap4
@@ -3103,7 +3103,12 @@ def _scale_evidence(georef: dict[str, object]) -> object:
 @stage_impl(
     "place_splat",
     consumes=("trained.ply", "georef.json"),
-    optional_consumes=("poses", quality.GATED_PLY.name, quality.COVERAGE_PLY.name),
+    optional_consumes=(
+        "poses",
+        quality.GATED_PLY.name,
+        quality.COVERAGE_PLY.name,
+        alignment.EPOCH_ALIGNMENT.name,
+    ),
     produces=(CANONICAL_PLY, COVERAGE_ENU, placement.PLACEMENT),
     summary="Lane 2: the trained splat, turned into east/north/up by the georeference",
 )
@@ -3132,6 +3137,15 @@ def place_splat(ctx: StageContext) -> StageOutcome:
     A `georef.json` with no `frame` (written by `manual_placement`) is levelled by the
     camera-up estimate in `poses`, if there is one, and otherwise passed through with a
     warning that nothing levelled it.
+
+    When `align` aligned this epoch visually to its site's reference epoch
+    (`epoch_alignment.json`, `frameSource: epoch-alignment`), that frame is applied
+    instead of the georeference's: the similarity into east/north/up about the very
+    origin `georef.json` names. Its `siteFrame.offsetM` is then **not** added -- the
+    offset places a located capture's recentred footprint at its GPS point, and the
+    alignment already put it where it is, so adding it would move it by the GPS error
+    twice. An alignment that kept the georeference's frame (`frameSource: georef`,
+    every unaligned epoch) changes nothing here.
     """
     georef = _read_json(ctx.input(GEOREF.name))
     source = quality.GATED_PLY.name if ctx.has_input(quality.GATED_PLY.name) else TRAINED_PLY.name
@@ -3144,6 +3158,18 @@ def place_splat(ctx: StageContext) -> StageOutcome:
         sh_degree=None,
     )
     frame = georef.get("frame")
+    frame_from = "georef"
+    aligned = _epoch_alignment(ctx)
+    if (
+        aligned is not None
+        and aligned.get("frameSource") == "epoch-alignment"
+        and isinstance(aligned.get("frame"), dict)
+    ):
+        frame, frame_from = aligned["frame"], "epoch-alignment"
+        ctx.log(
+            f"place: the epoch alignment's frame ({aligned.get('method')}, "
+            f"{aligned.get('verdict')}), not the georeference's"
+        )
     if not isinstance(frame, dict):
         model_dir = ctx.input(POSES.name) if ctx.has_input(POSES.name) else None
         frame = _frame_from_poses(ctx, model_dir)
@@ -3155,7 +3181,8 @@ def place_splat(ctx: StageContext) -> StageOutcome:
     translation = None if offset is None else np.asarray(offset, dtype=np.float64)
     # In a site's frame (D3): where the located capture sits relative to the frame origin
     # `georef.json` is about. None outside a frame, and for the EXIF-aligned branch.
-    site_offset = _site_offset(georef)
+    # Never for an epoch-aligned frame: it is already where the capture is (docstring).
+    site_offset = None if frame_from == "epoch-alignment" else _site_offset(georef)
     if site_offset is not None and not frame.get("recentre"):
         # Folded into the georeferenced step itself, so `_place_coverage` and the LOD
         # placement see the same total move as the splat.
@@ -3204,8 +3231,17 @@ def place_splat(ctx: StageContext) -> StageOutcome:
         "coveragePoints": coverage_points,
         # The SH bands carried into canonical.ply, turned with the splat (0: DC only).
         "shDegree": trained.sh_degree,
+        "frameFrom": frame_from,
     }
     return StageOutcome(metrics=metrics, summary=f"placed by {frame.get('source')}")
+
+
+def _epoch_alignment(ctx: StageContext) -> dict[str, object] | None:
+    """`epoch_alignment.json` when `align` ran and wrote one, else None."""
+    if not ctx.has_input(alignment.EPOCH_ALIGNMENT.name):
+        return None
+    path = ctx.input(alignment.EPOCH_ALIGNMENT.name)
+    return _read_json(path) if path.is_file() else None
 
 
 def _site_offset(georef: dict[str, object]) -> npt.NDArray[np.float64] | None:
@@ -3860,6 +3896,7 @@ def capture_manifest(ctx: StageContext) -> StageOutcome:
         "ground_samples.json",
         quality.QUALITY_JSON.name,
         COVERAGE_ENU.name,
+        alignment.EPOCH_ALIGNMENT.name,
     ),
     produces=(REGISTRATION,),
     summary="describe the finished capture for the API's registration endpoint",
@@ -3908,6 +3945,12 @@ def catalog(ctx: StageContext) -> StageOutcome:
         # The tier-coloured point cloud in the splat's own frame, when there is one to
         # lay over it; the worker publishes it beside the thumbnail.
         "coverage": _coverage_name(ctx),
+        # How this epoch was registered to its site (`align`, D4): what M3b.2 writes
+        # onto `epochs.alignment`. Less the per-image residuals, which stay in the run's
+        # artifact. Null for a recipe with no align stage.
+        "alignment": None
+        if (aligned := _epoch_alignment(ctx)) is None
+        else alignment.summary_of(aligned),
     }
     _write_json(ctx.output(REGISTRATION.name), document)
     return StageOutcome(metrics={"artifacts": len(tiles)})

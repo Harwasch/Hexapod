@@ -507,3 +507,160 @@ def test_an_unaccepted_visual_alignment_falls_back_and_says_so(
     assert document["frameSource"] == "georef" and document["confidence"] == 0.0
     assert document["registration"]["registered"] == 2
     assert any("fell back" in r for r in document["reasons"])
+
+
+# --- place and catalog read the alignment ------------------------------------------------------
+
+
+def _gaussians(points: np.ndarray) -> dict[str, np.ndarray]:
+    count = points.shape[0]
+    columns = {axis: points[:, i] for i, axis in enumerate("xyz")}
+    columns.update({f"f_dc_{i}": np.zeros(count) for i in range(3)})
+    columns.update({"opacity": np.full(count, 2.0)})
+    columns.update({f"scale_{i}": np.full(count, -4.0) for i in range(3)})
+    columns.update({"rot_0": np.ones(count), "rot_1": np.zeros(count)})
+    columns.update({"rot_2": np.zeros(count), "rot_3": np.zeros(count)})
+    return {name: np.ascontiguousarray(v, dtype=np.float32) for name, v in columns.items()}
+
+
+POINTS = np.random.default_rng(5).uniform(-2.0, 2.0, size=(50, 3))
+FRAME_A = sfm.Similarity(1.5, sfm.quat_to_matrix([0.9, 0.0, 0.0, 0.4359]), np.array([1.0, 2, 3]))
+FRAME_B = sfm.Similarity(0.7, sfm.quat_to_matrix([0.8, 0.6, 0.0, 0.0]), np.array([-4.0, 0, 1]))
+
+
+def _frame(similarity: sfm.Similarity, source: str) -> dict[str, Any]:
+    return {
+        "source": source,
+        "scale": similarity.scale,
+        "rotation": similarity.rotation.tolist(),
+        "translationM": similarity.translation.tolist(),
+        "recentre": False,
+        "headingDeg": None,
+        "headingSource": "x",
+        "up": None,
+    }
+
+
+def _place(root: Path, georef: dict[str, Any], aligned: dict[str, Any] | None) -> np.ndarray:
+    import gaussians
+
+    workdir = Workdir.create(root)
+    trained = workdir.input_path("trained.ply")
+    trained.parent.mkdir(parents=True, exist_ok=True)
+    gaussians.write_ply(trained, _gaussians(POINTS))
+    workdir.input_path("georef.json").write_text(json.dumps(georef))
+    inputs = ["trained.ply", "georef.json"]
+    if aligned is not None:
+        workdir.input_path("epoch_alignment.json").write_text(json.dumps(aligned))
+        inputs.append("epoch_alignment.json")
+    execute(
+        make_recipe([{"id": "place", "impl": "place_splat"}], inputs=inputs),
+        workdir,
+        RunnerSet(cpu=LocalRunner()),
+    )
+    placed = gaussians.read_splat(workdir.artifact_path("place", "canonical.ply"))
+    return np.asarray(placed.xyz, dtype=np.float64)
+
+
+def _georef_with(frame: dict[str, Any], offset: list[float] | None = None) -> dict[str, Any]:
+    georef: dict[str, Any] = {
+        "lat": ORIGIN[0],
+        "lon": ORIGIN[1],
+        "height": ORIGIN[2],
+        "georefMethod": "exif-gps",
+        "scaleSource": "exif-gps",
+        "uncertaintyM": 5.0,
+        "frame": frame,
+    }
+    if offset is not None:
+        georef["siteFrame"] = {
+            "siteId": "s",
+            "lat": ORIGIN[0],
+            "lon": ORIGIN[1],
+            "height": ORIGIN[2],
+            "offsetM": offset,
+            "offsetSource": "video",
+            "located": None,
+        }
+    return georef
+
+
+def test_place_prefers_the_epoch_alignment_frame(tmp_path: Path) -> None:
+    georef = _georef_with(_frame(FRAME_A, "exif-gps-similarity"))
+    aligned = {
+        "frameSource": "epoch-alignment",
+        "method": "visual",
+        "verdict": "coarse",
+        "frame": _frame(FRAME_B, "visual-epoch"),
+    }
+
+    with_alignment = _place(tmp_path / "b", georef, aligned)
+    without = _place(tmp_path / "a", georef, None)
+
+    # float32 positions in the PLY: equal to its precision.
+    assert np.abs(with_alignment - FRAME_B.apply(POINTS)).max() < 1e-5
+    assert np.abs(without - FRAME_A.apply(POINTS)).max() < 1e-5
+
+
+def test_place_ignores_an_alignment_that_kept_the_georef_frame(tmp_path: Path) -> None:
+    georef = _georef_with(_frame(FRAME_A, "exif-gps-similarity"))
+    kept = {"frameSource": "georef", "method": "gnss-prior-ba", "frame": _frame(FRAME_B, "x")}
+
+    assert np.abs(_place(tmp_path / "k", georef, kept) - FRAME_A.apply(POINTS)).max() < 1e-5
+
+
+def test_place_never_adds_the_site_offset_to_an_epoch_aligned_frame(tmp_path: Path) -> None:
+    """A located phone epoch in a site frame (the review's fix 2): its georef carries the
+    GPS point's offset from the frame origin, which `place` adds to a recentred footprint.
+    The epoch alignment already put the capture where it is; adding the offset as well
+    would move it by the GPS error a second time."""
+    offset = [8.0, 5.0, 0.0]
+    located = {**_frame(sfm.Similarity(1.0, np.eye(3), np.zeros(3)), "camera-up"), "recentre": True}
+    aligned = {
+        "frameSource": "epoch-alignment",
+        "method": "visual",
+        "verdict": "coarse",
+        "frame": _frame(FRAME_B, "visual-epoch"),
+    }
+
+    placed = _place(tmp_path / "o", _georef_with(located, offset), aligned)
+    assert np.abs(placed - FRAME_B.apply(POINTS)).max() < 1e-5
+    # What it would have been had the offset been applied to the same frame.
+    doubled = _place(tmp_path / "d", _georef_with(_frame(FRAME_B, "x"), offset), None)
+    assert np.abs(doubled - (FRAME_B.apply(POINTS) + np.asarray(offset))).max() < 1e-5
+
+
+def test_catalog_carries_the_alignment_without_per_image_residuals(tmp_path: Path) -> None:
+    workdir = Workdir.create(tmp_path / "c")
+    splat = workdir.input_path("splat")
+    splat.mkdir(parents=True)
+    (splat / "tileset.json").write_text("{}")
+    workdir.input_path("georef.json").write_text(json.dumps(_georef_with(_frame(FRAME_A, "x"))))
+    document = {
+        "version": 1,
+        "verdict": "coarse",
+        "label": "Phone video, aligned visually, ±0.065 m",
+        "uncertaintyM": 0.065,
+        "residualM": {
+            "rms": 0.01,
+            "median": 0.01,
+            "p90": 0.02,
+            "max": 0.03,
+            "perImage": {"frame_0000.jpg": 0.01},
+        },
+    }
+    workdir.input_path("epoch_alignment.json").write_text(json.dumps(document))
+    execute(
+        make_recipe(
+            [{"id": "register", "impl": "catalog"}],
+            inputs=["splat", "georef.json", "epoch_alignment.json"],
+        ),
+        workdir,
+        RunnerSet(cpu=LocalRunner()),
+    )
+    registration = json.loads(workdir.artifact_path("register", "registration.json").read_text())
+
+    carried = registration["alignment"]
+    assert carried["label"] == document["label"] and carried["verdict"] == "coarse"
+    assert carried["uncertaintyM"] == 0.065
+    assert carried["residualM"] == {"rms": 0.01, "median": 0.01, "p90": 0.02, "max": 0.03}
