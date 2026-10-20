@@ -33,6 +33,7 @@ from typing import Any
 
 from geoalchemy2.shape import to_shape
 from shapely.geometry import mapping
+from shapely.geometry.base import BaseGeometry
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -163,6 +164,15 @@ def load_grid(storage: ObjectStorage, row: EpochMap) -> cell_grid.Grid:
     return grid
 
 
+def flyable(site: Site) -> BaseGeometry:
+    """The ground a re-scan of `site` may fly (lon/lat): weak-area zones are clipped to it,
+    as the fog scout's are. Today that is the site's boundary, and its no-go areas are the
+    boundary's holes (its exclusions) only. The hook for explicit no-go zones (ADR 0016
+    § API 5): when a site can carry them, they are subtracted here, and every zone stays
+    out of them with no other change."""
+    return to_shape(site.boundary)
+
+
 def epoch_of_site(db: Session, site_id: uuid.UUID, epoch_id: uuid.UUID) -> Epoch:
     if db.get(Site, site_id) is None:
         raise NotFoundError("site", site_id)
@@ -251,9 +261,7 @@ def weak_areas(
         plane,
         mask,
         projection,
-        # The site's boundary is the ground a re-scan may fly: zones are clipped to it and
-        # kept out of its holes (its exclusions), as the fog scout's are.
-        allowed=site_plane(to_shape(site.boundary), projection),
+        allowed=site_plane(flyable(site), projection),
         max_areas=request.max_areas,
         budget_m2=request.budget_m2,
         focus=(request.focus[0], request.focus[1]) if request.focus is not None else None,

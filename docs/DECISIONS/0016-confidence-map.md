@@ -217,7 +217,10 @@ maxAreas 1..8}`. The finest level's weak cells (weak-v1, where the summary is st
    naively, a 4 m square at the antimeridian was a polygon spanning the globe. Zones are then **clipped to the site's boundary**, holes
    (its exclusions) included, before any budget is spent: the boundary is the ground a re-scan
    may fly, as it is for the fog scout, and clipping after closing cuts any gap closing bridged
-   across a hole. A budget takes whole zones in rank order — under `focus`, then largest, then nearest —
+   across a hole. Today a site's **no-go areas are its boundary's holes only**; there is no
+   other no-go layer. `confidence_maps.flyable(site)` is the one place the flyable ground is
+   computed, so explicit no-go zones, when a site can carry them, are subtracted there and
+   every zone stays out of them with no other change. A budget takes whole zones in rank order — under `focus`, then largest, then nearest —
    while they fit (within one zone cell), and clips the first that does not to a disc about
    the focus or its weakest cell, grown until it holds what is left (a disc follows a
    ring-shaped zone where a square would cover the strong ground beside it): the budget goes on the zones that rank
@@ -244,7 +247,11 @@ maxAreas 1..8}`. The finest level's weak cells (weak-v1, where the summary is st
    epoch B's **own finest level** (default B: the latest published) that are weak in B and
    were weak in the newest earlier measured epoch whose footprint covers the cell. An earlier
    epoch counts for a cell only when it covers it; one that saw it well fixed it, so B's
-   weakness there is not a re-scan's. A coarser earlier grid is read by the cell holding B's;
+   weakness there is not a re-scan's. **"Covers" is judged by the earlier epoch's own grid**,
+   cell by cell -- the cell is scored there, or expected and unseen -- not by
+   `Epoch.footprint`: the footprint is one outline round the whole capture and would count
+   every gap inside it as covered, while the grid says which cells the capture actually
+   tried to see. It is the more precise test of the same rule (C7). A coarser earlier grid is read by the cell holding B's;
    a finer one is weak in B's cell only when none of the children it saw there was strong.
    The gate never coarsens B: one weak child never opens its parent (the first build compared
    at the coarser level and did; review R3). Each target records the earlier epoch it
@@ -307,12 +314,17 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
    covered there); the layer records that grid's sha256. At publish
    (`publish-fill.yml`, `verify_layer`), the scan's asset must be a current revision of the
    gate's epoch and site, its current tileset must carry that very grid, the targets fetched
-   now must be the ones it was filled for, and every gaussian of every tile -- parents as well
-   as leaves (`layer_positions`) -- must be in a target cell. Fill
+   now must be the ones it was filled for, with the same provenance, and every gaussian of
+   every tile -- parents as well as leaves, a GLB two tiles name at each place it is drawn
+   (`layer_positions`) -- must be in a target cell. This pre-check reads only a tile's SPZ
+   block, so it refuses any tile GLB not laid out exactly as `build_glb` writes one (one
+   scene node with its matrix, one primitive); the API reads such a GLB in full. Fill
    time cannot tell an earlier epoch whose grid shares the window (its targets are weak there
    too, by definition); publish can.
 4. **The evidence says so**: `extras.evidence.rescanGate` {policy, siteId, epochId, weakIn,
-   comparedWith, level, cellM, i0, j0, ni, nj, cells, maskSha256, confidenceSha256}.
+   comparedWith, level, cellM, i0, j0, ni, nj, cells, maskSha256, satisfiedBy,
+   confidenceSha256}; `satisfiedBy` is the fill-targets answer's own encoding (one byte per
+   target, an index into `comparedWith`).
 5. **The API recomputes it, so nothing new reaches the live site without it.** The write
    token is the auth, not the evidence: a layer's `rescanGate` is readable metadata anyone
    holding the token can copy, so it never admits a layer. An attach
@@ -324,12 +336,22 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
    (`app/services/fill_gate.py`) recomputes the targets with `confidence_maps.fill_targets`
    over the stored `epoch_maps` (no earlier measured epoch, or no cell still weak, is a 422),
    requires the asset to be its epoch's current revision, the evidence to name exactly those
-   targets, the layer's root transform to be the scan's, and every gaussian of every tile to
-   be in a target cell. A republish carries a layer -- `inferredLayers`, and each fill
-   variant's -- only if the same gate admits it on the new revision (`fill_gate.carry_check`:
-   the epoch's targets recomputed, computed on the very grid the new tiles carry, every
-   gaussian of every tile in them; the `epoch_maps` rows are read and the transaction ended
-   before any grid is downloaded). A re-run that measured its own grid drops it, with its
+   targets **and their provenance** (`weakIn`, `comparedWith`, `satisfiedBy` equal to its own
+   answer, so what is stored is the API's, never invented or missing), the layer's root
+   transform to be the scan's, and every gaussian it draws to be in a target cell: every
+   tile, at every place the tileset draws it (`positions.tile_placements`: two tiles naming
+   one GLB draw it twice), and every primitive of the GLB where its nodes put it
+   (`positions.tile_draws`: each node's transform composed through the hierarchy, and
+   Cesium's own reading -- the first scene node's own matrix on its first primitive -- since
+   a viewer may draw it either way). A GLB no reading can place (instancing or another node
+   extension, skins, animation, morph targets, a primitive that is not an SPZ splat, a
+   node hierarchy that is not a forest, over 64 nodes) is refused. A republish carries a
+   layer -- `inferredLayers`, and each fill variant's -- only if the same gate admits it on
+   the new revision (`fill_gate.carry_check`: the epoch's targets recomputed, computed on
+   the very grid the new tiles carry -- the same whole descriptor, so the same planes at
+   the same window origins, level and frame, not only the same planes' sha256 -- every
+   gaussian it draws in them; the `epoch_maps` rows are read, by the fill-targets route's
+   own bounded query, and the transaction ended before any grid is downloaded). A re-run that measured its own grid drops it, with its
    files, and flags the asset "Inferred fill needs filling again" (a fill variant goes whole:
    "Fill variant needs filling again"); so does any republish of a layer that was never gated,
    or whose targets changed because an earlier epoch was measured since, the same tiles
