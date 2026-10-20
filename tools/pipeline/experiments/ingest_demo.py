@@ -3,7 +3,8 @@
 Builds, in `--out`:
 
 * (a) six DJI M3E-style JPEGs at 3000x2250 -- five RTK-fixed (`RtkFlag` 50), one single
-  (16); EXIF with no offset; GPS with a horizontal error; two exposure times;
+  (16), so a `drone`, not the survey tier, which needs every frame fixed; EXIF with no
+  offset; GPS with a horizontal error; two exposure times;
 * (b) four iPhone-style JPEGs with `OffsetTimeOriginal` and `GPSHPositioningError`;
 * (c) a 10-bit HLG HEVC `.mov` with the iPhone's QuickTime keys: ISO 6709 location,
   horizontal accuracy 4.766775 m, creation date `2025-06-14T10:41:02+0100`, make, model;
@@ -104,18 +105,21 @@ def _table(runs: dict[str, dict[str, Any]]) -> list[str]:
 
     lines = [
         "PLATFORM DETECTION TABLE (tests/test_capture_platform.py, then the three runs)",
-        f"{'case':<34} {'value':<12} {'source':<16} evidence",
+        f"{'case':<34} {'value':<12} {'source':<16} {'basis':<9} evidence",
     ]
     for case, fmt, records, video, requested, hint, *_expected in TABLE:
         found = capture_platform.detect(
             fmt=fmt, records=records, video=video, requested=requested, hint=hint
         )
-        lines.append(f"{case:<34} {found.value:<12} {found.source:<16} {found.evidence}")
+        lines.append(
+            f"{case:<34} {found.value:<12} {found.source:<16} {found.platform_evidence:<9} "
+            f"{found.evidence}"
+        )
     for name, frames in runs.items():
         platform = frames["platform"]
         lines.append(
             f"{'run: ' + name:<34} {platform['value']:<12} {platform['source']:<16} "
-            f"{platform['evidence']}"
+            f"{platform['platformEvidence']:<9} {platform['evidence']}"
         )
     return lines
 

@@ -3638,6 +3638,9 @@ def capture_manifest(ctx: StageContext) -> StageOutcome:
             # What captured it, by survey tier (`capture_platform`); null when the lane
             # did not detect one (`ingest_splat`).
             "platform": _platform_value(source.get("platform")),
+            # What that rests on (`capture_platform.PLATFORM_EVIDENCE`): `metadata`,
+            # `claimed` or `none`. A claimed `rtk-drone` is never the survey tier.
+            "platformEvidence": _platform_field(source.get("platform"), "platformEvidence"),
             "license": ctx.param("license"),
             "attribution": list(ctx.param("attribution", []) or []),
         },
@@ -3740,6 +3743,7 @@ def catalog(ctx: StageContext) -> StageOutcome:
         # What the worker writes onto the epoch (`registration.Registration.platform`),
         # and when the files say the capture was made; both null when nobody detected.
         "platform": facts.get("platform"),
+        "platformEvidence": facts.get("platformEvidence"),
         "capturedAtUtc": facts.get("capturedAtUtc"),
         "georef": georef,
         "artifacts": tiles,
@@ -3804,8 +3808,13 @@ def _coverage_name(ctx: StageContext) -> str | None:
 
 def _platform_value(value: object) -> str | None:
     """`source_meta.platform.value`, or None when there is no such record."""
-    if isinstance(value, dict) and isinstance(value.get("value"), str):
-        return str(value["value"])
+    return _platform_field(value, "value")
+
+
+def _platform_field(value: object, key: str) -> str | None:
+    """One field of `source_meta.platform`, or None when there is no such record."""
+    if isinstance(value, dict) and isinstance(value.get(key), str):
+        return str(value[key])
     return None
 
 

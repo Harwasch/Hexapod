@@ -71,6 +71,7 @@ def test_drone_photos_are_described_from_their_originals_before_shrinking(
     assert b"drone-dji" in (upload / "DJI_0000.JPG").read_bytes()
     source = _out(workdir, "source_meta.json")
     assert source["platform"]["value"] == "rtk-drone"
+    assert source["platform"]["platformEvidence"] == "metadata"
     assert frames["platform"] == source["platform"]
     assert source["focal"]["px"] == pytest.approx(3713.29 * 1600 / 5280, abs=1e-4)
     # DJI EXIF carries no offset, so there is no UTC time and nothing claims one: not
@@ -139,6 +140,7 @@ def test_the_platform_param_and_the_phone_hint_reach_the_record(tmp_path: Path) 
         "value": "drone",
         "source": "param",
         "evidence": "asked for by the recipe or the run",
+        "platformEvidence": "claimed",
     }
     bare = run_normalize(tmp_path / "c", {"select": "all"}, upload)
     assert _out(bare, "source_meta.json")["platform"]["value"] == "unknown"

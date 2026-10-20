@@ -291,8 +291,10 @@ def test_lane1_registers_no_platform(run: Workdir) -> None:
     registration = _json(run, "register", "registration.json")
 
     assert registration["platform"] is None
+    assert registration["platformEvidence"] is None
     assert registration["capturedAtUtc"] is None
     assert registration["manifest"]["capture"]["platform"] is None
+    assert registration["manifest"]["capture"]["platformEvidence"] is None
 
 
 def test_the_catalog_copies_the_platform_and_capture_time_from_the_manifest(
@@ -305,7 +307,11 @@ def test_the_catalog_copies_the_platform_and_capture_time_from_the_manifest(
     tiles.mkdir(parents=True)
     (tiles / "tileset.json").write_text("{}")
     workdir.input_path("georef.json").write_text(json.dumps({"lat": LAT, "lon": LON}))
-    capture = {"platform": "rtk-drone", "capturedAtUtc": "2026-10-01T15:20:30.123Z"}
+    capture = {
+        "platform": "rtk-drone",
+        "platformEvidence": "claimed",
+        "capturedAtUtc": "2026-10-01T15:20:30.123Z",
+    }
     workdir.input_path("manifest.json").write_text(json.dumps({"capture": capture}))
     recipe = make_recipe(
         [{"id": "register", "impl": "catalog", "params": {}}],
@@ -314,7 +320,8 @@ def test_the_catalog_copies_the_platform_and_capture_time_from_the_manifest(
     execute(recipe, workdir, RunnerSet.local())
 
     registration = _json(workdir, "register", "registration.json")
-    assert (registration["platform"], registration["capturedAtUtc"]) == (
-        "rtk-drone",
-        "2026-10-01T15:20:30.123Z",
-    )
+    assert (
+        registration["platform"],
+        registration["platformEvidence"],
+        registration["capturedAtUtc"],
+    ) == ("rtk-drone", "claimed", "2026-10-01T15:20:30.123Z")

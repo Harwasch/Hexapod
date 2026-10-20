@@ -22,7 +22,8 @@ def test_the_demo_describes_both_captures(
 
     report = capsys.readouterr().out
     assert "PLATFORM DETECTION TABLE" in report
-    assert "run: drone                         rtk-drone" in report
+    # One of its six frames lost the RTK fix: a drone, not the survey tier.
+    assert "run: drone                         drone        drone-xmp        metadata" in report
     assert "run: phone-photos                  phone-photo" in report
     assert "run: phone-video                   phone-video" in report
     assert '"tonemapped": true' in report
