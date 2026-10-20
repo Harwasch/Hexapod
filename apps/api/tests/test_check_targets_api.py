@@ -158,3 +158,52 @@ def test_a_label_named_twice_is_refused(client: TestClient) -> None:
     )
     assert response.status_code == 422
     assert "T1" in response.text
+
+
+def test_two_replacements_of_one_site_happen_one_after_the_other(
+    client: TestClient, db: Session, engine: Any
+) -> None:
+    """`replace_active` locks the site row first. While another transaction holds that
+    lock, a replacement waits rather than reading the active set under it; released, the
+    two run one after the other, and the site ends with one active row per label -- not
+    two replacements that both retired T1 and both inserted its successor (which the
+    partial unique index would have refused, failing one of them)."""
+    import threading
+    import time
+
+    from sqlalchemy import text
+    from sqlalchemy.orm import sessionmaker
+
+    from app.schemas.check_target import CheckTargetSet
+    from app.services import check_targets as service
+
+    site_id = uuid.UUID(_site(client))
+    _put(client, str(site_id), _target("T1"))
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    errors: list[BaseException] = []
+
+    def replace(lat: float) -> None:
+        session = factory()
+        try:
+            payload = CheckTargetSet.model_validate({"targets": [_target("T1", lat=lat)]})
+            service.replace_active(session, site_id, payload)
+        except BaseException as error:  # pragma: no cover - the failure being tested for
+            errors.append(error)
+        finally:
+            session.close()
+
+    holder = factory()
+    holder.execute(text("SELECT 1 FROM sites WHERE id = :id FOR UPDATE"), {"id": site_id})
+    threads = [threading.Thread(target=replace, args=(lat,)) for lat in (47.6401, 47.6402)]
+    for thread in threads:
+        thread.start()
+    time.sleep(0.5)
+    assert all(thread.is_alive() for thread in threads), "a replacement did not wait for the lock"
+    holder.rollback()
+    holder.close()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert not errors, errors
+    active = [row for row in _rows(db) if row.retired_at is None]
+    assert len(active) == 1 and active[0].lat in (47.6401, 47.6402)
+    assert len(_rows(db)) == 3

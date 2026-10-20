@@ -17,6 +17,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -147,3 +148,67 @@ def test_epoch_2_is_aligned_to_epoch_1_and_the_api_shows_its_alignment(
     assert first.georef_method is GeorefMethod.MANUAL
     assert uuid.UUID(site_id) == first.site_id == drone.site_id == phone.site_id
     assert two.status is RunStatus.COMPLETE and three.status is RunStatus.COMPLETE
+
+
+def test_no_session_is_idle_in_a_transaction_while_the_reference_downloads(
+    db: Session,
+    sessions: sessionmaker[Session],
+    storage: S3Storage,
+    tmp_path: Path,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The seed reads the database, then downloads the reference's frames and model --
+    minutes on a slow link. A session idle in a transaction that long is killed by the
+    database (`runner._end_transaction`), so during every download no session may be:
+    checked in Postgres itself (test_worker's pattern), with the real supervisor."""
+    from sqlalchemy import create_engine, text
+
+    from tests.conftest import TEST_DATABASE_URL, site_payload
+
+    site = client.post(
+        "/api/v1/sites", json=site_payload(slug="spy-tree", boundary=BOUNDARY, assets=[])
+    )
+    assert site.status_code == 201, site.text
+    site_id = site.json()["id"]
+    targets = [{**TARGET, "label": "T1"}]
+    assert client.put(
+        f"/api/v1/sites/{site_id}/check-targets", json={"targets": targets}
+    ).is_success
+    _first, one = _epoch_run(db, sessions, storage, tmp_path, site_id, "e1", CaptureKind.IMAGES)
+    db.commit()
+
+    probe = create_engine(TEST_DATABASE_URL)
+    seen: list[tuple[str, int]] = []
+
+    def idle_in_transaction() -> int:
+        with probe.connect() as connection:
+            return int(
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM pg_stat_activity WHERE datname = "
+                        "current_database() AND pid <> pg_backend_pid() AND "
+                        "state LIKE 'idle in transaction%'"
+                    )
+                ).scalar_one()
+            )
+
+    real_download, real_list = storage.download_file, storage.list_objects
+
+    def download(key: str, target: Path) -> int:
+        seen.append((key, idle_in_transaction()))
+        return real_download(key, target)
+
+    def listing(prefix: str, **kwargs: Any) -> Any:
+        seen.append((f"list {prefix}", idle_in_transaction()))
+        return real_list(prefix, **kwargs)
+
+    monkeypatch.setattr(storage, "download_file", download)
+    monkeypatch.setattr(storage, "list_objects", listing)
+    _epoch_run(db, sessions, storage, tmp_path, site_id, "e2_drone", CaptureKind.IMAGES)
+    probe.dispose()
+
+    # Epoch 1's 3 frames, 4 model files, placement.json and georef.json.
+    fetched = [key for key, _idle in seen if key.startswith(f"runs/{one.id}/")]
+    assert len(fetched) == 9, seen
+    assert all(idle == 0 for _key, idle in seen), seen
