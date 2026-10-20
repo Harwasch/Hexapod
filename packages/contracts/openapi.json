@@ -6555,6 +6555,17 @@
             "title": "Cells",
             "type": "integer"
           },
+          "groundWindowM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Groundwindowm"
+          },
           "level": {
             "title": "Level",
             "type": "integer"
@@ -6603,7 +6614,8 @@
           "cells",
           "surfacedCells",
           "medianSigmaM",
-          "originHeightM"
+          "originHeightM",
+          "groundWindowM"
         ],
         "title": "EpochSurfaceRead",
         "type": "object"

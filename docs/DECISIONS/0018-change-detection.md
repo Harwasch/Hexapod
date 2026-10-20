@@ -214,7 +214,7 @@ Date 2026-10-20 · M5 of the splat-pipeline build (design M4–M6 §3 A5, DECISI
    `vertical.originHeightM` — and one that fails is logged and not recorded. `surface.bin` is a
    sidecar of kind `surface`, bound to the tiles and not attachable, like `confidence.bin`. Every
    epoch says `surface: {status: measured, assetId, url, cellM, level, policy, calibration,
-cells, surfacedCells, medianSigmaM, originHeightM}`, or null — not measured.
+cells, surfacedCells, medianSigmaM, originHeightM, groundWindowM}`, or null — not measured.
 2. **`GET /sites/{id}/change?from=&to=`** (`change-v1`) compares the current revisions of two
    published epochs of one site. Both go to the coarser of their surfaces' levels by § Pipeline
    4's rule — of the children with a surface, dsm the highest, ground the lowest, sigma the largest

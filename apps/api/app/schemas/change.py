@@ -47,6 +47,9 @@ class EpochSurfaceRead(CamelModel):
     median_sigma_m: Finite | None
     #: The ellipsoidal height of the frame origin its heights are above, metres.
     origin_height_m: Finite
+    #: The window its bare ground was taken the least over, metres (5 m from P5; null when
+    #: the descriptor does not say): uncalibrated, like `policy`'s estimators.
+    ground_window_m: Finite | None
 
 
 #: What every change map says it is, in words a person reads.

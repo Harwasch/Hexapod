@@ -291,7 +291,14 @@ def surface_to_read(row: EpochMap) -> EpochSurfaceRead:
         if isinstance(median, int | float) and not isinstance(median, bool)
         else None,
         origin_height_m=float(descriptor["vertical"]["originHeightM"]),
+        ground_window_m=_finite_or_none((descriptor.get("estimators") or {}).get("groundWindowM")),
     )
+
+
+def _finite_or_none(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        return None
+    return float(value)
 
 
 def maps_of_asset(db: Session, asset_id: uuid.UUID) -> list[EpochMap]:

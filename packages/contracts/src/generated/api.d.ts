@@ -5944,6 +5944,8 @@ export interface components {
             cellM: number;
             /** Cells */
             cells: number;
+            /** Groundwindowm */
+            groundWindowM: number | null;
             /** Level */
             level: number;
             /** Mediansigmam */

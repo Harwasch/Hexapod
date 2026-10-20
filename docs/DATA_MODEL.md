@@ -118,7 +118,7 @@ summarised (`{status: measured, assetId, url, cellM, level, policy, weakShare, w
 scoredCells, unseenCells, reasons, alignmentCap {uncertaintyM, factor, priorEpochs, source}}`), or
 null — not measured; and `surface`: that revision's height surface summarised (`{status: measured,
 assetId, url, cellM, level, policy, calibration, cells, surfacedCells, medianSigmaM,
-originHeightM}`), or null — not measured. A capture names its site with `siteId` on
+originHeightM, groundWindowM}`), or null — not measured. A capture names its site with `siteId` on
 `POST /captures` (or the phone route), kept in `captures.metadata.siteId`; `captures.site_id` is
 still the site a run registered it into.
 

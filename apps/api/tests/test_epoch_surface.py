@@ -87,6 +87,7 @@ def test_a_measured_run_records_its_surface_and_the_epoch_reads_it(
         "surfacedCells": summary["surfaced"],
         "medianSigmaM": 0.03,
         "originHeightM": HEIGHT,
+        "groundWindowM": None,  # the fixture's descriptor names no estimators
     }
     assert epoch["confidence"]["level"] == 2
     site = client.get(f"/api/v1/sites/{capture.site_id}").json()
@@ -201,6 +202,22 @@ def test_a_surface_the_api_cannot_vouch_for_is_not_recorded(
     assert len(_assets(db, capture.site_id)) == 1
     assert db.scalars(select(EpochMap).where(EpochMap.kind == "confidence")).first() is not None
     assert words in caplog.text
+
+
+def test_an_epoch_reads_its_ground_window_from_the_estimators() -> None:
+    import uuid
+
+    found = surface_descriptor("e1", HEIGHT)
+    found["estimators"] = {"groundWindowM": 5.0}
+    row = EpochMap(
+        asset_id=uuid.uuid4(),
+        url="u",
+        cell_m=1.0,
+        level=2,
+        descriptor=found,
+        summary=found["summary"],
+    )
+    assert epoch_maps.surface_to_read(row).ground_window_m == 5.0
 
 
 def test_the_surface_check_takes_what_the_pipeline_writes() -> None:
