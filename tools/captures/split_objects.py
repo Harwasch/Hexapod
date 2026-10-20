@@ -53,7 +53,15 @@ from scipy.spatial import cKDTree
 import scene_plants
 from rig_tiles import glb_spz
 from skin_scene import decode_runs
-from splat_tiles import SH_DIMS, SPZ_FIXED_MAX, SPZ_MAGIC, build_glb, site_positions, tile_offsets
+from splat_tiles import (
+    SH_DIMS,
+    SPZ_FIXED_MAX,
+    SPZ_FIXED_MIN,
+    SPZ_MAGIC,
+    build_glb,
+    site_positions,
+    tile_offsets,
+)
 from synthetic_tree import checksum_positions
 
 FORMAT = "hexapod.split"
@@ -186,10 +194,12 @@ def write_spz(spz: Spz) -> bytes:
     )
     # The mask below keeps a record's low 24 bits; a record past them would come back as
     # a different position, so it is refused, as `pack_spz` refuses one (no wrap).
-    if n and int(np.abs(spz.fixed).max()) > SPZ_FIXED_MAX:
+    top, bottom = (int(spz.fixed.max()), int(spz.fixed.min())) if n else (0, 0)
+    if top > SPZ_FIXED_MAX or bottom < SPZ_FIXED_MIN:
+        worst = top if top > SPZ_FIXED_MAX else bottom
         raise ValueError(
-            f"an SPZ record ({int(np.abs(spz.fixed).max())}) is past the 24-bit field's "
-            f"+/-{SPZ_FIXED_MAX}; it belongs in a tile with an origin of its own"
+            f"an SPZ record ({worst}) is past the 24-bit field's {SPZ_FIXED_MIN} to "
+            f"{SPZ_FIXED_MAX}; it belongs in a tile with an origin of its own"
         )
     u = (spz.fixed & 0xFFFFFF).astype(np.uint32)
     pos = np.stack([u & 0xFF, (u >> 8) & 0xFF, (u >> 16) & 0xFF], axis=2).astype(np.uint8)

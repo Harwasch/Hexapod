@@ -56,6 +56,21 @@ def test_pack_spz_packs_the_last_step_inside_the_range() -> None:
     assert np.array_equal(back["z"], xyz[:, 2])
 
 
+def test_pack_spz_takes_the_most_negative_24_bit_value_and_no_further() -> None:
+    # Two's complement: the field holds -2^23 to 2^23 - 1, so -2048 m at 12 bits is in it
+    # and +2048 m is not.
+    low = -float(1 << 23) / 4096
+    xyz = _xyz((low, 0.0, low), (0.0, low, 1.0))
+    back = unpack_spz(_pack(xyz))
+    assert float(back["x"][0]) == -2048.0
+    assert np.array_equal(back["y"], xyz[:, 1])
+    assert np.array_equal(back["z"], xyz[:, 2])
+    with pytest.raises(SplatFormatError, match="24-bit"):
+        _pack(_xyz((-low, 0.0, 0.0)))
+    with pytest.raises(SplatFormatError, match="24-bit"):
+        _pack(_xyz((low - 1 / 4096, 0.0, 0.0)))
+
+
 def test_pack_spz_refuses_non_finite_positions() -> None:
     with pytest.raises(SplatFormatError, match="finite"):
         _pack(_xyz((np.nan, 0.0, 0.0)))

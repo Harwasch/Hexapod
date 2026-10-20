@@ -312,6 +312,10 @@ SPZ_COLOR_SCALE = 0.15
 #: `SPZ_FRACTIONAL_BITS` that is 8,388,607 / 4096 = 2047.99976 m either side of the tile's
 #: frame; `pack_spz` refuses anything past it rather than letting the top bits fall away.
 SPZ_FIXED_MAX = (1 << 23) - 1
+#: The most negative one, a step further out than `SPZ_FIXED_MAX`: -2048 m exactly at 12
+#: bits. The range checks take it; `fractional_bits_for` sizes a tile by magnitude alone,
+#: so it keeps a tile clear of it on both sides and never relies on the extra step.
+SPZ_FIXED_MIN = -(1 << 23)
 #: The fewest fractional bits a header can declare: whole metres, +/-8,388 km.
 SPZ_MIN_FRACTIONAL_BITS = 0
 #: How far from its frame a tile's centres may reach before the tile is given an origin of
@@ -455,13 +459,14 @@ def pack_spz(
     low = float(scaled.min()) if scaled.size else 0.0
     if not (math.isfinite(high) and math.isfinite(low)):
         raise SplatFormatError("SPZ positions must be finite; a NaN or infinity cannot be packed")
-    if max(high, -low) > SPZ_FIXED_MAX:
+    if high > SPZ_FIXED_MAX or low < SPZ_FIXED_MIN:
         reach = float(np.abs(positions).max())
+        step = float(1 << fractional_bits)
         raise SplatFormatError(
             f"an SPZ position reaches {reach:.3f} m from the tile's frame, past the "
-            f"+/-{SPZ_FIXED_MAX / (1 << fractional_bits):.5f} m that 24-bit fixed point "
-            f"holds at {fractional_bits} fractional bits; give the tile an origin "
-            "(tile_frame) or fewer fractional bits"
+            f"{SPZ_FIXED_MIN / step:.5f} to +{SPZ_FIXED_MAX / step:.5f} m that 24-bit "
+            f"fixed point holds at {fractional_bits} fractional bits; give the tile an "
+            "origin (tile_frame) or fewer fractional bits"
         )
     fixed = scaled.astype(np.int32).reshape(-1)
     fixed_u = fixed.astype(np.uint32)

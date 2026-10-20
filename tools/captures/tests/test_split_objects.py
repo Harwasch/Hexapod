@@ -160,6 +160,19 @@ def test_write_spz_refuses_a_record_past_24_bits() -> None:
         so.write_spz(spz)
 
 
+def test_write_spz_takes_the_most_negative_24_bit_value_and_no_further() -> None:
+    tiles = YARD / "splat"
+    uri = tile_uris(json.loads((tiles / "tileset.json").read_text(encoding="utf-8")))[0]
+    spz = so.read_spz(glb_spz(tiles / uri))
+    # Two's complement: the field holds -2^23 to 2^23 - 1, and -2^23 reads back as itself.
+    spz.fixed[0, 0] = -(1 << 23)
+    assert so.read_spz(so.write_spz(spz)).fixed[0, 0] == -(1 << 23)
+    for past in (1 << 23, -(1 << 23) - 1):
+        spz.fixed[0, 0] = past
+        with pytest.raises(ValueError, match="24-bit"):
+            so.write_spz(spz)
+
+
 def test_default_choice_is_the_movable_objects_of_a_useful_size(scan: Path) -> None:
     doc = json.loads((scan / "instances.json").read_text(encoding="utf-8"))
     chosen = so.choose(doc)
