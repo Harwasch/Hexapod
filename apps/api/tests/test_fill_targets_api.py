@@ -164,7 +164,7 @@ FIXTURE_NOTE = (
 
 
 def _placeheld(read: dict[str, Any], ids: dict[str, str]) -> dict[str, Any]:
-    out = json.loads(json.dumps(read))
+    out: dict[str, Any] = json.loads(json.dumps(read))
     swap = {ids[name]: PLACEHOLDERS[name] for name in ids}
     out["siteId"] = swap[out["siteId"]]
     out["epochId"] = swap[out["epochId"]]
