@@ -2379,6 +2379,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sites/{site_id}/change": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The change between two dates, from height surfaces
+         * @description `change-v1` (ADR 0018): from epoch `from` to epoch `to`, both published, per cell of
+         *     the coarser of their height surfaces' levels, `dsm_to - dsm_from` against three times
+         *     the combined spread and placement uncertainty -- raised, lowered, unchanged, or
+         *     insufficient where only one has a surface -- with the cells either epoch's confidence
+         *     does not vouch for flagged, not hidden, and the regions outlined on the globe. Derived,
+         *     not observed; uncalibrated. Open like every read (the world is viewable without a
+         *     token: the change drape is a view), and it stores nothing; a call may decode four
+         *     grids (cached), so it spends the per-client cell-map bucket weak areas spend.
+         */
+        get: operations["site_change_api_v1_sites__site_id__change_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sites/{site_id}/check-targets": {
         parameters: {
             query?: never;
@@ -4843,6 +4870,178 @@ export interface components {
              * @enum {string}
              */
             type: "cesium-ion-terrain";
+        };
+        /**
+         * ChangeAppearanceRead
+         * @description Change seen in appearance only (a repaint, leaf-off): not computed, and why.
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        ChangeAppearanceRead: {
+            /** Reason */
+            reason: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "not-computed";
+        };
+        /**
+         * ChangeArea
+         * @description One 4-connected region of cells of one class (raised and lowered regions are also of
+         *     one confidence), outlined on the cells' exact edges and placed on the globe.
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        ChangeArea: {
+            /** Aream2 */
+            areaM2: number;
+            /** Cells */
+            cells: number;
+            /**
+             * Class
+             * @enum {string}
+             */
+            class: "unchanged" | "raised" | "lowered" | "insufficient";
+            footprint: components["schemas"]["MultiPolygon"];
+            /** Lowconfidence */
+            lowConfidence: boolean;
+            /** Lowconfidencecells */
+            lowConfidenceCells: number;
+            /** Maxabsdeltam */
+            maxAbsDeltaM: number | null;
+            /** Meandeltam */
+            meanDeltaM: number | null;
+            /** Meangrounddeltam */
+            meanGroundDeltaM: number | null;
+        };
+        /**
+         * ChangeCountsRead
+         * @description Cells of each class at the compared level (`level`).
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        ChangeCountsRead: {
+            /** Insufficient */
+            insufficient: number;
+            /** Lowered */
+            lowered: number;
+            /** Raised */
+            raised: number;
+            /** Unchanged */
+            unchanged: number;
+        };
+        /**
+         * ChangeLowConfidenceRead
+         * @description Of each compared class, the cells either epoch's confidence does not vouch for (weak,
+         *     unseen or no evidence in its grid at the compared level) or whose sigma saturates. They
+         *     are classified all the same, and counted in `counts` too.
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        ChangeLowConfidenceRead: {
+            /** Lowered */
+            lowered: number;
+            /** Raised */
+            raised: number;
+            /** Unchanged */
+            unchanged: number;
+        };
+        /**
+         * ChangeMapRead
+         * @description The change from epoch `fromEpochId` to `toEpochId` of one site (`change-v1`, ADR 0018):
+         *     derived from their height surfaces, never observed and never from splat pixels.
+         *
+         *     Per cell of the coarser of the two surfaces' levels: `delta = dsm_to - dsm_from` against
+         *     `t = thresholdSigma * sqrt(sigma_from^2 + sigma_to^2 + u_from^2 + u_to^2)`, with `u` each
+         *     epoch's uncertainty from the site frame (`uncertainty`): `raised` above `t`, `lowered`
+         *     below `-t`, else `unchanged`; `insufficient` where only one epoch has a surface. The 3
+         *     sigma rule is a first-principles choice, `uncalibrated` until a site scanned twice
+         *     measures it.
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        ChangeMapRead: {
+            appearance: components["schemas"]["ChangeAppearanceRead"];
+            /** Areacellm */
+            areaCellM: number;
+            /** Arealevel */
+            areaLevel: number;
+            /** Areas */
+            areas: components["schemas"]["ChangeArea"][];
+            /**
+             * Calibration
+             * @constant
+             */
+            calibration: "uncalibrated";
+            /** Cellm */
+            cellM: number;
+            counts: components["schemas"]["ChangeCountsRead"];
+            /**
+             * Derived
+             * @constant
+             */
+            derived: true;
+            /**
+             * Frame
+             * @constant
+             */
+            frame: "tileset";
+            /**
+             * Fromassetid
+             * Format: uuid
+             */
+            fromAssetId: string;
+            /**
+             * Fromepochid
+             * Format: uuid
+             */
+            fromEpochId: string;
+            /** Label */
+            label: string;
+            /** Level */
+            level: number;
+            lowConfidence: components["schemas"]["ChangeLowConfidenceRead"];
+            /** Mindetectablem */
+            minDetectableM: number | null;
+            /** Nativelevel */
+            nativeLevel: number;
+            /**
+             * Policy
+             * @constant
+             */
+            policy: "change-v1";
+            /**
+             * Siteid
+             * Format: uuid
+             */
+            siteId: string;
+            /** Thresholdsigma */
+            thresholdSigma: number;
+            /**
+             * Toassetid
+             * Format: uuid
+             */
+            toAssetId: string;
+            /**
+             * Toepochid
+             * Format: uuid
+             */
+            toEpochId: string;
+            uncertainty: components["schemas"]["ChangeUncertaintyRead"];
+        };
+        /**
+         * ChangeUncertaintyRead
+         * @description Each epoch's placement uncertainty from the site frame, metres, as its confidence
+         *     grid states it (`alignmentCap.uncertaintyM`): 0 for the epoch that made the frame.
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        ChangeUncertaintyRead: {
+            /** Fromm */
+            fromM: number;
+            /** Tom */
+            toM: number;
         };
         /** ChartOutput */
         ChartOutput: {
@@ -12334,6 +12533,12 @@ export type SchemaCesiumIon3DTilesSource = components['schemas']['CesiumIon3DTil
 export type SchemaCesiumIonImagerySource = components['schemas']['CesiumIonImagerySource'];
 export type SchemaCesiumIonSource = components['schemas']['CesiumIonSource'];
 export type SchemaCesiumIonTerrainSource = components['schemas']['CesiumIonTerrainSource'];
+export type SchemaChangeAppearanceRead = components['schemas']['ChangeAppearanceRead'];
+export type SchemaChangeArea = components['schemas']['ChangeArea'];
+export type SchemaChangeCountsRead = components['schemas']['ChangeCountsRead'];
+export type SchemaChangeLowConfidenceRead = components['schemas']['ChangeLowConfidenceRead'];
+export type SchemaChangeMapRead = components['schemas']['ChangeMapRead'];
+export type SchemaChangeUncertaintyRead = components['schemas']['ChangeUncertaintyRead'];
 export type SchemaChartOutput = components['schemas']['ChartOutput'];
 export type SchemaChartSeries = components['schemas']['ChartSeries'];
 export type SchemaCheckTargetCreate = components['schemas']['CheckTargetCreate'];
@@ -23123,6 +23328,67 @@ export interface operations {
                 };
             };
             /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    site_change_api_v1_sites__site_id__change_get: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+            };
+            header?: never;
+            path: {
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangeMapRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such site, or no such epoch of it. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description `epoch-not-published`: an epoch is rejected or superseded; `surface-not-measured`: an epoch's current revision has no height surface; `confidence-not-measured`: or no confidence map (its uncertainty is unknown); `frames-differ`: a surface is above another origin than the site frame's; `no-site-frame`; `surface-unreadable` / `confidence-unreadable`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description `from` and `to` are the same epoch. */
             422: {
                 headers: {
                     [name: string]: unknown;

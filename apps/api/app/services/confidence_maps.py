@@ -121,45 +121,48 @@ def storage_key(storage: ObjectStorage, url: str) -> str | None:
     return key
 
 
+#: What a map's grid is called in an answer, and its code when it cannot be read.
+_NOUNS = {"confidence": "confidence grid", "surface": "height surface"}
+
+
 def descriptor_sha256(descriptor: Mapping[str, Any]) -> str:
     """The sha256 of the whole descriptor, canonical JSON: it holds the planes' own sha256
-    and everything that says how to read them (levels, windows, channels)."""
+    and everything that says how to read them (levels, windows, channels, kind)."""
     canonical = json.dumps(descriptor, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def load_grid(storage: ObjectStorage, row: EpochMap) -> cell_grid.Grid:
-    """The decoded grid of `row`, from the cache or the bucket; a 409 `confidence-unreadable`
-    when it is not in this deployment's bucket, is missing, too large or damaged."""
+    """The decoded grid of `row`, from the cache or the bucket; a 409 `<kind>-unreadable`
+    (`confidence-unreadable`, `surface-unreadable`) when it is not in this deployment's
+    bucket, is missing, too large or damaged."""
     cache_key = (row.url, descriptor_sha256(row.descriptor))
     cached = GRIDS.get(cache_key)
     if cached is not None:
         return cached
+    kind = row.kind or str(row.descriptor.get("kind") or "confidence")
+    noun = _NOUNS.get(kind, f"{kind} grid")
+    code = UNREADABLE if kind == "confidence" else f"{kind}-unreadable"
     key = storage_key(storage, row.url)
     if key is None:
-        raise ConflictError(
-            f"the confidence grid {row.url} is not in this deployment's bucket", code=UNREADABLE
-        )
+        raise ConflictError(f"the {noun} {row.url} is not in this deployment's bucket", code=code)
     head = storage.head_object(key)
     if head is None:
-        raise ConflictError(f"the confidence grid {row.url} is missing", code=UNREADABLE)
+        raise ConflictError(f"the {noun} {row.url} is missing", code=code)
     if head.size > MAX_GRID_BYTES:
         raise ConflictError(
-            f"the confidence grid {row.url} is {head.size} bytes, over {MAX_GRID_BYTES}",
-            code=UNREADABLE,
+            f"the {noun} {row.url} is {head.size} bytes, over {MAX_GRID_BYTES}", code=code
         )
     data, size = storage.get_object_tail(key, MAX_GRID_BYTES + 1)
     if size > MAX_GRID_BYTES:
-        raise ConflictError(
-            f"the confidence grid {row.url} grew past {MAX_GRID_BYTES} bytes", code=UNREADABLE
-        )
+        raise ConflictError(f"the {noun} {row.url} grew past {MAX_GRID_BYTES} bytes", code=code)
     try:
         grid = cell_grid.decode(row.descriptor, data)
     except cell_grid.CellGridError as error:
-        log.warning("confidence: %s is unreadable: %s", row.url, error)
-        raise ConflictError(
-            f"the confidence grid {row.url} cannot be read: {error}", code=UNREADABLE
-        ) from error
+        log.warning("%s: %s is unreadable: %s", kind, row.url, error)
+        raise ConflictError(f"the {noun} {row.url} cannot be read: {error}", code=code) from error
+    if grid.kind != kind:
+        raise ConflictError(f"the {noun} {row.url} is a {grid.kind} grid", code=code)
     GRIDS.put(cache_key, grid)
     return grid
 

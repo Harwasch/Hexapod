@@ -46,6 +46,9 @@ export type WeakArea = Schemas["WeakArea"];
 export type FillTargets = Schemas["FillTargetsRead"];
 /** An epoch's height surface, summarised (ADR 0018); null on an epoch is "not measured". */
 export type EpochSurface = Schemas["EpochSurfaceRead"];
+/** The change between two dates (`change-v1`): derived from height surfaces, never observed. */
+export type ChangeMap = Schemas["ChangeMapRead"];
+export type ChangeArea = Schemas["ChangeArea"];
 export type CheckTarget = Schemas["CheckTargetRead"];
 export type CheckTargetRole = Schemas["CheckTargetRole"];
 export type EpochStatus = Schemas["EpochStatus"];
