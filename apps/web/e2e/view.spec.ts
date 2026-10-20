@@ -177,6 +177,10 @@ test("a site with two dates opens on the latest", async ({ page }) => {
   await page.goto(`/view.html#${SITE}`);
   await expect(page.locator("#viewer-status")).toContainText("Drag to turn", { timeout: 30_000 });
   await expect(page.locator("#scan-date")).toContainText("Jun 1, 2026");
+  // Only the latest is shown here, and the page says so, with the way to the others.
+  const dates = page.locator("#scan-dates");
+  await expect(dates).toHaveText("Latest of 2 dates · the globe shows the others");
+  await expect(dates).toHaveAttribute("href", "/");
   expect(requested).toContain(`${TILESET}?epoch=2`);
   expect(requested).not.toContain(TILESET);
   expect(errors).toEqual([]);
