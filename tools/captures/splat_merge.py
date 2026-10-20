@@ -84,12 +84,17 @@ class Moments:
 
     @staticmethod
     def concat(parts: list[Moments]) -> Moments:
-        return Moments(
-            *(np.concatenate([getattr(part, name) for part in parts]) for name in MOMENT_FIELDS)
-        )
+        """The rows of `parts`, one after another, field by field."""
+        if not parts:
+            raise ValueError("Moments.concat needs at least one part")
+        stacked = [
+            np.concatenate([getattr(part, field) for part in parts]) for field in MOMENT_FIELDS
+        ]
+        return Moments(*stacked)
 
     def take(self, index: np.ndarray) -> Moments:
-        return Moments(*(getattr(self, name)[index] for name in MOMENT_FIELDS))
+        """The rows `index` selects (integer positions or a boolean mask), field by field."""
+        return Moments(*(getattr(self, field)[index] for field in MOMENT_FIELDS))
 
 
 @dataclass
@@ -231,62 +236,64 @@ def leaf_moments(
 
 def _rows(values: np.ndarray, n: int) -> np.ndarray:
     """`values` as n rows (an empty input keeps its column count)."""
-    columns = values.shape[-1] if values.ndim == 2 else (values.size // n if n else 0)
-    return values.reshape(n, columns)
+    array = np.asarray(values)
+    if n == 0:
+        # reshape(0, -1) is ambiguous, so the width comes from the input when it has one
+        return array.reshape(0, array.shape[-1] if array.ndim >= 2 else 0)
+    return array.reshape(n, -1)
+
+
+#: Index pairs (a, b) of the six stored covariance entries, in `Moments.cov` column order.
+_COV_PAIRS = ((0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2))
 
 
 def merge_cells(m: Moments) -> Moments:
     """One row per distinct key (keys ascending), each its members merged. `m.key` must be
     non-decreasing (equal keys contiguous)."""
-    if len(m) == 0:
+    rows = len(m)
+    if rows == 0:
         return m
-    key = m.key
-    starts = np.flatnonzero(np.concatenate([[True], key[1:] != key[:-1]]))
-    run = np.cumsum(np.concatenate([[False], key[1:] != key[:-1]]))  # each row's cell
-    w = m.weight
-    total = np.add.reduceat(w, starts)
-    cells = starts.size
+    # A cell is a run of equal keys; `starts` holds each run's first row and `cell` maps
+    # every row to its run, so all sums below are run-wise reductions (np.add.reduceat).
+    new_run = np.ones(rows, dtype=bool)
+    new_run[1:] = m.key[1:] != m.key[:-1]
+    starts = np.flatnonzero(new_run)
+    cell = np.cumsum(new_run) - 1
+    total = np.add.reduceat(m.weight, starts)
+    # Each member's share of its cell's weight: w_i / W, exactly 1.0 for a lone member.
+    share = (m.weight / total[cell])[:, None]
 
-    # Column by column, so no temporary is wider than one (n,) column: a leaf tile is up to
-    # `TILE_GAUSSIANS` rows, and the packer's memory must not grow with what it merges.
-    def mean_of(values: np.ndarray) -> np.ndarray:
-        out = np.empty((cells, values.shape[1]), dtype=np.float64)
-        for column in range(values.shape[1]):
-            out[:, column] = np.add.reduceat(w * values[:, column], starts) / total
-        return out
+    def weighted_mean(values: np.ndarray) -> np.ndarray:
+        return np.add.reduceat(values * share, starts, axis=0)
 
-    mean = mean_of(m.mean)
-    # Against the cell's own mean: the second pass.
-    d = [m.mean[:, axis] - mean[run, axis] for axis in range(3)]
-    cov = np.empty((cells, 6), dtype=np.float64)
-    for column, (i, j) in enumerate(((0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2))):
-        cov[:, column] = np.add.reduceat(w * (m.cov[:, column] + d[i] * d[j]), starts) / total
-    del d
-    colour = mean_of(m.colour)
-    sh = mean_of(m.sh)
-    # A cell of one member is that member: copied, not divided back out of w * x / w, so a
-    # lone gaussian merges to itself bit for bit.
-    alone = np.diff(np.append(starts, len(m))) == 1
-    if alone.any():
-        rows = starts[alone]
-        mean[alone], cov[alone], colour[alone] = m.mean[rows], m.cov[rows], m.colour[rows]
-        sh[alone] = m.sh[rows]
-    return Moments(
-        key=key[starts].astype(np.int64),
-        weight=total,
-        mean=mean,
-        cov=cov,
-        colour=colour,
-        sh=sh,
-    )
+    centre = weighted_mean(m.mean)
+    # Law of total covariance, second pass: deviations from the cell's own centre.
+    dev = m.mean - centre[cell]
+    scatter = np.stack([dev[:, a] * dev[:, b] for a, b in _COV_PAIRS], axis=1)
+    cov = weighted_mean(m.cov + scatter)
+    colour = weighted_mean(m.colour)
+    if m.sh.shape[1]:
+        sh = weighted_mean(m.sh)
+    else:
+        sh = np.zeros((len(starts), 0), dtype=np.float64)
+    merged = Moments(m.key[starts], total, centre, cov, colour, sh)
+    # A cell of one member is that member, bit for bit (adding a zero scatter would turn a
+    # stored -0.0 into +0.0), so lone rows are copied rather than recomputed.
+    lone = np.flatnonzero(np.diff(np.append(starts, rows)) == 1)
+    if len(lone):
+        source = starts[lone]
+        for field in MOMENT_FIELDS:
+            getattr(merged, field)[lone] = getattr(m, field)[source]
+    return merged
 
 
 def coarsen(m: Moments, levels: int) -> Moments:
     """The cells `levels` octree levels up (each level an octant, 3 bits of key), merged."""
     if levels <= 0:
         return m
-    shifted = Moments(m.key >> (3 * levels), m.weight, m.mean, m.cov, m.colour, m.sh)
-    return merge_cells(shifted)
+    # Dropping 3 bits per level maps each cell to its ancestor and keeps the keys sorted.
+    parent_keys = m.key >> np.int64(3 * levels)
+    return merge_cells(Moments(parent_keys, m.weight, m.mean, m.cov, m.colour, m.sh))
 
 
 def to_splats(m: Moments, *, log_scale_range: tuple[float, float]) -> MergedSplats:

@@ -272,3 +272,30 @@ def test_opacity_stays_finite_and_in_range() -> None:
 def test_an_empty_cell_list_merges_to_itself() -> None:
     m = moments(gaussians(0, 1), np.zeros(0, np.int64))
     assert len(sm.merge_cells(m)) == 0
+
+
+def test_a_lone_member_cell_is_that_member_bit_for_bit() -> None:
+    # Cells 3 and 9 have one member each, cell 5 has three; a -0.0 covariance entry must
+    # survive (adding a zero scatter would make it +0.0).
+    g = gaussians(5, 13, sh=2)
+    m = moments(g, np.array([3, 5, 5, 5, 9], np.int64))
+    m.cov[0, 1] = -0.0
+    merged = sm.merge_cells(m)
+    assert merged.key.tolist() == [3, 5, 9]
+    for field in sm.MOMENT_FIELDS:
+        for row, source in ((0, 0), (2, 4)):
+            assert getattr(merged, field)[row].tobytes() == getattr(m, field)[source].tobytes()
+    assert np.signbit(merged.cov[0, 1])
+
+
+def test_concat_and_take_are_field_wise() -> None:
+    a = moments(gaussians(3, 14, sh=1), np.arange(3, dtype=np.int64))
+    b = moments(gaussians(2, 15, sh=1), np.arange(3, 5, dtype=np.int64))
+    both = sm.Moments.concat([a, b])
+    assert len(both) == 5
+    picked = both.take(np.array([4, 0]))
+    for field in sm.MOMENT_FIELDS:
+        whole = np.concatenate([getattr(a, field), getattr(b, field)])
+        assert np.array_equal(getattr(both, field), whole)
+        assert np.array_equal(getattr(picked, field), whole[[4, 0]])
+    assert len(both.take(both.key > 2)) == 2
