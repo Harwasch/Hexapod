@@ -19,6 +19,9 @@ weak areas use (`confidence_maps.load_grid`), and measures the change between th
   verdict, as far as it may claim one -- `epochs.claimed_verdict` -- is `unaligned`, or
   none was recorded): placed by its georeference alone, its heights have no place in the
   frame another epoch's could be compared with (review B5a's ruling);
+* 409 `not-metric` when either surface's heights are not metres (its summary's `metric` is
+  not true: a run whose scale was never resolved, COLMAP's own units): no change in metres
+  can be read from it, and none in any other unit is offered (review B5a's ruling);
 * 409 `frames-differ` when a surface's heights are above another origin height than the
   site frame's (its `vertical.originHeightM`; to the millimetre, a tenth of the heights'
   own unit) -- the two would differ by the offset everywhere;
@@ -70,6 +73,7 @@ from app.storage import ObjectStorage
 
 NOT_PUBLISHED = "epoch-not-published"
 UNALIGNED = "epoch-unaligned"
+NOT_METRIC = "not-metric"
 SURFACE_NOT_MEASURED = "surface-not-measured"
 SURFACE_UNREADABLE = "surface-unreadable"
 FRAMES_DIFFER = "frames-differ"
@@ -180,6 +184,17 @@ def _placement(epoch: Epoch, graded: EpochMap) -> _Placement:
     return _Placement(verdict, _uncertainty(epoch, graded), claim_m)
 
 
+def _metric(epoch: Epoch, surface: EpochMap) -> None:
+    summary = surface.descriptor.get("summary") or {}
+    metric = summary.get("metric") if isinstance(summary, dict) else None
+    if metric is not True:
+        raise ConflictError(
+            f"epoch {epoch.id}'s height surface is not in metres (summary.metric {metric!r}: "
+            "its run's scale was never resolved), so no change in metres can be read from it",
+            code=NOT_METRIC,
+        )
+
+
 def _same_frame(epoch: Epoch, surface: EpochMap, frame: SiteFrame) -> None:
     origin = (surface.descriptor.get("vertical") or {}).get("originHeightM")
     if (
@@ -236,6 +251,7 @@ def change(
     asset_a, surface_a, graded_a = _maps(db, before)
     asset_b, surface_b, graded_b = _maps(db, after)
     for epoch, surface in ((before, surface_a), (after, surface_b)):
+        _metric(epoch, surface)
         _same_frame(epoch, surface, frame)
     placed_a, placed_b = _placement(before, graded_a), _placement(after, graded_b)
     ua, ub = placed_a.u_m, placed_b.u_m

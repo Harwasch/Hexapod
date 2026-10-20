@@ -99,6 +99,7 @@ def surveyed(
     uncertainty_m: float | None = None,
     origin_height_m: float = HEIGHT,
     aligned: Any = "survey",
+    metric: Any = True,
 ) -> dict[str, Any]:
     """The epoch's registration.json: its grids, and an alignment (`aligned`: a verdict,
     surveyed by default; an alignment dict; or None for a run that recorded none)."""
@@ -110,6 +111,7 @@ def surveyed(
         }
     if surface:
         out["surface"] = surface_descriptor(epoch, origin_height_m)
+        out["surface"]["summary"]["metric"] = metric
     if isinstance(aligned, str):
         out["alignment"] = alignment(aligned, CLAIM_M[epoch])
     elif aligned is not None:
@@ -287,6 +289,9 @@ def test_an_epoch_never_aligned_to_the_site_is_refused_not_compared(
         ({"surface": False}, "surface-not-measured"),
         ({"confidence": False}, "confidence-not-measured"),
         ({"origin_height_m": HEIGHT - 2.0}, "frames-differ"),
+        # Review B5a's ruling: a run whose scale was never resolved has no metres.
+        ({"metric": False}, "not-metric"),
+        ({"metric": None}, "not-metric"),
     ],
 )
 def test_what_cannot_be_compared_is_refused_with_its_code(
