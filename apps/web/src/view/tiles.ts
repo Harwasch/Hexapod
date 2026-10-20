@@ -75,8 +75,11 @@ export interface LoadStep {
  * close look sharpen instead of stopping at the overview's detail. 4x is the ratio Spark
  * itself ships on iOS (a 6.3M-splat page pool against a 1.5M draw budget,
  * SparkRenderer.ts `maxPagedSplats` / `defaultSplatTarget`); Standard (400k) then downloads up
- * to 1.6M gaussians, about 23 MB of SPZ, and holds ~36 MB of Spark's 16-byte splats with
- * their LoD tree.
+ * to 1.6M gaussians, about 23 MB of SPZ, and holds ~72 MB of splats with their LoD tree. That
+ * is twice what Spark's 16-byte splats took: view.html keeps 32-byte splats with 32-bit
+ * centres (`extSplats`, sparkStream.ts; `accumExtSplats` on its renderer), which a far tile's
+ * kilometre-scale positions need (docs/DECISIONS/0011-splat-tile-origins.md). The factor is
+ * kept at 4, not lowered to hold the old ceiling: neither figure has been measured on a phone.
  */
 export const LOAD_FACTOR = 4;
 
