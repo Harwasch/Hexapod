@@ -569,6 +569,50 @@ def test_a_far_sites_repack_keeps_what_is_bound_to_its_site_frame_positions(
     assert "instances" not in {flag["kind"] for flag in moved.sidecar_flags}
 
 
+def test_a_tileset_whose_tile_frames_cannot_be_read_carries_no_binding(
+    db: Session, buckets: Publisher
+) -> None:
+    """The same far tiles, but one child transform turns its tile as well as moving it. No
+    reader composes rotations (`positions.tile_offsets` refuses it), so no tile's site-frame
+    position is known and nothing bound to positions is carried: dropped and flagged, and
+    the republish itself still goes through."""
+    far = TREE_LOD.parent / "synthetic-far"
+    expected = json.loads((far / "source" / "expected.json").read_text())
+    document, tiles = fixture_scan(far / "splat")
+    a_tree_run(buckets, tiles, document)
+    capture = Capture(slug="far-turned", name="Far turned", kind=CaptureKind.GAUSSIAN_SPLAT)
+    db.add(capture)
+    db.commit()
+    republish(db, buckets, capture)
+    bound = {
+        "instances.json": json.dumps(
+            {
+                "tiles": {
+                    row["checksum"]: [1, row["gaussians"]] for row in expected["tiles"].values()
+                }
+            }
+        ).encode(),
+        "instances.emb": b"\0\1",
+    }
+    attach(db, buckets, the_splat(db, capture), bound, extras={"instances": INSTANCES_EXTRAS})
+    turned = json.loads(json.dumps(document))
+    child = next(c for c in turned["root"]["children"] if c.get("transform"))
+    child["transform"][0:2] = [0.0, 1.0]
+    child["transform"][4:6] = [-1.0, 0.0]
+    with pytest.raises(positions.TileFormatError, match="translation"):
+        positions.tile_offsets(turned)
+    a_tree_run(buckets, tiles, turned)
+
+    republish(db, buckets, capture)
+
+    moved = the_splat(db, capture)
+    files = files_under(buckets.public, directory_of(moved.source["url"]))
+    assert "instances.json" not in files
+    assert "instances" not in tileset_at(buckets.public, moved.source["url"])["root"]["extras"]
+    flags = {flag["kind"]: flag for flag in moved.sidecar_flags}
+    assert flags["instances"]["action"] == "Objects need re-segmenting"
+
+
 def test_moved_positions_drop_what_was_bound_to_them_and_flag_it(
     db: Session, buckets: Publisher, monkeypatch: pytest.MonkeyPatch
 ) -> None:
