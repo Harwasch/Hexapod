@@ -80,9 +80,11 @@ WIND_CALM : wind`, the reduced-motion rule extended), which stills the Living Su
 8. **Cost.** The switch and the chip live in the views control's chunk, loaded on demand (the
    chip from the same slot, so a site without a splat scan loads it only while As captured is
    on). The globe's entry grows by the reads in the scene and the slot: index entry 194,589 B →
-   194,969 B gzip (+380 B; budget 197,000 B), of which the simulated fleet and the rehearsal's
-   ghosts are about 100 B. The store is a chunk of its own the page preloads
-   (`asCaptured-*.js`, 453 B gzip), as the settings and view-rule stores are.
+   195,112 B gzip (+523 B; budget 197,000 B). Of that, hiding what simulated machines did is
+   about 240 B: the rehearsal's ghosts and the fleet's markers and tracks (about 100 B), then,
+   after review, the rehearsal's progress and the fleet's zone progress (143 B). The store is a
+   chunk of its own the page preloads (`asCaptured-*.js`, 453 B gzip), as the settings and
+   view-rule stores are.
 
 ### Consequences
 
