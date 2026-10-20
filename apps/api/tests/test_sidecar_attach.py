@@ -1221,3 +1221,29 @@ def test_a_fill_gated_for_another_epoch_is_refused(db: Session, buckets: Publish
             staging=buckets.private,
             public=buckets.public,
         )
+
+
+def _fill_variant(evidence: dict[str, Any]) -> tuple[dict[str, bytes], dict[str, Any]]:
+    files = {f"variants/fill/hedge/{k.rsplit('/', 1)[1]}": v for k, v in FILL_FILES.items()}
+    entry = {
+        "name": "hedge",
+        "label": "Hedge",
+        "inferredLayers": [{"uri": "variants/fill/hedge/tileset.json", "evidence": evidence}],
+    }
+    return files, {"variants": {"fill": [entry]}}
+
+
+def test_a_fill_variant_is_held_to_the_same_gate(
+    db: Session, buckets: Publisher, client: TestClient
+) -> None:
+    """A bake-off's fill variant is an inferred layer the viewer can show too: a new or
+    changed one is refused unless gated like any fill."""
+    a_measured_live_scan(buckets)
+    asset = an_asset(db, LIVE_URL)
+    files, extras = _fill_variant(UNGATED_EVIDENCE)
+    response = attach(client, asset, stage(buckets.private, asset.id, files), extras=extras)
+    assert response.status_code == 422, response.text
+    assert "no rescanGate" in response.json()["detail"]
+    files, extras = _fill_variant(FILL_EXTRAS[0]["evidence"])
+    response = attach(client, asset, stage(buckets.private, asset.id, files, "ok"), extras=extras)
+    assert response.status_code == 200, response.text

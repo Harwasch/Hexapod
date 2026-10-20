@@ -541,9 +541,22 @@ def _replaced(rel: str, units: set[str]) -> bool:
 def _check_fills(patch: dict[str, Any], current: dict[str, Any], asset: Asset) -> None:
     """The fill gate's second barrier (ADR 0016 § Fill; the first is publish-fill.yml): an
     inferred layer is attached only when gated against the confidence grid the asset's
-    tiles carry now, for its epoch. A 422 that says why, before anything is copied."""
-    layers = patch.get("inferredLayers")
-    if not isinstance(layers, list):
+    tiles carry now, for its epoch. A 422 that says why, before anything is copied.
+
+    That holds for every inferred layer the viewer can show: `inferredLayers`, and the
+    layers of a bake-off's fill variant (`extras.variants.fill`, apps/web lib/variants.ts)
+    that the request adds or changes -- the client sends the whole `variants` value, so
+    the entries it already had are not judged again."""
+    layers = list(patch.get("inferredLayers") or []) if "inferredLayers" in patch else []
+    variants = patch.get("variants")
+    if isinstance(variants, dict) and isinstance(variants.get("fill"), list):
+        had = (current.get("variants") or {}).get("fill") or []
+        for variant in variants["fill"]:
+            if variant in had or not isinstance(variant, dict):
+                continue
+            listed = variant.get("inferredLayers")
+            layers += listed if isinstance(listed, list) else [None]
+    if not layers:
         return
     sha = sidecars.grid_sha256(current)
     epoch = str(asset.epoch_id) if asset.epoch_id is not None else None
