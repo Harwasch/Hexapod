@@ -193,7 +193,7 @@ tiles, a cell off the lattice, missing summary keys) is logged and not recorded:
 not measured. `confidence.bin` is a sidecar of kind `confidence` (bound to the tiles, not
 attachable).
 
-- `POST /api/v1/sites/{id}/epochs/{epoch}/weak-areas` `{budgetM2?, focus?: [lon, lat], maxAreas
+- `POST /api/v1/sites/{id}/epochs/{epoch}/weak-areas` (write token) `{budgetM2?, focus?: [lon, lat], maxAreas
 1..8 = 3}` → `{epochId, assetId, policy, cellM, level, weakCells, totalCells,
 truncatedByBudget, heuristic, areas: [{footprint, areaM2, cells, meanScore, reasons, reliefM,
 diameterM, pattern (nadir · oblique · orbit), targetGsdM, gimbalPitchDeg, hint}]}`. 409

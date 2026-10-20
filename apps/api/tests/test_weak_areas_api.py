@@ -292,3 +292,27 @@ def test_a_rejected_epoch_shows_nothing_and_says_so(
     assert response.status_code == 409 and response.json()["code"] == "confidence-not-measured"
     assert "shows no tiles (rejected)" in response.json()["detail"]
 
+
+def test_weak_areas_take_the_write_token_and_fill_targets_stay_open(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Every POST is gated (test_write_token); the fill workflow reads fill targets open."""
+    from app.config import Settings
+
+    capture = _capture(db)
+    register_run(db, storage, tmp_path, capture, measured("e1"), grid=blob("e1"))
+    epoch = _epoch(db, capture)
+    app = create_app(Settings(api_write_token="a4-token"))
+
+    def override_db() -> Iterator[Session]:
+        yield db
+
+    app.dependency_overrides[_db] = override_db
+    app.dependency_overrides[get_public_storage] = lambda: storage
+    with TestClient(app) as client:
+        path = f"/api/v1/sites/{epoch.site_id}/epochs/{epoch.id}/weak-areas"
+        assert client.post(path, json={}).status_code == 401
+        allowed = client.post(path, json={}, headers={"Authorization": "Bearer a4-token"})
+        assert allowed.status_code == 200
+        # Open, and a 409 because nothing has been re-scanned: not a 401.
+        assert client.get(f"/api/v1/sites/{epoch.site_id}/fill-targets").status_code == 409

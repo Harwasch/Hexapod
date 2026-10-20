@@ -2442,8 +2442,10 @@ export interface paths {
          * An epoch's weak areas as re-scan zones
          * @description The epoch's weak cells (weak-v1, ADR 0016) merged into at most `maxAreas` zones on
          *     the globe, largest first, within `budgetM2`, each with a pattern to fly it again and a
-         *     hint. Computes and stores nothing, so it is open like every read of a site; a POST for
-         *     its body. The patterns are UX heuristics, labelled so (`heuristic`).
+         *     hint. It stores nothing, but it is the first step of planning a flight -- the console's
+         *     re-scan flow, which then asks for a plan draft -- so it takes the write token like every
+         *     POST (and a per-client bucket: it outlines up to 2^22 cells). The patterns are UX
+         *     heuristics, labelled so (`heuristic`).
          */
         post: operations["epoch_weak_areas_api_v1_sites__site_id__epochs__epoch_id__weak_areas_post"];
         delete?: never;

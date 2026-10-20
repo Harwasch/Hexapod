@@ -236,9 +236,12 @@ maxAreas 1..8}`. The finest level's weak cells (weak-v1, where the summary is st
    HEAD refusing anything over 32 MB, a bounded ranged GET, inflated no further than the
    descriptor declares (≤ 64 MB) and checked against its sha256. Decoded grids sit in a
    per-process LRU bounded by bytes (96 MB), keyed by URL **and** sha256 so a rewritten grid is
-   never a stale hit. Both routes compute and store nothing, so they are open like every read
-   of a site, but they read and outline up to 2^22 cells: a per-client token bucket (20, then
-   60 a minute) like the other routes whose cost is the attack.
+   never a stale hit. Neither route stores anything. Fill targets is a GET, open like every
+   read of a site (the fill workflow fetches it); weak areas is a POST, and every POST takes the
+   write token (`test_no_mutating_route_is_left_ungated`) — it is the first step of planning a
+   flight, which is gated anyway. Both read and outline up to 2^22 cells, so both also spend a
+   per-client token bucket (20, then 60 a minute) like the other routes whose cost is the
+   attack.
 
 ### Why not fog-v2
 

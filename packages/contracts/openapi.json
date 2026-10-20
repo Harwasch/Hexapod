@@ -41821,7 +41821,7 @@
     },
     "/api/v1/sites/{site_id}/epochs/{epoch_id}/weak-areas": {
       "post": {
-        "description": "The epoch's weak cells (weak-v1, ADR 0016) merged into at most `maxAreas` zones on\nthe globe, largest first, within `budgetM2`, each with a pattern to fly it again and a\nhint. Computes and stores nothing, so it is open like every read of a site; a POST for\nits body. The patterns are UX heuristics, labelled so (`heuristic`).",
+        "description": "The epoch's weak cells (weak-v1, ADR 0016) merged into at most `maxAreas` zones on\nthe globe, largest first, within `budgetM2`, each with a pattern to fly it again and a\nhint. It stores nothing, but it is the first step of planning a flight -- the console's\nre-scan flow, which then asks for a plan draft -- so it takes the write token like every\nPOST (and a per-client bucket: it outlines up to 2^22 cells). The patterns are UX\nheuristics, labelled so (`heuristic`).",
         "operationId": "epoch_weak_areas_api_v1_sites__site_id__epochs__epoch_id__weak_areas_post",
         "parameters": [
           {
@@ -41907,6 +41907,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "An epoch's weak areas as re-scan zones",
         "tags": [
           "sites"

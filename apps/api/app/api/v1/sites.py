@@ -95,7 +95,7 @@ def list_site_epochs(site_id: uuid.UUID, db: DbSession) -> list[EpochRead]:
     "/{site_id}/epochs/{epoch_id}/weak-areas",
     response_model=WeakAreasRead,
     summary="An epoch's weak areas as re-scan zones",
-    dependencies=[LimitCellMap],
+    dependencies=[RequireWriteToken, LimitCellMap],
     responses={
         404: {"model": Problem, "description": "No such site, or no such epoch of it."},
         409: {
@@ -115,8 +115,10 @@ def epoch_weak_areas(
 ) -> WeakAreasRead:
     """The epoch's weak cells (weak-v1, ADR 0016) merged into at most `maxAreas` zones on
     the globe, largest first, within `budgetM2`, each with a pattern to fly it again and a
-    hint. Computes and stores nothing, so it is open like every read of a site; a POST for
-    its body. The patterns are UX heuristics, labelled so (`heuristic`)."""
+    hint. It stores nothing, but it is the first step of planning a flight -- the console's
+    re-scan flow, which then asks for a plan draft -- so it takes the write token like every
+    POST (and a per-client bucket: it outlines up to 2^22 cells). The patterns are UX
+    heuristics, labelled so (`heuristic`)."""
     return confidence_maps.weak_areas(db, storage, site_id, epoch_id, payload)
 
 
