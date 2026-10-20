@@ -68,12 +68,23 @@ export function laterDates(
   return { shown, later };
 }
 
-/** Whether two root transforms are one frame (rotation to 1e-9, translation to a millimetre). */
-export function sameFrame(a: ArrayLike<number> | undefined, b: ArrayLike<number> | undefined) {
-  if (!a || !b || a.length !== 16 || b.length !== 16) return a === b;
+const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
+/**
+ * Whether two root transforms are one frame (rotation to 1e-9, translation to a millimetre). A
+ * root without one is the identity, on either side: tileset.json omits it, CesiumJS's root tile
+ * reports the identity.
+ */
+export function sameFrame(
+  a: ArrayLike<number> | undefined,
+  b: ArrayLike<number> | undefined,
+): boolean {
+  const x = a ?? IDENTITY;
+  const y = b ?? IDENTITY;
+  if (x.length !== 16 || y.length !== 16) return false;
   for (let i = 0; i < 16; i += 1) {
     const tolerance = i >= 12 && i <= 14 ? 1e-3 : 1e-9;
-    if (Math.abs((a[i] ?? 0) - (b[i] ?? 0)) > tolerance) return false;
+    if (Math.abs((x[i] ?? 0) - (y[i] ?? 0)) > tolerance) return false;
   }
   return true;
 }

@@ -136,6 +136,14 @@ describe("which later dates are compared", () => {
     expect(sameFrame(undefined, undefined)).toBe(true);
     expect(sameFrame(ROOT, undefined)).toBe(false);
   });
+
+  it("reads a root without a transform as the identity, as CesiumJS does", () => {
+    // CesiumJS gives a root tile without one the identity; tileset.json simply omits it.
+    const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+    expect(sameFrame(identity, undefined)).toBe(true);
+    expect(sameFrame(undefined, identity)).toBe(true);
+    expect(sameFrame(undefined, ROOT)).toBe(false);
+  });
 });
 
 describe("the Data age texture", () => {
