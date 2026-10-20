@@ -16,6 +16,7 @@ import { GlassTooltipProvider } from "@twin/ui";
 import { queryKeys } from "@/api/queries";
 import { ViewsSlot } from "@/features/views/ViewsSlot";
 import { VIEW_RULE_ENDED, VIEW_RULE_TEXT } from "@/features/views/ruleText";
+import { useAsCaptured } from "@/state/asCaptured";
 import { useLiving } from "@/state/living";
 import { useSettings, type SplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
@@ -40,7 +41,7 @@ function show(renderer: SplatRenderer = "cesium", site: Site = twoEpochSite()) {
   );
 }
 
-const ruleOn = (rule: "latest" | "data-age" = "latest") =>
+const ruleOn = (rule: "latest" | "data-age" | "ground-truth" = "latest") =>
   act(() => useViewRule.setState({ active: { siteId: SITE_ID, rule }, ended: null }));
 
 beforeEach(() => {
@@ -55,6 +56,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useAsCaptured.getState().set(false);
   useViewMode.setState({ mode: "photo", cells: {} });
   useViewRule.setState({ active: null, ended: null, legend: null });
   useLiving.getState().reset();
@@ -187,6 +189,43 @@ describe("Per cell", () => {
     expect(screen.getByTestId("rule-legend-left-out")).toHaveTextContent(
       "Jun 1, 2026 is not drawn yet: still loading",
     );
+  });
+
+  it("says a rule is drawn as Ground truth while As captured is on, and keys it so", async () => {
+    show();
+    await screen.findByTestId("views");
+    ruleOn("data-age");
+    act(() =>
+      useViewRule.setState({
+        legend: {
+          cellM: 1,
+          dates: [{ epochId: E1.id, coverage: "grid", cells: 120, ageBucket: 3 }],
+          inferredCells: 6,
+          left: 0,
+          leftOut: [],
+        },
+      }),
+    );
+    const row = () => screen.getAllByTestId("rule-legend-date")[0];
+    expect(row()).toHaveTextContent("Mar 1, 2026: 120 cells ·");
+    expect(screen.getByTestId("rule-legend-inferred")).toBeInTheDocument();
+    expect(screen.queryByTestId("views-rule-as-captured")).toBeNull();
+    act(() => useAsCaptured.getState().set(true));
+    expect(screen.getByTestId("views-rule-as-captured")).toHaveTextContent(
+      "Drawn as Ground truth while As captured is on",
+    );
+    // The key is Ground truth's: no age per date, no inferred cells.
+    expect(row()).toHaveTextContent(/^Mar 1, 2026: 120 cells$/);
+    expect(screen.queryByTestId("rule-legend-inferred")).toBeNull();
+    // The rule chosen is still the viewer's, and comes back with the key.
+    expect(screen.getByLabelText(VIEW_RULE_TEXT.label)).toHaveValue("data-age");
+    act(() => useAsCaptured.getState().set(false));
+    expect(screen.queryByTestId("views-rule-as-captured")).toBeNull();
+    expect(row()).toHaveTextContent("Mar 1, 2026: 120 cells ·");
+    // Ground truth chosen needs no note: it is drawn as chosen.
+    ruleOn("ground-truth");
+    act(() => useAsCaptured.getState().set(true));
+    expect(screen.queryByTestId("views-rule-as-captured")).toBeNull();
   });
 
   it("is disabled, and says why, while a Living Survey rig moves the scan", async () => {
