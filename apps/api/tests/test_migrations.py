@@ -991,7 +991,7 @@ def test_an_epoch_map_goes_with_its_asset_and_refuses_a_bad_cell(
         }
         return EpochMap(**values)
 
-    for bad in ({"cell_m": 0.0}, {"kind": "surface"}):
+    for bad in ({"cell_m": 0.0}, {"kind": "elevation"}):
         db.add(a_map(**bad))
         with pytest.raises(IntegrityError):
             db.commit()
@@ -1005,3 +1005,91 @@ def test_an_epoch_map_goes_with_its_asset_and_refuses_a_bad_cell(
     db.execute(text("DELETE FROM assets WHERE id = :id"), {"id": asset.id})
     db.commit()
     assert db.execute(text("SELECT count(*) FROM epoch_maps")).scalar_one() == 0
+
+
+def test_0036_downgrade_deletes_the_surfaces_and_keeps_the_confidence_maps(
+    alembic_config: Config, engine: Engine, db: Session
+) -> None:
+    """A revision with both maps, then down to 0035: its surface row goes first (0035's
+    constraint cannot hold it), its confidence row stays; up again, a surface row is
+    accepted and any other kind is still refused."""
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models import EpochMap
+    from tests.test_epochs import T0, make_asset, make_epoch, make_site
+
+    site = make_site(db, "surfaced")
+    epoch = make_epoch(db, site, 1, observed=T0)
+    asset = make_asset(db, site, epoch, "https://cdn.example.com/s/tileset.json", created=T0)
+    db.commit()
+
+    def a_map(kind: str) -> EpochMap:
+        return EpochMap(
+            epoch_id=epoch.id,
+            asset_id=asset.id,
+            kind=kind,
+            format="hexapod.cellgrid",
+            version=1,
+            url=f"https://cdn.example.com/s/{kind}.bin",
+            cell_m=0.5,
+            level=1,
+            descriptor={},
+            summary={},
+        )
+
+    db.add_all([a_map("confidence"), a_map("surface")])
+    db.commit()
+    epoch_id, asset_id = epoch.id, asset.id
+    db.close()
+
+    command.downgrade(alembic_config, "0035")
+    try:
+        with engine.connect() as connection:
+            kinds = connection.execute(
+                text("SELECT kind FROM epoch_maps WHERE asset_id = :id"), {"id": asset_id}
+            ).all()
+            assert [row[0] for row in kinds] == ["confidence"]
+            with pytest.raises(IntegrityError):
+                connection.execute(
+                    text(
+                        "INSERT INTO epoch_maps (id, epoch_id, asset_id, kind, format, version, "
+                        "url, cell_m, level, descriptor, summary) VALUES (:id, :epoch, :asset, "
+                        "'surface', 'hexapod.cellgrid', 1, 'u', 1.0, 2, '{}', '{}')"
+                    ),
+                    {"id": uuid.uuid4(), "epoch": epoch_id, "asset": asset_id},
+                )
+    finally:
+        command.upgrade(alembic_config, "head")
+    with Session(engine) as session:
+        session.add(
+            EpochMap(
+                epoch_id=epoch_id,
+                asset_id=asset_id,
+                kind="surface",
+                format="hexapod.cellgrid",
+                version=1,
+                url="https://cdn.example.com/s/surface.bin",
+                cell_m=0.5,
+                level=1,
+                descriptor={},
+                summary={},
+            )
+        )
+        session.commit()
+        session.add(
+            EpochMap(
+                epoch_id=epoch_id,
+                asset_id=asset_id,
+                kind="elevation",
+                format="hexapod.cellgrid",
+                version=1,
+                url="https://cdn.example.com/s/x.bin",
+                cell_m=0.5,
+                level=1,
+                descriptor={},
+                summary={},
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
