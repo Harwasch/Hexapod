@@ -836,6 +836,9 @@ def _new_asset(
     )
     asset.epoch_id = epoch.id
     asset.observed_at = epoch.observed_at
+    # The ground this run covered, not the site's boundary (the union of every epoch's):
+    # what the asset is drawn, clipped and counted as knowledge by (`land_knowledge`).
+    asset.footprint = epoch.footprint
     asset.source_kind = AssetSourceKind.OBSERVED.value
     asset.sidecar_flags = [
         sidecars.flag(gone.kind, action=gone.action, reason=gone.reason, job_id=job_id, at=now)
@@ -945,6 +948,9 @@ def _supersede(
         epoch_id=epoch.id,
         source_kind=AssetSourceKind.OBSERVED.value,
         observed_at=epoch.observed_at,
+        # This run's ground (`_replace_run` has just put it on the epoch); the old
+        # revision keeps the footprint its own run had.
+        footprint=epoch.footprint,
     )
     db.add(revision)
     current.valid_to = now
@@ -1129,6 +1135,9 @@ def register(
             # first revision, as the 0032 backfill does for the sites it could read.
             current.epoch_id = epoch.id
             current.observed_at = current.observed_at or epoch.observed_at
+            current.footprint = (
+                current.footprint if current.footprint is not None else epoch.footprint
+            )
     elif url is not None:
         _replace_run(epoch, producing, footprint, quality, now)
     if url is not None and current is not None and url != tileset_url(current):
