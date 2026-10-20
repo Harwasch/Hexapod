@@ -120,4 +120,24 @@ describe("scene selection across a site's dates", () => {
     expect(useSceneSelect.getState().assetId).toBe("e2");
     controller.destroy();
   });
+
+  it("an object of a date no longer drawn is not selected, nor its painted area kept", () => {
+    dates = twoDates();
+    const controller = new SceneSelectController(viewer() as never);
+    controller.setPainting(true);
+    controller.paintStroke(STROKE, "replace");
+    expect(controller.selection()?.assetId).toBe("e1");
+    // Another scan going away changes nothing.
+    controller.forgetScans(["elsewhere"]);
+    expect(controller.selection()?.assetId).toBe("e1");
+    dates.show("e2");
+    controller.forgetScans(["e1"]);
+    // Hide and Show only would act on the hidden date; Use painted area would make its object.
+    expect(controller.selection()).toBeNull();
+    expect(useSceneSelect.getState().paint).toBeNull();
+    expect(controller.usePaintedArea()).toBeNull();
+    // The brush stays out, on the date drawn now.
+    expect(useSceneSelect.getState().mode).toBe("paint");
+    controller.destroy();
+  });
 });
