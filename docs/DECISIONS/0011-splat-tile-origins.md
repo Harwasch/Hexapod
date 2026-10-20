@@ -90,4 +90,13 @@ bits and decode error; the worst is exactly half a quantum, on the 11-bit tiles.
 - **Spark memory.** Part B's 32-bit centres in view.html double Spark's per-splat memory (16 to
   32 bytes); `LOAD_FACTOR` and `MAX_STREAMED` are kept, not re-measured on a phone. The globe's
   Spark renderer keeps its accumulator at 16 bytes (`accumExtSplats` off), as before.
+- **Untested Spark options in view.html and live mode.** No test covers these lines: the
+  `accumExtSplats: true` on both pages' `SparkRenderer`, live mode's `extSplats: true`, and the
+  `extSplats.lodSplats` fallback in live mode's framing. The first two only show as half-float
+  quantisation in what Spark draws, and at the fixture's 3 km that is 2 m steps under 0.4 m
+  splats, which a screenshot cannot tell apart. The fallback only runs for a snapshot above the
+  Detail budget with no cameras. Both pages build these inside their page entry points, and no
+  unit test can load those without a WebGL context. What is tested: view.html's tile
+  `extSplats` default (`sparkStream.test.ts`), and its `drawn()` boxes (`viewFar.spec.ts`),
+  which are read from `extSplats.lodSplats`.
 - **SOG precision** for very large sites is not addressed.
