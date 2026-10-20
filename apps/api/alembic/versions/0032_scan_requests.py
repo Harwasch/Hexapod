@@ -38,7 +38,8 @@ def upgrade() -> None:
         sa.Column("outline_unvalidated", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("raw_outline", postgresql.JSONB(), nullable=True),
     )
-    # Newest first, counted by the day (the daily cap), and pruned by age once retention is set.
+    # Newest first, and counted by the day (the daily cap). Kept indefinitely; the index keeps a
+    # later prune by age cheap, should that change.
     op.create_index("ix_scan_requests_created_at", "scan_requests", ["created_at"])
 
 

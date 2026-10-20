@@ -6,7 +6,9 @@ cap, both before the body is read (app/main.py); a cap on the day's requests acr
 client; a honeypot field; size, precision, time and area bounds on the outline; strict email and
 control-character checks; and one generic answer for every accepted submission, so the route
 tells a prober nothing. `GET` holds names and emails, so it always takes the write token, and
-refuses outright on a server with none configured: the admin console reads it.
+refuses outright on a server with none configured: the admin console reads it. Requests are kept
+indefinitely, with no automatic deletion, until the person who sent one asks for it to be deleted
+(Harrison's decision, 2026-10-20).
 """
 
 from __future__ import annotations
