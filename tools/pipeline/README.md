@@ -849,8 +849,8 @@ fitted in, so every stage that turns the splat turns the bands: `place` (COLMAP'
 into east/north/up: the EXIF similarity or camera-up levelling, and a heading) and Lane
 1's `normalize` (up axis and heading), both through `gaussians.transform`, which now
 applies `harmonics.rotate` -- each band by the rotation's real Wigner D-matrix in the
-trainers' basis, fitted exactly against Inria's `eval_sh` rather than taken from a
-recurrence whose conventions differ in every source. `tests/test_harmonics.py` holds it to
+trainers' basis, fitted exactly against the real SH basis in the trainers' order rather
+than taken from a recurrence whose conventions differ in every source. `tests/test_harmonics.py` holds it to
 the definition for degrees 1, 2 and 3: turn the splat by R and look from R d, and every
 gaussian shows the colour it showed from d (to 2e-6), through `place` and `normalize` as
 well as on arrays; degree 1 is also held to its closed form `P R P^T`, and each band's
