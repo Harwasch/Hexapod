@@ -61,6 +61,7 @@ function inspect(site: Site, epochId: string | null = null) {
     activeSiteId: SITE_ID,
     representation: { [SITE_ID]: "gaussian-splat" },
     epoch: epochId ? { [SITE_ID]: epochId } : {},
+    compareDates: null,
   });
   useSelection.getState().setSelection({
     kind: "site",
@@ -157,6 +158,22 @@ describe("Date shown", () => {
     expect(screen.getByTestId("inspector-epoch-date")).toHaveTextContent(
       "· upload date; capture time not recorded",
     );
+  });
+
+  it("while two dates are compared, describes each by its side of the divider", () => {
+    inspect(twoEpochSite({ assets: [clamped, A2] }));
+    act(() => useSites.getState().setCompareDates(SITE_ID, { left: E1.id, right: E2.id }));
+    expect(screen.queryByTestId("inspector-epoch")).toBeNull();
+    const left = screen.getByTestId("inspector-epoch-left");
+    const right = screen.getByTestId("inspector-epoch-right");
+    expect(left).toHaveTextContent("Left of the divider · Yard");
+    expect(left).toHaveTextContent("Mar 1, 2026");
+    expect(left).toHaveTextContent("Defines the site frame");
+    expect(right).toHaveTextContent("Right of the divider · Yard");
+    expect(right).toHaveTextContent("Jun 1, 2026");
+    expect(right).toHaveTextContent("Phone video");
+    act(() => useSites.getState().setCompareDates(SITE_ID, null));
+    expect(screen.getByTestId("inspector-epoch")).toHaveTextContent("Date shown · Yard");
   });
 
   it("a site without epochs shows no Date shown section", () => {

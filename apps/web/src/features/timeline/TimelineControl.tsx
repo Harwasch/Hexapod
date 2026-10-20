@@ -23,6 +23,8 @@ import { useSites } from "@/state/sites";
  *
  * Choosing a date asks the scene (`SiteManager.setEpoch`); the control then follows what the
  * scene says it shows (the store's `epoch`, from the `epoch` event), never its own click.
+ * While two dates are compared (Compare › Dates) none is checked and the two say which side of
+ * the divider each is on; choosing one shows it alone.
  */
 export function TimelineControl() {
   const scene = useScene();
@@ -31,6 +33,7 @@ export function TimelineControl() {
     activeSiteId ? s.representation[activeSiteId] : undefined,
   );
   const shown = useSites((s) => (activeSiteId ? (s.epoch[activeSiteId] ?? null) : null));
+  const pair = useSites((s) => (s.compareDates?.siteId === activeSiteId ? s.compareDates : null));
   const site = useSite(activeSiteId).data;
   if (!site || !representation) return null;
   const epochs = siteEpochs(site);
@@ -51,23 +54,24 @@ export function TimelineControl() {
       <GlassSegmentedControl
         aria-label="Capture date"
         data-testid="timeline-epochs"
-        value={value}
+        value={pair ? "" : value}
         onValueChange={(epochId) => void scene?.sites.setEpoch(epochId)}
         options={options.map(({ epoch }) => {
           const date = epochDateLabel(epoch);
           const platform = platformLabel(epoch.platform);
           const alignment = alignmentLabel(epoch, anchor, epochs);
+          const side = pair?.left === epoch.id ? "left" : pair?.right === epoch.id ? "right" : null;
           return {
             value: epoch.id,
             label: (
               <span className="timeline__option">
                 <span className="timeline__date">{date}</span>
                 <span className="timeline__meta">
-                  {platform} · {alignment.short}
+                  {platform} · {side ? `${side} of divider` : alignment.short}
                 </span>
               </span>
             ),
-            ariaLabel: `${date}, ${platform}, ${alignment.long}`,
+            ariaLabel: `${date}, ${platform}, ${alignment.long}${side ? `, shown ${side} of the divider` : ""}`,
           };
         })}
       />
