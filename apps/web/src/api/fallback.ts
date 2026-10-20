@@ -100,6 +100,8 @@ function envAsset(
     },
     defaultVisible: false,
     sidecarFlags: [],
+    epochId: null,
+    sourceKind: "observed",
     createdAt: NOW,
     updatedAt: NOW,
   };
@@ -153,6 +155,8 @@ export function builtinScanSite(): Site {
     license: null,
     assets,
     cameraBookmarks: [overviewBookmark()],
+    frame: null,
+    epochs: [],
     createdAt: NOW,
     updatedAt: NOW,
   };
@@ -219,6 +223,8 @@ export function builtinRanchSite(): Site {
         createdAt: NOW,
       },
     ],
+    frame: null,
+    epochs: [],
     createdAt: NOW,
     updatedAt: NOW,
   };
@@ -392,7 +398,28 @@ export function readOfflineCatalog(document: unknown): Site[] {
   if (typeof document !== "object" || document === null) return [];
   const sites: unknown = (document as { sites?: unknown }).sites;
   if (!Array.isArray(sites)) return [];
-  return sites.filter(isSiteish);
+  return sites.filter(isSiteish).map(withEpochFields);
+}
+
+/**
+ * A catalog written before site frames and epochs existed (decision D3) has neither, nor
+ * an asset's `epochId` / `sourceKind`: read as the legacy site it describes.
+ */
+function withEpochFields(site: Site): Site {
+  const partial = site as Partial<Site>;
+  return {
+    ...site,
+    frame: partial.frame ?? null,
+    epochs: Array.isArray(partial.epochs) ? partial.epochs : [],
+    assets: site.assets.map((asset) => {
+      const fields = asset as Partial<Site["assets"][number]>;
+      return {
+        ...asset,
+        epochId: fields.epochId ?? null,
+        sourceKind: fields.sourceKind ?? "observed",
+      };
+    }),
+  };
 }
 
 function isSiteish(value: unknown): value is Site {

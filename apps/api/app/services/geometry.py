@@ -11,6 +11,7 @@ from shapely.geometry import Point as ShapelyPoint
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry import mapping, shape
 from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
 
 from app.schemas.common import BoundingBox, GeoPosition
 from app.schemas.geojson import MultiPolygon, Point, Polygon
@@ -82,3 +83,20 @@ def _to_lists(value: Any) -> Any:
     if isinstance(value, tuple | list):
         return [_to_lists(v) for v in value]
     return value
+
+
+def union_footprints(a: WKBElement, b: WKBElement) -> WKBElement:
+    """The union of two stored footprints, always a MultiPolygon (the column type)."""
+    merged = unary_union([to_shape(a), to_shape(b)])
+    if isinstance(merged, ShapelyPolygon):
+        merged = ShapelyMultiPolygon([merged])
+    elif not isinstance(merged, ShapelyMultiPolygon):
+        merged = ShapelyMultiPolygon(
+            [part for part in getattr(merged, "geoms", []) if isinstance(part, ShapelyPolygon)]
+        )
+    return from_shape(merged, srid=SRID)
+
+
+def contains(a: WKBElement, b: WKBElement) -> bool:
+    """Whether footprint `a` covers footprint `b` (boundary included)."""
+    return bool(to_shape(a).covers(to_shape(b)))
