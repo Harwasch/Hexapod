@@ -188,7 +188,9 @@ describe("the switch and the chip", () => {
     expect(useAsCaptured.getState().on).toBe(true);
     expect(toggle).toHaveAttribute("aria-checked", "true");
     const chip = await screen.findByTestId("as-captured-chip");
-    expect(chip).toHaveTextContent("As captured — only what was measured is drawn; plans stay as annotations");
+    expect(chip).toHaveTextContent(
+      "As captured — only what was measured is drawn; plans stay as annotations",
+    );
     expect(chip).toHaveAttribute("role", "status");
     await user.click(within(chip).getByRole("button", { name: AS_CAPTURED_TEXT.off }));
     expect(useAsCaptured.getState().on).toBe(false);
