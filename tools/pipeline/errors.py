@@ -266,6 +266,14 @@ class QualityGateError(PipelineError):
         self.unit = unit
         self.reason = one_line
 
+    def __reduce__(self) -> tuple[object, tuple[str, float, float, str, str]]:
+        # The keyword-only arguments mean the default (`cls(*self.args)`) cannot rebuild
+        # it, and an exception that crosses a process (a remote stage) is pickled.
+        return (
+            _rebuild_quality_gate,
+            (self.gate, self.measured, self.limit, self.unit, self.reason),
+        )
+
     def to_dict(self) -> dict[str, object]:
         return {
             "gate": self.gate,
@@ -274,6 +282,12 @@ class QualityGateError(PipelineError):
             "unit": self.unit,
             "reason": self.reason,
         }
+
+
+def _rebuild_quality_gate(
+    gate: str, measured: float, limit: float, unit: str, reason: str
+) -> QualityGateError:
+    return QualityGateError(gate, measured, limit, unit=unit, reason=reason)
 
 
 _GATE_NAME = re.compile(r"[A-Za-z0-9_.\-]+")

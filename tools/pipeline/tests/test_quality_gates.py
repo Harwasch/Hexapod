@@ -6,6 +6,8 @@ so M3b extends these tests rather than redefining the error.
 
 from __future__ import annotations
 
+import pickle
+
 import pytest
 
 from errors import BAD_INPUT_ERRORS, PipelineError, QualityGateError, check_gate, parse_quality_gate
@@ -78,3 +80,12 @@ def test_gate_names_and_units_are_one_token() -> None:
         QualityGateError("two words", 1.0, 2.0, reason="r")
     with pytest.raises(ValueError, match="one token"):
         QualityGateError("g", 1.0, 2.0, unit="per cent, roughly", reason="r")
+
+
+def test_a_gate_error_survives_crossing_a_process() -> None:
+    error = QualityGateError("g", 0.5, 0.2, unit="px", reason="why")
+
+    copy = pickle.loads(pickle.dumps(error))
+
+    assert isinstance(copy, QualityGateError)
+    assert (str(copy), copy.to_dict()) == (str(error), error.to_dict())
