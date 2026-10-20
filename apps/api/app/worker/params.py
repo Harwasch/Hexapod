@@ -39,19 +39,45 @@ ORIENTATION_KEYS: dict[str, str] = {"upAxis": "up_axis", "headingDeg": "heading_
 CATALOG = "catalog"
 #: The artifact whose producer describes the uploaded bytes.
 SOURCE_META = "source_meta.json"
+#: The parameter that tells a placing stage which site's frame to place the capture in
+#: (`{"siteId", "lat", "lon", "height"}`, `services/epochs.RunFrame.param`; decision D3).
+SITE_FRAME = "site_frame"
 
 
-def stage_params(plan: Plan, capture: Capture, job: Job) -> dict[str, dict[str, Any]]:
-    """Per-stage parameter overrides for this run, derived then overridden by `job.params`."""
+def stage_params(
+    plan: Plan, capture: Capture, job: Job, frame: dict[str, Any] | None = None
+) -> dict[str, dict[str, Any]]:
+    """Per-stage parameter overrides for this run, derived then overridden by `job.params`.
+
+    `frame` is the site frame the run is placed in (`services/epochs.frame_for_run`), or
+    None for a run that defines its own. It goes to the stages that write the placement
+    -- `manual_placement`, `ingest_splat`, `exif_gps` -- and to no other: everything after
+    them reads the origin from `georef.json`. Without it the output is what it always was.
+    """
     resolved: dict[str, dict[str, Any]] = {}
     placement = _placement(capture)
     facts = _capture_facts(capture)
     orientation = _orientation(capture)
+    located = {k: v for k, v in placement.items() if k in ("lat", "lon")}
     for stage in plan.stages:
         if stage.impl.name == MANUAL_PLACEMENT and placement:
             resolved.setdefault(stage.id, {}).update(placement)
+        if stage.impl.name == MANUAL_PLACEMENT and frame is not None:
+            # A capture with no coordinate of its own sits at its site's origin: the
+            # recipe's default of (0, 0) would be an offset of thousands of kilometres.
+            here = located or {"lat": frame["lat"], "lon": frame["lon"]}
+            fallback = {} if located else {"height": frame["height"]}
+            resolved.setdefault(stage.id, {}).update({SITE_FRAME: frame, **here, **fallback})
         if stage.impl.name == INGEST_SPLAT and orientation:
             resolved.setdefault(stage.id, {}).update(orientation)
+        if stage.impl.name == INGEST_SPLAT and frame is not None:
+            # `normalize` moves the splat by where the capture is from the frame's origin.
+            here = located or {"lat": frame["lat"], "lon": frame["lon"]}
+            resolved.setdefault(stage.id, {}).update({SITE_FRAME: frame, **here})
+        if stage.impl.name == EXIF_GPS and frame is not None:
+            # The stage falls back to the frame's origin itself, after the frames' own GPS,
+            # the video's location and the capture's coordinate.
+            resolved.setdefault(stage.id, {})[SITE_FRAME] = frame
         if stage.impl.name == EXIF_GPS:
             # Lane 2's fallback, not its answer: the frames' own GPS and the video's own
             # location both win over it inside the stage. Without it a video that

@@ -18,6 +18,7 @@ import logging
 import math
 import uuid
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -177,3 +178,122 @@ def platform_of(capture: Capture) -> EpochPlatform:
     if metadata.get("origin") == "phone-key":
         return EpochPlatform.PHONE_VIDEO
     return EpochPlatform.UNKNOWN
+
+
+# ── Which frame a run is placed in (decided before it starts) ─────────────────────────────
+
+#: How far outside a framed site's boundary a capture may be and still join it (D3).
+SPATIAL_JOIN_BUFFER_M = 25.0
+
+
+@dataclass(frozen=True)
+class RunFrame:
+    """The site frame a run is told to place its capture in (`site_frame` param)."""
+
+    site_id: uuid.UUID
+    lat: float
+    lon: float
+    height: float
+
+    def param(self) -> dict[str, Any]:
+        return {
+            "siteId": str(self.site_id),
+            "lat": self.lat,
+            "lon": self.lon,
+            "height": self.height,
+        }
+
+    @staticmethod
+    def of(frame: SiteFrame) -> RunFrame:
+        return RunFrame(site_id=frame.site_id, lat=frame.lat, lon=frame.lon, height=frame.height)
+
+
+def epoch_of_capture(db: Session, capture_id: uuid.UUID, *, lock: bool = False) -> Epoch | None:
+    """The epoch a capture already is (a re-run's), optionally locked (`FOR UPDATE`)."""
+    statement = select(Epoch).where(Epoch.capture_id == capture_id)
+    if lock:
+        statement = statement.with_for_update().execution_options(populate_existing=True)
+    return db.scalars(statement).first()
+
+
+def requested_site(db: Session, capture: Capture) -> Site | None:
+    """The site the capture named when it was created (`metadata.siteId`), if it exists."""
+    raw = (capture.metadata_ or {}).get("siteId")
+    if raw is None:
+        return None
+    try:
+        site_id = uuid.UUID(str(raw))
+    except ValueError:
+        log.warning("capture %s: metadata.siteId %r is not a site id", capture.id, raw)
+        return None
+    site = db.get(Site, site_id)
+    if site is None:
+        log.warning("capture %s names site %s, which no longer exists", capture.id, site_id)
+    return site
+
+
+def _point(lat: float, lon: float) -> Any:
+    return func.ST_SetSRID(func.ST_MakePoint(lon, lat), 4326)
+
+
+def nearest_framed_site(
+    db: Session, lat: float, lon: float, *, buffer_m: float = SPATIAL_JOIN_BUFFER_M
+) -> Site | None:
+    """The framed site whose boundary is within `buffer_m` of (lat, lon), nearest first.
+
+    Only sites with a frame: a legacy site has no origin to place a new epoch about.
+    """
+    point = func.geography(_point(lat, lon))
+    boundary = func.geography(Site.boundary)
+    return db.scalars(
+        select(Site)
+        .join(SiteFrame, SiteFrame.site_id == Site.id)
+        .where(func.ST_DWithin(boundary, point, buffer_m))
+        .order_by(func.ST_Distance(boundary, point), Site.created_at, Site.id)
+        .limit(1)
+    ).first()
+
+
+def _frame_of(db: Session, site_id: uuid.UUID) -> RunFrame | None:
+    frame = db.get(SiteFrame, site_id)
+    return RunFrame.of(frame) if frame is not None else None
+
+
+def _number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def frame_for_run(db: Session, capture: Capture) -> RunFrame | None:
+    """The frame a run of this capture is placed in, or None to let it define its own.
+
+    The first that applies:
+
+    1. the capture is already an epoch (a re-run): that epoch's site's frame, always;
+    2. the capture was registered into a site with no epoch for it (legacy): its frame;
+    3. the capture named a site (`metadata.siteId`): its frame, or none yet -- the run
+       is then that site's first epoch and defines it;
+    4. the capture has a coordinate (`metadata.lat`/`lon`): the nearest framed site
+       within `SPATIAL_JOIN_BUFFER_M`;
+    5. none: the run makes a new site and frame.
+
+    Decided before the run starts, because the pipeline places the capture in it. A
+    capture located only by its EXIF cannot be matched here (nothing knows where it is
+    until `normalize` runs); it joins a site only by naming it (M3 moves this later).
+    """
+    epoch = epoch_of_capture(db, capture.id)
+    if epoch is not None:
+        return _frame_of(db, epoch.site_id)
+    if capture.site_id is not None:
+        return _frame_of(db, capture.site_id)
+    named = requested_site(db, capture)
+    if named is not None:
+        return _frame_of(db, named.id)
+    metadata = capture.metadata_ or {}
+    lat, lon = _number(metadata.get("lat")), _number(metadata.get("lon"))
+    if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    site = nearest_framed_site(db, lat, lon)
+    return _frame_of(db, site.id) if site is not None else None
