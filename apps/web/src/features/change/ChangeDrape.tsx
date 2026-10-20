@@ -1,0 +1,227 @@
+import { useQuery } from "@tanstack/react-query";
+import { X } from "lucide-react";
+import { useEffect, useRef } from "react";
+
+import type { ChangeMap, Epoch } from "@twin/contracts";
+import { GlassButton, GlassPanel } from "@twin/ui";
+
+import { ApiError, api, unwrap } from "@/api/client";
+import { useSite } from "@/api/queries";
+import { ChangeDrapeLayer } from "@/cesium/changeDrape";
+import { useScene } from "@/cesium/SceneContext";
+import {
+  calibrationNote,
+  CHANGE_COLORS,
+  changeError,
+  changeLabel,
+  changeOffer,
+  legendRows,
+  NEEDS_TOKEN,
+  placementNotes,
+} from "@/lib/changeDrape";
+import { formatEpochDate, siteEpochs } from "@/lib/epochs";
+import { useChangeDrape, type ChangeDrapeRequest } from "@/state/changeDrape";
+import { useSettings } from "@/state/settings";
+import { useSites } from "@/state/sites";
+import { useUi } from "@/state/ui";
+
+const cells = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "cell" : "cells"}`;
+
+/** Ends the drape: nothing asked for, nothing refused. */
+function endChangeDrape(): void {
+  useChangeDrape.setState({ request: null, error: null });
+}
+
+function useChangeMap(request: ChangeDrapeRequest, enabled: boolean) {
+  return useQuery({
+    queryKey: ["change-map", request.siteId, request.from, request.to],
+    queryFn: () =>
+      unwrap<ChangeMap>(
+        api.GET("/api/v1/sites/{site_id}/change", {
+          params: {
+            path: { site_id: request.siteId },
+            query: { from: request.from, to: request.to },
+          },
+        }),
+      ),
+    enabled,
+    retry: false,
+    // Derived per request from stored maps that do not change under a revision: kept a while.
+    staleTime: 5 * 60_000,
+  });
+}
+
+function refusal(error: unknown): string {
+  return error instanceof ApiError
+    ? changeError(error.status, error.problem?.code)
+    : changeError(0);
+}
+
+/**
+ * The change map between two dates of the active site on the ground (cesium/changeDrape.ts),
+ * and its legend: what each colour is and how many cells, which are low confidence (hatched),
+ * that it is derived from height surfaces and not observed, the least change it can show
+ * between those dates, what is uncalibrated, and which date's placement is not survey-grade.
+ * Asked for from Compare › Dates (`useChangeDrape`); mounted by `ChangeDrapeSlot` while asked.
+ *
+ * It ends with its site (another becomes the active one), from its own Hide, or when a date
+ * loses its surface; a refusal (the write token, a 409) is said here and in Compare, never a
+ * blank drape. Ground geometry: drawn under every splat renderer, beside the date swipe and a
+ * per-cell view rule alike, which draw splats and leave the ground to it.
+ */
+export function ChangeDrape() {
+  const request = useChangeDrape((s) => s.request);
+  return request ? <Drape request={request} /> : null;
+}
+
+function Drape({ request }: { request: ChangeDrapeRequest }) {
+  const scene = useScene();
+  const activeSiteId = useSites((s) => s.activeSiteId);
+  const site = useSite(request.siteId).data;
+  const token = useSettings((s) => s.writeToken.trim());
+  const epochs = siteEpochs(site);
+  const offer = site ? changeOffer(epochs, request.from, request.to) : null;
+  const query = useChangeMap(request, offer?.offered === true);
+  const layer = useRef<ChangeDrapeLayer | null>(null);
+  const map = offer?.offered ? query.data : undefined;
+  const error = offer && !offer.offered ? offer.why : query.isError ? refusal(query.error) : null;
+
+  // Its site's: another site taking the globe ends it.
+  useEffect(() => {
+    if (activeSiteId !== request.siteId) endChangeDrape();
+  }, [activeSiteId, request.siteId]);
+
+  useEffect(() => {
+    if (!scene) return;
+    const made = new ChangeDrapeLayer(scene.scene);
+    layer.current = made;
+    return () => {
+      made.destroy();
+      layer.current = null;
+    };
+  }, [scene]);
+
+  useEffect(() => {
+    if (map) layer.current?.show(map);
+    else layer.current?.clear();
+  }, [map, scene]);
+
+  // Compare says why too, from the same words.
+  useEffect(() => {
+    useChangeDrape.setState({ error });
+  }, [error]);
+
+  // A token entered (or changed) after a refusal for want of one: asked again.
+  const { refetch, isError } = query;
+  const needsToken = error === NEEDS_TOKEN;
+  const lastToken = useRef(token);
+  useEffect(() => {
+    if (token === lastToken.current) return;
+    lastToken.current = token;
+    if (isError && needsToken) void refetch();
+  }, [token, isError, needsToken, refetch]);
+
+  const byId = (id: string) => epochs.find((e) => e.id === id);
+  const [from, to] = [byId(request.from), byId(request.to)];
+  const anchor = epochs.reduce<Epoch | null>(
+    (first, e) => (!first || e.ordinal < first.ordinal ? e : first),
+    null,
+  );
+  const dates =
+    from && to ? `${formatEpochDate(from.observedAt)} → ${formatEpochDate(to.observedAt)}` : "";
+
+  return (
+    <GlassPanel
+      strong
+      padding="sm"
+      className="change-drape"
+      role="region"
+      aria-label="Change map"
+      data-testid="change-drape"
+    >
+      <div className="change-drape__head">
+        <p className="glass-eyebrow">Change · {dates}</p>
+        <GlassButton
+          size="sm"
+          variant="ghost"
+          iconOnly
+          aria-label="Hide change map"
+          onClick={endChangeDrape}
+        >
+          <X size={14} aria-hidden="true" />
+        </GlassButton>
+      </div>
+      {error ? (
+        <div className="change-drape__state" role="alert" data-testid="change-drape-error">
+          <span>{error}</span>
+          {needsToken && (
+            <GlassButton
+              size="sm"
+              variant="ghost"
+              onClick={() => useUi.getState().setSettingsOpen(true)}
+            >
+              Open Settings
+            </GlassButton>
+          )}
+        </div>
+      ) : !map ? (
+        <p className="change-drape__state">Loading the change map…</p>
+      ) : (
+        <>
+          <p className="change-drape__label" data-testid="change-drape-label">
+            {changeLabel(map)}
+          </p>
+          <ul className="change-drape__rows">
+            {legendRows(map).map((row) => (
+              <li key={row.key} data-testid={`change-row-${row.key}`}>
+                <span
+                  className="change-drape__swatch"
+                  style={
+                    row.key === "unchanged" ? undefined : { background: CHANGE_COLORS[row.key] }
+                  }
+                  aria-hidden="true"
+                />
+                <span className="change-drape__name">{row.label}</span>
+                <span>
+                  {cells(row.cells)}
+                  {!row.drawn && " · counted, not drawn"}
+                </span>
+                {row.lowConfidence > 0 && (
+                  <span className="change-drape__low">
+                    <span
+                      className="change-drape__swatch change-drape__swatch--hatched"
+                      style={
+                        row.key === "unchanged" ? undefined : { color: CHANGE_COLORS[row.key] }
+                      }
+                      aria-hidden="true"
+                    />
+                    {row.lowConfidence.toLocaleString("en-US")} low confidence
+                    {row.drawn ? ", hatched" : ""}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+          {from && to && (
+            <ul className="change-drape__notes">
+              {placementNotes(epochs, from, to, anchor).map((note) => (
+                <li key={note} data-testid="change-drape-placement">
+                  {note}
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="change-drape__note">{calibrationNote(map, from && to ? [from, to] : [])}</p>
+          {map.areaLevel > map.level && (
+            <p className="change-drape__note">
+              Outlined at {map.areaCellM} m cells; counted at {map.cellM} m.
+            </p>
+          )}
+          <p className="change-drape__note">
+            Appearance-only change: not computed ({map.appearance.reason}).
+          </p>
+        </>
+      )}
+    </GlassPanel>
+  );
+}

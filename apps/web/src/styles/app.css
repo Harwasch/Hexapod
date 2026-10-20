@@ -2474,6 +2474,94 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   color: var(--text-tertiary);
 }
 
+/* ---- Change drape (features/change, ADR 0018) ------------------------------ */
+.change-drape {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-width: 22rem;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.change-drape__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.change-drape__head .glass-eyebrow,
+.change-drape__label,
+.change-drape__note,
+.change-drape__notes,
+.change-drape__state {
+  margin: 0;
+}
+
+.change-drape__label {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.change-drape__state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.change-drape__rows,
+.change-drape__notes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0;
+  list-style: none;
+}
+
+.change-drape__rows {
+  margin: 0;
+}
+
+.change-drape__rows li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2rem 0.4rem;
+}
+
+.change-drape__name {
+  min-width: 6.5rem;
+  color: var(--text-primary);
+}
+
+.change-drape__low {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--text-tertiary);
+}
+
+.change-drape__note,
+.change-drape__notes {
+  color: var(--text-tertiary);
+}
+
+.change-drape__swatch {
+  display: inline-block;
+  flex: none;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 0.15rem;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+/* Low confidence: the class's colour in stripes, as the drape hatches it on the ground. */
+.change-drape__swatch--hatched {
+  background-image: repeating-linear-gradient(45deg, currentColor 0 2px, transparent 2px 4px);
+}
+
 /* ---- Compare slider ------------------------------------------------------ */
 .split-slider {
   position: absolute;

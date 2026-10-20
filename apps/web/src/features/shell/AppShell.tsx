@@ -24,6 +24,7 @@ import { AddPanel } from "../add-data/AddPanel";
 import { CommandBox } from "../command-palette/CommandBox";
 import { ShortcutSheet } from "../command-palette/ShortcutSheet";
 import { CompareSplit } from "../compare/Compare";
+import { ChangeDrapeSlot } from "../change/ChangeDrapeSlot";
 import { DescentArrival } from "../descent/DescentArrival";
 import { DevPanel } from "../dev/DevPanel";
 import { ExploreHud } from "../explore/ExploreHud";
@@ -307,6 +308,8 @@ export function AppShell() {
             <Toasts />
           </div>
           <div className="hud-stack hud-detail">
+            {/* The change map between two dates (Compare › Dates): loaded when asked for. */}
+            <ChangeDrapeSlot />
             {env.landExplorationEnabled && (
               <OnDemand label="Land agent">
                 <LandAgent />
