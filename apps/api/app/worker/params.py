@@ -40,7 +40,8 @@ CATALOG = "catalog"
 #: The artifact whose producer describes the uploaded bytes.
 SOURCE_META = "source_meta.json"
 #: The parameter that tells a placing stage which site's frame to place the capture in
-#: (`{"siteId", "lat", "lon", "height"}`, `services/epochs.RunFrame.param`; decision D3).
+#: (`{siteId, lat, lon, height, heightDatum, epsg}`, `services/epochs.RunFrame.param`;
+#: decision D3).
 SITE_FRAME = "site_frame"
 
 
