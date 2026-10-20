@@ -3,8 +3,9 @@
 Opt-in: without a grid every byte is what it was (the synthetic-tree gates hold that for
 the committed fixtures; this holds it for a hierarchy). With one, the grid's file is
 copied beside the tiles, its descriptor goes on the root last, and every tile states the
-lowest score of the scored cells under it -- a leaf from its own gaussians, a parent the
-least of its children's.
+lowest score of the cells its box covers in plan: scored cells at their score, unseen ones
+at 0, whether or not any of its gaussians is in them -- strict gating removes exactly the
+gaussians of a weak cell, so the tile drawn over it holds none of them.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from typing import Any
 
 import numpy as np
 import pytest
-from test_splat_tiles_lod import glb_positions, scene, tiles_of, write_ply
+from test_splat_tiles_lod import box_bounds, scene, tiles_of, write_ply
 
 import cell_grid
 import splat_tiles
@@ -33,6 +34,9 @@ def _grid(root: Path, *, level: int = 1, seed: int = 4, kind: str = "confidence"
     data = np.zeros((n, n, 3), dtype=np.uint8)
     data[..., 0] = np.where(rng.random((n, n)) < 0.85, rng.integers(1, 256, (n, n)), 0)
     data[..., 1] = rng.integers(0, 8, (n, n))
+    # Half the empty cells are unseen: expected and not seen, so weak.
+    unseen = (data[..., 0] == 0) & (rng.random((n, n)) < 0.5)
+    data[..., 1] |= np.where(unseen, cell_grid.REASON_BITS["unseen"], 0).astype(np.uint8)
     data[..., 2] = rng.integers(0, 40, (n, n))
     planes = cell_grid.min_pyramid(cell_grid.CellPlane(level, i0, j0, n, n, data), 8)
     grid = cell_grid.CellGrid(
@@ -117,36 +121,95 @@ def test_the_root_extras_keep_their_order_and_the_grid_comes_last(
     assert list(grids) == ["confidence"]
 
 
-def test_a_leaf_states_its_least_confident_cell_and_a_parent_its_childrens(
+def _covered_min(plane: cell_grid.CellPlane, low: np.ndarray, high: np.ndarray) -> int | None:
+    """Brute force, one cell at a time: the least score of the cells a plan box touches,
+    an unseen cell at 0, an empty cell that is not unseen not counted."""
+    unseen = cell_grid.REASON_BITS["unseen"]
+    found = []
+    for j in range(plane.nj):
+        for i in range(plane.ni):
+            x0, y0 = (plane.i0 + i) * plane.cell_m, (plane.j0 + j) * plane.cell_m
+            if x0 + plane.cell_m <= low[0] or x0 > high[0]:
+                continue
+            if y0 + plane.cell_m <= low[1] or y0 > high[1]:
+                continue
+            score, reasons = int(plane.data[j, i, 0]), int(plane.data[j, i, 1])
+            if reasons & unseen:
+                found.append(0)
+            elif score > 0:
+                found.append(score)
+    return min(found) if found else None
+
+
+def test_every_tile_states_the_least_confident_cell_under_its_box(
     packed: dict[str, Any],
 ) -> None:
     measured = packed["measured"]
     document = json.loads((measured / "tileset.json").read_text())
     grid = cell_grid.from_tileset(measured / "tileset.json")["confidence"]
     offsets = splat_tiles.tile_offsets(document)
-    leaves = parents = 0
+    plane = grid.planes[0]
+    leaves = parents = unseen = 0
     for tile, _, _ in tiles_of(document):
         uri = tile["content"]["uri"]
+        low, high = box_bounds(tile)
+        offset = np.asarray(offsets[uri], dtype=np.float64)
+        expected = _covered_min(plane, low + offset, high + offset)
+        assert tile["extras"].get("confidenceMin") == expected, uri
+        unseen += expected == 0
         if tile.get("children"):
+            # A parent's box holds its children's: never more confident than they are.
             below = [c["extras"].get("confidenceMin") for c in tile["children"]]
             known = [v for v in below if v is not None]
-            assert tile["extras"].get("confidenceMin") == (min(known) if known else None), uri
+            assert not known or tile["extras"]["confidenceMin"] <= min(known), uri
             parents += 1
-            continue
-        _, local = glb_positions(measured / uri)
-        site = splat_tiles.site_positions(local, offsets[uri])
-        # Brute force: every gaussian's cell, one at a time, at the grid's finest level.
-        plane = grid.planes[0]
-        scores = []
-        for x, y, _ in site.astype(np.float64):
-            i = int(np.floor(x / plane.cell_m)) - plane.i0
-            j = int(np.floor(y / plane.cell_m)) - plane.j0
-            if 0 <= i < plane.ni and 0 <= j < plane.nj and plane.data[j, i, 0] > 0:
-                scores.append(int(plane.data[j, i, 0]))
-        assert tile["extras"].get("confidenceMin") == (min(scores) if scores else None), uri
-        leaves += 1
-    assert leaves > 4 and parents > 1
+        else:
+            leaves += 1
+    assert leaves > 4 and parents > 1 and unseen > 0
     assert document["root"]["extras"]["confidenceMin"] == packed["stats"]["confidence_min"]
+
+
+def _one_tile(root: Path, mark: tuple[int, int] | None) -> int | None:
+    """A single tile of ground over (0..4 m)^2 with no gaussian in the cell (4, 4) at level 1
+    (x, y in [2, 2.5)), and a grid strong everywhere but that cell, which `mark` sets."""
+    root.mkdir(parents=True)
+    columns = scene(2_000, seed=7)
+    rng = np.random.default_rng(8)
+    xy = rng.uniform(0.0, 4.0, (2_000, 2))
+    hole = (xy >= 2.0).all(axis=1) & (xy < 2.5).all(axis=1)
+    xy[hole] += 1.0  # out of the cell, still inside the box
+    columns["x"] = (np.round(xy[:, 0] * 4096) / 4096).astype(np.float32)
+    columns["y"] = (np.round(xy[:, 1] * 4096) / 4096).astype(np.float32)
+    columns["z"] = np.zeros(2_000, dtype=np.float32)
+    ply = write_ply(root / "ground.ply", columns)
+    data = np.zeros((12, 12, 3), dtype=np.uint8)  # i, j in [-2, 10): -1 m to 5 m
+    data[..., 0] = 255
+    if mark is not None:
+        data[4 + 2, 4 + 2, :2] = mark
+    plane = cell_grid.CellPlane(1, -2, -2, 12, 12, data)
+    grid = cell_grid.CellGrid(
+        "confidence", cell_grid.CONFIDENCE_CHANNELS, (plane,), {"policy": cell_grid.WEAK_POLICY}
+    )
+    folder = root / "confidence"
+    descriptor = cell_grid.encode(grid, folder, "confidence.bin")
+    (folder / "confidence.json").write_text(json.dumps(descriptor))
+    out = root / "tiles"
+    splat_tiles.convert(ply, out, 0.0, 0.0, 0.0, confidence=folder / "confidence.json")
+    document = json.loads((out / "tileset.json").read_text())
+    assert "children" not in document["root"]  # one tile: its box is the whole patch
+    value = document["root"]["extras"].get("confidenceMin")
+    return None if value is None else int(value)
+
+
+def test_a_cell_gating_emptied_or_nobody_saw_lowers_the_tile_over_it(tmp_path: Path) -> None:
+    """Review R3 #54 (medium): strict gating removes a weak cell's gaussians, so the tile
+    over it holds none of them; it must still say the cell is weak. An unseen cell under
+    it counts as 0; an empty cell nobody aimed at is not this epoch's and says nothing."""
+    unseen = cell_grid.REASON_BITS["unseen"]
+    assert _one_tile(tmp_path / "gated", (1, cell_grid.REASON_BITS["views"])) == 1
+    assert _one_tile(tmp_path / "unseen", (0, unseen)) == 0
+    assert _one_tile(tmp_path / "empty", (0, 0)) == 255
+    assert _one_tile(tmp_path / "plain", None) == 255
 
 
 def test_a_grid_that_is_not_a_confidence_grid_or_not_its_bytes_is_refused(

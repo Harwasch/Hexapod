@@ -107,8 +107,15 @@ weak, in a frame another epoch could be compared in.
 6. **Shipped beside the tiles, opt-in (C8).** The `confidence` stage (`confidence_grid`, between
    `place` and `package`, no GPU) writes `confidence/confidence.{json,bin}`. `package` copies
    the file beside the tiles, appends the descriptor to the root extras after `collision`, and gives
-   every tile `extras.confidenceMin` right after `gaussians` — a leaf the lowest score of the scored
-   cells its gaussians fall in, a parent the lowest of its children's. `catalog` writes the
+   every tile `extras.confidenceMin` right after `gaussians`: the lowest score, at the grid's
+   finest level, of the cells the tile's bounding box covers in plan. A cell **with evidence
+   counts at its score**; an **unseen** cell (empty, inside the pointed disc) counts at **0** —
+   expected and not seen, as weak as a cell can be; an empty cell outside the disc is not this
+   epoch's and does not count; a tile over none that count has no `confidenceMin`. The box, not
+   the tile's gaussians, because strict gating removes exactly a weak cell's gaussians: the
+   tile drawn over that cell holds none of them, and a minimum over what it holds would call it
+   strong. A parent's box holds its children's, so a parent is never more confident than any
+   child. `catalog` writes the
    descriptor at the top level of `registration.json` (never inside `quality`; `quality.json` is
    unchanged). `convert(confidence=None)` writes exactly the bytes it always did, so every fixture
    stays byte-identical. `photo-reconstruct` v14; `splat-ingest` has no evidence, so no grid:
@@ -144,10 +151,9 @@ weak, in a frame another epoch could be compared in.
   first epoch's GPS put it) is not known to the run, so an RTK epoch placed there by its GNSS
   could be further from the frame than it claims. With a reference, the reference's absolute
   uncertainty is added in quadrature, which covers it.
-- A tile's `confidenceMin` is computed from the leaf positions as packed and the grid from
-  `support/` placed by `placement.json`'s single similarity; the two placements agree to float32
-  rounding, so a gaussian exactly on a cell edge may be looked up in its neighbour. It is a
-  summary for finding weak tiles, not a per-gaussian score.
+- A tile's `confidenceMin` is a summary for finding weak tiles, not a per-gaussian score. Its box
+  is padded by its gaussians' reach and is axis-aligned, so it can take in a weak neighbour's
+  cell the tile barely draws over: the summary errs to the weak side, never the strong one.
 - Until A4 adds a `confidence` sidecar kind, a re-publish that carries sidecars from a previous
   generation reports `extras.confidence` as an unrecognised sidecar if the new run has none.
 - New trip-wires: `docs/HANDOFF.md` § 6.

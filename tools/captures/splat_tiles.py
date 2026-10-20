@@ -17,7 +17,7 @@ dependent colour the trainer learned is drawn (see `convert`). Beside the tiles 
 declared on the root tile (`COLLISION_FORMAT`), and `viewcones.bin`, the directions each
 part of it was seen from (`view_cones`), declared beside it. When the run measured one,
 the epoch's confidence grid (`cell_grid`, `confidence.bin`) is declared there too, and each
-tile says how confident its least confident cell is (`extras.confidenceMin`).
+tile says how confident the least confident cell under it is (`extras.confidenceMin`).
 
 Usage:
     python splat_tiles.py splat.ply out_dir --lat 46.84 --lon -91.99 --height 0
@@ -888,9 +888,9 @@ class Tile:
     high: np.ndarray = field(default_factory=lambda: np.zeros(3))
     origin: np.ndarray = field(default_factory=lambda: np.zeros(3))
     fractional_bits: int = SPZ_FRACTIONAL_BITS
-    #: The lowest confidence score (1..255) of any scored cell its gaussians are in -- a
-    #: leaf's own, a parent's the least of its children's -- when a confidence grid was
-    #: given and any of them is scored; None otherwise (`write_tiles`).
+    #: The lowest confidence score (0..255) of the grid's cells its box covers in plan --
+    #: an unseen cell at 0, an empty cell nobody aimed at not counted -- when a confidence
+    #: grid was given and any such cell is under it; None otherwise (`box_confidence_min`).
     confidence_min: int | None = None
 
     @property
@@ -1475,25 +1475,18 @@ def write_tiles(
     optimised in (`ParentOverrides`). Returns how many parent gaussians were replaced.
 
     With `confidence` (the epoch's grid, in this tileset's frame), each tile's
-    `confidence_min` is filled in: a leaf's is the lowest score of the scored cells its
-    gaussians fall in, at the grid's finest level; a parent's the lowest of its
-    children's, which is the same thing over its subtree -- a parent draws its subtree
-    merged, so it is never more confident than the weakest part of what it stands for.
-    Cells with no evidence (score 0) say nothing and are skipped.
+    `confidence_min` is filled in (`box_confidence_min`): the lowest score of the cells,
+    at the grid's finest level, that its box covers in plan -- whether or not any of its
+    gaussians is in them, since strict gating removes exactly a weak cell's gaussians and
+    the tile drawn over that cell then holds none. A parent's box holds its children's, so
+    it is never more confident than the weakest part of what it stands for.
     """
     replaced = 0
-    score = None if confidence is None else confidence.channel("score")
 
     def emit(tile: Tile, gaussians: Gaussians, keys: np.ndarray | None) -> None:
         nonlocal replaced
-        if confidence is not None and score is not None:
-            if keys is None:
-                found = cell_grid.lookup(confidence, gaussians.xyz)[:, score]
-                scored = found[found > 0]
-                tile.confidence_min = int(scored.min()) if scored.size else None
-            else:
-                below = [c.confidence_min for c in tile.children if c.confidence_min is not None]
-                tile.confidence_min = min(below) if below else None
+        if confidence is not None:
+            tile.confidence_min = box_confidence_min(confidence, tile.low, tile.high)
         if keys is not None and parents is not None:
             better = parents.take(tile.uri, keys)
             if better is not None:
@@ -1505,6 +1498,28 @@ def write_tiles(
 
     build_tiles(root, codes, store, edge, emit)
     return replaced
+
+
+def box_confidence_min(grid: cell_grid.CellGrid, low: np.ndarray, high: np.ndarray) -> int | None:
+    """The least confidence score of the cells of `grid`'s finest level that the plan box
+    `low`..`high` (site frame, x east, y north) touches -- a cell's own score when it has
+    evidence, **0 when it is unseen** (expected and not seen: weak, and as weak as a cell
+    can be), and nothing from an empty cell nobody aimed at, which is not this epoch's.
+    None when the box touches no cell that counts."""
+    plane = grid.plane(None)
+    corners = np.array([[low[0], low[1]], [high[0], high[1]]], dtype=np.float64)
+    i, j = cell_grid.Lattice(plane.level).index(corners)
+    i_lo, i_hi = max(int(i[0]) - plane.i0, 0), min(int(i[1]) - plane.i0, plane.ni - 1)
+    j_lo, j_hi = max(int(j[0]) - plane.j0, 0), min(int(j[1]) - plane.j0, plane.nj - 1)
+    if i_lo > i_hi or j_lo > j_hi:
+        return None
+    window = plane.data[j_lo : j_hi + 1, i_lo : i_hi + 1]
+    score = window[..., grid.channel("score")].astype(np.int64)
+    unseen = (window[..., grid.channel("reasons")] & cell_grid.REASON_BITS["unseen"]) > 0
+    counted = unseen | (score > 0)
+    if not counted.any():
+        return None
+    return int(np.where(unseen, 0, score)[counted].min())
 
 
 def _clamp_errors(tile: Tile, ceiling: float) -> None:
@@ -2221,9 +2236,10 @@ def convert(
     (tools/pipeline confidence.py's `confidence.json`, a `cell_grid` in this tileset's
     frame, with the file it names beside it). Its file is copied in beside the tiles, the
     descriptor is declared on the root tile's `extras.confidence` -- after the collision
-    grid, so a backfill appending it last writes these bytes -- and every tile states its
-    least confident scored cell as `extras.confidenceMin`, after `gaussians` (`write_tiles`):
-    a viewer can find the weak tiles from `tileset.json` alone. Opt-in: without it every
+    grid, so a backfill appending it last writes these bytes -- and every tile states the
+    least confident cell under its box as `extras.confidenceMin`, after `gaussians`
+    (`write_tiles`; an unseen cell is 0): a viewer can find the weak tiles from
+    `tileset.json` alone. Opt-in: without it every
     byte written is what it was before the grid existed.
     """
     if sh_degree is not None and not 0 <= sh_degree <= SH_MAX_DEGREE:

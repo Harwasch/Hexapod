@@ -187,8 +187,9 @@ outside, medianGsdMm, metric}` (finest level; `weakShare` is weak over scored + 
 - **Channels:** `score` u1 (0 no evidence, else `1 + round(254 · keepShare · f)`), `reasons` u1,
   `relief` u1 (height range of the cell's gaussians, 0.25 m, saturating). Coarser levels are
   min-of-children (min of scored children, OR, max). Weak: `0 < score < 128` or `unseen`.
-- **Per tile:** `extras.confidenceMin` (after `gaussians`): the lowest score of the scored cells
-  under the tile; absent when none is scored or no grid was shipped.
+- **Per tile:** `extras.confidenceMin` (after `gaussians`): the lowest score of the finest-level
+  cells the tile's box covers in plan — a scored cell at its score, an unseen cell at 0, an empty
+  cell outside the pointed disc not counted; absent when none counts or no grid was shipped.
 - **Pipeline artifacts:** `quality` → `support/` (`support.json` + one raw column per field,
   row for row with `trained.ply`, COLMAP frame); `confidence` → `confidence/confidence.json` and
   `confidence.bin`.
