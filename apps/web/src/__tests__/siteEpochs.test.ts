@@ -492,3 +492,100 @@ describe("every epoch of a site is drawn with one placement", () => {
     expect(sameRootFrame(base, undefined)).toBe(false);
   });
 });
+
+describe("a loaded site takes a fresh record of its dates", () => {
+  it("a date published while the site is loaded is shown, and can be chosen", async () => {
+    const { manager, site, epochs, viewer } = harness(twoEpochSite({ epochs: [E1], assets: [A1] }));
+    await open(manager);
+    expect(manager.shownAsset()?.id).toBe(A1.id);
+    // The site's record is fetched again (watchSiteRecords): E2 has been published since.
+    manager.updateRecord({ ...site, epochs: [E1, E2], assets: [A1, A2] });
+    await settle();
+    // The latest is what is shown when no date was chosen; and either can now be chosen.
+    expect(manager.shownAsset()?.id).toBe(A2.id);
+    expect(epochs.at(-1)).toBe(E2.id);
+    await manager.setEpoch(E1.id);
+    expect(manager.shownAsset()?.id).toBe(A1.id);
+    await manager.setEpoch(E2.id);
+    expect(manager.shownAsset()?.id).toBe(A2.id);
+    expect(viewer.scene.primitives.remove).not.toHaveBeenCalled();
+  });
+
+  it("a date chosen stays chosen when another is published", async () => {
+    const { manager, site } = harness();
+    await open(manager);
+    await manager.setEpoch(E1.id);
+    const E3 = epoch("e3", {
+      ordinal: 3,
+      observedAt: "2026-09-01T15:00:00Z",
+      currentAssetId: "a3",
+    });
+    const A3 = splat("a3", { epochId: "e3", createdAt: "2026-09-02T00:00:00Z" });
+    manager.updateRecord({ ...site, epochs: [E1, E2, E3], assets: [A1, A2, A3] });
+    await settle();
+    expect(manager.shownAsset()?.id).toBe(A1.id);
+    await manager.setEpoch(E3.id);
+    expect(manager.shownAsset()?.id).toBe(A3.id);
+  });
+
+  it("a re-run's new model replaces the old one on screen, with the shared placement", async () => {
+    const { manager, site, tileset, viewer } = harness(
+      withConfigs({ clampToGround: false, heightOffsetM: 3 }),
+    );
+    await open(manager);
+    const old = tileset(A2.id);
+    // E2 was run again: its new asset is current, the old one superseded (and so not listed).
+    const rerun = splat("a2b", { epochId: "e2", createdAt: "2026-07-01T00:00:00Z" });
+    manager.updateRecord({
+      ...site,
+      epochs: [E1, { ...E2, currentAssetId: "a2b" }],
+      assets: [site.assets[0] ?? A1, rerun],
+    });
+    await settle();
+    await settle();
+    expect(manager.shownAsset()?.id).toBe("a2b");
+    expect(viewer.scene.primitives.remove).toHaveBeenCalledWith(old);
+    expect(
+      manager
+        .loadedAssets()
+        .map((a) => a.assetId)
+        .sort(),
+    ).toEqual([A1.id, "a2b"].sort());
+    expect(manager.sharesPlacement(SITE_ID, "a2b")).toBe(true);
+    expect(originHeight(tileset("a2b"))).toBeCloseTo(13, 3);
+  });
+
+  it("when the frame's own date is run again, the other dates follow its new model", async () => {
+    const { manager, site, tileset } = harness(
+      withConfigs({ clampToGround: false, heightOffsetM: 3 }),
+    );
+    await open(manager);
+    const anchor = splat("a1b", {
+      epochId: "e1",
+      createdAt: "2026-07-01T00:00:00Z",
+      renderConfig: { ...A1.renderConfig, clampToGround: false, heightOffsetM: 5 },
+    });
+    manager.updateRecord({
+      ...site,
+      epochs: [{ ...E1, currentAssetId: "a1b" }, E2],
+      assets: [anchor, site.assets[1] ?? A2],
+    });
+    await settle();
+    await settle();
+    expect(manager.shownAsset()?.id).toBe(A2.id);
+    expect(manager.sharesPlacement(SITE_ID, A2.id)).toBe(true);
+    expect(originHeight(tileset("a1b"))).toBeCloseTo(15, 3);
+    expect(Matrix4.equals(tileset(A2.id)?.modelMatrix, tileset("a1b")?.modelMatrix)).toBe(true);
+  });
+
+  it("a record that changes nothing of the dates moves nothing", async () => {
+    const { manager, site, tilesetEvents } = harness();
+    await open(manager);
+    const before = vi.mocked(createSiteTileset).mock.calls.length;
+    tilesetEvents.mockClear();
+    manager.updateRecord({ ...site, name: "Renamed" });
+    await settle();
+    expect(vi.mocked(createSiteTileset).mock.calls.length).toBe(before);
+    expect(tilesetEvents).not.toHaveBeenCalled();
+  });
+});
