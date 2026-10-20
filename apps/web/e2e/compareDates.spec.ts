@@ -312,6 +312,38 @@ async function differ(page: Page, a: Buffer, b: Buffer, x0: number, x1: number):
   );
 }
 
+/**
+ * Which date's solids answer a pick through each point of a grid over the view (the collider,
+ * as Measure and selection ask it), split by the side of the divider the point is on.
+ */
+const sidePicks = (
+  page: Page,
+): Promise<{ left: string[]; right: string[]; leftUnsided: string[] }> =>
+  page.evaluate(`(() => {
+    const twin = window.__twin;
+    const canvas = twin.viewer.canvas;
+    const divider = twin.scene.splitPosition * canvas.clientWidth;
+    const byTileset = new Map(twin.sites.loadedAssets().map((a) => [a.tileset, a.assetId]));
+    const out = { left: [], right: [], leftUnsided: [] };
+    for (let i = 1; i < 20; i++) {
+      for (let j = 1; j < 10; j++) {
+        const x = (canvas.clientWidth * i) / 20;
+        const y = (canvas.clientHeight * j) / 10;
+        if (Math.abs(x - divider) < 4) continue;
+        const ray = twin.viewer.camera.getPickRay({ x, y });
+        const hit = ray && twin.collider.raycast(ray, undefined, { x, y });
+        const id = hit ? byTileset.get(hit.tileset) : undefined;
+        if (id) (x < divider ? out.left : out.right).push(id);
+        // The same ray with no point on screen, as every pick was before: what it would say.
+        const unsided = ray && twin.collider.raycast(ray);
+        const was = unsided ? byTileset.get(unsided.tileset) : undefined;
+        if (was && x < divider) out.leftUnsided.push(was);
+      }
+    }
+    const unique = (list) => [...new Set(list)];
+    return { left: unique(out.left), right: unique(out.right), leftUnsided: unique(out.leftUnsided) };
+  })()`);
+
 async function railUnchanged(page: Page): Promise<void> {
   await expect(page.getByRole("toolbar", { name: "Tools" }).getByRole("button")).toHaveText([
     ...(process.env.VITE_ENABLE_LAND_EXPLORATION === "true" ? ["Land"] : []),
@@ -405,6 +437,17 @@ test("under cesium, Compare › Dates draws two dates either side of the divider
   expect(halves.rightDates).toBeGreaterThan(0.02);
   expect(halves.leftVsMar).toBeLessThan(halves.leftVsJun / 2);
   expect(halves.rightVsJun).toBeLessThan(halves.rightVsMar / 2);
+
+  // A pick at a point on screen (Measure, selection, the orbit pivot) answers from the date
+  // drawn there: across a grid of points, never the other side's date.
+  const picks = await sidePicks(page);
+  test.info().annotations.push({ type: "picks by side", description: JSON.stringify(picks) });
+  expect(picks.left).not.toContain(A2);
+  expect(picks.right).not.toContain(A1);
+  expect(picks.left).toContain(A1);
+  expect(picks.right).toContain(A2);
+  // The check bites: without the point on screen, June's solids answered left of the divider.
+  expect(picks.leftUnsided).toContain(A2);
 
   // The divider moves the split: ten steps left, to 0.3, and June now begins there.
   await slider.focus();
