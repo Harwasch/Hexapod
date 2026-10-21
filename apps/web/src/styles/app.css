@@ -2475,13 +2475,22 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
 }
 
 /* ---- Change drape (features/change, ADR 0018) ------------------------------ */
+/* The dock shrinks its items (min-height: 0): the legend scrolls rather than squeezing its
+   lines into one another, as it did with vegetation's key open on a short view. */
 .change-drape {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
   max-width: 22rem;
+  min-height: 0;
+  overflow-y: auto;
   font-size: var(--text-xs);
   color: var(--text-secondary);
+}
+
+.change-drape > *,
+.change-drape__vegetation > * {
+  flex-shrink: 0;
 }
 
 .change-drape__head {

@@ -225,10 +225,10 @@ function Drape({ request }: { request: ChangeDrapeRequest }) {
         <p className="change-drape__state">Loading the change map…</p>
       ) : (
         <>
+          <p className="glass-eyebrow">Ground</p>
           <p className="change-drape__label" data-testid="change-drape-label">
             {changeLabel(map.ground)}
           </p>
-          <p className="glass-eyebrow">Ground</p>
           <LayerRows layer={map.ground} testId="change-row" />
           {verdicts && (
             <p className="change-drape__note" data-testid="change-drape-placement">
@@ -238,13 +238,13 @@ function Drape({ request }: { request: ChangeDrapeRequest }) {
           <p className="change-drape__note">{calibrationNote(map, from && to ? [from, to] : [])}</p>
           {outlinedNote(map, map.ground)}
           <div className="setting change-drape__layer">
-            <span className="setting__label" id="change-vegetation-label">
+            <span className="setting__label" id="change-vegetation-switch-label">
               {VEGETATION_TITLE}
             </span>
             <GlassSwitch
               checked={vegetation}
               onCheckedChange={setVegetation}
-              aria-labelledby="change-vegetation-label"
+              aria-labelledby="change-vegetation-switch-label"
             />
           </div>
           {vegetation && (
