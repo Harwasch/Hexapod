@@ -7,15 +7,9 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  allotments,
-  poseView,
-  roomForRoots,
-  RuleDates,
-  type DatesBackend,
-} from "@/cesium/scanView/ruleDates";
+import { allotments, poseView, RuleDates, type DatesBackend } from "@/cesium/scanView/ruleDates";
 import { RULE_KIT } from "@/cesium/scanView/ruleKit";
-import { namedKit, type RuleDate } from "@/cesium/scanView/scanRule";
+import { namedKit, roomForRoots, type RuleDate } from "@/cesium/scanView/scanRule";
 import type { LayerLook } from "@/cesium/scanView/layerLook";
 import type { ScanPose } from "@/cesium/scanView/types";
 import { useSettings } from "@/state/settings";

@@ -70,6 +70,15 @@ export interface RuleDate {
   root: number[];
 }
 
+/**
+ * Whether these roots (the scan's and each date's) fit `budget`, the device's: if not, no split
+ * draws every date within it, and the date is not added: the renderer refuses the rule or
+ * comparison (its `refuse`), whose session ends it, saying why (ruleDates.ts `allotments`).
+ */
+export function roomForRoots(budget: number, roots: readonly number[]): boolean {
+  return roots.reduce((sum, root) => sum + root, 0) <= budget;
+}
+
 /** A rule, as the renderer drawing the scan is handed it. */
 export interface ScanRuleView {
   /** The owner plane's cells in the scan's frame: (i0, j0, ni, nj), and their size (m). */
@@ -97,6 +106,14 @@ export interface ScanRuleView {
    * rule leaves it out). With each date's `owns`, what one budget is split by (ruleDates.ts).
    */
   scanOwns: readonly number[];
+  /** The gaussians of the root tile of the scan the renderer draws (0 or absent: unknown). */
+  scanRoot?: number;
+  /**
+   * Told by the renderer, with how many dates (the scan included), that their roots do not fit
+   * its device's budget (`roomForRoots`): it streams none of the other dates, and the session
+   * ends the rule, saying why.
+   */
+  refuse?: (dates: number) => void;
   /** Data age under the rule: each cell by its owner's age (`ownerAgeGrid`), else null. */
   age: CellLookView | null;
 }

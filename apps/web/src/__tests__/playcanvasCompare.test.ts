@@ -346,7 +346,7 @@ describe("two dates compared under PlayCanvas", () => {
   });
   afterEach(() => {
     vi.unstubAllGlobals();
-    for (const id of ["june-a", "june-b", "june-c", "june-d", "june-e", "march"]) {
+    for (const id of ["june-a", "june-b", "june-c", "june-d", "june-e", "june-f", "march"]) {
       publishScanCompare(id, null);
       publishScanSun(id, null);
       publishScanCellView(id, null);
@@ -417,6 +417,29 @@ describe("two dates compared under PlayCanvas", () => {
     expect(scanCompareReading("june-b")).toMatchObject({ on: false });
     expect(scanCompareReading("june-b")?.left.dates).toBe(0);
     expect(backend.loadFactor).toBe(1);
+    backend.destroy();
+  });
+
+  it("refuses a left date whose root does not fit beside the scan's in the device's budget", async () => {
+    const fetched = serveMarch();
+    // The device's budget is 1M (`backendFor`): 600k roots on either side cannot both be held.
+    const { backend } = await backendFor("june-f");
+    const refuse = vi.fn();
+    const too = view();
+    publishScanCompare("june-f", {
+      ...too,
+      left: { ...too.left, rootGaussians: 600_000 },
+      scanRoot: 600_000,
+      refuse,
+    });
+    expect(refuse).toHaveBeenCalledWith(2);
+    for (let i = 0; i < 10; i += 1) {
+      backend.render(pose);
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(fetched).not.toContain(MARCH);
+    expect(backend.loadFactor).toBe(1);
+    publishScanCompare("june-f", null);
     backend.destroy();
   });
 

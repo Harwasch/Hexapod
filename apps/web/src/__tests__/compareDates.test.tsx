@@ -19,6 +19,7 @@ import { CompareDates } from "@/features/compare/CompareDates";
 import { clearHistory, undo } from "@/state/history";
 import { useRendererOverride, useSettings, type SplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
+import { compareRoomKey, useSplatRoom } from "@/state/splatRoom";
 import { useViewRule } from "@/state/viewRule";
 
 import { A1, E1, E2, SITE_ID, epoch, splat, twoEpochSite } from "./epochFixtures";
@@ -128,6 +129,22 @@ describe("Compare › Dates", () => {
     expect(toggle()).toBeEnabled();
     expect(screen.getByLabelText("Left of the divider")).toBeEnabled();
     expect(screen.queryByTestId("compare-dates-needs-renderer")).toBeNull();
+  });
+
+  it("under PlayCanvas, is held off, saying why, for a pair whose roots had no room", () => {
+    // PlayCanvas refused this pair: its two root tiles alone pass the device's budget.
+    useSplatRoom.setState({ compare: { key: compareRoomKey(SITE_ID, E1.id, E2.id), dates: 2 } });
+    show(twoEpochSite(), "playcanvas");
+    expect(screen.getByRole("switch", { name: "Swipe between dates" })).toBeDisabled();
+    expect(screen.getByTestId("compare-dates-room")).toHaveTextContent(
+      "Not enough room to draw 2 dates on this device",
+    );
+    cleanup();
+    // CesiumJS draws the pair by its own budget: offered.
+    show(twoEpochSite(), "cesium");
+    expect(screen.getByRole("switch", { name: "Swipe between dates" })).toBeEnabled();
+    expect(screen.queryByTestId("compare-dates-room")).toBeNull();
+    useSplatRoom.setState({ compare: null });
   });
 
   it("under Spark: disabled, says it needs CesiumJS or PlayCanvas, and switches in one click", async () => {

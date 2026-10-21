@@ -162,7 +162,7 @@ export interface Holder {
  * two 300k roots drew 600k) -- then its share of what the roots leave. The scan's root is held
  * whatever its share (its host keeps it); a date with no share holds nothing, its root neither.
  * A budget below the roots leaves each holder its root alone: whether the roots fit at all is
- * decided before a date is added (`roomForRoots`, against the device's budget).
+ * decided before a date is added (scanRule.ts `roomForRoots`, against the device's budget).
  */
 export function allotments(
   budget: number,
@@ -175,15 +175,6 @@ export function allotments(
     scan: scan.root + scan.share * spare,
     dates: dates.map((d) => (d.share > 0 ? d.root + d.share * spare : 0)),
   };
-}
-
-/**
- * Whether these roots (the scan's and each date's) fit `budget`, the device's: if not, no split
- * draws every date within it, and the date is not added (the renderer refuses the rule or
- * comparison, which ends, saying why).
- */
-export function roomForRoots(budget: number, roots: readonly number[]): boolean {
-  return roots.reduce((sum, root) => sum + root, 0) <= budget;
 }
 
 /** Cells sampled at most for the shares, the plane thinned evenly past it. */

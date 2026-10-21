@@ -560,6 +560,56 @@ describe("the other dates a rule draws under PlayCanvas", () => {
   });
 });
 
+describe("a rule whose roots do not fit the device under PlayCanvas", () => {
+  beforeEach(() => {
+    vi.stubGlobal("Worker", FakeWorker);
+    pc.entities.length = 0;
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    publishScanRule("rule-g", null);
+  });
+
+  it("is refused: the renderer says so, and streams no date for it", async () => {
+    const JUNE = "https://scan.test/june/tileset.json";
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      fetched.push(url);
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ root: {} }) });
+    });
+    lendRuleKit(RULE_KIT);
+    // The device's budget is 1M (`backendFor`): two 600k roots cannot both be held.
+    const { backend } = await backendFor("rule-g");
+    const refuse = vi.fn();
+    const june = {
+      url: JUNE,
+      assetId: "june",
+      owns: [1],
+      extras: {},
+      placement: null,
+      root: IDENTITY,
+      rootGaussians: 600_000,
+    };
+    publishScanRule("rule-g", view({ dates: [june], scanRoot: 600_000, refuse }));
+    expect(refuse).toHaveBeenCalledWith(2);
+    for (let i = 0; i < 10; i += 1) {
+      backend.render(pose);
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(fetched).not.toContain(JUNE);
+    expect(backend.loadFactor).toBe(1);
+    // Roots that fit (400k + 600k): drawn, nothing refused.
+    const fits = vi.fn();
+    publishScanRule(
+      "rule-g",
+      view({ dates: [{ ...june, rootGaussians: 400_000 }], scanRoot: 600_000, refuse: fits }),
+    );
+    expect(fits).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(fetched).toContain(JUNE), { timeout: 20_000 });
+    backend.destroy();
+  });
+});
+
 describe("the rule's weight on a colour-only copy", () => {
   it("reads the splat's spread back from the work buffer, where the copy hands none over", () => {
     // PlayCanvas re-copies an SH splat's colour alone, and for a SOG skips

@@ -36,6 +36,13 @@ export const SIDE_RIGHT = 2;
 export interface ScanCompareView {
   /** The left-hand date, streamed beside the scan, placed in its frame. */
   left: RuleDate;
+  /** The gaussians of the root tile of the scan the renderer draws (0 or absent: unknown). */
+  scanRoot?: number;
+  /**
+   * Told by the renderer, with how many dates, that their roots do not fit its device's budget
+   * (scanRule.ts `roomForRoots`): it streams no left date, and the session ends the comparison.
+   */
+  refuse?: (dates: number) => void;
   /** The divider: the share of the canvas's width left of it (`scene.splitPosition`). */
   split: number;
   /** The scan's frame to Earth-fixed now (its root's computed transform): for the picks. */

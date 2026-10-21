@@ -9,10 +9,12 @@ import { formatEpochDate, observedAtFromUpload } from "@/lib/epochs";
 import type { Epoch } from "@twin/contracts";
 import { useAsCaptured } from "@/state/asCaptured";
 import { useLiving } from "@/state/living";
+import { useSplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
+import { ruleRoomKey, useSplatRoom } from "@/state/splatRoom";
 import { useViewRule, type ViewRuleLegend } from "@/state/viewRule";
 
-import { VIEW_RULE_ENDED, VIEW_RULE_TEXT as RULE_TEXT, VIEW_RULES } from "./ruleText";
+import { roomText, VIEW_RULE_ENDED, VIEW_RULE_TEXT as RULE_TEXT, VIEW_RULES } from "./ruleText";
 
 /**
  * A date as the key names it: its capture date, or -- dated only by its upload -- said to be
@@ -119,7 +121,13 @@ export function RuleControl({
   const compare = useSites((s) => s.compareDates?.siteId === siteId);
   const rigged = useLiving((s) => s.status.sites.some((site) => site.siteId === siteId));
   const held = useAsCaptured((s) => s.on);
-  const disabled = !drawable || rigged || (tooMany && !active);
+  // Refused by PlayCanvas for want of room, as of this date: held off until another As of.
+  const renderer = useSplatRenderer();
+  const asOf = useSites((s) => s.epoch[siteId] ?? null);
+  const room = useSplatRoom((s) => s.rule);
+  const noRoom =
+    !active && renderer === "playcanvas" && room?.key === ruleRoomKey(siteId, asOf) ? room : null;
+  const disabled = !drawable || rigged || (tooMany && !active) || noRoom !== null;
   return (
     <div className="views__rule" data-testid="views-rule">
       <label className="views__rule-label" htmlFor="views-rule-select">
@@ -153,7 +161,12 @@ export function RuleControl({
           {RULE_TEXT.compare}
         </span>
       )}
-      {!active && ended && (
+      {noRoom && (
+        <span className="views__notice" role="note" data-testid="views-rule-room">
+          {roomText(noRoom.dates)}
+        </span>
+      )}
+      {!active && ended && !noRoom && (
         <span className="views__notice" role="status" data-testid="views-rule-ended">
           {VIEW_RULE_ENDED[ended]}
         </span>

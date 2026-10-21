@@ -29,6 +29,7 @@ import type { ViewRule } from "@/lib/compositor";
 import { useAsCaptured } from "@/state/asCaptured";
 import { useSettings } from "@/state/settings";
 import { useViewMode } from "@/state/viewMode";
+import { useSplatRoom } from "@/state/splatRoom";
 import { useViewRule } from "@/state/viewRule";
 
 import { A1, A2, datedSite, E1, E2 } from "./epochFixtures";
@@ -130,7 +131,7 @@ async function harness(
     representation: "gaussian-splat",
     epochs: [E1, E2],
     epochId: null,
-    site: { assets: [A1, A2] },
+    site: { id: "site-epochs", assets: [A1, A2] },
     // June copies March's placement (SiteManager `followAnchor`).
     handles: new Map([
       [A1.id, { tileset: march as never }],
@@ -471,6 +472,24 @@ describe("a view rule's session", () => {
 });
 
 describe("a view rule's session under PlayCanvas", () => {
+  afterEach(() => useSplatRoom.setState({ rule: null, compare: null }));
+
+  it("hands over each date's root, and ends the rule, saying why, when the renderer has no room", async () => {
+    const { march, june, handle, frame, end } = await harness("latest", { renderer: "playcanvas" });
+    // The tilesets' roots, as their tileset.json says (extras.gaussians).
+    march.root.extras.gaussians = 300_000;
+    june.root.extras.gaussians = 200_000;
+    await frame();
+    const view = ruleFor(A2.id);
+    expect(view?.scanRoot).toBe(200_000);
+    expect(view?.dates[0]?.rootGaussians).toBe(300_000);
+    // The renderer finds the roots do not fit its device's budget (scanRule.ts roomForRoots).
+    view?.refuse?.(2);
+    expect(end).toHaveBeenCalledWith("room");
+    expect(useSplatRoom.getState().rule).toEqual({ key: "site-epochs|", dates: 2 });
+    handle.dispose();
+  });
+
   const MARCH = "https://tiles.example/march/tileset.json";
   const JUNE = "https://tiles.example/june/tileset.json";
 

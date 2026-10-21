@@ -75,6 +75,7 @@ import { MAX_RULE_DATES, perCellDrawable, ruleDateCount } from "@/lib/viewModes"
 import { effectiveInferredStyle, useAsCaptured } from "@/state/asCaptured";
 import { useSettings } from "@/state/settings";
 import { useViewMode } from "@/state/viewMode";
+import { ruleRoomKey, useSplatRoom } from "@/state/splatRoom";
 import { useViewRule, type LeftOut, type ViewRuleLegend } from "@/state/viewRule";
 
 import { companionGroups, ruledObjects, setCompanions, type CompanionHost } from "./companions";
@@ -83,6 +84,7 @@ import {
   IDENTITY,
   placedIn,
   relative,
+  rootGaussians,
   rootTransform,
   times,
   urlOf,
@@ -126,7 +128,7 @@ export interface CompositorSite {
   epochs: readonly Epoch[];
   /** The date chosen (the capture-date control's): "As of" it. Null for the latest. */
   epochId: string | null;
-  site: { assets: readonly SiteAsset[] };
+  site: { id?: string; assets: readonly SiteAsset[] };
   /**
    * Each loaded model, the asset whose placement it copies (`followAnchor`), if any, and
    * whether that is still being decided.
@@ -831,6 +833,9 @@ export function startCompositor(
               url: d.url,
               assetId: d.assetId,
               owns: ownsOf(source),
+              ...(rootGaussians(d.tileset) === undefined
+                ? {}
+                : { rootGaussians: rootGaussians(d.tileset) }),
               extras: d.extras,
               placement: d.placement,
               root: d.root,
@@ -848,7 +853,7 @@ export function startCompositor(
       ageKey,
       reach,
       tuning.enabled,
-      others.map((d) => [d.url, d.placement, d.root, d.owns]),
+      others.map((d) => [d.url, d.placement, d.root, d.owns, d.rootGaussians]),
     ]);
     if (published?.key !== key || published.assetId !== target.assetId) {
       const view: ScanRuleView = {
@@ -858,6 +863,17 @@ export function startCompositor(
         sources: bySource,
         native: native >= 0 && native < drawn.length ? native : NO_OWNER,
         scanOwns,
+        ...(rootGaussians(target.tileset) === undefined
+          ? {}
+          : { scanRoot: rootGaussians(target.tileset) }),
+        // The dates' roots do not fit the device's budget (the renderer's own check): the rule
+        // ends, saying so, and the control holds it off for this As of.
+        refuse: (dates) => {
+          useSplatRoom.setState({
+            rule: { key: ruleRoomKey(site.site.id ?? "", site.epochId), dates },
+          });
+          context.end("room");
+        },
         tinted,
         reach,
         enabled: tuning.enabled,

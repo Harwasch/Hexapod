@@ -27,6 +27,7 @@ import type { PerformanceManager } from "@/cesium/PerformanceManager";
 import type * as Tiles from "@/cesium/providers/tiles";
 import type * as Footprints from "@/cesium/scanFootprint";
 import { SiteManager } from "@/cesium/SiteManager";
+import { compareRoomKey, useSplatRoom } from "@/state/splatRoom";
 import type { SceneEvents } from "@/cesium/types";
 import { publishScanCompare, scanCompareOf } from "@/cesium/scanView/scanCompare";
 import { Emitter } from "@/lib/emitter";
@@ -361,6 +362,24 @@ describe("comparing two dates of a site", () => {
     expect(scanCompareOf(A2.id)).toBeNull();
     const scene = (manager as unknown as { scene: { preUpdate: Event } }).scene;
     expect(scene.preUpdate.numberOfListeners).toBe(0);
+  });
+
+  it("under PlayCanvas, ends when the renderer has no room for both dates' roots, saying so", async () => {
+    publishScanCompare(A2.id, null);
+    const { manager, said } = harness();
+    await open(manager, "playcanvas");
+    await manager.setCompareDates(BOTH);
+    await vi.waitFor(() => expect(scanCompareOf(A2.id)?.left.assetId).toBe(A1.id));
+    // PlayCanvas finds the two roots do not fit its device's budget (scanRule.ts roomForRoots).
+    scanCompareOf(A2.id)?.refuse?.(2);
+    await settle();
+    expect(manager.compareDates()).toBeNull();
+    expect(said).toEqual([BOTH, null]);
+    expect(useSplatRoom.getState().compare).toEqual({
+      key: compareRoomKey(SITE_ID, E1.id, E2.id),
+      dates: 2,
+    });
+    useSplatRoom.setState({ compare: null });
   });
 
   it("is kept across a switch between CesiumJS and PlayCanvas, each drawing both dates", async () => {
