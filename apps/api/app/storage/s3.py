@@ -13,6 +13,7 @@ from app.storage.base import (
     MultipartPart,
     ObjectPage,
     ObjectSummary,
+    RangeNotHonouredError,
     StoredObject,
     normalise_etag,
     quote_etag,
@@ -178,11 +179,23 @@ class S3Storage:
             if str(error.response.get("Error", {}).get("Code", "")) == "InvalidRange":
                 return b""
             raise
-        data: bytes = response["Body"].read()
-        # A server that ignored the range (a 200) sent the whole object.
-        if not response.get("ContentRange") and len(data) > length:
-            return data[start : start + length]
-        return data[:length]
+        body = response["Body"]
+        try:
+            # Never more than was asked for, whatever the server sends: a server that
+            # ignores Range answers with the whole object, and reading that to check it
+            # is the 12 GB read this method exists to avoid (the cross review of #72).
+            data: bytes = body.read(length)
+        finally:
+            body.close()
+        # `bytes 100-163/1000`: the span after the unit, before the slash.
+        span = str(response.get("ContentRange") or "").removeprefix("bytes ").partition("/")[0]
+        first = span.partition("-")[0]
+        if not first.isdecimal() or int(first) != start:
+            raise RangeNotHonouredError(
+                f"{key}: asked for bytes {start}-{start + length - 1}, answered with "
+                f"{response.get('ContentRange') or 'no Content-Range (the whole object)'}"
+            )
+        return data
 
     def download_file(self, key: str, target: Path) -> int:
         # boto3's managed transfer: ranged GETs written to a temporary file beside the

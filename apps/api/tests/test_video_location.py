@@ -8,12 +8,16 @@ kilobytes and its `mdat` is never touched. The fixtures are synthetic boxes
 
 from __future__ import annotations
 
+import io
 import struct
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from app.services import video_location
 from app.storage import S3Storage
+from app.storage.base import RangeNotHonouredError
 from tests.mov_fixtures import FLOAT32, FLOAT64, box, mov, mp4_with_loci, mp4_with_xyz
 
 SF = "+37.7749-122.4194+010.000/"
@@ -186,3 +190,55 @@ def test_a_crafted_moov_of_many_large_metadata_boxes_costs_a_bounded_read() -> N
 
     assert video_location.read_location(read_at, len(data)) is None
     assert sum(fetched) <= video_location.MAX_READ_BYTES
+
+
+class _Body(io.BytesIO):
+    """A response body that counts what was taken out of it."""
+
+    served = 0
+
+    def read(self, size: int | None = -1) -> bytes:
+        data = super().read(size)
+        self.served += len(data)
+        return data
+
+
+def _offline_s3(response: dict[str, Any]) -> S3Storage:
+    storage = object.__new__(S3Storage)
+    storage._bucket = "offline"
+    storage._client = SimpleNamespace(get_object=lambda **_: response)  # type: ignore[assignment]
+    return storage
+
+
+def test_a_server_that_ignores_the_range_is_refused_after_a_bounded_read() -> None:
+    """From the cross review: a 64 KiB read of an 8 MiB object whose server ignored Range
+    pulled all 8 MiB through `Body.read()` before anything was checked. The body is now
+    read no further than the bytes asked for, and an answer that is not the range asked
+    for is refused, whatever the server did."""
+    body = _Body(mov(iso6709=SF, mdat_bytes=8 * 1024 * 1024))
+
+    with pytest.raises(RangeNotHonouredError):
+        _offline_s3({"Body": body}).get_object_range("clip.mov", 0, 65536)
+
+    assert body.served <= 65536 + 1
+    assert body.closed
+
+
+def test_a_range_answered_from_elsewhere_is_refused() -> None:
+    body = _Body(b"\0" * 64)
+    response = {"Body": body, "ContentRange": "bytes 0-63/1000"}
+
+    with pytest.raises(RangeNotHonouredError):
+        _offline_s3(response).get_object_range("clip.mov", 100, 64)
+
+    honest = {"Body": _Body(b"x" * 64), "ContentRange": "bytes 100-163/1000"}
+    assert _offline_s3(honest).get_object_range("clip.mov", 100, 64) == b"x" * 64
+    # A body longer than its range is cut at the range, never read on.
+    longer = _Body(b"y" * 10_000)
+    assert (
+        _offline_s3({"Body": longer, "ContentRange": "bytes 0-63/10000"}).get_object_range(
+            "clip.mov", 0, 64
+        )
+        == b"y" * 64
+    )
+    assert longer.served <= 65

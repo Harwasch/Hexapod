@@ -24,6 +24,11 @@ DEFAULT_EXPIRES_IN = 3600
 MIN_MULTIPART_PART_SIZE = 5 * 1024 * 1024
 
 
+class RangeNotHonouredError(RuntimeError):
+    """A ranged GET was answered with something other than the range asked for: the
+    whole object (a server that ignores `Range`), or another span of it."""
+
+
 @dataclass(frozen=True)
 class StoredObject:
     """One object that exists in the bucket.
@@ -133,7 +138,9 @@ class ObjectStorage(Protocol):
         at its end, none from past it.
 
         For reading a few boxes out of a 12 GB video (`services/video_location.py`) without
-        downloading any of the rest.
+        downloading any of the rest. Never more than `length` bytes are taken from the
+        response, whatever the server sends; an answer that is not the range asked for
+        raises `RangeNotHonouredError`.
         """
         ...
 
