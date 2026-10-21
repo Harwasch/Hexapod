@@ -4930,6 +4930,61 @@ export interface components {
             unchanged: number;
         };
         /**
+         * ChangeDetectableGridRead
+         * @description Per cell of the layer's area level, the least change it could have seen: `data` is
+         *     base64 of `nj` rows south to north of `ni` little-endian u2 centimetres each, cell
+         *     `(i0 + i, j0 + j)` at `j * ni + i`; `noData` (65535) where nothing was compared.
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        ChangeDetectableGridRead: {
+            /** Cellm */
+            cellM: number;
+            /** Data */
+            data: string;
+            /**
+             * Encoding
+             * @constant
+             */
+            encoding: "u2le-base64-rows-south-to-north";
+            /** I0 */
+            i0: number;
+            /** J0 */
+            j0: number;
+            /** Level */
+            level: number;
+            /** Ni */
+            ni: number;
+            /** Nj */
+            nj: number;
+            /** Nodata */
+            noData: number;
+            /** Unitm */
+            unitM: number;
+        };
+        /**
+         * ChangeDetectableRead
+         * @description The least change a layer could have seen, summed over its compared cells, metres:
+         *     each cell's threshold `t` (whole centimetres, rounded up). A change smaller than a
+         *     cell's is not one the map could see there, so "unchanged" there means "nothing this
+         *     large", never "nothing". Review B5a round 2's ruling: small objects under about a
+         *     metre are not detected yet (ADR 0018 § API, Limits).
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        ChangeDetectableRead: {
+            /** Cells */
+            cells: number;
+            /** Maxm */
+            maxM: number;
+            /** Medianm */
+            medianM: number;
+            /** Minm */
+            minM: number;
+            /** P90M */
+            p90M: number;
+        };
+        /**
          * ChangeLayerRead
          * @description One layer of the change map (ADR 0018 § API): `ground`, the bare earth (P5's `ground`
          *     and `groundSigma`), the primary product; or `vegetation`, the top surface (`dsm` and
@@ -4954,6 +5009,8 @@ export interface components {
             /** Areas */
             areas: components["schemas"]["ChangeArea"][];
             counts: components["schemas"]["ChangeCountsRead"];
+            detectable: components["schemas"]["ChangeDetectableRead"] | null;
+            detectableGrid: components["schemas"]["ChangeDetectableGridRead"];
             /** Driftreachm */
             driftReachM: number;
             /**
@@ -12592,6 +12649,8 @@ export type SchemaCesiumIonTerrainSource = components['schemas']['CesiumIonTerra
 export type SchemaChangeAppearanceRead = components['schemas']['ChangeAppearanceRead'];
 export type SchemaChangeArea = components['schemas']['ChangeArea'];
 export type SchemaChangeCountsRead = components['schemas']['ChangeCountsRead'];
+export type SchemaChangeDetectableGridRead = components['schemas']['ChangeDetectableGridRead'];
+export type SchemaChangeDetectableRead = components['schemas']['ChangeDetectableRead'];
 export type SchemaChangeLayerRead = components['schemas']['ChangeLayerRead'];
 export type SchemaChangeLowConfidenceRead = components['schemas']['ChangeLowConfidenceRead'];
 export type SchemaChangeMapRead = components['schemas']['ChangeMapRead'];

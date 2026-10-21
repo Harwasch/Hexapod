@@ -151,6 +151,8 @@ NO = cell_grid.NO_HEIGHT
 SATURATED = cell_grid.SIGMA_SATURATED
 CM = cell_grid.HEIGHT_UNIT_M
 _I16_MAX = np.int16(np.iinfo(np.int16).max)
+#: `ChangePlanes.threshold_cm` where nothing was compared.
+NO_DETECTABLE = 65535
 
 
 @dataclass(frozen=True)
@@ -649,6 +651,9 @@ class ChangePlanes:
     classes: NDArray[np.int8]
     delta_cm: NDArray[np.int32]
     low: NDArray[np.bool_]
+    #: Per cell the least change it could have seen: its threshold in whole centimetres,
+    #: rounded up; `NO_DETECTABLE` where nothing was compared (and from 655.35 m up).
+    threshold_cm: NDArray[np.uint16]
     #: The least threshold over the compared cells, metres; None when none was compared.
     min_detectable_m: float | None
     uncertainty_from_m: float
@@ -667,6 +672,28 @@ class ChangePlanes:
     def counts(self) -> dict[str, int]:
         return {
             name: int(np.count_nonzero(self.classes == code)) for code, name in enumerate(CLASSES)
+        }
+
+    def detectable(self) -> dict[str, float | int] | None:
+        """The least detectable change over the compared cells, summed up: its least,
+        median, 90th percentile and largest, metres, and how many cells; None when none
+        was compared."""
+        values = self.threshold_cm[self.threshold_cm != NO_DETECTABLE]
+        if values.size == 0:
+            return None
+        ranked = np.sort(values)
+
+        def at(q: float) -> float:
+            return round(
+                float(ranked[min(ranked.size - 1, math.ceil(q * ranked.size) - 1)]) * CM, 2
+            )
+
+        return {
+            "minM": round(float(ranked[0]) * CM, 2),
+            "medianM": at(0.5),
+            "p90M": at(0.9),
+            "maxM": round(float(ranked[-1]) * CM, 2),
+            "cells": int(ranked.size),
         }
 
     def low_counts(self) -> dict[str, int]:
@@ -746,6 +773,7 @@ def change_planes(
     del anywhere
     delta_cm = np.zeros((nj, ni), dtype=np.int32)
     low = np.zeros((nj, ni), dtype=bool)
+    threshold_cm = np.full((nj, ni), NO_DETECTABLE, dtype=np.uint16)
     # Classified on the joint window (where alone both can have a height), a band of rows
     # at a time; the neighbourhoods and the grade are of the whole joint window.
     jw = joint.window
@@ -792,6 +820,11 @@ def change_planes(
         out[both & (up * CM > threshold)] = RAISED
         out[both & (down * CM > threshold)] = LOWERED
         delta_cm[dj + r0 : dj + r1, di : di + jw[2]] = np.where(both, delta, 0)
+        with np.errstate(invalid="ignore"):
+            cm = np.ceil(np.round(threshold / CM, 6))
+        threshold_cm[dj + r0 : dj + r1, di : di + jw[2]] = np.where(
+            both, np.minimum(cm, NO_DETECTABLE), NO_DETECTABLE
+        ).astype(np.uint16)
         if both.any():
             least = min(least, float(threshold[both].min()))
         strong = np.ones(both.shape, dtype=bool)
@@ -812,6 +845,7 @@ def change_planes(
         classes=classes,
         delta_cm=delta_cm,
         low=low,
+        threshold_cm=threshold_cm,
         min_detectable_m=least if math.isfinite(least) else None,
         uncertainty_from_m=ua,
         uncertainty_to_m=ub,

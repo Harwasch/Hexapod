@@ -138,6 +138,44 @@ class ChangeArea(CamelModel):
     max_abs_delta_m: Finite | None
 
 
+class ChangeDetectableRead(CamelModel):
+    """The least change a layer could have seen, summed over its compared cells, metres:
+    each cell's threshold `t` (whole centimetres, rounded up). A change smaller than a
+    cell's is not one the map could see there, so "unchanged" there means "nothing this
+    large", never "nothing". Review B5a round 2's ruling: small objects under about a
+    metre are not detected yet (ADR 0018 § API, Limits).
+
+    Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+    """
+
+    min_m: Finite
+    median_m: Finite
+    p90_m: Finite
+    max_m: Finite
+    #: The compared cells it is of.
+    cells: int
+
+
+class ChangeDetectableGridRead(CamelModel):
+    """Per cell of the layer's area level, the least change it could have seen: `data` is
+    base64 of `nj` rows south to north of `ni` little-endian u2 centimetres each, cell
+    `(i0 + i, j0 + j)` at `j * ni + i`; `noData` (65535) where nothing was compared.
+
+    Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+    """
+
+    level: int
+    cell_m: Finite
+    i0: int
+    j0: int
+    ni: int
+    nj: int
+    unit_m: Finite
+    no_data: int
+    encoding: Literal["u2le-base64-rows-south-to-north"]
+    data: str
+
+
 #: What each layer is, in words a person reads.
 GROUND_LABEL = "Ground: the bare earth"
 VEGETATION_LABEL = (
@@ -169,6 +207,10 @@ class ChangeLayerRead(CamelModel):
     #: The least threshold over the layer's compared cells, metres: no change of this layer
     #: smaller than it can be seen anywhere between these dates. Null when none was compared.
     min_detectable_m: Finite | None
+    #: The least detectable change over the compared cells, summed up (null when none was
+    #: compared), and per cell of the area level.
+    detectable: ChangeDetectableRead | None
+    detectable_grid: ChangeDetectableGridRead
     #: The layer's own motion between visits, per epoch, metres (one standard deviation,
     #: vertical and horizontal): 0 for the ground, 0.25 for vegetation.
     motion_m: Finite

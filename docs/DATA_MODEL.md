@@ -214,7 +214,10 @@ toEpochId, fromAssetId, toAssetId, frame, level, nativeLevel, cellM, thresholdSi
 uncertainty {fromM, toM, fromVerdict, toVerdict, fromFrameM, toFrameM}, ground, vegetation,
 appearance {status: not-computed, reason}}`; each layer (`ground`, the bare earth, primary;
   `vegetation`, the top surface at its own higher threshold) is `{layer, label, heights (ground ·
-dsm), minDetectableM, motionM, horizontalRadiusM, driftReachM, counts {unchanged, raised, lowered,
+dsm), minDetectableM, detectable {minM, medianM, p90M, maxM, cells} (null: none compared),
+detectableGrid {level, cellM, i0, j0, ni, nj, unitM: 0.01, noData: 65535, encoding:
+u2le-base64-rows-south-to-north, data} (each cell's least detectable change, at areaLevel),
+motionM, horizontalRadiusM, driftReachM, counts {unchanged, raised, lowered,
 insufficient}, lowConfidence {unchanged, raised, lowered}, areaLevel, areaCellM, areas (raised,
 lowered and insufficient only; unchanged cells are counted, not outlined): [{class, footprint
 (MultiPolygon), cells, areaM2, lowConfidence, lowConfidenceCells, meanDeltaM, maxAbsDeltaM}]}`. 404

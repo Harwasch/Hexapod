@@ -8,12 +8,14 @@ dug. The answer is in two layers (ground, vegetation), and every refusal has its
 
 from __future__ import annotations
 
+import base64
 import copy
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from shapely.geometry import shape
@@ -226,6 +228,24 @@ def test_the_change_from_e1_to_e2_in_two_layers(
         assert all(a["class"] != "unchanged" for a in areas)
         counts = layer["counts"]
         assert sum(a["cells"] for a in areas) == sum(counts.values()) - counts["unchanged"]
+    # Every layer says what it could see: summed up, and per cell of its area level.
+    for layer in (ground, vegetation):
+        summary = layer["detectable"]
+        assert summary["minM"] == pytest.approx(layer["minDetectableM"], abs=0.01)
+        assert summary["minM"] <= summary["medianM"] <= summary["p90M"] <= summary["maxM"]
+        assert (
+            summary["cells"]
+            == layer["counts"]["unchanged"]
+            + layer["counts"]["raised"]
+            + (layer["counts"]["lowered"])
+        )
+        grid = layer["detectableGrid"]
+        assert (grid["level"], grid["cellM"], grid["unitM"]) == (2, 1.0, 0.01)
+        assert (grid["encoding"], grid["noData"]) == ("u2le-base64-rows-south-to-north", 65535)
+        values = np.frombuffer(base64.b64decode(grid["data"]), dtype="<u2")
+        assert values.size == grid["ni"] * grid["nj"]
+        assert int((values != 65535).sum()) == summary["cells"]
+        assert values[values != 65535].min() / 100 == pytest.approx(summary["minM"], abs=0.01)
     # The saturated sigma is insufficient for the top only; the ground's sigma is not.
     assert vegetation["counts"]["insufficient"] == ground["counts"]["insufficient"] + 1
 

@@ -734,3 +734,27 @@ def test_a_half_metre_crate_is_not_detected_by_either_layer_and_the_map_says_so(
     assert vegetation.min_detectable_m is not None and vegetation.min_detectable_m > 1.0
     assert ground.min_detectable_m is not None and ground.min_detectable_m < 0.5
     # The ground could see half a metre over a wide area; the crate is not ground change.
+
+
+def test_every_compared_cell_says_the_least_change_it_could_see() -> None:
+    """Review B5a round 2's ruling: the map says, per cell and per layer, the least change
+    it could have seen there (its threshold, whole centimetres up, `NO_DETECTABLE` where it
+    compared nothing), and sums it up -- so a 0.5 m crate the map calls unchanged is shown
+    to be under what it could see, not to be absent."""
+    planes = control_pair(("k", "l"), "vegetation")
+    t = planes.threshold_cm
+    assert t.dtype == np.uint16 and t.shape == planes.classes.shape
+    compared = planes.classes >= change.UNCHANGED
+    compared &= planes.classes != change.INSUFFICIENT
+    assert (t[~compared] == change.NO_DETECTABLE).all()
+    crate = t[14:17, 14:17]  # the crate's cells (3.5 to 4.25 m, 0.25 m cells)
+    assert (crate > 50).all() and (crate < change.NO_DETECTABLE).all()
+    summary = planes.detectable()
+    assert summary is not None
+    assert summary["minM"] == pytest.approx(planes.min_detectable_m, abs=0.01)
+    assert summary["minM"] <= summary["medianM"] <= summary["p90M"] <= summary["maxM"]
+    assert summary["cells"] == int(compared.sum())
+    nothing = _change_planes(
+        surface(hole(flat(), slice(0, 20), slice(0, 20))), surface(flat()), 0.0, 0.0, layer="ground"
+    )
+    assert nothing.detectable() is None

@@ -53,6 +53,7 @@ Every answer says it is derived, not observed, and uncalibrated.
 
 from __future__ import annotations
 
+import base64
 import math
 import uuid
 from dataclasses import dataclass
@@ -75,6 +76,8 @@ from app.schemas.change import (
     ChangeAppearanceRead,
     ChangeArea,
     ChangeCountsRead,
+    ChangeDetectableGridRead,
+    ChangeDetectableRead,
     ChangeLayerRead,
     ChangeLowConfidenceRead,
     ChangeMapRead,
@@ -379,11 +382,25 @@ def _layer(
     """One layer of the answer: its compared level's counts, its drawn areas."""
     planes, drawn = found.planes, found.drawn
     area_cell = drawn.cell_m
+    summary = planes.detectable()
     return ChangeLayerRead(
         layer=planes.layer,
         label=label,
         heights=heights,
         min_detectable_m=_metres(planes.min_detectable_m),
+        detectable=ChangeDetectableRead(**summary) if summary is not None else None,
+        detectable_grid=ChangeDetectableGridRead(
+            level=drawn.level,
+            cell_m=drawn.cell_m,
+            i0=drawn.i0,
+            j0=drawn.j0,
+            ni=drawn.ni,
+            nj=drawn.nj,
+            unit_m=analysis.CM,
+            no_data=analysis.NO_DETECTABLE,
+            encoding="u2le-base64-rows-south-to-north",
+            data=base64.b64encode(drawn.threshold_cm.astype("<u2").tobytes()).decode("ascii"),
+        ),
         motion_m=planes.motion_m,
         horizontal_radius_m=round(planes.horizontal_cells * planes.cell_m, 3),
         drift_reach_m=round(planes.drift_reach_m, 3),

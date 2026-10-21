@@ -4137,6 +4137,102 @@
         "title": "ChangeCountsRead",
         "type": "object"
       },
+      "ChangeDetectableGridRead": {
+        "additionalProperties": false,
+        "description": "Per cell of the layer's area level, the least change it could have seen: `data` is\nbase64 of `nj` rows south to north of `ni` little-endian u2 centimetres each, cell\n`(i0 + i, j0 + j)` at `j * ni + i`; `noData` (65535) where nothing was compared.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "cellM": {
+            "title": "Cellm",
+            "type": "number"
+          },
+          "data": {
+            "title": "Data",
+            "type": "string"
+          },
+          "encoding": {
+            "const": "u2le-base64-rows-south-to-north",
+            "title": "Encoding",
+            "type": "string"
+          },
+          "i0": {
+            "title": "I0",
+            "type": "integer"
+          },
+          "j0": {
+            "title": "J0",
+            "type": "integer"
+          },
+          "level": {
+            "title": "Level",
+            "type": "integer"
+          },
+          "ni": {
+            "title": "Ni",
+            "type": "integer"
+          },
+          "nj": {
+            "title": "Nj",
+            "type": "integer"
+          },
+          "noData": {
+            "title": "Nodata",
+            "type": "integer"
+          },
+          "unitM": {
+            "title": "Unitm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "level",
+          "cellM",
+          "i0",
+          "j0",
+          "ni",
+          "nj",
+          "unitM",
+          "noData",
+          "encoding",
+          "data"
+        ],
+        "title": "ChangeDetectableGridRead",
+        "type": "object"
+      },
+      "ChangeDetectableRead": {
+        "additionalProperties": false,
+        "description": "The least change a layer could have seen, summed over its compared cells, metres:\neach cell's threshold `t` (whole centimetres, rounded up). A change smaller than a\ncell's is not one the map could see there, so \"unchanged\" there means \"nothing this\nlarge\", never \"nothing\". Review B5a round 2's ruling: small objects under about a\nmetre are not detected yet (ADR 0018 \u00a7 API, Limits).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "cells": {
+            "title": "Cells",
+            "type": "integer"
+          },
+          "maxM": {
+            "title": "Maxm",
+            "type": "number"
+          },
+          "medianM": {
+            "title": "Medianm",
+            "type": "number"
+          },
+          "minM": {
+            "title": "Minm",
+            "type": "number"
+          },
+          "p90M": {
+            "title": "P90M",
+            "type": "number"
+          }
+        },
+        "required": [
+          "minM",
+          "medianM",
+          "p90M",
+          "maxM",
+          "cells"
+        ],
+        "title": "ChangeDetectableRead",
+        "type": "object"
+      },
       "ChangeLayerRead": {
         "additionalProperties": false,
         "description": "One layer of the change map (ADR 0018 \u00a7 API): `ground`, the bare earth (P5's `ground`\nand `groundSigma`), the primary product; or `vegetation`, the top surface (`dsm` and\n`sigma`: canopy, crops, and anything standing on the ground), with its own motion term\nso that wind in a crown is never a change and growth is never ground change.\n\nPer cell, `delta = h_to - h_from` of the layer's height against\n`t = thresholdSigma * sqrt(s_from^2 + s_to^2 + u_from^2 + u_to^2 + 2 motionM^2) + drift`\n(`drift` the ground envelope's on a slope, up to `grade * driftReachM`; 0 for\nvegetation), each cell against the other epoch's neighbourhood within\n`horizontalRadiusM`: `raised` above `t`, `lowered` below `-t`, else `unchanged`;\n`insufficient` where either measured the layer but they cannot be compared (no shared\nchild, a partial child set, a saturated sigma, ground never observed).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
@@ -4158,6 +4254,19 @@
           },
           "counts": {
             "$ref": "#/components/schemas/ChangeCountsRead"
+          },
+          "detectable": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChangeDetectableRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "detectableGrid": {
+            "$ref": "#/components/schemas/ChangeDetectableGridRead"
           },
           "driftReachM": {
             "title": "Driftreachm",
@@ -4211,6 +4320,8 @@
           "label",
           "heights",
           "minDetectableM",
+          "detectable",
+          "detectableGrid",
           "motionM",
           "horizontalRadiusM",
           "driftReachM",
