@@ -350,6 +350,19 @@ describe("comparing two dates of a site", () => {
     expect(drawn()).toEqual({ [A1.id]: ALONE, [A2.id]: ALONE });
   });
 
+  it("under PlayCanvas, takes the left date back from the renderer as the site unloads, with no frame after", async () => {
+    publishScanCompare(A2.id, null);
+    const { manager } = harness();
+    await open(manager, "playcanvas");
+    await manager.setCompareDates(BOTH);
+    await vi.waitFor(() => expect(scanCompareOf(A2.id)?.left.assetId).toBe(A1.id));
+    // Torn down: no frame follows, so the comparison's session cannot notice on its own.
+    manager.deactivate();
+    expect(scanCompareOf(A2.id)).toBeNull();
+    const scene = (manager as unknown as { scene: { preUpdate: Event } }).scene;
+    expect(scene.preUpdate.numberOfListeners).toBe(0);
+  });
+
   it("is kept across a switch between CesiumJS and PlayCanvas, each drawing both dates", async () => {
     const { manager, said, drawn } = harness();
     await open(manager);

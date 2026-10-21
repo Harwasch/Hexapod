@@ -293,6 +293,8 @@ interface ActiveSite {
    * one date is drawn. `epochId` is kept meanwhile: it is the date shown again after.
    */
   compare: CompareDates | null;
+  /** Lets go of the comparison's session under PlayCanvas at once (compareSession.ts). */
+  stopCompare?: () => void;
   /**
    * A per-cell view rule (`setViewRule`; ADR 0017): the site's dates up to the one chosen drawn
    * as one, each cell from the date the rule picks; null while one date is drawn.
@@ -1457,7 +1459,10 @@ export class SiteManager {
     // PlayCanvas the right-hand date's renderer is handed the left one (compareSession.ts).
     if (dates) {
       this.endRule(active, "compare");
-      void this.rules().then((m) => m.startCompare(this.scene, active, RULE_KIT));
+      void this.rules().then((m) => {
+        active.stopCompare?.();
+        active.stopCompare = m.startCompare(this.scene, active, RULE_KIT);
+      });
     }
     this.events.emit("compare-dates", { siteId: active.site.id, dates: active.compare });
     // A date the comparison has to load is the site's model loading again: the load pill says
@@ -1520,6 +1525,7 @@ export class SiteManager {
   private endCompare(entry: ActiveSite): boolean {
     if (!entry.compare) return false;
     entry.compare = null;
+    entry.stopCompare?.();
     this.events.emit("compare-dates", { siteId: entry.site.id, dates: null });
     return true;
   }

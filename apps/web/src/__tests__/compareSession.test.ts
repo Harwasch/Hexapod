@@ -131,4 +131,17 @@ describe("two dates compared, as PlayCanvas is handed them", () => {
     expect(seen.filter(Boolean)).toHaveLength(0);
     stop();
   });
+
+  it("is let go at once by its disposer, its view taken back, with no frame after", () => {
+    const { scene, entry, seen, stop } = compared();
+    const dispose = startCompare(scene, entry, RULE_KIT);
+    expect(seen.at(-1)?.left.assetId).toBe(A1.id);
+    dispose();
+    expect(seen.at(-1)).toBeNull();
+    expect(scene.preUpdate.numberOfListeners).toBe(0);
+    // A second start for the same pair is a session of its own again.
+    startCompare(scene, entry, RULE_KIT);
+    expect(seen.at(-1)?.left.assetId).toBe(A1.id);
+    stop();
+  });
 });

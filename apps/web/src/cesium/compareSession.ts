@@ -13,7 +13,8 @@
  * dates are (scanView/ruleDates.ts).
  *
  * One session per comparison: it lets go, and takes its view back, once the site's comparison
- * is another pair or none (SiteManager ends it however it ends).
+ * is another pair or none, at the next frame or at once by its disposer (SiteManager calls it
+ * however the comparison ends).
  */
 
 import type { CompareDates } from "@/lib/epochs";
@@ -39,14 +40,18 @@ export interface CompareSite {
 /** The comparisons a session runs for (SiteManager makes a new pair object for each). */
 const running = new WeakSet<object>();
 
-/** Hands the renderer drawing `entry`'s right-hand date its comparison, until it ends. */
+/**
+ * Hands the renderer drawing `entry`'s right-hand date its comparison, until it ends: the next
+ * frame after the pair changes or ends, or at once by the disposer returned (SiteManager calls
+ * it as the comparison ends, so a site torn down with no frame after leaves nothing published).
+ */
 export function startCompare(
   scene: Pick<Scene, "preUpdate" | "splitPosition">,
   entry: CompareSite,
   kit: RuleKit,
-): void {
+): () => void {
   const pair = entry.compare;
-  if (!pair || running.has(pair)) return;
+  if (!pair || running.has(pair)) return () => undefined;
   running.add(pair);
   lendRuleKit(kit);
   let published: { assetId: string; view: ScanCompareView; key: string } | null = null;
@@ -57,11 +62,14 @@ export function startCompare(
     if (mine === null) return;
     if (scanCompareOf(mine.assetId) === mine.view) publishScanCompare(mine.assetId, null);
   };
+  const stop = (): void => {
+    off();
+    running.delete(pair);
+    unpublish();
+  };
   const sync = (): void => {
     if (entry.compare !== pair) {
-      off();
-      running.delete(pair);
-      unpublish();
+      stop();
       return;
     }
     const offered = epochOptions(entry.epochs, entry.site.assets, entry.representation);
@@ -103,4 +111,5 @@ export function startCompare(
   };
   const off = scene.preUpdate.addEventListener(sync);
   sync();
+  return stop;
 }
