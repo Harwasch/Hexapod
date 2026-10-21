@@ -15,11 +15,13 @@ import {
   changeOffer,
   calibrationNote,
   legendRows,
-  placementNotes,
+  vegetationNote,
+  verdictNote,
+  VEGETATION_TITLE,
   NEEDS_TOKEN,
 } from "@/lib/changeDrape";
 
-import { E1, E2, epoch } from "./epochFixtures";
+import { E1, E2 } from "./epochFixtures";
 
 const surface = (extra: Partial<EpochSurface> = {}): EpochSurface => ({
   status: "measured",
@@ -62,7 +64,32 @@ function area(cls: ChangeArea["class"], lowConfidence: boolean, x: number): Chan
     lowConfidenceCells: lowConfidence ? 4 : 0,
     meanDeltaM: cls === "insufficient" ? null : 1.5,
     maxAbsDeltaM: cls === "insufficient" ? null : 1.5,
-    meanGroundDeltaM: cls === "insufficient" ? null : 0,
+  };
+}
+
+type Layer = ChangeMap["ground"];
+
+function layer(name: Layer["layer"], extra: Partial<Layer> = {}): Layer {
+  return {
+    layer: name,
+    label: name === "ground" ? "Ground: the bare earth" : "Vegetation and objects",
+    heights: name === "ground" ? "ground" : "dsm",
+    minDetectableM: name === "ground" ? 0.489 : 1.089,
+    motionM: name === "ground" ? 0 : 0.25,
+    horizontalRadiusM: name === "ground" ? 1 : 2,
+    driftReachM: name === "ground" ? 3.536 : 0,
+    counts: { unchanged: 1137, raised: 47, lowered: 24, insufficient: 72 },
+    lowConfidence: { unchanged: 3, raised: 23, lowered: 0 },
+    areaLevel: 2,
+    areaCellM: 1,
+    areas: [
+      area("insufficient", false, 5),
+      area("raised", true, 1),
+      area("lowered", false, 3),
+      area("raised", false, 2),
+      area("raised", false, 4),
+    ],
+    ...extra,
   };
 }
 
@@ -82,20 +109,17 @@ function map(extra: Partial<ChangeMap> = {}): ChangeMap {
     nativeLevel: 2,
     cellM: 1,
     thresholdSigma: 3,
-    minDetectableM: 0.229,
-    uncertainty: { fromM: 0, toM: 0.062 },
-    counts: { unchanged: 1137, raised: 47, lowered: 24, insufficient: 72 },
-    lowConfidence: { unchanged: 3, raised: 23, lowered: 0 },
+    uncertainty: {
+      fromM: 0.03,
+      toM: 0.062,
+      fromVerdict: "survey",
+      toVerdict: "survey",
+      fromFrameM: 0,
+      toFrameM: 0.062,
+    },
+    ground: layer("ground"),
+    vegetation: layer("vegetation"),
     appearance: { status: "not-computed", reason: "needs the new photos" },
-    areaLevel: 2,
-    areaCellM: 1,
-    areas: [
-      area("insufficient", false, 5),
-      area("raised", true, 1),
-      area("lowered", false, 3),
-      area("raised", false, 2),
-      area("raised", false, 4),
-    ],
     ...extra,
   };
 }
@@ -128,19 +152,21 @@ describe("the offer", () => {
 });
 
 describe("the label", () => {
-  it("says it is derived, and the least change these dates can show", () => {
-    expect(changeLabel(map())).toBe(
-      "Derived from height surfaces — not observed · changes under ±0.23 m cannot be seen between these dates",
+  it("says it is derived, and the least change each layer can show", () => {
+    expect(changeLabel(map().ground)).toBe(
+      "Derived from height surfaces — not observed · changes under ±0.49 m cannot be seen between these dates",
     );
-    expect(changeLabel(map({ minDetectableM: 30 }))).toContain("changes under ±30 m cannot");
+    expect(changeLabel(map().vegetation)).toContain("changes under ±1.1 m cannot");
+    const ground = (minDetectableM: number | null) => layer("ground", { minDetectableM });
+    expect(changeLabel(ground(30))).toContain("changes under ±30 m cannot");
     // Rounded up, never down: the floor is not understated.
-    expect(changeLabel(map({ minDetectableM: 0.124 }))).toContain("changes under ±0.13 m cannot");
-    expect(changeLabel(map({ minDetectableM: 0.191 }))).toContain("changes under ±0.2 m cannot");
-    expect(changeLabel(map({ minDetectableM: 0.12 }))).toContain("changes under ±0.12 m cannot");
+    expect(changeLabel(ground(0.124))).toContain("changes under ±0.13 m cannot");
+    expect(changeLabel(ground(0.191))).toContain("changes under ±0.2 m cannot");
+    expect(changeLabel(ground(0.12))).toContain("changes under ±0.12 m cannot");
   });
 
   it("says so when no cell could be compared", () => {
-    expect(changeLabel(map({ minDetectableM: null }))).toBe(
+    expect(changeLabel(layer("ground", { minDetectableM: null }))).toBe(
       "Derived from height surfaces — not observed · no cell could be compared between these dates",
     );
   });
@@ -155,41 +181,31 @@ describe("the label", () => {
       "Uncalibrated: the 3σ rule is first principles until a site scanned twice measures it",
     );
   });
+
+  it("names vegetation for what it is, and its sway as uncalibrated", () => {
+    expect(VEGETATION_TITLE).toBe(
+      "Vegetation: canopy height change, higher threshold, wind and growth not ground change",
+    );
+    expect(vegetationNote(map(), map().vegetation)).toBe(
+      "Uncalibrated: the 3σ rule and ±0.25 m of wind sway per date are first principles until a site scanned twice measures them",
+    );
+  });
 });
 
 describe("the placement it is only as good as", () => {
-  it("names a date aligned visually or not at all as not survey-grade", () => {
-    const coarse = {
-      ...E2,
-      alignment: { verdict: "coarse", uncertaintyM: 0.062 },
-    } as unknown as Epoch;
-    expect(placementNotes([E1, coarse], E1, coarse, E1)).toEqual([
-      "Jun 1, 2026: Phone video, aligned visually, ±0.062 m — not survey-grade",
-    ]);
-    const unaligned = { ...E2, alignment: { verdict: "unaligned" } } as unknown as Epoch;
-    expect(placementNotes([E1, unaligned], E1, unaligned, E1)).toEqual([
-      "Jun 1, 2026: Not aligned: placed by its own GPS — not survey-grade",
-    ]);
+  it("says nothing when both dates are survey-grade", () => {
+    expect(verdictNote(map().uncertainty, E1, E2)).toBeNull();
   });
 
-  it("never lets a phone date read survey-grade, whatever its record says", () => {
-    const claims = {
-      ...E2,
-      alignment: { verdict: "survey", uncertaintyM: 0.01 },
-    } as unknown as Epoch;
-    expect(placementNotes([E1, claims], E1, claims, E1)).toEqual([
-      "Jun 1, 2026: Phone video, aligned visually, ±0.01 m — not survey-grade",
-    ]);
-  });
-
-  it("says nothing of the date that made the frame, or one at the survey tier", () => {
-    const rtk = epoch("e3", {
-      ordinal: 3,
-      platform: "rtk-drone",
-      observedAt: "2026-07-01T15:00:00Z",
-      alignment: { verdict: "survey", uncertaintyM: 0.02 },
-    } as unknown as Partial<Epoch>);
-    expect(placementNotes([E1, E2, rtk], E1, rtk, E1)).toEqual([]);
+  it("says not survey-grade, with each date's verdict, when either is coarse", () => {
+    const coarse = { ...map().uncertainty, toM: 5, toVerdict: "coarse" as const };
+    expect(verdictNote(coarse, E1, E2)).toBe(
+      "Not survey-grade: Mar 1, 2026 survey (±0.03 m) · Jun 1, 2026 coarse (±5 m)",
+    );
+    const both = { ...coarse, fromM: 2, fromVerdict: "coarse" as const };
+    expect(verdictNote(both, E1, E2)).toBe(
+      "Not survey-grade: Mar 1, 2026 coarse (±2 m) · Jun 1, 2026 coarse (±5 m)",
+    );
   });
 });
 
@@ -209,10 +225,16 @@ describe("a refusal", () => {
       "frames-differ",
       "surface-unreadable",
       "confidence-unreadable",
+      "epoch-unaligned",
+      "not-metric",
+      "scale-corrected",
     ];
     const said = codes.map((code) => changeError(409, code));
     expect(new Set(said).size).toBe(codes.length);
     expect(changeError(409, "confidence-not-measured")).toMatch(/no confidence map/);
+    expect(changeError(409, "epoch-unaligned")).toMatch(/not aligned/);
+    expect(changeError(409, "not-metric")).toMatch(/not in metres/);
+    expect(changeError(409, "scale-corrected")).toMatch(/scale/);
     expect(changeError(409, "something-new")).toMatch(/409/);
   });
 
@@ -226,7 +248,7 @@ describe("a refusal", () => {
 
 describe("the drawing", () => {
   it("is one draw per class and confidence, raised first, each with every polygon of its areas", () => {
-    const buckets = changeBuckets(map());
+    const buckets = changeBuckets(map().ground);
     expect(
       buckets.map((b) => [b.cls, b.lowConfidence, b.areas, b.cells, b.polygons.length]),
     ).toEqual([
@@ -241,20 +263,20 @@ describe("the drawing", () => {
       footprint: { type: "Polygon", coordinates: square(9, 0) },
     };
     expect(
-      changeBuckets(map({ areas: [polygon as unknown as ChangeArea] }))[0]?.polygons,
+      changeBuckets(layer("ground", { areas: [polygon as unknown as ChangeArea] }))[0]?.polygons,
     ).toHaveLength(1);
   });
 
   it("draws nothing for no areas, and never an unchanged one", () => {
-    expect(changeBuckets(map({ areas: [] }))).toEqual([]);
+    expect(changeBuckets(layer("ground", { areas: [] }))).toEqual([]);
     const unchanged = { ...area("raised", false, 1), class: "unchanged" } as unknown as ChangeArea;
-    expect(changeBuckets(map({ areas: [unchanged] }))).toEqual([]);
+    expect(changeBuckets(layer("ground", { areas: [unchanged] }))).toEqual([]);
   });
 });
 
 describe("the legend", () => {
   it("counts every class, low confidence among them, and unchanged as counted only", () => {
-    expect(legendRows(map())).toEqual([
+    expect(legendRows(map().ground)).toEqual([
       { key: "raised", label: "Raised", cells: 47, lowConfidence: 23, drawn: true },
       { key: "lowered", label: "Lowered", cells: 24, lowConfidence: 0, drawn: true },
       { key: "insufficient", label: "Not comparable", cells: 72, lowConfidence: 0, drawn: true },

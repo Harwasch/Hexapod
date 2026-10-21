@@ -4,27 +4,40 @@
  * Cesium-free: the legend, the Compare › Dates offer and the drawing all read it.
  *
  * The map is derived from the two dates' height surfaces, never observed and never from splat
- * pixels, and uncalibrated: the drape says so, with the least change it can show between those
- * dates, and names a date whose placement is not survey-grade, so a phone video never reads as
- * a survey.
+ * pixels, and uncalibrated: the drape says so, with the least change each layer can show
+ * between those dates, and says when a date's placement is not survey-grade, so a phone video
+ * never reads as a survey. It comes in two layers (ADR 0018 § API 2): the ground, the primary
+ * product, and vegetation (the top surface), at its own higher threshold and never ground
+ * change; each is keyed and drawn on its own.
  */
 import type { Position } from "geojson";
 
 import type { ChangeArea, ChangeMap, Epoch, EpochSurface } from "@twin/contracts";
 import { polygonsOf } from "@twin/geo";
 
-import { alignmentLabel, formatEpochDate } from "@/lib/epochs";
+import { formatEpochDate } from "@/lib/epochs";
+
+/** One layer of a change map: the ground, or vegetation and objects. */
+export type ChangeLayer = ChangeMap["ground"];
+export type ChangeLayerName = ChangeLayer["layer"];
+
+/** How the vegetation layer is named wherever it is shown, apart from the ground. */
+export const VEGETATION_TITLE =
+  "Vegetation: canopy height change, higher threshold, wind and growth not ground change";
 
 /** The classes a change map outlines; unchanged cells are counted, never outlined. */
 export type ChangeClass = ChangeArea["class"];
 
 export const CHANGE_CLASSES: readonly ChangeClass[] = ["raised", "lowered", "insufficient"];
 
-/** Each class's colour, on the ground and in the legend: warm up, cool down, grey unknown. */
-export const CHANGE_COLORS: Record<ChangeClass, string> = {
-  raised: "#f08c3a",
-  lowered: "#3a9cf0",
-  insufficient: "#a3a7ad",
+/**
+ * Each layer's class colours, on the ground and in its legend. The ground: warm up, cool down,
+ * grey unknown. Vegetation in hues of its own (green up, violet down), so the two are never
+ * read as one where both are drawn.
+ */
+export const CHANGE_COLORS: Record<ChangeLayerName, Record<ChangeClass, string>> = {
+  ground: { raised: "#f08c3a", lowered: "#3a9cf0", insufficient: "#a3a7ad" },
+  vegetation: { raised: "#4cc37f", lowered: "#b37be0", insufficient: "#a3a7ad" },
 };
 
 export const CHANGE_LABELS: Record<ChangeClass | "unchanged", string> = {
@@ -83,8 +96,8 @@ function plusMinus(m: number): string {
   return `±${String(Number((Math.ceil(m / step - 1e-9) * step).toPrecision(2)))} m`;
 }
 
-/** The drape's one line on what it is, and the least change it can show. */
-export function changeLabel(map: Pick<ChangeMap, "minDetectableM">): string {
+/** A layer's one line on what it is, and the least change it can show. */
+export function changeLabel(map: Pick<ChangeLayer, "minDetectableM">): string {
   const floor =
     map.minDetectableM === null
       ? "no cell could be compared between these dates"
@@ -110,23 +123,28 @@ export function calibrationNote(map: Pick<ChangeMap, "thresholdSigma">, epochs: 
     : `Uncalibrated: ${rule} is first principles until a site scanned twice measures it`;
 }
 
+/** The vegetation layer's uncalibrated parts: the rule, and the wind sway allowed per date. */
+export function vegetationNote(
+  map: Pick<ChangeMap, "thresholdSigma">,
+  layer: Pick<ChangeLayer, "motionM">,
+): string {
+  return `Uncalibrated: the ${String(map.thresholdSigma)}σ rule and ${plusMinus(layer.motionM)} of wind sway per date are first principles until a site scanned twice measures them`;
+}
+
 /**
- * The dates the map is only as good as: each of the two whose placement is not survey-grade
- * (aligned visually, not aligned, or not yet), in the words the date control uses. The date
- * that made the site frame, and a survey-tier one, need no note; a phone date never reads as
- * survey-grade, whatever its record claims (alignmentLabel, D4).
+ * When either date's placement is coarse (any phone, a drone without RTK evidence: ADR 0018
+ * § API 4), the map says it is not survey-grade, with each date's verdict and the placement
+ * uncertainty it was compared with; null when both are survey-grade.
  */
-export function placementNotes(
-  epochs: readonly Epoch[],
-  from: Epoch,
-  to: Epoch,
-  anchor: Epoch | null,
-): string[] {
-  return [from, to].flatMap((epoch) => {
-    const label = alignmentLabel(epoch, anchor, epochs);
-    if (label.short === "site frame" || label.short === "survey tier") return [];
-    return [`${formatEpochDate(epoch.observedAt)}: ${label.long} — not survey-grade`];
-  });
+export function verdictNote(
+  uncertainty: ChangeMap["uncertainty"],
+  from: Pick<Epoch, "observedAt">,
+  to: Pick<Epoch, "observedAt">,
+): string | null {
+  if (uncertainty.fromVerdict === "survey" && uncertainty.toVerdict === "survey") return null;
+  const side = (epoch: Pick<Epoch, "observedAt">, verdict: string, m: number) =>
+    `${formatEpochDate(epoch.observedAt)} ${verdict} (${plusMinus(m)})`;
+  return `Not survey-grade: ${side(from, uncertainty.fromVerdict, uncertainty.fromM)} · ${side(to, uncertainty.toVerdict, uncertainty.toM)}`;
 }
 
 const REFUSALS: Record<string, string> = {
@@ -139,6 +157,12 @@ const REFUSALS: Record<string, string> = {
     "The two height surfaces are above different origins, so they cannot be compared.",
   "surface-unreadable": "A height surface could not be read.",
   "confidence-unreadable": "A confidence map could not be read.",
+  "epoch-unaligned":
+    "One of these dates is not aligned to the site (no alignment, or placed by its own GPS), so no change is claimed against it.",
+  "not-metric":
+    "One of these dates' heights are not in metres (its scale was never resolved), so they cannot be compared.",
+  "scale-corrected":
+    "One of these dates is drawn at a corrected scale its heights were not measured at, so they cannot be compared.",
 };
 
 /** A refused or failed request, in words (ADR 0018 § API 7). Status 0: no answer at all. */
@@ -167,7 +191,7 @@ export interface ChangeBucket {
  * confidence (confident first), in that order; an empty group is not drawn, and neither is
  * any class the drape does not know (unchanged is never outlined).
  */
-export function changeBuckets(map: Pick<ChangeMap, "areas">): ChangeBucket[] {
+export function changeBuckets(map: Pick<ChangeLayer, "areas">): ChangeBucket[] {
   const buckets: ChangeBucket[] = [];
   for (const cls of CHANGE_CLASSES) {
     for (const lowConfidence of [false, true]) {
@@ -197,7 +221,7 @@ export interface LegendRow {
 }
 
 /** The legend's rows: each class's cells and low-confidence cells, unchanged last. */
-export function legendRows(map: Pick<ChangeMap, "counts" | "lowConfidence">): LegendRow[] {
+export function legendRows(map: Pick<ChangeLayer, "counts" | "lowConfidence">): LegendRow[] {
   const low = map.lowConfidence as Partial<Record<ChangeClass | "unchanged", number>>;
   return [...CHANGE_CLASSES, "unchanged" as const].map((key) => ({
     key,
