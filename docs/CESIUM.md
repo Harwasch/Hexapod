@@ -650,7 +650,8 @@ date is on into one byte a splat; the frame's own splat hook hands it to the fra
 which discards a fragment on the other date's side of the divider by `gl_FragCoord.x`: exact at
 the divider, and swiping copies nothing. The tilesets keep their sides for the picks: the
 collider counts both, hidden, each on its side, and scene selection picks each date only where
-it is drawn. A switch between CesiumJS and PlayCanvas keeps the comparison; under Spark or the
+it is drawn; each date draws its own Confidence and Data age, read in its own frame. A switch
+between CesiumJS and PlayCanvas keeps the comparison; under Spark or the
 WebGPU trial the section is disabled with "Needs the CesiumJS or PlayCanvas renderer" and a
 one-click switch to PlayCanvas. See [ADR 0017](DECISIONS/0017-compare-dates.md) § Compare two
 dates under PlayCanvas. Evidence: `e2e/compareDates.spec.ts` (the app under CesiumJS and

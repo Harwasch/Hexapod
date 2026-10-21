@@ -378,6 +378,16 @@ the work buffer when the divider moves. No PlayCanvas patch is needed.
    while the right, measured, is unchanged (0 and 0). With the switcher reading only the
    right-hand date the control never appears, and with the other date's layers drawn without
    their Highlight look the left half stays at 0%: both checks bite.
+   Each date draws its own Confidence and Data age, as CesiumJS draws each date's tileset with
+   its own: the left date's tiles read its own view, as cellView.ts publishes it for its asset,
+   in its own frame (`uCellFrame`, the inverse of its placement). With March's grid weak
+   everywhere and June's strong, the left half is 100% red and the right 100% green
+   (`compareScene.spec.ts`); one grid for both left it 0% red. And the handle on screen is
+   where the cut is: at a device pixel ratio of 2 the cut, found in the screenshot's own pixels,
+   is at the handle's column (1,280 of 2,560) at the full render scale and at a half (the
+   overlay 1,280 px wide, its divider at 640); the divider set in CSS pixels instead moved it
+   off. The cut's decision is also run from the shader's text in the unit tests
+   (`compareCut.test.ts`), which a flipped cut fails without a GPU.
 6. **Cost.** The comparison's PlayCanvas parts load on demand: the session and the placement
    with the rules' module (`compositorSession`, 20.6 → 21.6 kB raw), the channel with port 3's
    (`scanRule` and `scanCompare` in one chunk, 7.6 → 9.0 kB raw), the rest in the renderer
@@ -406,6 +416,8 @@ the work buffer when the divider moves. No PlayCanvas patch is needed.
   the notice, as under Spark.
 - The right-hand date being the scan, choosing the sides the other way round starts the
   renderer again on the other date (as choosing another date does).
+- The comparison's session is let go as the comparison ends, whether or not a frame follows
+  (`startCompare`'s disposer, which SiteManager keeps beside the comparison).
 
 ### Not built: GPU seam stitch
 
