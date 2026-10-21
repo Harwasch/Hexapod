@@ -140,8 +140,10 @@ other, so wherever both reach one is painted over the other.
    The splat budget counts a date the host draws once.
 6. **One or the other with Compare › Dates.** Turning either on ends the other, and the control
    says so (before, and after: "Per-cell dates ended: Compare › Dates was turned on").
-7. **CesiumJS only (C5).** Under PlayCanvas or Spark the control is disabled with the views'
-   notice and one-click switch; choosing another renderer ends a rule, and says so.
+7. **CesiumJS only (C5)** when first built. PlayCanvas draws the rules too since
+   (§ "Per-cell view rules under PlayCanvas" below); under Spark or the WebGPU trial the control
+   is disabled with the views' notice and one-click switch, and choosing one ends a rule, and
+   says so.
 8. **What it turns off while on, and says.** A date's own Confidence and Data age views (they read
    one date's grid) are held at Photo. The host's view cones are off: the anchor's cones would
    fade the other dates' splats where the anchor never looked. A Living Survey rig takes its scan
@@ -171,6 +173,87 @@ other, so wherever both reach one is painted over the other.
 - A pick (Measure, selection) is answered by the collider from every drawn date's solids, not by
   the rule's owner of the cell hit.
 - Sixteen sources at most on one primitive: past them a layer is not drawn, and the key says so.
+
+## Per-cell view rules under PlayCanvas
+
+Date 2026-10-20 · PlayCanvas port 3; branch `claude/feat-splat-pc-view-rules`.
+
+### Context
+
+PlayCanvas is the app's default renderer, and the rules above were CesiumJS's alone: most
+visitors met Per cell disabled, with a switch to another renderer. A rule needs one sort for
+every date (two sorts paint one date over the other wherever both reach). PlayCanvas sorts
+every entity of its app together, and its copy pass (`modifySplatColor` of the work buffer's
+modifier) already draws Confidence, Data age and the objects' rules per tile.
+
+### Decision
+
+1. **One app draws every date.** The scan PlayCanvas draws stays the date chosen
+   (SiteManager `scanTarget`, the date the rule is As of), so turning a rule on restarts nothing.
+   The rule's session hands that renderer the owner plane (`cesium/scanView/scanRule.ts`) and the
+   other dates, which it streams into the same app beside its scan
+   (`cesium/scanView/ruleDates.ts`, loaded with the first rule that names one): each date's tiles
+   placed where the date is in the scan's frame (`P = C_scan⁻¹ · C_date`, the two roots' computed
+   transforms), its inferred layers and split objects with it. A date's tile is drawn as a scan
+   tile (the cell views, the sun) but bound to none of the scan's objects, motion or picks, as a
+   CesiumJS companion is not.
+2. **The plane, in the scan's frame.** `lib/compositor.ts` is unchanged: the session works the
+   plane out once and draws it one of two ways. Under PlayCanvas the plane is in the frame of
+   the scan PlayCanvas draws, and every tileset is named by the URL the renderer streams it from:
+   each date, each one's inferred layers, each one's split objects. A renderer switch between
+   CesiumJS and PlayCanvas carries the rule over.
+3. **Each tile is weighed in the copy pass.** The weight depends on no eye (the splat's cell,
+   its source, its own spread), so it is applied once per copy of a tile, on the opacity, after
+   the motion has moved the splat (`RULE_WEIGHT_GLSL`, `compositorWeight` in GLSL). A tile's
+   source is one uniform, from the tileset it came from: no per-splat stream and no entity ids
+   (`enableIds`) are needed. A tile of no named source draws nothing: the rule fails closed. A
+   split object is weighed whole by the cell under its centre (moved with its pose), and keeps
+   its own colours under Data age. Highlight invented sets the layers' own Highlight look (each
+   layer already carries the viewer's Highlight, so none is tinted twice); Data age is the
+   plane's owner-age grid as a cell view, drawn in place of the scan's own while the rule is on.
+4. **The seam in PlayCanvas's footprints.** Both renderers fall off as `exp(-4 u²)` across a quad
+   sized from the projected spread, but PlayCanvas's quad reaches `√(2λ)` pixels from the centre
+   and CesiumJS's half that: PlayCanvas draws every splat twice as wide for the same covariance.
+   The rule above (no splat's drawn footprint carries its date over a seam) is then twice the
+   sigmas: the reach handed over is CesiumJS's 2, scaled by `PLAYCANVAS_FOOTPRINT` = 2.
+   **Measured** by the method above (`e2e/compositorScene.spec.ts`, the same scene and counts,
+   SwiftShader, 960 x 640), seam band, pixels blending both dates:
+
+   | reach (σ) | 0 (centres) | 2      | 2.5    | 3      | **4**          |
+   | --------- | ----------- | ------ | ------ | ------ | -------------- |
+   | mixed     | 5.59%       | 1.29%  | 0.54%  | 0.01%  | **0 of 9,276** |
+   | covered   | 11,416      | 10,847 | 10,544 | 10,054 | 9,276          |
+
+   The band keeps 81% of its covered pixels at 4 σ (CesiumJS at 2 σ: 82%). The other figures:
+   both dates unruled 93.5% mixed; Latest left 99.7% red, right 100% blue; the gap south-west
+   100% green under Latest, nothing under Ground truth. The spec asserts the same figures under
+   both renderers.
+
+5. **Residency.** Each other date streams within the budget the host draws to now, so resident
+   splats roughly double with two dates, as under CesiumJS where each date's tileset refines on
+   its own; frames that slow under both lower the adaptive budget for both. Still off by default.
+6. **Not Spark, not the WebGPU trial.** Spark's world modifier has no port of the weight, and
+   the trial's modifiers are GLSL only: there the control stays disabled, with the notice naming
+   Per cell and its one-click switch.
+7. **Cost.** The rule's PlayCanvas parts load on demand: the channel (`scanRule.ts`, 7.0 kB raw)
+   with the rule's session or the renderer, the dates (`ruleDates.ts`, 3.8 kB raw) with the
+   first rule that names one. Index entry 196,148 B → 190,489 B gzip (Node's gzip, as
+   `check-bundle.mjs` counts): the bundler moved three modules the lazy parts now share with the
+   entry (`scanLayers`, `layerLook`, `view/stream`) into chunks of their own, which the page
+   still loads up front: its JavaScript before the first frame grew 1,602,079 B → 1,603,880 B
+   gzip (976 B raw), two more files.
+
+### Consequences
+
+- Compare › Dates stays CesiumJS's: the stock split is CesiumJS's, and a rule and a comparison
+  remain one or the other. As captured draws a rule as Ground truth, and At capture is off while
+  the rule draws more than one date, under either renderer.
+- The other dates' split objects are placed at their poses as frames are drawn; a pose set on
+  one while nothing else changes waits for the next frame.
+- A pick is answered from the dates' solids (the collider) as under CesiumJS; scene selection
+  picks the scan's own tiles, never another date's.
+- Sixteen sources at most, as under CesiumJS: past them a tileset is named by no source and not
+  drawn, and the key says so.
 
 ### Not built: GPU seam stitch
 
