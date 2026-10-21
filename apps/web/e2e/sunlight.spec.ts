@@ -353,8 +353,8 @@ test("under playcanvas, the sun relights the shown date by PlayCanvas's hook, sa
   const radio = (name: string) => sun.getByRole("radio", { name });
   for (const name of ["Off", "Now", "At capture"]) await expect(radio(name)).toBeEnabled();
   await expect(page.getByTestId("views-sun-needs")).toHaveCount(0);
-  // The shared notice is about Per cell alone now.
-  await expect(page.getByTestId("views-needs-cesium")).not.toContainText("Sunlight");
+  // No shared notice: PlayCanvas draws Sunlight, and the per-cell rules too.
+  await expect(page.getByTestId("views-needs-cesium")).toHaveCount(0);
   expect(await installed(page, A2)).toBe(false);
   await expect(page.getByTestId("relit-badge")).toHaveCount(0);
 

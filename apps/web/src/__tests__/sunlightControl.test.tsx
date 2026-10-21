@@ -141,8 +141,9 @@ describe("the Sun control", () => {
     await screen.findByTestId("views-sun");
     for (const name of ["Off", "Now", "At capture"]) expect(sunRadio(name)).toBeEnabled();
     expect(screen.queryByTestId("views-sun-needs")).toBeNull();
-    // The shared notice no longer names it.
-    expect(screen.getByTestId("views-needs-cesium")).not.toHaveTextContent("Sunlight");
+    // The shared notice does not name it: under PlayCanvas there is no notice at all now that
+    // PlayCanvas draws the per-cell rules too.
+    expect(screen.queryByTestId("views-needs-cesium")).toBeNull();
     await userEvent.click(sunRadio("Now"));
     expect(useLighting.getState().sun).toBe("now");
   });
