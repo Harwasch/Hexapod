@@ -1,6 +1,6 @@
 """Generative image inpainting for Teacher B's holes: the server side of
 `world_model_client.GenerativeFiller`, run on a Modal GPU by `infra/modal/fill.py` and
-`infra/modal/world_models.py` (`InpaintSDXL`, `InpaintQwen`, `InpaintFlux`), which run *this*
+`infra/modal/world_models.py` (`InpaintSDXL`, `InpaintQwen`), which run *this*
 module. NVIDIA Fixer cleans what a render shows; it does not invent what is missing (on the
 pumpkin's hole it kept Telea's flat pre-fill). These paint the masked pixels from a prompt
 and the pixels around them.
@@ -9,7 +9,6 @@ and the pixels around them.
 | ------ | ---------------------------------------------------------- | ------------------------------ |
 | `sdxl` | diffusers/stable-diffusion-xl-1.0-inpainting-0.1           | CreativeML OpenRAIL++-M        |
 | `qwen` | Qwen/Qwen-Image + InstantX/Qwen-Image-ControlNet-Inpainting | Apache-2.0 (both)             |
-| `flux` | black-forest-labs/FLUX.1-Fill-dev (gated)                  | FLUX.1 [dev] Non-Commercial    |
 | (pre)  | LaMa big-lama, TorchScript export of IOPaint (`LAMA_URL`)  | Apache-2.0                     |
 
 LaMa (Fourier convolutions, not a diffusion model) fills a hole with the texture around it
@@ -18,10 +17,9 @@ draw an object there (on the pumpkin: a blue bowl, an orange disc). `"prefill": 
 fills the hole with LaMa first; SDXL then denoises that at `strength` < 1 (detail on a
 layout LaMa chose), or with `strength` 0 the LaMa fill comes back as it is.
 
-`flux` is here for comparison only: its licence allows non-commercial use of the model (its
-outputs are the user's), so it cannot run in a product; and the account must have accepted
-it on the Hub. OpenRAIL++-M is permissive with use restrictions (its Attachment A) that pass
-on to anyone redistributing the weights; Apache-2.0 has none.
+Every model listed may run in a product (a model whose licence forbids commercial use is
+not listed, not even for comparison). OpenRAIL++-M is permissive with use restrictions (its
+Attachment A) that pass on to anyone redistributing the weights; Apache-2.0 has none.
 
 A request is `{"image": png, "mask": png (white = paint), "prompt", "negative"?, "seed",
 "steps"?, "guidance"?, "strength"?, "prefill"?}`; the answer `{"image": png at the input's size,
@@ -42,7 +40,6 @@ from typing import Any
 SDXL_MODEL = "diffusers/stable-diffusion-xl-1.0-inpainting-0.1"
 QWEN_MODEL = "Qwen/Qwen-Image"
 QWEN_CONTROLNET = "InstantX/Qwen-Image-ControlNet-Inpainting"
-FLUX_FILL_MODEL = "black-forest-labs/FLUX.1-Fill-dev"
 #: big-lama as IOPaint (Apache-2.0) exports it, and its md5 (checked on download).
 LAMA_URL = "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt"
 LAMA_MD5 = "e3aa4aaa15225a33ec84f9f4bc47e500"
@@ -63,8 +60,6 @@ MODELS: dict[str, Spec] = {
     "sdxl": Spec((SDXL_MODEL,), 30, 8.0, 8),
     # The ControlNet card's: 30 steps, true CFG 4.
     "qwen": Spec((QWEN_MODEL, QWEN_CONTROLNET), 30, 4.0, 16),
-    # The model card's: 50 steps, guidance 30.
-    "flux": Spec((FLUX_FILL_MODEL,), 50, 30.0, 16),
 }
 
 
@@ -101,10 +96,6 @@ def load(key: str, device: str = "cuda") -> Any:
         pipe = QwenImageControlNetInpaintPipeline.from_pretrained(
             QWEN_MODEL, controlnet=controlnet, torch_dtype=torch.bfloat16
         )
-    elif key == "flux":
-        from diffusers import FluxFillPipeline
-
-        pipe = FluxFillPipeline.from_pretrained(FLUX_FILL_MODEL, torch_dtype=torch.bfloat16)
     else:
         raise ValueError(f"inpainting model {key!r}: one of {', '.join(MODELS)}")
     pipe.set_progress_bar_config(disable=True)

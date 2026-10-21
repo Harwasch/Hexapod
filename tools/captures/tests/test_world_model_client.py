@@ -230,6 +230,13 @@ def test_generative_filler_chains_only_when_asked() -> None:
     assert tf.make_filler(spec).name == "inpaint-sdxl-lama"
 
 
+def test_flux_is_not_an_inpainting_model() -> None:
+    # Its weights' licence forbids commercial use, so the client cannot ask for it.
+    assert "flux" not in wmc.INPAINT_CLASSES
+    with pytest.raises(ValueError):
+        wmc.GenerativeFiller(model="flux", remote=None)  # type: ignore[arg-type]
+
+
 def test_generative_filler_shows_the_model_a_crop_around_the_hole() -> None:
     sent: list[tuple[str, dict]] = []
 

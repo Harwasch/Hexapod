@@ -1,7 +1,7 @@
 """Block training (`blocks.py`, `block_maths.py`): everything but the GPU.
 
 **Nothing here trains or renders anything.** The rules are plain geometry and are tested
-as that, each against the source it was taken from where one exists. The stage is driven
+as that, each against the property the rule is stated by (`block_maths.py`). The stage is driven
 end to end by the stand-in trainers (`gsplat_stand_in.py`, and `loop_stand_in/` for the
 convergence stop) and a stand-in for the camera test's renders
 (`block_views_stand_in.py`), which is evidence that the blocks are planned, trained,
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import struct
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -58,7 +59,7 @@ def walk_points(count: int = 6000, seed: int = 0) -> np.ndarray:
 
 
 def test_blocks_hold_equal_counts_per_column_and_row_at_the_quantiles() -> None:
-    """CityGS V2 build_partition_coordinates: per-axis quantiles of the coarse gaussians."""
+    """Cell edges at per-axis quantiles of the coarse gaussians: equal counts per column."""
     xyz = walk_points()
     part = block_maths.partition(xyz, [0.0, 0.0, 1.0], 4, exact=True)
     uv = part.project(xyz)
@@ -164,6 +165,28 @@ def test_a_camera_standing_in_a_block_is_assigned_to_it() -> None:
     assert inside.tolist() == [[True, False], [False, True], [True, False], [False, True]]
 
 
+def test_ssim_counts_the_frame_border() -> None:
+    """The local statistics are renormalised to the in-frame pixels, so a change in the
+    edge column of the view counts, but only as the sliver it is."""
+    rng = np.random.default_rng(2)
+    image = rng.random((24, 32, 3))
+    edge = image.copy()
+    edge[:, :1] = 0.0
+    half = image.copy()
+    half[:, :16] = 0.0
+    assert 0.0 < 1.0 - block_maths.ssim(edge, image) < 0.05
+    assert 1.0 - block_maths.ssim(half, image) > 0.5
+    # Renormalised, a border window's mean is the mean of real pixels: two flat images
+    # score the closed form at every pixel, the border included (zero padding would
+    # darken the border's means and move it).
+    c1, c2 = 0.01**2, 0.03**2
+    flat = ((2 * 0.5 * 0.6 + c1) * c2) / ((0.5**2 + 0.6**2 + c1) * c2)
+    a, b = np.full((24, 32, 3), 0.5), np.full((24, 32, 3), 0.6)
+    assert block_maths.ssim(a, b) == pytest.approx(flat, abs=1e-12)
+    # Grey images too (H, W): the same rule.
+    assert block_maths.ssim(image[..., 0], image[..., 0]) == pytest.approx(1.0)
+
+
 def test_ssim_is_one_for_equal_images_and_falls_with_what_changes() -> None:
     rng = np.random.default_rng(1)
     image = rng.random((32, 40, 3))
@@ -176,7 +199,7 @@ def test_ssim_is_one_for_equal_images_and_falls_with_what_changes() -> None:
 
 
 def test_the_camera_test_is_one_minus_ssim_of_the_render_without_the_block() -> None:
-    """CityGS V2 projection_based_partition_assignment, with a stub renderer: camera 0 sees
+    """The camera-contribution test (arXiv 2404.01133), with a stub renderer: camera 0 sees
     block 1 fill half its view, camera 1 sees a sliver of it, camera 2 sees none of it."""
     rng = np.random.default_rng(2)
     base = rng.random((24, 32, 3))
@@ -196,14 +219,14 @@ def test_the_camera_test_is_one_minus_ssim_of_the_render_without_the_block() -> 
     loss = block_maths.contribution(render, 3, members, skip=inside)
     assert loss[0, 1] > block_maths.DEFAULT_EPSILON > loss[1, 1] > 0.0
     assert loss[2, 1] == 0.0
-    # A camera standing in a block is not rendered for it (CityGS renders only the rest).
+    # A camera standing in a block is not rendered for it (only the rest are tested).
     assert all(dropped != 0 for _camera, dropped in calls)
     assigned = block_maths.assign(inside, loss, block_maths.DEFAULT_EPSILON)
     assert assigned.tolist() == [[True, True], [True, False], [True, False]]
 
 
 def test_a_block_under_the_minimum_joins_its_emptiest_neighbour() -> None:
-    """CityGS V2 asserts > 50 images a block; one short of that is merged, not trained."""
+    """A block needs 50 training images; one short of that is merged, not trained."""
     part = block_maths.Partition(
         origin=(0.0, 0.0, 0.0),
         axis_u=(1.0, 0.0, 0.0),
@@ -233,64 +256,113 @@ def test_a_block_count_that_cannot_reach_the_minimum_comes_down_to_one() -> None
     assert merged.count == 1 and matrix.shape == (30, 1) and len(merges) == 1
 
 
+def test_block_views_takes_the_argv_blocks_passes() -> None:
+    """The GPU script cannot run here, but its command line can: every argument
+    `blocks._contribution` passes is one `block_views.main` declares."""
+    done = subprocess.run(
+        [sys.executable, str(HERE.parent / "block_views.py"), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    for flag in (
+        "--data_dir",
+        "--prior",
+        "--partition",
+        "--out",
+        "--trainer",
+        "--max-side",
+        "--budget-s",
+    ):
+        assert flag in done.stdout
+
+
 # --- the frozen ring and the blend ----------------------------------------------------
 
 
-def test_the_frozen_ring_is_h3dgs_scaffold_outside_the_trainable_region() -> None:
-    """H3DGS gaussian_model.py: 0.5 < max(|dx|, |dy|) / size < 1.5, here from the margin's
-    edge outward, per axis for a rectangular block."""
+def test_the_frozen_ring_is_a_square_annulus_outside_the_trainable_region() -> None:
     part = block_maths.Partition(
         origin=(0.0, 0.0, 0.0),
         axis_u=(1.0, 0.0, 0.0),
         axis_v=(0.0, 1.0, 0.0),
         u_edges=(-10.0, 0.0, 2.0, 4.0, 14.0),
         v_edges=(-10.0, 0.0, 1.0, 11.0),
-        blocks=tuple((c,) for c in range(12)),
+        blocks=tuple((cell,) for cell in range(12)),
     )
     block = 1 * part.rows + 1  # the cell u in [0, 2], v in [0, 1]
-    uv = np.array(
-        [
-            [1.0, 0.5],  # its centre: trainable
-            [2.1, 0.5],  # inside the 10% margin: trainable, not ring
-            [2.5, 0.5],  # past the margin: ring
-            [3.9, 0.5],  # 1.45 sizes from the centre along u: ring
-            [4.1, 0.5],  # 1.55: beyond the ring
-            [1.0, 1.9],  # 1.4 sizes along v: ring
-            [1.0, 2.1],  # 1.6 along v: beyond
-        ]
-    )
+    assert part.rect(block) == (0.0, 2.0, 0.0, 1.0)
+    uv = np.array([[1, 0.5], [2.1, 0.5], [2.5, 0.5], [3.9, 0.5], [4.1, 0.5], [1, 1.9], [1, 2.1]])
     ring = block_maths.ring(part, uv, block, margin=0.1, outer=1.5)
     assert ring.tolist() == [False, False, True, True, False, True, False]
-    assert part.in_expanded(uv, block, 0.1).tolist()[:3] == [True, True, False]
+    # Nothing is both trainable and frozen.
+    grid = np.stack(np.meshgrid(np.linspace(-5, 8, 131), np.linspace(-4, 6, 101)), -1)
+    grid = grid.reshape(-1, 2)
+    frozen = block_maths.ring(part, grid, block, margin=0.1, outer=1.5)
+    assert not (frozen & part.in_expanded(grid, block, 0.1)).any() and frozen.any()
 
 
-def get_weight(pos: np.ndarray, chunk: int, centres: np.ndarray, falloff: float = 0.05) -> float:
-    """H3DGS hierarchy_explicit_loader.cpp::getWeight, transcribed."""
-    own = float(np.linalg.norm(pos - centres[chunk]))
-    other = min(float(np.linalg.norm(pos - c)) for i, c in enumerate(centres) if i != chunk)
-    if own <= (1 - falloff) * other:
-        return 1.0
-    if own > (1 + falloff) * other:
-        return 0.0
-    return (-1 / (2 * falloff * other)) * own + (1 + falloff) / (2 * falloff)
-
-
-def test_the_blend_matches_h3dgs_get_weight_on_its_uniform_grid() -> None:
+def test_the_blend_band_is_a_fraction_of_the_centre_spacing() -> None:
+    """two_blocks: centres 4 apart, so h = 0.0125 * 4 = 0.05 either side of u = 0."""
     part = two_blocks()
-    centres = np.array([[-2.0, 0.0], [2.0, 0.0]])
-    xs = np.linspace(-0.3, 0.3, 121)
-    uv = np.stack([xs, np.zeros_like(xs)], axis=1)
-    ours = block_maths.weights(part, uv, 0)
-    theirs = np.array([get_weight(p, 0, centres) for p in uv])
-    # getWeight is linear in the distance to its own centre, so its band sits 0.0128 D
-    # before the edge and 0.0122 D after it; ours is the symmetric +-0.0125 D.
-    assert np.abs(ours - theirs).max() < 0.02
-    band = xs[(theirs > 0) & (theirs < 1)]
-    ours_band = xs[(ours > 0) & (ours < 1)]
-    assert abs(band.min() - ours_band.min()) < 0.01
-    assert abs(band.max() - ours_band.max()) < 0.01
-    assert ours[0] == 1.0 and ours[-1] == 0.0
-    assert block_maths.weights(part, np.array([[0.0, 0.0]]), 0)[0] == pytest.approx(0.5)
+    u = np.array([-1.0, -0.05, -0.025, 0.0, 0.05, 1.0])
+    w = block_maths.weights(part, np.stack([u, np.zeros_like(u)], 1), 0)
+    np.testing.assert_allclose(w, [1.0, 1.0, 0.75, 0.5, 0.0, 0.0], atol=1e-12)
+
+
+def test_a_zero_blend_is_a_hard_crop() -> None:
+    part = two_blocks()
+    u = np.array([-0.01, 0.0, 0.01])
+    w = block_maths.weights(part, np.stack([u, np.zeros_like(u)], 1), 0, blend=0.0)
+    assert w.tolist() == [1.0, 0.0, 0.0]
+
+
+def test_the_blend_never_reaches_past_the_margin() -> None:
+    """A thin cell next to a wide one: blend * D (0.0625) would cross the thin cell's whole
+    margin, so the band is capped at margin * 0.1 = 0.01 either side of the edge."""
+    part = block_maths.Partition(
+        origin=(0.0, 0.0, 0.0),
+        axis_u=(1.0, 0.0, 0.0),
+        axis_v=(0.0, 1.0, 0.0),
+        u_edges=(0.0, 0.1, 10.0),
+        v_edges=(0.0, 1.0),
+        blocks=((0,), (1,)),
+    )
+    u = np.array([0.0899, 0.09, 0.1, 0.11, 0.1101])
+    uv = np.stack([u, np.zeros_like(u)], 1)
+    np.testing.assert_allclose(
+        block_maths.weights(part, uv, 0), [1.0, 1.0, 0.5, 0.0, 0.0], atol=1e-9
+    )
+    rng = np.random.default_rng(7)
+    many = np.stack([rng.uniform(-1, 11, 10_000), rng.uniform(-1, 2, 10_000)], 1)
+    w0, w1 = (block_maths.weights(part, many, b) for b in (0, 1))
+    assert (w0 >= 0).all() and (w1 >= 0).all()
+    np.testing.assert_allclose(w0 + w1, 1.0, atol=1e-12)
+
+
+def test_weights_are_never_negative_on_uneven_grids() -> None:
+    rng = np.random.default_rng(11)
+    for _ in range(50):
+        widths_u = np.exp(rng.uniform(0, np.log(1e3), int(rng.integers(2, 6))))
+        widths_v = np.exp(rng.uniform(0, np.log(1e3), int(rng.integers(1, 4))))
+        u_edges = tuple(float(e) for e in np.concatenate([[0.0], np.cumsum(widths_u)]))
+        v_edges = tuple(float(e) for e in np.concatenate([[0.0], np.cumsum(widths_v)]))
+        cells = (len(u_edges) - 1) * (len(v_edges) - 1)
+        part = block_maths.Partition(
+            origin=(0.0, 0.0, 0.0),
+            axis_u=(1.0, 0.0, 0.0),
+            axis_v=(0.0, 1.0, 0.0),
+            u_edges=u_edges,
+            v_edges=v_edges,
+            blocks=tuple((cell,) for cell in range(cells)),
+        )
+        uv = np.stack(
+            [rng.uniform(-10, u_edges[-1] + 10, 2000), rng.uniform(-10, v_edges[-1] + 10, 2000)], 1
+        )
+        blend = float(rng.uniform(0.0, 0.5))
+        each = [block_maths.weights(part, uv, b, blend=blend) for b in range(part.count)]
+        assert all((w >= 0).all() for w in each)
+        np.testing.assert_allclose(sum(each), 1.0, atol=1e-9)
 
 
 def test_the_blend_is_a_partition_of_unity_so_the_band_never_doubles_density() -> None:
@@ -303,12 +375,6 @@ def test_the_blend_is_a_partition_of_unity_so_the_band_never_doubles_density() -
     merged = block_maths.Partition(**{**part.__dict__, "blocks": ((0, 1), *part.blocks[2:])})
     total = sum(block_maths.weights(merged, uv, b) for b in range(merged.count))
     assert np.allclose(total, 1.0)
-
-
-def test_a_zero_falloff_is_the_hard_crop_of_cityg_and_vastgs() -> None:
-    part = two_blocks()
-    uv = np.array([[-0.01, 0.0], [0.0, 0.0], [0.01, 0.0]])
-    assert block_maths.weights(part, uv, 0, falloff=0.0).tolist() == [1.0, 0.0, 0.0]
 
 
 def test_fading_scales_alpha_and_leaves_full_weight_bit_for_bit() -> None:

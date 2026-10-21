@@ -779,40 +779,11 @@ of raster memory, so the budget's ceiling -- and with it `blocks: auto` -- accou
 it. Whether B > 1 is faster per image on an L4 is exactly what is not yet measured:
 `batch_size: 2` and `4` on the spool against 1, comparing `trainSeconds` and PSNR/LPIPS.
 
-## Optimised parents (`optimise_lod`)
+## Optimised parents (removed)
 
-`package` merges each parent tile from its subtree by Hierarchical 3DGS's moment matching;
-Phase 1 measured that ahead of thinned parents on PSNR, SSIM and holes, not on LPIPS at
-the switch distance -- merged parents are blurry. `optimise_lod` (recipe 10) optimises
-them against the photos, as H3DGS Sec. 5.1 does its interior nodes: leaves frozen, a random
-training frame and a log-uniform tau in [3, 64] px each step, Cesium's own REPLACE cut at
-tau rendered at full resolution, the trainer's 0.8 L1 + 0.2 D-SSIM, train_post.py's
-learning rates, opacity kept at most 0.99 for SPZ. It is a GPU stage between `place` and
-`package` because the tree is a function of `canonical.ply` -- after `quality`'s crop and
-`place`'s east/north/up -- and it builds that tree with the packer's own code
-(`splat_tiles.hierarchy`); the parents come back keyed by tile and cell and fingerprinted
-by the PLY's sha256, and `package` refuses them for any other tree. `lod_parents.py` is
-the stage, `lod_optimise.py` the torch half, `lod_maths.py` the tested numpy half.
-
-The parents are kept only if the held-out frames' loss at the cut fell; a failure, a
-rejection or `enabled: false` leaves the merged parents, as before. Iterations are planned
-so each parent is optimised about as often as H3DGS's 15,000 optimise each of its nodes
-(15,000 x ln 2 / ln 20 = 3,471 choices), from the measured rate at which the training
-frames' cuts choose it: 3,471 when there is one parent tile (a scan of about 1M gaussians
-at 100k a tile), at most 15,000.
-
-**Not yet run on a GPU. Expected** on the L4: a step renders the cut (up to every leaf)
-and back-propagates like a training step at the same count, so ~10-15 steps a second at
-~1M gaussians (the measured Refine ran 23 steps a second at 500k); 3.5k steps is ~5 min,
-plus ~2 min of tree building, target renders and evaluation and the container's start --
-about $0.10 at $0.80 an hour; the 15,000-step ceiling ~$0.40; `budget_s` (1 h) bounds it.
-**Check on the first run** (`stages/optimise_lod/out/lod_parents/summary.json`):
-`itPerSecond` and `loopSeconds`; `timesChosen` (every parent tile trained); `before` /
-`after` held-out loss, PSNR and LPIPS per tau; `switchDistance` -- each parent alone from
-where its error projects to 16 px against its own leaves, merged and optimised, the
-measure Phase 1 made; `accepted`. `experiments/lod_compare.py` repeats Phase 1's exact
-protocol (root at the switch distance, Cesium's cut from four distances) on the GPU, on
-two tilesets packed from the run's `canonical.ply` with and without `--parents`.
+The `optimise_lod` stage was removed in recipe 11 (licence: the method's reference code is
+non-commercial; it never ran on a GPU). `splat_tiles.ParentOverrides` remains as the format
+a future optimiser would write.
 
 ## Stages after training, a chunk at a time
 
@@ -878,8 +849,8 @@ fitted in, so every stage that turns the splat turns the bands: `place` (COLMAP'
 into east/north/up: the EXIF similarity or camera-up levelling, and a heading) and Lane
 1's `normalize` (up axis and heading), both through `gaussians.transform`, which now
 applies `harmonics.rotate` -- each band by the rotation's real Wigner D-matrix in the
-trainers' basis, fitted exactly against Inria's `eval_sh` rather than taken from a
-recurrence whose conventions differ in every source. `tests/test_harmonics.py` holds it to
+trainers' basis, fitted exactly against the real SH basis in the trainers' order rather
+than taken from a recurrence whose conventions differ in every source. `tests/test_harmonics.py` holds it to
 the definition for degrees 1, 2 and 3: turn the splat by R and look from R d, and every
 gaussian shows the colour it showed from d (to 2e-6), through `place` and `normalize` as
 well as on arrays; degree 1 is also held to its closed form `P R P^T`, and each band's

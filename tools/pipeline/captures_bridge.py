@@ -91,7 +91,8 @@ def splat_tiles_convert(
     through a working directory beside `out_dir`, so memory does not grow with the scan.
     The statistics include `parent_gaussians` and `storage_overhead`, what the merged
     levels cost on top of the scan itself, and `optimised_parent_gaussians`, how many of
-    those are `parents` -- optimised on the GPU by `optimise_lod` -- rather than merged.
+    those are `parents` -- parent gaussians optimised elsewhere (no stage produces them
+    since recipe 11) -- rather than merged.
     `sh_degree` caps the SH bands the tiles carry (None: every band the PLY has, which
     is the run's own `ship_sh_degree`); `sh_degree` in the statistics is what they carry.
     """

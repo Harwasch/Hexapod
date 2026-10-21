@@ -12,7 +12,10 @@ sits exactly on a leaf splat takes that leaf's id. Leaf tiles keep their ids. It
 the published package -- the tiles and instances.json -- so a scan already published is fixed
 by rewriting its instances.json:
 
-    python rebind_instances.py TILES_DIR [--instances instances.json] [--out PATH]
+    python rebind_instances.py TILES_DIR [--instances instances.json] [--out PATH] [--rekey]
+
+`--rekey` follows a re-pack that kept every leaf but changed the parents (a new merge rule):
+the parents' new checksums are bound from the leaves and the old keys dropped (`rekey`).
 
 `segment_scene.py` applies the same step to what it binds.
 """
@@ -88,6 +91,22 @@ def plurality(near: np.ndarray) -> np.ndarray:
     return best
 
 
+def _readers(
+    positions_of: Callable[[Path], np.ndarray] | None,
+    checksum_of: Callable[[np.ndarray], str] | None,
+) -> tuple[Callable[[Path], np.ndarray], Callable[[np.ndarray], str]]:
+    """The given readers, or the real ones: positions tile-local by contract (the caller
+    adds each tile's offset, `site_positions`, before it checksums) and the checksum every
+    binding is keyed by."""
+    from rig_tiles import tile_positions
+    from synthetic_tree import checksum_positions
+
+    return (
+        positions_of or (lambda path: tile_positions(path, None)),
+        checksum_of or checksum_positions,
+    )
+
+
 def rebind(
     tiles_dir: Path,
     tiles: dict[str, list[int]],
@@ -104,12 +123,7 @@ def rebind(
     checksums and the nearest-leaf search are over."""
     from splat_tiles import site_positions, tile_offsets
 
-    if positions_of is None or checksum_of is None:
-        from rig_tiles import tile_positions
-        from synthetic_tree import checksum_positions
-
-        positions_of = positions_of or (lambda path: tile_positions(path, None))
-        checksum_of = checksum_of or checksum_positions
+    positions_of, checksum_of = _readers(positions_of, checksum_of)
     tileset = json.loads((tiles_dir / "tileset.json").read_text(encoding="utf-8"))
     offsets = tile_offsets(tileset)
     entries = []
@@ -137,6 +151,46 @@ def rebind(
         labels = np.where(np.atleast_2d(distance)[:, 0] == 0.0, near[:, 0], plurality(near))
         out[checksum] = encode_runs(labels)
     return dict(sorted(out.items()))
+
+
+def rekey(
+    tiles_dir: Path,
+    tiles: dict[str, list[int]],
+    *,
+    positions_of: Callable[[Path], np.ndarray] | None = None,
+    checksum_of: Callable[[np.ndarray], str] | None = None,
+    neighbours: int = NEIGHBOURS,
+) -> dict[str, list[int]]:
+    """`tiles` re-keyed to a re-pack of the same scan that kept every leaf: each leaf tile's
+    checksum must already be a key, with runs covering its gaussians (else ValueError); a
+    parent whose checksum is new is added, then bound as `rebind` binds it, from the leaf
+    splats nearest to its splats; and every key that is no tile's checksum is dropped.
+
+    Checksums are over site-frame positions, each tile's transform composed exactly as
+    `rebind` composes it (`splat_tiles.tile_offsets`, `site_positions`)."""
+    from splat_tiles import site_positions, tile_offsets
+
+    positions_of, checksum_of = _readers(positions_of, checksum_of)
+    tileset = json.loads((tiles_dir / "tileset.json").read_text(encoding="utf-8"))
+    offsets = tile_offsets(tileset)
+    seen: list[tuple[str, int, bool]] = []
+    for uri, leaf in tile_tree(tileset):
+        at = site_positions(positions_of(tiles_dir / uri), offsets.get(uri))
+        checksum = checksum_of(at)
+        if leaf:
+            runs = tiles.get(checksum)
+            if runs is None or int(np.sum(np.asarray(runs, np.int64)[1::2])) != len(at):
+                raise ValueError(f"rekey keeps leaves: tile {uri} is not in the instances")
+        seen.append((checksum, len(at), leaf))
+    seeded = dict(tiles)
+    for checksum, count, leaf in seen:
+        if not leaf and checksum not in seeded:
+            seeded[checksum] = [0, count]
+    bound = rebind(
+        tiles_dir, seeded, positions_of=positions_of, checksum_of=checksum_of, neighbours=neighbours
+    )
+    live = {checksum for checksum, _, _ in seen}
+    return {key: runs for key, runs in bound.items() if key in live}
 
 
 def check_binding(tiles_dir: Path, document: dict) -> None:
@@ -171,11 +225,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("tiles", type=Path, help="the scan's tileset directory")
     parser.add_argument("--instances", type=Path, help="default: TILES/instances.json")
     parser.add_argument("--out", type=Path, help="default: overwrite --instances")
+    parser.add_argument(
+        "--rekey",
+        action="store_true",
+        help="follow a re-pack that kept every leaf: bind new parent tiles, drop stale keys",
+    )
     args = parser.parse_args(argv)
     source = args.instances or args.tiles / "instances.json"
     document = json.loads(source.read_text(encoding="utf-8"))
     before = _zero_share(document["tiles"])
-    document["tiles"] = rebind(args.tiles, document["tiles"])
+    document["tiles"] = (rekey if args.rekey else rebind)(args.tiles, document["tiles"])
     document["tilesEncoding"] = TILES_ENCODING
     (args.out or source).write_text(
         json.dumps(document, separators=(",", ":")) + "\n", encoding="utf-8"

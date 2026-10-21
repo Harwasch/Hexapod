@@ -14,29 +14,29 @@ GPU trains: its raw count over `gpu_cap`, the smaller of the budget's two ceilin
 L4's memory model and `budget_max`), rounded up. `blocks: <n>` forces n blocks, for
 validating the machinery on a capture that fits one GPU (the spool at `blocks: 2`).
 
-**The recipe, and where each part comes from** (`block_maths.py` has the rules' code):
+**The recipe, and where each idea comes from** (`block_maths.py` states the rules as maths):
 
-1. *Prior*: a whole-scene coarse model -- CityGaussian §3.2 trains one on every image
-   first and uses it to partition, to assign cameras and to initialise every block;
-   H3DGS §6.1 trains one as the "scaffold". Ours is the Preview, which every capture
-   already has: every `train` run leaves its splat's shapes in `checkpoint/block-prior/`
-   (`save_prior`). A run with none trains a short coarse pass first (`_coarse_prior`):
-   7,500 steps (a quarter of the schedule; CityGS V2's fast "-t" variant trains its coarse
-   model for 7k where the full one trains 30k) at the Preview's 800 px, capped at 1M
-   gaussians (5x the Preview's 200k, still a fraction of what the L4 holds at 800 px).
-2. *Partition*: per-axis quantiles of the prior's gaussians in the region to train
-   (CityGS V2 `build_partition_coordinates`), in the ground plane of the cameras' up.
+1. *Prior*: a whole-scene coarse model, trained on every image first and used to
+   partition, to assign cameras and to initialise every block (arXiv 2404.01133, §3.2).
+   Ours is the Preview, which every capture already has: every `train` run leaves its
+   splat's shapes in `checkpoint/block-prior/` (`save_prior`). A run with none trains a
+   short coarse pass first (`_coarse_prior`): 7,500 steps (a quarter of the schedule) at
+   the Preview's 800 px, capped at 1M gaussians (5x the Preview's 200k, still a fraction
+   of what the L4 holds at 800 px).
+2. *Partition*: per-axis quantiles of the prior's gaussians in the region to train, in the
+   ground plane of the cameras' up, so every column and row holds as many as the others.
 3. *Cameras*: in the block, or `1 - SSIM > epsilon` when the block is removed from the
-   prior's render (CityGS; Tab. 4: 25.77 dB with the test, 23.43 without). At least 50
-   training frames a block (V2 asserts > 50), else merged into a neighbour.
-4. *Training*: each block from the prior's gaussians in it (plus its margin), with a
-   *frozen* ring of prior gaussians round it (H3DGS's scaffold) so its edges are occluded
-   and lit as in the scene, without loading the whole scene as CityGS does; its own
-   density budget and the single run's schedule and convergence stop.
+   prior's render (the camera-contribution test of arXiv 2404.01133; its Tab. 4: 25.77 dB
+   with the test, 23.43 without). At least 50 training frames a block, else merged into a
+   neighbour.
+4. *Training*: each block from the prior's gaussians in it, plus its margin (arXiv
+   2402.17427), with a *frozen* ring of prior gaussians round it (the idea of arXiv
+   2406.12080) so its edges are occluded and lit as in the scene, without loading the
+   whole scene; its own density budget and the single run's schedule and convergence stop.
 5. *Merge*: each block keeps the gaussians whose final centre is in its core, their
-   opacity faded across a thin band at the shared edges (H3DGS `getWeight`); the blocks
-   are concatenated into one PLY by a chunked writer, so `quality`, `place` and `package`
-   read one `trained.ply` as always.
+   opacity faded across a thin band at the shared edges (`block_maths.weights`, a linear
+   cross-fade whose weights sum to 1); the blocks are concatenated into one PLY by a
+   chunked writer, so `quality`, `place` and `package` read one `trained.ply` as always.
 
 **On Modal: one GPU per block, at once.** Measured on the spool forced to 2 blocks, one
 after another on one L4: a 7,500-step coarse pass (no Preview existed), then block 1 in
@@ -165,8 +165,8 @@ COARSE_CAP = 1_000_000
 COARSE_MAX_SIDE = 800
 
 #: The camera test renders the prior at most this size (the Preview's own frame size):
-#: CityGS renders the coarse model at its training resolution; a 1 - SSIM of a whole
-#: block appearing or not is not a fine-detail measurement.
+#: arXiv 2404.01133 renders the coarse model at its training resolution; a 1 - SSIM of a
+#: whole block appearing or not is not a fine-detail measurement.
 ASSIGN_MAX_SIDE = 800
 
 #: Modal's function timeout is 6 h (`infra/modal/app.py`, TIMEOUT_S); a block is not
@@ -1301,7 +1301,7 @@ def _train_block(
     part = plan.partition
     total = part.count
     margin = _param_float(settings, "block_margin", block_maths.DEFAULT_MARGIN)
-    falloff = _param_float(settings, "block_blend", block_maths.DEFAULT_FALLOFF)
+    blend = _param_float(settings, "block_blend", block_maths.DEFAULT_BLEND)
     region = BlockRegion(part, index, margin, settings.region)
     names = [n for n, a in zip(plan.names, plan.assigned[:, index], strict=True) if a]
     val_flags = dict(zip(plan.names, plan.val, strict=True))
@@ -1327,7 +1327,7 @@ def _train_block(
         region,
         budget=init_seed.budget_for(cap, settings.init_max_points),
     )
-    # The frozen ring: H3DGS excludes its scaffold from densification; here it is not
+    # The frozen ring: arXiv 2406.12080 excludes it from densification; here it is not
     # optimised at all (block_trainer.py), and needs MCMC, whose densification reads no
     # per-gaussian screen-space gradients of the gaussians it is rendered with.
     ring_on = _param_bool(settings, "block_ring", True) and settings.strategy == "mcmc"
@@ -1431,7 +1431,9 @@ def _train_block(
     columns = read_ply(ply)
     trained = int(np.asarray(columns["x"]).shape[0])
     xyz = np.stack([columns["x"], columns["y"], columns["z"]], axis=1).astype(np.float64)
-    weight = np.asarray(block_maths.weights(part, part.project(xyz), index, falloff=falloff))
+    weight = np.asarray(
+        block_maths.weights(part, part.project(xyz), index, blend=blend, margin=margin)
+    )
     keep = weight > 0.0
     keep &= np.isfinite(xyz).all(axis=1)
     if settings.region is not None:
@@ -1604,7 +1606,7 @@ def _merge_and_measure(
             "enabled": _param_bool(settings, "block_ring", True) and settings.strategy == "mcmc",
             "outer": _param_float(settings, "block_ring_outer", block_maths.DEFAULT_RING_OUTER),
         },
-        "blend": _param_float(settings, "block_blend", block_maths.DEFAULT_FALLOFF),
+        "blend": _param_float(settings, "block_blend", block_maths.DEFAULT_BLEND),
         "exposure": "bilateral_grid" if settings.switches.get("bilateral_grid") else None,
         "blocks": records,
         "merged": {"gaussians": count, "trainedBytes": written},

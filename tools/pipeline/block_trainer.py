@@ -8,13 +8,12 @@ cfg)` -- is replaced by one that patches the trainer's module before handing on.
 patches, each optional:
 
 * **The convergence stop** (`--converge`): `converge_trainer.install`, as it is.
-* **The frozen ring** (`--ring ring.npz`): Hierarchical 3DGS loads a "scaffold" of the
-  coarse model round each chunk, 0.5-1.5 chunk sizes out, and excludes it from
-  densification (`scene/gaussian_model.py`, `densify_and_split`: "No densification of the
-  scaffold"), so a chunk's edges are occluded and lit as in the whole scene. Here the ring
-  is not optimised at all -- it is discarded after training, and holding it as constants
-  costs its parameters only, not their gradients and Adam's two moments (944 of the 1,616
-  bytes a trained gaussian costs, `gaussian_budget.py`). v1.5.3's `Runner.rasterize_splats`
+* **The frozen ring** (`--ring ring.npz`): a frozen ring of the prior's gaussians around
+  the block (the idea of arXiv 2406.12080), held as constants, so a block's edges are
+  occluded and lit as in the whole scene. Here the ring is not optimised at all -- it is
+  discarded after training, and holding it as constants costs its parameters only, not
+  their gradients and Adam's two moments (944 of the 1,616 bytes a trained gaussian costs,
+  `gaussian_budget.py`). v1.5.3's `Runner.rasterize_splats`
   calls the module-global `rasterization(means=..., quats=..., scales=..., opacities=...,
   colors=..., ...)` with activated tensors; the patch replaces that global with one that
   appends the ring's constants to those five and calls the real one. Everything that owns

@@ -246,6 +246,16 @@ pnpm lint && pnpm typecheck && pnpm test`, `pnpm e2e` if `apps/web` changed, plu
   are over site-frame positions (`splat_tiles.tile_offsets`, `site_positions`). A new reader
   of tile positions composes the offsets: `data/tiles/synthetic-far` is the fixture to test
   it on (ADR 0011).
+- LOD and SH fixtures are regenerated under `OPENBLAS_CORETYPE=Sandybridge`, the yard under
+  Haswell, the yard's sidecars under Sandybridge; commands in
+  docs/DECISIONS/0012-licence-clean-room.md. Every one also runs with numpy's AVX-512 loops off
+  (`NPY_DISABLE_CPU_FEATURES="X86_V4 AVX512_ICL AVX512_SPR"`, set by tools/captures'
+  conftest): their float64 `exp`/`log` differ in the last bit from the AVX2 loops the fixtures
+  were written with, and CI's AVX-512 runners wrote another yard.
+- `scripts/licence_scan.py` fails on a stale allowlist entry. A change that edits an
+  allowlisted line (`gaussians.py`, `splat_io.py`, `harmonics.py`, `experiments/benchmark.py`,
+  the seed's `WITHDRAWN_SITES`, `worlds/core/catalog.ts`, the research JSON) updates
+  `scripts/licence_allowlist.json` in the same commit.
 - `packages/contracts/openapi.json` is committed; any schema change needs
   `export_openapi` + `pnpm contracts:generate`.
 - `pnpm format:check` runs **before** lint in CI and covers YAML and Markdown.

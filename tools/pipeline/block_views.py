@@ -1,22 +1,24 @@
-"""Which cameras each block needs: render the prior with and without the block. GPU.
+"""The camera test's renders: the prior with and without each block, 1 - SSIM per frame.
 
-**Not executed on a GPU in this repository yet**: gsplat's rasteriser has no CPU path.
-The decision it feeds is `block_maths.assign`, and the score is `block_maths.contribution`
-with `block_maths.ssim` -- the same code the pipeline's tests drive with a stub renderer.
-Run by the `train` stage with the trainer's interpreter, as `holdout_error.py` is.
+**Not executed on a GPU in this repository yet.** It needs CUDA (gsplat's rasteriser has
+no CPU path); `tests/block_views_stand_in.py` takes the same arguments and writes the same
+file, so the stage around it is tested end to end. Run by `blocks.py` with the trainer's
+own interpreter (`$GSPLAT_PYTHON`, CPython 3.10).
 
-CityGaussian's rule (V1 `data_partition.py`, V2 `projection_based_partition_assignment`):
-for each camera not already standing in a block, render the coarse model, render it again
-with the block's gaussians' opacity set to zero, and assign the camera to the block when
-`1 - SSIM` of the two exceeds epsilon. Here: every registered frame through gsplat's own
-parser (`examples/datasets/colmap.py`, the split and undistortion the trainer uses), its
-intrinsics scaled so the long side is at most `--max-side` (the renders are compared with
-each other, never with a photo, so any size works; the prior's own 800 px is enough to see
-a block appear or not), the prior drawn with its DC colour on black. A block none of whose
-gaussians lands in the frame (`radii > 0` in the full render) scores 0 without a render.
+The rule (`block_maths.contribution`, `block_maths.ssim`): a camera trains a block it does
+not stand in when removing the block's gaussians from the coarse model's render changes
+the view by 1 - SSIM > epsilon -- the idea of testing a camera by removing a block from
+the coarse model's render is CityGaussian's (arXiv 2404.01133). SSIM is Wang et al. 2004
+over an 11-tap gaussian window renormalised to the in-frame pixels, so a block seen only
+at the frame border counts as the sliver it is.
 
-Output (`--out`): `{"names": [...], "loss": [[1 - SSIM per block] per frame], "seconds"}`,
-frames in the parser's (name-sorted) order.
+Per frame: the full render first; a block none of whose gaussians are visible from the
+frame (every projected radius 0), or that the camera stands in, is not rendered and
+scores 0. Frames are rendered at most `--max-side` pixels on their longer side.
+
+Output, `--out`: `{"names": the dataset's image names in order, "loss": (frames, blocks)
+1 - SSIM rounded to 6 decimals, "seconds": wall time}`. A watchdog ends the process with
+code 3 after `--budget-s`, and the stage falls back to the CPU visibility test.
 """
 
 from __future__ import annotations
@@ -37,22 +39,39 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import block_maths
 
 
+def _out_of_time(budget: float) -> None:
+    sys.stderr.write(f"block_views: out of time after {budget:g} s\n")
+    sys.stderr.flush()
+    os._exit(3)
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    parser.add_argument("--data_dir", type=Path, required=True)
-    parser.add_argument("--prior", type=Path, required=True)
-    parser.add_argument("--partition", type=Path, required=True)
-    parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--trainer", type=Path, required=True)
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
+    parser.add_argument("--data_dir", type=Path, required=True, help="the trainer's dataset")
+    parser.add_argument(
+        "--prior",
+        type=Path,
+        required=True,
+        help="npz of xyz, quats (w first), log_scales, logit_opacity, f_dc",
+    )
+    parser.add_argument(
+        "--partition", type=Path, required=True, help="block_maths.Partition.to_dict JSON"
+    )
+    parser.add_argument("--out", type=Path, required=True, help="where to write the JSON")
+    parser.add_argument(
+        "--trainer", type=Path, required=True, help="gsplat's examples/simple_trainer.py"
+    )
     parser.add_argument("--max-side", dest="max_side", type=int, default=800)
     parser.add_argument("--budget-s", dest="budget_s", type=float, default=1800.0)
+    # Not for the pipeline: gsplat has no CPU rasteriser.
     parser.add_argument("--device", default="cuda", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    # As holdout_error.py: a hang here must not hold the GPU until the tier's timeout.
-    # The stage then falls back to the CPU visibility test.
+
     watchdog = threading.Timer(args.budget_s, _out_of_time, args=(args.budget_s,))
     watchdog.daemon = True
     watchdog.start()
+    started = time.perf_counter()
+
     sys.path.insert(0, str(args.trainer.resolve().parent))
     import torch
     from datasets.colmap import Parser
@@ -61,111 +80,103 @@ def main(argv: list[str] | None = None) -> int:
     if args.device == "cuda" and not torch.cuda.is_available():
         sys.stderr.write("block_views: no CUDA device; gsplat's rasteriser has no CPU path\n")
         return 2
-    started = time.perf_counter()
     device = torch.device(args.device)
+
     part = block_maths.Partition.from_dict(json.loads(args.partition.read_text("utf-8")))
-    with np.load(args.prior) as data:
-        prior = {name: np.asarray(data[name], dtype=np.float32) for name in data.files}
-    xyz = prior["xyz"]
-    member_of = part.block_of(part.project(xyz))
-    members = [member_of == b for b in range(part.count)]
+    prior = np.load(args.prior)
+    xyz = np.asarray(prior["xyz"], dtype=np.float32)
+    owner = part.block_of(part.project(xyz))
+    members = [owner == b for b in range(part.count)]
+
+    dataset = Parser(data_dir=str(args.data_dir), factor=1, normalize=False, test_every=8)
+    names = [str(name) for name in dataset.image_names]
+    camtoworlds = np.asarray(dataset.camtoworlds, dtype=np.float64)
+    inside = block_maths.cameras_inside(part, camtoworlds[:, :3, 3])
 
     def tensor(values: Any) -> Any:
-        return torch.from_numpy(np.ascontiguousarray(values, dtype=np.float32)).to(device)
+        """`values` as a contiguous float32 torch tensor on `device` (what gsplat takes)."""
+        return torch.as_tensor(np.ascontiguousarray(values, dtype=np.float32), device=device)
 
     means = tensor(xyz)
     quats = tensor(prior["quats"])
     scales = torch.exp(tensor(prior["log_scales"]))
     opacities = torch.sigmoid(tensor(prior["logit_opacity"]))
-    colors = tensor(prior["f_dc"])[:, None, :]
-    masks = [torch.from_numpy(m).to(device) for m in members]
+    colours = tensor(prior["f_dc"])[:, None, :]
+    masks = {id(member): torch.from_numpy(member).to(device) for member in members}
 
-    colmap = Parser(data_dir=str(args.data_dir), factor=1, normalize=False, test_every=8)
-    names = list(colmap.image_names)
-    centres = np.asarray(colmap.camtoworlds)[:, :3, 3]
-    inside = block_maths.cameras_inside(part, centres)
-    views: list[tuple[Any, Any, int, int]] = []
+    frames: list[tuple[Any, Any, int, int]] = []
     for index in range(len(names)):
-        camera_id = colmap.camera_ids[index]
-        k = np.array(colmap.Ks_dict[camera_id], dtype=np.float64)
-        width, height = colmap.imsize_dict[camera_id]
+        camera_id = dataset.camera_ids[index]
+        width, height = dataset.imsize_dict[camera_id]
         scale = min(1.0, args.max_side / max(width, height))
-        k[:2, :] *= scale
-        w, h = max(1, round(width * scale)), max(1, round(height * scale))
-        viewmat = torch.linalg.inv(tensor(colmap.camtoworlds[index])[None])
-        views.append((viewmat, tensor(k)[None], w, h))
+        k = np.array(dataset.Ks_dict[camera_id], dtype=np.float64).copy()
+        k[:2] *= scale
+        size = (max(1, round(width * scale)), max(1, round(height * scale)))
+        viewmat = np.linalg.inv(camtoworlds[index])
+        frames.append((tensor(viewmat)[None], tensor(k)[None], size[0], size[1]))
 
-    full: dict[int, Any] = {}
-    seen: dict[int, Any] = {}
+    full_cache: dict[int, tuple[np.ndarray, Any]] = {}
 
-    def render(camera: int, drop: Any) -> Any:
-        if drop is None and camera in full:
-            return full[camera]
-        viewmat, k, w, h = views[camera]
+    def draw(camera: int, drop: Any) -> tuple[np.ndarray, Any]:
+        viewmat, k, width, height = frames[camera]
         alpha = opacities
         if drop is not None:
-            # `contribution` hands back the very arrays in `members`.
-            mask = next((masks[b] for b, m in enumerate(members) if m is drop), None)
+            mask = masks.get(id(drop))
             if mask is None:
                 mask = torch.from_numpy(np.asarray(drop, dtype=bool)).to(device)
             alpha = torch.where(mask, torch.zeros_like(opacities), opacities)
         with torch.no_grad():
-            rgb, _, meta = rasterization(
+            image, _alpha, meta = rasterization(
                 means=means,
                 quats=quats,
                 scales=scales,
                 opacities=alpha,
-                colors=colors,
+                colors=colours,
                 viewmats=viewmat,
                 Ks=k,
-                width=w,
-                height=h,
+                width=width,
+                height=height,
                 sh_degree=0,
                 packed=False,
             )
-        image = rgb[0].clamp(0.0, 1.0).cpu().numpy()
+        rgb = image[0].clamp(0.0, 1.0).cpu().numpy().astype(np.float64)
+        return rgb, meta
+
+    def render(camera: int, drop: Any) -> np.ndarray:
         if drop is None:
-            full[camera] = image
-            seen[camera] = (meta["radii"][0] > 0).reshape(means.shape[0], -1).any(-1)
-        return image
+            if camera not in full_cache:
+                full_cache[camera] = draw(camera, None)
+            return full_cache[camera][0]
+        return draw(camera, drop)[0]
 
-    # The full render first, to learn which blocks the camera sees at all.
-    skip = inside.copy()
     loss = np.zeros((len(names), part.count), dtype=np.float64)
-    for camera in range(len(names)):
-        render(camera, None)
-        visible = seen.pop(camera)
-        for block in range(part.count):
-            if not bool(visible[masks[block]].any()):
-                skip[camera, block] = True
+    for c in range(len(names)):
+        _image, meta = full_cache.setdefault(c, draw(c, None))
+        radii = meta["radii"][0]
+        radii = radii.reshape(radii.shape[0], -1) if radii.ndim > 1 else radii[:, None]
+        visible = (radii > 0).any(dim=1).cpu().numpy()
+        skip = np.array(
+            [bool(inside[c, b]) or not bool(visible[members[b]].any()) for b in range(part.count)]
+        )
 
-        def one(_camera: int, drop: Any, camera: int = camera) -> Any:
-            return render(camera, drop)
+        def this_frame(_camera: int, drop: Any, c: int = c) -> np.ndarray:
+            return render(c, drop)
 
-        row = block_maths.contribution(one, 1, members, skip=skip[camera : camera + 1])
-        full.pop(camera, None)
-        loss[camera] = row[0]
-        if (camera + 1) % 25 == 0 or camera + 1 == len(names):
-            sys.stdout.write(f"block_views: {camera + 1} of {len(names)} frames\n")
+        row = block_maths.contribution(this_frame, 1, members, skip=skip[None, :])[0]
+        loss[c] = row
+        full_cache.pop(c, None)
+        if (c + 1) % 25 == 0 or c + 1 == len(names):
+            sys.stdout.write(f"block_views: {c + 1} of {len(names)} frames\n")
             sys.stdout.flush()
+
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(
-        json.dumps(
-            {
-                "names": names,
-                "loss": np.round(loss, 6).tolist(),
-                "seconds": round(time.perf_counter() - started, 1),
-            }
-        ),
-        encoding="utf-8",
-    )
+    document = {
+        "names": names,
+        "loss": np.round(loss, 6).tolist(),
+        "seconds": round(time.perf_counter() - started, 1),
+    }
+    args.out.write_text(json.dumps(document), encoding="utf-8")
     return 0
-
-
-def _out_of_time(budget: float) -> None:
-    sys.stderr.write(f"block_views: out of time after {budget:g} s\n")
-    sys.stderr.flush()
-    os._exit(3)
 
 
 if __name__ == "__main__":

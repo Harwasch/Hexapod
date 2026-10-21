@@ -3,10 +3,11 @@
 The property everything here holds `harmonics.rotate` to is the definition of turning a
 splat correctly: **turn the splat by R and look at it from R d, and every gaussian shows
 the colour it showed from d.** Checked numerically for degrees 1, 2 and 3 on random
-rotations, coefficients and directions -- against a basis transcribed independently below
-from Inria's `eval_sh`, the convention every trainer and renderer here agrees with -- and
-then through the code that applies it: `gaussians.transform`, the chunked writer `place`
-uses, and the `train -> place -> package` stages on a stand-in trainer's SH-3 export.
+rotations, coefficients and directions -- against the real spherical harmonics built in
+this file from the associated Legendre recurrence, the convention every trainer and
+renderer here agrees with -- and then through the code that applies it:
+`gaussians.transform`, the chunked writer `place` uses, and the `train -> place -> package`
+stages on a stand-in trainer's SH-3 export.
 """
 
 from __future__ import annotations
@@ -52,56 +53,6 @@ def unit(n: int) -> np.ndarray:
     return d / np.linalg.norm(d, axis=1, keepdims=True)
 
 
-def inria_eval_sh(deg: int, sh: np.ndarray, dirs: np.ndarray) -> np.ndarray:
-    """gaussian-splatting's `utils/sh_utils.py` `eval_sh`, verbatim but for numpy: `sh` is
-    (..., 3, (deg + 1)^2) -- channel first, coefficient last -- and `dirs` unit vectors."""
-    c0 = 0.28209479177387814
-    c1 = 0.4886025119029199
-    c2 = [
-        1.0925484305920792,
-        -1.0925484305920792,
-        0.31539156525252005,
-        -1.0925484305920792,
-        0.5462742152960396,
-    ]
-    c3 = [
-        -0.5900435899266435,
-        2.890611442640554,
-        -0.4570457994644658,
-        0.3731763325901154,
-        -0.4570457994644658,
-        1.445305721320277,
-        -0.5900435899266435,
-    ]
-    result = c0 * sh[..., 0]
-    if deg > 0:
-        x, y, z = dirs[..., 0:1], dirs[..., 1:2], dirs[..., 2:3]
-        result = result - c1 * y * sh[..., 1] + c1 * z * sh[..., 2] - c1 * x * sh[..., 3]
-        if deg > 1:
-            xx, yy, zz = x * x, y * y, z * z
-            xy, yz, xz = x * y, y * z, x * z
-            result = (
-                result
-                + c2[0] * xy * sh[..., 4]
-                + c2[1] * yz * sh[..., 5]
-                + c2[2] * (2.0 * zz - xx - yy) * sh[..., 6]
-                + c2[3] * xz * sh[..., 7]
-                + c2[4] * (xx - yy) * sh[..., 8]
-            )
-            if deg > 2:
-                result = (
-                    result
-                    + c3[0] * y * (3 * xx - yy) * sh[..., 9]
-                    + c3[1] * xy * z * sh[..., 10]
-                    + c3[2] * y * (4 * zz - xx - yy) * sh[..., 11]
-                    + c3[3] * z * (2 * zz - 3 * xx - 3 * yy) * sh[..., 12]
-                    + c3[4] * x * (4 * zz - xx - yy) * sh[..., 13]
-                    + c3[5] * z * (xx - yy) * sh[..., 14]
-                    + c3[6] * x * (xx - 3 * yy) * sh[..., 15]
-                )
-    return result
-
-
 def columns_with_sh(count: int, degree: int, seed: int = 3) -> dict[str, np.ndarray]:
     """A splat's canonical fourteen and `degree` bands of f_rest_*, channel-major."""
     g = np.random.default_rng(seed)
@@ -136,24 +87,81 @@ def dc_of(columns: dict[str, np.ndarray]) -> np.ndarray:
 # --- the basis ---------------------------------------------------------------------------
 
 
+def test_the_constants_are_their_closed_forms() -> None:
+    def c(n: float, d: float) -> float:
+        return math.sqrt(n / (d * math.pi))
+
+    c0, c1 = harmonics.SH_C0, harmonics.SH_C1
+    assert c0 == c(1, 4)
+    assert c1 == c(3, 4)
+    assert tuple(harmonics.SH_C2) == (c(15, 4), -c(15, 4), c(5, 16), -c(15, 4), c(15, 16))
+    assert tuple(harmonics.SH_C3) == (
+        -c(35, 32),
+        c(105, 4),
+        -c(21, 32),
+        c(7, 16),
+        -c(21, 32),
+        c(105, 16),
+        -c(35, 32),
+    )
+
+
+def _legendre(band: int, m: int, x: np.ndarray) -> np.ndarray:
+    """The associated Legendre function P_l^m(x), m >= 0, Condon-Shortley phase included:
+    P_m^m = (-1)^m (2m-1)!! (1-x^2)^(m/2), P_{m+1}^m = x (2m+1) P_m^m, and
+    (l-m) P_l^m = x (2l-1) P_{l-1}^m - (l+m-1) P_{l-2}^m."""
+    double_factorial = math.prod(range(2 * m - 1, 0, -2)) if m > 0 else 1
+    p_mm: np.ndarray = (-1.0) ** m * double_factorial * (1.0 - x * x) ** (m / 2)
+    if band == m:
+        return p_mm
+    p_prev, p = p_mm, x * (2 * m + 1) * p_mm
+    for k in range(m + 2, band + 1):
+        p_prev, p = p, (x * (2 * k - 1) * p - (k + m - 1) * p_prev) / (k - m)
+    out: np.ndarray = p
+    return out
+
+
+def _real_sh(band: int, m: int, dirs: np.ndarray) -> np.ndarray:
+    """Y_{l,m} real: sqrt(2) N P_l^|m|(cos theta) sin(|m| phi) for m < 0, N P_l^0 for
+    m = 0, sqrt(2) N P_l^m cos(m phi) for m > 0, N_l^m = sqrt((2l+1)/(4 pi) (l-m)!/(l+m)!)."""
+    theta = np.arccos(np.clip(dirs[:, 2], -1.0, 1.0))
+    phi = np.arctan2(dirs[:, 1], dirs[:, 0])
+    a = abs(m)
+    norm = math.sqrt(
+        (2 * band + 1) / (4 * math.pi) * math.factorial(band - a) / math.factorial(band + a)
+    )
+    p = _legendre(band, a, np.cos(theta))
+    if m < 0:
+        out: np.ndarray = math.sqrt(2) * norm * p * np.sin(a * phi)
+    elif m == 0:
+        out = norm * p
+    else:
+        out = math.sqrt(2) * norm * p * np.cos(m * phi)
+    return out
+
+
 @pytest.mark.parametrize("degree", [1, 2, 3])
-def test_the_basis_is_inrias_eval_sh(degree: int) -> None:
-    """The order, signs and constants a trained PLY's coefficients mean anything in."""
-    n = 500
-    dirs = unit(n)
-    dc = rng.normal(size=(n, 3))
-    rest = rng.normal(size=(n, harmonics.SH_DIMS[degree], 3))
-    ours = harmonics.evaluate(dc, rest, dirs) - 0.5
-    stacked = np.concatenate([dc[:, None, :], rest], axis=1).transpose(0, 2, 1)
-    theirs = inria_eval_sh(degree, stacked, dirs)
-    np.testing.assert_allclose(ours, theirs, rtol=0, atol=1e-12)
+def test_the_basis_is_the_real_spherical_harmonics(degree: int) -> None:
+    """Each column of `basis` is Y_{l,m} (bands 1..degree, m = -l..l), against a reference
+    built here from the Legendre recurrence and the normalisation -- a sign, a constant or
+    a column out of order in `basis` fails this."""
+    g = np.random.default_rng(degree)
+    dirs = g.normal(size=(500, 3))
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+    reference = np.stack(
+        [_real_sh(b, m, dirs) for b in range(1, degree + 1) for m in range(-b, b + 1)], axis=1
+    )
+    got = harmonics.basis(degree, dirs)
+    assert got.shape == (500, harmonics.SH_DIMS[degree])
+    np.testing.assert_allclose(got, reference, rtol=0, atol=1e-12)
+    assert harmonics.basis(0, dirs).shape == (500, 0)
 
 
 def test_the_basis_is_orthonormal_on_the_sphere() -> None:
     """Real SH with these constants are orthonormal: (1/4pi) integral Y_i Y_j = delta_ij
-    / (4pi), here by a 40,000-point Fibonacci quadrature. A wrong constant or a swapped
-    sign in `basis` shows up as an off-diagonal or a diagonal away from 1."""
-    count = 40_000
+    / (4pi), here by a 200,000-point Fibonacci quadrature. A wrong constant in `basis`
+    shows up as an off-diagonal or a diagonal away from 1."""
+    count = 200_000
     i = np.arange(count) + 0.5
     polar = np.arccos(1 - 2 * i / count)
     azimuth = math.pi * (1 + 5**0.5) * i

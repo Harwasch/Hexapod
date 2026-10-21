@@ -185,19 +185,20 @@ runs the job on an L4 (`run_job_gsplat`). Runs 36992095315 (gsplat), 36994749804
 ## 8. Generative inpainting for holes (2026-10-02, branch `wm-inpaint`)
 
 `world_model_client.GenerativeFiller` is a `Filler` that paints the mask with an inpainting
-model (`tools/captures/inpaint_models.py`, run by `InpaintSDXL` / `InpaintQwen` /
-`InpaintFlux` in `infra/modal/fill.py` and `world_models.py`). `fill.py` checks the
+model (`tools/captures/inpaint_models.py`, run by `InpaintSDXL` / `InpaintQwen` in
+`infra/modal/fill.py` and `world_models.py`). `fill.py` checks the
 workspace's Hugging Face token against every model first (`inpaint-access.json`), drops jobs
 whose model it cannot read, and fetches the weights into the volume once. Runs 37051163053,
 37053677004, 37057636855 (pumpkin), 37059869195 (camp). Fillers: `lama`, `sdxl`, `qwen`,
 `sdxl-lama` (LaMa then SDXL at strength 0.6), each with `-chain`.
 
-| Model                                                      | Weights                                                        | Licence                                                                           | GPU, per 1024x576 view                                             |
-| ---------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Qwen-Image + inpainting ControlNet                         | `Qwen/Qwen-Image`, `InstantX/Qwen-Image-ControlNet-Inpainting` | Apache-2.0 (both)                                                                 | H100, 7-9 s (58 GB; cold load from the volume 12 min, warm ~1 min) |
-| LaMa (big-lama, IOPaint's TorchScript export, md5 checked) | GitHub release `Sanster/models`                                | Apache-2.0                                                                        | L40S, 0.3-2 s                                                      |
-| SDXL inpainting 0.1                                        | `diffusers/stable-diffusion-xl-1.0-inpainting-0.1`             | CreativeML OpenRAIL++-M (use restrictions travel with the weights)                | L40S, 1.5-3 s                                                      |
-| FLUX.1 Fill [dev] (not run)                                | `black-forest-labs/FLUX.1-Fill-dev`                            | FLUX.1 [dev] Non-Commercial: the model may not be used commercially (outputs may) | gated: `GatedRepoError 403` for the workspace's token              |
+| Model                                                      | Weights                                                        | Licence                                                            | GPU, per 1024x576 view                                             |
+| ---------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| Qwen-Image + inpainting ControlNet                         | `Qwen/Qwen-Image`, `InstantX/Qwen-Image-ControlNet-Inpainting` | Apache-2.0 (both)                                                  | H100, 7-9 s (58 GB; cold load from the volume 12 min, warm ~1 min) |
+| LaMa (big-lama, IOPaint's TorchScript export, md5 checked) | GitHub release `Sanster/models`                                | Apache-2.0                                                         | L40S, 0.3-2 s                                                      |
+| SDXL inpainting 0.1                                        | `diffusers/stable-diffusion-xl-1.0-inpainting-0.1`             | CreativeML OpenRAIL++-M (use restrictions travel with the weights) | L40S, 1.5-3 s                                                      |
+
+A gated FLUX inpainting model was listed here and removed in 2026-10: its licence forbids commercial use.
 
 - **Secrets.** The workspace's Hugging Face secret is not named `huggingface` (it starts
   with `huggingface-secr`): `fill.yml` finds it by prefix (`HEXAPOD_HF_SECRET`), and

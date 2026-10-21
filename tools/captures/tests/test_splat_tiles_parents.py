@@ -1,10 +1,9 @@
-"""Optimised parents: the tree the GPU sees is the tree the packer writes, and only the
+"""Optimised parents: the tree an optimiser sees is the tree the packer writes, and only the
 parents' content changes when optimised ones are applied.
 
-The GPU stage (tools/pipeline lod_optimise.py) builds the hierarchy with
-`splat_tiles.hierarchy` on the same `canonical.ply`, optimises the parent gaussians
-against the photos (Hierarchical 3DGS Sec. 5.1) and hands them back as a
-`ParentOverrides` file keyed by tile and cell. What has to hold for that to be sound:
+Parents optimised elsewhere (no stage in this repository writes them since recipe 11)
+would be built on `splat_tiles.hierarchy` of the same `canonical.ply`, optimised against
+the photos and handed back as a `ParentOverrides` file keyed by tile and cell. What has to hold for that to be sound:
 
 * `hierarchy` emits exactly the tiles, boxes, errors and gaussians `convert` writes;
 * applying overrides changes each parent tile's gaussians to the overrides and nothing

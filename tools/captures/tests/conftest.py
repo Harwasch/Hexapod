@@ -18,6 +18,15 @@ in a new interpreter pinned to Haswell (`synthetic_yard.FIXTURE_CORETYPE`). That
 every runner: the yard check passed under Haswell on the crashing ones, which died later, in
 the large matmuls.
 
+numpy picks some of its own loops by CPU as well: on a runner with AVX-512 (the EPYC 9V74 and
+9V45) its float64 `exp` and `log` take AVX-512 paths whose last bits differ from the AVX2 ones
+every machine without AVX-512 runs, which is where the committed fixtures were written. The
+merge of PR #50 (`splat_merge`: opacity logits, log scales, the eigenvalue floor) put those
+calls on the path to the yard's bytes, and Captures went red on the runners that drew AVX-512
+(splat_4.glb, 3 bytes). So numpy's AVX-512 dispatch targets are switched off before numpy
+loads (`NPY_DISABLE_CPU_FEATURES`, read once at import; a target the CPU lacks is ignored), in
+this process and in the interpreters it starts.
+
 A fork copies the process but only the forking thread, and this process holds three OpenBLAS
 thread pools (numpy's, scipy's, and the 0.3.15 that OpenCV's wheel bundles) and OpenCV's own.
 So a test that needs a fork runs it in a new interpreter (`fresh_process`: `subprocess`,
@@ -36,6 +45,8 @@ from pathlib import Path
 import pytest
 
 os.environ.setdefault("OPENBLAS_CORETYPE", "Sandybridge")
+#: numpy 2.5's AVX-512 dispatch targets; the AVX2 (X86_V3) loops stay.
+os.environ.setdefault("NPY_DISABLE_CPU_FEATURES", "X86_V4 AVX512_ICL AVX512_SPR")
 
 CAPTURES = Path(__file__).resolve().parents[1]
 #: Forks of this process (`os.fork`, which multiprocessing's fork context calls).

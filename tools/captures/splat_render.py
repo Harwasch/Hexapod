@@ -193,6 +193,11 @@ def _from_columns(c: dict[str, np.ndarray], offset: np.ndarray | None = None) ->
     )
 
 
+#: A tile's decoded SPZ columns (`splat_tiles.unpack_spz`) as `Splats`, moved by `offset`
+#: (`splat_tiles.tile_offsets`) into the site frame.
+splats_from_columns = _from_columns
+
+
 def load_ply(path: Path) -> Splats:
     """A 3DGS PLY (degree-0 colour)."""
     from splat_tiles import read_ply
@@ -220,7 +225,7 @@ def load_tileset(tileset: Path) -> Splats:
             leaves.append(tile["content"]["uri"])
     return Splats.concat(
         [
-            _from_columns(unpack_spz(glb_spz(tileset.parent / uri)), offsets.get(uri))
+            splats_from_columns(unpack_spz(glb_spz(tileset.parent / uri)), offsets.get(uri))
             for uri in sorted(leaves)
         ]
     )

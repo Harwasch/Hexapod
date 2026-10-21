@@ -625,7 +625,8 @@ is byte-identical to a fresh run:
 
 ```bash
 cd tools/captures
-uv run python synthetic_yard.py ../../data/tiles/synthetic-yard   # regenerates, and scores
+OPENBLAS_CORETYPE=Haswell NPY_DISABLE_CPU_FEATURES="X86_V4 AVX512_ICL AVX512_SPR" \
+  uv run python synthetic_yard.py ../../data/tiles/synthetic-yard   # regenerates, and scores
 ```
 
 | Measure                       | Synthetic yard                                                       |

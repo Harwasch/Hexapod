@@ -105,8 +105,8 @@ class ObjectStoreTransfer:
 
     Uploads and downloads both stream between disk and the bucket (`upload_file`,
     `download_file`), because what crosses in either direction can be one file of
-    hundreds of megabytes -- a trained splat coming back from a GPU stage, or going out
-    to `optimise_lod` -- and a directory's members move eight at a time. Keys are opaque
+    hundreds of megabytes -- a trained splat coming back from a GPU stage, or
+    `canonical.ply` going out to `package` -- and a directory's members move eight at a time. Keys are opaque
     strings chosen by the pipeline, so nothing here knows what a stage or a checkpoint
     is. (What the provider leaves under `.../transfer/out` is also where
     `outputs.upload_artifact` copies a dispatched stage's artifacts from, inside the
@@ -132,7 +132,7 @@ class ObjectStoreTransfer:
 
             return sum(_parallel(one, sorted(p for p in source.rglob("*") if p.is_file())))
         # Streamed from disk, as `get` is: a stage's input can be a trained splat larger
-        # than the worker's memory (`canonical.ply` for `optimise_lod`, ~2 GB at 8M).
+        # than the worker's memory (`canonical.ply` for `package`, ~2 GB at 8M).
         self.storage.upload_file(target, source, "application/octet-stream")
         return source.stat().st_size
 

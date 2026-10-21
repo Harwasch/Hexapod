@@ -26,7 +26,8 @@ faces the ground. So `rotate` is applied wherever `transform` is, and it is exac
   ordering and signs -- applied to each colour channel.
 * **How.** Not by the Ivanic-Ruedenberg recurrence, whose sign and ordering conventions
   differ between every paper and library that prints one: by fitting it to the very basis
-  the trainer evaluates (`basis`, transcribed from gsplat's / Inria's `eval_sh`). Over
+  the trainers and CesiumJS evaluate (`basis`: real spherical harmonics with the
+  Condon-Shortley phase, in gsplat's ordering, from their closed forms). Over
   `_SAMPLES` well-spread directions, `A[s] = Y(d_s)` and `B[s] = Y(R^T d_s)`, and
   `D = lstsq(A, B)` is the matrix with `A D = B`. Because the band is closed under R that
   system has an exact solution, so the fit is the D-matrix to rounding (~1e-15), for
@@ -84,25 +85,33 @@ __all__ = [
 F32 = npt.NDArray[np.float32]
 F64 = npt.NDArray[np.float64]
 
-#: The DC term: colour = SH_C0 * f_dc + 0.5 (+ the bands below).
+#: The DC term: colour = SH_C0 * f_dc + 0.5 (+ the bands below). Y_0^0 = sqrt(1 / 4 pi).
 SH_C0 = 0.28209479177387814
-#: Inria's `utils/sh_utils.py` and gsplat's `_eval_sh_bases_fast` constants, bands 1-3.
-SH_C1 = 0.4886025119029199
-SH_C2 = (
-    1.0925484305920792,
-    -1.0925484305920792,
-    0.31539156525252005,
-    -1.0925484305920792,
-    0.5462742152960396,
+
+#: The real spherical harmonics' normalisations N_l^m = sqrt((2l+1)/(4 pi) (l-m)!/(l+m)!),
+#: times sqrt(2) for m != 0, times the Condon-Shortley phase (-1)^m and whatever constant
+#: the Cartesian form of the associated Legendre polynomial carries -- folded into one
+#: number per column of `basis` (Sloan, "Stupid Spherical Harmonics Tricks", 2008, lists
+#: the same table). Band 1, m = -1..1 (each column scales -y, z, -x):
+SH_C1 = math.sqrt(3 / (4 * math.pi))
+#: Band 2, m = -2..2 (columns xy, yz, 2z^2 - x^2 - y^2, xz, x^2 - y^2).
+SH_C2: tuple[float, ...] = (
+    math.sqrt(15 / (4 * math.pi)),
+    -math.sqrt(15 / (4 * math.pi)),
+    math.sqrt(5 / (16 * math.pi)),
+    -math.sqrt(15 / (4 * math.pi)),
+    math.sqrt(15 / (16 * math.pi)),
 )
-SH_C3 = (
-    -0.5900435899266435,
-    2.890611442640554,
-    -0.4570457994644658,
-    0.3731763325901154,
-    -0.4570457994644658,
-    1.445305721320277,
-    -0.5900435899266435,
+#: Band 3, m = -3..3 (columns y(3x^2 - y^2), xyz, y(4z^2 - x^2 - y^2), z(2z^2 - 3x^2 - 3y^2),
+#: x(4z^2 - x^2 - y^2), z(x^2 - y^2), x(x^2 - 3y^2)).
+SH_C3: tuple[float, ...] = (
+    -math.sqrt(35 / (32 * math.pi)),
+    math.sqrt(105 / (4 * math.pi)),
+    -math.sqrt(21 / (32 * math.pi)),
+    math.sqrt(7 / (16 * math.pi)),
+    -math.sqrt(21 / (32 * math.pi)),
+    math.sqrt(105 / (16 * math.pi)),
+    -math.sqrt(35 / (32 * math.pi)),
 )
 
 #: Coefficients a colour channel has above DC, by degree 0..3 (nianticlabs/spz's
@@ -205,13 +214,14 @@ def truncate(columns: Mapping[str, npt.ArrayLike], degree: int) -> dict[str, F32
 
 
 def basis(degree: int, dirs: npt.ArrayLike) -> F64:
-    """The real SH basis functions of bands 1..`degree` at unit directions `dirs` (n, 3),
-    as (n, SH_DIMS[degree]) -- the DC term excluded, which no rotation touches.
+    """The real spherical harmonics of bands 1..`degree` at unit directions `dirs` (n, 3),
+    as (n, SH_DIMS[degree]) columns: band by band, m = -l..l within a band.
 
-    Transcribed from Inria's `eval_sh` (gaussian-splatting `utils/sh_utils.py`), which
-    gsplat's `_eval_sh_bases_fast` and CUDA kernels, CesiumJS's `evaluateSH` and
-    nianticlabs/spz all agree with: the order, the signs and the constants a trained PLY's
-    coefficients mean anything in.
+    Y_{l,m<0} = sqrt(2) Im Y_l^|m|, Y_{l,0} = Y_l^0 and Y_{l,m>0} = sqrt(2) Re Y_l^m, with
+    Y_l^m the complex orthonormal harmonics including the Condon-Shortley phase, theta the
+    polar angle from +z and phi the azimuth from +x towards +y. Evaluated in Cartesian
+    form, each column a constant (`SH_C1`..`SH_C3`) times a polynomial in x, y, z, not
+    simplified with x^2 + y^2 + z^2 = 1. Degree 0 gives no columns.
     """
     d = np.asarray(dirs, dtype=np.float64).reshape(-1, 3)
     x, y, z = d[:, 0], d[:, 1], d[:, 2]
@@ -220,17 +230,18 @@ def basis(degree: int, dirs: npt.ArrayLike) -> F64:
         columns += [-SH_C1 * y, SH_C1 * z, -SH_C1 * x]
     if degree >= 2:
         xx, yy, zz = x * x, y * y, z * z
+        xy, yz, xz = x * y, y * z, x * z
         columns += [
-            SH_C2[0] * x * y,
-            SH_C2[1] * y * z,
+            SH_C2[0] * xy,
+            SH_C2[1] * yz,
             SH_C2[2] * (2.0 * zz - xx - yy),
-            SH_C2[3] * x * z,
+            SH_C2[3] * xz,
             SH_C2[4] * (xx - yy),
         ]
     if degree >= 3:
         columns += [
             SH_C3[0] * y * (3.0 * xx - yy),
-            SH_C3[1] * x * y * z,
+            SH_C3[1] * xy * z,
             SH_C3[2] * y * (4.0 * zz - xx - yy),
             SH_C3[3] * z * (2.0 * zz - 3.0 * xx - 3.0 * yy),
             SH_C3[4] * x * (4.0 * zz - xx - yy),
@@ -239,7 +250,8 @@ def basis(degree: int, dirs: npt.ArrayLike) -> F64:
         ]
     if not columns:
         return np.zeros((d.shape[0], 0), dtype=np.float64)
-    return np.stack(columns, axis=1)
+    out: F64 = np.stack(columns, axis=1)
+    return out
 
 
 def evaluate(f_dc: npt.ArrayLike, rest: npt.ArrayLike | None, dirs: npt.ArrayLike) -> F64:

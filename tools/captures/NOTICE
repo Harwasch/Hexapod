@@ -1,5 +1,24 @@
 Hexapod capture tools -- third-party notices
 
+This file lists the third-party code contained in tools/captures; everything not listed is
+this project's own work.
+
+splat_merge.py (the level-of-detail merge) replaces code derived from a non-commercial
+original. Its provenance, stated exactly (docs/DECISIONS/0012-licence-clean-room.md, "What
+actually happened"):
+
+  - It was first written in October 2026 from a specification of the mathematics (the ADR's
+    Appendix, section 5A) by an implementer who did not open the code it replaced, but who was
+    incidentally shown, in two grep outputs, a few old docstring and comment lines and a few
+    lines of the old merge. The rule opacity = weight / surface area also appears in the old
+    code; section 5A specifies it, so the implementer took it from there.
+  - An independent review then found that five helper bodies (Moments.concat, Moments.take,
+    merge_cells, coarsen, _rows) matched the old code character for character.
+  - Those five bodies were removed unseen and rewritten by a second implementer who saw only
+    their signatures and docstrings, the tests, where they are called from and section 5A.
+
+No more than that is claimed: the rest of splat_merge.py is the first implementer's work.
+
 kaolin_rkpm.py
 --------------
 Contains code from NVIDIA Kaolin (https://github.com/NVIDIAGameWorks/kaolin), master branch,

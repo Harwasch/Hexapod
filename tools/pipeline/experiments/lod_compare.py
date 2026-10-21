@@ -1,12 +1,12 @@
-"""Merged against optimised parents, rendered on the GPU: Phase 1's comparison, again.
+"""Two tilesets of one tree (e.g. two merge rules), rendered on the GPU: Phase 1's comparison.
 
 Phase 1 (scratchpad lodcmp/compare.py + lpips_eval.py, on the 640k "Train" splat) found
-H3DGS-merged parents ahead of the old thinned ones on PSNR, SSIM and holes, and level with
-or behind them on LPIPS at the switch distance (tau 8-16 px: 0.138 vs 0.138, 0.353 vs
-0.343, 0.169 vs 0.124) -- merged parents are blurry. `optimise_lod` optimises them against
-the photos (H3DGS Sec. 5.1). This script repeats Phase 1's two tests on two tilesets of
-the same `canonical.ply`, packed with and without the optimised parents, with gsplat's CUDA
-rasteriser instead of the numpy one and LPIPS in the same pass:
+the moment-matched parents of 2026-09 ahead of the old thinned ones on PSNR, SSIM and
+holes, and level with or behind them on LPIPS at the switch distance (tau 8-16 px: 0.138
+vs 0.138, 0.353 vs 0.343, 0.169 vs 0.124) -- merged parents are blurry. This script
+repeats Phase 1's two tests on two tilesets `a` and `b` of the same `canonical.ply` (the
+same tree, different parents), with gsplat's CUDA rasteriser instead of the numpy one and
+LPIPS in the same pass:
 
 1. **root at its switch distance**: each tileset's root drawn alone, from where its
    geometric error projects to tau px (tau = 8 and 16), four azimuths 25 degrees up,
@@ -19,33 +19,24 @@ Each row: PSNR, SSIM, LPIPS (AlexNet, torchmetrics) and holes -- the share of pi
 full render covers (alpha > 0.5) that the LoD view leaves see-through. The root at
 tau = 16 is the number to compare with Phase 1's.
 
-**The experiment, on the spool capture** (job 15b70036's video; any photo-reconstruct run
-on recipe version 10 has what it needs):
+**The experiment**, on a GPU box with the training image (`modal shell` into
+`run_stage_l4`, or any CUDA machine with gsplat 1.5.3), with a run's
+`stages/place/out/canonical.ply` packed twice, once by each rule being compared:
 
-1. Process it on recipe 10 -- `optimise_lod` is on by default. The run's own
-   `optimise_lod` step already reports, in its metrics and in
-   `stages/optimise_lod/out/lod_parents/summary.json`: held-out loss/PSNR/SSIM/LPIPS at
-   the cut before and after (taus 4, 8, 16, 32; frames never trained on), the per-tile
-   switch-distance PSNR/SSIM/LPIPS/holes of merged and optimised parents against their
-   own subtrees, iterations, it/s and seconds on the L4, and whether they were kept.
-2. For Phase 1's protocol exactly, on a GPU box with the training image
-   (`modal shell` into `run_stage_l4`, or any CUDA machine with gsplat 1.5.3), with the
-   run's `stages/place/out/canonical.ply` and
-   `stages/optimise_lod/out/lod_parents/lod_parents.npz`:
+    python tools/captures/splat_tiles.py canonical.ply a --lat 0 --lon 0
+    python tools/captures/splat_tiles.py canonical.ply b --lat 0 --lon 0   # the other rule
+    $GSPLAT_PYTHON tools/pipeline/experiments/lod_compare.py a b --out lod_compare.json
 
-       python tools/captures/splat_tiles.py canonical.ply merged --lat 0 --lon 0
-       python tools/captures/splat_tiles.py canonical.ply optimised --lat 0 --lon 0 \\
-           --parents lod_parents.npz
-       $GSPLAT_PYTHON tools/pipeline/experiments/lod_compare.py merged optimised \\
-           --out lod_compare.json
+(`--tile-gaussians` and `--opacity-min` at the recipe's 100000 and 0.02, the defaults.) The
+two must be the same tree -- the same tile uris with the same children -- or the script
+refuses (`same_tree`). Their geometric errors may differ: a parent's error comes from its
+merge (its boxes and widening), so two rules give two sets of errors, and each tileset's root
+is drawn from its own switch distance.
 
-   (`--tile-gaussians` and `--opacity-min` at the recipe's 100000 and 0.02, the defaults;
-   the packer refuses the parents for any other packing.)
-3. **Decide**: keep `optimise_lod` on if the optimised root's LPIPS at tau 8 and 16 is
-   below the merged root's by more than the spread across the four azimuths, holes do
-   not rise by more than a point, and the held-out loss at the cut fell (the stage's own
-   acceptance). If LPIPS does not move, the cost -- see the stage's `loopSeconds` -- buys
-   nothing and `enabled: false` is the recipe's answer.
+**Tile transforms.** A far site's tiles carry translation-only `transform`s (ADR 0011).
+`Tileset` composes them (`splat_tiles.tile_offsets`): each box and each decoded position
+is moved into the root's frame, so the cut and the renders are right for a site of any
+size. Not executed on a GPU in this repository yet.
 """
 
 from __future__ import annotations
@@ -76,8 +67,9 @@ ELEVATION_DEG = 25.0
 CUT_SCALES = (4.0, 2.0, 1.0, 0.5)
 
 
-def decode(path: Path) -> dict[str, np.ndarray]:
-    """One tile's gaussians: xyz, sh0, opacity (0-1), scales (linear), quats (w first)."""
+def decode(path: Path, shift: np.ndarray | None = None) -> dict[str, np.ndarray]:
+    """One tile's gaussians: xyz (moved by `shift` into the root's frame), sh0, opacity
+    (0-1), scales (linear), quats (w first)."""
     raw = path.read_bytes()
     offset, chunks = 12, {}
     while offset < len(raw):
@@ -89,7 +81,7 @@ def decode(path: Path) -> dict[str, np.ndarray]:
     start = view.get("byteOffset", 0)
     d = splat_tiles.unpack_spz(chunks[0x004E4942][start : start + view["byteLength"]])
     return {
-        "xyz": np.stack([d["x"], d["y"], d["z"]], 1),
+        "xyz": splat_tiles.site_positions(np.stack([d["x"], d["y"], d["z"]], 1), shift),
         "sh0": np.stack([d[f"f_dc_{i}"] for i in range(3)], 1),
         "opacity": splat_tiles.sigmoid(d["opacity"].astype(np.float64)).astype(np.float32),
         "scales": np.exp(np.stack([d[f"scale_{i}"] for i in range(3)], 1)).astype(np.float32),
@@ -98,7 +90,8 @@ def decode(path: Path) -> dict[str, np.ndarray]:
 
 
 class Tileset:
-    """A packed `splat/` folder: its tree as `lod_maths.Tree`, and each tile's content."""
+    """A packed `splat/` folder: its tree as `lod_maths.Tree`, and each tile's content, both
+    in the root's frame (every tile's translation composed, `splat_tiles.tile_offsets`)."""
 
     def __init__(self, folder: Path) -> None:
         self.folder = folder
@@ -119,10 +112,13 @@ class Tileset:
         centre = boxes[:, :3]
         half = np.stack([boxes[:, 3], boxes[:, 7], boxes[:, 11]], 1)
         self.uris = [str(tile["content"]["uri"]) for tile in tiles]
+        # A tile's box is in its own frame: moved by its offset, like its positions.
+        self.offsets = splat_tiles.tile_offsets(document)
+        shift = np.array([self.offsets.get(uri, np.zeros(3)) for uri in self.uris])
         self.tree = lod_maths.Tree(
             uris=tuple(self.uris),
-            low=centre - half,
-            high=centre + half,
+            low=centre - half + shift,
+            high=centre + half + shift,
             error=np.array([float(t["geometricError"]) for t in tiles]),
             children=tuple(children),
             rows=np.zeros((len(tiles), 2), dtype=np.int64),
@@ -132,15 +128,23 @@ class Tileset:
     def content(self, tiles: list[int]) -> dict[str, np.ndarray]:
         for tile in tiles:
             if tile not in self.cache:
-                self.cache[tile] = decode(self.folder / self.uris[tile])
+                uri = self.uris[tile]
+                self.cache[tile] = decode(self.folder / uri, self.offsets.get(uri))
         parts = [self.cache[tile] for tile in tiles]
         return {key: np.concatenate([part[key] for part in parts]) for key in parts[0]}
 
 
+def same_tree(a: lod_maths.Tree, b: lod_maths.Tree) -> bool:
+    """Whether two packed tilesets are one tree: the same tile uris, in walk order, with the
+    same children. Geometric errors (and boxes) are not compared: they follow from the merge
+    rule, which is what the comparison varies."""
+    return a.uris == b.uris and a.children == b.children
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    parser.add_argument("merged", type=Path, help="splat/ packed without --parents")
-    parser.add_argument("optimised", type=Path, help="splat/ packed with --parents")
+    parser.add_argument("a", type=Path, help="one splat/ folder")
+    parser.add_argument("b", type=Path, help="another splat/ folder of the same tree")
     parser.add_argument("--out", type=Path, default=Path("lod_compare.json"))
     parser.add_argument("--device", default="cuda")
     # Phase 1's 480 x 360; smaller only to check this script on a CPU stand-in.
@@ -191,9 +195,9 @@ def main(argv: list[str] | None = None) -> int:
             "holes": holes,
         }
 
-    sets = {"merged": Tileset(args.merged), "optimised": Tileset(args.optimised)}
-    base = sets["merged"]
-    if base.tree.error.tolist() != sets["optimised"].tree.error.tolist():
+    sets = {"a": Tileset(args.a), "b": Tileset(args.b)}
+    base = sets["a"]
+    if not same_tree(base.tree, sets["b"].tree):
         sys.stderr.write("lod_compare: the two tilesets are different trees\n")
         return 2
     leaves = base.content(list(base.tree.leaves))
@@ -212,14 +216,15 @@ def main(argv: list[str] | None = None) -> int:
 
     rows: list[dict[str, Any]] = []
     for tau in SWITCH_TAUS:
-        distance = float(base.tree.error[0]) * focal / tau
         for azimuth in AZIMUTHS_DEG:
-            eye = lod_maths.orbit_eye(
-                target, direction(azimuth), base.tree.low[0], base.tree.high[0], distance
-            )
-            view = lod_maths.look_at(eye, target)
-            reference, reference_alpha = render(leaves, view)
             for name, tileset in sets.items():
+                # Each root from its own switch distance: the two errors may differ.
+                distance = float(tileset.tree.error[0]) * focal / tau
+                eye = lod_maths.orbit_eye(
+                    target, direction(azimuth), tileset.tree.low[0], tileset.tree.high[0], distance
+                )
+                view = lod_maths.look_at(eye, target)
+                reference, reference_alpha = render(leaves, view)
                 image, alpha = render(tileset.content([0]), view)
                 rows.append(
                     {"test": "root-at-switch", "tau": tau, "azimuth": azimuth, "tileset": name,

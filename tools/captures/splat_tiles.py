@@ -7,9 +7,9 @@ is the form CesiumJS 1.145 loads, plus a tileset.json whose root transform place
 frame on the globe. Every gaussian that passes the opacity and floater filters is written
 exactly once, in a leaf: an adaptive octree splits wherever a tile would hold more than
 `TILE_GAUSSIANS`, each parent holds its subtree *merged* -- one gaussian per occupied cell,
-by Hierarchical 3DGS's moment matching -- and refinement is REPLACE (see `convert` for
-why). A scan within one tile's budget is one tile, as before. The packer reads the PLY in
-windows and sorts through disk, so its memory does not grow with the file. The glTF node
+by moment matching (`splat_merge`) -- and refinement is REPLACE (see `convert` for why). A
+scan within one tile's budget is one tile, as before. The packer reads the PLY in windows
+and sorts through disk, so its memory does not grow with the file. The glTF node
 carries the z-up to y-up swap the same way Cesium's own sample tilesets do. A trained PLY's
 spherical harmonics (`f_rest_*`, up to degree 3) ride along in every tile, so the view-
 dependent colour the trainer learned is drawn (see `convert`). Beside the tiles goes
@@ -44,7 +44,9 @@ from typing import Any, cast
 
 import numpy as np
 
+import splat_merge
 import view_cones
+from splat_merge import Moments, coarsen, merge_cells
 
 SH_C0 = 0.28209479177387814
 WGS84_A = 6378137.0
@@ -352,8 +354,9 @@ def sh_degree_for_dim(dim: int) -> int:
 def ply_sh_degree(layout: PlyLayout) -> int:
     """The SH degree a trained PLY carries in its `f_rest_*` properties; 0 without them.
 
-    3DGS trainers (Inria, gsplat's exporter, OpenSplat) write the rest of the SH as
-    `f_rest_0..f_rest_{3K-1}`, channel-major: all K of red, then green, then blue.
+    3DGS trainers (the paper's own, arXiv 2308.04079; gsplat's exporter; OpenSplat) write
+    the rest of the SH as `f_rest_0..f_rest_{3K-1}`, channel-major: all K of red, then
+    green, then blue.
     """
     rest = [name for name in layout.names if name.startswith("f_rest_")]
     if not rest:
@@ -762,30 +765,6 @@ GRID_BITS = 21
 #: range the tiler reasons about sizes in. A garbage scale of +40 must not become exp(40).
 SPZ_LOG_SCALE_RANGE = (-10.0, 255 / 16 - 10.0)
 
-#: The most a merged gaussian may be opaque, and so where H3DGS's "falloff" is cut.
-#:
-#: Merging sets a parent's opacity to `sum(w_i) / S_p` (H3DGS 2406.12080 Sec. 4.1, Eqs. 8-9;
-#: gaussian-hierarchy ClusterMerger.cpp: `clustered.opacity = weight_sum /
-#: ellipseSurface(clustered.scale)`), which the paper calls *falloff* because it exceeds 1
-#: wherever the children overlapped; its own rasteriser then clamps each fragment's alpha
-#: at 0.99 (hierarchy-rasterizer forward.cu: `min(0.99f, con_o.w * exp(power))`). SPZ and
-#: KHR_gaussian_splatting store an opacity in [0, 1] (a sigmoid, then a byte), so the cut
-#: has to happen here instead: at 0.99, the same ceiling that rasteriser applies.
-MERGED_OPACITY_MAX = 0.99
-
-#: How far a merged gaussian may be widened to keep what the opacity cut would lose.
-#:
-#: Cutting falloff F > 1 to 0.99 alone makes a merged surface see-through between its
-#: gaussians -- two neighbours a cell apart each reach ~0.23 alpha at the midpoint, 0.41
-#: together, where the children they replace were opaque. So the product H3DGS conserves
-#: when it merges, opacity x surface (its weights w = o * S, Eq. 8), is conserved here too:
-#: the surface grows by F / 0.99, the scales by the square root of that. That is the rule
-#: Spark's own LoD applies when `lodInflate` is on ("inflate LoD splats to ensure opacity
-#: stays <= 1.0"; spark src/shaders/splatVertex.glsl), and what Cesium ion's own splat
-#: tilesets show (coarse splats enlarged: p99 35 m against 17.7 m a level down). Capped at
-#: 2x: F far above 4 means many *stacked* layers, and widening a node past its cell smears
-#: colour across neighbours instead of filling gaps.
-MERGED_INFLATE_MAX = 2.0
 
 #: Merged parents carry their merged SH bands -- the same weighted mean as the DC colour
 #: (`merge_cells`), of the bands their members are drawn with -- rather than zeros.
@@ -1087,180 +1066,7 @@ def plan_tree(codes: np.ndarray, tile_gaussians: int | None = TILE_GAUSSIANS) ->
     return split(0, count, 0, ())
 
 
-# ------------------------------------------------------------------------ merging (H3DGS)
-
-
-@dataclass
-class Moments:
-    """Gaussians, or merged cells of gaussians, as the moments H3DGS merges.
-
-    `weight` is H3DGS's unnormalised w = opacity x surface (s0 s1 + s0 s2 + s1 s2) -- for a
-    merged cell, the sum of its members' -- `mean` and `cov` (xx, xy, xz, yy, yz, zz) the
-    weighted first and central second moments, `colour` the weighted SH DC term and `sh`
-    the weighted higher SH bands, flattened to (n, 3K) -- (n, 0) when the tiles carry none.
-    `key` is each row's cell at the level it was merged to, ascending.
-
-    The weights add, so merging merged cells is merging their gaussians: a cell's weight is
-    exactly its members' sum (the opacity cut in `to_gaussians` touches only what is
-    *written*, never these), and Eqs. 3-4 are the law of total covariance. So each parent
-    is built from its children's cells rather than re-reading every gaussian below it,
-    the way ClusterMerger.cpp's `mergeRec` merges each child's `merged[0]` -- and the
-    result is the same as merging the leaves directly (tests/test_splat_tiles_lod.py checks
-    it against a brute-force merge).
-    """
-
-    key: np.ndarray
-    weight: np.ndarray
-    mean: np.ndarray
-    cov: np.ndarray
-    colour: np.ndarray
-    sh: np.ndarray
-
-    def __len__(self) -> int:
-        return int(self.key.size)
-
-    @staticmethod
-    def concat(parts: list[Moments]) -> Moments:
-        return Moments(
-            *(np.concatenate([getattr(part, name) for part in parts]) for name in _MOMENT_FIELDS)
-        )
-
-    def take(self, index: np.ndarray) -> Moments:
-        return Moments(*(getattr(self, name)[index] for name in _MOMENT_FIELDS))
-
-
-_MOMENT_FIELDS = ("key", "weight", "mean", "cov", "colour", "sh")
-
-
-def _surface(scales: np.ndarray) -> np.ndarray:
-    """H3DGS's surface proxy, s0 s1 + s0 s2 + s1 s2 (ClusterMerger.cpp `ellipseSurface`)."""
-    return scales[:, 0] * scales[:, 1] + scales[:, 0] * scales[:, 2] + scales[:, 1] * scales[:, 2]
-
-
-def _rotation_matrices(quat_wxyz: np.ndarray) -> np.ndarray:
-    """(n, 3, 3) rotations whose columns are each gaussian's axes, from w-first quaternions.
-
-    The 3DGS convention (and gaussian-hierarchy common.h `matrixFromQuat`): covariance is
-    R S S^T R^T with R from the normalised quaternion.
-    """
-    q = quat_wxyz.astype(np.float64)
-    q = q / np.maximum(np.linalg.norm(q, axis=1, keepdims=True), 1e-12)
-    w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
-    return np.stack(
-        [
-            np.stack([1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)], 1),
-            np.stack([2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)], 1),
-            np.stack([2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)], 1),
-        ],
-        axis=1,
-    )
-
-
-def _quaternions(rotations: np.ndarray) -> np.ndarray:
-    """w-first unit quaternions of proper rotation matrices (Shepperd's method, vectorised).
-
-    The branch is chosen per matrix by the largest of trace, R00, R11, R22, so the square
-    root is never taken of a small number.
-    """
-    r = rotations
-    trace = r[:, 0, 0] + r[:, 1, 1] + r[:, 2, 2]
-    pick = np.argmax(np.stack([trace, r[:, 0, 0], r[:, 1, 1], r[:, 2, 2]], 1), axis=1)
-    out = np.empty((r.shape[0], 4))
-    for case in range(4):
-        m = r[pick == case]
-        if case == 0:
-            s = np.sqrt(np.maximum(1 + m[:, 0, 0] + m[:, 1, 1] + m[:, 2, 2], 1e-30)) * 2
-            q = [s / 4, (m[:, 2, 1] - m[:, 1, 2]) / s, (m[:, 0, 2] - m[:, 2, 0]) / s,
-                 (m[:, 1, 0] - m[:, 0, 1]) / s]  # fmt: skip
-        elif case == 1:
-            s = np.sqrt(np.maximum(1 + m[:, 0, 0] - m[:, 1, 1] - m[:, 2, 2], 1e-30)) * 2
-            q = [(m[:, 2, 1] - m[:, 1, 2]) / s, s / 4, (m[:, 0, 1] + m[:, 1, 0]) / s,
-                 (m[:, 0, 2] + m[:, 2, 0]) / s]  # fmt: skip
-        elif case == 2:
-            s = np.sqrt(np.maximum(1 - m[:, 0, 0] + m[:, 1, 1] - m[:, 2, 2], 1e-30)) * 2
-            q = [(m[:, 0, 2] - m[:, 2, 0]) / s, (m[:, 0, 1] + m[:, 1, 0]) / s, s / 4,
-                 (m[:, 1, 2] + m[:, 2, 1]) / s]  # fmt: skip
-        else:
-            s = np.sqrt(np.maximum(1 - m[:, 0, 0] - m[:, 1, 1] + m[:, 2, 2], 1e-30)) * 2
-            q = [(m[:, 1, 0] - m[:, 0, 1]) / s, (m[:, 0, 2] + m[:, 2, 0]) / s,
-                 (m[:, 1, 2] + m[:, 2, 1]) / s, s / 4]  # fmt: skip
-        out[pick == case] = np.stack(q, 1)
-    return out / np.linalg.norm(out, axis=1, keepdims=True)
-
-
-def gaussian_moments(records: np.ndarray, keys: np.ndarray) -> Moments:
-    """Leaf gaussians (`RECORD` rows) as moments, each in its own row.
-
-    Scales are clipped to what SPZ can store first, so a parent merges exactly the sizes
-    its children are drawn at.
-    """
-    scales = np.exp(np.clip(records["scale"].astype(np.float64), *SPZ_LOG_SCALE_RANGE))
-    opacity = sigmoid(records["opacity"].astype(np.float64))
-    # (R S)(R S)^T, batched: a matmul, which is ten times faster here than the einsum.
-    axes = _rotation_matrices(records["rot"]) * scales[:, None, :]
-    cov3 = axes @ axes.transpose(0, 2, 1)
-    return Moments(
-        key=keys.astype(np.int64),
-        # A floor, not a filter: a zero weight (a gaussian SPZ would round to nothing)
-        # must not make a cell of such gaussians divide by zero.
-        weight=np.maximum(opacity * _surface(scales), 1e-30),
-        mean=records["xyz"].astype(np.float64),
-        cov=cov3[:, [0, 0, 0, 1, 1, 2], [0, 1, 2, 1, 2, 2]],
-        colour=records["f_dc"].astype(np.float64),
-        sh=(
-            unquantize_sh(records["sh"]).reshape(len(records), -1).astype(np.float64)
-            if "sh" in (records.dtype.names or ())
-            else np.zeros((len(records), 0))
-        ),
-    )
-
-
-def merge_cells(moments: Moments) -> Moments:
-    """One row per distinct key: H3DGS moment matching over each key's rows.
-
-    With w_i normalised within the cell (ClusterMerger.cpp, `weights[i] / weight_sum`):
-    mean mu_p = sum w_i mu_i (Eq. 3), covariance Sigma_p = sum w_i (Sigma_i + (mu_i - mu_p)
-    (mu_i - mu_p)^T) (Eq. 4), SH sum w_i c_i -- the DC term and every higher band alike --
-    and the unnormalised weight sum is kept, so the result merges again exactly. SH is
-    linear in its coefficients, so a merged gaussian's view-dependent colour is, from every
-    direction, the weighted mean of its members' colours from that direction. Rows must be sorted by key;
-    each cell is a contiguous run, so this is one `reduceat` per moment and no loop.
-    """
-    if len(moments) == 0:
-        return moments
-    key = moments.key
-    starts = np.flatnonzero(np.r_[True, key[1:] != key[:-1]])
-    run = np.cumsum(np.r_[False, key[1:] != key[:-1]])
-    w = moments.weight
-    total = np.add.reduceat(w, starts)
-    mean = np.add.reduceat(w[:, None] * moments.mean, starts) / total[:, None]
-    colour = np.add.reduceat(w[:, None] * moments.colour, starts) / total[:, None]
-    sh = (
-        np.add.reduceat(w[:, None] * moments.sh, starts) / total[:, None]
-        if moments.sh.shape[1]
-        else np.zeros((starts.size, 0))
-    )
-    # Deviations from the cell's own mean, not raw second moments: E[xx^T] - mu mu^T would
-    # cancel catastrophically for centimetre cells a hundred metres from the origin.
-    d = moments.mean - mean[run]
-    spread = d[:, [0, 0, 0, 1, 1, 2]] * d[:, [0, 1, 2, 1, 2, 2]]
-    cov = np.add.reduceat(w[:, None] * (moments.cov + spread), starts) / total[:, None]
-    return Moments(key[starts], total, mean, cov, colour, sh)
-
-
-def coarsen(moments: Moments, levels: int) -> Moments:
-    """Cells `levels` levels coarser: keys shifted up an octant per level, then merged."""
-    if levels <= 0:
-        return moments
-    shifted = Moments(
-        moments.key >> (3 * levels),
-        moments.weight,
-        moments.mean,
-        moments.cov,
-        moments.colour,
-        moments.sh,
-    )
-    return merge_cells(shifted)
+# --------------------------------------------------------------- merging (splat_merge.py)
 
 
 @dataclass
@@ -1282,47 +1088,36 @@ class Gaussians:
         return 3.0 * np.exp(top)
 
 
-def to_gaussians(moments: Moments) -> Gaussians:
-    """Merged cells as gaussians: axes and scales from the covariance, opacity from falloff.
-
-    The covariance's eigenvectors are the axes and the square roots of its eigenvalues the
-    scales (ClusterMerger.cpp: `SelfAdjointEigenSolver`, then `sqrt(eigenvalues)`), with the
-    third axis flipped where needed to make a rotation, not a reflection, and eigenvalues
-    kept off zero as its "Working hard..." loop does. Opacity is H3DGS's falloff,
-    `sum(w_i) / S_p`, cut to `MERGED_OPACITY_MAX` with the surface widened to keep
-    opacity x surface (see `MERGED_INFLATE_MAX` for why and by how much).
-    """
-    c = moments.cov
-    matrices = np.stack(
-        [
-            np.stack([c[:, 0], c[:, 1], c[:, 2]], 1),
-            np.stack([c[:, 1], c[:, 3], c[:, 4]], 1),
-            np.stack([c[:, 2], c[:, 4], c[:, 5]], 1),
-        ],
-        axis=1,
+def gaussian_moments(records: np.ndarray, keys: np.ndarray) -> Moments:
+    """Leaves as moments (`splat_merge.leaf_moments`), one row per record in order, their
+    sizes clipped to what SPZ holds and their SH the bytes SPZ will hold, unquantised."""
+    n = int(records.shape[0])
+    if "sh" in (records.dtype.names or ()):
+        sh_flat = unquantize_sh(records["sh"]).reshape(n, -1)
+    else:
+        sh_flat = np.zeros((n, 0), dtype=np.float32)
+    return splat_merge.leaf_moments(
+        keys.astype(np.int64),
+        records["xyz"],
+        records["opacity"],
+        records["scale"],
+        records["rot"],  # w first, as the PLY's rot_0..3
+        records["f_dc"],
+        sh_flat,
+        log_scale_range=SPZ_LOG_SCALE_RANGE,
     )
-    values, vectors = np.linalg.eigh(matrices)
-    floor = np.maximum(values[:, 2:3] * 1e-8, np.exp(2 * SPZ_LOG_SCALE_RANGE[0]))
-    values = np.maximum(values, floor)
-    flip = np.linalg.det(vectors) < 0
-    vectors[flip, :, 2] *= -1
-    scales = np.sqrt(values)
-    falloff = moments.weight / _surface(scales)
-    inflate = np.clip(np.sqrt(falloff / MERGED_OPACITY_MAX), 1.0, MERGED_INFLATE_MAX)
-    scales = scales * inflate[:, None]
-    opacity = np.clip(falloff / inflate**2, 1e-6, MERGED_OPACITY_MAX)
-    quat = _quaternions(vectors)
+
+
+def to_gaussians(moments: Moments) -> Gaussians:
+    """Merged cells as gaussians (`splat_merge.to_splats`)."""
+    merged = splat_merge.to_splats(moments, log_scale_range=SPZ_LOG_SCALE_RANGE)
     return Gaussians(
-        xyz=moments.mean.astype(np.float32),
-        sh0=moments.colour.astype(np.float32),
-        opacity_logit=np.log(opacity / (1 - opacity)).astype(np.float32),
-        log_scales=np.log(scales).astype(np.float32),
-        quat_xyzw=quat[:, [1, 2, 3, 0]].astype(np.float32),
-        sh_rest=(
-            moments.sh.reshape(len(moments), -1, 3).astype(np.float32)
-            if moments.sh.shape[1]
-            else None
-        ),
+        xyz=merged.xyz,
+        sh0=merged.sh0,
+        opacity_logit=merged.opacity_logit,
+        log_scales=merged.log_scales,
+        quat_xyzw=merged.quat_xyzw,
+        sh_rest=merged.sh_rest,
     )
 
 
@@ -1603,8 +1398,8 @@ def build_tiles(root: Tile, codes: np.ndarray, store: SortedStore, edge: float, 
     to its own level (`Moments`), which each child hands up coarsened to that level -- so
     every original is read once, by its leaf, and each merged cell is merged once more per
     level above it. `emit` receives each tile's content as it is finished: `write_tiles`
-    writes it as a GLB; the GPU stage that optimises the parents (tools/pipeline
-    lod_optimise.py) keeps it, so both see the one tree this function builds.
+    writes it as a GLB; `hierarchy` hands it to its caller, so both see the one tree this
+    function builds.
 
     Geometric error, which Cesium projects to pixels and refines on: a leaf is the data at
     full resolution, so 0. A parent's is what the merge gives away: detail finer than the
@@ -1678,8 +1473,8 @@ def write_tiles(
         if keys is not None and parents is not None:
             better = parents.take(tile.uri, keys)
             if better is not None:
-                # Optimised parents are optimised in DC colour only (lod_optimise.py); the
-                # higher bands stay the merge's, cell for cell (`take` checked the cells).
+                # Optimised parents carry DC colour only (`ParentOverrides`); the higher
+                # bands stay the merge's, cell for cell (`take` checked the cells).
                 gaussians = replace(better, sh_rest=gaussians.sh_rest)
                 replaced += int(keys.size)
         _write_tile(out_dir, tile, gaussians)
@@ -1769,7 +1564,7 @@ def hierarchy(
     return tree.root
 
 
-# ------------------------------------------------------------- optimised parents (H3DGS)
+# --------- optimised parents (a file format; nothing in this repo writes one since recipe 11)
 
 #: The version of the file `ParentOverrides.save` writes.
 PARENTS_FORMAT = 1
@@ -1790,8 +1585,8 @@ def file_sha256(path: Path) -> str:
 
 @dataclass
 class ParentOverrides:
-    """Parent gaussians optimised against the photos (Hierarchical 3DGS Sec. 5.1), written
-    in place of the merge's, tile by tile.
+    """Parent gaussians optimised elsewhere against the photos, written in place of the
+    merge's, tile by tile.
 
     Keyed by tile (`Tile.uri`, the octant path) and, within it, by each merged gaussian's
     cell key at the tile's level -- the `keys` `build_tiles` emits, in the order the tile
@@ -2315,8 +2110,8 @@ def convert(
 
     **Refinement is REPLACE, with merged parents.** Each leaf holds original gaussians and
     the leaves hold every kept gaussian exactly once; each parent holds one gaussian per
-    occupied cell of its grid, merged from everything under it by H3DGS's moment matching
-    (`merge_cells`, `to_gaussians`). What this replaced was ADD with *thinned* parents --
+    occupied cell of its grid, merged by moment matching (`splat_merge`: the law of total
+    covariance over opacity x surface-area weights). What this replaced was ADD with *thinned* parents --
     the heaviest original per cell, unenlarged -- which is the prune-only baseline LapisGS
     (2408.14823, Tab. 2) measures worst of all its coarse levels (SSIM 0.548, LPIPS 0.314,
     against 0.957 / 0.052 for its best), and which every shipping streamer avoids: Cesium
@@ -2376,9 +2171,9 @@ def convert(
     does, its normalise/place stages turn them with the splat (tools/pipeline
     harmonics.py), so a canonical.ply's SH is already in the frame its positions are.
 
-    **Optimised parents.** `parents`, when given, are parent gaussians optimised against
-    the capture's photos on the GPU (tools/pipeline lod_optimise.py, Hierarchical 3DGS
-    Sec. 5.1) for exactly this PLY and these parameters; each parent tile draws them in
+    **Optimised parents.** `parents`, when given, are parent gaussians optimised elsewhere
+    against the capture's photos (no stage in this repository writes them since recipe 11)
+    for exactly this PLY and these parameters; each parent tile draws them in
     place of its merge, and nothing else changes (`write_tiles`). A set built for another
     PLY or other parameters is refused before anything is written (`ParentOverrideError`).
 
