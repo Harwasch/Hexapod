@@ -33,7 +33,8 @@ refuses what it cannot compare honestly, each with a code:
 * 409 `frames-differ` when a surface's heights are above another origin height than the
   site frame's (its `vertical.originHeightM`; to the millimetre, a tenth of the heights'
   own unit) -- the two would differ by the offset everywhere;
-* 409 `surface-unreadable` / `confidence-unreadable` when a grid cannot be read, or an
+* 409 `surface-unreadable` / `confidence-unreadable` when a grid cannot be read, is over
+  2^22 cells (2048 x 2048, the pipeline's own ceiling: refused before it is fetched), or an
   epoch's confidence grid is coarser than its surface (they must be one plane).
 
 **Each epoch's `u`** is the larger of its uncertainty from the site frame (its confidence
@@ -215,6 +216,21 @@ def _placement(epoch: Epoch, graded: EpochMap) -> _Placement:
     return _Placement(verdict, _uncertainty(epoch, graded), claim_m)
 
 
+def _within_ceiling(epoch: Epoch, row: EpochMap) -> None:
+    """A 409 for a grid whose finest plane is over `MAX_CHANGE_CELLS` (2^22) cells: no grid
+    the pipeline writes, and past what the comparison's memory was measured at."""
+    levels = row.descriptor.get("levels") or [{}]
+    first = levels[0] if isinstance(levels[0], dict) else {}
+    ni, nj = first.get("ni"), first.get("nj")
+    if isinstance(ni, int) and isinstance(nj, int) and ni * nj > analysis.MAX_CHANGE_CELLS:
+        kind = "height surface" if row.kind == EpochMapKind.SURFACE.value else "confidence grid"
+        raise ConflictError(
+            f"epoch {epoch.id}'s {kind} is {ni} x {nj} cells, over 2^22 (the pipeline's own "
+            "ceiling): refused, not compared",
+            code=SURFACE_UNREADABLE if kind == "height surface" else UNREADABLE,
+        )
+
+
 def _metric(epoch: Epoch, surface: EpochMap) -> None:
     summary = surface.descriptor.get("summary") or {}
     metric = summary.get("metric") if isinstance(summary, dict) else None
@@ -286,6 +302,13 @@ def change(
         _same_frame(epoch, surface, frame)
     placed_a, placed_b = _placement(before, graded_a), _placement(after, graded_b)
     ua, ub = placed_a.u_m, placed_b.u_m
+    for epoch, row in (
+        (before, surface_a),
+        (after, surface_b),
+        (before, graded_a),
+        (after, graded_b),
+    ):
+        _within_ceiling(epoch, row)
     grids = [load_grid(storage, row) for row in (surface_a, surface_b, graded_a, graded_b)]
     for epoch, heights, graded in ((before, grids[0], grids[2]), (after, grids[1], grids[3])):
         # A surface is written on its confidence grid's finest plane; one finer than its

@@ -520,3 +520,26 @@ def test_an_epoch_drawn_at_a_runtime_scale_is_refused_its_surface_is_not_the_sho
     shown.render_config = {**shown.render_config, "scale": 1.0}
     db.commit()
     assert get(api, e1, e2).status_code == 200
+
+
+def test_a_surface_over_the_cell_ceiling_is_refused_not_compared(
+    api: TestClient, db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """A plane of more than 2^22 cells (2048 x 2048: the pipeline's own ceiling, and the
+    one the comparison's memory was measured at) is no grid the pipeline wrote; it is
+    refused before it is fetched, never compared coarser."""
+    first = _capture(db, "first", FIRST)
+    register_run(
+        db, storage, tmp_path, first, surveyed("e1"), grid=blob("e1"), surface=surface_blob("e1")
+    )
+    site_id = _epoch(db, first).site_id
+    later = _capture(db, "second", SECOND)
+    document = surveyed("e2", _echoed(site_id))
+    document["surface"]["levels"][0].update(ni=4097, nj=1024)
+    register_run(
+        db, storage, tmp_path, later, document, grid=blob("e2"), surface=surface_blob("e2")
+    )
+    response = get(api, _epoch(db, first), _epoch(db, later))
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "surface-unreadable"
+    assert "2^22" in response.json()["detail"]
