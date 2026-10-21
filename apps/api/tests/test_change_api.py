@@ -274,6 +274,42 @@ def test_a_coarse_epoch_brings_its_metres_whatever_its_frame_says(
 
 
 @pytest.mark.parametrize(
+    ("aligned", "claim_m"),
+    [
+        # Review B5a round 2: a phone epoch, coarse, claiming 3 cm, its cap 3 cm too.
+        (alignment("coarse", 0.03, platform="phone"), 1.0),
+        # A survey claimed without its evidence: register records it coarse, claim kept.
+        (alignment("survey", 0.03, platform="phone"), 1.0),
+        # Coarse with no figure at all: the unrecorded uncertainty, 10 m.
+        (alignment("coarse", None, platform="phone"), 10.0),
+    ],
+)
+def test_a_coarse_epoch_never_claims_under_a_metre_whatever_its_alignment_says(
+    api: TestClient,
+    db: Session,
+    storage: S3Storage,
+    tmp_path: Path,
+    aligned: dict[str, Any],
+    claim_m: float,
+) -> None:
+    """Review B5a round 2's ruling: coarse is a class, not a number. A coarse epoch's u is
+    at least the larger of its claim and 1 m, however small its claim or its frame cap
+    (both 3 cm here): the review's half-metre rise of the whole surface read as 1,024
+    ground cells raised at a floor of 0.21 m. Now no change under 3 m is claimed."""
+    e1, e2 = two_epochs(db, storage, tmp_path, uncertainty_m=0.03, aligned=aligned)
+    response = get(api, e1, e2)
+    assert response.status_code == 200, response.text
+    read = response.json()
+    assert read["uncertainty"]["toVerdict"] == "coarse"
+    assert read["uncertainty"]["toM"] == claim_m
+    for layer in ("ground", "vegetation"):
+        assert read[layer]["minDetectableM"] >= 3 * claim_m
+    # The shed (2.5 m) and the pond (1 m) are under that floor: nothing is claimed.
+    assert read["ground"]["counts"]["lowered"] == read["ground"]["counts"]["raised"] == 0
+    assert read["vegetation"]["counts"]["raised"] == 0
+
+
+@pytest.mark.parametrize(
     ("first", "second"),
     [
         ("unaligned", "survey"),  # placed by its georeference alone

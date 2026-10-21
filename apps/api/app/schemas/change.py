@@ -90,7 +90,8 @@ class ChangeUncertaintyRead(CamelModel):
     of its uncertainty from the site frame (`fromFrameM`, its confidence grid's
     `alignmentCap.uncertaintyM`: 0 for the epoch that made the frame) and its alignment's
     own claim -- so a `coarse` epoch (a phone, a drone without RTK evidence) brings its
-    metres, however well it was aligned visually. An `unaligned` epoch is refused (409).
+    metres, however well it was aligned visually, and never less than 1 m whatever it
+    claims. An `unaligned` epoch is refused (409).
 
     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
     """

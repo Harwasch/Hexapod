@@ -42,8 +42,10 @@ alignment's own claim (`alignment.uncertaintyM`, `UNRECORDED_UNCERTAINTY_M` when
 none). A `survey` epoch's claim is centimetres; a `coarse` one's -- a phone, a drone
 without RTK evidence, anything aligned into a coarse reference -- is metres, so a pair
 with a coarse epoch claims no change under metres however well it was aligned visually
-(Harrison's rule: a phone epoch is never presented as survey grade). The answer states
-each epoch's verdict and both figures.
+(Harrison's rule: a phone epoch is never presented as survey grade) -- and never under
+`COARSE_FLOOR_M`, 1 m, whatever it claims: a survey claimed without its evidence is recorded
+coarse with its centimetre claim kept, and a phone may claim 3 cm. The answer states each
+epoch's verdict and both figures.
 
 Every answer says it is derived, not observed, and uncalibrated.
 """
@@ -85,6 +87,10 @@ from app.storage import ObjectStorage
 
 NOT_PUBLISHED = "epoch-not-published"
 UNALIGNED = "epoch-unaligned"
+#: The least `u` a coarse epoch has, metres (review B5a round 2's ruling): coarse is a class
+#: that was not shown to survey accuracy, so no claim of its own, however small, and no frame
+#: cap makes it finer than a metre.
+COARSE_FLOOR_M = 1.0
 NOT_METRIC = "not-metric"
 SCALE_CORRECTED = "scale-corrected"
 SURFACE_NOT_MEASURED = "surface-not-measured"
@@ -180,7 +186,8 @@ class _Placement:
 
     @property
     def u_m(self) -> float:
-        return max(self.frame_m, self.claim_m)
+        u = max(self.frame_m, self.claim_m)
+        return max(u, COARSE_FLOOR_M) if self.verdict == "coarse" else u
 
 
 def _placement(epoch: Epoch, graded: EpochMap) -> _Placement:

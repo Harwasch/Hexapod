@@ -4355,7 +4355,7 @@
       },
       "ChangeUncertaintyRead": {
         "additionalProperties": false,
-        "description": "Each epoch's placement uncertainty `u`, metres, as the threshold takes it: the larger\nof its uncertainty from the site frame (`fromFrameM`, its confidence grid's\n`alignmentCap.uncertaintyM`: 0 for the epoch that made the frame) and its alignment's\nown claim -- so a `coarse` epoch (a phone, a drone without RTK evidence) brings its\nmetres, however well it was aligned visually. An `unaligned` epoch is refused (409).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "description": "Each epoch's placement uncertainty `u`, metres, as the threshold takes it: the larger\nof its uncertainty from the site frame (`fromFrameM`, its confidence grid's\n`alignmentCap.uncertaintyM`: 0 for the epoch that made the frame) and its alignment's\nown claim -- so a `coarse` epoch (a phone, a drone without RTK evidence) brings its\nmetres, however well it was aligned visually, and never less than 1 m whatever it\nclaims. An `unaligned` epoch is refused (409).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
         "properties": {
           "fromFrameM": {
             "title": "Fromframem",
