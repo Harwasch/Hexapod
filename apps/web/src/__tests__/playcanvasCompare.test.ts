@@ -400,8 +400,10 @@ describe("two dates compared under PlayCanvas", () => {
     expect(component(march).params.get("uHexapodSide")).toBe(1);
     // Bound to none of the scan's objects.
     expect(backend.instanceTiles?.().tiles).toBe(1);
-    // One budget for both: the scan streams within half of it, the left date the other half.
-    expect(backend.loadFactor).toBe(0.5);
+    // One budget for both: the scan streams within half of what the left date's root leaves
+    // (its two gaussians held first, ruleDates.ts `allotments`), the left date the rest.
+    expect(backend.loadFactor).toBeCloseTo(0.5, 5);
+    expect(backend.loadFactor).toBeLessThan(0.5);
     expect(scanCompareReading("june-b")).toMatchObject({
       on: true,
       dividerPx: 400,

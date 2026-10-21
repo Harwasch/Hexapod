@@ -54,6 +54,11 @@ export interface RuleDate {
   assetId: string;
   /** Its sources in the plane: its own, and its inferred layers' -- what its share counts. */
   owns: number[];
+  /**
+   * The gaussians of its root tile, which its streamer keeps whatever its budget
+   * (ruleDates.ts `allotments`); when absent, read from its tileset.json once fetched.
+   */
+  rootGaussians?: number;
   /** Its tileset's root extras: its inferred layers and split objects. */
   extras: unknown;
   /** Where its tiles go in the scan's frame (column-major 4x4), or null where they are. */
