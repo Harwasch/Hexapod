@@ -10,7 +10,7 @@
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 import { expect, test, type Page } from "@playwright/test";
 
@@ -28,17 +28,34 @@ interface Expected {
 }
 const expected = JSON.parse(readFileSync(resolve(FAR, "source/expected.json"), "utf8")) as Expected;
 
-/** The POSITION accessor's min and max of a tile's GLB: its centres in its own frame. */
-function accessorBox(uri: string): { min: number[]; max: number[] } {
+/**
+ * The box of a tile's drawable splat centres, in its own frame, read from its GLB's SPZ: the
+ * header's fractional bits, then the 24-bit positions, then one alpha byte per splat. A splat
+ * whose alpha byte is 0 is skipped, because the renderers skip it too (Spark returns before
+ * drawing a splat of alpha 0). A merged parent can hold such splats: a few small gaussians
+ * moment-matched across a cell kilometres wide come out at the largest scale SPZ stores and an
+ * opacity that rounds to 0. So "the size its GLB says" means the size of what the GLB draws,
+ * not the accessor's min and max over every splat.
+ */
+function splatBox(uri: string): { min: number[]; max: number[] } {
   const glb = readFileSync(resolve(TILES, uri));
   const length = glb.readUInt32LE(12);
-  const json = JSON.parse(glb.subarray(20, 20 + length).toString("utf8")) as {
-    accessors: { min?: number[]; max?: number[] }[];
-    meshes: { primitives: { attributes: { POSITION: number } }[] }[];
-  };
-  const index = json.meshes[0]?.primitives[0]?.attributes.POSITION ?? 0;
-  const accessor = json.accessors[index];
-  return { min: accessor?.min ?? [], max: accessor?.max ?? [] };
+  const binAt = 20 + length;
+  const spz = gunzipSync(glb.subarray(binAt + 8, binAt + 8 + glb.readUInt32LE(binAt)));
+  const count = spz.readUInt32LE(8);
+  const scale = 2 ** spz.readUInt8(13);
+  const alphaAt = 16 + count * 9;
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < count; i++) {
+    if (spz.readUInt8(alphaAt + i) === 0) continue;
+    for (let k = 0; k < 3; k++) {
+      const value = spz.readIntLE(16 + i * 9 + k * 3, 3) / scale;
+      min[k] = Math.min(min[k] ?? Infinity, value);
+      max[k] = Math.max(max[k] ?? -Infinity, value);
+    }
+  }
+  return { min, max };
 }
 
 /** What Spark holds centres in on the GPU (main.ts `__viewer.gpu`). */
@@ -236,13 +253,13 @@ test("a far tile is drawn where it is: its frame composed and its header's bits 
   await expect(page.locator("#scan-name")).toHaveText("Far site");
   await expect(page.locator("#viewer-status")).toContainText("Drag to turn", { timeout: 60_000 });
 
-  // The root (11 bits: its content spans 7 km) is drawn the size its GLB says, in the scan's
-  // frame. Read at 12 bits it would be half that.
+  // The root (11 bits: its content spans 7 km) is drawn the size its GLB's drawable splats say,
+  // in the scan's frame. Read at 12 bits it would be half that.
   const debug = (): Promise<{ uri: string; min: number[]; max: number[] }[]> =>
     page.evaluate(() => (window as unknown as ViewerDebug).__viewer.drawn());
   const root = (await debug()).find((tile) => tile.uri === "splat.glb");
   expect(root).toBeDefined();
-  const rootBox = accessorBox("splat.glb");
+  const rootBox = splatBox("splat.glb");
   expect(expected.tiles["splat.glb"]?.fractionalBits).toBe(11);
   for (let k = 0; k < 3; k++) {
     expect(Math.abs((root?.min[k] ?? Number.NaN) - (rootBox.min[k] ?? 0))).toBeLessThan(1);
@@ -273,7 +290,7 @@ test("a far tile is drawn where it is: its frame composed and its header's bits 
   const drawn = await debug();
   expect(drawn.length).toBeGreaterThan(3);
   for (const tile of drawn) {
-    const own = accessorBox(tile.uri);
+    const own = splatBox(tile.uri);
     const offset = expected.tiles[tile.uri]?.offset ?? [Number.NaN, 0, 0];
     for (let k = 0; k < 3; k++) {
       expect(
