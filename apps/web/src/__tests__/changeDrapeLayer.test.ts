@@ -90,10 +90,10 @@ describe("the change drape", () => {
     expect(added.every((p) => p.classificationType === ClassificationType.BOTH)).toBe(true);
     expect(added.every((p) => !p.allowPicking)).toBe(true);
     expect(tags(added)).toEqual([
-      { cls: "raised", lowConfidence: false, polygons: 4, hatched: false },
-      { cls: "raised", lowConfidence: true, polygons: 2, hatched: true },
-      { cls: "lowered", lowConfidence: false, polygons: 2, hatched: false },
-      { cls: "insufficient", lowConfidence: false, polygons: 2, hatched: false },
+      { layer: "ground", cls: "raised", lowConfidence: false, polygons: 4, hatched: false },
+      { layer: "ground", cls: "raised", lowConfidence: true, polygons: 2, hatched: true },
+      { layer: "ground", cls: "lowered", lowConfidence: false, polygons: 2, hatched: false },
+      { layer: "ground", cls: "insufficient", lowConfidence: false, polygons: 2, hatched: false },
     ]);
     expect(raw.requestRender).toHaveBeenCalled();
     expect(layer.drawn()).toEqual(tags(added));
@@ -146,7 +146,7 @@ describe("the change drape", () => {
   it("draws the same map over the scan too, and clears and destroys it with the drape", () => {
     const { scene } = fakeScene();
     const overlay = { show: vi.fn(), clear: vi.fn(), destroy: vi.fn() };
-    const layer = new ChangeDrapeLayer(scene, overlay);
+    const layer = new ChangeDrapeLayer(scene, { overlay });
     const shown = map([area("raised", false, 0)]);
     layer.show(shown);
     expect(overlay.show).toHaveBeenCalledWith(shown);
@@ -156,6 +156,20 @@ describe("the change drape", () => {
     expect(overlay.destroy).toHaveBeenCalledTimes(1);
     layer.show(shown);
     expect(overlay.show).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws the vegetation layer in its own colours, tagged as vegetation", () => {
+    const { scene, added } = fakeScene();
+    new ChangeDrapeLayer(scene, { layer: "vegetation" }).show(map([area("raised", false, 0)]));
+    expect(tags(added)).toEqual([
+      { layer: "vegetation", cls: "raised", lowConfidence: false, polygons: 2, hatched: false },
+    ]);
+    const material = (
+      added[0]?.appearance as unknown as { material: { uniforms: Record<string, unknown> } }
+    ).material;
+    const color = material.uniforms.color as { red: number; green: number; blue: number };
+    // Green (#4cc37f), not the ground's orange.
+    expect(color.green).toBeGreaterThan(color.red);
   });
 
   it("keeps a polygon's holes open", () => {
@@ -216,7 +230,7 @@ describe("the change drape", () => {
     } as unknown as ChangeArea;
     new ChangeDrapeLayer(scene).show(map([broken]));
     expect(tags(added)).toEqual([
-      { cls: "raised", lowConfidence: false, polygons: 1, hatched: false },
+      { layer: "ground", cls: "raised", lowConfidence: false, polygons: 1, hatched: false },
     ]);
   });
 });

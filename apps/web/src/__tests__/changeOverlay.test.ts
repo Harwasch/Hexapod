@@ -91,6 +91,7 @@ describe("the change overlay", () => {
     new ChangeOverlay(scene, { project: projector() });
     const svg = host.querySelector("svg");
     expect(svg).not.toBeNull();
+    expect(svg?.getAttribute("data-change-overlay")).toBe("ground");
     expect(svg?.style.position).toBe("absolute");
     expect(svg?.style.pointerEvents).toBe("none");
     // After the renderer's canvas, so drawn over it.
@@ -128,11 +129,21 @@ describe("the change overlay", () => {
     expect(raised?.stroke).toBe("#f08c3a");
     expect(lowered?.stroke).toBe("#3a9cf0");
     expect(raised?.fill).toBe("#f08c3a");
-    expect(raisedLow?.fill).toMatch(/^url\(#change-hatch-raised-/);
+    expect(raisedLow?.fill).toMatch(/^url\(#change-hatch-ground-raised-/);
     expect(host.querySelector(`pattern${raisedLow?.fill?.slice(4, -1) ?? ""}`)).not.toBeNull();
     expect(insufficient?.dash).toBeTruthy();
     expect(insufficient?.stroke).toBe("#a3a7ad");
     expect(raised?.dash).toBeNull();
+  });
+
+  it("outlines the vegetation layer in its own colours, marked as vegetation", () => {
+    const { scene, host } = fakeScene();
+    new ChangeOverlay(scene, { project: projector(), layer: "vegetation" }).show(
+      map([area("raised", false, 0), area("lowered", false, 2)]),
+    );
+    const svg = host.querySelector("svg");
+    expect(svg?.getAttribute("data-change-overlay")).toBe("vegetation");
+    expect(paths(host).map((p) => p.stroke)).toEqual(["#4cc37f", "#b37be0"]);
   });
 
   it("leaves out a polygon with a point behind the camera", () => {

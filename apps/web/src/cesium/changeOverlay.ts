@@ -14,9 +14,13 @@
 import { Cartesian3, Cartographic, SceneTransforms, type Scene } from "cesium";
 import type { Position } from "geojson";
 
-import type { ChangeMap } from "@twin/contracts";
-
-import { CHANGE_COLORS, changeBuckets, type ChangeClass } from "@/lib/changeDrape";
+import {
+  CHANGE_COLORS,
+  changeBuckets,
+  type ChangeClass,
+  type ChangeLayer,
+  type ChangeLayerName,
+} from "@/lib/changeDrape";
 
 /** The least time between two redraws while the view moves. */
 export const OVERLAY_MIN_INTERVAL_MS = 50;
@@ -62,6 +66,7 @@ interface Shape {
 export class ChangeOverlay {
   private readonly svg: SVGSVGElement;
   private readonly project: Project;
+  private readonly layer: ChangeLayerName;
   private readonly id = String((made += 1));
   private shapes: Shape[] = [];
   private removeListener: (() => void) | null;
@@ -71,10 +76,11 @@ export class ChangeOverlay {
 
   constructor(
     private readonly scene: Scene,
-    options: { project?: Project } = {},
+    options: { project?: Project; layer?: ChangeLayerName } = {},
   ) {
     this.project = options.project ?? projectThrough(scene);
-    this.svg = element("svg", { "aria-hidden": "true", "data-change-overlay": "" });
+    this.layer = options.layer ?? "ground";
+    this.svg = element("svg", { "aria-hidden": "true", "data-change-overlay": this.layer });
     Object.assign(this.svg.style, {
       position: "absolute",
       inset: "0",
@@ -90,13 +96,13 @@ export class ChangeOverlay {
   }
 
   /** Draws `map`'s areas, replacing whatever was drawn before. */
-  show(map: Pick<ChangeMap, "areas">): void {
+  show(map: Pick<ChangeLayer, "areas">): void {
     this.clear();
     if (!this.removeListener) return;
     const defs = element("defs", {});
     this.svg.appendChild(defs);
     for (const bucket of changeBuckets(map)) {
-      const color = CHANGE_COLORS[bucket.cls];
+      const color = CHANGE_COLORS[this.layer][bucket.cls];
       const attributes: Record<string, string> = {
         "data-class": bucket.cls,
         "data-low-confidence": String(bucket.lowConfidence),
@@ -109,7 +115,7 @@ export class ChangeOverlay {
       };
       if (bucket.cls === "insufficient") attributes["stroke-dasharray"] = "5 4";
       if (bucket.lowConfidence) {
-        const id = `change-hatch-${bucket.cls}-${this.id}`;
+        const id = `change-hatch-${this.layer}-${bucket.cls}-${this.id}`;
         const pattern = element("pattern", {
           id,
           width: "8",

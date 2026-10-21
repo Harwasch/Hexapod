@@ -23,16 +23,21 @@ import {
 } from "cesium";
 import type { Position } from "geojson";
 
-import type { ChangeMap } from "@twin/contracts";
 import { flattenRing } from "@twin/geo";
 
-import { CHANGE_COLORS, changeBuckets, type ChangeClass } from "@/lib/changeDrape";
+import {
+  CHANGE_COLORS,
+  changeBuckets,
+  type ChangeClass,
+  type ChangeLayer,
+  type ChangeLayerName,
+} from "@/lib/changeDrape";
 
 import { ChangeOverlay } from "./changeOverlay";
 
 /** What draws the map over the scan as well (cesium/changeOverlay.ts). */
 export interface ChangeOverlayLike {
-  show(map: Pick<ChangeMap, "areas">): void;
+  show(map: Pick<ChangeLayer, "areas">): void;
   clear(): void;
   destroy(): void;
 }
@@ -41,6 +46,7 @@ export interface ChangeOverlayLike {
 export const CHANGE_DRAPE_TAG = "changeDrape";
 
 export interface ChangeDrapeTag {
+  layer: ChangeLayerName;
   cls: ChangeClass;
   lowConfidence: boolean;
   polygons: number;
@@ -62,8 +68,8 @@ const HATCH_SOURCE = `czm_material czm_getMaterial(czm_materialInput materialInp
   return material;
 }`;
 
-function materialFor(cls: ChangeClass, hatched: boolean): Material {
-  const color = Color.fromCssColorString(CHANGE_COLORS[cls]).withAlpha(ALPHA[cls]);
+function materialFor(layer: ChangeLayerName, cls: ChangeClass, hatched: boolean): Material {
+  const color = Color.fromCssColorString(CHANGE_COLORS[layer][cls]).withAlpha(ALPHA[cls]);
   if (!hatched) return Material.fromType("Color", { color });
   return new Material({
     fabric: { type: "ChangeHatch", uniforms: { color, spacing: 10 }, source: HATCH_SOURCE },
@@ -86,20 +92,30 @@ export class ChangeDrapeLayer {
   private primitives: { primitive: GroundPrimitive; tag: ChangeDrapeTag }[] = [];
   private destroyed = false;
 
+  private readonly layer: ChangeLayerName;
+  private readonly overlay: ChangeOverlayLike | null;
+
   /**
+   * One layer of a change map (`layer`, the ground unless named), in that layer's colours.
    * `overlay` draws the same areas over the scan, above every renderer's canvas: splats cover
    * the ground, so the drape alone shows only where nothing was scanned. Made here for a scene
    * with a canvas.
    */
   constructor(
     private readonly scene: Scene,
-    private readonly overlay: ChangeOverlayLike | null = (scene as Partial<Scene>).canvas
-      ? new ChangeOverlay(scene)
-      : null,
-  ) {}
+    options: { layer?: ChangeLayerName; overlay?: ChangeOverlayLike | null } = {},
+  ) {
+    this.layer = options.layer ?? "ground";
+    this.overlay =
+      options.overlay !== undefined
+        ? options.overlay
+        : (scene as Partial<Scene>).canvas
+          ? new ChangeOverlay(scene, { layer: this.layer })
+          : null;
+  }
 
   /** Draws `map`'s areas, replacing whatever was drawn before. */
-  show(map: Pick<ChangeMap, "areas">): void {
+  show(map: Pick<ChangeLayer, "areas">): void {
     this.clear();
     if (this.destroyed) return;
     for (const bucket of changeBuckets(map)) {
@@ -119,7 +135,7 @@ export class ChangeDrapeLayer {
             }),
         ),
         appearance: new MaterialAppearance({
-          material: materialFor(bucket.cls, hatched),
+          material: materialFor(this.layer, bucket.cls, hatched),
           flat: true,
           translucent: true,
         }),
@@ -128,6 +144,7 @@ export class ChangeDrapeLayer {
         asynchronous: true,
       });
       const tag: ChangeDrapeTag = {
+        layer: this.layer,
         cls: bucket.cls,
         lowConfidence: bucket.lowConfidence,
         polygons: hierarchies.length,
