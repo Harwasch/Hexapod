@@ -7,9 +7,11 @@ import { AS_CAPTURED_TEXT } from "@/lib/asCapturedText";
 import { epochOptions, pickShownAsset, siteEpochs } from "@/lib/epochs";
 import { captureTimeOf } from "@/lib/sunlightText";
 import {
+  cellLevelNote,
   DRAW_WITH_CESIUM,
   drawWithCesium,
   NEEDS_CESIUM_NOTICE,
+  needsCesiumFor,
   VIEW_MODES,
   viewModeDrawable,
 } from "@/lib/viewModes";
@@ -26,11 +28,13 @@ import { VIEW_RULE_TEXT } from "./ruleText";
 
 /**
  * How the active splat scan is coloured: Photo, Confidence or Data age (state/viewMode.ts),
- * with the key to what is drawn. The analytic views are CesiumJS's alone (lib/viewModes.ts):
- * under another renderer they are offered disabled, with the reason and the one-click switch,
- * and Photo is what the control says is shown, because it is. Beside them, the sun the scan is
- * relit by (SunControl, CesiumJS's too) and the As captured switch (state/asCaptured.ts): only
- * what was measured drawn, plans kept as annotations.
+ * with the key to what is drawn. CesiumJS, PlayCanvas and Spark draw all three, the key saying
+ * where a renderer sizes cells per tile (lib/viewModes.ts); under the WebGPU trial the analytic
+ * views are offered disabled, and Photo is what the control says is shown, because it is.
+ * Beside them, the per-cell rules (RuleControl) and the sun the scan is relit by (SunControl),
+ * CesiumJS's alone: under another renderer the notice names exactly those, with the one-click
+ * switch. And the As captured switch (state/asCaptured.ts): only what was measured drawn,
+ * plans kept as annotations.
  */
 export function ViewsControl({ siteId }: { siteId: string }) {
   const mode = useViewMode((s) => s.mode);
@@ -44,9 +48,10 @@ export function ViewsControl({ siteId }: { siteId: string }) {
   const report = useViewMode((s) => (asset ? s.cells[asset.id] : undefined));
   const ruleOn = useViewRule((s) => s.active?.siteId === siteId);
   const onCesium = renderer === "cesium";
-  const shown = onCesium && !ruleOn ? mode : "photo";
+  const shown = viewModeDrawable(mode, renderer) && !ruleOn ? mode : "photo";
   const epochs = site ? siteEpochs(site) : [];
   const dates = site ? epochOptions(epochs, site.assets, "gaussian-splat").length : 0;
+  const needs = needsCesiumFor(renderer, dates >= 2);
   const asCaptured = useAsCaptured((s) => s.on);
   const setAsCaptured = useAsCaptured((s) => s.set);
   return (
@@ -75,15 +80,19 @@ export function ViewsControl({ siteId }: { siteId: string }) {
           {VIEW_RULE_TEXT.holdsViews}
         </span>
       )}
-      {!onCesium && (
+      {needs !== null && (
         <div className="views__notice" role="note" data-testid="views-needs-cesium">
-          <span>{NEEDS_CESIUM_NOTICE}</span>
+          <span>
+            {needs}: {NEEDS_CESIUM_NOTICE}
+          </span>
           <GlassButton size="sm" variant="ghost" onClick={drawWithCesium}>
             {DRAW_WITH_CESIUM}
           </GlassButton>
         </div>
       )}
-      {onCesium && shown !== "photo" && <CellLegend mode={shown} report={report} />}
+      {shown !== "photo" && (
+        <CellLegend mode={shown} report={report} note={cellLevelNote(renderer)} />
+      )}
       {dates >= 2 && <RuleControl siteId={siteId} epochs={epochs} onCesium={onCesium} />}
       <SunControl onCesium={onCesium} captureTime={captureTimeOf(asset, epochs)} />
       <span className="views__rule" title={AS_CAPTURED_TEXT.hint}>

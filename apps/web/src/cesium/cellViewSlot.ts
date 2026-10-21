@@ -32,14 +32,16 @@ export function attachCellView(
   let loading = false;
   let disposed = false;
   /**
-   * The view drawn: the one chosen while CesiumJS is the renderer, else Photo, as the control
-   * says (ViewsControl). A rigged model is drawn by CesiumJS under any renderer, so the
-   * renderer, not the model's tileset being shown, decides.
+   * The view drawn: the one chosen, by CesiumJS, PlayCanvas or Spark alike (the view hands it
+   * to whichever draws the scan); Photo under the WebGPU trial, which cannot draw it yet, as
+   * the control says (ViewsControl, lib/viewModes.ts). A rigged model is drawn by CesiumJS
+   * under any renderer, so the renderer, not the model's tileset being shown, decides.
    */
   const drawn = (): ViewMode =>
-    (useRendererOverride.getState().renderer ?? useSettings.getState().splatRenderer) === "cesium"
-      ? useViewMode.getState().mode
-      : "photo";
+    (useRendererOverride.getState().renderer ?? useSettings.getState().splatRenderer) ===
+    "playcanvas-webgpu"
+      ? "photo"
+      : useViewMode.getState().mode;
   let last = drawn();
   const apply = (mode: ViewMode): void => {
     if (handle) {

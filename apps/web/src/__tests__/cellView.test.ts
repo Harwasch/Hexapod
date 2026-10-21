@@ -26,7 +26,7 @@ let served: { meta: CellGridMeta; planes: Uint8Array };
 let fetched: string[];
 
 beforeEach(async () => {
-  // The analytic views are CesiumJS's (lib/viewModes.ts): drawn only while it is the renderer.
+  // CesiumJS draws the scan here (the part in its primitive is what these tests read).
   useSettings.getState().set({ splatRenderer: "cesium" });
   served = await encodeConfidenceGrid({
     level: 2,
@@ -281,28 +281,29 @@ describe("Confidence, then Data age, then Photo", () => {
     expect(listeners.size).toBe(0);
   });
 
-  it("is drawn only while CesiumJS is the renderer, as the control says, rigged model or not", async () => {
+  it("is drawn under every renderer but the WebGPU trial, as the control says, rigged model or not", async () => {
     // A rigged model is drawn by CesiumJS whatever the renderer (SiteManager `cesiumDraws`);
-    // under PlayCanvas the control says Photo, so Photo is what it must show.
+    // PlayCanvas and Spark draw the view too, so it stays; under the WebGPU trial the control
+    // says Photo, so Photo is what it must show.
     const { asCesium, tileset, primitive } = scan({ confidence: served.meta });
     tileset.gaussianSplatPrimitive = primitive;
     const dispose = attachCellView(asCesium, { requestRender: vi.fn() }, A1.id, context);
     useViewMode.getState().set("confidence");
     await vi.waitFor(() => expect(parts(primitive)).toEqual(["splatCellViewColor"]));
     useSettings.getState().set({ splatRenderer: "playcanvas" });
+    expect(parts(primitive)).toEqual(["splatCellViewColor"]);
+    useSettings.getState().set({ splatRenderer: "playcanvas-webgpu" });
     expect(primitive.vertexColor).toBeUndefined();
     // A `?renderer=` choice counts as the renderer too.
-    useSettings.getState().set({ splatRenderer: "cesium" });
-    await vi.waitFor(() => expect(parts(primitive)).toEqual(["splatCellViewColor"]));
     useRendererOverride.setState({ renderer: "spark" });
-    expect(primitive.vertexColor).toBeUndefined();
-    useRendererOverride.setState({ renderer: null });
     await vi.waitFor(() => expect(parts(primitive)).toEqual(["splatCellViewColor"]));
+    useRendererOverride.setState({ renderer: null });
+    expect(primitive.vertexColor).toBeUndefined();
     dispose();
   });
 
-  it("does not load the view at all under another renderer", async () => {
-    useSettings.getState().set({ splatRenderer: "playcanvas" });
+  it("does not load the view at all under the WebGPU trial", async () => {
+    useSettings.getState().set({ splatRenderer: "playcanvas-webgpu" });
     const { asCesium, tileset, primitive } = scan({ confidence: served.meta });
     tileset.gaussianSplatPrimitive = primitive;
     const load = vi.fn(() => import("@/cesium/cellView"));

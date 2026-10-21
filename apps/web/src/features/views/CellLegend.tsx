@@ -88,13 +88,18 @@ function AgeKey({ report }: { report: Extract<CellViewReport, { kind: "ready" }>
   );
 }
 
-/** The key to an analytic view, or what stands in for one (loading, not measured, failed). */
+/**
+ * The key to an analytic view, or what stands in for one (loading, not measured, failed), and
+ * `note`, what the renderer drawing it does differently (a cell level per tile), if anything.
+ */
 export function CellLegend({
   mode,
   report,
+  note = null,
 }: {
   mode: Exclude<ViewMode, "photo">;
   report: CellViewReport | undefined;
+  note?: string | null;
 }) {
   let body;
   if (!report || report.kind === "loading") {
@@ -124,6 +129,11 @@ export function CellLegend({
       {body}
       {mode === "confidence" && report?.kind === "ready" && (
         <p className="cell-legend__policy">weak-v1</p>
+      )}
+      {note !== null && report?.kind === "ready" && (
+        <p className="cell-legend__policy" data-testid="cell-legend-renderer">
+          {note}
+        </p>
       )}
     </div>
   );

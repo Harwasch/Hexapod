@@ -3,7 +3,8 @@ import { create } from "zustand";
 /**
  * How splat scans are coloured: as photographed, by how well the capture measured each part
  * (Confidence, the `weak-v1` map), or by how old the data shown is (Data age). The analytic
- * views are drawn by the CesiumJS splat primitive only (lib/viewModes.ts `needsCesium`).
+ * views are drawn by CesiumJS, PlayCanvas and Spark, not yet the WebGPU trial
+ * (lib/viewModes.ts `viewModeDrawable`).
  *
  * Not persisted: an analytic tint is a question asked now, and a reload that kept it would
  * show a red scan to someone who never asked.
