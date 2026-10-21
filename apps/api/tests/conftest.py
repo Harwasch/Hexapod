@@ -9,12 +9,13 @@ import pytest
 from alembic.config import Config
 from fastapi.testclient import TestClient
 from moto import mock_aws
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from alembic import command
 from app.api.deps import _db
 from app.config import get_settings
+from app.db import make_engine
 from app.main import create_app
 from app.storage import S3Storage
 
@@ -69,6 +70,8 @@ TABLES = (
     "plan_revisions",
     "plans",
     "camera_bookmarks",
+    "epochs",
+    "site_frames",
     "assets",
     "layers",
     "sites",
@@ -85,7 +88,8 @@ def alembic_config() -> Config:
 @pytest.fixture(scope="session")
 def engine(alembic_config: Config) -> Iterator[Engine]:
     command.upgrade(alembic_config, "head")
-    engine = create_engine(TEST_DATABASE_URL, future=True)
+    # The app's engine (`app.db.make_engine`): timestamps in UTC whatever `PGTZ` says.
+    engine = make_engine(TEST_DATABASE_URL, future=True)
     yield engine
     engine.dispose()
 

@@ -4,11 +4,17 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Asset, Site
-from app.models.enums import AssetProvider, Representation, ScaleSource
+from app.models import Asset, Epoch, Site
+from app.models.enums import (
+    AssetProvider,
+    AssetSourceKind,
+    EpochStatus,
+    Representation,
+    ScaleSource,
+)
 from app.schemas.asset import (
     AssetBase,
     AssetCreate,
@@ -26,7 +32,7 @@ from app.schemas.asset import (
     provider_for_source,
 )
 from app.schemas.common import Attribution, LicenseMetadata, Provenance
-from app.services import geometry, placement
+from app.services import epochs, geometry, placement
 from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.services.urls import validate_dataset_url
 
@@ -36,6 +42,12 @@ NOT_SCALABLE = "not_scalable"
 
 #: The render config keys `set_scale` owns. A PATCH of the render config keeps them.
 SCALE_KEYS = ("scale", "scaleEvidence")
+
+#: The Problem `code` of an edit refused because the epoch owns it (decision D3): a
+#: superseded revision is history, and an epoch asset's dates and footprint are its epoch's.
+EPOCH_MANAGED = "epoch_managed"
+#: The fields of an epoch asset that its epoch owns.
+EPOCH_FIELDS = ("observed_at", "valid_from", "valid_to", "footprint")
 
 
 def render_config_document(config: RenderConfig) -> dict[str, Any]:
@@ -78,6 +90,7 @@ def build_asset(payload: AssetBase, site_id: uuid.UUID | None) -> Asset:
         attribution=[a.model_dump(mode="json", by_alias=True) for a in payload.attribution],
         render_config=render,
         default_visible=payload.default_visible,
+        source_kind=AssetSourceKind.OBSERVED.value,
     )
 
 
@@ -106,8 +119,34 @@ def get_asset(db: Session, asset_id: uuid.UUID) -> Asset:
 
 
 def update_asset(db: Session, asset_id: uuid.UUID, payload: AssetUpdate) -> Asset:
-    asset = get_asset(db, asset_id)
+    """Edit an asset in place.
+
+    Refused (409, `epoch_managed`) for a superseded revision of an epoch -- it is history
+    -- and, on an epoch's asset, for the dates and footprint, which are the epoch's
+    (`observedAt`, `validFrom`, `validTo`, `footprint`). Its name, default visibility,
+    render config, resolution, licence and credits stay editable. No PATCH changes an
+    asset's `source`: `AssetUpdate` has no such field.
+
+    The asset is locked first (`_lock`), as a scale, an attach and a re-run lock it, so an
+    edit is checked against the row as it is once they are done: never written onto a
+    revision a re-run superseded meanwhile, nor over a scale set meanwhile.
+    """
+    asset = _lock(db, asset_id)
     data = payload.model_dump(exclude_unset=True)
+    if epochs.is_superseded(asset):
+        db.rollback()
+        raise ConflictError(
+            f"asset {asset.id} is a superseded revision of its epoch; it is history",
+            code=EPOCH_MANAGED,
+        )
+    owned = [field for field in EPOCH_FIELDS if field in data]
+    if asset.epoch_id is not None and owned:
+        names = ", ".join(_camel(field) for field in owned)
+        db.rollback()
+        raise ConflictError(
+            f"asset {asset.id} is epoch {asset.epoch_id}'s, and its {names} belong to that epoch",
+            code=EPOCH_MANAGED,
+        )
     for field in ("name", "observed_at", "valid_from", "valid_to", "default_visible"):
         if field in data:
             setattr(asset, field, data[field])
@@ -140,6 +179,7 @@ def update_asset(db: Session, asset_id: uuid.UUID, payload: AssetUpdate) -> Asse
             geometry.footprint_to_wkb(payload.footprint) if payload.footprint else None
         )
     if asset.valid_from and asset.valid_to and asset.valid_to < asset.valid_from:
+        db.rollback()
         raise InvalidInputError("validTo must not precede validFrom")
     db.commit()
     db.refresh(asset)
@@ -235,8 +275,9 @@ def _scale_provenance(evidence: ScaleEvidence) -> dict[str, Any]:
 
 def _lock(db: Session, asset_id: uuid.UUID) -> Asset:
     """The asset, locked for this transaction: the row lock a re-run takes before it
-    repoints the asset (`app/worker/registration.py`), so a scale and a re-run's reset of
-    it happen one after the other and the boundary is resized from the right scale."""
+    supersedes the asset (`app/worker/registration.py`), so a scale and a re-run's reset
+    of it happen one after the other and the boundary is resized from the right scale.
+    A scale then locks the site (`_locked_site`): asset first, then site, as a register."""
     asset = db.execute(
         select(Asset)
         .where(Asset.id == asset_id)
@@ -249,14 +290,25 @@ def _lock(db: Session, asset_id: uuid.UUID) -> Asset:
     return asset
 
 
+def _camel(field: str) -> str:
+    head, *rest = field.split("_")
+    return head + "".join(part.capitalize() for part in rest)
+
+
 def _placed(db: Session, asset: Asset) -> tuple[Site, placement.Origin]:
     """The site of a pipeline-placed splat and the origin its tiles are placed at, or 409.
 
-    The splat a run registered and repoints -- the site's first gaussian-splat, a 3D Tiles
-    URL -- on a site whose metadata carries the run's registration and so its origin.
+    An epoch's asset (decision D3) is resized about its site's frame, and only when it is
+    its epoch's current revision on a site of one published epoch: every epoch is placed
+    in one frame, and resizing one would move it against the others.
+
+    A legacy asset: the splat a run registered -- the site's first gaussian-splat, a 3D
+    Tiles URL -- on a site whose metadata carries the run's registration and its origin.
     """
+    if asset.epoch_id is not None:
+        return _placed_epoch(db, asset)
     why = None
-    site = db.get(Site, asset.site_id) if asset.site_id is not None else None
+    site = _locked_site(db, asset)
     origin = placement.registered_origin(site.metadata_) if site is not None else None
     if asset.representation != Representation.GAUSSIAN_SPLAT:
         why = f"it is a {asset.representation.value}, and only a splat's tiles are resized"
@@ -279,9 +331,68 @@ def _placed(db: Session, asset: Asset) -> tuple[Site, placement.Origin]:
     return site, origin
 
 
+def _placed_epoch(db: Session, asset: Asset) -> tuple[Site, placement.Origin]:
+    """`_placed` for an epoch's asset: about the site's frame, never its metadata."""
+    site = _locked_site(db, asset)
+    why = None
+    if asset.representation != Representation.GAUSSIAN_SPLAT:
+        why = f"it is a {asset.representation.value}, and only a splat's tiles are resized"
+    elif asset.provider != AssetProvider.TILES_3D_URL:
+        why = "its tiles are not a 3D Tiles URL a pipeline run published"
+    elif site is None:
+        why = "it is on no site"
+    elif epochs.is_superseded(asset):
+        current = epochs.current_asset(db, asset.epoch_id) if asset.epoch_id else None
+        why = (
+            f"it is a superseded revision of its epoch, superseded by "
+            f"{current.id if current is not None else 'a later run'}"
+        )
+    elif site.frame is None:
+        why = "its site has no frame, so nothing records the origin its tiles are placed at"
+    else:
+        published = db.scalar(
+            select(func.count())
+            .select_from(Epoch)
+            .where(Epoch.site_id == site.id, Epoch.status == EpochStatus.PUBLISHED.value)
+        )
+        if (published or 0) > 1:
+            why = (
+                f"its site has {published} epochs in one frame; resizing one would move it "
+                "against the others"
+            )
+    if why is not None or site is None or site.frame is None:
+        raise ConflictError(
+            f"asset {asset.id} cannot be rescaled: {why or 'it has no placement'}",
+            code=NOT_SCALABLE,
+        )
+    return site, placement.frame_origin(site.frame)
+
+
+def _locked_site(db: Session, asset: Asset) -> Site | None:
+    """The asset's site, locked (`FOR UPDATE`) for the rest of a scale's transaction.
+
+    What a scale reads off the site -- its frame, its origin, how many epochs it has -- is
+    what a register changes while it holds this lock (`registration.register` locks an
+    epoch, then its current asset, then the site; a new epoch's register, only the site).
+    Read unlocked, a scale could count one epoch while a second was joining, then resize
+    the boundary under both. Taken after the asset's lock, as a register takes them, so the
+    two never wait on each other in a cycle."""
+    if asset.site_id is None:
+        return None
+    return db.get(Site, asset.site_id, with_for_update=True, populate_existing=True)
+
+
 def _registered_splat(db: Session, site: Site) -> uuid.UUID | None:
-    """The asset a run repoints: the site's first splat by creation, as the worker's
-    `registration.splat_asset` picks it."""
+    """The splat the site shows, as the worker's `registration.splat_asset` picks it: the
+    current revision of its newest epoch that has one (a superseded revision is history,
+    and resizing it would move nothing anybody sees); for a legacy site, its first splat
+    by creation."""
+    for epoch_id in db.scalars(
+        select(Epoch.id).where(Epoch.site_id == site.id).order_by(Epoch.ordinal.desc())
+    ):
+        current = epochs.current_asset(db, epoch_id)
+        if current is not None:
+            return current.id
     return db.scalar(
         select(Asset.id)
         .where(Asset.site_id == site.id, Asset.representation == Representation.GAUSSIAN_SPLAT)
@@ -325,6 +436,8 @@ def asset_to_read(asset: Asset) -> AssetRead:
         render_config=RenderConfig.model_validate(render_raw),
         default_visible=asset.default_visible,
         sidecar_flags=[SidecarFlag.model_validate(entry) for entry in asset.sidecar_flags or []],
+        epoch_id=asset.epoch_id,
+        source_kind=AssetSourceKind(asset.source_kind or AssetSourceKind.OBSERVED.value),
         created_at=asset.created_at,
         updated_at=asset.updated_at,
     )

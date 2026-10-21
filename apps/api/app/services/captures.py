@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import Settings
-from app.models import Artifact, Capture, CaptureFile, Job, JobStep
+from app.models import Artifact, Capture, CaptureFile, Job, JobStep, Site
 from app.models.enums import ArtifactKind, CaptureStatus, RunStatus, UploadStatus
 from app.schemas.capture import (
     CaptureCreate,
@@ -114,8 +114,19 @@ def _unique_slug(db: Session, base: str) -> str:
 
 
 def create_capture(db: Session, payload: CaptureCreate) -> Capture:
+    """A new capture, awaiting its files.
+
+    `siteId` names the site the capture is a new epoch of. It is kept in
+    `metadata.siteId` until a run registers the capture: `captures.site_id` stays "the site
+    a run registered it into", which the upload page and the console read as "ready".
+    """
     if payload.slug and db.scalar(select(Capture.id).where(Capture.slug == payload.slug)):
         raise ConflictError(f"capture slug '{payload.slug}' already exists")
+    metadata = dict(payload.metadata)
+    if payload.site_id is not None:
+        if db.get(Site, payload.site_id) is None:
+            raise NotFoundError("site", payload.site_id)
+        metadata["siteId"] = str(payload.site_id)
     capture = Capture(
         slug=payload.slug or _unique_slug(db, slugify(payload.name)),
         name=payload.name,
@@ -128,7 +139,7 @@ def create_capture(db: Session, payload: CaptureCreate) -> Capture:
         temporal_extent=payload.temporal_extent.model_dump(mode="json", by_alias=True)
         if payload.temporal_extent
         else None,
-        metadata_=payload.metadata,
+        metadata_=metadata,
         attribution=[a.model_dump(mode="json", by_alias=True) for a in payload.attribution],
         license=payload.license.model_dump(mode="json", by_alias=True) if payload.license else None,
         provenance=payload.provenance.model_dump(mode="json", by_alias=True)
@@ -434,10 +445,16 @@ def quality_of(capture: Capture) -> CaptureQuality | None:
     The worker writes this already validated, so a failure here is a schema that moved
     under old rows; a capture list that 500s over one of them would be the worse answer.
     """
-    if not capture.quality:
+    return quality_from(capture.quality)
+
+
+def quality_from(raw: object) -> CaptureQuality | None:
+    """A stored `CaptureQuality` dump (a capture's or an epoch's), or None when there is
+    none or it no longer parses."""
+    if not raw:
         return None
     try:
-        return CaptureQuality.model_validate(capture.quality)
+        return CaptureQuality.model_validate(raw)
     except ValidationError:
         return None
 

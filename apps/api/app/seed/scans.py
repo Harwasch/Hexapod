@@ -208,13 +208,18 @@ def _bring_in_step(db: Session, existing: Site, wanted: SiteCreate) -> list[str]
             setattr(existing, field, value)
             changed.append(field.rstrip("_"))
     boundary = geometry.footprint_to_wkb(wanted.boundary)
-    if geometry.wkb_to_footprint(existing.boundary) != geometry.wkb_to_footprint(boundary):
+    if existing.epochs:
+        # The boundary covers every epoch captured there (decision D3); the snapshot's
+        # outline would cut them off, so a site that holds epochs keeps the one they grew.
+        logger.info("scan %s holds epochs: its boundary is left alone", wanted.slug)
+    elif geometry.wkb_to_footprint(existing.boundary) != geometry.wkb_to_footprint(boundary):
         existing.boundary = boundary
         centroid = wanted.centroid or geometry.centroid_of(wanted.boundary)
         existing.centroid = geometry.position_to_wkb(centroid)
         existing.centroid_height = centroid.height
         changed.append("boundary")
-    by_name = {asset.name: asset for asset in existing.assets}
+    # The seed's own assets only: an epoch's asset is a capture's, whatever it is called.
+    by_name = {asset.name: asset for asset in existing.assets if asset.epoch_id is None}
     for payload in wanted.assets:
         built = build_asset(payload, site_id=existing.id)
         asset = by_name.get(payload.name)

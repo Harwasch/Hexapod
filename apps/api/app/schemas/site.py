@@ -12,6 +12,7 @@ from app.schemas.asset import AssetBase, AssetRead
 from app.schemas.base import CamelModel
 from app.schemas.bookmark import CameraBookmarkCreate, CameraBookmarkRead
 from app.schemas.common import Attribution, GeoPosition, LicenseMetadata
+from app.schemas.epoch import EpochRead, SiteFrameRead
 from app.schemas.geojson import Footprint
 
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -101,7 +102,13 @@ class SiteRead(CamelModel):
     metadata: dict[str, Any]
     attribution: list[Attribution]
     license: LicenseMetadata | None
+    #: What the site shows: every asset except superseded revisions of an epoch (those
+    #: are history, and `GET /assets?siteId=` still lists them).
     assets: list[AssetRead]
     camera_bookmarks: list[CameraBookmarkRead]
+    #: The site's fixed frame; null for a legacy (seeded, catalog, hand-made) site.
+    frame: SiteFrameRead | None
+    #: The site's epochs, oldest first; empty for a legacy site.
+    epochs: list[EpochRead]
     created_at: datetime
     updated_at: datetime

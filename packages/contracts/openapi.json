@@ -1111,6 +1111,18 @@
             "title": "Defaultvisible",
             "type": "boolean"
           },
+          "epochId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Epochid"
+          },
           "footprint": {
             "anyOf": [
               {
@@ -1233,6 +1245,9 @@
             ],
             "title": "Source"
           },
+          "sourceKind": {
+            "$ref": "#/components/schemas/AssetSourceKind"
+          },
           "updatedAt": {
             "format": "date-time",
             "title": "Updatedat",
@@ -1282,6 +1297,8 @@
           "renderConfig",
           "defaultVisible",
           "sidecarFlags",
+          "epochId",
+          "sourceKind",
           "createdAt",
           "updatedAt"
         ],
@@ -1323,6 +1340,15 @@
         },
         "title": "AssetScaleUpdate",
         "type": "object"
+      },
+      "AssetSourceKind": {
+        "description": "Whether an asset shows what was captured (``observed``) or what was inferred to fill\nit (``inferred``, M5). One asset is one tileset of one epoch and one source kind.",
+        "enum": [
+          "observed",
+          "inferred"
+        ],
+        "title": "AssetSourceKind",
+        "type": "string"
       },
       "AssetUpdate": {
         "additionalProperties": false,
@@ -2942,6 +2968,19 @@
               }
             ],
             "title": "Sensor"
+          },
+          "siteId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The site this capture is a new epoch of. Unset: the worker matches it spatially or makes a new site.",
+            "title": "Siteid"
           },
           "slug": {
             "anyOf": [
@@ -5672,6 +5711,181 @@
         "title": "EcologyRequest",
         "type": "object"
       },
+      "EpochJoinMethod": {
+        "description": "How a capture found the site it is an epoch of: named it (``explicit``), was matched\nto it by location before its run (``spatial``), or made it (``new-site``).",
+        "enum": [
+          "explicit",
+          "spatial",
+          "new-site"
+        ],
+        "title": "EpochJoinMethod",
+        "type": "string"
+      },
+      "EpochPlatform": {
+        "description": "What captured an epoch, by survey tier (decision D4). Only ``phone-video`` and\n``unknown`` are told apart until M3 reads DJI XMP and RTK.",
+        "enum": [
+          "rtk-drone",
+          "drone",
+          "phone-video",
+          "phone-photo",
+          "unknown"
+        ],
+        "title": "EpochPlatform",
+        "type": "string"
+      },
+      "EpochRead": {
+        "additionalProperties": false,
+        "description": "One dated capture of a site, expressed in the site's frame.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "alignment": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alignment"
+          },
+          "captureId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captureid"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "currentAssetId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currentassetid"
+          },
+          "footprint": {
+            "discriminator": {
+              "mapping": {
+                "MultiPolygon": "#/components/schemas/MultiPolygon",
+                "Polygon": "#/components/schemas/Polygon"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "$ref": "#/components/schemas/MultiPolygon"
+              }
+            ],
+            "title": "Footprint"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "jobId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jobid"
+          },
+          "joinMethod": {
+            "$ref": "#/components/schemas/EpochJoinMethod"
+          },
+          "observedAt": {
+            "format": "date-time",
+            "title": "Observedat",
+            "type": "string"
+          },
+          "observedAtSource": {
+            "$ref": "#/components/schemas/ObservedAtSource"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/EpochPlatform"
+          },
+          "quality": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaptureQuality"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "siteId": {
+            "format": "uuid",
+            "title": "Siteid",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EpochStatus"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "title": "Updatedat",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "siteId",
+          "ordinal",
+          "captureId",
+          "jobId",
+          "observedAt",
+          "observedAtSource",
+          "footprint",
+          "platform",
+          "status",
+          "joinMethod",
+          "alignment",
+          "quality",
+          "currentAssetId",
+          "createdAt",
+          "updatedAt"
+        ],
+        "title": "EpochRead",
+        "type": "object"
+      },
+      "EpochStatus": {
+        "description": "An epoch's standing. Only ``published`` is written until quality gates exist (M3).",
+        "enum": [
+          "published",
+          "rejected",
+          "superseded"
+        ],
+        "title": "EpochStatus",
+        "type": "string"
+      },
       "EventLocation": {
         "additionalProperties": false,
         "description": "Where on the map a research step is looking or what it found.\n\nSmall on purpose: a point, a box or a reference to saved geometry, never the geometry\nitself, so a streamed event stays far below the frame limit.",
@@ -7028,6 +7242,15 @@
         },
         "title": "Heartbeat",
         "type": "object"
+      },
+      "HeightDatum": {
+        "description": "What a site frame's origin height is measured from.\n\n``msl-unverified``: every frame today. GPS altitude is above mean sea level (the geoid),\nand nothing here applies a geoid model, so the number is recorded with the datum it\nprobably has rather than passed off as an ellipsoid height.",
+        "enum": [
+          "ellipsoid-wgs84",
+          "msl-unverified"
+        ],
+        "title": "HeightDatum",
+        "type": "string"
       },
       "Highlight": {
         "properties": {
@@ -13492,6 +13715,16 @@
         "title": "ObjectiveAssessment",
         "type": "object"
       },
+      "ObservedAtSource": {
+        "description": "Where an epoch's ``observed_at`` came from: the capture row's ``captured_at``, the\nrun's manifest (the files' own date), or -- with neither -- the upload time\n(``created``), which is labelled as such rather than passed off as a capture date.",
+        "enum": [
+          "captured-at",
+          "manifest",
+          "created"
+        ],
+        "title": "ObservedAtSource",
+        "type": "string"
+      },
       "Offer": {
         "additionalProperties": false,
         "properties": {
@@ -13762,6 +13995,18 @@
               }
             ],
             "title": "Name"
+          },
+          "siteId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siteid"
           }
         },
         "title": "PhoneCaptureCreate",
@@ -19859,6 +20104,66 @@
         "title": "SiteCreate",
         "type": "object"
       },
+      "SiteFrameRead": {
+        "additionalProperties": false,
+        "description": "The WGS84 origin every epoch of the site is placed about; fixed once created.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "epsg": {
+            "title": "Epsg",
+            "type": "integer"
+          },
+          "height": {
+            "title": "Height",
+            "type": "number"
+          },
+          "heightDatum": {
+            "$ref": "#/components/schemas/HeightDatum"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "title": "Lon",
+            "type": "number"
+          },
+          "siteId": {
+            "format": "uuid",
+            "title": "Siteid",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SiteFrameSource"
+          }
+        },
+        "required": [
+          "siteId",
+          "lat",
+          "lon",
+          "height",
+          "heightDatum",
+          "epsg",
+          "source",
+          "createdAt"
+        ],
+        "title": "SiteFrameRead",
+        "type": "object"
+      },
+      "SiteFrameSource": {
+        "description": "How a site's frame came to exist (decision D3): from its first epoch's georeference\n(``registration``), from migration 0032 (``backfill``), or re-made from the frame a run\nechoed after the site it named was deleted (``echo``).",
+        "enum": [
+          "registration",
+          "backfill",
+          "echo"
+        ],
+        "title": "SiteFrameSource",
+        "type": "string"
+      },
       "SiteQuality": {
         "additionalProperties": false,
         "properties": {
@@ -19956,6 +20261,23 @@
             ],
             "title": "Description"
           },
+          "epochs": {
+            "items": {
+              "$ref": "#/components/schemas/EpochRead"
+            },
+            "title": "Epochs",
+            "type": "array"
+          },
+          "frame": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SiteFrameRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -20018,6 +20340,8 @@
           "license",
           "assets",
           "cameraBookmarks",
+          "frame",
+          "epochs",
           "createdAt",
           "updatedAt"
         ],
@@ -24386,7 +24710,7 @@
                 }
               }
             },
-            "description": "Not found"
+            "description": "No such asset"
           },
           "409": {
             "content": {
@@ -24396,7 +24720,7 @@
                 }
               }
             },
-            "description": "Conflict"
+            "description": "`epoch_managed`: a superseded revision of an epoch (history), or an epoch asset's `observedAt`, `validFrom`, `validTo` or `footprint`, which belong to its epoch"
           },
           "422": {
             "content": {
@@ -24485,7 +24809,7 @@
                 }
               }
             },
-            "description": "`not_scalable`: not the splat a pipeline run registered (a seeded or hand-made asset, a mesh, a Cesium ion asset), so nothing records the origin its tiles are placed at"
+            "description": "`not_scalable`: not the splat a pipeline run registered (a seeded or hand-made asset, a mesh, a Cesium ion asset), so nothing records the origin its tiles are placed at; or a superseded revision of an epoch; or an epoch asset whose site has no frame, or more than one published epoch in its frame"
           },
           "422": {
             "content": {
@@ -40557,6 +40881,84 @@
           }
         ],
         "summary": "Delete a camera bookmark",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/api/v1/sites/{site_id}/epochs": {
+      "get": {
+        "description": "The site's dated captures in its one frame, oldest first, each with the asset it\ncurrently shows. Empty for a legacy (seeded, catalog, hand-made) site.",
+        "operationId": "list_site_epochs_api_v1_sites__site_id__epochs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EpochRead"
+                  },
+                  "title": "Response List Site Epochs Api V1 Sites  Site Id  Epochs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "List a site's epochs",
         "tags": [
           "sites"
         ]

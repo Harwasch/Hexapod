@@ -26,6 +26,7 @@ import { tileUrl } from "@/lib/tileProxy";
 import { productHeader } from "@/shared/product";
 
 import { parseCoverage } from "./coverage";
+import { shownScan, type ShownCoverage, type ShownScan } from "./shown";
 import { showLive } from "./live";
 import { ScanNavigation } from "./navigate";
 import { spzPoints, type SpzPoints } from "./spz";
@@ -141,11 +142,10 @@ async function showGallery(): Promise<void> {
 
 let active: { stop: () => void } | null = null;
 
-/** A site's gaussian-splat tileset: where it is, and its tile tree (see tiles.ts). */
-async function splatTileset(site: Site): Promise<{ url: string; tree: TileTree }> {
-  const source = site.assets.find(
-    (candidate) => candidate.representation === "gaussian-splat",
-  )?.source;
+/** The shown scan's gaussian-splat tileset (shown.ts): where it is, and its tile tree (see
+ *  tiles.ts). */
+async function splatTileset(shown: ShownScan): Promise<{ url: string; tree: TileTree }> {
+  const source = shown.asset?.source;
   if (source?.type !== "3d-tiles-url") throw new Error("This site has no splat scan to show.");
   const url = await tileUrl(source.url);
   return { url, tree: parseTileset(await json<unknown>(url)) };
@@ -290,7 +290,8 @@ async function showScan(siteId: string): Promise<void> {
     // and is close, coarse elsewhere, within LOAD_FACTOR times the Detail budget, and Spark's
     // LoD decides what of that to draw each frame. An ADD scan (packed before merged
     // parents) keeps the static plan: its parents are drawn under their children anyway.
-    const tileset = await splatTileset(site);
+    const scanShown = shownScan(site);
+    const tileset = await splatTileset(scanShown);
     const scan = new THREE.Group();
     // The pipeline's splats are east/north/up with z up (see splat_tiles.py, whose glTF
     // node matrix makes the same turn for Cesium); three.js is y-up.
@@ -398,7 +399,7 @@ async function showScan(siteId: string): Promise<void> {
         }),
       }),
     };
-    offerCoverage(site, scene, scan, size);
+    offerCoverage(scanShown.coverage, scene, scan, size);
     status.textContent = "Drag to turn · pinch to zoom · two fingers to move";
     window.setTimeout(() => {
       status.hidden = true;
@@ -470,15 +471,19 @@ async function showScan(siteId: string): Promise<void> {
  * on the site's metadata, set by the worker's registration). Fetched on the first tap,
  * not before: it is up to a couple of megabytes a phone need not spend unasked.
  */
-function offerCoverage(site: Site, scene: THREE.Scene, scan: THREE.Group, size: number): void {
-  // Read defensively: a site registered before the quality bar has no such key, and an
-  // older API may send no metadata at all.
-  const metadata = site.metadata as Record<string, unknown> | null | undefined;
-  const url = metadata?.coverageUrl;
-  if (typeof url !== "string" || !url) return;
+function offerCoverage(
+  coverage: ShownCoverage | null,
+  scene: THREE.Scene,
+  scan: THREE.Group,
+  size: number,
+): void {
+  // None when the run measured none, or when it was measured on other tiles than the scan
+  // shown (shown.ts): a site registered before the quality bar has no such key.
+  if (!coverage) return;
+  const { url } = coverage;
   // How much of the high-quality tier frames held back from training confirmed (the
   // pipeline's keepVerifiedPct); absent when accuracy was not measured.
-  const verified = metadata?.keepVerifiedPct;
+  const verified = coverage.verifiedPct;
   const button = el("coverage");
   const legend = el("coverage-legend");
   button.hidden = false;

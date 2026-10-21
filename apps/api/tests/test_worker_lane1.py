@@ -13,20 +13,22 @@ pulled in this environment; every other moving part is the real one.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import struct
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 import boto3
 import pytest
+from fastapi.testclient import TestClient
 from moto import mock_aws
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import Artifact, Capture, CaptureFile, Job, JobStep, Site
+from app.models import Artifact, Capture, CaptureFile, Epoch, Job, JobStep, Site
 from app.models.enums import (
     ArtifactKind,
     CaptureKind,
@@ -67,16 +69,24 @@ def storage() -> Iterator[S3Storage]:
         )
 
 
-def _uploaded_capture(db: Session, storage: S3Storage, *, placed: bool = True) -> Capture:
+def _uploaded_capture(
+    db: Session,
+    storage: S3Storage,
+    *,
+    placed: bool = True,
+    slug: str = "orchard-tree",
+    captured_at: datetime = datetime(2026, 9, 12, tzinfo=UTC),
+    lat: float = LAT,
+) -> Capture:
     """A capture whose `.ply` really is in the bucket, as A4's upload would leave it."""
     capture = Capture(
-        slug="orchard-tree",
-        name="Orchard tree",
+        slug=slug,
+        name=slug.replace("-", " ").capitalize(),
         kind=CaptureKind.GAUSSIAN_SPLAT,
         status=CaptureStatus.NOT_STARTED,
         sensor="Scaniverse",
         device="iPhone 15 Pro",
-        captured_at=datetime(2026, 9, 12, tzinfo=UTC),
+        captured_at=captured_at,
         # Lane 1 has no EXIF and no poses, so the coordinate is the operator's: this is
         # "the capture carries a coordinate", and the worker hands it to whichever stage
         # places captures by hand.
@@ -85,7 +95,7 @@ def _uploaded_capture(db: Session, storage: S3Storage, *, placed: bool = True) -
         # not what a `.ply` is taken to be when nobody says (y down, the 3DGS
         # convention). It is also the path a real capture's override takes.
         metadata_=(
-            {"lat": LAT, "lon": LON, "height": HEIGHT, "upAxis": "z"} if placed else {"upAxis": "z"}
+            {"lat": lat, "lon": LON, "height": HEIGHT, "upAxis": "z"} if placed else {"upAxis": "z"}
         ),
     )
     db.add(capture)
@@ -113,6 +123,8 @@ def _run(
     capture: Capture,
     tmp_path: Path,
     params: dict[str, dict[str, object]] | None = None,
+    *,
+    expect: str = "complete",
 ) -> Job:
     job = Job(
         capture_id=capture.id,
@@ -134,7 +146,7 @@ def _run(
         poll_s=0.2,
         retry_backoff_s=0.0,
     )
-    assert JobSupervisor(sessions, storage, config).run(job.id) == "complete"
+    assert JobSupervisor(sessions, storage, config).run(job.id) == expect
     db.expire_all()
     return job
 
@@ -532,24 +544,30 @@ def test_the_run_is_repeatable_and_produces_the_same_tileset_bytes(
     assert isinstance(first.id, uuid.UUID) and first.id != second.id
 
 
-def test_a_re_run_repoints_the_site_at_the_new_reconstruction(
-    db: Session, sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
+def test_a_re_run_adds_a_revision_and_keeps_the_old_url(
+    db: Session,
+    sessions: sessionmaker[Session],
+    storage: S3Storage,
+    tmp_path: Path,
+    client: TestClient,
 ) -> None:
-    """A10's reconciliation found this: the site kept run 1's geometry and took run 2's
-    thumbnail, so the reconstruction the second run produced was invisible and showed up
-    as an unreferenced object.
+    """A10's reconciliation found that a re-run's reconstruction was invisible: the site
+    kept run 1's geometry and took run 2's thumbnail. The globe must show the newest run.
 
-    The cause was that a re-run writes to `runs/<job id>/...`, a different key, while
-    registration only created the asset when the capture had no site yet. B3's whole shape
-    is re-running one capture with a different `mask`, so a re-run that the globe ignores
-    would have made that comparison meaningless.
+    Changed with site epochs (decision D3): it used to do that by rewriting the asset's
+    URL in place, so run 1's tiles stopped being referenced by anything. Now run 2 is a new
+    *revision* of the capture's one epoch -- a second asset row, current -- and run 1's
+    row is kept as it was, URL and render config included, with `validTo` set. The site
+    still shows one splat (`GET /sites/{id}` lists only current revisions).
     """
     capture = _uploaded_capture(db, storage)
 
     first = _run(db, sessions, storage, capture, tmp_path / "one")
     site_id = db.get(Capture, capture.id).site_id  # type: ignore[union-attr]
     assert site_id is not None
-    first_url = str(db.get(Site, site_id).assets[0].source["url"])  # type: ignore[union-attr]
+    first_asset = db.get(Site, site_id).assets[0]  # type: ignore[union-attr]
+    first_url = str(first_asset.source["url"])
+    first_render = dict(first_asset.render_config)
     assert first_url.endswith(f"runs/{first.id}/package/splat/tileset.json")
 
     second = _run(db, sessions, storage, capture, tmp_path / "two")
@@ -558,11 +576,172 @@ def test_a_re_run_repoints_the_site_at_the_new_reconstruction(
     db.expire_all()
     site = db.get(Site, site_id)
     assert site is not None
-    # Still one splat: a re-run replaces what the globe shows, it does not stack.
     splats = [a for a in site.assets if a.representation is Representation.GAUSSIAN_SPLAT]
-    assert len(splats) == 1
-    assert str(splats[0].source["url"]).endswith(f"runs/{second.id}/package/splat/tileset.json")
+    assert len(splats) == 2
+    old = next(a for a in splats if a.id == first_asset.id)
+    new = next(a for a in splats if a.id != first_asset.id)
+    # Run 1's revision is history, untouched but for its validity.
+    assert old.source["url"] == first_url
+    assert old.valid_to is not None and old.default_visible is False
+    assert old.render_config == first_render
+    # Run 2's is what the epoch shows.
+    assert str(new.source["url"]).endswith(f"runs/{second.id}/package/splat/tileset.json")
+    assert new.valid_to is None and new.epoch_id == old.epoch_id is not None
+    read = client.get(f"/api/v1/sites/{site_id}").json()
+    assert [asset["id"] for asset in read["assets"]] == [str(new.id)]
+    [epoch] = db.scalars(select(Epoch).where(Epoch.site_id == site_id)).all()
+    assert epoch.job_id == second.id
     # And the picture and the geometry now come from the same run.
     assert site.thumbnail_url is not None
     assert f"runs/{second.id}/" in site.thumbnail_url
     assert str(site.metadata_["jobId"]) == str(second.id)
+
+
+# --- a second capture of the same field (decision D3, the M2 evidence) -------------------
+
+
+def _enu_north_m(
+    lat: float, lon: float, height: float, origin: tuple[float, float, float]
+) -> float:
+    """North metres of a point about `origin`, by pyproj: an implementation independent of
+    the pipeline's own WGS84 arithmetic (`exif.ecef_to_enu`)."""
+    import math
+
+    from pyproj import Transformer
+
+    to_ecef = Transformer.from_crs("EPSG:4979", "EPSG:4978", always_xy=True)
+    x, y, z = to_ecef.transform(lon, lat, height)
+    ox, oy, oz = to_ecef.transform(origin[1], origin[0], origin[2])
+    phi, lam = math.radians(origin[0]), math.radians(origin[1])
+    dx, dy, dz = x - ox, y - oy, z - oz
+    return float(
+        -math.sin(phi) * math.cos(lam) * dx
+        - math.sin(phi) * math.sin(lam) * dy
+        + math.cos(phi) * dz
+    )
+
+
+def _row(db: Session, asset_id: uuid.UUID) -> dict[str, object]:
+    row = db.execute(
+        text("SELECT to_jsonb(a) FROM assets a WHERE id = :id"), {"id": asset_id}
+    ).scalar_one()
+    assert isinstance(row, dict)
+    return row
+
+
+def test_a_second_capture_of_the_same_field_joins_its_site_as_epoch_2(
+    db: Session,
+    sessions: sessionmaker[Session],
+    storage: S3Storage,
+    tmp_path: Path,
+    client: TestClient,
+    record_property: Callable[[str, object], None],
+) -> None:
+    """The M2 demonstration: September's scan, then October's, about 10 m north.
+
+    October is matched to September's site before its run starts (its point is within
+    25 m of the site), so the pipeline places it in September's frame. It becomes epoch 2
+    of the same site, its tiles hang off the same root transform, it sits where it was
+    captured relative to epoch 1, and epoch 1's asset row is not touched -- not even its
+    `updated_at`.
+    """
+    september = _uploaded_capture(db, storage)
+    first = _run(db, sessions, storage, september, tmp_path / "september")
+    site_id = db.get(Capture, september.id).site_id  # type: ignore[union-attr]
+    assert site_id is not None
+    [epoch_1_asset] = db.get(Site, site_id).assets  # type: ignore[union-attr]
+    before = _row(db, epoch_1_asset.id)
+    bbox_1 = db.get(Site, site_id).metadata_["registration"]["bboxLocalM"]  # type: ignore[union-attr]
+    north_lat = LAT + 0.00009
+
+    october = _uploaded_capture(
+        db,
+        storage,
+        slug="orchard-tree-october",
+        captured_at=datetime(2026, 10, 12, tzinfo=UTC),
+        lat=north_lat,
+    )
+    second = _run(db, sessions, storage, october, tmp_path / "october")
+
+    db.expire_all()
+    assert db.get(Capture, october.id).site_id == site_id  # type: ignore[union-attr]
+    site = db.get(Site, site_id)
+    assert site is not None and site.frame is not None
+    assert (site.frame.lat, site.frame.lon, site.frame.height) == (LAT, LON, HEIGHT)
+    epochs = list(db.scalars(select(Epoch).where(Epoch.site_id == site_id).order_by(Epoch.ordinal)))
+    assert [e.ordinal for e in epochs] == [1, 2]
+    assert [e.join_method for e in epochs] == ["new-site", "spatial"]
+    assert [e.job_id for e in epochs] == [first.id, second.id]
+    after = _row(db, epoch_1_asset.id)
+    assert after == before
+    splats = sorted(site.assets, key=lambda a: a.created_at)
+    urls = [str(a.source["url"]) for a in splats]
+    assert len(set(urls)) == 2
+    assert [a.epoch_id for a in splats] == [e.id for e in epochs]
+
+    # One frame: both tilesets hang off the same root transform.
+    def root_transform(job: Job) -> list[float]:
+        tileset = json.loads(storage.get_object(f"runs/{job.id}/package/splat/tileset.json"))
+        transform: list[float] = tileset["root"]["transform"]
+        return transform
+
+    assert root_transform(first) == root_transform(second)
+    # And October sits where it was captured, relative to September: its north extreme
+    # is the north offset of its coordinate further on. 1 mm, from first principles: the
+    # SPZ position quantum is 2^-12 m (0.24 mm) on each bound, plus float32 at 10 m.
+    # Read off October's own run: the site's metadata mirrors only the epoch it shows.
+    bbox_2 = json.loads(storage.get_object(f"runs/{second.id}/register/registration.json"))[
+        "bboxLocalM"
+    ]
+    assert site.metadata_["registration"]["bboxLocalM"] == bbox_1
+    expected = _enu_north_m(north_lat, LON, HEIGHT, (LAT, LON, HEIGHT))
+    assert abs((bbox_2["max"][1] - bbox_1["max"][1]) - expected) < 1e-3
+    assert abs((bbox_2["min"][1] - bbox_1["min"][1]) - expected) < 1e-3
+    assert abs(bbox_2["max"][0] - bbox_1["max"][0]) < 1e-3
+
+    listed = client.get(f"/api/v1/sites/{site_id}/epochs").json()
+    assert [item["observedAt"][:10] for item in listed] == ["2026-09-12", "2026-10-12"]
+    assert len({item["currentAssetId"] for item in listed}) == 2
+    read = client.get(f"/api/v1/sites/{site_id}").json()
+    assert read["frame"] is not None and len(read["epochs"]) == 2 and len(read["assets"]) == 2
+
+    record_property("epochs", json.dumps(listed, sort_keys=True))
+    record_property("frame", json.dumps(read["frame"], sort_keys=True))
+    record_property("north_offset_expected_m", expected)
+    record_property("north_offset_measured_m", bbox_2["max"][1] - bbox_1["max"][1])
+    record_property(
+        "epoch1_row_sha256_before",
+        hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest(),
+    )
+    record_property(
+        "epoch1_row_sha256_after",
+        hashlib.sha256(json.dumps(after, sort_keys=True).encode()).hexdigest(),
+    )
+
+
+def test_a_run_whose_frame_disagrees_with_its_site_dead_letters(
+    db: Session, sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
+) -> None:
+    """A job told (through its params) to place an epoch in another frame is placed there
+    consistently by the pipeline -- and refused at registration, never put on the site."""
+    capture = _uploaded_capture(db, storage)
+    _run(db, sessions, storage, capture, tmp_path / "one")
+    site_id = db.get(Capture, capture.id).site_id  # type: ignore[union-attr]
+    assert site_id is not None
+    other = {"siteId": str(site_id), "lat": LAT - 0.0001, "lon": LON, "height": HEIGHT}
+    assets_before = len(db.get(Site, site_id).assets)  # type: ignore[union-attr]
+
+    failed = _run(
+        db,
+        sessions,
+        storage,
+        capture,
+        tmp_path / "two",
+        params={"normalize": {"site_frame": other}, "georeference": {"site_frame": other}},
+        expect="error",
+    )
+
+    assert failed.status is RunStatus.ERROR
+    assert "registration refused" in (failed.error or "")
+    db.expire_all()
+    assert len(db.get(Site, site_id).assets) == assets_before  # type: ignore[union-attr]

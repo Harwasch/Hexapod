@@ -6,6 +6,8 @@ Python models are snake_case (`CamelModel` handles both).
 
 ```text
 sites 1 ──── * assets            (site_id nullable: assets can exist before a site)
+sites 1 ──── 0..1 site_frames    (the fixed origin every epoch is placed about)
+sites 1 ──── * epochs 1 ──── * assets (revisions of one epoch; epoch_id nullable: legacy)
 sites 1 ──── * camera_bookmarks
 layers                           (independent catalog entries)
 ```
@@ -47,12 +49,61 @@ A derived, renderable delivery asset with provenance.
 | render_config                     | jsonb `RenderConfig`               | `maximumScreenSpaceError`, `pointCloudShading`, `clipsWorld`, `clipFootprint` (`catalog`/`tileset`), `heightOffsetM`, `clampToGround`, `groundSamples` (the capture's own measured ground as ellipsoid heights — what the clamp rests on), `scale`/`scaleEvidence` (a runtime size correction, below); provenance, including `georefMethod`/`scaleSource`/`uncertaintyM`, is stored alongside |
 | default_visible                   | bool                               | the representation shown first                                                                                                                                                                                                                                                                                                                                                                |
 | sidecar_flags                     | jsonb                              | sidecars a republish could not carry into the new generation, one `{kind, action, reason, jobId, flaggedAt}` per kind ("Objects need re-segmenting"); cleared when the kind is attached again (0009, docs/SCENE_OBJECTS.md §8)                                                                                                                                                                |
+| epoch_id                          | uuid → epochs (set null), nullable | the epoch this asset is a revision of (0032); null for seeded, catalog and hand-made assets                                                                                                                                                                                                                                                                                                   |
+| source_kind                       | text                               | `observed` (the capture) · `inferred` (a fill, M5); one asset is one tileset of one epoch and one source kind                                                                                                                                                                                                                                                                                 |
+
+**Superseded = `valid_to` set on an epoch asset.** A re-run of a capture inserts a new revision of
+its epoch and sets the old row's `valid_to` and `default_visible = false`; nothing else of the old
+row changes, its URL included. `SiteRead.assets` lists only what is not superseded; `GET /assets`
+lists every row. On a legacy asset (`epoch_id` null) `valid_to` is only a validity window.
 
 What a splat scan carries beside its tiles is declared on its tileset's root, not in these
 columns: `extras.instances`, `extras.skin`, `extras.inferredLayers`, `extras.viewCones`,
 `extras.collision`, `extras.nativeLod`, and `extras.variants` -- other methods' objects, fills
 and skins for the same scan, for the owner's bake-offs (docs/SCENE_OBJECTS.md §4, "Root
 extras" and "Variants"; the table of kinds in §8).
+
+## site_frames
+
+A site's fixed east/north/up frame (decision D3, ADR 0013): 1:1 with the site, never updated.
+
+| Column       | Type                       | Notes                                                                                                                        |
+| ------------ | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| site_id      | uuid → sites (cascade), PK |                                                                                                                              |
+| lat, lon     | float8                     | the WGS84 origin every epoch's tiles are placed about                                                                        |
+| height       | float8                     | the origin's height                                                                                                          |
+| height_datum | text                       | `ellipsoid-wgs84` · `msl-unverified` (every frame today: no geoid applied)                                                   |
+| epsg         | int                        | the origin's WGS84 UTM zone (32601–32660, 32701–32760)                                                                       |
+| source       | text                       | `registration` (its first epoch) · `backfill` (0032) · `echo` (re-made from a run's echoed frame after its site was deleted) |
+| created_at   | timestamptz                |                                                                                                                              |
+
+Read as `SiteRead.frame` (null for a legacy site).
+
+## epochs
+
+One dated capture of a site, in the site's frame.
+
+| Column                 | Type                               | Notes                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| id                     | uuid                               |                                                                                                                                                                                                                                                                                                                                                         |
+| site_id                | uuid → sites (cascade)             |                                                                                                                                                                                                                                                                                                                                                         |
+| capture_id             | uuid → captures (set null), unique | one capture per epoch                                                                                                                                                                                                                                                                                                                                   |
+| job_id                 | uuid → jobs (set null)             | the run behind the epoch's current revision                                                                                                                                                                                                                                                                                                             |
+| ordinal                | int ≥ 1, unique per site           | 1 for the capture that defined the frame                                                                                                                                                                                                                                                                                                                |
+| observed_at            | timestamptz                        | when it was captured                                                                                                                                                                                                                                                                                                                                    |
+| observed_at_source     | text                               | where `observed_at` came from, first that applies: `manifest` (the run manifest's tz-aware `capture.capturedAtUtc`, read before the capture row because M3a also copies it there) · `captured-at` (the capture row's `captured_at`) · `manifest` (the manifest's naive `capturedAt`, as UTC) · `created` (the upload time); `registration._observed_at` |
+| footprint              | MultiPolygon 4326 (GiST)           | the run's measured extent in the frame                                                                                                                                                                                                                                                                                                                  |
+| platform               | text                               | `rtk-drone` · `drone` · `phone-video` · `phone-photo` · `unknown` (only the last two written before M3)                                                                                                                                                                                                                                                 |
+| status                 | text                               | `published` · `rejected` · `superseded` (only `published` written before M3)                                                                                                                                                                                                                                                                            |
+| join_method            | text                               | `explicit` (the capture named the site) · `spatial` (matched before its run) · `new-site`                                                                                                                                                                                                                                                               |
+| alignment              | jsonb, nullable                    | how it was aligned to earlier epochs (M3)                                                                                                                                                                                                                                                                                                               |
+| quality                | jsonb, nullable                    | a `CaptureQuality` dump                                                                                                                                                                                                                                                                                                                                 |
+| created_at, updated_at | timestamptz                        |                                                                                                                                                                                                                                                                                                                                                         |
+
+Read as `SiteRead.epochs` and `GET /api/v1/sites/{id}/epochs`, each with `currentAssetId`: the
+epoch's newest observed asset with no `valid_to`. A capture names its site with `siteId` on
+`POST /captures` (or the phone route), kept in `captures.metadata.siteId`; `captures.site_id` is
+still the site a run registered it into.
 
 ## Runtime scale
 
@@ -88,12 +139,16 @@ redrew is resized as drawn, not replaced. `PATCH /assets/{id}` keeps `scale` and
 `scaleEvidence` whatever its `renderConfig` says, because only this endpoint moves the
 boundary with them.
 
-Only the splat a pipeline run registered can be resized: the site's first gaussian-splat
-asset, a 3D Tiles URL, on a site whose `metadata.registration.georef` records the origin.
-Anything else is a 409 with `code: not_scalable`. A re-run that registers new tiles resets
-the scale (the new tiles carry the run's own, in the provenance that replaces the old) and
-resizes the boundary back; the site's `metadata.registration` becomes the new run's, so the
-next scale is set about the origin those tiles are placed at. Unscaled assets store neither
+Only the splat a pipeline run registered can be resized. An epoch's asset is resized about its
+site's frame (`site_frames`), and only when it is the current revision of the site's one published
+epoch: every epoch is placed in one frame, so resizing one of two would move it against the other.
+A legacy asset is the site's first gaussian-splat asset, a 3D Tiles URL, on a site whose
+`metadata.registration.georef` records the origin. Anything else is a 409 with
+`code: not_scalable`. A re-run that registers new tiles adds a new
+revision with no scale (the new tiles carry the run's own, in the provenance that replaces the
+old) and resizes the site's boundary back; the superseded revision keeps its scale as history; the next scale is set about the
+origin those tiles are placed at: for an epoch asset the site's frame, which never moves; for a
+legacy asset the site's `metadata.registration`, which becomes the new run's. Unscaled assets store neither
 key, so code from before this can still read every asset nobody resized; reset scaled ones
 before rolling back past it.
 

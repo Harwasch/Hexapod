@@ -13,23 +13,28 @@ from __future__ import annotations
 
 import json
 import math
+import threading
+import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import Engine, select, text
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.deps import _db
 from app.config import Settings
 from app.main import create_app
 from app.models import Asset, Capture, Job, Site
 from app.models.enums import CaptureKind, Representation, RunStatus
+from app.schemas.asset import AssetScaleUpdate
+from app.schemas.geojson import Polygon
 from app.seed import seed
-from app.services import placement
+from app.services import geometry, placement
+from app.services.errors import ConflictError
 from app.storage import S3Storage
 from app.worker import registration
 from app.worker.carry import CarryPlan
@@ -281,11 +286,14 @@ def test_scales_compose_to_the_last_one_not_their_product(
 
 
 def test_a_scale_moves_the_boundary_centroid_footprint_and_ground_about_the_origin(
-    client: TestClient, scan: tuple[Capture, Asset]
+    client: TestClient, db: Session, scan: tuple[Capture, Asset]
 ) -> None:
+    """Changed with site epochs (decision D3): the footprint is set on the row rather than
+    through `PATCH /assets/{id}`, which now refuses it on an epoch's asset (the footprint is
+    the epoch's). What is under test, that a scale moves it, is unchanged."""
     _, splat = scan
-    patched = client.patch(f"/api/v1/assets/{splat.id}", json={"footprint": SQUARE})
-    assert patched.status_code == 200, patched.text
+    splat.footprint = geometry.footprint_to_wkb(Polygon.model_validate(SQUARE))
+    db.commit()
     before_site = _site(client, splat)
     before = client.get(f"/api/v1/assets/{splat.id}").json()
 
@@ -494,7 +502,14 @@ def test_a_re_run_resets_the_scale_and_takes_the_boundary_back(
     scan: tuple[Capture, Asset],
 ) -> None:
     """The new tiles carry the run's own scale, so the correction to the old ones goes:
-    scale 1, no evidence, the new run's provenance, and the boundary resized back."""
+    the new revision has no scale and the new run's provenance, and the boundary is
+    resized back.
+
+    Changed with site epochs (decision D3): the re-run used to rewrite this asset in
+    place. Now it is a new revision of the capture's epoch, and the old row keeps its
+    scale of 0.4 as history -- it is superseded, so it can no longer be resized; the new
+    revision can.
+    """
     capture, splat = scan
     assert _put(client, splat, {"scale": 0.4}).status_code == 200
     estimated = _document()
@@ -508,27 +523,35 @@ def test_a_re_run_resets_the_scale_and_takes_the_boundary_back(
     second = _register(db, storage, tmp_path, capture, estimated)
 
     db.expire_all()
-    asset = db.get(Asset, splat.id)
-    assert asset is not None
-    assert str(second.id) in asset.source["url"]
-    assert "scale" not in asset.render_config
-    assert "scaleEvidence" not in asset.render_config
-    assert asset.render_config["provenance"]["scaleSource"] == "camera-height-estimate"
-    assert asset.render_config["provenance"]["scaleUncertaintyPct"] == 21.5
-    _assert_scaled(_ring(_site(client, splat)), 1.0)
+    old = db.get(Asset, splat.id)
+    assert old is not None
+    assert str(second.id) not in old.source["url"]
+    assert old.render_config["scale"] == 0.4
+    assert old.valid_to is not None
+    assert capture.site_id is not None
+    revision = registration.splat_asset(db, capture.site_id)
+    assert revision is not None and revision.id != splat.id
+    assert str(second.id) in revision.source["url"]
+    assert "scale" not in revision.render_config
+    assert "scaleEvidence" not in revision.render_config
+    assert revision.render_config["provenance"]["scaleSource"] == "camera-height-estimate"
+    assert revision.render_config["provenance"]["scaleUncertaintyPct"] == 21.5
+    _assert_scaled(_ring(_site(client, revision)), 1.0)
     site = db.get(Site, splat.site_id)
     assert site is not None
     assert site.metadata_["jobId"] == str(second.id)
     assert site.metadata_["registration"]["georef"]["scaleSource"] == "camera-height-estimate"
-    # Still the one splat, and it can be resized again about the new registration's origin.
+    # Two rows, one shown: the old revision is history and is not resized again.
     splats = db.scalars(
         select(Asset).where(
             Asset.site_id == site.id, Asset.representation == Representation.GAUSSIAN_SPLAT
         )
     ).all()
-    assert [a.id for a in splats] == [splat.id]
-    assert _put(client, splat, {"scale": 0.9}).status_code == 200
-    _assert_scaled(_ring(_site(client, splat)), 0.9)
+    assert {a.id for a in splats} == {splat.id, revision.id}
+    refused = _put(client, old, {"scale": 0.9})
+    assert refused.status_code == 409 and refused.json()["code"] == "not_scalable"
+    assert _put(client, revision, {"scale": 0.9}).status_code == 200
+    _assert_scaled(_ring(_site(client, revision)), 0.9)
 
 
 def test_seeding_twice_stores_no_scale_keys_on_unscaled_assets(db: Session) -> None:
@@ -543,3 +566,180 @@ def test_seeding_twice_stores_no_scale_keys_on_unscaled_assets(db: Session) -> N
     for asset in assets:
         assert "scale" not in asset.render_config
         assert "scaleEvidence" not in asset.render_config
+
+
+# --- epochs (decision D3) ------------------------------------------------------------------
+
+
+def test_a_site_with_two_epochs_refuses_a_scale(
+    client: TestClient,
+    db: Session,
+    storage: S3Storage,
+    tmp_path: Path,
+    scan: tuple[Capture, Asset],
+) -> None:
+    """Two epochs share one frame: resizing one would move it against the other."""
+    from tests.test_registration_epochs import _capture, _echoed, run
+
+    capture, splat = scan
+    assert capture.site_id is not None
+    october = _capture(db, "october")
+    run(db, storage, tmp_path, october, _echoed(capture.site_id))
+
+    for asset in (splat, registration.splat_asset(db, capture.site_id)):
+        assert asset is not None
+        response = _put(client, asset, {"scale": 0.5})
+        assert response.status_code == 409, response.text
+        assert response.json()["code"] == "not_scalable"
+    assert "2 epochs in one frame" in response.json()["detail"]
+
+
+def test_a_re_run_of_a_scaled_epoch_leaves_the_boundary_other_epochs_grew(
+    client: TestClient,
+    db: Session,
+    storage: S3Storage,
+    tmp_path: Path,
+    scan: tuple[Capture, Asset],
+) -> None:
+    """Epoch 1 is resized while it is the site's only epoch; epoch 2 then joins and grows
+    the boundary to the north. A re-run of epoch 1 used to undo epoch 1's scale on the
+    whole boundary, which resized epoch 2's part of it too: 2.5 times as far north, and
+    off the ground epoch 2 covers. With another epoch on the site a re-run leaves the
+    boundary as it is and only grows it to cover the new revision."""
+    from geoalchemy2.shape import to_shape
+
+    from tests.test_registration_epochs import _capture, _echoed, _epochs, run
+
+    capture, splat = scan
+    assert capture.site_id is not None
+    assert _put(client, splat, {"scale": 0.4}).status_code == 200
+    north = _echoed(capture.site_id)
+    north["bboxLocalM"] = {"min": [-4.0, 40.0, -1.0], "max": [6.0, 50.0, 3.0]}
+    run(db, storage, tmp_path, _capture(db, "october"), north)
+    db.expire_all()
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    before, centroid = to_shape(site.boundary), to_shape(site.centroid)
+
+    _register(db, storage, tmp_path, capture)
+
+    db.expire_all()
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    after = to_shape(site.boundary)
+    assert after.buffer(1e-9).covers(before)
+    for epoch in _epochs(db, capture.site_id):
+        assert after.buffer(1e-9).covers(to_shape(epoch.footprint))
+    assert to_shape(site.centroid).equals(centroid)
+
+
+def run_beside(
+    engine: Engine, call: Callable[[Session], object]
+) -> tuple[threading.Thread, dict[str, object], bool]:
+    """`call` in a session of its own on another thread; whether it waited on a row lock.
+
+    For a test that holds a lock in its own transaction: the thread is started, and given
+    up to five seconds to block on that lock (or to finish without blocking). The caller
+    then lets go of its lock and joins the thread; `result["value"]` is what `call`
+    returned or raised."""
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    result: dict[str, object] = {}
+
+    def target() -> None:
+        with factory() as session:
+            try:
+                result["value"] = call(session)
+            except Exception as error:  # surfaced by the caller
+                result["value"] = error
+
+    thread = threading.Thread(target=target)
+    thread.start()
+    deadline = time.monotonic() + 5
+    while thread.is_alive() and time.monotonic() < deadline:
+        with engine.connect() as connection:
+            if connection.execute(text("SELECT count(*) FROM pg_locks WHERE NOT granted")).scalar():
+                return thread, result, True
+        time.sleep(0.05)
+    return thread, result, False
+
+
+def test_a_scale_waits_for_an_epoch_joining_its_site_and_then_refuses(
+    db: Session, engine: Engine, scan: tuple[Capture, Asset]
+) -> None:
+    """A register of a new epoch holds the site's row lock (`registration._target`) while it
+    adds the epoch. A scale read the site and counted its epochs unlocked, so it saw one
+    epoch, resized the boundary and committed -- and the site then had two epochs, one of
+    them resized against the other. It locks the site (after the asset, the order a
+    register takes them) and counts once the joining epoch is committed."""
+    from app.models import Epoch
+    from app.services import assets as asset_service
+
+    capture, splat = scan
+    assert capture.site_id is not None
+    holder = sessionmaker(bind=engine, expire_on_commit=False)()
+    try:
+        site = holder.get(Site, capture.site_id, with_for_update=True)
+        assert site is not None
+        holder.add(
+            Epoch(
+                site_id=site.id,
+                ordinal=2,
+                observed_at=site.created_at,
+                observed_at_source="created",
+                footprint=site.boundary,
+                platform="unknown",
+                status="published",
+                join_method="spatial",
+            )
+        )
+        holder.flush()
+        thread, result, waited = run_beside(
+            engine,
+            lambda session: asset_service.set_scale(session, splat.id, AssetScaleUpdate(scale=0.5)),
+        )
+        holder.commit()
+    finally:
+        holder.close()
+    thread.join(timeout=30)
+
+    assert waited, "the scale did not wait for the site's lock"
+    refused = result["value"]
+    assert isinstance(refused, ConflictError), refused
+    assert refused.code == "not_scalable" and "2 epochs in one frame" in str(refused)
+
+
+def test_a_superseded_revision_is_not_scalable(
+    client: TestClient,
+    db: Session,
+    storage: S3Storage,
+    tmp_path: Path,
+    scan: tuple[Capture, Asset],
+) -> None:
+    capture, splat = scan
+    _register(db, storage, tmp_path, capture)
+    assert capture.site_id is not None
+    current = registration.splat_asset(db, capture.site_id)
+    assert current is not None and current.id != splat.id
+
+    response = _put(client, splat, {"scale": 0.5})
+
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "not_scalable"
+    assert f"superseded by {current.id}" in response.json()["detail"]
+
+
+def test_a_single_epoch_scales_about_its_site_frame_not_its_metadata(
+    client: TestClient, db: Session, scan: tuple[Capture, Asset]
+) -> None:
+    """The frame is the record of where the tiles are placed; the site's metadata is a
+    mirror a PATCH can replace, and losing it must not lose the origin."""
+    _, splat = scan
+    site = _site(client, splat)
+    metadata = {k: v for k, v in site["metadata"].items() if k != "registration"}
+    patched = client.patch(f"/api/v1/sites/{splat.site_id}", json={"metadata": metadata})
+    assert patched.status_code == 200, patched.text
+
+    response = _put(client, splat, {"scale": 0.5})
+
+    assert response.status_code == 200, response.text
+    _assert_scaled(_ring(_site(client, splat)), 0.5)

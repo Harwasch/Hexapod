@@ -13,7 +13,7 @@ from app.schemas.asset import AssetBase, AssetRead
 from app.schemas.bookmark import CameraBookmarkCreate, CameraBookmarkRead
 from app.schemas.common import Attribution, GeoPosition, LicenseMetadata
 from app.schemas.site import SiteCreate, SiteQuality, SiteRead, SiteSummary, SiteUpdate
-from app.services import geometry
+from app.services import epochs, geometry
 from app.services.assets import asset_to_read, build_asset
 from app.services.errors import ConflictError, NotFoundError
 from app.services.slugs import slugify
@@ -35,7 +35,9 @@ def _validate_asset_sources(assets: Sequence[AssetBase]) -> None:
             validate_dataset_url(str(asset.source.url))
 
 
-def create_site(db: Session, payload: SiteCreate) -> Site:
+def create_site(db: Session, payload: SiteCreate, *, commit: bool = True) -> Site:
+    """`commit=False` flushes and returns the unreloaded row, so a caller can add the site's
+    frame, epoch and asset in the same transaction (`app/worker/registration.py`)."""
     _validate_asset_sources(payload.assets)
     if payload.slug and db.scalar(select(Site.id).where(Site.slug == payload.slug)) is not None:
         raise ConflictError(f"site slug '{payload.slug}' already exists")
@@ -57,6 +59,9 @@ def create_site(db: Session, payload: SiteCreate) -> Site:
     for bookmark_payload in payload.camera_bookmarks:
         site.bookmarks.append(build_bookmark(bookmark_payload))
     db.add(site)
+    if not commit:
+        db.flush()
+        return site
     db.commit()
     db.refresh(site)
     return get_site(db, site.id)
@@ -98,7 +103,12 @@ def list_sites_with_area(db: Session) -> list[tuple[Site, float]]:
 def get_site(db: Session, site_id: uuid.UUID) -> Site:
     stmt = (
         select(Site)
-        .options(selectinload(Site.assets), selectinload(Site.bookmarks))
+        .options(
+            selectinload(Site.assets),
+            selectinload(Site.bookmarks),
+            selectinload(Site.epochs),
+            selectinload(Site.frame),
+        )
         .where(Site.id == site_id)
     )
     site = db.scalar(stmt)
@@ -110,7 +120,12 @@ def get_site(db: Session, site_id: uuid.UUID) -> Site:
 def get_site_by_slug(db: Session, slug: str) -> Site:
     stmt = (
         select(Site)
-        .options(selectinload(Site.assets), selectinload(Site.bookmarks))
+        .options(
+            selectinload(Site.assets),
+            selectinload(Site.bookmarks),
+            selectinload(Site.epochs),
+            selectinload(Site.frame),
+        )
         .where(Site.slug == slug)
     )
     site = db.scalar(stmt)
@@ -202,8 +217,10 @@ def site_to_read(db: Session, site: Site) -> SiteRead:
         metadata=site.metadata_,
         attribution=[Attribution.model_validate(a) for a in site.attribution],
         license=LicenseMetadata.model_validate(site.license) if site.license else None,
-        assets=[asset_to_read(a) for a in site.assets],
+        assets=[asset_to_read(a) for a in epochs.live_assets(site)],
         camera_bookmarks=[CameraBookmarkRead.model_validate(b) for b in site.bookmarks],
+        frame=epochs.frame_to_read(site.frame),
+        epochs=[epochs.epoch_to_read(e, site.assets) for e in site.epochs],
         created_at=site.created_at,
         updated_at=site.updated_at,
     )

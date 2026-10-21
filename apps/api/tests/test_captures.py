@@ -391,3 +391,40 @@ def test_the_container_layout_does_not_crash_on_import() -> None:
     """
     assert repo_root_for(PurePosixPath("/app/app/config.py")) == Path("/app")
     assert repo_root_for(PurePosixPath("/src/twin/apps/api/app/config.py")) == Path("/src/twin")
+
+
+def test_the_seed_leaves_epoch_assets_and_their_sites_boundary_alone(
+    db: Session, tmp_path: Path
+) -> None:
+    """A seeded site somebody captured again holds epochs: the seed's tuning of its
+    boundary would cut them off, and an epoch asset that happens to share a seeded asset's
+    name is not the seeded one."""
+    from geoalchemy2.shape import to_shape
+
+    from tests.test_epochs import T0, make_asset, make_epoch
+
+    settings = settings_for(tmp_path)
+    wanted = next(s for s in capture_sites(settings) if s.slug == "test-field")
+    created = site_service.create_site(db, wanted)
+    epoch = make_epoch(db, created, 1, observed=T0)
+    name = wanted.assets[2].name
+    joined = make_asset(db, created, epoch, "https://cdn.example.com/e/tileset.json", created=T0)
+    joined.name = name
+    db.commit()
+    boundary = to_shape(created.boundary)
+    grown = json.loads(json.dumps(CAPTURE))
+    grown["boundary"] = [[-91.01, 46.0], [-90.99, 46.0], [-90.99, 46.01], [-91.01, 46.0]]
+    grown["assets"][2]["path"] = "moved/splat/tileset.json"
+    (tmp_path / "test-field" / SITE_DOCUMENT_NAME).write_text(json.dumps(grown), "utf-8")
+    changed = next(s for s in capture_sites(settings) if s.slug == "test-field")
+    db.expire_all()
+
+    refresh_site(db, site_service.get_site(db, created.id), changed)
+
+    db.expire_all()
+    site = site_service.get_site(db, created.id)
+    assert to_shape(site.boundary).equals(boundary)
+    epoch_asset = next(a for a in site.assets if a.id == joined.id)
+    assert epoch_asset.source["url"] == "https://cdn.example.com/e/tileset.json"
+    seeded = next(a for a in site.assets if a.name == name and a.epoch_id is None)
+    assert "moved/splat/tileset.json" in seeded.source["url"]

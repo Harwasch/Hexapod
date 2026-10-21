@@ -718,3 +718,60 @@ def test_unlocated_records_share_one_read_only_mask() -> None:
     mask = knowledge.footprint_mask(grid, source)
     assert mask is grid.inside and not mask.flags.writeable
     assert knowledge.footprint_mask(grid, source) is mask
+
+
+def test_a_superseded_revision_is_not_knowledge(client: TestClient, db: Session) -> None:
+    """A re-run's old revision is history: the fog counts the epoch once, by its current
+    asset, however many times it was re-run."""
+    from tests.test_epochs import make_asset, make_epoch, make_site
+
+    land = make_land(client)
+    observed = datetime.now(UTC) - timedelta(days=30)
+    site = make_site(db, "pole", at=POINT)
+    epoch = make_epoch(db, site, 1, observed=observed)
+    make_asset(
+        db,
+        site,
+        epoch,
+        "https://tiles.example.com/old/tileset.json",
+        created=observed,
+        valid_to=observed + timedelta(days=1),
+    )
+    db.commit()
+    assert fog(client, land["id"])["records"] == []
+
+    make_asset(db, site, epoch, "https://tiles.example.com/new/tileset.json", created=observed)
+    db.commit()
+    [record] = fog(client, land["id"])["records"]
+    assert record["kind"] == "capture"
+
+
+def test_an_epoch_is_credited_with_its_own_ground_not_its_sites(
+    client: TestClient, db: Session
+) -> None:
+    """A site's boundary is the union of every epoch's footprint. An epoch's asset -- one
+    the 0032 backfill adopted carries no footprint of its own -- is knowledge of the
+    ground that epoch's run covered, so a small epoch on a grown site lifts the fog over
+    its own footprint only, not over the whole merged boundary."""
+    from geoalchemy2.shape import to_shape
+
+    from tests.test_epochs import make_asset, make_epoch, make_site, square
+
+    land = make_land(client)
+    observed = datetime.now(UTC) - timedelta(days=30)
+    site = make_site(db, "pole", at=POINT)
+    site.boundary = square(*POINT, half_deg=0.004)
+    small = square(*POINT, half_deg=0.0003)
+    epoch = make_epoch(db, site, 1, observed=observed, footprint=small)
+    make_asset(db, site, epoch, "https://tiles.example.com/one/tileset.json", created=observed)
+    db.commit()
+
+    [source] = land_knowledge._captures(db, uuid.UUID(land["id"]), [])
+
+    assert source.geometry is not None
+    # Read back through ST_AsGeoJSON, which rounds to nine decimals: each edge moves by at
+    # most half of 1e-9 degrees, so the two differ by at most perimeter x 5e-10 deg^2.
+    stored = to_shape(small)
+    bound = stored.length * 5e-10
+    assert source.geometry.symmetric_difference(stored).area <= bound
+    assert source.geometry.area < to_shape(site.boundary).area / 100

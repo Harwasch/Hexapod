@@ -50,6 +50,31 @@ describe("readOfflineCatalog", () => {
       1,
     );
   });
+
+  it("reads an older catalog without epochs as legacy sites with empty epochs", () => {
+    // Written before site frames and epochs (decision D3): no `frame`, no `epochs`, and
+    // assets with no `epochId` or `sourceKind`.
+    const asset = {
+      id: "asset-1",
+      siteId: SITE.id,
+      name: "splat",
+      representation: "gaussian-splat",
+      source: { type: "3d-tiles-url", url: "https://tiles.example.com/a/tileset.json" },
+    };
+    const [site] = readOfflineCatalog({ version: 1, sites: [{ ...SITE, assets: [asset] }] });
+    expect(site?.frame).toBeNull();
+    expect(site?.epochs).toEqual([]);
+    expect(site?.assets[0]?.epochId).toBeNull();
+    expect(site?.assets[0]?.sourceKind).toBe("observed");
+  });
+
+  it("keeps the epochs a newer catalog carries", () => {
+    const frame = { siteId: SITE.id, lat: 28, lon: -82, height: 10, epsg: 32617 };
+    const epochs = [{ id: "epoch-1", ordinal: 1 }];
+    const [site] = readOfflineCatalog({ version: 1, sites: [{ ...SITE, frame, epochs }] });
+    expect(site?.frame).toEqual(frame);
+    expect(site?.epochs).toEqual(epochs);
+  });
 });
 
 describe("the offline catalog's URL", () => {

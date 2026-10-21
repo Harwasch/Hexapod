@@ -46,6 +46,8 @@ function asset(over: Partial<SiteAsset> = {}): SiteAsset {
     },
     defaultVisible: true,
     sidecarFlags: [],
+    epochId: null,
+    sourceKind: "observed",
     createdAt: NOW,
     updatedAt: NOW,
     ...over,

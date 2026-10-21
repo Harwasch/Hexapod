@@ -5,7 +5,9 @@ create the capture first. This key is typed once on the phone and remembered the
 it opens exactly three routes (app/api/v1/phone.py): create a phone capture, get an
 upload token for one, and queue a run over one. It cannot touch a capture it did not
 create, delete anything, or reach any other route, and it may create at most
-`api_phone_daily_captures` captures in any 24 hours.
+`api_phone_daily_captures` captures in any 24 hours. A capture it creates may name the
+site it is a new epoch of (decision D3) only if a phone capture made that site: never a
+seeded, catalog, hand-made or desktop-uploaded one.
 
 Deliberately modest, at the owner's request: one key, no accounts, no revocation list.
 What keeps it from being worse than that is how it is stored. The configuration holds a

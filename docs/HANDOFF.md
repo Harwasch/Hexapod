@@ -263,6 +263,14 @@ pnpm lint && pnpm typecheck && pnpm test`, `pnpm e2e` if `apps/web` changed, plu
 - The repo's `.env` leaks into `apps/api` settings tests. This has caused three separate
   false results; override explicitly rather than trusting ambient config.
 - Two `apps/api` pytest sessions at once deadlock on the shared test database.
+- Superseded revisions are rows: `SiteRead.assets` hides them, `GET /assets` does not. A re-run
+  never rewrites an asset's URL; it adds a revision (ADR 0013).
+- A run's tiles must be placed about its site frame's origin exactly, or registration refuses it
+  (`FrameMismatch`) and the job dead-letters. The frame is decided when the job starts.
+- In a site frame, `normalize` and `georeference` must be told the same located point
+  (`worker/params.located_point`) or `manual_placement` refuses the run; and anything turned from
+  frame metres into degrees uses the exact ENU inverse, never the flat 111,320 m/° (metres out at
+  2 km).
 - Postgres may need `service postgresql start` before `apps/api` tests — and a fresh
   container may have no database at all. What worked here: `apt-get update && apt-get
 install -y postgresql-16-postgis-3`, then create a `twin` role with password `twin` and

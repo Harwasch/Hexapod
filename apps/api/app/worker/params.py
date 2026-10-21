@@ -39,19 +39,50 @@ ORIENTATION_KEYS: dict[str, str] = {"upAxis": "up_axis", "headingDeg": "heading_
 CATALOG = "catalog"
 #: The artifact whose producer describes the uploaded bytes.
 SOURCE_META = "source_meta.json"
+#: The parameter that tells a placing stage which site's frame to place the capture in
+#: (`{siteId, lat, lon, height, heightDatum, epsg}`, `services/epochs.RunFrame.param`;
+#: decision D3).
+SITE_FRAME = "site_frame"
 
 
-def stage_params(plan: Plan, capture: Capture, job: Job) -> dict[str, dict[str, Any]]:
-    """Per-stage parameter overrides for this run, derived then overridden by `job.params`."""
+def stage_params(
+    plan: Plan, capture: Capture, job: Job, frame: dict[str, Any] | None = None
+) -> dict[str, dict[str, Any]]:
+    """Per-stage parameter overrides for this run, derived then overridden by `job.params`.
+
+    `frame` is the site frame the run is placed in (`services/epochs.frame_for_run`), or
+    None for a run that defines its own. It goes to the stages that write the placement
+    -- `manual_placement`, `ingest_splat`, `exif_gps` -- and to no other: everything after
+    them reads the origin from `georef.json`. Without it the output is what it always was.
+    """
     resolved: dict[str, dict[str, Any]] = {}
+    requested = _requested(job)
     placement = _placement(capture)
     facts = _capture_facts(capture)
     orientation = _orientation(capture)
+    point = located_point(plan, capture, job)
+    located = {} if point is None else {"lat": point[0], "lon": point[1]}
     for stage in plan.stages:
         if stage.impl.name == MANUAL_PLACEMENT and placement:
             resolved.setdefault(stage.id, {}).update(placement)
+        if stage.impl.name == MANUAL_PLACEMENT and frame is not None:
+            # A capture with no coordinate of its own sits at its site's origin: the
+            # recipe's default of (0, 0) would be an offset of thousands of kilometres.
+            here = located or {"lat": frame["lat"], "lon": frame["lon"]}
+            fallback = {} if placement else {"height": frame["height"]}
+            resolved.setdefault(stage.id, {}).update({SITE_FRAME: frame, **here, **fallback})
         if stage.impl.name == INGEST_SPLAT and orientation:
             resolved.setdefault(stage.id, {}).update(orientation)
+        if stage.impl.name == INGEST_SPLAT and frame is not None:
+            # `normalize` moves the splat by where the capture is from the frame's origin,
+            # and must be told the very point `georeference` will be (`located_point`):
+            # `manual_placement` refuses a frame offset `normalize` did not apply.
+            here = located or {"lat": frame["lat"], "lon": frame["lon"]}
+            resolved.setdefault(stage.id, {}).update({SITE_FRAME: frame, **here})
+        if stage.impl.name == EXIF_GPS and frame is not None:
+            # The stage falls back to the frame's origin itself, after the frames' own GPS,
+            # the video's location and the capture's coordinate.
+            resolved.setdefault(stage.id, {})[SITE_FRAME] = frame
         if stage.impl.name == EXIF_GPS:
             # Lane 2's fallback, not its answer: the frames' own GPS and the video's own
             # location both win over it inside the stage. Without it a video that
@@ -70,9 +101,34 @@ def stage_params(plan: Plan, capture: Capture, job: Job) -> dict[str, dict[str, 
             # Without this the slug is the run id, so a capture's site is named after the
             # uuid of the job that happened to produce it.
             resolved.setdefault(stage.id, {}).update({"slug": capture.slug, "title": capture.name})
-    for stage_id, overrides in _requested(job).items():
+    for stage_id, overrides in requested.items():
         resolved.setdefault(stage_id, {}).update(overrides)
     return resolved
+
+
+def located_point(plan: Plan, capture: Capture, job: Job) -> tuple[float, float] | None:
+    """The one point a run places its capture at, before any stage runs: a hand
+    placement's `lat`/`lon` in `jobs.params` (the upload page's typed place, which wins
+    over the phone's own fix), else the capture's own coordinate, else None.
+
+    One answer for every consumer that needs it before the run: the spatial join
+    (`services/epochs.frame_for_run`) and, in a site frame, both `normalize`
+    (`ingest_splat`, which moves the splat by its offset from the frame's origin) and
+    `georeference` (`manual_placement`, which refuses a frame offset `normalize` did not
+    apply). Two stages told two different points made a capture that could never run.
+    """
+    requested = _requested(job)
+    for stage in plan.stages:
+        if stage.impl.name != MANUAL_PLACEMENT:
+            continue
+        asked = requested.get(stage.id, {})
+        lat, lon = _number(asked.get("lat")), _number(asked.get("lon"))
+        if lat is not None and lon is not None:
+            return lat, lon
+    placement = _placement(capture)
+    if "lat" in placement and "lon" in placement:
+        return float(placement["lat"]), float(placement["lon"])
+    return None
 
 
 #: The artifact a region of interest's coordinates are in: an ROI measured by one run's

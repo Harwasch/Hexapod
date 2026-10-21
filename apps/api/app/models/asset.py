@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from geoalchemy2 import Geometry, WKBElement
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, ForeignKey, String, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -20,6 +20,9 @@ class Asset(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """A derived, renderable delivery asset (3D Tiles today) with provenance."""
 
     __tablename__ = "assets"
+    __table_args__ = (
+        CheckConstraint("source_kind IN ('observed', 'inferred')", name="ck_assets_source_kind"),
+    )
 
     site_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("sites.id", ondelete="CASCADE"), nullable=True, index=True
@@ -53,6 +56,26 @@ class Asset(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Cleared for a kind when it is attached again (app/services/attach.py) or when a run
     # brings its own. Migration 0009.
     sidecar_flags: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+
+    # The epoch this asset is a revision of (migration 0032, decision D3); None for seeded,
+    # catalog and hand-made assets. A revision is superseded once `valid_to` is set: it
+    # stays as a row, with its URL, and the epoch's current asset is its newest one with
+    # no `valid_to` (`services/epochs.py`).
+    epoch_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("epochs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # `observed` (the capture itself) or `inferred` (a fill, M5). One asset is one tileset
+    # of one epoch and one source kind.
+    source_kind: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="observed", server_default=text("'observed'")
+    )
+    # Append-only: every URL a sidecar attach moved this asset off, oldest first, each with
+    # when, why (`sidecar-attach`) and where to (`services/attach.py`). ADR 0013's one
+    # exception to "an asset's URL is never rewritten": an attach repoints only to a
+    # generation holding byte-identical tiles, and the generation it left stays in storage.
+    url_history: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
 

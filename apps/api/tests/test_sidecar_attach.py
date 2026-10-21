@@ -968,3 +968,121 @@ def test_discovery_finds_each_kind_by_its_key_or_its_files() -> None:
         "rig": ("rig.json",),
     }
     assert sidecars.unknown_extras(extras) == ["mystery"]
+
+
+def test_an_attach_to_a_superseded_revision_is_refused(
+    db: Session, buckets: Publisher, client: TestClient
+) -> None:
+    """A re-run superseded this revision (decision D3): attaching to it would cut a
+    generation nothing shows, so it is refused and names the epoch's current asset."""
+    from datetime import UTC, datetime
+
+    from tests.test_epochs import T0, make_asset, make_epoch, make_site
+
+    put_scan(buckets.public, LIVE_DIR)
+    site = make_site(db)
+    epoch = make_epoch(db, site, 1, observed=T0)
+    old = make_asset(db, site, epoch, LIVE_URL, created=T0, valid_to=datetime.now(tz=UTC))
+    current = make_asset(db, site, epoch, LIVE_URL.replace("tileset", "next"), created=T0)
+    db.commit()
+    before = files_under(buckets.public, "")
+
+    response = attach(client, old, stage(buckets.private, old.id, INSTANCES_FILES))
+
+    assert response.status_code == 409, response.text
+    assert response.json()["code"] == "not_attachable"
+    assert str(current.id) in response.json()["detail"]
+    assert files_under(buckets.public, "") == before
+
+
+# --- the URL it moves from (ADR 0013's one exception) --------------------------------------
+
+
+def test_every_url_an_attach_moves_the_asset_off_is_kept_in_its_history(
+    db: Session, buckets: Publisher, client: TestClient
+) -> None:
+    """ADR 0013: an asset's URL is never rewritten, but for this. An attach repoints the
+    asset to a generation holding the very same tiles, and keeps the URL it left, with
+    when and why, in an append-only history; a second attach adds to it."""
+    a_live_scan(buckets)
+    asset = an_asset(db, LIVE_URL)
+    first = attach(
+        client,
+        asset,
+        stage(buckets.private, asset.id, INSTANCES_FILES),
+        extras={"instances": INSTANCES_EXTRAS},
+    )
+    assert first.status_code == 200, first.text
+    db.expire_all()
+    moved = db.get(Asset, asset.id)
+    assert moved is not None
+
+    second = attach(client, moved, stage(buckets.private, asset.id, {"collision.bin": b"g2"}, "2"))
+
+    assert second.status_code == 200, second.text
+    db.expire_all()
+    stored = db.get(Asset, asset.id)
+    assert stored is not None
+    assert [entry["url"] for entry in stored.url_history] == [LIVE_URL, first.json()["url"]]
+    assert {entry["reason"] for entry in stored.url_history} == {"sidecar-attach"}
+    assert [entry["movedTo"] for entry in stored.url_history] == [
+        first.json()["url"],
+        second.json()["url"],
+    ]
+    assert all(isinstance(entry["replacedAt"], str) for entry in stored.url_history)
+
+
+class Altering:
+    """The public bucket, whose copy of one tile lands with other bytes."""
+
+    def __init__(self, inner: S3Storage, tile: str) -> None:
+        self.inner = inner
+        self.tile = tile
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def bucket(self) -> str:
+        return self.inner.bucket
+
+    def copy_object(self, bucket: str, key: str, target: str, **kwargs: Any) -> Any:
+        etag = self.inner.copy_object(bucket, key, target, **kwargs)
+        if target.endswith(self.tile):
+            self.inner.put_object(target, b"other splats", "model/gltf-binary")
+        return etag
+
+
+def test_an_attach_whose_new_generation_holds_other_tiles_is_refused(
+    db: Session, buckets: Publisher
+) -> None:
+    """The exception holds only for byte-identical tiles. The new generation is listed
+    back before the asset moves, and refused unless its tiles have the current ones'
+    fingerprint (the tree, and every tile's size and ETag): the asset stays put and its
+    history is untouched."""
+    a_live_scan(buckets)
+    asset = an_asset(db, LIVE_URL)
+    assert isinstance(buckets.public, S3Storage)
+
+    with pytest.raises(ConflictError, match="not the tiles") as refused:
+        attach_service.attach_sidecars(
+            db,
+            asset.id,
+            SidecarAttach(
+                staging_prefix=stage(buckets.private, asset.id, INSTANCES_FILES),
+                based_on=LIVE_URL,
+                extras={"instances": INSTANCES_EXTRAS},
+            ),
+            staging=buckets.private,
+            public=Altering(buckets.public, TILES[1]),  # type: ignore[arg-type]
+        )
+
+    assert refused.value.code == attach_service.NOT_ATTACHABLE
+    db.expire_all()
+    stored = db.get(Asset, asset.id)
+    assert stored is not None
+    assert stored.source["url"] == LIVE_URL and stored.url_history == []
