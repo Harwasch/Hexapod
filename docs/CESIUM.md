@@ -751,8 +751,9 @@ projected through the camera at the globe's height and redrawn only when the vie
 **Vegetation** (the top surface, at its own higher threshold, never ground change) is a layer
 apart behind its own switch in the legend, in its own colours and its own key. The legend
 (`features/change/ChangeDrape.tsx`, loaded on demand into the details dock) says each layer is
-derived and uncalibrated and the least change it can show (its `minDetectableM`), and "Not
-survey-grade" with both verdicts when either date is coarse. It is ground geometry, so it is
+derived and uncalibrated, the least change it can show (its `minDetectableM`) and what it could
+see (`detectable`: the least and the median), that small objects under about a metre are not
+detected yet, and "Not survey-grade" with both verdicts when either date is coarse. It is ground geometry, so it is
 offered under every splat renderer and sits beside the date swipe and a per-cell view rule; it
 ends with its site or from its own Hide. The read is behind the write token: a 401 asks for it in
 the legend and in Compare. Evidence: `e2e/changeDrape.spec.ts` (the app under CesiumJS, PlayCanvas

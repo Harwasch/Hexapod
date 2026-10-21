@@ -410,7 +410,11 @@ Date 2026-10-20 · M5 of the splat-pipeline build (design M4–M6 §3 W5c), bran
    unchanged counted, not drawn; the label and that layer's floor; the 3σ rule and the ground
    window (for vegetation, its wind sway) uncalibrated; appearance-only change not computed;
    and, when either verdict is coarse, "Not survey-grade" with both dates' verdicts and the `u`
-   they were compared with, so a phone date never reads as a survey.
+   they were compared with, so a phone date never reads as a survey. Each layer also says what it
+   could see (round 2): its least detectable change from `detectable`, the least and the median
+   (one figure when they round alike), "Small objects under ~1 m are not detected yet", and the
+   best that layer was measured to see (§ API Limits: ground 0.23 m over areas wider than the
+   5 m window at 1 cm of noise; vegetation 1.06 m), named synthetic and uncalibrated.
 6. **The token is the client's rule.** The auth middleware sends the write token on this one read
    as on a write, and a 401 opens the token field; the legend and Compare say the map "needs the
    pilot's write token", open Settings in one click, and ask again once a token is entered
@@ -426,8 +430,7 @@ Date 2026-10-20 · M5 of the splat-pipeline build (design M4–M6 §3 W5c), bran
 frame): under CesiumJS, PlayCanvas and Spark, the ground drawn alone first (the pond lowered, 48
 cells, under ±0.49 m), on the ground and outlined over the scan, its colours on screen from above;
 vegetation apart behind its switch (the shed and the stack raised, the stack hatched, the spoil
-heap lowered, under ±1.1 m) and gone again when it is off; a coarse later date (±5 m) claiming
-nothing under 16 m and saying "Not survey-grade" with both verdicts; the token asked for and then
+heap lowered, under ±1.1 m) and gone again when it is off; a coarse later date (its claimed 0.062 m held to the 1 m floor) claiming nothing under a metre (both floors 3.2 m) and saying "Not survey-grade" with both verdicts; the token asked for and then
 sent; no offer without surfaces. Before the outlines over the scan, the ground drape alone showed
 only 0.24–0.48 % of the view in its raised colour from 70 m over the yard (the grass splats
 covered the rest); with them, 1.13–1.31 % (one-layer answer, SwiftShader, one run each).
@@ -437,3 +440,5 @@ covered the rest); with them, 1.13–1.31 % (one-layer answer, SwiftShader, one 
 - Outlines stand at the globe's height, not each area's own: the answer carries no absolute
   heights, so over a raised area they sit at its foot.
 - Per-cell change (areas and counts only) and appearance-only change.
+- A "least detectable" overlay drawn from `detectableGrid`: the legend states the layer's
+  summary; drawing each cell's threshold is a later decision.
