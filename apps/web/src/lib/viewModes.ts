@@ -6,8 +6,9 @@
  * modifier and Spark's world modifier -- CesiumJS picking the cell level per splat, the other
  * two per tile, which the key says. The WebGPU trial does not draw them yet (the modifier is
  * GLSL only): under it the control says so and offers the switch, rather than leaving a button
- * that silently does nothing. The per-cell view rules and Sunlight are CesiumJS's alone, and
- * the notice names them.
+ * that silently does nothing. The per-cell view rules are CesiumJS's alone, and the notice names
+ * them. Sunlight is CesiumJS's and PlayCanvas's (`sunlightDrawable`): under Spark and the WebGPU
+ * trial the Sun control says so itself, with the switch to PlayCanvas, the default renderer.
  */
 import { useSettings, type SplatRenderer } from "@/state/settings";
 import type { ViewMode } from "@/state/viewMode";
@@ -33,18 +34,20 @@ export function sunlightDrawable(renderer: SplatRenderer): boolean {
 }
 
 /**
- * What the splat view control offers that `renderer` cannot draw, in words for its notice
- * (`perCell`: the Per cell rules are offered, the site having two dates or more); null under
- * CesiumJS, which draws all of it.
+ * What the splat view control offers that `renderer` cannot draw and CesiumJS can, in words for
+ * its notice (`perCell`: the Per cell rules are offered, the site having two dates or more);
+ * null when there is none -- under CesiumJS, which draws all of it, or nothing of it missing.
+ * Sunlight is not named: PlayCanvas draws it too, and the Sun control says so where it is not
+ * drawn (`NEEDS_SUNLIGHT_RENDERER`).
  */
 export function needsCesiumFor(renderer: SplatRenderer, perCell: boolean): string | null {
   if (renderer === "cesium") return null;
   const parts = [
     ...(viewModeDrawable("confidence", renderer) ? [] : ["Confidence", "Data age"]),
     ...(perCell ? ["Per cell"] : []),
-    "Sunlight",
   ];
-  const last = parts.pop() ?? "";
+  const last = parts.pop();
+  if (last === undefined) return null;
   return parts.length > 0 ? `${parts.join(", ")} and ${last}` : last;
 }
 
@@ -66,6 +69,10 @@ export function cellLevelNote(renderer: SplatRenderer): string | null {
 export const NEEDS_CESIUM_NOTICE =
   "Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)";
 export const DRAW_WITH_CESIUM = "Draw with CesiumJS";
+/** The Sun control's notice under a renderer that does not draw Sunlight. */
+export const NEEDS_SUNLIGHT_RENDERER =
+  "Needs the CesiumJS or PlayCanvas renderer (Settings › Advanced › Splat renderer)";
+export const DRAW_WITH_PLAYCANVAS = "Draw with PlayCanvas";
 
 /**
  * The notice's one-click switch: CesiumJS draws splats from now on. Choosing a renderer in the
@@ -73,4 +80,12 @@ export const DRAW_WITH_CESIUM = "Draw with CesiumJS";
  */
 export function drawWithCesium(): void {
   useSettings.getState().set({ splatRenderer: "cesium" });
+}
+
+/**
+ * The Sun control's one-click switch: PlayCanvas on WebGL2 -- the default renderer, which draws
+ * Sunlight -- from now on, ending a `?renderer=` choice for this visit as the other does.
+ */
+export function drawWithPlaycanvas(): void {
+  useSettings.getState().set({ splatRenderer: "playcanvas" });
 }

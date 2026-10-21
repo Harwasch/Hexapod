@@ -1,7 +1,8 @@
 /**
  * Sunlight in the HUD (ADR 0019): the Sun control in the splat view control, the badge that
  * says the scan is relit and over what, and "At capture" holding the scene clock at the shown
- * date's capture time while it is drawn -- given back whatever ends it.
+ * date's capture time while it is drawn -- given back whatever ends it. CesiumJS and PlayCanvas
+ * draw it; under Spark and the WebGPU trial the control says it needs one of them.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -19,7 +20,7 @@ import { RelitSlot, ViewsSlot } from "@/features/views/ViewsSlot";
 import { captureTimeOf, relitSentence, SUNLIGHT_TEXT } from "@/lib/sunlightText";
 import { useAsCaptured } from "@/state/asCaptured";
 import { useLighting } from "@/state/lighting";
-import { useSettings, type SplatRenderer } from "@/state/settings";
+import { useRendererOverride, useSettings, type SplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
 import { useSunReport } from "@/state/sunReport";
 import { useViewRule } from "@/state/viewRule";
@@ -105,6 +106,7 @@ function show(
 
 afterEach(() => {
   cleanup();
+  useRendererOverride.setState({ renderer: null });
   useLighting.setState({ sun: "off" });
   useAsCaptured.setState({ on: false });
   useSunReport.setState({ reports: {} });
@@ -134,14 +136,34 @@ describe("the Sun control", () => {
     expect(useLighting.getState().sun).toBe("capture");
   });
 
-  it("is offered disabled under another renderer, beside the shared notice and switch", async () => {
+  it("is offered under PlayCanvas, which draws it too, with no notice of its own", async () => {
     show("playcanvas");
     await screen.findByTestId("views-sun");
-    for (const name of ["Off", "Now", "At capture"]) expect(sunRadio(name)).toBeDisabled();
-    expect(screen.getByTestId("views-needs-cesium")).toHaveTextContent(
-      "Needs the CesiumJS renderer",
-    );
+    for (const name of ["Off", "Now", "At capture"]) expect(sunRadio(name)).toBeEnabled();
+    expect(screen.queryByTestId("views-sun-needs")).toBeNull();
+    // The shared notice no longer names it.
+    expect(screen.getByTestId("views-needs-cesium")).not.toHaveTextContent("Sunlight");
+    await userEvent.click(sunRadio("Now"));
+    expect(useLighting.getState().sun).toBe("now");
   });
+
+  for (const renderer of ["spark", "playcanvas-webgpu"] as const) {
+    it(`is offered disabled under ${renderer}, says it needs CesiumJS or PlayCanvas, and switches in one click`, async () => {
+      show(renderer);
+      act(() => useRendererOverride.setState({ renderer }));
+      await screen.findByTestId("views-sun");
+      for (const name of ["Off", "Now", "At capture"]) expect(sunRadio(name)).toBeDisabled();
+      const needs = screen.getByTestId("views-sun-needs");
+      expect(needs).toHaveTextContent(
+        "Needs the CesiumJS or PlayCanvas renderer (Settings › Advanced › Splat renderer)",
+      );
+      await userEvent.click(screen.getByRole("button", { name: "Draw with PlayCanvas" }));
+      expect(useSettings.getState().splatRenderer).toBe("playcanvas");
+      expect(useRendererOverride.getState().renderer).toBeNull();
+      await waitFor(() => expect(screen.queryByTestId("views-sun-needs")).toBeNull());
+      expect(sunRadio("Now")).toBeEnabled();
+    });
+  }
 
   it("shows Off, disabled, while As captured is on, says why, and keeps the choice for after", async () => {
     useLighting.setState({ sun: "now" });
@@ -283,6 +305,21 @@ describe("the badge", () => {
     // Comparing again gives the clock back.
     comparing();
     await waitFor(() => expect(scene.clock.shouldAnimate).toBe(true));
+  });
+
+  it("speaks for PlayCanvas's relight and holds the clock for it as for CesiumJS's", async () => {
+    const scene = fakeScene();
+    useSunReport.getState().report(A2.id, day);
+    show("playcanvas", { registry: scene.registry });
+    act(() => useLighting.getState().set("capture"));
+    const badge = await screen.findByTestId("relit-badge");
+    expect(badge).toHaveTextContent("Simulated lighting: the sun (at capture)");
+    await waitFor(() => expect(iso(scene.clock.currentTime)).toBe("2026-06-01T15:00:00.000Z"));
+    expect(scene.clock.shouldAnimate).toBe(false);
+    // Spark does not draw it: given back, nothing said.
+    act(() => useSettings.getState().set({ splatRenderer: "spark" }));
+    await waitFor(() => expect(scene.clock.shouldAnimate).toBe(true));
+    expect(screen.queryByTestId("relit-badge")).toBeNull();
   });
 
   it("gives the clock back under another renderer, and draws the sun of now where no capture time is known", async () => {

@@ -9,6 +9,7 @@ import { useScene } from "@/cesium/SceneContext";
 import { holdClock } from "@/cesium/sunClock";
 import { pickShownAsset, siteEpochs } from "@/lib/epochs";
 import { captureTimeOf, relitSentence, SUNLIGHT_TEXT, useSeveralDates } from "@/lib/sunlightText";
+import { sunlightDrawable } from "@/lib/viewModes";
 import { useAsCaptured } from "@/state/asCaptured";
 import { useLighting } from "@/state/lighting";
 import { useSplatRenderer } from "@/state/settings";
@@ -19,9 +20,9 @@ import { useSunReport } from "@/state/sunReport";
  * Says the splat scan is relit (ADR 0019 "Sunlight"): by which sun, over the shadows the
  * capture baked in, and when that was; "Sun below horizon" when the frame drawn had the sun
  * down. Loaded by `RelitSlot` (ViewsSlot.tsx) once the sun is on; it says anything only while
- * the relight can be drawn -- As captured off, CesiumJS drawing the active site's splat scan --
- * and only what the scene reports drawing for the shown model (state/sunReport.ts), so it never
- * claims a relight that is not on screen.
+ * the relight can be drawn -- As captured off, CesiumJS or PlayCanvas drawing the active site's
+ * splat scan -- and only what the scene reports drawing for the shown model (state/sunReport.ts),
+ * so it never claims a relight that is not on screen.
  *
  * "At capture" is held here: while it is chosen and the shown date has a capture time, the
  * scene clock stands at that time (cesium/sunClock.ts), and it is given back, exactly, when
@@ -34,10 +35,10 @@ import { useSunReport } from "@/state/sunReport";
 export function RelitBadge() {
   const sun = useLighting((s) => s.sun);
   const held = useAsCaptured((s) => s.on);
-  const cesium = useSplatRenderer() === "cesium";
+  const drawable = sunlightDrawable(useSplatRenderer());
   const siteId = useSites((s) => s.activeSiteId);
   const splat = useSites((s) => siteId !== null && s.representation[siteId] === "gaussian-splat");
-  const drawn = sun !== "off" && !held && cesium && splat;
+  const drawn = sun !== "off" && !held && drawable && splat;
   const scene = useScene();
   const site = useSite(drawn ? siteId : null).data;
   const shownEpoch = useSites((s) => (siteId === null ? null : (s.epoch[siteId] ?? null)));

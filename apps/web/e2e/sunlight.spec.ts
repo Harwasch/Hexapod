@@ -15,9 +15,12 @@
  *   saying why; off again: held again;
  * - Off: the clock given back, running, today.
  *
- * Under PlayCanvas and Spark: the Sun control disabled beside the shared notice, and "Draw with
- * CesiumJS" really switching, after which Now relights. The tool rail is as it was.
- * Screenshots go to `W6B_EVIDENCE_DIR` when set.
+ * Under PlayCanvas (the default renderer) the same, drawn by PlayCanvas's per-frame hook (what
+ * the renderer reads out: scanView/scanSunlight.ts): Now relights and says so, At capture holds
+ * the clock and gives it back, As captured takes the relight off. Under Spark: the Sun control
+ * disabled, saying it needs CesiumJS or PlayCanvas, and "Draw with PlayCanvas" really
+ * switching, after which Now relights. The tool rail is as it was. Screenshots go to
+ * `W6B_EVIDENCE_DIR` when set.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -320,40 +323,108 @@ test("under cesium, the sun relights the shown date, says so, and At capture hol
   await railUnchanged(page);
 });
 
-for (const renderer of ["playcanvas", "spark"] as const) {
-  test(`under ${renderer}, the Sun says it needs CesiumJS and switches to it in one click`, async ({
-    page,
-  }) => {
-    test.setTimeout(360_000);
-    await arrive(page, renderer);
-    const sun = page.getByTestId("views-sun");
-    await expect(sun).toBeVisible();
-    const radio = (name: string) => sun.getByRole("radio", { name });
-    for (const name of ["Off", "Now", "At capture"]) await expect(radio(name)).toBeDisabled();
-    await expect(radio("Off")).toHaveAttribute("aria-checked", "true");
-    const notice = page.getByTestId("views-needs-cesium");
-    await expect(notice).toContainText(
-      "Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
-    );
-    await expect(page.getByTestId("relit-badge")).toHaveCount(0);
-    await shot(page, `app-${renderer}-notice`);
-    await railUnchanged(page);
+/** What PlayCanvas, drawing `assetId`, says of its sunlight hook (scanView/scanSunlight.ts). */
+const hook = (
+  page: Page,
+  assetId: string,
+): Promise<{ installed: boolean; frames: number } | null> =>
+  page.evaluate(async (id) => {
+    const link = "/src/cesium/scanView/scanSunlight.ts";
+    const module = (await import(/* @vite-ignore */ link)) as {
+      scanSunReading(id: string): { installed: boolean; frames: number } | null;
+    };
+    return module.scanSunReading(id);
+  }, assetId);
 
-    await notice.getByRole("button", { name: "Draw with CesiumJS" }).click();
-    await expect(notice).toHaveCount(0);
-    await expect
-      .poll(() => page.evaluate(`window.__twin.scanRendererStatus.active`), poll)
-      .toBe(false);
-    await expect(radio("Now")).toBeEnabled();
-    await radio("Now").click();
-    await expect.poll(async () => (await state(page)).parts[A2] ?? [], poll).toContain(RELIT);
-    await expect(page.getByTestId("relit-badge")).toContainText(
-      "Simulated lighting: the sun (now)",
-      {
-        timeout: 60_000,
-      },
-    );
-    await shot(page, `app-${renderer}-switched-now`);
-    await railUnchanged(page);
+const installed = async (page: Page, assetId: string) =>
+  (await hook(page, assetId))?.installed ?? false;
+
+test("under playcanvas, the sun relights the shown date by PlayCanvas's hook, says so, and At capture holds the clock", async ({
+  page,
+}) => {
+  test.setTimeout(420_000);
+  await arrive(page, "playcanvas");
+  await expect
+    .poll(() => page.evaluate(`window.__twin.scanRendererStatus.active`), poll)
+    .toBe(true);
+  const sun = page.getByTestId("views-sun");
+  await expect(sun).toBeVisible();
+  const radio = (name: string) => sun.getByRole("radio", { name });
+  for (const name of ["Off", "Now", "At capture"]) await expect(radio(name)).toBeEnabled();
+  await expect(page.getByTestId("views-sun-needs")).toHaveCount(0);
+  // The shared notice is about Per cell alone now.
+  await expect(page.getByTestId("views-needs-cesium")).not.toContainText("Sunlight");
+  expect(await installed(page, A2)).toBe(false);
+  await expect(page.getByTestId("relit-badge")).toHaveCount(0);
+
+  // Now: PlayCanvas's hook in, and the badge over June's capture.
+  await radio("Now").click();
+  await expect.poll(() => installed(page, A2), poll).toBe(true);
+  const badge = page.getByTestId("relit-badge");
+  await expect(badge).toContainText(
+    /Simulated lighting: the sun \(now\) over shadows baked in at capture, .*Jun.*1, 2026.* UTC/,
+    { timeout: 60_000 },
+  );
+  // CesiumJS's own part is not on its hidden tileset.
+  expect((await state(page)).parts[A2] ?? []).not.toContain(RELIT);
+  await shot(page, "app-playcanvas-now");
+
+  // At capture: the clock stands at June's capture time.
+  await radio("At capture").click();
+  await expect.poll(async () => (await state(page)).clock, poll).toBe("2026-06-01T18:30:00Z");
+  expect((await state(page)).animating).toBe(false);
+  await expect(badge).toContainText("Simulated lighting: the sun (at capture)");
+  await shot(page, "app-playcanvas-at-capture-jun");
+
+  // As captured: the hook out, nothing said, the clock given back.
+  await page.getByRole("switch", { name: "As captured" }).click();
+  await expect.poll(() => installed(page, A2), poll).toBe(false);
+  await expect(badge).toHaveCount(0);
+  await expect(page.getByTestId("views-sun-as-captured")).toHaveText("Off while As captured is on");
+  expect((await state(page)).animating).toBe(true);
+  expect(await clockLag(page)).toBeLessThan(120);
+  await page.getByRole("switch", { name: "As captured" }).click();
+  await expect.poll(() => installed(page, A2), poll).toBe(true);
+  await expect.poll(async () => (await state(page)).clock, poll).toBe("2026-06-01T18:30:00Z");
+
+  // Off: the hook out, the clock running at today again.
+  await radio("Off").click();
+  await expect.poll(() => installed(page, A2), poll).toBe(false);
+  await expect(badge).toHaveCount(0);
+  expect((await state(page)).animating).toBe(true);
+  expect(await clockLag(page)).toBeLessThan(120);
+  await railUnchanged(page);
+});
+
+test("under spark, the Sun says it needs CesiumJS or PlayCanvas and switches to PlayCanvas in one click", async ({
+  page,
+}) => {
+  test.setTimeout(360_000);
+  await arrive(page, "spark");
+  const sun = page.getByTestId("views-sun");
+  await expect(sun).toBeVisible();
+  const radio = (name: string) => sun.getByRole("radio", { name });
+  for (const name of ["Off", "Now", "At capture"]) await expect(radio(name)).toBeDisabled();
+  await expect(radio("Off")).toHaveAttribute("aria-checked", "true");
+  const needs = page.getByTestId("views-sun-needs");
+  await expect(needs).toContainText(
+    "Needs the CesiumJS or PlayCanvas renderer (Settings › Advanced › Splat renderer)",
+  );
+  await expect(page.getByTestId("relit-badge")).toHaveCount(0);
+  await shot(page, "app-spark-notice");
+  await railUnchanged(page);
+
+  await needs.getByRole("button", { name: "Draw with PlayCanvas" }).click();
+  await expect(needs).toHaveCount(0);
+  await expect
+    .poll(() => page.evaluate(`window.__twin.scanRendererStatus.kind`), poll)
+    .toBe("playcanvas");
+  await expect(radio("Now")).toBeEnabled();
+  await radio("Now").click();
+  await expect.poll(() => installed(page, A2), poll).toBe(true);
+  await expect(page.getByTestId("relit-badge")).toContainText("Simulated lighting: the sun (now)", {
+    timeout: 60_000,
   });
-}
+  await shot(page, "app-spark-switched-now");
+  await railUnchanged(page);
+});
