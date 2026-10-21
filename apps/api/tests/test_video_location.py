@@ -148,3 +148,26 @@ def test_read_from_the_bucket_by_ranged_gets(storage: S3Storage) -> None:
     )
     assert video_location.location_in_storage(storage, "captures/c/bare.MOV") is None
     assert storage.get_object_range("captures/c/bare.MOV", 4, 4) == b"ftyp"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [SF, "+51.5007-000.1246/", "-33.8688+151.2093", "+95.0-122.0/", "37.7,-122.4", "", "+1+2+3+4"],
+)
+def test_the_api_and_the_pipeline_read_the_same_places_the_same_way(text: str) -> None:
+    """The join (here) and the georeference (`tools/pipeline/video.py`) must agree on what
+    a clip says, or a capture is matched by one point and placed by another."""
+    from importlib import import_module
+
+    import app.worker.pipeline_bridge  # noqa: F401 - puts tools/pipeline on the path
+
+    video = import_module("video")
+    assert video_location.VIDEO_SUFFIXES == video.VIDEO_SUFFIXES
+    assert video_location.ACCURACY_KEY == video.ACCURACY_KEY
+    assert video.LOCATION_KEYS[0] == video_location.ISO6709_KEY
+    theirs = video.parse_iso6709(text)
+    ours = read(mov(iso6709=text))
+    on_globe = theirs is not None and -90 <= theirs[0] <= 90 and -180 <= theirs[1] <= 180
+    assert (None if not on_globe else theirs[:2]) == (
+        None if ours is None else (ours.lat, ours.lon)
+    )

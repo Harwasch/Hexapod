@@ -96,6 +96,10 @@ class CaptureCreate(CaptureBase):
         # it), so it is only ever written from `siteId`, which is checked to exist.
         if "siteId" in self.metadata:
             raise ValueError("metadata.siteId is set through siteId")
+        if "videoLocation" in self.metadata:
+            # The worker reads it out of the uploaded video (`worker/video_gps.py`) and
+            # the site join trusts it as the file's: a request does not get to claim one.
+            raise ValueError("metadata.videoLocation is read from the uploaded video")
         return self
 
 

@@ -91,6 +91,7 @@ from app.worker import (
     retry,
     site_context,
     steps,
+    video_gps,
 )
 from app.worker.child import (
     CANCEL_SIGNAL,
@@ -1108,6 +1109,9 @@ class JobSupervisor:
         capture = db.get(Capture, job.capture_id)
         if capture is None:
             return {}
+        # Where the video says it was made, read from its container before the frame is
+        # chosen by it (ADR 0013, "Joining a site by the video's GPS"); once per capture.
+        video_gps.record_video_location(db, self._storage, capture)
         # The site frame the capture is placed in (decision D3): decided now, because the
         # pipeline places the capture in it, and the same on every attempt of a re-run.
         frame = epochs.frame_for_run(db, capture, params.located_point(plan, capture, job))
