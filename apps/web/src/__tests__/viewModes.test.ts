@@ -10,6 +10,7 @@ import {
   drawWithCesium,
   NEEDS_CESIUM_NOTICE,
   needsCesiumFor,
+  perCellDrawable,
   sunlightDrawable,
   VIEW_MODES,
   viewModeDrawable,
@@ -36,10 +37,15 @@ describe("which renderer draws a view", () => {
     expect(SPLAT_RENDERERS.filter((r) => sunlightDrawable(r))).toEqual(["playcanvas", "cesium"]);
   });
 
+  it("is CesiumJS or PlayCanvas for the per-cell rules: not Spark, not the WebGPU trial", () => {
+    expect(SPLAT_RENDERERS.filter((r) => perCellDrawable(r))).toEqual(["playcanvas", "cesium"]);
+  });
+
   it("names what still needs CesiumJS under each renderer, and nothing under CesiumJS", () => {
     expect(needsCesiumFor("cesium", true)).toBeNull();
-    // Sunlight is not CesiumJS's alone: the Sun control says what draws it (SunControl).
-    expect(needsCesiumFor("playcanvas", true)).toBe("Per cell");
+    // Sunlight is not CesiumJS's alone: the Sun control says what draws it (SunControl). Nor
+    // is Per cell: PlayCanvas draws the rules too (scanView/scanRule.ts).
+    expect(needsCesiumFor("playcanvas", true)).toBeNull();
     expect(needsCesiumFor("spark", true)).toBe("Per cell");
     expect(needsCesiumFor("spark", false)).toBeNull();
     expect(needsCesiumFor("playcanvas", false)).toBeNull();

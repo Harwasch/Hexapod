@@ -91,8 +91,9 @@ function RuleLegend({
 
 /**
  * Per cell: one of the per-cell view rules (lib/compositor.ts, ADR 0017), or One date. Offered
- * while the site has two dates or more under CesiumJS (the caller's notice covers another
- * renderer); disabled, and says why, while a Living Survey rig moves the scan. The scene owns
+ * while the site has two dates or more under a renderer that draws the rules -- CesiumJS or
+ * PlayCanvas (`drawable`; the caller's notice covers Spark and the WebGPU trial); disabled, and
+ * says why, while a Living Survey rig moves the scan. The scene owns
  * the rule: the select shows what it says it draws (state/viewRule.ts), never its own click,
  * and why the last one ended when nobody turned it off. While As captured is on the rule
  * chosen is drawn as Ground truth (compositorSession.ts), and the control says so.
@@ -100,11 +101,12 @@ function RuleLegend({
 export function RuleControl({
   siteId,
   epochs,
-  onCesium,
+  drawable,
 }: {
   siteId: string;
   epochs: readonly Epoch[];
-  onCesium: boolean;
+  /** The renderer drawing splats draws the rules (lib/viewModes.ts `perCellDrawable`). */
+  drawable: boolean;
 }) {
   const scene = useScene();
   const active = useViewRule((s) => (s.active?.siteId === siteId ? s.active.rule : null));
@@ -113,7 +115,7 @@ export function RuleControl({
   const compare = useSites((s) => s.compareDates?.siteId === siteId);
   const rigged = useLiving((s) => s.status.sites.some((site) => site.siteId === siteId));
   const held = useAsCaptured((s) => s.on);
-  const disabled = !onCesium || rigged;
+  const disabled = !drawable || rigged;
   return (
     <div className="views__rule" data-testid="views-rule">
       <label className="views__rule-label" htmlFor="views-rule-select">
@@ -132,7 +134,7 @@ export function RuleControl({
           </option>
         ))}
       </GlassSelect>
-      {rigged && onCesium && (
+      {rigged && drawable && (
         <span className="views__notice" role="note" data-testid="views-rule-living">
           {RULE_TEXT.living}
         </span>

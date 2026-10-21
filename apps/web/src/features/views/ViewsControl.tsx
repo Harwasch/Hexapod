@@ -12,6 +12,7 @@ import {
   drawWithCesium,
   NEEDS_CESIUM_NOTICE,
   needsCesiumFor,
+  perCellDrawable,
   sunlightDrawable,
   VIEW_MODES,
   viewModeDrawable,
@@ -32,8 +33,8 @@ import { VIEW_RULE_TEXT } from "./ruleText";
  * with the key to what is drawn. CesiumJS, PlayCanvas and Spark draw all three, the key saying
  * where a renderer sizes cells per tile (lib/viewModes.ts); under the WebGPU trial the analytic
  * views are offered disabled, and Photo is what the control says is shown, because it is.
- * Beside them, the per-cell rules (RuleControl), CesiumJS's alone -- under another renderer the
- * notice names them, with the one-click switch -- and the sun the scan is relit by (SunControl),
+ * Beside them, the per-cell rules (RuleControl), CesiumJS's and PlayCanvas's -- under Spark or
+ * the WebGPU trial the notice names them, with the one-click switch -- and the sun the scan is relit by (SunControl),
  * which CesiumJS and PlayCanvas draw and which says so itself elsewhere. And the As captured switch (state/asCaptured.ts): only what was measured drawn,
  * plans kept as annotations.
  */
@@ -48,7 +49,6 @@ export function ViewsControl({ siteId }: { siteId: string }) {
     : null;
   const report = useViewMode((s) => (asset ? s.cells[asset.id] : undefined));
   const ruleOn = useViewRule((s) => s.active?.siteId === siteId);
-  const onCesium = renderer === "cesium";
   const shown = viewModeDrawable(mode, renderer) && !ruleOn ? mode : "photo";
   const epochs = site ? siteEpochs(site) : [];
   const dates = site ? epochOptions(epochs, site.assets, "gaussian-splat").length : 0;
@@ -94,7 +94,9 @@ export function ViewsControl({ siteId }: { siteId: string }) {
       {shown !== "photo" && (
         <CellLegend mode={shown} report={report} note={cellLevelNote(renderer)} />
       )}
-      {dates >= 2 && <RuleControl siteId={siteId} epochs={epochs} onCesium={onCesium} />}
+      {dates >= 2 && (
+        <RuleControl siteId={siteId} epochs={epochs} drawable={perCellDrawable(renderer)} />
+      )}
       <SunControl
         drawable={sunlightDrawable(renderer)}
         captureTime={captureTimeOf(asset, epochs)}

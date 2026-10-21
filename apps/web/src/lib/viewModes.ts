@@ -6,8 +6,8 @@
  * modifier and Spark's world modifier -- CesiumJS picking the cell level per splat, the other
  * two per tile, which the key says. The WebGPU trial does not draw them yet (the modifier is
  * GLSL only): under it the control says so and offers the switch, rather than leaving a button
- * that silently does nothing. The per-cell view rules are CesiumJS's alone, and the notice names
- * them. Sunlight is CesiumJS's and PlayCanvas's (`sunlightDrawable`): under Spark and the WebGPU
+ * that silently does nothing. The per-cell view rules are CesiumJS's and PlayCanvas's
+ * (`perCellDrawable`): under Spark and the WebGPU trial the notice names them. Sunlight is CesiumJS's and PlayCanvas's (`sunlightDrawable`): under Spark and the WebGPU
  * trial the Sun control says so itself, with the switch to PlayCanvas, the default renderer.
  */
 import { useSettings, type SplatRenderer } from "@/state/settings";
@@ -47,13 +47,14 @@ export function perCellDrawable(renderer: SplatRenderer): boolean {
  * its notice (`perCell`: the Per cell rules are offered, the site having two dates or more);
  * null when there is none -- under CesiumJS, which draws all of it, or nothing of it missing.
  * Sunlight is not named: PlayCanvas draws it too, and the Sun control says so where it is not
- * drawn (`NEEDS_SUNLIGHT_RENDERER`).
+ * drawn (`NEEDS_SUNLIGHT_RENDERER`). Per cell is named only where it is not drawn
+ * (`perCellDrawable`).
  */
 export function needsCesiumFor(renderer: SplatRenderer, perCell: boolean): string | null {
   if (renderer === "cesium") return null;
   const parts = [
     ...(viewModeDrawable("confidence", renderer) ? [] : ["Confidence", "Data age"]),
-    ...(perCell ? ["Per cell"] : []),
+    ...(perCell && !perCellDrawable(renderer) ? ["Per cell"] : []),
   ];
   const last = parts.pop();
   if (last === undefined) return null;

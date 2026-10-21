@@ -261,9 +261,21 @@ describe("Per cell", () => {
     expect(screen.queryByTestId("views-rule-ended")).toBeNull();
   });
 
-  it("is disabled under another renderer, whose notice the views already show", async () => {
+  it("is offered under PlayCanvas, which draws it, with no notice", async () => {
     show("playcanvas");
-    expect(await screen.findByLabelText(VIEW_RULE_TEXT.label)).toBeDisabled();
-    expect(screen.getByTestId("views-needs-cesium")).toBeInTheDocument();
+    const select = await screen.findByLabelText(VIEW_RULE_TEXT.label);
+    expect(select).toBeEnabled();
+    expect(screen.queryByTestId("views-needs-cesium")).toBeNull();
+    await userEvent.selectOptions(select, "latest");
+    expect(scene.sites.setViewRule).toHaveBeenCalledWith("latest");
+  });
+
+  it("is disabled under a renderer that draws none, whose notice the views already show", async () => {
+    for (const renderer of ["spark", "playcanvas-webgpu"] as const) {
+      show(renderer);
+      expect(await screen.findByLabelText(VIEW_RULE_TEXT.label)).toBeDisabled();
+      expect(screen.getByTestId("views-needs-cesium")).toHaveTextContent("Per cell");
+      cleanup();
+    }
   });
 });
