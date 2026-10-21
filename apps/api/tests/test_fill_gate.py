@@ -651,11 +651,10 @@ def test_no_session_is_idle_in_a_transaction_while_the_carry_gate_downloads_grid
     """The carry gate reads the site's `epoch_maps` rows, then downloads their grids -- up
     to nine of 32 MB, with the publish's copy still to come. A session idle in a transaction
     that long is killed by the database (`runner._end_transaction`), so during every grid
-    download no session may be: checked in Postgres itself, as
-    test_worker_registration.py's reference-download test does, with the runner's hook."""
-    from sqlalchemy import create_engine, text
-
+    download no session may be: checked in Postgres itself (`tests/idle_transactions.py`),
+    as test_worker_registration.py's reference-download test does, with the runner's hook."""
     from tests.conftest import TEST_DATABASE_URL
+    from tests.idle_transactions import IdleTransactions
 
     _, asset = site(db, storage, tmp_path)
     read = targets(db, storage, asset)
@@ -664,20 +663,8 @@ def test_no_session_is_idle_in_a_transaction_while_the_carry_gate_downloads_grid
     db.commit()
     confidence_maps.GRIDS.clear()
 
-    probe = create_engine(TEST_DATABASE_URL)
+    idle_in_transaction = IdleTransactions(TEST_DATABASE_URL)
     seen: list[tuple[str, int]] = []
-
-    def idle_in_transaction() -> int:
-        with probe.connect() as connection:
-            return int(
-                connection.execute(
-                    text(
-                        "SELECT count(*) FROM pg_stat_activity WHERE datname = "
-                        "current_database() AND pid <> pg_backend_pid() AND "
-                        "state LIKE 'idle in transaction%'"
-                    )
-                ).scalar_one()
-            )
 
     def spied(name: str) -> Callable[..., Any]:
         real = getattr(storage, name)
@@ -691,8 +678,10 @@ def test_no_session_is_idle_in_a_transaction_while_the_carry_gate_downloads_grid
 
     for name in ("get_object", "get_object_tail", "download_file", "head_object"):
         monkeypatch.setattr(storage, name, spied(name))
-    plan = _republish(db, storage, asset, after=db.commit)
-    probe.dispose()
+    try:
+        plan = _republish(db, storage, asset, after=db.commit)
+    finally:
+        idle_in_transaction.close()
 
     assert _extras(plan)["inferredLayers"] == [_entry(read)]
     downloads = [key for key, _ in seen if not key.startswith("head_object")]
