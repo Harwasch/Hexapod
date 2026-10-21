@@ -198,6 +198,7 @@ describe("a dedicated renderer's camera under a runtime scale", () => {
       camera(toWorld),
       inverseScaledTransformation(toWorld, new Matrix4()),
       size,
+      size.pixelRatio,
     );
     expect(pose.eye[0]).toBeCloseTo(0, 6);
     expect(pose.eye[1]).toBeCloseTo(-10, 6);
@@ -211,7 +212,12 @@ describe("a dedicated renderer's camera under a runtime scale", () => {
   });
 
   it("is what it always was for a rigid frame", () => {
-    const pose = scanPose(camera(ROOT), Matrix4.inverseTransformation(ROOT, new Matrix4()), size);
+    const pose = scanPose(
+      camera(ROOT),
+      Matrix4.inverseTransformation(ROOT, new Matrix4()),
+      size,
+      size.pixelRatio,
+    );
     expect(pose.near).toBe(0.2);
     expect(pose.far).toBe(1000);
     expect(pose.eye[1]).toBeCloseTo(-10, 6);
