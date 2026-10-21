@@ -713,3 +713,153 @@ test("under playcanvas, the left date's inferred fill is labelled, and drawn pur
   expect(Math.abs(figures.rightHighlight - figures.rightShow)).toBeLessThan(0.005);
   await railUnchanged(page);
 });
+
+/**
+ * Where the cut is in a screenshot: per pixel column near `around` (device pixels), how many of
+ * the rows [0.08, 0.55) of the view look like `left` alone and not `right` alone, and the other
+ * way round; the cut is the first column from which the right date's columns win, and keep
+ * winning for six columns.
+ */
+async function cutColumn(
+  page: Page,
+  shots: { compared: Buffer; left: Buffer; right: Buffer },
+  around: number,
+): Promise<number | null> {
+  return page.evaluate(
+    async ([compared, left, right, at]) => {
+      const read = async (data: string) => {
+        const image = new Image();
+        image.src = `data:image/png;base64,${data}`;
+        await image.decode();
+        const canvas = document.createElement("canvas");
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const context = canvas.getContext("2d");
+        if (!context) throw new Error("no 2D context");
+        context.drawImage(image, 0, 0);
+        return {
+          data: context.getImageData(0, 0, image.width, image.height).data,
+          w: image.width,
+          h: image.height,
+        };
+      };
+      const [c, l, r] = [await read(compared), await read(left), await read(right)];
+      const near = (a: Uint8ClampedArray, b: Uint8ClampedArray, i: number) =>
+        Math.abs((a[i] ?? 0) - (b[i] ?? 0)) +
+          Math.abs((a[i + 1] ?? 0) - (b[i + 1] ?? 0)) +
+          Math.abs((a[i + 2] ?? 0) - (b[i + 2] ?? 0)) <
+        24;
+      const score: number[] = [];
+      const x0 = Math.max(0, Math.round(at) - 60);
+      const x1 = Math.min(c.w, Math.round(at) + 60);
+      for (let x = x0; x < x1; x++) {
+        let s = 0;
+        for (let y = Math.floor(c.h * 0.08); y < Math.floor(c.h * 0.55); y++) {
+          const i = (y * c.w + x) * 4;
+          const asLeft = near(c.data, l.data, i);
+          const asRight = near(c.data, r.data, i);
+          if (asLeft && !asRight) s += 1;
+          if (asRight && !asLeft) s -= 1;
+        }
+        score.push(s);
+      }
+      for (let k = 0; k + 6 <= score.length; k++)
+        if (score.slice(k, k + 6).every((s) => s < 0)) return x0 + k;
+      return null;
+    },
+    [
+      shots.compared.toString("base64"),
+      shots.left.toString("base64"),
+      shots.right.toString("base64"),
+      around,
+    ] as const,
+  );
+}
+
+test.describe("at a device pixel ratio of 2", () => {
+  test.use({ deviceScaleFactor: 2 });
+
+  test("under playcanvas, the cut is where the divider's handle is, at full and half render scale", async ({
+    page,
+  }) => {
+    test.setTimeout(600_000);
+    await arrive(page, "playcanvas");
+    const timeline = page.getByTestId("timeline");
+    await expect.poll(async () => (await state(page)).shown, poll).toBe(A2);
+    // Screenshots without the divider's own white line over the cut.
+    await page.addStyleTag({ content: ".split-slider { opacity: 0 !important; }" });
+    const measure = async (label: string) => {
+      await overlayDrawn(page, A2);
+      const june = await settledShot(page, `dpr2-${label}-jun-alone`);
+      await timeline.getByRole("radio", { name: /Mar 1, 2026/ }).click();
+      await overlayDrawn(page, A1);
+      const march = await settledShot(page, `dpr2-${label}-mar-alone`);
+      await timeline.getByRole("radio", { name: /Jun 1, 2026/ }).click();
+      await overlayDrawn(page, A2);
+      const dates = await openCompare(page);
+      await dates.getByRole("switch", { name: "Swipe between dates" }).click();
+      await closePanel(page);
+      await expect
+        .poll(async () => {
+          const r = await compareReading(page, A2);
+          return r !== null && r.on && r.left.tiles > 0 && r.left.loading === 0;
+        }, poll)
+        .toBe(true);
+      await overlayDrawn(page, A2);
+      const compared = await settledShot(page, `dpr2-${label}-compare`);
+      const handle = await page.getByTestId("split-slider").boundingBox();
+      const facts: {
+        dpr: number;
+        resolutionScale: number;
+        globe: number;
+        overlay: number;
+        css: number;
+      } = await page.evaluate(`(() => {
+        const twin = window.__twin;
+        const overlay = document.querySelector("canvas[data-scan-renderer]");
+        return {
+          dpr: window.devicePixelRatio,
+          resolutionScale: twin.viewer.resolutionScale,
+          globe: twin.viewer.canvas.width,
+          overlay: overlay ? overlay.width : 0,
+          css: twin.viewer.canvas.clientWidth,
+        };
+      })()`);
+      const reading = await compareReading(page, A2);
+      // The divider's line starts at its CSS x (`left: fraction%`), in the screenshot's pixels.
+      const handleX = (handle?.x ?? Number.NaN) * facts.dpr;
+      const cut = await cutColumn(page, { compared, left: march, right: june }, handleX);
+      const figures = { label, ...facts, handleX, cut, dividerPx: reading?.dividerPx };
+      test.info().annotations.push({ type: "cut vs handle", description: JSON.stringify(figures) });
+      console.info(JSON.stringify(figures));
+      // Off again for the next measure.
+      const again = await openCompare(page);
+      await again.getByRole("switch", { name: "Swipe between dates" }).click();
+      await closePanel(page);
+      await expect
+        .poll(async () => (await compareReading(page, A2))?.on ?? false, poll)
+        .toBe(false);
+      return figures;
+    };
+    const full = await measure("full");
+    expect(full.dpr).toBe(2);
+    expect(full.cut).not.toBeNull();
+    expect(Math.abs((full.cut ?? 0) - full.handleX)).toBeLessThanOrEqual(2);
+    // A render scale of a half: the globe and the overlay draw half the pixels, stretched.
+    await page.evaluate(`(() => {
+      window.__twin.viewer.resolutionScale = 0.5;
+      window.__twin.scene.requestRender();
+    })()`);
+    await expect
+      .poll(
+        () => page.evaluate(`document.querySelector("canvas[data-scan-renderer]")?.width ?? 0`),
+        poll,
+      )
+      .toBeLessThanOrEqual(full.css * 1.01);
+    const half = await measure("half");
+    expect(half.resolutionScale).toBeCloseTo(0.5, 5);
+    expect(half.overlay).toBeLessThanOrEqual(half.css * 1.01);
+    expect(half.cut).not.toBeNull();
+    expect(Math.abs((half.cut ?? 0) - half.handleX)).toBeLessThanOrEqual(2);
+  });
+});
