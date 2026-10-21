@@ -84,7 +84,9 @@ describe("lib", () => {
       sourceLabel({ type: "xyz", urlTemplate: "https://tiles.example.com/{z}/{x}/{y}.png" }),
     ).toBe("XYZ tiles · tiles.example.com");
     expect(formatDate(null)).toBe("—");
-    expect(formatDate("2021-01-01T00:00:00Z")).toMatch(/2021/);
+    // Midday UTC in mid-June is the same calendar day in every time zone (UTC−12 to UTC+14), so
+    // the viewer's own zone (formatDate shows local dates, as it should) cannot move the year.
+    expect(formatDate("2021-06-15T12:00:00Z")).toMatch(/2021/);
   });
 
   it("records timing spans", () => {
