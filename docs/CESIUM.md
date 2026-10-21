@@ -662,7 +662,11 @@ it (`cesium/scanView/ruleDates.ts`), each placed where it is in the scan's frame
 inferred layers and split objects; every tile is weighed in the copy pass of the work buffer by
 its own source, read from the tileset it came from, with the same seam fade measured in
 PlayCanvas's footprints (it draws a splat twice as wide as CesiumJS for the same covariance, so
-CesiumJS's 2 σ reach is 4 σ there). A tile of no named source draws nothing. Switching between
+CesiumJS's 2 σ reach is 4 σ there), read back from the work buffer on PlayCanvas's colour-only
+refresh of a streamed SOG. A tile of no named source draws nothing. The dates share one budget,
+split by each one's share of the cells in view it owns (a date that owns none streams nothing),
+and a rule names four dates at most. A split object is drawn by the date owning the cell under
+its declared origin, under both renderers. Switching between
 CesiumJS and PlayCanvas carries a rule over; under Spark or the WebGPU trial the control is
 disabled with the notice. See [ADR 0017](DECISIONS/0017-compare-dates.md) § Per-cell view rules
 and § Per-cell view rules under PlayCanvas. Evidence: `e2e/compositorScene.spec.ts` (scene,

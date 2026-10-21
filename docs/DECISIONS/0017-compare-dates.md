@@ -154,8 +154,13 @@ other, so wherever both reach one is painted over the other.
    Ground truth) must not leave a hole.
 9. **Split objects** are tilesets of their own beside their scan, outside the host's sort: the
    rule says per scan which are drawn (`companions.ts` `ruledObjects`), each whole, by the date
-   that owns the cell under its centre, so one date's copy of an object is drawn, never two. They
-   keep their own colours under Data age.
+   that owns the cell under its anchor, so one date's copy of an object is drawn, never two. They
+   keep their own colours under Data age. The anchor is the origin the package declares
+   (`extras.objects[].origin`, the centre of its splats' bounds on the ground,
+   `split_objects.py`) where its pose puts it -- its own frame's translation
+   (`lib/compositor.ts` `objectAnchor`), the same under PlayCanvas. (It was the middle of the
+   object tileset's bounding volume, which the package pads by three scales a splat; near a seam
+   that could name another date than PlayCanvas did.)
 10. **Cost.** The rule's parts load on demand (`compositorSession.ts`, 7,314 B gzip; 7,967 B
     after the review fixes); the globe's entry grows by what the scene keeps of it. Index entry
     193,893 B → 194,589 B gzip (budget 197,000 B); on its rebased base 195,199 B, and 195,217 B
@@ -211,6 +216,17 @@ modifier) already draws Confidence, Data age and the objects' rules per tile.
    its own colours under Data age. Highlight invented sets the layers' own Highlight look (each
    layer already carries the viewer's Highlight, so none is tinted twice); Data age is the
    plane's owner-age grid as a cell view, drawn in place of the scan's own while the rule is on.
+   **A colour-only copy.** PlayCanvas also copies an SH splat's colour alone as the camera moves,
+   and for a natively streamed SOG that copy reads the geometry back from the work buffer
+   (`GSPLAT_WORKBUFFER_GEOMETRY`) and never calls `modifySplatRotationScale`; there the weight
+   reads the rotation and scales back from the work buffer too (`workBufferWorldRotation`,
+   `workBufferWorldScale`, as the full copy wrote them). Without it each refresh weighed every
+   splat as a metre-wide one: measured on the SH tree's streamed package
+   (`data/tiles/synthetic-tree-sh-sog`) under a seam down the tree, 19,316 covered pixels before a
+   camera move away and back, 8,066 after; with it, 19,316 (`e2e/compositorScene.spec.ts`).
+   **Fail closed, in pixels.** Where nobody owns a cell (Ground truth's gap), a resident tile the
+   rule names no source for draws nothing: 15 of the fill's tiles resident and unnamed, 0
+   pixels; with the unnamed case mutated to draw, the gap is all the fill's and the spec fails.
 4. **The seam in PlayCanvas's footprints.** Both renderers fall off as `exp(-4 u²)` across a quad
    sized from the projected spread, but PlayCanvas's quad reaches `√(2λ)` pixels from the centre
    and CesiumJS's half that: PlayCanvas draws every splat twice as wide for the same covariance.
@@ -229,9 +245,21 @@ modifier) already draws Confidence, Data age and the objects' rules per tile.
    100% green under Latest, nothing under Ground truth. The spec asserts the same figures under
    both renderers.
 
-5. **Residency.** Each other date streams within the budget the host draws to now, so resident
-   splats roughly double with two dates, as under CesiumJS where each date's tileset refines on
-   its own; frames that slow under both lower the adaptive budget for both. Still off by default.
+5. **One budget for every date.** Every date a rule draws is resident at once in PlayCanvas's one
+   work buffer, so they share the one budget the host draws to: split by each one's share of the
+   cells in view it owns, its inferred layers' cells counted with it
+   (`cesium/scanView/ruleDates.ts` `viewShares`, the plane sampled at 16k cells at most).
+   Together they hold what one scan alone would. A date that owns no cell in view streams
+   nothing and lets its tiles go until it does. The scan PlayCanvas draws takes its share through
+   the host (PlayCanvas's `loadFactor`; the host hands its streamer what the cut may hold
+   whenever any input of it moves, checked each frame), or for a natively streamed scan through
+   PlayCanvas's own budget. A budget or share that moves with the camera still is planned for at
+   once. (Each date first took the whole budget: N dates held N + 1 budgets, up to about 18M
+   splats against the 16.8M one texture holds.) **Four dates at most**: a rule names the dates up
+   to As of, four at most (`lib/viewModes.ts` `MAX_RULE_DATES`), under either renderer; past
+   four a date's share is too thin to draw it well. The control is offered disabled with the
+   reason and the way out (an earlier As of), the scene refuses such a rule, and a running rule
+   whose As of moves past four ends, saying why. Still off by default.
 6. **Not Spark, not the WebGPU trial.** Spark's world modifier has no port of the weight, and
    the trial's modifiers are GLSL only: there the control stays disabled, with the notice naming
    Per cell and its one-click switch.
@@ -251,10 +279,21 @@ modifier) already draws Confidence, Data age and the objects' rules per tile.
    new reference to those bindings has the minifier re-letter the export aliases of the shared
    chunks (`ci as f` becomes `li as f`), which compress a little worse: the tuple in another
    module, without the helper in a shared chunk, or of fewer parts measured +280 to +330 B gzip
-   each; without it, +37.
+   each; without it, +37. After the cross review's changes (the colour-only copy, one budget,
+   the cap, the anchor), measured against the branch before them (369bde60): before its first
+   frame the page loads 5,623,570 → 5,623,554 B raw, 1,602,398 → 1,602,371 B gzip, 83 files;
+   entry 196,356 → 196,329 B gzip. The cap lives in a module the control and the session already
+   share, and the dates' module imports nothing the channel does not, so neither adds a chunk
+   to the preload map the entry carries.
 
 ### Consequences
 
+- The colour-only copy is reached only by a natively streamed scan with SH bands. The pipeline
+  ships SH degree 0 by default (`ship_sh_degree`, tools/pipeline/harmonics.py); the streamed
+  package is an opt-in backfill (`.github/workflows/streamed-lod-backfill.yml`, never run by
+  default) that keeps whatever bands the tiles carry; and the app streams it only for a scan
+  that has one and declares no objects (`ScanRendererHost` `runNative`). So no scan published
+  with the defaults meets it.
 - Compare › Dates stays CesiumJS's: the stock split is CesiumJS's, and a rule and a comparison
   remain one or the other. As captured draws a rule as Ground truth, and At capture is off while
   the rule draws more than one date, under either renderer.
