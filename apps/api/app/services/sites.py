@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import Asset, CameraBookmark, Site
+from app.models import Asset, CameraBookmark, Epoch, Site
 from app.schemas.asset import AssetBase, AssetRead
 from app.schemas.bookmark import CameraBookmarkCreate, CameraBookmarkRead
 from app.schemas.common import Attribution, GeoPosition, LicenseMetadata
@@ -106,7 +106,7 @@ def get_site(db: Session, site_id: uuid.UUID) -> Site:
         .options(
             selectinload(Site.assets),
             selectinload(Site.bookmarks),
-            selectinload(Site.epochs),
+            selectinload(Site.epochs).selectinload(Epoch.maps),
             selectinload(Site.frame),
         )
         .where(Site.id == site_id)
@@ -123,7 +123,7 @@ def get_site_by_slug(db: Session, slug: str) -> Site:
         .options(
             selectinload(Site.assets),
             selectinload(Site.bookmarks),
-            selectinload(Site.epochs),
+            selectinload(Site.epochs).selectinload(Epoch.maps),
             selectinload(Site.frame),
         )
         .where(Site.slug == slug)

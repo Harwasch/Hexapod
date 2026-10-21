@@ -116,6 +116,36 @@
         "title": "ActionMissionCreate",
         "type": "object"
       },
+      "AlignmentCapRead": {
+        "additionalProperties": false,
+        "description": "How the epoch's placement capped its scores (ADR 0016, C4): a cell may only claim\nevidence when the epoch's uncertainty from the site frame is under half a cell.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "factor": {
+            "title": "Factor",
+            "type": "number"
+          },
+          "priorEpochs": {
+            "title": "Priorepochs",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "uncertaintyM": {
+            "title": "Uncertaintym",
+            "type": "number"
+          }
+        },
+        "required": [
+          "uncertaintyM",
+          "factor",
+          "priorEpochs",
+          "source"
+        ],
+        "title": "AlignmentCapRead",
+        "type": "object"
+      },
       "AppearancePackage": {
         "properties": {
           "appearance": {
@@ -5898,6 +5928,80 @@
         "title": "EcologyRequest",
         "type": "object"
       },
+      "EpochConfidenceRead": {
+        "additionalProperties": false,
+        "description": "The confidence map an epoch's current revision shipped, summarised at its finest\nlevel. Null on an epoch means not measured: the run that made its current revision\nmeasured none (a splat upload carries no capture evidence).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "alignmentCap": {
+            "$ref": "#/components/schemas/AlignmentCapRead"
+          },
+          "assetId": {
+            "format": "uuid",
+            "title": "Assetid",
+            "type": "string"
+          },
+          "cellM": {
+            "title": "Cellm",
+            "type": "number"
+          },
+          "level": {
+            "title": "Level",
+            "type": "integer"
+          },
+          "policy": {
+            "title": "Policy",
+            "type": "string"
+          },
+          "reasons": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Reasons",
+            "type": "object"
+          },
+          "scoredCells": {
+            "title": "Scoredcells",
+            "type": "integer"
+          },
+          "status": {
+            "const": "measured",
+            "title": "Status",
+            "type": "string"
+          },
+          "unseenCells": {
+            "title": "Unseencells",
+            "type": "integer"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "weakCells": {
+            "title": "Weakcells",
+            "type": "integer"
+          },
+          "weakShare": {
+            "title": "Weakshare",
+            "type": "number"
+          }
+        },
+        "required": [
+          "status",
+          "assetId",
+          "url",
+          "cellM",
+          "level",
+          "policy",
+          "weakShare",
+          "weakCells",
+          "scoredCells",
+          "unseenCells",
+          "reasons",
+          "alignmentCap"
+        ],
+        "title": "EpochConfidenceRead",
+        "type": "object"
+      },
       "EpochJoinMethod": {
         "description": "How a capture found the site it is an epoch of: named it (``explicit``), was matched\nto it by location before its run (``spatial``), or made it (``new-site``).",
         "enum": [
@@ -5947,6 +6051,16 @@
               }
             ],
             "title": "Captureid"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EpochConfidenceRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "createdAt": {
             "format": "date-time",
@@ -6057,6 +6171,7 @@
           "alignment",
           "quality",
           "currentAssetId",
+          "confidence",
           "createdAt",
           "updatedAt"
         ],
@@ -6988,6 +7103,124 @@
           "original"
         ],
         "title": "FeatureRequestRead",
+        "type": "object"
+      },
+      "FillTargetsRead": {
+        "additionalProperties": false,
+        "description": "The cells a re-scan left weak (`rescan-gate-v1`): this epoch's own finest cells that\nare weak in it, where the newest earlier measured epoch of the site whose footprint covers\nthe cell was weak too. The fill gate (F4) only fills these.\n\n`mask` is base64 of `nj` rows, south to north (`j0` first), each `rowBytes` bytes; in a\nrow, bit `k` (least significant first) of byte `b` is cell `i0 + 8 b + k`. 1 is a\ntarget. Cells are in the tileset frame of the site lattice (`0.25 m * 2**level`), at\nthis epoch's finest level. `satisfiedBy` is base64 of one byte per target, in the same\norder (row by row, `i` ascending): the index into `comparedWith` of the earlier epoch\nwhose weak cell it re-scanned.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "bitOrder": {
+            "const": "little",
+            "title": "Bitorder",
+            "type": "string"
+          },
+          "capped": {
+            "title": "Capped",
+            "type": "boolean"
+          },
+          "cellM": {
+            "title": "Cellm",
+            "type": "number"
+          },
+          "cells": {
+            "title": "Cells",
+            "type": "integer"
+          },
+          "comparedWith": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Comparedwith",
+            "type": "array"
+          },
+          "epochId": {
+            "format": "uuid",
+            "title": "Epochid",
+            "type": "string"
+          },
+          "frame": {
+            "const": "tileset",
+            "title": "Frame",
+            "type": "string"
+          },
+          "i0": {
+            "title": "I0",
+            "type": "integer"
+          },
+          "j0": {
+            "title": "J0",
+            "type": "integer"
+          },
+          "level": {
+            "title": "Level",
+            "type": "integer"
+          },
+          "mask": {
+            "title": "Mask",
+            "type": "string"
+          },
+          "ni": {
+            "title": "Ni",
+            "type": "integer"
+          },
+          "nj": {
+            "title": "Nj",
+            "type": "integer"
+          },
+          "policy": {
+            "const": "rescan-gate-v1",
+            "title": "Policy",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "rowBytes": {
+            "title": "Rowbytes",
+            "type": "integer"
+          },
+          "satisfiedBy": {
+            "title": "Satisfiedby",
+            "type": "string"
+          },
+          "siteId": {
+            "format": "uuid",
+            "title": "Siteid",
+            "type": "string"
+          },
+          "weakIn": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Weakin",
+            "type": "array"
+          }
+        },
+        "required": [
+          "policy",
+          "siteId",
+          "epochId",
+          "weakIn",
+          "comparedWith",
+          "capped",
+          "frame",
+          "cellM",
+          "level",
+          "i0",
+          "j0",
+          "ni",
+          "nj",
+          "rowBytes",
+          "bitOrder",
+          "mask",
+          "cells",
+          "satisfiedBy",
+          "reason"
+        ],
+        "title": "FillTargetsRead",
         "type": "object"
       },
       "FindingDisposition": {
@@ -19160,6 +19393,13 @@
             "title": "Forwardoverlap",
             "type": "number"
           },
+          "gimbalPitchDeg": {
+            "default": -90,
+            "maximum": -30.0,
+            "minimum": -90.0,
+            "title": "Gimbalpitchdeg",
+            "type": "number"
+          },
           "headingDeg": {
             "anyOf": [
               {
@@ -19173,11 +19413,34 @@
             ],
             "title": "Headingdeg"
           },
+          "pattern": {
+            "default": "nadir",
+            "enum": [
+              "nadir",
+              "oblique",
+              "orbit"
+            ],
+            "title": "Pattern",
+            "type": "string"
+          },
           "purpose": {
-            "const": "lift-knowledge-fog",
             "default": "lift-knowledge-fog",
+            "enum": [
+              "lift-knowledge-fog",
+              "re-scan-weak"
+            ],
             "title": "Purpose",
             "type": "string"
+          },
+          "rescanOf": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ScoutRescanRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "sideOverlap": {
             "maximum": 0.9,
@@ -19199,6 +19462,56 @@
           "speedMs"
         ],
         "title": "ScoutCapture",
+        "type": "object"
+      },
+      "ScoutRescanRef": {
+        "additionalProperties": false,
+        "description": "Which epoch's weak cells a re-scan area is for. Informational only: plans are a\nworkspace's and sites are public, so this is a reference, never a foreign key (the\nre-scan of a cell is any later epoch of the site that covers it, ADR 0016).",
+        "properties": {
+          "cells": {
+            "minimum": 0.0,
+            "title": "Cells",
+            "type": "integer"
+          },
+          "epochId": {
+            "format": "uuid",
+            "title": "Epochid",
+            "type": "string"
+          },
+          "policy": {
+            "const": "weak-v1",
+            "default": "weak-v1",
+            "title": "Policy",
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "enum": [
+                "views",
+                "spread",
+                "gsd",
+                "accuracy",
+                "unseen",
+                "alignment"
+              ],
+              "type": "string"
+            },
+            "maxItems": 6,
+            "title": "Reasons",
+            "type": "array"
+          },
+          "siteId": {
+            "format": "uuid",
+            "title": "Siteid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "siteId",
+          "epochId",
+          "cells"
+        ],
+        "title": "ScoutRescanRef",
         "type": "object"
       },
       "Select": {
@@ -23219,6 +23532,195 @@
           "revision"
         ],
         "title": "VersionReference",
+        "type": "object"
+      },
+      "WeakArea": {
+        "additionalProperties": false,
+        "description": "One re-scan zone: weak cells merged, smoothed and placed on the globe.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "areaM2": {
+            "title": "Aream2",
+            "type": "number"
+          },
+          "cells": {
+            "title": "Cells",
+            "type": "integer"
+          },
+          "diameterM": {
+            "title": "Diameterm",
+            "type": "number"
+          },
+          "footprint": {
+            "$ref": "#/components/schemas/Polygon"
+          },
+          "gimbalPitchDeg": {
+            "title": "Gimbalpitchdeg",
+            "type": "number"
+          },
+          "hint": {
+            "title": "Hint",
+            "type": "string"
+          },
+          "meanScore": {
+            "title": "Meanscore",
+            "type": "number"
+          },
+          "pattern": {
+            "enum": [
+              "nadir",
+              "oblique",
+              "orbit"
+            ],
+            "title": "Pattern",
+            "type": "string"
+          },
+          "reasons": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Reasons",
+            "type": "object"
+          },
+          "reliefM": {
+            "title": "Reliefm",
+            "type": "number"
+          },
+          "targetGsdM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Targetgsdm"
+          }
+        },
+        "required": [
+          "footprint",
+          "areaM2",
+          "cells",
+          "meanScore",
+          "reasons",
+          "reliefM",
+          "diameterM",
+          "pattern",
+          "targetGsdM",
+          "gimbalPitchDeg",
+          "hint"
+        ],
+        "title": "WeakArea",
+        "type": "object"
+      },
+      "WeakAreasRead": {
+        "additionalProperties": false,
+        "description": "An epoch's weak cells as re-scan zones, largest first.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/WeakArea"
+            },
+            "title": "Areas",
+            "type": "array"
+          },
+          "assetId": {
+            "format": "uuid",
+            "title": "Assetid",
+            "type": "string"
+          },
+          "cellM": {
+            "title": "Cellm",
+            "type": "number"
+          },
+          "epochId": {
+            "format": "uuid",
+            "title": "Epochid",
+            "type": "string"
+          },
+          "heuristic": {
+            "title": "Heuristic",
+            "type": "string"
+          },
+          "level": {
+            "title": "Level",
+            "type": "integer"
+          },
+          "policy": {
+            "const": "weak-v1",
+            "title": "Policy",
+            "type": "string"
+          },
+          "totalCells": {
+            "title": "Totalcells",
+            "type": "integer"
+          },
+          "truncatedByBudget": {
+            "title": "Truncatedbybudget",
+            "type": "boolean"
+          },
+          "weakCells": {
+            "title": "Weakcells",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epochId",
+          "assetId",
+          "policy",
+          "cellM",
+          "level",
+          "weakCells",
+          "totalCells",
+          "truncatedByBudget",
+          "heuristic",
+          "areas"
+        ],
+        "title": "WeakAreasRead",
+        "type": "object"
+      },
+      "WeakAreasRequest": {
+        "additionalProperties": false,
+        "description": "Which of an epoch's weak cells to turn into re-scan zones.",
+        "properties": {
+          "budgetM2": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 50000000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budgetm2"
+          },
+          "focus": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 3,
+                "minItems": 2,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Focus"
+          },
+          "maxAreas": {
+            "default": 3,
+            "maximum": 8.0,
+            "minimum": 1.0,
+            "title": "Maxareas",
+            "type": "integer"
+          }
+        },
+        "title": "WeakAreasRequest",
         "type": "object"
       },
       "WmsSource": {
@@ -41322,6 +41824,201 @@
           }
         },
         "summary": "List a site's epochs",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/api/v1/sites/{site_id}/epochs/{epoch_id}/weak-areas": {
+      "post": {
+        "description": "The epoch's weak cells (weak-v1, ADR 0016) merged into at most `maxAreas` zones on\nthe globe, largest first, within `budgetM2`, each with a pattern to fly it again and a\nhint. It stores nothing, but it is the first step of planning a flight -- the console's\nre-scan flow, which then asks for a plan draft -- so it takes the write token like every\nPOST (and a per-client bucket: it outlines up to 2^22 cells). The patterns are UX\nheuristics, labelled so (`heuristic`).",
+        "operationId": "epoch_weak_areas_api_v1_sites__site_id__epochs__epoch_id__weak_areas_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "epoch_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Epoch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WeakAreasRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WeakAreasRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such site, or no such epoch of it."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "`confidence-not-measured`: the epoch's current revision has no confidence map (a splat upload is not measured); `confidence-unreadable`: its grid cannot be read; `no-site-frame`: the site has no frame to place cells by."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "An epoch's weak areas as re-scan zones",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/api/v1/sites/{site_id}/fill-targets": {
+      "get": {
+        "description": "`rescan-gate-v1`: the cells of epoch `epochId` (default: the site's latest published)\nthat are weak, covered by it, and were weak in at least one earlier measured epoch,\ncompared at the coarser level -- a re-scan that did not fix them. An inferred fill\nfills only these (F4). A bit mask in the tileset frame of the site lattice. Behind the\nwrite token, which its one consumer (the fill workflow) holds: a call may decode a grid\nper earlier epoch, at most the eight most recent (`capped` says when there were more).",
+        "operationId": "site_fill_targets_api_v1_sites__site_id__fill_targets_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "epochId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Epochid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FillTargetsRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such site, or no such epoch of it."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "`confidence-not-measured`: the epoch has no confidence map (or the site no published epoch); `no-rescan-yet`: no earlier epoch of the site was measured; `confidence-unreadable`: a grid cannot be read."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "The cells a re-scan left weak",
         "tags": [
           "sites"
         ]

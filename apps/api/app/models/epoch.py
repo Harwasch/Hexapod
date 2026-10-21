@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from geoalchemy2 import Geometry, WKBElement
 from sqlalchemy import (
@@ -27,7 +27,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, utcnow
 from app.models.enums import (
@@ -38,6 +38,9 @@ from app.models.enums import (
     ObservedAtSource,
     SiteFrameSource,
 )
+
+if TYPE_CHECKING:
+    from app.models.epoch_map import EpochMap
 
 
 def _in(column: str, values: type[Any]) -> str:
@@ -122,4 +125,10 @@ class Epoch(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # epoch's current revision; this keeps what they said of the ones before it.
     history: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+
+    # Each revision's per-cell maps (M4, `epoch_maps`): its asset's confidence grid. Which
+    # one the epoch shows is its current asset's (`services/epochs.epoch_to_read`).
+    maps: Mapped[list[EpochMap]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True, order_by="EpochMap.created_at"
     )

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { MACHINE_CLASSES } from "@/missions/machineClasses";
 import {
   DEFAULT_SCOUT,
+  kmzRefusal,
   RELIEF_MAX_SAMPLES,
   reliefFrom,
   reliefPoints,
@@ -86,6 +87,37 @@ describe("scout geometry", () => {
     expect(stored.altitudeM).toBe(90);
     expect(stored.camera).toBe("dji-m3e-wide");
     expect(stored.headingDeg).toBeNull();
+    expect([stored.purpose, stored.pattern, stored.gimbalPitchDeg]).toEqual([
+      "lift-knowledge-fog",
+      "nadir",
+      -90,
+    ]);
+  });
+
+  it("keeps a re-scan's purpose, pattern and camera pitch", () => {
+    const rescanOf = {
+      siteId: "00000000-0000-4000-8000-000000000001",
+      epochId: "00000000-0000-4000-8000-000000000002",
+      policy: "weak-v1" as const,
+      cells: 40,
+      reasons: ["views" as const],
+    };
+    const stored = scoutOf({
+      purpose: "re-scan-weak",
+      pattern: "orbit",
+      gimbalPitchDeg: -30,
+      rescanOf,
+      altitudeM: 30,
+      forwardOverlap: 0.8,
+      sideOverlap: 0.7,
+      speedMs: 5,
+    });
+    expect([stored.purpose, stored.pattern, stored.gimbalPitchDeg]).toEqual([
+      "re-scan-weak",
+      "orbit",
+      -30,
+    ]);
+    expect(stored.rescanOf).toEqual(rescanOf);
   });
 });
 
@@ -186,5 +218,16 @@ describe("relief samples", () => {
         "terrain",
       ),
     ).toBeNull();
+  });
+});
+
+describe("what the KMZ export can fly", () => {
+  it("is straight-down lanes only, and says why for anything else", () => {
+    expect(kmzRefusal([{}])).toBeNull();
+    expect(kmzRefusal([{ scout: { ...DEFAULT_SCOUT } }])).toBeNull();
+    const orbit = { scout: { ...DEFAULT_SCOUT, pattern: "orbit" as const, gimbalPitchDeg: -30 } };
+    expect(kmzRefusal([{}, orbit])).toMatch(/orbit/);
+    const pitched = { scout: { ...DEFAULT_SCOUT, gimbalPitchDeg: -70 } };
+    expect(kmzRefusal([pitched])).toMatch(/pitched −70°/);
   });
 });

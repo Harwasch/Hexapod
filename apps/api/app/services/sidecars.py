@@ -41,7 +41,8 @@ code that writes each one (docs/SCENE_OBJECTS.md, section 8, has the table):
   them; a new reconstruction, which moves every position, does not. The worker, which has
   the new tiles, decides this (`app/worker/carry.py`, `app/worker/positions.py`).
 * `TILES` -- bound to the tiles' bytes. `collision.bin` and `viewcones.bin` are grids
-  computed from the kept splats with nothing recorded to check them by, and `sog/` is the
+  computed from the kept splats with nothing recorded to check them by, `confidence.bin`
+  bins this reconstruction's own evidence (ADR 0016), and `sog/` is the
   leaves' gaussians themselves, colours and harmonics included, re-encoded; a split
   rewrote the tiles. These are carried only when the new tiles are the same tiles
   (`tiles_fingerprint`).
@@ -107,8 +108,9 @@ class SidecarKind:
     follows: str | None = None
     basis: str = ""
     action: str = ""
-    #: False for a kind that cannot be attached beside unchanged tiles.
+    #: False for a kind that cannot be attached beside unchanged tiles, and why not.
     attachable: bool = True
+    refusal: str = "rewrites the scan's tiles and cannot be attached beside them"
     #: For a `POSITIONS` kind: where it lists the tile checksums it is bound to, as
     #: `(file beside tileset.json, field)` -- a field holding an object (keyed by checksum)
     #: or a list of checksums. Every file of these that is present must list a tile for the
@@ -210,6 +212,27 @@ VIEW_CONES = SidecarKind(
     basis="view_cones: per cell of the splats' grid, the directions it was seen from",
     action="View cones need rebuilding",
 )
+CONFIDENCE = SidecarKind(
+    name="confidence",
+    extras=("confidence",),
+    files=("confidence.bin",),
+    # A function of this reconstruction -- the quality stage's evidence per trained
+    # gaussian, binned in the cells its placement put them in -- so only the same tiles
+    # keep it. Not the frame: a new run of the same capture sees it differently.
+    depends=Dependence.TILES,
+    basis=(
+        "the confidence stage: every trained gaussian's evidence, binned per cell of the "
+        "site lattice in the tileset's frame (ADR 0016)"
+    ),
+    action="Confidence needs re-measuring",
+    # `register` records the run's grid as the revision's map (`epoch_maps`); one attached
+    # later would be a grid no row describes.
+    attachable=False,
+    refusal=(
+        "is recorded with the run that measured it (epoch_maps), so only a run of the "
+        "capture ships one"
+    ),
+)
 INFERRED = SidecarKind(
     name="inferredLayers",
     extras=("inferredLayers",),
@@ -255,6 +278,7 @@ KINDS: tuple[SidecarKind, ...] = (
     OBJECTS,
     COLLISION,
     VIEW_CONES,
+    CONFIDENCE,
     INFERRED,
     NATIVE_LOD,
     RIG,
@@ -387,10 +411,7 @@ def check_extras_key(key: str) -> str:
         raise SidecarPathError(f"extras.{key} belongs to the tileset, not to a sidecar")
     kind = KINDS_BY_EXTRAS.get(key)
     if kind is not None and not kind.attachable:
-        raise SidecarPathError(
-            f"extras.{key} is a {kind.name} sidecar, which rewrites the scan's tiles and "
-            "cannot be attached beside them"
-        )
+        raise SidecarPathError(f"extras.{key} is a {kind.name} sidecar, which {kind.refusal}")
     return key
 
 

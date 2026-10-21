@@ -231,6 +231,13 @@ class CheckTargetRole(StrEnum):
     CONTROL = "control"
 
 
+class EpochMapKind(StrEnum):
+    """A per-cell map an epoch revision carries beside its tiles (M4, ADR 0016): today its
+    ``confidence`` grid; M5 adds its height ``surface``. One row per asset and kind."""
+
+    CONFIDENCE = "confidence"
+
+
 class AssetSourceKind(StrEnum):
     """Whether an asset shows what was captured (``observed``) or what was inferred to fill
     it (``inferred``, M5). One asset is one tileset of one epoch and one source kind."""

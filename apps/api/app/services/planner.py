@@ -38,6 +38,7 @@ from app.schemas.agent import (
     PlanStep,
     ZoneCoverage,
 )
+from app.schemas.scout import ScoutCapture
 from app.services import coverage as coverage_service
 from app.services.machine_classes import MACHINE_CLASSES
 
@@ -465,6 +466,22 @@ class SizingBudget:
         return lines
 
 
+#: An orbit re-scan flies this many rings (UX rule of thumb: one high, one low, both at the
+#: stand-off), and aims the camera at the outline's foot.
+ORBIT_RINGS = 2
+#: Nearer than this an orbit is not flown, however steep the camera (a UX floor, metres).
+ORBIT_MIN_STANDOFF_M = 5.0
+
+
+def _orbit_standoff_m(capture: ScoutCapture) -> float:
+    """How far out an orbit flies: where a camera pitched `gimbal_pitch_deg` down from
+    `altitude_m` looks at the ground (the outline's foot), but never nearer than
+    `ORBIT_MIN_STANDOFF_M`."""
+    pitch = math.radians(-capture.gimbal_pitch_deg)
+    reach = capture.altitude_m / math.tan(pitch) if pitch < math.pi / 2 else 0.0
+    return max(ORBIT_MIN_STANDOFF_M, reach)
+
+
 def _size_zone(
     zone: PlannerZone,
     kind: TaskKind,
@@ -482,8 +499,9 @@ def _size_zone(
     flown_at: float | None = None
     capture = zone.capture if machine == "drone" else None
     if capture is not None:
-        # A scout area ("Lift the fog") is flown at the capture numbers it carries, the ones
-        # its exported route uses: lines one image footprint apart, less the side overlap.
+        # A scout area ("Lift the fog", "Re-scan weak areas") is flown at the capture numbers
+        # it carries, the ones its exported route uses: lines one image footprint apart,
+        # less the side overlap.
         drone = MACHINE_CLASSES.drone
         altitude = capture.altitude_m
         spacing = drone.footprint_width_m(altitude) * (1 - capture.side_overlap)
@@ -492,6 +510,16 @@ def _size_zone(
             f"{altitude:g} m above take-off, lines {spacing:.0f} m apart for "
             f"{capture.side_overlap * 100:g} % side overlap, the area's scout capture"
         )
+        if capture.pattern == "oblique":
+            how = (
+                f"two crossing passes of {altitude:g} m lines {spacing:.0f} m apart, camera "
+                f"{-capture.gimbal_pitch_deg:g}° down, the area's oblique re-scan"
+            )
+        elif capture.pattern == "orbit":
+            how = (
+                f"two rings {_orbit_standoff_m(capture):.0f} m out at {altitude:g} m above "
+                f"take-off, camera {-capture.gimbal_pitch_deg:g}° down, the area's orbit re-scan"
+            )
     elif machine == "drone":
         drone = MACHINE_CLASSES.drone
         detail = _answer_text(answers, "resolution")
@@ -511,14 +539,29 @@ def _size_zone(
     if measured is None:
         return None
     length, passes, spans = measured.length_m, measured.passes, measured.spans
+    transit = measured.transit_m
+    orbit: float | None = None
+    if capture is not None and capture.pattern == "oblique" and measured.kind == "area":
+        # Two crossing sets of the same lines (a UX rule of thumb for obliques): twice the
+        # lanes, the second set at right angles to the first.
+        length, passes, spans, transit = length * 2, passes * 2, spans * 2, transit * 2
+    elif capture is not None and capture.pattern == "orbit":
+        ring = coverage_service.orbit_length_m(
+            zone.geometry.model_dump(mode="json"), _orbit_standoff_m(capture)
+        )
+        if ring is not None:
+            orbit = ring
+            length, passes, spans, transit = ring * ORBIT_RINGS, ORBIT_RINGS, ORBIT_RINGS, 0.0
     both_sides = measured.kind == "line" and kind == "treat"
     if both_sides:
         # A treatment along a line works one pass each side of it.
         length, passes, spans = length * 2, 2, 2
     effort, effort_note = _coverage_effort(kind, machine, answers, captured=capture is not None)
-    hours = ((length + measured.transit_m) / speed + spans * turn) / 3600 * effort
+    hours = ((length + transit) / speed + spans * turn) / 3600 * effort
     timing = f"{turn:g} s per turn" if turn else "turns not timed"
-    if measured.kind == "line":
+    if orbit is not None:
+        path = f"{_distance(length)} in {ORBIT_RINGS} rings of {_distance(orbit)} ({how})"
+    elif measured.kind == "line":
         path = f"{_distance(measured.length_m)} along the line" + (
             ", one pass each side" if both_sides else ""
         )
@@ -542,7 +585,7 @@ def _size_zone(
         machine_class=machine,
         area_m2=measured.area_m2,
         length_m=length,
-        transit_m=measured.transit_m,
+        transit_m=transit,
         passes=passes,
         spans=spans,
         spacing_m=measured.spacing_m,

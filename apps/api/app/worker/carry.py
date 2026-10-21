@@ -1,16 +1,17 @@
 """Carrying a scan's sidecars into the generation a republish cuts -- when they still hold.
 
 A worker publish copies a run's own outputs into a generation of its own
-(`app/worker/publish.py`). The run's outputs are its tiles, `collision.bin` and
-`viewcones.bin`; what was attached beside the live tiles since -- objects from a
-segmentation, an inferred fill, a backfilled grid, the streamed LOD, a plant rig
+(`app/worker/publish.py`). The run's outputs are its tiles, `collision.bin`,
+`viewcones.bin` and, when it measured one, `confidence.bin`; what was attached beside the
+live tiles since -- objects from a segmentation, an inferred fill, a backfilled grid, the
+streamed LOD, a plant rig
 (`app/services/sidecars.py`) -- is not among them. Repointing the asset at the new
 generation as it stands made all of that vanish from the live site.
 
 So before the copy, the live generation is read and each sidecar kind in it is decided:
 
-* **the run brings its own** (`collision`, `viewCones` from the packer): the new one wins
-  and the old is not carried -- "superseded", which clears any flag for the kind;
+* **the run brings its own** (`collision`, `viewCones`, `confidence` from the packer): the
+  new one wins and the old is not carried -- "superseded", which clears any flag for the kind;
 * **bound to the splats' positions** (`POSITIONS`: instances, skin, rig): carried when
   every tile of the new tileset has a position checksum the kind's binding lists -- the
   very test the viewer applies before it draws a tile with them. The checksums are

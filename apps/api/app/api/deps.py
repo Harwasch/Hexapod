@@ -192,7 +192,13 @@ def limit_imagery_catalog(request: Request, settings: SettingsDep) -> None:
     limits_of(request).imagery_catalog.take(client_key(request, settings))
 
 
+def limit_cell_map(request: Request, settings: SettingsDep) -> None:
+    """One confidence-map computation per token: see app/services/ratelimit.py."""
+    limits_of(request).cell_map.take(client_key(request, settings))
+
+
 LimitReconcile = Depends(limit_reconcile)
 LimitStepLog = Depends(limit_step_log)
 LimitPlace = Depends(limit_place)
 LimitTopoTile = Depends(limit_topo_tile)
+LimitCellMap = Depends(limit_cell_map)

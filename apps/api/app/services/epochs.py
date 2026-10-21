@@ -31,6 +31,7 @@ from app.models import Artifact, Asset, Capture, Epoch, Job, JobStep, Site, Site
 from app.models.enums import (
     AssetSourceKind,
     EpochJoinMethod,
+    EpochMapKind,
     EpochPlatform,
     EpochStatus,
     HeightDatum,
@@ -39,7 +40,7 @@ from app.models.enums import (
     SiteFrameSource,
 )
 from app.schemas.epoch import EpochRead, SiteFrameRead
-from app.services import geometry
+from app.services import epoch_maps, geometry
 from app.services.captures import quality_from
 from app.services.errors import NotFoundError
 
@@ -113,6 +114,8 @@ def epoch_to_read(epoch: Epoch, assets: Sequence[Asset]) -> EpochRead:
     footprint = geometry.wkb_to_footprint(epoch.footprint)
     assert footprint is not None
     current = current_asset_of(epoch.id, assets)
+    current_id = current.id if current is not None else None
+    measured = epoch_maps.map_of(epoch.maps, current_id, EpochMapKind.CONFIDENCE)
     return EpochRead(
         id=epoch.id,
         site_id=epoch.site_id,
@@ -127,7 +130,8 @@ def epoch_to_read(epoch: Epoch, assets: Sequence[Asset]) -> EpochRead:
         join_method=EpochJoinMethod(epoch.join_method),
         alignment=epoch.alignment,
         quality=quality_from(epoch.quality),
-        current_asset_id=current.id if current is not None else None,
+        current_asset_id=current_id,
+        confidence=epoch_maps.confidence_to_read(measured) if measured is not None else None,
         created_at=epoch.created_at,
         updated_at=epoch.updated_at,
     )

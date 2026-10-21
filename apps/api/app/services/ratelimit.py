@@ -1,6 +1,6 @@
 """Per-client token buckets for the few routes whose cost is the attack.
 
-Most of this API is cheap to call and open to read, and is left alone. Five things are
+Most of this API is cheap to call and open to read, and is left alone. Six things are
 not cheap:
 
 * **The phone key.** Every route behind it hashes the supplied key with 200,000 rounds of
@@ -18,6 +18,9 @@ not cheap:
 * **Dated imagery** (`/imagery/dated`, `/imagery/usgs-topo/tiles`) asks Planetary Computer,
   The National Map and USGS's sheet bucket on the caller's behalf, before sign-in: public
   data, but not an open proxy either.
+* **Confidence maps** (`/sites/{id}/epochs/{id}/weak-areas`, `/sites/{id}/fill-targets`)
+  read a grid of up to 2^22 cells a level out of the bucket and polygonise or compare it
+  (both behind the write token): cached, but bucketed so a loop cannot pin a CPU.
 
 In-process and per-machine, on purpose: the API runs as one Fly machine (fly.toml), and a
 limit that needs Redis to work is a limit nobody deploys. A second machine would give each
@@ -70,6 +73,9 @@ IMAGERY_CATALOG = Limit(burst=10, per_minute=30)
 #: Historical map tiles (`/imagery/usgs-topo/tiles`): each a few byte-range reads of a USGS
 #: sheet. A lens sweeping a sheet asks a few dozen a second at first, then browsers cache them.
 TOPO_TILE = Limit(burst=200, per_minute=600)
+#: Confidence-map computations. The re-scan flow asks once when an operator presses the
+#: button, and the fill workflow once per scan it fills.
+CELL_MAP = Limit(burst=20, per_minute=60)
 
 #: Clients remembered per bucket before the least recently seen is forgotten. Forgetting
 #: one only ever gives it a full bucket again, so the bound is on memory, not on safety.
@@ -138,6 +144,7 @@ class RateLimits:
         self.place = TokenBucket(PLACE, clock=clock)
         self.imagery_catalog = TokenBucket(IMAGERY_CATALOG, clock=clock)
         self.topo_tile = TokenBucket(TOPO_TILE, clock=clock)
+        self.cell_map = TokenBucket(CELL_MAP, clock=clock)
 
 
 #: The header Fly's proxy sets on every request, which is `API_CLIENT_IP_HEADER`'s default.

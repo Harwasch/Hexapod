@@ -36,6 +36,14 @@ export type AssetSourceKind = Schemas["AssetSourceKind"];
 
 export type Epoch = Schemas["EpochRead"];
 export type SiteFrame = Schemas["SiteFrameRead"];
+/** An epoch's confidence map, summarised (ADR 0016); null on an epoch is "not measured". */
+export type EpochConfidence = Schemas["EpochConfidenceRead"];
+export type AlignmentCap = Schemas["AlignmentCapRead"];
+export type WeakAreasRequest = Schemas["WeakAreasRequest"];
+export type WeakAreas = Schemas["WeakAreasRead"];
+export type WeakArea = Schemas["WeakArea"];
+/** The cells a re-scan left weak (`rescan-gate-v1`): what an inferred fill may fill. */
+export type FillTargets = Schemas["FillTargetsRead"];
 export type CheckTarget = Schemas["CheckTargetRead"];
 export type CheckTargetRole = Schemas["CheckTargetRole"];
 export type EpochStatus = Schemas["EpochStatus"];
@@ -217,6 +225,7 @@ export type KnowledgeScoutRequest = Schemas["KnowledgeScoutRequest"];
 export type KnowledgeScoutRead = Schemas["KnowledgeScoutRead"];
 export type KnowledgeScoutArea = Schemas["KnowledgeScoutArea"];
 export type ScoutCapture = Schemas["ScoutCapture"];
+export type ScoutRescanRef = Schemas["ScoutRescanRef"];
 /** Dated public imagery for the Time Lantern (stream lantern): NAIP years, dry-season
  * Sentinel-2 scenes and USGS historical map editions, each with its date's meaning, licence
  * and stated positional accuracy. */

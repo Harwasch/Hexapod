@@ -3,17 +3,20 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 
-from app.api.deps import DbSession, PublicStorage, RequireWriteToken
+from app.api.deps import DbSession, LimitCellMap, PublicStorage, RequireWriteToken
 from app.schemas.asset import AssetRead
 from app.schemas.bookmark import CameraBookmarkCreate, CameraBookmarkRead
 from app.schemas.check_target import CheckTargetRead, CheckTargetSet
+from app.schemas.common import Problem
+from app.schemas.confidence import FillTargetsRead, WeakAreasRead, WeakAreasRequest
 from app.schemas.epoch import EpochRead
 from app.schemas.site import SiteCreate, SiteRead, SiteSummary, SiteUpdate
 from app.services import assets as asset_service
 from app.services import bookmarks as bookmark_service
 from app.services import check_targets as check_target_service
+from app.services import confidence_maps
 from app.services import epochs as epoch_service
 from app.services import sites as site_service
 from app.storage import StorageUnavailableError
@@ -86,6 +89,67 @@ def list_site_epochs(site_id: uuid.UUID, db: DbSession) -> list[EpochRead]:
     currently shows. Empty for a legacy (seeded, catalog, hand-made) site."""
     site = site_service.get_site(db, site_id)
     return [epoch_service.epoch_to_read(e, site.assets) for e in site.epochs]
+
+
+@router.post(
+    "/{site_id}/epochs/{epoch_id}/weak-areas",
+    response_model=WeakAreasRead,
+    summary="An epoch's weak areas as re-scan zones",
+    dependencies=[RequireWriteToken, LimitCellMap],
+    responses={
+        404: {"model": Problem, "description": "No such site, or no such epoch of it."},
+        409: {
+            "model": Problem,
+            "description": "`confidence-not-measured`: the epoch's current revision has no "
+            "confidence map (a splat upload is not measured); `confidence-unreadable`: its "
+            "grid cannot be read; `no-site-frame`: the site has no frame to place cells by.",
+        },
+    },
+)
+def epoch_weak_areas(
+    site_id: uuid.UUID,
+    epoch_id: uuid.UUID,
+    payload: WeakAreasRequest,
+    db: DbSession,
+    storage: PublicStorage,
+) -> WeakAreasRead:
+    """The epoch's weak cells (weak-v1, ADR 0016) merged into at most `maxAreas` zones on
+    the globe, largest first, within `budgetM2`, each with a pattern to fly it again and a
+    hint. It stores nothing, but it is the first step of planning a flight -- the console's
+    re-scan flow, which then asks for a plan draft -- so it takes the write token like every
+    POST (and a per-client bucket: it outlines up to 2^22 cells). The patterns are UX
+    heuristics, labelled so (`heuristic`)."""
+    return confidence_maps.weak_areas(db, storage, site_id, epoch_id, payload)
+
+
+@router.get(
+    "/{site_id}/fill-targets",
+    response_model=FillTargetsRead,
+    summary="The cells a re-scan left weak",
+    dependencies=[RequireWriteToken, LimitCellMap],
+    responses={
+        404: {"model": Problem, "description": "No such site, or no such epoch of it."},
+        409: {
+            "model": Problem,
+            "description": "`confidence-not-measured`: the epoch has no confidence map (or the "
+            "site no published epoch); `no-rescan-yet`: no earlier epoch of the site was "
+            "measured; `confidence-unreadable`: a grid cannot be read.",
+        },
+    },
+)
+def site_fill_targets(
+    site_id: uuid.UUID,
+    db: DbSession,
+    storage: PublicStorage,
+    epoch_id: Annotated[uuid.UUID | None, Query(alias="epochId")] = None,
+) -> FillTargetsRead:
+    """`rescan-gate-v1`: the cells of epoch `epochId` (default: the site's latest published)
+    that are weak, covered by it, and were weak in at least one earlier measured epoch,
+    compared at the coarser level -- a re-scan that did not fix them. An inferred fill
+    fills only these (F4). A bit mask in the tileset frame of the site lattice. Behind the
+    write token, which its one consumer (the fill workflow) holds: a call may decode a grid
+    per earlier epoch, at most the eight most recent (`capped` says when there were more)."""
+    return confidence_maps.fill_targets(db, storage, site_id, epoch_id)
 
 
 @router.get(
