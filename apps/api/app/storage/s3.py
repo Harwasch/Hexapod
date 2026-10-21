@@ -166,6 +166,24 @@ class S3Storage:
         size = content_range.rpartition("/")[2]
         return data, int(size) if size.isdecimal() else len(data)
 
+    def get_object_range(self, key: str, start: int, length: int) -> bytes:
+        if start < 0 or length <= 0:
+            return b""
+        try:
+            response = self._client.get_object(
+                Bucket=self._bucket, Key=key, Range=f"bytes={start}-{start + length - 1}"
+            )
+        except ClientError as error:
+            # S3's answer to a range that starts past the end of the object.
+            if str(error.response.get("Error", {}).get("Code", "")) == "InvalidRange":
+                return b""
+            raise
+        data: bytes = response["Body"].read()
+        # A server that ignored the range (a 200) sent the whole object.
+        if not response.get("ContentRange") and len(data) > length:
+            return data[start : start + length]
+        return data[:length]
+
     def download_file(self, key: str, target: Path) -> int:
         # boto3's managed transfer: ranged GETs written to a temporary file beside the
         # target and renamed into place, so memory stays at a few chunks whatever the

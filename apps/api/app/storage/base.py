@@ -128,6 +128,15 @@ class ObjectStorage(Protocol):
         """
         ...
 
+    def get_object_range(self, key: str, start: int, length: int) -> bytes:
+        """At most `length` bytes of an object from byte `start`, in one ranged GET; fewer
+        at its end, none from past it.
+
+        For reading a few boxes out of a 12 GB video (`services/video_location.py`) without
+        downloading any of the rest.
+        """
+        ...
+
     def download_file(self, key: str, target: Path) -> int:
         """Stream an object to a file and return its size, never holding it in memory.
 
