@@ -235,13 +235,23 @@ modifier) already draws Confidence, Data age and the objects' rules per tile.
 6. **Not Spark, not the WebGPU trial.** Spark's world modifier has no port of the weight, and
    the trial's modifiers are GLSL only: there the control stays disabled, with the notice naming
    Per cell and its one-click switch.
-7. **Cost.** The rule's PlayCanvas parts load on demand: the channel (`scanRule.ts`, 7.0 kB raw)
+7. **Cost.** The rule's PlayCanvas parts load on demand: the channel (`scanRule.ts`, 7.2 kB raw)
    with the rule's session or the renderer, the dates (`ruleDates.ts`, 3.8 kB raw) with the
-   first rule that names one. Index entry 196,148 B → 190,489 B gzip (Node's gzip, as
-   `check-bundle.mjs` counts): the bundler moved three modules the lazy parts now share with the
-   entry (`scanLayers`, `layerLook`, `view/stream`) into chunks of their own, which the page
-   still loads up front: its JavaScript before the first frame grew 1,602,079 B → 1,603,880 B
-   gzip (976 B raw), two more files.
+   first rule that names one. They borrow the globe's own streaming classes (the tile streamer,
+   a scan's layers and objects, the parser, the layers' pick) **lent at runtime, not imported**
+   (`cesium/scanView/ruleKit.ts`): SiteManager hands the rule's session a tuple of them as a rule
+   starts, and the session lends it to the renderer. Imported, those modules were shared by the
+   entry and an on-demand chunk, and the bundler cut them out of the entry into three chunks of
+   their own that the page still loads up front: the entry fell 196,148 → 190,489 B gzip but the
+   page's JavaScript before its first frame grew 1,602,079 → 1,603,880 B gzip (+976 B raw, two
+   more files), which is the measure that matters. Lent, no module moves (83 files before and
+   after): before its first frame the page loads 1,602,079 → 1,602,391 B gzip (+71 B raw), its
+   entry 196,148 → 196,349 B gzip (budget 197,000; Node's gzip, as `check-bundle.mjs` counts).
+   The raw growth is the session's context and the tuple. Gzip grows more than raw because any
+   new reference to those bindings has the minifier re-letter the export aliases of the shared
+   chunks (`ci as f` becomes `li as f`), which compress a little worse: the tuple in another
+   module, without the helper in a shared chunk, or of fewer parts measured +280 to +330 B gzip
+   each; without it, +37.
 
 ### Consequences
 
