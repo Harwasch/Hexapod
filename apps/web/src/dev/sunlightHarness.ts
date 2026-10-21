@@ -75,6 +75,11 @@ export interface SlabView {
   parts: string[];
   /** What the relight reported drawing, if anything. */
   reported: { at: string; sine: number } | null;
+  /**
+   * The inferred layer's pixels (red-dominant, left out of `flat` and `round`): how many, and
+   * their mean red (0-255). Under PlayCanvas only, which draws a layer in the scan's sort.
+   */
+  layer: { covered: number; red: number };
 }
 
 export interface SunlightHarness {
@@ -84,6 +89,8 @@ export interface SunlightHarness {
     asCaptured?: boolean;
     /** Confidence drawn over the slab, every cell strong. */
     cell?: boolean;
+    /** The slab's inferred layer shown (Inferred: Show), where the slab declares one. */
+    layer?: boolean;
   }): Promise<SlabView>;
 }
 
@@ -202,29 +209,41 @@ export async function startSunlightHarness(options: {
     for (let frame = 0; frame < 3000 && still < 30; frame += 1) {
       await nextFrame(scene);
       const status = host.status();
-      const ready = status.active && status.tiles > 0 && status.loading === 0 && status.settled;
+      // An inferred layer shown is in too: its tileset read and every one on screen.
+      const layers = status.layers;
+      const layersIn = !layers || (layers.loading === 0 && layers.drawn >= layers.wanted);
+      const ready =
+        status.active && status.tiles > 0 && status.loading === 0 && status.settled && layersIn;
       still = ready ? still + 1 : 0;
     }
   };
 
   function measureOverlay(
     canvas: HTMLCanvasElement,
-  ): Pick<SlabView, "coverage" | "flat" | "round"> {
+  ): Pick<SlabView, "coverage" | "flat" | "round" | "layer"> {
     const copy = document.createElement("canvas");
     copy.width = canvas.width;
     copy.height = canvas.height;
     const context = copy.getContext("2d");
-    if (!context) return { coverage: 0, flat: 0, round: 0 };
+    if (!context) return { coverage: 0, flat: 0, round: 0, layer: { covered: 0, red: 0 } };
     context.drawImage(canvas, 0, 0);
     const data = context.getImageData(0, 0, copy.width, copy.height).data;
     const half = copy.width / 2;
     let covered = 0;
     const sum = { left: 0, right: 0 };
     const count = { left: 0, right: 0 };
+    const layer = { covered: 0, red: 0 };
     for (let p = 0; p < data.length; p += 4) {
       // The overlay is transparent where nothing is drawn: covered is a quarter opaque or more.
       if ((data[p + 3] ?? 0) < 64) continue;
       covered += 1;
+      const [r, g, b] = [data[p] ?? 0, data[p + 1] ?? 0, data[p + 2] ?? 0];
+      // The layer's red, unmistakable against the grey wall at any light.
+      if (r > 1.8 * Math.max(g, b) && r > 12) {
+        layer.covered += 1;
+        layer.red += r;
+        continue;
+      }
       const side = (p / 4) % copy.width < half ? "left" : "right";
       sum[side] += ((data[p] ?? 0) + (data[p + 1] ?? 0) + (data[p + 2] ?? 0)) / 3;
       count[side] += 1;
@@ -233,18 +252,23 @@ export async function startSunlightHarness(options: {
       coverage: covered / (data.length / 4),
       flat: count.left > 0 ? sum.left / count.left : 0,
       round: count.right > 0 ? sum.right / count.right : 0,
+      layer: { covered: layer.covered, red: layer.covered > 0 ? layer.red / layer.covered : 0 },
     };
   }
 
-  function measure(): Pick<SlabView, "coverage" | "flat" | "round"> {
+  function measure(): Pick<SlabView, "coverage" | "flat" | "round" | "layer"> {
     const drawn = host ? overlay() : null;
-    if (host) return drawn ? measureOverlay(drawn) : { coverage: 0, flat: 0, round: 0 };
+    if (host) {
+      return drawn
+        ? measureOverlay(drawn)
+        : { coverage: 0, flat: 0, round: 0, layer: { covered: 0, red: 0 } };
+    }
     const canvas = scene.canvas;
     const copy = document.createElement("canvas");
     copy.width = canvas.width;
     copy.height = canvas.height;
     const context = copy.getContext("2d");
-    if (!context) return { coverage: 0, flat: 0, round: 0 };
+    if (!context) return { coverage: 0, flat: 0, round: 0, layer: { covered: 0, red: 0 } };
     context.drawImage(canvas, 0, 0);
     const data = context.getImageData(0, 0, copy.width, copy.height).data;
     const bg = Color.fromCssColorString(BACKGROUND);
@@ -267,6 +291,8 @@ export async function startSunlightHarness(options: {
       coverage: covered / (data.length / 4),
       flat: count.left > 0 ? sum.left / count.left : 0,
       round: count.right > 0 ? sum.right / count.right : 0,
+      // CesiumJS draws an inferred layer as a tileset of its own, which this page has not.
+      layer: { covered: 0, red: 0 },
     };
   }
 
@@ -277,7 +303,8 @@ export async function startSunlightHarness(options: {
   };
 
   return {
-    async view({ sun, at, asCaptured = false, cell = false }) {
+    async view({ sun, at, asCaptured = false, cell = false, layer = false }) {
+      useSettings.getState().set({ inferredStyle: layer ? "show" : "hide" });
       useAsCaptured.getState().set(asCaptured);
       useLighting.getState().set(sun);
       const time = JulianDate.fromIso8601(at);
