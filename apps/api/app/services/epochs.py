@@ -130,6 +130,10 @@ def epoch_to_read(epoch: Epoch, assets: Sequence[Asset]) -> EpochRead:
         platform=EpochPlatform(epoch.platform),
         status=EpochStatus(epoch.status),
         join_method=EpochJoinMethod(epoch.join_method),
+        join_point_source=(
+            JoinPointSource(epoch.join_point_source) if epoch.join_point_source else None
+        ),
+        join_point_accuracy_m=epoch.join_point_accuracy_m,
         alignment=epoch.alignment,
         quality=quality_from(epoch.quality),
         current_asset_id=current_id,
@@ -251,6 +255,18 @@ class JoinPoint:
     #: The video fix's horizontal accuracy, when it is the video's and one was written.
     accuracy_m: float | None
     buffer_m: float
+
+
+def spatial_join_point(capture: Capture) -> tuple[str, float | None]:
+    """What a `spatial` epoch records it was matched by (`Epoch.join_point_source`,
+    `join_point_accuracy_m`): `video` and its accuracy when the capture's video location
+    is recorded -- `join_point` took it -- else `upload`, a located point with no
+    accuracy of its own. Read off the capture, so the registration that writes the epoch
+    agrees with the frame decision made before the run, which read the same record."""
+    video = recorded_video_location(capture)
+    if video is not None:
+        return JoinPointSource.VIDEO.value, video.accuracy_m
+    return JoinPointSource.UPLOAD.value, None
 
 
 def recorded_video_location(capture: Capture) -> VideoLocation | None:
@@ -881,6 +897,7 @@ def record_rejected(
     )
     named = requested_site(db, capture)
     explicit = capture.site_id == site.id or (named is not None and named.id == site.id)
+    source, accuracy = (None, None) if explicit else spatial_join_point(capture)
     ordinal = (db.scalar(select(func.max(Epoch.ordinal)).where(Epoch.site_id == site.id)) or 0) + 1
     observed = capture.captured_at or capture.created_at
     epoch = Epoch(
@@ -896,6 +913,8 @@ def record_rejected(
         platform=platform,
         status=EpochStatus.REJECTED.value,
         join_method=(EpochJoinMethod.EXPLICIT if explicit else EpochJoinMethod.SPATIAL).value,
+        join_point_source=source,
+        join_point_accuracy_m=accuracy,
         alignment=alignment,
         quality=None,
     )

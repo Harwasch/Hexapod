@@ -449,6 +449,7 @@ def test_a_rejected_capture_is_kept_where_its_video_says(db: Session) -> None:
     )
 
     assert epoch is not None and epoch.site_id == site.id and epoch.join_method == "spatial"
+    assert (epoch.join_point_source, epoch.join_point_accuracy_m) == ("video", 5.0)
     assert epochs.distance_to_site_m(db, site.id, ORIGIN[0], ORIGIN[1]) == 0.0
     from geoalchemy2.shape import to_shape
 

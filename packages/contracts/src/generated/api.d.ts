@@ -5692,6 +5692,9 @@ export interface components {
             /** Jobid */
             jobId: string | null;
             joinMethod: components["schemas"]["EpochJoinMethod"];
+            /** Joinpointaccuracym */
+            joinPointAccuracyM: number | null;
+            joinPointSource: components["schemas"]["JoinPointSource"] | null;
             /**
              * Observedat
              * Format: date-time
@@ -6921,6 +6924,15 @@ export interface components {
              */
             updatedAt: string;
         };
+        /**
+         * JoinPointSource
+         * @description Which point a capture was matched to a site by (``spatial`` joins): the location its
+         *     video's container carried (``video``), else the one sent with the upload (``upload``:
+         *     the browser's fix, or a place typed for the run). ADR 0013, "Joining a site by the
+         *     video's GPS".
+         * @enum {string}
+         */
+        JoinPointSource: "video" | "upload";
         /** KnowledgeCellRead */
         KnowledgeCellRead: {
             /** Bounds */
@@ -12385,6 +12397,7 @@ export type SchemaJobRead = components['schemas']['JobRead'];
 export type SchemaJobRetry = components['schemas']['JobRetry'];
 export type SchemaJobStepLog = components['schemas']['JobStepLog'];
 export type SchemaJobStepRead = components['schemas']['JobStepRead'];
+export type SchemaJoinPointSource = components['schemas']['JoinPointSource'];
 export type SchemaKnowledgeCellRead = components['schemas']['KnowledgeCellRead'];
 export type SchemaKnowledgeCellRecord = components['schemas']['KnowledgeCellRecord'];
 export type SchemaKnowledgeClassRead = components['schemas']['KnowledgeClassRead'];
