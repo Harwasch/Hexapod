@@ -87,7 +87,7 @@ def test_a_measured_run_records_its_surface_and_the_epoch_reads_it(
         "surfacedCells": summary["surfaced"],
         "medianSigmaM": 0.03,
         "originHeightM": HEIGHT,
-        "groundWindowM": None,  # the fixture's descriptor names no estimators
+        "groundWindowM": 5.0,  # the fixture states P5's window (its ground's reach)
     }
     assert epoch["confidence"]["level"] == 2
     site = client.get(f"/api/v1/sites/{capture.site_id}").json()
@@ -219,7 +219,7 @@ def test_an_epoch_reads_its_ground_window_from_the_estimators() -> None:
     import uuid
 
     found = surface_descriptor("e1", HEIGHT)
-    found["estimators"] = {"groundWindowM": 5.0}
+    found["estimators"] = {"groundWindowM": 2.5}
     row = EpochMap(
         asset_id=uuid.uuid4(),
         url="u",
@@ -228,7 +228,7 @@ def test_an_epoch_reads_its_ground_window_from_the_estimators() -> None:
         descriptor=found,
         summary=found["summary"],
     )
-    assert epoch_maps.surface_to_read(row).ground_window_m == 5.0
+    assert epoch_maps.surface_to_read(row).ground_window_m == 2.5
 
 
 def test_the_surface_check_takes_what_the_pipeline_writes() -> None:
