@@ -270,6 +270,7 @@ export function namedKit([
   layerBudgetShare,
   pickedLayers,
   splitObjectsOf,
+  registerPickSource,
 ]: RuleKit) {
   return {
     TileStreamer,
@@ -280,6 +281,7 @@ export function namedKit([
     layerBudgetShare,
     pickedLayers,
     splitObjectsOf,
+    registerPickSource,
   };
 }
 

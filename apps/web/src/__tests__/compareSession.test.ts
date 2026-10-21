@@ -65,6 +65,7 @@ describe("two dates compared, as PlayCanvas is handed them", () => {
       // Both dates share the site's one placement: the left one's tiles go where they are.
       placement: null,
       root: Matrix4.toArray(Matrix4.IDENTITY),
+      owns: [],
     });
     expect(view?.split).toBe(0.4);
     expect(Matrix4.equals(view?.toWorld(), ROOT)).toBe(true);

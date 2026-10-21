@@ -90,7 +90,8 @@ export function startCompare(
     if (published?.key === key) return;
     if (published && published.assetId !== right.id) unpublish();
     const view: ScanCompareView = {
-      left: { url, assetId: left.id, extras, placement, root },
+      // It owns no cell of a plane: the comparison splits the budget evenly (no plane).
+      left: { url, assetId: left.id, extras, placement, root, owns: [] },
       split,
       toWorld: () =>
         rightSet.isDestroyed()

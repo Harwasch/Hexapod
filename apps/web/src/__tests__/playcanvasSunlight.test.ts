@@ -15,6 +15,7 @@ import type { CellLookView } from "@/lib/cellLook";
 import { publishScanCellView } from "@/cesium/scanView/scanCellView";
 import type { LayerLook } from "@/cesium/scanView/layerLook";
 import { publishScanSun, scanSunDrawn, scanSunReading, type ScanSun } from "@/state/sunReport";
+import { SIDE_STREAM } from "@/cesium/scanView/scanCompare";
 import { SUN_HOOK_VS, SUN_STREAM } from "@/cesium/scanView/sunHook";
 import type { BackendHooks, ScanPose } from "@/cesium/scanView/types";
 import type { TileWork } from "@/cesium/scanView/tileWork";
@@ -196,6 +197,7 @@ vi.mock("playcanvas", () => {
     PIXELFORMAT_RGBA32F: 3,
     PIXELFORMAT_RGBA32U: 4,
     PIXELFORMAT_R32U: 5,
+    PIXELFORMAT_R8U: 33,
     FILTER_NEAREST: 0,
     ADDRESS_CLAMP_TO_EDGE: 0,
     Quat: { IDENTITY: {} },
@@ -268,6 +270,9 @@ const LOOK: LayerLook = {
   fromScan: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
 };
 
+/** The streams the work buffer has beyond the compare side's, which is there from the start. */
+const sunStreams = () => pc.format.streams.filter((s) => s.name !== SIDE_STREAM);
+
 describe("Sunlight under PlayCanvas", () => {
   beforeEach(() => {
     vi.stubGlobal("Worker", FakeWorker);
@@ -288,7 +293,7 @@ describe("Sunlight under PlayCanvas", () => {
     backend.add(near);
     backend.render(pose);
     expect(component(near).modifier ?? null).toBeNull();
-    expect(pc.format.streams).toEqual([]);
+    expect(sunStreams()).toEqual([]);
     expect(pc.material.chunks.get("gsplatModifyVS")).toBe("default modify");
     expect(pc.material.updates).toBe(0);
     // It draws the scan, and it can relight: the relight's report counts it as drawn.
@@ -318,7 +323,7 @@ describe("Sunlight under PlayCanvas", () => {
     publishScanSun("scan-b", MORNING);
     expect(wanted()).toBeGreaterThan(before);
     // The word each splat carries: one R32U stream of the work buffer, added once.
-    expect(pc.format.streams).toEqual([{ name: SUN_STREAM, format: 5 }]);
+    expect(sunStreams()).toEqual([{ name: SUN_STREAM, format: 5 }]);
     // Every scan tile's copy writes it -- one with no objects and no view too -- and a layer's
     // writes the skip bit.
     const tileGlsl = component(near).modifier?.glsl ?? "";
@@ -365,7 +370,7 @@ describe("Sunlight under PlayCanvas", () => {
     // On again: the same stream, the hook back in.
     publishScanSun("scan-b", MORNING);
     backend.render(pose);
-    expect(pc.format.streams).toHaveLength(1);
+    expect(sunStreams()).toHaveLength(1);
     expect(pc.material.chunks.get("gsplatModifyVS")).toBe(SUN_HOOK_VS);
     backend.destroy();
   });
@@ -377,7 +382,7 @@ describe("Sunlight under PlayCanvas", () => {
     backend.add(near);
     backend.render(pose);
     // Already on when the renderer started: the stream from the start, the tiles writing it.
-    expect(pc.format.streams).toHaveLength(1);
+    expect(sunStreams()).toHaveLength(1);
     expect(component(near).modifier?.glsl).toContain("writeHexapodSun(");
     expect(pc.material.params.get("uHexapodSunlight")).toEqual([0, 0.35, 0.25, 0].map(Math.fround));
     backend.destroy();

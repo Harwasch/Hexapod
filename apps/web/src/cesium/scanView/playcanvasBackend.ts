@@ -60,6 +60,14 @@
  * splat is lit (a layer's is not), and under Confidence or Data age the look drawn for a black
  * splat, with which the hook keeps CesiumJS's order -- the sun before the look. GLSL only too.
  *
+ * Two dates compared (scanCompare.ts) are drawn in this one app too: the scan is the right-hand
+ * date, the left one is streamed beside it as a per-cell rule's dates are (ruleDates.ts), within
+ * the same budget. Every tile's copy writes the side its date is drawn on into one more byte a
+ * splat (`hexapodSide`, in the work buffer from start-up), from one uniform a tile; the frame's
+ * hook hands it to the fragment shader as a flat varying, and `gsplatModifyPS` discards each
+ * fragment on the other date's side of the divider by `gl_FragCoord.x`. The divider is a uniform
+ * of the frame: swiping copies nothing. Scene selection picks each date on its side only.
+ *
  * Selecting in the scene (cesium/sceneSelect) reads the tiles drawn now in each tile's own
  * order (`pickTiles`): the Morton order put back, so a pick's index is the index the tile's
  * ids in `instances.json` are listed by. The copies are made only when a pick first asks for
@@ -79,6 +87,7 @@
  * crash), which the host answers by drawing with WebGL2 instead (`hooks.deviceLost`).
  */
 
+import { SplitDirection } from "cesium";
 import * as pc from "playcanvas";
 
 import { CELL_TEXTURE_WIDTH } from "@/lib/cellGrid";
@@ -125,9 +134,23 @@ import {
   watchScanRule,
   type ScanRuleView,
 } from "./scanRule";
+import {
+  COMPARE_HOOK_PS,
+  compareHookVs,
+  reportScanCompare,
+  SIDE_LEFT,
+  SIDE_NONE,
+  SIDE_RIGHT,
+  SIDE_STREAM,
+  SIDE_VARYING,
+  SIDE_WRITE_GLSL,
+  SIDE_WRITE_STEP,
+  watchScanCompare,
+  type ScanCompareView,
+} from "./scanCompare";
 import { countOverlayLoopTick } from "./stats";
 import { SUN_HOOK_VS, SUN_STREAM, SUN_WORD_GLSL } from "./sunHook";
-import type { RuleDates } from "./ruleDates";
+import type { RuleDates, RuleDatesPlan } from "./ruleDates";
 import type { BackendHooks, GraphicsApi, ScanBackend, ScanPose, SplatRendererKind } from "./types";
 
 const log = createLogger("playcanvas");
@@ -140,6 +163,13 @@ const NO_DATES = {
   owners: { data: new Uint8Array(0), height: 0 },
   scanOwns: [],
 };
+
+/**
+ * Two dates compared share the one budget evenly, whatever the divider: each draws about half
+ * the screen at rest, and shares that followed the divider would have both dates streamed again
+ * on every frame of a swipe, which is meant to copy nothing.
+ */
+const COMPARE_SHARES = { scan: 0.5, dates: [0.5] } as const;
 
 /** Where an object not placed yet is weighed: outside every plane, so it is not drawn. */
 const UNPLACED = 1e9;
@@ -177,7 +207,8 @@ export const SORT_REFRESH_MS = 100;
  * gets the look alone: the objects' dim is not put on splats no object was found in. With
  * `rule`, last, a per-cell view rule's weight on the opacity (scanRule.ts), from the spread the
  * splat has once the motion moved it; under the rule a split object (`uRuleSource.y`) keeps its
- * own colours, as CesiumJS draws it outside the rule's look.
+ * own colours, as CesiumJS draws it outside the rule's look. With `side`, first, the side of the
+ * compare divider the tile's date is drawn on (scanCompare.ts), written for the frame's hook.
  */
 export function playcanvasModifierGlsl(
   ids: boolean,
@@ -186,6 +217,7 @@ export function playcanvasModifierGlsl(
   cell = false,
   sun = false,
   rule = false,
+  side = false,
 ): string {
   const id = ids ? "loadSplatInstance().r" : "0u";
   const second = wide ? "loadSplatWeights2()" : "uvec4(0u)";
@@ -241,6 +273,8 @@ export function playcanvasModifierGlsl(
           : ""
       }${ruledLook}`;
   const ruleStep = rule ? "\n    color.a *= hexapodRuleWeight(center);" : "";
+  // Two dates compared: which one this tile is of, first, so no early return skips it.
+  const sideStep = side ? `${SIDE_WRITE_STEP}\n    ` : "";
   const ruleSpread = rule
     ? `
     hexapodRuleRotation = rotation;
@@ -268,6 +302,7 @@ ${SCAN_INSTANCE_RULE_GLSL}
 ${SCAN_MOTION_GLSL}
 ${cellUniforms}
 ${rule ? RULE_WEIGHT_GLSL : ""}
+${side ? SIDE_WRITE_GLSL : ""}
 mat3 hexapodLinear = mat3(0.0);
 void modifySplatCenter(inout vec3 center) {
     hexapodLinear = mat3(0.0);
@@ -285,7 +320,7 @@ void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout ve
     }${ruleSpread}
 }
 void modifySplatColor(vec3 center, inout vec4 color) {
-    ${sunStep}${colorStep}${ruleStep}
+    ${sideStep}${sunStep}${colorStep}${ruleStep}
 }
 `;
 }
@@ -328,7 +363,8 @@ const MODIFIERS = new Map<string, WorkBufferModifier>();
 
 /**
  * The modifier for a tile with ids, skin weights, a cell view, the sunlight's word (`sun`:
- * every tile writes it once the work buffer has it), a per-cell view rule, or any of them:
+ * every tile writes it once the work buffer has it), a per-cell view rule, the side of the
+ * compare divider its date is drawn on (`side`), or any of them:
  * always GLSL (the colour rule, the motion, the cell look, the word, the rule's weight); WGSL
  * only for ids alone, and then hide and highlight alone -- a WebGPU renderer moves nothing and
  * draws no cell view, sunlight or rule (see the file comment). One object per kind, so a tile's
@@ -341,13 +377,16 @@ export function playcanvasModifier(
   cell = false,
   sun = false,
   rule = false,
+  side = false,
 ): WorkBufferModifier {
-  const key = `${String(ids)}|${String(skin)}|${String(skin && wide)}|${String(cell)}|${String(sun)}|${String(rule)}`;
+  const key = `${String(ids)}|${String(skin)}|${String(skin && wide)}|${String(cell)}|${String(sun)}|${String(rule)}|${String(side)}`;
   let modifier = MODIFIERS.get(key);
   if (!modifier) {
     modifier = {
-      glsl: playcanvasModifierGlsl(ids, skin, skin && wide, cell, sun, rule),
-      ...(ids && !skin && !cell && !sun && !rule ? { wgsl: PLAYCANVAS_INSTANCE_WGSL } : {}),
+      glsl: playcanvasModifierGlsl(ids, skin, skin && wide, cell, sun, rule, side),
+      ...(ids && !skin && !cell && !sun && !rule && !side
+        ? { wgsl: PLAYCANVAS_INSTANCE_WGSL }
+        : {}),
     };
     MODIFIERS.set(key, modifier);
   }
@@ -362,10 +401,11 @@ export function playcanvasModifier(
  * (scanRule.ts): a layer owns a cell only where no date saw it. GLSL only, as the motion: the
  * WebGPU trial draws a scan with inferred layers with WebGL2.
  */
-function layerModifierGlsl(sun: boolean, rule = false): string {
+function layerModifierGlsl(sun: boolean, rule = false, side = false): string {
   return `
 ${sun ? SUN_WORD_GLSL : ""}
 ${rule ? RULE_WEIGHT_GLSL : ""}
+${side ? SIDE_WRITE_GLSL : ""}
 uniform vec4 uCellFill;
 uniform mat4 uLayerFrame;
 uniform vec4 uLayerTint;
@@ -389,7 +429,7 @@ void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout ve
   }
 }
 void modifySplatColor(vec3 center, inout vec4 color) {
-    ${sun ? "writeHexapodSun(uvec4(HEXAPOD_SUN_SKIP, 0u, 0u, 0u));\n    " : ""}if (uCellFill.x > 0.5) {
+    ${side ? `${SIDE_WRITE_STEP}\n    ` : ""}${sun ? "writeHexapodSun(uvec4(HEXAPOD_SUN_SKIP, 0u, 0u, 0u));\n    " : ""}if (uCellFill.x > 0.5) {
         color = hexapodCellGrey(color);
     }
     color = hexapodLayerColor(center, color, uLayerFrame, uLayerTint, uLayerPattern, uLayerCones,
@@ -409,11 +449,21 @@ export const PLAYCANVAS_LAYER_MODIFIER: WorkBufferModifier = { glsl: layerModifi
  */
 export const PLAYCANVAS_LAYER_SUN_MODIFIER: WorkBufferModifier = { glsl: layerModifierGlsl(true) };
 
-/** The layer's modifiers under a per-cell view rule, without and with the sunlight's word. */
-const LAYER_RULE_MODIFIERS: readonly WorkBufferModifier[] = [
-  { glsl: layerModifierGlsl(false, true) },
-  { glsl: layerModifierGlsl(true, true) },
-];
+/**
+ * The layer's modifiers under a per-cell view rule or two dates compared, with or without the
+ * sunlight's word: one object per kind, so a tile's modifier is compared by identity.
+ */
+const LAYER_MODIFIERS = new Map<string, WorkBufferModifier>([
+  ["false|false|false", PLAYCANVAS_LAYER_MODIFIER],
+  ["true|false|false", PLAYCANVAS_LAYER_SUN_MODIFIER],
+]);
+function layerModifierOf(sun: boolean, rule: boolean, side: boolean): WorkBufferModifier {
+  const key = `${String(sun)}|${String(rule)}|${String(side)}`;
+  let modifier = LAYER_MODIFIERS.get(key);
+  if (!modifier)
+    LAYER_MODIFIERS.set(key, (modifier = { glsl: layerModifierGlsl(sun, rule, side) }));
+  return modifier;
+}
 
 /** The decoded columns a pick copy is made from (lib/splatLayout.ts names). */
 type PickColumns = Readonly<Record<string, Float32Array>>;
@@ -501,6 +551,18 @@ interface TileBinding {
   /** `pick` at `placement`: made on first need, so a moving object costs no copy a frame. */
   placedPick: PickTile | null;
 }
+
+/** What a pick of a tile reads (a scan tile's binding, or another date's tile's record). */
+type PickRecord = Pick<
+  TileBinding,
+  "checksum" | "order" | "columns" | "origin" | "pick" | "placement" | "placedPick"
+>;
+
+/**
+ * The priority of the two pick sources a comparison registers (cesium/sceneSelect/pickSources.ts):
+ * above the renderer host's own for the scan (`DEDICATED_PRIORITY`, 1), which says no side.
+ */
+const COMPARE_PICK_PRIORITY = 2;
 
 /** An inferred layer's tile as the renderer keeps it: its look and the eye its fade is from. */
 interface LayerState {
@@ -677,8 +739,17 @@ function assemble(
   let drawBudget = budget;
   /** The scan is streamed natively (`streamNative`): its own budget is PlayCanvas's. */
   let streamingNatively = false;
-  /** The scan's share of the budget: all of it, or under a rule its share (ruleDates.ts). */
-  const scanShare = (): number => (rule ? (ruleDates?.scanShare() ?? 1) : 1);
+  /**
+   * The scan's share of the budget: all of it, or under a rule or a comparison its share
+   * (ruleDates.ts).
+   */
+  const scanShare = (): number => (rule || compare ? (ruleDates?.scanShare() ?? 1) : 1);
+  /**
+   * What the dates beside the scan follow: a rule's plan, or a comparison's left-hand date with
+   * the one budget split evenly (`COMPARE_SHARES`), or none.
+   */
+  const datesPlan = (): RuleDatesPlan =>
+    rule ?? (compare ? { ...NO_DATES, dates: [compare.left], shares: COMPARE_SHARES } : NO_DATES);
   /**
    * What PlayCanvas's own level of detail may draw: the budget, or for a natively streamed scan
    * under a rule its share of it, as the host streams a tiled scan's share.
@@ -699,6 +770,25 @@ function assemble(
   const anchors = new WeakMap<pc.Entity, [number, number]>();
   const ruleSources = new WeakMap<pc.Entity, Float32Array>();
   /**
+   * Two dates compared (scanCompare.ts), GLSL only as the motion: the comparison drawn now, or
+   * null. Every entity of another date (`dated`: the left one's tiles, layers and objects, or a
+   * rule's dates') is drawn left of the divider, the scan's own right of it; each tile's copy
+   * writes which (`SIDE_STREAM`, added at start-up) and the frame's hook cuts at the divider.
+   */
+  let compare: ScanCompareView | null = null;
+  const dated = new WeakSet<pc.Entity>();
+  /** Another date's tiles, for its pick source under a comparison (made on first need). */
+  const datePicks = new WeakMap<pc.Entity, PickRecord>();
+  let unpick: (() => void) | null = null;
+  let pickedLeft: string | null = null;
+  /** Whether the frame's hook cuts at the divider now, and where (the canvas's pixels). */
+  let cutHooked = false;
+  let dividerAt = Number.NaN;
+  const dividerValue = new Float32Array(4);
+  let varying = false;
+  /** Seen from afar last frame: no objects are selected then, on either side. */
+  let farNow = false;
+  /**
    * Sunlight (state/sunReport.ts, sunHook.ts), GLSL only as the motion: the sun to light by now,
    * whether the work buffer carries the word the copy pass writes for it -- added with the
    * first sun and kept, a stream not being taken back -- and whether the frame's hook is in.
@@ -708,8 +798,9 @@ function assemble(
   let sunHooked = false;
   let sunSet: ScanSun | null = null;
   let sunFrames = 0;
-  /** PlayCanvas's own final-draw chunk, put back when the hook comes out. */
+  /** PlayCanvas's own final-draw chunks, put back when the hooks come out. */
   let ownModifyVS: string | undefined;
+  let ownModifyPS: string | undefined;
   const sunValue = new Float32Array(4);
   const sunlightValue = new Float32Array(4);
   /** The device is gone for good: nothing more is drawn, and the host replaces the renderer. */
@@ -732,6 +823,12 @@ function assemble(
   // are already the detail the view asked for. The smallest splat kept is set per resolution,
   // and to none from afar (`splatMinPixelSize`, in render).
   (app.scene.gsplat as unknown as { dataFormat: string }).dataFormat = "large";
+  // The side of the compare divider each splat is drawn on (scanCompare.ts): one byte a splat,
+  // added at start-up so the work buffer's layout never changes under a comparison. Written
+  // only while two dates are compared; read only by the hook drawn then. GLSL only.
+  if (moves) {
+    app.scene.gsplat.format.addExtraStreams([{ name: SIDE_STREAM, format: pc.PIXELFORMAT_R8U }]);
+  }
   const camera = new pc.Entity("scan-camera");
   camera.addComponent("camera", { clearColor: new pc.Color(0, 0, 0, 0) });
   app.root.addChild(camera);
@@ -936,8 +1033,13 @@ function assemble(
     return rule !== null && source < 31 && ((rule.tinted >> source) & 1) === 1;
   };
 
-  /** The rule's uniforms on `component`, while one is drawn. */
+  /** Which side of the compare divider `entity` is drawn on: another date's left, else right. */
+  const sideOf = (entity: pc.Entity): number =>
+    !compare ? SIDE_NONE : dated.has(entity) ? SIDE_LEFT : SIDE_RIGHT;
+
+  /** The rule's uniforms on `component`, while one is drawn, and the comparison's side. */
   const setRuleUniforms = (component: pc.GSplatComponent, entity: pc.Entity): void => {
+    if (compare) component.setParameter("uHexapodSide", sideOf(entity));
     if (!rule) return;
     component.setParameter("uRuleOwners", ruleOwners ?? stand().state);
     component.setParameter("uRulePlane", rulePlane);
@@ -982,11 +1084,13 @@ function assemble(
     const cell = cells?.drawing === true && cells.has(entity);
     // Once the work buffer carries the sunlight's word, every scan tile's copy writes it.
     const lit = sunStream && cells?.has(entity) === true;
-    // Under a rule every tile is weighed by it, the scan's own and the other dates'.
+    // Under a rule every tile is weighed by it, the scan's own and the other dates'; under a
+    // comparison every tile writes its side.
     const ruled = rule !== null;
+    const sided = compare !== null;
     const modifier =
-      hasIds || skinned || cell || lit || ruled
-        ? playcanvasModifier(hasIds, skinned, tile?.skinWide ?? false, cell, lit, ruled)
+      hasIds || skinned || cell || lit || ruled || sided
+        ? playcanvasModifier(hasIds, skinned, tile?.skinWide ?? false, cell, lit, ruled, sided)
         : null;
     if (modifier !== (modifiers.get(entity) ?? null)) {
       modifiers.set(entity, modifier);
@@ -1268,15 +1372,11 @@ function assemble(
   };
 
   /**
-   * A layer's modifier: with the skip bit once the work buffer carries the sunlight's word, and
-   * the rule's weight while a rule is drawn.
+   * A layer's modifier: with the skip bit once the work buffer carries the sunlight's word, the
+   * rule's weight while a rule is drawn, and its side while two dates are compared.
    */
   const layerModifier = (): WorkBufferModifier =>
-    rule
-      ? (LAYER_RULE_MODIFIERS[sunStream ? 1 : 0] ?? PLAYCANVAS_LAYER_MODIFIER)
-      : sunStream
-        ? PLAYCANVAS_LAYER_SUN_MODIFIER
-        : PLAYCANVAS_LAYER_MODIFIER;
+    layerModifierOf(sunStream, rule !== null, compare !== null);
 
   /**
    * Draws `view` -- a per-cell view rule (scanRule.ts) -- on every tile, or none with null:
@@ -1321,13 +1421,15 @@ function assemble(
   };
 
   /**
-   * Streams the dates the rule names beside the scan (ruleDates.ts), its code fetched with the
-   * first rule that names one; drops them all with the rule.
+   * Streams the dates the rule names beside the scan (ruleDates.ts), or the left-hand date of
+   * two compared, its code fetched with the first that names one; drops them all with the rule
+   * or the comparison.
    */
   const syncRuleDates = (): void => {
-    const wanted = rule?.dates ?? [];
+    // A rule's dates, or the left-hand date of two compared: never both (they end each other).
+    const wanted = rule?.dates ?? (compare ? [compare.left] : []);
     if (ruleDates || wanted.length === 0) {
-      ruleDates?.setRule(rule ?? NO_DATES);
+      ruleDates?.setRule(datesPlan());
       return;
     }
     const kit = lentRuleKit();
@@ -1339,8 +1441,7 @@ function assemble(
         ruleDates = new RuleDates<pc.Entity>(
           {
             loadDate,
-            loadLayer: (url, tile, signal) =>
-              backend.loadLayer?.(url, tile, signal) ?? Promise.reject(new Error("no layers")),
+            loadLayer: loadDateLayer,
             setLayerLook: (entity, look) => backend.setLayerLook?.(entity, look),
             add: (entity) => backend.add(entity),
             remove: (entity) => backend.remove(entity),
@@ -1356,7 +1457,7 @@ function assemble(
           },
           kit,
         );
-        ruleDates.setRule(rule ?? NO_DATES);
+        ruleDates.setRule(datesPlan());
         hooks.frameWanted();
       })
       .catch((error: unknown) => {
@@ -1373,7 +1474,7 @@ function assemble(
   /**
    * The sun to light the scan by (state/sunReport.ts), or none. The first one adds the word to the
    * work buffer and has every tile's copy write it -- each tile copied again once, in the frame
-   * this asks for; the hook and its uniforms follow in `render` (`syncSun`).
+   * this asks for; the hook and its uniforms follow in `render` (`syncHooks`).
    */
   const setSun = (next: ScanSun | null): void => {
     sun = next;
@@ -1391,35 +1492,143 @@ function assemble(
   };
 
   /**
-   * Puts the frame's hook into the user material while there is a sun (and the word it reads),
-   * takes it out when there is none, and sets the sun's uniforms when they change: PlayCanvas
-   * copies the material onto its draw material when its version moves (`update`), and a uniform
-   * copies nothing into the work buffer.
+   * Draws `next` -- two dates compared (scanCompare.ts) -- or one date again with null: the
+   * left-hand date streamed beside the scan (ruleDates.ts), every tile's copy writing its side
+   * once as the comparison starts or ends (each copied again in the frame this asks for), the
+   * side handed to the fragment shader as a varying, and a pick source each side. The divider
+   * moving changes one uniform of the frame (`syncHooks`): nothing is copied.
    */
-  const syncSun = (): void => {
-    const material = app.scene.gsplat.material;
-    const want = sun !== null && sunStream;
-    let changed = false;
-    if (want !== sunHooked) {
-      const chunks = material.getShaderChunks(pc.SHADERLANGUAGE_GLSL);
-      if (want) {
-        ownModifyVS = chunks.get("gsplatModifyVS") as string | undefined;
-        chunks.set("gsplatModifyVS", SUN_HOOK_VS);
-      } else if (ownModifyVS !== undefined) {
-        chunks.set("gsplatModifyVS", ownModifyVS);
-      } else {
-        chunks.delete("gsplatModifyVS");
+  const setCompare = (next: ScanCompareView | null): void => {
+    if (!cells) return;
+    const before = compare;
+    compare = next;
+    if ((before === null) !== (next === null)) {
+      for (const entity of cells.meshes()) applyModifier(entity);
+      for (const [entity, state] of layers) {
+        entity.gsplat?.setWorkBufferModifier(layerModifier());
+        layerParameters(entity, state);
       }
-      sunHooked = want;
+      const varyings = app.scene.gsplat.varyings;
+      if (next && !varying) {
+        varyings.add([{ name: SIDE_VARYING, type: pc.TYPE_UINT32, components: 1 }]);
+        varying = true;
+      } else if (!next && varying) {
+        varyings.remove([SIDE_VARYING]);
+        varying = false;
+      }
+    }
+    syncComparePicks();
+    syncRuleDates();
+    hooks.frameWanted();
+  };
+
+  /**
+   * Under a comparison, scene selection picks each date only on its side of the divider: the
+   * scan's tiles right of it, the left-hand date's left of it (cesium/sceneSelect), above the
+   * host's own source for the scan, which says no side.
+   */
+  const syncComparePicks = (): void => {
+    const left = compare?.left.assetId ?? null;
+    if (left === pickedLeft) return;
+    unpick?.();
+    unpick = null;
+    pickedLeft = left;
+    const kit = lentRuleKit();
+    if (left === null || !kit || assetId === undefined) return;
+    const toWorld = () => compare?.toWorld();
+    const right = kit.registerPickSource(
+      assetId,
+      {
+        renderer: identity.name,
+        split: () => SplitDirection.RIGHT,
+        tiles: () => (farNow ? [] : (backend.pickTiles?.() ?? [])),
+        toWorld,
+      },
+      COMPARE_PICK_PRIORITY,
+    );
+    const other = kit.registerPickSource(
+      left,
+      {
+        renderer: identity.name,
+        split: () => SplitDirection.LEFT,
+        tiles: () => (farNow ? [] : datePickTiles()),
+        toWorld,
+      },
+      COMPARE_PICK_PRIORITY,
+    );
+    unpick = () => {
+      right();
+      other();
+    };
+  };
+
+  /** The other date's tiles drawn now, in each tile's own order and the scan's frame. */
+  const datePickTiles = (): PickTile[] => {
+    const out: PickTile[] = [];
+    for (const entity of shown) {
+      const record = dated.has(entity) ? datePicks.get(entity) : undefined;
+      const pick = record && pickOf(record);
+      if (pick) out.push(pick);
+    }
+    return out;
+  };
+
+  /** A tile's pick copy, moved where it is placed: made on first need, kept until it moves. */
+  const pickOf = (record: PickRecord): PickTile | null => {
+    record.pick ??= pickTileOf(record.columns, record.order, record.origin, record.checksum);
+    if (!record.pick) return null;
+    if (!record.placement) return record.pick;
+    record.placedPick ??= placedPickTile(record.pick, record.placement);
+    return record.placedPick;
+  };
+
+  /**
+   * Puts the frame's hooks into the user material while they are wanted -- the sunlight's while
+   * there is a sun (and the word it reads), the comparison's while two dates are compared -- and
+   * takes them out when they are not; sets the sun's uniforms and the divider when they change:
+   * PlayCanvas copies the material onto its draw material when its version moves (`update`),
+   * and a uniform copies nothing into the work buffer.
+   */
+  const syncHooks = (): void => {
+    const material = app.scene.gsplat.material;
+    const lit = sun !== null && sunStream;
+    const cut = compare !== null;
+    let changed = false;
+    if (lit !== sunHooked || cut !== cutHooked) {
+      const chunks = material.getShaderChunks(pc.SHADERLANGUAGE_GLSL);
+      if (!sunHooked && !cutHooked) {
+        ownModifyVS = chunks.get("gsplatModifyVS") as string | undefined;
+        ownModifyPS = chunks.get("gsplatModifyPS") as string | undefined;
+      }
+      const put = (name: string, chunk: string | undefined): void => {
+        if (chunk === undefined) chunks.delete(name);
+        else chunks.set(name, chunk);
+      };
+      put(
+        "gsplatModifyVS",
+        cut ? compareHookVs(lit ? SUN_HOOK_VS : null) : lit ? SUN_HOOK_VS : ownModifyVS,
+      );
+      put("gsplatModifyPS", cut ? COMPARE_HOOK_PS : ownModifyPS);
+      sunHooked = lit;
+      cutHooked = cut;
       sunSet = null;
+      dividerAt = Number.NaN;
       changed = true;
     }
-    if (want && sun && sun !== sunSet) {
+    if (lit && sun && sun !== sunSet) {
       sunValue.set([sun.dir[0], sun.dir[1], sun.dir[2], sun.sunUp]);
       sunlightValue.set([sun.strength, sun.ambient, sun.flat, 0]);
       material.setParameter("uHexapodSun", sunValue);
       material.setParameter("uHexapodSunlight", sunlightValue);
       sunSet = sun;
+      changed = true;
+    }
+    // The divider in the canvas's own pixels, as `gl_FragCoord` counts them.
+    const at = compare ? compare.split * device.width : Number.NaN;
+    if (compare && at !== dividerAt) {
+      dividerValue.set([at, 1, 0, 0]);
+      material.setParameter("uHexapodDivider", dividerValue);
+      dividerAt = at;
       changed = true;
     }
     if (changed) material.update();
@@ -1467,6 +1676,7 @@ function assemble(
     tile: TileNode,
     decoded: Decoded,
     kind: "scan" | "layer" | "date" = "scan",
+    ofDate = kind === "date",
   ): pc.Entity => {
     const layer = kind === "layer";
     const { properties, count, order } = decoded;
@@ -1496,6 +1706,19 @@ function assemble(
     fromUrl.set(entity, url);
     entity.addComponent("gsplat", { resource });
     resources.set(entity, resource);
+    // Another date's (a rule's, or the left-hand one of two compared): its side, its picks.
+    if (ofDate) dated.add(entity);
+    if (kind === "date" && decoded.checksum !== undefined) {
+      datePicks.set(entity, {
+        checksum: decoded.checksum,
+        order,
+        columns: properties,
+        origin,
+        pick: undefined,
+        placement: null,
+        placedPick: null,
+      });
+    }
     // Every tile of the scan reads its cell, whether or not it carries ids.
     if (!layer) cells?.add(entity, origin);
     // A layer's tile carries none of the scan's ids, skins or picks: its look is its own. Nor
@@ -1527,7 +1750,7 @@ function assemble(
         if (binding.ids && motion && motion.rigidByLeaf.size > 0) sortDirty.add(entity);
       }
     }
-    if (!layer && (cells?.drawing || sunStream || rule)) applyModifier(entity);
+    if (!layer && (cells?.drawing || sunStream || rule || compare)) applyModifier(entity);
     return entity;
   };
 
@@ -1542,6 +1765,20 @@ function assemble(
     return hooks.work.run(() => {
       signal?.throwIfAborted();
       return build(tilesetUrl, tile, decoded, "date");
+    });
+  };
+
+  /** A tile of another date's inferred layer: a layer's, of that date (its side). */
+  const loadDateLayer = async (
+    tilesetUrl: string,
+    tile: TileNode,
+    signal?: AbortSignal,
+  ): Promise<pc.Entity> => {
+    const decoded = await decode(new URL(tile.uri, tilesetUrl).toString());
+    signal?.throwIfAborted();
+    return hooks.work.run(() => {
+      signal?.throwIfAborted();
+      return build(tilesetUrl, tile, decoded, "layer", true);
     });
   };
 
@@ -1634,7 +1871,7 @@ function assemble(
     },
     place: (entity, matrix) => {
       const origin = origins.get(entity) ?? [0, 0, 0];
-      const tile = tiles.get(entity);
+      const tile: PickRecord | undefined = tiles.get(entity) ?? datePicks.get(entity);
       if (matrix === null) {
         if (tile) {
           tile.placement = null;
@@ -1710,7 +1947,8 @@ function assemble(
       // scan's share of the budget with them.
       ruleDates?.plan(pose);
       lodBudget();
-      syncSun();
+      farNow = pose.farView === true;
+      syncHooks();
       framesDrawn += 1;
       app.render();
       while (doomed[0] && framesDrawn - doomed[0].at >= DESTROY_AFTER_FRAMES) {
@@ -1798,7 +2036,7 @@ function assemble(
       natives.add(entity);
       streamingNatively = true;
       lodBudget();
-      if (cells?.drawing || sunStream || rule) applyModifier(entity);
+      if (cells?.drawing || sunStream || rule || compare) applyModifier(entity);
       resumeLoop();
       return {
         splats: () => app.scene.gsplat.splatBudget,
@@ -1813,6 +2051,8 @@ function assemble(
     },
     destroy: () => {
       for (const off of cellLinks) off();
+      unpick?.();
+      unpick = null;
       ruleDates?.stop();
       ruleDates = null;
       cellTexture?.destroy();
@@ -1911,6 +2151,28 @@ function assemble(
           // The scan's sunlight, drawn by the frame's hook (sunHook.ts). Watching is what says
           // this renderer draws it (the badge's report), so only where it can: GLSL, as the
           // cell views.
+          // Two dates compared, the left one drawn beside this scan (scanCompare.ts).
+          watchScanCompare(assetId, setCompare),
+          reportScanCompare(assetId, () => {
+            const sides = { left: 0, right: 0 };
+            if (compare)
+              for (const entity of [...cells.meshes(), ...layers.keys()]) {
+                if (sideOf(entity) === SIDE_LEFT) sides.left += 1;
+                else sides.right += 1;
+              }
+            return {
+              renderer: identity.name,
+              on: compare !== null && cutHooked,
+              dividerPx: dividerAt,
+              sides,
+              left: (compare ? ruleDates?.status() : undefined) ?? {
+                dates: 0,
+                tiles: 0,
+                gaussians: 0,
+                loading: 0,
+              },
+            };
+          }),
           watchScanSun(assetId, setSun),
           reportScanSun(assetId, () => ({
             renderer: identity.name,

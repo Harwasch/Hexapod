@@ -133,7 +133,16 @@ interface DrawnDate<M> {
 }
 
 /** What of a rule the dates are planned from (scanRule.ts `ScanRuleView`). */
-export type RuleDatesPlan = Pick<ScanRuleView, "dates" | "plane" | "cellM" | "owners" | "scanOwns">;
+export type RuleDatesPlan = Pick<
+  ScanRuleView,
+  "dates" | "plane" | "cellM" | "owners" | "scanOwns"
+> & {
+  /**
+   * Shares fixed rather than worked out from the plane: two dates compared split the one budget
+   * evenly (playcanvasBackend.ts `COMPARE_SHARES`).
+   */
+  shares?: { readonly scan: number; readonly dates: readonly number[] };
+};
 
 /** Cells sampled at most for the shares, the plane thinned evenly past it. */
 export const SHARE_SAMPLES = 16_384;
@@ -304,7 +313,8 @@ export class RuleDates<M> {
   #reshare(visible: ((sphere: Sphere) => boolean) | null): void {
     const plan = this.#plan;
     if (!plan) return;
-    const found = viewShares({ ...plan, dates: this.#dates.map((d) => d.date) }, visible);
+    const found =
+      plan.shares ?? viewShares({ ...plan, dates: this.#dates.map((d) => d.date) }, visible);
     if (!found) return;
     this.#dates.forEach((d, k) => this.#shares.set(d.key, found.dates[k] ?? 0));
     if (found.scan !== this.#scanShare) {

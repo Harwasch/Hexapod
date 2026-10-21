@@ -91,7 +91,9 @@ vi.mock("playcanvas", () => {
   }
   class Application extends Handlers {
     readonly graphicsDevice = { isWebGPU: false, maxPixelRatio: 1, gl: null };
-    readonly scene = Object.assign(new Handlers(), { gsplat: {} });
+    readonly scene = Object.assign(new Handlers(), {
+      gsplat: { format: { addExtraStreams: (): void => undefined } },
+    });
     readonly systems = { gsplat: new Handlers() };
     readonly root = {
       addChild: (e: Entity) => {
@@ -147,6 +149,7 @@ vi.mock("playcanvas", () => {
     FILLMODE_NONE: "NONE",
     RESOLUTION_AUTO: "AUTO",
     ASPECT_AUTO: 0,
+    PIXELFORMAT_R8U: 33,
   };
 });
 

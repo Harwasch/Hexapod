@@ -78,7 +78,15 @@ import { useViewMode } from "@/state/viewMode";
 import { useViewRule, type LeftOut, type ViewRuleLegend } from "@/state/viewRule";
 
 import { companionGroups, ruledObjects, setCompanions, type CompanionHost } from "./companions";
-import { absoluteUrl, IDENTITY, placedIn, relative, rootTransform, urlOf } from "./datePlacement";
+import {
+  absoluteUrl,
+  IDENTITY,
+  placedIn,
+  relative,
+  rootTransform,
+  times,
+  urlOf,
+} from "./datePlacement";
 import type { RuleKit } from "./scanView/ruleKit";
 import {
   lendRuleKit,
