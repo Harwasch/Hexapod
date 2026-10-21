@@ -119,9 +119,14 @@ def test_it_is_read_once(db: Session, storage: S3Storage) -> None:
     assert capture.metadata_ == recorded
 
 
-def test_a_storage_failure_records_nothing_and_the_upload_decides(
+def test_a_storage_failure_is_recorded_as_no_location_so_the_frame_never_moves(
     db: Session, storage: S3Storage
 ) -> None:
+    """The frame is chosen again when a stage is retried (`runner._override`). A read that
+    failed and was retried there could succeed and move a run's remaining stages into
+    another site's frame, halfway: so a failed read is recorded as no location, the upload
+    decides, and every later decision for the capture reads that same answer."""
+    site = make_site(db)
     capture = _capture(db, storage, {"a.mov": mov(iso6709=AT_SITE)})
 
     class Down:
@@ -129,11 +134,14 @@ def test_a_storage_failure_records_nothing_and_the_upload_decides(
             raise ConnectionError("the bucket is down")
 
     video_gps.record_video_location(db, Down(), capture)  # type: ignore[arg-type]
+    first = epochs.frame_for_run(db, capture)
+    video_gps.record_video_location(db, storage, capture)  # the retry, bucket back
 
     db.refresh(capture)
-    assert "videoLocation" not in capture.metadata_
+    assert "videoLocation" in capture.metadata_ and capture.metadata_["videoLocation"] is None
     point = epochs.join_point(capture, None)
     assert point is not None and point.source == "upload"
+    assert first is None and epochs.frame_for_run(db, capture) is None and site.id
 
 
 def test_the_video_read_is_the_one_the_pipeline_takes(db: Session, storage: S3Storage) -> None:

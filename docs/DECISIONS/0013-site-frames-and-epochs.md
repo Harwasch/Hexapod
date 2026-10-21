@@ -104,9 +104,10 @@ the video's location at join time:
 **Recorded once.** The answer is kept on the capture as `metadata.videoLocation` (`{lat, lon,
 accuracyM, key}`, or `null` when the clip carries none), so the site-context seed, a rejected
 run's epoch, the registration and a retried run on another worker all join by the same answer as
-the first. Only the worker writes it: `CaptureCreate` refuses the key. A storage failure records
-nothing and the run is matched by the upload's fix, as before; no capture fails for want of a
-better guess at its site.
+the first. Only the worker writes it: `CaptureCreate` refuses the key. A storage failure is
+recorded as no location and the run is matched by the upload's fix, as before: no capture fails
+for want of a better guess at its site, and a stage retried mid-run (which chooses the frame
+again) cannot move the rest of the run into another site's frame.
 
 **Order.** The video's GPS, when recorded; else the located point as before (a typed place, else
 the fix sent with the upload). A typed place belongs to the splat lane, whose files carry no

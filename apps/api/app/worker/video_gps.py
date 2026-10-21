@@ -16,9 +16,11 @@ writes the epoch (which records the source), and a resumed or retried run on ano
 worker. It is read once: the uploaded bytes do not change. Only the worker writes it
 (`schemas/capture.CaptureCreate` refuses it), so it is never a claim the request made.
 
-A storage failure records nothing and the run goes on matched by the upload's fix, as
-before: a capture is never failed for want of a better guess at its site, and a later
-run reads the video again.
+A storage failure is recorded as no location, and the run goes on matched by the
+upload's fix, as before: a capture is never failed for want of a better guess at its
+site. Recorded rather than left for a later read, because the frame is chosen again when
+a stage is retried (`runner._override`), and a read that succeeded there would move the
+run's remaining stages into another site's frame halfway.
 """
 
 from __future__ import annotations
@@ -72,6 +74,7 @@ def record_video_location(db: Session, storage: ObjectStorage, capture: Capture)
     key, name = video.storage_key, Path(video.filename).name
     if db.in_transaction():
         db.commit()
+    failed = False
     if Path(name).suffix.lower() not in QUICKTIME_SUFFIXES:
         found = None  # Matroska, WebM, AVI: no QuickTime location atoms to read
     else:
@@ -79,13 +82,13 @@ def record_video_location(db: Session, storage: ObjectStorage, capture: Capture)
             found = location_in_storage(storage, key)
         except Exception as error:  # any failure means "matched by the upload"
             log.warning(
-                "capture %s: could not read the location in %s (%s); it is matched to a "
-                "site by the location sent with its upload",
+                "capture %s: could not read the location in %s (%s); recorded as none, "
+                "so it is matched to a site by the location sent with its upload",
                 capture.id,
                 name,
                 error,
             )
-            return
+            found, failed = None, True
     record = {epochs.VIDEO_LOCATION: found.to_metadata() if found is not None else None}
     db.execute(
         update(Capture)
@@ -94,6 +97,8 @@ def record_video_location(db: Session, storage: ObjectStorage, capture: Capture)
     )
     db.commit()
     db.refresh(capture)
+    if failed:
+        return
     if found is None:
         log.info(
             "capture %s: %s carries no location; it is matched to a site by the location "

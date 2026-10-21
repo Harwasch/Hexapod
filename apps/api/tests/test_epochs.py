@@ -434,6 +434,12 @@ def test_a_phone_capture_joins_by_its_videos_gps_only_a_site_a_phone_made(db: Se
     found = epochs.frame_for_run(db, at_phone)
     assert found is not None and found.site_id == phone_site.id
     assert desk_site.id != seeded.id
+    # Decided again on every run: once the site is no longer a phone capture's (its
+    # metadata replaced by PATCH), the next run of a capture not yet its epoch does not
+    # join it, whatever its video says.
+    phone_site.metadata_ = {"note": "edited by hand"}
+    db.commit()
+    assert epochs.frame_for_run(db, at_phone) is None
 
 
 def test_a_rejected_capture_is_kept_where_its_video_says(db: Session) -> None:
