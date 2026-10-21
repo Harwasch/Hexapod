@@ -457,6 +457,10 @@ class ReferenceChoice:
     runtime_scale: float = 1.0
     #: The site frame's origin (lat, lon, height): the pivot a runtime scale is about.
     frame_origin: tuple[float, float, float] | None = None
+    #: How far the reference may be from the site frame rather than the globe (ADR 0016):
+    #: 0 for the epoch that made the frame (ordinal 1), else its alignment's
+    #: `frameRelativeUncertaintyM`, else `uncertainty_m` (never less: conservative).
+    frame_relative_uncertainty_m: float = 0.0
 
 
 def survey_evidenced(alignment: dict[str, Any]) -> bool:
@@ -529,6 +533,34 @@ def _confirmed_at(epoch: Epoch, shown_at: datetime) -> datetime:
             continue
         confirmed = max(confirmed, at)
     return confirmed
+
+
+def _frame_relative_uncertainty(epoch: Epoch, absolute: float) -> float:
+    """The reference's uncertainty from the site frame (`ReferenceChoice`)."""
+    if epoch.ordinal == 1:
+        return 0.0
+    alignment = epoch.alignment if isinstance(epoch.alignment, dict) else {}
+    number = _number(alignment.get("frameRelativeUncertaintyM"))
+    return number if number is not None and number >= 0 else absolute
+
+
+def prior_epoch_count(
+    db: Session, site_id: uuid.UUID, *, capture_id: uuid.UUID | None = None
+) -> int:
+    """How many published epochs the site had before a run of `capture_id`: all of them
+    but the capture's own for a new epoch, and only those that joined before it (a lower
+    ordinal) for a re-run -- so the epoch that made the frame is 0 however many came after.
+    What `site_context.json`'s `priorEpochs` says, and what tells the confidence grid
+    whether this epoch is the frame or is placed relative to one (ADR 0016)."""
+    own = epoch_of_capture(db, capture_id) if capture_id is not None else None
+    statement = select(func.count(Epoch.id)).where(
+        Epoch.site_id == site_id, Epoch.status == EpochStatus.PUBLISHED.value
+    )
+    if capture_id is not None:
+        statement = statement.where((Epoch.capture_id.is_(None)) | (Epoch.capture_id != capture_id))
+    if own is not None:
+        statement = statement.where(Epoch.ordinal < own.ordinal)
+    return int(db.scalar(statement) or 0)
 
 
 def _reference_keys(db: Session, job_id: uuid.UUID) -> tuple[dict[str, str], datetime | None, str]:
@@ -627,12 +659,13 @@ def reference_epoch(
                 created_at=epoch.created_at,
                 platform=epoch.platform,
                 verdict=claimed_verdict(epoch.alignment, epoch.platform),
-                uncertainty_m=_reference_uncertainty(epoch, capture),
+                uncertainty_m=(absolute := _reference_uncertainty(epoch, capture)),
                 keys=keys,
                 revision=revision,
                 height_datum=_reference_datum(epoch),
                 runtime_scale=_runtime_scale(shown),
                 frame_origin=frame_origin,
+                frame_relative_uncertainty_m=_frame_relative_uncertainty(epoch, absolute),
             )
         )
     if not candidates:

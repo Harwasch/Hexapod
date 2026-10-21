@@ -15,12 +15,14 @@ spherical harmonics (`f_rest_*`, up to degree 3) ride along in every tile, so th
 dependent colour the trainer learned is drawn (see `convert`). Beside the tiles goes
 `collision.bin`, the scan's solid cells for the web clients' camera collision and picking,
 declared on the root tile (`COLLISION_FORMAT`), and `viewcones.bin`, the directions each
-part of it was seen from (`view_cones`), declared beside it.
+part of it was seen from (`view_cones`), declared beside it. When the run measured one,
+the epoch's confidence grid (`cell_grid`, `confidence.bin`) is declared there too, and each
+tile says how confident the least confident cell under it is (`extras.confidenceMin`).
 
 Usage:
     python splat_tiles.py splat.ply out_dir --lat 46.84 --lon -91.99 --height 0
         [--opacity-min 0.02] [--tile-gaussians 100000] [--parents lod_parents.npz]
-        [--sh-degree 0-3]
+        [--sh-degree 0-3] [--confidence confidence/confidence.json]
     python splat_tiles.py collision splat.ply out_dir [--tileset out_dir/tileset.json]
         [--opacity-min 0.02]
     python splat_tiles.py viewcones splat.ply|tileset.json out_dir [--tileset tileset.json]
@@ -44,6 +46,7 @@ from typing import Any, cast
 
 import numpy as np
 
+import cell_grid
 import splat_merge
 import view_cones
 from splat_merge import Moments, coarsen, merge_cells
@@ -885,6 +888,10 @@ class Tile:
     high: np.ndarray = field(default_factory=lambda: np.zeros(3))
     origin: np.ndarray = field(default_factory=lambda: np.zeros(3))
     fractional_bits: int = SPZ_FRACTIONAL_BITS
+    #: The lowest confidence score (0..255) of the grid's cells its box covers in plan --
+    #: an unseen cell at 0, an empty cell nobody aimed at not counted -- when a confidence
+    #: grid was given and any such cell is under it; None otherwise (`box_confidence_min`).
+    confidence_min: int | None = None
 
     @property
     def uri(self) -> str:
@@ -1458,6 +1465,7 @@ def write_tiles(
     out_dir: Path,
     edge: float,
     parents: ParentOverrides | None = None,
+    confidence: cell_grid.CellGrid | None = None,
 ) -> int:
     """Write every tile's GLB (`build_tiles`), a parent's from `parents` where it has one.
 
@@ -1465,11 +1473,20 @@ def write_tiles(
     geometric error and the moments handed up to its own parent are the merge's, so the
     tree -- and so the cut a viewer takes through it -- is the one the parents were
     optimised in (`ParentOverrides`). Returns how many parent gaussians were replaced.
+
+    With `confidence` (the epoch's grid, in this tileset's frame), each tile's
+    `confidence_min` is filled in (`box_confidence_min`): the lowest score of the cells,
+    at the grid's finest level, that its box covers in plan -- whether or not any of its
+    gaussians is in them, since strict gating removes exactly a weak cell's gaussians and
+    the tile drawn over that cell then holds none. A parent's box holds its children's, so
+    it is never more confident than the weakest part of what it stands for.
     """
     replaced = 0
 
     def emit(tile: Tile, gaussians: Gaussians, keys: np.ndarray | None) -> None:
         nonlocal replaced
+        if confidence is not None:
+            tile.confidence_min = box_confidence_min(confidence, tile.low, tile.high)
         if keys is not None and parents is not None:
             better = parents.take(tile.uri, keys)
             if better is not None:
@@ -1481,6 +1498,28 @@ def write_tiles(
 
     build_tiles(root, codes, store, edge, emit)
     return replaced
+
+
+def box_confidence_min(grid: cell_grid.CellGrid, low: np.ndarray, high: np.ndarray) -> int | None:
+    """The least confidence score of the cells of `grid`'s finest level that the plan box
+    `low`..`high` (site frame, x east, y north) touches -- a cell's own score when it has
+    evidence, **0 when it is unseen** (expected and not seen: weak, and as weak as a cell
+    can be), and nothing from an empty cell nobody aimed at, which is not this epoch's.
+    None when the box touches no cell that counts."""
+    plane = grid.plane(None)
+    corners = np.array([[low[0], low[1]], [high[0], high[1]]], dtype=np.float64)
+    i, j = cell_grid.Lattice(plane.level).index(corners)
+    i_lo, i_hi = max(int(i[0]) - plane.i0, 0), min(int(i[1]) - plane.i0, plane.ni - 1)
+    j_lo, j_hi = max(int(j[0]) - plane.j0, 0), min(int(j[1]) - plane.j0, plane.nj - 1)
+    if i_lo > i_hi or j_lo > j_hi:
+        return None
+    window = plane.data[j_lo : j_hi + 1, i_lo : i_hi + 1]
+    score = window[..., grid.channel("score")].astype(np.int64)
+    unseen = (window[..., grid.channel("reasons")] & cell_grid.REASON_BITS["unseen"]) > 0
+    counted = unseen | (score > 0)
+    if not counted.any():
+        return None
+    return int(np.where(unseen, 0, score)[counted].min())
 
 
 def _clamp_errors(tile: Tile, ceiling: float) -> None:
@@ -2100,6 +2139,7 @@ def convert(
     work_dir: Path | None = None,
     parents: ParentOverrides | None = None,
     sh_degree: int | None = None,
+    confidence: Path | None = None,
 ) -> dict[str, float | int]:
     """Every gaussian that passes the filters, as a level-of-detail tileset.
 
@@ -2191,6 +2231,16 @@ def convert(
     outside its cone, so a scan walked inside a site does not show the overview the backs
     of what it only saw from within. Two more windowed passes; `view_cones.py` writes the
     same file for a tileset packed before it existed (from the PLY, or from its leaves).
+
+    **Confidence.** `confidence`, when given, is the epoch's confidence grid descriptor
+    (tools/pipeline confidence.py's `confidence.json`, a `cell_grid` in this tileset's
+    frame, with the file it names beside it). Its file is copied in beside the tiles, the
+    descriptor is declared on the root tile's `extras.confidence` -- after the collision
+    grid, so a backfill appending it last writes these bytes -- and every tile states the
+    least confident cell under its box as `extras.confidenceMin`, after `gaussians`
+    (`write_tiles`; an unseen cell is 0): a viewer can find the weak tiles from
+    `tileset.json` alone. Opt-in: without it every
+    byte written is what it was before the grid existed.
     """
     if sh_degree is not None and not 0 <= sh_degree <= SH_MAX_DEGREE:
         raise ValueError(f"sh_degree caps the SH bands at 0 to {SH_MAX_DEGREE}, not {sh_degree}")
@@ -2198,12 +2248,17 @@ def convert(
         why = parents.mismatch(ply, opacity_min, tile_gaussians)
         if why:
             raise ParentOverrideError(why)
+    scores, scores_blob, scores_extras = (
+        (None, b"", None) if confidence is None else _confidence(confidence)
+    )
     carried = ply_sh_degree(ply_layout(ply))
     degree = carried if sh_degree is None else min(sh_degree, carried)
     out_dir.mkdir(parents=True, exist_ok=True)
     work = work_dir or out_dir.parent
     with prepare(ply, opacity_min, tile_gaussians, work, degree) as tree:
-        replaced = write_tiles(tree.root, tree.codes, tree.store, out_dir, tree.edge, parents)
+        replaced = write_tiles(
+            tree.root, tree.codes, tree.store, out_dir, tree.edge, parents, confidence=scores
+        )
     root, layout, count, pmin, pmax = tree.root, tree.layout, tree.count, tree.pmin, tree.pmax
     keep = tree.keep
     assert keep is not None
@@ -2236,6 +2291,9 @@ def convert(
             # globe's splat-count cap in src/cesium/SiteManager.ts).
             "extras": {"gaussians": tile.count},
         }
+        if tile.confidence_min is not None:
+            # The least confident scored cell under it, when a grid was given (`write_tiles`).
+            cast(dict[str, object], entry["extras"])["confidenceMin"] = tile.confidence_min
         if tile.children:
             entry["children"] = [node(child, tile.origin) for child in tile.children]
         return entry
@@ -2277,6 +2335,11 @@ def convert(
     # collision grid, so a backfill of either one (each appended last) writes these bytes.
     tileset["root"]["extras"]["viewCones"] = seen_from
     tileset["root"]["extras"]["collision"] = collision
+    if scores_extras is not None:
+        # How well each part of this epoch was seen, per cell (`cell_grid`): after the
+        # collision grid, so a backfill that appends it writes these bytes.
+        (out_dir / str(scores_extras["uri"])).write_bytes(scores_blob)
+        tileset["root"]["extras"]["confidence"] = scores_extras
     (out_dir / "tileset.json").write_text(json.dumps(tileset, indent=1), encoding="utf-8")
     leaves = sum(tile.count for tile in tiles if not tile.children)
     parent_count = sum(tile.count for tile in tiles if tile.children)
@@ -2306,7 +2369,50 @@ def convert(
         # bits any tile's SPZ declares: 0 and 12 for every scan under ~4 km across.
         "offset_tiles": sum(1 for tile in tiles if tile.origin.any()),
         "min_fractional_bits": min(tile.fractional_bits for tile in tiles),
-    }
+    } | (
+        {}
+        if scores is None
+        else {
+            # The confidence grid's finest level, and the root's least confident cell (0:
+            # no tile holds a scored cell).
+            "confidence_level": scores.level,
+            "confidence_min": root.confidence_min or 0,
+        }
+    )
+
+
+#: Files `convert` writes beside the tiles, which a declared grid's `uri` may not name.
+_RESERVED = ("tileset.json", COLLISION_URI, view_cones.URI)
+
+
+def _confidence(path: Path) -> tuple[cell_grid.CellGrid, bytes, dict[str, Any]]:
+    """The confidence grid `path` (its descriptor) describes, its file's bytes, and the
+    descriptor -- checked (`cell_grid.decode`: format, sizes, sha256) before anything is
+    written, and refused unless it is a confidence grid with a plain file name."""
+    try:
+        descriptor = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as problem:
+        raise cell_grid.CellGridError(f"{path.name} is not readable: {problem}") from problem
+    if not isinstance(descriptor, dict):
+        raise cell_grid.CellGridError(f"{path.name} is not a cell grid descriptor")
+    uri = str(descriptor.get("uri") or "")
+    if (
+        not uri
+        or "/" in uri
+        or "\\" in uri
+        or uri.startswith(".")
+        or uri in _RESERVED
+        or (uri.startswith("splat") and uri.endswith(".glb"))
+    ):
+        raise cell_grid.CellGridError(f"{path.name}: {uri!r} is not a file name a tileset can hold")
+    try:
+        blob = (path.parent / uri).read_bytes()
+    except OSError as problem:
+        raise cell_grid.CellGridError(f"{path.name}: {uri} is not readable: {problem}") from problem
+    grid = cell_grid.decode(descriptor, blob)
+    if grid.kind != "confidence":
+        raise cell_grid.CellGridError(f"{path.name} is a {grid.kind!r} grid, not a confidence grid")
+    return grid, blob, descriptor
 
 
 def _translation(transform: object, uri: str) -> np.ndarray:
@@ -2447,6 +2553,12 @@ def main() -> None:
         default=None,
         help="most SH bands the tiles carry (0-3); default: all the PLY's f_rest_* has",
     )
+    parser.add_argument(
+        "--confidence",
+        type=Path,
+        default=None,
+        help="the epoch's confidence grid descriptor (confidence.json, its .bin beside it)",
+    )
     args = parser.parse_args()
     stats = convert(
         args.ply,
@@ -2458,6 +2570,7 @@ def main() -> None:
         args.tile_gaussians or None,
         parents=ParentOverrides.load(args.parents) if args.parents else None,
         sh_degree=args.sh_degree,
+        confidence=args.confidence,
     )
     print(json.dumps(stats))
 

@@ -263,9 +263,10 @@ KINDS_BY_NAME: dict[str, SidecarKind] = {kind.name: kind for kind in KINDS}
 KINDS_BY_EXTRAS: dict[str, SidecarKind] = {key: kind for kind in KINDS for key in kind.extras}
 
 #: Root extras that belong to the tileset itself rather than to a sidecar: the packer's
-#: gaussian count on the root tile (tools/captures/splat_tiles.py). Never patched, never
-#: carried: the new tileset has its own.
-TILESET_EXTRAS = frozenset({"gaussians"})
+#: gaussian count on the root tile and, when the run measured a confidence grid, the root
+#: tile's least confident cell (`confidenceMin`, written on every tile; tools/captures/
+#: splat_tiles.py). Never patched, never carried: the new tileset has its own.
+TILESET_EXTRAS = frozenset({"gaussians", "confidenceMin"})
 
 # --- what a staged file may be ------------------------------------------------------
 
@@ -503,7 +504,10 @@ def tiles_fingerprint(
     """Who these tiles are, or None where the store cannot vouch for them.
 
     The tileset without its root extras -- the tree, its bounds and errors, every content
-    uri -- and each content object's size and ETag. Two tilesets with the same fingerprint
+    uri -- and each content object's size and ETag. Every tile's `confidenceMin` is left
+    out too: it summarises the epoch's confidence grid over the tile's box (ADR 0016), not
+    the tile's bytes, so a re-pack whose grid changed and whose tiles did not is still the
+    same tiles, and what is bound to them stays. Two tilesets with the same fingerprint
     hold the same bytes in the same tiles, so whatever was bound to one is bound to the
     other: a chain of attaches copies the tiles unchanged and keeps it; a new
     reconstruction, a Refine or a re-pack changes it. It is a sufficient test, not a
@@ -515,6 +519,7 @@ def tiles_fingerprint(
     """
     skeleton = copy.deepcopy(dict(document))
     skeleton["root"] = {k: v for k, v in dict(skeleton["root"]).items() if k != "extras"}
+    _drop_confidence_min(skeleton["root"])
     lines = [json.dumps(skeleton, sort_keys=True, separators=(",", ":"))]
     for uri in sorted(content_uris(document)):
         found = objects.get(uri)
@@ -522,6 +527,21 @@ def tiles_fingerprint(
             return None
         lines.append(f"{uri}\t{found.size}\t{found.etag}")
     return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+def _drop_confidence_min(tile: object) -> None:
+    """Every descendant's `extras.confidenceMin` removed, in place (on a deep copy)."""
+    stack = [tile]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        extras = node.get("extras")
+        if isinstance(extras, dict):
+            extras.pop("confidenceMin", None)
+        children = node.get("children")
+        if isinstance(children, list):
+            stack.extend(children)
 
 
 def bound_checksums(kind: SidecarKind, documents: Mapping[str, bytes]) -> frozenset[str] | None:

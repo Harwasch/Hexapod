@@ -65,6 +65,12 @@ starts from what anchors the frame -- for a visual alignment the reference's unc
 and three times the fit's RMS in quadrature, for GNSS the georeference's own (floored at
 5 m by `exif_gps`) or, with three check targets, the priors' sigma -- and check targets can
 only raise it. An anchor with no vertical never claims better than the georeference.
+**frameRelativeUncertaintyM** is the same question asked of the site frame rather than the
+globe (`frame_relative_uncertainty`; ADR 0016): 0 for the epoch that makes the frame, the
+reference's own figure and three times the fit's RMS for a visual alignment -- unless its
+check targets are further off than every placement in the chain can explain, which refutes
+the fit -- the epoch's own placement (with the reference's) otherwise. It is what caps the
+confidence grid.
 
 Every gate is a recipe param and **off**: no recorded measurement backs a threshold (D4).
 
@@ -122,8 +128,10 @@ __all__ = [
     "datum_problem",
     "decide",
     "empty_site_context",
+    "frame_relative_uncertainty",
     "label",
     "platform_evidence",
+    "prior_epochs",
     "read_site_context",
     "reference_frame",
     "rtk_evidence",
@@ -202,6 +210,10 @@ class Reference:
     #: The datum its georef origin's height is on (`site_frame.HEIGHT_DATUMS`), when the
     #: site context states it.
     height_datum: str | None = None
+    #: The reference's own uncertainty relative to the site frame (its alignment's
+    #: `frameRelativeUncertaintyM`; 0 for the epoch that made the frame), when the worker
+    #: knew it; None for an older alignment, read as `uncertainty_m` (conservative).
+    frame_relative_uncertainty_m: float | None = None
 
 
 @dataclass(frozen=True)
@@ -214,6 +226,71 @@ class SiteContext:
 def empty_site_context(site_id: str | None = None) -> dict[str, object]:
     """What the worker seeds for a run with nothing to align to (design section 4.1)."""
     return {"version": 1, "siteId": site_id, "reference": None, "targets": [], "observations": []}
+
+
+def prior_epochs(document: Mapping[str, object] | None) -> int:
+    """`site_context.json`'s `priorEpochs` -- how many published epochs the site had before
+    this one (the worker writes it) -- or, for a context written before the key existed,
+    what it implies: none without a reference epoch, one with."""
+    if document is None:
+        return 0
+    value = document.get("priorEpochs")
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return 0 if document.get("reference") is None else 1
+
+
+def frame_relative_uncertainty(
+    *,
+    prior: int,
+    visual: bool,
+    rms_m: float,
+    own_m: float,
+    reference: Reference | None,
+    check_rmse_m: float | None = None,
+) -> tuple[float, str]:
+    """How far this epoch may be from the site frame, not from the globe: what caps its
+    confidence grid (confidence.py, ADR 0016). With its basis.
+
+    `check_rmse_m` is what the check targets measured (`checkTargets.rmseM.total`, from
+    any number evaluated; None for none). They measure this epoch **on the globe**; the
+    frame is where earlier epochs were placed, so their disagreement is evidence about the
+    frame only beyond what those placements explain. It is never less than the epoch's own
+    placement either way, so `own` below is `max(own_m, check_rmse_m)`.
+
+    * the epoch that makes the frame (`prior` 0): 0 -- the frame is where it is;
+    * aligned visually to a reference: the fit's claim `v = sqrt(ref_rel^2 + (3 rms)^2)`,
+      the reference's own frame-relative figure (its absolute one when an older alignment
+      did not record it: conservative) and this fit's error -- **unless the targets refute
+      it**. The frame-defining epoch is at most `ref_abs + ref_rel` from the globe (the
+      reference's absolute placement, then the reference from the frame), so by the
+      triangle inequality this epoch is at least `d - ref_abs - ref_rel` from the frame
+      when its targets are `d` off. When that lower bound exceeds `v`, the fit's claim is
+      proven wrong, and the epoch is taken as not aligned to the reference: the next rule;
+    * not aligned to the reference it had (or kept its own RTK frame over it, or refuted
+      as above): its own placement and the reference's, in quadrature -- the frame is
+      where an earlier epoch was placed, so it is never better than either;
+    * not aligned and no reference, yet the site has earlier epochs: its own placement.
+    """
+    if prior == 0:
+        return 0.0, "frame-defining"
+    measured = 0.0 if check_rmse_m is None else max(0.0, check_rmse_m)
+    own = max(own_m, measured)
+    if visual and reference is not None:
+        ref_rel = reference.frame_relative_uncertainty_m
+        basis = "visual"
+        if ref_rel is None:
+            ref_rel, basis = (
+                reference.uncertainty_m,
+                "visual, reference at its absolute uncertainty",
+            )
+        claim = math.hypot(ref_rel, SIGMA_K * rms_m)
+        if measured - reference.uncertainty_m - ref_rel <= claim:
+            return claim, basis
+        return math.hypot(own, reference.uncertainty_m), "visual, refuted by its check targets"
+    if reference is not None:
+        return math.hypot(own, reference.uncertainty_m), "own and reference placements"
+    return own, "own placement"
 
 
 def read_site_context(directory: Path, log: Callable[[str], None] = print) -> SiteContext:
@@ -253,6 +330,9 @@ def read_site_context(directory: Path, log: Callable[[str], None] = print) -> Si
         uncertainty_m = _float(raw.get("uncertaintyM"))
         if uncertainty_m is None or uncertainty_m <= 0:
             raise ValueError("reference.uncertaintyM must be a positive number of metres")
+        relative = _float(raw.get("frameRelativeUncertaintyM"))
+        if relative is not None and relative < 0:
+            raise ValueError("reference.frameRelativeUncertaintyM must not be negative")
         reference = Reference(
             epoch_id=_str(raw.get("epochId")),
             job_id=_str(raw.get("jobId")),
@@ -261,6 +341,7 @@ def read_site_context(directory: Path, log: Callable[[str], None] = print) -> Si
             verdict=_str(raw.get("verdict")),
             uncertainty_m=uncertainty_m,
             height_datum=datum,
+            frame_relative_uncertainty_m=relative,
             **paths,
         )
     return SiteContext(
@@ -278,6 +359,12 @@ def _float(value: object) -> float | None:
         return None
     number = float(value)
     return number if math.isfinite(number) else None
+
+
+def _check_rmse(checks: Mapping[str, Any]) -> float | None:
+    """What the evaluated check targets measured on the globe (`rmseM.total`), if any."""
+    rmse = checks.get("rmseM") if int(checks.get("evaluated") or 0) > 0 else None
+    return _float(rmse.get("total")) if isinstance(rmse, Mapping) else None
 
 
 def _str(value: object) -> str | None:
@@ -1141,6 +1228,15 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
     )
     reasons.extend(why)
     score = confidence(chosen, verdict=verdict, checks=checks)
+    prior = prior_epochs(context.document)
+    relative_m, relative_basis = frame_relative_uncertainty(
+        prior=prior,
+        visual=chosen.method == "visual" and chosen.aligned and verdict != "unaligned",
+        rms_m=rms,
+        own_m=uncertainty_m,
+        reference=reference,
+        check_rmse_m=_check_rmse(checks),
+    )
     words = label(
         platform=platform,
         verdict=verdict,
@@ -1178,6 +1274,10 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
         "verdict": verdict,
         "confidence": score,
         "uncertaintyM": round(uncertainty_m, 4),
+        # From the site frame rather than the globe: what the confidence grid is capped by.
+        "priorEpochs": prior,
+        "frameRelativeUncertaintyM": round(relative_m, 4),
+        "frameRelativeBasis": relative_basis,
         "label": words,
         "reasons": reasons,
         "origin": {"lat": lat, "lon": lon, "height": height, "heightDatum": datum},

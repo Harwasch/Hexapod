@@ -35,6 +35,7 @@ __all__ = [
     "ParentOverrideError",
     "ParentOverrides",
     "SplatFormatError",
+    "cell_grid",
     "pack_spz",
     "read_ply",
     "sigmoid",
@@ -58,6 +59,7 @@ def _ensure_importable() -> None:
 
 _ensure_importable()
 
+import cell_grid  # noqa: E402 - the site lattice's container (confidence.py)
 from splat_tiles import (  # noqa: E402
     TILE_GAUSSIANS,
     ParentOverrideError,
@@ -82,6 +84,7 @@ def splat_tiles_convert(
     tile_gaussians: int | None = TILE_GAUSSIANS,
     parents: ParentOverrides | None = None,
     sh_degree: int | None = None,
+    confidence: Path | None = None,
 ) -> dict[str, float | int]:
     """Call the sibling project's packer and return its statistics.
 
@@ -95,6 +98,8 @@ def splat_tiles_convert(
     since recipe 11) -- rather than merged.
     `sh_degree` caps the SH bands the tiles carry (None: every band the PLY has, which
     is the run's own `ship_sh_degree`); `sh_degree` in the statistics is what they carry.
+    `confidence` is the epoch's confidence grid descriptor (`confidence.py`'s
+    `confidence.json`, its file beside it), declared on the root and summarised per tile.
     """
     return convert(
         ply,
@@ -106,4 +111,5 @@ def splat_tiles_convert(
         tile_gaussians,
         parents=parents,
         sh_degree=sh_degree,
+        confidence=confidence,
     )

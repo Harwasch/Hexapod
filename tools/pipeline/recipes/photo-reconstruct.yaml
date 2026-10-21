@@ -9,7 +9,7 @@
 # `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
 # run `none` would be billing a GPU to do nothing.
 name: photo-reconstruct
-version: 13
+version: 14
 description: Reconstruct a splat from a raw capture, then package and register it.
 
 # `site_context` is what the worker knows about the site before the run: its reference
@@ -392,6 +392,28 @@ stages:
   - id: place
     impl: place_splat
     params: {}
+
+  # How well each part of this epoch was seen, per cell of its site (confidence.py,
+  # docs/DECISIONS/0016-confidence-map.md): the quality stage's per-gaussian evidence (`support/`, every
+  # trained gaussian, not only what the bar published) moved by `place`'s similarity
+  # into the tileset frame and binned on the site lattice, 0.25 m x 2^level, so every
+  # epoch's cells nest. `weak-v1`: a cell is weak below a keep majority (score 128) or
+  # when it is inside what the cameras pointed at with no evidence; the score is capped
+  # by the epoch's placement uncertainty relative to the site frame, so an epoch placed
+  # only by its GPS is weak everywhere. First principles, not calibrated. No `gpu:`: it
+  # runs on the worker, a few passes over ~20 bytes a gaussian. `package` ships the grid.
+  #   base_cell_m: the site lattice's finest cell -- fixed, or epochs would not nest.
+  #   min_cell_gaussians: the level is the finest whose median occupied cell holds this
+  #     many visible gaussians (a share from 16 has sigma <= 0.125).
+  #   max_cells: the most cells the finest plane may have (2^22).
+  #   pyramid_levels: coarser levels above it, min-of-children.
+  - id: confidence
+    impl: confidence_grid
+    params:
+      base_cell_m: 0.25
+      min_cell_gaussians: 16
+      max_cells: 4194304
+      pyramid_levels: 8
 
   - id: package
     impl: splat_tiles

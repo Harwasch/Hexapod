@@ -25,8 +25,9 @@ __all__ = ["client"]  # the fixture, re-used from the phone key's own tests
 
 import_module("stages")  # registers the shipped implementations
 
-#: photo-reconstruct v13, in order: `train` is ordinal 5 (georeference and align moved
-#: before training in M3b, so a Refine from `train` keeps them with the poses).
+#: photo-reconstruct v14, in order: `train` is ordinal 5 (georeference and align moved
+#: before training in M3b, so a Refine from `train` keeps them with the poses; M4 put
+#: `confidence` between `place` and `package`).
 STAGES = (
     "normalize",
     "pose",
@@ -37,6 +38,7 @@ STAGES = (
     "compensate",
     "quality",
     "place",
+    "confidence",
     "package",
     "thumbnail",
     "ground_samples",

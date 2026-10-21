@@ -75,6 +75,8 @@ class SeedPlan:
     reference: epochs.ReferenceChoice | None = None
     targets: list[dict[str, Any]] = field(default_factory=list)
     observations_key: str | None = None
+    #: The site's published epochs before this run's (`epochs.prior_epoch_count`).
+    prior_epochs: int = 0
 
 
 def _target(row: Any) -> dict[str, Any]:
@@ -114,6 +116,7 @@ def plan_seed(
         reference=epochs.reference_epoch(db, site_id, capture_id=capture.id),
         targets=[_target(row) for row in check_targets.list_active(db, site_id)],
         observations_key=observations,
+        prior_epochs=epochs.prior_epoch_count(db, site_id, capture_id=capture.id),
     )
 
 
@@ -227,6 +230,7 @@ def _fetch_reference(
         "revision": reference.revision,
         "heightDatum": reference.height_datum,
         "runtimeScale": reference.runtime_scale,
+        "frameRelativeUncertaintyM": reference.frame_relative_uncertainty_m,
         **{role: f"{REFERENCE_DIR}/{names[role]}" for role in epochs.REFERENCE_ARTIFACTS},
         "placement": placement,
     }
@@ -340,6 +344,9 @@ def seed_site_context(
     if plan.reference is not None:
         document["reference"] = _fetch_reference(storage, plan.reference, directory)
     document["targets"] = plan.targets
+    # Whether this epoch makes the site's frame (0) or is placed relative to one: what
+    # caps its confidence grid when it could not be aligned (ADR 0016).
+    document["priorEpochs"] = plan.prior_epochs
     if plan.observations_key is not None:
         document["observations"] = _observations(storage, plan.observations_key, directory)
     staging = path.with_suffix(".json.tmp")

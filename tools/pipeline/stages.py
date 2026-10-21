@@ -41,6 +41,7 @@ import alignment
 import blocks
 import capture_platform
 import colmap4
+import confidence
 import convergence
 import exif
 import exposure
@@ -70,6 +71,7 @@ from artifacts import ArtifactDecl
 from captures_bridge import (
     CAPTURES_DIR,
     TILE_GAUSSIANS,
+    cell_grid,
     splat_tiles_convert,
     tile_offsets,
 )
@@ -165,7 +167,8 @@ SPLAT_TILES = ArtifactDecl(
     # declared on the root tile's `extras.collision`) and the view-cone grid the globe fades
     # what a capture never saw with (`viewcones.bin`, `extras.viewCones`; tools/captures
     # view_cones.py). A scan within one tile's budget (the stub, the committed tree) is
-    # exactly these four; a bigger one adds
+    # exactly these four, plus `confidence.bin` (`extras.confidence`) when a `confidence`
+    # stage measured the epoch -- optional, so not pinned; a bigger one adds
     # `splat_<octant path>.glb` children, which `tileset.json` names and
     # tests/test_captures_bridge.py checks it names all of. The whole directory is
     # published (app/worker/registration.py `_publish_tileset`), so all of it is served.
@@ -3627,6 +3630,7 @@ def _median_or_none(values: list[float]) -> float | None:
 @stage_impl(
     "splat_tiles",
     consumes=("canonical.ply", "georef.json"),
+    optional_consumes=(confidence.CONFIDENCE.name,),
     produces=(SPLAT_TILES,),
     summary="pack every gaussian into a level-of-detail KHR_gaussian_splatting 3D Tileset",
 )
@@ -3663,6 +3667,14 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
     is logged, since the held-out error then describes more colour than the tiles hold.
     Degree 3 is measured at 1.6-1.7x the tileset bytes of degree 0 on real SH-3 scans,
     degree 1 at 1.17-1.20x (`splat_tiles.convert`).
+
+    **Confidence.** When a `confidence` stage measured the epoch (`confidence.py`), its
+    grid ships beside the tiles: `confidence.bin`, declared on the root as
+    `extras.confidence`, and each tile's least confident scored cell as
+    `extras.confidenceMin`. A grid the packer refuses (a stub's bytes, a checksum that does
+    not match) is logged and left out -- the map is evidence about the tiles, never a
+    reason not to publish them -- and an epoch with no confidence stage (splat-ingest)
+    packs exactly as before, which reads as "not measured".
     """
     georef = _read_json(ctx.input(GEOREF.name))
     cap = ctx.param("ship_sh_degree")
@@ -3678,25 +3690,62 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
         # still carry these. Say so, rather than silently honouring or refusing them.
         if ctx.param(retired) is not None:
             ctx.log(f"{retired} is no longer read: every gaussian is packed, in tiles")
-    stats = splat_tiles_convert(
-        ctx.input(CANONICAL_PLY.name),
-        ctx.output(SPLAT_TILES.name),
-        lat=float(_number(georef.get("lat"))),
-        lon=float(_number(georef.get("lon"))),
-        height=float(_number(georef.get("height"))),
-        opacity_min=float(ctx.param("opacity_min", 0.02)),
-        tile_gaussians=int(ctx.param("tile_gaussians", TILE_GAUSSIANS)),
-        parents=None,
-        sh_degree=sh_cap,
-    )
+    grid = _confidence_descriptor(ctx)
+
+    def pack(grid: Path | None) -> dict[str, float | int]:
+        return splat_tiles_convert(
+            ctx.input(CANONICAL_PLY.name),
+            ctx.output(SPLAT_TILES.name),
+            lat=float(_number(georef.get("lat"))),
+            lon=float(_number(georef.get("lon"))),
+            height=float(_number(georef.get("height"))),
+            opacity_min=float(ctx.param("opacity_min", 0.02)),
+            tile_gaussians=int(ctx.param("tile_gaussians", TILE_GAUSSIANS)),
+            parents=None,
+            sh_degree=sh_cap,
+            confidence=grid,
+        )
+
+    try:
+        stats = pack(grid)
+    except cell_grid.CellGridError as problem:
+        if grid is None:
+            raise
+        # Evidence about the tiles, never a reason not to publish them.
+        ctx.log(f"WARNING: the confidence grid was not shipped ({problem}); packing without")
+        shutil.rmtree(ctx.output(SPLAT_TILES.name))
+        stats = pack(None)
     ctx.log(
         f"packaged {stats['gaussians']} gaussians ({stats['dropped']} dropped) in "
         f"{stats['tiles']} tiles, {stats['depth']} levels deep, "
         f"extent {stats['extent_m']:.2f} m; merged parents add {stats['parent_gaussians']} "
         f"({float(stats['storage_overhead']):.1%}); SH degree {stats['sh_degree']}"
     )
+    if "confidence_level" in stats:
+        ctx.log(
+            f"shipped the confidence grid (level {stats['confidence_level']}); the root's least "
+            f"confident cell scores {stats['confidence_min']}"
+        )
     metrics: dict[str, MetricValue] = {key: value for key, value in stats.items()}
     return StageOutcome(metrics=metrics, summary=f"{stats['gaussians']} gaussians packaged")
+
+
+def _confidence_descriptor(ctx: StageContext) -> Path | None:
+    """`confidence/confidence.json` when the stage ran and wrote a cell grid; None (and
+    why) when it did not, or wrote something else (a stub's)."""
+    if not ctx.has_input(confidence.CONFIDENCE.name):
+        return None
+    path = ctx.input(confidence.CONFIDENCE.name) / confidence.DESCRIPTOR_FILE
+    try:
+        document = _read_json(path)
+    except (OSError, ValueError):
+        document = {}
+    if document.get("format") != cell_grid.FORMAT:
+        ctx.log(
+            f"no confidence grid in {path.parent.name}/ (not a {cell_grid.FORMAT}); not shipped"
+        )
+        return None
+    return path
 
 
 @stage_impl(
@@ -3968,6 +4017,10 @@ def catalog(ctx: StageContext) -> StageOutcome:
         "alignment": None
         if (aligned := _epoch_alignment(ctx)) is None
         else alignment.summary_of(aligned),
+        # The epoch's confidence grid as the tileset declares it (`extras.confidence`):
+        # what A4 records per asset. Not inside `quality`, and null when nothing measured
+        # one (splat-ingest, or a grid package refused): "not measured".
+        "confidence": _shipped_confidence(ctx),
     }
     _write_json(ctx.output(REGISTRATION.name), document)
     return StageOutcome(metrics={"artifacts": len(tiles)})
@@ -3990,6 +4043,19 @@ _QUALITY_SUMMARY_KEYS = (
     "gsd",
     "tips",
 )
+
+
+def _shipped_confidence(ctx: StageContext) -> dict[str, object] | None:
+    try:
+        tileset = _read_json(ctx.input(SPLAT_TILES.name) / "tileset.json")
+    except (OSError, ValueError):
+        return None
+    root = tileset.get("root")
+    extras = root.get("extras") if isinstance(root, dict) else None
+    found = extras.get("confidence") if isinstance(extras, dict) else None
+    if isinstance(found, dict) and found.get("format") == cell_grid.FORMAT:
+        return found
+    return None
 
 
 def _quality_summary(ctx: StageContext) -> dict[str, object] | None:

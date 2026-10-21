@@ -40,7 +40,7 @@ if TYPE_CHECKING:  # pragma: no cover - import is for typing only
 #: truth: where the recipes are readable they are read.
 SHIPPED_RECIPE_VERSIONS: dict[str, str] = {
     "splat-ingest": "3",
-    "photo-reconstruct": "13",
+    "photo-reconstruct": "14",
 }
 
 

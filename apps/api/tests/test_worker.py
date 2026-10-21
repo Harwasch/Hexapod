@@ -942,6 +942,7 @@ def test_a_recipe_that_asks_for_site_context_is_given_an_empty_one(
         "reference": None,
         "targets": [],
         "observations": [],
+        "priorEpochs": 0,
     }
     seeded = next((tmp_path / "runs").rglob("inputs/site_context/site_context.json"))
     seeded.write_text('{"version": 1, "siteId": "frozen"}')

@@ -58,7 +58,7 @@ def test_memory_does_not_grow_with_the_splat(tmp_path: Path) -> None:
     for count in (150_000, 600_000):
         root = tmp_path / f"n{count}"
         _probe("make", str(root), str(count), "8", "--held")
-        stages = ("quality", "place", "thumbnail", "ground")
+        stages = ("quality", "place", "confidence", "thumbnail", "ground")
         chunked = _probe("chunked", str(root), *stages, "--small", "--chunk", "32768")
         peaks[count] = float(chunked["peakMb"])
         whole[count] = float(_probe("whole", str(root))["peakMb"])
@@ -80,9 +80,19 @@ def test_eight_million_gaussians_fit_in_a_fixed_budget(tmp_path: Path) -> None:
     _probe("make", str(root), "8000000", "16", "--held")
     limit = 1536
     result = _probe(
-        "chunked", str(root), "quality", "place", "thumbnail", "ground", "--limit-mb", str(limit)
+        "chunked",
+        str(root),
+        "quality",
+        "place",
+        "confidence",
+        "thumbnail",
+        "ground",
+        "--limit-mb",
+        str(limit),
     )
-    sys.stdout.write(f"\n8M gaussians, quality + place + thumbnail + ground: {result}\n")
+    sys.stdout.write(
+        f"\n8M gaussians, quality + place + confidence + thumbnail + ground: {result}\n"
+    )
     assert result["peakMb"] < limit
     run = next(root.glob("run-*"))
     gated = splat_io.read_layout(run / "stages" / "quality" / "out" / "gated.ply")

@@ -13,6 +13,7 @@ does (CI installs the wheel). The sequential tests also need the faiss vocabular
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -367,7 +368,15 @@ def test_4_2_and_the_global_mapper_run_on_the_same_database(
 
     mapper = poses["mapper"]
     assert isinstance(mapper, dict) and mapper["used"] == "global"
-    assert poses["registered"] == FRAMES
+    # The stage keeps the global mapper's model only when it registers at least
+    # `min_registered_fraction` (0.8 by default, the recipe's too) of the frames, and maps
+    # incrementally on the same matches otherwise (stages.py), so `used == "global"` already
+    # means that many. Every frame is not a guarantee: COLMAP 4.2's global mapper is not
+    # deterministic, and on this orbit it registered 40 of 40 in 29 runs of 30 and 39 in
+    # one (hwgeekom, 2026-10-21; CI drew a 39 too). The count is the stage's own floor.
+    enough = math.ceil(0.8 * FRAMES)
+    registered = poses["registered"]
+    assert isinstance(registered, int) and enough <= registered <= FRAMES, registered
 
 
 VIDEO_FRAMES = 30

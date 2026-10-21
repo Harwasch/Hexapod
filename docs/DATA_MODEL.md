@@ -164,6 +164,38 @@ write token (survey marks on private land are not public, unlike the site's othe
 A run is given the set as it is when it starts (`site_context`), with the capture's own clicks
 from an uploaded `check_observations.json` (`{"version": 1, "observations": [...]}`).
 
+## Confidence grid
+
+Per epoch revision, how well each part of the capture was seen (ADR 0016). Not a table yet (A4
+records it per asset): a file beside the tiles, `confidence.bin`, declared on the tileset's root as
+`extras.confidence` and copied to the top level of `registration.json` as `confidence` (null:
+not measured — every `splat-ingest` epoch).
+
+- **Lattice.** Tileset frame (the site frame), x east, y north; cell `0.25 m × 2^level`,
+  `i = floor(x / cell)`, `j = floor(y / cell)`. Levels nest; epochs compare at the coarser level.
+- **Container** `hexapod.cellgrid` v1 (`tools/captures/cell_grid.py`): gzip of the level planes,
+  finest first, `nj × ni` row-major, channels interleaved little-endian. The descriptor carries
+  `format`, `version`, `kind`, `uri`, `frame`, `lattice {baseM, level}`, `cellM`,
+  `channels [{name, type, unitM?}]`, `levels [{level, cellM, i0, j0, ni, nj, offset, bytes}]` (into
+  the uncompressed planes), the kind's keys, and `sha256` of the uncompressed planes.
+- **Confidence** keys: `reasonBits` (`views 1, spread 2, gsd 4, accuracy 8, unseen 16,
+alignment 32`), `policy: weak-v1`, `weakBelow: 128`,
+  `alignmentCap {uncertaintyM, priorEpochs, factor, source}`, `roiDisc {centerM, radiusM}` (where
+  `unseen` was expected), `summary {cells, scored, weak, unseen, weakShare, reasons, gaussians,
+outside, medianGsdMm, metric}` (finest level; `weakShare` is weak over scored + unseen;
+  `reasons` counts weak cells per bit).
+- **Channels:** `score` u1 (0 no evidence, else `1 + floor(254 · keepShare · f)`), `reasons` u1,
+  `relief` u1 (height range of the cell's gaussians, 0.25 m, saturating). Coarser levels are
+  min-of-children (min of scored children, OR, max). Weak: `0 < score < 128` or `unseen`.
+- **Per tile:** `extras.confidenceMin` (after `gaussians`): the lowest score of the finest-level
+  cells the tile's box covers in plan — a scored cell at its score, an unseen cell at 0, an empty
+  cell outside the pointed disc not counted; absent when none counts or no grid was shipped.
+- **Pipeline artifacts:** `quality` → `support/` (`support.json` + one raw column per field,
+  row for row with `trained.ply`, COLMAP frame); `confidence` → `confidence/confidence.json` and
+  `confidence.bin`.
+- **Fixture:** `data/tiles/synthetic-yard-epochs/` (two grids over the synthetic yard, with
+  `grids.json`), the cross-language decoder check.
+
 ## Runtime scale
 
 A phone video registered before the pipeline estimated scales (`scaleSource: unresolved`)
