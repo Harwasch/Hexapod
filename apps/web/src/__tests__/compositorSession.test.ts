@@ -31,7 +31,7 @@ import { useSettings } from "@/state/settings";
 import { useViewMode } from "@/state/viewMode";
 import { useViewRule } from "@/state/viewRule";
 
-import { A1, A2, E1, E2 } from "./epochFixtures";
+import { A1, A2, datedSite, E1, E2 } from "./epochFixtures";
 
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
@@ -417,6 +417,29 @@ describe("a view rule's session", () => {
     expect(colorChainOf(host as never)?.parts.map((p) => p.colorFunction) ?? []).not.toContain(
       "splatCellViewColor",
     );
+    handle.dispose();
+  });
+
+  it("names four dates at most: more up to As of is refused, and ends a rule, saying why", async () => {
+    const { handle, frame, end, entry, march, june } = await harness();
+    await frame();
+    expect(end).not.toHaveBeenCalled();
+    // Five dates up to As of, every one sharing the frame's placement.
+    const { epochs, assets } = datedSite(5);
+    entry.epochs = epochs;
+    entry.site = { assets };
+    entry.handles = new Map(
+      assets.map((a, k) => [
+        a.id,
+        { tileset: (k % 2 === 0 ? march : june) as never, ...(k > 0 ? { follows: "a1" } : {}) },
+      ]),
+    );
+    expect(handle.assets("gaussian-splat")).toBeNull();
+    await frame();
+    expect(end).toHaveBeenCalledWith("dates");
+    // As of the fourth: four dates, drawn.
+    entry.epochId = "e4";
+    expect(handle.assets("gaussian-splat")?.map((a) => a.id)).toEqual(["a1", "a2", "a3", "a4"]);
     handle.dispose();
   });
 

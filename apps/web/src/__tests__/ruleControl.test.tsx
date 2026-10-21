@@ -23,7 +23,7 @@ import { useSites } from "@/state/sites";
 import { useViewMode } from "@/state/viewMode";
 import { useViewRule } from "@/state/viewRule";
 
-import { A1, E1, E2, SITE_ID, twoEpochSite } from "./epochFixtures";
+import { A1, datedSite, E1, E2, SITE_ID, twoEpochSite } from "./epochFixtures";
 
 const scene = vi.hoisted(() => ({ sites: { setViewRule: vi.fn(() => Promise.resolve()) } }));
 vi.mock("@/cesium/SceneContext", () => ({ useScene: () => scene }));
@@ -259,6 +259,18 @@ describe("Per cell", () => {
     // Another site's rule that ended says nothing here.
     act(() => useViewRule.setState({ ended: { siteId: "elsewhere", reason: "living" } }));
     expect(screen.queryByTestId("views-rule-ended")).toBeNull();
+  });
+
+  it("is disabled, and says why, for more than four dates up to As of", async () => {
+    const { epochs, assets } = datedSite(5);
+    show("cesium", twoEpochSite({ epochs, assets }));
+    const select = await screen.findByLabelText(VIEW_RULE_TEXT.label);
+    expect(select).toBeDisabled();
+    expect(screen.getByTestId("views-rule-dates")).toHaveTextContent(VIEW_RULE_TEXT.tooMany);
+    // As of the fourth: four dates, offered.
+    act(() => useSites.setState({ epoch: { [SITE_ID]: "e4" } }));
+    expect(select).toBeEnabled();
+    expect(screen.queryByTestId("views-rule-dates")).toBeNull();
   });
 
   it("is offered under PlayCanvas, which draws it, with no notice", async () => {

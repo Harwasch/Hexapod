@@ -17,6 +17,7 @@ import {
   VIEW_MODES,
   viewModeDrawable,
 } from "@/lib/viewModes";
+import { MAX_RULE_DATES, ruleDateCount } from "@/lib/ruleCap";
 import { useAsCaptured } from "@/state/asCaptured";
 import { useSplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
@@ -95,7 +96,12 @@ export function ViewsControl({ siteId }: { siteId: string }) {
         <CellLegend mode={shown} report={report} note={cellLevelNote(renderer)} />
       )}
       {dates >= 2 && (
-        <RuleControl siteId={siteId} epochs={epochs} drawable={perCellDrawable(renderer)} />
+        <RuleControl
+          siteId={siteId}
+          epochs={epochs}
+          drawable={perCellDrawable(renderer)}
+          tooMany={site ? ruleDateCount(epochs, site.assets, shownEpoch) > MAX_RULE_DATES : false}
+        />
       )}
       <SunControl
         drawable={sunlightDrawable(renderer)}
