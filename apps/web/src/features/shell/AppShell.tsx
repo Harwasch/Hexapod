@@ -27,7 +27,6 @@ import { CompareSplit } from "../compare/Compare";
 import { DescentArrival } from "../descent/DescentArrival";
 import { DevPanel } from "../dev/DevPanel";
 import { ExploreHud } from "../explore/ExploreHud";
-import { InspectorPanel } from "../inspector/InspectorPanel";
 import { LanternBridge } from "../lantern/LanternBridge";
 import { LanternRim } from "../lantern/LanternRim";
 import { UNAVAILABLE } from "../lantern/lanternWords";
@@ -71,6 +70,11 @@ function lazyNamed<K extends string, M extends Record<K, ComponentType>>(
 ): LazyExoticComponent<M[K]> {
   return lazy(() => load().then((module) => ({ default: module[name] })));
 }
+
+// The inspector is always mounted (it opens and closes itself on the selection) but draws
+// nothing until something is selected, so it loads on demand like SettingsSheet: its panel,
+// the provenance and placement text and their helpers stay out of the globe's first load.
+const InspectorPanel = lazyNamed(() => import("../inspector/InspectorPanel"), "InspectorPanel");
 
 // The Land feature (VITE_ENABLE_LAND_EXPLORATION): its surface, strip, overlays and agent, the bridges that draw and sync it
 // on the globe, the fog of knowing, and the workspace sign-in behind them (oidc-client-ts, which
@@ -311,7 +315,9 @@ export function AppShell() {
               <FeedsPanel />
             </ErrorBoundary>
             <ErrorBoundary inline label="Inspector">
-              <InspectorPanel />
+              <Suspense fallback={null}>
+                <InspectorPanel />
+              </Suspense>
               <DevPanel />
             </ErrorBoundary>
             {env.landExplorationEnabled && (
