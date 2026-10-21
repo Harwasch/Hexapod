@@ -599,8 +599,9 @@ the pipeline's per-cell grid, `hexapod.cellgrid` v1, declared on the root tile a
   98.6 % red under an all-weak grid, 99.3 % green under an all-strong one). Cells are measured
   in the globe's pixels (`ScanPose.globePixelRatio`), so the overlay's lower resolution in
   motion steps nothing.
-- **What still needs CesiumJS.** The Compare swipe (its section says so itself), and under
-  Spark the per-cell view rules: there the notice names exactly that ("Per cell: Needs the
+- **What still needs CesiumJS.** Under Spark the Compare swipe (its section says it needs
+  CesiumJS or PlayCanvas itself, with a switch to PlayCanvas) and the per-cell view rules: there
+  the notice names exactly that ("Per cell: Needs the
   CesiumJS renderer (Settings › Advanced › Splat renderer)") with the one-click "Draw with
   CesiumJS"; PlayCanvas draws the rules (§ Per-cell dates). Sunlight is CesiumJS's and
   PlayCanvas's, and says so itself under Spark (§ Sunlight). The
@@ -638,10 +639,23 @@ Layers › Compare › Dates draws two dated captures of the active site at once
 the divider (`features/compare/CompareDates.tsx`, `SiteManager.setCompareDates`). Each is its
 own tileset with the stock `splitDirection` (`LEFT`, `RIGHT`), which the splat primitive copies
 every frame; the divider sets `scene.splitPosition`. Both share the frame anchor's placement,
-so what differs between the halves is the data. CesiumJS only: under PlayCanvas or Spark the
-section is disabled with the views' notice and one-click switch. Choosing one date,
-another renderer or a representation one date lacks ends the comparison and draws the date shown
-before. See [ADR 0017](DECISIONS/0017-compare-dates.md). Evidence: `e2e/compareDates.spec.ts`.
+so what differs between the halves is the data. Choosing one date, Spark or the WebGPU trial,
+or a representation one date lacks ends the comparison and draws the date shown before.
+
+**Under PlayCanvas** (the default renderer) the right-hand date is the scan PlayCanvas draws and
+the left one is streamed into the same app beside it (`cesium/compareSession.ts`,
+`cesium/scanView/scanCompare.ts`, port 3's `ruleDates.ts`). Each tile's copy writes the side its
+date is on into one byte a splat; the frame's own splat hook hands it to the fragment shader,
+which discards a fragment on the other date's side of the divider by `gl_FragCoord.x`: exact at
+the divider, and swiping copies nothing. The tilesets keep their sides for the picks: the
+collider counts both, hidden, each on its side, and scene selection picks each date only where
+it is drawn. A switch between CesiumJS and PlayCanvas keeps the comparison; under Spark or the
+WebGPU trial the section is disabled with "Needs the CesiumJS or PlayCanvas renderer" and a
+one-click switch to PlayCanvas. See [ADR 0017](DECISIONS/0017-compare-dates.md) § Compare two
+dates under PlayCanvas. Evidence: `e2e/compareDates.spec.ts` (the app under CesiumJS and
+PlayCanvas, and the notice under Spark) and `e2e/compareScene.spec.ts` (the scene under
+PlayCanvas: left of the divider 100% one date, right of it 100% the other, no pixel on the wrong
+side, and 0% of the work buffer copied while swiping).
 
 ## Per-cell dates: view rules
 
