@@ -43,6 +43,30 @@ export function perCellDrawable(renderer: SplatRenderer): boolean {
 }
 
 /**
+ * The most dates a per-cell view rule names: those observed up to the date it is As of, four
+ * at most. Under PlayCanvas every date a rule draws is resident at once in its one work buffer,
+ * within one budget split between them (scanView/ruleDates.ts); past four a date's share is too
+ * thin to draw it well, and the texture PlayCanvas packs them into nears its limit. The control
+ * and the scene read the same count (`ruleDateCount`): the control is offered disabled, saying
+ * so, and the scene refuses a rule or ends one, saying why (`ViewRuleEnd` "dates").
+ */
+export const MAX_RULE_DATES = 4;
+
+/**
+ * The dates a rule names: of a site's dated options (lib/epochs.ts `epochOptions`), those
+ * observed up to `asOf` (the chosen option's `observedAt`; the latest when absent). Here, beside
+ * the rules' renderers, rather than with the options: this module is shared by the control and
+ * the scene already, so the count adds no chunk to either.
+ */
+export function ruleDateCount(
+  options: readonly { epoch: { observedAt: string } }[],
+  asOf: string | undefined,
+): number {
+  const until = asOf ? Date.parse(asOf) : Number.POSITIVE_INFINITY;
+  return options.filter((o) => Date.parse(o.epoch.observedAt) <= until).length;
+}
+
+/**
  * What the splat view control offers that `renderer` cannot draw and CesiumJS can, in words for
  * its notice (`perCell`: the Per cell rules are offered, the site having two dates or more);
  * null when there is none -- under CesiumJS, which draws all of it, or nothing of it missing.

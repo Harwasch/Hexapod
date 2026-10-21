@@ -71,8 +71,7 @@ import {
 // Already reached through splatCompositor.ts: importing it moves nothing (ruleKit.ts).
 import { resolveLayerUrl } from "@/lib/inferred";
 import { createLogger } from "@/lib/log";
-import { MAX_RULE_DATES, ruleDateCount } from "@/lib/ruleCap";
-import { perCellDrawable } from "@/lib/viewModes";
+import { MAX_RULE_DATES, perCellDrawable, ruleDateCount } from "@/lib/viewModes";
 import { effectiveInferredStyle, useAsCaptured } from "@/state/asCaptured";
 import { useSettings } from "@/state/settings";
 import { useViewMode } from "@/state/viewMode";
@@ -138,7 +137,7 @@ export interface CompositorSite {
  * draws them all under CesiumJS, then each date up to the one chosen that copies its placement,
  * oldest first. Null when a rule cannot be drawn: not splats, under a renderer that draws no
  * rule (Spark, the WebGPU trial: lib/viewModes.ts `perCellDrawable`), fewer than two dates, or
- * more than four up to As of (lib/ruleCap.ts).
+ * more than four up to As of (lib/viewModes.ts `MAX_RULE_DATES`).
  */
 export function ruleAssets(
   site: CompositorSite,
@@ -152,7 +151,7 @@ export function ruleAssets(
     !anchor ||
     options.length < 2 ||
     representation !== "gaussian-splat" ||
-    ruleDateCount(site.epochs, site.site.assets, site.epochId, representation) > MAX_RULE_DATES
+    ruleDateCount(options, shownOption(options, site.epochId)?.epoch.observedAt) > MAX_RULE_DATES
   )
     return null;
   const until = Date.parse(shownOption(options, site.epochId)?.epoch.observedAt ?? "");
@@ -911,8 +910,11 @@ export function startCompositor(
 
   const sync = (): void => {
     if (disposed) return;
-    // As of moved past four dates: the rule ends, and says why (lib/ruleCap.ts).
-    if (ruleDateCount(site.epochs, site.site.assets, site.epochId) > MAX_RULE_DATES) {
+    // As of moved past four dates: the rule ends, and says why (lib/viewModes.ts).
+    const options = epochOptions(site.epochs, site.site.assets, "gaussian-splat");
+    if (
+      ruleDateCount(options, shownOption(options, site.epochId)?.epoch.observedAt) > MAX_RULE_DATES
+    ) {
       context.end("dates");
       return;
     }

@@ -4,20 +4,21 @@ import { GlassButton, GlassPanel, GlassSegmentedControl, GlassSwitch } from "@tw
 
 import { useSite } from "@/api/queries";
 import { AS_CAPTURED_TEXT } from "@/lib/asCapturedText";
-import { epochOptions, pickShownAsset, siteEpochs } from "@/lib/epochs";
+import { epochOptions, pickShownAsset, shownOption, siteEpochs } from "@/lib/epochs";
 import { captureTimeOf } from "@/lib/sunlightText";
 import {
   cellLevelNote,
   DRAW_WITH_CESIUM,
   drawWithCesium,
   NEEDS_CESIUM_NOTICE,
+  MAX_RULE_DATES,
   needsCesiumFor,
   perCellDrawable,
+  ruleDateCount,
   sunlightDrawable,
   VIEW_MODES,
   viewModeDrawable,
 } from "@/lib/viewModes";
-import { MAX_RULE_DATES, ruleDateCount } from "@/lib/ruleCap";
 import { useAsCaptured } from "@/state/asCaptured";
 import { useSplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
@@ -52,7 +53,10 @@ export function ViewsControl({ siteId }: { siteId: string }) {
   const ruleOn = useViewRule((s) => s.active?.siteId === siteId);
   const shown = viewModeDrawable(mode, renderer) && !ruleOn ? mode : "photo";
   const epochs = site ? siteEpochs(site) : [];
-  const dates = site ? epochOptions(epochs, site.assets, "gaussian-splat").length : 0;
+  const options = site ? epochOptions(epochs, site.assets, "gaussian-splat") : [];
+  const dates = options.length;
+  // The date a rule would be As of: the one chosen, else the latest.
+  const asOf = shownOption(options, shownEpoch);
   const needs = needsCesiumFor(renderer, dates >= 2);
   const asCaptured = useAsCaptured((s) => s.on);
   const setAsCaptured = useAsCaptured((s) => s.set);
@@ -100,7 +104,7 @@ export function ViewsControl({ siteId }: { siteId: string }) {
           siteId={siteId}
           epochs={epochs}
           drawable={perCellDrawable(renderer)}
-          tooMany={site ? ruleDateCount(epochs, site.assets, shownEpoch) > MAX_RULE_DATES : false}
+          tooMany={ruleDateCount(options, asOf?.epoch.observedAt) > MAX_RULE_DATES}
         />
       )}
       <SunControl

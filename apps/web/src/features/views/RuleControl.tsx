@@ -94,7 +94,7 @@ function RuleLegend({
  * while the site has two dates or more under a renderer that draws the rules -- CesiumJS or
  * PlayCanvas (`drawable`; the caller's notice covers Spark and the WebGPU trial); disabled, and
  * says why, while a Living Survey rig moves the scan or with more than four dates up to As of
- * (lib/ruleCap.ts). The scene owns
+ * (lib/viewModes.ts `MAX_RULE_DATES`). The scene owns
  * the rule: the select shows what it says it draws (state/viewRule.ts), never its own click,
  * and why the last one ended when nobody turned it off. While As captured is on the rule
  * chosen is drawn as Ground truth (compositorSession.ts), and the control says so.
@@ -109,7 +109,7 @@ export function RuleControl({
   epochs: readonly Epoch[];
   /** The renderer drawing splats draws the rules (lib/viewModes.ts `perCellDrawable`). */
   drawable: boolean;
-  /** More than four dates up to As of (lib/ruleCap.ts): none can be drawn as one. */
+  /** More than four dates up to As of (lib/viewModes.ts `MAX_RULE_DATES`): none can be drawn as one. */
   tooMany?: boolean;
 }) {
   const scene = useScene();

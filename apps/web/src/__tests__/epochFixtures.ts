@@ -89,7 +89,7 @@ export function twoEpochSite(extra: Partial<Site> = {}): Site {
 
 /**
  * `count` dated captures a month apart from March 2026, each with its splat: e1/a1 (the
- * frame's own), e2/a2, ... -- the per-cell rules' cap (lib/ruleCap.ts).
+ * frame's own), e2/a2, ... -- the per-cell rules' cap (lib/viewModes.ts `MAX_RULE_DATES`).
  */
 export function datedSite(count: number): { epochs: Epoch[]; assets: SiteAsset[] } {
   const epochs: Epoch[] = [];

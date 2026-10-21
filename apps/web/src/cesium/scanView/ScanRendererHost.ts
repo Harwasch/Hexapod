@@ -1007,20 +1007,21 @@ export class ScanRendererHost {
     let arrived = true;
     /** Hands the renderer what it may draw now (`drawBudget`); the streamer follows (`hold`). */
     const applyBudget = (): void => backend.setBudget(drawBudget());
-    /** The streamer's budgets last handed over. */
-    let held = "";
+    /** What the cut was last planned for (`hold`). */
+    let held = 0;
     /**
-     * Hands the streamer what the cut may hold now, when any of it moved -- the adaptive budget,
-     * rest or motion, near or far, the renderer's own share of it (`loadFactor`: a per-cell
-     * rule splits one budget between its dates) -- and has the cut planned again under it.
-     * Checked as each frame is drawn, so a share that moves with the camera still is planned
-     * for at once.
+     * Hands the streamer what the cut may hold now when it moved -- the adaptive budget, rest or
+     * motion, near or far, the renderer's own share of it (`loadFactor`: a per-cell rule splits
+     * one budget between its dates) -- and has the cut planned again. Checked as each frame is
+     * drawn, so a share that moves with the camera still is planned for at once. (The cache's
+     * budget moves with it, but for an adaptive step while a still view holds the ceiling,
+     * which the next move hands over.)
      */
     const hold = (): void => {
-      const budgets = [streamedFor(planBudget()), cacheBudget()] as const;
-      if (budgets.join() === held) return;
-      held = budgets.join();
-      streamer.setBudget(...budgets);
+      const plan = streamedFor(planBudget());
+      if (plan === held) return;
+      held = plan;
+      streamer.setBudget(plan, cacheBudget());
       arrived = true;
     };
     // A tile arrived or failed, a deferred swap is due, a failed tile may be tried again.

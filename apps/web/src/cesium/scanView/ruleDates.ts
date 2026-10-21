@@ -27,7 +27,6 @@
  * of the globe's first-load entry, and the first load would grow.
  */
 
-import { NO_OWNER } from "@/lib/compositor";
 import { createLogger } from "@/lib/log";
 import type { TileStreamer, View } from "@/view/stream";
 import type { Sphere, TileNode } from "@/view/tiles";
@@ -162,7 +161,8 @@ export function viewShares(
   let total = 0;
   for (let cj = Math.floor(step / 2); cj < nj; cj += step)
     for (let ci = Math.floor(step / 2); ci < ni; ci += step) {
-      const holder = holderOf.get(plan.owners.data[cj * ni + ci] ?? NO_OWNER);
+      // A cell nobody owns (or past the bytes) is no holder's.
+      const holder = holderOf.get(plan.owners.data[cj * ni + ci] ?? -1);
       if (holder === undefined) continue;
       const center: [number, number, number] = [
         (i0 + ci + 0.5) * plan.cellM,
