@@ -300,6 +300,8 @@ describe("the Spark back-end and tile frames", () => {
       maxSh: 0,
       updateGenerator: vi.fn(),
       dispose: vi.fn(),
+      // Every scan tile reads its cell (the cell view), centred by its box.
+      getBoundingBox: () => new THREE.Box3(),
     });
     mesh.position.set(...offset);
     vi.mocked(loadSplatTile).mockResolvedValue({ mesh: mesh as unknown as SplatMesh, bytes });

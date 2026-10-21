@@ -32,6 +32,11 @@
  * the scan's, but bound to none of its objects and left out of picking; its world modifier
  * draws its look (layerLook.ts), generated again as the eye moves past its view cones' step.
  *
+ * Confidence and Data age (cellModifier.ts) are one more dyno in the same world modifier, on
+ * every tile of the scan: the shared cell look (lib/cellLook.ts) reading the view's texture at
+ * one level of the grid per tile, picked from the eye as each frame is drawn -- the tile
+ * generated again only when its level steps. A layer's tiles go grey under either view.
+ *
  * Drawn on demand: Spark has no loop of its own -- it sorts in a worker when a frame is drawn
  * and the view or the splats changed -- and says when a sort it started has finished
  * (`onDirty`), which is when the host draws the frame that shows it (overlayFrames.ts); what
@@ -44,6 +49,8 @@ import * as THREE from "three";
 
 import { checksumPositions } from "@twin/world";
 
+import { CELL_TEXTURE_WIDTH } from "@/lib/cellGrid";
+import { CELL_LOOK_GLSL, type CellLookView } from "@/lib/cellLook";
 import { tileInstanceIds, type InstancesDoc } from "@/lib/instances";
 import { tileSkin, type SkinDoc } from "@/lib/skin";
 import type { PickTile } from "@/lib/splatPick";
@@ -51,6 +58,13 @@ import { gunzip, siteFramePositions, spzPickDataOf } from "@/lib/spzPositions";
 import { loadSplatTile } from "@/view/sparkStream";
 
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
+import {
+  CELL_TILE_GLSL,
+  cellFillOf,
+  CellTiles,
+  type CellTileSample,
+  type CellTileUniforms,
+} from "./cellModifier";
 import {
   coneEye,
   eyeMoved,
@@ -61,6 +75,7 @@ import {
   type LayerLook,
 } from "./layerLook";
 import type { InstanceStyle } from "./scanInstances";
+import { reportScanCellView, watchScanCellView } from "./scanCellView";
 import { MOTION_TEXTURE_WIDTH, SCAN_MOTION_GLSL, type ScanMotion } from "./scanMotion";
 import type { BackendHooks, ScanBackend, ScanPose } from "./types";
 
@@ -136,13 +151,15 @@ function layerDynos() {
 
 /**
  * An inferred layer's tile's world modifier: its look on the colour (`LAYER_LOOK_GLSL`), with
- * the splat's centre in the world -- the scan's frame, where it is placed.
+ * the splat's centre in the world -- the scan's frame, where it is placed -- and grey first
+ * while Confidence or Data age is drawn (`fill`): a layer has no capture evidence.
  */
 function layerModifier(
   uniforms: ReturnType<typeof layerDynos>,
   instances: {
     params: dyno.DynoVec4<THREE.Vector4, string>;
     dim: dyno.DynoVec4<THREE.Vector4, string>;
+    fill: dyno.DynoVec4<THREE.Vector4, string>;
   },
 ): dyno.Dyno<{ gsplat: typeof dyno.Gsplat }, { gsplat: typeof dyno.Gsplat }> {
   return dyno.dynoBlock({ gsplat: dyno.Gsplat }, { gsplat: dyno.Gsplat }, ({ gsplat }) => {
@@ -159,20 +176,54 @@ function layerModifier(
         eye: "vec4",
         params: "vec4",
         dim: "vec4",
+        fill: "vec4",
       },
       outTypes: { gsplat: dyno.Gsplat },
-      globals: () => [LAYER_LOOK_GLSL],
+      globals: () => [LAYER_LOOK_GLSL, CELL_LOOK_GLSL],
       statements: ({ inputs, outputs }) => {
         const out = String(outputs.gsplat);
         const i = (name: keyof typeof inputs): string => String(inputs[name]);
         return [
           `${out} = ${i("gsplat")};`,
-          `${out}.rgba = hexapodLayerColor(${i("gsplat")}.center, ${i("gsplat")}.rgba, ${i("frame")}, ${i("tint")}, ${i("pattern")}, ${i("cones")}, ${i("grid")}, ${i("dims")}, ${i("eye")}, hexapodLayerDim(${i("params")}, ${i("dim")}));`,
+          `if (${i("fill")}.x > 0.5) { ${out}.rgba = hexapodCellGrey(${out}.rgba); }`,
+          `${out}.rgba = hexapodLayerColor(${i("gsplat")}.center, ${out}.rgba, ${i("frame")}, ${i("tint")}, ${i("pattern")}, ${i("cones")}, ${i("grid")}, ${i("dims")}, ${i("eye")}, hexapodLayerDim(${i("params")}, ${i("dim")}));`,
         ];
       },
     });
     return { gsplat: look.apply({ gsplat, ...uniforms, ...instances }).gsplat };
   });
+}
+
+/** The dyno inputs of the cell look (cellModifier.ts): shared, and one tile's level. */
+interface CellInputs {
+  grid: dyno.DynoSampler2D<string, THREE.DataTexture>;
+  rule: dyno.DynoVec4<THREE.Vector4, string>;
+  level: dyno.DynoVec4<THREE.Vector4, string>;
+  tile: dyno.DynoVec4<THREE.Vector4, string>;
+}
+
+/** The cell look as a dyno, applied to `gsplat` (the scan's frame: a world modifier's). */
+function cellStep(gsplat: dyno.DynoVal<typeof dyno.Gsplat>, inputs: CellInputs) {
+  const look = new dyno.Dyno({
+    inTypes: {
+      gsplat: dyno.Gsplat,
+      grid: "sampler2D",
+      rule: "vec4",
+      level: "vec4",
+      tile: "vec4",
+    },
+    outTypes: { gsplat: dyno.Gsplat },
+    globals: () => [CELL_TILE_GLSL],
+    statements: ({ inputs: named, outputs }) => {
+      const out = String(outputs.gsplat);
+      const i = (name: keyof typeof named): string => String(named[name]);
+      return [
+        `${out} = ${i("gsplat")};`,
+        `${out}.rgba = hexapodCellTile(${i("gsplat")}.center, ${i("gsplat")}.rgba, ${i("grid")}, ${i("rule")}, ${i("level")}, ${i("tile")});`,
+      ];
+    },
+  });
+  return look.apply({ gsplat, ...inputs }).gsplat;
 }
 
 /** One tile's binding to the scan's objects. */
@@ -306,18 +357,25 @@ export function createBackend(
   const motionExtra = dyno.dynoVec4(new THREE.Vector4(0, 1, 0, 0));
   let redrawn = 0;
 
+  /**
+   * A tile's world modifier: the objects' motion and rule from its textures (a `tile` that
+   * carries ids or a skin), then the cell look (`cell`, while a view is drawn), or either.
+   */
   const modifierFor = (
-    tile: SparkTile,
+    tile: SparkTile | undefined,
+    cell: CellInputs | null,
   ): dyno.Dyno<{ gsplat: typeof dyno.Gsplat }, { gsplat: typeof dyno.Gsplat }> => {
-    const ids = dyno.dynoUsampler2D(tile.ids ?? emptySplats);
-    const skins = dyno.dynoUsampler2D(tile.skins ?? emptySplats);
-    const weights = dyno.dynoUsampler2D(tile.weights ?? emptyUint);
-    const weights2 = dyno.dynoUsampler2D(tile.weights2 ?? emptyUint);
-    const hasIds = tile.ids !== null;
-    const hasSkin = tile.skins !== null;
-    const wide = hasSkin && tile.weights2 !== null;
+    const objects = tile !== undefined && (tile.doc !== null || tile.skins !== null);
+    const ids = dyno.dynoUsampler2D(tile?.ids ?? emptySplats);
+    const skins = dyno.dynoUsampler2D(tile?.skins ?? emptySplats);
+    const weights = dyno.dynoUsampler2D(tile?.weights ?? emptyUint);
+    const weights2 = dyno.dynoUsampler2D(tile?.weights2 ?? emptyUint);
+    const hasIds = (tile?.ids ?? null) !== null;
+    const hasSkin = (tile?.skins ?? null) !== null;
+    const wide = hasSkin && (tile?.weights2 ?? null) !== null;
     return dyno.dynoBlock({ gsplat: dyno.Gsplat }, { gsplat: dyno.Gsplat }, ({ gsplat }) => {
       if (!gsplat) throw new Error("No gsplat input");
+      if (!objects) return { gsplat: cell ? cellStep(gsplat, cell) : gsplat };
       const rule = new dyno.Dyno({
         inTypes: {
           gsplat: dyno.Gsplat,
@@ -346,38 +404,62 @@ export function createBackend(
           ];
         },
       });
-      return {
-        gsplat: rule.apply({
-          gsplat,
-          ids,
-          skins,
-          weights,
-          weights2,
-          state,
-          params,
-          tint,
-          dim,
-          handles,
-          slots,
-          poses,
-          motion: motionParams,
-          extra: motionExtra,
-        }).gsplat,
-      };
+      const moved = rule.apply({
+        gsplat,
+        ids,
+        skins,
+        weights,
+        weights2,
+        state,
+        params,
+        tint,
+        dim,
+        handles,
+        slots,
+        poses,
+        motion: motionParams,
+        extra: motionExtra,
+      }).gsplat;
+      return { gsplat: cell ? cellStep(moved, cell) : moved };
     });
+  };
+
+  /** The scan's tiles under a cell view, and the levels they read (cellModifier.ts). */
+  const cells = new CellTiles<SplatMesh>();
+  const emptyCellGrid = new THREE.DataTexture(new Uint8Array(4), 1, 1);
+  emptyCellGrid.needsUpdate = true;
+  const cellGrid = dyno.dynoSampler2D(emptyCellGrid);
+  const cellRule = dyno.dynoVec4(new THREE.Vector4());
+  /** `(1, 0, 0, 0)` while a cell view is drawn: what has a layer's tiles drawn grey. */
+  const cellFill = dyno.dynoVec4(new THREE.Vector4());
+  const cellLevels = new Map<SplatMesh, { level: CellInputs["level"]; tile: CellInputs["tile"] }>();
+  /** What each tile's world modifier is built for now (objects, cell look), if it has one. */
+  const modifiedAs = new Map<SplatMesh, string>();
+
+  /** Writes a tile's level into its cell dynos, made on first need. */
+  const writeLevel = (mesh: SplatMesh, uniforms: CellTileUniforms): CellInputs => {
+    let own = cellLevels.get(mesh);
+    if (!own) {
+      own = { level: dyno.dynoVec4(new THREE.Vector4()), tile: dyno.dynoVec4(new THREE.Vector4()) };
+      cellLevels.set(mesh, own);
+    }
+    own.level.value.fromArray(uniforms.level);
+    own.tile.value.fromArray(uniforms.tile);
+    return { grid: cellGrid, rule: cellRule, ...own };
   };
 
   /** The instances whose ids tiles carry: hide and highlight's, or the motion's. */
   const instancesDoc = (): InstancesDoc | null => style?.doc ?? motion?.instances ?? null;
 
   /**
-   * Writes what the tile needs for the current style and motion -- a new per-splat texture
-   * builds its modifier again -- and has Spark regenerate it.
+   * Writes what the tile needs for the current style, motion and cell view -- a new per-splat
+   * texture, or the cell look put on or taken off, builds its modifier again -- and has Spark
+   * regenerate it. `tile` is undefined for a tile with no binding to the scan's objects.
    */
-  const bind = (mesh: SplatMesh, tile: SparkTile): void => {
+  const bind = (mesh: SplatMesh, tile: SparkTile | undefined): void => {
     let replaced = false;
     const doc = instancesDoc();
-    if (doc && tile.doc !== doc) {
+    if (tile && doc && tile.doc !== doc) {
       const found = tileInstanceIds(doc, tile.checksum);
       const listed = found?.length === tile.count ? found : undefined;
       tile.ids?.dispose();
@@ -388,7 +470,7 @@ export function createBackend(
       replaced = true;
     }
     const skinDoc = motion?.skin ?? null;
-    if (skinDoc && tile.skinDoc !== skinDoc) {
+    if (tile && skinDoc && tile.skinDoc !== skinDoc) {
       tile.skinDoc = skinDoc;
       const found = tileSkin(skinDoc, tile.checksum);
       const skinSet = new Set<number>();
@@ -404,13 +486,69 @@ export function createBackend(
       tile.skinSet = skinSet;
       replaced = true;
     }
-    if (tile.doc === null && tile.skins === null) return;
-    if (replaced || !tile.modified) {
-      tile.modified = true;
-      mesh.worldModifier = modifierFor(tile);
+    const objects = tile !== undefined && (tile.doc !== null || tile.skins !== null);
+    const uniforms = cells.drawing ? cells.uniforms(mesh) : undefined;
+    const as = objects || uniforms ? `${String(objects)}|${String(uniforms !== undefined)}` : null;
+    const before = modifiedAs.get(mesh) ?? null;
+    if (as === null && before === null) return;
+    if (replaced || as !== before) {
+      if (tile) tile.modified = objects;
+      if (as === null) {
+        modifiedAs.delete(mesh);
+        mesh.worldModifier = undefined;
+      } else {
+        modifiedAs.set(mesh, as);
+        mesh.worldModifier = modifierFor(tile, uniforms ? writeLevel(mesh, uniforms) : null);
+      }
       mesh.updateGenerator();
     }
     mesh.updateVersion();
+  };
+
+  /**
+   * Draws `view` -- Confidence or Data age, its texture and the grid's rule -- on every tile of
+   * the scan, or the photo again with null (cellModifier.ts); a layer's tiles grey while one is
+   * drawn. Each tile is generated again once.
+   */
+  const setCellView = (view: CellLookView | null): void => {
+    const before = cells.view;
+    if (!cells.setView(view)) return;
+    if (view && view.rows !== before?.rows) {
+      const texture = new THREE.DataTexture(
+        view.rows.data,
+        CELL_TEXTURE_WIDTH,
+        view.rows.height,
+        THREE.RGFormat,
+        THREE.UnsignedByteType,
+      );
+      texture.needsUpdate = true;
+      if (cellGrid.value !== emptyCellGrid) cellGrid.value.dispose();
+      cellGrid.value = texture;
+    }
+    cellRule.value.fromArray(cells.rule);
+    cellFill.value.fromArray(cellFillOf(view));
+    for (const mesh of cells.meshes()) {
+      const uniforms = cells.uniforms(mesh);
+      if (uniforms) writeLevel(mesh, uniforms);
+      bind(mesh, tiles.get(mesh));
+    }
+    for (const mesh of layers.keys()) mesh.updateVersion();
+    hooks.frameWanted();
+  };
+
+  /** A tile's own splats in the scan's frame, for the cell view's reading (`CellTiles`). */
+  const cellSample = (mesh: SplatMesh): CellTileSample | null => {
+    const tile = tiles.get(mesh);
+    if (!tile) return null;
+    const positions = tile.pick.positions;
+    return {
+      count: tile.count,
+      at: (i, out) => {
+        out[0] = positions[i * 3] ?? 0;
+        out[1] = positions[i * 3 + 1] ?? 0;
+        out[2] = positions[i * 3 + 2] ?? 0;
+      },
+    };
   };
 
   const setInstances = (next: InstanceStyle | null): void => {
@@ -583,7 +721,7 @@ export function createBackend(
             .add(new THREE.Vector3(ox, oy, oz))
             .toArray();
         layers.set(mesh, state);
-        mesh.worldModifier = layerModifier(uniforms, { params, dim });
+        mesh.worldModifier = layerModifier(uniforms, { params, dim, fill: cellFill });
         mesh.updateGenerator();
       }
       state.look = look;
@@ -604,6 +742,19 @@ export function createBackend(
         mesh.updateGenerator();
       }
       if (tile.offset) offsets.set(mesh, tile.offset);
+      // Every tile of the scan reads its cell, whether or not it carries ids: its centre in
+      // the scan's frame, the tile's offset added, as the eye is measured in.
+      const box = mesh.getBoundingBox(true);
+      const [cx, cy, cz] = tile.offset ?? [0, 0, 0];
+      cells.add(
+        mesh,
+        box.isEmpty()
+          ? [cx, cy, cz]
+          : box
+              .getCenter(new THREE.Vector3())
+              .add(new THREE.Vector3(cx, cy, cz))
+              .toArray(),
+      );
       const raw = await gunzip(bytes).catch(() => undefined);
       // Reading and digesting every centre is main-thread work: within the frame's budget.
       const read = raw
@@ -619,6 +770,7 @@ export function createBackend(
               return { data, checksum: checksumPositions(data.positions) };
             })
             .catch((error: unknown) => {
+              cells.delete(mesh);
               mesh.dispose();
               throw error;
             })
@@ -646,6 +798,7 @@ export function createBackend(
         tiles.set(mesh, binding);
         if (style || motion) bind(mesh, binding);
       }
+      if (cells.drawing) bind(mesh, tiles.get(mesh));
       return mesh;
     },
     add: (mesh) => {
@@ -669,6 +822,9 @@ export function createBackend(
       tile?.weights?.dispose();
       tile?.weights2?.dispose();
       tiles.delete(mesh);
+      cells.delete(mesh);
+      cellLevels.delete(mesh);
+      modifiedAs.delete(mesh);
       mesh.dispose();
     },
     place: (mesh, matrix) => {
@@ -766,6 +922,11 @@ export function createBackend(
         layer.uniforms.eye.value.fromArray(coneEye(layer.look, pose.eye));
         mesh.updateVersion();
       }
+      // A tile whose cell level stepped is generated again (cellModifier.ts).
+      cells.update(pose, (mesh, uniforms) => {
+        writeLevel(mesh, uniforms);
+        mesh.updateVersion();
+      });
       drawing = true;
       try {
         renderer.render(scene, camera);
@@ -774,6 +935,9 @@ export function createBackend(
       }
     },
     destroy: () => {
+      for (const off of cellLinks) off();
+      if (cellGrid.value !== emptyCellGrid) cellGrid.value.dispose();
+      emptyCellGrid.dispose();
       for (const tile of tiles.values()) {
         tile.ids?.dispose();
         tile.skins?.dispose();
@@ -801,5 +965,14 @@ export function createBackend(
       renderer.forceContextLoss();
     },
   };
+  // The scan's Confidence / Data age view, drawn as the view says (scanCellView.ts).
+  const assetId = hooks.assetId;
+  const cellLinks =
+    assetId !== undefined
+      ? [
+          watchScanCellView(assetId, setCellView),
+          reportScanCellView(assetId, () => cells.reading("spark", cellSample)),
+        ]
+      : [];
   return Promise.resolve(backend);
 }

@@ -34,6 +34,8 @@ import {
 } from "@/lib/cellLook";
 
 import type { ScanCellViewReading } from "./scanCellView";
+
+export type { CellTileUniforms };
 import type { ScanPose } from "./types";
 
 /**
