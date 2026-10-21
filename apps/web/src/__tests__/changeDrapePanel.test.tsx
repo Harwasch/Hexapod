@@ -90,6 +90,22 @@ const changeLayer = (name: "ground" | "vegetation") => ({
   label: name === "ground" ? "Ground: the bare earth" : "Vegetation and objects",
   heights: name === "ground" ? "ground" : "dsm",
   minDetectableM: name === "ground" ? 0.489 : 1.089,
+  detectable:
+    name === "ground"
+      ? { minM: 0.49, medianM: 0.49, p90M: 0.49, maxM: 2.17, cells: 1132 }
+      : { minM: 1.09, medianM: 1.1, p90M: 1.1, maxM: 1.67, cells: 1131 },
+  detectableGrid: {
+    level: 2,
+    cellM: 1,
+    i0: -4,
+    j0: -4,
+    ni: 1,
+    nj: 1,
+    unitM: 0.01,
+    noData: 65535,
+    encoding: "u2le-base64-rows-south-to-north",
+    data: "MQA=",
+  },
   motionM: name === "ground" ? 0 : 0.25,
   horizontalRadiusM: name === "ground" ? 1 : 2,
   driftReachM: name === "ground" ? 3.536 : 0,
@@ -383,6 +399,10 @@ describe("the drape and its legend", () => {
       /Unchanged.*1,084 cells.*counted, not drawn/,
     );
     expect(legend).toHaveTextContent("the 3σ rule and the 5 m ground window");
+    // What the ground could see, and what it cannot see at all yet.
+    expect(screen.getByTestId("change-detectable")).toHaveTextContent(
+      /Least detectable change: 0\.49 m across the 1,132 cells compared.*Small objects under ~1 m are not detected yet.*Measured at best \(synthetic, uncalibrated\): 0\.23 m over areas wider than the 5 m ground window/,
+    );
     expect(screen.getByTestId("change-drape-placement")).toHaveTextContent(
       "Not survey-grade: Mar 1, 2026 survey (±0.03 m) · Jun 1, 2026 coarse (±5 m)",
     );
@@ -413,6 +433,9 @@ describe("the drape and its legend", () => {
       /Raised.*47 cells.*23 low confidence, hatched/,
     );
     expect(section).toHaveTextContent("±0.25 m of wind sway per date");
+    expect(screen.getByTestId("change-vegetation-detectable")).toHaveTextContent(
+      /Least detectable change: 1\.1 m across the 1,131 cells compared.*Small objects under ~1 m are not detected yet.*Measured at best \(synthetic, uncalibrated\): 1\.06 m/,
+    );
     // The ground's own key is untouched by it.
     expect(screen.getByTestId("change-row-raised")).toHaveTextContent(/Raised.*0 cells/);
     await userEvent.click(vegetation);

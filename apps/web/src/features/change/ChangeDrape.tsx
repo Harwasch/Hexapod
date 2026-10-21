@@ -17,6 +17,9 @@ import {
   changeOffer,
   legendRows,
   NEEDS_TOKEN,
+  detectableNote,
+  measuredLimit,
+  SMALL_OBJECTS,
   vegetationNote,
   verdictNote,
   VEGETATION_TITLE,
@@ -61,6 +64,17 @@ function LayerRows({ layer, testId }: { layer: ChangeLayer; testId: string }) {
           )}
         </li>
       ))}
+    </ul>
+  );
+}
+
+/** What a layer could see between these dates, what it cannot see yet, and its measured best. */
+function LayerLimits({ layer, testId }: { layer: ChangeLayer; testId: string }) {
+  return (
+    <ul className="change-drape__notes" data-testid={testId}>
+      <li>{detectableNote(layer)}</li>
+      <li>{SMALL_OBJECTS}</li>
+      <li>{measuredLimit(layer.layer)}</li>
     </ul>
   );
 }
@@ -230,6 +244,7 @@ function Drape({ request }: { request: ChangeDrapeRequest }) {
             {changeLabel(map.ground)}
           </p>
           <LayerRows layer={map.ground} testId="change-row" />
+          <LayerLimits layer={map.ground} testId="change-detectable" />
           {verdicts && (
             <p className="change-drape__note" data-testid="change-drape-placement">
               {verdicts}
@@ -257,6 +272,7 @@ function Drape({ request }: { request: ChangeDrapeRequest }) {
                 {changeLabel(map.vegetation)}
               </p>
               <LayerRows layer={map.vegetation} testId="change-vegetation-row" />
+              <LayerLimits layer={map.vegetation} testId="change-vegetation-detectable" />
               <p className="change-drape__note">{vegetationNote(map, map.vegetation)}</p>
               {outlinedNote(map, map.vegetation)}
             </section>
