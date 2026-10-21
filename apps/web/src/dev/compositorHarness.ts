@@ -64,12 +64,17 @@ import {
 import { addColorPart, removeColorPart, type SplatColorPart } from "@/cesium/splatColor";
 import { incrementalSplats, splatTilesetOf } from "@/cesium/splatInternals";
 import { decodeCellGrid, type CellGrid } from "@/lib/cellGrid";
-import type { ViewRule } from "@/lib/compositor";
+import { NO_OWNER, type ViewRule } from "@/lib/compositor";
 import { useSettings } from "@/state/settings";
 
 import { encodeConfidenceGrid } from "./cellGridFixture";
 
-export type Scenario = "both" | "latest" | "gap-latest" | "gap-truth";
+/**
+ * `gap-unnamed` (PlayCanvas only): `gap-truth`, with June's fill streamed and resident but the
+ * rule naming no source for its tileset -- where nobody owns a cell, a tile of no named source
+ * must still draw nothing (the rule fails closed).
+ */
+export type Scenario = "both" | "latest" | "gap-latest" | "gap-truth" | "gap-unnamed";
 
 /** Of the covered pixels in a region: red (March), blue (June), green (inferred), mixed. */
 export interface Region {
@@ -100,7 +105,7 @@ export interface CompositorCounts {
    * source: CesiumJS's slots, PlayCanvas's tiles.
    */
   companion: boolean;
-  sources: { march: number; june: number; fill: number };
+  sources: { march: number; june: number; fill: number; unnamed?: number };
   /** The canvases counted (PlayCanvas: the globe's and the overlay's), device pixels. */
   canvases?: { globe: number[]; overlay: number[] | null };
 }
@@ -461,7 +466,8 @@ export async function startCompositorHarness(options: {
 
   /** Under PlayCanvas: every date and layer in, its tiles coloured by source, then counted. */
   const viewPlaycanvas = async (scenario: Scenario): Promise<CompositorCounts> => {
-    const gap = scenario === "gap-latest" || scenario === "gap-truth";
+    const gap = scenario !== "both" && scenario !== "latest";
+    const unnamed = scenario === "gap-unnamed";
     let still = 0;
     for (let frame = 0; frame < 3000 && still < 30; frame += 1) {
       await nextFrame(scene);
@@ -478,7 +484,9 @@ export async function startCompositorHarness(options: {
         reading.dates.loading === 0 &&
         owners?.includes(0) === true &&
         owners.includes(1) &&
-        (scenario !== "gap-latest" || (owners.includes(2) && (reading.sources[2] ?? 0) > 0));
+        (scenario !== "gap-latest" || (owners.includes(2) && (reading.sources[2] ?? 0) > 0)) &&
+        // The fill resident, its tiles named, before the rule stops naming it.
+        (!unnamed || (reading.sources[2] ?? 0) > 0);
       still = ready ? still + 1 : 0;
     }
     if (still < 30) throw new Error("PlayCanvas did not draw every date");
@@ -487,7 +495,14 @@ export async function startCompositorHarness(options: {
     // The same rule again first (a layer's modifier is put on again with it), then each tile's
     // own modifier coloured by its source; a parameter set copies each into the work buffer.
     const view = ruleNow();
-    if (view) publishScanRule(SHOWN_ASSET, { ...view });
+    if (view)
+      publishScanRule(SHOWN_ASSET, {
+        ...view,
+        // gap-unnamed: the fill's tileset named by no source, as an unknown tileset would be.
+        sources: unnamed
+          ? new Map([...view.sources].filter(([, named]) => named.source !== 2))
+          : view.sources,
+      });
     for (const component of app.root.findComponents("gsplat") as pc.GSplatComponent[]) {
       const code = (component as unknown as { _workBufferModifier?: { code?: string } | null })
         ._workBufferModifier?.code;
@@ -510,6 +525,7 @@ export async function startCompositorHarness(options: {
         march: reading?.sources[0] ?? 0,
         june: reading?.sources[1] ?? 0,
         fill: gap ? (reading?.sources[2] ?? 0) : 0,
+        unnamed: reading?.sources[NO_OWNER] ?? 0,
       },
     };
   };
@@ -521,9 +537,9 @@ export async function startCompositorHarness(options: {
         march.boundingSphere.center,
         new HeadingPitchRange(0, CesiumMath.toRadians(-85), 48),
       );
-      const gap = scenario === "gap-latest" || scenario === "gap-truth";
+      const gap = scenario !== "both" && scenario !== "latest";
       start(
-        scenario === "gap-truth" ? "ground-truth" : "latest",
+        scenario === "gap-truth" || scenario === "gap-unnamed" ? "ground-truth" : "latest",
         gap ? grids.northWest : grids.everywhere,
         gap,
       );

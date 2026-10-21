@@ -73,7 +73,7 @@ interface Counts {
   all: Region;
   seam: { pixels: number; covered: number; mixed: number; profile: number[] };
   companion: boolean;
-  sources: { march: number; june: number; fill: number };
+  sources: { march: number; june: number; fill: number; unnamed?: number };
 }
 
 /** Five views of the yard drawn by `renderer`, counted; asserted by each test. */
@@ -129,10 +129,20 @@ async function measure(page: Page, renderer: "cesium" | "playcanvas") {
   const centres = await view("latest", 0);
   const gapLatest = await view("gap-latest");
   const gapTruth = await view("gap-truth");
-  const figures = JSON.stringify({ renderer, both, latest, centres, gapLatest, gapTruth });
+  // PlayCanvas names each tile's source by its tileset: one it does not name draws nothing.
+  const gapUnnamed = renderer === "playcanvas" ? await view("gap-unnamed") : null;
+  const figures = JSON.stringify({
+    renderer,
+    both,
+    latest,
+    centres,
+    gapLatest,
+    gapTruth,
+    gapUnnamed,
+  });
   test.info().annotations.push({ type: "pixels", description: figures });
   if (EVIDENCE) writeFileSync(`${EVIDENCE}/scene-${renderer}.json`, figures);
-  return { errors, both, latest, centres, gapLatest, gapTruth };
+  return { errors, both, latest, centres, gapLatest, gapTruth, gapUnnamed };
 }
 
 /** What both renderers must show (ADR 0017's method and figures). */
@@ -181,7 +191,14 @@ test("under PlayCanvas too, one date a cell in one sort, the seam as clean", asy
   // The same five views drawn by the app's PlayCanvas renderer, every date streamed into its
   // one app; software GL again.
   test.setTimeout(840_000);
-  expectOneOwnerPerCell(await measure(page, "playcanvas"));
+  const measured = await measure(page, "playcanvas");
+  expectOneOwnerPerCell(measured);
+  // Fail closed: June's fill resident, its tiles named by no source, in cells nobody owns
+  // (Ground truth's gap): nothing drawn there, not the fill.
+  const { gapUnnamed, gapLatest } = measured;
+  expect(gapUnnamed?.sources.unnamed).toBeGreaterThan(0);
+  expect(gapUnnamed?.southWest.green).toBeLessThan(0.02);
+  expect(gapUnnamed?.southWest.covered).toBeLessThan(gapLatest.southWest.covered / 4);
 });
 
 /** The tree with SH bands, and its streamed package beside its tileset (where PlayCanvas looks). */
