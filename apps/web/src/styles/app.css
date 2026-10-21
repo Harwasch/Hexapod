@@ -2557,6 +2557,19 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
 }
 
+/* Vegetation: a layer apart from the ground's key, under its own switch. */
+.change-drape__vegetation {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--glass-border, rgba(255, 255, 255, 0.12));
+}
+
+.change-drape__layer .setting__label {
+  font-size: var(--text-xs);
+}
+
 /* Low confidence: the class's colour in stripes, as the drape hatches it on the ground. */
 .change-drape__swatch--hatched {
   background-image: repeating-linear-gradient(45deg, currentColor 0 2px, transparent 2px 4px);

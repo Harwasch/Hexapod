@@ -1,8 +1,9 @@
 /**
  * The change drape in the app (features/change, Compare › Dates): offered once both chosen
  * dates measured a height surface, and otherwise says why; under any splat renderer, since it
- * is ground geometry; its legend counts each class, marks low confidence, says it is derived
- * and uncalibrated, the least change it can show, and which date is not survey-grade; a 401
+ * is ground geometry; the ground drawn and keyed, vegetation apart behind its own switch; its
+ * legend counts each class, marks low confidence, says it is derived and uncalibrated, the
+ * least change each layer can show, and when a date is not survey-grade; a 401
  * asks for the pilot's write token rather than leaving a blank drape; and it ends with its site.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -28,20 +29,29 @@ import { useViewRule } from "@/state/viewRule";
 
 import { A1, A2, E1, E2, SITE_ID, epoch, splat, twoEpochSite } from "./epochFixtures";
 
+/** The layers made, each by its kind: show/clear/destroy say which layer they were on. */
 const layer = vi.hoisted(() => ({
   show: vi.fn(),
   clear: vi.fn(),
   destroy: vi.fn(),
-  made: 0,
+  made: [] as string[],
 }));
 vi.mock("@/cesium/changeDrape", () => ({
   ChangeDrapeLayer: class {
-    constructor() {
-      layer.made += 1;
+    kind: string;
+    constructor(_scene: unknown, options?: { layer?: string }) {
+      this.kind = options?.layer ?? "ground";
+      layer.made.push(this.kind);
     }
-    show = layer.show;
-    clear = layer.clear;
-    destroy = layer.destroy;
+    show = (map: unknown) => {
+      layer.show(this.kind, map);
+    };
+    clear = () => {
+      layer.clear(this.kind);
+    };
+    destroy = () => {
+      layer.destroy(this.kind);
+    };
   },
 }));
 
@@ -75,6 +85,27 @@ const S2 = {
 } as unknown as Epoch;
 const surfaced = (extra: Partial<Site> = {}) => twoEpochSite({ epochs: [S1, S2], ...extra });
 
+const changeLayer = (name: "ground" | "vegetation") => ({
+  layer: name,
+  label: name === "ground" ? "Ground: the bare earth" : "Vegetation and objects",
+  heights: name === "ground" ? "ground" : "dsm",
+  minDetectableM: name === "ground" ? 0.489 : 1.089,
+  motionM: name === "ground" ? 0 : 0.25,
+  horizontalRadiusM: name === "ground" ? 1 : 2,
+  driftReachM: name === "ground" ? 3.536 : 0,
+  counts:
+    name === "ground"
+      ? { unchanged: 1084, raised: 0, lowered: 48, insufficient: 148 }
+      : { unchanged: 1060, raised: 47, lowered: 24, insufficient: 149 },
+  lowConfidence:
+    name === "ground"
+      ? { unchanged: 562, raised: 0, lowered: 0 }
+      : { unchanged: 539, raised: 23, lowered: 0 },
+  areaLevel: 2,
+  areaCellM: 1,
+  areas: [],
+});
+
 const changeMap = {
   policy: "change-v1",
   derived: true,
@@ -90,18 +121,21 @@ const changeMap = {
   nativeLevel: 2,
   cellM: 1,
   thresholdSigma: 3,
-  minDetectableM: 0.229,
-  uncertainty: { fromM: 0, toM: 0.062 },
-  counts: { unchanged: 1137, raised: 47, lowered: 24, insufficient: 72 },
-  lowConfidence: { unchanged: 0, raised: 23, lowered: 0 },
+  uncertainty: {
+    fromM: 0.03,
+    toM: 5,
+    fromVerdict: "survey",
+    toVerdict: "coarse",
+    fromFrameM: 0,
+    toFrameM: 0.062,
+  },
+  ground: changeLayer("ground"),
+  vegetation: changeLayer("vegetation"),
   appearance: {
     status: "not-computed",
     reason:
       "needs the new photos compared with the old epoch at fixed geometry; never splat pixels",
   },
-  areaLevel: 2,
-  areaCellM: 1,
-  areas: [],
 } as unknown as ChangeMap;
 
 interface GetResult {
@@ -142,7 +176,7 @@ beforeEach(() => {
   layer.show.mockClear();
   layer.clear.mockClear();
   layer.destroy.mockClear();
-  layer.made = 0;
+  layer.made = [];
   get.mockReset();
   get.mockResolvedValue(answer(changeMap));
   useSites.setState({
@@ -325,35 +359,79 @@ describe("beside the swipe and a per-cell rule", () => {
 });
 
 describe("the drape and its legend", () => {
-  it("draws the map and keys it: counts, low confidence, derived, the floor, uncalibrated, placement", async () => {
+  it("draws the ground and keys it: counts, low confidence, derived, its floor, uncalibrated, verdicts", async () => {
     show();
     await userEvent.click(changeSwitch());
     const legend = await screen.findByTestId("change-drape");
-    await waitFor(() => expect(layer.show).toHaveBeenCalledWith(changeMap));
+    await waitFor(() => expect(layer.show).toHaveBeenCalledWith("ground", changeMap.ground));
+    // The ground only: vegetation is not drawn until asked for.
+    expect(layer.made).toEqual(["ground"]);
     expect(get).toHaveBeenCalledWith("/api/v1/sites/{site_id}/change", {
       params: { path: { site_id: SITE_ID }, query: { from: E1.id, to: E2.id } },
     });
     expect(screen.getByTestId("change-drape-label")).toHaveTextContent(
-      "Derived from height surfaces — not observed · changes under ±0.23 m cannot be seen between these dates",
+      "Derived from height surfaces — not observed · changes under ±0.49 m cannot be seen between these dates",
     );
     expect(legend).toHaveTextContent("Mar 1, 2026 → Jun 1, 2026");
-    expect(screen.getByTestId("change-row-raised")).toHaveTextContent(
-      /Raised.*47 cells.*23 low confidence, hatched/,
-    );
-    expect(screen.getByTestId("change-row-lowered")).toHaveTextContent(/Lowered.*24 cells/);
+    expect(screen.getByTestId("change-row-raised")).toHaveTextContent(/Raised.*0 cells/);
+    expect(screen.getByTestId("change-row-lowered")).toHaveTextContent(/Lowered.*48 cells/);
     expect(screen.getByTestId("change-row-lowered")).not.toHaveTextContent(/low confidence/);
     expect(screen.getByTestId("change-row-insufficient")).toHaveTextContent(
-      /Not comparable.*72 cells/,
+      /Not comparable.*148 cells/,
     );
     expect(screen.getByTestId("change-row-unchanged")).toHaveTextContent(
-      /Unchanged.*1,137 cells.*counted, not drawn/,
+      /Unchanged.*1,084 cells.*counted, not drawn/,
     );
-    expect(legend).toHaveTextContent(/uncalibrated/i);
     expect(legend).toHaveTextContent("the 3σ rule and the 5 m ground window");
     expect(screen.getByTestId("change-drape-placement")).toHaveTextContent(
-      "Jun 1, 2026: Phone video, aligned visually, ±0.062 m — not survey-grade",
+      "Not survey-grade: Mar 1, 2026 survey (±0.03 m) · Jun 1, 2026 coarse (±5 m)",
     );
     expect(legend).toHaveTextContent(/Appearance-only change: not computed/);
+    // Vegetation is neither keyed nor counted in the ground's legend.
+    expect(screen.queryByTestId("change-vegetation")).toBeNull();
+    expect(legend).not.toHaveTextContent("47 cells");
+  });
+
+  it("draws vegetation apart, behind its own switch, keyed and floored on its own", async () => {
+    show();
+    await userEvent.click(changeSwitch());
+    await screen.findByTestId("change-drape");
+    const vegetation = screen.getByRole("switch", { name: /^Vegetation/ });
+    expect(vegetation).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByTestId("change-drape")).toHaveTextContent(
+      "Vegetation: canopy height change, higher threshold, wind and growth not ground change",
+    );
+    await userEvent.click(vegetation);
+    await waitFor(() =>
+      expect(layer.show).toHaveBeenCalledWith("vegetation", changeMap.vegetation),
+    );
+    const section = screen.getByTestId("change-vegetation");
+    expect(screen.getByTestId("change-vegetation-label")).toHaveTextContent(
+      "changes under ±1.1 m cannot be seen between these dates",
+    );
+    expect(screen.getByTestId("change-vegetation-row-raised")).toHaveTextContent(
+      /Raised.*47 cells.*23 low confidence, hatched/,
+    );
+    expect(section).toHaveTextContent("±0.25 m of wind sway per date");
+    // The ground's own key is untouched by it.
+    expect(screen.getByTestId("change-row-raised")).toHaveTextContent(/Raised.*0 cells/);
+    await userEvent.click(vegetation);
+    await waitFor(() => expect(layer.destroy).toHaveBeenCalledWith("vegetation"));
+    expect(screen.queryByTestId("change-vegetation")).toBeNull();
+    expect(layer.destroy).not.toHaveBeenCalledWith("ground");
+  });
+
+  it("says nothing of survey grade when both dates are survey-grade", async () => {
+    get.mockResolvedValue(
+      answer({
+        ...changeMap,
+        uncertainty: { ...changeMap.uncertainty, toM: 0.062, toVerdict: "survey" },
+      }),
+    );
+    show();
+    await userEvent.click(changeSwitch());
+    await screen.findByTestId("change-drape-label");
+    expect(screen.queryByTestId("change-drape-placement")).toBeNull();
   });
 
   it("ends from its own Hide, taking the drape off the ground", async () => {
@@ -363,7 +441,7 @@ describe("the drape and its legend", () => {
     await userEvent.click(screen.getByRole("button", { name: "Hide change map" }));
     expect(useChangeDrape.getState().request).toBeNull();
     await waitFor(() => expect(screen.queryByTestId("change-drape")).toBeNull());
-    expect(layer.destroy).toHaveBeenCalled();
+    expect(layer.destroy).toHaveBeenCalledWith("ground");
   });
 
   it("asks for the pilot's write token on a 401, in the legend and in Compare, and loads once given", async () => {
@@ -377,7 +455,7 @@ describe("the drape and its legend", () => {
     expect(useUi.getState().settingsOpen).toBe(true);
     get.mockResolvedValue(answer(changeMap));
     act(() => useSettings.getState().set({ writeToken: "pilot" }));
-    await waitFor(() => expect(layer.show).toHaveBeenCalledWith(changeMap));
+    await waitFor(() => expect(layer.show).toHaveBeenCalledWith("ground", changeMap.ground));
     expect(screen.queryByTestId("change-drape-error")).toBeNull();
     expect(screen.queryByTestId("compare-change-refused")).toBeNull();
   });
@@ -394,7 +472,7 @@ describe("the drape and its legend", () => {
     act(() => useSettings.getState().set({ writeToken: "pilot" }));
     // The first request, sent without the token, is refused only now.
     act(() => answerFirst(refuse(401)));
-    await waitFor(() => expect(layer.show).toHaveBeenCalledWith(changeMap));
+    await waitFor(() => expect(layer.show).toHaveBeenCalledWith("ground", changeMap.ground));
     expect(screen.queryByTestId("change-drape-error")).toBeNull();
   });
 
@@ -415,13 +493,13 @@ describe("the drape and its legend", () => {
     act(() => useSites.setState({ activeSiteId: "elsewhere" }));
     await waitFor(() => expect(useChangeDrape.getState().request).toBeNull());
     expect(screen.queryByTestId("change-drape")).toBeNull();
-    expect(layer.destroy).toHaveBeenCalled();
+    expect(layer.destroy).toHaveBeenCalledWith("ground");
   });
 
   it("renders nothing, and makes no layer, until asked", () => {
     show();
     expect(screen.queryByTestId("change-drape")).toBeNull();
-    expect(layer.made).toBe(0);
+    expect(layer.made).toEqual([]);
     expect(get).not.toHaveBeenCalled();
   });
 });

@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import type { ChangeMap, Epoch } from "@twin/contracts";
-import { GlassButton, GlassPanel } from "@twin/ui";
+import type { ChangeMap } from "@twin/contracts";
+import { GlassButton, GlassPanel, GlassSwitch } from "@twin/ui";
 
 import { ApiError, api, unwrap } from "@/api/client";
 import { useSite } from "@/api/queries";
@@ -17,7 +17,11 @@ import {
   changeOffer,
   legendRows,
   NEEDS_TOKEN,
-  placementNotes,
+  vegetationNote,
+  verdictNote,
+  VEGETATION_TITLE,
+  type ChangeLayer,
+  type ChangeLayerName,
 } from "@/lib/changeDrape";
 import { formatEpochDate, siteEpochs } from "@/lib/epochs";
 import { useChangeDrape, type ChangeDrapeRequest } from "@/state/changeDrape";
@@ -26,6 +30,68 @@ import { useSites } from "@/state/sites";
 import { useUi } from "@/state/ui";
 
 const cells = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "cell" : "cells"}`;
+
+/** One layer's key: each class's cells, its low-confidence ones (hatched), unchanged counted. */
+function LayerRows({ layer, testId }: { layer: ChangeLayer; testId: string }) {
+  const colors = CHANGE_COLORS[layer.layer];
+  return (
+    <ul className="change-drape__rows">
+      {legendRows(layer).map((row) => (
+        <li key={row.key} data-testid={`${testId}-${row.key}`}>
+          <span
+            className="change-drape__swatch"
+            style={row.key === "unchanged" ? undefined : { background: colors[row.key] }}
+            aria-hidden="true"
+          />
+          <span className="change-drape__name">{row.label}</span>
+          <span>
+            {cells(row.cells)}
+            {!row.drawn && " · counted, not drawn"}
+          </span>
+          {row.lowConfidence > 0 && (
+            <span className="change-drape__low">
+              <span
+                className="change-drape__swatch change-drape__swatch--hatched"
+                style={row.key === "unchanged" ? undefined : { color: colors[row.key] }}
+                aria-hidden="true"
+              />
+              {row.lowConfidence.toLocaleString("en-US")} low confidence
+              {row.drawn ? ", hatched" : ""}
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Where a layer was outlined a level up (its map too large to outline), saying so. */
+function outlinedNote(map: ChangeMap, layer: ChangeLayer) {
+  return layer.areaLevel > map.level ? (
+    <p className="change-drape__note">
+      Outlined at {layer.areaCellM} m cells; counted at {map.cellM} m.
+    </p>
+  ) : null;
+}
+
+/** One layer of the map on the ground and over the scan, while `on` and the map is in. */
+function useLayerDrawing(name: ChangeLayerName, layer: ChangeLayer | undefined, on: boolean) {
+  const scene = useScene();
+  const drawing = useRef<ChangeDrapeLayer | null>(null);
+  useEffect(() => {
+    if (!scene || !on) return;
+    const made = new ChangeDrapeLayer(scene.scene, { layer: name });
+    drawing.current = made;
+    return () => {
+      made.destroy();
+      drawing.current = null;
+    };
+  }, [scene, name, on]);
+  useEffect(() => {
+    if (layer) drawing.current?.show(layer);
+    else drawing.current?.clear();
+  }, [layer, scene, on]);
+}
 
 /** Ends the drape: nothing asked for, nothing refused. */
 function endChangeDrape(): void {
@@ -69,9 +135,12 @@ function refusal(error: unknown): string {
 
 /**
  * The change map between two dates of the active site on the ground (cesium/changeDrape.ts),
- * and its legend: what each colour is and how many cells, which are low confidence (hatched),
- * that it is derived from height surfaces and not observed, the least change it can show
- * between those dates, what is uncalibrated, and which date's placement is not survey-grade.
+ * and its legend. The ground layer, the primary product, is drawn and keyed; vegetation (the
+ * top surface, at its own higher threshold, never ground change) is a layer apart, behind its
+ * own switch, keyed in its own section and never counted in the ground's. Each key says what
+ * each colour is and how many cells, which are low confidence (hatched), that it is derived
+ * from height surfaces and not observed, the least change that layer can show between those
+ * dates, and what is uncalibrated; the legend says when either date is not survey-grade.
  * Asked for from Compare › Dates (`useChangeDrape`); mounted by `ChangeDrapeSlot` while asked.
  *
  * It ends with its site (another becomes the active one) or from its own Hide. A date that
@@ -85,15 +154,15 @@ export function ChangeDrape() {
 }
 
 function Drape({ request }: { request: ChangeDrapeRequest }) {
-  const scene = useScene();
   const activeSiteId = useSites((s) => s.activeSiteId);
   const site = useSite(request.siteId).data;
   const token = useSettings((s) => s.writeToken.trim());
   const epochs = siteEpochs(site);
   const offer = site ? changeOffer(epochs, request.from, request.to) : null;
   const query = useChangeMap(request, token, offer?.offered === true);
-  const layer = useRef<ChangeDrapeLayer | null>(null);
   const map = offer?.offered ? query.data : undefined;
+  // Vegetation is apart from the ground and off until asked for, each time the map is drawn.
+  const [vegetation, setVegetation] = useState(false);
   const error = offer && !offer.offered ? offer.why : query.isError ? refusal(query.error) : null;
 
   // Its site's: another site taking the globe ends it.
@@ -101,20 +170,9 @@ function Drape({ request }: { request: ChangeDrapeRequest }) {
     if (activeSiteId !== request.siteId) endChangeDrape();
   }, [activeSiteId, request.siteId]);
 
-  useEffect(() => {
-    if (!scene) return;
-    const made = new ChangeDrapeLayer(scene.scene);
-    layer.current = made;
-    return () => {
-      made.destroy();
-      layer.current = null;
-    };
-  }, [scene]);
-
-  useEffect(() => {
-    if (map) layer.current?.show(map);
-    else layer.current?.clear();
-  }, [map, scene]);
+  // The ground, the primary product, always; vegetation only while its switch is on.
+  useLayerDrawing("ground", map?.ground, true);
+  useLayerDrawing("vegetation", map?.vegetation, vegetation);
 
   // Compare says why too, from the same words.
   useEffect(() => {
@@ -125,10 +183,7 @@ function Drape({ request }: { request: ChangeDrapeRequest }) {
 
   const byId = (id: string) => epochs.find((e) => e.id === id);
   const [from, to] = [byId(request.from), byId(request.to)];
-  const anchor = epochs.reduce<Epoch | null>(
-    (first, e) => (!first || e.ordinal < first.ordinal ? e : first),
-    null,
-  );
+  const verdicts = map && from && to ? verdictNote(map.uncertainty, from, to) : null;
   const dates =
     from && to ? `${formatEpochDate(from.observedAt)} → ${formatEpochDate(to.observedAt)}` : "";
 
@@ -171,53 +226,40 @@ function Drape({ request }: { request: ChangeDrapeRequest }) {
       ) : (
         <>
           <p className="change-drape__label" data-testid="change-drape-label">
-            {changeLabel(map)}
+            {changeLabel(map.ground)}
           </p>
-          <ul className="change-drape__rows">
-            {legendRows(map).map((row) => (
-              <li key={row.key} data-testid={`change-row-${row.key}`}>
-                <span
-                  className="change-drape__swatch"
-                  style={
-                    row.key === "unchanged" ? undefined : { background: CHANGE_COLORS[row.key] }
-                  }
-                  aria-hidden="true"
-                />
-                <span className="change-drape__name">{row.label}</span>
-                <span>
-                  {cells(row.cells)}
-                  {!row.drawn && " · counted, not drawn"}
-                </span>
-                {row.lowConfidence > 0 && (
-                  <span className="change-drape__low">
-                    <span
-                      className="change-drape__swatch change-drape__swatch--hatched"
-                      style={
-                        row.key === "unchanged" ? undefined : { color: CHANGE_COLORS[row.key] }
-                      }
-                      aria-hidden="true"
-                    />
-                    {row.lowConfidence.toLocaleString("en-US")} low confidence
-                    {row.drawn ? ", hatched" : ""}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-          {from && to && (
-            <ul className="change-drape__notes">
-              {placementNotes(epochs, from, to, anchor).map((note) => (
-                <li key={note} data-testid="change-drape-placement">
-                  {note}
-                </li>
-              ))}
-            </ul>
+          <p className="glass-eyebrow">Ground</p>
+          <LayerRows layer={map.ground} testId="change-row" />
+          {verdicts && (
+            <p className="change-drape__note" data-testid="change-drape-placement">
+              {verdicts}
+            </p>
           )}
           <p className="change-drape__note">{calibrationNote(map, from && to ? [from, to] : [])}</p>
-          {map.areaLevel > map.level && (
-            <p className="change-drape__note">
-              Outlined at {map.areaCellM} m cells; counted at {map.cellM} m.
-            </p>
+          {outlinedNote(map, map.ground)}
+          <div className="setting change-drape__layer">
+            <span className="setting__label" id="change-vegetation-label">
+              {VEGETATION_TITLE}
+            </span>
+            <GlassSwitch
+              checked={vegetation}
+              onCheckedChange={setVegetation}
+              aria-labelledby="change-vegetation-label"
+            />
+          </div>
+          {vegetation && (
+            <section
+              className="change-drape__vegetation"
+              aria-label="Vegetation change"
+              data-testid="change-vegetation"
+            >
+              <p className="change-drape__label" data-testid="change-vegetation-label">
+                {changeLabel(map.vegetation)}
+              </p>
+              <LayerRows layer={map.vegetation} testId="change-vegetation-row" />
+              <p className="change-drape__note">{vegetationNote(map, map.vegetation)}</p>
+              {outlinedNote(map, map.vegetation)}
+            </section>
           )}
           <p className="change-drape__note">
             Appearance-only change: not computed ({map.appearance.reason}).

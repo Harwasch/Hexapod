@@ -67,7 +67,7 @@ const area = (cls: ChangeArea["class"], lowConfidence: boolean, x: number) =>
     lowConfidence,
   }) as unknown as ChangeArea;
 
-const map = (areas: ChangeArea[]) => ({ areas }) as unknown as ChangeMap;
+const map = (areas: ChangeArea[]) => ({ areas }) as unknown as ChangeMap["ground"];
 
 const tags = (added: GroundPrimitive[]) =>
   added.map((p) => (p as unknown as Record<string, ChangeDrapeTag>)[CHANGE_DRAPE_TAG]);

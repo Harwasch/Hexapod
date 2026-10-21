@@ -64,7 +64,7 @@ const area = (cls: ChangeArea["class"], lowConfidence: boolean, x: number) =>
     lowConfidence,
   }) as unknown as ChangeArea;
 
-const map = (areas: ChangeArea[]) => ({ areas }) as unknown as ChangeMap;
+const map = (areas: ChangeArea[]) => ({ areas }) as unknown as ChangeMap["ground"];
 
 const paths = (host: HTMLElement) =>
   [...host.querySelectorAll("svg path")].map((p) => ({
