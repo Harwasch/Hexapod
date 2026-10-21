@@ -910,3 +910,60 @@ def test_the_demo_takes_a_saturated_sigma_as_unbounded_not_as_2_55_m() -> None:
     found = confidence_demo.surface_change(a, b, _vouched(0), _vouched(0), 0.0, 0.0)
     assert found["counts"]["insufficient"] == 2 + 1  # (0, 1) and (1, 1) have none; (0, 0)
     assert [(row["i"], row["class"]) for row in found["changed"]] == [(1, "raised")]
+
+
+# --- review round 2: spatially uneven noise under the ground (B5a, round 2) --------------
+
+
+def _uneven_epoch(
+    per_cell: int, quiet_m: float, loud_m: float, every: int, seed: int, side: int = 48
+) -> cell_grid.CellPlane:
+    """Unchanged flat ground at 0 over `side` x `side` cells of 0.25 m, `per_cell` samples
+    a cell with `quiet_m` of noise, except the cells `[every//2::every, every//2::every]`
+    (none when `every` is 0), whose noise is `loud_m`."""
+    rng = np.random.default_rng(seed)
+    cells = side * side
+    j, i = np.divmod(np.repeat(np.arange(cells), per_cell), side)
+    noise = np.full((side, side), quiet_m)
+    if every:
+        noise[every // 2 :: every, every // 2 :: every] = loud_m
+    xy = (np.column_stack([i, j]) + rng.uniform(0.01, 0.99, (cells * per_cell, 2))) * 0.25
+    z = rng.normal(0.0, 1.0, cells * per_cell) * noise[j, i]
+    window = surface.Window(level=0, i0=0, j0=0, ni=side, nj=side)
+    xyz = np.column_stack([xy, z])
+    return surface.surface_plane(lambda: iter([(xyz, surface.SPLAT)]), window).plane
+
+
+def _false_ground(a: cell_grid.CellPlane, b: cell_grid.CellPlane, ua: float, ub: float) -> int:
+    """Cells of an unchanged scene whose ground the rule would call changed, of those where
+    both epochs observed a ground: |g_b - g_a| > 3 sqrt(gs_a^2 + gs_b^2 + ua^2 + ub^2)."""
+    unit = cell_grid.HEIGHT_UNIT_M
+    ga, gb = (_channel(p, "ground") for p in (a, b))
+    sa, sb = (_channel(p, "groundSigma") * unit for p in (a, b))
+    both = (ga != NO) & (gb != NO)
+    threshold = 3.0 * np.sqrt(sa**2 + sb**2 + ua**2 + ub**2)
+    return int((both & (np.abs(gb - ga) * unit > threshold)).sum())
+
+
+@pytest.mark.parametrize(
+    ("per_cell", "every", "seeds"),
+    [
+        (2000, 8, (90, 91)),  # the review's: 775 of 2,304 cells lowered
+        (2000, 8, (92, 93)),  # 619
+        (2000, 8, (94, 95)),  # 592
+        (2000, 16, (90, 91)),  # 1 noisy cell in 256: 693 of 6,912 over three seeds
+        (50, 8, (90, 91)),  # fewer samples: 1 of 6,912
+        (2000, 64, (96, 97)),  # one noisy cell in the plane: 2 of 23,040
+    ],
+)
+def test_ground_sigma_is_the_noise_of_the_sample_that_set_the_minimum_not_an_average(
+    per_cell: int, every: int, seeds: tuple[int, int]
+) -> None:
+    """Review B5a round 2: epoch a has 1 cm of noise everywhere; epoch b the same but 10 cm
+    in a sparse lattice of cells. The ground is a window's least 2nd-lowest, so in b it is
+    set by the noisy cells' deep lows (some 32 cm down); an average of the window's noise
+    scales gave it a sigma of 5-7 cm and 28.7% of cells read as lowered. The sigma of the
+    cell that set the minimum carries it: no more than the 3 sigma rule's one cell in 370."""
+    a = _uneven_epoch(per_cell, 0.01, 0.01, 0, seeds[0])
+    b = _uneven_epoch(per_cell, 0.01, 0.10, every, seeds[1])
+    assert _false_ground(a, b, 0.03, 0.03) <= math.ceil(48 * 48 / 370)

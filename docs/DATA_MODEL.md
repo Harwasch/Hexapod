@@ -253,7 +253,8 @@ root as `extras.surface` (after `extras.confidence`) and copied to the top level
   `max(1 cm, (z1 − zm)·RMS2(n)/SPAN(n))`, dsm's bias included, 255 = at least 2.55 m, 0 = no
   surface), `support` u1 (bit 1 SfM points,
   bit 2 splat centres; high nibble `floor(log2 samples)`, at most 15), `groundSigma` u1
-  (centimetres, ground's own: `max(1 cm, s_low·RMS2(N))` over the window's `N` samples, 255 = at
+  (centimetres, ground's own: `max(1 cm, s_low·RMS2(N))` over the window's `N` samples, `s_low` the noise of the cell that set
+  the minimum, 255 = at
   least 2.55 m, 0 = no ground).
 - **Keys:** `policy: surface-v1`, `status: uncalibrated`, `estimators {dsm, ground, sigma,
 minSamples, groundWindowM, groundWindowCells, groundUnobserved, groundMaxGrade, groundSigma,

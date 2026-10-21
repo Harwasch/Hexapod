@@ -46,7 +46,9 @@ how well each cell was seen (ADR 0016).
      window it used (`groundWindowCells`). `groundSigma = max(1 cm, s_low·RMS2(N))`: the
      least 2nd-lowest over a window of `N` samples is never below the 2nd lowest of those `N`
      together, so that order statistic bounds its distance below the ground; `s_low` is the
-     mean over the window's cells of each one's bottom-eight noise scale. At 1 cm noise and 100
+     bottom-eight noise scale of the cell that set the minimum — never an average over the
+     window (round 2: a sparse lattice of 10 cm cells among 1 cm ones, 2,000 samples a cell,
+     read 1,862 of 2,304 unchanged cells as lowered with the average; 0 with this). At 1 cm noise and 100
      samples a cell it is about 5 cm, against dsm's 2 cm: a lower envelope over 441 cells is the
      more biased estimator, and its sigma says so (review B5a's control, for the ground: 0 of
      400 unchanged cells called changed at 20 vs 2,000 samples or 1 vs 10 cm). Where the window saw only canopy or roof, the ground

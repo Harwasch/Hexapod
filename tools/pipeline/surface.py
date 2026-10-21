@@ -45,10 +45,13 @@ its whole square.
 least 2nd-lowest over a window holding `N` samples in all is never lower than the 2nd
 lowest of those `N` together, so its distance below the ground is at most that order
 statistic's: `s_low RMS2(N)`, with `N` the window's samples (a box sum) and `s_low` the
-noise scale of its ground -- the mean, over the window's cells with a ground, of each one's
-`(z_m - z_1) / SPAN(n)` from its bottom `m` samples. Far larger than dsm's at the same noise
-(at 1 cm and 100 samples a cell, about 5 cm against dsm's 2 cm): a lower envelope over 441
-cells is a biased estimator, and its sigma says so. 0 where the ground is `NO_HEIGHT`.
+noise scale **of the cell whose 2nd-lowest set the minimum**, `(z_m - z_1) / SPAN(n)` from
+its bottom `m` samples (a tie goes to the larger). Never an average over the window: a
+minimum is set by the noisiest lows, and a window of 1 cm cells with one 10 cm cell reads
+some 30 cm low with an averaged sigma of 5-7 cm (review B5a round 2: 28.7% of unchanged
+cells lowered). Far larger than dsm's at the same noise (at 1 cm and 100 samples a cell,
+about 5 cm against dsm's 2 cm): a lower envelope over 441 cells is a biased estimator, and
+its sigma says so. 0 where the ground is `NO_HEIGHT`.
 
 **Ground that was never seen.** Under a crown or a roof wider than the window, every cell
 of the window sees only it, and the least of them is the canopy, not the ground. That is
@@ -172,7 +175,8 @@ SPLAT = cell_grid.SURFACE_SOURCE_BITS["splat"]
 #: i2's range in centimetres, less the sentinel.
 HEIGHT_LIMIT_CM = 32767
 _NO_GROUND = np.iinfo(np.int32).max
-#: A millimetre, and the most a cell's ground noise is held as (32 m).
+#: A millimetre, and the most a cell's ground noise is held as (32 m): 15 bits of the
+#: ground filter's keys, below the height's 16 (`surface_plane`).
 _MM = 0.001
 _NOISE_MM_MAX = (1 << 15) - 1
 #: One SfM point's fixed part in `points3D.bin`: id, xyz, rgb, error, track length.
@@ -657,12 +661,20 @@ def surface_plane(
         counts[band0:band1] = count.reshape(shape)
         del band
     half = ground_half_cells(window.cell_m, ground_window_m)
-    filtered = ground_filter(ground, half)
-    # The ground's noise scale: the mean, over the window's cells with a ground, of each
-    # one's own (module docstring), in whole millimetres rounded up.
-    measured = box_sum((ground != _NO_GROUND).astype(np.int64), half)
-    noise_at = -(-box_sum(noise_mm.astype(np.int64), half) // np.maximum(measured, 1))
-    del noise_mm, measured
+    # The least 2nd-lowest over the window, and the noise scale of the cell it came from
+    # (module docstring): one exact filter over keys that sort by the height, then by the
+    # larger noise, so a tie is resolved towards the larger sigma.
+    keys = np.where(
+        ground == _NO_GROUND,
+        _NO_GROUND,
+        ((ground.astype(np.int64) + 32768) << 15) | (_NOISE_MM_MAX - noise_mm),
+    ).astype(np.int32)
+    del noise_mm
+    least = ground_filter(keys, half)
+    del keys
+    filtered = np.where(least == _NO_GROUND, _NO_GROUND, (least >> 15) - 32768).astype(np.int32)
+    noise_at = np.where(least == _NO_GROUND, 0, _NOISE_MM_MAX - (least & _NOISE_MM_MAX))
+    del least
     # Ground the window saw only canopy or roof for: higher than any slope up to
     # GROUND_MAX_GRADE from a lower 2nd-lowest anywhere allows (module docstring).
     step_cm = ground_max_grade * window.cell_m / cell_grid.HEIGHT_UNIT_M
@@ -808,7 +820,8 @@ def height_surface(ctx: StageContext) -> StageOutcome:
             "wider than the window, the ground under it never seen",
             "groundMaxGrade": max_grade,
             "groundSigma": f"max({sigma_floor:g} m, s_low RMS2(N)): N the window's samples, "
-            "s_low the mean over its cells of (z_m - z_1) / SPAN(n) of each one's lowest: "
+            "s_low the (z_m - z_1) / SPAN(n) of the lowest samples of the cell that set the "
+            "minimum: "
             "the 2nd lowest of N samples bounds the envelope's distance below the ground",
             "samples": "SfM points3D placed by placement.json, and canonical.ply centres "
             f"at least {min_alpha:g} opaque",
