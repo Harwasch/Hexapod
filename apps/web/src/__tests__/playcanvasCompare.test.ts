@@ -381,6 +381,7 @@ describe("two dates compared under PlayCanvas", () => {
     const own = await backend.load(SCAN, tile("1_1.glb"));
     backend.add(own);
     const fill = await backend.loadLayer?.(SCAN, tile("2_2.glb"));
+    if (!fill) throw new Error("PlayCanvas draws layers");
     backend.setLayerLook?.(fill, LOOK);
     publishScanCompare("june-b", view());
     await vi.waitFor(() => expect(fetched).toContain(MARCH), { timeout: 20_000 });
