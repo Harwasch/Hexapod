@@ -644,7 +644,8 @@ or a representation one date lacks ends the comparison and draws the date shown 
 
 **Under PlayCanvas** (the default renderer) the right-hand date is the scan PlayCanvas draws and
 the left one is streamed into the same app beside it (`cesium/compareSession.ts`,
-`cesium/scanView/scanCompare.ts`, port 3's `ruleDates.ts`). Each tile's copy writes the side its
+`cesium/scanView/scanCompare.ts`, port 3's `ruleDates.ts`), within the one budget, half each.
+Each tile's copy writes the side its
 date is on into one byte a splat; the frame's own splat hook hands it to the fragment shader,
 which discards a fragment on the other date's side of the divider by `gl_FragCoord.x`: exact at
 the divider, and swiping copies nothing. The tilesets keep their sides for the picks: the

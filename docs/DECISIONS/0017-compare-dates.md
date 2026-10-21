@@ -335,8 +335,11 @@ the work buffer when the divider moves. No PlayCanvas patch is needed.
    that renderer the left-hand date and the divider (`scanView/scanCompare.ts`): the left date's
    URL, its root's extras, where it is in the scan's frame (`datePlacement.ts`, as a rule's), and
    `scene.splitPosition`, checked each frame and handed on only when it moves. The renderer
-   streams the left date into the same app with port 3's `RuleDates`, within the same budget, its
-   inferred layers and split objects with it. A switch between CesiumJS and PlayCanvas keeps the
+   streams the left date into the same app with port 3's `RuleDates`, its inferred layers and
+   split objects with it, within the one budget a rule's dates share (§ above): split evenly,
+   half for the scan and half for the left date (`COMPARE_SHARES`), not by `viewShares`. A
+   comparison has no owner plane, and shares that followed the divider would stream both dates
+   again on every frame of a swipe, which copies nothing as it is. A switch between CesiumJS and PlayCanvas keeps the
    comparison; Spark or the WebGPU trial end it, as before.
 2. **Each splat says its date; the fragment is cut.** Each tile's copy into the work buffer
    writes the side its date is drawn on -- left for the other date's tiles, layers and objects,
@@ -370,22 +373,24 @@ the work buffer when the divider moves. No PlayCanvas patch is needed.
    crossed columns changed. With the cut switched off the same view has 57,691 pixels on the
    wrong side, so the measure bites. June alone, before and after, covers 180,430 pixels.
 6. **Cost.** The comparison's PlayCanvas parts load on demand: the session and the placement
-   with the rules' module (`compositorSession`, 20.3 → 21.4 kB raw), the channel with port 3's
-   (`scanRule` and `scanCompare` in one chunk, 7.2 → 8.6 kB raw), the rest in the renderer. What
-   the globe loads before its first frame grows by what SiteManager, the collider and the scene
-   manager say: index entry 196,356 → 196,408 B gzip (budget 197,000; Node's gzip, as
-   `check-bundle.mjs` counts), the page's JavaScript before its first frame 5,623,570 →
-   5,623,724 B raw (+154) and 1,602,398 → 1,602,450 B gzip (+52), 83 files before and after.
-   Over the 100 B raw the coordinator first set for this port: about 75 of the 154 are the left
-   half's collider picks (the list of solid tilesets), the rest the renderer check, the right-hand
-   scan and the session's start. The coordinator took the overshoot for Measure, the site card's
-   date, the orbit pivot and the wheel zoom on the left half; the entry's gzip guard (+100 B)
-   holds.
+   with the rules' module (`compositorSession`, 20.6 → 21.6 kB raw), the channel with port 3's
+   (`scanRule` and `scanCompare` in one chunk, 7.6 → 9.0 kB raw), the rest in the renderer
+   (2,047.9 → 2,050.3 kB raw). What the globe loads before its first frame grows by what
+   SiteManager, the collider and the scene manager say. Measured on the rules' reviewed branch
+   (0218a39b) and on this one (Node's gzip, as `check-bundle.mjs` counts): index entry 196,329
+   → 196,394 B gzip (+65; budget 197,000), the page's JavaScript before its first frame
+   5,623,554 → 5,623,708 B raw (+154) and 1,602,371 → 1,602,436 B gzip (+65), 83 files before
+   and after. Over the 100 B raw the coordinator first set for this port: about 75 of the 154
+   are the left half's collider picks (the list of solid tilesets), the rest the renderer
+   check, the right-hand scan and the session's start. The coordinator took the overshoot for
+   Measure, the site card's date, the orbit pivot and the wheel zoom on the left half; the
+   entry's gzip guard (+100 B) holds.
 
 ### Consequences
 
-- Resident splats roughly double while two dates are compared, as under CesiumJS; the left date
-  streams within the budget the scan draws to, so frames that slow lower it for both.
+- Two dates compared hold what one scan alone would under PlayCanvas, half each, where CesiumJS
+  lets each date's tileset refine on its own (about twice as many resident); frames that slow
+  lower the one budget for both. A side drawing more of the screen gets no more of it.
 - The left date's tiles are drawn as scan tiles but bound to none of the scan's objects or
   motion, as a rule's dates are: its objects are picked and selected on its side, but hiding or
   highlighting them is not drawn on it under PlayCanvas, and its skins and telemetry are at rest.
