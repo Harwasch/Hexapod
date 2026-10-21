@@ -32,6 +32,7 @@ import {
 } from "@/lib/dataAge";
 import { observedAtFromUpload } from "@/lib/epochs";
 import { createLogger } from "@/lib/log";
+import { useRendererOverride, useSettings } from "@/state/settings";
 import { useViewMode, type CellViewReport, type ViewMode } from "@/state/viewMode";
 
 import {
@@ -148,7 +149,7 @@ export function startCellView(
     return age;
   };
 
-  const sync = (next: ViewMode): void => {
+  const draw = (next: ViewMode): void => {
     mode = next;
     if (disposed) return;
     if (part && next !== "photo") part.mode = next;
@@ -201,12 +202,37 @@ export function startCellView(
       });
   };
 
+  /**
+   * The view chosen, drawn where the renderer drawing splats now can draw it -- CesiumJS,
+   * PlayCanvas, Spark -- and Photo under the WebGPU trial, as the control says
+   * (lib/viewModes.ts). A rigged model is drawn by CesiumJS under any renderer, so the
+   * renderer, not the model's tileset being shown, decides.
+   */
+  let asked: ViewMode = "photo";
+  const drawable = (): ViewMode =>
+    // lib/viewModes.ts `viewModeDrawable`, not imported: that chunk is the control's.
+    (useRendererOverride.getState().renderer ?? useSettings.getState().splatRenderer) ===
+    "playcanvas-webgpu"
+      ? "photo"
+      : asked;
+  const rendererChanged = (): void => {
+    const next = drawable();
+    if (next !== mode) draw(next);
+  };
+  const unsubscribeRenderer = [
+    useSettings.subscribe(rendererChanged),
+    useRendererOverride.subscribe(rendererChanged),
+  ];
   // The primitive appears with the first tile, and an unloaded tileset's comes back with one.
   const unsubscribe = tileset.tileLoad.addEventListener(place);
   return {
-    sync,
+    sync: (next) => {
+      asked = next;
+      draw(drawable());
+    },
     dispose: () => {
       disposed = true;
+      for (const off of unsubscribeRenderer) off();
       unsubscribe();
       publish();
       part?.destroy();

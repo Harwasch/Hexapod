@@ -302,16 +302,18 @@ describe("Confidence, then Data age, then Photo", () => {
     dispose();
   });
 
-  it("does not load the view at all under the WebGPU trial", async () => {
+  it("fetches and joins nothing under the WebGPU trial, and draws once the renderer can", async () => {
     useSettings.getState().set({ splatRenderer: "playcanvas-webgpu" });
     const { asCesium, tileset, primitive } = scan({ confidence: served.meta });
     tileset.gaussianSplatPrimitive = primitive;
-    const load = vi.fn(() => import("@/cesium/cellView"));
-    const dispose = attachCellView(asCesium, { requestRender: vi.fn() }, A1.id, context, { load });
+    const dispose = attachCellView(asCesium, { requestRender: vi.fn() }, A1.id, context);
     useViewMode.getState().set("confidence");
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(load).not.toHaveBeenCalled();
+    expect(fetched).toEqual([]);
     expect(primitive.vertexColor).toBeUndefined();
+    expect(useViewMode.getState().cells[A1.id]).toBeUndefined();
+    useSettings.getState().set({ splatRenderer: "playcanvas" });
+    await vi.waitFor(() => expect(parts(primitive)).toEqual(["splatCellViewColor"]));
     dispose();
   });
 
