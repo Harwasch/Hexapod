@@ -27,10 +27,12 @@ from tests.mov_fixtures import (
     UTF8,
     box,
     large_box,
+    loci_atom,
     mdta_meta,
     mov,
     mp4_with_loci,
     mp4_with_xyz,
+    xyz_atom,
 )
 
 SF = "+37.7749-122.4194+010.000/"
@@ -279,3 +281,65 @@ def test_sexagesimal_is_converted_or_rejected_never_read_as_decimal(text: str) -
     found, _ = checked(mov(iso6709=text))
     expected = 0.5 if text == "+0030.0+00030.0/" else 30 / 3600
     assert found is None or (found.lat == expected and found.lon == expected)
+
+
+def test_conflicting_locations_are_no_location() -> None:
+    """The cross review's precedence cases, under the ruling that followed it: points that
+    disagree past their accuracy are no location, in whichever order the atoms come."""
+    meta = mdta_meta([(ISO6709_KEY, b"+1+2/", UTF8)])
+    for fallback in [xyz_atom("+3+4/") + loci_atom(5, 6), loci_atom(5, 6) + xyz_atom("+3+4/")]:
+        for data in [
+            box(b"moov", meta + box(b"udta", fallback)),
+            box(b"moov", box(b"udta", fallback) + meta),
+            box(b"moov", box(b"udta", fallback)),
+        ]:
+            found, _ = checked(data)
+            assert found is None
+
+
+@pytest.mark.parametrize(
+    "variant", ["xyz_then_loci", "loci_then_xyz", "duplicate_meta", "duplicate_agreeing"]
+)
+def test_the_reader_never_vouches_for_a_point_ffmpeg_reads_otherwise(
+    variant: str, tmp_path: Path
+) -> None:
+    """The cross review's ffmpeg comparison: on conflicting atoms ffmpeg 7.0.2 (and so the
+    pipeline's own scrape) reads the last. The pipeline is now handed the worker's reading
+    instead (`worker/params.VIDEO_LOCATION_PARAM`), and this holds the reader to never
+    vouching for a point more than the agreement tolerance from what ffmpeg would read."""
+    import subprocess
+    from importlib import import_module
+
+    import imageio_ffmpeg
+
+    import app.worker.pipeline_bridge  # noqa: F401 - puts tools/pipeline on the path
+
+    video = import_module("video")
+    if variant == "duplicate_meta":
+        children = mdta_meta([(ISO6709_KEY, b"+1+2/", UTF8)]) + mdta_meta(
+            [(ISO6709_KEY, b"+3+4/", UTF8)]
+        )
+    elif variant == "duplicate_agreeing":
+        children = mdta_meta([(ISO6709_KEY, SF.encode(), UTF8)]) + box(b"udta", xyz_atom(SF))
+    else:
+        atoms = [xyz_atom("+3+4/"), loci_atom(5, 6)]
+        if variant == "loci_then_xyz":
+            atoms.reverse()
+        children = box(b"udta", b"".join(atoms))
+    data = box(b"ftyp", b"qt  " + b"\0" * 4 + b"qt  ") + box(b"moov", children)
+    path = tmp_path / f"{variant}.mov"
+    path.write_bytes(data)
+    result = subprocess.run(
+        [imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-i", str(path)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    pipeline = video.parse_probe(result.stderr).location
+    reader, _ = checked(data)
+    assert pipeline is not None
+    if variant == "duplicate_agreeing":
+        assert reader is not None and (reader.lat, reader.lon) == (pipeline.lat, pipeline.lon)
+    else:
+        assert reader is None

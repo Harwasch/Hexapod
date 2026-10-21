@@ -65,6 +65,11 @@ ISO6709_KEY = "com.apple.quicktime.location.iso6709"
 ACCURACY_KEY = "com.apple.quicktime.location.accuracy.horizontal"
 XYZ = b"\xa9xyz"
 LOCI = b"loci"
+#: How far apart two of a clip's location atoms may be and still be one fix, when none
+#: claims a wider accuracy: two honest writings of one fix differ by their rounding -- a
+#: four-decimal ISO 6709 string is good to +-0.00005 deg (5.6 m north-south, 7.9 m on the
+#: diagonal), 16.16 fixed point to 1/65536 deg (1.7 m) -- and 10 m holds both together.
+AGREE_FLOOR_M = 10.0
 #: `VideoLocation.key`'s values, by which atom the point came out of.
 KEYS: tuple[str, ...] = ("iso6709", "xyz", "loci")
 
@@ -108,10 +113,20 @@ class VideoLocation:
     #: or wrote something that is not a positive number.
     accuracy_m: float | None
     key: str
+    #: The height the atom gave, in metres, when it gave one (what `exif_gps` places a
+    #: clip's height by: it now reads this, not ffmpeg's own scrape).
+    altitude_m: float | None = None
 
     def to_metadata(self) -> dict[str, Any]:
-        """The shape kept on the capture (`metadata.videoLocation`)."""
-        return {"lat": self.lat, "lon": self.lon, "accuracyM": self.accuracy_m, "key": self.key}
+        """The shape kept on the capture (`metadata.videoLocation`), and handed to the
+        pipeline's `normalize` as its location (`worker/params.VIDEO_LOCATION_PARAM`)."""
+        return {
+            "lat": self.lat,
+            "lon": self.lon,
+            "altitudeM": self.altitude_m,
+            "accuracyM": self.accuracy_m,
+            "key": self.key,
+        }
 
     @staticmethod
     def from_metadata(value: object) -> VideoLocation | None:
@@ -128,6 +143,7 @@ class VideoLocation:
             lon=lon,
             accuracy_m=accuracy if accuracy is not None and accuracy > 0 else None,
             key=key if isinstance(key, str) and key in KEYS else "iso6709",
+            altitude_m=_finite(value.get("altitudeM")),
         )
 
 
@@ -232,8 +248,7 @@ def location_in_storage(storage: ObjectStorage, key: str) -> VideoLocation | Non
 
 
 def _in_moov(reader: _Reader, start: int, end: int) -> VideoLocation | None:
-    keyed: VideoLocation | None = None
-    xyz: VideoLocation | None = None
+    found: list[VideoLocation | None] = []
     # Read ahead freely inside `moov`: it holds no media, only boxes that describe it.
     within: ReadAt = lambda offset, length: reader.read(offset, length, ahead_to=end)  # noqa: E731
     for kind, child_start, child_end in _boxes(within, start, end):
@@ -243,18 +258,45 @@ def _in_moov(reader: _Reader, start: int, end: int) -> VideoLocation | None:
         if len(payload) != child_end - child_start:
             continue
         if kind == b"meta":
-            found = _meta(payload)
-            keyed, xyz = keyed or found[0], xyz or found[1]
+            found.extend(_meta(payload))
             continue
         for inner, inner_start, inner_end in _boxes(_memory(payload), 0, len(payload)):
             if inner == XYZ:
-                xyz = xyz or _xyz(payload[inner_start:inner_end])
+                found.append(_xyz(payload[inner_start:inner_end]))
             elif inner == LOCI:
-                xyz = xyz or _loci(payload[inner_start:inner_end])
+                found.append(_loci(payload[inner_start:inner_end]))
             elif inner == b"meta":
-                found = _meta(payload[inner_start:inner_end])
-                keyed, xyz = keyed or found[0], xyz or found[1]
-    return keyed or xyz
+                found.extend(_meta(payload[inner_start:inner_end]))
+    return agreed([point for point in found if point is not None])
+
+
+def agreed(points: list[VideoLocation]) -> VideoLocation | None:
+    """The one location a clip's atoms give, or None when they give two.
+
+    An iPhone writes one fix into several places. Where they disagree, this reader once
+    kept the first and ffmpeg (the pipeline's scrape) keeps the last, so a crafted clip
+    could choose one site and be placed at another (the cross review of #72). So: the
+    `mdta` key's reading, with its accuracy, when there is one, else the first atom's --
+    and only when every point the clip gives is within `AGREE_FLOOR_M`, or the largest
+    accuracy any of them claims, of it. Otherwise no location: the capture is matched,
+    and placed, by its upload. The pipeline is handed this reading, not its own."""
+    if not points:
+        return None
+    keyed = [point for point in points if point.key == "iso6709"]
+    chosen = (keyed or points)[0]
+    claimed = [point.accuracy_m for point in points if point.accuracy_m is not None]
+    tolerance = max([AGREE_FLOOR_M, *claimed])
+    if any(_metres(chosen, point) > tolerance for point in points):
+        return None
+    return chosen
+
+
+def _metres(a: VideoLocation, b: VideoLocation) -> float:
+    """Great-circle metres between two points (haversine, mean Earth radius)."""
+    p1, p2 = math.radians(a.lat), math.radians(b.lat)
+    dp, dl = p2 - p1, math.radians(b.lon - a.lon)
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * 6_371_008.8 * math.asin(min(1.0, math.sqrt(h)))
 
 
 def _meta(payload: bytes) -> tuple[VideoLocation | None, VideoLocation | None]:
@@ -276,13 +318,21 @@ def _meta(payload: bytes) -> tuple[VideoLocation | None, VideoLocation | None]:
         parsed = _parse_iso6709(point)
         if parsed is not None:
             accuracy = _accuracy(items.get(named.get(ACCURACY_KEY, 0)))
-            keyed = VideoLocation(lat=parsed[0], lon=parsed[1], accuracy_m=accuracy, key="iso6709")
+            keyed = VideoLocation(
+                lat=parsed[0],
+                lon=parsed[1],
+                accuracy_m=accuracy,
+                key="iso6709",
+                altitude_m=parsed[2],
+            )
     xyz = None
     text = _text(items.get(XYZ))
     if text is not None:
         parsed = _parse_iso6709(text)
         if parsed is not None:
-            xyz = VideoLocation(lat=parsed[0], lon=parsed[1], accuracy_m=None, key="xyz")
+            xyz = VideoLocation(
+                lat=parsed[0], lon=parsed[1], accuracy_m=None, key="xyz", altitude_m=parsed[2]
+            )
     return keyed, xyz
 
 
@@ -363,7 +413,9 @@ def _xyz(payload: bytes) -> VideoLocation | None:
     parsed = _parse_iso6709(text)
     if parsed is None:
         return None
-    return VideoLocation(lat=parsed[0], lon=parsed[1], accuracy_m=None, key="xyz")
+    return VideoLocation(
+        lat=parsed[0], lon=parsed[1], accuracy_m=None, key="xyz", altitude_m=parsed[2]
+    )
 
 
 def _loci(payload: bytes) -> VideoLocation | None:
@@ -373,13 +425,15 @@ def _loci(payload: bytes) -> VideoLocation | None:
     if len(payload) < 6 or end < 0 or end + 1 + 1 + 8 > len(payload):
         return None
     at = end + 2  # past the name's NUL and the role
-    lon, lat = (value / 65536 for value in struct.unpack(">ii", payload[at : at + 8]))
+    if at + 12 > len(payload):
+        return None
+    lon, lat, altitude = (value / 65536 for value in struct.unpack(">iii", payload[at : at + 12]))
     if not _on_globe(lat, lon):
         return None
-    return VideoLocation(lat=lat, lon=lon, accuracy_m=None, key="loci")
+    return VideoLocation(lat=lat, lon=lon, accuracy_m=None, key="loci", altitude_m=altitude)
 
 
-def _parse_iso6709(text: str) -> tuple[float, float] | None:
+def _parse_iso6709(text: str) -> tuple[float, float, float | None] | None:
     """`tools/pipeline/video.parse_iso6709`'s grammar, compact forms included; a test holds
     the two to one answer per string."""
     match = _ISO6709_RE.match(text.strip())
@@ -387,9 +441,10 @@ def _parse_iso6709(text: str) -> tuple[float, float] | None:
         return None
     lat = _iso6709_component(match.group("lat"), 2)
     lon = _iso6709_component(match.group("lon"), 3)
-    if lat is None or lon is None:
+    if lat is None or lon is None or not _on_globe(lat, lon):
         return None
-    return (lat, lon) if _on_globe(lat, lon) else None
+    altitude = match.group("alt")
+    return lat, lon, None if altitude is None else float(altitude)
 
 
 def _iso6709_component(text: str, degree_digits: int) -> float | None:

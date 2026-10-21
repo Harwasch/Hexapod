@@ -31,11 +31,12 @@ def test_an_iphone_clip_with_its_moov_at_the_end() -> None:
     found = read(mov(iso6709=SF, accuracy="4.723285"))
 
     assert found == video_location.VideoLocation(
-        lat=37.7749, lon=-122.4194, accuracy_m=4.723285, key="iso6709"
+        lat=37.7749, lon=-122.4194, accuracy_m=4.723285, key="iso6709", altitude_m=10.0
     )
     assert found.to_metadata() == {
         "lat": 37.7749,
         "lon": -122.4194,
+        "altitudeM": 10.0,
         "accuracyM": 4.723285,
         "key": "iso6709",
     }
@@ -66,9 +67,27 @@ def test_the_3gpp_loci_box_as_ffmpeg_writes_an_mp4s_location() -> None:
     assert abs(found.lat - 51.5007) < 2e-5 and abs(found.lon + 0.1246) < 2e-5
 
 
-def test_the_mdta_key_wins_over_the_xyz_atom() -> None:
-    found = read(mov(iso6709=SF, xyz="+51.5007-000.1246/"))
-    assert found is not None and found.key == "iso6709" and found.lat == 37.7749
+def test_atoms_that_agree_give_the_mdta_keys_reading_with_its_accuracy() -> None:
+    """An iPhone writes one fix into both places; the same point, or one within the
+    rounding of two honest writings of it, is that fix."""
+    same = read(mov(iso6709=SF, accuracy="4.5", xyz=SF))
+    assert same is not None and (same.key, same.lat, same.accuracy_m) == ("iso6709", 37.7749, 4.5)
+    rounded = read(mov(iso6709="+37.77494-122.41936+010.000/", xyz="+37.7749-122.4194/"))
+    assert rounded is not None and rounded.key == "iso6709" and rounded.lat == 37.77494
+
+
+def test_atoms_that_disagree_are_no_location() -> None:
+    """From the cross review of #72: with two different points in one clip, this reader
+    took the first and ffmpeg (the pipeline) the last, so a crafted clip could choose one
+    site and be placed at another. Points farther apart than the fix's accuracy (or the
+    rounding floor) say nowhere: the capture is matched and placed by its upload."""
+    assert read(mov(iso6709=SF, xyz="+51.5007-000.1246/")) is None
+    # 60 m apart, against a fix that claims 20 m.
+    apart = f"+{37.7749 + 60 / 111_320:.6f}-122.4194/"
+    assert read(mov(iso6709=SF, accuracy="20", xyz=apart)) is None
+    # The same 60 m against a fix that claims 100 m: one fix, written twice.
+    within = read(mov(iso6709=SF, accuracy="100", xyz=apart))
+    assert within is not None and within.lat == 37.7749
 
 
 def test_a_clip_without_location_says_none() -> None:

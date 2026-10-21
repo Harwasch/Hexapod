@@ -81,6 +81,7 @@ def test_the_videos_gps_is_recorded_and_the_run_is_placed_in_that_site(
     assert capture.metadata_["videoLocation"] == {
         "lat": ORIGIN[0],
         "lon": ORIGIN[1],
+        "altitudeM": 30.0,
         "accuracyM": 4.5,
         "key": "iso6709",
     }

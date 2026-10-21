@@ -50,6 +50,15 @@ PHONE_ORIGIN = "phone-key"
 #: What a phone-key capture tells `normalize` it is (`capture_platform.PHONE_HINT`): the
 #: last thing platform detection falls back on when the frames say nothing.
 PHONE_HINT = "phone"
+#: Lane 2's frame extractor: the stage that reads the clip's container, and records its
+#: location in `source_meta.json` for `exif_gps` to place by.
+FFMPEG_FRAMES = "ffmpeg_frames"
+#: The capture metadata the worker records its reading of the video's location in
+#: (`worker/video_gps.py`, `services/epochs.VIDEO_LOCATION`), and the `ffmpeg_frames`
+#: parameter it is handed on as (`tools/pipeline/stages.VIDEO_LOCATION_PARAM`): the one
+#: reading that both chose the capture's site and places it (the cross review of #72).
+VIDEO_LOCATION = "videoLocation"
+VIDEO_LOCATION_PARAM = "video_location"
 #: The parameter that tells a placing stage which site's frame to place the capture in
 #: (`{siteId, lat, lon, height, heightDatum, epsg}`, `services/epochs.RunFrame.param`;
 #: decision D3).
@@ -115,6 +124,12 @@ def stage_params(
                 fallback["heading_deg"] = heading
             if fallback:
                 resolved.setdefault(stage.id, {}).update(fallback)
+        if stage.impl.name == FFMPEG_FRAMES and VIDEO_LOCATION in (capture.metadata_ or {}):
+            # Present even when null: "the worker looked and found none it could vouch
+            # for" must stop the stage falling back to ffmpeg's own reading.
+            resolved.setdefault(stage.id, {})[VIDEO_LOCATION_PARAM] = capture.metadata_[
+                VIDEO_LOCATION
+            ]
         if SOURCE_META in stage.impl.produced_names and facts:
             resolved.setdefault(stage.id, {}).update(facts)
         if stage.impl.name == CATALOG:

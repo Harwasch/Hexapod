@@ -553,6 +553,48 @@ def test_both_location_keys_survive_a_round_trip_through_a_real_container(
     assert (meta["location"]["lat"], meta["location"]["lon"]) == (37.7749, -122.4194)
 
 
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        # The worker's reading, which chose the capture's site: it is the location.
+        (
+            {"lat": 47.6445, "lon": -122.138, "altitudeM": 30.0, "accuracyM": 4.5, "key": "xyz"},
+            {"lat": 47.6445, "lon": -122.138, "altitudeM": 30.0, "accuracyM": 4.5},
+        ),
+        # It found none -- stripped, or atoms that disagree: none, whatever ffmpeg reads.
+        (None, None),
+        # Something that is not a point is no location either, never ffmpeg's instead.
+        ({"lat": 95.0, "lon": 0.0}, None),
+    ],
+)
+def test_the_workers_reading_of_the_location_is_the_one_kept(
+    tmp_path: Path, given: dict[str, object] | None, expected: dict[str, object] | None
+) -> None:
+    """One source of truth (the cross review of #72): the API reads the container's
+    location before the run to choose the capture's site, and ffmpeg keeps the *last* of
+    conflicting atoms where that reader keeps the first, so a crafted clip could be
+    matched to one site and placed at another. Given `video_location`, the stage records
+    the worker's reading and not its own; without it, its own, as before."""
+    upload = tmp_path / "upload"
+    upload.mkdir()
+    make_clip(
+        upload / "clip.mp4",
+        frames=4,
+        fps=10,
+        metadata=["-metadata", "location=+37.7749-122.4194+010.000/"],
+    )
+
+    workdir = run_normalize(tmp_path, {"fps": 10, "keep": 2, "video_location": given}, upload)
+
+    meta = json.loads((workdir.out_dir("normalize") / "source_meta.json").read_text())
+    if expected is None:
+        assert meta["location"] is None
+    else:
+        assert {k: meta["location"][k] for k in expected} == expected
+        assert meta["location"]["source"] == "worker:xyz"
+    assert meta["video"]["location"] == meta["location"]
+
+
 def test_a_clip_becomes_frames_and_a_description_of_where_they_came_from(
     tmp_path: Path,
 ) -> None:

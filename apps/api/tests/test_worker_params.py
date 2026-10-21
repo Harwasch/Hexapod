@@ -256,6 +256,35 @@ def test_a_phone_captures_params_are_pinned_whole(recipe: str) -> None:
     }
 
 
+VIDEO = {"lat": 47.6445, "lon": -122.138, "altitudeM": 30.0, "accuracyM": 4.5, "key": "iso6709"}
+
+
+def test_the_videos_recorded_location_is_the_one_normalize_keeps() -> None:
+    """One source of truth (the cross review of #72): the location the worker read before
+    the run, which chose the capture's site, goes to the frame extractor as its location
+    -- none included -- so ffmpeg's own reading of conflicting atoms never places it."""
+    found = _params("photo-reconstruct", {"lat": 1.0, "lon": 2.0, "videoLocation": VIDEO})
+    stripped = _params("photo-reconstruct", {"lat": 1.0, "lon": 2.0, "videoLocation": None})
+    unread = _params("photo-reconstruct", {"lat": 1.0, "lon": 2.0})
+
+    assert found["normalize"]["video_location"] == VIDEO
+    assert "video_location" in stripped["normalize"]
+    assert stripped["normalize"]["video_location"] is None
+    assert "video_location" not in unread.get("normalize", {})
+    # Only the stage that reads the clip: a splat has no video to read.
+    assert "video_location" not in _params(
+        "splat-ingest", {"lat": 1.0, "lon": 2.0, "videoLocation": VIDEO}
+    ).get("normalize", {})
+
+
+def test_the_worker_and_the_pipeline_agree_on_the_video_location_names() -> None:
+    from app.services import epochs
+    from app.worker import params
+
+    assert params.VIDEO_LOCATION == epochs.VIDEO_LOCATION
+    assert params.VIDEO_LOCATION_PARAM == import_module("stages").VIDEO_LOCATION_PARAM
+
+
 def test_the_worker_and_the_phone_route_agree_on_the_origin() -> None:
     from app.api.v1 import phone
     from app.worker import params
