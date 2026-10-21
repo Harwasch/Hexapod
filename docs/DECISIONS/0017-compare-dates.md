@@ -372,6 +372,12 @@ the work buffer when the divider moves. No PlayCanvas patch is needed.
    in 20, PlayCanvas copied 0% of its work buffer in every frame, and 0 pixels outside the
    crossed columns changed. With the cut switched off the same view has 57,691 pixels on the
    wrong side, so the measure bites. June alone, before and after, covers 180,430 pixels.
+   In the app (`e2e/compareDates.spec.ts`), with only the left date carrying an inferred layer,
+   the Inferred control and legend speak for it (decision 7 above, under PlayCanvas), and under
+   Highlight the left half draws it purple (7.4% of the covered pixels, from 0 under Show)
+   while the right, measured, is unchanged (0 and 0). With the switcher reading only the
+   right-hand date the control never appears, and with the other date's layers drawn without
+   their Highlight look the left half stays at 0%: both checks bite.
 6. **Cost.** The comparison's PlayCanvas parts load on demand: the session and the placement
    with the rules' module (`compositorSession`, 20.6 → 21.6 kB raw), the channel with port 3's
    (`scanRule` and `scanCompare` in one chunk, 7.6 → 9.0 kB raw), the rest in the renderer
