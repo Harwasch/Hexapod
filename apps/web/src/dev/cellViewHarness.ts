@@ -69,6 +69,8 @@ export interface CellViewHarness {
   installed(): boolean;
   /** What PlayCanvas or Spark says it drew of the view (null under CesiumJS). */
   reading(): ScanCellViewReading | null;
+  /** Whether the dedicated renderer streams the scan's own package (PlayCanvas's SOG). */
+  native(): boolean;
 }
 
 const BACKGROUND = "#10141a";
@@ -249,7 +251,13 @@ export async function startCellViewHarness(options: {
     for (let frame = 0; frame < 3000 && still < 40; frame += 1) {
       await nextFrame(scene);
       const status = renderer.status();
-      const ready = status.active && status.tiles > 0 && status.loading === 0 && status.settled;
+      // A natively streamed scan has no tiles of the host's, and PlayCanvas streams its chunks
+      // by itself: it is given 300 frames (its WebP chunks decode in the browser) before it counts.
+      const ready =
+        status.active &&
+        (status.native ? frame >= 300 : status.tiles > 0) &&
+        status.loading === 0 &&
+        status.settled;
       still = ready ? still + 1 : 0;
     }
     return count();
@@ -283,5 +291,6 @@ export async function startCellViewHarness(options: {
       return Object.values(parts).some((p) => p.installed);
     },
     reading: () => scanCellViewReading(HARNESS_ASSET),
+    native: () => host?.status().native ?? false,
   };
 }

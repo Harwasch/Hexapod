@@ -70,6 +70,11 @@ vi.mock("playcanvas", () => {
     readonly graphicsDevice = { isWebGPU: false, maxPixelRatio: 1, gl: null };
     readonly scene = Object.assign(new Handlers(), { gsplat: {} });
     readonly systems = { gsplat: new Handlers() };
+    readonly assets = {
+      add: (): void => undefined,
+      remove: (): void => undefined,
+      load: (asset: Asset) => asset.loaded(),
+    };
     readonly root = {
       addChild: (e: Entity) => {
         e.parent = this.root;
@@ -115,6 +120,18 @@ vi.mock("playcanvas", () => {
       this.destroyed = true;
     }
   }
+  /** A streamed package (lod-meta.json): its octree's bounds, the yard's, in the scan frame. */
+  class Asset {
+    readonly resource = { aabb: { center: { x: 16, y: 12, z: 2 } } };
+    readonly handlers = new Map<string, () => void>();
+    once(event: string, handler: () => void): void {
+      this.handlers.set(event, handler);
+    }
+    loaded(): void {
+      this.handlers.get("load")?.();
+    }
+    unload = (): void => undefined;
+  }
   class GSplatResource {
     readonly format = { addExtraStreams: (): void => undefined };
     getTexture = (): null => null;
@@ -133,6 +150,7 @@ vi.mock("playcanvas", () => {
   }
   return {
     Application,
+    Asset,
     Entity,
     GSplatResource,
     GSplatData,
@@ -304,6 +322,38 @@ describe("Confidence and Data age under PlayCanvas", () => {
     expect(component(far).modifier ?? null).toBeNull();
     backend.destroy();
     expect(scanCellViewReading("scan-a")).toBeNull();
+  });
+
+  it("draws a natively streamed scan with the look too, one level for all of it", async () => {
+    const { publishScanCellView, scanCellViewReading } =
+      await import("@/cesium/scanView/scanCellView");
+    const { backend } = await backendFor("scan-native");
+    const v = await view();
+    publishScanCellView("scan-native", v);
+    backend.render(pose([16, -40, 30]));
+    const stream = await backend.streamNative?.("https://scan.test/sog/lod-meta.json");
+    if (!stream) throw new Error("no native streaming");
+    const scan = pc.entities.find((e) => e.name === "scan");
+    const c = component(scan);
+    // The streamed scan is one entity, drawn with the shared look like any tile.
+    expect(c.modifier?.glsl).toContain(CELL_TILE_GLSL);
+    expect(c.params.get("uCellRule")).toBeDefined();
+    // Its level: CesiumJS's rule at the middle of the package's bounds.
+    const ppr = pxPerRadianOf(600, Math.PI / 3);
+    const level = () => (c.params.get("uCellTile") as Float32Array)[3];
+    expect(level()).toBe(cellLevelIndex(v.meta, Math.hypot(0, 52, 28), ppr));
+    // From much further, the whole scan steps coarser at once.
+    backend.render(pose([16, -1500, 30]));
+    expect(level()).toBe(cellLevelIndex(v.meta, Math.hypot(0, 1512, 28), ppr));
+    expect(level()).toBeGreaterThan(cellLevelIndex(v.meta, Math.hypot(0, 52, 28), ppr));
+    expect(scanCellViewReading("scan-native")).toMatchObject({ tiles: 1, steps: 1 });
+    // Photo: the look comes off; stopped, the scan is no longer one of the view's tiles.
+    publishScanCellView("scan-native", null);
+    expect(c.modifier ?? null).toBeNull();
+    stream.stop();
+    publishScanCellView("scan-native", v);
+    expect(scanCellViewReading("scan-native")).toMatchObject({ tiles: 0 });
+    backend.destroy();
   });
 
   it("draws an inferred layer's splats grey while a view is drawn: no measured colour", async () => {

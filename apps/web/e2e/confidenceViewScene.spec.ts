@@ -66,31 +66,55 @@ interface Harness {
   view(grid: string, mode?: string): Promise<Counts>;
   installed(): boolean;
   reading(): { tiles: number; steps: number; sampled: number; agree: number } | null;
+  native(): boolean;
 }
 
-/** Opens the harness drawn by `renderer`, collecting the page's errors into `errors`. */
-async function openHarness(page: Page, renderer: string, errors: string[]): Promise<void> {
+/** The yard's PlayCanvas streamed package (splat-transform's lod-meta.json and SOG chunks). */
+const NATIVE = "synthetic-yard/splat/sog/";
+
+/**
+ * Opens the harness drawn by `renderer`, collecting the page's errors into `errors`. With
+ * `native`, the yard's streamed package is served where a scan keeps it (`sog/` beside the
+ * tileset) and PlayCanvas streams that; without, the tileset says it has none
+ * (`extras.nativeLod: false`), so nothing is probed for and nothing answers 404.
+ */
+async function openHarness(
+  page: Page,
+  renderer: string,
+  errors: string[],
+  options: { native?: boolean } = {},
+): Promise<void> {
   await page.setViewportSize({ width: 960, height: 640 });
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
   });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/fixture-tiles/**", (route) => {
-    const relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
+    let relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
     if (relative.includes("..")) return route.abort();
-    // PlayCanvas asks whether the scan has a native package (sog/lod-meta.json): it has none.
+    if (relative.startsWith(NATIVE) && options.native) {
+      relative = `synthetic-yard-sog/${relative.slice(NATIVE.length)}`;
+    }
     const file = resolve(TILES, relative);
-    if (!existsSync(file)) return route.fulfill({ status: 404, body: "" });
+    if (!existsSync(file)) {
+      errors.push(`404: ${relative}`);
+      return route.fulfill({ status: 404, body: "" });
+    }
+    if (relative === "synthetic-yard/splat/tileset.json" && !options.native) {
+      const tileset = JSON.parse(readFileSync(file, "utf8")) as {
+        root: { extras?: Record<string, unknown> };
+      };
+      tileset.root.extras = { ...tileset.root.extras, nativeLod: false };
+      return route.fulfill({ status: 200, contentType: "application/json", json: tileset });
+    }
     const type = relative.endsWith(".json")
       ? "application/json"
       : relative.endsWith(".bin")
         ? "application/octet-stream"
-        : "model/gltf-binary";
-    return route.fulfill({
-      status: 200,
-      contentType: type,
-      body: readFileSync(file),
-    });
+        : relative.endsWith(".webp")
+          ? "image/webp"
+          : "model/gltf-binary";
+    return route.fulfill({ status: 200, contentType: type, body: readFileSync(file) });
   });
   await page.route(/\/cell-view-harness\.html/, (route) =>
     route.fulfill({ status: 200, contentType: "text/html", body: HARNESS_HTML }),
@@ -187,7 +211,7 @@ for (const renderer of ["playcanvas", "spark"] as const) {
       type: "pixels",
       description: JSON.stringify({ off, weak, strong, split, age, newer, reading }),
     });
-    expect(errors.filter((e) => /shader|compile|link|uniform/i.test(e))).toEqual([]);
+    expect(errors.filter((e) => /shader|compile|link|uniform|^404/i.test(e))).toEqual([]);
     // The look is on the renderer's tiles, and the level each reads agrees with CesiumJS's.
     expect(reading?.tiles ?? 0).toBeGreaterThan(0);
     expect(reading?.sampled ?? 0).toBeGreaterThan(0);
@@ -206,6 +230,41 @@ for (const renderer of ["playcanvas", "spark"] as const) {
     expect(newer.light).toBeGreaterThan(age.light + 0.15);
   });
 }
+
+test("under playcanvas streaming the yard's own package, the look is drawn at one level for all of it", async ({
+  page,
+}) => {
+  test.setTimeout(480_000);
+  const errors: string[] = [];
+  await openHarness(page, "playcanvas", errors, { native: true });
+  const view = (grid: string, mode?: string) => viewOf(page, "playcanvas-native-", grid, mode);
+  await view("off");
+  const off = await view("off");
+  const weak = await view("weak");
+  const reading = await page.evaluate(() =>
+    (window as unknown as { __cellView: Harness }).__cellView.reading(),
+  );
+  const native = await page.evaluate(() =>
+    (window as unknown as { __cellView: Harness }).__cellView.native(),
+  );
+  const strong = await view("strong");
+  const split = await view("split");
+  test.info().annotations.push({
+    type: "pixels",
+    description: JSON.stringify({ off, weak, strong, split, reading, native }),
+  });
+  expect(errors.filter((e) => /shader|compile|link|uniform|^404/i.test(e))).toEqual([]);
+  // PlayCanvas streams the package itself: one entity, the look on it.
+  expect(native).toBe(true);
+  expect(reading?.tiles).toBe(1);
+  expect(off.coverage).toBeGreaterThan(0.05);
+  expect(off.red).toBeLessThan(0.1);
+  expect(weak.red).toBeGreaterThan(0.6);
+  expect(strong.green).toBeGreaterThan(0.6);
+  expect(strong.red).toBeLessThan(0.05);
+  expect(split.leftRed).toBeGreaterThan(0.5);
+  expect(split.rightGreen).toBeGreaterThan(0.5);
+});
 
 test("the shared colour code draws on a GPU what its reference says, case for case", async ({
   page,
