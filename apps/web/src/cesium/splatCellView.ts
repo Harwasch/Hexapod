@@ -1,0 +1,552 @@
+/**
+ * Confidence and Data age on a splat scan: each splat tinted by the cell of the site lattice
+ * it sits in (hexapod.cellgrid v1, `lib/cellGrid.ts`), in the CesiumJS splat primitive's
+ * vertex shader, as one part of its colour chain (`splatColor.ts`).
+ *
+ * - Confidence: `weak-v1` (design M4-6 C3). Weak cells (score below 128, or unseen) red; the
+ *   rest from amber to green by score; a cell with no evidence desaturated grey. Not colour
+ *   alone: weak cells are hatched with dark diagonal bands and fair ones dotted, strong ones
+ *   solid, a band pair or a dot every two cells of the level read (`CELL_PATTERN_CELLS`), so a
+ *   reader who cannot tell red from green still finds the weak patches.
+ * - Data age: the shown date's age, one colour per age bucket for every cell it observed
+ *   (`lib/dataAge.ts`); light world-space stripes where a later date of the site has evidence,
+ *   so "newer data here" can be seen without switching.
+ *
+ * The splat's own luminance shades the tint, so the scan's shapes still read.
+ *
+ * Which level a splat reads is picked per splat from its distance to the eye, in step with the
+ * tiles' level of detail: the finest level whose cell covers at least `minPx` pixels
+ * (`cellLevelFor`). Coarser levels hold the weakest of their children (C3's pyramid), so a far
+ * view never hides a weak patch behind a strong average.
+ *
+ * The frame: a splat's position in the shader is in the draw command's model frame, the ENU
+ * frame at the tileset's centre the engine baked every tile into (`primitive._rootTransform`,
+ * `R`). The grid is in the tileset frame -- the root tile's frame, `root.computedTransform`
+ * (`T`, which includes the site's placement). A model-frame point is `T⁻¹ · R · p` in the
+ * grid's metres, whichever tile it came from: unlike un-baking by one tile's bake, this also
+ * holds for tiles that carry their own origin (3D Tiles `tile.transform`, decision D1).
+ *
+ * Splats an inferred layer adds to the scan's sort (`primitive.companions`, inferredLayers.ts)
+ * have no capture evidence: in either view they are grey, whatever the scan's cell says.
+ *
+ * Cost: nothing in Photo (the part is not in the chain, `cellViewSlot.ts`). In a view, one
+ * texel fetch and a few dozen flops a splat; a mode switch or a new data-age texture changes
+ * uniforms only, and the caller asks for a render.
+ */
+
+import { Cartesian4, Matrix4, PixelDatatype, PixelFormat, Sampler, Texture } from "cesium";
+
+import {
+  CELL_TEXTURE_WIDTH,
+  cellTexelLayout,
+  cellTextureRows,
+  confidenceTexels,
+  DEFAULT_UNSEEN_BIT,
+  DEFAULT_WEAK_BELOW,
+  MAX_CELL_LEVELS,
+  type CellGrid,
+} from "@/lib/cellGrid";
+
+import { AGE_RAMP, CONFIDENCE_RAMP, type Rgb } from "@/lib/cellRamps";
+
+import {
+  addColorPart,
+  hasColorPart,
+  removeColorPart,
+  type ColorPrimitive,
+  type SplatColorPart,
+} from "./splatColor";
+import { invertAffine, type Mat4 } from "./splatFrames";
+import type { OwnedTexture } from "./splatGpuMotion";
+import type { SplatPrimitive, SplatShaderBuilder } from "./splatInternals";
+import { COMPANION_SLOT_VECS, companionSlots, companionSlotsGlsl } from "./splatSlots";
+
+export type CellViewMode = "confidence" | "data-age";
+export { AGE_RAMP, CONFIDENCE_RAMP };
+
+/** The shader's mode numbers. */
+const MODE: Record<CellViewMode | "off", number> = { off: 0, confidence: 1, "data-age": 2 };
+
+/** Smallest a cell may look on screen before a coarser level is read (pixels). */
+export const CELL_MIN_PX = 6;
+/** Data age's "newer data here" stripes: one light and one plain band per this many metres. */
+export const NEWER_STRIPE_M = 0.6;
+/** Confidence's hatching and dots repeat every this many cells of the level a splat reads. */
+export const CELL_PATTERN_CELLS = 2;
+/** How dark a hatch band or a dot is: the tint times this. */
+const PATTERN_DARK = 0.55;
+
+/** How the part makes its texture and uniform values. The real one wraps CesiumJS. */
+export interface CellViewGpu {
+  /** An `RG8` texture, read normalised, sampled nearest. */
+  createRG(context: unknown, width: number, height: number, data: Uint8Array): OwnedTexture;
+  mat4(values: readonly number[]): unknown;
+  vec4(x: number, y: number, z: number, w: number): unknown;
+}
+
+/**
+ * GLSL of the part. Uniforms: the cell texture; the model-to-grid matrix; per level
+ * (i0, j0, ni, nj) and its first texel; (mode, finest cell m, minimum px, levels); (weak
+ * threshold, unseen bit, stripe m, the model's runtime scale); the mode's ramp; the companion
+ * slots drawn grey.
+ */
+export function cellViewGlsl(): string {
+  const width = String(CELL_TEXTURE_WIDTH);
+  return `
+uniform highp sampler2D u_cellGrid;
+uniform mat4 u_cellFromModel;
+uniform ivec4 u_cellLevels[${String(MAX_CELL_LEVELS)}];
+uniform ivec4 u_cellOffsets[${String(Math.ceil(MAX_CELL_LEVELS / 4))}];
+uniform vec4 u_cellParams;
+uniform vec4 u_cellRule;
+uniform vec4 u_cellRamp[6];
+uniform ivec4 u_cellFills[${String(COMPANION_SLOT_VECS)}];
+${companionSlotsGlsl("splatCellFill", "u_cellFills")}
+int splatCellOffset(int k) {
+    ivec4 o = u_cellOffsets[k / 4];
+    int c = k - (k / 4) * 4;
+    return c == 0 ? o.x : c == 1 ? o.y : c == 2 ? o.z : o.w;
+}
+
+vec4 splatCellViewColor(uint splatIndex, vec3 position, vec4 color) {
+    int mode = int(u_cellParams.x + 0.5);
+    if (mode == 0) {
+        return color;
+    }
+    float lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
+    if (splatCellFill(splatIndex)) {
+        return vec4(vec3(lum * 0.85), color.a);
+    }
+    vec3 p = (u_cellFromModel * vec4(position, 1.0)).xyz;
+    vec3 eye = (czm_inverseModelView * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+    float dist = max(length(position - eye), 0.001);
+    float pxPerRadian = 0.5 * czm_viewport.w * czm_projection[1][1];
+    // The cell's size on the globe: grid metres times the model's runtime scale.
+    float need = u_cellParams.z * dist / (pxPerRadian * u_cellParams.y * u_cellRule.w);
+    int levels = int(u_cellParams.w + 0.5);
+    int k = need <= 1.0 ? 0 : int(ceil(log2(need)));
+    k = clamp(k, 0, levels - 1);
+    float cell = u_cellParams.y * exp2(float(k));
+    ivec4 l = u_cellLevels[k];
+    int ci = int(floor(p.x / cell)) - l.x;
+    int cj = int(floor(p.y / cell)) - l.y;
+    ivec2 t = ivec2(0);
+    if (ci >= 0 && cj >= 0 && ci < l.z && cj < l.w) {
+        int linear = splatCellOffset(k) + cj * l.z + ci;
+        int row = linear / ${width};
+        vec2 texel = texelFetch(u_cellGrid, ivec2(linear - row * ${width}, row), 0).rg;
+        t = ivec2(texel * 255.0 + 0.5);
+    }
+    float shade = 0.45 + 0.55 * lum;
+    vec3 rgb;
+    if (mode == 1) {
+        bool unseen = (t.y & int(u_cellRule.y + 0.5)) != 0;
+        if (t.x == 0 && !unseen) {
+            rgb = vec3(lum * 0.85);
+        } else {
+            float period = ${String(CELL_PATTERN_CELLS)}.0 * cell;
+            if (unseen || float(t.x) < u_cellRule.x) {
+                rgb = u_cellRamp[1].rgb * shade;
+                if (fract((p.x - p.y) / period) >= 0.5) {
+                    rgb *= ${String(PATTERN_DARK)};
+                }
+            } else {
+                int bin = 2 + clamp(int(4.0 * (float(t.x) - u_cellRule.x) / (256.0 - u_cellRule.x)), 0, 3);
+                rgb = u_cellRamp[bin].rgb * shade;
+                if (bin < 4 && fract(p.x / period) >= 0.6 && fract(p.y / period) >= 0.6) {
+                    rgb *= ${String(PATTERN_DARK)};
+                }
+            }
+        }
+    } else {
+        rgb = t.x == 0 ? vec3(lum * 0.85) : u_cellRamp[clamp(t.x - 1, 0, 5)].rgb * shade;
+        if (t.y > 0 && fract((p.x + p.y) / u_cellRule.z) < 0.5) {
+            rgb = mix(rgb, vec3(1.0), 0.65);
+        }
+    }
+    return vec4(rgb, color.a);
+}
+`;
+}
+
+/**
+ * What the shader does to one straight-alpha colour, for tests: `texel` the cell's (R, G)
+ * bytes (or null outside the grid), `p` the splat in the grid's metres, `cell` the size of the
+ * level's cells it reads (m).
+ */
+export function cellViewColor(
+  mode: CellViewMode,
+  texel: readonly [number, number] | null,
+  color: readonly [number, number, number, number],
+  options: {
+    weakBelow?: number;
+    unseenBit?: number;
+    p?: readonly [number, number];
+    cell?: number;
+    fill?: boolean;
+  } = {},
+): [number, number, number, number] {
+  const lum = 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2];
+  const grey: [number, number, number, number] = [lum * 0.85, lum * 0.85, lum * 0.85, color[3]];
+  if (options.fill) return grey;
+  const [r, g] = texel ?? [0, 0];
+  const shade = 0.45 + 0.55 * lum;
+  const tint = (c: Rgb | undefined): [number, number, number, number] => [
+    (c?.[0] ?? 0) * shade,
+    (c?.[1] ?? 0) * shade,
+    (c?.[2] ?? 0) * shade,
+    color[3],
+  ];
+  if (mode === "confidence") {
+    const weakBelow = options.weakBelow ?? DEFAULT_WEAK_BELOW;
+    const unseen = (g & (options.unseenBit ?? DEFAULT_UNSEEN_BIT)) !== 0;
+    if (r === 0 && !unseen) return grey;
+    const period = CELL_PATTERN_CELLS * (options.cell ?? 1);
+    const fract = (v: number) => v / period - Math.floor(v / period);
+    const [x, y] = options.p ?? [0, 0];
+    const dark = (c: [number, number, number, number]): [number, number, number, number] => [
+      c[0] * PATTERN_DARK,
+      c[1] * PATTERN_DARK,
+      c[2] * PATTERN_DARK,
+      c[3],
+    ];
+    if (unseen || r < weakBelow) {
+      const weak = tint(CONFIDENCE_RAMP[1]);
+      return fract(x - y) >= 0.5 ? dark(weak) : weak;
+    }
+    const bin = 2 + Math.min(3, Math.max(0, Math.floor((4 * (r - weakBelow)) / (256 - weakBelow))));
+    const out = tint(CONFIDENCE_RAMP[bin]);
+    return bin < 4 && fract(x) >= 0.6 && fract(y) >= 0.6 ? dark(out) : out;
+  }
+  const out = r === 0 ? grey : tint(AGE_RAMP[Math.min(5, Math.max(0, r - 1))]);
+  const [x, y] = options.p ?? [0, 0];
+  const band = (x + y) / NEWER_STRIPE_M - Math.floor((x + y) / NEWER_STRIPE_M);
+  if (g > 0 && band < 0.5) {
+    return [
+      out[0] + (1 - out[0]) * 0.65,
+      out[1] + (1 - out[1]) * 0.65,
+      out[2] + (1 - out[2]) * 0.65,
+      out[3],
+    ];
+  }
+  return out;
+}
+
+/**
+ * The texel the shader reads for a splat at grid-frame `(x, y)` at `distanceM`, seen at
+ * `pxPerRadian`: its level index (finest 0) and its cell's index in the cell texture, or null
+ * outside that level's plane. The reference for the lookup in `cellViewGlsl`.
+ */
+export function cellTexelFor(
+  meta: Pick<CellGrid["meta"], "levels">,
+  x: number,
+  y: number,
+  distanceM: number,
+  pxPerRadian: number,
+  minPx: number = CELL_MIN_PX,
+  scale = 1,
+): { level: number; texel: number | null } {
+  const levels = meta.levels;
+  const cellM = levels[0]?.cellM ?? 1;
+  const need = (minPx * Math.max(distanceM, 0.001)) / (pxPerRadian * cellM * scale);
+  const k = Math.min(levels.length - 1, Math.max(0, need <= 1 ? 0 : Math.ceil(Math.log2(need))));
+  const l = levels[k];
+  if (!l) return { level: k, texel: null };
+  const cell = cellM * 2 ** k;
+  const ci = Math.floor(x / cell) - l.i0;
+  const cj = Math.floor(y / cell) - l.j0;
+  if (ci < 0 || cj < 0 || ci >= l.ni || cj >= l.nj) return { level: k, texel: null };
+  return { level: k, texel: (cellTexelLayout(meta).offsets[k] ?? 0) + cj * l.ni + ci };
+}
+
+/** Column-major `a · b`. */
+function multiply(a: Mat4, b: Mat4): number[] {
+  const out = new Array<number>(16).fill(0);
+  for (let c = 0; c < 4; c += 1) {
+    for (let r = 0; r < 4; r += 1) {
+      let sum = 0;
+      for (let k = 0; k < 4; k += 1) sum += (a[k * 4 + r] ?? 0) * (b[c * 4 + k] ?? 0);
+      out[c * 4 + r] = sum;
+    }
+  }
+  return out;
+}
+
+/**
+ * The matrix from the draw command's model frame to the grid's metres: `T⁻¹ · R`, with `R`
+ * the primitive's ENU bake frame and `T` the root tile's computed transform. Undefined when
+ * `T` cannot be inverted.
+ */
+export function cellFromModel(rootComputed: Mat4, modelFrame: Mat4): number[] | undefined {
+  const inverse = invertAffine(rootComputed);
+  return inverse ? multiply(inverse, modelFrame) : undefined;
+}
+
+function same(a: Mat4 | undefined, b: Mat4 | undefined): boolean {
+  if (!a || !b) return a === b;
+  for (let i = 0; i < 16; i += 1) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/** The primitive fields the part reads, beyond the colour slot. */
+export type CellViewPrimitive = ColorPrimitive &
+  Pick<SplatPrimitive, "_rootTransform" | "_tileSlots" | "companions" | "isDestroyed">;
+
+/** The cell-view part of one scan's primitive. */
+export class SplatCellView implements SplatColorPart {
+  readonly colorFunction = "splatCellViewColor";
+  /** Below the inferred layer's Highlight (10), above the objects' highlight (0). */
+  readonly colorOrder = 5;
+  readonly grid: CellGrid;
+  readonly #gpu: CellViewGpu;
+  readonly #rootOf: () => Mat4 | undefined;
+  readonly #levels: unknown[];
+  readonly #offsets: unknown[];
+  readonly #params: { cellM: number; levels: number };
+  #rule: { scale: number; value: unknown };
+  readonly #modeParams: Record<number, unknown>;
+  readonly #ramps: Record<CellViewMode, unknown[]>;
+  readonly #rows: Partial<Record<CellViewMode, { data: Uint8Array; height: number }>> = {};
+  readonly #textures = new Map<CellViewMode, OwnedTexture>();
+  #context: unknown;
+  #primitive: CellViewPrimitive | undefined;
+  #frame: { root: number[]; model: number[]; matrix: unknown } | undefined;
+  #identity: unknown;
+  #fillsOf: unknown;
+  #fills: unknown[];
+  /** What is drawn; a mode without its texture yet draws the photo. */
+  mode: CellViewMode = "confidence";
+
+  /** `rootOf`: the root tile's computed transform now (`T`). */
+  constructor(grid: CellGrid, gpu: CellViewGpu, rootOf: () => Mat4 | undefined) {
+    this.grid = grid;
+    this.#gpu = gpu;
+    this.#rootOf = rootOf;
+    const levels = grid.meta.levels;
+    const { offsets } = cellTexelLayout(grid.meta);
+    this.#levels = Array.from({ length: MAX_CELL_LEVELS }, (_, k) => {
+      const l = levels[k];
+      return gpu.vec4(l?.i0 ?? 0, l?.j0 ?? 0, l?.ni ?? 0, l?.nj ?? 0);
+    });
+    this.#offsets = Array.from({ length: Math.ceil(MAX_CELL_LEVELS / 4) }, (_, v) =>
+      gpu.vec4(
+        offsets[v * 4] ?? 0,
+        offsets[v * 4 + 1] ?? 0,
+        offsets[v * 4 + 2] ?? 0,
+        offsets[v * 4 + 3] ?? 0,
+      ),
+    );
+    this.#params = { cellM: levels[0]?.cellM ?? 1, levels: levels.length };
+    this.#modeParams = Object.fromEntries(
+      Object.values(MODE).map((m) => [
+        m,
+        gpu.vec4(m, this.#params.cellM, CELL_MIN_PX, levels.length),
+      ]),
+    );
+    this.#rule = { scale: Number.NaN, value: undefined };
+    const ramp = (colors: readonly Rgb[]) => colors.map(([r, g, b]) => gpu.vec4(r, g, b, 1));
+    this.#ramps = { confidence: ramp(CONFIDENCE_RAMP), "data-age": ramp(AGE_RAMP) };
+    this.#rows.confidence = cellTextureRows(grid.meta, confidenceTexels(grid));
+    this.#fills = companionSlots(undefined, new Set()).vecs.map(([a, b, c, d]) =>
+      gpu.vec4(a, b, c, d),
+    );
+  }
+
+  /** Data age's texture bytes (`lib/dataAge.ts` `dataAgeTexels`), replacing any before. */
+  setDataAge(rg: Uint8Array): void {
+    this.#textures.get("data-age")?.destroy();
+    this.#textures.delete("data-age");
+    this.#rows["data-age"] = cellTextureRows(this.grid.meta, rg);
+  }
+
+  /** Whether `mode` can be drawn now (its texture's bytes are here). */
+  ready(mode: CellViewMode = this.mode): boolean {
+    return this.#rows[mode] !== undefined;
+  }
+
+  addToShader(
+    shaderBuilder: SplatShaderBuilder,
+    uniformMap: Record<string, () => unknown>,
+    context: unknown,
+  ): void {
+    this.#context = context;
+    shaderBuilder.addVertexLines(cellViewGlsl());
+    uniformMap.u_cellGrid = () => this.#texture();
+    uniformMap.u_cellFromModel = () => this.#frameMatrix();
+    uniformMap.u_cellLevels = () => this.#levels;
+    uniformMap.u_cellOffsets = () => this.#offsets;
+    uniformMap.u_cellParams = () => this.#modeParams[this.#activeMode()];
+    uniformMap.u_cellRule = () => this.#ruleValue();
+    uniformMap.u_cellRamp = () => this.#ramps[this.mode];
+    uniformMap.u_cellFills = () => this.#fillSlots();
+  }
+
+  install(primitive: CellViewPrimitive): boolean {
+    if (this.#primitive === primitive && hasColorPart(primitive, this)) return true;
+    if (this.#primitive && this.#primitive !== primitive) this.uninstall();
+    if (!addColorPart(primitive, this)) return false;
+    this.#primitive = primitive;
+    this.#frame = undefined;
+    this.#fillsOf = undefined;
+    return true;
+  }
+
+  get installed(): boolean {
+    return hasColorPart(this.#primitive, this);
+  }
+
+  uninstall(): void {
+    if (this.#primitive) removeColorPart(this.#primitive, this);
+    this.#primitive = undefined;
+  }
+
+  destroy(): void {
+    this.uninstall();
+    for (const texture of this.#textures.values()) if (!texture.isDestroyed()) texture.destroy();
+    this.#textures.clear();
+  }
+
+  /** The shader's mode: off until the frame is known and the mode's bytes are here. */
+  #activeMode(): number {
+    if (!this.ready() || this.#readFrame() === undefined) return MODE.off;
+    return MODE[this.mode];
+  }
+
+  #texture(): unknown {
+    const mode = this.ready() ? this.mode : "confidence";
+    let texture = this.#textures.get(mode);
+    if (texture === undefined || texture.isDestroyed()) {
+      const rows = this.#rows[mode] ?? this.#rows.confidence;
+      if (!rows || this.#context === undefined) return undefined;
+      texture = this.#gpu.createRG(this.#context, CELL_TEXTURE_WIDTH, rows.height, rows.data);
+      this.#textures.set(mode, texture);
+    }
+    return texture;
+  }
+
+  /**
+   * (weak threshold, unseen bit, stripe m, scale): the scale is how long a grid metre is on the
+   * globe -- the root's computed transform's first column, `renderConfig.scale` for a model
+   * drawn at one (tilesetScale.ts), 1 for a rigid placement -- so a splat picks its level by
+   * the size its cell is drawn at, while it still indexes the grid in the grid's own metres.
+   */
+  #ruleValue(): unknown {
+    const root = this.#rootOf();
+    const length = root ? Math.hypot(root[0] ?? 0, root[1] ?? 0, root[2] ?? 0) : 1;
+    const scale = Number.isFinite(length) && length > 0 ? length : 1;
+    if (scale !== this.#rule.scale) {
+      const meta = this.grid.meta;
+      this.#rule = {
+        scale,
+        value: this.#gpu.vec4(
+          meta.weakBelow ?? DEFAULT_WEAK_BELOW,
+          meta.reasonBits?.unseen ?? DEFAULT_UNSEEN_BIT,
+          NEWER_STRIPE_M,
+          scale,
+        ),
+      };
+    }
+    return this.#rule.value;
+  }
+
+  /** `T⁻¹ · R`, rebuilt only when either changes. */
+  #readFrame(): unknown {
+    const root = this.#rootOf();
+    const model = this.#primitive?._rootTransform;
+    if (!root || !model) return undefined;
+    if (this.#frame && same(this.#frame.root, root) && same(this.#frame.model, model)) {
+      return this.#frame.matrix;
+    }
+    const values = cellFromModel(root, model);
+    if (!values) return undefined;
+    this.#frame = {
+      root: Array.from({ length: 16 }, (_, i) => root[i] ?? 0),
+      model: Array.from({ length: 16 }, (_, i) => model[i] ?? 0),
+      matrix: this.#gpu.mat4(values),
+    };
+    return this.#frame.matrix;
+  }
+
+  #frameMatrix(): unknown {
+    const matrix = this.#readFrame();
+    if (matrix !== undefined) return matrix;
+    this.#identity ??= this.#gpu.mat4([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    return this.#identity;
+  }
+
+  /** The slots of the layers the scan's primitive draws in its sort: grey, not the scan's. */
+  #fillSlots(): unknown[] {
+    const primitive = this.#primitive;
+    const slots = primitive?._tileSlots;
+    const companions = primitive?.companions;
+    const key = slots && companions && companions.length > 0 ? slots : undefined;
+    if (key !== this.#fillsOf) {
+      this.#fillsOf = key;
+      const owners = new Set<unknown>(key ? companions : []);
+      const slots = companionSlots(primitive, owners);
+      // More layer ranges than the uniform holds: the last range is stretched over all those
+      // past it. Fails closed -- an inferred splat is never given a measured colour; scan
+      // splats between them go grey, which claims no evidence rather than false evidence.
+      const last = slots.vecs[slots.vecs.length - 1];
+      if (slots.overflow > 0 && last) {
+        for (const [tile, slot] of primitive?._tileSlots ?? []) {
+          if (owners.has(tile.tileset)) last[3] = Math.max(last[3], slot.start + slot.count);
+        }
+      }
+      this.#fills = slots.vecs.map(([a, b, c, d]) => this.#gpu.vec4(a, b, c, d));
+    }
+    return this.#fills;
+  }
+}
+
+interface Barrel {
+  Texture?: new (options: Record<string, unknown>) => OwnedTexture;
+  Sampler?: { NEAREST?: unknown };
+  PixelFormat?: { RG?: number };
+  PixelDatatype?: { UNSIGNED_BYTE?: number };
+  Matrix4?: { fromArray(values: readonly number[]): unknown };
+  Cartesian4?: new (x: number, y: number, z: number, w: number) => unknown;
+}
+
+/** By name, not `import * as`: a namespace read by key keeps every engine export in the bundle. */
+const CESIUM = {
+  Texture,
+  Sampler,
+  PixelFormat,
+  PixelDatatype,
+  Matrix4,
+  Cartesian4,
+} as unknown as Barrel;
+
+/** The real `CellViewGpu`, or `undefined` when this CesiumJS build lacks what it needs. */
+export function cesiumCellViewGpu(): CellViewGpu | undefined {
+  const { Texture, Matrix4, Cartesian4 } = CESIUM;
+  const nearest = CESIUM.Sampler?.NEAREST;
+  const rg = CESIUM.PixelFormat?.RG;
+  const bytes = CESIUM.PixelDatatype?.UNSIGNED_BYTE;
+  if (
+    typeof Texture !== "function" ||
+    !Matrix4 ||
+    typeof Cartesian4 !== "function" ||
+    nearest === undefined ||
+    rg === undefined ||
+    bytes === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    createRG: (context, width, height, data) =>
+      new Texture({
+        context,
+        source: { width, height, arrayBufferView: data },
+        pixelFormat: rg,
+        pixelDatatype: bytes,
+        preMultiplyAlpha: false,
+        skipColorSpaceConversion: true,
+        flipY: false,
+        sampler: nearest,
+      }),
+    mat4: (values) => Matrix4.fromArray(values),
+    vec4: (x, y, z, w) => new Cartesian4(x, y, z, w),
+  };
+}

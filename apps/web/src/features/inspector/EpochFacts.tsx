@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { Site, SiteAsset } from "@twin/contracts";
 
 import { useScene } from "@/cesium/SceneContext";
+import { confidenceFact } from "@/lib/confidenceFacts";
 import {
   alignmentLabel,
   epochOf,
@@ -69,6 +70,11 @@ export function EpochFacts({ site }: { site: Site }) {
   const isAnchor = anchor?.epoch.id === epoch.id;
   const anchorDate = anchor ? formatEpochDate(anchor.epoch.observedAt) : null;
   const shares = scene?.sites.sharesPlacement(site.id, asset.id) ?? null;
+  // The root's extras, once the model is in the scene (under any renderer: CesiumJS loads it).
+  const loaded = scene?.sites.loadedAssets().find((a) => a.assetId === asset.id);
+  const extras = loaded
+    ? ((loaded.tileset.root as { extras?: unknown } | undefined)?.extras ?? null)
+    : undefined;
   return (
     <section aria-label={`Date shown: ${site.name}`} data-testid="inspector-epoch">
       <p className="glass-eyebrow">Date shown · {site.name}</p>
@@ -94,6 +100,12 @@ export function EpochFacts({ site }: { site: Site }) {
         <dd data-testid="inspector-epoch-placement">
           {placementLine(anchor?.asset ?? null, anchorDate, isAnchor, shares)}
         </dd>
+        {representation === "gaussian-splat" && (
+          <>
+            <dt>Confidence</dt>
+            <dd data-testid="inspector-epoch-confidence">{confidenceFact(extras)}</dd>
+          </>
+        )}
       </dl>
     </section>
   );

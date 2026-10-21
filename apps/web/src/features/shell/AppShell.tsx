@@ -51,6 +51,7 @@ import { OnboardingCard } from "../onboarding/OnboardingCard";
 import { RepresentationSwitcher } from "../sites/RepresentationSwitcher";
 import { SiteLoadStatus } from "../sites/SiteLoadStatus";
 import { TimelineControl } from "../timeline/TimelineControl";
+import { ViewsSlot } from "../views/ViewsSlot";
 import { DevReadouts } from "./DevReadouts";
 import { LandSurfaceSlot } from "./LandSurfaceSlot";
 import { MapCorner } from "./MapCorner";
@@ -339,6 +340,9 @@ export function AppShell() {
           {/* Dates, then the lens over dated imagery, then how old what you know is: time
               first, the way the strip reads left to right. */}
           <TimelineControl />
+          {/* How the splat scan is coloured: Photo, Confidence, Data age (CesiumJS draws the
+              analytic ones). A slot here; the control loads when a splat site is active. */}
+          <ViewsSlot />
           <ErrorBoundary inline label="Time Lantern">
             <TimeLanternControl />
           </ErrorBoundary>
