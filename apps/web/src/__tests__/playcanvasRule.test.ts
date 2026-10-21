@@ -577,6 +577,67 @@ describe("a splat's footprint as each renderer draws it", () => {
   });
 });
 
+describe("the scan's share of the budget under PlayCanvas", () => {
+  beforeEach(() => {
+    vi.stubGlobal("Worker", FakeWorker);
+    pc.entities.length = 0;
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    publishScanRule("rule-f", null);
+  });
+
+  it("goes to the host as its load factor, and to a natively streamed scan's own budget", async () => {
+    const JUNE = "https://scan.test/june/tileset.json";
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            root: { geometricError: 0, content: { uri: "9_1.glb" }, extras: { gaussians: 2 } },
+          }),
+      }),
+    );
+    lendRuleKit(RULE_KIT);
+    const { backend } = await backendFor("rule-f");
+    expect(backend.loadFactor).toBe(1);
+    const stream = await backend.streamNative?.("https://scan.test/lod-meta.json");
+    backend.setBudget(1_000_000);
+    // March (the scan, source 0) west of x = 4, June (1) east: about half each in view.
+    publishScanRule(
+      "rule-f",
+      view({
+        dates: [
+          { url: JUNE, assetId: "june", owns: [1], extras: {}, placement: null, root: IDENTITY },
+        ],
+        scanOwns: [0],
+      }),
+    );
+    const wide: ScanPose = {
+      ...pose,
+      eye: [4, -6, 8],
+      direction: [0, 0.6, -0.8],
+      up: [0, 0.8, 0.6],
+    };
+    for (let i = 0; i < 30 && backend.loadFactor === 1; i += 1) {
+      await new Promise((r) => setTimeout(r, 20));
+      backend.render(wide);
+    }
+    const share = backend.loadFactor;
+    expect(share).toBeGreaterThan(0.2);
+    expect(share).toBeLessThan(0.8);
+    // Streamed natively, the scan chooses its own detail: within its share of the budget.
+    expect(stream?.splats()).toBe(Math.round(1_000_000 * share));
+    // The rule off: the whole budget the scan's again.
+    publishScanRule("rule-f", null);
+    backend.render(wide);
+    expect(backend.loadFactor).toBe(1);
+    expect(stream?.splats()).toBe(1_000_000);
+    stream?.stop();
+    backend.destroy();
+  });
+});
+
 describe("a splat's spread across the plane", () => {
   it("is its scales along x and y unrotated, and swapped a quarter turn about up", () => {
     expect(ruleSigma([0, 0, 0, 1], [0.3, 0.1, 0.05])).toEqual([0.3, 0.1]);

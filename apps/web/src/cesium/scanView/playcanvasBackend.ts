@@ -675,6 +675,18 @@ function assemble(
   let ruleDatesLoading = false;
   /** The budget the host draws to (`setBudget`), which a rule's dates share. */
   let drawBudget = budget;
+  /** The scan is streamed natively (`streamNative`): its own budget is PlayCanvas's. */
+  let streamingNatively = false;
+  /** The scan's share of the budget: all of it, or under a rule its share (ruleDates.ts). */
+  const scanShare = (): number => (rule ? (ruleDates?.scanShare() ?? 1) : 1);
+  /**
+   * What PlayCanvas's own level of detail may draw: the budget, or for a natively streamed scan
+   * under a rule its share of it, as the host streams a tiled scan's share.
+   */
+  const lodBudget = (): void => {
+    const wanted = streamingNatively ? Math.round(drawBudget * scanShare()) : drawBudget;
+    if (app.scene.gsplat.splatBudget !== wanted) app.scene.gsplat.splatBudget = wanted;
+  };
   /** The tileset each entity came from: whose source it is under a rule. */
   const fromUrl = new WeakMap<pc.Entity, string>();
   /** A natively streamed scan's one entity: the rule's `native` source. */
@@ -1537,7 +1549,11 @@ function assemble(
     name: identity.name,
     api,
     apiNote: identity.note,
-    loadFactor: 1,
+    // Gaussians streamed per gaussian drawn: all of the budget, or under a per-cell rule the
+    // scan's share of it (ruleDates.ts), which the host streams the scan's tiles within.
+    get loadFactor() {
+      return scanShare();
+    },
     load: async (tilesetUrl: string, tile: TileNode, signal?: AbortSignal) => {
       const decoded = await decode(new URL(tile.uri, tilesetUrl).toString(), tile.offset);
       signal?.throwIfAborted();
@@ -1690,8 +1706,10 @@ function assemble(
         entity.gsplat?.setParameter("uCellLevel", cell.level);
         entity.gsplat?.setParameter("uCellTile", cell.tile);
       });
-      // The rule's other dates, planned from the pose this frame is drawn from.
+      // The rule's other dates, planned from the pose this frame is drawn from, and the
+      // scan's share of the budget with them.
       ruleDates?.plan(pose);
+      lodBudget();
       syncSun();
       framesDrawn += 1;
       app.render();
@@ -1723,7 +1741,7 @@ function assemble(
     },
     setBudget: (drawn) => {
       drawBudget = drawn;
-      app.scene.gsplat.splatBudget = drawn;
+      lodBudget();
     },
     setInstances,
     pickTiles: () => {
@@ -1778,11 +1796,14 @@ function assemble(
       const middle = (asset.resource as { aabb?: { center?: pc.Vec3 } } | null)?.aabb?.center;
       cells?.add(entity, middle ? [middle.x, middle.y, middle.z] : [0, 0, 0]);
       natives.add(entity);
+      streamingNatively = true;
+      lodBudget();
       if (cells?.drawing || sunStream || rule) applyModifier(entity);
       resumeLoop();
       return {
         splats: () => app.scene.gsplat.splatBudget,
         stop: () => {
+          streamingNatively = false;
           cells?.delete(entity);
           entity.destroy();
           app.assets.remove(asset);
