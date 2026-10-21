@@ -101,9 +101,16 @@ export function CellLegend({
   report: CellViewReport | undefined;
   note?: string | null;
 }) {
+  // The scan is drawn as the photo until the view's data is in: said, so the photo is not read
+  // as a scan with no evidence.
+  const loading = (
+    <p className="cell-legend__state" data-testid="cell-legend-loading">
+      {mode === "confidence" ? "Loading confidence…" : "Loading data age…"}
+    </p>
+  );
   let body;
   if (!report || report.kind === "loading") {
-    body = <p className="cell-legend__state">Loading…</p>;
+    body = loading;
   } else if (report.kind === "not-measured") {
     body = (
       <p className="cell-legend__state">
@@ -117,7 +124,7 @@ export function CellLegend({
   } else if (report.mode === "data-age") {
     body = <AgeKey report={report} />;
   } else {
-    body = <p className="cell-legend__state">Loading…</p>;
+    body = loading;
   }
   return (
     <div

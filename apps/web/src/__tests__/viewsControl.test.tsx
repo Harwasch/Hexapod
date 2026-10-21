@@ -68,7 +68,9 @@ describe("under CesiumJS", () => {
     expect(screen.queryByTestId("cell-legend")).toBeNull();
     await userEvent.click(screen.getByRole("radio", { name: "Confidence" }));
     expect(useViewMode.getState().mode).toBe("confidence");
-    expect(screen.getByTestId("cell-legend")).toHaveTextContent("Loading…");
+    // The scan stays the photo until the grid is in: the key says it is coming, so the photo
+    // is not read as a scan with no evidence.
+    expect(screen.getByTestId("cell-legend")).toHaveTextContent("Loading confidence…");
     report({ kind: "ready", mode: "confidence", weakBelow: 128 });
     expect(screen.getByTestId("cell-legend")).toHaveTextContent(
       /Weak: score under 128 \(under half its splats pass the capture checks\), or unseen.*Fair: score 128–191.*Strong: score 192–255.*No evidence.*weak-v1/,
@@ -123,6 +125,10 @@ describe("under CesiumJS", () => {
   it("says an age counted from the upload is one", async () => {
     show("cesium");
     await userEvent.click(await screen.findByRole("radio", { name: "Data age" }));
+    expect(screen.getByTestId("cell-legend")).toHaveTextContent("Loading data age…");
+    // Confidence is in, Data age's comparison not yet: still loading, not Confidence's key.
+    report({ kind: "ready", mode: "confidence", weakBelow: 128 });
+    expect(screen.getByTestId("cell-legend")).toHaveTextContent("Loading data age…");
     report({
       kind: "ready",
       mode: "data-age",
