@@ -10,10 +10,12 @@ import { describe, expect, it } from "vitest";
 import {
   hookSunFactor,
   packSunWord,
+  relightAfterLook,
   SUN_HOOK_VS,
   SUN_WORD_GLSL,
   unpackSunWord,
 } from "@/cesium/scanView/sunHook";
+import { cellViewColor, type CellViewMode } from "@/lib/cellLook";
 import { covarianceOf, SUN_AMBIENT, sunlightFactor, type Vec3 } from "@/lib/splatNormals";
 
 function about(axis: Vec3, angle: number): [number, number, number, number] {
@@ -32,6 +34,8 @@ function random(seed: number): () => number {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+type Rgba = [number, number, number, number];
 
 const IDENTITY3 = [1, 0, 0, 0, 1, 0, 0, 0, 1];
 
@@ -103,5 +107,59 @@ describe("the word beside each splat", () => {
     expect(SUN_WORD_GLSL).toContain(`${String(2 ** 30)}u`);
     expect(SUN_HOOK_VS).toContain("loadHexapodSun().r");
     expect(SUN_HOOK_VS).toContain("hexapodSunSkipped");
+  });
+});
+
+describe("the look's order", () => {
+  // Every branch of the cell look: Confidence weak (plain and hatched), unseen, fair (dotted),
+  // strong, no evidence (grey), outside the grid; Data age per bucket, with and without the
+  // "newer here" stripe.
+  const cases: { mode: CellViewMode; texel: [number, number] | null; p: [number, number] }[] = [
+    { mode: "confidence", texel: [60, 0], p: [0.2, 0.1] },
+    { mode: "confidence", texel: [60, 0], p: [1.4, 0.1] },
+    { mode: "confidence", texel: [200, 16], p: [0.3, 0.3] },
+    { mode: "confidence", texel: [140, 0], p: [1.3, 1.3] },
+    { mode: "confidence", texel: [140, 0], p: [0.2, 0.2] },
+    { mode: "confidence", texel: [250, 0], p: [0.5, 0.5] },
+    { mode: "confidence", texel: [0, 0], p: [0.5, 0.5] },
+    { mode: "confidence", texel: null, p: [0.5, 0.5] },
+    ...[1, 2, 3, 4, 5, 6].map((r) => ({
+      mode: "data-age" as const,
+      texel: [r, 0] as [number, number],
+      p: [0.1, 0.1] as [number, number],
+    })),
+    { mode: "data-age", texel: [3, 1], p: [0.1, 0.1] },
+    { mode: "data-age", texel: [3, 1], p: [0.4, 0.1] },
+    { mode: "data-age", texel: [0, 1], p: [0.1, 0.1] },
+  ];
+
+  it("relit after the look by its word is the look of the relit splat, as CesiumJS draws it", () => {
+    const next = random(7);
+    for (const c of cases) {
+      const look = (color: Rgba) => cellViewColor(c.mode, c.texel, color, { p: c.p, cell: 1 });
+      for (let i = 0; i < 200; i += 1) {
+        const photo: Rgba = [next(), next(), next(), 0.2 + 0.8 * next()];
+        const factor = SUN_AMBIENT + (1 - SUN_AMBIENT) * next();
+        const relit: Rgba = [photo[0] * factor, photo[1] * factor, photo[2] * factor, photo[3]];
+        // CesiumJS: the sun (3) before the look (5).
+        const cesium = look(relit);
+        // PlayCanvas: the look in the copy pass, with its black kept in the word; the sun in
+        // the frame's hook.
+        const black = look([0, 0, 0, photo[3]]);
+        const word = packSunWord([black[0], black[1], black[2]], false);
+        const drawn = relightAfterLook(look(photo), unpackSunWord(word).black, factor);
+        for (let k = 0; k < 3; k += 1) expect(Math.abs(drawn[k]! - cesium[k]!)).toBeLessThan(1e-3);
+        expect(drawn[3]).toBe(cesium[3]);
+      }
+    }
+  });
+
+  it("would not be, relit after the look without it: the order is what the word buys", () => {
+    const look = (color: Rgba) => cellViewColor("confidence", [250, 0], color, { p: [0.5, 0.5] });
+    const photo: Rgba = [0.6, 0.6, 0.6, 1];
+    const factor = SUN_AMBIENT;
+    const cesium = look([0.6 * factor, 0.6 * factor, 0.6 * factor, 1]);
+    const naive = look(photo).map((v, i) => (i < 3 ? v * factor : v));
+    expect(Math.abs(naive[1]! - cesium[1]!)).toBeGreaterThan(0.1);
   });
 });

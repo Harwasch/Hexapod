@@ -3,11 +3,16 @@
  * is off; the first sun adds the word stream to the work buffer and puts on every tile a
  * modifier that writes it (an inferred layer's with the skip bit), and the frame's hook goes
  * into the user material with the sun as uniforms -- set per frame without a tile copied again
- * -- and comes out when the sun goes. PlayCanvas is faked (no WebGL in jsdom): what matters is
+ * -- and comes out when the sun goes. Under Confidence or Data age the copy pass keeps in the
+ * word the look of a black splat, so the hook relights in CesiumJS's order (sun, then look). PlayCanvas is faked (no WebGL in jsdom): what matters is
  * what each tile and the material are given, and when. e2e/sunlightScene.spec.ts draws it.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { encodeConfidenceGrid } from "@/dev/cellGridFixture";
+import { cellTextureRows, confidenceTexels, decodeCellGrid } from "@/lib/cellGrid";
+import type { CellLookView } from "@/lib/cellLook";
+import { publishScanCellView } from "@/cesium/scanView/scanCellView";
 import type { LayerLook } from "@/cesium/scanView/layerLook";
 import {
   publishScanSun,
@@ -389,6 +394,44 @@ describe("Sunlight under PlayCanvas", () => {
     const entity = pc.entities.find((e) => e.name === "scan");
     expect(entity?.gsplat?.modifier?.glsl).toContain("writeHexapodSun(uvec4(0u, 0u, 0u, 0u));");
     stream?.stop();
+    backend.destroy();
+  });
+
+  it("keeps the look's black in the word under a cell view, so the sun comes before the look", async () => {
+    const { meta, planes } = await encodeConfidenceGrid({
+      level: 2,
+      i0: 0,
+      j0: 0,
+      ni: 8,
+      nj: 8,
+      cell: () => ({ score: 240 }),
+    });
+    const grid = await decodeCellGrid(meta, planes);
+    const view: CellLookView = {
+      mode: "confidence",
+      rows: cellTextureRows(grid.meta, confidenceTexels(grid)),
+      meta: grid.meta,
+    };
+    const { backend } = await backendFor("scan-c");
+    const near = await backend.load(URL_, tile("0_0.glb"));
+    backend.add(near);
+    publishScanSun("scan-c", MORNING);
+    publishScanCellView("scan-c", view);
+    const glsl = component(near).modifier?.glsl ?? "";
+    // The word: the look drawn for a black splat of the same alpha, then the look itself.
+    const word = glsl.indexOf(
+      "writeHexapodSun(uvec4(hexapodSunWord(hexapodCellTile(center, vec4(0.0, 0.0, 0.0, color.a), uCellGrid, uCellRule, uCellLevel, uCellTile).rgb), 0u, 0u, 0u));",
+    );
+    const look = glsl.indexOf(
+      "color = hexapodCellTile(center, color, uCellGrid, uCellRule, uCellLevel, uCellTile);",
+    );
+    expect(word).toBeGreaterThan(0);
+    expect(look).toBeGreaterThan(word);
+    // No other word written: one per splat.
+    expect(glsl.split("writeHexapodSun(").length).toBe(2);
+    // Photo again: the plain word (no look, nothing to undo).
+    publishScanCellView("scan-c", null);
+    expect(component(near).modifier?.glsl).toContain("writeHexapodSun(uvec4(0u, 0u, 0u, 0u));");
     backend.destroy();
   });
 });

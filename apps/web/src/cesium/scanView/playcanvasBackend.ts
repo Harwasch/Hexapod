@@ -57,7 +57,8 @@
  * hook in the user material's `gsplatModifyVS`, lit by the sun the relight hands over
  * (scanSunlight.ts) as uniforms, which copy nothing. The copy pass only leaves it one word per
  * splat (the `hexapodSun` stream of the work buffer, added with the first sun): whether the
- * splat is lit (a layer's is not). GLSL only too.
+ * splat is lit (a layer's is not), and under Confidence or Data age the look drawn for a black
+ * splat, with which the hook keeps CesiumJS's order -- the sun before the look. GLSL only too.
  *
  * Selecting in the scene (cesium/sceneSelect) reads the tiles drawn now in each tile's own
  * order (`pickTiles`): the Morton order put back, so a pick's index is the index the tile's
@@ -168,8 +169,16 @@ export function playcanvasModifierGlsl(
         return;
     }
     color = hexapodInstanceColor(${id}, color);`;
-  // With `sun`, first the word the frame's sunlight hook reads (sunHook.ts): a scan splat, lit.
-  const sunStep = sun ? "writeHexapodSun(uvec4(0u, 0u, 0u, 0u));\n    " : "";
+  // With `sun`, the word the frame's sunlight hook reads (sunHook.ts): a scan splat, lit; under
+  // a cell view, with the look drawn for a black splat, so that the hook relights the look of
+  // the relit splat (`A + (drawn - A) · factor`, every branch of the look being affine in the
+  // colour's scale) -- CesiumJS's order, the sun (3) before the look (5).
+  const sunStep = sun && !cell ? "writeHexapodSun(uvec4(0u, 0u, 0u, 0u));\n    " : "";
+  const cellArgs = "uCellGrid, uCellRule, uCellLevel, uCellTile";
+  const blackStep = sun
+    ? `writeHexapodSun(uvec4(hexapodSunWord(hexapodCellTile(center, vec4(0.0, 0.0, 0.0, color.a), ${cellArgs}).rgb), 0u, 0u, 0u));
+    `
+    : "";
   const colorStep = !cell
     ? ids || skin
       ? objectStep
@@ -181,7 +190,7 @@ export function playcanvasModifierGlsl(
     }
     `
           : ""
-      }color = hexapodCellTile(center, color, uCellGrid, uCellRule, uCellLevel, uCellTile);`;
+      }${blackStep}color = hexapodCellTile(center, color, ${cellArgs});`;
   const cellUniforms = cell
     ? `uniform highp sampler2D uCellGrid;
 uniform vec4 uCellRule;
