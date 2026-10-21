@@ -78,6 +78,7 @@ import { useViewMode } from "@/state/viewMode";
 import { useViewRule, type LeftOut, type ViewRuleLegend } from "@/state/viewRule";
 
 import { companionGroups, ruledObjects, setCompanions, type CompanionHost } from "./companions";
+import { absoluteUrl, IDENTITY, placedIn, relative, rootTransform, urlOf } from "./datePlacement";
 import type { RuleKit } from "./scanView/ruleKit";
 import {
   lendRuleKit,
@@ -267,47 +268,6 @@ const DATES = Symbol("view-rule dates");
 
 function primitiveOf(tileset: Cesium3DTileset): HostPrimitive | undefined {
   return splatTilesetOf(tileset).gaussianSplatPrimitive;
-}
-
-function urlOf(tileset: Cesium3DTileset): string | undefined {
-  return (tileset as unknown as { resource?: { url?: string } }).resource?.url;
-}
-
-/** The root tile's transform as tileset.json declares it (the identity when it declares none). */
-function rootTransform(tileset: Cesium3DTileset): Matrix4 {
-  return (tileset.root as { transform?: Matrix4 } | undefined)?.transform ?? Matrix4.IDENTITY;
-}
-
-/** The root tile's transform on the globe now (its placement's model matrix included). */
-function computedTransform(tileset: Cesium3DTileset): number[] {
-  const m = (tileset.root as { computedTransform?: Mat4 } | undefined)?.computedTransform;
-  return Array.from({ length: 16 }, (_, i) => m?.[i] ?? (i % 5 === 0 ? 1 : 0));
-}
-
-/** A tileset's URL as a dedicated renderer fetches it (ScanRendererHost `run`): absolute. */
-function absoluteUrl(tileset: Cesium3DTileset): string | undefined {
-  const url = urlOf(tileset);
-  return url === undefined ? undefined : new URL(url, location.href).toString();
-}
-
-const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-
-/** `a · b` (column-major 4x4). */
-function times(a: readonly number[], b: readonly number[]): number[] {
-  return Matrix4.toArray(
-    Matrix4.multiply(Matrix4.fromArray([...a]), Matrix4.fromArray([...b]), new Matrix4()),
-  );
-}
-
-/** `a⁻¹` (column-major 4x4, any affine: a runtime scale too). */
-function inverse(a: readonly number[]): number[] {
-  return Matrix4.toArray(Matrix4.inverse(Matrix4.fromArray([...a]), new Matrix4()));
-}
-
-/** `a⁻¹ · b`, or null when it is the identity (to a micrometre): where `b`'s frame is in `a`'s. */
-function relative(a: readonly number[], b: readonly number[]): number[] | null {
-  const m = times(inverse(a), b);
-  return m.every((v, i) => Math.abs(v - (IDENTITY[i] ?? 0)) < 1e-6) ? null : m;
 }
 
 /** A tileset.json's `root.transform` (column-major), or the identity. */
@@ -777,13 +737,8 @@ export function startCompositor(
     if (published && published.assetId !== target.assetId) unpublish();
     reframe(target.tileset);
     // Each date where it is in the scan's frame (`P`), and the root its layers are placed from.
-    const toScan = invertAffine(computedTransform(target.tileset));
     const placed = dates.map((d) => {
-      const placement = toScan
-        ? relative(computedTransform(target.tileset), computedTransform(d.tileset))
-        : null;
-      const own = Matrix4.toArray(rootTransform(d.tileset));
-      const root = placement ? times(own, inverse(placement)) : own;
+      const { placement, root } = placedIn(target.tileset, d.tileset);
       return {
         ...d,
         url: absoluteUrl(d.tileset),
