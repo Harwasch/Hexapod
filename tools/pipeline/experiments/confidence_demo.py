@@ -23,8 +23,11 @@ adds no evidence of its own; it exercises the SfM path, nothing more. The demo t
 the change between their height surfaces (the `surface` stage's) per cell, the way the
 change map (A5) measures it: both surfaces at the coarser level (dsm by max, ground by min,
 sigma by max), and `delta = dsm_e2 - dsm_e1` against `3 sqrt(sigma_e1^2 + sigma_e2^2 +
-u_e1^2 + u_e2^2)`, where `u` is each epoch's uncertainty from the site frame (its confidence
-grid's `alignmentCap.uncertaintyM`: 0 for e1, which made the frame; 0.062 m for e2). A cell
+u_e1^2 + u_e2^2)`, where `u` is each epoch's placement (`placement_m`): the larger of its
+uncertainty from the site frame (its confidence grid's `alignmentCap.uncertaintyM`: 0 for
+e1, which made the frame; 0.062 m for e2) and its alignment's own claim, at least 1 m for a
+coarse epoch, an unaligned one refused. With `--change` the two are taken as survey-grade
+scans (e1 claiming 3 cm, e2 aligned at 0.062 m): a coarse pair could not see the crate. A cell
 is `insufficient` when either epoch has no surface there, when either sigma saturates (255:
 "at least 2.55 m", a threshold that is only a lower bound), or when the finer epoch measured
 only some of the coarse cell's children (its top would be theirs alone against the whole).
@@ -69,6 +72,13 @@ __all__ = ["coarsen_surface", "main", "rescan", "rows", "surface_change"]
 GAUSSIANS = 150_000
 SEED = 7
 
+
+#: Each epoch's alignment. e2's is coarse (visual, +/-0.062 m) as the M4 demo has it; with
+#: `--change` the pair is taken as two survey-grade scans (an RTK drone's, both), since a
+#: coarse epoch claims no change under a metre (ADR 0018 § API 4) and the crate is 1.5 m.
+#: e1 made the frame; its own claim is a survey's 3 cm.
+E1_ALIGNMENT: dict[str, Any] = {"verdict": "survey", "uncertaintyM": 0.03}
+E2_ALIGNED_M = 0.062
 
 #: `--change`: e2's crate (centre east/north, side and height, metres), each scan's height
 #: noise, and the share of each scan's samples its sparse SfM cloud holds.
@@ -338,6 +348,28 @@ def _comparable(a: cell_grid.CellGrid, b: cell_grid.CellGrid) -> None:
         )
 
 
+#: The least `u` a coarse epoch may claim, metres (the change map's floor, ADR 0018 § API 4):
+#: coarse is not shown to survey accuracy, whatever its claim says.
+COARSE_FLOOR_M = 1.0
+
+
+def placement_m(frame_m: float, alignment: Mapping[str, Any] | None) -> float:
+    """An epoch's `u` as the change map takes it: the larger of its uncertainty from the
+    site frame (`frame_m`, its confidence grid's cap) and its alignment's own claim, at
+    least `COARSE_FLOOR_M` for a coarse one. An unaligned epoch, or one with no alignment
+    recorded, has no place to compare from: ValueError."""
+    verdict = alignment.get("verdict") if alignment is not None else None
+    if verdict not in ("survey", "coarse"):
+        raise ValueError(f"the epoch was never aligned to its site (verdict {verdict!r})")
+    assert alignment is not None
+    claim = alignment.get("uncertaintyM")
+    claimed = (
+        float(claim) if isinstance(claim, int | float) and not isinstance(claim, bool) else 10.0
+    )
+    u = max(frame_m, claimed)
+    return max(u, COARSE_FLOOR_M) if verdict == "coarse" else u
+
+
 #: The change classes A5 emits (`appearance-only` is reserved and never emitted here).
 CLASSES = ("raised", "lowered", "unchanged", "insufficient")
 
@@ -575,11 +607,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     e1 = _run(
         out / "e1", confidence_scene.arc(24, degrees=160.0, radius=7.0, height=2.5), **scans["e1"]
     )
+    e2_alignment = confidence_scene.alignment_of(
+        E2_ALIGNED_M, "survey" if args.change else "coarse"
+    )
     e2 = _run(
         out / "e2",
         confidence_scene.orbit(24) + confidence_scene.obliques(8),
         prior_epochs=1,
-        alignment=confidence_scene.alignment_of(0.062),
+        alignment=e2_alignment,
         **scans["e2"],
     )
     unaligned = _confidence_again(
@@ -618,8 +653,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             sb[1],
             ga[1],
             gb[1],
-            float(ga[0]["alignmentCap"]["uncertaintyM"]),
-            float(gb[0]["alignmentCap"]["uncertaintyM"]),
+            placement_m(float(ga[0]["alignmentCap"]["uncertaintyM"]), E1_ALIGNMENT),
+            placement_m(float(gb[0]["alignmentCap"]["uncertaintyM"]), e2_alignment),
         )
         surfaces["crate"] = _crate_tally(surfaces)
         sys.stdout.write("\n" + change_report(surfaces) + "\n")

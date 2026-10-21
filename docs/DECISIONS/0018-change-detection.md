@@ -85,7 +85,10 @@ how well each cell was seen (ADR 0016).
    `insufficient`: its top would be the measured children's alone against the whole cell):
    `Δ = dsm_b − dsm_a`, and the cell is **changed** when `|Δ| > 3·√(σa² + σb² + ua² + ub²)`, where
    `u` is each epoch's uncertainty **from the site frame** (its confidence grid's
-   `alignmentCap.uncertaintyM`, ADR 0016 §5: 0 for the epoch that made the frame). Classes:
+   `alignmentCap.uncertaintyM`, ADR 0016 §5: 0 for the epoch that made the frame) or its
+   alignment's own claim, whichever is larger, and at least 1 m for a coarse epoch (an unaligned
+   one is refused; review B5a round 2: the demo took the cap alone, so a coarse epoch 3 mm from
+   the frame called a 5 cm rise raised). Classes:
    `raised`, `lowered`, `unchanged`, `insufficient` (either epoch has no surface in the cell, or
    the finer measured only part of it, or either sigma saturates: "at least 2.55 m" makes the
    threshold only a lower bound), and

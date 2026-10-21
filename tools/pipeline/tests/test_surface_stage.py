@@ -579,9 +579,10 @@ def test_the_change_demo_finds_the_crate_raised_and_the_noise_unchanged(
         if abs(row["eastM"] + 3.1) <= 0.75 and abs(row["northM"] - 3.4) <= 0.75
     ]
     assert on and all(abs(row["deltaM"] - 1.5) < 0.1 for row in on)
-    # The threshold is the frame-relative one: e1 made the frame (0), e2 aligned at 0.062.
-    assert (found["uE1M"], found["uE2M"]) == (0.0, 0.062)
-    assert 0.18 < found["minDetectableM"] < 0.2
+    # Each epoch's u: the larger of its cap from the frame (0 for e1, which made it; 0.062
+    # for e2) and its survey claim (0.03 m for e1).
+    assert (found["uE1M"], found["uE2M"]) == (0.03, 0.062)
+    assert 0.2 < found["minDetectableM"] < 0.22
     assert found["unchangedMaxDeltaOverThreshold"] < 1.0
     assert "Derived from height surfaces, not observed" in text
     for name in ("e1-splat", "e2-splat"):
@@ -1038,3 +1039,25 @@ def test_ground_on_a_slope_near_the_grade_limit_is_all_observed(grade: float) ->
     window = surface.Window(level=0, i0=0, j0=0, ni=side, nj=side)
     found = surface.surface_plane(lambda: iter([(np.column_stack([xy, z]), surface.SPLAT)]), window)
     assert found.ground_unobserved == 0
+
+
+def test_the_demo_takes_each_epochs_alignment_class_and_a_coarse_one_brings_a_metre() -> None:
+    """Review B5a round 2 (low): the demo took only the frame cap as u, so a coarse epoch
+    6 mm from the frame (the review's: u 0 and 0.003 m) called a 5 cm rise raised against
+    4.3 cm. u is the larger of the cap and the alignment's claim, at least 1 m for a coarse
+    epoch (the change map's floor), and an unaligned epoch is refused."""
+    from experiments import confidence_demo
+
+    coarse = {"verdict": "coarse", "uncertaintyM": 0.03}
+    assert confidence_demo.placement_m(0.003, coarse) == 1.0
+    assert confidence_demo.placement_m(0.003, {**coarse, "uncertaintyM": 5.0}) == 5.0
+    assert confidence_demo.placement_m(0.003, {"verdict": "survey", "uncertaintyM": 0.03}) == 0.03
+    assert confidence_demo.placement_m(0.062, {"verdict": "survey", "uncertaintyM": 0.03}) == 0.062
+    for refused in ({"verdict": "unaligned", "uncertaintyM": 5.0}, None):
+        with pytest.raises(ValueError, match="aligned"):
+            confidence_demo.placement_m(0.0, refused)
+    a, b = _heights(0, {(0, 0): (0, 1)}), _heights(0, {(0, 0): (5, 1)})
+    ua = confidence_demo.placement_m(0.0, {"verdict": "survey", "uncertaintyM": 0.0})
+    ub = confidence_demo.placement_m(0.003, coarse)
+    found = confidence_demo.surface_change(a, b, _vouched(0), _vouched(0), ua, ub)
+    assert found["counts"]["raised"] == 0 and found["counts"]["unchanged"] == 1
