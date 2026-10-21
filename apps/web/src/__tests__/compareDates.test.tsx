@@ -123,19 +123,32 @@ describe("Compare › Dates", () => {
     expect(scene.sites.setCompareDates).toHaveBeenLastCalledWith({ left: E1.id, right: E3.id });
   });
 
-  it("under another renderer: disabled, says why, and switches to CesiumJS in one click", async () => {
+  it("under PlayCanvas, the default renderer, is offered as under CesiumJS, with no notice", () => {
     show(twoEpochSite(), "playcanvas");
+    expect(toggle()).toBeEnabled();
+    expect(screen.getByLabelText("Left of the divider")).toBeEnabled();
+    expect(screen.queryByTestId("compare-dates-needs-renderer")).toBeNull();
+  });
+
+  it("under Spark: disabled, says it needs CesiumJS or PlayCanvas, and switches in one click", async () => {
+    show(twoEpochSite(), "spark");
     expect(toggle()).toBeDisabled();
     expect(screen.getByLabelText("Left of the divider")).toBeDisabled();
-    expect(screen.getByTestId("compare-dates-needs-cesium")).toHaveTextContent(
-      "Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
+    expect(screen.getByTestId("compare-dates-needs-renderer")).toHaveTextContent(
+      "Needs the CesiumJS or PlayCanvas renderer (Settings › Advanced › Splat renderer)",
     );
-    act(() => useRendererOverride.setState({ renderer: "playcanvas" }));
-    await userEvent.click(screen.getByRole("button", { name: "Draw with CesiumJS" }));
-    expect(useSettings.getState().splatRenderer).toBe("cesium");
+    act(() => useRendererOverride.setState({ renderer: "spark" }));
+    await userEvent.click(screen.getByRole("button", { name: "Draw with PlayCanvas" }));
+    expect(useSettings.getState().splatRenderer).toBe("playcanvas");
     expect(useRendererOverride.getState().renderer).toBeNull();
-    await waitFor(() => expect(screen.queryByTestId("compare-dates-needs-cesium")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("compare-dates-needs-renderer")).toBeNull());
     expect(toggle()).toBeEnabled();
+  });
+
+  it("under the WebGPU trial: disabled, with the same notice", () => {
+    show(twoEpochSite(), "playcanvas-webgpu");
+    expect(toggle()).toBeDisabled();
+    expect(screen.getByTestId("compare-dates-needs-renderer")).toBeInTheDocument();
   });
 
   it("undo skips turning it on once a date choice has ended it, rather than doing nothing", async () => {
