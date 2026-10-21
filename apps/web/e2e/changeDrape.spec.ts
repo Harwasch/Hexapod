@@ -1,27 +1,24 @@
 /**
  * The change drape in the app itself (features/change, ADR 0018): Compare › Dates offers the
  * change map between two dated captures of the yard once both measured a height surface; the
- * map is drawn on the ground under CesiumJS and under PlayCanvas alike; its legend counts each
- * class and says it is derived, uncalibrated, the least change it can show and which date is
- * not survey-grade; and the write token it is behind is asked for, not a blank drape.
+ * ground layer is drawn on the ground and outlined over the scan under CesiumJS, PlayCanvas and
+ * Spark alike, vegetation apart behind its own switch; the legend keys each layer on its own
+ * and says it is derived, uncalibrated, the least change each layer can show, and when a date
+ * is not survey-grade; and the write token it is behind is asked for, not a blank drape.
  *
- * The `/change` answer is mocked, in the real API's shape, from what the repository commits:
- * the cells P5's reference change lists for `data/tiles/synthetic-yard-surfaces` (e1 -> e2 at
- * 1 m: a raised block, a lowered block, and a weak raised block), the cells it counts as not
- * comparable (one date measured them, the other did not: read here from the two surface.bin
- * planes, as the API compares them), its counts, and A5's evidence for the rest (minDetectableM
- * as the least threshold, the uncertainties, the appearance stub, as ADR 0018 records them). Areas are each class's
- * 4-connected regions, split by confidence as the API splits them, outlined as row runs of
- * cells in the yard's frame (whose origin is the yard tileset's root transform). Unchanged
- * cells are counted, never outlined, as the API now answers.
+ * The `/change` answers are the API's own for the committed fixture (e2e/fixtures/changeYard.py
+ * runs the API's analysis and response code over data/tiles/synthetic-yard-surfaces and
+ * synthetic-yard-epochs, placed in the yard's frame): the ground layer finds the 1 m pond dug
+ * and nothing else; vegetation finds the shed and the stack raised (the stack where e1 was
+ * weak) and the spoil heap gone. changeYardCoarse.json is the same pair with the later date a
+ * coarse ±5 m placement: nothing claimed under 15 m, and the legend says not survey-grade.
  *
  * Headless GL is SwiftShader: the drape is asserted through `window.__twin` (the ground
- * primitives it tags) and, by pixels, as the drape's colours appearing on the ground from
- * above where they were not before.
+ * primitives it tags) and the overlay's SVG, and, by pixels, as each layer's colours appearing
+ * on screen from above where they were not before.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { gunzipSync } from "node:zlib";
 
 import type { Page, Route } from "@playwright/test";
 
@@ -43,7 +40,6 @@ const LAT = 46.1335;
 const east = (m: number) => m / (111_320 * Math.cos((LAT * Math.PI) / 180));
 const north = (m: number) => m / 111_320;
 const MID = { lon: LON + east(16), lat: LAT + north(12) };
-const at = (x: number, y: number): [number, number] => [LON + east(x), LAT + north(y)];
 
 const ring = (half: number): [number, number][] => [
   [MID.lon - east(half), MID.lat - north(half)],
@@ -83,6 +79,7 @@ function epoch(
   platform: string,
   asset: string,
   surface: boolean,
+  coarse = false,
 ) {
   return {
     id,
@@ -96,15 +93,14 @@ function epoch(
     platform,
     status: "published",
     joinMethod: ordinal === 1 ? "new-site" : "spatial",
-    // The phone date aligned visually to the drone date, ±0.062 m (A5's evidence): coarse.
+    // The re-scan surveyed (RTK), as the API's own test registers it; or a phone date aligned
+    // coarsely at ±5 m.
     alignment:
       ordinal === 1
         ? null
-        : {
-            verdict: "coarse",
-            uncertaintyM: 0.062,
-            label: "Phone video, aligned visually, ±0.062 m",
-          },
+        : coarse
+          ? { verdict: "coarse", uncertaintyM: 5, label: "Phone video, aligned visually, ±5 m" }
+          : { verdict: "survey", uncertaintyM: 0.062, label: "RTK drone, survey tier, ±0.062 m" },
     quality: null,
     // A map is answered only for dates with a confidence grid too (else 409
     // confidence-not-measured): each of these has one, the phone date capped by ±0.062 m.
@@ -169,7 +165,7 @@ function asset(id: string, epochId: string, url: string, createdAt: string) {
   };
 }
 
-function site(surfaces: boolean) {
+function site(surfaces: boolean, coarse = false) {
   return {
     id: SITE_ID,
     slug: "yard-change",
@@ -188,7 +184,15 @@ function site(surfaces: boolean) {
     ],
     epochs: [
       epoch(E1, 1, "2026-03-01T15:00:00Z", "drone", A1, surfaces),
-      epoch(E2, 2, "2026-06-01T15:00:00Z", "phone-video", A2, surfaces),
+      epoch(
+        E2,
+        2,
+        "2026-06-01T15:00:00Z",
+        coarse ? "phone-video" : "rtk-drone",
+        A2,
+        surfaces,
+        coarse,
+      ),
     ],
     frame: null,
     cameraBookmarks: [],
@@ -212,192 +216,11 @@ const summary = {
   updatedAt: "2026-06-02T00:00:00Z",
 };
 
-// ---- The change map, from the committed surfaces fixture ----------------------------------
+// ---- The change map: the API's own answers for the committed fixture ----------------------
 
-interface Level {
-  cellM: number;
-  i0: number;
-  j0: number;
-  ni: number;
-  nj: number;
-  offset: number;
-}
-interface SurfacesFixture {
-  epochs: Record<"e1" | "e2", { descriptor: { levels: Level[] }; file: string }>;
-  change: {
-    cellM: number;
-    counts: { raised: number; lowered: number; unchanged: number; insufficient: number };
-    changed: {
-      i: number;
-      j: number;
-      deltaM: number;
-      thresholdM: number;
-      class: string;
-      weak: boolean;
-    }[];
-  };
-}
-
-const SURFACES = resolve(TILES, "synthetic-yard-surfaces");
-
-/** The cells a surface measured (dsm not noData), at its own level, as "i,j". */
-function measuredCells(
-  fixture: SurfacesFixture,
-  key: "e1" | "e2",
-): { cellM: number; cells: Set<string> } {
-  const { descriptor, file } = fixture.epochs[key];
-  const level = descriptor.levels[0];
-  if (!level) throw new Error(`${key}: no level`);
-  const planes = gunzipSync(readFileSync(resolve(SURFACES, file)));
-  const cells = new Set<string>();
-  // Channels dsm i2, ground i2, sigma u1, support u1: six bytes a cell, little-endian.
-  for (let j = 0; j < level.nj; j++)
-    for (let i = 0; i < level.ni; i++)
-      if (planes.readInt16LE(level.offset + (j * level.ni + i) * 6) !== -32768)
-        cells.add(`${level.i0 + i},${level.j0 + j}`);
-  return { cellM: level.cellM, cells };
-}
-
-/** Cells at the coarser level `cellM` either measured but no child of which both did. */
-function insufficientCells(fixture: SurfacesFixture, cellM: number): [number, number][] {
-  const up = (side: { cellM: number; cells: Set<string> }) => {
-    const f = Math.round(cellM / side.cellM);
-    return new Set(
-      [...side.cells].map((key) => {
-        const [i = 0, j = 0] = key.split(",").map(Number);
-        return `${Math.floor(i / f)},${Math.floor(j / f)}`;
-      }),
-    );
-  };
-  const [a, b] = [up(measuredCells(fixture, "e1")), up(measuredCells(fixture, "e2"))];
-  return [...new Set([...a, ...b])]
-    .filter((key) => !(a.has(key) && b.has(key)))
-    .map((key) => key.split(",").map(Number) as [number, number]);
-}
-
-/** 4-connected regions of cells. */
-function regions(cells: [number, number][]): [number, number][][] {
-  const left = new Set(cells.map(([i, j]) => `${i},${j}`));
-  const out: [number, number][][] = [];
-  for (const [i, j] of cells) {
-    if (!left.delete(`${i},${j}`)) continue;
-    const region: [number, number][] = [[i, j]];
-    // Cells pushed while walking are walked too.
-    for (const [x, y] of region) {
-      for (const [dx, dy] of [
-        [1, 0],
-        [-1, 0],
-        [0, 1],
-        [0, -1],
-      ] as const) {
-        if (left.delete(`${x + dx},${y + dy}`)) region.push([x + dx, y + dy]);
-      }
-    }
-    out.push(region);
-  }
-  return out;
-}
-
-/** A region outlined as one rectangle per run of cells along a row, in the yard's frame. */
-function outline(region: [number, number][], cellM: number) {
-  const rows = new Map<number, number[]>();
-  for (const [i, j] of region) rows.set(j, [...(rows.get(j) ?? []), i]);
-  const polygons: [number, number][][][] = [];
-  for (const [j, is] of rows) {
-    is.sort((p, q) => p - q);
-    let start = is[0] ?? 0;
-    for (let k = 1; k <= is.length; k++) {
-      const i = is[k];
-      if (i !== undefined && i === (is[k - 1] ?? 0) + 1) continue;
-      const end = (is[k - 1] ?? 0) + 1;
-      const [x0, x1, y0, y1] = [start * cellM, end * cellM, j * cellM, (j + 1) * cellM];
-      polygons.push([[at(x0, y0), at(x1, y0), at(x1, y1), at(x0, y1), at(x0, y0)]]);
-      if (i !== undefined) start = i;
-    }
-  }
-  return { type: "MultiPolygon", coordinates: polygons };
-}
-
-function changeMap() {
-  const fixture = JSON.parse(
-    readFileSync(resolve(SURFACES, "surfaces.json"), "utf8"),
-  ) as SurfacesFixture;
-  const { cellM, counts, changed } = fixture.change;
-  // What the fixture does not carry, as A5's evidence answered it (ADR 0018 § API Evidence).
-  const evidence = {
-    appearance: {
-      status: "not-computed",
-      reason:
-        "needs the new photos compared with the old epoch at fixed geometry; never splat pixels",
-    },
-    uncertainty: { fromM: 0, toM: 0.062 },
-  };
-  const areas: Record<string, unknown>[] = [];
-  for (const cls of ["raised", "lowered"]) {
-    for (const weak of [false, true]) {
-      const cells = changed.filter((c) => c.class === cls && c.weak === weak);
-      for (const region of regions(cells.map((c) => [c.i, c.j]))) {
-        const deltas = region.map(
-          ([i, j]) => cells.find((c) => c.i === i && c.j === j)?.deltaM ?? 0,
-        );
-        areas.push({
-          class: cls,
-          footprint: outline(region, cellM),
-          cells: region.length,
-          areaM2: region.length * cellM * cellM,
-          lowConfidence: weak,
-          lowConfidenceCells: weak ? region.length : 0,
-          meanDeltaM: deltas.reduce((s, d) => s + d, 0) / deltas.length,
-          maxAbsDeltaM: Math.max(...deltas.map(Math.abs)),
-          meanGroundDeltaM: 0,
-        });
-      }
-    }
-  }
-  const insufficient = insufficientCells(fixture, cellM);
-  expect(insufficient).toHaveLength(counts.insufficient);
-  for (const region of regions(insufficient))
-    areas.push({
-      class: "insufficient",
-      footprint: outline(region, cellM),
-      cells: region.length,
-      areaM2: region.length * cellM * cellM,
-      lowConfidence: false,
-      lowConfidenceCells: 0,
-      meanDeltaM: null,
-      maxAbsDeltaM: null,
-      meanGroundDeltaM: null,
-    });
-  return {
-    policy: "change-v1",
-    derived: true,
-    label: "Derived from height surfaces, not observed",
-    calibration: "uncalibrated",
-    siteId: SITE_ID,
-    fromEpochId: E1,
-    toEpochId: E2,
-    fromAssetId: A1,
-    toAssetId: A2,
-    frame: "tileset",
-    level: 2,
-    nativeLevel: 2,
-    cellM,
-    thresholdSigma: 3,
-    minDetectableM: Math.min(...changed.map((c) => c.thresholdM)),
-    uncertainty: evidence.uncertainty,
-    counts,
-    lowConfidence: {
-      // The fixture lists only changed cells' confidence; unchanged ones are not known here.
-      unchanged: 0,
-      raised: changed.filter((c) => c.class === "raised" && c.weak).length,
-      lowered: changed.filter((c) => c.class === "lowered" && c.weak).length,
-    },
-    appearance: evidence.appearance,
-    areaLevel: 2,
-    areaCellM: cellM,
-    areas,
-  };
-}
+const FIXTURES = resolve(process.cwd(), "e2e/fixtures");
+const answerFor = (name: "changeYard" | "changeYardCoarse"): unknown =>
+  JSON.parse(readFileSync(resolve(FIXTURES, `${name}.json`), "utf8"));
 
 // ---- The app ---------------------------------------------------------------------------------
 
@@ -437,16 +260,16 @@ interface ChangeCalls {
 
 async function route(
   page: Page,
-  options: { surfaces?: boolean; token?: boolean } = {},
+  options: { surfaces?: boolean; token?: boolean; coarse?: boolean } = {},
 ): Promise<ChangeCalls> {
   const calls: ChangeCalls = { asked: [] };
-  const map = changeMap();
+  const map = answerFor(options.coarse ? "changeYardCoarse" : "changeYard");
   await mockApi(page);
   await page.route("**/api/v1/sites", (r) =>
     r.request().method() === "GET" ? r.fulfill({ status: 200, json: [summary] }) : r.fallback(),
   );
   await page.route(`**/api/v1/sites/${SITE_ID}`, (r) =>
-    r.fulfill({ status: 200, json: site(options.surfaces ?? true) }),
+    r.fulfill({ status: 200, json: site(options.surfaces ?? true, options.coarse) }),
   );
   await page.route(`**/api/v1/sites/${SITE_ID}/change?*`, (r: Route) => {
     const url = new URL(r.request().url());
@@ -519,6 +342,7 @@ async function lookDown(page: Page, heightM: number): Promise<void> {
 }
 
 interface DrapeTag {
+  layer: string;
   cls: string;
   lowConfidence: boolean;
   polygons: number;
@@ -539,9 +363,18 @@ const drawn = (page: Page): Promise<DrapeTag[]> =>
     return out;
   })()`);
 
-/** The outline overlay over the scan: each class's path, and whether it draws anything. */
-const overlay = (page: Page): Promise<{ cls: string; low: string; drawn: boolean }[]> =>
-  page.evaluate(`[...document.querySelectorAll("svg[data-change-overlay] path")].map((p) => ({
+/** What is drawn of one layer: each primitive's class and confidence, in drawing order. */
+const layerDrawn = async (page: Page, layer: string) =>
+  (await drawn(page))
+    .filter((d) => d.layer === layer)
+    .map(({ cls, lowConfidence, hatched }) => ({ cls, lowConfidence, hatched }));
+
+/** One layer's outlines over the scan: each class's path, and whether it draws anything. */
+const overlay = (
+  page: Page,
+  layer: string,
+): Promise<{ cls: string; low: string; drawn: boolean }[]> =>
+  page.evaluate(`[...document.querySelectorAll('svg[data-change-overlay="${layer}"] path')].map((p) => ({
     cls: p.getAttribute("data-class"),
     low: p.getAttribute("data-low-confidence"),
     drawn: (p.getAttribute("d") ?? "").length > 0,
@@ -560,11 +393,18 @@ async function settledShot(page: Page, name?: string): Promise<Buffer> {
   return shot;
 }
 
+interface Shares {
+  /** The ground's lowered blue (#3a9cf0): the pond. */
+  pond: number;
+  /** Vegetation's raised yellow (#f2c94c): the shed and the stack. */
+  grown: number;
+}
+
 /**
- * The share of the view's pixels near each drape colour (summed RGB distance under 90),
- * over the middle of the view, clear of the HUD: raised (orange) and lowered (blue).
+ * The share of the view's pixels near a layer's colour (summed RGB distance under 90), over
+ * the view clear of the HUD and the legend.
  */
-async function drapePixels(page: Page, shot: Buffer): Promise<{ raised: number; lowered: number }> {
+async function drapePixels(page: Page, shot: Buffer): Promise<Shares> {
   return page.evaluate(async (data) => {
     const image = new Image();
     image.src = `data:image/png;base64,${data}`;
@@ -573,23 +413,23 @@ async function drapePixels(page: Page, shot: Buffer): Promise<{ raised: number; 
     canvas.width = image.width;
     canvas.height = image.height;
     const context = canvas.getContext("2d");
-    if (!context) return { raised: 0, lowered: 0 };
+    if (!context) return { pond: 0, grown: 0 };
     context.drawImage(image, 0, 0);
     const [x, y] = [Math.floor(image.width * 0.1), Math.floor(image.height * 0.1)];
-    const [w, h] = [Math.floor(image.width * 0.55), Math.floor(image.height * 0.65)];
+    const [w, h] = [Math.floor(image.width * 0.64), Math.floor(image.height * 0.65)];
     const px = context.getImageData(x, y, w, h).data;
     const near = (r: number, g: number, b: number, i: number) =>
       Math.abs((px[i] ?? 0) - r) + Math.abs((px[i + 1] ?? 0) - g) + Math.abs((px[i + 2] ?? 0) - b) <
       90;
-    let raised = 0;
-    let lowered = 0;
+    let pond = 0;
+    let grown = 0;
     for (let i = 0; i < px.length; i += 4) {
-      // Orange #f08c3a and blue #3a9cf0 over the ground, at the drape's opacity.
-      if (px[i]! > px[i + 2]! + 60 && near(220, 140, 80, i)) raised += 1;
-      if (px[i + 2]! > px[i]! + 60 && near(80, 150, 220, i)) lowered += 1;
+      const [r, g, b] = [px[i] ?? 0, px[i + 1] ?? 0, px[i + 2] ?? 0];
+      if (b > r + 60 && near(80, 150, 220, i)) pond += 1;
+      if (r > b + 80 && g > b + 60 && near(230, 200, 90, i)) grown += 1;
     }
     const total = px.length / 4;
-    return { raised: raised / total, lowered: lowered / total };
+    return { pond: pond / total, grown: grown / total };
   }, shot.toString("base64"));
 }
 
@@ -618,21 +458,29 @@ async function closePanel(page: Page) {
 
 const poll = { timeout: 120_000, intervals: [250, 500, 1000] };
 
-const EXPECTED = [
+/** The ground: the pond lowered, and the not-comparable margins. */
+const GROUND = [
+  { cls: "lowered", lowConfidence: false, hatched: false },
+  { cls: "insufficient", lowConfidence: false, hatched: false },
+];
+/** Vegetation: the shed and the stack (weak, hatched) raised, the spoil heap lowered. */
+const VEGETATION = [
   { cls: "raised", lowConfidence: false, hatched: false },
   { cls: "raised", lowConfidence: true, hatched: true },
   { cls: "lowered", lowConfidence: false, hatched: false },
   { cls: "insufficient", lowConfidence: false, hatched: false },
 ];
+const outlined = (layer: typeof GROUND) =>
+  layer.map(({ cls, lowConfidence }) => ({ cls, low: String(lowConfidence), drawn: true }));
 
 for (const renderer of ["cesium", "playcanvas", "spark"] as const) {
-  test(`under ${renderer}, Compare › Dates drapes the change between two dates and keys it`, async ({
+  test(`under ${renderer}, Compare › Dates drapes the ground's change, and vegetation apart`, async ({
     page,
   }) => {
     test.setTimeout(420_000);
     const calls = await route(page);
     await arrive(page, renderer);
-    // The drone date: the yard, its ground covered in splats, which the drape lies under.
+    // The drone date: the yard, its ground covered in splats.
     await page
       .getByTestId("timeline")
       .getByRole("radio", { name: /Mar 1, 2026/ })
@@ -650,63 +498,77 @@ for (const renderer of ["cesium", "playcanvas", "spark"] as const) {
     await expect(change).toHaveAttribute("aria-checked", "true");
     await expect.poll(() => calls.asked.at(-1), poll).toMatchObject({ from: E1, to: E2 });
 
-    // On the ground: one primitive per class and confidence, ready, whatever draws the splats.
-    await expect
-      .poll(
-        async () =>
-          (await drawn(page)).map(({ cls, lowConfidence, hatched }) => ({
-            cls,
-            lowConfidence,
-            hatched,
-          })),
-        poll,
-      )
-      .toEqual(EXPECTED);
+    // The ground only, on the ground and over the scan, whatever draws the splats.
+    await expect.poll(() => layerDrawn(page, "ground"), poll).toEqual(GROUND);
     await expect
       .poll(async () => (await drawn(page)).every((d) => d.ready && d.show), poll)
       .toBe(true);
-    // And over the scan, above whichever canvas draws the splats: the same four, outlined.
-    await expect
-      .poll(() => overlay(page), poll)
-      .toEqual([
-        { cls: "raised", low: "false", drawn: true },
-        { cls: "raised", low: "true", drawn: true },
-        { cls: "lowered", low: "false", drawn: true },
-        { cls: "insufficient", low: "false", drawn: true },
-      ]);
+    expect(await layerDrawn(page, "vegetation")).toEqual([]);
+    await expect.poll(() => overlay(page, "ground"), poll).toEqual(outlined(GROUND));
+    await expect(page.locator('svg[data-change-overlay="vegetation"]')).toHaveCount(0);
 
-    // The legend: counts from the fixture, low confidence hatched, derived, the floor,
-    // uncalibrated, and the phone date named as not survey-grade.
+    // The ground's key: the pond, its floor, uncalibrated; nothing of vegetation in it.
     const legend = page.getByTestId("change-drape");
     await expect(legend).toBeVisible();
     await expect(page.getByTestId("change-drape-label")).toHaveText(
-      "Derived from height surfaces — not observed · changes under ±0.23 m cannot be seen between these dates",
+      "Derived from height surfaces — not observed · changes under ±0.49 m cannot be seen between these dates",
     );
-    await expect(page.getByTestId("change-row-raised")).toContainText("47 cells");
-    await expect(page.getByTestId("change-row-raised")).toContainText("23 low confidence, hatched");
-    await expect(page.getByTestId("change-row-lowered")).toContainText("24 cells");
-    await expect(page.getByTestId("change-row-insufficient")).toContainText("72 cells");
+    await expect(page.getByTestId("change-row-raised")).toContainText("0 cells");
+    await expect(page.getByTestId("change-row-lowered")).toContainText("48 cells");
+    await expect(page.getByTestId("change-row-insufficient")).toContainText("148 cells");
     await expect(page.getByTestId("change-row-unchanged")).toContainText(
-      "1,137 cells · counted, not drawn",
+      "1,084 cells · counted, not drawn",
     );
     await expect(legend).toContainText("Uncalibrated: the 3σ rule and the 5 m ground window");
-    await expect(page.getByTestId("change-drape-placement")).toHaveText(
-      "Jun 1, 2026: Phone video, aligned visually, ±0.062 m — not survey-grade",
-    );
+    // Both dates surveyed: nothing said of survey grade.
+    await expect(page.getByTestId("change-drape-placement")).toHaveCount(0);
+    await expect(page.getByTestId("change-vegetation")).toHaveCount(0);
 
-    // It outlives the panel, and shows on the ground from above.
+    // It outlives the panel; from above, the pond's blue where there was none.
     await closePanel(page);
     await expect(legend).toBeVisible();
     await lookDown(page, 70);
-    const after = await settledShot(page, `${renderer}-drape`);
-    const [off, on] = [await drapePixels(page, before), await drapePixels(page, after)];
-    test
-      .info()
-      .annotations.push({ type: "drape pixels", description: JSON.stringify({ off, on }) });
-    // The ground drape alone lay under the splats (dense grass covered most of it); the
-    // outlines over the scan show both blocks, the lowered one over the shed and a tree too.
-    expect(on.raised).toBeGreaterThan(off.raised + 0.001);
-    expect(on.lowered).toBeGreaterThan(off.lowered + 0.001);
+    const ground = await settledShot(page, `${renderer}-drape`);
+
+    // Vegetation, apart, behind its own switch: its own key, its own floor, its own colours.
+    const vegetation = legend.getByRole("switch", { name: /^Vegetation: canopy height change/ });
+    await expect(vegetation).toHaveAttribute("aria-checked", "false");
+    await vegetation.click();
+    await expect.poll(() => layerDrawn(page, "vegetation"), poll).toEqual(VEGETATION);
+    await expect.poll(() => overlay(page, "vegetation"), poll).toEqual(outlined(VEGETATION));
+    await expect(page.getByTestId("change-vegetation-label")).toContainText(
+      "changes under ±1.1 m cannot be seen between these dates",
+    );
+    await expect(page.getByTestId("change-vegetation-row-raised")).toContainText("47 cells");
+    await expect(page.getByTestId("change-vegetation-row-raised")).toContainText(
+      "23 low confidence, hatched",
+    );
+    await expect(page.getByTestId("change-vegetation-row-lowered")).toContainText("24 cells");
+    await expect(page.getByTestId("change-vegetation")).toContainText(
+      "±0.25 m of wind sway per date",
+    );
+    // The ground's key is untouched by it.
+    await expect(page.getByTestId("change-row-lowered")).toContainText("48 cells");
+    await lookDown(page, 70);
+    const both = await settledShot(page, `${renderer}-vegetation`);
+
+    const off = await drapePixels(page, before);
+    const on = await drapePixels(page, ground);
+    const withVegetation = await drapePixels(page, both);
+    test.info().annotations.push({
+      type: "drape pixels",
+      description: JSON.stringify({ off, on, withVegetation }),
+    });
+    expect(on.pond).toBeGreaterThan(off.pond + 0.001);
+    // Vegetation's yellow appears only with its switch on.
+    expect(on.grown).toBeLessThan(off.grown + 0.0005);
+    expect(withVegetation.grown).toBeGreaterThan(on.grown + 0.001);
+
+    // Vegetation off: its drawing goes, the ground's stays.
+    await vegetation.click();
+    await expect.poll(() => layerDrawn(page, "vegetation"), poll).toEqual([]);
+    await expect(page.locator('svg[data-change-overlay="vegetation"]')).toHaveCount(0);
+    expect(await layerDrawn(page, "ground")).toEqual(GROUND);
 
     // Hide: off the ground, and the legend gone.
     await legend.getByRole("button", { name: "Hide change map" }).click();
@@ -716,6 +578,25 @@ for (const renderer of ["cesium", "playcanvas", "spark"] as const) {
     await railUnchanged(page);
   });
 }
+
+test("a coarse date: nothing claimed under 15 m, and the legend says not survey-grade", async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await route(page, { coarse: true });
+  await arrive(page, "cesium");
+  const dates = await openCompare(page);
+  await dates.getByRole("switch", { name: "Change map" }).click();
+  await expect(page.getByTestId("change-drape-label")).toHaveText(
+    "Derived from height surfaces — not observed · changes under ±16 m cannot be seen between these dates",
+  );
+  await expect(page.getByTestId("change-drape-placement")).toHaveText(
+    "Not survey-grade: Mar 1, 2026 survey (±0.03 m) · Jun 1, 2026 coarse (±5 m)",
+  );
+  await expect(page.getByTestId("change-row-lowered")).toContainText("0 cells");
+  await settledShot(page, "coarse");
+  await railUnchanged(page);
+});
 
 test("the change map asks for the pilot's write token, then draws once it is given", async ({
   page,
@@ -739,7 +620,7 @@ test("the change map asks for the pilot's write token, then draws once it is giv
   await expect.poll(() => calls.asked.at(-1)?.auth ?? null, poll).toBe(`Bearer ${TOKEN}`);
   await expect(page.getByTestId("change-drape-label")).toBeVisible({ timeout: 30_000 });
   await expect(error).toHaveCount(0);
-  await expect.poll(async () => (await drawn(page)).length, poll).toBe(EXPECTED.length);
+  await expect.poll(() => layerDrawn(page, "ground"), poll).toEqual(GROUND);
   await railUnchanged(page);
 });
 
