@@ -53,6 +53,12 @@
  * again only when its level steps. A layer's tiles go grey under either view (no evidence).
  * GLSL only, as the motion: the WebGPU trial does not draw them (lib/viewModes.ts says so).
  *
+ * Sunlight (sunHook.ts) is the one look drawn every frame instead: PlayCanvas's own per-frame
+ * hook in the user material's `gsplatModifyVS`, lit by the sun the relight hands over
+ * (scanSunlight.ts) as uniforms, which copy nothing. The copy pass only leaves it one word per
+ * splat (the `hexapodSun` stream of the work buffer, added with the first sun): whether the
+ * splat is lit (a layer's is not). GLSL only too.
+ *
  * Selecting in the scene (cesium/sceneSelect) reads the tiles drawn now in each tile's own
  * order (`pickTiles`): the Morton order put back, so a pick's index is the index the tile's
  * ids in `instances.json` are listed by. The copies are made only when a pick first asks for
@@ -106,7 +112,9 @@ import {
   type ScanMotion,
 } from "./scanMotion";
 import { reportScanCellView, watchScanCellView } from "./scanCellView";
+import { reportScanSun, watchScanSun, type ScanSun } from "./scanSunlight";
 import { countOverlayLoopTick } from "./stats";
+import { SUN_HOOK_VS, SUN_STREAM, SUN_WORD_GLSL } from "./sunHook";
 import type { BackendHooks, GraphicsApi, ScanBackend, ScanPose, SplatRendererKind } from "./types";
 
 interface Decoded {
@@ -146,6 +154,7 @@ export function playcanvasModifierGlsl(
   skin: boolean,
   wide = false,
   cell = false,
+  sun = false,
 ): string {
   const id = ids ? "loadSplatInstance().r" : "0u";
   const second = wide ? "loadSplatWeights2()" : "uvec4(0u)";
@@ -159,8 +168,12 @@ export function playcanvasModifierGlsl(
         return;
     }
     color = hexapodInstanceColor(${id}, color);`;
+  // With `sun`, first the word the frame's sunlight hook reads (sunHook.ts): a scan splat, lit.
+  const sunStep = sun ? "writeHexapodSun(uvec4(0u, 0u, 0u, 0u));\n    " : "";
   const colorStep = !cell
-    ? objectStep
+    ? ids || skin
+      ? objectStep
+      : ""
     : `${
         ids || skin
           ? `if (uInstanceParams.x > 0.5) {
@@ -177,6 +190,7 @@ uniform vec4 uCellTile;
 ${CELL_TILE_GLSL}`
     : "";
   return `
+${sun ? SUN_WORD_GLSL : ""}
 uniform highp sampler2D uInstanceState;
 uniform vec4 uInstanceParams;
 uniform vec4 uInstanceTint;
@@ -206,7 +220,7 @@ void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout ve
     }
 }
 void modifySplatColor(vec3 center, inout vec4 color) {
-    ${colorStep}
+    ${sunStep}${colorStep}
 }
 `;
 }
@@ -248,23 +262,25 @@ export interface WorkBufferModifier {
 const MODIFIERS = new Map<string, WorkBufferModifier>();
 
 /**
- * The modifier for a tile with ids, skin weights, a cell view, or any of them: always GLSL
- * (the colour rule, the motion, the cell look); WGSL only for ids alone, and then hide and
- * highlight alone -- a WebGPU renderer moves nothing and draws no cell view (see the file
- * comment). One object per kind, so a tile's modifier is compared by identity.
+ * The modifier for a tile with ids, skin weights, a cell view, the sunlight's word (`sun`:
+ * every tile writes it once the work buffer has it), or any of them: always GLSL (the colour
+ * rule, the motion, the cell look, the word); WGSL only for ids alone, and then hide and
+ * highlight alone -- a WebGPU renderer moves nothing and draws no cell view or sunlight (see the
+ * file comment). One object per kind, so a tile's modifier is compared by identity.
  */
 export function playcanvasModifier(
   ids: boolean,
   skin: boolean,
   wide = false,
   cell = false,
+  sun = false,
 ): WorkBufferModifier {
-  const key = `${String(ids)}|${String(skin)}|${String(skin && wide)}|${String(cell)}`;
+  const key = `${String(ids)}|${String(skin)}|${String(skin && wide)}|${String(cell)}|${String(sun)}`;
   let modifier = MODIFIERS.get(key);
   if (!modifier) {
     modifier = {
-      glsl: playcanvasModifierGlsl(ids, skin, skin && wide, cell),
-      ...(ids && !skin && !cell ? { wgsl: PLAYCANVAS_INSTANCE_WGSL } : {}),
+      glsl: playcanvasModifierGlsl(ids, skin, skin && wide, cell, sun),
+      ...(ids && !skin && !cell && !sun ? { wgsl: PLAYCANVAS_INSTANCE_WGSL } : {}),
     };
     MODIFIERS.set(key, modifier);
   }
@@ -278,8 +294,9 @@ export function playcanvasModifier(
  * a measured colour (cellModifier.ts). GLSL only, as the motion: the WebGPU trial draws a scan
  * with inferred layers with WebGL2.
  */
-export const PLAYCANVAS_LAYER_MODIFIER: WorkBufferModifier = {
-  glsl: `
+function layerModifierGlsl(sun: boolean): string {
+  return `
+${sun ? SUN_WORD_GLSL : ""}
 uniform vec4 uCellFill;
 uniform mat4 uLayerFrame;
 uniform vec4 uLayerTint;
@@ -297,15 +314,23 @@ void modifySplatCenter(inout vec3 center) {
 void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout vec4 rotation, inout vec3 scale) {
 }
 void modifySplatColor(vec3 center, inout vec4 color) {
-    if (uCellFill.x > 0.5) {
+    ${sun ? "writeHexapodSun(uvec4(HEXAPOD_SUN_SKIP, 0u, 0u, 0u));\n    " : ""}if (uCellFill.x > 0.5) {
         color = hexapodCellGrey(color);
     }
     color = hexapodLayerColor(center, color, uLayerFrame, uLayerTint, uLayerPattern, uLayerCones,
                               uLayerConeGrid, uLayerConeDims, uLayerConeEye,
                               hexapodLayerDim(uInstanceParams, uInstanceDim));
 }
-`,
-};
+`;
+}
+
+export const PLAYCANVAS_LAYER_MODIFIER: WorkBufferModifier = { glsl: layerModifierGlsl(false) };
+
+/**
+ * The layer's modifier once the work buffer carries the sunlight's word: the skip bit first,
+ * so the frame's hook leaves the layer as drawn -- it is not the capture (sunHook.ts).
+ */
+export const PLAYCANVAS_LAYER_SUN_MODIFIER: WorkBufferModifier = { glsl: layerModifierGlsl(true) };
 
 /** The decoded columns a pick copy is made from (lib/splatLayout.ts names). */
 type PickColumns = Readonly<Record<string, Float32Array>>;
@@ -544,6 +569,20 @@ function assemble(
   const cellFill = new Float32Array(4);
   /** The modifier on each entity now (a tile with no binding has one only for a cell view). */
   const modifiers = new WeakMap<pc.Entity, WorkBufferModifier | null>();
+  /**
+   * Sunlight (scanSunlight.ts, sunHook.ts), GLSL only as the motion: the sun to light by now,
+   * whether the work buffer carries the word the copy pass writes for it -- added with the
+   * first sun and kept, a stream not being taken back -- and whether the frame's hook is in.
+   */
+  let sun: ScanSun | null = null;
+  let sunStream = false;
+  let sunHooked = false;
+  let sunSet: ScanSun | null = null;
+  let sunFrames = 0;
+  /** PlayCanvas's own final-draw chunk, put back when the hook comes out. */
+  let ownModifyVS: string | undefined;
+  const sunValue = new Float32Array(4);
+  const sunlightValue = new Float32Array(4);
   /** The device is gone for good: nothing more is drawn, and the host replaces the renderer. */
   let lost = false;
   /** The renderer is letting go of its device itself: that loss is not news. */
@@ -773,9 +812,11 @@ function assemble(
     const hasIds = (tile?.doc ?? null) !== null;
     const skinned = tile?.skinned ?? false;
     const cell = cells?.drawing === true && cells.has(entity);
+    // Once the work buffer carries the sunlight's word, every scan tile's copy writes it.
+    const lit = sunStream && cells?.has(entity) === true;
     const modifier =
-      hasIds || skinned || cell
-        ? playcanvasModifier(hasIds, skinned, tile?.skinWide ?? false, cell)
+      hasIds || skinned || cell || lit
+        ? playcanvasModifier(hasIds, skinned, tile?.skinWide ?? false, cell, lit)
         : null;
     if (modifier !== (modifiers.get(entity) ?? null)) {
       modifiers.set(entity, modifier);
@@ -1033,6 +1074,66 @@ function assemble(
     hooks.frameWanted();
   };
 
+  /** A layer's modifier: with the skip bit once the work buffer carries the sunlight's word. */
+  const layerModifier = (): WorkBufferModifier =>
+    sunStream ? PLAYCANVAS_LAYER_SUN_MODIFIER : PLAYCANVAS_LAYER_MODIFIER;
+
+  /**
+   * The sun to light the scan by (scanSunlight.ts), or none. The first one adds the word to the
+   * work buffer and has every tile's copy write it -- each tile copied again once, in the frame
+   * this asks for; the hook and its uniforms follow in `render` (`syncSun`).
+   */
+  const setSun = (next: ScanSun | null): void => {
+    sun = next;
+    if (next && !sunStream && cells) {
+      app.scene.gsplat.format.addExtraStreams([{ name: SUN_STREAM, format: pc.PIXELFORMAT_R32U }]);
+      sunStream = true;
+      for (const entity of cells.meshes()) applyModifier(entity);
+      for (const entity of layers.keys()) {
+        entity.gsplat?.setWorkBufferModifier(layerModifier());
+        // Setting a parameter has the tile copied into the work buffer again.
+        entity.gsplat?.setParameter("uCellFill", cellFill);
+      }
+    }
+    hooks.frameWanted();
+  };
+
+  /**
+   * Puts the frame's hook into the user material while there is a sun (and the word it reads),
+   * takes it out when there is none, and sets the sun's uniforms when they change: PlayCanvas
+   * copies the material onto its draw material when its version moves (`update`), and a uniform
+   * copies nothing into the work buffer.
+   */
+  const syncSun = (): void => {
+    const material = app.scene.gsplat.material;
+    const want = sun !== null && sunStream;
+    let changed = false;
+    if (want !== sunHooked) {
+      const chunks = material.getShaderChunks(pc.SHADERLANGUAGE_GLSL);
+      if (want) {
+        ownModifyVS = chunks.get("gsplatModifyVS") as string | undefined;
+        chunks.set("gsplatModifyVS", SUN_HOOK_VS);
+      } else if (ownModifyVS !== undefined) {
+        chunks.set("gsplatModifyVS", ownModifyVS);
+      } else {
+        chunks.delete("gsplatModifyVS");
+      }
+      sunHooked = want;
+      sunSet = null;
+      changed = true;
+    }
+    if (want && sun && sun !== sunSet) {
+      sunValue.set([sun.dir[0], sun.dir[1], sun.dir[2], sun.sunUp]);
+      sunlightValue[0] = sun.strength;
+      material.setParameter("uHexapodSun", sunValue);
+      material.setParameter("uHexapodSunlight", sunlightValue);
+      sunSet = sun;
+      changed = true;
+    }
+    if (changed) material.update();
+    if (sunHooked) sunFrames += 1;
+  };
+
   /** A tile's own splats in the scan's frame, for the cell view's reading (`CellTiles`). */
   const cellSample = (entity: pc.Entity): CellTileSample | null => {
     const tile = tiles.get(entity);
@@ -1107,7 +1208,7 @@ function assemble(
         if (binding.ids && motion && motion.rigidByLeaf.size > 0) sortDirty.add(entity);
       }
     }
-    if (!layer && cells?.drawing) applyModifier(entity);
+    if (!layer && (cells?.drawing || sunStream)) applyModifier(entity);
     return entity;
   };
 
@@ -1149,7 +1250,7 @@ function assemble(
       const previous = before?.look.cones ?? null;
       state.look = look;
       layers.set(entity, state);
-      if (!before) component.setWorkBufferModifier(PLAYCANVAS_LAYER_MODIFIER);
+      if (!before) component.setWorkBufferModifier(layerModifier());
       const values = layerUniforms(look);
       component.setParameter("uLayerFrame", values.frame);
       component.setParameter("uLayerTint", values.tint);
@@ -1279,6 +1380,7 @@ function assemble(
         entity.gsplat?.setParameter("uCellLevel", cell.level);
         entity.gsplat?.setParameter("uCellTile", cell.tile);
       });
+      syncSun();
       framesDrawn += 1;
       app.render();
       while (doomed[0] && framesDrawn - doomed[0].at >= DESTROY_AFTER_FRAMES) {
@@ -1357,7 +1459,7 @@ function assemble(
       // middle of its bounds (cellModifier.ts).
       const middle = (asset.resource as { aabb?: { center?: pc.Vec3 } } | null)?.aabb?.center;
       cells?.add(entity, middle ? [middle.x, middle.y, middle.z] : [0, 0, 0]);
-      if (cells?.drawing) applyModifier(entity);
+      if (cells?.drawing || sunStream) applyModifier(entity);
       resumeLoop();
       return {
         splats: () => app.scene.gsplat.splatBudget,
@@ -1442,6 +1544,17 @@ function assemble(
       ? [
           watchScanCellView(assetId, setCellView),
           reportScanCellView(assetId, () => cells.reading(identity.name, cellSample)),
+          // The scan's sunlight, drawn by the frame's hook (sunHook.ts). Watching is what says
+          // this renderer draws it (the badge's report), so only where it can: GLSL, as the
+          // cell views.
+          watchScanSun(assetId, setSun),
+          reportScanSun(assetId, () => ({
+            renderer: identity.name,
+            installed: sunHooked,
+            stream: sunStream,
+            sun: sunHooked ? sunSet : null,
+            frames: sunFrames,
+          })),
         ]
       : [];
   return backend;
