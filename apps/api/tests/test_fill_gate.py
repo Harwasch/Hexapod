@@ -183,6 +183,22 @@ def test_every_tile_is_checked_not_only_the_leaves(
         attach(db, storage, asset, layer_files([outside], [inside]), gate_of(read))
 
 
+def _whole_metres_off_targets(read: FillTargetsRead, point: list[float]) -> tuple[float, float]:
+    """The nearest whole-metre move of `point` into a cell of the window that is not a
+    target."""
+    mask = rescan_gate.unpack(read.mask, read.ni, read.nj)
+    moves = sorted(
+        ((dx, dy) for dx in range(-40, 41) for dy in range(-40, 41)),
+        key=lambda m: abs(m[0]) + abs(m[1]),
+    )
+    for dx, dy in moves:
+        i = int(np.floor((point[0] + dx) / read.cell_m)) - read.i0
+        j = int(np.floor((point[1] + dy) / read.cell_m)) - read.j0
+        if 0 <= i < read.ni and 0 <= j < read.nj and not mask[j, i]:
+            return float(dx), float(dy)
+    raise AssertionError("no cell off the targets within 40 m")
+
+
 def test_a_tile_named_twice_is_checked_at_every_place_it_is_drawn(
     db: Session, storage: S3Storage, tmp_path: Path
 ) -> None:
@@ -191,28 +207,13 @@ def test_a_tile_named_twice_is_checked_at_every_place_it_is_drawn(
     uri and saw only the allowed copy."""
     _, asset = site(db, storage, tmp_path)
     read = targets(db, storage, asset)
-    inside, outside = centre(read, target=True), centre(read, target=False)
+    inside = centre(read, target=True)
     files = layer_files([inside], [inside])
     document = json.loads(files[f"{LAYER}tileset.json"])
     child = document["root"]["children"][0]
-    shift = [
-        1.0,
-        0,
-        0,
-        0,
-        0,
-        1,
-        0,
-        0,
-        0,
-        0,
-        1,
-        0,
-        outside[0] - inside[0],
-        outside[1] - inside[1],
-        0,
-        1,
-    ]
+    # A whole-metre move (the tiler's only kind) into a cell that is not a target.
+    east, north = _whole_metres_off_targets(read, inside)
+    shift = [1.0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, east, north, 0, 1]
     document["root"]["children"].append({**child, "transform": shift})
     files[f"{LAYER}tileset.json"] = json.dumps(document).encode()
     with pytest.raises(InvalidInputError, match="1 of its 3 gaussians are outside"):

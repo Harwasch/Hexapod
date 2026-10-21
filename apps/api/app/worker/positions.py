@@ -327,9 +327,15 @@ def packer_placements(document: Mapping[str, Any]) -> list[tuple[str, np.ndarray
         )
         _names(declared.get("extensionsUsed"), SPLAT_EXTENSIONS, f"{CONTENT_GLTF} used")
         _names(declared.get("extensionsRequired"), SPLAT_EXTENSIONS, f"{CONTENT_GLTF} required")
-    stack: list[object] = [document.get("root")]
+    _error(document.get("geometricError"))
+    root = document.get("root")
+    stack: list[tuple[object, tuple[float, float, float]]] = [(root, (0.0, 0.0, 0.0))]
     while stack:
-        tile = _keys(stack.pop(), TILE_KEYS, "a tile")
+        item, offset = stack.pop()
+        tile = _keys(item, TILE_KEYS, "a tile")
+        _error(tile.get("geometricError"))
+        if tile is not root and "transform" in tile:
+            offset = _whole_metres(tile["transform"], offset)
         volume = _keys(tile.get("boundingVolume"), frozenset({"box"}), "a bounding volume")
         _numbers(volume.get("box"), 12, "a bounding box")
         if tile.get("refine", "REPLACE") not in ("REPLACE", "ADD"):
@@ -339,8 +345,43 @@ def packer_placements(document: Mapping[str, Any]) -> list[tuple[str, np.ndarray
         children = tile.get("children", [])
         if not isinstance(children, list):
             raise TileFormatError("a tile's children are not a list")
-        stack.extend(children)
+        stack.extend((child, offset) for child in children)
     return tile_placements(document)
+
+
+#: How far from the site frame a tile's origin, or any one translation, may be: SPZ's
+#: whole-metre reach (2^23 m, `splat_tiles.SPZ_MIN_FRACTIONAL_BITS`). No tile of one site
+#: is farther, and whole metres under 2^24 add exactly in float32 as in float64.
+MAX_ORIGIN_M = float(1 << 23)
+
+
+def _error(value: object) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        raise TileFormatError(f"geometricError {value!r} is not a finite number >= 0")
+
+
+def _whole_metres(
+    transform: object, offset: tuple[float, float, float]
+) -> tuple[float, float, float]:
+    """`offset` moved by a child tile's `transform`, which must be what the tiler writes:
+    a pure translation (the rest is `_translation`'s to refuse) by whole metres, each
+    component and each composed offset within `MAX_ORIGIN_M`. Whole metres sum exactly,
+    so the gate's offsets are Cesium's Matrix4 products and float32's, in any order, with
+    nothing to cancel (+1e300 then -1e300 hid a 100 m root in Cesium's arithmetic)."""
+    _numbers(transform, 16, "a tile transform")
+    step = transform[12:15]  # type: ignore[index]
+    moved = tuple(o + t for o, t in zip(offset, step, strict=True))
+    if not all(float(v).is_integer() and abs(v) <= MAX_ORIGIN_M for v in (*step, *moved)):
+        raise TileFormatError(
+            f"a tile translation {step!r} (composed {moved!r}) is not whole metres within "
+            f"{MAX_ORIGIN_M:g} m of the site frame, as the tiler writes"
+        )
+    return moved
 
 
 def _numbers(value: object, count: int, what: str) -> None:

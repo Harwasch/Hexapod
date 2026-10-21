@@ -424,3 +424,79 @@ def test_an_sh_tile_s_attributes_are_its_degree_s() -> None:
     assert positions.packer_spz(data) == positions.glb_spz(data)
     with pytest.raises(positions.TileFormatError):
         positions.packer_spz(glb(POINT, sh_degree=1))
+
+
+# --- the tileset's numbers: whole-metre translations within a site, finite errors (R5) ------
+#
+# Codex R5: child translations of +1e300 then -1e300 cancel in the gate's float64 sum of
+# offsets but not in Cesium's Matrix4 products, which lose the root's 100 m. The tiler
+# writes whole-metre origins (`splat_tiles.tile_frame`) of a site, so each translation and
+# each composed offset is a whole number of metres within 2^23 m (SPZ's whole-metre reach):
+# then every partial sum is exact in float64 and in float32, in any order.
+
+
+def _translate(*values: float) -> Callable[[dict[str, Any]], object]:
+    """The child moved by `values[0]` east, a grandchild under it by each next one."""
+
+    def change(d: dict[str, Any]) -> None:
+        tile = _child(d)
+        for index, value in enumerate(values):
+            tile["transform"] = [1.0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, value, 0, 0, 1]
+            if index + 1 < len(values):
+                inner = {
+                    "boundingVolume": {"box": [0.0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5]},
+                    "geometricError": 0,
+                    "content": {"uri": "f1.glb"},
+                }
+                tile.pop("content", None)
+                tile["children"] = [inner]
+                tile = inner
+
+    return change
+
+
+NUMBER_REFUSALS: dict[str, Callable[[dict[str, Any]], object]] = {
+    "translation_cancel_1e300": _translate(1e300, -1e300),
+    "translation_cancel_1e9": _translate(1e9, -1e9),
+    "translation_1e300": _translate(1e300),
+    "translation_past_site": _translate(float(2**23 + 1)),
+    "translation_sum_past_site": _translate(float(2**23), float(2**23)),
+    "translation_fraction": _translate(0.25),
+    "translation_nested_fraction": _translate(0.25, 0.75),
+    "translation_nan": _translate(float("nan")),
+    "error_nan": lambda d: d["root"].update(geometricError=float("nan")),
+    "error_inf": lambda d: _child(d).update(geometricError=float("inf")),
+    "error_negative": lambda d: _child(d).update(geometricError=-1.0),
+    "error_not_a_number": lambda d: _child(d).update(geometricError="1"),
+    "top_error_nan": lambda d: d.update(geometricError=float("nan")),
+    "box_nan": lambda d: _child(d)["boundingVolume"].update(box=[float("nan")] * 12),
+}
+
+
+@pytest.mark.parametrize("case", sorted(NUMBER_REFUSALS))
+def test_a_tileset_number_the_tiler_never_writes_is_refused(case: str) -> None:
+    document = a_tileset(("f0.glb", "f1.glb"))
+    NUMBER_REFUSALS[case](document)
+    with pytest.raises(positions.TileFormatError):
+        positions.packer_placements(document)
+
+
+def test_whole_metre_offsets_compose_exactly_in_any_float_order() -> None:
+    """The tolerance is zero: whole metres under 2^23 m sum exactly in float64 and float32,
+    so the gate's offsets (float64, root down) are Cesium's (Matrix4 products) and the
+    GPU's (float32) bit for bit."""
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    for _ in range(200):
+        steps = rng.integers(-(2**20), 2**20, size=(8, 3)).astype(np.float64)
+        document = a_tileset(("f0.glb", "f1.glb"))
+        _translate(*steps[:, 0])(document)
+        (_, f0), (_, f1) = positions.packer_placements(document)
+        exact = int(steps[:, 0].astype(np.int64).sum())
+        assert f1[0] == exact
+        assert float(np.float32(steps[::-1, 0]).sum(dtype=np.float32)) == exact
+        assert not f0.any()
+    document = a_tileset(("f0.glb", "f1.glb"))
+    _translate(float(2**23 - 1), 1.0)(document)
+    assert positions.packer_placements(document)[-1][1][0] == 2**23

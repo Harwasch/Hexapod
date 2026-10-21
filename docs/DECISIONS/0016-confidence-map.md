@@ -345,8 +345,11 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
    `content.url`, `3DTILES_multiple_contents`, an SPZ block in a second, data-URI buffer).
    So the layer's tileset may hold only the tiler's keys -- content by a plain relative
    `uri` to a `.glb` alone (no `url`, `contents`, extension, `?`, `#`, `%`, `..`, `./`,
-   scheme, absolute path or backslash), a box, translation-only child transforms, 3D Tiles
-   1.1 and `3DTILES_content_gltf` declaring the two splat extensions -- and every GLB must
+   scheme, absolute path or backslash), a box of finite numbers, finite non-negative
+   geometric errors, child transforms that translate by whole metres with every component
+   and every composed offset within 2^23 m (SPZ's whole-metre reach; whole metres sum
+   exactly in float64 and float32 in any order, so the gate's offsets are Cesium's, with
+   nothing to cancel: +1e300 then -1e300 hid a 100 m root there), 3D Tiles 1.1 and `3DTILES_content_gltf` declaring the two splat extensions -- and every GLB must
    be `build_glb`'s: a JSON then a BIN chunk and nothing after, one buffer that is the BIN
    chunk, one buffer view, exactly the packer's extensions used and required, one scene of
    one node with its matrix, one point primitive of SPZ, accessors with no data of their

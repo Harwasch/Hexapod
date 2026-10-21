@@ -465,6 +465,68 @@ def test_an_accessor_not_build_glbs_value_for_value_is_refused(tmp_path: Path, c
         rg.layer_positions(path)
 
 
+# --- the tileset's numbers: whole-metre translations within a site, finite errors (R5) ------
+#
+# Codex R5: child translations of +1e300 then -1e300 cancel in the gate's float64 sum of
+# offsets but not in Cesium's Matrix4 products, which lose the root's 100 m. The tiler
+# writes whole-metre origins (`splat_tiles.tile_frame`) of a site, so each translation and
+# each composed offset is a whole number of metres within 2^23 m (SPZ's whole-metre reach):
+# then every partial sum is exact in float64 and in float32, in any order.
+
+
+def _translate(*values: float) -> Callable[[dict[str, Any]], object]:
+    """The child moved by `values[0]` east, a grandchild under it by each next one."""
+
+    def change(d: dict[str, Any]) -> None:
+        tile = _child(d)
+        for index, value in enumerate(values):
+            tile["transform"] = [1.0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, value, 0, 0, 1]
+            if index + 1 < len(values):
+                inner = {
+                    "boundingVolume": {"box": [0.0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 5]},
+                    "geometricError": 0,
+                    "content": {"uri": "f1.glb"},
+                }
+                tile.pop("content", None)
+                tile["children"] = [inner]
+                tile = inner
+
+    return change
+
+
+NUMBER_REFUSALS: dict[str, Callable[[dict[str, Any]], object]] = {
+    "translation_cancel_1e300": _translate(1e300, -1e300),
+    "translation_cancel_1e9": _translate(1e9, -1e9),
+    "translation_1e300": _translate(1e300),
+    "translation_past_site": _translate(float(2**23 + 1)),
+    "translation_sum_past_site": _translate(float(2**23), float(2**23)),
+    "translation_fraction": _translate(0.25),
+    "translation_nested_fraction": _translate(0.25, 0.75),
+    "translation_nan": _translate(float("nan")),
+    "error_nan": lambda d: d["root"].update(geometricError=float("nan")),
+    "error_inf": lambda d: _child(d).update(geometricError=float("inf")),
+    "error_negative": lambda d: _child(d).update(geometricError=-1.0),
+    "error_not_a_number": lambda d: _child(d).update(geometricError="1"),
+    "top_error_nan": lambda d: d.update(geometricError=float("nan")),
+    "box_nan": lambda d: _child(d)["boundingVolume"].update(box=[float("nan")] * 12),
+}
+
+
+@pytest.mark.parametrize("case", sorted(NUMBER_REFUSALS))
+def test_a_tileset_number_the_tiler_never_writes_is_refused(tmp_path: Path, case: str) -> None:
+    document = tileset()
+    NUMBER_REFUSALS[case](document)
+    with pytest.raises(rg.RescanGateError):
+        rg.layer_positions(write(tmp_path, document))
+
+
+def test_whole_metre_nested_translations_pass(tmp_path: Path) -> None:
+    document = tileset()
+    _translate(3.0, -2.0, 1.0)(document)
+    xyz = rg.layer_positions(write(tmp_path, document))
+    assert sorted(xyz[:, 0].tolist()) == [0.5, 2.5]
+
+
 def test_the_cases_are_the_apis() -> None:
     """The same refusals by name as apps/api tests/test_layer_allowlist.py: one allowlist,
     two transcriptions, held to one list."""
