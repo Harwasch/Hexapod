@@ -45,6 +45,7 @@ import hashlib
 import json
 import math
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -210,17 +211,52 @@ def plane_sha256(plane: Any) -> str:
 
 # --- the no-change control (review B5a) ---------------------------------------------------
 
-#: The control's scans of one unchanged scene: (samples a cell, height noise in metres).
-#: Pairs with very different counts (a, b) and noise (c, d); review B5a's own cases.
-CONTROL: dict[str, tuple[int, float]] = {
-    "a": (20, 0.10),
-    "b": (2000, 0.10),
-    "c": (100, 0.01),
-    "d": (100, 0.10),
+
+@dataclass(frozen=True)
+class Scan:
+    """One scan of a control scene by P5's own estimator: a square of `side` cells of
+    0.25 m from the origin, `per_cell` samples a cell, height noise `noise_m` (or
+    `loud_m` in the cells `[every//2::every, every//2::every]`), and the scene: flat ground
+    at 0, with a box `box` (x0, y0, x1, y1 metres) standing `tall_m` on it (dense: every
+    sample in it is on its top)."""
+
+    per_cell: int
+    noise_m: float
+    side: int = 32
+    box: tuple[float, float, float, float] | None = (3.0, 3.0, 5.0, 5.0)
+    tall_m: float = 1.5
+    loud_m: float = 0.0
+    every: int = 0
+
+
+#: The control scans (review B5a and its round 2), in pairs of one place on two dates:
+#: a/b and c/d one unchanged scene at very different sample counts and noise; e/f flat
+#: ground with a sparse lattice of 10 cm cells among 1 cm ones in f; g/h a 40 m crown
+#: growing from 4 to 6 m; i/j a 4 m roof, j one cell east of i (a placement shift); k/l
+#: a 0.5 m crate of 3 x 3 cells put down in l.
+CONTROL: dict[str, Scan] = {
+    "a": Scan(20, 0.10),
+    "b": Scan(2000, 0.10),
+    "c": Scan(100, 0.01),
+    "d": Scan(100, 0.10),
+    "e": Scan(2000, 0.01, side=48, box=None),
+    "f": Scan(2000, 0.01, side=48, box=None, loud_m=0.10, every=8),
+    "g": Scan(20, 0.01, side=224, box=(8.0, 8.0, 48.0, 48.0), tall_m=4.0),
+    "h": Scan(20, 0.01, side=224, box=(8.0, 8.0, 48.0, 48.0), tall_m=6.0),
+    "i": Scan(50, 0.01, side=48, box=(3.0, 3.0, 9.0, 9.0), tall_m=4.0),
+    "j": Scan(50, 0.01, side=48, box=(3.25, 3.0, 9.25, 9.0), tall_m=4.0),
+    "k": Scan(50, 0.01, box=None),
+    "l": Scan(50, 0.01, box=(3.5, 3.5, 4.25, 4.25), tall_m=0.5),
 }
-#: The control's plane: 32 x 32 cells of 0.25 m, a 2 x 2 m box 1.5 m tall in the middle.
-CONTROL_CELLS = 32
-CONTROL_BOX: tuple[Box, int] = ((3, 3, 5, 5), 150)
+#: What each pair is, and what the change map must find between them.
+CONTROL_PAIRS: list[dict[str, Any]] = [
+    {"pair": ["a", "b"], "uM": [0.0, 0.0], "expect": "no change in either layer"},
+    {"pair": ["c", "d"], "uM": [0.0, 0.03], "expect": "no change in either layer"},
+    {"pair": ["e", "f"], "uM": [0.03, 0.03], "expect": "no change in either layer"},
+    {"pair": ["g", "h"], "uM": [0.03, 0.03], "expect": "vegetation raised; no ground change"},
+    {"pair": ["i", "j"], "uM": [0.25, 0.25], "expect": "no change in either layer"},
+    {"pair": ["k", "l"], "uM": [0.03, 0.03], "expect": "under both floors: not detected"},
+]
 _MASK64 = (1 << 64) - 1
 
 
@@ -251,29 +287,35 @@ def _normal(seed: int, n: int) -> np.ndarray:
 
 
 def control_scan(name: str) -> Any:
-    """One scan of the control's unchanged scene by P5's own estimator (`surface_plane`):
-    its samples uniform in each cell, its heights the scene's plus its noise."""
-    per_cell, noise = CONTROL[name]
+    """One scan (`CONTROL`) by P5's own estimator (`surface_plane`): its samples uniform in
+    each cell, its heights the scene's plus its noise, all in integer arithmetic."""
+    scan = CONTROL[name]
     seed = sum(ord(c) << (8 * k) for k, c in enumerate(f"control-{name}"))
-    cells = CONTROL_CELLS * CONTROL_CELLS
-    n = cells * per_cell
+    cells = scan.side * scan.side
+    n = cells * scan.per_cell
     words = _stream(seed ^ 0x5DEECE66D, 2 * n).reshape(n, 2)
     unit = ((words >> np.uint64(11)).astype(np.float64)) / float(1 << 53)  # [0, 1), exact
-    i, j = np.divmod(np.repeat(np.arange(cells, dtype=np.int64), per_cell), CONTROL_CELLS)
+    j, i = np.divmod(np.repeat(np.arange(cells, dtype=np.int64), scan.per_cell), scan.side)
     cell = 0.25
     x, y = (i + unit[:, 0]) * cell, (j + unit[:, 1]) * cell
-    (x0, y0, x1, y1), tall = CONTROL_BOX
-    box = (x >= x0) & (x < x1) & (y >= y0) & (y < y1)
-    z = np.where(box, tall / 100.0, 0.0) + noise * _normal(seed, n)
+    del words, unit
+    noise = np.full((scan.side, scan.side), scan.noise_m)
+    if scan.every:
+        noise[scan.every // 2 :: scan.every, scan.every // 2 :: scan.every] = scan.loud_m
+    z = noise[j, i] * _normal(seed, n)
+    if scan.box is not None:
+        x0, y0, x1, y1 = scan.box
+        z = np.where((x >= x0) & (x < x1) & (y >= y0) & (y < y1), scan.tall_m, 0.0) + z
     xyz = np.column_stack([x, y, z])
-    window = p5.Window(level=0, i0=0, j0=0, ni=CONTROL_CELLS, nj=CONTROL_CELLS)
+    del x, y, z, i, j
+    window = p5.Window(level=0, i0=0, j0=0, ni=scan.side, nj=scan.side)
     return p5.surface_plane(lambda: iter([(xyz, p5.SPLAT)]), window)
 
 
 def control(out: Path, height: float) -> dict[str, Any]:
     """`control/<name>/surface.bin` for every scan of `CONTROL`, and their descriptors."""
     scans: dict[str, Any] = {}
-    for name, (per_cell, noise) in CONTROL.items():
+    for name, scan in CONTROL.items():
         found = control_scan(name)
         plane = found.plane
         has = plane.data[..., 2] > 0
@@ -281,9 +323,9 @@ def control(out: Path, height: float) -> dict[str, Any]:
             "policy": "surface-v1",
             "status": "uncalibrated",
             "estimators": {
-                "control": f"P5's surface_plane over {per_cell} samples a cell with {noise:g} m "
-                "of near-normal height noise, one unchanged scene (review B5a's no-change "
-                "control; tools/pipeline/experiments/surface_fixture.py)",
+                "control": f"P5's surface_plane over {scan.per_cell} samples a cell with "
+                f"{scan.noise_m:g} m of near-normal height noise (review B5a's controls; "
+                "tools/pipeline/experiments/surface_fixture.py)",
                 "groundWindowM": p5.GROUND_WINDOW_M,
                 "groundWindowCells": 2 * found.ground_half + 1,
             },
@@ -306,17 +348,19 @@ def control(out: Path, height: float) -> dict[str, Any]:
         descriptor = cell_grid.encode(grid, out / "control" / name, "surface.bin")
         blob = (out / "control" / name / "surface.bin").read_bytes()
         scans[name] = {
-            "samplesPerCell": per_cell,
-            "noiseM": noise,
+            "samplesPerCell": scan.per_cell,
+            "noiseM": scan.noise_m,
+            "loudNoiseM": scan.loud_m,
+            "box": list(scan.box) if scan.box is not None else None,
+            "tallM": scan.tall_m if scan.box is not None else 0.0,
             "descriptor": descriptor,
             "file": f"control/{name}/surface.bin",
             "fileSha256": hashlib.sha256(blob).hexdigest(),
         }
     return {
-        "note": "review B5a's no-change control: one unchanged scene (flat ground, a 2 x 2 m "
-        "box 1.5 m tall) scanned with very different sample counts (a, b) and noise (c, d), "
-        "each made by P5's own estimator; no change of either layer may be read between them",
-        "pairs": [["a", "b"], ["c", "d"]],
+        "note": "review B5a's controls, each scan made by P5's own estimator from integer "
+        "noise: pairs of one place on two dates, and what the change map must find",
+        "pairs": CONTROL_PAIRS,
         "scans": scans,
     }
 

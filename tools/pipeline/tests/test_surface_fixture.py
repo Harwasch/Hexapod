@@ -12,6 +12,7 @@ from captures_bridge import cell_grid
 from experiments import surface_fixture
 
 COMMITTED = surface_fixture.OUT
+NO = cell_grid.NO_HEIGHT
 
 
 def test_the_committed_surfaces_are_regenerated_byte_for_byte(tmp_path: Path) -> None:
@@ -60,16 +61,22 @@ def test_the_reference_change_finds_what_was_built() -> None:
         assert channels == ["dsm", "ground", "sigma", "support", "groundSigma"]
 
 
-def test_the_control_is_one_scene_scanned_four_ways_by_p5s_estimator() -> None:
-    """Review B5a's no-change control: the same scene at very different sample counts and
-    noise, each surface P5's own; every cell surfaced and its ground observed (the box is
-    narrower than the window)."""
+def test_the_controls_are_p5s_own_scans_of_round_twos_scenes() -> None:
+    """Review B5a's controls and its round 2's: each scan P5's own surface, every cell
+    surfaced; ground observed everywhere but under the 40 m crown (g, h), whose core P5
+    leaves unobserved (never canopy height)."""
     control = json.loads((COMMITTED / "surfaces.json").read_text(encoding="utf-8"))["control"]
-    assert control["pairs"] == [["a", "b"], ["c", "d"]]
+    pairs = [tuple(spec["pair"]) for spec in control["pairs"]]
+    assert pairs == [("a", "b"), ("c", "d"), ("e", "f"), ("g", "h"), ("i", "j"), ("k", "l")]
     counts = {name: scan["samplesPerCell"] for name, scan in control["scans"].items()}
-    assert counts == {"a": 20, "b": 2000, "c": 100, "d": 100}
-    for scan in control["scans"].values():
+    assert (counts["a"], counts["b"], counts["f"]) == (20, 2000, 2000)
+    for name, scan in control["scans"].items():
         blob = (COMMITTED / scan["file"]).read_bytes()
         assert hashlib.sha256(blob).hexdigest() == scan["fileSha256"]
         plane = cell_grid.decode(scan["descriptor"], blob).planes[0]
-        assert (plane.data[..., 2] > 0).all() and (plane.data[..., 4] > 0).all()
+        assert (plane.data[..., 2] > 0).all(), name
+        unobserved = int(scan["descriptor"]["summary"]["groundUnobserved"])
+        if name in ("g", "h"):
+            assert unobserved > 0 and (plane.data[..., 1][plane.data[..., 4] == 0] == NO).all()
+        elif name not in ("i", "j"):
+            assert unobserved == 0, name

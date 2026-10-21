@@ -684,18 +684,53 @@ def control_surface(name: str) -> Surface:
     return Surface.of(grid.finest, ground_reach_m=reach)
 
 
-@pytest.mark.parametrize("layer", change.LAYERS)
-@pytest.mark.parametrize(("pair", "ub"), [(("a", "b"), 0.0), (("c", "d"), 0.03)])
-def test_no_change_control_nothing_changes_whatever_the_samples_and_noise(
-    layer: change.Layer, pair: tuple[str, str], ub: float
-) -> None:
-    """Review B5a's ruling: one unchanged scene (flat ground, a 1.5 m box), scanned by P5's
-    own estimator with 20 against 2,000 samples a cell (10 cm of noise each), and 1 cm
-    against 10 cm of noise (100 samples each). Neither layer may read a change between
-    them: the bias of P5's 2nd highest and of its lower envelope is in its sigmas. The
-    3 sigma rule allows about one cell in 370 of Gaussian noise: 2 of these 1,024 at most."""
+PAIRS = {tuple(spec["pair"]): spec for spec in DOCUMENT["control"]["pairs"]}
+
+
+def control_pair(pair: tuple[str, str], layer: change.Layer) -> change.ChangePlanes:
+    ua, ub = PAIRS[pair]["uM"]
     a, b = (control_surface(name) for name in pair)
-    planes = _change_planes(a, b, 0.0, ub, layer=layer)
+    return _change_planes(a, b, ua, ub, layer=layer)
+
+
+@pytest.mark.parametrize("layer", change.LAYERS)
+@pytest.mark.parametrize("pair", [("a", "b"), ("c", "d"), ("e", "f"), ("i", "j")])
+def test_no_change_control_nothing_changes_whatever_the_samples_noise_or_shift(
+    layer: change.Layer, pair: tuple[str, str]
+) -> None:
+    """Review B5a and its round 2, on P5's own bytes (`control/`): one unchanged place
+    scanned twice at 20 against 2,000 samples a cell (a, b), at 1 cm against 10 cm of noise
+    (c, d), with a sparse lattice of 10 cm cells among 1 cm ones at 2,000 samples (e, f:
+    28.7% of cells read as ground lowered in round 2), and a 4 m roof placed one 25 cm cell
+    east at 25 cm of uncertainty each (i, j). Neither layer may read a change: at most the 3
+    sigma rule's one cell in 370."""
+    planes = control_pair(pair, layer)
     counts = planes.counts()
-    assert counts["raised"] + counts["lowered"] <= 2, counts
-    assert counts["unchanged"] > 900, counts
+    cells = sum(counts.values())
+    assert counts["raised"] + counts["lowered"] <= math.ceil(cells / 370), counts
+    assert counts["unchanged"] > 0.9 * cells, counts
+
+
+def test_a_wide_crown_growing_is_vegetation_change_and_never_ground_change() -> None:
+    """Review B5a round 2: a 40 m crown growing from 4 to 6 m (g, h) read as 4,356 cells of
+    ground raised, its centre's "ground" 3.97 then 5.97 m. P5 now leaves the ground under it
+    unobserved; the vegetation layer has the whole crown raised, the ground layer nothing."""
+    ground = control_pair(("g", "h"), "ground")
+    assert ground.counts()["raised"] == ground.counts()["lowered"] == 0
+    vegetation = control_pair(("g", "h"), "vegetation")
+    assert vegetation.counts()["raised"] == 160 * 160 and vegetation.counts()["lowered"] == 0
+
+
+def test_a_half_metre_crate_is_not_detected_by_either_layer_and_the_map_says_so() -> None:
+    """Review B5a round 2's ruling: a 0.5 m crate of 3 x 3 cells put down (k, l) is under
+    both layers' floors -- the ground's window does not see it (narrower than the window),
+    and vegetation's least detectable change is about 1.07 m -- so it is unchanged in both.
+    Accepted for now, and said: the least detectable change exceeds it in both layers."""
+    for layer in change.LAYERS:
+        planes = control_pair(("k", "l"), layer)
+        assert planes.counts()["raised"] == planes.counts()["lowered"] == 0
+    ground = control_pair(("k", "l"), "ground")
+    vegetation = control_pair(("k", "l"), "vegetation")
+    assert vegetation.min_detectable_m is not None and vegetation.min_detectable_m > 1.0
+    assert ground.min_detectable_m is not None and ground.min_detectable_m < 0.5
+    # The ground could see half a metre over a wide area; the crate is not ground change.
