@@ -1,0 +1,8 @@
+# photo-reconstruct's second input (M3b): the worker seeds an empty site context, and a
+# stage reads it back.
+name: t-site-context
+version: 1
+description: One stage that reads the site context the worker seeded.
+inputs: [upload, site_context]
+stages:
+  - { id: reads, impl: t_reads_site_context }

@@ -92,6 +92,8 @@ from app.worker.events import Event
 from app.worker.pipeline_bridge import (
     CALL_BOOK,
     PIPELINE_DIR,
+    SITE_CONTEXT,
+    SITE_CONTEXT_FILE,
     ArtifactRef,
     AttemptLedger,
     CallBook,
@@ -102,6 +104,7 @@ from app.worker.pipeline_bridge import (
     StepResult,
     Workdir,
     checksum_of,
+    empty_site_context,
     latest_live,
     latest_progress,
     plan_recipe,
@@ -1135,6 +1138,9 @@ class JobSupervisor:
         ]
         _end_transaction(db)
         for name in inputs:
+            if name == SITE_CONTEXT:
+                _seed_site_context(work.input_path(name))
+                continue
             if name != "upload" or capture is None:
                 continue
             target = work.input_path(name)
@@ -1455,6 +1461,24 @@ def _tail_lines(path: Path, offset: int) -> str:
     lines = [line for line in _read_from(path, offset).splitlines() if line.strip()]
     tail = "\n".join(lines[-STDERR_TAIL_LINES:])
     return tail if len(tail) <= STDERR_TAIL_CHARS else "..." + tail[-STDERR_TAIL_CHARS:]
+
+
+def _seed_site_context(directory: Path) -> None:
+    """What the site knows before this run, for `align` (M3b; `alignment.py`).
+
+    M3b.1 seeds the empty context -- no reference epoch, no check targets -- so every
+    epoch is aligned by its own georeference until M3b.2 seeds the site's reference.
+    Written only if absent, through a temporary file: a resumed or retried run keeps the
+    context it started with, so its alignment is never measured against a different
+    reference halfway through.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / SITE_CONTEXT_FILE
+    if path.exists():
+        return
+    staging = path.with_suffix(".json.tmp")
+    staging.write_text(json.dumps(empty_site_context()) + "\n", encoding="utf-8")
+    staging.replace(path)
 
 
 def _end_transaction(db: Session) -> None:

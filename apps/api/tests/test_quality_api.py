@@ -25,14 +25,16 @@ __all__ = ["client"]  # the fixture, re-used from the phone key's own tests
 
 import_module("stages")  # registers the shipped implementations
 
-#: photo-reconstruct v12, in order: `train` is ordinal 3.
+#: photo-reconstruct v13, in order: `train` is ordinal 5 (georeference and align moved
+#: before training in M3b, so a Refine from `train` keeps them with the poses).
 STAGES = (
     "normalize",
     "pose",
+    "georeference",
+    "align",
     "mask",
     "train",
     "compensate",
-    "georeference",
     "quality",
     "place",
     "package",
@@ -182,8 +184,10 @@ def test_refine_resumes_the_preview_at_train_inside_its_region(
         "quality": {"bar": "strict", "mode": "refine"},
     }
     states = {step["stageId"]: step["status"] for step in body["steps"]}
-    assert [states[s] for s in ("normalize", "pose", "mask")] == ["complete"] * 3
-    assert {states[s] for s in STAGES[3:]} == {"not-started"}
+    kept = ("normalize", "pose", "georeference", "align", "mask")
+    assert STAGES[: STAGES.index("train")] == kept
+    assert [states[s] for s in kept] == ["complete"] * len(kept)
+    assert {states[s] for s in STAGES[len(kept) :]} == {"not-started"}
     # And it is running now, so a second Refine waits for it.
     again = client.post(f"/api/v1/phone/captures/{capture_id}/refine", json={}, headers=PHONE)
     assert again.status_code == 409

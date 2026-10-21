@@ -37,6 +37,7 @@ import numpy.typing as npt
 import PIL
 import PIL.Image
 
+import alignment
 import blocks
 import capture_platform
 import colmap4
@@ -53,10 +54,12 @@ import init_seed
 import keyframes
 import live
 import placement
+import priors
 import quality
 import resolution
 import scale_estimate
 import sfm
+import sim3
 import site_frame
 import splat_io
 import splat_stream
@@ -71,7 +74,7 @@ from captures_bridge import (
     tile_offsets,
 )
 from contracts import FANOUT_METRIC, MetricValue, StageContext, StageOutcome, fanout_role
-from errors import QualityGateError, check_gate
+from errors import QualityGateError, check_gate, evaluate_gate
 from phases import Phases
 from registry import stage_impl
 
@@ -200,6 +203,11 @@ REGISTRATION = ArtifactDecl(
 #: a clear sky, and a phone's first frame -- taken before the GPS has locked, at the last
 #: cell-tower position -- is exactly the outlier this exists to drop.
 DEFAULT_ALIGNMENT_MAX_ERROR_M = 5.0
+
+#: `exif_gps`'s `aligner`: COLMAP 3.9.1's `model_aligner` (the default, so a job written
+#: before this existed runs as it did), or the seeded numpy RANSAC in `sim3.py`, which is
+#: byte-reproducible on one machine and needs no COLMAP binary.
+ALIGNERS: tuple[str, ...] = ("model_aligner", "ransac")
 
 #: The best horizontal uncertainty an EXIF GPS georeference will ever claim, in metres.
 #:
@@ -1137,6 +1145,18 @@ def colmap(ctx: StageContext) -> StageOutcome:
     compared on one capture. 3.9.1 stays the default until that comparison decides;
     `poses.json`'s `version` is the COLMAP that ran. A run that asks for 4.2 where there
     is no pycolmap fails rather than quietly running 3.9.1.
+
+    `pose_priors: auto` (4.2 only; `off` is the default) hands each frame's EXIF fix to
+    incremental mapping as a CARTESIAN pose prior about the georeference's own origin
+    (the `site_frame` when given, else the fixes' median: `priors.frame_origin`), with a
+    sigma from `frames_meta.json` (an RTK fixed solution's own std, or the EXIF
+    horizontal error), else `prior_std_m` / `prior_std_v_m`, else 5 m (`priors.py`). The
+    model then comes out in metric east/north/up and `poses.json` says so (`priors`,
+    and `scale.metric`). The global mapper ignores priors, and says so.
+
+    Two quality gates, both off unless the run sets them (no recorded measurement backs
+    a threshold, D4): `fail_below_registered_fraction` and
+    `max_mean_reprojection_error_px` raise `QualityGateError`, which is never retried.
     """
     frames = ctx.input(FRAMES.name)
     out = ctx.output(POSES.name)
@@ -1229,6 +1249,30 @@ def colmap(ctx: StageContext) -> StageOutcome:
         if four
         else sfm.feature_extractor_argv(database, frames, **extraction),
     )
+    prior_plan = priors.plan_priors(
+        frames,
+        requested=str(ctx.param("pose_priors", "off")),
+        engine=engine,
+        frame=site_frame.from_param(ctx.param("site_frame")),
+        frames_meta=_frames_meta(ctx),
+        std_m=_optional_float(ctx.param("prior_std_m")),
+        std_v_m=_optional_float(ctx.param("prior_std_v_m")),
+    )
+    if prior_plan.used:
+        priors_file = ctx.work_dir / "priors.json"
+        prior_plan.write(priors_file)
+        ctx.run(colmap4.priors_argv(interpreter, database, priors_file))
+    sigma = prior_plan.summary()["sigmaM"]
+    ctx.log(
+        f"colmap: pose priors {'used' if prior_plan.used else 'not used'} -- "
+        f"{prior_plan.reason}"
+        + (
+            f"; sigma {sigma['horizontalMedian']:g} m h / {sigma['verticalMedian']:g} m v "
+            f"median; vertical {prior_plan.vertical()}"
+            if prior_plan.used and isinstance(sigma, dict)
+            else ""
+        )
+    )
     passes_run: list[dict[str, object]] = []
     pairs = [0]
 
@@ -1297,7 +1341,9 @@ def colmap(ctx: StageContext) -> StageOutcome:
             }
             with live.MapperWatch(snapshots, ctx.log, frames=len(images), enabled=watch):
                 ctx.run(
-                    colmap4.map_argv(interpreter, database, frames, into, **how)
+                    colmap4.map_argv(
+                        interpreter, database, frames, into, use_priors=prior_plan.used, **how
+                    )
                     if four
                     else sfm.mapper_argv(database, frames, into, **how)
                 )
@@ -1347,6 +1393,16 @@ def colmap(ctx: StageContext) -> StageOutcome:
         live.emit_model(ctx.log, out, frames=len(images), final=True)
     focal = model.cameras[0].focal_px if model.cameras else 0.0
     version = colmap_version or sfm.colmap_version()
+    priors_used = prior_plan.used and mapper_used == "incremental"
+    priors_summary: dict[str, object] = {
+        **prior_plan.summary(),
+        "used": priors_used,
+        "mapper": (
+            "incremental"
+            if mapper_used == "incremental"
+            else "ignored by the global mapper, which made the model kept"
+        ),
+    }
     document: dict[str, object] = {
         "tool": "colmap",
         # The COLMAP that extracted, matched and mapped: apt's 3.9.1 CLI, or 4.2 through
@@ -1422,19 +1478,37 @@ def colmap(ctx: StageContext) -> StageOutcome:
                 )
             ),
         },
-        "scale": {
-            "metric": False,
-            "source": "none",
-            "note": (
-                "a reconstruction from images alone has no metric scale; `arkit` or a "
-                "measured baseline is what produces one"
-            ),
-        },
+        # GNSS pose priors, when bundle adjustment had them (`priors.py`).
+        "priors": priors_summary,
+        "scale": (
+            {
+                "metric": True,
+                "source": "gnss-pose-priors",
+                "note": (
+                    f"bundle adjustment held each camera to its GNSS fix ({prior_plan.count} "
+                    "pose priors), so the model is in metric east/north/up about the "
+                    "priors' origin; as accurate as the fixes' declared sigma"
+                ),
+            }
+            if priors_used
+            else {
+                "metric": False,
+                "source": "none",
+                "note": (
+                    "a reconstruction from images alone has no metric scale; `arkit` or a "
+                    "measured baseline is what produces one"
+                ),
+            }
+        ),
         # Gravity, as far as the frames can say: how the phone was held. What `place`
         # levels the splat by when nothing better (an EXIF similarity) exists.
         "upEstimate": None if (up := sfm.camera_up(model)) is None else up.to_dict(),
     }
+    gates, gate_failure = _pose_gates(ctx, model, len(images))
+    document["gates"] = gates
     _write_json(out / "poses.json", document)
+    if gate_failure is not None:
+        raise gate_failure
     ctx.log(
         f"colmap: {model.registered}/{len(images)} registered, {model.points3d} points, "
         f"mean track {model.mean_track_length:.2f}, focal {focal:.1f} px"
@@ -1461,6 +1535,7 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "mapS": round(seconds["map"], 1),
         "mapper": mapper_used,
         "colmap": version,
+        "priors": prior_plan.count if priors_used else 0,
     }
     if "global" in seconds:
         metrics["globalMapS"] = round(seconds["global"], 1)
@@ -1472,6 +1547,49 @@ def colmap(ctx: StageContext) -> StageOutcome:
 #: `focal_from`: `none` leaves the initial focal to COLMAP; `exif` seeds it from
 #: `frames_meta.json`'s capture focal.
 FOCAL_FROM: tuple[str, ...] = ("none", "exif")
+
+
+def _pose_gates(
+    ctx: StageContext, model: sfm.Model, frames: int
+) -> tuple[list[dict[str, object]], QualityGateError | None]:
+    """The pose stage's two gates, off unless the run sets a limit (D4: no recorded
+    measurement backs either threshold yet): what each measured, and the first failure."""
+    fraction = model.registered / frames if frames else 0.0
+    floor = _optional_float(ctx.param("fail_below_registered_fraction"))
+    ceiling = _optional_float(ctx.param("max_mean_reprojection_error_px"))
+    first, first_error = evaluate_gate(
+        "registered_fraction",
+        fraction,
+        floor,
+        fail_when="below",
+        reason=(
+            f"{model.registered} of {frames} frames registered; "
+            f"fail_below_registered_fraction is set to {floor}"
+        ),
+    )
+    second, second_error = evaluate_gate(
+        "mean_reprojection_error_px",
+        model.mean_reprojection_error if model.points3d else None,
+        ceiling,
+        fail_when="above",
+        unit="px",
+        reason=(
+            f"the sparse model's points reproject {model.mean_reprojection_error:.3f} px "
+            f"from their features on average; max_mean_reprojection_error_px is set to "
+            f"{ceiling}"
+        ),
+    )
+    first["param"] = "fail_below_registered_fraction"
+    second["param"] = "max_mean_reprojection_error_px"
+    return [first, second], first_error or second_error
+
+
+def _frames_meta(ctx: StageContext) -> dict[str, object] | None:
+    """`frames_meta.json` when normalize wrote one, else None (planned but absent too)."""
+    if not ctx.has_input(FRAMES_META.name):
+        return None
+    path = ctx.input(FRAMES_META.name)
+    return _read_json(path) if path.is_file() else None
 
 
 def _focal_seed(
@@ -2782,7 +2900,8 @@ def _check_normalized_frame(ctx: StageContext, expected: dict[str, object] | Non
     summary="georeference from EXIF GPS, or an iPhone video's location metadata",
 )
 def exif_gps(ctx: StageContext) -> StageOutcome:
-    """Real: the frames' own GPS, through `colmap model_aligner`, into a placed frame.
+    """Real: the frames' own GPS, through `colmap model_aligner` or the seeded RANSAC of
+    `sim3.py` (`aligner: ransac`), into a placed frame.
 
     Two outcomes, and which one happens is a property of the capture rather than a
     setting:
@@ -2823,10 +2942,13 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
       (0, 0).
 
     One consequence worth stating: `georef.json` out of the aligned branch is **not**
-    byte-reproducible the way the rest of a run's outputs are. `model_aligner` has no
-    non-robust mode on 3.9.1, so the similarity comes out of a RANSAC, and the last digits
-    of the scale and the residuals move between runs over the same frames. The Lane 1
-    byte-identity gate is unaffected -- `manual_placement` writes parameters.
+    byte-reproducible the way the rest of a run's outputs are, unless `aligner: ransac`.
+    `model_aligner` has no non-robust mode on 3.9.1 and no seed, so the similarity comes
+    out of a RANSAC whose last digits of scale and residual move between runs over the
+    same frames. `aligner: ransac` solves the same similarity with `sim3.fit_sim3` --
+    seeded by the run's `seed` (0), same `max_error_m` threshold -- and is byte-identical
+    across runs on one machine. The Lane 1 byte-identity gate is unaffected either way --
+    `manual_placement` writes parameters.
 
     `site_frame` (an epoch of a site that already has a frame): the aligned branch
     expresses the fixes about the frame's origin instead of their median, so the
@@ -2835,6 +2957,9 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
     as `siteFrame.offsetM`, which `place` adds after recentring. With a frame and no
     location at all, the capture sits at the site's origin rather than being refused.
     """
+    aligner = str(ctx.param("aligner", "model_aligner"))
+    if aligner not in ALIGNERS:
+        raise ValueError(f"aligner must be model_aligner or ransac, not {aligner!r}")
     frames = ctx.input(FRAMES.name)
     fixes = exif.read_fixes(frames)
     min_images = int(ctx.param("min_images", 3))
@@ -2842,8 +2967,15 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
     ctx.log(f"{len(fixes)} of {_count_files(frames)} frames carry an EXIF GPS fix")
 
     model_dir = ctx.input(POSES.name) if ctx.has_input(POSES.name) else None
+    no_consensus: str | None = None
     if len(fixes) >= max(min_images, 3) and model_dir is not None:
-        return _exif_gps_aligned(ctx, fixes, model_dir, frame_given)
+        try:
+            return _exif_gps_aligned(ctx, fixes, model_dir, frame_given)
+        except sim3.NoConsensusError as error:
+            # The fixes agree on no similarity: applying the sampled one would place the
+            # capture by a guess. It is located at their median instead, not aligned.
+            no_consensus = str(error)
+            ctx.log(f"WARNING: the EXIF fixes reached {no_consensus}; located, not aligned")
 
     located = _sole_location(ctx, fixes)
     method = "exif-gps"
@@ -2889,7 +3021,11 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
             frame_given, offset=offset, offset_source=offset_source, located=located
         )
         lat, lon, height = frame_given.lat, frame_given.lon, frame_given.height
-    why = "fewer than three EXIF fixes" if model_dir else "no pose model to align against"
+    why = (
+        f"the EXIF fixes reached {no_consensus}"
+        if no_consensus is not None
+        else ("fewer than three EXIF fixes" if model_dir else "no pose model to align against")
+    )
     frame = _frame_from_poses(ctx, model_dir, estimate_scale=True)
     source = (
         "the capture's own coordinate (placed by hand)"
@@ -2978,7 +3114,12 @@ def _scale_evidence(georef: dict[str, object]) -> object:
 @stage_impl(
     "place_splat",
     consumes=("trained.ply", "georef.json"),
-    optional_consumes=("poses", quality.GATED_PLY.name, quality.COVERAGE_PLY.name),
+    optional_consumes=(
+        "poses",
+        quality.GATED_PLY.name,
+        quality.COVERAGE_PLY.name,
+        alignment.EPOCH_ALIGNMENT.name,
+    ),
     produces=(CANONICAL_PLY, COVERAGE_ENU, placement.PLACEMENT),
     summary="Lane 2: the trained splat, turned into east/north/up by the georeference",
 )
@@ -3007,6 +3148,15 @@ def place_splat(ctx: StageContext) -> StageOutcome:
     A `georef.json` with no `frame` (written by `manual_placement`) is levelled by the
     camera-up estimate in `poses`, if there is one, and otherwise passed through with a
     warning that nothing levelled it.
+
+    When `align` aligned this epoch visually to its site's reference epoch
+    (`epoch_alignment.json`, `frameSource: epoch-alignment`), that frame is applied
+    instead of the georeference's: the similarity into east/north/up about the very
+    origin `georef.json` names. Its `siteFrame.offsetM` is then **not** added -- the
+    offset places a located capture's recentred footprint at its GPS point, and the
+    alignment already put it where it is, so adding it would move it by the GPS error
+    twice. An alignment that kept the georeference's frame (`frameSource: georef`,
+    every unaligned epoch) changes nothing here.
     """
     georef = _read_json(ctx.input(GEOREF.name))
     source = quality.GATED_PLY.name if ctx.has_input(quality.GATED_PLY.name) else TRAINED_PLY.name
@@ -3019,6 +3169,18 @@ def place_splat(ctx: StageContext) -> StageOutcome:
         sh_degree=None,
     )
     frame = georef.get("frame")
+    frame_from = "georef"
+    aligned = _epoch_alignment(ctx)
+    if (
+        aligned is not None
+        and aligned.get("frameSource") == "epoch-alignment"
+        and isinstance(aligned.get("frame"), dict)
+    ):
+        frame, frame_from = aligned["frame"], "epoch-alignment"
+        ctx.log(
+            f"place: the epoch alignment's frame ({aligned.get('method')}, "
+            f"{aligned.get('verdict')}), not the georeference's"
+        )
     if not isinstance(frame, dict):
         model_dir = ctx.input(POSES.name) if ctx.has_input(POSES.name) else None
         frame = _frame_from_poses(ctx, model_dir)
@@ -3030,7 +3192,8 @@ def place_splat(ctx: StageContext) -> StageOutcome:
     translation = None if offset is None else np.asarray(offset, dtype=np.float64)
     # In a site's frame (D3): where the located capture sits relative to the frame origin
     # `georef.json` is about. None outside a frame, and for the EXIF-aligned branch.
-    site_offset = _site_offset(georef)
+    # Never for an epoch-aligned frame: it is already where the capture is (docstring).
+    site_offset = None if frame_from == "epoch-alignment" else _site_offset(georef)
     if site_offset is not None and not frame.get("recentre"):
         # Folded into the georeferenced step itself, so `_place_coverage` and the LOD
         # placement see the same total move as the splat.
@@ -3079,8 +3242,17 @@ def place_splat(ctx: StageContext) -> StageOutcome:
         "coveragePoints": coverage_points,
         # The SH bands carried into canonical.ply, turned with the splat (0: DC only).
         "shDegree": trained.sh_degree,
+        "frameFrom": frame_from,
     }
     return StageOutcome(metrics=metrics, summary=f"placed by {frame.get('source')}")
+
+
+def _epoch_alignment(ctx: StageContext) -> dict[str, object] | None:
+    """`epoch_alignment.json` when `align` ran and wrote one, else None."""
+    if not ctx.has_input(alignment.EPOCH_ALIGNMENT.name):
+        return None
+    path = ctx.input(alignment.EPOCH_ALIGNMENT.name)
+    return _read_json(path) if path.is_file() else None
 
 
 def _site_offset(georef: dict[str, object]) -> npt.NDArray[np.float64] | None:
@@ -3262,29 +3434,55 @@ def _exif_gps_aligned(
             f"between `normalize` and `pose`"
         )
 
-    work = ctx.work_dir / "align"
-    work.mkdir(parents=True, exist_ok=True)
-    ref_path = work / "ref_positions.txt"
-    sfm.write_ref_positions(ref_path, common)
     max_error_m = float(ctx.param("max_error_m", DEFAULT_ALIGNMENT_MAX_ERROR_M))
-    # COLMAP 3.9.1 aborts (SIGABRT, no message) rather than creating `--output_path`, and
-    # the directory it writes there is never read -- see `sfm`'s module docstring.
-    aligned = work / "aligned"
-    aligned.mkdir(parents=True, exist_ok=True)
-    argv = sfm.model_aligner_argv(
-        model_dir,
-        aligned,
-        ref_path,
-        work / "transform.txt",
-        max_error_m=max_error_m,
-        min_common_images=3,
-    )
-    ctx.run(argv)
-    similarity = sfm.read_similarity(work / "transform.txt")
+    aligner = str(ctx.param("aligner", "model_aligner"))
+    tool: dict[str, object]
+    if aligner == "ransac":
+        seed = int(ctx.param("seed", sim3.DEFAULT_SEED))
+        fit = sim3.fit_sim3(
+            {name: centres[name] for name in common}, common, max_error_m=max_error_m, seed=seed
+        )
+        similarity = fit.similarity
+        tool = {
+            "tool": "numpy ransac (sim3.py)",
+            "version": None,
+            "seed": seed,
+            "iterations": fit.iterations,
+        }
+    else:
+        work = ctx.work_dir / "align"
+        work.mkdir(parents=True, exist_ok=True)
+        ref_path = work / "ref_positions.txt"
+        sfm.write_ref_positions(ref_path, common)
+        # COLMAP 3.9.1 aborts (SIGABRT, no message) rather than creating `--output_path`,
+        # and the directory it writes there is never read -- see `sfm`'s module docstring.
+        aligned = work / "aligned"
+        aligned.mkdir(parents=True, exist_ok=True)
+        argv = sfm.model_aligner_argv(
+            model_dir,
+            aligned,
+            ref_path,
+            work / "transform.txt",
+            max_error_m=max_error_m,
+            min_common_images=3,
+        )
+        ctx.run(argv)
+        similarity = sfm.read_similarity(work / "transform.txt")
+        tool = {
+            "tool": "colmap model_aligner",
+            "version": sfm.colmap_version(),
+            "alignmentType": "custom",
+        }
     residuals = sfm.alignment_residuals(similarity, centres, common)
     values = np.asarray(sorted(residuals.values()), dtype=np.float64)
     rms = float(np.sqrt(float((values**2).mean()))) if values.size else 0.0
     inliers = int((values <= max_error_m).sum())
+    if inliers < sim3.MIN_POINTS:
+        # `model_aligner` has no such refusal of its own; the same rule as `sim3`'s.
+        raise sim3.NoConsensusError(
+            f"no consensus: {inliers} of {len(common)} fixes agree within {max_error_m:g} m "
+            f"with {tool['tool']}'s similarity, and a similarity needs {sim3.MIN_POINTS}"
+        )
     # Consistency, floored. The residual cannot see the receiver's own bias, which is
     # common to every fix in the capture and moves all of it together.
     uncertainty = max(rms, EXIF_GPS_UNCERTAINTY_FLOOR_M)
@@ -3297,7 +3495,7 @@ def _exif_gps_aligned(
         "scaleSource": "exif-gps",
         "uncertaintyM": round(uncertainty, 3),
         "note": (
-            f"aligned to {len(common)} EXIF GPS fixes with colmap model_aligner; "
+            f"aligned to {len(common)} EXIF GPS fixes with {tool['tool']}; "
             f"residual {float(np.median(values)):.2f} m median, {rms:.2f} m rms. The "
             f"reported uncertainty is floored at {EXIF_GPS_UNCERTAINTY_FLOOR_M:g} m "
             f"because a residual measures consistency, not accuracy"
@@ -3309,9 +3507,7 @@ def _exif_gps_aligned(
             "dopMedian": _median_or_none([f.dop for f in fixes if f.dop is not None]),
         },
         "alignment": {
-            "tool": "colmap model_aligner",
-            "version": sfm.colmap_version(),
-            "alignmentType": "custom",
+            **tool,
             "maxErrorM": max_error_m,
             "images": len(common),
             "inliers": inliers,
@@ -3717,6 +3913,7 @@ def capture_manifest(ctx: StageContext) -> StageOutcome:
         "ground_samples.json",
         quality.QUALITY_JSON.name,
         COVERAGE_ENU.name,
+        alignment.EPOCH_ALIGNMENT.name,
     ),
     produces=(REGISTRATION,),
     summary="describe the finished capture for the API's registration endpoint",
@@ -3765,6 +3962,12 @@ def catalog(ctx: StageContext) -> StageOutcome:
         # The tier-coloured point cloud in the splat's own frame, when there is one to
         # lay over it; the worker publishes it beside the thumbnail.
         "coverage": _coverage_name(ctx),
+        # How this epoch was registered to its site (`align`, D4): what M3b.2 writes
+        # onto `epochs.alignment`. Less the per-image residuals, which stay in the run's
+        # artifact. Null for a recipe with no align stage.
+        "alignment": None
+        if (aligned := _epoch_alignment(ctx)) is None
+        else alignment.summary_of(aligned),
     }
     _write_json(ctx.output(REGISTRATION.name), document)
     return StageOutcome(metrics={"artifacts": len(tiles)})

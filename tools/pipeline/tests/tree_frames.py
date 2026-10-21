@@ -179,17 +179,19 @@ def orbit(
     height_m: float = 3.6,
     target: tuple[float, float, float] = (0.0, 0.0, 3.0),
     stem: str = "frame",
+    phase_deg: float = 0.0,
 ) -> tuple[Pose, ...]:
     """`count` cameras evenly around a closed circle, all looking at `target`.
 
     A *closed* orbit on purpose: it is the case A0 #7 found `sequential_matcher` fails on
     (2 of 40 registered), because the last frame and the first frame overlap and only an
-    exhaustive matcher ever compares them.
+    exhaustive matcher ever compares them. `phase_deg` turns the whole circle (a second
+    epoch flown on another orbit); 0, the default, is every existing render unchanged.
     """
     centre = np.asarray(target, dtype=np.float64)
     poses: list[Pose] = []
     for index in range(count):
-        angle = 2.0 * math.pi * index / count
+        angle = 2.0 * math.pi * index / count + math.radians(phase_deg)
         eye = np.array(
             [radius_m * math.cos(angle), radius_m * math.sin(angle), height_m], dtype=np.float64
         )
@@ -381,22 +383,27 @@ def render_orbit(
     radius_m: float = 9.0,
     camera_height_m: float = 3.6,
     quality: int = 92,
+    phase_deg: float = 0.0,
+    cloud: Cloud | None = None,
+    ground_seed: int = GROUND_SEED,
 ) -> Truth:
     """Render `count` frames into `out_dir` and return the poses they were rendered from.
 
     Deterministic: the splats are read from a committed file, the ground texture is
-    seeded, and nothing here touches a clock or the filesystem's ordering.
+    seeded, and nothing here touches a clock or the filesystem's ordering. `cloud` (the
+    committed tree by default) and `ground_seed` exist to render a *different* scene --
+    an empty one on another ground -- for the test that unrelated frames do not register.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    cloud = load_cloud(ply)
+    cloud = load_cloud(ply) if cloud is None else cloud
     intrinsics = Intrinsics.of(width, height, focal_px)
-    poses = orbit(count, radius_m=radius_m, height_m=camera_height_m)
-    texture = ground_texture()
+    poses = orbit(count, radius_m=radius_m, height_m=camera_height_m, phase_deg=phase_deg)
+    texture = ground_texture(ground_seed)
     for pose in poses:
         frame = render(cloud, pose, intrinsics, texture)
         frame.save(out_dir / pose.name, format="JPEG", quality=quality, subsampling=0)
-    low = cloud.position.min(axis=0)
-    high = cloud.position.max(axis=0)
+    low = cloud.position.min(axis=0) if cloud.count else np.zeros(3)
+    high = cloud.position.max(axis=0) if cloud.count else np.zeros(3)
     truth = Truth(
         intrinsics=intrinsics,
         poses=poses,

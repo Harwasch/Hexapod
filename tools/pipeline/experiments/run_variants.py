@@ -73,14 +73,16 @@ KEY_ENV = "TWIN_PHONE_KEY"
 TERMINAL = frozenset({"complete", "error", "cancelled"})
 #: A variant name: something a table cell and a file name can both hold.
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
-#: The stage order a photo-reconstruct run goes in, for the per-stage columns.
+#: The stage order a photo-reconstruct run goes in (v13), for the per-stage columns. Runs
+#: go through the API, whose worker seeds the recipe's `site_context` input itself.
 STAGE_ORDER = (
     "normalize",
     "pose",
+    "georeference",
+    "align",
     "mask",
     "train",
     "compensate",
-    "georeference",
     "quality",
     "place",
     "package",

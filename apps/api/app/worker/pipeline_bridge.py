@@ -54,6 +54,7 @@ def ensure_importable(directory: Path = PIPELINE_DIR) -> None:
 ensure_importable()
 
 from adapters import FakeAdapter, LocalTransfer, SubprocessAdapter  # noqa: E402
+from alignment import SITE_CONTEXT, SITE_CONTEXT_FILE, empty_site_context  # noqa: E402
 from artifacts import ArtifactRef, checksum_of  # noqa: E402
 from cloud import (  # noqa: E402
     CALL_BOOK,
@@ -74,6 +75,7 @@ from errors import (  # noqa: E402
     DetachRequested,
     PipelineError,
     PreemptedError,
+    QualityGateError,
     StageFailedError,
     StopRequested,
 )
@@ -94,6 +96,8 @@ __all__ = [
     "CALL_BOOK",
     "PIPELINE_DIR",
     "PROVIDERS",
+    "SITE_CONTEXT",
+    "SITE_CONTEXT_FILE",
     "ArtifactRef",
     "AttemptLedger",
     "CallBook",
@@ -111,6 +115,7 @@ __all__ = [
     "PreemptedError",
     "Provider",
     "ProviderAdapter",
+    "QualityGateError",
     "Rate",
     "Recipe",
     "RunCost",
@@ -125,6 +130,7 @@ __all__ = [
     "check_sh_degree",
     "checkpoint_key",
     "checksum_of",
+    "empty_site_context",
     "ensure_importable",
     "execute",
     "latest_live",

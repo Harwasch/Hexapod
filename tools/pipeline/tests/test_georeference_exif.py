@@ -817,3 +817,38 @@ def test_a_video_locations_own_accuracy_is_kept(tmp_path: Path) -> None:
         ).read_text()
     )
     assert (georef["uncertaintyM"], georef["locationAccuracyM"]) == (UNALIGNED_UNCERTAINTY_M, 3.0)
+
+
+# --- moving points between two ENU origins ---------------------------------------------
+
+
+def test_reframing_round_trips_through_the_fixtures_inverse() -> None:
+    """`exif.reframe_enu` against an independent path: the fixture's closed-form inverse
+    (`gps_frames.enu_to_geodetic`, Ferrari) to geodetic, then `exif.enu_offsets` about the
+    other origin. Two origins about a kilometre apart, where the tangent planes differ by
+    a rotation as well as an offset."""
+    source = ORIGIN
+    target = gps_frames.enu_to_geodetic(700.0, -720.0, 12.0, *ORIGIN)
+    rng = np.random.default_rng(31)
+    points = rng.uniform(-60.0, 60.0, size=(25, 3))
+
+    moved = exif.reframe_enu(points, source, target)
+
+    for index, point in enumerate(points):
+        east, north, up = (float(v) for v in point)
+        lat, lon, height = gps_frames.enu_to_geodetic(east, north, up, *source)
+        expected = exif.enu_offsets([exif.Fix(name="p", lat=lat, lon=lon, alt=height)], target)
+        assert np.abs(moved[index] - np.asarray(expected["p"])).max() < 1e-6
+    single = exif.reframe_enu(points[0], source, target)
+    assert single.shape == (3,) and np.abs(single - moved[0]).max() < 1e-12
+    back = exif.reframe_enu(moved, target, source)
+    assert np.abs(back - points).max() < 1e-6
+
+
+def test_reframing_to_the_same_origin_is_the_identity() -> None:
+    points = np.asarray([[1.0, -2.0, 3.5], [100.0, 40.0, -7.0]])
+
+    assert np.abs(exif.reframe_enu(points, ORIGIN, ORIGIN) - points).max() < 1e-8
+    rotation = exif.enu_rotation(ORIGIN[0], ORIGIN[1])
+    assert np.abs(rotation @ rotation.T - np.eye(3)).max() < 1e-12
+    assert np.linalg.det(rotation) == pytest.approx(1.0, abs=1e-12)

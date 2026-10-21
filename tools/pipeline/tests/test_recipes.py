@@ -52,18 +52,29 @@ def test_every_recipe_ends_in_a_registration(name: str, tmp_path: Path) -> None:
     ]
 
 
-def test_photo_reconstruct_sends_pose_train_and_quality_off_the_worker() -> None:
-    """`train` to a GPU; `pose` and `quality` to Modal's CPU box, because COLMAP's
-    extraction and projecting every gaussian into every frame both want more memory than
-    the 2 GB worker has to spare. Nothing else leaves the worker (recipe 11 removed the
-    parent optimiser, which never ran)."""
+def test_photo_reconstruct_sends_pose_align_train_and_quality_off_the_worker() -> None:
+    """`train` to a GPU; `pose`, `align` and `quality` to Modal's CPU box, because
+    COLMAP's extraction (twice: an epoch's own frames, then them against its reference's)
+    and projecting every gaussian into every frame all want more memory than the 2 GB
+    worker has to spare. Nothing else leaves the worker (recipe 11 removed the parent
+    optimiser, which never ran)."""
     recipe = load_recipe("photo-reconstruct")
     plan = plan_recipe(recipe)
 
-    assert recipe.version == 12
-    assert plan.gpu_stages == ("pose", "train", "quality")
+    assert recipe.version == 13
+    assert plan.gpu_stages == ("pose", "align", "train", "quality")
     tiers = {stage.id: stage.gpu.tier for stage in plan.stages if stage.gpu is not None}
-    assert tiers == {"pose": "cpu4", "train": "l4", "quality": "cpu4"}
+    assert tiers == {"pose": "cpu4", "align": "cpu4", "train": "l4", "quality": "cpu4"}
+    # Registered before training (a gate there fails before any L4 time), and `place`
+    # reads the alignment; the site's context is a recipe input the worker seeds.
+    order = [stage.id for stage in plan.stages]
+    assert order.index("georeference") < order.index("align") < order.index("train")
+    assert plan.origins["epoch_alignment.json"] == "align"
+    assert plan.origins["site_context"] == "<input>"
+    place = next(stage for stage in plan.stages if stage.id == "place")
+    assert place.inputs["epoch_alignment.json"] == "stages/align/out/epoch_alignment.json"
+    register = next(stage for stage in plan.stages if stage.id == "register")
+    assert register.inputs["epoch_alignment.json"] == "stages/align/out/epoch_alignment.json"
     # `place` records the similarity it applied; `package` merges its own parents.
     assert plan.origins["placement.json"] == "place"
     assert "lod_parents" not in plan.origins
@@ -128,7 +139,7 @@ def test_photo_reconstruct_describes_every_frame_and_seeds_pose_from_it() -> Non
     plan = plan_recipe(load_recipe("photo-reconstruct"))
     by_id = {stage.id: stage for stage in plan.stages}
 
-    assert plan.recipe.version == 12
+    assert plan.recipe.version == 13
     assert plan.origins["frames_meta.json"] == "normalize"
     assert by_id["pose"].inputs["frames_meta.json"] == "stages/normalize/out/frames_meta.json"
     assert by_id["pose"].params["focal_from"] == "exif"
@@ -137,3 +148,28 @@ def test_photo_reconstruct_describes_every_frame_and_seeds_pose_from_it() -> Non
     assert normalize["hdr"] == "auto"
     # The exposure gate ships off: no measurement backs a threshold.
     assert normalize.get("max_clipped_frames_fraction") is None
+
+
+def test_photo_reconstruct_registers_each_epoch_with_every_gate_off() -> None:
+    """M3b (D4): GNSS priors in pose, the seeded RANSAC in georeference, and align with
+    the extraction settings pose used -- and not one gate on, since no recorded
+    measurement backs a threshold."""
+    plan = plan_recipe(load_recipe("photo-reconstruct"))
+    by_id = {stage.id: stage for stage in plan.stages}
+
+    assert by_id["pose"].params["pose_priors"] == "auto"
+    assert by_id["georeference"].params["aligner"] == "ransac"
+    align = by_id["align"].params
+    for key in ("max_features", "max_image_size", "first_octave"):
+        assert align[key] == by_id["pose"].params[key], key
+    assert (align["max_frames"], align["seed"], align["min_registered_fraction"]) == (60, 0, 0.5)
+    for gate in (
+        "fail_unaligned",
+        "max_check_target_rmse_m",
+        "fail_check_targets_out_of_tolerance",
+        "max_alignment_rms_m",
+        "max_gnss_visual_offset_m",
+    ):
+        assert align.get(gate) is None, gate
+    for gate in ("fail_below_registered_fraction", "max_mean_reprojection_error_px"):
+        assert by_id["pose"].params.get(gate) is None, gate

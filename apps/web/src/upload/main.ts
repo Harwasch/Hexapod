@@ -428,6 +428,10 @@ const STAGE_TEXT: Record<string, StageText> = {
     name: "Find where on Earth it is",
     what: "Uses the photos' GPS, or your phone's location, to place the model and give it a real-world scale.",
   },
+  align_epoch: {
+    name: "Line it up with earlier scans",
+    what: "Matches these photos against the site's earlier scan so the two sit in the same place, and checks the result against any surveyed ground marks. Says how sure it is.",
+  },
   manual_placement: {
     name: "Place it",
     what: "Puts the scan where your phone was, since a splat file carries no location of its own.",

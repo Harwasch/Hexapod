@@ -916,3 +916,35 @@ def test_a_restarted_step_does_not_show_the_last_attempts_progress(db: Session) 
         db, job.id, stage_id="train", ordinal=3, impl="gsplat", attempt=2
     )
     assert again.metrics == {}
+
+
+def test_a_recipe_that_asks_for_site_context_is_given_an_empty_one(
+    db: Session, sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
+) -> None:
+    """M3b.1: photo-reconstruct declares `site_context`, and `plan.check_inputs` refuses
+    a run whose inputs are not all there. The worker seeds the empty context (no
+    reference epoch, no targets) -- and leaves one already there alone, so a resumed run
+    aligns to the context it started with."""
+    capture = make_capture(db, slug="context")
+    job = queue_job(db, capture, "t-site-context")
+    session = sessions()
+    assert claim_next(session, worker_id="worker-a", lease_s=30) is not None
+    session.close()
+
+    assert run_job(sessions, storage, job.id, config(tmp_path)) == "complete"
+
+    runs = [p for p in (tmp_path / "runs").rglob("context_seen.json")]
+    assert len(runs) == 1
+    assert json.loads(runs[0].read_text()) == {
+        "version": 1,
+        "siteId": None,
+        "reference": None,
+        "targets": [],
+        "observations": [],
+    }
+    seeded = next((tmp_path / "runs").rglob("inputs/site_context/site_context.json"))
+    seeded.write_text('{"version": 1, "siteId": "frozen"}')
+    from app.worker.runner import _seed_site_context
+
+    _seed_site_context(seeded.parent)
+    assert json.loads(seeded.read_text())["siteId"] == "frozen"

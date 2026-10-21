@@ -35,6 +35,7 @@ __all__ = [
     "UnknownImplError",
     "UnresolvedArtifactError",
     "check_gate",
+    "evaluate_gate",
     "parse_quality_gate",
 ]
 
@@ -348,6 +349,31 @@ def check_gate(
     if failed:
         raise QualityGateError(gate, measured, limit, unit=unit, reason=reason)
     return record
+
+
+def evaluate_gate(
+    gate: str,
+    measured: float | None,
+    limit: float | None,
+    *,
+    fail_when: Literal["below", "above"],
+    unit: str = "",
+    reason: str,
+) -> tuple[dict[str, object], QualityGateError | None]:
+    """`check_gate` that does not raise: its record (with `passed` False on a failure) and
+    the error to raise once the stage has written down what it measured."""
+    try:
+        return check_gate(
+            gate, measured, limit, fail_when=fail_when, unit=unit, reason=reason
+        ), None
+    except QualityGateError as error:
+        return {
+            "name": gate,
+            "enabled": True,
+            "limit": limit,
+            "measured": measured,
+            "passed": False,
+        }, error
 
 
 #: The errors that say the recipe, its parameters or its stage code are wrong rather than

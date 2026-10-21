@@ -230,3 +230,18 @@ def t_many(ctx: StageContext) -> StageOutcome:
     for index in range(int(ctx.param("members", 40))):
         (out / f"member_{index:03d}.bin").write_bytes(f"{index}".encode() * 8)
     return StageOutcome(metrics={"runs": runs + 1})
+
+
+CONTEXT_SEEN = ArtifactDecl("context_seen.json", content_type="application/json")
+
+
+@stage_impl(
+    "t_reads_site_context",
+    consumes=("site_context",),
+    produces=(CONTEXT_SEEN,),
+    summary="copies the seeded site_context.json into an artifact",
+)
+def t_reads_site_context(ctx: StageContext) -> StageOutcome:
+    seeded = ctx.input("site_context") / "site_context.json"
+    ctx.output(CONTEXT_SEEN.name).write_text(seeded.read_text(encoding="utf-8"), "utf-8")
+    return StageOutcome(metrics={})

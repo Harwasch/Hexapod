@@ -22,6 +22,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+import alignment
 import colmap4
 import global_sfm
 import live
@@ -105,6 +106,16 @@ def test_the_mapper_argv_holds_a_focal_prior_and_passes_the_seed_and_snapshots()
     assert argv[argv.index("--seed") + 1] == "2"
     assert argv[argv.index("--snapshot-every") + 1] == "3"
     assert "--snapshot-path" not in colmap4.map_argv("/py", Path("d"), Path("i"), Path("o"))
+    assert "--use-priors" not in argv
+    assert "--use-priors" in colmap4.map_argv(
+        "/py", Path("d"), Path("i"), Path("o"), use_priors=True
+    )
+    assert colmap4.priors_argv("/py", Path("d"), Path("p.json"))[-4:] == [
+        "--database",
+        "d",
+        "--priors",
+        "p.json",
+    ]
 
 
 def test_the_faiss_tree_has_its_own_variable(
@@ -163,6 +174,7 @@ def test_the_self_check_the_modal_image_runs_passes_here() -> None:
     )
     assert done.returncode == 0, done.stdout + done.stderr
     assert "COLMAP 4.2" in done.stdout
+    assert "priors ok" in done.stdout
     # And 3.9.1's FLANN tree, where there is one, is refused by it rather than accepted.
     flann = sfm.vocab_tree_path()
     if flann is not None:
@@ -406,3 +418,258 @@ def test_4_2s_exhaustive_fallback_fills_in_only_the_pairs_sequential_skipped(
         ("exhaustive", False),
     ]
     assert passes[0]["pairs"] < passes[1]["pairs"] == VIDEO_FRAMES * (VIDEO_FRAMES - 1) // 2
+
+
+# --- registering a new epoch into a fixed reference (M3b) ----------------------------------
+
+
+def test_the_register_argv_carries_its_settings() -> None:
+    argv = colmap4.register_argv(
+        "/py",
+        reference_frames=Path("rf"),
+        reference_poses=Path("rp"),
+        frames=Path("f"),
+        poses=Path("p"),
+        work=Path("w"),
+        output=Path("o.json"),
+        max_frames=25,
+        random_seed=3,
+        first_octave=0,
+        num_threads=4,
+    )
+    assert argv[2] == "register"
+    for flag, value in (
+        ("--reference-frames", "rf"),
+        ("--reference-poses", "rp"),
+        ("--frames", "f"),
+        ("--poses", "p"),
+        ("--work", "w"),
+        ("--output", "o.json"),
+        ("--max-frames", "25"),
+        ("--seed", "3"),
+        ("--first-octave", "0"),
+        ("--threads", "4"),
+        ("--camera-model", "SIMPLE_RADIAL"),
+        ("--max-image-size", "1600"),
+        ("--max-features", "4096"),
+    ):
+        assert argv[argv.index(flag) + 1] == value, flag
+    names = [f"frame_{i:04d}.jpg" for i in range(10)]
+    assert colmap4.sample_evenly(names[::-1], 4) == [names[0], names[3], names[6], names[9]]
+    assert colmap4.sample_evenly(names, 60) == names
+
+
+REGISTER = {
+    "reference": {"count": 40, "radius_m": 9.0, "camera_height_m": 3.6, "phase_deg": 0.0},
+    "new": {"count": 30, "radius_m": 11.0, "camera_height_m": 5.0, "phase_deg": 20.0},
+}
+
+
+@pytest.fixture(scope="module")
+def two_epochs(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, tuple[Path, Path, tree_frames.Truth]]:
+    """Two orbits of the tree, each posed on its own: (frames, poses, truth)."""
+    if PYCOLMAP is None:
+        pytest.skip("needs pycolmap")
+    root = tmp_path_factory.mktemp("epochs")
+    out = {}
+    for side, orbit in REGISTER.items():
+        frames = root / side / "render" / "frames"
+        truth = tree_frames.render_orbit(FIXTURE_PLY, frames, **orbit)  # type: ignore[arg-type]
+        workdir, _ = _pose(root / side / "pose", frames)
+        out[side] = (frames, workdir.artifact_path("pose", "poses"), truth)
+    return out
+
+
+# The two_epochs fixture's reference orbit is not always posed whole, and cannot be made
+# to be: measured on this machine (pycolmap 4.2.0, 2026-10-20) over 110 poses of it --
+# 16 threads (the default here) 39 of 40 frames once in 40 runs, else 40; 4 threads (CI's
+# runner) 39 once in 30; 2 threads 40 in 30 of 30; 1 thread 40 in 10 of 10 -- and not
+# byte-reproducible at any thread count (1 thread: 2 distinct images.bin in 10 runs; 16:
+# 10 in 10), so no seed pins it. CI saw the 39 (#52's Pipeline job). The register tests
+# therefore assert against the model as posed, never against 40.
+
+
+def _posed(poses: Path) -> int:
+    """How many frames a pose model registered."""
+    return len(sfm.read_model(poses).images)
+
+
+# Register's own guarantee about the *new* frames is not that every one registers: COLMAP's
+# incremental mapping into the fixed reference leaves one out now and then, run to run on
+# the same inputs (measured here, pycolmap 4.2.0, 2026-10-20, 25 runs each on one posed
+# pair: untagged frames 30 of 30 in 23 runs and 29 of 30 in 2; EXIF-tagged 30 of 30 in 25;
+# CI saw 29 of 30 tagged). What it guarantees is a completed mapping in which the fixed
+# reference did not move, every sampled reference frame a verified pair touches stayed
+# registered (`_reference_whole`; the others are never seeded), and the
+# registered fraction is what it is -- `align_epoch` then judges it against
+# `min_registered_fraction` (`alignment.DEFAULT_MIN_REGISTERED_FRACTION`, 0.5). So these
+# tests hold a registration to being one align_epoch accepts, never to all 30.
+def _counts(document: dict[str, Any]) -> dict[str, object]:
+    """What a failed register assert prints: every count the guarantee is about."""
+    keys = ("newFramesUsed", "referenceFramesUsed", "registeredReference",
+            "referenceFramesUnmatched", "referenceMovedMaxM", "exifPosePriorsCleared")  # fmt: skip
+    return {**{k: document.get(k) for k in keys}, "registeredNew": len(document["registeredNew"])}
+
+
+def _reference_whole(document: dict[str, Any]) -> bool:
+    """Every sampled reference frame some verified pair touches stayed registered (the
+    unmatched ones are never seeded, `colmap4._register`)."""
+    seeded = int(document["referenceFramesUsed"]) - len(document["referenceFramesUnmatched"])
+    return int(document["registeredReference"]) == seeded
+
+
+def _accepted(document: dict[str, Any]) -> bool:
+    """The registered fraction of the new frames is one `align_epoch` accepts."""
+    used = int(document["newFramesUsed"])
+    registered = len(document["registeredNew"])
+    return used > 0 and registered >= alignment.DEFAULT_MIN_REGISTERED_FRACTION * used
+
+
+def _register(
+    root: Path, reference: tuple[Path, Path, Any], new: tuple[Path, Path, Any]
+) -> dict[str, Any]:
+    argv = colmap4.register_argv(
+        colmap4.python(),
+        reference_frames=reference[0],
+        reference_poses=reference[1],
+        frames=new[0],
+        poses=new[1],
+        work=root / "work",
+        output=root / "register.json",
+        first_octave=0,
+    )
+    done = subprocess.run(argv, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stdout + done.stderr
+    document = json.loads((root / "register.json").read_text())
+    assert isinstance(document, dict)
+    return document
+
+
+@requires_pycolmap
+def test_new_frames_register_into_a_fixed_reference(
+    tmp_path: Path, two_epochs: dict[str, tuple[Path, Path, tree_frames.Truth]]
+) -> None:
+    """Epoch 2 lands in epoch 1's own model frame and epoch 1 does not move.
+
+    "Does not move" is the fixed-frame guarantee, so its bound is round-off (1e-9 m),
+    not a tolerance. Where epoch 2 lands is held to the bound test_pose_colmap4 already
+    holds 4.2's poses to: median centre error under 1% of the scene's extent."""
+    reference, new = two_epochs["reference"], two_epochs["new"]
+    document = _register(tmp_path, reference, new)
+
+    assert document["pycolmap"] == PYCOLMAP
+    # What register is given is the reference *as posed*: the fixture's own mapping
+    # sometimes leaves a frame out (see `_posed`), which is pose's business, not
+    # register's. Register's guarantee is about its input: every reference frame it
+    # sampled stays registered and fixed, and every new one it sampled registers.
+    # (Both sides are under register's 60-frame sample, so all of each is used.)
+    used = _posed(reference[1])
+    assert document["newFramesUsed"] == _posed(new[1])
+    assert document["referenceFramesUsed"] == used
+    assert _accepted(document), _counts(document)
+    assert _reference_whole(document), _counts(document)
+    assert document["referenceMovedMaxM"] < 1e-9
+    assert document["crossPairs"] > 0 and document["crossInlierMatches"] > 0
+    # The truth in the reference model's frame: the similarity from epoch 1's true
+    # centres to its posed ones, applied to epoch 2's true centres.
+    model = sfm.read_model(reference[1])
+    known = reference[2].by_name()
+    to_model = sfm.umeyama(np.stack([known[i.name].centre for i in model.images]), model.centres())
+    truth = new[2].by_name()
+    names = sorted(document["registeredNew"])
+    expected = to_model.apply(np.stack([truth[name].centre for name in names]))
+    found = np.asarray([document["registeredNew"][name]["centre"] for name in names])
+    metres = np.linalg.norm(found - expected, axis=1) / to_model.scale
+    assert float(np.median(metres)) < 0.01 * new[2].extent_m
+
+
+@requires_pycolmap
+def test_unrelated_frames_do_not_register(
+    tmp_path: Path, two_epochs: dict[str, tuple[Path, Path, tree_frames.Truth]]
+) -> None:
+    """A different scene -- no tree, another ground -- shares nothing with epoch 1, so
+    it must stay far below what align_epoch would accept (half its frames)."""
+    empty = tree_frames.Cloud(
+        position=np.zeros((0, 3)), colour=np.zeros((0, 3), dtype=np.uint8), radius_m=np.zeros(0)
+    )
+    frames = tmp_path / "other" / "frames"
+    truth = tree_frames.render_orbit(
+        FIXTURE_PLY,
+        frames,
+        count=30,
+        radius_m=11.0,
+        camera_height_m=5.0,
+        cloud=empty,
+        ground_seed=12345,
+    )
+    workdir, poses = _pose(tmp_path / "other-pose", frames)
+    if not poses["registered"]:
+        pytest.skip("the unrelated scene did not even pose on its own")
+    document = _register(
+        tmp_path / "reg",
+        two_epochs["reference"],
+        (frames, workdir.artifact_path("pose", "poses"), truth),
+    )
+
+    assert len(document["registeredNew"]) < 0.5 * 30
+    assert document["referenceMovedMaxM"] < 1e-9
+
+
+@requires_pycolmap
+def test_frames_that_carry_exif_gps_still_register(
+    tmp_path: Path, two_epochs: dict[str, tuple[Path, Path, tree_frames.Truth]]
+) -> None:
+    """COLMAP 4 turns every frame's EXIF GPS into a WGS84 pose prior at extraction, and
+    with those in the database the fixed-reference mapping failed outright ("key was not
+    found in unordered_node_map"). The alignment is visual by decision (D4), so register
+    clears them and says how many it cleared."""
+    import gps_frames
+
+    reference, new = two_epochs["reference"], two_epochs["new"]
+    tagged = tmp_path / "tagged" / "frames"
+    shutil.copytree(new[0], tagged)
+    gps_frames.tag_orbit(tagged, {p.name: p.centre for p in new[2].poses}, (28.0, -82.0, 10.0))
+
+    document = _register(tmp_path / "reg", reference, (tagged, new[1], new[2]))
+
+    assert document["exifPosePriorsCleared"] == 30
+    # With the priors cleared the mapping completes as it does untagged (register's
+    # guarantee, `_accepted`): the reference fixed and whole, the new frames accepted.
+    assert _accepted(document), _counts(document)
+    assert _reference_whole(document), _counts(document)
+    assert document["referenceMovedMaxM"] < 1e-9, _counts(document)
+
+
+@requires_pycolmap
+def test_a_reference_frame_that_matches_nothing_does_not_crash_the_registration(
+    tmp_path: Path, two_epochs: dict[str, tuple[Path, Path, tree_frames.Truth]]
+) -> None:
+    """A sampled reference frame with no verified two-view geometry -- here a frame whose
+    pixels were replaced by an unrelated pattern, so it has features that match nothing --
+    was seeded into the fixed model
+    anyway; COLMAP's database cache dropped it and incremental mapping raised IndexError
+    ("key was not found in unordered_node_map"), failing the run (the review saw it on 1
+    of 6 runs). Only reference frames with at least one verified geometry are seeded."""
+    from PIL import Image
+
+    import drone_frames
+
+    reference, new = two_epochs["reference"], two_epochs["new"]
+    frames = tmp_path / "reference" / "frames"
+    shutil.copytree(reference[0], frames)
+    # A frame the reference model posed (the fixture's mapping may leave one out).
+    posed = sorted(image.name for image in sfm.read_model(reference[1]).images)
+    name = "frame_0024.jpg" if "frame_0024.jpg" in posed else posed[len(posed) // 2]
+    stranger = frames / name
+    with Image.open(stranger) as image:
+        size = image.size
+    drone_frames.pixels(size, seed=99).save(stranger, format="JPEG", quality=92)
+
+    document = _register(tmp_path / "reg", (frames, reference[1], reference[2]), new)
+
+    assert document["referenceFramesUnmatched"] == [name]
+    assert document["registeredReference"] == document["referenceFramesUsed"] - 1
+    assert _accepted(document), _counts(document)
+    assert document["referenceMovedMaxM"] < 1e-9

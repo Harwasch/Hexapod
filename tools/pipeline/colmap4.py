@@ -77,6 +77,7 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -90,7 +91,10 @@ __all__ = [
     "main",
     "map_argv",
     "match_argv",
+    "priors_argv",
     "python",
+    "register_argv",
+    "sample_evenly",
     "version",
     "vocab_tree_path",
 ]
@@ -205,8 +209,12 @@ def map_argv(
     num_threads: int | None = None,
     snapshot_path: Path | None = None,
     snapshot_every: int = 0,
+    use_priors: bool = False,
 ) -> list[str]:
-    """`sfm.mapper_argv`, on 4.2: incremental mapping into numbered models under `output`."""
+    """`sfm.mapper_argv`, on 4.2: incremental mapping into numbered models under `output`.
+
+    `use_priors` maps with the database's pose priors (`priors_argv` writes them) as
+    robust position constraints in bundle adjustment."""
     argv = [
         *_script(interpreter, "map"),
         "--database",
@@ -226,10 +234,327 @@ def map_argv(
         argv += ["--threads", str(num_threads)]
     if snapshot_path is not None and snapshot_every > 0:
         argv += ["--snapshot-path", str(snapshot_path), "--snapshot-every", str(snapshot_every)]
+    if use_priors:
+        argv.append("--use-priors")
     return argv
 
 
+def priors_argv(interpreter: str, database: Path, priors_file: Path) -> list[str]:
+    """Write `priors_file` (`priors.PriorPlan.write`) into the database as pose priors."""
+    return [
+        *_script(interpreter, "priors"),
+        "--database",
+        str(database),
+        "--priors",
+        str(priors_file),
+    ]
+
+
+def register_argv(
+    interpreter: str,
+    *,
+    reference_frames: Path,
+    reference_poses: Path,
+    frames: Path,
+    poses: Path,
+    work: Path,
+    output: Path,
+    camera_model: str = "SIMPLE_RADIAL",
+    max_image_size: int = 1600,
+    max_features: int = 4096,
+    first_octave: int | None = None,
+    max_frames: int = 60,
+    random_seed: int = 0,
+    num_threads: int | None = None,
+) -> list[str]:
+    """Register a new epoch's frames into a reference epoch's **fixed** model.
+
+    The reference's cameras and intrinsics are held exactly where its own pose stage put
+    them (`fix_existing_frames`, its camera constant), so registering a later epoch can
+    never move an earlier one; only the new frames are solved, in the reference's frame.
+    Writes `output` (JSON): which frames were used, the cross-epoch matches, every new
+    frame registered (its centre and world-to-camera rotation, reference frame), and how
+    far the reference moved (it must not)."""
+    argv = [
+        *_script(interpreter, "register"),
+        "--reference-frames",
+        str(reference_frames),
+        "--reference-poses",
+        str(reference_poses),
+        "--frames",
+        str(frames),
+        "--poses",
+        str(poses),
+        "--work",
+        str(work),
+        "--output",
+        str(output),
+        "--camera-model",
+        camera_model,
+        "--max-image-size",
+        str(max_image_size),
+        "--max-features",
+        str(max_features),
+        "--max-frames",
+        str(max_frames),
+        "--seed",
+        str(random_seed),
+    ]
+    if first_octave is not None:
+        argv += ["--first-octave", str(first_octave)]
+    if num_threads is not None:
+        argv += ["--threads", str(num_threads)]
+    return argv
+
+
+def sample_evenly(names: list[str], count: int) -> list[str]:
+    """`count` of the sorted `names`, evenly spread (first and last kept); all if fewer."""
+    ordered = sorted(names)
+    if count <= 0 or len(ordered) <= count:
+        return ordered
+    if count == 1:
+        return [ordered[0]]
+    step = (len(ordered) - 1) / (count - 1)
+    picked = sorted({round(i * step) for i in range(count)})
+    return [ordered[i] for i in picked]
+
+
 # --- the script half, run under an interpreter with pycolmap ------------------------------
+
+
+def _register(pycolmap: Any, parsed: argparse.Namespace) -> int:
+    """The script half of `register_argv` (design M3b section 6, commit 7, steps 1-8).
+
+    Verified on pycolmap 4.2.0: a seed `Reconstruction` is built from the database's own
+    cameras, rigs and frames, not by `transcribe_image_ids_to_database` (which fails on
+    frame data ids), and frames are **copied**, never symlinked (a symlinked folder gave
+    an empty database)."""
+    import json
+    import shutil
+
+    import numpy as np
+
+    seconds: dict[str, float] = {}
+    work: Path = parsed.work
+    if work.exists():
+        shutil.rmtree(work)
+    images = work / "images"
+    reference = pycolmap.Reconstruction(parsed.reference_poses)
+    new = pycolmap.Reconstruction(parsed.poses)
+    sides = {"ref": (reference, parsed.reference_frames), "new": (new, parsed.frames)}
+    used: dict[str, list[str]] = {}
+    for side, (model, folder) in sides.items():
+        names = sample_evenly([image.name for image in model.images.values()], parsed.max_frames)
+        (images / side).mkdir(parents=True)
+        for name in names:
+            shutil.copyfile(Path(folder) / name, images / side / name)
+        used[side] = names
+    database = work / "database.db"
+    began = time.monotonic()
+    reader = pycolmap.ImageReaderOptions()
+    reader.camera_model = parsed.camera_model
+    extraction = pycolmap.FeatureExtractionOptions()
+    extraction.use_gpu = False
+    extraction.num_threads = parsed.threads
+    extraction.max_image_size = parsed.max_image_size
+    extraction.sift.max_num_features = parsed.max_features
+    if parsed.first_octave is not None:
+        extraction.sift.first_octave = parsed.first_octave
+    cpu = pycolmap.Device.cpu
+    pycolmap.extract_features(
+        database,
+        images,
+        camera_mode=pycolmap.CameraMode.PER_FOLDER,
+        reader_options=reader,
+        extraction_options=extraction,
+        device=cpu,
+    )
+    seconds["extract"] = time.monotonic() - began
+    began = time.monotonic()
+    matching = pycolmap.FeatureMatchingOptions()
+    matching.use_gpu = False
+    matching.num_threads = parsed.threads
+    pycolmap.match_exhaustive(database, matching_options=matching, device=cpu)
+    seconds["match"] = time.monotonic() - began
+
+    db = pycolmap.Database.open(database)
+    try:
+        # COLMAP 4 turns each frame's EXIF GPS into a WGS84 pose prior at extraction. The
+        # alignment is visual by decision (D4) -- GNSS only checks it -- and those priors
+        # broke the fixed-reference mapping (an unordered_node_map key error), so none.
+        priors_from_exif = db.num_pose_priors()
+        db.clear_pose_priors()
+        by_id = {image.image_id: image for image in db.read_all_images()}
+        cameras = db.read_all_cameras()
+        rigs = db.read_all_rigs()
+        frames = db.read_all_frames()
+        pair_ids, geometries = db.read_two_view_geometries()
+    finally:
+        db.close()
+    side_of = {image_id: image.name.split("/", 1)[0] for image_id, image in by_id.items()}
+    cross_pairs = verified = cross_matches = 0
+    connected: set[int] = set()
+    for pair_id, geometry in zip(pair_ids, geometries, strict=True):
+        count = len(geometry.inlier_matches)
+        if count == 0:
+            continue
+        verified += 1
+        a, b = pycolmap.pair_id_to_image_pair(pair_id)
+        connected.update((a, b))
+        if side_of[a] != side_of[b]:
+            cross_pairs += 1
+            cross_matches += count
+    pose_camera = {
+        "ref": next(iter(reference.cameras.values())),
+        "new": next(iter(new.cameras.values())),
+    }
+    reference_by_name = {image.name: image for image in reference.images.values()}
+    seed = pycolmap.Reconstruction()
+    constant: set[int] = set()
+    for camera in cameras:
+        side = next(side_of[i] for i, image in by_id.items() if image.camera_id == camera.camera_id)
+        source = pose_camera[side]
+        camera.model = source.model
+        camera.params = source.params
+        seed.add_camera(camera)
+        if side == "ref":
+            constant.add(camera.camera_id)
+    for rig in rigs:
+        seed.add_rig(rig)
+    unmatched: list[str] = []
+    for frame in frames:
+        # One camera image per frame (the database's trivial rigs): its data id.
+        image = by_id[min(data.id for data in frame.data_ids)]
+        if side_of[image.image_id] != "ref":
+            continue
+        if image.image_id not in connected:
+            # A reference frame no verified pair touches is dropped from COLMAP's
+            # database cache, and seeding it anyway made incremental mapping raise
+            # ("key was not found in unordered_node_map"). It adds no constraint.
+            unmatched.append(image.name.split("/", 1)[1])
+            continue
+        frame.rig_from_world = reference_by_name[image.name.split("/", 1)[1]].cam_from_world()
+        seed.add_frame(frame)
+        seed.add_image(image)
+        seed.register_frame(frame.frame_id)
+    options = pycolmap.IncrementalPipelineOptions()
+    options.num_threads = parsed.threads
+    options.ba_use_gpu = False
+    (work / "tri").mkdir()
+    began = time.monotonic()
+    triangulated = pycolmap.triangulate_points(
+        seed, database, images, work / "tri", clear_points=True, options=options
+    )
+    seconds["triangulate"] = time.monotonic() - began
+    options.fix_existing_frames = True
+    options.constant_cameras = constant
+    options.multiple_models = False
+    options.random_seed = parsed.seed
+    pycolmap.set_random_seed(parsed.seed)
+    (work / "reg").mkdir()
+    began = time.monotonic()
+    models = pycolmap.incremental_mapping(
+        database, images, work / "reg", options, input_path=work / "tri"
+    )
+    seconds["map"] = time.monotonic() - began
+
+    def count_reference(model: Any) -> int:
+        return sum(1 for image in model.images.values() if image.name.startswith("ref/"))
+
+    chosen = max(models.values(), key=count_reference) if models else None
+    registered_new: dict[str, dict[str, object]] = {}
+    moved = 0.0
+    registered_reference = 0
+    if chosen is not None:
+        for image in chosen.images.values():
+            if not image.has_pose:
+                continue
+            side, name = image.name.split("/", 1)
+            if side == "new":
+                rotation = np.asarray(image.cam_from_world().rotation.matrix(), dtype=float)
+                registered_new[name] = {
+                    "centre": [float(v) for v in image.projection_center()],
+                    "rotation": rotation.tolist(),
+                }
+            else:
+                registered_reference += 1
+                before = reference_by_name[name].projection_center()
+                moved = max(moved, float(np.linalg.norm(image.projection_center() - before)))
+    document = {
+        "pycolmap": pycolmap.__version__,
+        "referenceFramesUsed": len(used["ref"]),
+        "newFramesUsed": len(used["new"]),
+        "crossPairs": cross_pairs,
+        "verifiedPairs": verified,
+        "crossInlierMatches": cross_matches,
+        "triangulatedPoints": int(triangulated.num_points3D()),
+        "exifPosePriorsCleared": priors_from_exif,
+        "registeredNew": dict(sorted(registered_new.items())),
+        "registeredReference": registered_reference,
+        "referenceFramesUnmatched": sorted(unmatched),
+        "referenceMovedMaxM": moved,
+        "seconds": {k: round(v, 2) for k, v in seconds.items()},
+    }
+    Path(parsed.output).write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")
+    sys.stdout.write(
+        f"colmap4: registered {len(registered_new)} of {len(used['new'])} new frames into "
+        f"{registered_reference} fixed reference frames ({cross_pairs} cross pairs); the "
+        f"reference moved {moved:.3g} m\n"
+    )
+    return 0
+
+
+def _pose_prior(pycolmap: Any, camera_id: int, image_id: int, position: Any, cov: Any) -> Any:
+    """A CARTESIAN position prior on one camera image (`data_t` id is the image id)."""
+    import numpy as np
+
+    return pycolmap.PosePrior(
+        corr_data_id=pycolmap.data_t(
+            sensor_id=pycolmap.sensor_t(type=pycolmap.SensorType.CAMERA, id=camera_id),
+            id=image_id,
+        ),
+        position=np.asarray(position, dtype=np.float64),
+        position_covariance=np.asarray(cov, dtype=np.float64),
+        coordinate_system=pycolmap.PosePriorCoordinateSystem.CARTESIAN,
+    )
+
+
+def _write_priors(pycolmap: Any, parsed: argparse.Namespace) -> int:
+    """Replace the database's pose priors with `--priors`; refuse a name it has not got."""
+    import json
+
+    document = json.loads(Path(parsed.priors).read_text(encoding="utf-8"))
+    if document.get("coordinateSystem") != "CARTESIAN":
+        raise SystemExit(
+            f"colmap4: priors must be CARTESIAN, not {document.get('coordinateSystem')}"
+        )
+    database = pycolmap.Database.open(parsed.database)
+    try:
+        images = {image.name: image for image in database.read_all_images()}
+        wanted = document.get("priors") or []
+        missing = sorted(p["name"] for p in wanted if p["name"] not in images)
+        if missing:
+            raise SystemExit(
+                f"colmap4: {len(missing)} prior(s) name frames the database has not got: "
+                f"{', '.join(missing[:5])}"
+            )
+        database.clear_pose_priors()
+        for prior in wanted:
+            image = images[prior["name"]]
+            database.write_pose_prior(
+                _pose_prior(
+                    pycolmap,
+                    image.camera_id,
+                    image.image_id,
+                    prior["position"],
+                    prior["covariance"],
+                )
+            )
+        written = database.num_pose_priors()
+    finally:
+        database.close()
+    sys.stdout.write(f"colmap4: {written} pose prior(s) written\n")
+    return 0
 
 
 def _extraction(pycolmap: Any, parsed: argparse.Namespace) -> tuple[Any, Any]:
@@ -292,6 +617,11 @@ def _mapping(pycolmap: Any, parsed: argparse.Namespace) -> Any:
     if parsed.snapshot_path is not None and parsed.snapshot_every > 0:
         options.snapshot_path = parsed.snapshot_path
         options.snapshot_frames_freq = parsed.snapshot_every
+    if getattr(parsed, "use_priors", False):
+        # A robust (Cauchy) loss on each prior, at COLMAP's own scale (7.815: chi-square
+        # with 3 dof at 95%), so one wild fix is down-weighted rather than obeyed.
+        options.use_prior_position = True
+        options.use_robust_loss_on_prior_position = True
     return options
 
 
@@ -323,6 +653,21 @@ def _parser() -> argparse.ArgumentParser:
     mapper.add_argument("--hold-extra", action="store_true")
     mapper.add_argument("--snapshot-path", type=Path, default=None)
     mapper.add_argument("--snapshot-every", type=int, default=0)
+    mapper.add_argument("--use-priors", action="store_true")
+    priors = commands.add_parser("priors")
+    priors.add_argument("--database", type=Path, required=True)
+    priors.add_argument("--priors", type=Path, required=True)
+    register = commands.add_parser("register")
+    for flag in ("--reference-frames", "--reference-poses", "--frames", "--poses", "--work"):
+        register.add_argument(flag, type=Path, required=True)
+    register.add_argument("--output", type=Path, required=True)
+    register.add_argument("--camera-model", default="SIMPLE_RADIAL")
+    register.add_argument("--max-image-size", type=int, default=1600)
+    register.add_argument("--max-features", type=int, default=4096)
+    register.add_argument("--first-octave", type=int, default=None)
+    register.add_argument("--max-frames", type=int, default=60)
+    register.add_argument("--seed", type=int, default=0)
+    register.add_argument("--threads", type=int, default=-1)
     commands.add_parser("version")
     check = commands.add_parser("self-check")
     check.add_argument("--vocab-tree", type=Path, default=None)
@@ -365,8 +710,25 @@ def _self_check(pycolmap: Any, parsed: argparse.Namespace) -> int:
             hold_extra=False,
             snapshot_path=Path("s"),
             snapshot_every=3,
+            use_priors=True,
         ),
     )
+    _pose_prior(pycolmap, 1, 1, [0.0, 0.0, 0.0], [[1.0, 0, 0], [0, 1.0, 0], [0, 0, 4.0]])
+    for name in ("open", "read_all_images", "write_pose_prior", "clear_pose_priors"):
+        assert callable(getattr(pycolmap.Database, name)), name
+    # `register`: every name its script half reaches for.
+    registering = pycolmap.IncrementalPipelineOptions()
+    registering.fix_existing_frames = True
+    registering.constant_cameras = {1}
+    registering.multiple_models = False
+    for name in ("triangulate_points", "pair_id_to_image_pair", "set_random_seed"):
+        assert callable(getattr(pycolmap, name)), name
+    for name in ("add_camera", "add_rig", "add_frame", "add_image", "register_frame"):
+        assert callable(getattr(pycolmap.Reconstruction, name)), name
+    for name in ("read_two_view_geometries", "read_all_cameras", "read_all_rigs"):
+        assert callable(getattr(pycolmap.Database, name)), name
+    assert callable(pycolmap.Database.read_all_frames)
+    assert pycolmap.CameraMode.PER_FOLDER is not None
     words = ""
     if parsed.vocab_tree is not None:
         # Loaded, not just found: a FLANN tree (3.9.1's) is refused right here --
@@ -374,7 +736,7 @@ def _self_check(pycolmap: Any, parsed: argparse.Namespace) -> int:
         index = pycolmap.VisualIndex.read(parsed.vocab_tree)
         assert index.num_visual_words() > 0, parsed.vocab_tree
         words = f", vocabulary tree {index.num_visual_words()} words"
-    sys.stdout.write(f"colmap4: {pycolmap.COLMAP_version} ok{words}\n")
+    sys.stdout.write(f"colmap4: {pycolmap.COLMAP_version} ok{words}, priors ok, register ok\n")
     return 0
 
 
@@ -394,6 +756,10 @@ def main(args: list[str] | None = None) -> int:
         return 0
     if parsed.command == "self-check":
         return _self_check(pycolmap, parsed)
+    if parsed.command == "priors":
+        return _write_priors(pycolmap, parsed)
+    if parsed.command == "register":
+        return _register(pycolmap, parsed)
     cpu = pycolmap.Device.cpu
     began = time.monotonic()
     if parsed.command == "extract":
@@ -408,11 +774,14 @@ def main(args: list[str] | None = None) -> int:
         )
     elif parsed.command == "match":
         options, passes = _matching(pycolmap, parsed)
-        run = {
+        # Typed as one callable: with pycolmap installed its stubs give the three matchers
+        # different signatures, whose join mypy cannot call ("unknown type").
+        matchers: dict[str, Callable[..., object]] = {
             "sequential": pycolmap.match_sequential,
             "spatial": pycolmap.match_spatial,
             "exhaustive": pycolmap.match_exhaustive,
-        }[parsed.matcher]
+        }
+        run = matchers[parsed.matcher]
         for pairing in passes:
             run(parsed.database, matching_options=options, pairing_options=pairing, device=cpu)
     else:
