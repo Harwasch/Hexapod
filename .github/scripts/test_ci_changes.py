@@ -2,14 +2,29 @@
 
 from __future__ import annotations
 
+import io
+import os
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
-from ci_changes import JOBS, ROOT, ZERO_SHA, decide, diff_names, nightly_due, outputs
+from ci_changes import (
+    DRAFT_NOTE,
+    FAST,
+    JOBS,
+    ROOT,
+    ZERO_SHA,
+    decide,
+    diff_names,
+    main,
+    nightly_due,
+    outputs,
+)
 
 BEFORE = "1" * 40
 NODE = {"web", "e2e"}
@@ -244,6 +259,89 @@ class Dispatch(unittest.TestCase):
         self.assertEqual(ran(decide("workflow_dispatch", None)[0]), FULL)
 
 
+class Draft(unittest.TestCase):
+    """A draft pull request runs the fast checks alone; marking it ready runs the rest."""
+
+    def draft(self, *paths: str) -> dict[str, bool]:
+        return decide("pull_request", list(paths), draft=True)[0]
+
+    def test_a_draft_runs_only_fast_jobs(self) -> None:
+        for paths in (
+            [".github/workflows/ci.yml"],
+            ["brand-new-dir/thing.py"],
+            ["apps/api/app/main.py", "apps/web/src/cesium/globe.ts"],
+            [PAGE_ONLY],
+            ["hardware/arm/data/tasks.yaml"],
+        ):
+            with self.subTest(paths=paths):
+                needed = self.draft(*paths)
+                self.assertLessEqual(ran(needed), set(FAST))
+                self.assertFalse(needed["scene"])
+                self.assertIn("shards=[1]", outputs(needed))
+
+    def test_a_draft_still_runs_the_fast_jobs_its_diff_needs(self) -> None:
+        self.assertEqual(ran(self.draft(".github/workflows/ci.yml")), {"workflows", "format"})
+        self.assertEqual(ran(self.draft("docs/DEPLOYMENT.md")), {"workflows", "format"})
+        self.assertEqual(ran(self.draft("tools/pipeline/stages.py")), set())
+
+    def test_a_draft_checks_formatting_where_the_web_job_would_have(self) -> None:
+        self.assertEqual(ran(self.draft(PAGE_ONLY)), {"format"})
+
+    def test_a_diff_that_failed_runs_the_fast_jobs_on_a_draft(self) -> None:
+        self.assertEqual(ran(decide("pull_request", None, draft=True)[0]), set(FAST))
+
+    def test_a_ready_pull_request_is_unchanged(self) -> None:
+        for paths in (
+            [".github/workflows/ci.yml"],
+            ["apps/api/app/main.py"],
+            [PAGE_ONLY],
+            ["docs/HANDOFF.md"],
+        ):
+            with self.subTest(paths=paths):
+                self.assertEqual(
+                    decide("pull_request", paths, draft=False), decide("pull_request", paths)
+                )
+
+    def test_push_dispatch_and_nightly_are_never_drafts(self) -> None:
+        self.assertEqual(
+            decide("push", ["apps/api/app/main.py"], before=BEFORE, draft=True),
+            decide("push", ["apps/api/app/main.py"], before=BEFORE),
+        )
+        self.assertEqual(ran(decide("workflow_dispatch", None, draft=True)[0]), FULL)
+        self.assertEqual(ran(decide("schedule", None, draft=True)[0]), FULL)
+
+    def test_the_command_line_ignores_draft_outside_a_pull_request(self) -> None:
+        for event, extra, expected in (
+            ("pull_request", ["--draft", "true"], "api=false"),
+            ("pull_request", ["--draft", "false"], "api=true"),
+            ("push", ["--draft", "true", "--before", BEFORE], "api=true"),
+            ("workflow_dispatch", ["--draft", "true"], "api=true"),
+        ):
+            with self.subTest(event=event, extra=extra):
+                out = io.StringIO()
+                with (
+                    mock.patch.dict(os.environ, clear=False) as env,
+                    mock.patch("sys.stdin", io.StringIO("apps/api/app/main.py\n")),
+                    redirect_stdout(out),
+                ):
+                    env.pop("GITHUB_OUTPUT", None)
+                    env.pop("GITHUB_STEP_SUMMARY", None)
+                    main(["--event", event, "--stdin", *extra])
+                self.assertIn(expected, out.getvalue())
+
+    def test_the_summary_says_why_on_a_draft(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "summary.md"
+            with (
+                mock.patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": str(summary)}) as env,
+                mock.patch("sys.stdin", io.StringIO("apps/api/app/main.py\n")),
+                redirect_stdout(io.StringIO()),
+            ):
+                env.pop("GITHUB_OUTPUT", None)
+                main(["--event", "pull_request", "--stdin", "--draft", "true"])
+            self.assertTrue(summary.read_text().startswith(DRAFT_NOTE))
+
+
 class Workflow(unittest.TestCase):
     """ci.yml's gates: every job runs when the changes job fails (fail open)."""
 
@@ -264,6 +362,20 @@ class Workflow(unittest.TestCase):
                 self.assertIn("!cancelled()", job["if"])
                 self.assertIn("!= 'false'", job["if"])
                 self.assertNotIn("== 'true'", job["if"])
+
+    def test_a_pull_request_reruns_when_marked_ready_and_says_whether_it_is_a_draft(
+        self,
+    ) -> None:
+        text = (ROOT / ".github/workflows/ci.yml").read_text()
+        # PyYAML reads the `on:` key as True.
+        triggers = yaml.safe_load(text)[True]
+        self.assertEqual(
+            set(triggers["pull_request"]["types"]),
+            {"opened", "synchronize", "reopened", "ready_for_review"},
+        )
+        (step,) = [s for s in self.jobs["changes"]["steps"] if s.get("id") == "filter"]
+        self.assertEqual(step["env"]["DRAFT"], "${{ github.event.pull_request.draft }}")
+        self.assertIn('--draft "$DRAFT"', step["run"])
 
     def test_the_shard_matrix_has_a_fallback(self) -> None:
         shard = self.jobs["e2e-shard"]

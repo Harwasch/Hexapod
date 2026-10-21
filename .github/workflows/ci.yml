@@ -3,7 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+  # A draft runs the fast checks alone (the `changes` job); marking it ready for review
+  # starts the full run, and every push after that runs in full too.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   # Lets CI be run on demand against a feature branch. Without it the only
   # triggers are main and pull requests, so work on a branch with no PR open
   # cannot be verified by CI at all -- which matters here because some checks
@@ -29,7 +32,9 @@ jobs:
   # job): a pull request runs only the jobs whose inputs it changed, and a push to main
   # only those whose inputs changed since the push's `before`; a change to this file or
   # to ci_changes.py, a new branch, a force-push, an unclassified path, a diff that
-  # cannot be computed, a dispatch and the nightly run everything.
+  # cannot be computed, a dispatch and the nightly run everything. A draft pull request
+  # runs only the fast checks (format, workflows) whatever it touched; to run the rest on
+  # a draft, mark it ready or dispatch this workflow on its branch.
   #
   # A job-level `if:` rather than a workflow-level `paths:` filter, deliberately: a
   # workflow that `paths:` leaves out never starts, so a required check on it waits for
@@ -69,9 +74,10 @@ jobs:
           BEFORE: ${{ github.event.before }}
           FORCED: ${{ github.event.forced }}
           HEAD: ${{ github.sha }}
+          DRAFT: ${{ github.event.pull_request.draft }}
         run: >-
           python3 .github/scripts/ci_changes.py --event "$EVENT" --base "$BASE"
-          --before "$BEFORE" --forced "$FORCED" --head "$HEAD"
+          --before "$BEFORE" --forced "$FORCED" --head "$HEAD" --draft "$DRAFT"
 
   web:
     name: Web · lint, typecheck, test, build
