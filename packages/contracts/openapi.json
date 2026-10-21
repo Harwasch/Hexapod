@@ -6117,6 +6117,27 @@
           "joinMethod": {
             "$ref": "#/components/schemas/EpochJoinMethod"
           },
+          "joinPointAccuracyM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Joinpointaccuracym"
+          },
+          "joinPointSource": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JoinPointSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "observedAt": {
             "format": "date-time",
             "title": "Observedat",
@@ -6168,6 +6189,8 @@
           "platform",
           "status",
           "joinMethod",
+          "joinPointSource",
+          "joinPointAccuracyM",
           "alignment",
           "quality",
           "currentAssetId",
@@ -9334,6 +9357,15 @@
         ],
         "title": "JobStepRead",
         "type": "object"
+      },
+      "JoinPointSource": {
+        "description": "Which point a capture was matched to a site by (``spatial`` joins): the location its\nvideo's container carried (``video``), else the one sent with the upload (``upload``:\nthe browser's fix, or a place typed for the run). ADR 0013, \"Joining a site by the\nvideo's GPS\".",
+        "enum": [
+          "video",
+          "upload"
+        ],
+        "title": "JoinPointSource",
+        "type": "string"
       },
       "KnowledgeCellRead": {
         "additionalProperties": false,

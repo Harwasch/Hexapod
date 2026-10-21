@@ -852,10 +852,49 @@ def test_0033_downgrade_folds_visual_epoch_out_of_every_json_record(
         command.upgrade(alembic_config, "head")
 
 
+def test_0034a_backfills_every_spatial_join_as_matched_by_the_upload(
+    alembic_config: Config, engine: Engine, db: Session
+) -> None:
+    """Before 0034a every spatial join was by the located point -- a typed place or the
+    fix sent with the upload -- so that is what the backfill says; the other joins were
+    matched by no point and stay null. Down, the two columns are gone."""
+    from tests.test_epochs import make_site
+
+    command.downgrade(alembic_config, "0034")
+    try:
+        site = make_site(db)
+        db.commit()
+        ids = {"new-site": uuid.uuid4(), "spatial": uuid.uuid4()}
+        for ordinal, (method, epoch_id) in enumerate(ids.items(), start=1):
+            # As 0034's table holds it: the ORM model already has 0034a's columns.
+            db.execute(
+                text(
+                    "INSERT INTO epochs (id, site_id, ordinal, observed_at, observed_at_source,"
+                    " footprint, platform, status, join_method) SELECT :id, s.id, :ordinal,"
+                    " now(), 'created', ST_Multi(s.boundary), 'unknown', 'published', :method"
+                    " FROM sites s WHERE s.id = :site"
+                ),
+                {"id": epoch_id, "ordinal": ordinal, "method": method, "site": site.id},
+            )
+        db.commit()
+        command.upgrade(alembic_config, "0034a")
+        with engine.connect() as connection:
+            rows = dict(
+                connection.execute(text("SELECT id, join_point_source FROM epochs")).tuples().all()
+            )
+        assert rows == {ids["new-site"]: None, ids["spatial"]: "upload"}
+        command.downgrade(alembic_config, "0034")
+        columns = {c["name"] for c in inspect(engine).get_columns("epochs")}
+        assert "join_point_source" not in columns and "join_point_accuracy_m" not in columns
+    finally:
+        db.rollback()
+        command.upgrade(alembic_config, "head")
+
+
 def test_0035_downgrade_drops_the_maps_and_nothing_else(
     alembic_config: Config, engine: Engine, db: Session
 ) -> None:
-    """An epoch with a confidence map, then down to 0034: the table goes, the epoch and its
+    """An epoch with a confidence map, then down to 0034a: the table goes, the epoch and its
     asset stay; up again, the table is back, empty. A map dies with its epoch or its asset
     and outlives the run that measured it."""
     from app.models import EpochMap
@@ -899,7 +938,7 @@ def test_0035_downgrade_drops_the_maps_and_nothing_else(
     epoch_id, asset_id = epoch.id, asset.id
     db.close()
 
-    command.downgrade(alembic_config, "0034")
+    command.downgrade(alembic_config, "0034a")
     try:
         inspector = inspect(engine)
         assert not inspector.has_table("epoch_maps")

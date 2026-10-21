@@ -1363,6 +1363,9 @@ def register(
         site, _frame, join = _target(db, capture, job_id, registration, echo)
     if epoch is None:
         observed_at, observed_source = _observed_at(capture, registration)
+        source, accuracy = (
+            epochs.spatial_join_point(capture) if join is EpochJoinMethod.SPATIAL else (None, None)
+        )
         ordinal = (
             db.scalar(select(func.max(Epoch.ordinal)).where(Epoch.site_id == site.id)) or 0
         ) + 1
@@ -1377,6 +1380,8 @@ def register(
             platform=epoch_platform(capture, registration, None),
             status=EpochStatus.PUBLISHED.value,
             join_method=join.value,
+            join_point_source=source,
+            join_point_accuracy_m=accuracy,
             alignment=alignment_of(capture, registration),
             quality=quality,
         )

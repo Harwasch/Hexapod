@@ -17,6 +17,7 @@ and a single `package` implementation turns either one into the same `splat/` ti
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import hashlib
 import json
@@ -468,6 +469,18 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         for line in text.splitlines():
             ctx.log(line)
         meta = video.parse_probe(text)
+        if VIDEO_LOCATION_PARAM in ctx.params:
+            # The worker's reading of the container, which already chose this capture's
+            # site (`apps/api/app/services/video_location.py`): one source of truth, so
+            # a clip whose atoms disagree is never matched by one and placed by another.
+            given = _worker_location(ctx.param(VIDEO_LOCATION_PARAM))
+            ctx.log(
+                "location: the worker's reading of the container"
+                + ("" if given is None else f" ({given.lat}, {given.lon})")
+                + ", not ffmpeg's"
+                + ("" if meta.location is None else f" ({meta.location.lat}, {meta.location.lon})")
+            )
+            meta = dataclasses.replace(meta, location=given)
         hdr = _hdr_decision(meta, hdr_rule)
         tonemap = video.TONEMAP_FILTER if hdr["tonemapped"] else None
         ctx.log(f"hdr: {hdr['reason']}")
@@ -3577,6 +3590,37 @@ def _exif_gps_aligned(
         metrics=metrics,
         summary=f"{len(common)} EXIF fixes, {rms:.2f} m rms residual",
     )
+
+
+#: The `normalize` parameter the worker hands its reading of the video's location in
+#: (`apps/api/app/worker/params.py`): `{lat, lon, altitudeM, accuracyM, key}`, or None when
+#: the container carried none it could vouch for. Present, it is the location.
+VIDEO_LOCATION_PARAM = "video_location"
+
+
+def _worker_location(value: object) -> video.Location | None:
+    """The worker's reading as a `video.Location`, or None for none or for anything that is
+    not a point on the globe -- never ffmpeg's own reading instead."""
+    if not isinstance(value, dict):
+        return None
+    lat, lon = _finite_number(value.get("lat")), _finite_number(value.get("lon"))
+    if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    accuracy = _finite_number(value.get("accuracyM"))
+    return video.Location(
+        lat=lat,
+        lon=lon,
+        altitude_m=_finite_number(value.get("altitudeM")),
+        source=f"worker:{value.get('key') or 'unknown'}",
+        accuracy_m=accuracy if accuracy is not None and accuracy > 0 else None,
+    )
+
+
+def _finite_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
 
 
 def _sole_location(

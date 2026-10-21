@@ -531,18 +531,48 @@ def parse_iso6709(text: str) -> tuple[float, float, float | None] | None:
     """`+37.7749-122.4194+010.000/` -> (37.7749, -122.4194, 10.0).
 
     ISO 6709 signs are part of the numbers, which is what makes the string parseable
-    without separators at all. Anything that does not match that shape returns None
-    rather than a coordinate nobody can vouch for.
+    without separators at all. The compact forms -- degrees and minutes `+DDMM.M`,
+    degrees, minutes and seconds `+DDMMSS.S` -- are told apart by their count of integer
+    digits and converted (`_iso6709_component`). Anything that does not match, or is not a
+    point on the globe, returns None rather than a coordinate nobody can vouch for. The
+    API's pre-run reader (`apps/api/app/services/video_location.py`) parses the same way,
+    and a test there holds the two to one answer per string.
     """
     match = _ISO6709_RE.match(text.strip())
     if match is None:
         return None
+    lat = _iso6709_component(match.group("lat"), 2)
+    lon = _iso6709_component(match.group("lon"), 3)
+    if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
     altitude = match.group("alt")
-    return (
-        float(match.group("lat")),
-        float(match.group("lon")),
-        None if altitude is None else float(altitude),
-    )
+    return lat, lon, None if altitude is None else float(altitude)
+
+
+def _iso6709_component(text: str, degree_digits: int) -> float | None:
+    """One signed ISO 6709 component in degrees, by its count of integer digits: up to
+    `degree_digits` (2 for latitude, 3 for longitude) is decimal degrees; two more is
+    degrees and decimal minutes (+DDMM.M); four more is degrees, minutes and decimal
+    seconds (+DDMMSS.S). Any other count, or minutes or seconds of 60 or more, is None.
+    Read as decimal degrees, +0030.0 (half a degree) was thirty."""
+    sign = -1.0 if text[0] == "-" else 1.0
+    whole, _, fraction = text[1:].partition(".")
+    tail = f".{fraction}" if fraction else ""
+    count = len(whole)
+    if count <= degree_digits:
+        return sign * float(text[1:])
+    if count == degree_digits + 2:
+        minutes = float(whole[degree_digits:] + tail)
+        if minutes >= 60:
+            return None
+        return sign * (int(whole[:degree_digits]) + minutes / 60)
+    if count == degree_digits + 4:
+        minutes = int(whole[degree_digits : degree_digits + 2])
+        seconds = float(whole[degree_digits + 2 :] + tail)
+        if minutes >= 60 or seconds >= 60:
+            return None
+        return sign * (int(whole[:degree_digits]) + minutes / 60 + seconds / 3600)
+    return None
 
 
 def extract_frames_argv(

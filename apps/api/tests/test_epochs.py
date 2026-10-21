@@ -6,6 +6,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pytest
 from geoalchemy2 import WKBElement
 from geoalchemy2.shape import from_shape
 from shapely.geometry import MultiPolygon, box
@@ -309,6 +310,176 @@ def test_a_phone_capture_joins_by_location_only_a_site_a_phone_made(db: Session)
     ):
         found = epochs.frame_for_run(db, capture)
         assert found is not None and found.site_id == site.id
+
+
+def _video(lat: float, lon: float, accuracy: float | None = None) -> dict[str, Any]:
+    """`metadata.videoLocation` as the worker records it (`worker/video_gps.py`)."""
+    return {"videoLocation": {"lat": lat, "lon": lon, "accuracyM": accuracy, "key": "iso6709"}}
+
+
+def test_a_video_with_gps_uploaded_from_10_km_away_joins_the_site_it_shows(db: Session) -> None:
+    """Recorded on the ranch, uploaded from home: the browser's fix is 10 km off, and the
+    video's own location is where it was made (ADR 0013, "Joining a site by the video's
+    GPS"). The join takes the video's, and says so."""
+    site = make_site(db)
+    home = {"lat": _north_of(10_000), "lon": ORIGIN[1]}
+    capture = _capture(db, "c", {**home, **_video(ORIGIN[0], ORIGIN[1], 5.0)})
+    uploaded_only = _capture(db, "u", home)
+    db.commit()
+
+    found = epochs.frame_for_run(db, capture)
+
+    assert found is not None and found.site_id == site.id
+    assert epochs.frame_for_run(db, uploaded_only) is None
+    point = epochs.join_point(capture, None)
+    assert point is not None and (point.source, point.accuracy_m) == ("video", 5.0)
+
+
+def test_a_video_without_gps_falls_back_to_where_it_was_uploaded_from(db: Session) -> None:
+    """iOS can strip the location (a video picked through Safari or a Photos share with
+    location off): the worker records that it looked and found none (`videoLocation:
+    null`), and the join is today's, by the upload-time fix."""
+    site = make_site(db)
+    edge = ORIGIN[0] + 0.0005
+    near = {"lat": _north_of(20, edge), "lon": ORIGIN[1]}
+    stripped = _capture(db, "s", {**near, "videoLocation": None})
+    garbled = _capture(db, "g", {**near, "videoLocation": {"lat": "north", "lon": 1}})
+    db.commit()
+
+    for capture in (stripped, garbled):
+        found = epochs.frame_for_run(db, capture)
+        assert found is not None and found.site_id == site.id
+        point = epochs.join_point(capture, None)
+        assert point is not None and (point.source, point.accuracy_m) == ("upload", None)
+        assert point.buffer_m == epochs.SPATIAL_JOIN_BUFFER_M
+
+
+def test_a_valid_video_fix_that_matches_no_site_makes_a_new_one(db: Session) -> None:
+    """Ruled after the cross review of #72: a valid video fix is authoritative. Recorded
+    500 m from any site and uploaded from beside one, the capture joins nothing -- the
+    upload's point is not tried after the video's misses -- and its run makes a new site.
+    The upload decides only when the video has no usable location."""
+    site = make_site(db)
+    edge = ORIGIN[0] + 0.0005
+    beside = {"lat": _north_of(10, edge), "lon": ORIGIN[1]}
+    elsewhere = _capture(db, "c", {**beside, **_video(_north_of(500, edge), ORIGIN[1], 5.0)})
+    unusable = _capture(db, "u", {**beside, "videoLocation": None})
+    db.commit()
+
+    assert epochs.frame_for_run(db, elsewhere) is None
+    point = epochs.join_point(elsewhere, None)
+    assert point is not None and point.source == "video"
+    found = epochs.frame_for_run(db, unusable)
+    assert found is not None and found.site_id == site.id
+
+
+def test_a_video_near_two_sites_joins_the_nearer(db: Session) -> None:
+    """A wide fix can reach two sites; the nearer boundary wins, whichever is older."""
+    edge = ORIGIN[0] + 0.0005
+    far = make_site(db, "far")  # its north edge 35 m south of the point; made first
+    # Its south edge 50 m north of `far`'s north edge (a square is 0.001 deg across).
+    near = make_site(db, "near", at=(ORIGIN[1], _north_of(50, edge) + 0.0005))
+    point = _north_of(35, edge)  # 35 m north of `far`'s edge, 15 m south of `near`'s
+    capture = _capture(db, "c", _video(point, ORIGIN[1], 20.0))
+    db.commit()
+
+    found = epochs.frame_for_run(db, capture)
+
+    assert found is not None and found.site_id == near.id and far.id != near.id
+
+
+@pytest.mark.parametrize(
+    ("accuracy", "metres", "joins"),
+    [
+        (None, 20, True),  # no accuracy written: the D3 default, 25 m
+        (None, 30, False),
+        (20.0, 35, True),  # widened: 2 x 20 = 40 m
+        (20.0, 45, False),
+        (3.0, 8, True),  # narrowed: 2 x 3 = 6 m, held at the 10 m floor
+        (3.0, 20, False),  # inside the default 25 m, outside a good fix's 10 m
+        (1000.0, 45, True),  # a fix no better than a kilometre: capped at 50 m
+        (1000.0, 60, False),
+    ],
+)
+def test_the_buffer_follows_the_videos_accuracy(
+    db: Session, accuracy: float | None, metres: float, joins: bool
+) -> None:
+    site = make_site(db)
+    edge = ORIGIN[0] + 0.0005
+    capture = _capture(db, "c", _video(_north_of(metres, edge), ORIGIN[1], accuracy))
+    db.commit()
+
+    found = epochs.frame_for_run(db, capture)
+
+    assert (found is not None and found.site_id == site.id) is joins
+
+
+def test_the_video_buffer_rule() -> None:
+    assert epochs.video_join_buffer_m(None) == epochs.SPATIAL_JOIN_BUFFER_M
+    assert epochs.video_join_buffer_m(5.0) == 10.0
+    assert epochs.video_join_buffer_m(12.5) == 25.0
+    assert epochs.video_join_buffer_m(18.0) == 36.0
+    assert epochs.video_join_buffer_m(65.0) == epochs.VIDEO_JOIN_MAX_M == 50.0
+    assert epochs.video_join_buffer_m(0.5) == epochs.VIDEO_JOIN_MIN_M == 10.0
+    assert epochs.VIDEO_JOIN_MAX_M < epochs.EXPLICIT_JOIN_MAX_M
+
+
+def test_a_phone_capture_joins_by_its_videos_gps_only_a_site_a_phone_made(db: Session) -> None:
+    """The video's location is as forgeable as the browser's -- the phone writes both --
+    so it is held to the same rule (`phone._check_phone_site`): a phone capture whose
+    video says it stands in a desktop-made or seeded site does not join it, even with a
+    wide accuracy; one whose video says it stands in a phone-made site does."""
+    from app.api.v1.phone import ORIGIN as PHONE
+
+    by_desk = _capture(db, "desk-maker")
+    desk_site = make_site(db, "desk", metadata={"captureId": str(by_desk.id)})
+    by_phone = _capture(db, "phone-maker", {"origin": PHONE})
+    phone_site = make_site(
+        db, "phone", at=(ORIGIN[1] + 0.05, ORIGIN[0]), metadata={"captureId": str(by_phone.id)}
+    )
+    seeded = make_site(db, "seeded", at=(ORIGIN[1] - 0.05, ORIGIN[0]))
+    beside_phone = {"lat": ORIGIN[0], "lon": ORIGIN[1] + 0.05}
+    at_desk = _capture(
+        db, "p1", {"origin": PHONE, **beside_phone, **_video(ORIGIN[0], ORIGIN[1], 1e6)}
+    )
+    at_seeded = _capture(
+        db, "p2", {"origin": PHONE, **beside_phone, **_video(ORIGIN[0], ORIGIN[1] - 0.05)}
+    )
+    at_phone = _capture(db, "p3", {"origin": PHONE, **_video(ORIGIN[0], ORIGIN[1] + 0.05, 4.0)})
+    db.commit()
+
+    assert epochs.frame_for_run(db, at_desk) is None
+    assert epochs.frame_for_run(db, at_seeded) is None
+    found = epochs.frame_for_run(db, at_phone)
+    assert found is not None and found.site_id == phone_site.id
+    assert desk_site.id != seeded.id
+    # Decided again on every run: once the site is no longer a phone capture's (its
+    # metadata replaced by PATCH), the next run of a capture not yet its epoch does not
+    # join it, whatever its video says.
+    phone_site.metadata_ = {"note": "edited by hand"}
+    db.commit()
+    assert epochs.frame_for_run(db, at_phone) is None
+
+
+def test_a_rejected_capture_is_kept_where_its_video_says(db: Session) -> None:
+    """`record_rejected` takes the same answer: the video's site, and a footprint about
+    the video's point, not the upload's."""
+    site = make_site(db)
+    home = {"lat": _north_of(10_000), "lon": ORIGIN[1]}
+    capture = _capture(db, "c", {**home, **_video(ORIGIN[0], ORIGIN[1], 5.0)})
+    db.commit()
+
+    epoch = epochs.record_rejected(
+        db, uuid.uuid4(), capture, epochs.Rejection(stage_id="quality", gate={})
+    )
+
+    assert epoch is not None and epoch.site_id == site.id and epoch.join_method == "spatial"
+    assert (epoch.join_point_source, epoch.join_point_accuracy_m) == ("video", 5.0)
+    assert epochs.distance_to_site_m(db, site.id, ORIGIN[0], ORIGIN[1]) == 0.0
+    from geoalchemy2.shape import to_shape
+
+    centre = to_shape(epoch.footprint).centroid
+    assert abs(centre.y - ORIGIN[0]) < 1e-5 and abs(centre.x - ORIGIN[1]) < 1e-5
 
 
 def test_the_spatial_match_is_answered_from_an_index_on_the_boundary(db: Session) -> None:

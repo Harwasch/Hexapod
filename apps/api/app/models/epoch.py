@@ -35,6 +35,7 @@ from app.models.enums import (
     EpochPlatform,
     EpochStatus,
     HeightDatum,
+    JoinPointSource,
     ObservedAtSource,
     SiteFrameSource,
 )
@@ -89,6 +90,9 @@ class Epoch(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint("ordinal >= 1", name="ck_epochs_ordinal"),
         CheckConstraint(_in("status", EpochStatus), name="ck_epochs_status"),
         CheckConstraint(_in("join_method", EpochJoinMethod), name="ck_epochs_join_method"),
+        CheckConstraint(
+            _in("join_point_source", JoinPointSource), name="ck_epochs_join_point_source"
+        ),
         CheckConstraint(_in("platform", EpochPlatform), name="ck_epochs_platform"),
         CheckConstraint(
             _in("observed_at_source", ObservedAtSource), name="ck_epochs_observed_at_source"
@@ -116,6 +120,12 @@ class Epoch(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     platform: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     join_method: Mapped[str] = mapped_column(String(20), nullable=False)
+    # A `spatial` join's point (ADR 0013, "Joining a site by the video's GPS"): `video`,
+    # the location its video's container carried, with the horizontal accuracy the phone
+    # wrote (null when none); else `upload`, the one sent with the upload. Null for the
+    # other joins, which no point decided. Set once, when the epoch is made.
+    join_point_source: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    join_point_accuracy_m: Mapped[float | None] = mapped_column(Float, nullable=True)
     # How this epoch was aligned to the ones before it (M3 fills it).
     alignment: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # A `CaptureQuality` dump, the same shape as `captures.quality`.

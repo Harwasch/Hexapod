@@ -512,6 +512,46 @@ def test_an_echoed_frame_joins_that_site_as_the_next_epoch(
     assert _count(db, Site) == 1
 
 
+def test_a_spatial_epoch_records_which_point_matched_it(
+    db: Session, storage: S3Storage, tmp_path: Path, client: Any
+) -> None:
+    """A capture matched to its site by location says by which point (ADR 0013, "Joining a
+    site by the video's GPS"): its video's own GPS, with the accuracy the phone wrote, or
+    the location sent with its upload. One that named its site, or made it, was matched by
+    neither, and says nothing."""
+    first = _capture(db, "first")
+    run(db, storage, tmp_path, first)
+    assert first.site_id is not None
+    video = {"lat": LAT, "lon": LON, "accuracyM": 4.5, "key": "iso6709"}
+    by_video = _capture(db, "by-video", metadata_={"lat": 1.0, "lon": 2.0, "videoLocation": video})
+    by_upload = _capture(db, "by-upload", metadata_={"lat": LAT, "lon": LON, "videoLocation": None})
+    named = _capture(db, "named", metadata_={"siteId": str(first.site_id)})
+
+    for capture in (by_video, by_upload, named):
+        run(db, storage, tmp_path, capture, _echoed(first.site_id))
+
+    epochs = _epochs(db, first.site_id)
+    assert [(e.join_method, e.join_point_source, e.join_point_accuracy_m) for e in epochs] == [
+        ("new-site", None, None),
+        ("spatial", "video", 4.5),
+        ("spatial", "upload", None),
+        ("explicit", None, None),
+    ]
+    listed = client.get(f"/api/v1/sites/{first.site_id}/epochs").json()
+    assert [(e["joinPointSource"], e["joinPointAccuracyM"]) for e in listed] == [
+        (None, None),
+        ("video", 4.5),
+        ("upload", None),
+        (None, None),
+    ]
+    # A re-run keeps how the epoch first found its site.
+    by_video.metadata_ = {**by_video.metadata_, "videoLocation": None}
+    db.commit()
+    run(db, storage, tmp_path, by_video, _echoed(first.site_id))
+    db.expire_all()
+    assert _epochs(db, first.site_id)[1].join_point_source == "video"
+
+
 def test_an_echo_whose_site_has_another_frame_is_refused(
     db: Session, storage: S3Storage, tmp_path: Path
 ) -> None:

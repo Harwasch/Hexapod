@@ -1,7 +1,7 @@
 """an epoch revision's per-cell maps (M4)
 
 Revision ID: 0035
-Revises: 0034
+Revises: 0034a
 Create Date: 2026-10-20
 
 `epoch_maps`: one row per asset (an epoch revision) and kind -- today its confidence grid
@@ -19,7 +19,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision = "0035"
-down_revision = "0034"
+down_revision = "0034a"
 branch_labels = None
 depends_on = None
 

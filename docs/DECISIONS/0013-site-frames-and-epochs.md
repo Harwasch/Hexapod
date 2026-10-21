@@ -75,6 +75,93 @@ heightDatum, epsg}`) to the stages that write the placement: `ingest_splat`, `ma
    asset it would read as superseded, so such a splat stays legacy). Seeded and catalog sites stay legacy. The downgrade drops only the new
    tables and columns: no asset row and no `source` is touched.
 
+## Joining a site by the video's GPS
+
+**Decided 2026-10-21 (Harrison):** an iPhone capture is matched to its existing site by the
+video's own GPS, not by where it was uploaded from, and there is no site picker. The browser's fix
+at upload time is where the phone was when it sent the clip: a video recorded on the ranch and sent
+from home is kilometres from the site it shows, and joined nothing (or the wrong site).
+
+**The problem.** The site is chosen before the run (decision 4 above), but the clip's metadata is
+read inside it (`tools/pipeline/video.py` scrapes `ffmpeg -i` in `normalize`). Three ways to have
+the video's location at join time:
+
+- _The upload page reads it and sends it._ Rejected: the page would be telling the API what the
+  file says while the file itself is in the bucket, and a value the request carries can be trusted
+  no more than the file — so read the file.
+- _ffprobe on the worker._ Rejected: the worker has no ffprobe (the pipeline's ffmpeg is a wheel in
+  another project, without it), and the frame is chosen before the upload is downloaded.
+- **Chosen: the worker reads the container's location atoms from the bucket** before it chooses
+  the frame (`worker/video_gps.py`, from `runner._stage_params`). `services/video_location.py` is a
+  pure-Python walk of the box tree: top-level boxes by their sizes, then `moov`'s children, reading
+  only `moov/meta` (the iOS camera's `mdta` key `com.apple.quicktime.location.ISO6709` with
+  `...location.accuracy.horizontal`) and `moov/udta` (`(c)xyz`, and the 3GPP `loci` ffmpeg's MP4
+  muxer writes) — the places, in the order, the pipeline reads. Not one byte of the `mdat` is
+  fetched (the top-level walk reads 8-byte headers only): a 12 GB clip costs a handful of ranged
+  GETs, at most 64 KiB each inside `moov`. Reads, boxes and metadata bytes are capped, so
+  a crafted file costs no more than an honest one; anything malformed is "no location". It reads
+  the video `pick_source` will take (the first by name). No dependency.
+
+**One reading, agreed.** A clip may carry its location in several atoms. The reader keeps one only
+if they agree — the `mdta` key's reading, with its accuracy, when every other point is within the
+largest accuracy any of them claims or a 10 m floor (the rounding of two honest writings of one
+fix) — and otherwise says the clip has no location: where atoms disagree, ffmpeg keeps the last and
+a reader could keep the first, and a crafted clip would be matched to one site and placed at
+another (the cross review of #72). ISO 6709's compact forms (`+DDMM.M`, `+DDMMSS.S`) are converted,
+in both this reader and the pipeline's. **The pipeline places by the same reading:** the worker
+hands it to `normalize` (`ffmpeg_frames`'s `video_location`, null included), which records it as
+`source_meta.json`'s location in place of its own scrape, so `exif_gps` places the capture by the
+point that chose its site.
+
+**Recorded once.** The answer is kept on the capture as `metadata.videoLocation` (`{lat, lon,
+altitudeM, accuracyM, key}`, or `null` when the clip carries none it can vouch for), so the
+site-context seed, a rejected
+run's epoch, the registration and a retried run on another worker all join by the same answer as
+the first. Only the worker writes it: `CaptureCreate` refuses the key. A storage failure is
+recorded as no location and the run is matched by the upload's fix, as before: no capture fails
+for want of a better guess at its site, and a stage retried mid-run (which chooses the frame
+again) cannot move the rest of the run into another site's frame.
+
+**Order.** The video's GPS, when recorded; else the located point as before (a typed place, else
+the fix sent with the upload). A typed place belongs to the splat lane, whose files carry no
+location, so the video beating it meets no real case. A valid video fix is authoritative: when no
+site is within its buffer, the capture makes a new site, and the upload's point is not tried after
+it. The upload decides only when the video has no usable location.
+
+**Buffer.** A video fix comes with Apple's horizontal accuracy, so the join buffer follows it:
+`clamp(2 × accuracy, 10 m, 50 m)` (`services/epochs.video_join_buffer_m`); with no accuracy, and
+for the upload's fix, it is the D3 25 m as before. Derived, not measured on captures:
+
+- _K = 2._ The reported figure is the radius of the fix's ~68 % circle; for a circular normal error
+  that is 1.51 sigma, and the 99 % circle is 3.03 sigma, so twice the figure holds the true point
+  99 times in 100.
+- _Floor 10 m._ A good fix (±2 m) does not shrink where the phone stood: recording starts a few
+  steps outside what it then films, and a site's boundary is the footprint of what its first
+  capture showed, not of where that camera walked.
+- _Ceiling 50 m_, twice the D3 default. A fix worse than ±25 m (indoors, Wi-Fi only: iOS reports
+  65 m) still matches, but its buffer stops at 50 m rather than reaching as far as its circle does
+  — into the next field — so it joins only a site within 50 m, and farther from every site it makes
+  a new one; the console can still put it on the right one. Far inside the 2047 m a frame can hold.
+- Two sites inside one buffer are never ambiguous: the nearer boundary wins (the query orders by
+  distance, then age).
+
+**The phone key's rule holds for every source.** A phone-key capture joins by location only a site
+a phone capture made, whichever point matched it, decided again on every run (a re-run stays in
+its epoch's site, which `_check_phone_run` re-checks). The phone makes the video as it makes the
+upload's fix, so a forged location in the file reaches no further than a forged fix in the request
+always could: at most a site the phone key made.
+
+**Said where it is shown.** A spatial epoch records which point matched it --
+`epochs.join_point_source` (`video` | `upload`) and `join_point_accuracy_m`, migration 0034a, which
+backfills every earlier spatial join as `upload` — in `EpochRead`, and the inspector's placement
+row says "Matched by the video's GPS (±5 m)" or "Matched by where it was uploaded from". Explicit
+and new-site joins record nothing: no point decided them.
+
+**Not verified:** the buffer's numbers on real joins, and a real iPhone clip end to end. The reader
+is tested on synthetic boxes built to Apple's and ISO's layouts, which the wheel's ffmpeg 7.0.2
+reads the same tags out of, and on files ffmpeg wrote; how often iOS strips the location when a
+clip is shared is from Apple's sharing options, not measured (`docs/CAPTURES.md`).
+
 ## The one exception: a sidecar attach repoints the asset's URL
 
 `POST /assets/{id}/sidecars` (`services/attach.py`) moves the current asset's `source.url` to a new
@@ -132,8 +219,8 @@ And three made while building it:
 - `SiteRead.assets` hides superseded revisions; `GET /assets?siteId=` does not.
 - Until the M2b timeline, a new epoch is not `default_visible`, so a two-epoch site opens on epoch
   1; the existing date switcher can show the other.
-- A capture located only by EXIF cannot be matched spatially before its run; it joins a site only by
-  naming it until M3 moves resolution later. Two first captures of a new field processed at once
+- A capture located only by its photos' EXIF cannot be matched spatially before its run; it joins a
+  site only by naming it until M3 moves resolution later. A video is read before its run (above). Two first captures of a new field processed at once
   make two sites.
 - Vertical disagreement between epochs is hidden by the viewer's per-asset ground clamp until M2b
   removes it and M3 aligns epochs visually.

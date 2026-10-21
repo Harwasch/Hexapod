@@ -435,7 +435,43 @@ def test_iso6709_signs_are_the_separators(
     assert (round(parsed[0], 4), round(parsed[1], 4), parsed[2]) == expected
 
 
-@pytest.mark.parametrize("text", ["", "51.5074,-0.1278", "unknown", "+51.5074/"])
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # ISO 6709's compact forms: the count of integer digits says which. Degrees and
+        # minutes (+DDMM.M / +DDDMM.M) and degrees, minutes and seconds (+DDMMSS.S /
+        # +DDDMMSS.S); read as decimal degrees, both of these were (30, 30).
+        ("+0030.0+00030.0/", (0.5, 0.5, None)),
+        ("+000030.0+0000030.0/", (30 / 3600, 30 / 3600, None)),
+        ("+4807.038-01131.000/", (48 + 7.038 / 60, -(11 + 31 / 60), None)),
+        ("+402646-0794859+300.5/", (40 + 26 / 60 + 46 / 3600, -(79 + 48 / 60 + 59 / 3600), 300.5)),
+    ],
+)
+def test_iso6709_compact_minutes_and_seconds_are_converted(
+    text: str, expected: tuple[float, float, float | None]
+) -> None:
+    parsed = video.parse_iso6709(text)
+    assert parsed is not None
+    assert parsed[0] == pytest.approx(expected[0], abs=1e-12)
+    assert parsed[1] == pytest.approx(expected[1], abs=1e-12)
+    assert parsed[2] == expected[2]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "51.5074,-0.1278",
+        "unknown",
+        "+51.5074/",
+        "+123.4-001.0/",  # three integer digits of latitude: no ISO 6709 form has three
+        "+12345.6+001.0/",  # five
+        "+1260.0+000.0/",  # 60 minutes
+        "+120060+0000000/",  # 60 seconds
+        "+95.0-122.0/",  # off the globe
+        "+" + "9" * 400 + "+2/",
+    ],
+)
 def test_a_coordinate_nobody_can_vouch_for_is_none_rather_than_a_guess(text: str) -> None:
     assert video.parse_iso6709(text) is None
 
@@ -515,6 +551,48 @@ def test_both_location_keys_survive_a_round_trip_through_a_real_container(
     meta = json.loads((workdir.out_dir("normalize") / "source_meta.json").read_text())
     assert meta["location"]["source"] == "location"
     assert (meta["location"]["lat"], meta["location"]["lon"]) == (37.7749, -122.4194)
+
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [
+        # The worker's reading, which chose the capture's site: it is the location.
+        (
+            {"lat": 47.6445, "lon": -122.138, "altitudeM": 30.0, "accuracyM": 4.5, "key": "xyz"},
+            {"lat": 47.6445, "lon": -122.138, "altitudeM": 30.0, "accuracyM": 4.5},
+        ),
+        # It found none -- stripped, or atoms that disagree: none, whatever ffmpeg reads.
+        (None, None),
+        # Something that is not a point is no location either, never ffmpeg's instead.
+        ({"lat": 95.0, "lon": 0.0}, None),
+    ],
+)
+def test_the_workers_reading_of_the_location_is_the_one_kept(
+    tmp_path: Path, given: dict[str, object] | None, expected: dict[str, object] | None
+) -> None:
+    """One source of truth (the cross review of #72): the API reads the container's
+    location before the run to choose the capture's site, and ffmpeg keeps the *last* of
+    conflicting atoms where that reader keeps the first, so a crafted clip could be
+    matched to one site and placed at another. Given `video_location`, the stage records
+    the worker's reading and not its own; without it, its own, as before."""
+    upload = tmp_path / "upload"
+    upload.mkdir()
+    make_clip(
+        upload / "clip.mp4",
+        frames=4,
+        fps=10,
+        metadata=["-metadata", "location=+37.7749-122.4194+010.000/"],
+    )
+
+    workdir = run_normalize(tmp_path, {"fps": 10, "keep": 2, "video_location": given}, upload)
+
+    meta = json.loads((workdir.out_dir("normalize") / "source_meta.json").read_text())
+    if expected is None:
+        assert meta["location"] is None
+    else:
+        assert {k: meta["location"][k] for k in expected} == expected
+        assert meta["location"]["source"] == "worker:xyz"
+    assert meta["video"]["location"] == meta["location"]
 
 
 def test_a_clip_becomes_frames_and_a_description_of_where_they_came_from(

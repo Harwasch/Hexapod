@@ -11,6 +11,7 @@ from app.models.enums import (
     EpochPlatform,
     EpochStatus,
     HeightDatum,
+    JoinPointSource,
     ObservedAtSource,
     SiteFrameSource,
 )
@@ -57,6 +58,12 @@ class EpochRead(CamelModel):
     platform: EpochPlatform
     status: EpochStatus
     join_method: EpochJoinMethod
+    #: A `spatial` join's point: `video` (the location the video's container carried)
+    #: or `upload` (the one sent with the upload); null for `explicit` and `new-site`.
+    join_point_source: JoinPointSource | None
+    #: The horizontal accuracy, in metres, the phone wrote with the video's fix; null when
+    #: it wrote none or the join was not by the video.
+    join_point_accuracy_m: float | None
     #: How the epoch was aligned to the ones before it; null until alignment exists (M3).
     alignment: dict[str, Any] | None
     quality: CaptureQuality | None

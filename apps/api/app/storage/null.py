@@ -48,6 +48,9 @@ class NullStorage:
     def get_object_tail(self, key: str, max_bytes: int) -> tuple[bytes, int]:
         raise StorageUnavailableError(_UNAVAILABLE)
 
+    def get_object_range(self, key: str, start: int, length: int) -> bytes:
+        raise StorageUnavailableError(_UNAVAILABLE)
+
     def download_file(self, key: str, target: Path) -> int:
         raise StorageUnavailableError(_UNAVAILABLE)
 

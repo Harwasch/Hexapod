@@ -212,16 +212,23 @@ interface EpochVerdict {
   readonly uncertaintyM: number | null;
 }
 
+/** The epoch an asset belongs to, as the site lists it; read defensively. */
+function epochOf(
+  site: Site | null | undefined,
+  asset: SiteAsset,
+): Record<string, unknown> | undefined {
+  const listed: unknown = (site as { epochs?: unknown } | null | undefined)?.epochs;
+  if (!Array.isArray(listed)) return undefined;
+  return (listed as Record<string, unknown>[]).find(
+    (e) => (asset.epochId != null && e.id === asset.epochId) || e.currentAssetId === asset.id,
+  );
+}
+
 /**
  * The recorded alignment of the epoch an asset belongs to, when it carries a verdict and a
  * label; read defensively, since `alignment` is an open object and an M2-era epoch has none.
  */
-function epochVerdict(site: Site | null | undefined, asset: SiteAsset): EpochVerdict | undefined {
-  const listed: unknown = (site as { epochs?: unknown } | null | undefined)?.epochs;
-  if (!Array.isArray(listed)) return undefined;
-  const epoch = (listed as Record<string, unknown>[]).find(
-    (e) => (asset.epochId != null && e.id === asset.epochId) || e.currentAssetId === asset.id,
-  );
+function epochVerdict(epoch: Record<string, unknown> | undefined): EpochVerdict | undefined {
   const alignment = epoch?.alignment;
   if (!alignment || typeof alignment !== "object") return undefined;
   const { label, verdict, uncertaintyM } = alignment as Record<string, unknown>;
@@ -254,7 +261,8 @@ export function placementProvenance(
   // The epoch's verdict outranks the asset's method (the R2 review of #52): an epoch that
   // failed its visual alignment keeps its EXIF similarity, and "Aligned to EXIF GPS" alone
   // would hide that it is unaligned; a phone's coarse alignment must say phone and coarse.
-  const recorded = epochVerdict(site, asset);
+  const epoch = epochOf(site, asset);
+  const recorded = epochVerdict(epoch);
   const uncertainty = recorded?.uncertaintyM ?? provenance?.uncertaintyM;
   const how = recorded
     ? `${withoutFigure(recorded.label)} (${VERDICT_WORDS[recorded.verdict]})`
@@ -268,6 +276,14 @@ export function placementProvenance(
       : "uncertainty not recorded",
     scaleLabel(asset),
   ];
+  // Which point matched a spatial join to its site (ADR 0013): the video's own GPS, else the
+  // location sent with the upload. Null for an epoch that named its site or made it.
+  const accuracy = epoch?.joinPointAccuracyM;
+  if (epoch?.joinPointSource === "video")
+    parts.push(
+      `Matched by the video's GPS${typeof accuracy === "number" ? ` (±${formatLength(accuracy, units)})` : ""}`,
+    );
+  if (epoch?.joinPointSource === "upload") parts.push("Matched by where it was uploaded from");
   const fromMeasurement = aligned || method === "arkit";
   return {
     summary: parts.join(" · "),

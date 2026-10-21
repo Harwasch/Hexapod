@@ -13,6 +13,7 @@ from app.storage.base import (
     MultipartPart,
     ObjectPage,
     ObjectSummary,
+    RangeNotHonouredError,
     StoredObject,
     normalise_etag,
     quote_etag,
@@ -165,6 +166,45 @@ class S3Storage:
         content_range = response.get("ContentRange") or ""
         size = content_range.rpartition("/")[2]
         return data, int(size) if size.isdecimal() else len(data)
+
+    def get_object_range(self, key: str, start: int, length: int) -> bytes:
+        if start < 0 or length <= 0:
+            return b""
+        try:
+            response = self._client.get_object(
+                Bucket=self._bucket, Key=key, Range=f"bytes={start}-{start + length - 1}"
+            )
+        except ClientError as error:
+            # S3's answer to a range that starts past the end of the object.
+            if str(error.response.get("Error", {}).get("Code", "")) == "InvalidRange":
+                return b""
+            raise
+        body = response["Body"]
+        try:
+            # Checked before a byte is read: a server that ignores Range answers with the
+            # whole object, and reading it to find out is the 12 GB read this method
+            # exists to avoid (the cross review of #72). `bytes 100-163/1000`: the span
+            # after the unit, before the slash.
+            content_range = str(response.get("ContentRange") or "")
+            first = content_range.removeprefix("bytes ").partition("/")[0].partition("-")[0]
+            if not first.isdecimal() or int(first) != start:
+                raise RangeNotHonouredError(
+                    f"{key}: asked for bytes {start}-{start + length - 1}, answered with "
+                    f"{content_range or 'no Content-Range (the whole object)'}"
+                )
+            # Then never more than was asked for, a read at a time: a socket may hand
+            # over less than a read asks.
+            chunks: list[bytes] = []
+            taken = 0
+            while taken < length:
+                chunk: bytes = body.read(length - taken)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                taken += len(chunk)
+        finally:
+            body.close()
+        return b"".join(chunks)
 
     def download_file(self, key: str, target: Path) -> int:
         # boto3's managed transfer: ranged GETs written to a temporary file beside the

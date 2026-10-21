@@ -201,6 +201,16 @@ class EpochJoinMethod(StrEnum):
     NEW_SITE = "new-site"
 
 
+class JoinPointSource(StrEnum):
+    """Which point a capture was matched to a site by (``spatial`` joins): the location its
+    video's container carried (``video``), else the one sent with the upload (``upload``:
+    the browser's fix, or a place typed for the run). ADR 0013, "Joining a site by the
+    video's GPS"."""
+
+    VIDEO = "video"
+    UPLOAD = "upload"
+
+
 class EpochPlatform(StrEnum):
     """What captured an epoch, by survey tier (decision D4). Only ``phone-video`` and
     ``unknown`` are told apart until M3 reads DJI XMP and RTK."""

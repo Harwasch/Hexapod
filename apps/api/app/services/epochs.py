@@ -35,6 +35,7 @@ from app.models.enums import (
     EpochPlatform,
     EpochStatus,
     HeightDatum,
+    JoinPointSource,
     ObservedAtSource,
     RunStatus,
     SiteFrameSource,
@@ -43,6 +44,7 @@ from app.schemas.epoch import EpochRead, SiteFrameRead
 from app.services import epoch_maps, geometry
 from app.services.captures import quality_from
 from app.services.errors import NotFoundError
+from app.services.video_location import VideoLocation
 
 log = logging.getLogger(__name__)
 
@@ -128,6 +130,10 @@ def epoch_to_read(epoch: Epoch, assets: Sequence[Asset]) -> EpochRead:
         platform=EpochPlatform(epoch.platform),
         status=EpochStatus(epoch.status),
         join_method=EpochJoinMethod(epoch.join_method),
+        join_point_source=(
+            JoinPointSource(epoch.join_point_source) if epoch.join_point_source else None
+        ),
+        join_point_accuracy_m=epoch.join_point_accuracy_m,
         alignment=epoch.alignment,
         quality=quality_from(epoch.quality),
         current_asset_id=current_id,
@@ -200,8 +206,104 @@ def is_phone_capture(capture: Capture) -> bool:
 
 # ── Which frame a run is placed in (decided before it starts) ─────────────────────────────
 
-#: How far outside a framed site's boundary a capture may be and still join it (D3).
+#: How far outside a framed site's boundary a capture may be and still join it (D3), when
+#: it is matched by the location sent with its upload, or by a video location that came
+#: with no accuracy.
 SPATIAL_JOIN_BUFFER_M = 25.0
+
+#: A capture matched by its video's own GPS (ADR 0013, "Joining a site by the video's
+#: GPS") reaches `VIDEO_JOIN_K` times the accuracy the phone wrote with the fix, held to
+#: [`VIDEO_JOIN_MIN_M`, `VIDEO_JOIN_MAX_M`]. Derived, not measured on captures:
+#:
+#: * K = 2: Apple's horizontal accuracy is the radius of the fix's ~68 % circle. For a
+#:   circular normal error that is 1.51 sigma, and the 99 % circle is 3.03 sigma, so twice
+#:   the reported figure holds the true point 99 times in 100;
+#: * the floor, 10 m: a good fix (+-2 m) does not shrink where the phone stood -- the
+#:   recording starts a few steps outside what it then films, and a site's boundary is
+#:   the footprint of what the first capture showed, not of where its camera walked;
+#: * the ceiling, 50 m: twice the D3 default. A fix worse than +-25 m (indoors, Wi-Fi
+#:   only: iOS reports 65 m) still matches, but its buffer stops growing at 50 m rather
+#:   than reaching as far as its circle does -- into the next field -- so such a capture
+#:   joins only a site within 50 m, and farther from every site it makes a new one (the
+#:   console can still put it on the right one). Far inside the 2047 m a frame can hold.
+#:
+#: Two sites inside one buffer are never ambiguous: the nearer boundary wins
+#: (`nearest_framed_site_statement` orders by distance).
+VIDEO_JOIN_K = 2.0
+VIDEO_JOIN_MIN_M = 10.0
+VIDEO_JOIN_MAX_M = 50.0
+
+#: The capture metadata the worker records its video's location in (`worker/video_gps.
+#: py`): `{lat, lon, altitudeM, accuracyM, key}`, or null once it looked and found none
+#: it could vouch for (none in the clip, atoms that disagree, or a failed read).
+VIDEO_LOCATION = "videoLocation"
+
+
+def video_join_buffer_m(accuracy_m: float | None) -> float:
+    """The join buffer for a video fix of this horizontal accuracy (`VIDEO_JOIN_K`)."""
+    if accuracy_m is None or not math.isfinite(accuracy_m) or accuracy_m <= 0:
+        return SPATIAL_JOIN_BUFFER_M
+    return min(max(VIDEO_JOIN_K * accuracy_m, VIDEO_JOIN_MIN_M), VIDEO_JOIN_MAX_M)
+
+
+@dataclass(frozen=True)
+class JoinPoint:
+    """The point a capture is matched to a site by, where it came from, and how far
+    outside a boundary it may be (`buffer_m`)."""
+
+    lat: float
+    lon: float
+    source: JoinPointSource
+    #: The video fix's horizontal accuracy, when it is the video's and one was written.
+    accuracy_m: float | None
+    buffer_m: float
+
+
+def spatial_join_point(capture: Capture) -> tuple[str, float | None]:
+    """What a `spatial` epoch records it was matched by (`Epoch.join_point_source`,
+    `join_point_accuracy_m`): `video` and its accuracy when the capture's video location
+    is recorded -- `join_point` took it -- else `upload`, a located point with no
+    accuracy of its own. Read off the capture, so the registration that writes the epoch
+    agrees with the frame decision made before the run, which read the same record."""
+    video = recorded_video_location(capture)
+    if video is not None:
+        return JoinPointSource.VIDEO.value, video.accuracy_m
+    return JoinPointSource.UPLOAD.value, None
+
+
+def recorded_video_location(capture: Capture) -> VideoLocation | None:
+    """The video location the worker recorded on the capture, checked again."""
+    return VideoLocation.from_metadata((capture.metadata_ or {}).get(VIDEO_LOCATION))
+
+
+def join_point(capture: Capture, located: tuple[float, float] | None) -> JoinPoint | None:
+    """The video's own location, when the worker found one in it; else `located_or_
+    metadata` -- the place typed for the run, or the fix sent with the upload; else None.
+
+    The video wins over both: it is where the capture was made, and the browser's fix is
+    where it was uploaded from. A typed place is the splat lane's (`manual_placement`),
+    whose files carry no location, so in practice the two never meet. A valid video fix
+    is authoritative: when no site is within its buffer the capture makes a new site --
+    the upload's point is not tried after it (ruled after the cross review of #72)."""
+    video = recorded_video_location(capture)
+    if video is not None:
+        return JoinPoint(
+            lat=video.lat,
+            lon=video.lon,
+            source=JoinPointSource.VIDEO,
+            accuracy_m=video.accuracy_m,
+            buffer_m=video_join_buffer_m(video.accuracy_m),
+        )
+    point = located_or_metadata(capture, located)
+    if point is None:
+        return None
+    return JoinPoint(
+        lat=point[0],
+        lon=point[1],
+        source=JoinPointSource.UPLOAD,
+        accuracy_m=None,
+        buffer_m=SPATIAL_JOIN_BUFFER_M,
+    )
 
 
 @dataclass(frozen=True)
@@ -367,10 +469,13 @@ def site_for_run(
     2. the capture was registered into a site with no epoch for it (legacy): that site;
     3. the capture named a site (`metadata.siteId`): that site, framed or not -- with no
        frame yet the run is its first epoch and defines it;
-    4. the run has a located point (`located`, `worker/params.located_point`: a typed
-       place in the job's params, else the capture's `metadata.lat`/`lon`): the nearest
-       framed site within `SPATIAL_JOIN_BUFFER_M` -- for a phone-key capture, the nearest
-       such site a phone capture made, as when it names one;
+    4. the run has a join point (`join_point`): the video's own GPS, recorded on the
+       capture by the worker before this is asked (`worker/video_gps.py`), else the
+       run's located point (`located`, `worker/params.located_point`: a typed place in
+       the job's params, else the capture's `metadata.lat`/`lon`): the nearest framed
+       site within the point's buffer (`video_join_buffer_m`, else
+       `SPATIAL_JOIN_BUFFER_M`) -- for a phone-key capture, the nearest such site a
+       phone capture made, as when it names one, whichever point it was;
     5. none: the run makes a new site and frame.
 
     Decided before the run starts, because the pipeline places the capture in it. A
@@ -389,10 +494,16 @@ def site_for_run(
     named = requested_site(db, capture)
     if named is not None:
         return named.id
-    point = located_or_metadata(capture, located)
+    point = join_point(capture, located)
     if point is None:
         return None
-    site = nearest_framed_site(db, *point, phone_made_only=is_phone_capture(capture))
+    site = nearest_framed_site(
+        db,
+        point.lat,
+        point.lon,
+        buffer_m=point.buffer_m,
+        phone_made_only=is_phone_capture(capture),
+    )
     return site.id if site is not None else None
 
 
@@ -772,13 +883,15 @@ def record_rejected(
     site = db.get(Site, site_id, with_for_update=True) if site_id is not None else None
     if site is None or db.get(SiteFrame, site.id) is None:
         return None
-    point = located_or_metadata(capture, rejection.located)
+    point = join_point(capture, rejection.located)
     footprint = (
         db.scalar(
             select(
                 func.ST_Multi(
                     func.geometry(
-                        func.ST_Buffer(func.geography(_point(*point)), REJECTED_FOOTPRINT_M)
+                        func.ST_Buffer(
+                            func.geography(_point(point.lat, point.lon)), REJECTED_FOOTPRINT_M
+                        )
                     )
                 )
             )
@@ -788,6 +901,7 @@ def record_rejected(
     )
     named = requested_site(db, capture)
     explicit = capture.site_id == site.id or (named is not None and named.id == site.id)
+    source, accuracy = (None, None) if explicit else spatial_join_point(capture)
     ordinal = (db.scalar(select(func.max(Epoch.ordinal)).where(Epoch.site_id == site.id)) or 0) + 1
     observed = capture.captured_at or capture.created_at
     epoch = Epoch(
@@ -803,6 +917,8 @@ def record_rejected(
         platform=platform,
         status=EpochStatus.REJECTED.value,
         join_method=(EpochJoinMethod.EXPLICIT if explicit else EpochJoinMethod.SPATIAL).value,
+        join_point_source=source,
+        join_point_accuracy_m=accuracy,
         alignment=alignment,
         quality=None,
     )
