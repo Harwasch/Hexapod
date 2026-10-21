@@ -300,7 +300,7 @@ describe("comparing two dates of a site", () => {
   });
 
   it("under PlayCanvas, draws the right-hand date as its scan, the left beside it, neither by CesiumJS", async () => {
-    const { manager, said, drawn } = harness();
+    const { manager, said, drawn, tileset } = harness();
     await open(manager, "playcanvas");
     // The date chosen is the earlier one: the comparison's right-hand date is PlayCanvas's scan.
     await manager.setEpoch(E1.id);
@@ -315,11 +315,14 @@ describe("comparing two dates of a site", () => {
       [A1.id]: { show: false, split: SplitDirection.LEFT },
       [A2.id]: { show: false, split: SplitDirection.RIGHT },
     });
+    // Both are walked on and picked (SplatCollider), each on its side, though hidden.
+    expect(manager.scanTarget()?.solid).toEqual([tileset(A1.id), tileset(A2.id)]);
     // Either way round; and the date chosen comes back as the scan once it ends.
     await manager.setCompareDates({ left: E2.id, right: E1.id });
     expect(manager.scanTarget()?.assetId).toBe(A1.id);
     await manager.setCompareDates(null);
     expect(manager.scanTarget()?.assetId).toBe(A1.id);
+    expect(manager.scanTarget()?.solid).toEqual([tileset(A1.id)]);
     expect(drawn()).toEqual({ [A1.id]: ALONE, [A2.id]: ALONE });
   });
 

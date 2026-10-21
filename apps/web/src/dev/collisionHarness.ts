@@ -115,7 +115,7 @@ export async function startCollisionHarness(
   // loads a tile of it -- and its solids must count all the same.
   tileset.show = !options.hidden;
   tileset.preloadWhenHidden = false;
-  if (options.hidden) collider.setSolidWhileHidden(tileset);
+  if (options.hidden) collider.setSolidWhileHidden([tileset]);
   scene.primitives.add(tileset);
   const sphere = BoundingSphere.clone(tileset.boundingSphere);
 

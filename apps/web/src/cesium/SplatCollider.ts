@@ -93,7 +93,7 @@ function toVec(c: Cartesian3): Vec3 {
 
 export class SplatCollider {
   private readonly tracked = new Map<SplatTilesetShape, Tracked>();
-  private solidWhileHidden: object | null = null;
+  private solidWhileHidden: readonly object[] = [];
   /** Tilesets whose packaged collision is being fetched, or failed (then run-time). */
   private readonly loading = new Set<SplatTilesetShape>();
   private readonly noPackage = new WeakSet<SplatTilesetShape>();
@@ -174,7 +174,7 @@ export class SplatCollider {
   ): { point: Cartesian3; distance: number; tileset: object } | null {
     let best: { point: Cartesian3; distance: number; tileset: object } | null = null;
     for (const [tileset, entry] of this.tracked) {
-      if ((!tileset.show && tileset !== this.solidWhileHidden) || entry.solids.empty) continue;
+      if ((!tileset.show && !this.solidWhileHidden.includes(tileset)) || entry.solids.empty) continue;
       // Drawn where it is asked: CesiumJS discards LEFT (-1) fragments right of the divider
       // (`splitPosition` of the canvas width) and RIGHT (1) ones left of it; NONE (0) nowhere.
       const cut = at && (tileset.splitDirection ?? 0);
@@ -225,17 +225,19 @@ export class SplatCollider {
   }
 
   /**
-   * A tileset whose solids count though it is hidden: a scan drawn by another renderer
-   * (scanView/ScanRendererHost.ts) is still walked on and bumped into.
+   * The tilesets whose solids count though they are hidden: a scan drawn by another renderer
+   * (scanView/ScanRendererHost.ts) is still walked on and bumped into, and so is every date it
+   * draws beside it -- two compared, each on its side of the divider (`splitDirection`), or a
+   * per-cell view rule's.
    */
-  setSolidWhileHidden(tileset: object | null): void {
-    this.solidWhileHidden = tileset;
+  setSolidWhileHidden(tilesets: readonly object[]): void {
+    this.solidWhileHidden = tilesets;
   }
 
   private near(world: Cartesian3, margin: number): Tracked[] {
     const found: Tracked[] = [];
     for (const [tileset, entry] of this.tracked) {
-      if ((!tileset.show && tileset !== this.solidWhileHidden) || entry.solids.empty) continue;
+      if ((!tileset.show && !this.solidWhileHidden.includes(tileset)) || entry.solids.empty) continue;
       const reach = entry.bounds.radius + margin;
       if (Cartesian3.distanceSquared(world, entry.bounds.center) <= reach * reach) {
         found.push(entry);
@@ -249,9 +251,10 @@ export class SplatCollider {
     const tilesets = splatTilesets(this.scene.primitives);
     // A scan another renderer draws may never have had a tile loaded by CesiumJS (hidden from
     // the start), so it has no splat primitive to be found by: its packaged solids still count.
-    const hidden = this.solidWhileHidden as
-      (SplatTilesetShape & { isDestroyed?(): boolean }) | null;
-    if (hidden && !hidden.isDestroyed?.() && !tilesets.includes(hidden)) tilesets.push(hidden);
+    for (const hidden of this.solidWhileHidden as (SplatTilesetShape & {
+      isDestroyed?(): boolean;
+    })[])
+      if (!hidden.isDestroyed?.() && !tilesets.includes(hidden)) tilesets.push(hidden);
     for (const tileset of tilesets) {
       seen.add(tileset);
       if (this.packaged(tileset)) continue;

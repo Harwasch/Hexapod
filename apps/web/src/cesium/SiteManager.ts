@@ -2963,7 +2963,13 @@ export class SiteManager {
    * With two dates compared under PlayCanvas, the right-hand date (`mainAsset`'s, as the clip
    * and the far view's), whichever date was chosen before.
    */
-  scanTarget(): { key: string; tileset: Cesium3DTileset; assetId: string; far: boolean } | null {
+  scanTarget(): {
+    key: string;
+    tileset: Cesium3DTileset;
+    assetId: string;
+    far: boolean;
+    solid: Cesium3DTileset[];
+  } | null {
     if (this.splatRenderer === "cesium") return null;
     const active = this.active;
     if (!active || !drawn(active) || active.representation !== "gaussian-splat") return null;
@@ -2976,6 +2982,8 @@ export class SiteManager {
     return {
       key: `${active.site.id}:${asset.id}`,
       tileset: handle.tileset,
+      // Every date drawn: both compared, a rule's; walked on and picked though hidden.
+      solid: this.drawnHandles(active).map((h) => h.tileset),
       assetId: asset.id,
       far: !active.engaged,
     };
