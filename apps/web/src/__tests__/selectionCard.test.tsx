@@ -419,6 +419,39 @@ describe("one selection at a time", () => {
     });
   });
 
+  it("swaps the card in place the moment the selection changes, before any frame is drawn", () => {
+    // On CI's software-rendered desktop globe the camera flight a "where is" answer starts drew
+    // about a frame a second, then none for 11 s; a swap that waited for the old card's
+    // fade-out left the machine's card up for 18 s after the object was selected.
+    touchScreen(false);
+    stageScan();
+    const registry = new SceneRegistry();
+    registry.set(fakeScene(controller) as unknown as CesiumSceneManager);
+    offs.push(
+      bindOneSelection({
+        clearZone: () => undefined,
+        clearObject: () => {
+          controller.setPainting(false);
+          controller.clear();
+        },
+        clearInspector: () => undefined,
+      }),
+    );
+    act(() => useMission.getState().select({ kind: "machine", id: "TR-04" }));
+    render(wrap(<SelectionCard />, registry));
+
+    // No await: nothing between the selection and the look gives motion's frame loop a turn.
+    act(() => useSceneSelect.getState().select(ASSET, [3, 2], 2, 0, null));
+    let cards = screen.getAllByTestId("selection-card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toHaveAttribute("data-kind", "object");
+
+    act(() => useMission.getState().select({ kind: "machine", id: "TR-04" }));
+    cards = screen.getAllByTestId("selection-card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toHaveTextContent("TR-04 Kestrel");
+  });
+
   it("closes the inspector for an object, and the brush counts as one", () => {
     const clearInspector = vi.fn();
     offs.push(

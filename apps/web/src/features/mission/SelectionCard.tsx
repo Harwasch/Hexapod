@@ -23,6 +23,12 @@ const ENTER = {
  * of a scan picked in the scene (`ObjectCard`: a click, the brush, the objects panel). One
  * selection at a time: a new one replaces the old (`state/oneSelection.ts`), so the card
  * swaps rather than two cards showing.
+ *
+ * The swap is immediate, in place: one wrapper holds whichever card it is, and only a card
+ * appearing from nothing or leaving for nothing fades. A swap used to wait for the old card to
+ * fade out first, and a fade runs on animation frames: on a software-rendered globe busy with a
+ * camera flight (the one "where is TR-04" starts) they came about once a second and then not at
+ * all for 11 s, so the machine's card stayed up 18 s after an object was selected.
  */
 export function SelectionCard() {
   const scene = useScene();
@@ -46,153 +52,151 @@ export function SelectionCard() {
   const objectController = objectShown ? (scene?.sceneSelect ?? null) : null;
   const show = objectController === null && Boolean(machine ?? zone);
 
-  // "wait": the card going out leaves before the next comes in, so two never show at once.
   return (
-    <AnimatePresence mode="wait">
-      {objectController && (
-        <motion.div key="object" {...ENTER}>
-          <ObjectCard controller={objectController} />
-        </motion.div>
-      )}
-      {show && (
-        <motion.div key={selection?.id} {...ENTER}>
-          <GlassPanel
-            className="mc-card"
-            role="region"
-            aria-label={machine ? machine.name : zone?.name}
-            data-testid="selection-card"
-          >
-            {machine && (
-              <>
-                <div className="mc-card__head">
-                  <div className="mc-card__title">{machine.name}</div>
-                  <div className="mc-row">
-                    <span className={`mc-status mc-status--${machine.status}`}>
-                      <span className="mc-dot" aria-hidden="true" />
-                      {machine.task}
-                    </span>
-                    <button
-                      type="button"
-                      className="mc-close"
-                      onClick={clearSelection}
-                      aria-label="Close"
-                    >
-                      <X size={13} aria-hidden="true" />
-                    </button>
+    <AnimatePresence>
+      {(objectController !== null || show) && (
+        <motion.div key="selection" {...ENTER}>
+          {objectController ? (
+            <ObjectCard controller={objectController} />
+          ) : (
+            <GlassPanel
+              className="mc-card"
+              role="region"
+              aria-label={machine ? machine.name : zone?.name}
+              data-testid="selection-card"
+            >
+              {machine && (
+                <>
+                  <div className="mc-card__head">
+                    <div className="mc-card__title">{machine.name}</div>
+                    <div className="mc-row">
+                      <span className={`mc-status mc-status--${machine.status}`}>
+                        <span className="mc-dot" aria-hidden="true" />
+                        {machine.task}
+                      </span>
+                      <button
+                        type="button"
+                        className="mc-close"
+                        onClick={clearSelection}
+                        aria-label="Close"
+                      >
+                        <X size={13} aria-hidden="true" />
+                      </button>
+                    </div>
                   </div>
-                </div>
-                <div className="mc-card__meta">
-                  {machine.model} · {machine.zoneLabel}
-                </div>
-                <div className="mc-stats">
-                  <div className="mc-stat">
-                    <div className="mc-stat__value">{machine.batteryPct}%</div>
-                    <div className="mc-stat__label">Battery</div>
+                  <div className="mc-card__meta">
+                    {machine.model} · {machine.zoneLabel}
                   </div>
-                  <div className="mc-stat">
-                    <div className="mc-stat__value">{machine.acresDone ?? "—"}</div>
-                    <div className="mc-stat__label">Acres done</div>
+                  <div className="mc-stats">
+                    <div className="mc-stat">
+                      <div className="mc-stat__value">{machine.batteryPct}%</div>
+                      <div className="mc-stat__label">Battery</div>
+                    </div>
+                    <div className="mc-stat">
+                      <div className="mc-stat__value">{machine.acresDone ?? "—"}</div>
+                      <div className="mc-stat__label">Acres done</div>
+                    </div>
+                    <div className="mc-stat">
+                      <div className="mc-stat__value">{machine.shift}</div>
+                      <div className="mc-stat__label">Shift</div>
+                    </div>
                   </div>
-                  <div className="mc-stat">
-                    <div className="mc-stat__value">{machine.shift}</div>
-                    <div className="mc-stat__label">Shift</div>
-                  </div>
-                </div>
-                <div className="mc-actions">
-                  <button
-                    type="button"
-                    className="mc-btn"
-                    onClick={() => runMachineAction(machine)}
-                  >
-                    {machine.primaryAction}
-                  </button>
-                  <button
-                    type="button"
-                    className={`mc-btn ${feedsOpen ? "is-on" : ""}`}
-                    onClick={() => setFeedsOpen(!feedsOpen)}
-                    aria-pressed={feedsOpen}
-                  >
-                    Camera
-                  </button>
-                </div>
-              </>
-            )}
-            {zone && (
-              <>
-                <div className="mc-card__head">
-                  <div className="mc-card__title">{zone.name}</div>
-                  <div className="mc-row">
-                    <span className={`mc-mono mc-tone--${zone.tone}`}>{zone.acres} ac</span>
-                    <button
-                      type="button"
-                      className="mc-close"
-                      onClick={clearSelection}
-                      aria-label="Close"
-                    >
-                      <X size={13} aria-hidden="true" />
-                    </button>
-                  </div>
-                </div>
-                <div className="mc-card__meta">
-                  {zone.land
-                    ? `${zone.land.kind === "boundary" ? "Saved land" : zone.land.kind === "derived" ? "Derived from your saved land" : `Mapped ${zone.short}`} · private to your workspace`
-                    : `${zone.task} · ${zone.machines}`}
-                </div>
-                <GlassProgress
-                  className={`mc-progress mc-progress--${zone.tone}`}
-                  label={`${zone.name} progress`}
-                  value={zone.progressPct}
-                  valueText={`${zone.progressPct}%`}
-                />
-                <div className="mc-card__note">{zone.note}</div>
-                {/* A Land's zones carry their source in both: say it once. */}
-                {zone.attribution && zone.attribution !== zone.note && (
-                  <div className="mc-card__note mc-muted" data-testid="zone-attribution">
-                    {zone.attribution}
-                  </div>
-                )}
-                <div className="mc-actions">
-                  <button
-                    type="button"
-                    className="mc-btn"
-                    onClick={() => {
-                      const plan = project?.plans.find((p) => p.zoneIds.includes(zone.id));
-                      if (plan) openPlan(plan.id);
-                      else useMission.getState().openComposer({ zoneIds: [zone.id] });
-                    }}
-                  >
-                    {project?.plans.some((p) => p.zoneIds.includes(zone.id))
-                      ? "Open plan"
-                      : "Plan here"}
-                  </button>
-                  {zone.land ? (
+                  <div className="mc-actions">
                     <button
                       type="button"
                       className="mc-btn"
-                      onClick={() => useUi.getState().setPanel("land")}
+                      onClick={() => runMachineAction(machine)}
                     >
-                      Open in Land
+                      {machine.primaryAction}
                     </button>
-                  ) : (
+                    <button
+                      type="button"
+                      className={`mc-btn ${feedsOpen ? "is-on" : ""}`}
+                      onClick={() => setFeedsOpen(!feedsOpen)}
+                      aria-pressed={feedsOpen}
+                    >
+                      Camera
+                    </button>
+                  </div>
+                </>
+              )}
+              {zone && (
+                <>
+                  <div className="mc-card__head">
+                    <div className="mc-card__title">{zone.name}</div>
+                    <div className="mc-row">
+                      <span className={`mc-mono mc-tone--${zone.tone}`}>{zone.acres} ac</span>
+                      <button
+                        type="button"
+                        className="mc-close"
+                        onClick={clearSelection}
+                        aria-label="Close"
+                      >
+                        <X size={13} aria-hidden="true" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mc-card__meta">
+                    {zone.land
+                      ? `${zone.land.kind === "boundary" ? "Saved land" : zone.land.kind === "derived" ? "Derived from your saved land" : `Mapped ${zone.short}`} · private to your workspace`
+                      : `${zone.task} · ${zone.machines}`}
+                  </div>
+                  <GlassProgress
+                    className={`mc-progress mc-progress--${zone.tone}`}
+                    label={`${zone.name} progress`}
+                    value={zone.progressPct}
+                    valueText={`${zone.progressPct}%`}
+                  />
+                  <div className="mc-card__note">{zone.note}</div>
+                  {/* A Land's zones carry their source in both: say it once. */}
+                  {zone.attribution && zone.attribution !== zone.note && (
+                    <div className="mc-card__note mc-muted" data-testid="zone-attribution">
+                      {zone.attribution}
+                    </div>
+                  )}
+                  <div className="mc-actions">
                     <button
                       type="button"
                       className="mc-btn"
                       onClick={() => {
-                        appendLog("you", `Reassign ${zone.id}`);
-                        appendLog(
-                          "agent",
-                          `I can move ${zone.machines} off ${zone.name} — tell me which machine should take it and I'll re-sequence the passes.`,
-                        );
-                        setStreamOpen(true);
+                        const plan = project?.plans.find((p) => p.zoneIds.includes(zone.id));
+                        if (plan) openPlan(plan.id);
+                        else useMission.getState().openComposer({ zoneIds: [zone.id] });
                       }}
                     >
-                      Reassign
+                      {project?.plans.some((p) => p.zoneIds.includes(zone.id))
+                        ? "Open plan"
+                        : "Plan here"}
                     </button>
-                  )}
-                </div>
-              </>
-            )}
-          </GlassPanel>
+                    {zone.land ? (
+                      <button
+                        type="button"
+                        className="mc-btn"
+                        onClick={() => useUi.getState().setPanel("land")}
+                      >
+                        Open in Land
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="mc-btn"
+                        onClick={() => {
+                          appendLog("you", `Reassign ${zone.id}`);
+                          appendLog(
+                            "agent",
+                            `I can move ${zone.machines} off ${zone.name} — tell me which machine should take it and I'll re-sequence the passes.`,
+                          );
+                          setStreamOpen(true);
+                        }}
+                      >
+                        Reassign
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </GlassPanel>
+          )}
         </motion.div>
       )}
     </AnimatePresence>
