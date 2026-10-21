@@ -16,7 +16,8 @@ COMMITTED = surface_fixture.OUT
 
 def test_the_committed_surfaces_are_regenerated_byte_for_byte(tmp_path: Path) -> None:
     surface_fixture.write(tmp_path)
-    for name in ("e1/surface.bin", "e2/surface.bin", "surfaces.json"):
+    controls = [f"control/{name}/surface.bin" for name in surface_fixture.CONTROL]
+    for name in ("e1/surface.bin", "e2/surface.bin", "surfaces.json", *controls):
         assert (tmp_path / name).read_bytes() == (COMMITTED / name).read_bytes(), name
 
 
@@ -57,3 +58,18 @@ def test_the_reference_change_finds_what_was_built() -> None:
             ]["channels"]
         ]
         assert channels == ["dsm", "ground", "sigma", "support", "groundSigma"]
+
+
+def test_the_control_is_one_scene_scanned_four_ways_by_p5s_estimator() -> None:
+    """Review B5a's no-change control: the same scene at very different sample counts and
+    noise, each surface P5's own; every cell surfaced and its ground observed (the box is
+    narrower than the window)."""
+    control = json.loads((COMMITTED / "surfaces.json").read_text(encoding="utf-8"))["control"]
+    assert control["pairs"] == [["a", "b"], ["c", "d"]]
+    counts = {name: scan["samplesPerCell"] for name, scan in control["scans"].items()}
+    assert counts == {"a": 20, "b": 2000, "c": 100, "d": 100}
+    for scan in control["scans"].values():
+        blob = (COMMITTED / scan["file"]).read_bytes()
+        assert hashlib.sha256(blob).hexdigest() == scan["fileSha256"]
+        plane = cell_grid.decode(scan["descriptor"], blob).planes[0]
+        assert (plane.data[..., 2] > 0).all() and (plane.data[..., 4] > 0).all()

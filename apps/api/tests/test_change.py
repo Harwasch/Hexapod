@@ -23,7 +23,7 @@ from app.analysis.change import change_map as _change_map
 from app.analysis.change import change_planes as _change_planes
 from app.analysis.weak_areas import site_projection
 from tests.confidence_fixtures import blob, descriptor
-from tests.surface_fixtures import DOCUMENT, surface_blob, surface_descriptor
+from tests.surface_fixtures import DOCUMENT, SURFACES, surface_blob, surface_descriptor
 
 NO = cell_grid.NO_HEIGHT
 PROJECTION = site_projection(44.7965, -111.1346, 1520.0)
@@ -671,3 +671,31 @@ def test_the_grounds_reach_is_its_windows_half_diagonal() -> None:
     # Not stated: P5's own 5 m window at that level (centres within 2.5 m).
     assert change.ground_reach_m({}, 2) == pytest.approx(2 * 1.0 * math.sqrt(2.0))
     assert change.ground_reach_m({}, 4) == 0.0
+
+
+# --- the no-change control, on P5's own bytes (review B5a) -------------------------------
+
+
+def control_surface(name: str) -> Surface:
+    scan = DOCUMENT["control"]["scans"][name]
+    data = (SURFACES / scan["file"]).read_bytes()
+    grid = cell_grid.decode(scan["descriptor"], data)
+    reach = change.ground_reach_m(scan["descriptor"], grid.finest.level)
+    return Surface.of(grid.finest, ground_reach_m=reach)
+
+
+@pytest.mark.parametrize("layer", change.LAYERS)
+@pytest.mark.parametrize(("pair", "ub"), [(("a", "b"), 0.0), (("c", "d"), 0.03)])
+def test_no_change_control_nothing_changes_whatever_the_samples_and_noise(
+    layer: change.Layer, pair: tuple[str, str], ub: float
+) -> None:
+    """Review B5a's ruling: one unchanged scene (flat ground, a 1.5 m box), scanned by P5's
+    own estimator with 20 against 2,000 samples a cell (10 cm of noise each), and 1 cm
+    against 10 cm of noise (100 samples each). Neither layer may read a change between
+    them: the bias of P5's 2nd highest and of its lower envelope is in its sigmas. The
+    3 sigma rule allows about one cell in 370 of Gaussian noise: 2 of these 1,024 at most."""
+    a, b = (control_surface(name) for name in pair)
+    planes = _change_planes(a, b, 0.0, ub, layer=layer)
+    counts = planes.counts()
+    assert counts["raised"] + counts["lowered"] <= 2, counts
+    assert counts["unchanged"] > 900, counts

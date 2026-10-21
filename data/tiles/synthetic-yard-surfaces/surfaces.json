@@ -1585,5 +1585,344 @@
     "weak": true
    }
   ]
+ },
+ "control": {
+  "note": "review B5a's no-change control: one unchanged scene (flat ground, a 2 x 2 m box 1.5 m tall) scanned with very different sample counts (a, b) and noise (c, d), each made by P5's own estimator; no change of either layer may be read between them",
+  "pairs": [
+   [
+    "a",
+    "b"
+   ],
+   [
+    "c",
+    "d"
+   ]
+  ],
+  "scans": {
+   "a": {
+    "samplesPerCell": 20,
+    "noiseM": 0.1,
+    "descriptor": {
+     "format": "hexapod.cellgrid",
+     "version": 1,
+     "kind": "surface",
+     "uri": "surface.bin",
+     "frame": "tileset",
+     "lattice": {
+      "baseM": 0.25,
+      "level": 0
+     },
+     "cellM": 0.25,
+     "channels": [
+      {
+       "name": "dsm",
+       "type": "i2",
+       "unitM": 0.01
+      },
+      {
+       "name": "ground",
+       "type": "i2",
+       "unitM": 0.01
+      },
+      {
+       "name": "sigma",
+       "type": "u1",
+       "unitM": 0.01
+      },
+      {
+       "name": "support",
+       "type": "u1"
+      },
+      {
+       "name": "groundSigma",
+       "type": "u1",
+       "unitM": 0.01
+      }
+     ],
+     "levels": [
+      {
+       "level": 0,
+       "cellM": 0.25,
+       "i0": 0,
+       "j0": 0,
+       "ni": 32,
+       "nj": 32,
+       "offset": 0,
+       "bytes": 7168
+      }
+     ],
+     "policy": "surface-v1",
+     "status": "uncalibrated",
+     "estimators": {
+      "control": "P5's surface_plane over 20 samples a cell with 0.1 m of near-normal height noise, one unchanged scene (review B5a's no-change control; tools/pipeline/experiments/surface_fixture.py)",
+      "groundWindowM": 5.0,
+      "groundWindowCells": 21
+     },
+     "noData": -32768,
+     "sourceBits": {
+      "sfm": 1,
+      "splat": 2
+     },
+     "sigmaSaturatesAt": 255,
+     "vertical": {
+      "zero": "the tileset frame's origin",
+      "originHeightM": 0.0,
+      "surface": "the tangent plane at the origin, not a height above a datum"
+     },
+     "summary": {
+      "cells": 1024,
+      "surfaced": 1024,
+      "groundUnobserved": 0,
+      "metric": true
+     },
+     "sha256": "a9a8d002b33d628634ba7eefcc3510d355caa404f90bd01d4673d3deeb146bcd"
+    },
+    "file": "control/a/surface.bin",
+    "fileSha256": "37475f897913a85ce172406256a095c0beb061c8f2917f2ef217c25a52e54739"
+   },
+   "b": {
+    "samplesPerCell": 2000,
+    "noiseM": 0.1,
+    "descriptor": {
+     "format": "hexapod.cellgrid",
+     "version": 1,
+     "kind": "surface",
+     "uri": "surface.bin",
+     "frame": "tileset",
+     "lattice": {
+      "baseM": 0.25,
+      "level": 0
+     },
+     "cellM": 0.25,
+     "channels": [
+      {
+       "name": "dsm",
+       "type": "i2",
+       "unitM": 0.01
+      },
+      {
+       "name": "ground",
+       "type": "i2",
+       "unitM": 0.01
+      },
+      {
+       "name": "sigma",
+       "type": "u1",
+       "unitM": 0.01
+      },
+      {
+       "name": "support",
+       "type": "u1"
+      },
+      {
+       "name": "groundSigma",
+       "type": "u1",
+       "unitM": 0.01
+      }
+     ],
+     "levels": [
+      {
+       "level": 0,
+       "cellM": 0.25,
+       "i0": 0,
+       "j0": 0,
+       "ni": 32,
+       "nj": 32,
+       "offset": 0,
+       "bytes": 7168
+      }
+     ],
+     "policy": "surface-v1",
+     "status": "uncalibrated",
+     "estimators": {
+      "control": "P5's surface_plane over 2000 samples a cell with 0.1 m of near-normal height noise, one unchanged scene (review B5a's no-change control; tools/pipeline/experiments/surface_fixture.py)",
+      "groundWindowM": 5.0,
+      "groundWindowCells": 21
+     },
+     "noData": -32768,
+     "sourceBits": {
+      "sfm": 1,
+      "splat": 2
+     },
+     "sigmaSaturatesAt": 255,
+     "vertical": {
+      "zero": "the tileset frame's origin",
+      "originHeightM": 0.0,
+      "surface": "the tangent plane at the origin, not a height above a datum"
+     },
+     "summary": {
+      "cells": 1024,
+      "surfaced": 1024,
+      "groundUnobserved": 0,
+      "metric": true
+     },
+     "sha256": "1e2304d89aafe72a4403a224f467e879e2637100e0948ed9292d86a2cdf39f45"
+    },
+    "file": "control/b/surface.bin",
+    "fileSha256": "0e1ee9bd65113d96aba6cb9147498d915327cb3cdd478720a666ea0f2ba0871d"
+   },
+   "c": {
+    "samplesPerCell": 100,
+    "noiseM": 0.01,
+    "descriptor": {
+     "format": "hexapod.cellgrid",
+     "version": 1,
+     "kind": "surface",
+     "uri": "surface.bin",
+     "frame": "tileset",
+     "lattice": {
+      "baseM": 0.25,
+      "level": 0
+     },
+     "cellM": 0.25,
+     "channels": [
+      {
+       "name": "dsm",
+       "type": "i2",
+       "unitM": 0.01
+      },
+      {
+       "name": "ground",
+       "type": "i2",
+       "unitM": 0.01
+      },
+      {
+       "name": "sigma",
+       "type": "u1",
+       "unitM": 0.01
+      },
+      {
+       "name": "support",
+       "type": "u1"
+      },
+      {
+       "name": "groundSigma",
+       "type": "u1",
+       "unitM": 0.01
+      }
+     ],
+     "levels": [
+      {
+       "level": 0,
+       "cellM": 0.25,
+       "i0": 0,
+       "j0": 0,
+       "ni": 32,
+       "nj": 32,
+       "offset": 0,
+       "bytes": 7168
+      }
+     ],
+     "policy": "surface-v1",
+     "status": "uncalibrated",
+     "estimators": {
+      "control": "P5's surface_plane over 100 samples a cell with 0.01 m of near-normal height noise, one unchanged scene (review B5a's no-change control; tools/pipeline/experiments/surface_fixture.py)",
+      "groundWindowM": 5.0,
+      "groundWindowCells": 21
+     },
+     "noData": -32768,
+     "sourceBits": {
+      "sfm": 1,
+      "splat": 2
+     },
+     "sigmaSaturatesAt": 255,
+     "vertical": {
+      "zero": "the tileset frame's origin",
+      "originHeightM": 0.0,
+      "surface": "the tangent plane at the origin, not a height above a datum"
+     },
+     "summary": {
+      "cells": 1024,
+      "surfaced": 1024,
+      "groundUnobserved": 0,
+      "metric": true
+     },
+     "sha256": "c7569993be20725836f3344c4f6b34a5c4d549279bf2fc1985a6174636e309a9"
+    },
+    "file": "control/c/surface.bin",
+    "fileSha256": "76293b8dbc5922bc2c64b69cf9a4e9dcf0747f776b6b2b054022e224a69af631"
+   },
+   "d": {
+    "samplesPerCell": 100,
+    "noiseM": 0.1,
+    "descriptor": {
+     "format": "hexapod.cellgrid",
+     "version": 1,
+     "kind": "surface",
+     "uri": "surface.bin",
+     "frame": "tileset",
+     "lattice": {
+      "baseM": 0.25,
+      "level": 0
+     },
+     "cellM": 0.25,
+     "channels": [
+      {
+       "name": "dsm",
+       "type": "i2",
+       "unitM": 0.01
+      },
+      {
+       "name": "ground",
+       "type": "i2",
+       "unitM": 0.01
+      },
+      {
+       "name": "sigma",
+       "type": "u1",
+       "unitM": 0.01
+      },
+      {
+       "name": "support",
+       "type": "u1"
+      },
+      {
+       "name": "groundSigma",
+       "type": "u1",
+       "unitM": 0.01
+      }
+     ],
+     "levels": [
+      {
+       "level": 0,
+       "cellM": 0.25,
+       "i0": 0,
+       "j0": 0,
+       "ni": 32,
+       "nj": 32,
+       "offset": 0,
+       "bytes": 7168
+      }
+     ],
+     "policy": "surface-v1",
+     "status": "uncalibrated",
+     "estimators": {
+      "control": "P5's surface_plane over 100 samples a cell with 0.1 m of near-normal height noise, one unchanged scene (review B5a's no-change control; tools/pipeline/experiments/surface_fixture.py)",
+      "groundWindowM": 5.0,
+      "groundWindowCells": 21
+     },
+     "noData": -32768,
+     "sourceBits": {
+      "sfm": 1,
+      "splat": 2
+     },
+     "sigmaSaturatesAt": 255,
+     "vertical": {
+      "zero": "the tileset frame's origin",
+      "originHeightM": 0.0,
+      "surface": "the tangent plane at the origin, not a height above a datum"
+     },
+     "summary": {
+      "cells": 1024,
+      "surfaced": 1024,
+      "groundUnobserved": 0,
+      "metric": true
+     },
+     "sha256": "6bc9fcbdd1bdecfdcb504e60836d63dd2e8d7975ded29366a3efe283c21fc405"
+    },
+    "file": "control/d/surface.bin",
+    "fileSha256": "2d5fbfb97c9c50c44fae5618364d83f3fa2e4332165ddfa8ba073b0a4365d3e5"
+   }
+  }
  }
 }

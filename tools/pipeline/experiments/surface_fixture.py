@@ -53,6 +53,7 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
+import surface as p5  # noqa: E402
 from captures_bridge import cell_grid  # noqa: E402
 from experiments.confidence_demo import coarsen_surface, surface_change  # noqa: E402
 
@@ -207,6 +208,119 @@ def plane_sha256(plane: Any) -> str:
     return hashlib.sha256(rows.tobytes()).hexdigest()
 
 
+# --- the no-change control (review B5a) ---------------------------------------------------
+
+#: The control's scans of one unchanged scene: (samples a cell, height noise in metres).
+#: Pairs with very different counts (a, b) and noise (c, d); review B5a's own cases.
+CONTROL: dict[str, tuple[int, float]] = {
+    "a": (20, 0.10),
+    "b": (2000, 0.10),
+    "c": (100, 0.01),
+    "d": (100, 0.10),
+}
+#: The control's plane: 32 x 32 cells of 0.25 m, a 2 x 2 m box 1.5 m tall in the middle.
+CONTROL_CELLS = 32
+CONTROL_BOX: tuple[Box, int] = ((3, 3, 5, 5), 150)
+_MASK64 = (1 << 64) - 1
+
+
+def _stream(seed: int, n: int) -> np.ndarray:
+    """`n` 64-bit words of splitmix64 from `seed`: integer arithmetic alone, so every
+    machine draws the same ones (numpy's generators promise no such thing across
+    versions)."""
+    with np.errstate(over="ignore"):
+        x = (np.arange(1, n + 1, dtype=np.uint64) * np.uint64(0x9E3779B97F4A7C15)) + np.uint64(
+            seed & _MASK64
+        )
+        x = (x ^ (x >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+        x = (x ^ (x >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+        out: np.ndarray = x ^ (x >> np.uint64(31))
+    return out
+
+
+def _normal(seed: int, n: int) -> np.ndarray:
+    """`n` near-normal draws, mean 0 and standard deviation 1: the sum of twelve uniform
+    16-bit draws less their mean (Irwin-Hall), whole multiples of 2^-16, so exact."""
+    words = _stream(seed, 3 * n).reshape(n, 3)
+    total = np.zeros(n, dtype=np.int64)
+    for column in range(3):
+        for shift in (0, 16, 32, 48):
+            total += ((words[:, column] >> np.uint64(shift)) & np.uint64(0xFFFF)).astype(np.int64)
+    out: np.ndarray = (total - 6 * 65536 + 6) / 65536.0  # (12 * 65535 / 2 rounded)
+    return out
+
+
+def control_scan(name: str) -> Any:
+    """One scan of the control's unchanged scene by P5's own estimator (`surface_plane`):
+    its samples uniform in each cell, its heights the scene's plus its noise."""
+    per_cell, noise = CONTROL[name]
+    seed = sum(ord(c) << (8 * k) for k, c in enumerate(f"control-{name}"))
+    cells = CONTROL_CELLS * CONTROL_CELLS
+    n = cells * per_cell
+    words = _stream(seed ^ 0x5DEECE66D, 2 * n).reshape(n, 2)
+    unit = ((words >> np.uint64(11)).astype(np.float64)) / float(1 << 53)  # [0, 1), exact
+    i, j = np.divmod(np.repeat(np.arange(cells, dtype=np.int64), per_cell), CONTROL_CELLS)
+    cell = 0.25
+    x, y = (i + unit[:, 0]) * cell, (j + unit[:, 1]) * cell
+    (x0, y0, x1, y1), tall = CONTROL_BOX
+    box = (x >= x0) & (x < x1) & (y >= y0) & (y < y1)
+    z = np.where(box, tall / 100.0, 0.0) + noise * _normal(seed, n)
+    xyz = np.column_stack([x, y, z])
+    window = p5.Window(level=0, i0=0, j0=0, ni=CONTROL_CELLS, nj=CONTROL_CELLS)
+    return p5.surface_plane(lambda: iter([(xyz, p5.SPLAT)]), window)
+
+
+def control(out: Path, height: float) -> dict[str, Any]:
+    """`control/<name>/surface.bin` for every scan of `CONTROL`, and their descriptors."""
+    scans: dict[str, Any] = {}
+    for name, (per_cell, noise) in CONTROL.items():
+        found = control_scan(name)
+        plane = found.plane
+        has = plane.data[..., 2] > 0
+        meta = {
+            "policy": "surface-v1",
+            "status": "uncalibrated",
+            "estimators": {
+                "control": f"P5's surface_plane over {per_cell} samples a cell with {noise:g} m "
+                "of near-normal height noise, one unchanged scene (review B5a's no-change "
+                "control; tools/pipeline/experiments/surface_fixture.py)",
+                "groundWindowM": p5.GROUND_WINDOW_M,
+                "groundWindowCells": 2 * found.ground_half + 1,
+            },
+            "noData": NO,
+            "sourceBits": dict(cell_grid.SURFACE_SOURCE_BITS),
+            "sigmaSaturatesAt": 255,
+            "vertical": {
+                "zero": "the tileset frame's origin",
+                "originHeightM": height,
+                "surface": "the tangent plane at the origin, not a height above a datum",
+            },
+            "summary": {
+                "cells": plane.cells,
+                "surfaced": int(has.sum()),
+                "groundUnobserved": found.ground_unobserved,
+                "metric": True,
+            },
+        }
+        grid = cell_grid.CellGrid("surface", cell_grid.SURFACE_CHANNELS, (plane,), meta)
+        descriptor = cell_grid.encode(grid, out / "control" / name, "surface.bin")
+        blob = (out / "control" / name / "surface.bin").read_bytes()
+        scans[name] = {
+            "samplesPerCell": per_cell,
+            "noiseM": noise,
+            "descriptor": descriptor,
+            "file": f"control/{name}/surface.bin",
+            "fileSha256": hashlib.sha256(blob).hexdigest(),
+        }
+    return {
+        "note": "review B5a's no-change control: one unchanged scene (flat ground, a 2 x 2 m "
+        "box 1.5 m tall) scanned with very different sample counts (a, b) and noise (c, d), "
+        "each made by P5's own estimator; no change of either layer may be read between them",
+        "pairs": [["a", "b"], ["c", "d"]],
+        "scans": scans,
+    }
+
+
 def write(out: Path) -> dict[str, Any]:
     """`e1/surface.bin`, `e2/surface.bin` and `surfaces.json` in `out`."""
     height = origin_height()
@@ -259,6 +373,7 @@ def write(out: Path) -> dict[str, Any]:
             for row in change["changed"]
         ],
     }
+    document["control"] = control(out, height)
     (out / "surfaces.json").write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")
     return document
 
