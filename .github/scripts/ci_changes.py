@@ -10,6 +10,8 @@ By event:
 
 - pull_request: only the jobs whose inputs changed between the base and the PR; the
   Playwright shards run the page specs alone when the 3D scene's inputs did not change.
+  On a draft pull request, only the fast checks (`FAST`) of those; the rest run when it
+  is marked ready for review, which starts a new run.
 - push to main: only the jobs whose inputs changed between the push's `before` and its
   head, with the scene specs whenever Playwright runs. A new branch (an all-zeros
   `before`), a force-push, or a diff that cannot be computed runs everything.
@@ -198,6 +200,11 @@ PAGE_SPECS = r"apps/web/e2e/(admin|app|captures|layout|phoneUpload|view)\.spec\.
 
 ZERO_SHA = "0" * 40
 
+# What a draft pull request runs: the checks that take a minute, not a queue. Twenty
+# stacked drafts re-running every job on each push held main's own CI up for hours.
+FAST = ("workflows", "format")
+DRAFT_NOTE = "Draft PR: slow jobs skipped; mark ready to run the full suite"
+
 # `import x from "y"`, `export * from "y"`, `import "y"`, `import("y")`, `new URL("y", ...)`.
 _IMPORT = re.compile(r"""(?:\bfrom|\bimport|\bnew\s+URL)\s*\(?\s*["']([^"']+)["']""")
 _SOURCE = (".ts", ".tsx", ".js", ".jsx", ".mjs")
@@ -301,6 +308,14 @@ def classify(
     return needed, unknown
 
 
+def draft_only(needed: dict[str, bool]) -> dict[str, bool]:
+    """A draft's jobs: the fast ones of `needed` alone. The web job checks formatting
+    itself, so where it would have run, the format job runs instead."""
+    fast = {**nothing(), **{job: needed[job] for job in FAST}}
+    fast["format"] = needed["format"] or needed["web"]
+    return fast
+
+
 def _overrides(paths: Sequence[str], unknown: Sequence[str]) -> str | None:
     """Why this diff must run everything, if it must."""
     own = [path.strip() for path in paths if _match(CI_SELF, path.strip())]
@@ -318,12 +333,17 @@ def decide(
     before: str = "",
     forced: bool = False,
     nightly_due: bool = True,
+    draft: bool = False,
     scene: tuple[Collection[str], Collection[str]] | None = None,
 ) -> tuple[dict[str, bool], str]:
     """The jobs to run for this event, and one line saying why.
 
-    `changed` is None when the diff could not be computed.
+    `changed` is None when the diff could not be computed. `draft` counts on a pull
+    request alone: a push, a dispatch and the nightly are never drafts.
     """
+    if draft and event == "pull_request":
+        needed, why = decide(event, changed, scene=scene)
+        return draft_only(needed), f"draft {why}; the fast checks alone"
     if event == "schedule":
         if not nightly_due:
             return nothing(), "nightly: main has no commits since the last nightly"
@@ -424,6 +444,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--base", default="", help="pull_request: the base commit")
     parser.add_argument("--forced", default="false", help="push: 'true' for a force-push")
     parser.add_argument("--head", default="", help="schedule: the commit being tested")
+    parser.add_argument("--draft", default="false", help="pull_request: 'true' for a draft")
     parser.add_argument(
         "--stdin", action="store_true", help="read changed paths from stdin instead of git"
     )
@@ -443,8 +464,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if changed is not None:
         print("Changed:", *changed, sep="\n  ")
+    draft = args.event == "pull_request" and args.draft == "true"
     needed, reason = decide(
-        args.event, changed, before=args.before, forced=args.forced == "true", nightly_due=due
+        args.event,
+        changed,
+        before=args.before,
+        forced=args.forced == "true",
+        nightly_due=due,
+        draft=draft,
     )
     result = outputs(needed)
     print(reason)
@@ -455,6 +482,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             output.write(result)
     if path := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(path, "a") as summary:
+            if draft:
+                summary.write(f"{DRAFT_NOTE}.\n\n")
             summary.write(f"**{reason}**\n\n| job | runs |\n|---|---|\n")
             for job in (*JOBS, "scene"):
                 summary.write(f"| {job} | {'yes' if needed[job] else 'no'} |\n")

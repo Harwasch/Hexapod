@@ -20,7 +20,9 @@ Start with `README.md`, then `docs/HANDOFF.md` and `docs/DEPLOYMENT.md`.
   `pnpm contracts:generate`.
 - CI (`.github/workflows/ci.yml`): a PR, and a push to main, run only the jobs whose paths changed
   (`.github/scripts/ci_changes.py`, tested by `python3 -m unittest discover -s .github/scripts`); a change to
-  CI itself runs everything; a nightly runs everything when main moved. Deploy (`deploy.yml`) ships main.
+  CI itself runs everything; a nightly runs everything when main moved. A draft PR runs only the format and
+  workflows checks; marking it ready for review (or a `workflow_dispatch` on its branch) runs the full suite.
+  Deploy (`deploy.yml`) ships main.
 
 ## Conventions
 
