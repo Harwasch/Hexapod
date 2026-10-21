@@ -1,13 +1,15 @@
 /**
  * Compare › Dates in the app itself: two dated captures of one site, one each side of the
- * divider, under CesiumJS; and under PlayCanvas the control disabled, with the reason and the
- * one-click switch.
+ * divider, under CesiumJS and under PlayCanvas (the right-hand date its scan, the left streamed
+ * beside it in its one app); and under Spark the control disabled, with the reason and the
+ * one-click switch to PlayCanvas.
  *
  * E1 is the synthetic yard as a drone flew it on Mar 1 (the capture that made the site's
  * frame); E2 is a phone video of Jun 1, whose tileset is the yard's `tileset.json?epoch=2`
  * rewritten in the route to the committed synthetic tree's tile under the yard's root transform
  * (as epochSlider.spec.ts does), so the two dates look different on screen. Asserted, through
- * `window.__twin`: both dates drawn, E1 split LEFT and E2 RIGHT, one model matrix; the divider
+ * `window.__twin`: both dates drawn, E1 split LEFT and E2 RIGHT, one model matrix (under
+ * PlayCanvas CesiumJS's copies hidden, and PlayCanvas's own reading of the cut); the divider
  * moves the scene's split; turning the comparison off draws the one date shown before, whole.
  * And by pixels: left of the divider looks like E1 alone, right of it like E2 alone, and moving
  * the divider moves where E2 begins. The tool rail is as it was.
@@ -259,6 +261,24 @@ async function arrive(page: Page, renderer: string): Promise<void> {
   );
 }
 
+/**
+ * Under a dedicated renderer: until it draws the scan SiteManager hands it (`scanTarget`), all
+ * of it in and still, twice a second apart (a date chosen starts a new session).
+ */
+async function overlayDrawn(page: Page, assetId: string): Promise<void> {
+  const drawn = () =>
+    page.evaluate(`(() => {
+      const twin = window.__twin;
+      twin.scene.requestRender();
+      const s = twin.scanRendererStatus;
+      return twin.sites.scanTarget()?.assetId === "${assetId}" && s.active && s.tiles > 0 &&
+        s.loading === 0 && s.settled;
+    })()`);
+  await expect
+    .poll(async () => (await drawn()) && (await page.waitForTimeout(1_000), await drawn()), poll)
+    .toBe(true);
+}
+
 /** A screenshot once the scene has drawn a few frames at rest; saved as evidence when named. */
 async function settledShot(page: Page, name?: string): Promise<Buffer> {
   await page.evaluate(`window.__twin.scene.requestRender()`);
@@ -370,11 +390,29 @@ async function closePanel(page: Page) {
 
 const poll = { timeout: 120_000, intervals: [250, 500, 1000] };
 
-test("under cesium, Compare › Dates draws two dates either side of the divider", async ({
-  page,
-}) => {
-  test.setTimeout(420_000);
-  await arrive(page, "cesium");
+/** What PlayCanvas, drawing asset `id`, reads out of the comparison (scanView/scanCompare.ts). */
+const compareReading = (page: Page, id: string) =>
+  page.evaluate(async (asset) => {
+    const link = "/src/cesium/scanView/scanCompare.ts";
+    const module = (await import(/* @vite-ignore */ link)) as {
+      scanCompareReading(id: string): {
+        on: boolean;
+        dividerPx: number;
+        sides: { left: number; right: number };
+        left: { dates: number; tiles: number; loading: number };
+      } | null;
+    };
+    return module.scanCompareReading(asset);
+  }, id);
+
+/**
+ * Compare › Dates under `renderer`: each date alone, then both, each half like its own date,
+ * the picks by side, the divider moved, and off again.
+ */
+async function comparesTwoDates(page: Page, renderer: "cesium" | "playcanvas"): Promise<void> {
+  await arrive(page, renderer);
+  // Drawn by CesiumJS itself, or by PlayCanvas with CesiumJS's copies hidden.
+  const own = renderer === "cesium";
   const timeline = page.getByTestId("timeline");
   const mar = timeline.getByRole("radio", { name: /Mar 1, 2026/ });
   const jun = timeline.getByRole("radio", { name: /Jun 1, 2026/ });
@@ -384,22 +422,24 @@ test("under cesium, Compare › Dates draws two dates either side of the divider
   await expect
     .poll(async () => (await state(page)).loaded.map((a) => a.id).sort(), poll)
     .toEqual([A1, A2].sort());
-  const juneAlone = await settledShot(page, "jun-alone");
+  if (!own) await overlayDrawn(page, A2);
+  const juneAlone = await settledShot(page, `${renderer}-jun-alone`);
   await mar.click();
-  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [true, NONE], [A2]: [false, NONE] });
-  const marchAlone = await settledShot(page, "mar-alone");
+  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [own, NONE], [A2]: [false, NONE] });
+  if (!own) await overlayDrawn(page, A1);
+  const marchAlone = await settledShot(page, `${renderer}-mar-alone`);
   await jun.click();
-  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [false, NONE], [A2]: [true, NONE] });
+  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [false, NONE], [A2]: [own, NONE] });
 
   // Compare › Dates: the latest against the one before, and on.
   const dates = await openCompare(page);
   await expect(dates.getByLabel("Left of the divider")).toHaveValue(E1);
   await expect(dates.getByLabel("Right of the divider")).toHaveValue(E2);
-  await expect(page.getByTestId("compare-dates-needs-cesium")).toHaveCount(0);
+  await expect(page.getByTestId("compare-dates-needs-renderer")).toHaveCount(0);
   const toggle = dates.getByRole("switch", { name: "Swipe between dates" });
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");
-  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [true, LEFT], [A2]: [true, RIGHT] });
+  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [own, LEFT], [A2]: [own, RIGHT] });
   const both = await state(page);
   expect(both.compare).toEqual({ left: E1, right: E2 });
   // The single date is kept for after; both are drawn with one model matrix.
@@ -407,6 +447,26 @@ test("under cesium, Compare › Dates draws two dates either side of the divider
   const [m1, m2] = [A1, A2].map((id) => both.loaded.find((a) => a.id === id)?.m);
   expect(m1).toBeDefined();
   expect(m2).toEqual(m1);
+  if (!own) {
+    // PlayCanvas, drawing June, streams March beside it and cuts each at the divider.
+    await expect
+      .poll(async () => {
+        const r = await compareReading(page, A2);
+        return r && { on: r.on, left: r.sides.left > 0, right: r.sides.right > 0 };
+      }, poll)
+      .toEqual({ on: true, left: true, right: true });
+    await expect
+      .poll(async () => {
+        const r = await compareReading(page, A2);
+        return r !== null && r.left.tiles > 0 && r.left.loading === 0;
+      }, poll)
+      .toBe(true);
+    await overlayDrawn(page, A2);
+  }
+  // At capture is off while two dates are drawn: one clock is not each date's.
+  await expect(
+    page.getByTestId("views-sun").getByRole("radio", { name: "At capture" }),
+  ).toBeDisabled();
   // The divider is drawn, and the scene splits where it is.
   const slider = page.getByTestId("split-slider");
   await expect(slider).toBeVisible();
@@ -420,7 +480,7 @@ test("under cesium, Compare › Dates draws two dates either side of the divider
   // It outlives the panel. By pixels: each half looks like its own date alone.
   await closePanel(page);
   await expect(slider).toBeVisible();
-  const compared = await settledShot(page, "compare-at-half");
+  const compared = await settledShot(page, `${renderer}-compare-at-half`);
   const halves = {
     leftVsMar: await differ(page, compared, marchAlone, 0.08, 0.47),
     leftVsJun: await differ(page, compared, juneAlone, 0.08, 0.47),
@@ -453,7 +513,7 @@ test("under cesium, Compare › Dates draws two dates either side of the divider
   await slider.focus();
   for (let i = 0; i < 10; i++) await page.keyboard.press("ArrowLeft");
   await expect.poll(async () => (await state(page)).splitPosition, poll).toBeCloseTo(0.3, 5);
-  const moved = await settledShot(page, "compare-at-0.3");
+  const moved = await settledShot(page, `${renderer}-compare-at-0.3`);
   const band = {
     vsJun: await differ(page, moved, juneAlone, 0.33, 0.47),
     vsMar: await differ(page, moved, marchAlone, 0.33, 0.47),
@@ -466,44 +526,68 @@ test("under cesium, Compare › Dates draws two dates either side of the divider
   expect(band.dates).toBeGreaterThan(0.02);
   expect(band.vsJun).toBeLessThan(band.vsMar / 2);
 
+  if (!own) {
+    // The divider moved one uniform of PlayCanvas's frame, where the canvas's pixels say.
+    const reading = await compareReading(page, A2);
+    const width = await page.evaluate(
+      `document.querySelector("canvas[data-scan-renderer]")?.width ?? 0`,
+    );
+    expect(reading?.dividerPx).toBeCloseTo(0.3 * Number(width), 0);
+  }
   // Off: the one date shown before, whole, and no divider.
   const again = await openCompare(page);
   await again.getByRole("switch", { name: "Swipe between dates" }).click();
-  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [false, NONE], [A2]: [true, NONE] });
+  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [false, NONE], [A2]: [own, NONE] });
   expect((await state(page)).compare).toBeNull();
   await expect(page.getByTestId("split-slider")).toHaveCount(0);
   await expect(jun).toHaveAttribute("aria-checked", "true");
   await closePanel(page);
-  await settledShot(page, "compare-off");
+  await settledShot(page, `${renderer}-compare-off`);
   await railUnchanged(page);
+}
+
+test("under cesium, Compare › Dates draws two dates either side of the divider", async ({
+  page,
+}) => {
+  test.setTimeout(420_000);
+  await comparesTwoDates(page, "cesium");
 });
 
-test("under playcanvas, Compare › Dates says it needs CesiumJS and switches to it in one click", async ({
+test("under playcanvas, Compare › Dates draws two dates in one app, each cut at the divider", async ({
+  page,
+}) => {
+  test.setTimeout(420_000);
+  await comparesTwoDates(page, "playcanvas");
+});
+
+test("under spark, Compare › Dates says it needs CesiumJS or PlayCanvas and switches in one click", async ({
   page,
 }) => {
   test.setTimeout(360_000);
-  await arrive(page, "playcanvas");
+  await arrive(page, "spark");
   const dates = await openCompare(page);
   const toggle = dates.getByRole("switch", { name: "Swipe between dates" });
   await expect(toggle).toBeDisabled();
   await expect(dates.getByLabel("Left of the divider")).toBeDisabled();
-  const notice = page.getByTestId("compare-dates-needs-cesium");
+  const notice = page.getByTestId("compare-dates-needs-renderer");
   await expect(notice).toContainText(
-    "Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
+    "Needs the CesiumJS or PlayCanvas renderer (Settings › Advanced › Splat renderer)",
   );
-  await settledShot(page, "playcanvas-notice");
+  await settledShot(page, "spark-notice");
   await railUnchanged(page);
 
-  // One click: CesiumJS draws the scan, and the comparison can be turned on.
-  await notice.getByRole("button", { name: "Draw with CesiumJS" }).click();
+  // One click: PlayCanvas, the default, draws the scan, and the comparison can be turned on.
+  await notice.getByRole("button", { name: "Draw with PlayCanvas" }).click();
   await expect(notice).toHaveCount(0);
   await expect
-    .poll(() => page.evaluate(`window.__twin.scanRendererStatus.active`), poll)
-    .toBe(false);
+    .poll(() => page.evaluate(`window.__twin.scanRendererStatus.kind`), poll)
+    .toBe("playcanvas");
   await expect(toggle).toBeEnabled();
   await toggle.click();
-  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [true, LEFT], [A2]: [true, RIGHT] });
+  await expect
+    .poll(() => drawnAs(page), poll)
+    .toEqual({ [A1]: [false, LEFT], [A2]: [false, RIGHT] });
   await closePanel(page);
-  await settledShot(page, "playcanvas-switched-compare");
+  await settledShot(page, "spark-switched-compare");
   await railUnchanged(page);
 });
