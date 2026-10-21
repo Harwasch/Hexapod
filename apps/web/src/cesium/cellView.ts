@@ -12,6 +12,11 @@
  *
  * What the view found is reported per model (`useViewMode.report`): not measured (no grid on
  * the root), failed (and why), or ready, with Data age's bucket and the later dates compared.
+ *
+ * The same view is handed to PlayCanvas or Spark when one of them draws the scan
+ * (scanView/scanCellView.ts): the mode drawn, its texture and the grid, or nothing on Photo --
+ * and nothing for Data age until its texture is built, as here. CesiumJS's own copy of the scan
+ * is hidden then; its part costs nothing there.
  */
 
 import type { Cesium3DTileset, Scene } from "cesium";
@@ -36,6 +41,7 @@ import {
   type CellViewPrimitive,
 } from "./splatCellView";
 import type { Mat4 } from "./splatFrames";
+import { publishScanCellView } from "./scanView/scanCellView";
 import { splatTilesetOf } from "./splatInternals";
 
 const log = createLogger("cellView");
@@ -82,9 +88,18 @@ export function startCellView(
   const primitive = (): CellViewPrimitive | undefined =>
     splatTilesetOf(tileset).gaussianSplatPrimitive;
 
+  /** What a dedicated renderer drawing the scan draws now. */
+  const publish = (): void => {
+    publishScanCellView(
+      assetId,
+      !disposed && part && mode !== "photo" ? part.lookView(mode) : null,
+    );
+  };
+
   /** Puts the part where the view says, on the primitive there is now. */
   const place = (): void => {
     if (disposed || !part) return;
+    publish();
     const target = primitive();
     if (mode === "photo") {
       if (part.installed) {
@@ -118,7 +133,10 @@ export function startCellView(
     age = loadLaterGrids(later, asArray(root()?.transform)).then((grids): CellViewReport => {
       const { compared, skipped } = comparedGrids(grids, g);
       const { rg, newerCells } = dataAgeTexels(g, bucket, compared);
-      if (!disposed && key === ageKey) part?.setDataAge(rg);
+      if (!disposed && key === ageKey) {
+        part?.setDataAge(rg);
+        publish();
+      }
       return {
         kind: "ready",
         mode: "data-age",
@@ -190,6 +208,7 @@ export function startCellView(
     dispose: () => {
       disposed = true;
       unsubscribe();
+      publish();
       part?.destroy();
       part = undefined;
       report(assetId, null);

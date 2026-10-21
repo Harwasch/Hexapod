@@ -55,6 +55,7 @@ import {
   CELL_MIN_PX,
   CELL_MODE,
   NEWER_STRIPE_M,
+  type CellLookView,
   type CellViewMode,
 } from "@/lib/cellLook";
 
@@ -253,6 +254,15 @@ export class SplatCellView implements SplatColorPart {
   /** Whether `mode` can be drawn now (its texture's bytes are here). */
   ready(mode: CellViewMode = this.mode): boolean {
     return this.#rows[mode] !== undefined;
+  }
+
+  /**
+   * `mode` as a dedicated renderer draws it (lib/cellLook.ts): its texture's bytes and the
+   * grid's levels and rule, or null until the bytes are here (the photo, as here).
+   */
+  lookView(mode: CellViewMode = this.mode): CellLookView | null {
+    const rows = this.#rows[mode];
+    return rows ? { mode, rows, meta: this.grid.meta } : null;
   }
 
   addToShader(
