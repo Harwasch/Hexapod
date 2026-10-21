@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path
 
 import pytest
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import Artifact, Capture, CaptureFile, Job, JobStep, Site
@@ -244,6 +244,44 @@ def test_a_lease_keeper_holds_the_lease_while_its_owner_is_busy_and_then_lets_go
     assert taken is not None and taken.claimed_by == "worker-b"
     owner.close()
     other.close()
+
+
+def test_a_lease_keeper_is_never_idle_in_a_transaction(
+    db: Session, engine: Engine, sessions: sessionmaker[Session]
+) -> None:
+    """The keeper renews from its own thread while the supervisor downloads and uploads,
+    which is exactly when the tests below ask Postgres whether any session is idle in a
+    transaction. A renewal sent as UPDATE and then COMMIT is idle in one for the round trip
+    between the two, and for as long as its thread then waits for the GIL or a CPU: those
+    tests counted it about once in 30 runs on a loaded machine. So each of its statements
+    is checked here the moment it returns, in Postgres -- the renewals, and the read of
+    the job's status after the one that finds the job no longer held."""
+    capture = make_capture(db)
+    job = queue_job(db, capture)
+    owner = sessions()
+    assert claim_next(owner, worker_id="worker-a", lease_s=FAST_LEASE_S) is not None
+    owner.commit()  # `claim_next` loads the job it claimed, which begins a transaction
+    idle_in_transaction = IdleTransactions(TEST_DATABASE_URL)
+    seen: list[tuple[str, int]] = []
+
+    def after(_conn: object, _cursor: object, statement: str, *_args: object) -> None:
+        if threading.current_thread().name.startswith("lease-"):
+            seen.append((statement.split(None, 1)[0], idle_in_transaction()))
+
+    event.listen(engine, "after_cursor_execute", after)
+    try:
+        with LeaseKeeper(
+            sessions, job.id, worker_id="worker-a", lease_s=FAST_LEASE_S, interval_s=0.05
+        ):
+            assert wait_until(lambda: len(seen) >= 3)
+            release(owner, job.id, worker_id="worker-a")
+            assert wait_until(lambda: any(kind == "SELECT" for kind, _ in seen))
+    finally:
+        event.remove(engine, "after_cursor_execute", after)
+        idle_in_transaction.close()
+        owner.close()
+    assert {kind for kind, _ in seen} == {"UPDATE", "SELECT"}, seen
+    assert [entry for entry in seen if entry[1] != 0] == [], seen
 
 
 # --------------------------------------------------------------------------------------
