@@ -272,3 +272,10 @@ def test_declared_xyz_text_must_not_be_truncated() -> None:
     data = box(b"moov", box(b"udta", box(v.XYZ, struct.pack(">HH", 65535, 0) + b"+1+2/")))
     found, _ = checked(data)
     assert found is None
+
+
+@pytest.mark.parametrize("text", ["+0030.0+00030.0/", "+000030.0+0000030.0/"])
+def test_sexagesimal_is_converted_or_rejected_never_read_as_decimal(text: str) -> None:
+    found, _ = checked(mov(iso6709=text))
+    expected = 0.5 if text == "+0030.0+00030.0/" else 30 / 3600
+    assert found is None or (found.lat == expected and found.lon == expected)

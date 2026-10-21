@@ -84,7 +84,8 @@ MAX_BOXES = 1024
 #: The most `keys` entries read.
 MAX_KEYS = 1024
 
-# +DD.DDDD-DDD.DDDD+AAA.AAA/ -- the grammar `tools/pipeline/video.parse_iso6709` accepts.
+# +DD.DDDD-DDD.DDDD+AAA.AAA/ (or a compact +DDMM / +DDMMSS form, `_iso6709_component`):
+# the grammar `tools/pipeline/video.parse_iso6709` accepts.
 _ISO6709_RE = re.compile(
     r"^(?P<lat>[+-]\d+(?:\.\d+)?)(?P<lon>[+-]\d+(?:\.\d+)?)(?P<alt>[+-]\d+(?:\.\d+)?)?/?$"
 )
@@ -379,11 +380,42 @@ def _loci(payload: bytes) -> VideoLocation | None:
 
 
 def _parse_iso6709(text: str) -> tuple[float, float] | None:
+    """`tools/pipeline/video.parse_iso6709`'s grammar, compact forms included; a test holds
+    the two to one answer per string."""
     match = _ISO6709_RE.match(text.strip())
     if match is None:
         return None
-    lat, lon = float(match.group("lat")), float(match.group("lon"))
+    lat = _iso6709_component(match.group("lat"), 2)
+    lon = _iso6709_component(match.group("lon"), 3)
+    if lat is None or lon is None:
+        return None
     return (lat, lon) if _on_globe(lat, lon) else None
+
+
+def _iso6709_component(text: str, degree_digits: int) -> float | None:
+    """One signed ISO 6709 component in degrees, by its count of integer digits: up to
+    `degree_digits` (2 for latitude, 3 for longitude) is decimal degrees; two more is
+    degrees and decimal minutes (+DDMM.M); four more is degrees, minutes and decimal
+    seconds (+DDMMSS.S). Any other count, or minutes or seconds of 60 or more, is None.
+    Read as decimal degrees, +0030.0 (half a degree) was thirty."""
+    sign = -1.0 if text[0] == "-" else 1.0
+    whole, _, fraction = text[1:].partition(".")
+    tail = f".{fraction}" if fraction else ""
+    count = len(whole)
+    if count <= degree_digits:
+        return sign * float(text[1:])
+    if count == degree_digits + 2:
+        minutes = float(whole[degree_digits:] + tail)
+        if minutes >= 60:
+            return None
+        return sign * (int(whole[:degree_digits]) + minutes / 60)
+    if count == degree_digits + 4:
+        minutes = int(whole[degree_digits : degree_digits + 2])
+        seconds = float(whole[degree_digits + 2 :] + tail)
+        if minutes >= 60 or seconds >= 60:
+            return None
+        return sign * (int(whole[:degree_digits]) + minutes / 60 + seconds / 3600)
+    return None
 
 
 def _on_globe(lat: float, lon: float) -> bool:

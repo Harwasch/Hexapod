@@ -435,7 +435,43 @@ def test_iso6709_signs_are_the_separators(
     assert (round(parsed[0], 4), round(parsed[1], 4), parsed[2]) == expected
 
 
-@pytest.mark.parametrize("text", ["", "51.5074,-0.1278", "unknown", "+51.5074/"])
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # ISO 6709's compact forms: the count of integer digits says which. Degrees and
+        # minutes (+DDMM.M / +DDDMM.M) and degrees, minutes and seconds (+DDMMSS.S /
+        # +DDDMMSS.S); read as decimal degrees, both of these were (30, 30).
+        ("+0030.0+00030.0/", (0.5, 0.5, None)),
+        ("+000030.0+0000030.0/", (30 / 3600, 30 / 3600, None)),
+        ("+4807.038-01131.000/", (48 + 7.038 / 60, -(11 + 31 / 60), None)),
+        ("+402646-0794859+300.5/", (40 + 26 / 60 + 46 / 3600, -(79 + 48 / 60 + 59 / 3600), 300.5)),
+    ],
+)
+def test_iso6709_compact_minutes_and_seconds_are_converted(
+    text: str, expected: tuple[float, float, float | None]
+) -> None:
+    parsed = video.parse_iso6709(text)
+    assert parsed is not None
+    assert parsed[0] == pytest.approx(expected[0], abs=1e-12)
+    assert parsed[1] == pytest.approx(expected[1], abs=1e-12)
+    assert parsed[2] == expected[2]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "51.5074,-0.1278",
+        "unknown",
+        "+51.5074/",
+        "+123.4-001.0/",  # three integer digits of latitude: no ISO 6709 form has three
+        "+12345.6+001.0/",  # five
+        "+1260.0+000.0/",  # 60 minutes
+        "+120060+0000000/",  # 60 seconds
+        "+95.0-122.0/",  # off the globe
+        "+" + "9" * 400 + "+2/",
+    ],
+)
 def test_a_coordinate_nobody_can_vouch_for_is_none_rather_than_a_guess(text: str) -> None:
     assert video.parse_iso6709(text) is None
 

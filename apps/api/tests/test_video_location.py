@@ -158,7 +158,19 @@ def test_read_from_the_bucket_by_ranged_gets(storage: S3Storage) -> None:
 
 @pytest.mark.parametrize(
     "text",
-    [SF, "+51.5007-000.1246/", "-33.8688+151.2093", "+95.0-122.0/", "37.7,-122.4", "", "+1+2+3+4"],
+    [
+        SF,
+        "+51.5007-000.1246/",
+        "-33.8688+151.2093",
+        "+95.0-122.0/",
+        "37.7,-122.4",
+        "",
+        "+1+2+3+4",
+        "+0030.0+00030.0/",
+        "+402646-0794859+300.5/",
+        "+123.4-001.0/",
+        "+1260.0+000.0/",
+    ],
 )
 def test_the_api_and_the_pipeline_read_the_same_places_the_same_way(text: str) -> None:
     """The join (here) and the georeference (`tools/pipeline/video.py`) must agree on what
@@ -173,8 +185,8 @@ def test_the_api_and_the_pipeline_read_the_same_places_the_same_way(text: str) -
     assert video.LOCATION_KEYS[0] == video_location.ISO6709_KEY
     theirs = video.parse_iso6709(text)
     ours = read(mov(iso6709=text))
-    on_globe = theirs is not None and -90 <= theirs[0] <= 90 and -180 <= theirs[1] <= 180
-    assert (None if not on_globe else theirs[:2]) == (
+    # The same grammar, compact forms and globe check included: one answer per string.
+    assert (None if theirs is None else theirs[:2]) == (
         None if ours is None else (ours.lat, ours.lon)
     )
 
