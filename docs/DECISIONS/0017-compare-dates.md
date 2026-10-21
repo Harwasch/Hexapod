@@ -249,6 +249,9 @@ modifier) already draws Confidence, Data age and the objects' rules per tile.
    work buffer, so they share the one budget the host draws to: split by each one's share of the
    cells in view it owns, its inferred layers' cells counted with it
    (`cesium/scanView/ruleDates.ts` `viewShares`, the plane sampled at 16k cells at most).
+   Known limit: visibility is sampled on the plane's ground, z = 0 of the root frame, so on a
+   steep site, or one whose ground sits far from that z, the budget is shared out less
+   accurately. What is drawn is unaffected: ownership and the weight do not use it.
    Together they hold what one scan alone would. A date that owns no cell in view streams
    nothing and lets its tiles go until it does. The scan PlayCanvas draws takes its share through
    the host (PlayCanvas's `loadFactor`; the host hands its streamer what the cut may hold
