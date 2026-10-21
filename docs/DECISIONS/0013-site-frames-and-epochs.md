@@ -102,8 +102,20 @@ the video's location at join time:
   a crafted file costs no more than an honest one; anything malformed is "no location". It reads
   the video `pick_source` will take (the first by name). No dependency.
 
+**One reading, agreed.** A clip may carry its location in several atoms. The reader keeps one only
+if they agree — the `mdta` key's reading, with its accuracy, when every other point is within the
+largest accuracy any of them claims or a 10 m floor (the rounding of two honest writings of one
+fix) — and otherwise says the clip has no location: where atoms disagree, ffmpeg keeps the last and
+a reader could keep the first, and a crafted clip would be matched to one site and placed at
+another (the cross review of #72). ISO 6709's compact forms (`+DDMM.M`, `+DDMMSS.S`) are converted,
+in both this reader and the pipeline's. **The pipeline places by the same reading:** the worker
+hands it to `normalize` (`ffmpeg_frames`'s `video_location`, null included), which records it as
+`source_meta.json`'s location in place of its own scrape, so `exif_gps` places the capture by the
+point that chose its site.
+
 **Recorded once.** The answer is kept on the capture as `metadata.videoLocation` (`{lat, lon,
-accuracyM, key}`, or `null` when the clip carries none), so the site-context seed, a rejected
+altitudeM, accuracyM, key}`, or `null` when the clip carries none it can vouch for), so the
+site-context seed, a rejected
 run's epoch, the registration and a retried run on another worker all join by the same answer as
 the first. Only the worker writes it: `CaptureCreate` refuses the key. A storage failure is
 recorded as no location and the run is matched by the upload's fix, as before: no capture fails
@@ -127,9 +139,9 @@ for the upload's fix, it is the D3 25 m as before. Derived, not measured on capt
   steps outside what it then films, and a site's boundary is the footprint of what its first
   capture showed, not of where that camera walked.
 - _Ceiling 50 m_, twice the D3 default. A fix worse than ±25 m (indoors, Wi-Fi only: iOS reports
-  65 m) is too poor to pick a site by — its circle spans the next field — so the capture makes a
-  new site rather than joining a guess; the console can still put it on one. Far inside the
-  2047 m a frame can hold.
+  65 m) still matches, but its buffer stops at 50 m rather than reaching as far as its circle does
+  — into the next field — so it joins only a site within 50 m, and farther from every site it makes
+  a new one; the console can still put it on the right one. Far inside the 2047 m a frame can hold.
 - Two sites inside one buffer are never ambiguous: the nearer boundary wins (the query orders by
   distance, then age).
 

@@ -222,9 +222,10 @@ SPATIAL_JOIN_BUFFER_M = 25.0
 #:   recording starts a few steps outside what it then films, and a site's boundary is
 #:   the footprint of what the first capture showed, not of where its camera walked;
 #: * the ceiling, 50 m: twice the D3 default. A fix worse than +-25 m (indoors, Wi-Fi
-#:   only: iOS reports 65 m) is too poor to pick a site by -- its circle spans the next
-#:   field -- so the capture makes a new site rather than joining a guess, and the
-#:   console can still put it on one. Far inside the 2047 m a site's frame can hold.
+#:   only: iOS reports 65 m) still matches, but its buffer stops growing at 50 m rather
+#:   than reaching as far as its circle does -- into the next field -- so such a capture
+#:   joins only a site within 50 m, and farther from every site it makes a new one (the
+#:   console can still put it on the right one). Far inside the 2047 m a frame can hold.
 #:
 #: Two sites inside one buffer are never ambiguous: the nearer boundary wins
 #: (`nearest_framed_site_statement` orders by distance).
@@ -233,7 +234,8 @@ VIDEO_JOIN_MIN_M = 10.0
 VIDEO_JOIN_MAX_M = 50.0
 
 #: The capture metadata the worker records its video's location in (`worker/video_gps.
-#: py`): `{lat, lon, accuracyM, key}`, or null once it looked and found none.
+#: py`): `{lat, lon, altitudeM, accuracyM, key}`, or null once it looked and found none
+#: it could vouch for (none in the clip, atoms that disagree, or a failed read).
 VIDEO_LOCATION = "videoLocation"
 
 
