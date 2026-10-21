@@ -274,7 +274,7 @@ describe("Confidence and Data age under PlayCanvas", () => {
     for (const entity of [near, far]) {
       const c = component(entity);
       expect(c.modifier?.glsl).toContain(CELL_TILE_GLSL);
-      expect(c.modifier?.glsl).toContain("hexapodCellTile(center, color, uCellGrid");
+      expect(c.modifier?.glsl).toContain("hexapodCellTile(hexapodCellAt(center), color, uCellGrid");
       const grid = c.params.get("uCellGrid") as { width: number; height: number; data: Uint8Array };
       expect(grid.width).toBe(4096);
       expect(Array.from(grid.data.subarray(0, 4))).toEqual(Array.from(v.rows.data.subarray(0, 4)));

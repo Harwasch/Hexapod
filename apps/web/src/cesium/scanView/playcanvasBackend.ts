@@ -111,6 +111,7 @@ import {
   type LayerCones,
   type LayerLook,
 } from "./layerLook";
+import { invertAffine } from "../splatFrames";
 import { splatMinPixelSize } from "./quality";
 import {
   idsInResourceOrder,
@@ -189,6 +190,10 @@ interface Decoded {
   error?: string;
 }
 
+/** The identity, column-major: a scan tile's cell grid is in the scan's own frame. */
+const IDENTITY_FRAME = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+const IDENTITY_FRAME_F32 = Float32Array.from(IDENTITY_FRAME);
+
 /** The per-splat streams. */
 const INSTANCE_STREAM = "splatInstance";
 const SKIN_STREAM = "splatSkin";
@@ -243,11 +248,13 @@ export function playcanvasModifierGlsl(
   const sunStep =
     sun && !cell ? "writeHexapodSun(uvec4(hexapodSunWord(vec3(0.0)), 0u, 0u, 0u));\n    " : "";
   const cellArgs = "uCellGrid, uCellRule, uCellLevel, uCellTile";
+  // Read in the grid's own frame: the scan's, or another date's under a comparison.
+  const at = "hexapodCellAt(center)";
   const blackStep = sun
-    ? `writeHexapodSun(uvec4(hexapodSunWord(hexapodCellTile(center, vec4(0.0, 0.0, 0.0, color.a), ${cellArgs}).rgb), 0u, 0u, 0u));
+    ? `writeHexapodSun(uvec4(hexapodSunWord(hexapodCellTile(${at}, vec4(0.0, 0.0, 0.0, color.a), ${cellArgs}).rgb), 0u, 0u, 0u));
     `
     : "";
-  const look = `${blackStep}color = hexapodCellTile(center, color, ${cellArgs});`;
+  const look = `${blackStep}color = hexapodCellTile(${at}, color, ${cellArgs});`;
   // A split object under a rule is drawn in its own colours (and, lit, as the photograph is).
   const ruledLook = rule
     ? `if (uRuleSource.y < 0.5) {
@@ -285,7 +292,11 @@ export function playcanvasModifierGlsl(
 uniform vec4 uCellRule;
 uniform vec4 uCellLevel;
 uniform vec4 uCellTile;
-${CELL_TILE_GLSL}`
+uniform mat4 uCellFrame;
+${CELL_TILE_GLSL}
+vec3 hexapodCellAt(vec3 p) {
+    return (uCellFrame * vec4(p, 1.0)).xyz;
+}`
     : "";
   return `
 ${sun ? SUN_WORD_GLSL : ""}
@@ -718,6 +729,19 @@ function assemble(
   /** The scan's tiles under a cell view, and the levels they read: GLSL only, as the motion. */
   const cells = moves ? new CellTiles<pc.Entity>() : null;
   let cellTexture: pc.Texture | null = null;
+  /**
+   * Another date's tiles under the cell views, apart from the scan's: under a comparison the
+   * left date draws its own Confidence or Data age (its own grid, read in its own frame:
+   * `dateCellFrame`, the scan's frame to the date's), as CesiumJS draws each date's tileset
+   * with its own (cellView.ts); under a rule the rule's own view, in the scan's frame.
+   */
+  const dateCells = moves ? new CellTiles<pc.Entity>() : null;
+  let dateCellTexture: pc.Texture | null = null;
+  const dateCellFill = new Float32Array(4);
+  const dateCellFrame = new Float32Array(IDENTITY_FRAME);
+  /** The left date's own view (scanCellView.ts), watched while two dates are compared. */
+  let leftCellView: CellLookView | null = null;
+  let leftCellWatch: { assetId: string; off: () => void } | null = null;
   /** `(1, 0, 0, 0)` while a cell view is drawn: what has a layer's tiles drawn grey. */
   const cellFill = new Float32Array(4);
   /** The modifier on each entity now (a tile with no binding has one only for a cell view). */
@@ -1033,6 +1057,12 @@ function assemble(
     return rule !== null && source < 31 && ((rule.tinted >> source) & 1) === 1;
   };
 
+  /** Every tile that is not a layer's: the scan's and other dates'. */
+  const tileMeshes = (): pc.Entity[] => [
+    ...(cells?.meshes() ?? []),
+    ...(dateCells?.meshes() ?? []),
+  ];
+
   /** Which side of the compare divider `entity` is drawn on: another date's left, else right. */
   const sideOf = (entity: pc.Entity): number =>
     !compare ? SIDE_NONE : dated.has(entity) ? SIDE_LEFT : SIDE_RIGHT;
@@ -1049,10 +1079,16 @@ function assemble(
 
   /** Sets every uniform the modifier reads; setting any marks the tile for a new copy. */
   const setUniforms = (component: pc.GSplatComponent, entity: pc.Entity): void => {
-    const cell = cells?.uniforms(entity);
-    if (cells && cell) {
-      component.setParameter("uCellGrid", cellTexture ?? stand().state);
-      component.setParameter("uCellRule", cells.rule);
+    const ofDate = dated.has(entity);
+    const group = ofDate ? dateCells : cells;
+    const cell = group?.uniforms(entity);
+    if (group && cell) {
+      component.setParameter(
+        "uCellGrid",
+        (ofDate ? dateCellTexture : cellTexture) ?? stand().state,
+      );
+      component.setParameter("uCellRule", group.rule);
+      component.setParameter("uCellFrame", ofDate ? dateCellFrame : IDENTITY_FRAME_F32);
       component.setParameter("uCellLevel", cell.level);
       component.setParameter("uCellTile", cell.tile);
     }
@@ -1081,9 +1117,10 @@ function assemble(
     const tile = tiles.get(entity);
     const hasIds = (tile?.doc ?? null) !== null;
     const skinned = tile?.skinned ?? false;
-    const cell = cells?.drawing === true && cells.has(entity);
+    const group = dated.has(entity) ? dateCells : cells;
+    const cell = group?.drawing === true && group.has(entity);
     // Once the work buffer carries the sunlight's word, every scan tile's copy writes it.
-    const lit = sunStream && cells?.has(entity) === true;
+    const lit = sunStream && group?.has(entity) === true;
     // Under a rule every tile is weighed by it, the scan's own and the other dates'; once the
     // work buffer has the side's stream, every tile writes its side.
     const ruled = rule !== null;
@@ -1307,7 +1344,7 @@ function assemble(
     // The objects' dim while one is highlighted: a layer belongs to none (layerLook.ts).
     component.setParameter("uInstanceDim", dim);
     component.setParameter("uInstanceParams", params);
-    component.setParameter("uCellFill", cellFill);
+    component.setParameter("uCellFill", dated.has(entity) ? dateCellFill : cellFill);
     setRuleUniforms(component, entity);
     // Last: setting a parameter has the tile copied into the work buffer again.
     state.lastEye = lastPoseEye ? layerEye(state.look, lastPoseEye) : null;
@@ -1345,15 +1382,46 @@ function assemble(
    * drawn. Each tile is copied again once, in the frame this asks for.
    */
   const setCellView = (view: CellLookView | null): void => {
-    if (!cells) return;
-    const before = cells.view;
-    if (!cells.setView(view)) return;
+    if (cells) cellTexture = applyCellView(cells, cellTexture, cellFill, false, view);
+  };
+
+  /**
+   * Another date's tiles' view: under a rule the rule's own (as the scan's, in its frame), under
+   * a comparison the left date's own view, in its own frame; none otherwise.
+   */
+  const syncDateCells = (): void => {
+    if (!dateCells) return;
+    const view = rule ? (rule.age ?? ownCellView) : compare ? leftCellView : null;
+    // The scan's frame to the left date's: its tiles are placed by `P`, its grid read by `P⁻¹`.
+    const placement = !rule && compare ? compare.left.placement : null;
+    const frame = (placement && invertAffine(placement)) ?? IDENTITY_FRAME;
+    const moved = frame.some((v, i) => Math.fround(v) !== dateCellFrame[i]);
+    if (moved) dateCellFrame.set(frame);
+    const before = dateCells.view;
+    dateCellTexture = applyCellView(dateCells, dateCellTexture, dateCellFill, true, view);
+    if (moved && dateCells.view === before) for (const e of dateCells.meshes()) applyModifier(e);
+  };
+
+  /**
+   * Puts `view` on the tiles of `group` (the scan's, or other dates' with `ofDate`), with its
+   * texture (`texture`, made again when its bytes change, freed on Photo) and its layers'
+   * fill (`fill`); returns the texture now.
+   */
+  const applyCellView = (
+    group: CellTiles<pc.Entity>,
+    texture: pc.Texture | null,
+    fill: Float32Array<ArrayBuffer>,
+    ofDate: boolean,
+    view: CellLookView | null,
+  ): pc.Texture | null => {
+    const before = group.view;
+    if (!group.setView(view)) return texture;
     // Photo frees the grid's texture: every tile is pointed at a stand-in before it goes.
-    const freed = view ? null : cellTexture;
-    if (!view) cellTexture = null;
-    if (view && (view.rows !== before?.rows || !cellTexture)) {
-      cellTexture?.destroy();
-      cellTexture = dataTexture(
+    const freed = view ? null : texture;
+    let next = view ? texture : null;
+    if (view && (view.rows !== before?.rows || !next)) {
+      next?.destroy();
+      next = dataTexture(
         "hexapodCellGrid",
         CELL_TEXTURE_WIDTH,
         view.rows.height,
@@ -1361,14 +1429,18 @@ function assemble(
         view.rows.data,
       );
     }
-    cellFillOf(view, cellFill);
-    for (const entity of cells.meshes()) {
+    if (ofDate) dateCellTexture = next;
+    else cellTexture = next;
+    cellFillOf(view, fill);
+    for (const entity of group.meshes()) {
       applyModifier(entity);
       if (freed) entity.gsplat?.setParameter("uCellGrid", stand().state);
     }
     freed?.destroy();
-    for (const entity of layers.keys()) entity.gsplat?.setParameter("uCellFill", cellFill);
+    for (const entity of layers.keys())
+      if (dated.has(entity) === ofDate) entity.gsplat?.setParameter("uCellFill", fill);
     hooks.frameWanted();
+    return next;
   };
 
   /**
@@ -1411,7 +1483,8 @@ function assemble(
       ruleParams.set([next.enabled ? 1 : 0, next.cellM, next.reach * PLAYCANVAS_FOOTPRINT, 0]);
     }
     setCellView(next?.age ?? ownCellView);
-    for (const entity of cells.meshes()) applyModifier(entity);
+    syncDateCells();
+    for (const entity of tileMeshes()) applyModifier(entity);
     for (const [entity, state] of layers) {
       entity.gsplat?.setWorkBufferModifier(layerModifier());
       layerParameters(entity, state);
@@ -1481,11 +1554,11 @@ function assemble(
     if (next && !sunStream && cells) {
       app.scene.gsplat.format.addExtraStreams([{ name: SUN_STREAM, format: pc.PIXELFORMAT_R32U }]);
       sunStream = true;
-      for (const entity of cells.meshes()) applyModifier(entity);
+      for (const entity of tileMeshes()) applyModifier(entity);
       for (const entity of layers.keys()) {
         entity.gsplat?.setWorkBufferModifier(layerModifier());
         // Setting a parameter has the tile copied into the work buffer again.
-        entity.gsplat?.setParameter("uCellFill", cellFill);
+        entity.gsplat?.setParameter("uCellFill", dated.has(entity) ? dateCellFill : cellFill);
       }
     }
     hooks.frameWanted();
@@ -1506,8 +1579,27 @@ function assemble(
       app.scene.gsplat.format.addExtraStreams([{ name: SIDE_STREAM, format: pc.PIXELFORMAT_R8U }]);
       sideStream = true;
     }
+    // The left date's own Confidence / Data age, watched while it is drawn (scanCellView.ts).
+    const leftId = next?.left.assetId ?? null;
+    if (leftCellWatch?.assetId !== leftId) {
+      leftCellWatch?.off();
+      leftCellWatch = null;
+      leftCellView = null;
+      if (leftId !== null) {
+        const watch: { assetId: string; off: () => void } = {
+          assetId: leftId,
+          off: () => undefined,
+        };
+        leftCellWatch = watch;
+        watch.off = watchScanCellView(leftId, (view) => {
+          leftCellView = view;
+          if (leftCellWatch === watch) syncDateCells();
+        });
+      }
+    }
+    syncDateCells();
     if ((before === null) !== (next === null)) {
-      for (const entity of cells.meshes()) applyModifier(entity);
+      for (const entity of tileMeshes()) applyModifier(entity);
       for (const [entity, state] of layers) {
         entity.gsplat?.setWorkBufferModifier(layerModifier());
         layerParameters(entity, state);
@@ -1723,8 +1815,9 @@ function assemble(
         placedPick: null,
       });
     }
-    // Every tile of the scan reads its cell, whether or not it carries ids.
-    if (!layer) cells?.add(entity, origin);
+    // Every tile of the scan reads its cell, whether or not it carries ids; another date's its
+    // own date's (`dateCells`).
+    if (!layer) (ofDate ? dateCells : cells)?.add(entity, origin);
     // A layer's tile carries none of the scan's ids, skins or picks: its look is its own. Nor
     // does another date's.
     if (decoded.checksum !== undefined && kind === "scan") {
@@ -1754,7 +1847,8 @@ function assemble(
         if (binding.ids && motion && motion.rigidByLeaf.size > 0) sortDirty.add(entity);
       }
     }
-    if (!layer && (cells?.drawing || sunStream || rule || sideStream)) applyModifier(entity);
+    const drawing = (ofDate ? dateCells : cells)?.drawing;
+    if (!layer && (drawing || sunStream || rule || sideStream)) applyModifier(entity);
     return entity;
   };
 
@@ -1858,6 +1952,7 @@ function assemble(
       shown.delete(entity);
       tiles.delete(entity);
       cells?.delete(entity);
+      dateCells?.delete(entity);
       sortDirty.delete(entity);
       const layer = layers.get(entity);
       if (layer) {
@@ -1943,10 +2038,11 @@ function assemble(
         entity.gsplat?.setParameter("uLayerConeEye", coneEye(layer.look, pose.eye, layer.eye));
       }
       // A tile whose cell level stepped is copied again in this frame (cellModifier.ts).
-      cells?.update(pose, (entity, cell) => {
-        entity.gsplat?.setParameter("uCellLevel", cell.level);
-        entity.gsplat?.setParameter("uCellTile", cell.tile);
-      });
+      for (const group of [cells, dateCells])
+        group?.update(pose, (entity, cell) => {
+          entity.gsplat?.setParameter("uCellLevel", cell.level);
+          entity.gsplat?.setParameter("uCellTile", cell.tile);
+        });
       // The rule's other dates, planned from the pose this frame is drawn from, and the
       // scan's share of the budget with them.
       ruleDates?.plan(pose);
@@ -2061,6 +2157,10 @@ function assemble(
       ruleDates = null;
       cellTexture?.destroy();
       cellTexture = null;
+      dateCellTexture?.destroy();
+      dateCellTexture = null;
+      leftCellWatch?.off();
+      leftCellWatch = null;
       ruleOwners?.destroy();
       ruleOwners = null;
       for (const worker of workers) worker.terminate();
@@ -2141,7 +2241,7 @@ function assemble(
           reportScanRule(assetId, () => {
             const sources: Record<number, number> = {};
             if (rule)
-              for (const entity of [...cells.meshes(), ...layers.keys()]) {
+              for (const entity of [...tileMeshes(), ...layers.keys()]) {
                 const source = ruleSourceOf(entity)[0] ?? NO_OWNER;
                 sources[source] = (sources[source] ?? 0) + 1;
               }
@@ -2160,7 +2260,7 @@ function assemble(
           reportScanCompare(assetId, () => {
             const sides = { left: 0, right: 0 };
             if (compare)
-              for (const entity of [...cells.meshes(), ...layers.keys()]) {
+              for (const entity of [...tileMeshes(), ...layers.keys()]) {
                 if (sideOf(entity) === SIDE_LEFT) sides.left += 1;
                 else sides.right += 1;
               }

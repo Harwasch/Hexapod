@@ -21,7 +21,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const TILES = resolve(process.cwd(), "../../data/tiles");
 const EVIDENCE = process.env.PC4_EVIDENCE_DIR;
@@ -52,6 +52,7 @@ interface Side {
   covered: number;
   red: number;
   blue: number;
+  green: number;
 }
 
 interface Counts {
@@ -66,6 +67,7 @@ interface Counts {
 }
 
 interface Harness {
+  confidence(split: number): Promise<Counts>;
   alone(): Promise<Counts>;
   uncut(): Promise<Counts>;
   compare(split: number): Promise<Counts>;
@@ -73,10 +75,8 @@ interface Harness {
   end(): Promise<Counts>;
 }
 
-test("under playcanvas, each date is drawn only on its side of the divider, cut exactly there", async ({
-  page,
-}) => {
-  test.setTimeout(600_000);
+/** The harness page under PlayCanvas, its console's errors, and a way to call it and shoot. */
+async function open(page: Page) {
   await page.setViewportSize({ width: 960, height: 640 });
   const errors: string[] = [];
   page.on("console", (message) => {
@@ -120,6 +120,14 @@ test("under playcanvas, each date is drawn only on its side of the divider, cut 
       [name, args] as const,
     ) as ReturnType<Harness[K]>;
 
+  return { errors, shot, harness };
+}
+
+test("under playcanvas, each date is drawn only on its side of the divider, cut exactly there", async ({
+  page,
+}) => {
+  test.setTimeout(600_000);
+  const { errors, shot, harness } = await open(page);
   const alone = await harness("alone");
   await shot("playcanvas-june-alone");
   const half = await harness("compare", 0.5);
@@ -193,4 +201,26 @@ test("under playcanvas, each date is drawn only on its side of the divider, cut 
   expect(unchanged.toRight).toBe(0);
   // Ended: June alone again, whole -- every tile's copy now writes no side, which cuts nothing.
   expect(ended.left.covered + ended.right.covered).toBeGreaterThan(150_000);
+});
+
+test("under playcanvas, each compared date draws its own Confidence on its side", async ({
+  page,
+}) => {
+  test.setTimeout(600_000);
+  const { errors, shot, harness } = await open(page);
+  // March's grid weak everywhere, June's strong: left of the divider March's red verdicts,
+  // right of it June's green ones -- not one grid for both.
+  const counts = await harness("confidence", 0.5);
+  await shot("playcanvas-compare-confidence");
+  test.info().annotations.push({ type: "verdicts", description: JSON.stringify(counts) });
+  console.info(JSON.stringify({ left: counts.left, right: counts.right }));
+  if (EVIDENCE)
+    writeFileSync(`${EVIDENCE}/scene-compare-confidence.json`, JSON.stringify(counts, null, 2));
+  expect(errors.filter((e) => /shader|compile|link|webgl/i.test(e))).toEqual([]);
+  expect(counts.left.covered).toBeGreaterThan(5_000);
+  expect(counts.right.covered).toBeGreaterThan(5_000);
+  expect(counts.left.red).toBeGreaterThan(0.9);
+  expect(counts.left.green).toBeLessThan(0.02);
+  expect(counts.right.green).toBeGreaterThan(0.9);
+  expect(counts.right.red).toBeLessThan(0.02);
 });

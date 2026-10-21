@@ -453,14 +453,16 @@ describe("a per-cell view rule under PlayCanvas", () => {
     const object = await backend.load(OBJECT, tile("5_1.glb"));
     publishScanRule("rule-d", view({ age }));
     const glsl = component(scan).modifier?.glsl ?? "";
-    expect(glsl).toContain("hexapodCellTile(center, color");
+    expect(glsl).toContain("hexapodCellTile(hexapodCellAt(center), color");
     // The look is not put on a split object: it keeps its own colours, as under CesiumJS.
     expect(glsl).toContain("if (uRuleSource.y < 0.5) {");
     expect(param(scan, "uCellTile")[0]).toBeGreaterThan(0);
     expect(component(object).modifier?.glsl).toBe(glsl);
     // Without the rule's view the scan's own (none here) is drawn: the photo.
     publishScanRule("rule-d", view());
-    expect(component(scan).modifier?.glsl).not.toContain("hexapodCellTile(center, color");
+    expect(component(scan).modifier?.glsl).not.toContain(
+      "hexapodCellTile(hexapodCellAt(center), color",
+    );
     backend.destroy();
   });
 

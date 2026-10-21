@@ -28,6 +28,10 @@ import { pickSourceOf } from "@/cesium/sceneSelect/pickSources";
 import type { BackendHooks, ScanPose } from "@/cesium/scanView/types";
 import type { TileWork } from "@/cesium/scanView/tileWork";
 import type { TileNode } from "@/view/tiles";
+import { publishScanCellView } from "@/cesium/scanView/scanCellView";
+import { encodeConfidenceGrid } from "@/dev/cellGridFixture";
+import { cellTextureRows, confidenceTexels, decodeCellGrid } from "@/lib/cellGrid";
+import type { CellLookView } from "@/lib/cellLook";
 
 interface FakeComponent {
   modifier: { glsl: string } | null | undefined;
@@ -293,9 +297,9 @@ async function backendFor(assetId: string) {
 const component = (entity: unknown): FakeComponent => (entity as { gsplat: FakeComponent }).gsplat;
 
 /** March, left of a divider at `split` of the width, beside June (the scan). */
-function view(split = 0.4): ScanCompareView {
+function view(split = 0.4, placement: number[] | null = null): ScanCompareView {
   return {
-    left: { url: MARCH, assetId: "march", extras: {}, placement: null, root: IDENTITY, owns: [] },
+    left: { url: MARCH, assetId: "march", extras: {}, placement, root: IDENTITY, owns: [] },
     split,
     toWorld: () => undefined,
   };
@@ -342,9 +346,10 @@ describe("two dates compared under PlayCanvas", () => {
   });
   afterEach(() => {
     vi.unstubAllGlobals();
-    for (const id of ["june-a", "june-b", "june-c", "june-d"]) {
+    for (const id of ["june-a", "june-b", "june-c", "june-d", "june-e", "march"]) {
       publishScanCompare(id, null);
       publishScanSun(id, null);
+      publishScanCellView(id, null);
     }
   });
 
@@ -493,6 +498,54 @@ describe("two dates compared under PlayCanvas", () => {
     expect(left?.tiles()).toHaveLength(0);
     publishScanCompare("june-a", null);
     expect(pickSourceOf("march")).toBeUndefined();
+    backend.destroy();
+  });
+
+  it("draws each date in its own Confidence: June's tiles read June's grid, March's March's", async () => {
+    /** A one-level confidence grid of `score` everywhere, as a renderer is handed it. */
+    const cellView = async (score: number): Promise<CellLookView> => {
+      const { meta, planes } = await encodeConfidenceGrid({
+        level: 2,
+        i0: 0,
+        j0: 0,
+        ni: 8,
+        nj: 4,
+        cell: () => ({ score }),
+      });
+      const grid = await decodeCellGrid(meta, planes);
+      return {
+        mode: "confidence",
+        rows: cellTextureRows(grid.meta, confidenceTexels(grid)),
+        meta: grid.meta,
+      };
+    };
+    const [june, march] = [await cellView(240), await cellView(60)];
+    serveMarch();
+    const { backend } = await backendFor("june-e");
+    const own = await backend.load(SCAN, tile("1_1.glb"));
+    backend.add(own);
+    publishScanCellView("june-e", june);
+    publishScanCellView("march", march);
+    // March's tiles go 2 m east in June's frame: its grid is read back in its own.
+    const east = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 0, 0, 1];
+    publishScanCompare("june-e", view(0.5, east));
+    const left = await marchTile(backend);
+    const grid = (entity: unknown): number[] => {
+      const texture = component(entity).params.get("uCellGrid") as { data: Uint8Array };
+      return Array.from(texture.data.subarray(0, june.rows.data.length));
+    };
+    expect(grid(own)).toEqual(Array.from(june.rows.data));
+    expect(grid(left)).toEqual(Array.from(march.rows.data));
+    expect(grid(left)).not.toEqual(grid(own));
+    const frame = (entity: unknown): number[] =>
+      Array.from(component(entity).params.get("uCellFrame") as Float32Array, (v) => v + 0);
+    expect(frame(own)).toEqual(IDENTITY);
+    expect(frame(left)).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -2, 0, 0, 1]);
+    expect(component(left).modifier?.glsl).toContain("hexapodCellTile(hexapodCellAt(center)");
+    // March's own view to the photo: its tiles drawn as captured, June's still in Confidence.
+    publishScanCellView("march", null);
+    expect(component(left).params.get("uCellTile")).toEqual(Float32Array.of(0, 0, 0, 0));
+    expect((component(own).params.get("uCellTile") as Float32Array)[0]).toBeGreaterThan(0);
     backend.destroy();
   });
 });

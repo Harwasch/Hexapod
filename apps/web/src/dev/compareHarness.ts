@@ -30,16 +30,22 @@ import {
 import * as pc from "playcanvas";
 
 import { startCompare, type CompareSite } from "@/cesium/compareSession";
+import { publishScanCellView } from "@/cesium/scanView/scanCellView";
+import { cesiumCellViewGpu, SplatCellView } from "@/cesium/splatCellView";
+import { decodeCellGrid } from "@/lib/cellGrid";
 import { RULE_KIT } from "@/cesium/scanView/ruleKit";
 import { ScanRendererHost } from "@/cesium/scanView/ScanRendererHost";
 import { scanCompareReading, SIDE_WRITE_STEP } from "@/cesium/scanView/scanCompare";
 import { incrementalSplats } from "@/cesium/splatInternals";
 
-/** Of the covered pixels on one side of the divider: March's red, June's blue. */
+import { encodeConfidenceGrid, REASON_BITS } from "./cellGridFixture";
+
+/** Of the covered pixels on one side of the divider: March's red, June's blue (green too). */
 export interface Side {
   covered: number;
   red: number;
   blue: number;
+  green: number;
 }
 
 export interface CompareCounts {
@@ -62,6 +68,12 @@ export interface CompareCounts {
 }
 
 export interface CompareHarness {
+  /**
+   * Each date in its own Confidence, compared with the divider at `split` (no debug colours):
+   * March's grid weak everywhere (red), June's strong (green), each published for its own asset
+   * as cellView.ts publishes it.
+   */
+  confidence(split: number): Promise<Omit<CompareCounts, "pixels">>;
   /** June alone, before any comparison: drawn whole, every covered pixel its own colours. */
   alone(): Promise<Omit<CompareCounts, "pixels">>;
   /**
@@ -205,13 +217,14 @@ export async function startCompareHarness(options: {
     const image = context.getImageData(0, 0, w, copy.height);
     const data = image.data;
     const divider = scanCompareReading(SCAN_ASSET)?.dividerPx ?? Number.NaN;
-    const left: Side = { covered: 0, red: 0, blue: 0 };
-    const right: Side = { covered: 0, red: 0, blue: 0 };
+    const left: Side = { covered: 0, red: 0, blue: 0, green: 0 };
+    const right: Side = { covered: 0, red: 0, blue: 0, green: 0 };
     const cut = new Map<number, { covered: number; wrong: number }>();
     let wrong = 0;
     for (let p = 0; p < data.length; p += 4) {
       if ((data[p + 3] ?? 0) < 64) continue;
       const r = data[p] ?? 0;
+      const g = data[p + 1] ?? 0;
       const b = data[p + 2] ?? 0;
       const x = (p / 4) % w;
       // A pixel's centre is x + 0.5, as gl_FragCoord.x has it.
@@ -232,11 +245,13 @@ export async function startCompareHarness(options: {
       side.covered += 1;
       if (red) side.red += 1;
       if (blue) side.blue += 1;
+      if (g > 40 && g > 1.25 * Math.max(r, b)) side.green += 1;
     }
     const share = (s: Side): Side => ({
       covered: s.covered,
       red: s.covered ? s.red / s.covered : 0,
       blue: s.covered ? s.blue / s.covered : 0,
+      green: s.covered ? s.green / s.covered : 0,
     });
     let binary = "";
     const bytes = new Uint8Array(data.buffer);
@@ -275,8 +290,52 @@ export async function startCompareHarness(options: {
     }
   };
 
+  /** A confidence grid over the yard, every cell weak or every cell strong. */
+  const verdict = async (weak: boolean, tileset: Cesium3DTileset) => {
+    const gpu = cesiumCellViewGpu();
+    if (!gpu) throw new Error("no RG8 texture support");
+    const { meta, planes } = await encodeConfidenceGrid({
+      level: 2,
+      i0: -2,
+      j0: -2,
+      ni: 36,
+      nj: 28,
+      cell: () => (weak ? { score: 60, reasons: REASON_BITS.views } : { score: 240 }),
+      coarser: 8,
+    });
+    const root = () =>
+      (tileset.root as unknown as { computedTransform?: ArrayLike<number> }).computedTransform;
+    return new SplatCellView(await decodeCellGrid(meta, planes), gpu, root).lookView("confidence");
+  };
+
+  /** Starts the comparison, the divider at `split`, once every tile of both dates is in. */
+  const startCompared = async (split: number): Promise<void> => {
+    if (entry.compare) return;
+    scene.splitPosition = split;
+    entry.compare = { left: E1.id, right: E2.id };
+    startCompare(scene, entry, RULE_KIT);
+    await settle(() => {
+      const reading = scanCompareReading(SCAN_ASSET);
+      return (
+        reading?.on === true &&
+        reading.left.dates === 1 &&
+        reading.left.tiles > 0 &&
+        reading.left.loading === 0
+      );
+    });
+  };
+
   let coloured = false;
   return {
+    async confidence(split) {
+      publishScanCellView(LEFT_ASSET, await verdict(true, march));
+      publishScanCellView(SCAN_ASSET, await verdict(false, june));
+      await startCompared(split);
+      await drawFrames(20);
+      await settle();
+      const { pixels: _pixels, ...counts } = count();
+      return counts;
+    },
     async alone() {
       await settle();
       const { pixels: _pixels, ...counts } = count();
@@ -295,20 +354,7 @@ export async function startCompareHarness(options: {
       return counts;
     },
     async compare(split) {
-      if (!entry.compare) {
-        scene.splitPosition = split;
-        entry.compare = { left: E1.id, right: E2.id };
-        startCompare(scene, entry, RULE_KIT);
-        await settle(() => {
-          const reading = scanCompareReading(SCAN_ASSET);
-          return (
-            reading?.on === true &&
-            reading.left.dates === 1 &&
-            reading.left.tiles > 0 &&
-            reading.left.loading === 0
-          );
-        });
-      }
+      await startCompared(split);
       if (!coloured) {
         // Each tile's own modifier, coloured by the side it writes; a parameter set copies it.
         for (const component of app().root.findComponents("gsplat") as pc.GSplatComponent[]) {
