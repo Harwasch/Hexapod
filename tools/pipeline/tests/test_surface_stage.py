@@ -630,19 +630,19 @@ def _one_cell(points: list[list[float]], **kwargs: Any) -> tuple[list[int], surf
 
 def test_exactly_three_samples_are_a_surface_and_sigma_spans_all_three() -> None:
     """`count >= min_samples`, not `>`; and with three, z8 does not exist, so sigma is
-    read from the spread of all three: (z1 - z3) RMS2(3) / SPAN(3)."""
+    read from the spread of all three, widened for so few: (z1 - z3) 5.1 RMS2(3) / SPAN(3)."""
     cell, found = _one_cell([[0.5, 0.5, 0.0], [0.5, 0.5, 0.1], [0.5, 0.5, 0.3]])
-    # dsm z2, ground z2 (no neighbours), 0.3 m * 0.6699 / 1.6925 = 11.9 cm, rounded up.
-    assert cell[:3] == [10, 10, 12]
+    # dsm z2, ground z2 (no neighbours), 0.3 m * 5.1 * 0.6699 / 1.6925 = 60.6 cm, rounded up.
+    assert cell[:3] == [10, 10, 61]
     assert found.thin == 0
 
 
 def test_sigma_is_rounded_up_to_the_centimetre() -> None:
-    """0.0369 m * RMS2(4) / SPAN(4) = 1.2 cm is stored as 2 cm, never 1; the 1 cm floor
-    stays exactly 1."""
-    up, _ = _one_cell([[0.5, 0.5, z] for z in (0.0369, 0.01, 0.005, 0.0)])
+    """0.0164 m * 2.25 RMS2(4) / SPAN(4) = 1.2 cm is stored as 2 cm, never 1; the 1 cm
+    floor stays exactly 1."""
+    up, _ = _one_cell([[0.5, 0.5, z] for z in (0.0164, 0.01, 0.005, 0.0)])
     assert up[2] == 2
-    exact, _ = _one_cell([[0.5, 0.5, z] for z in (0.02, 0.01, 0.005, 0.0)])
+    exact, _ = _one_cell([[0.5, 0.5, z] for z in (0.012, 0.01, 0.005, 0.0)])
     assert exact[2] == 1
 
 
@@ -1061,3 +1061,115 @@ def test_the_demo_takes_each_epochs_alignment_class_and_a_coarse_one_brings_a_me
     ub = confidence_demo.placement_m(0.003, coarse)
     found = confidence_demo.surface_change(a, b, _vouched(0), _vouched(0), ua, ub)
     assert found["counts"]["raised"] == 0 and found["counts"]["unchanged"] == 1
+
+
+# --- review round 2: what it found resolved, held by tests --------------------------------
+
+
+def _demo_grid(plane: cell_grid.CellPlane) -> Any:
+    meta = {"vertical": {"originHeightM": 180.0}, "summary": {"metric": True}}
+    return cell_grid.CellGrid("surface", cell_grid.SURFACE_CHANNELS, (plane,), meta)
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ((3, 0.10), (3, 0.10)),  # the review's: 11 of 5,120
+        ((3, 0.01), (3, 0.10)),  # 9 of 5,120
+        ((8, 0.10), (8, 0.10)),
+        ((20, 0.10), (2000, 0.10)),
+        ((100, 0.01), (100, 0.10)),
+    ],
+)
+def test_the_demos_own_comparison_of_flat_scans_stays_within_the_3_sigma_rate(
+    a: tuple[int, float], b: tuple[int, float]
+) -> None:
+    """Review B5a round 2, the demo's own path (`surface_change`, no motion term): five
+    seed pairs of 32 x 32 unchanged cells (5,120). Three samples a cell read their noise
+    from three, so they scatter: at most the 3 sigma rule's one cell in 370 (14 of 5,120)."""
+    from experiments import confidence_demo
+
+    false = 0
+    for seed in range(5):
+        pa = _flat_epoch(*a, seed=100 + 2 * seed, side=32)
+        pb = _flat_epoch(*b, seed=101 + 2 * seed, side=32)
+        found = confidence_demo.surface_change(
+            _demo_grid(pa), _demo_grid(pb), _vouched(0, 32), _vouched(0, 32), 0.0, 0.0
+        )
+        false += found["counts"]["raised"] + found["counts"]["lowered"]
+    assert false <= math.ceil(5 * 32 * 32 / 370)
+
+
+def _samples_of(xyz: np.ndarray) -> surface.Samples:
+    def stream() -> Any:
+        yield xyz, surface.SPLAT
+
+    return stream
+
+
+def test_sparse_coarse_cells_of_three_samples_scatter_no_more_than_noise_would() -> None:
+    """Review B5a round 2: 4 m cells (the window is the cell alone), three samples a cell
+    at 10 cm in both epochs: 32 of 10,000 grounds called changed, 0.32% against the rule's
+    0.27%. A count of three reads its noise from three samples, so this is scatter, not a
+    bias: at most 45 of 10,000 (the 99.9th percentile of a binomial at 0.27%)."""
+    rng_seeds = (31, 32)
+    planes = []
+    for seed in rng_seeds:
+        rng = np.random.default_rng(seed)
+        side, per_cell = 100, 3
+        cells = side * side
+        j, i = np.divmod(np.repeat(np.arange(cells), per_cell), side)
+        xy = (np.column_stack([i, j]) + rng.uniform(0.01, 0.99, (cells * per_cell, 2))) * 4.0
+        z = rng.normal(0.0, 0.10, cells * per_cell)
+        window = surface.Window(level=4, i0=0, j0=0, ni=side, nj=side)
+        xyz = np.column_stack([xy, z])
+        planes.append(surface.surface_plane(_samples_of(xyz), window))
+    assert planes[0].ground_half == 0
+    assert _false_ground(planes[0].plane, planes[1].plane, 0.0, 0.0) <= 45
+
+
+def test_ground_steeper_than_the_grade_may_be_unobserved_a_loss_never_a_height() -> None:
+    """Review B5a round 2: at a grade of 0.75 (steeper than the 1 in 2 the slope test
+    allows) about half the cells lose their ground; what ground remains is the slope's."""
+    rng = np.random.default_rng(75)
+    side, per_cell = 64, 20
+    cells = side * side
+    j, i = np.divmod(np.repeat(np.arange(cells), per_cell), side)
+    xy = (np.column_stack([i, j]) + rng.uniform(0.01, 0.99, (cells * per_cell, 2))) * 0.25
+    z = 0.75 * xy[:, 0] + rng.normal(0.0, 0.01, cells * per_cell)
+    window = surface.Window(level=0, i0=0, j0=0, ni=side, nj=side)
+    found = surface.surface_plane(lambda: iter([(np.column_stack([xy, z]), surface.SPLAT)]), window)
+    assert 0 < found.ground_unobserved < cells
+    ground = _channel(found.plane, "ground")
+    dsm = _channel(found.plane, "dsm")
+    kept = ground != NO
+    assert (ground[kept] <= dsm[kept]).all()
+
+
+@pytest.mark.parametrize("n", [3, 4, 5, 6, 7, 8, 20, 50, 64])
+def test_the_noise_model_tables_agree_with_monte_carlo(n: int) -> None:
+    """Review B5a round 2's independent check: RMS2 and SPAN against direct standard
+    normal draws (100,000 trials; their standard errors are under 0.3%, so 1% is a
+    four-sigma margin, not a fitted tolerance)."""
+    rng = np.random.default_rng(20261020 + n)
+    draws = -np.sort(-rng.standard_normal((100_000, n)), axis=1)
+    m = min(n, surface.TOP_K)
+    rms = math.sqrt(float(np.mean(draws[:, 1] ** 2)))
+    span = float(np.mean(draws[:, 0] - draws[:, m - 1]))
+    count = np.array([n], dtype=np.int64)
+    assert float(surface.rms_second(count)[0]) == pytest.approx(rms, rel=0.01)
+    assert float(surface.top_span(count)[0]) == pytest.approx(span, rel=0.01)
+
+
+@pytest.mark.parametrize("n", [3, 4, 5, 6, 7])
+def test_few_samples_widen_the_noise_to_the_rules_rate_by_monte_carlo(n: int) -> None:
+    """`FEW_SAMPLES` against an independent Monte Carlo (400,000 draws; a seed of its own):
+    a cell of `n` samples against a noiseless other side calls no more than the 3 sigma
+    rule's 0.27% of unchanged cells changed, with the 0.1% the draw's own scatter allows."""
+    rng = np.random.default_rng(1000 + n)
+    draws = -np.sort(-rng.standard_normal((400_000, n)), axis=1)
+    m = min(n, surface.TOP_K)
+    count = np.array([n], dtype=np.int64)
+    ratio = float(surface.few_samples(count)[0] * surface.rms_second(count)[0])
+    sigma = (draws[:, 0] - draws[:, m - 1]) * ratio / float(surface.top_span(count)[0])
+    assert float(np.mean(np.abs(draws[:, 1]) > 3.0 * sigma)) <= 0.0027 + 0.001

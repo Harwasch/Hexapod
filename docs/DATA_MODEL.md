@@ -250,7 +250,7 @@ root as `extras.surface` (after `extras.confidence`) and copied to the top level
 - **Channels:** `dsm` i2 and `ground` i2 (centimetres above the tileset frame's origin height,
   along its up: a tangent plane, not a datum; `-32768` = no surface, or in `ground` alone under a
   surface, ground never observed), `sigma` u1 (centimetres,
-  `max(1 cm, (z1 − zm)·RMS2(n)/SPAN(n))`, dsm's bias included, 255 = at least 2.55 m, 0 = no
+  `max(1 cm, (z1 − zm)·FEW(n)·RMS2(n)/SPAN(n))`, dsm's bias included, widened for 3–6 samples, 255 = at least 2.55 m, 0 = no
   surface), `support` u1 (bit 1 SfM points,
   bit 2 splat centres; high nibble `floor(log2 samples)`, at most 15), `groundSigma` u1
   (centimetres, ground's own: `max(1 cm, s_low·RMS2(N))` over the window's `N` samples, `s_low` the noise of the cell that set

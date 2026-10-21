@@ -134,6 +134,7 @@ from registry import stage_impl
 
 __all__ = [
     "BAND_CELLS",
+    "FEW_SAMPLES",
     "GROUND_MAX_GRADE",
     "GROUND_WINDOW_M",
     "MIN_SAMPLES",
@@ -224,6 +225,14 @@ _POINT = struct.Struct("<Q3d3BdQ")
 # them against a second, independent integration. Fixed numbers in the source, so the
 # stored bytes depend on no machine's libm. Gaussian noise is the model, not a measurement:
 # heavier tails read further high, and that is uncalibrated (ADR 0018).
+#
+# **Few samples.** From three to six samples the spread is a poor estimate of the noise
+# (a range of two to five degrees of freedom), and an under-read sigma calls noise a
+# change: against a noiseless other side, a cell of three samples read at the mean span
+# called 6.3% of unchanged cells changed, four 2.9%, five 1.2%, six 0.46%, against the
+# rule's 0.27% (review B5a round 2 found it on the demo's flat scans: three samples at 1
+# and at 10 cm). The scale is widened by `FEW_SAMPLES` there, to the rule's rate at worst:
+# a cell of three samples is five times less sure of itself, and says so.
 
 #: Counts the tables hold exactly; above, half-octaves to 2^48 (beyond, the last).
 _EXACT_MAX = 64
@@ -279,6 +288,24 @@ def _order_index(count: I64) -> I64:
 def rms_second(count: I64) -> F64:
     """`RMS2(n)`: sqrt(E[Z(2:n)^2]) for standard normal noise (the noise model above)."""
     out: F64 = np.asarray(_RMS2, dtype=np.float64)[_order_index(count)]
+    return out
+
+
+#: How much wider the noise scale is read from three to six samples (module docstring,
+#: "few samples"): the least factor keeping a cell's false-change rate at the 3 sigma
+#: rule's 0.27% against a noiseless other side (the worst case: its noise is all there is),
+#: by Monte Carlo (4,000,000 draws: 4.955, 2.186, 1.399, 1.094 at 3, 4, 5, 6 samples),
+#: with about 3% to spare, rounded up to 0.05. From seven samples none is needed (0.17%
+#: at seven unscaled, falling).
+FEW_SAMPLES: Mapping[int, float] = {3: 5.1, 4: 2.25, 5: 1.45, 6: 1.15}
+
+
+def few_samples(count: I64) -> F64:
+    """The factor the noise scale read from `count` samples is widened by (`FEW_SAMPLES`;
+    1 from five up)."""
+    out: F64 = np.ones(np.shape(count), dtype=np.float64)
+    for n, factor in FEW_SAMPLES.items():
+        out = np.where(count == n, factor, out)
     return out
 
 
@@ -724,13 +751,16 @@ def surface_plane(
         last = np.maximum(np.minimum(count, TOP_K) - 1, 0)
         z1, zm = band.top[:, 0], band.top[np.arange(count.size), last]
         with np.errstate(invalid="ignore"):
-            spread = np.maximum(sigma_floor_m, (z1 - zm) * (rms_second(count) / top_span(count)))
+            scale = (z1 - zm) * (few_samples(count) / top_span(count))
+            spread = np.maximum(sigma_floor_m, scale * rms_second(count))
             # Rounded up -- never understated -- after a micro-rounding that keeps a
             # floating error from turning exactly 1 cm into 2.
             sigma_cm = np.ceil(np.round(spread / cell_grid.HEIGHT_UNIT_M, 6))
         zl1, zlm = band.bottom[:, 0], band.bottom[np.arange(count.size), last]
         with np.errstate(invalid="ignore"):
-            low_noise = np.ceil(np.round((zlm - zl1) / top_span(count) / _MM, 6))
+            low_noise = np.ceil(
+                np.round((zlm - zl1) * (few_samples(count) / top_span(count)) / _MM, 6)
+            )
         top_cm = _centimetres(band.top[:, 1])
         low_cm = _centimetres(band.bottom[:, 1])
         fits = (np.abs(top_cm) <= HEIGHT_LIMIT_CM) & (np.abs(low_cm) <= HEIGHT_LIMIT_CM)

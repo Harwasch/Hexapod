@@ -72,7 +72,11 @@ how well each cell was seen (ADR 0016).
      noisy samples reads high by `s·E[Z(2:n)]` (about 1.4 noise scales at 20 samples, 3.2 at
      2,000), so two scans of unchanged ground with different counts or noise differ by that
      bias; both biases have the same sign, so their difference is never more than the larger,
-     and the threshold below covers it (review B5a);
+     and the threshold below covers it (review B5a). From three to six samples the spread is a
+     poor estimate of the noise, and an under-read sigma calls noise a change (round 2: two
+     three-sample scans at 1 and 10 cm, 51 of 5,120 unchanged cells changed); the scale is
+     widened there (`FEW_SAMPLES`: 5.1, 2.25, 1.45, 1.15 at 3 to 6 samples, the least keeping a
+     cell at the rule's 0.27% against a noiseless other side, by Monte Carlo, with 3% to spare);
    - fewer than 3 samples is no surface: with two, the 2nd lowest is the higher of them and the
      ground would stand above the top. From three up, `ground ≤ dsm` by construction.
 
