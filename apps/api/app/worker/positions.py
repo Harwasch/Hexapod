@@ -40,7 +40,7 @@ import re
 import struct
 import zlib
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -253,10 +253,6 @@ PACKER_SPLAT: dict[str, Any] = {
     }
 }
 PRIMITIVE_KEYS = frozenset({"mode", "material", "attributes", "extensions"})
-ACCESSOR_KEYS = frozenset({"componentType", "count", "type", "min", "max", "normalized"})
-_ATTRIBUTE = re.compile(
-    r"POSITION|COLOR_0|KHR_gaussian_splatting:(SCALE|ROTATION|SH_DEGREE_[1-3]_COEF_[0-9]{1,2})"
-)
 _JSON_CHUNK, _BIN_CHUNK = 0x4E4F534A, 0x004E4942
 
 
@@ -410,19 +406,6 @@ def packer_spz(data: bytes) -> bytes:
         raise TileFormatError("the primitive is not points")
     if "material" in primitive and not ("materials" in gltf and _same(primitive["material"], 0)):
         raise TileFormatError("the primitive's material is not the unlit one")
-    accessors = gltf.get("accessors")
-    if not isinstance(accessors, list):
-        raise TileFormatError("no accessors")
-    for accessor in accessors:
-        _keys(accessor, ACCESSOR_KEYS, "an accessor")
-    attributes = primitive.get("attributes")
-    if (
-        not isinstance(attributes, dict)
-        or "POSITION" not in attributes
-        or not all(_ATTRIBUTE.fullmatch(name) for name in attributes)
-        or not all(_index(v) and v < len(accessors) for v in attributes.values())
-    ):
-        raise TileFormatError(f"attributes {attributes!r} are not build_glb's")
     buffers = gltf.get("buffers")
     if not isinstance(buffers, list) or len(buffers) != 1:
         raise TileFormatError("not one buffer")
@@ -440,8 +423,55 @@ def packer_spz(data: bytes) -> bytes:
         raise TileFormatError("the SPZ block runs past the buffer")
     start = bin_at + 8 + offset
     block = data[start : start + length]
-    packer_spz_header(block)
+    _packer_accessors(gltf.get("accessors"), primitive.get("attributes"), packer_spz_header(block))
     return block
+
+
+def _sh_attributes(degree: int) -> list[str]:
+    """`splat_tiles.sh_attributes`: the SH accessors' names, band by band."""
+    return [
+        f"KHR_gaussian_splatting:SH_DEGREE_{band}_COEF_{n}"
+        for band in range(1, degree + 1)
+        for n in range(2 * band + 1)
+    ]
+
+
+def _packer_accessors(accessors: object, attributes: object, spz: SpzHeader) -> None:
+    """Refuses (`TileFormatError`) accessors and attributes that are not `build_glb`'s
+    value for value for this SPZ: POSITION, COLOR_0, SCALE, ROTATION and the SH degree's
+    accessors, in that order and nothing else, each its exact componentType, type and
+    `normalized`, its count the SPZ's; POSITION's bounds those of the stored positions
+    (within the one step packing moves them). The SPZ path keeps these: a POSITION read as
+    unsigned ints draws the float bytes of 0.5 at 1056964608."""
+    n = spz.gaussians
+    names = [
+        "POSITION",
+        "COLOR_0",
+        "KHR_gaussian_splatting:SCALE",
+        "KHR_gaussian_splatting:ROTATION",
+        *_sh_attributes(spz.degree),
+    ]
+    if not _same(attributes, {name: index for index, name in enumerate(names)}):
+        raise TileFormatError(f"attributes {attributes!r} are not build_glb's for this SPZ")
+    expected: list[dict[str, Any]] = [
+        {"componentType": 5126, "count": n, "type": "VEC3"},
+        {"componentType": 5121, "normalized": True, "count": n, "type": "VEC4"},
+        {"componentType": 5126, "count": n, "type": "VEC3"},
+        {"componentType": 5126, "count": n, "type": "VEC4"},
+        *({"componentType": 5126, "count": n, "type": "VEC3"} for _ in names[4:]),
+    ]
+    if not isinstance(accessors, list) or len(accessors) != len(expected):
+        raise TileFormatError("the accessors are not build_glb's")
+    position = dict(accessors[0]) if isinstance(accessors[0], dict) else {}
+    low, high = position.pop("min", None), position.pop("max", None)
+    if not all(_same(a, e) for a, e in zip([position, *accessors[1:]], expected, strict=True)):
+        raise TileFormatError("an accessor's type, count or normalisation is not build_glb's")
+    _numbers(low, 3, "POSITION's min")
+    _numbers(high, 3, "POSITION's max")
+    step = math.ldexp(1.0, spz.bits)
+    for bound, stored in ((low, spz.low), (high, spz.high)):
+        if any(abs(b * step - s) > 1.0 for b, s in zip(bound, stored, strict=True)):
+            raise TileFormatError("POSITION's bounds are not those of the stored positions")
 
 
 #: What `splat_tiles.pack_spz` writes in an SPZ header: version 2, no flags, nothing
@@ -456,8 +486,19 @@ SPZ_FIXED_MAX = (1 << 23) - 1
 MAX_SPZ_RAW_BYTES = 256 * 1024 * 1024
 
 
-def packer_spz_header(block: bytes) -> tuple[int, int]:
-    """`(count, sh degree)` of an SPZ stream exactly as `splat_tiles.pack_spz` writes one,
+class SpzHeader(NamedTuple):
+    """What `packer_spz_header` read: the gaussians' count, SH degree and fractional bits, and the
+    stored positions' per-axis extremes in steps."""
+
+    gaussians: int
+    degree: int
+    bits: int
+    low: tuple[int, int, int]
+    high: tuple[int, int, int]
+
+
+def packer_spz_header(block: bytes) -> SpzHeader:
+    """`SpzHeader` of an SPZ stream exactly as `splat_tiles.pack_spz` writes one,
     else `TileFormatError`: one gzip member and nothing after it, holding a 16-byte header
     and exactly the body it declares; magic, version 2, no flags or reserved byte, SH degree
     0 to 3; and the fractional bits the tiler gives such a tile (`_packer_bits`). Python
@@ -487,21 +528,22 @@ def packer_spz_header(block: bytes) -> tuple[int, int]:
         raise TileFormatError(f"the SPZ body is not the {need} bytes its header declares")
     if inflater.unused_data:
         raise TileFormatError("bytes after the SPZ stream's one gzip member")
-    _packer_bits(bits, body[: 9 * count], count)
-    return count, degree
+    if not count:
+        raise TileFormatError("an SPZ of no gaussians: the packer writes no empty tile")
+    packed = np.frombuffer(body, dtype=np.uint8, count=9 * count).reshape(count, 3, 3)
+    wide = packed.astype(np.int64)
+    fixed = ((wide[:, :, 0] | (wide[:, :, 1] << 8) | (wide[:, :, 2] << 16)) ^ 0x800000) - 0x800000
+    _packer_bits(bits, int(np.abs(fixed).max()))
+    low = tuple(int(v) for v in fixed.min(axis=0))
+    high = tuple(int(v) for v in fixed.max(axis=0))
+    return SpzHeader(count, degree, bits, low, high)  # type: ignore[arg-type]
 
 
-def _packer_bits(bits: int, positions: bytes, count: int) -> None:
+def _packer_bits(bits: int, largest: int) -> None:
     """The tiler's rule (`splat_tiles.fractional_bits_for`): the most fractional bits, 12 at
     most, at which the tile's farthest position component still fits 24 bits. So 12, or
     fewer only when one more would not fit: with `m` the largest stored magnitude, `bits`
     is 12 or `2 m` overflows."""
-    if count:
-        packed = np.frombuffer(positions, dtype=np.uint8).reshape(count * 3, 3).astype(np.int64)
-        fixed = packed[:, 0] | (packed[:, 1] << 8) | (packed[:, 2] << 16)
-        largest = int(np.abs((fixed ^ 0x800000) - 0x800000).max())
-    else:
-        largest = 0
     if (
         bits > PACKER_FRACTIONAL_BITS
         or largest > SPZ_FIXED_MAX

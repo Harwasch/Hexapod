@@ -411,6 +411,60 @@ def test_a_tile_reaching_past_2048_m_at_the_tilers_fewer_bits_passes(tmp_path: P
         rg.layer_positions(path)
 
 
+# --- the accessors: build_glb's exact values (Codex R5) -------------------------------------
+#
+# The SPZ path keeps each accessor's componentType, type, normalized and count: POSITION as
+# 5125 (unsigned int) makes Cesium read the float bytes of 0.5 as 1056964608. So every
+# accessor is build_glb's, value for value, its count the SPZ's, and the attributes map to
+# them in build_glb's order, SH ones exactly those of the SPZ's degree.
+
+
+def _accessor(index: int, **change: Any) -> Callable[[], bytes]:
+    return _edit(lambda g: g["accessors"][index].update(**change))
+
+
+ACCESSOR_REFUSALS: dict[str, Callable[[], bytes]] = {
+    "accessor_uint": _accessor(0, componentType=5125),
+    "accessor_type": _accessor(0, componentType=5121, type="SCALAR"),
+    "accessor_vec4_position": _accessor(0, type="VEC4"),
+    "accessor_normalized": _accessor(0, normalized=True),
+    "accessor_count_zero": _accessor(0, count=0),
+    "accessor_count_two": _accessor(0, count=2),
+    "accessor_count_huge": _accessor(0, count=100000000),
+    "accessor_minmax": _accessor(0, min=[30, 30, 30], max=[31, 31, 31]),
+    "accessor_no_minmax": _edit(
+        lambda g: (g["accessors"][0].pop("min"), g["accessors"][0].pop("max"))
+    ),
+    "accessor_minmax_short": _accessor(0, min=[0.5, 0.5]),
+    "accessor_color_float": _accessor(1, componentType=5126),
+    "accessor_color_not_normalized": _edit(lambda g: g["accessors"][1].pop("normalized")),
+    "accessor_scale_count": _accessor(2, count=2),
+    "accessor_rotation_vec3": _accessor(3, type="VEC3"),
+    "accessor_extra": _edit(lambda g: g["accessors"].append(dict(g["accessors"][2]))),
+    "attributes_swapped": _edit(
+        lambda g: _primitive(g)["attributes"].update(
+            POSITION=2, **{"KHR_gaussian_splatting:SCALE": 0}
+        )
+    ),
+    "attributes_missing_rotation": _edit(
+        lambda g: _primitive(g)["attributes"].pop("KHR_gaussian_splatting:ROTATION")
+    ),
+    "attributes_sh_without_degree": _edit(
+        lambda g: (
+            g["accessors"].append(dict(g["accessors"][2])),
+            _primitive(g)["attributes"].update({"KHR_gaussian_splatting:SH_DEGREE_1_COEF_0": 4}),
+        )
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(ACCESSOR_REFUSALS))
+def test_an_accessor_not_build_glbs_value_for_value_is_refused(tmp_path: Path, case: str) -> None:
+    path = write(tmp_path, tileset(), leaf=ACCESSOR_REFUSALS[case]())
+    with pytest.raises(rg.RescanGateError):
+        rg.layer_positions(path)
+
+
 def test_the_cases_are_the_apis() -> None:
     """The same refusals by name as apps/api tests/test_layer_allowlist.py: one allowlist,
     two transcriptions, held to one list."""

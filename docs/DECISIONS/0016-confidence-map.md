@@ -350,7 +350,9 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
    be `build_glb`'s: a JSON then a BIN chunk and nothing after, one buffer that is the BIN
    chunk, one buffer view, exactly the packer's extensions used and required, one scene of
    one node with its matrix, one point primitive of SPZ, accessors with no data of their
-   own (no sparse), no skins, animation, morph targets or instancing; and the SPZ itself
+   own (no sparse) and `build_glb`'s values exactly (componentType, type, `normalized`, the
+   SPZ's count, POSITION's bounds the stored ones; a POSITION read as unsigned ints draws
+   the bytes of 0.5 at 1056964608), no skins, animation, morph targets or instancing; and the SPZ itself
    one gzip member holding exactly the header and body it declares, the header the
    packer's (version 2, no flags, SH degree 0-3) with the fractional bits the tiler's rule
    gives (`fractional_bits_for`: 12, fewer only when the tile's farthest position needs

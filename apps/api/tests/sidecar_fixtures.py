@@ -291,7 +291,7 @@ def splat_glb(
     for spz in streams:
         views.append({"buffer": 0, "byteOffset": len(binary), "byteLength": len(spz)})
         binary += spz + b"\0" * (-len(spz) % 4)
-    counts = [np.asarray(points).reshape(-1, 3).shape[0] for points in (positions, *also)]
+    arrays = [np.asarray(points, dtype=np.float32).reshape(-1, 3) for points in (positions, *also)]
     gltf: dict[str, Any] = {
         "asset": {"version": "2.0", "generator": "twin splat_tiles"},
         "extensionsUsed": [
@@ -333,9 +333,16 @@ def splat_glb(
         "materials": [{"extensions": {"KHR_materials_unlit": {}}}],
         "accessors": [
             accessor
-            for count in counts
+            for xyz in arrays
+            for count in (xyz.shape[0],)
             for accessor in (
-                {"componentType": 5126, "count": count, "type": "VEC3"},
+                {
+                    "componentType": 5126,
+                    "count": count,
+                    "type": "VEC3",
+                    "min": xyz.min(axis=0).tolist(),
+                    "max": xyz.max(axis=0).tolist(),
+                },
                 {"componentType": 5121, "normalized": True, "count": count, "type": "VEC4"},
                 {"componentType": 5126, "count": count, "type": "VEC3"},
                 {"componentType": 5126, "count": count, "type": "VEC4"},
