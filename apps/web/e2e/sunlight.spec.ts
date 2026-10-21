@@ -19,8 +19,9 @@
  * the renderer reads out: state/sunReport.ts): Now relights and says so, At capture holds
  * the clock and gives it back, As captured takes the relight off. Under Spark: the Sun control
  * disabled, saying it needs CesiumJS or PlayCanvas, and "Draw with PlayCanvas" really
- * switching, after which Now relights. The tool rail is as it was. Screenshots go to
- * `W6B_EVIDENCE_DIR` when set.
+ * switching, after which Now relights. With the sun on, a switch from CesiumJS to PlayCanvas and
+ * back hands the relight over each way and keeps the badge. The tool rail is as it was.
+ * Screenshots go to `W6B_EVIDENCE_DIR` when set.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -426,5 +427,50 @@ test("under spark, the Sun says it needs CesiumJS or PlayCanvas and switches to 
     timeout: 60_000,
   });
   await shot(page, "app-spark-switched-now");
+  await railUnchanged(page);
+});
+
+/** Chooses the splat renderer as Settings › Advanced does (state/settings.ts). */
+const chooseRenderer = (page: Page, renderer: string): Promise<void> =>
+  page.evaluate(async (kind) => {
+    const link = "/src/state/settings.ts";
+    const module = (await import(/* @vite-ignore */ link)) as {
+      useSettings: { getState(): { set(patch: { splatRenderer: string }): void } };
+    };
+    module.useSettings.getState().set({ splatRenderer: kind });
+  }, renderer);
+
+test("with the sun on, switching CesiumJS to PlayCanvas and back keeps the relight on whichever draws", async ({
+  page,
+}) => {
+  test.setTimeout(420_000);
+  await arrive(page, "cesium");
+  const sun = page.getByTestId("views-sun");
+  await expect(sun).toBeVisible();
+  await sun.getByRole("radio", { name: "Now" }).click();
+  await expect.poll(async () => (await state(page)).parts[A2] ?? [], poll).toContain(RELIT);
+  const badge = page.getByTestId("relit-badge");
+  await expect(badge).toContainText("Simulated lighting: the sun (now)", { timeout: 60_000 });
+
+  // PlayCanvas: its hook in, CesiumJS's part out of the hidden tileset, the badge still said.
+  await chooseRenderer(page, "playcanvas");
+  await expect
+    .poll(() => page.evaluate(`window.__twin.scanRendererStatus.active`), poll)
+    .toBe(true);
+  await expect.poll(() => installed(page, A2), poll).toBe(true);
+  await expect.poll(async () => (await state(page)).parts[A2] ?? [], poll).not.toContain(RELIT);
+  await expect(badge).toContainText("Simulated lighting: the sun (now)", { timeout: 60_000 });
+  await expect(sun.getByRole("radio", { name: "Now" })).toHaveAttribute("aria-checked", "true");
+  await shot(page, "app-switch-playcanvas");
+
+  // Back to CesiumJS: its part again, PlayCanvas's session gone with its hook.
+  await chooseRenderer(page, "cesium");
+  await expect
+    .poll(() => page.evaluate(`window.__twin.scanRendererStatus.active`), poll)
+    .toBe(false);
+  await expect.poll(() => installed(page, A2), poll).toBe(false);
+  await expect.poll(async () => (await state(page)).parts[A2] ?? [], poll).toContain(RELIT);
+  await expect(badge).toContainText("Simulated lighting: the sun (now)", { timeout: 60_000 });
+  await shot(page, "app-switch-cesium-again");
   await railUnchanged(page);
 });
