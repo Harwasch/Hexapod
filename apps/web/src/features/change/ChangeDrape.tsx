@@ -141,7 +141,7 @@ function refusal(error: unknown): string {
  * each colour is and how many cells, which are low confidence (hatched), that it is derived
  * from height surfaces and not observed, the least change that layer can show between those
  * dates, and what is uncalibrated; the legend says when either date is not survey-grade.
- * Asked for from Compare › Dates (`useChangeDrape`); mounted by `ChangeDrapeSlot` while asked.
+ * Asked for from Compare › Dates (`useChangeDrape`); mounted by the shell (AppShell) while asked.
  *
  * It ends with its site (another becomes the active one) or from its own Hide. A date that
  * no longer lists a surface, or a refusal (the write token, a 409), is said here and in

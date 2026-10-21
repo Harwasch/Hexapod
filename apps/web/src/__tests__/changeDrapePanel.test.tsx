@@ -17,7 +17,7 @@ import { GlassTooltipProvider } from "@twin/ui";
 import { api } from "@/api/client";
 import { queryKeys } from "@/api/queries";
 import { CompareDates } from "@/features/compare/CompareDates";
-import { ChangeDrapeSlot } from "@/features/change/ChangeDrapeSlot";
+import { ChangeDrape } from "@/features/change/ChangeDrape";
 import { NEEDS_TOKEN } from "@/lib/changeDrape";
 import type { CompareDates as CompareDatesPair } from "@/lib/epochs";
 import { useChangeDrape } from "@/state/changeDrape";
@@ -163,7 +163,7 @@ function show(site: Site = surfaced(), renderer: SplatRenderer = "cesium") {
     <QueryClientProvider client={client}>
       <GlassTooltipProvider>
         <CompareDates siteId={SITE_ID} />
-        <ChangeDrapeSlot />
+        <ChangeDrape />
       </GlassTooltipProvider>
     </QueryClientProvider>,
   );

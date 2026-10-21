@@ -14,6 +14,7 @@ import { useScene } from "@/cesium/SceneContext";
 import { useHotkey } from "@/lib/hotkeys";
 import { bindDockRules, useLayout } from "@/state/layout";
 import { useMission } from "@/state/mission";
+import { useChangeDrape } from "@/state/changeDrape";
 import { useSettings } from "@/state/settings";
 import { useSkinPoke } from "@/state/skinPoke";
 import { useLantern } from "@/state/lantern";
@@ -24,7 +25,6 @@ import { AddPanel } from "../add-data/AddPanel";
 import { CommandBox } from "../command-palette/CommandBox";
 import { ShortcutSheet } from "../command-palette/ShortcutSheet";
 import { CompareSplit } from "../compare/Compare";
-import { ChangeDrapeSlot } from "../change/ChangeDrapeSlot";
 import { DescentArrival } from "../descent/DescentArrival";
 import { DevPanel } from "../dev/DevPanel";
 import { ExploreHud } from "../explore/ExploreHud";
@@ -110,6 +110,8 @@ const KnowledgeCellCard = lazyNamed(
   () => import("../knowledge/KnowledgeCellCard"),
   "KnowledgeCellCard",
 );
+// The change map between two dates and its legend (Compare › Dates), loaded when one is asked for.
+const ChangeDrape = lazyNamed(() => import("../change/ChangeDrape"), "ChangeDrape");
 const KnowledgeLegend = lazyNamed(() => import("../knowledge/KnowledgeLegend"), "KnowledgeLegend");
 
 /** The app's own keys, bound from the registry (`app/hotkeys.ts`) that the `?` sheet prints. */
@@ -237,6 +239,7 @@ function OnDemand({ label, children }: { label: string; children: ReactNode }) {
 export function AppShell() {
   const sheet = useLayout((s) => s.focus);
   const view = useMission((s) => s.view);
+  const changeAsked = useChangeDrape((s) => s.request !== null);
   useEffect(() => bindDockRules(), []);
   return (
     <>
@@ -308,8 +311,11 @@ export function AppShell() {
             <Toasts />
           </div>
           <div className="hud-stack hud-detail">
-            {/* The change map between two dates (Compare › Dates): loaded when asked for. */}
-            <ChangeDrapeSlot />
+            {changeAsked && (
+              <OnDemand label="Change map">
+                <ChangeDrape />
+              </OnDemand>
+            )}
             {env.landExplorationEnabled && (
               <OnDemand label="Land agent">
                 <LandAgent />
