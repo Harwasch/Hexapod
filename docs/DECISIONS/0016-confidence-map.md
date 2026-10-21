@@ -450,8 +450,12 @@ cells in the tileset frame), a score and the reasons it is low, as one container
    PlayCanvas and Spark colour a splat as they copy or generate its tile, with no eye, so they
    read one level per tile -- CesiumJS's rule at the tile's centre -- and copy a tile again only
    when its level steps (`scanView/cellModifier.ts`); the key says cells are sized per tile.
-   An inferred layer's tiles are grey under either view. The notice stays for the per-cell
-   rules, Sunlight and Compare, and names them; the WebGPU trial keeps the gate (no WGSL yet).
+   An inferred layer's tiles are grey under either view. Its Highlight, when on, still draws
+   purple and hatched over that grey, as under CesiumJS: Highlight marks invented content, and
+   grey says only that the content carries no evidence, so the two do not conflict. The
+   notice stays for the per-cell rules, Sunlight and Compare, and names them; the WebGPU trial
+   keeps the gate (no WGSL yet). A grid of 2^23 cells or more is refused, so PlayCanvas and
+   Spark can hand a plane's first texel to the shader exactly in a float uniform.
 
 ### Consequences
 

@@ -588,12 +588,17 @@ the pipeline's per-cell grid, `hexapod.cellgrid` v1, declared on the root tile a
   PlayCanvas (per splat by CesiumJS)"). The colours and cues are the same; only the cell size
   at a tile's near and far edges can differ, and each renderer reads out how many sampled
   splats read CesiumJS's level (`scanCellViewReading`). Measured on the synthetic yard
-  (2026-10-20, SwiftShader): from 48 m overhead, 989 of 989 sampled splats read CesiumJS's level
-  under both PlayCanvas and Spark, and weak cells drew 98.6 % (PlayCanvas) and 98.8 % (Spark)
-  red against CesiumJS's 99.0 %; from the app's landing view, 989 of 989 under PlayCanvas and
-  871 of 989 (88 %) under Spark. A natively streamed scan (SOG) is one entity: one level for
-  all of it. Cells are measured in the globe's pixels (`ScanPose.globePixelRatio`), so the
-  overlay's lower resolution in motion steps nothing.
+  (2026-10-20, SwiftShader), two different things. Pixel coverage, from 48 m overhead: of the
+  pixels the scan covers, under an all-weak grid 98.6 % drew red under PlayCanvas, 98.8 % under
+  Spark and 99.0 % under CesiumJS; under an all-strong grid 99.3 %, 99.4 % and 99.5 % drew green.
+  That is how much of the scan shows the right verdict, not a per-cell match. Level agreement:
+  from 48 m overhead, 989 of 989 sampled splats read CesiumJS's level under both renderers;
+  from the app's landing view, 989 of 989 under PlayCanvas but 871 of 989 (88 %) under Spark --
+  the other 12 % draw cells a level finer or coarser than CesiumJS would there. A natively
+  streamed scan (SOG) is one entity: one level for all of it (the yard's own package draws
+  98.6 % red under an all-weak grid, 99.3 % green under an all-strong one). Cells are measured
+  in the globe's pixels (`ScanPose.globePixelRatio`), so the overlay's lower resolution in
+  motion steps nothing.
 - **What still needs CesiumJS.** The per-cell view rules, Sunlight and the Compare swipe: under
   PlayCanvas or Spark the notice names exactly those ("Per cell and Sunlight: Needs the CesiumJS
   renderer (Settings › Advanced › Splat renderer)") with the one-click "Draw with CesiumJS". The
@@ -611,7 +616,9 @@ the pipeline's per-cell grid, `hexapod.cellgrid` v1, declared on the root tile a
   so far views read the pyramid's coarser levels, which hold the weakest child: a weak patch is
   never averaged away.
 - **Honesty.** A model without a grid is "Not measured" in the key and in the Inspector's
-  Date shown (a splat upload, or a run before confidence maps). An inferred layer drawn in the
+  Date shown (a splat upload, or a run before confidence maps). Until a view's data is in, the
+  scan stays the photo and the key says "Loading confidence…" or "Loading data age…", so the
+  photo is not read as no evidence. An inferred layer drawn in the
   scan's sort is grey: it carries no capture evidence (under PlayCanvas and Spark a layer's
   tiles are their own, and grey whatever their number). Data age gives one date one age (one
   capture time), and stripes cells where a later date scored evidence; a later date is compared
