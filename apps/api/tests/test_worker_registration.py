@@ -161,10 +161,9 @@ def test_no_session_is_idle_in_a_transaction_while_the_reference_downloads(
     """The seed reads the database, then downloads the reference's frames and model --
     minutes on a slow link. A session idle in a transaction that long is killed by the
     database (`runner._end_transaction`), so during every download no session may be:
-    checked in Postgres itself (test_worker's pattern), with the real supervisor."""
-    from sqlalchemy import create_engine, text
-
+    checked in Postgres itself (`tests/idle_transactions.py`), with the real supervisor."""
     from tests.conftest import TEST_DATABASE_URL, site_payload
+    from tests.idle_transactions import IdleTransactions
 
     site = client.post(
         "/api/v1/sites", json=site_payload(slug="spy-tree", boundary=BOUNDARY, assets=[])
@@ -178,20 +177,8 @@ def test_no_session_is_idle_in_a_transaction_while_the_reference_downloads(
     _first, one = _epoch_run(db, sessions, storage, tmp_path, site_id, "e1", CaptureKind.IMAGES)
     db.commit()
 
-    probe = create_engine(TEST_DATABASE_URL)
+    idle_in_transaction = IdleTransactions(TEST_DATABASE_URL)
     seen: list[tuple[str, int]] = []
-
-    def idle_in_transaction() -> int:
-        with probe.connect() as connection:
-            return int(
-                connection.execute(
-                    text(
-                        "SELECT count(*) FROM pg_stat_activity WHERE datname = "
-                        "current_database() AND pid <> pg_backend_pid() AND "
-                        "state LIKE 'idle in transaction%'"
-                    )
-                ).scalar_one()
-            )
 
     real_download, real_list = storage.download_file, storage.list_objects
 
@@ -205,8 +192,10 @@ def test_no_session_is_idle_in_a_transaction_while_the_reference_downloads(
 
     monkeypatch.setattr(storage, "download_file", download)
     monkeypatch.setattr(storage, "list_objects", listing)
-    _epoch_run(db, sessions, storage, tmp_path, site_id, "e2_drone", CaptureKind.IMAGES)
-    probe.dispose()
+    try:
+        _epoch_run(db, sessions, storage, tmp_path, site_id, "e2_drone", CaptureKind.IMAGES)
+    finally:
+        idle_in_transaction.close()
 
     # Epoch 1's 3 frames, 4 model files, placement.json and georef.json.
     fetched = [key for key, _idle in seen if key.startswith(f"runs/{one.id}/")]
