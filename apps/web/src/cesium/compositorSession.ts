@@ -32,8 +32,8 @@
  * scan's own tiles, the other dates streamed beside them (scanView/ruleDates.ts), their
  * inferred layers and split objects, each tile weighed by the plane as it is copied into the
  * renderer's work buffer, with the same seam fade. The plane is then worked out in the frame of
- * the scan PlayCanvas draws (SiteManager `scanTarget`, the date chosen): every date's tiles are
- * placed in it. Nothing is put on CesiumJS's primitives, which draw nothing there. A renderer
+ * the scan PlayCanvas draws (SiteManager `scanTarget`, the date chosen, which the rule is As
+ * of): every date's tiles are placed in it. Nothing is put on CesiumJS's primitives, which draw nothing there. A renderer
  * change carries the rule over, CesiumJS to PlayCanvas and back; under Spark or the WebGPU
  * trial a rule cannot be drawn (`ruleAssets`), and SiteManager ends it, saying so.
  *
@@ -67,9 +67,9 @@ import {
   observedAtFromUpload,
   shownOption,
 } from "@/lib/epochs";
+// Already reached through splatCompositor.ts: importing it moves nothing (ruleKit.ts).
 import { resolveLayerUrl } from "@/lib/inferred";
 import { createLogger } from "@/lib/log";
-import { splitObjectsOf } from "@/lib/sceneObjects";
 import { perCellDrawable } from "@/lib/viewModes";
 import { effectiveInferredStyle, useAsCaptured } from "@/state/asCaptured";
 import { useSettings } from "@/state/settings";
@@ -77,10 +77,10 @@ import { useViewMode } from "@/state/viewMode";
 import { useViewRule, type LeftOut, type ViewRuleLegend } from "@/state/viewRule";
 
 import { companionGroups, ruledObjects, setCompanions, type CompanionHost } from "./companions";
-import { pickedLayers } from "./inferredLayers";
-import { layerPlacement } from "./scanView/scanLayers";
-import { multiply4, rootTransformOf } from "./scanView/scanObjects";
+import type { RuleKit } from "./scanView/ruleKit";
 import {
+  lendRuleKit,
+  namedKit,
   publishScanRule,
   ruleOwnerRows,
   type RuleDate,
@@ -192,8 +192,11 @@ export interface CompositorContext {
   entry: CompositorSite;
   /** Who draws splat scans now: CesiumJS and PlayCanvas draw a rule (`perCellDrawable`). */
   renderer(): SplatRendererKind;
-  /** The scan another renderer than CesiumJS draws now (SiteManager `scanTarget`), or null. */
-  target(): { assetId: string; tileset: Cesium3DTileset } | null;
+  /**
+   * What the rule borrows from the globe's first load to draw under PlayCanvas (ruleKit.ts:
+   * lent, not imported, so that nothing moves out of the first load's entry).
+   */
+  kit: RuleKit;
   /** Ends the rule, saying why. */
   end(reason: ViewRuleEnd): void;
 }
@@ -284,6 +287,34 @@ function absoluteUrl(tileset: Cesium3DTileset): string | undefined {
   return url === undefined ? undefined : new URL(url, location.href).toString();
 }
 
+const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
+/** `a · b` (column-major 4x4). */
+function times(a: readonly number[], b: readonly number[]): number[] {
+  return Matrix4.toArray(
+    Matrix4.multiply(Matrix4.fromArray([...a]), Matrix4.fromArray([...b]), new Matrix4()),
+  );
+}
+
+/** `a⁻¹` (column-major 4x4, any affine: a runtime scale too). */
+function inverse(a: readonly number[]): number[] {
+  return Matrix4.toArray(Matrix4.inverse(Matrix4.fromArray([...a]), new Matrix4()));
+}
+
+/** `a⁻¹ · b`, or null when it is the identity (to a micrometre): where `b`'s frame is in `a`'s. */
+function relative(a: readonly number[], b: readonly number[]): number[] | null {
+  const m = times(inverse(a), b);
+  return m.every((v, i) => Math.abs(v - (IDENTITY[i] ?? 0)) < 1e-6) ? null : m;
+}
+
+/** A tileset.json's `root.transform` (column-major), or the identity. */
+function declaredRoot(json: unknown): number[] {
+  const t = (json as { root?: { transform?: unknown } } | null)?.root?.transform;
+  return Array.isArray(t) && t.length === 16 && t.every((v) => Number.isFinite(v))
+    ? (t as number[])
+    : IDENTITY;
+}
+
 /** A tileset.json by plain fetch (an inferred layer under PlayCanvas has no Resource here). */
 async function fetchJsonOf(url: string): Promise<unknown> {
   const response = await fetch(url);
@@ -344,6 +375,9 @@ export function startCompositor(
   }
   // A date's own Confidence or Data age reads its own grid, not the other dates'.
   useViewMode.getState().set("photo");
+  // PlayCanvas streams the other dates with the globe's own classes, lent (ruleKit.ts).
+  lendRuleKit(context.kit);
+  const kit = namedKit(context.kit);
 
   let disposed = false;
   /** Which renderer the rule is drawn by now; null before the first frame. */
@@ -723,7 +757,11 @@ export function startCompositor(
    * scan and weighs every tile it draws by the plane.
    */
   const syncPlaycanvas = (dates: readonly CompositorDate[]): void => {
-    const target = context.target();
+    // The scan PlayCanvas draws: the date chosen (SiteManager `scanTarget`; a model asked for
+    // by itself, which it would draw instead, ends the rule).
+    const chosen = asOfNow();
+    const shown = chosen ? site.handles.get(chosen.assetId)?.tileset : null;
+    const target = chosen && shown ? { assetId: chosen.assetId, tileset: shown } : null;
     if (!target || target.tileset.isDestroyed()) {
       unpublish();
       return;
@@ -734,10 +772,10 @@ export function startCompositor(
     const toScan = invertAffine(computedTransform(target.tileset));
     const placed = dates.map((d) => {
       const placement = toScan
-        ? layerPlacement(computedTransform(target.tileset), computedTransform(d.tileset))
+        ? relative(computedTransform(target.tileset), computedTransform(d.tileset))
         : null;
       const own = Matrix4.toArray(rootTransform(d.tileset));
-      const root = placement ? multiply4(own, invertAffine(placement) ?? own) : own;
+      const root = placement ? times(own, inverse(placement)) : own;
       return {
         ...d,
         url: absoluteUrl(d.tileset),
@@ -765,7 +803,7 @@ export function startCompositor(
     for (const d of placed) {
       if (!d.url || d.assetId === undefined) continue;
       const base = d.url;
-      for (const ref of pickedLayers(d.assetId, d.extras).refs) {
+      for (const ref of kit.pickedLayers(d.assetId, d.extras).refs) {
         const url = resolveLayerUrl(base, ref.uri);
         entries.push({
           key: url,
@@ -778,7 +816,7 @@ export function startCompositor(
             extras: undefined,
             inferred: true,
             json,
-            frame: (layer) => multiply4(invertAffine(d.root) ?? d.root, rootTransformOf(layer)),
+            frame: (layer) => relative(d.root, declaredRoot(layer)) ?? undefined,
           },
         });
       }
@@ -792,7 +830,7 @@ export function startCompositor(
     // Each date's split objects, drawn whole by the date owning the cell under each.
     placed.forEach((d, source) => {
       if (!d.url || source >= drawn.length) return;
-      for (const ref of splitObjectsOf(d.extras))
+      for (const ref of kit.splitObjectsOf(d.extras))
         bySource.set(resolveLayerUrl(d.url, ref.uri), { source, whole: true });
     });
     const tinted =

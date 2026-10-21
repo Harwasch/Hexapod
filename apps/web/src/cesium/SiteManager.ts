@@ -47,6 +47,7 @@ import type { SiteLoad } from "@/state/sites";
 import { useViewRule } from "@/state/viewRule";
 import type { Viewport } from "@/missions/framing";
 
+import { RULE_KIT } from "./scanView/ruleKit";
 import { prefetchScanDestination } from "./scanView/ScanRendererHost";
 import type { SplatRendererKind } from "./scanView/types";
 import type { Emitter } from "@/lib/emitter";
@@ -1578,7 +1579,7 @@ export class SiteManager {
           scene: this.scene,
           entry: active,
           renderer,
-          target: () => this.scanTarget(),
+          kit: RULE_KIT,
           end: (reason) => this.endRule(active, reason),
         });
         this.restartLoad(active);

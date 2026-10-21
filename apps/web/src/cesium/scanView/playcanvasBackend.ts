@@ -117,6 +117,7 @@ import {
 } from "./scanMotion";
 import { reportScanCellView, watchScanCellView } from "./scanCellView";
 import {
+  lentRuleKit,
   PLAYCANVAS_FOOTPRINT,
   reportScanRule,
   RULE_OWNER_WIDTH,
@@ -1298,7 +1299,8 @@ function assemble(
       ruleDates?.setDates(wanted);
       return;
     }
-    if (ruleDatesLoading) return;
+    const kit = lentRuleKit();
+    if (ruleDatesLoading || !kit) return;
     ruleDatesLoading = true;
     void import("./ruleDates")
       .then(({ RuleDates }) => {
@@ -1320,6 +1322,7 @@ function assemble(
             // The budget the host draws to now: frames slowed by two dates lower it for both.
             budget: () => app.scene.gsplat.splatBudget,
           },
+          kit,
         );
         ruleDates.setDates(rule?.dates ?? []);
         hooks.frameWanted();

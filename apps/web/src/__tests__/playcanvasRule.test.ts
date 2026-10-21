@@ -11,7 +11,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LayerLook } from "@/cesium/scanView/layerLook";
+import { RULE_KIT } from "@/cesium/scanView/ruleKit";
 import {
+  lendRuleKit,
   PLAYCANVAS_FOOTPRINT,
   publishScanRule,
   ruleOwnerRows,
@@ -472,6 +474,8 @@ describe("the other dates a rule draws under PlayCanvas", () => {
           }),
       });
     });
+    // The rule's session lends the renderer the globe's streaming classes as it starts.
+    lendRuleKit(RULE_KIT);
     const { backend } = await backendFor("rule-e");
     const own = await backend.load(SCAN, tile("1_1.glb"));
     backend.add(own);

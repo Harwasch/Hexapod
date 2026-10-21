@@ -21,15 +21,19 @@
  *
  * **Frames.** A date's tiles go under its placement `P` in the scan's frame; the view is taken
  * into the date's frame by `P⁻¹` (scanLayers.ts `layerView`).
+ *
+ * The streamer, the layers' and objects' classes and the parser are the globe's own, lent at
+ * runtime (`kit`, ruleKit.ts) rather than imported: imported, the bundler would move them out
+ * of the globe's first-load entry, and the first load would grow.
  */
 
 import { createLogger } from "@/lib/log";
-import { TileStreamer, type View } from "@/view/stream";
-import { parseTileset, type Sphere, type TileNode } from "@/view/tiles";
+import type { TileStreamer, View } from "@/view/stream";
+import type { Sphere, TileNode } from "@/view/tiles";
 
-import { LAYER_BUDGET_SHARE, layerView, ScanLayers, type LayerBackend } from "./scanLayers";
-import { ScanObjects } from "./scanObjects";
-import type { RuleDate } from "./scanRule";
+import type { LayerBackend, ScanLayers } from "./scanLayers";
+import type { ScanObjects } from "./scanObjects";
+import type { NamedRuleKit, RuleDate } from "./scanRule";
 import type { ScanBackend, ScanPose } from "./types";
 
 const log = createLogger("rule-dates");
@@ -138,6 +142,7 @@ export class RuleDates<M> {
   constructor(
     private readonly backend: DatesBackend<M>,
     private readonly options: RuleDatesOptions,
+    private readonly kit: NamedRuleKit,
   ) {}
 
   /** Draws these dates (none: `[]`), keeping each one already drawn as it was. */
@@ -186,7 +191,7 @@ export class RuleDates<M> {
     const budget = Math.max(1, this.options.budget());
     for (const date of this.#dates) {
       date.streamer?.setBudget(budget, budget * DATE_CACHE_FACTOR);
-      date.streamer?.update(layerView(view, date.date.placement));
+      date.streamer?.update(this.kit.layerView(view, date.date.placement));
       date.layers.update(view);
     }
   }
@@ -215,18 +220,18 @@ export class RuleDates<M> {
   }
 
   #start(key: string, date: RuleDate): DrawnDate<M> {
-    const { backend, options } = this;
+    const { backend, options, kit } = this;
     const drawn: DrawnDate<M> = {
       date,
       key,
       streamer: null,
-      layers: new ScanLayers<M>(backend, date.assetId, date.url, date.extras, date.root, {
+      layers: new kit.ScanLayers<M>(backend, date.assetId, date.url, date.extras, date.root, {
         arrived: () => this.#arrive(),
         changed: () => options.changed(),
-        budget: () => options.budget() * LAYER_BUDGET_SHARE,
+        budget: () => options.budget() * kit.layerBudgetShare,
         ...(options.fetchJson ? { fetchJson: options.fetchJson } : {}),
       }),
-      objects: new ScanObjects<M>(
+      objects: new kit.ScanObjects<M>(
         {
           load: (url, tile, signal) => backend.loadDate(url, tile, signal),
           add: (mesh) => backend.add(mesh),
@@ -252,8 +257,8 @@ export class RuleDates<M> {
       .then((json) => {
         if (drawn.stopped) return;
         const budget = Math.max(1, options.budget());
-        const streamer = new TileStreamer<M>(
-          parseTileset(json),
+        const streamer = new kit.TileStreamer<M>(
+          kit.parseTileset(json),
           {
             load: (tile, signal) => backend.loadDate(date.url, tile, signal),
             show: (_tile, mesh) => {

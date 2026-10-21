@@ -21,6 +21,8 @@
 import type { CellLookView } from "@/lib/cellLook";
 import { NO_OWNER, type OwnerPlane } from "@/lib/compositor";
 
+import type { RuleKit } from "./ruleKit";
+
 /** Cells a row of the owner texture holds (R8), as CesiumJS's (splatCompositor.ts). */
 export const RULE_OWNER_WIDTH = 4096;
 
@@ -238,4 +240,42 @@ export function reportScanRule(assetId: string, read: () => ScanRuleReading): ()
 /** What the renderer drawing asset `assetId` says of its rule, or null when none does. */
 export function scanRuleReading(assetId: string): ScanRuleReading | null {
   return readings.get(assetId)?.() ?? null;
+}
+
+/** The kit's parts by name, on the on-demand side (ruleKit.ts says why it is a tuple). */
+export function namedKit([
+  TileStreamer,
+  parseTileset,
+  ScanLayers,
+  ScanObjects,
+  layerView,
+  layerBudgetShare,
+  pickedLayers,
+  splitObjectsOf,
+]: RuleKit) {
+  return {
+    TileStreamer,
+    parseTileset,
+    ScanLayers,
+    ScanObjects,
+    layerView,
+    layerBudgetShare,
+    pickedLayers,
+    splitObjectsOf,
+  };
+}
+
+/** `namedKit`'s result. */
+export type NamedRuleKit = ReturnType<typeof namedKit>;
+
+let lent: NamedRuleKit | null = null;
+
+/** Lends the renderer the globe's streaming kit (ruleKit.ts): the rule's session, as it starts. */
+export function lendRuleKit(kit: RuleKit): void {
+  lent ??= namedKit(kit);
+}
+
+/** The kit lent by the rule's session, or null before any rule started. */
+export function lentRuleKit(): NamedRuleKit | null {
+  return lent;
 }

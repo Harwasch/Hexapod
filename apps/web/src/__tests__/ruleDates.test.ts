@@ -8,13 +8,16 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { poseView, RuleDates, type DatesBackend } from "@/cesium/scanView/ruleDates";
-import type { RuleDate } from "@/cesium/scanView/scanRule";
+import { RULE_KIT } from "@/cesium/scanView/ruleKit";
+import { namedKit, type RuleDate } from "@/cesium/scanView/scanRule";
 import type { LayerLook } from "@/cesium/scanView/layerLook";
 import type { ScanPose } from "@/cesium/scanView/types";
 import { useSettings } from "@/state/settings";
 import type { TileNode } from "@/view/tiles";
 
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+/** The globe's streaming classes, as the rule's session lends them (ruleKit.ts). */
+const KIT = namedKit(RULE_KIT);
 const SHIFTED = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 2, 0, 0, 1];
 
 const pose: ScanPose = {
@@ -98,14 +101,18 @@ describe("the dates a rule draws under PlayCanvas", () => {
     useSettings.getState().set({ inferredStyle: "show" });
     const { backend, calls, onScreen, placed } = fakeBackend();
     let arrivals = 0;
-    const dates = new RuleDates(backend, {
-      arrived: () => {
-        arrivals += 1;
+    const dates = new RuleDates(
+      backend,
+      {
+        arrived: () => {
+          arrivals += 1;
+        },
+        changed: () => undefined,
+        budget: () => 1e6,
+        fetchJson: (url) => Promise.resolve(leaf(url.includes("fill") ? "fill.glb" : "june.glb")),
       },
-      changed: () => undefined,
-      budget: () => 1e6,
-      fetchJson: (url) => Promise.resolve(leaf(url.includes("fill") ? "fill.glb" : "june.glb")),
-    });
+      KIT,
+    );
     dates.setDates([JUNE]);
     await flush();
     expect(arrivals).toBeGreaterThan(0);
@@ -130,12 +137,16 @@ describe("the dates a rule draws under PlayCanvas", () => {
 
   it("plans at most every replan interval, and says when the held-back plan is due", async () => {
     const { backend } = fakeBackend();
-    const dates = new RuleDates(backend, {
-      arrived: () => undefined,
-      changed: () => undefined,
-      budget: () => 1e6,
-      fetchJson: () => Promise.resolve(leaf("june.glb")),
-    });
+    const dates = new RuleDates(
+      backend,
+      {
+        arrived: () => undefined,
+        changed: () => undefined,
+        budget: () => 1e6,
+        fetchJson: () => Promise.resolve(leaf("june.glb")),
+      },
+      KIT,
+    );
     dates.setDates([{ ...JUNE, extras: {} }]);
     await flush();
     dates.plan(pose, 1_000);

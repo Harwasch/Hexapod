@@ -20,6 +20,7 @@ import { colorChainOf } from "@/cesium/splatColor";
 import { ruledObjects } from "@/cesium/companions";
 import type { CompositorGpu } from "@/cesium/splatCompositor";
 import { addVisibilityPart, visibilityChainOf } from "@/cesium/splatVisibility";
+import { RULE_KIT } from "@/cesium/scanView/ruleKit";
 import { watchScanRule, type ScanRuleView } from "@/cesium/scanView/scanRule";
 import type { SplatRendererKind } from "@/cesium/scanView/types";
 import { encodeConfidenceGrid } from "@/dev/cellGridFixture";
@@ -137,14 +138,13 @@ async function harness(
     ]),
   };
   const end = vi.fn();
-  // Who draws splats, and the scan another renderer draws (SiteManager `scanTarget`): the
-  // date chosen, June, the latest.
+  // Who draws splats. The scan PlayCanvas draws is the date chosen: June, the latest.
   const drawing: { renderer: SplatRendererKind } = { renderer: options.renderer ?? "cesium" };
   const context: CompositorContext = {
     scene: { preUpdate, requestRender: vi.fn() },
     entry,
     renderer: () => drawing.renderer,
-    target: () => ({ assetId: A2.id, tileset: june as never }),
+    kit: RULE_KIT,
     end,
   };
   const handle = startCompositor(context, {

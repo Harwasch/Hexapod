@@ -18,11 +18,11 @@
  *   (the yard again, registered as one) covers everything by its tiles' bounds. Latest fills
  *   the south-west green from it; Ground truth draws nothing there.
  *
- * Under PlayCanvas (`renderer: "playcanvas"`) the app's own renderer draws March
- * (ScanRendererHost, handed the scan as SiteManager's `scanTarget` hands it), the rule's session
- * hands it the plane (scanView/scanRule.ts), and it streams June -- and in the gap scenarios
- * June's inferred layer, the yard again, declared as one in June's root -- into the same app
- * and sort (scanView/ruleDates.ts). CesiumJS's own copies are hidden. The debug colours are the
+ * Under PlayCanvas (`renderer: "playcanvas"`) the app's own renderer draws June, the date the
+ * rule is As of (ScanRendererHost, handed the scan as SiteManager's `scanTarget` hands it) -- and
+ * in the gap scenarios June's inferred layer, the yard again, declared as one in June's root --
+ * the rule's session hands it the plane (scanView/scanRule.ts), and it streams March into the
+ * same app and sort (scanView/ruleDates.ts). CesiumJS's own copies are hidden. The debug colours are the
  * rule's source of each tile: once every tile is in, each tile's work-buffer modifier is handed
  * a copy of itself that colours by `uRuleSource` just before the rule's weight (PlayCanvas's
  * public `setWorkBufferModifier`, given the code the tile holds -- a read of a private member,
@@ -53,6 +53,7 @@ import {
   type CompositorHandle,
   type CompositorSite,
 } from "@/cesium/compositorSession";
+import { RULE_KIT } from "@/cesium/scanView/ruleKit";
 import { ScanRendererHost } from "@/cesium/scanView/ScanRendererHost";
 import {
   publishScanRule,
@@ -168,7 +169,8 @@ function debugModifier(code: string): string {
     .replace(RULE_STEP, `color = hexapodRuleDebug(color);\n    ${RULE_STEP}`);
 }
 
-const MARCH_ASSET = "march-splat";
+/** The scan PlayCanvas draws: June, the date the rule is As of (SiteManager `scanTarget`). */
+const SHOWN_ASSET = "june-splat";
 
 function nextFrame(scene: Scene): Promise<void> {
   return new Promise((resolve) => {
@@ -227,16 +229,6 @@ export async function startCompositorHarness(options: {
   const june = await load("epoch=2");
   const fill = await load("fill=1");
   fill.show = false;
-  // Under PlayCanvas the app's renderer draws March, and the rule's other dates beside it.
-  const scanHost = playcanvas
-    ? new ScanRendererHost(widget, { preserveDrawingBuffer: true })
-    : undefined;
-  if (scanHost) {
-    march.show = false;
-    june.show = false;
-    scanHost.setRenderer("playcanvas");
-    scanHost.setTarget({ key: "march", tileset: march, assetId: MARCH_ASSET });
-  }
   const primitiveOf = (t: Cesium3DTileset) => splatTilesetOf(t).gaussianSplatPrimitive;
 
   // The yard: 32 x 24 m east/north of its frame's origin. 1 m cells, a margin of 2.
@@ -262,28 +254,37 @@ export async function startCompositorHarness(options: {
     const root = date.root as unknown as { _header: { extras?: Record<string, unknown> } };
     root._header.extras = { ...root._header.extras, confidence: grids.everywhere.meta };
   }
-  /** June's root extras, with its inferred layer (PlayCanvas streams it from there) or not. */
+  // Under PlayCanvas, June declares its inferred layer (PlayCanvas streams it from there, as the
+  // scan's own: its session reads June's root once, as it starts); Inferred's Show or Hide says
+  // whether it is drawn, scenario by scenario.
   const juneRoot = june.root as unknown as { _header: { extras?: Record<string, unknown> } };
-  const juneExtras = { ...juneRoot._header.extras };
-  const juneFill = (on: boolean) => {
-    juneRoot._header.extras = on
-      ? {
-          ...juneExtras,
-          inferredLayers: [
-            {
-              uri: "tileset.json?fill=1",
-              evidence: {
-                kind: "inferred",
-                filler: "fixture",
-                views: 3,
-                gaussians: 10,
-                meanConfidence: 0.5,
-              },
-            },
-          ],
-        }
-      : juneExtras;
-  };
+  if (playcanvas)
+    juneRoot._header.extras = {
+      ...juneRoot._header.extras,
+      inferredLayers: [
+        {
+          uri: "tileset.json?fill=1",
+          evidence: {
+            kind: "inferred",
+            filler: "fixture",
+            views: 3,
+            gaussians: 10,
+            meanConfidence: 0.5,
+          },
+        },
+      ],
+    };
+  // Under PlayCanvas the app's renderer draws June, the date the rule is As of, and the rule's
+  // other date beside it.
+  const scanHost = playcanvas
+    ? new ScanRendererHost(widget, { preserveDrawingBuffer: true })
+    : undefined;
+  if (scanHost) {
+    march.show = false;
+    june.show = false;
+    scanHost.setRenderer("playcanvas");
+    scanHost.setTarget({ key: "june", tileset: june, assetId: SHOWN_ASSET });
+  }
 
   const E1 = epoch("march", "2026-03-01T15:00:00Z", 1);
   const E2 = epoch("june", "2026-06-01T15:00:00Z", 2);
@@ -310,14 +311,14 @@ export async function startCompositorHarness(options: {
     const own = primitiveOf(fill);
     if (own) own.drawnBy = undefined;
     fill.show = withFill && !playcanvas;
-    juneFill(withFill && playcanvas);
+    if (playcanvas) useSettings.getState().set({ inferredStyle: withFill ? "show" : "hide" });
     entry.rule = { rule };
     session = startCompositor(
       {
         scene,
         entry,
         renderer: () => (playcanvas ? "playcanvas" : "cesium"),
-        target: () => (playcanvas ? { assetId: MARCH_ASSET, tileset: march } : null),
+        kit: RULE_KIT,
         end: (reason) => {
           throw new Error(`the rule ended: ${reason}`);
         },
@@ -452,7 +453,7 @@ export async function startCompositorHarness(options: {
   /** The rule handed to PlayCanvas now (scanView/scanRule.ts). */
   const ruleNow = (): ScanRuleView | null => {
     let view: ScanRuleView | null = null;
-    watchScanRule(MARCH_ASSET, (v) => {
+    watchScanRule(SHOWN_ASSET, (v) => {
       view = v;
     })();
     return view;
@@ -465,7 +466,7 @@ export async function startCompositorHarness(options: {
     for (let frame = 0; frame < 3000 && still < 30; frame += 1) {
       await nextFrame(scene);
       const status = scanHost?.status();
-      const reading = scanRuleReading(MARCH_ASSET);
+      const reading = scanRuleReading(SHOWN_ASSET);
       const owners = ruleNow()?.owners.data;
       const ready =
         status?.active === true &&
@@ -486,7 +487,7 @@ export async function startCompositorHarness(options: {
     // The same rule again first (a layer's modifier is put on again with it), then each tile's
     // own modifier coloured by its source; a parameter set copies each into the work buffer.
     const view = ruleNow();
-    if (view) publishScanRule(MARCH_ASSET, { ...view });
+    if (view) publishScanRule(SHOWN_ASSET, { ...view });
     for (const component of app.root.findComponents("gsplat") as pc.GSplatComponent[]) {
       const code = (component as unknown as { _workBufferModifier?: { code?: string } | null })
         ._workBufferModifier?.code;
@@ -500,7 +501,7 @@ export async function startCompositorHarness(options: {
       await nextFrame(scene);
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    const reading = scanRuleReading(MARCH_ASSET);
+    const reading = scanRuleReading(SHOWN_ASSET);
     return {
       ...count(),
       canvases: sizes,
