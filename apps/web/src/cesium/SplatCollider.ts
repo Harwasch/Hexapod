@@ -174,7 +174,8 @@ export class SplatCollider {
   ): { point: Cartesian3; distance: number; tileset: object } | null {
     let best: { point: Cartesian3; distance: number; tileset: object } | null = null;
     for (const [tileset, entry] of this.tracked) {
-      if ((!tileset.show && !this.solidWhileHidden.includes(tileset)) || entry.solids.empty) continue;
+      if ((!tileset.show && !this.solidWhileHidden.includes(tileset)) || entry.solids.empty)
+        continue;
       // Drawn where it is asked: CesiumJS discards LEFT (-1) fragments right of the divider
       // (`splitPosition` of the canvas width) and RIGHT (1) ones left of it; NONE (0) nowhere.
       const cut = at && (tileset.splitDirection ?? 0);
@@ -237,7 +238,8 @@ export class SplatCollider {
   private near(world: Cartesian3, margin: number): Tracked[] {
     const found: Tracked[] = [];
     for (const [tileset, entry] of this.tracked) {
-      if ((!tileset.show && !this.solidWhileHidden.includes(tileset)) || entry.solids.empty) continue;
+      if ((!tileset.show && !this.solidWhileHidden.includes(tileset)) || entry.solids.empty)
+        continue;
       const reach = entry.bounds.radius + margin;
       if (Cartesian3.distanceSquared(world, entry.bounds.center) <= reach * reach) {
         found.push(entry);
