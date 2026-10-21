@@ -143,10 +143,10 @@ def site_fill_targets(
     storage: PublicStorage,
     epoch_id: Annotated[uuid.UUID | None, Query(alias="epochId")] = None,
 ) -> FillTargetsRead:
-    """`rescan-gate-v1`: the cells of epoch `epochId` (default: the site's latest published)
-    that are weak, covered by it, and were weak in at least one earlier measured epoch,
-    compared at the coarser level -- a re-scan that did not fix them. An inferred fill
-    fills only these (F4). A bit mask in the tileset frame of the site lattice. Behind the
+    """`rescan-gate-v1`: the finest cells of epoch `epochId` (default: the site's latest
+    published) that are weak in it, where the newest earlier measured epoch that covers the
+    cell was weak too -- a re-scan that did not fix them; `satisfiedBy` names that epoch per
+    target. An inferred fill fills only these (F4). A bit mask in the tileset frame of the site lattice. Behind the
     write token, which its one consumer (the fill workflow) holds: a call may decode a grid
     per earlier epoch, at most the eight most recent (`capped` says when there were more)."""
     return confidence_maps.fill_targets(db, storage, site_id, epoch_id)

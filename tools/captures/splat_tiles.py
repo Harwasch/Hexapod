@@ -2451,17 +2451,12 @@ class TileOffsets(dict[str, np.ndarray]):
         return super().get(uri.removeprefix("./"), default)
 
 
-def tile_offsets(tileset: Mapping[str, Any]) -> TileOffsets:
-    """Each content uri's frame in the root's frame: the float64 sum of the translation-only
-    `transform`s from the root down to its tile, the root's own (the globe placement)
-    excluded. Zero for every tile of a tileset that fits SPZ's range (`tile_frame`).
-
-    Reads `content.uri` and 3D Tiles 1.1 `contents[].uri`, a leading `./` removed (as
-    apps/api services/sidecars.py `content_uris` does) from the keys and from every lookup
-    (`TileOffsets`). A child transform that is anything but a translation is refused
-    (`SplatFormatError`): no reader here composes rotations.
-    """
-    out = TileOffsets()
+def tile_placements(tileset: Mapping[str, Any]) -> list[tuple[str, np.ndarray]]:
+    """Every `(content uri, offset)` the tileset draws, one per tile that names it, in the
+    order `tile_offsets` visits them; the offset as `tile_offsets` composes it. A uri two
+    tiles name is drawn twice, once at each tile's offset, so it is here twice: what a
+    gate that must see every drawn gaussian reads (`rescan_gate.layer_positions`)."""
+    out: list[tuple[str, np.ndarray]] = []
     root = tileset.get("root")
     stack: list[tuple[Any, np.ndarray]] = [(root, np.zeros(3))]
     while stack:
@@ -2474,11 +2469,25 @@ def tile_offsets(tileset: Mapping[str, Any]) -> TileOffsets:
         for content in [tile.get("content"), *(tile.get("contents") or [])]:
             uri = content.get("uri") if isinstance(content, dict) else None
             if isinstance(uri, str) and uri:
-                out[uri.removeprefix("./")] = offset
+                out.append((uri.removeprefix("./"), offset))
         children = tile.get("children")
         if isinstance(children, list):
             stack.extend((child, offset) for child in children)
     return out
+
+
+def tile_offsets(tileset: Mapping[str, Any]) -> TileOffsets:
+    """Each content uri's frame in the root's frame: the float64 sum of the translation-only
+    `transform`s from the root down to its tile, the root's own (the globe placement)
+    excluded. Zero for every tile of a tileset that fits SPZ's range (`tile_frame`).
+
+    Reads `content.uri` and 3D Tiles 1.1 `contents[].uri`, a leading `./` removed (as
+    apps/api services/sidecars.py `content_uris` does) from the keys and from every lookup
+    (`TileOffsets`). A child transform that is anything but a translation is refused
+    (`SplatFormatError`): no reader here composes rotations. A uri two tiles name keeps
+    the offset `tile_placements` visits last.
+    """
+    return TileOffsets(tile_placements(tileset))
 
 
 def site_positions(local: np.ndarray, offset: np.ndarray | None) -> np.ndarray:

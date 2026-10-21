@@ -851,15 +851,15 @@ curl --fail-with-body -sS -X POST "$TWIN_API_URL/api/v1/assets/$ASSET_ID/sidecar
 What each workflow stages and sends is in docs/SCENE_OBJECTS.md, section 8. What their
 publish jobs read:
 
-| Name                    | Kind     | Read by                                       | For                                                        |
-| ----------------------- | -------- | --------------------------------------------- | ---------------------------------------------------------- |
-| `API_WRITE_TOKEN`       | secret   | all five                                      | the attach is a write                                      |
-| `CLOUDFLARE_ACCOUNT_ID` | secret   | all five                                      | the R2 endpoint, `https://<id>.r2.cloudflarestorage.com`   |
-| `R2_ACCESS_KEY_ID`      | secret   | all five                                      | staging in the private bucket                              |
-| `R2_SECRET_ACCESS_KEY`  | secret   | all five                                      | its other half                                             |
-| `R2_BUCKET`             | variable | all five (default `twin-assets`)              | the **private** bucket the API reads `staging/` from       |
-| `TWIN_API_URL`          | variable | all five (default `https://twin-api.fly.dev`) | the API the asset is read from and the attach is sent to   |
-| `SCAN_ASSET_IDS`        | variable | publish-instances, publish-fill               | which asset each scan of infra/modal/segment.py `SCANS` is |
+| Name                    | Kind     | Read by                                                               | For                                                                                                  |
+| ----------------------- | -------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `API_WRITE_TOKEN`       | secret   | all five; fill.yml and publish-fill's build read fill targets with it | the attach is a write                                                                                |
+| `CLOUDFLARE_ACCOUNT_ID` | secret   | all five                                                              | the R2 endpoint, `https://<id>.r2.cloudflarestorage.com`                                             |
+| `R2_ACCESS_KEY_ID`      | secret   | all five                                                              | staging in the private bucket                                                                        |
+| `R2_SECRET_ACCESS_KEY`  | secret   | all five                                                              | its other half                                                                                       |
+| `R2_BUCKET`             | variable | all five (default `twin-assets`)                                      | the **private** bucket the API reads `staging/` from                                                 |
+| `TWIN_API_URL`          | variable | all five, and fill.yml (default `https://twin-api.fly.dev`)           | the API the asset is read from and the attach is sent to; fill.yml fetches fill targets only from it |
+| `SCAN_ASSET_IDS`        | variable | publish-instances, publish-fill                                       | which asset each scan of infra/modal/segment.py `SCANS` is                                           |
 
 None of them needs the public bucket's name or URL any more. They still use the repository's
 one R2 pair, which can write the public bucket too; a pair scoped to the private bucket alone

@@ -217,7 +217,10 @@ maxAreas 1..8}`. The finest level's weak cells (weak-v1, where the summary is st
    naively, a 4 m square at the antimeridian was a polygon spanning the globe. Zones are then **clipped to the site's boundary**, holes
    (its exclusions) included, before any budget is spent: the boundary is the ground a re-scan
    may fly, as it is for the fog scout, and clipping after closing cuts any gap closing bridged
-   across a hole. A budget takes whole zones in rank order — under `focus`, then largest, then nearest —
+   across a hole. Today a site's **no-go areas are its boundary's holes only**; there is no
+   other no-go layer. `confidence_maps.flyable(site)` is the one place the flyable ground is
+   computed, so explicit no-go zones, when a site can carry them, are subtracted there and
+   every zone stays out of them with no other change. A budget takes whole zones in rank order — under `focus`, then largest, then nearest —
    while they fit (within one zone cell), and clips the first that does not to a disc about
    the focus or its weakest cell, grown until it holds what is left (a disc follows a
    ring-shaped zone where a square would cover the strong ground beside it): the budget goes on the zones that rank
@@ -244,7 +247,11 @@ maxAreas 1..8}`. The finest level's weak cells (weak-v1, where the summary is st
    epoch B's **own finest level** (default B: the latest published) that are weak in B and
    were weak in the newest earlier measured epoch whose footprint covers the cell. An earlier
    epoch counts for a cell only when it covers it; one that saw it well fixed it, so B's
-   weakness there is not a re-scan's. A coarser earlier grid is read by the cell holding B's;
+   weakness there is not a re-scan's. **"Covers" is judged by the earlier epoch's own grid**,
+   cell by cell -- the cell is scored there, or expected and unseen -- not by
+   `Epoch.footprint`: the footprint is one outline round the whole capture and would count
+   every gap inside it as covered, while the grid says which cells the capture actually
+   tried to see. It is the more precise test of the same rule (C7). A coarser earlier grid is read by the cell holding B's;
    a finer one is weak in B's cell only when none of the children it saw there was strong.
    The gate never coarsens B: one weak child never opens its parent (the first build compared
    at the coarser level and did; review R3). Each target records the earlier epoch it
@@ -279,6 +286,126 @@ policy readers already rely on. Confidence is its own layer and its own endpoint
   the export refuses any capture that is not straight down, saying why, rather than fly it nadir), the fill gate itself (F4).
 - Any measurement behind the pattern rules, the 0.5 m closing or the 1 m² smallest zone: UX
   heuristics until a pilot site re-scanned by them says otherwise.
+
+## Fill
+
+Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branch
+`claude/feat-splat-fill-gate`.
+
+### Decision
+
+1. **A generative fill runs only where a re-scan left cells weak.** `teacher_fill.fill_scan`
+   requires a `rescan_gate.RescanGate`: the API's fill targets for the scan's epoch
+   (`rescan-gate-v1`, § API 8), read exactly as the API's `unpack` (rows south to north, least
+   significant bit first; held to the endpoint's own committed answer over the yard fixtures,
+   `data/tiles/synthetic-yard-epochs/fill-targets.json`), `satisfiedBy` included: each target's
+   index into `comparedWith`, and `weakIn` exactly the epochs those name. A point is a target
+   when its cell on the site lattice, in the **tileset frame** with every tile's origin
+   composed, is one.
+2. **Only what is faded and in a target cell is a hole.** Every other gaussian is rendered as
+   seen, so the image model is never shown a hole there; a lifted disc whose centre is not
+   `INSET_M` = 2^-10 m inside the targets is dropped, before and after distill. The inset is the
+   float32 and SPZ rounding bound (2^-11 m within 8 km of the origin at 12 fractional bits),
+   stated from first principles, so the stored layer is still inside when publish checks it
+   exactly. No target is a skipped result that says why, not an error.
+3. **The targets are bound to the tiles twice.** At fill time against the tileset's own
+   confidence grid (`check_tileset`: the gate is at the grid's finest level, as § API 8's
+   targets always are, its plane there has the gate's window, and every target is weak and
+   covered there); the layer records that grid's sha256. At publish
+   (`publish-fill.yml`, `verify_layer`), the scan's asset must be a current revision of the
+   gate's epoch and site, its current tileset must carry that very grid, the targets fetched
+   now must be the ones it was filled for, with the same provenance, and every gaussian of
+   every tile -- parents as well as leaves, a GLB two tiles name at each place it is drawn
+   (`layer_positions`) -- must be in a target cell, on a layer laid out exactly as the tiler
+   writes one (`packer_layout`, the API's allowlist below, transcribed). Fill
+   time cannot tell an earlier epoch whose grid shares the window (its targets are weak there
+   too, by definition); publish can.
+4. **The evidence says so**: `extras.evidence.rescanGate` {policy, siteId, epochId, weakIn,
+   comparedWith, level, cellM, i0, j0, ni, nj, cells, maskSha256, satisfiedBy,
+   confidenceSha256}; `satisfiedBy` is the fill-targets answer's own encoding (one byte per
+   target, an index into `comparedWith`).
+5. **The API recomputes it, so nothing new reaches the live site without it.** The write
+   token is the auth, not the evidence: a layer's `rescanGate` is readable metadata anyone
+   holding the token can copy, so it never admits a layer. An attach
+   (`POST /assets/{id}/sidecars`) judges every inferred layer it declares anew --
+   `inferredLayers`, and the layers of a fill variant (`extras.variants.fill`) -- and every declared layer it
+   stages any file of (an empty `extras` that replaces a layer's tiles is judged too). Each
+   must carry a `rescan-gate-v1` `rescanGate` against the grid the tiles carry, for the
+   asset's epoch, at a plain path (`sidecars.fill_gate_problem`); then the API's own gate
+   (`app/services/fill_gate.py`) recomputes the targets with `confidence_maps.fill_targets`
+   over the stored `epoch_maps` (no earlier measured epoch, or no cell still weak, is a 422),
+   requires the asset to be its epoch's current revision, the evidence to name exactly those
+   targets **and their provenance** (`weakIn`, `comparedWith`, `satisfiedBy` equal to its own
+   answer, so what is stored is the API's, never invented or missing), the layer's root
+   transform to be the scan's, and every gaussian it draws to be in a target cell: every
+   tile, at every place the tileset draws it (two tiles naming one GLB draw it twice).
+   **The gate reads only what the packer writes, an allowlist, not a denylist**
+   (`positions.packer_placements`, `packer_spz`): review found, round after round, something
+   Cesium honours that the gate did not read (a second copy of a tile, a node matrix,
+   `content.url`, `3DTILES_multiple_contents`, an SPZ block in a second, data-URI buffer).
+   So the layer's tileset may hold only the tiler's keys -- content by a plain relative
+   `uri` to a `.glb` alone (no `url`, `contents`, extension, `?`, `#`, `%`, `..`, `./`,
+   scheme, absolute path or backslash), a box of finite numbers, finite non-negative
+   geometric errors, child transforms that translate by whole metres with every component
+   and every composed offset within 2^23 m (SPZ's whole-metre reach; whole metres sum
+   exactly in float64 and float32 in any order, so the gate's offsets are Cesium's, with
+   nothing to cancel: +1e300 then -1e300 hid a 100 m root there), 3D Tiles 1.1 and `3DTILES_content_gltf` declaring the two splat extensions -- and every GLB must
+   be `build_glb`'s: a JSON then a BIN chunk and nothing after, one buffer that is the BIN
+   chunk, one buffer view, exactly the packer's extensions used and required, one scene of
+   one node with its matrix, one point primitive of SPZ, accessors with no data of their
+   own (no sparse) and `build_glb`'s values exactly (componentType, type, `normalized`, the
+   SPZ's count, POSITION's bounds the stored ones; a POSITION read as unsigned ints draws
+   the bytes of 0.5 at 1056964608), no skins, animation, morph targets or instancing; and the SPZ itself
+   one gzip member holding exactly the header and body it declares, the header the
+   packer's (version 2, no flags, SH degree 0-3) with the fractional bits the tiler's rule
+   gives (`fractional_bits_for`: 12, fewer only when the tile's farthest position needs
+   it) -- Python and Cesium's SPZ loader agree on nothing else (at 32 bits Python reads
+   2048 / 2^32 m where Cesium draws 2048 m). On that layout the SPZ
+   positions and the tiles' translations are the whole placement. Anything else is refused,
+   even what would draw in the targets; a new packer feature widens the allowlist in both
+   transcriptions, with a test. A republish carries a
+   layer -- `inferredLayers`, and each fill variant's -- only if the same gate admits it on
+   the new revision (`fill_gate.carry_check`: the epoch's targets recomputed, computed on
+   the very grid the new tiles carry -- the same whole descriptor, so the same planes at
+   the same window origins, level and frame, not only the same planes' sha256 -- every
+   gaussian it draws in them; the `epoch_maps` rows are read, by the fill-targets route's
+   own bounded query, and the transaction ended before any grid is downloaded). A re-run that measured its own grid drops it, with its
+   files, and flags the asset "Inferred fill needs filling again" (a fill variant goes whole:
+   "Fill variant needs filling again"); so does any republish of a layer that was never gated,
+   or whose targets changed because an earlier epoch was measured since, the same tiles
+   included. With no gate to ask, nothing is carried. Layers live from before the gate (the
+   camp's) stay until that first republish, or until an attach sets `inferredLayers` to null.
+6. **Where it is enforced in the tools.** `teacher_fill.py fill` requires `--still-weak FILE`;
+   `infra/modal/fill.py` takes `--still-weak <scan>=<file>`, checks each file's shape with the
+   standard library alone (it runs where fill.yml runs it, with nothing but modal installed)
+   before anything starts on Modal, and forwards it; the job fetches the scan with every cell
+   grid it declares (`_fetch`), and its `teacher_fill.py` reads every bit. `fill.yml` gains
+   `fill_targets_url` and fetches each fill job's targets from the API's
+   own route (no new secret); its jobs have no default, so a push runs nothing and says so.
+7. **What stays ungated.** `drop`, the evaluation harness, is never published. A split
+   object's hole fill (`fill_hole`, declared under `fills/`, a plain path: a uri that climbs
+   out of `fills/` is refused, never exempt) stays ungated while splits are
+   unpublished (the attach refuses `fills/` and `objects/`; carry sends it with its split);
+   gating it is the first step of ever publishing a split. `FillTargetsRead` stays as it is:
+   the exact binding to a revision is at publish and in the API, not at fill time.
+
+### Consequences
+
+- A scan with no measured epoch — every legacy scan, the camp included — cannot be filled or
+  published until it has two measured epochs on one site, and its existing fill goes on its
+  next republish. A `wm-*` push (no inputs) runs no job. There is no override (design open
+  question 8).
+- On the yard at the fill size (CPU renderer, Telea, 8 views at 1024×576): every cell still
+  weak gave 1,833 faded targets and an 11,746-gaussian layer, much of it discs lifted along
+  the ground; the API's 90 cells gave 87 targets and a 380-gaussian layer, all inside them.
+  Synthetic, not measured.
+
+### Not done here
+
+- Fill execution on a GPU (Modal): only the gate runs locally, with the Telea stand-in.
+- Gating `fill_hole` (split objects' holes): only once a split is published.
+- A carry rule for fill variants on new tiles: `variants` is an extras key the API does not
+  own, so new tiles drop it whole (flagged), and the same tiles keep it.
 
 ## Web
 

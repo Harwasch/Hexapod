@@ -25,10 +25,18 @@ samples) in a CPU container; `--renderer gsplat` runs the same job in a GPU cont
 (`SPLIT_ARGS`) out into tilesets of their own and the holes they leave filled with the same
 filler, renderer and distill; the split tileset comes back as `split.tar.gz`.
 
+**Fill jobs are gated** (ADR 0016 § Fill): `fill:<scan>` needs the scan's epoch's fill
+targets (`GET /api/v1/sites/{id}/fill-targets?epochId=`, saved to a file; fill.yml fetches
+them), given as `--still-weak <scan>=<file>` and forwarded to `teacher_fill.py fill
+--still-weak`, which fills only the cells a re-scan left weak. A fill job without them is
+refused here, before any container starts. `drop` (the evaluation) and `split` (the hole
+an object leaves, never published) are not gated.
+
 Run from the repository root (`.github/workflows/fill.yml` does):
 
     modal run infra/modal/fill.py --jobs drop:yard,drop:spool
-    modal run infra/modal/fill.py --jobs fill:camp --renderer gsplat --distill 1500
+    modal run infra/modal/fill.py --jobs fill:camp --still-weak camp=fill-targets/camp.json \
+        --renderer gsplat --distill 1500
     modal run infra/modal/fill.py --jobs split:pumpkin --fillers fixer-t50 --renderer gsplat
 """
 
@@ -483,9 +491,26 @@ def _get(url: str, timeout: float) -> bytes:
     raise AssertionError("unreachable")
 
 
+#: `cell_grid.FORMAT`: a root extras value in this format is a cell grid the tileset carries
+#: (`confidence.bin`, ADR 0016), restated so the local side needs nothing of tools/captures.
+CELL_GRID_FORMAT = "hexapod.cellgrid"
+
+
+def _beside(uri: str) -> str:
+    """`uri` as a plain path beside the tileset, or a RuntimeError: nothing fetched may be
+    written outside the scan's folder."""
+    rel = uri.removeprefix("./")
+    parts = rel.split("/")
+    if not rel or "\\" in rel or any(part in ("", ".", "..") for part in parts):
+        raise RuntimeError(f"{uri!r} must name a file beside the tileset")
+    return rel
+
+
 def _fetch(url: str, out: Path, every: bool = False) -> Path:
-    """The tileset, its leaves and its view cones (what teacher_fill reads); `every`: its
-    merged parents too (what split_objects rewrites)."""
+    """The tileset, its leaves, its view cones and every cell grid it declares (what
+    teacher_fill reads: the fill gate's `check_tileset` reads `extras.confidence`, and
+    `cell_grid.from_tileset` decodes every grid declared); `every`: its merged parents too
+    (what split_objects rewrites)."""
     import concurrent.futures
 
     if not url.startswith("https://"):
@@ -504,12 +529,19 @@ def _fetch(url: str, out: Path, every: bool = False) -> Path:
         uri = tile.get("content", {}).get("uri")
         if uri and (every or not tile.get("children")):
             uris.append(uri)
-    if cones := document["root"].get("extras", {}).get("viewCones", {}).get("uri"):
+    extras = document["root"].get("extras", {})
+    if cones := extras.get("viewCones", {}).get("uri"):
         uris.append(cones)
+    # The confidence grid (and any other cell grid): without it the gate refuses the job.
+    for value in extras.values():
+        if isinstance(value, dict) and value.get("format") == CELL_GRID_FORMAT:
+            uris.append(str(value.get("uri") or ""))
     # The instances, for `split` (and the embedding beside them).
     if instances := document["root"].get("extras", {}).get("instances", {}).get("uri"):
         uris.append(instances)
         uris.append(str(PurePosixPath(instances).with_name("instances.emb")))
+
+    uris = [_beside(uri) for uri in uris]
 
     def get(uri: str) -> None:
         (out / uri).parent.mkdir(parents=True, exist_ok=True)
@@ -601,6 +633,19 @@ def parity() -> str:
 
 
 def _run_job(kind: str, scan: str, filler: str, options: dict) -> dict:
+    if kind == "fill" and not options.get("still_weak"):
+        # `main` refuses this before any container starts; a direct call is refused too.
+        return {
+            "kind": kind,
+            "scan": scan,
+            "filler": filler,
+            "ok": False,
+            "argv": [],
+            "result": None,
+            "timings": {},
+            "files": {},
+            "log": "refused: a fill job needs its scan's fill targets (--still-weak)",
+        }
     _remote_classes()
     REMOTE_SECONDS.clear()  # a container may run several jobs
     os.chdir(CAPTURES)
@@ -647,7 +692,11 @@ def _run_job(kind: str, scan: str, filler: str, options: dict) -> dict:
         else:
             width, height = FILL_SIZE
             out = root / "inferred"
+            targets = root / "fill-targets.json"
+            targets.write_text(options["still_weak"], encoding="utf-8")
+            files["fill-targets.json"] = targets.read_bytes()
             argv = ["fill", str(tileset), str(out), "--filler", spec]
+            argv += ["--still-weak", str(targets)]
             argv += ["--views", str(options.get("views", 8)), "--mode", "ring"]
             if options.get("max_scale_m"):
                 argv += ["--max-scale-m", str(options["max_scale_m"])]
@@ -755,14 +804,19 @@ def main(
     renderer: str = "cpu",
     parity_test: bool = False,
     max_scale_m: float = 0.0,
+    still_weak: str = "",
 ) -> None:
     """Every `kind:scan` in `jobs` with every filler, in parallel containers; each result
     under `out/<kind>-<scan>-<filler>/`, and `out/summary.json`. `selftest`: also Fixer on
     its repository's examples, under `out/selftest/`. `renderer`: `cpu` or `gsplat` (the
     jobs on a GPU). `parity_test`: CPU against gsplat on the yard, in `out/parity.txt`.
-    `max_scale_m` (fill jobs, 0 = off): condition without gaussians larger than this."""
+    `max_scale_m` (fill jobs, 0 = off): condition without gaussians larger than this.
+    `still_weak`: `<scan>=<file>` pairs, comma-separated -- each fill job's fill targets
+    (required for every `fill:<scan>`; checked here, sent to its job)."""
     if renderer not in ("cpu", "gsplat"):
         raise SystemExit(f"renderer {renderer!r}: cpu or gsplat")
+    # Before anything runs on a GPU: a fill job without its targets is refused.
+    targets = _fill_targets(still_weak, jobs)
     if parity_test:
         Path(out).mkdir(parents=True, exist_ok=True)
         text = parity.remote()
@@ -792,6 +846,8 @@ def main(
             options["distill"] = distill
         if kind in ("fill", "split") and max_scale_m > 0:
             options["max_scale_m"] = max_scale_m
+        if kind == "fill":
+            options["still_weak"] = targets[scan]
         calls += [(kind, scan, f.strip(), options) for f in fillers.split(",") if f.strip()]
     summary, failed = [], []
     calls, skipped = _prepare_inpainting(calls, Path(out))
@@ -819,6 +875,64 @@ def main(
     (Path(out) / "summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
     if failed:
         raise SystemExit(f"failed: {', '.join(failed)}")
+
+
+#: What a fill-targets answer (`FillTargetsRead`, rescan-gate-v1) holds: what
+#: `rescan_gate.RescanGate.from_payload` reads, all of it required.
+TARGET_KEYS = (
+    "policy", "siteId", "epochId", "weakIn", "comparedWith", "frame", "cellM", "level",
+    "i0", "j0", "ni", "nj", "rowBytes", "bitOrder", "mask", "cells", "satisfiedBy", "reason",
+)  # fmt: skip
+
+
+def _targets_problem(payload: object) -> str | None:
+    """Why `payload` is not a rescan-gate-v1 answer, by its shape alone, or None."""
+    if not isinstance(payload, dict):
+        return "not a JSON object (FillTargetsRead)"
+    missing = [key for key in TARGET_KEYS if key not in payload]
+    if missing:
+        return f"missing {', '.join(missing)}"
+    if payload["policy"] != "rescan-gate-v1":
+        return f"policy {payload['policy']!r} is not 'rescan-gate-v1'"
+    if payload["frame"] != "tileset" or payload["bitOrder"] != "little":
+        return "not in the tileset frame, least significant bit first"
+    return None
+
+
+def _fill_targets(still_weak: str, jobs: str) -> dict[str, str]:
+    """`<scan>=<file>` pairs read and checked: the text of each fill job's targets by scan.
+    A fill job without them, or with a file that is not a rescan-gate-v1 answer, is a
+    refusal before anything runs on Modal.
+
+    Standard library only: this side runs where fill.yml runs it, `uv run --with modal`
+    from the repository root, with nothing of tools/captures' dependencies (a numpy import
+    here would crash every run, drop-only ones included; tests/test_modal_fill_local.py).
+    The shape is checked here; the job's `teacher_fill.py fill --still-weak` reads every
+    bit (`rescan_gate`) and holds it to the tileset before anything renders."""
+    given: dict[str, str] = {}
+    for pair in (p.strip() for p in still_weak.split(",") if p.strip()):
+        scan, sep, path = pair.partition("=")
+        if not sep or scan not in SCANS or not path:
+            raise SystemExit(f"--still-weak {pair!r}: <scan>=<file>, scans {sorted(SCANS)}")
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+            payload = json.loads(text)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise SystemExit(f"--still-weak {scan}: refused: not JSON ({error})") from None
+        problem = _targets_problem(payload)
+        if problem is not None:
+            raise SystemExit(f"--still-weak {scan}: refused: {problem}")
+        given[scan] = text
+    listed = (j.strip() for j in jobs.split(","))
+    fills = sorted({j.partition(":")[2] for j in listed if j.startswith("fill:")})
+    missing = [scan for scan in fills if scan not in given]
+    if missing:
+        raise SystemExit(
+            f"fill:{', fill:'.join(missing)} refused: a fill runs only where a re-scan left "
+            "cells weak; give each its epoch's fill targets, --still-weak <scan>=<file> "
+            "(GET /api/v1/sites/{id}/fill-targets?epochId=..., ADR 0016 Fill)"
+        )
+    return given
 
 
 def _inpaint_key(filler: str) -> str | None:

@@ -63,6 +63,7 @@ __all__ = [
     "CellPlane",
     "Channel",
     "Lattice",
+    "covered_mask",
     "decode",
     "descriptor_of",
     "encode",
@@ -70,6 +71,7 @@ __all__ = [
     "lookup",
     "min_pyramid",
     "pack",
+    "plane_at",
     "weak_mask",
 ]
 
@@ -522,6 +524,30 @@ def weak_mask(plane: CellPlane, *, score: int = 0, reasons: int = 1) -> np.ndarr
     unseen = (plane.data[..., reasons].astype(np.int64) & REASON_BITS["unseen"]) > 0
     weak: np.ndarray = ((s > 0) & (s < WEAK_BELOW)) | unseen
     return weak
+
+
+def covered_mask(plane: CellPlane, *, score: int = 0, reasons: int = 1) -> np.ndarray:
+    """The cells an epoch speaks for, `(nj, ni)` bool: scored, or expected and unseen.
+    (`weak_mask` is a subset: a weak cell is always one the epoch speaks for.)"""
+    s = plane.data[..., score].astype(np.int64)
+    unseen = (plane.data[..., reasons].astype(np.int64) & REASON_BITS["unseen"]) > 0
+    covered: np.ndarray = (s > 0) | unseen
+    return covered
+
+
+def plane_at(grid: CellGrid, level: int) -> CellPlane:
+    """`grid`'s plane at `level`: its own when it has one, else its nearest finer plane
+    coarsened up to it min-of-children (`min_pyramid`'s step), which is what its pyramid
+    holds there or would have held past where it stopped. A level finer than the grid's
+    finest is refused: a coarse map says nothing about the cells inside its own."""
+    if level < grid.level:
+        raise CellGridError(f"level {level} is finer than the grid's finest ({grid.level})")
+    Lattice(level)
+    plane = max((p for p in grid.planes if p.level <= level), key=lambda p: p.level)
+    score, reasons, relief = (grid.channel(name) for name in ("score", "reasons", "relief"))
+    while plane.level < level:
+        plane = _coarsen(plane, score, reasons, relief)
+    return plane
 
 
 def from_tileset(tileset_path: Path) -> dict[str, CellGrid]:

@@ -8,9 +8,12 @@ both grids.
 
 from __future__ import annotations
 
+import json
+import os
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -25,7 +28,14 @@ from app.models import Capture, Epoch
 from app.models.enums import CaptureKind
 from app.services import confidence_maps
 from app.storage import S3Storage, get_public_storage
-from tests.confidence_fixtures import blob, descriptor, encode_grid, measured, register_run
+from tests.confidence_fixtures import (
+    FIXTURE,
+    blob,
+    descriptor,
+    encode_grid,
+    measured,
+    register_run,
+)
 from tests.test_registration_epochs import _echoed
 
 FIRST = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
@@ -134,6 +144,62 @@ def test_the_re_scan_s_still_weak_cells_are_the_targets(
 
     same = api.get(f"/api/v1/sites/{e2.site_id}/fill-targets", params={"epochId": str(e2.id)})
     assert same.json() == read
+
+
+#: The committed answer for the yard's two epochs: what tools/captures' fill gate
+#: (`rescan_gate.RescanGate.from_json`) is held to, read with this API's bit and row order.
+PAYLOAD = FIXTURE / "fill-targets.json"
+#: The database's random ids, written as these in the committed copy.
+PLACEHOLDERS = {
+    "site": "00000000-0000-4000-8000-000000005173",
+    "e1": "00000000-0000-4000-8000-0000000000e1",
+    "e2": "00000000-0000-4000-8000-0000000000e2",
+}
+FIXTURE_NOTE = (
+    "GET /api/v1/sites/{site}/fill-targets for the yard's two fixture epochs (e1, then its "
+    "re-scan e2), as apps/api answers it, with the database's ids replaced by placeholders. "
+    "Written by apps/api tests/test_fill_targets_api.py with HEXAPOD_WRITE_FILL_TARGETS=1; "
+    "read by tools/captures tests/test_rescan_gate.py. Synthetic, not measured."
+)
+
+
+def _placeheld(read: dict[str, Any], ids: dict[str, str]) -> dict[str, Any]:
+    out: dict[str, Any] = json.loads(json.dumps(read))
+    swap = {ids[name]: PLACEHOLDERS[name] for name in ids}
+    out["siteId"] = swap[out["siteId"]]
+    out["epochId"] = swap[out["epochId"]]
+    out["weakIn"] = [swap[v] for v in out["weakIn"]]
+    out["comparedWith"] = [swap[v] for v in out["comparedWith"]]
+    return out
+
+
+def test_the_committed_payload_is_what_the_endpoint_answers(
+    api: TestClient, db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """The cross-language half on this side: the endpoint's answer over the committed grids
+    is the committed `fill-targets.json` (ids aside), and `unpack` reads its mask as the
+    brute force says. tools/captures decodes the same file with its own reader."""
+    e1, e2 = two_epochs(db, storage, tmp_path)
+    read = api.get(f"/api/v1/sites/{e2.site_id}/fill-targets").json()
+    held = _placeheld(read, {"site": str(e2.site_id), "e1": str(e1.id), "e2": str(e2.id)})
+    if os.environ.get("HEXAPOD_WRITE_FILL_TARGETS") == "1":
+        PAYLOAD.write_text(
+            json.dumps({**held, "fixture": FIXTURE_NOTE}, indent=1) + "\n", encoding="utf-8"
+        )
+    committed = json.loads(PAYLOAD.read_text(encoding="utf-8"))
+    assert committed.pop("fixture") == FIXTURE_NOTE
+    assert committed == held
+    mask = rescan_gate.unpack(committed["mask"], committed["ni"], committed["nj"])
+    # e2's own finest cells (#59's rule), never e1's coarser ones.
+    assert committed["level"] == descriptor("e2")["levels"][0]["level"]
+    expected = brute_force()
+    assert {
+        (committed["i0"] + di, committed["j0"] + dj): bool(mask[dj, di])
+        for dj in range(committed["nj"])
+        for di in range(committed["ni"])
+    } == expected
+    satisfied = rescan_gate.unpack_satisfied(committed["satisfiedBy"], committed["cells"])
+    assert satisfied == [0] * committed["cells"]  # every target re-scanned e1
 
 
 def test_before_a_re_scan_there_is_nothing_to_fill(

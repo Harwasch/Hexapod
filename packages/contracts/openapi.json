@@ -41930,7 +41930,7 @@
     },
     "/api/v1/sites/{site_id}/fill-targets": {
       "get": {
-        "description": "`rescan-gate-v1`: the cells of epoch `epochId` (default: the site's latest published)\nthat are weak, covered by it, and were weak in at least one earlier measured epoch,\ncompared at the coarser level -- a re-scan that did not fix them. An inferred fill\nfills only these (F4). A bit mask in the tileset frame of the site lattice. Behind the\nwrite token, which its one consumer (the fill workflow) holds: a call may decode a grid\nper earlier epoch, at most the eight most recent (`capped` says when there were more).",
+        "description": "`rescan-gate-v1`: the finest cells of epoch `epochId` (default: the site's latest\npublished) that are weak in it, where the newest earlier measured epoch that covers the\ncell was weak too -- a re-scan that did not fix them; `satisfiedBy` names that epoch per\ntarget. An inferred fill fills only these (F4). A bit mask in the tileset frame of the site lattice. Behind the\nwrite token, which its one consumer (the fill workflow) holds: a call may decode a grid\nper earlier epoch, at most the eight most recent (`capped` says when there were more).",
         "operationId": "site_fill_targets_api_v1_sites__site_id__fill_targets_get",
         "parameters": [
           {

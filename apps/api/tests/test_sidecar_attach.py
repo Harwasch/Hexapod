@@ -42,6 +42,8 @@ from tests.sidecar_fixtures import (
     COLLISION_EXTRAS,
     FILL_EXTRAS,
     FILL_FILES,
+    GRID_EXTRAS,
+    GRID_FILES,
     INSTANCES_EXTRAS,
     LEGACY_DIR,
     LEGACY_URL,
@@ -50,17 +52,28 @@ from tests.sidecar_fixtures import (
     PUBLIC,
     PUBLIC_URL,
     TILES,
+    UNGATED_EVIDENCE,
+    UNGATED_FILL_EXTRAS,
     an_asset,
     directory_of,
     files_under,
+    gate_for,
     put_scan,
     stage,
     tileset_at,
     two_buckets,
+    waive_fill_gate,
 )
 
 TOKEN = "correct-horse-battery-staple"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
+
+
+@pytest.fixture
+def fill_gate_waived(monkeypatch: pytest.MonkeyPatch) -> list[list[Any]]:
+    """For the attach's mechanics with a fill on a single scan (nothing re-scanned): the
+    API's recompute of the fill gate admits, and records what it was asked to judge."""
+    return waive_fill_gate(monkeypatch)
 
 
 @pytest.fixture
@@ -86,13 +99,18 @@ def client(db: Session, buckets: Publisher) -> Iterator[TestClient]:
         yield test_client
 
 
-def a_live_scan(buckets: Publisher) -> None:
-    """A scan in a generation, already with a backfilled grid and an inferred fill."""
+def a_live_scan(buckets: Publisher, *, measured: bool = False) -> None:
+    """A scan in a generation, already with a backfilled grid and an inferred fill; when
+    `measured`, its tiles carry the confidence grid a new fill is gated against."""
     put_scan(
         buckets.public,
         LIVE_DIR,
-        sidecars={"collision.bin": b"grid", **FILL_FILES},
-        extras={"collision": COLLISION_EXTRAS, "inferredLayers": FILL_EXTRAS},
+        sidecars={"collision.bin": b"grid", **FILL_FILES, **(GRID_FILES if measured else {})},
+        extras={
+            "collision": COLLISION_EXTRAS,
+            "inferredLayers": FILL_EXTRAS,
+            **({"confidence": GRID_EXTRAS} if measured else {}),
+        },
     )
 
 
@@ -295,12 +313,13 @@ def _now() -> Any:
     return datetime.now(tz=UTC)
 
 
+@pytest.mark.usefixtures("fill_gate_waived")
 def test_a_second_fill_is_declared_beside_the_first_not_instead_of_it(
     db: Session, buckets: Publisher, client: TestClient
 ) -> None:
     """`inferredLayers` is a list, and each fill workflow sends only its own entry: the
     attach merges the list by uri, so the second fill does not drop the first's."""
-    a_live_scan(buckets)  # already declares inferred/fixer
+    a_live_scan(buckets, measured=True)  # already declares inferred/fixer
     asset = an_asset(db, LIVE_URL)
     other = {**FILL_EXTRAS[0], "uri": "inferred/other/tileset.json"}
     files = {f"inferred/other/{k.rsplit('/', 1)[1]}": v for k, v in FILL_FILES.items()}
@@ -332,9 +351,9 @@ MATERIALS_EXTRAS = {"uri": "materials.json", "count": 2}
 TELEMETRY_EXTRAS = {"uri": "telemetry.json", "streams": 1}
 
 
-def a_scan_with_objects(buckets: Publisher) -> None:
+def a_scan_with_objects(buckets: Publisher, *, measured: bool = False) -> None:
     """A generation with objects (both files), the materials and telemetry keyed by their
-    ids, and a backfilled grid."""
+    ids, and a backfilled grid; when `measured`, the confidence grid too."""
     put_scan(
         buckets.public,
         LIVE_DIR,
@@ -343,12 +362,14 @@ def a_scan_with_objects(buckets: Publisher) -> None:
             "materials.json": b'{"old": "materials"}',
             "telemetry.json": b'{"old": "telemetry"}',
             "collision.bin": b"grid",
+            **(GRID_FILES if measured else {}),
         },
         extras={
             "instances": INSTANCES_EXTRAS,
             "materials": MATERIALS_EXTRAS,
             "telemetry": TELEMETRY_EXTRAS,
             "collision": COLLISION_EXTRAS,
+            **({"confidence": GRID_EXTRAS} if measured else {}),
         },
     )
 
@@ -459,12 +480,13 @@ def test_objects_attached_with_their_materials_keep_both_and_flag_nothing(
     assert body["asset"]["sidecarFlags"] == []
 
 
+@pytest.mark.usefixtures("fill_gate_waived")
 def test_an_independent_kind_leaves_the_objects_and_what_is_keyed_by_them_alone(
     db: Session, buckets: Publisher, client: TestClient
 ) -> None:
     """An inferred layer is placed in the scan's frame and names no object: attaching one
     replaces nothing of the objects, the materials or the telemetry."""
-    a_scan_with_objects(buckets)
+    a_scan_with_objects(buckets, measured=True)
     asset = an_asset(db, LIVE_URL)
     before = files_under(buckets.public, LIVE_DIR)
     prefix = stage(buckets.private, asset.id, FILL_FILES)
@@ -480,7 +502,7 @@ def test_an_independent_kind_leaves_the_objects_and_what_is_keyed_by_them_alone(
     assert extras["materials"] == MATERIALS_EXTRAS
     assert extras["telemetry"] == TELEMETRY_EXTRAS
     assert body["attached"] == ["inferredLayers"]
-    assert body["carried"] == ["collision", "instances", "materials", "telemetry"]
+    assert body["carried"] == ["collision", "confidence", "instances", "materials", "telemetry"]
     assert (body["dropped"], body["removed"]) == ([], [])
     assert body["asset"]["sidecarFlags"] == []
 
@@ -513,6 +535,7 @@ def test_a_kind_set_to_null_goes_with_its_files_and_what_was_keyed_by_it(
 # --- legacy prefixes -----------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("fill_gate_waived")
 def test_a_legacy_prefix_is_attached_to_by_cutting_its_first_generation(
     db: Session, buckets: Publisher, client: TestClient
 ) -> None:
@@ -522,8 +545,12 @@ def test_a_legacy_prefix_is_attached_to_by_cutting_its_first_generation(
     put_scan(
         buckets.public,
         LEGACY_DIR,
-        sidecars={**INSTANCES_FILES, "collision.bin": b"grid"},
-        extras={"instances": INSTANCES_EXTRAS, "collision": COLLISION_EXTRAS},
+        sidecars={**INSTANCES_FILES, "collision.bin": b"grid", **GRID_FILES},
+        extras={
+            "instances": INSTANCES_EXTRAS,
+            "collision": COLLISION_EXTRAS,
+            "confidence": GRID_EXTRAS,
+        },
     )
     asset = an_asset(db, LEGACY_URL)
     before = files_under(buckets.public, LEGACY_DIR)
@@ -535,14 +562,22 @@ def test_a_legacy_prefix_is_attached_to_by_cutting_its_first_generation(
     job = LEGACY_DIR.split("/")[1]
     assert url == f"{PUBLIC_URL}/runs/{job}/p{body['generation']}/package/splat/tileset.json"
     now = files_under(buckets.public, directory_of(url))
-    assert set(now) == {*TILES, *INSTANCES_FILES, "collision.bin", *FILL_FILES, "tileset.json"}
+    assert set(now) == {
+        *TILES,
+        *INSTANCES_FILES,
+        "collision.bin",
+        *GRID_FILES,
+        *FILL_FILES,
+        "tileset.json",
+    }
     assert set(tileset_at(buckets.public, url)["root"]["extras"]) == {
         "gaussians",
         "instances",
         "collision",
+        "confidence",
         "inferredLayers",
     }
-    assert body["carried"] == ["collision", "instances"]
+    assert body["carried"] == ["collision", "confidence", "instances"]
     assert files_under(buckets.public, LEGACY_DIR) == before
 
 
@@ -822,13 +857,14 @@ def waiting_on_a_lock(engine: Engine) -> bool:
         )
 
 
+@pytest.mark.usefixtures("fill_gate_waived")
 def test_two_attaches_at_once_both_land_the_second_on_the_first(
     db: Session, buckets: Publisher, engine: Engine
 ) -> None:
     """The instances workflow and the fill workflow, started from the same scan. Without
     the row lock both read the same generation and the second repoints the asset at a copy
     without the first's files. With it, the second waits, then builds on the first."""
-    put_scan(buckets.public, LEGACY_DIR)
+    put_scan(buckets.public, LEGACY_DIR, sidecars=GRID_FILES, extras={"confidence": GRID_EXTRAS})
     asset = an_asset(db, LEGACY_URL)
     asset_id = asset.id
     assert isinstance(buckets.public, S3Storage)
@@ -1102,3 +1138,181 @@ def test_a_tiles_confidence_min_is_the_tilesets_own_not_a_sidecar() -> None:
     assert "confidenceMin" not in sidecars.unknown_extras(extras)
     with pytest.raises(sidecars.SidecarPathError, match="belongs to the tileset"):
         sidecars.check_extras_key("confidenceMin")
+
+
+# --- the fill gate (ADR 0016 § Fill): a second barrier beside publish-fill.yml -----------
+
+
+def a_measured_live_scan(buckets: Publisher) -> None:
+    """A scan in a generation whose tiles carry their confidence grid (a measured epoch)."""
+    put_scan(
+        buckets.public,
+        LIVE_DIR,
+        sidecars=GRID_FILES,
+        extras={"confidence": GRID_EXTRAS},
+    )
+
+
+def test_a_fill_gated_against_the_scans_own_grid_is_attached(
+    db: Session, buckets: Publisher, client: TestClient, fill_gate_waived: list[list[Any]]
+) -> None:
+    """The metadata half admits it and hands it to the API's recompute (waived here)."""
+    a_measured_live_scan(buckets)
+    asset = an_asset(db, LIVE_URL)
+    prefix = stage(buckets.private, asset.id, FILL_FILES)
+    response = attach(client, asset, prefix, extras={"inferredLayers": FILL_EXTRAS})
+    assert response.status_code == 200, response.text
+    assert fill_gate_waived == [FILL_EXTRAS]
+    layers = tileset_at(buckets.public, response.json()["url"])["root"]["extras"]
+    assert layers["inferredLayers"] == FILL_EXTRAS
+
+
+@pytest.mark.parametrize(
+    ("entry", "grid", "words"),
+    [
+        (UNGATED_FILL_EXTRAS[0], True, "no rescanGate"),
+        (
+            {**FILL_EXTRAS[0], "evidence": {**UNGATED_EVIDENCE, "rescanGate": gate_for("b2" * 32)}},
+            True,
+            "confidence grid",
+        ),
+        (
+            {
+                **FILL_EXTRAS[0],
+                "evidence": {
+                    **UNGATED_EVIDENCE,
+                    "rescanGate": {**gate_for(), "policy": "weak-v1"},
+                },
+            },
+            True,
+            "rescan-gate-v1",
+        ),
+        (FILL_EXTRAS[0], False, "no confidence grid"),
+    ],
+)
+def test_an_ungated_or_mismatched_fill_is_refused(
+    db: Session,
+    buckets: Publisher,
+    client: TestClient,
+    entry: dict[str, Any],
+    grid: bool,
+    words: str,
+) -> None:
+    """A fill not gated against the confidence grid the scan's tiles carry now is a 422,
+    before anything is copied: nothing reaches the live site without the gate."""
+    if grid:
+        a_measured_live_scan(buckets)
+    else:
+        put_scan(buckets.public, LIVE_DIR)
+    asset = an_asset(db, LIVE_URL)
+    before = files_under(buckets.public, "")
+    prefix = stage(buckets.private, asset.id, FILL_FILES)
+    response = attach(client, asset, prefix, extras={"inferredLayers": [entry]})
+    assert response.status_code == 422, response.text
+    assert words in response.json()["detail"]
+    assert files_under(buckets.public, "") == before
+
+
+def test_a_fill_gated_for_another_epoch_is_refused(db: Session, buckets: Publisher) -> None:
+    from app.services.errors import InvalidInputError
+    from tests.test_sidecar_carry import the_measured_asset
+
+    asset = the_measured_asset(db, buckets)
+    grid = tileset_at(buckets.public, asset.source["url"])["root"]["extras"]["confidence"]
+    other = {
+        **FILL_EXTRAS[0],
+        "evidence": {**UNGATED_EVIDENCE, "rescanGate": gate_for(grid["sha256"], uuid.uuid4())},
+    }
+    with pytest.raises(InvalidInputError, match="epoch"):
+        attach_service.attach_sidecars(
+            db,
+            asset.id,
+            SidecarAttach(
+                staging_prefix=stage(buckets.private, asset.id, FILL_FILES),
+                based_on=asset.source["url"],
+                extras={"inferredLayers": [other]},
+            ),
+            staging=buckets.private,
+            public=buckets.public,
+        )
+
+
+def _fill_variant(evidence: dict[str, Any]) -> tuple[dict[str, bytes], dict[str, Any]]:
+    files = {f"variants/fill/hedge/{k.rsplit('/', 1)[1]}": v for k, v in FILL_FILES.items()}
+    entry = {
+        "name": "hedge",
+        "label": "Hedge",
+        "inferredLayers": [{"uri": "variants/fill/hedge/tileset.json", "evidence": evidence}],
+    }
+    return files, {"variants": {"fill": [entry]}}
+
+
+@pytest.mark.usefixtures("fill_gate_waived")
+def test_a_fill_variant_is_held_to_the_same_gate(
+    db: Session, buckets: Publisher, client: TestClient
+) -> None:
+    """A bake-off's fill variant is an inferred layer the viewer can show too: a new or
+    changed one is refused unless gated like any fill."""
+    a_measured_live_scan(buckets)
+    asset = an_asset(db, LIVE_URL)
+    files, extras = _fill_variant(UNGATED_EVIDENCE)
+    response = attach(client, asset, stage(buckets.private, asset.id, files), extras=extras)
+    assert response.status_code == 422, response.text
+    assert "no rescanGate" in response.json()["detail"]
+    files, extras = _fill_variant(FILL_EXTRAS[0]["evidence"])
+    response = attach(client, asset, stage(buckets.private, asset.id, files, "ok"), extras=extras)
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "fills/../variants/fill/x/tileset.json",
+        "./fills/../variants/fill/x/tileset.json",
+        "fills/%2e%2e/variants/fill/x/tileset.json",
+        "fills/..\\variants\\fill\\x\\tileset.json",
+        "/fills/x/tileset.json",
+        "fills//x/tileset.json",
+    ],
+)
+def test_only_a_plain_fills_path_is_a_splits_hole_fill(uri: str) -> None:
+    """The `fills/` exemption is for a split's own hole fill, a plain path under `fills/`.
+    A uri that climbs out of it (`..`, encoded or with backslashes), is absolute or is not
+    a plain path names some other file -- a staged, ungated layer -- and is refused."""
+    entry = {"uri": uri, "evidence": {"kind": "inferred"}}
+    why = sidecars.fill_gate_problem(entry, grid_sha="a1" * 32)
+    assert why is not None and "plain path" in why, why
+
+
+def test_a_plain_fills_path_is_still_the_splits_own() -> None:
+    for uri in ("fills/hole/tileset.json", "./fills/hole/tileset.json"):
+        entry = {"uri": uri, "evidence": {"kind": "inferred"}}
+        assert sidecars.fill_gate_problem(entry, grid_sha=None) is None
+
+
+def test_a_fill_variant_cannot_climb_out_of_fills_past_the_gate(
+    db: Session, buckets: Publisher, client: TestClient
+) -> None:
+    """Codex R3 #60: an ungated layer staged under `variants/fill/x/`, declared as a fill
+    variant at `fills/../variants/fill/x/tileset.json`, was exempted as a split's hole fill
+    (and nested variant uris are not path-checked), so it reached the viewer ungated."""
+    a_measured_live_scan(buckets)
+    asset = an_asset(db, LIVE_URL)
+    files = {f"variants/fill/x/{k.rsplit('/', 1)[1]}": v for k, v in FILL_FILES.items()}
+    entry = {
+        "name": "x",
+        "label": "X",
+        "inferredLayers": [
+            {"uri": "fills/../variants/fill/x/tileset.json", "evidence": {"kind": "inferred"}}
+        ],
+    }
+    before = files_under(buckets.public, "")
+    response = attach(
+        client,
+        asset,
+        stage(buckets.private, asset.id, files),
+        extras={"variants": {"fill": [entry]}},
+    )
+    assert response.status_code == 422, response.text
+    assert "plain path" in response.json()["detail"]
+    assert files_under(buckets.public, "") == before
