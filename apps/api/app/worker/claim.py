@@ -278,6 +278,13 @@ class LeaseKeeper:
 
     def _run(self) -> None:
         db = self._sessions()
+        # In autocommit: each statement of a renewal is a transaction of its own, so this
+        # session is never idle in one. As UPDATE then COMMIT it was, for the round trip
+        # between them and for as long as this thread then waited for the GIL or a CPU --
+        # holding the job row's lock all the while, against the supervisor's own writes to
+        # it. `heartbeat`'s commits are then no-ops; the isolation level goes back to the
+        # pool's default when the connection is returned.
+        db.bind = db.get_bind().execution_options(isolation_level="AUTOCOMMIT")
         try:
             while not self._done.wait(self._interval_s):
                 try:

@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path
 
 import pytest
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine, event, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import Artifact, Capture, CaptureFile, Job, JobStep, Site
@@ -36,6 +36,7 @@ from app.worker.loop import Worker
 from app.worker.pipeline_bridge import Workdir
 from app.worker.runner import JobSupervisor, Terminal
 from tests.conftest import TEST_DATABASE_URL
+from tests.idle_transactions import IdleTransactions
 
 RECIPES = Path(__file__).resolve().parent / "recipes"
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -245,6 +246,44 @@ def test_a_lease_keeper_holds_the_lease_while_its_owner_is_busy_and_then_lets_go
     other.close()
 
 
+def test_a_lease_keeper_is_never_idle_in_a_transaction(
+    db: Session, engine: Engine, sessions: sessionmaker[Session]
+) -> None:
+    """The keeper renews from its own thread while the supervisor downloads and uploads,
+    which is exactly when the tests below ask Postgres whether any session is idle in a
+    transaction. A renewal sent as UPDATE and then COMMIT is idle in one for the round trip
+    between the two, and for as long as its thread then waits for the GIL or a CPU: those
+    tests counted it about once in 30 runs on a loaded machine. So each of its statements
+    is checked here the moment it returns, in Postgres -- the renewals, and the read of
+    the job's status after the one that finds the job no longer held."""
+    capture = make_capture(db)
+    job = queue_job(db, capture)
+    owner = sessions()
+    assert claim_next(owner, worker_id="worker-a", lease_s=FAST_LEASE_S) is not None
+    owner.commit()  # `claim_next` loads the job it claimed, which begins a transaction
+    idle_in_transaction = IdleTransactions(TEST_DATABASE_URL)
+    seen: list[tuple[str, int]] = []
+
+    def after(_conn: object, _cursor: object, statement: str, *_args: object) -> None:
+        if threading.current_thread().name.startswith("lease-"):
+            seen.append((statement.split(None, 1)[0], idle_in_transaction()))
+
+    event.listen(engine, "after_cursor_execute", after)
+    try:
+        with LeaseKeeper(
+            sessions, job.id, worker_id="worker-a", lease_s=FAST_LEASE_S, interval_s=0.05
+        ):
+            assert wait_until(lambda: len(seen) >= 3)
+            release(owner, job.id, worker_id="worker-a")
+            assert wait_until(lambda: any(kind == "SELECT" for kind, _ in seen))
+    finally:
+        event.remove(engine, "after_cursor_execute", after)
+        idle_in_transaction.close()
+        owner.close()
+    assert {kind for kind, _ in seen} == {"UPDATE", "SELECT"}, seen
+    assert [entry for entry in seen if entry[1] != 0] == [], seen
+
+
 # --------------------------------------------------------------------------------------
 # Running a recipe
 # --------------------------------------------------------------------------------------
@@ -403,24 +442,10 @@ def test_long_uploads_and_publishing_hold_no_transaction_open(
     by the database (Neon's idle-in-transaction timeout), and the registration after it
     then failed: seen on a 22.7M-gaussian, 514-tile upload. So during both, no session
     may be idle in a transaction -- checked in Postgres itself, not by trusting code."""
-    from sqlalchemy import create_engine, text
-
     from app.worker import outputs, registration
 
-    probe = create_engine(TEST_DATABASE_URL)
+    idle_in_transaction = IdleTransactions(TEST_DATABASE_URL)
     seen: list[tuple[str, int]] = []
-
-    def idle_in_transaction() -> int:
-        with probe.connect() as connection:
-            return int(
-                connection.execute(
-                    text(
-                        "SELECT count(*) FROM pg_stat_activity WHERE datname = "
-                        "current_database() AND pid <> pg_backend_pid() AND "
-                        "state LIKE 'idle in transaction%'"
-                    )
-                ).scalar_one()
-            )
 
     real_upload, real_publish = outputs.upload_artifact, registration._publish_tileset
 
@@ -474,7 +499,7 @@ def test_long_uploads_and_publishing_hold_no_transaction_open(
         db.commit()
         assert run_job(sessions, storage, fetched.id, config(tmp_path)) == "complete"
     finally:
-        probe.dispose()
+        idle_in_transaction.close()
     assert any(kind == "publish" for kind, _ in seen), seen
     assert any(kind == "upload" for kind, _ in seen), seen
     assert any(kind == "download" for kind, _ in seen), seen
