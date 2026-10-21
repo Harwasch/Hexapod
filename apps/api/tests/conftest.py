@@ -19,6 +19,10 @@ from app.main import create_app
 from app.storage import S3Storage
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or get_settings().test_database_url
+# Every connection this process opens names it (libpq reads `PGAPPNAME`), and so does
+# every worker process it starts, so a test can count this run's sessions and not some
+# other client's on the same database (`tests/idle_transactions.py`).
+os.environ["PGAPPNAME"] = f"twin-tests-{os.getpid()}"
 TABLES = (
     "land_research_workers",
     "land_views",

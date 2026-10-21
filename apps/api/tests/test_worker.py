@@ -36,6 +36,7 @@ from app.worker.loop import Worker
 from app.worker.pipeline_bridge import Workdir
 from app.worker.runner import JobSupervisor, Terminal
 from tests.conftest import TEST_DATABASE_URL
+from tests.idle_transactions import IdleTransactions
 
 RECIPES = Path(__file__).resolve().parent / "recipes"
 API_ROOT = Path(__file__).resolve().parents[1]
@@ -403,24 +404,10 @@ def test_long_uploads_and_publishing_hold_no_transaction_open(
     by the database (Neon's idle-in-transaction timeout), and the registration after it
     then failed: seen on a 22.7M-gaussian, 514-tile upload. So during both, no session
     may be idle in a transaction -- checked in Postgres itself, not by trusting code."""
-    from sqlalchemy import create_engine, text
-
     from app.worker import outputs, registration
 
-    probe = create_engine(TEST_DATABASE_URL)
+    idle_in_transaction = IdleTransactions(TEST_DATABASE_URL)
     seen: list[tuple[str, int]] = []
-
-    def idle_in_transaction() -> int:
-        with probe.connect() as connection:
-            return int(
-                connection.execute(
-                    text(
-                        "SELECT count(*) FROM pg_stat_activity WHERE datname = "
-                        "current_database() AND pid <> pg_backend_pid() AND "
-                        "state LIKE 'idle in transaction%'"
-                    )
-                ).scalar_one()
-            )
 
     real_upload, real_publish = outputs.upload_artifact, registration._publish_tileset
 
@@ -474,7 +461,7 @@ def test_long_uploads_and_publishing_hold_no_transaction_open(
         db.commit()
         assert run_job(sessions, storage, fetched.id, config(tmp_path)) == "complete"
     finally:
-        probe.dispose()
+        idle_in_transaction.close()
     assert any(kind == "publish" for kind, _ in seen), seen
     assert any(kind == "upload" for kind, _ in seen), seen
     assert any(kind == "download" for kind, _ in seen), seen
