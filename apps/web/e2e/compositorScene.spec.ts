@@ -183,3 +183,78 @@ test("under PlayCanvas too, one date a cell in one sort, the seam as clean", asy
   test.setTimeout(840_000);
   expectOneOwnerPerCell(await measure(page, "playcanvas"));
 });
+
+/** The tree with SH bands, and its streamed package beside its tileset (where PlayCanvas looks). */
+const TREE = "synthetic-tree-sh/";
+const TREE_NATIVE = `${TREE}sog/`;
+
+const sogHarnessHtml = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Rule on a streamed SOG</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #10141a; }
+      #viewer, #viewer .cesium-widget, #viewer canvas { width: 100vw; height: 100vh; display: block; }
+    </style>
+  </head>
+  <body>
+    <div id="viewer"></div>
+    <script type="module">
+      const harness = await import("/src/dev/ruleSogHarness.ts");
+      window.__ruleSog = await harness.startRuleSogHarness({
+        container: document.getElementById("viewer"),
+        url: "/fixture-tiles/${TREE}tileset.json",
+      });
+    </script>
+  </body>
+</html>`;
+
+test("under PlayCanvas, a colour-only refresh of a natively streamed SH scan keeps the seam", async ({
+  page,
+}) => {
+  // PlayCanvas re-copies an SH splat's colour alone as the camera moves, and for a SOG reads its
+  // geometry back from the work buffer: the rule's weight must see the same spread there.
+  test.setTimeout(300_000);
+  await page.setViewportSize({ width: 960, height: 640 });
+  await page.route("**/fixture-tiles/**", (route) => {
+    let relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
+    if (relative.includes("..")) return route.abort();
+    if (relative.startsWith(TREE_NATIVE))
+      relative = `synthetic-tree-sh-sog/${relative.slice(TREE_NATIVE.length)}`;
+    const file = resolve(TILES, relative);
+    if (!existsSync(file)) return route.fulfill({ status: 404, body: "" });
+    return route.fulfill({ status: 200, body: readFileSync(file) });
+  });
+  await page.route("**/rule-sog-harness.html", (route) =>
+    route.fulfill({ status: 200, contentType: "text/html", body: sogHarnessHtml }),
+  );
+  await page.goto("/rule-sog-harness.html");
+  await page.waitForFunction(() => "__ruleSog" in window, undefined, { timeout: 120_000 });
+  interface Harness {
+    status(): { native: boolean; gaussians: number };
+    cover(): number;
+    move(m: number): Promise<void>;
+  }
+  const status = await page.evaluate(() =>
+    (window as unknown as { __ruleSog: Harness }).__ruleSog.status(),
+  );
+  const before = await page.evaluate(() =>
+    (window as unknown as { __ruleSog: Harness }).__ruleSog.cover(),
+  );
+  await page.evaluate(() => (window as unknown as { __ruleSog: Harness }).__ruleSog.move(4));
+  const after = await page.evaluate(() =>
+    (window as unknown as { __ruleSog: Harness }).__ruleSog.cover(),
+  );
+  const path = EVIDENCE
+    ? `${EVIDENCE}/scene-playcanvas-sog-refresh.png`
+    : test.info().outputPath("sog.png");
+  await page.screenshot({ path });
+  const figures = JSON.stringify({ status, before, after });
+  test.info().annotations.push({ type: "pixels", description: figures });
+  if (EVIDENCE) writeFileSync(`${EVIDENCE}/scene-playcanvas-sog-refresh.json`, figures);
+  expect(status.native).toBe(true);
+  expect(before).toBeGreaterThan(2_000);
+  // The same view before and after: the refresh changes colours, never which splats are drawn.
+  expect(after).toBeGreaterThan(0.9 * before);
+});

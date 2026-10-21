@@ -107,7 +107,12 @@ export function ruleOwnerRows(plane: Pick<OwnerPlane, "owners">): {
  * tile, on the opacity. A splat's spread across the plane is its covariance's, from the
  * rotation (x, y, z, w) and scales the copy pass hands `modifySplatRotationScale` -- kept in
  * `hexapodRuleRotation` and `hexapodRuleScale` -- in the work buffer's frame, which is the
- * scan's and the plane's. Uniforms: `uRuleOwners` (R8), `uRulePlane` (i0, j0, ni, nj),
+ * scan's and the plane's. PlayCanvas also copies an SH splat's colour alone as the camera
+ * moves, and for a resource that keeps its geometry in the work buffer (a natively streamed
+ * SOG, `GSPLAT_WORKBUFFER_GEOMETRY`) that copy hands no rotation or scale over: there the
+ * weight reads them back from the work buffer, as the full copy wrote them. Read where only
+ * the full copy hands them over, the refresh weighed every splat as a metre-wide one (e2e
+ * compositorScene.spec.ts: 19,316 covered pixels before a camera move, 8,066 after). Uniforms: `uRuleOwners` (R8), `uRulePlane` (i0, j0, ni, nj),
  * `uRuleParams` (on, cell m, reach in sigmas, -), and per tile `uRuleSource` (source, whole,
  * and for a split object its centre's x and y).
  */
@@ -151,6 +156,12 @@ float hexapodRuleWeight(vec3 center) {
     if (whole) {
         return 1.0;
     }
+#ifdef GSPLAT_WORKBUFFER_GEOMETRY
+    // A colour-only copy (an SH splat's refresh as the camera moves) skips
+    // modifySplatRotationScale and reads the geometry back from the work buffer: so does this.
+    hexapodRuleRotation = workBufferWorldRotation();
+    hexapodRuleScale = workBufferWorldScale();
+#endif
     // The splat's spread across the plane: the x and y diagonal of R diag(s^2) R^T.
     vec4 q = hexapodRuleRotation;
     vec3 rx = vec3(1.0 - 2.0 * (q.y * q.y + q.z * q.z), 2.0 * (q.x * q.y - q.w * q.z), 2.0 * (q.x * q.z + q.w * q.y));

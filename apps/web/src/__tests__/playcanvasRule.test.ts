@@ -16,6 +16,7 @@ import {
   lendRuleKit,
   PLAYCANVAS_FOOTPRINT,
   publishScanRule,
+  RULE_WEIGHT_GLSL,
   ruleOwnerRows,
   ruleSigma,
   scanRuleReading,
@@ -511,6 +512,19 @@ describe("the other dates a rule draws under PlayCanvas", () => {
     publishScanRule("rule-e", null);
     expect(scanRuleReading("rule-e")?.dates).toMatchObject({ dates: 0, tiles: 0 });
     backend.destroy();
+  });
+});
+
+describe("the rule's weight on a colour-only copy", () => {
+  it("reads the splat's spread back from the work buffer, where the copy hands none over", () => {
+    // PlayCanvas re-copies an SH splat's colour alone, and for a SOG skips
+    // modifySplatRotationScale there (GSPLAT_WORKBUFFER_GEOMETRY): the full copy's geometry,
+    // in the work buffer, is what the weight reads then.
+    const at = RULE_WEIGHT_GLSL.indexOf("#ifdef GSPLAT_WORKBUFFER_GEOMETRY");
+    expect(at).toBeGreaterThan(RULE_WEIGHT_GLSL.indexOf("float hexapodRuleWeight(vec3 center) {"));
+    expect(RULE_WEIGHT_GLSL).toContain("hexapodRuleRotation = workBufferWorldRotation();");
+    expect(RULE_WEIGHT_GLSL).toContain("hexapodRuleScale = workBufferWorldScale();");
+    expect(RULE_WEIGHT_GLSL.indexOf("vec4 q = hexapodRuleRotation;")).toBeGreaterThan(at);
   });
 });
 
