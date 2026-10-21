@@ -6,8 +6,9 @@ shape and the numbers the API gives for `data/tiles/synthetic-yard-surfaces` (he
 `data/tiles/synthetic-yard-epochs` (confidence), both epochs surveyed (u 0.03 m and 0.062 m, as
 apps/api tests/test_change_api.py registers them), placed in the yard's frame (the root
 transform's origin of data/tiles/synthetic-yard: 46.1335 N, 123.88 W, 0 m). The coarse answer
-is the same pair with e2 placed coarsely at ±5 m (a phone epoch, ADR 0018 § API 4), its grid
-0.062 m from the frame. It runs the API's analysis and response code, not a copy of it.
+is the same pair with e2 a coarse epoch claiming its 0.062 m: a coarse epoch's u is at least the
+API's floor (`COARSE_FLOOR_M`, 1 m; ADR 0018 § API 4), so nothing under a metre is claimed
+against it. It runs the API's analysis and response code, not a copy of it.
 Regenerate after the fixture or the API changes, then format:
 
     cd apps/api && uv run python ../web/e2e/fixtures/changeYard.py
@@ -99,7 +100,7 @@ def answer(u_to: float, to_verdict: str) -> dict[str, object]:
 def main() -> None:
     for name, u_to, verdict in (
         ("changeYard", U_TO, "survey"),
-        ("changeYardCoarse", 5.0, "coarse"),
+        ("changeYardCoarse", max(U_TO, change_maps.COARSE_FLOOR_M), "coarse"),
     ):
         out = Path(__file__).with_name(f"{name}.json")
         out.write_text(json.dumps(answer(u_to, verdict), indent=2) + "\n")

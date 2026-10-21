@@ -11,7 +11,8 @@
  * synthetic-yard-epochs, placed in the yard's frame): the ground layer finds the 1 m pond dug
  * and nothing else; vegetation finds the shed and the stack raised (the stack where e1 was
  * weak) and the spoil heap gone. changeYardCoarse.json is the same pair with the later date a
- * coarse ±5 m placement: nothing claimed under 15 m, and the legend says not survey-grade.
+ * coarse epoch (its placement at the API's 1 m floor): nothing claimed under a metre (the floor
+ * is 3.2 m), and the legend says not survey-grade.
  *
  * Headless GL is SwiftShader: the drape is asserted through `window.__twin` (the ground
  * primitives it tags) and the overlay's SVG, and, by pixels, as each layer's colours appearing
@@ -93,13 +94,17 @@ function epoch(
     platform,
     status: "published",
     joinMethod: ordinal === 1 ? "new-site" : "spatial",
-    // The re-scan surveyed (RTK), as the API's own test registers it; or a phone date aligned
-    // coarsely at ±5 m.
+    // The re-scan surveyed (RTK), as the API's own test registers it; or a phone date claiming
+    // 0.062 m, which the API holds to its coarse floor of a metre.
     alignment:
       ordinal === 1
         ? null
         : coarse
-          ? { verdict: "coarse", uncertaintyM: 5, label: "Phone video, aligned visually, ±5 m" }
+          ? {
+              verdict: "coarse",
+              uncertaintyM: 0.062,
+              label: "Phone video, aligned visually, ±0.062 m",
+            }
           : { verdict: "survey", uncertaintyM: 0.062, label: "RTK drone, survey tier, ±0.062 m" },
     quality: null,
     // A map is answered only for dates with a confidence grid too (else 409
@@ -515,11 +520,18 @@ for (const renderer of ["cesium", "playcanvas", "spark"] as const) {
     );
     await expect(page.getByTestId("change-row-raised")).toContainText("0 cells");
     await expect(page.getByTestId("change-row-lowered")).toContainText("48 cells");
-    await expect(page.getByTestId("change-row-insufficient")).toContainText("148 cells");
+    await expect(page.getByTestId("change-row-insufficient")).toContainText("142 cells");
     await expect(page.getByTestId("change-row-unchanged")).toContainText(
-      "1,084 cells · counted, not drawn",
+      "1,122 cells · counted, not drawn",
     );
     await expect(legend).toContainText("Uncalibrated: the 3σ rule and the 5 m ground window");
+    // What the ground could see here, and what it cannot see at all yet.
+    await expect(page.getByTestId("change-detectable")).toContainText(
+      "Least detectable change: 0.49 m across the 1,170 cells compared",
+    );
+    await expect(page.getByTestId("change-detectable")).toContainText(
+      "Small objects under ~1 m are not detected yet",
+    );
     // Both dates surveyed: nothing said of survey grade.
     await expect(page.getByTestId("change-drape-placement")).toHaveCount(0);
     await expect(page.getByTestId("change-vegetation")).toHaveCount(0);
@@ -546,6 +558,9 @@ for (const renderer of ["cesium", "playcanvas", "spark"] as const) {
     await expect(page.getByTestId("change-vegetation-row-lowered")).toContainText("24 cells");
     await expect(page.getByTestId("change-vegetation")).toContainText(
       "±0.25 m of wind sway per date",
+    );
+    await expect(page.getByTestId("change-vegetation-detectable")).toContainText(
+      "Least detectable change: 1.1 m across the 1,169 cells compared",
     );
     // The ground's key is untouched by it.
     await expect(page.getByTestId("change-row-lowered")).toContainText("48 cells");
@@ -579,7 +594,7 @@ for (const renderer of ["cesium", "playcanvas", "spark"] as const) {
   });
 }
 
-test("a coarse date: nothing claimed under 15 m, and the legend says not survey-grade", async ({
+test("a coarse date: nothing claimed under a metre, and the legend says not survey-grade", async ({
   page,
 }) => {
   test.setTimeout(300_000);
@@ -587,13 +602,21 @@ test("a coarse date: nothing claimed under 15 m, and the legend says not survey-
   await arrive(page, "cesium");
   const dates = await openCompare(page);
   await dates.getByRole("switch", { name: "Change map" }).click();
+  // A coarse epoch's placement is at least a metre, so the ground's floor is over three.
   await expect(page.getByTestId("change-drape-label")).toHaveText(
-    "Derived from height surfaces — not observed · changes under ±16 m cannot be seen between these dates",
+    "Derived from height surfaces — not observed · changes under ±3.2 m cannot be seen between these dates",
   );
   await expect(page.getByTestId("change-drape-placement")).toHaveText(
-    "Not survey-grade: Mar 1, 2026 survey (±0.03 m) · Jun 1, 2026 coarse (±5 m)",
+    "Not survey-grade: Mar 1, 2026 survey (±0.03 m) · Jun 1, 2026 coarse (±1 m)",
   );
   await expect(page.getByTestId("change-row-lowered")).toContainText("0 cells");
+  await expect(page.getByTestId("change-row-raised")).toContainText("0 cells");
+  await expect(page.getByTestId("change-detectable")).toContainText(
+    "Least detectable change: 3.2 m across the 1,170 cells compared",
+  );
+  await expect
+    .poll(() => layerDrawn(page, "ground"), poll)
+    .toEqual([{ cls: "insufficient", lowConfidence: false, hatched: false }]);
   await settledShot(page, "coarse");
   await railUnchanged(page);
 });
