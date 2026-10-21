@@ -8,8 +8,10 @@
  *
  * Under CesiumJS: the three views, the key to what is drawn, the colour part in the shown
  * model's primitive (read through `window.__twin`) and out of it again on Photo, Data age's
- * "newer data here" on the older date. Under PlayCanvas and Spark: the analytic views disabled
- * with the reason, and "Draw with CesiumJS" really switching. The tool rail is as it was.
+ * "newer data here" on the older date. Under PlayCanvas and Spark the same three views and
+ * key, drawn by that renderer (what it reads out of its tiles: scanView/scanCellView.ts), the
+ * key saying cells are sized per tile, and the "Needs the CesiumJS renderer" notice naming only
+ * Per cell and Sunlight. The tool rail is as it was.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -319,42 +321,87 @@ test("under cesium, Confidence and Data age tint the shown date, keyed, and Phot
   await railUnchanged(page);
 });
 
-for (const renderer of ["playcanvas", "spark"] as const) {
-  test(`under ${renderer}, the analytic views say they need CesiumJS and switch to it in one click`, async ({
+/** What the dedicated renderer drawing `assetId` says it drew of the cell view. */
+const reading = (
+  page: Page,
+  assetId: string,
+): Promise<{ mode: string | null; tiles: number; sampled: number; agree: number } | null> =>
+  page.evaluate(async (id) => {
+    const link = "/src/cesium/scanView/scanCellView.ts";
+    const module = (await import(/* @vite-ignore */ link)) as {
+      scanCellViewReading(id: string): {
+        mode: string | null;
+        tiles: number;
+        sampled: number;
+        agree: number;
+      } | null;
+    };
+    return module.scanCellViewReading(id);
+  }, assetId);
+
+for (const [renderer, name] of [
+  ["playcanvas", "PlayCanvas"],
+  ["spark", "Spark"],
+] as const) {
+  test(`under ${renderer}, Confidence and Data age are drawn by it, keyed, and Photo undoes it`, async ({
     page,
   }) => {
     test.setTimeout(360_000);
     await arrive(page, renderer);
-    const views = page.getByTestId("views");
-    await expect(views).toBeVisible();
-    const radio = (name: string) => views.getByRole("radio", { name });
-    await expect(radio("Photo")).toBeEnabled();
-    await expect(radio("Photo")).toHaveAttribute("aria-checked", "true");
-    await expect(radio("Confidence")).toBeDisabled();
-    await expect(radio("Data age")).toBeDisabled();
-    const notice = page.getByTestId("views-needs-cesium");
-    await expect(notice).toContainText(
-      "Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
-    );
-    await expect(page.getByTestId("cell-legend")).toHaveCount(0);
-    await shot(page, `${renderer}-notice`);
-    await railUnchanged(page);
-
-    // One click: CesiumJS draws the scan, the views are offered, and Confidence works.
-    await notice.getByRole("button", { name: "Draw with CesiumJS" }).click();
-    await expect(notice).toHaveCount(0);
     await expect
       .poll(() => page.evaluate(`window.__twin.scanRendererStatus.active`), poll)
-      .toBe(false);
-    const saved = await page.evaluate(() => localStorage.getItem("twin.settings.v1") ?? "");
-    expect(saved).toContain('"splatRenderer":"cesium"');
-    await expect(radio("Confidence")).toBeEnabled();
+      .toBe(true);
+    const views = page.getByTestId("views");
+    await expect(views).toBeVisible();
+    const radio = (label: string) => views.getByRole("radio", { name: label });
+    for (const label of ["Photo", "Confidence", "Data age"])
+      await expect(radio(label)).toBeEnabled();
+    await expect(radio("Photo")).toHaveAttribute("aria-checked", "true");
+    // The notice stays for what CesiumJS alone draws, and no longer names the views.
+    const notice = page.getByTestId("views-needs-cesium");
+    await expect(notice).toContainText(
+      "Per cell and Sunlight: Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
+    );
+    await expect(notice).not.toContainText("Confidence");
+    await expect(notice).not.toContainText("Data age");
+
+    // Confidence: the key, and the look on the renderer's own tiles of the shown date.
     await radio("Confidence").click();
-    await expect(page.getByTestId("cell-legend")).toContainText("weak-v1", { timeout: 60_000 });
-    await expect
-      .poll(async () => (await parts(page)).parts[A2] ?? [], poll)
-      .toContain("splatCellViewColor");
-    await shot(page, `${renderer}-switched-confidence`);
+    const legend = page.getByTestId("cell-legend");
+    await expect(legend).toContainText(
+      "Weak: score under 128 (under half its splats pass the capture checks)",
+      { timeout: 60_000 },
+    );
+    await expect(legend).toContainText("weak-v1");
+    await expect(legend).toContainText(
+      `Cell size picked per tile by ${name} (per splat by CesiumJS)`,
+    );
+    await expect.poll(async () => (await reading(page, A2))?.mode ?? null, poll).toBe("confidence");
+    await expect.poll(async () => (await reading(page, A2))?.tiles ?? 0, poll).toBeGreaterThan(0);
+    const confidence = await reading(page, A2);
+    test.info().annotations.push({ type: "reading", description: JSON.stringify(confidence) });
+    await shot(page, `${renderer}-confidence-jun`);
+
+    // The older date, weak west of the yard's middle: the renderer draws March's grid.
+    await page
+      .getByTestId("timeline")
+      .getByRole("radio", { name: /Mar 1, 2026/ })
+      .click();
+    await expect.poll(async () => (await reading(page, A1))?.mode ?? null, poll).toBe("confidence");
+    await shot(page, `${renderer}-confidence-mar`);
+
+    // Data age on it: its age, and June's evidence as newer data.
+    await radio("Data age").click();
+    await expect(page.getByTestId("cell-legend-newer")).toHaveText("Newer data here: switch date", {
+      timeout: 60_000,
+    });
+    await expect.poll(async () => (await reading(page, A1))?.mode ?? null, poll).toBe("data-age");
+    await shot(page, `${renderer}-data-age-mar`);
+
+    // Photo: the renderer draws the scan as photographed again.
+    await radio("Photo").click();
+    await expect(legend).toHaveCount(0);
+    await expect.poll(async () => (await reading(page, A1))?.mode ?? null, poll).toBeNull();
     await railUnchanged(page);
   });
 }
