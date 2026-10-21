@@ -29,6 +29,13 @@ export interface ScanPose {
   height: number;
   pixelRatio: number;
   /**
+   * The device pixels a CSS pixel the globe renders at (quality.ts `globePixelRatio`): what a
+   * size on screen is measured in as CesiumJS measures it -- the cell views' level of detail
+   * (scanView/cellModifier.ts) -- steady while the overlay's own resolution drops in motion.
+   * Absent: `pixelRatio`.
+   */
+  globePixelRatio?: number;
+  /**
    * The scan is seen from afar (`ScanTarget.far`): drawn small, and nothing in it is culled
    * for size (quality.ts, `splatMinPixelSize`). Absent: up close.
    */
@@ -58,6 +65,11 @@ export interface BackendHooks {
    * read the overlay's pixels back. Off in the app, where it costs a copy per frame.
    */
   preserveDrawingBuffer?: boolean;
+  /**
+   * The scan's asset id: whose Confidence / Data age view (scanView/scanCellView.ts) the
+   * renderer draws, where it can. Absent: none.
+   */
+  assetId?: string;
 }
 
 /** A scan the renderer streams by itself (ScanBackend.streamNative). */

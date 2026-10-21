@@ -22,16 +22,13 @@ const listeners = new Map<string, Set<Listener>>();
 /** Puts asset `assetId`'s view (null: the photo) where its renderer reads it. */
 export function publishScanCellView(assetId: string, view: CellLookView | null): void {
   const before = views.get(assetId) ?? null;
-  if (
+  const same =
     before === view ||
-    (before &&
-      view &&
-      before.mode === view.mode &&
+    (view !== null &&
+      before?.mode === view.mode &&
       before.rows === view.rows &&
-      before.meta === view.meta)
-  ) {
-    return;
-  }
+      before.meta === view.meta);
+  if (same) return;
   if (view) views.set(assetId, view);
   else views.delete(assetId);
   for (const listener of listeners.get(assetId) ?? []) listener(view);
