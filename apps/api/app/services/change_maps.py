@@ -3,7 +3,11 @@
 `change` reads each epoch's current revision's height surface and confidence grid
 (`epoch_maps`), loads their planes from the public bucket through the grid cache that
 weak areas use (`confidence_maps.load_grid`), and measures the change between them
-(`app/analysis/change.py`). It refuses what it cannot compare honestly, each with a code:
+(`app/analysis/change.py`) in two layers: the ground (the bare earth, the primary product)
+and vegetation (the top surface, at its own higher threshold), each with its counts, its
+least detectable change and its areas. Each surface's ground reach (how far its ground may
+have come from, for the drift bound) is read from its descriptor's ground window. It
+refuses what it cannot compare honestly, each with a code:
 
 * 404 when the site or either epoch is not there, or an epoch is another site's;
 * 422 when both are the same epoch;
@@ -49,6 +53,7 @@ from __future__ import annotations
 import math
 import uuid
 from dataclasses import dataclass
+from typing import Literal
 
 from shapely.geometry import mapping
 from shapely.geometry.base import BaseGeometry
@@ -62,9 +67,12 @@ from app.models.enums import EpochMapKind, EpochStatus
 from app.schemas.change import (
     APPEARANCE_REASON,
     CHANGE_LABEL,
+    GROUND_LABEL,
+    VEGETATION_LABEL,
     ChangeAppearanceRead,
     ChangeArea,
     ChangeCountsRead,
+    ChangeLayerRead,
     ChangeLowConfidenceRead,
     ChangeMapRead,
     ChangeUncertaintyRead,
@@ -282,23 +290,30 @@ def change(
                 "plane, so its cells cannot be vouched for",
                 code=UNREADABLE,
             )
+    reaches = [analysis.ground_reach_m(grid.descriptor, grid.finest.level) for grid in grids[:2]]
     try:
-        found = analysis.change_map(
-            analysis.Surface.of(grids[0].finest),
-            analysis.Surface.of(grids[1].finest),
-            ua,
-            ub,
-            site_projection(frame.lat, frame.lon, frame.height),
-            confidence_a=grids[2],
-            confidence_b=grids[3],
-        )
+        surfaces = [
+            analysis.Surface.of(grid.finest, ground_reach_m=reach)
+            for grid, reach in zip(grids[:2], reaches, strict=True)
+        ]
+        found = {
+            layer: analysis.change_map(
+                surfaces[0],
+                surfaces[1],
+                ua,
+                ub,
+                site_projection(frame.lat, frame.lon, frame.height),
+                layer=layer,
+                confidence_a=grids[2],
+                confidence_b=grids[3],
+            )
+            for layer in analysis.LAYERS
+        }
     except cell_grid.CellGridError as error:
         raise ConflictError(
             f"the height surfaces cannot be compared: {error}", code=SURFACE_UNREADABLE
         ) from error
-    planes, drawn = found.planes, found.drawn
-    counts, lows = planes.counts(), planes.low_counts()
-    area_cell = drawn.cell_m
+    ground = found["ground"].planes
     return ChangeMapRead(
         policy="change-v1",
         derived=True,
@@ -310,11 +325,10 @@ def change(
         from_asset_id=asset_a,
         to_asset_id=asset_b,
         frame="tileset",
-        level=planes.level,
-        native_level=planes.native_level,
-        cell_m=planes.cell_m,
+        level=ground.level,
+        native_level=ground.native_level,
+        cell_m=ground.cell_m,
         threshold_sigma=analysis.THRESHOLD_SIGMA,
-        min_detectable_m=_metres(planes.min_detectable_m),
         uncertainty=ChangeUncertaintyRead(
             from_m=ua,
             to_m=ub,
@@ -323,9 +337,28 @@ def change(
             from_frame_m=placed_a.frame_m,
             to_frame_m=placed_b.frame_m,
         ),
-        counts=ChangeCountsRead(**counts),
-        low_confidence=ChangeLowConfidenceRead(**lows),
+        ground=_layer(found["ground"], GROUND_LABEL, "ground"),
+        vegetation=_layer(found["vegetation"], VEGETATION_LABEL, "dsm"),
         appearance=ChangeAppearanceRead(status="not-computed", reason=APPEARANCE_REASON),
+    )
+
+
+def _layer(
+    found: analysis.ChangeMap, label: str, heights: Literal["ground", "dsm"]
+) -> ChangeLayerRead:
+    """One layer of the answer: its compared level's counts, its drawn areas."""
+    planes, drawn = found.planes, found.drawn
+    area_cell = drawn.cell_m
+    return ChangeLayerRead(
+        layer=planes.layer,
+        label=label,
+        heights=heights,
+        min_detectable_m=_metres(planes.min_detectable_m),
+        motion_m=planes.motion_m,
+        horizontal_radius_m=round(planes.horizontal_cells * planes.cell_m, 3),
+        drift_reach_m=round(planes.drift_reach_m, 3),
+        counts=ChangeCountsRead(**planes.counts()),
+        low_confidence=ChangeLowConfidenceRead(**planes.low_counts()),
         area_level=drawn.level,
         area_cell_m=area_cell,
         areas=[
@@ -338,7 +371,6 @@ def change(
                 low_confidence_cells=area.low_confidence_cells,
                 mean_delta_m=_metres(area.mean_delta_m),
                 max_abs_delta_m=_metres(area.max_abs_delta_m),
-                mean_ground_delta_m=_metres(area.mean_ground_delta_m),
             )
             for area in found.areas
         ],

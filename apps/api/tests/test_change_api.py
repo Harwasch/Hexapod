@@ -2,9 +2,8 @@
 
 The yard's two fixture epochs registered through `register` on one site, each with its
 confidence grid (synthetic-yard-epochs) and height surface (synthetic-yard-surfaces): e2
-has a shed and a stack the earlier e1 had not, e1 a spoil heap e2 has not. The answer is
-held to P5's demo reference over the same grids (`surfaces.json`), and every refusal has
-its code.
+has a shed and a stack the earlier e1 had not, e1 a spoil heap e2 has not, and e2 a pond
+dug. The answer is in two layers (ground, vegetation), and every refusal has its code.
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ from app.models.enums import CaptureKind
 from app.services import confidence_maps
 from app.storage import S3Storage, get_public_storage
 from tests.confidence_fixtures import blob, measured, register_run
-from tests.surface_fixtures import DOCUMENT, surface_blob, surface_descriptor
+from tests.surface_fixtures import surface_blob, surface_descriptor
 from tests.test_asset_scale import HEIGHT
 from tests.test_registration_epochs import _echoed
 
@@ -152,9 +151,12 @@ def get(api: TestClient, a: Epoch, b: Epoch) -> Any:
     return api.get(f"/api/v1/sites/{a.site_id}/change", params={"from": str(a.id), "to": str(b.id)})
 
 
-def test_the_change_from_e1_to_e2_is_p5_s_reference(
+def test_the_change_from_e1_to_e2_in_two_layers(
     api: TestClient, db: Session, storage: S3Storage, tmp_path: Path
 ) -> None:
+    """The ground layer finds the pond dug and nothing else: the shed, the stack and the
+    spoil heap stand on ground that did not move. The vegetation layer finds those three,
+    at its own threshold (about 1.09 m here), and not the pond's metre."""
     e1, e2 = two_epochs(db, storage, tmp_path)
 
     response = get(api, e1, e2)
@@ -169,10 +171,7 @@ def test_the_change_from_e1_to_e2_is_p5_s_reference(
     )
     assert read["label"] == "Derived from height surfaces, not observed"
     assert (read["fromEpochId"], read["toEpochId"]) == (str(e1.id), str(e2.id))
-    reference = DOCUMENT["change"]
     assert (read["level"], read["nativeLevel"], read["cellM"]) == (2, 2, 1.0)
-    assert read["counts"] == reference["counts"]
-    assert read["lowConfidence"]["raised"] == reference["weakChanged"] == 23
     # The larger of each epoch's uncertainty from the frame and its own survey claim.
     assert read["uncertainty"] == {
         "fromM": 0.03,
@@ -185,33 +184,50 @@ def test_the_change_from_e1_to_e2_is_p5_s_reference(
     assert read["thresholdSigma"] == 3
     assert read["appearance"]["status"] == "not-computed"
     assert "never splat pixels" in read["appearance"]["reason"]
-    # The least: e1's 2 cm against 4 cm of e2's (its four 0.5 m children by max: a whole
-    # child set always holds one at 4), u 0.03 and 0.062 m.
-    assert read["minDetectableM"] == pytest.approx(
-        3 * (0.02**2 + 0.04**2 + 0.03**2 + 0.062**2) ** 0.5, abs=1e-3
-    )
-    assert read["areaLevel"] == 2 and read["areaCellM"] == 1.0
+    u2 = 0.03**2 + 0.062**2
 
-    areas = read["areas"]
-    changed = [(a["class"], a["cells"], a["lowConfidence"]) for a in areas[:3]]
+    ground, vegetation = read["ground"], read["vegetation"]
+    assert (ground["layer"], ground["heights"]) == ("ground", "ground")
+    assert (vegetation["layer"], vegetation["heights"]) == ("vegetation", "dsm")
+    assert "never ground change" in vegetation["label"]
+    # Ground: e1's 5 cm against e2's 6 cm (groundSigma), no motion; the drift reaches
+    # e2's half-diagonal (11 cells of 0.5 m: 2.5 sqrt 2 m) on the yard's 1 in 20 slope.
+    assert (ground["motionM"], ground["driftReachM"]) == (0.0, 3.536)
+    assert ground["horizontalRadiusM"] == 1.0  # 3 sqrt(u2) = 0.21 m: one 1 m cell
+    assert ground["minDetectableM"] > 3 * (0.05**2 + 0.06**2 + u2) ** 0.5
+    assert ground["counts"]["raised"] == 0 and ground["counts"]["lowered"] == 48
+    [pond] = [a for a in ground["areas"] if a["class"] != "insufficient"]
+    assert (pond["class"], pond["cells"], pond["lowConfidence"]) == ("lowered", 48, False)
+    assert pond["meanDeltaM"] == pytest.approx(-1.0, abs=0.03)
+    # Vegetation: its own motion, 0.25 m a side, in quadrature: about 1.09 m at least.
+    assert vegetation["motionM"] == 0.25 and vegetation["driftReachM"] == 0.0
+    assert vegetation["minDetectableM"] == pytest.approx(
+        3 * (0.02**2 + 0.04**2 + u2 + 2 * 0.25**2) ** 0.5, abs=1e-3
+    )
+    assert vegetation["horizontalRadiusM"] == 2.0
+    changed = [(a["class"], a["cells"], a["lowConfidence"]) for a in vegetation["areas"][:3]]
     # The shed (6 x 4 m, seen well), the stack where e1 was weak, the spoil heap gone.
     assert changed == [("raised", 24, False), ("raised", 23, True), ("lowered", 24, False)]
-    shed, stack, spoil = areas[:3]
+    shed, stack, spoil = vegetation["areas"][:3]
     assert shed["meanDeltaM"] == pytest.approx(2.5, abs=0.03) and shed["areaM2"] == 24.0
-    assert stack["meanDeltaM"] == pytest.approx(1.0, abs=0.03)
-    assert spoil["meanDeltaM"] == pytest.approx(-1.2, abs=0.03)
-    # The ground did not move: e2's ground is its 0.5 m children's least, on the slope.
-    assert shed["meanGroundDeltaM"] == pytest.approx(0.0, abs=0.03)
-    for area in areas:
-        geometry = shape(area["footprint"])
-        assert area["footprint"]["type"] == "MultiPolygon" and geometry.is_valid
-    insufficient = [a for a in areas if a["class"] == "insufficient"]
-    assert sum(a["cells"] for a in insufficient) == reference["counts"]["insufficient"]
-    assert all(a["meanDeltaM"] is None for a in insufficient)
-    # Unchanged cells are counted, never outlined: an unaligned epoch's cannot read confident.
-    assert all(a["class"] != "unchanged" for a in areas)
-    counts = reference["counts"]
-    assert sum(a["cells"] for a in areas) == sum(counts.values()) - counts["unchanged"]
+    assert stack["meanDeltaM"] == pytest.approx(1.6, abs=0.03)
+    assert spoil["meanDeltaM"] == pytest.approx(-1.8, abs=0.03)
+    assert vegetation["lowConfidence"]["raised"] == 23
+    for layer in (ground, vegetation):
+        assert layer["areaLevel"] == 2 and layer["areaCellM"] == 1.0
+        areas = layer["areas"]
+        for area in areas:
+            geometry = shape(area["footprint"])
+            assert area["footprint"]["type"] == "MultiPolygon" and geometry.is_valid
+        insufficient = [a for a in areas if a["class"] == "insufficient"]
+        assert sum(a["cells"] for a in insufficient) == layer["counts"]["insufficient"]
+        assert all(a["meanDeltaM"] is None for a in insufficient)
+        # Unchanged cells are counted, never outlined.
+        assert all(a["class"] != "unchanged" for a in areas)
+        counts = layer["counts"]
+        assert sum(a["cells"] for a in areas) == sum(counts.values()) - counts["unchanged"]
+    # The saturated sigma is insufficient for the top only; the ground's sigma is not.
+    assert vegetation["counts"]["insufficient"] == ground["counts"]["insufficient"] + 1
 
 
 def test_from_and_to_the_other_way_round_swap_raised_and_lowered(
@@ -219,8 +235,9 @@ def test_from_and_to_the_other_way_round_swap_raised_and_lowered(
 ) -> None:
     e1, e2 = two_epochs(db, storage, tmp_path)
     forward, back = get(api, e1, e2).json(), get(api, e2, e1).json()
-    assert back["counts"]["raised"] == forward["counts"]["lowered"]
-    assert back["counts"]["lowered"] == forward["counts"]["raised"]
+    for layer in ("ground", "vegetation"):
+        assert back[layer]["counts"]["raised"] == forward[layer]["counts"]["lowered"]
+        assert back[layer]["counts"]["lowered"] == forward[layer]["counts"]["raised"]
     assert (back["uncertainty"]["fromM"], back["uncertainty"]["toM"]) == (0.062, 0.03)
 
 
@@ -232,8 +249,9 @@ def test_an_unaligned_re_scan_sees_no_change_and_says_how_much_it_could(
     and nothing is called changed."""
     e1, e2 = two_epochs(db, storage, tmp_path, uncertainty_m=10.0)
     read = get(api, e1, e2).json()
-    assert read["minDetectableM"] == pytest.approx(30.0, abs=0.01)
-    assert read["counts"]["raised"] == read["counts"]["lowered"] == 0
+    for layer in ("ground", "vegetation"):
+        assert read[layer]["minDetectableM"] >= 30.0
+        assert read[layer]["counts"]["raised"] == read[layer]["counts"]["lowered"] == 0
     assert read["uncertainty"]["toM"] == 10.0
 
 
@@ -250,8 +268,9 @@ def test_a_coarse_epoch_brings_its_metres_whatever_its_frame_says(
     read = response.json()
     assert read["uncertainty"]["toVerdict"] == "coarse"
     assert (read["uncertainty"]["toM"], read["uncertainty"]["toFrameM"]) == (5.0, 0.062)
-    assert read["minDetectableM"] == pytest.approx(3 * 5.0, rel=0.01)
-    assert read["counts"]["raised"] == read["counts"]["lowered"] == 0
+    for layer in ("ground", "vegetation"):
+        assert read[layer]["minDetectableM"] == pytest.approx(3 * 5.0, rel=0.02)
+        assert read[layer]["counts"]["raised"] == read[layer]["counts"]["lowered"] == 0
 
 
 @pytest.mark.parametrize(

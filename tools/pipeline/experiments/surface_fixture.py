@@ -17,8 +17,13 @@ centimetres from integer arithmetic over the cells, so any machine writes the sa
 * a ground sloping gently east and north, the same in both epochs;
 * a hedge 1.8 m tall standing in both (sigma 30 cm: foliage), which must read unchanged;
 * in e2 a shed 2.5 m tall in the south-west, where both epochs saw well: raised;
-* in e1 a spoil heap 1.2 m tall in the south-east that e2 no longer has: lowered;
-* in e2 a 1 m stack in the north, where e1's confidence is weak: raised, low confidence;
+* in e1 a spoil heap 1.8 m tall in the south-east that e2 no longer has: lowered;
+* in e2 a 1.6 m stack in the north, where e1's confidence is weak: raised, low confidence;
+* in e2 a pond dug 1 m deep over 10 x 10 m in the east, where both saw well, ground and
+  top alike: the ground lowered (wider than P5's ground window, so its envelope follows);
+* the shed, spoil and stack stand on the ground, which does not move under them: they
+  are change of the top surface only (the change map's vegetation layer, whose own
+  threshold is about 1.1 m here: why they are taller than a metre);
 * a few centimetres of height "noise" each, different per epoch: unchanged;
 * the ground's own sigma (`groundSigma`) 5 cm in e1 and 6 cm in e2;
 * e1 has no surface where its confidence grid says unseen and e2 none in a strip along
@@ -60,8 +65,12 @@ Box = tuple[int, int, int, int]
 #: (x0, y0, x1, y1) metres in the yard's tileset frame, and the height above the ground (cm).
 HEDGE: tuple[Box, int] = ((12, 0, 14, 10), 180)
 SHED: tuple[Box, int] = ((2, 2, 8, 6), 250)
-SPOIL: tuple[Box, int] = ((20, 3, 26, 7), 120)
-STACK: tuple[Box, int] = ((4, 16, 10, 20), 100)
+SPOIL: tuple[Box, int] = ((20, 3, 26, 7), 180)
+STACK: tuple[Box, int] = ((4, 16, 10, 20), 160)
+#: e2's pond: the ground itself, and the top with it, this much lower (cm).
+POND: tuple[Box, int] = ((26, 1, 36, 11), 100)
+#: P5's ground window at each epoch's level (cells a side): 5 m wide, centres within 2.5 m.
+GROUND_WINDOW_CELLS = {2: 5, 1: 11}
 #: e2 has no surface west of this (metres east).
 E2_WEST_EDGE_M = -2
 #: The e2 cell whose sigma saturates: the south-west corner of it, metres east and north.
@@ -114,6 +123,9 @@ def surface_plane(epoch: str, graded: Any) -> Any:
     xc, yc = (2 * ii + 1) * cell_cm // 2, (2 * jj + 1) * cell_cm // 2
     x, y = ii * cell_cm / 100.0, jj * cell_cm / 100.0
     ground = 1000 + xc // 20 + yc // 40
+    if epoch == "e2":
+        box, deep = POND
+        ground = np.where(_inside(x, y, box), ground - deep, ground)
     if epoch == "e1":
         noise = (ii * 7 + jj * 3) % 5 - 2
         sigma = 2 + (ii + jj) % 3
@@ -150,7 +162,10 @@ def _meta(plane: Any, graded_descriptor: dict[str, Any], height: float) -> dict[
         "status": "uncalibrated",
         "estimators": {
             "fixture": "synthetic: integer arithmetic over the synthetic-yard-epochs planes, "
-            "not a measurement (tools/pipeline/experiments/surface_fixture.py)"
+            "not a measurement (tools/pipeline/experiments/surface_fixture.py)",
+            # The window P5's ground would have been taken the least over at this level.
+            "groundWindowM": 5.0,
+            "groundWindowCells": GROUND_WINDOW_CELLS[plane.level],
         },
         "noData": NO,
         "sourceBits": dict(cell_grid.SURFACE_SOURCE_BITS),

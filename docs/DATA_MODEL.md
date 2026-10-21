@@ -211,13 +211,16 @@ target: which of `comparedWith` it re-scanned), reason}`. 409 `confidence-not-me
 - `GET /api/v1/sites/{id}/change?from=&to=` (write token, cell-map rate limit) → `change-v1` (ADR 0018
   § API): `{policy, derived: true, label, calibration: uncalibrated, siteId, fromEpochId,
 toEpochId, fromAssetId, toAssetId, frame, level, nativeLevel, cellM, thresholdSigma: 3,
-minDetectableM, uncertainty {fromM, toM}, counts {unchanged, raised, lowered, insufficient},
-lowConfidence {unchanged, raised, lowered}, appearance {status: not-computed, reason}, areaLevel,
-areaCellM, areas (raised, lowered and insufficient only; unchanged cells are counted, not outlined):
-[{class, footprint (MultiPolygon), cells, areaM2, lowConfidence,
-lowConfidenceCells, meanDeltaM, maxAbsDeltaM, meanGroundDeltaM}]}`. 404 · 422 (same epoch) · 409
-  `epoch-not-published` · `no-site-frame` · `surface-not-measured` · `confidence-not-measured` ·
-  `frames-differ` · `surface-unreadable` · `confidence-unreadable`.
+uncertainty {fromM, toM, fromVerdict, toVerdict, fromFrameM, toFrameM}, ground, vegetation,
+appearance {status: not-computed, reason}}`; each layer (`ground`, the bare earth, primary;
+  `vegetation`, the top surface at its own higher threshold) is `{layer, label, heights (ground ·
+dsm), minDetectableM, motionM, horizontalRadiusM, driftReachM, counts {unchanged, raised, lowered,
+insufficient}, lowConfidence {unchanged, raised, lowered}, areaLevel, areaCellM, areas (raised,
+lowered and insufficient only; unchanged cells are counted, not outlined): [{class, footprint
+(MultiPolygon), cells, areaM2, lowConfidence, lowConfidenceCells, meanDeltaM, maxAbsDeltaM}]}`. 404
+  · 422 (same epoch) · 409 `epoch-not-published` · `no-site-frame` · `surface-not-measured` ·
+  `confidence-not-measured` · `epoch-unaligned` · `not-metric` · `scale-corrected` · `frames-differ`
+  · `surface-unreadable` · `confidence-unreadable`.
 
 ## Confidence grid
 

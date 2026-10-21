@@ -4912,8 +4912,6 @@ export interface components {
             maxAbsDeltaM: number | null;
             /** Meandeltam */
             meanDeltaM: number | null;
-            /** Meangrounddeltam */
-            meanGroundDeltaM: number | null;
         };
         /**
          * ChangeCountsRead
@@ -4932,10 +4930,57 @@ export interface components {
             unchanged: number;
         };
         /**
+         * ChangeLayerRead
+         * @description One layer of the change map (ADR 0018 § API): `ground`, the bare earth (P5's `ground`
+         *     and `groundSigma`), the primary product; or `vegetation`, the top surface (`dsm` and
+         *     `sigma`: canopy, crops, and anything standing on the ground), with its own motion term
+         *     so that wind in a crown is never a change and growth is never ground change.
+         *
+         *     Per cell, `delta = h_to - h_from` of the layer's height against
+         *     `t = thresholdSigma * sqrt(s_from^2 + s_to^2 + u_from^2 + u_to^2 + 2 motionM^2) + drift`
+         *     (`drift` the ground envelope's on a slope, up to `grade * driftReachM`; 0 for
+         *     vegetation), each cell against the other epoch's neighbourhood within
+         *     `horizontalRadiusM`: `raised` above `t`, `lowered` below `-t`, else `unchanged`;
+         *     `insufficient` where either measured the layer but they cannot be compared (no shared
+         *     child, a partial child set, a saturated sigma, ground never observed).
+         *
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+         */
+        ChangeLayerRead: {
+            /** Areacellm */
+            areaCellM: number;
+            /** Arealevel */
+            areaLevel: number;
+            /** Areas */
+            areas: components["schemas"]["ChangeArea"][];
+            counts: components["schemas"]["ChangeCountsRead"];
+            /** Driftreachm */
+            driftReachM: number;
+            /**
+             * Heights
+             * @enum {string}
+             */
+            heights: "ground" | "dsm";
+            /** Horizontalradiusm */
+            horizontalRadiusM: number;
+            /** Label */
+            label: string;
+            /**
+             * Layer
+             * @enum {string}
+             */
+            layer: "ground" | "vegetation";
+            lowConfidence: components["schemas"]["ChangeLowConfidenceRead"];
+            /** Mindetectablem */
+            minDetectableM: number | null;
+            /** Motionm */
+            motionM: number;
+        };
+        /**
          * ChangeLowConfidenceRead
          * @description Of each compared class, the cells either epoch's confidence does not vouch for (weak,
-         *     unseen or no evidence in its grid at the compared level) or whose sigma saturates. They
-         *     are classified all the same, and counted in `counts` too.
+         *     unseen or no evidence in its grid at the compared level). They are classified all the
+         *     same, and counted in `counts` too.
          *
          *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
          */
@@ -4950,27 +4995,18 @@ export interface components {
         /**
          * ChangeMapRead
          * @description The change from epoch `fromEpochId` to `toEpochId` of one site (`change-v1`, ADR 0018):
-         *     derived from their height surfaces, never observed and never from splat pixels.
-         *
-         *     Per cell of the coarser of the two surfaces' levels, each side taken over only the
-         *     children both epochs measured: `delta = dsm_to - dsm_from` against
-         *     `t = thresholdSigma * sqrt(sigma_from^2 + sigma_to^2 + u_from^2 + u_to^2)`, with `u` each
-         *     epoch's uncertainty from the site frame (`uncertainty`): `raised` above `t`, `lowered`
-         *     below `-t`, else `unchanged`; `insufficient` where either measured something but they
-         *     share no child. A cell compared over fewer children than either side measured is low
-         *     confidence. The 3 sigma rule is a first-principles choice, `uncalibrated` until a site
-         *     scanned twice measures it.
+         *     derived from their height surfaces, never observed and never from splat pixels. Two
+         *     layers, each classified on its own: `ground` (the bare earth: the primary product) and
+         *     `vegetation` (the top surface, at its own higher threshold). Per cell of the coarser of
+         *     the two surfaces' levels, each side taken over the children both epochs measured (a
+         *     partial child set is insufficient), with `u` each epoch's placement uncertainty
+         *     (`uncertainty`). The 3 sigma rule is a first-principles choice, `uncalibrated` until a
+         *     site scanned twice measures it.
          *
          *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
          */
         ChangeMapRead: {
             appearance: components["schemas"]["ChangeAppearanceRead"];
-            /** Areacellm */
-            areaCellM: number;
-            /** Arealevel */
-            areaLevel: number;
-            /** Areas */
-            areas: components["schemas"]["ChangeArea"][];
             /**
              * Calibration
              * @constant
@@ -4978,7 +5014,6 @@ export interface components {
             calibration: "uncalibrated";
             /** Cellm */
             cellM: number;
-            counts: components["schemas"]["ChangeCountsRead"];
             /**
              * Derived
              * @constant
@@ -4999,13 +5034,11 @@ export interface components {
              * Format: uuid
              */
             fromEpochId: string;
+            ground: components["schemas"]["ChangeLayerRead"];
             /** Label */
             label: string;
             /** Level */
             level: number;
-            lowConfidence: components["schemas"]["ChangeLowConfidenceRead"];
-            /** Mindetectablem */
-            minDetectableM: number | null;
             /** Nativelevel */
             nativeLevel: number;
             /**
@@ -5031,6 +5064,7 @@ export interface components {
              */
             toEpochId: string;
             uncertainty: components["schemas"]["ChangeUncertaintyRead"];
+            vegetation: components["schemas"]["ChangeLayerRead"];
         };
         /**
          * ChangeUncertaintyRead
@@ -12557,6 +12591,7 @@ export type SchemaCesiumIonTerrainSource = components['schemas']['CesiumIonTerra
 export type SchemaChangeAppearanceRead = components['schemas']['ChangeAppearanceRead'];
 export type SchemaChangeArea = components['schemas']['ChangeArea'];
 export type SchemaChangeCountsRead = components['schemas']['ChangeCountsRead'];
+export type SchemaChangeLayerRead = components['schemas']['ChangeLayerRead'];
 export type SchemaChangeLowConfidenceRead = components['schemas']['ChangeLowConfidenceRead'];
 export type SchemaChangeMapRead = components['schemas']['ChangeMapRead'];
 export type SchemaChangeUncertaintyRead = components['schemas']['ChangeUncertaintyRead'];

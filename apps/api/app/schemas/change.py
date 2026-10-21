@@ -74,8 +74,8 @@ class ChangeCountsRead(CamelModel):
 
 class ChangeLowConfidenceRead(CamelModel):
     """Of each compared class, the cells either epoch's confidence does not vouch for (weak,
-    unseen or no evidence in its grid at the compared level) or whose sigma saturates. They
-    are classified all the same, and counted in `counts` too.
+    unseen or no evidence in its grid at the compared level). They are classified all the
+    same, and counted in `counts` too.
 
     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
     """
@@ -131,26 +131,72 @@ class ChangeArea(CamelModel):
     #: True when every cell of it is low confidence; and how many are.
     low_confidence: bool
     low_confidence_cells: int
-    #: The mean and the largest change of its top surface (dsm), metres, positive up; null
-    #: for an insufficient area (no child both epochs measured, so nothing to compare).
+    #: The mean and the largest change of its layer's height (the ground, or the top
+    #: surface), metres, positive up; null for an insufficient area (nothing compared).
     mean_delta_m: Finite | None
     max_abs_delta_m: Finite | None
-    #: The mean change of its bare ground, metres; null where `meanDeltaM` is.
-    mean_ground_delta_m: Finite | None
+
+
+#: What each layer is, in words a person reads.
+GROUND_LABEL = "Ground: the bare earth"
+VEGETATION_LABEL = (
+    "Vegetation and objects: the top surface, at a higher threshold; never ground change"
+)
+
+
+class ChangeLayerRead(CamelModel):
+    """One layer of the change map (ADR 0018 § API): `ground`, the bare earth (P5's `ground`
+    and `groundSigma`), the primary product; or `vegetation`, the top surface (`dsm` and
+    `sigma`: canopy, crops, and anything standing on the ground), with its own motion term
+    so that wind in a crown is never a change and growth is never ground change.
+
+    Per cell, `delta = h_to - h_from` of the layer's height against
+    `t = thresholdSigma * sqrt(s_from^2 + s_to^2 + u_from^2 + u_to^2 + 2 motionM^2) + drift`
+    (`drift` the ground envelope's on a slope, up to `grade * driftReachM`; 0 for
+    vegetation), each cell against the other epoch's neighbourhood within
+    `horizontalRadiusM`: `raised` above `t`, `lowered` below `-t`, else `unchanged`;
+    `insufficient` where either measured the layer but they cannot be compared (no shared
+    child, a partial child set, a saturated sigma, ground never observed).
+
+    Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
+    """
+
+    layer: Literal["ground", "vegetation"]
+    label: str
+    #: Which of the surface's heights the layer is made of.
+    heights: Literal["ground", "dsm"]
+    #: The least threshold over the layer's compared cells, metres: no change of this layer
+    #: smaller than it can be seen anywhere between these dates. Null when none was compared.
+    min_detectable_m: Finite | None
+    #: The layer's own motion between visits, per epoch, metres (one standard deviation,
+    #: vertical and horizontal): 0 for the ground, 0.25 for vegetation.
+    motion_m: Finite
+    #: The horizontal radius each cell was compared within, metres (whole cells).
+    horizontal_radius_m: Finite
+    #: How far from a cell its ground may have come (the half-diagonal of P5's ground
+    #: window), metres: the reach of the drift bound. 0 for vegetation.
+    drift_reach_m: Finite
+    counts: ChangeCountsRead
+    low_confidence: ChangeLowConfidenceRead
+    #: The level the areas are outlined at (`level` unless the outline would have been over
+    #: 2^20 cells or 2^18 cell edges: then classified again, by the same rule, coarser).
+    area_level: int
+    area_cell_m: Finite
+    #: Raised and lowered first, then insufficient; largest first in each. Unchanged cells
+    #: are counted (`counts`), never outlined: an area of them would read as confident
+    #: wherever the comparison could not see.
+    areas: list[ChangeArea]
 
 
 class ChangeMapRead(CamelModel):
     """The change from epoch `fromEpochId` to `toEpochId` of one site (`change-v1`, ADR 0018):
-    derived from their height surfaces, never observed and never from splat pixels.
-
-    Per cell of the coarser of the two surfaces' levels, each side taken over only the
-    children both epochs measured: `delta = dsm_to - dsm_from` against
-    `t = thresholdSigma * sqrt(sigma_from^2 + sigma_to^2 + u_from^2 + u_to^2)`, with `u` each
-    epoch's uncertainty from the site frame (`uncertainty`): `raised` above `t`, `lowered`
-    below `-t`, else `unchanged`; `insufficient` where either measured something but they
-    share no child. A cell compared over fewer children than either side measured is low
-    confidence. The 3 sigma rule is a first-principles choice, `uncalibrated` until a site
-    scanned twice measures it.
+    derived from their height surfaces, never observed and never from splat pixels. Two
+    layers, each classified on its own: `ground` (the bare earth: the primary product) and
+    `vegetation` (the top surface, at its own higher threshold). Per cell of the coarser of
+    the two surfaces' levels, each side taken over the children both epochs measured (a
+    partial child set is insufficient), with `u` each epoch's placement uncertainty
+    (`uncertainty`). The 3 sigma rule is a first-principles choice, `uncalibrated` until a
+    site scanned twice measures it.
 
     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
     """
@@ -173,18 +219,9 @@ class ChangeMapRead(CamelModel):
     native_level: int
     cell_m: Finite
     threshold_sigma: Finite
-    #: The least threshold over the compared cells, metres: no change smaller than this can
-    #: be seen anywhere between these dates. Null when no cell was compared.
-    min_detectable_m: Finite | None
     uncertainty: ChangeUncertaintyRead
-    counts: ChangeCountsRead
-    low_confidence: ChangeLowConfidenceRead
+    #: The bare earth's change: the primary product.
+    ground: ChangeLayerRead
+    #: The top surface's change: vegetation and anything standing, never read as ground.
+    vegetation: ChangeLayerRead
     appearance: ChangeAppearanceRead
-    #: The level the areas are outlined at (`level` unless the outline would have been over
-    #: 2^20 cells or 2^18 cell edges: then classified again, by the same rule, coarser).
-    area_level: int
-    area_cell_m: Finite
-    #: Raised and lowered first, then insufficient; largest first in each. Unchanged cells
-    #: are counted (`counts`), never outlined: an area of them would read as confident
-    #: wherever the comparison could not see.
-    areas: list[ChangeArea]

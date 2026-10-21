@@ -3,6 +3,8 @@
 Synthetic surface planes built here (a crate on flat ground, noise, holes, an unaligned
 epoch, weak confidence), and the committed fixture (data/tiles/synthetic-yard-surfaces) for
 P5's own reference: its demo's `coarsen_surface` and `surface_change` over the same grids.
+The rule's mechanics are tested on the top surface with no motion term (`change_planes`
+here); the two layers, ground and vegetation, after them.
 """
 
 from __future__ import annotations
@@ -16,7 +18,9 @@ import numpy as np
 import pytest
 
 from app.analysis import cell_grid, change
-from app.analysis.change import Surface, change_areas, change_map, change_planes, coarsen_surface
+from app.analysis.change import Surface, change_areas, coarsen_surface
+from app.analysis.change import change_map as _change_map
+from app.analysis.change import change_planes as _change_planes
 from app.analysis.weak_areas import site_projection
 from tests.confidence_fixtures import blob, descriptor
 from tests.surface_fixtures import DOCUMENT, surface_blob, surface_descriptor
@@ -51,6 +55,18 @@ def flat(
 
 def surface(fields: dict[str, Any]) -> Surface:
     return Surface(**fields)
+
+
+def change_planes(a: Surface, b: Surface, ua: float, ub: float, **kwargs: Any) -> Any:
+    """The top surface's change with no motion term: the rule's own mechanics."""
+    kwargs.setdefault("layer", "vegetation")
+    kwargs.setdefault("motion_m", 0.0)
+    return _change_planes(a, b, ua, ub, **kwargs)
+
+
+def change_map(a: Surface, b: Surface, ua: float, ub: float, *args: Any, **kwargs: Any) -> Any:
+    kwargs.setdefault("layer", "vegetation")
+    return _change_map(a, b, ua, ub, *args, **kwargs)
 
 
 def crate(fields: dict[str, Any], rows: slice, columns: slice, tall_cm: int) -> dict[str, Any]:
@@ -119,7 +135,6 @@ def test_a_crate_is_raised_and_nothing_else_changed() -> None:
     assert (raised.change, raised.cells, raised.low_confidence) == ("raised", 9, False)
     assert raised.metric.area == pytest.approx(9.0)
     assert raised.mean_delta_m == pytest.approx(1.5) and raised.max_abs_delta_m == 1.5
-    assert raised.mean_ground_delta_m == 0.0
 
 
 def test_a_lowered_cell_and_its_sign() -> None:
@@ -377,7 +392,7 @@ def test_a_noisy_map_is_drawn_coarser_within_the_outline_bound(
     a = flat(level=0, ni=32, nj=32)
     b = {**a, "dsm": a["dsm"].copy()}
     jj, ii = np.indices(b["dsm"].shape)
-    b["dsm"][(ii + jj) % 2 == 0] += 100
+    b["dsm"][(ii + jj) % 2 == 0] += 300  # past vegetation's own motion term (1.06 m)
     found = change_map(surface(a), surface(b), 0.0, 0.0, PROJECTION)
     assert found.planes.level == 0 and found.planes.counts()["raised"] == 512
     assert found.drawn.level > 0
@@ -429,19 +444,24 @@ def test_every_outlined_cell_is_in_one_area_and_every_outline_is_valid(seed: int
         assert _footprint(area.footprint).type == "MultiPolygon"
 
 
-def test_change_planes_memory_is_bounded() -> None:
-    """About 30 bytes a cell at the peak (both surfaces over their shared cells, the
-    outputs, what each side measured), not the window held in float64 per array."""
+@pytest.mark.parametrize(("layer", "bound"), [("vegetation", 40), ("ground", 56)])
+def test_change_planes_memory_is_bounded(layer: change.Layer, bound: int) -> None:
+    """Bytes a cell at the peak, not the window held in float64 per array: the top surface
+    with vegetation's 5-cell neighbourhoods measured 36.3 (2026-10-20, this machine:
+    both sides over their shared cells, the outputs, what each side measured, the
+    neighbourhoods); the ground, with its 1-cell neighbourhood and its local rise for the
+    drift bound (a 3.5 m reach), 50.9. Each bound is its measurement plus about 10%."""
     side = 1024
+    reach = 10 * 0.25 * math.sqrt(2.0)
     a = flat(level=0, ni=side, nj=side)
     b = crate(flat(level=0, ni=side, nj=side), slice(0, 100), slice(0, 100), 150)
-    sa, sb = surface(a), surface(b)
+    sa, sb = Surface(**a, ground_reach_m=reach), Surface(**b, ground_reach_m=reach)
     grid = strong(a)
     tracemalloc.start()
-    change_planes(sa, sb, 0.0, 0.0, confidence_a=grid, confidence_b=grid)
+    _change_planes(sa, sb, 0.03, 0.062, layer=layer, confidence_a=grid, confidence_b=grid)
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
-    assert peak / (side * side) < 36, peak / (side * side)
+    assert peak / (side * side) < bound, peak / (side * side)
 
 
 # --- P5's reference, over the committed fixture -----------------------------------------
@@ -489,7 +509,7 @@ def test_the_api_classifies_as_p5_s_demo_does() -> None:
         ub,
         confidence_a=fixture_confidence("e1"),
         confidence_b=fixture_confidence("e2"),
-        horizontal=False,
+        horizontal=False,  # and no motion term (`change_planes` here): the demo's own rule
     )
     assert (planes.level, planes.cell_m) == (reference["level"], reference["cellM"])
     assert planes.counts() == reference["counts"]
@@ -551,3 +571,103 @@ def test_a_post_put_up_or_taken_away_is_still_a_change_under_horizontal_uncertai
         0.25,
     )
     assert classes_at(higher, "raised") == {(i, j) for i in range(5, 12) for j in range(5, 15)}
+
+
+# --- the two layers (review B5a's ruling) ------------------------------------------------
+
+#: The ground's reach at 1 m cells: P5's 5 m window is 5 cells, centres 2 m off.
+REACH_1M = 2.0 * math.sqrt(2.0)
+
+
+def canopy(
+    fields: dict[str, Any], rows: slice, columns: slice, tall_cm: int, *, reach: float = REACH_1M
+) -> Surface:
+    """`fields` (dsm and ground at the same height) with a canopy `tall_cm` above its
+    ground in the given cells: its top moves, its ground is the ground's."""
+    out: dict[str, Any] = {
+        k: v.copy() if isinstance(v, np.ndarray) else v for k, v in fields.items()
+    }
+    out["dsm"][rows, columns] = out["ground"][rows, columns] + tall_cm
+    return Surface(**out, ground_reach_m=reach)
+
+
+def test_wind_in_a_crown_is_never_ground_change_and_growth_is_vegetation_change() -> None:
+    """The ruling: a crown that sways (its top 40 cm lower, its ground the same) changes
+    neither layer; one that grew 2 m is vegetation raised, and the ground under it still
+    unchanged. Vegetation's threshold carries its own motion: about 1.06 m at least."""
+    a = canopy(flat(), slice(5, 9), slice(5, 9), 600)
+    swayed = canopy(flat(), slice(5, 9), slice(5, 9), 560)
+    grown = canopy(flat(), slice(5, 9), slice(5, 9), 800)
+    for b, vegetation in ((swayed, 0), (grown, 16)):
+        top = _change_planes(a, b, 0.0, 0.0, layer="vegetation")
+        ground = _change_planes(a, b, 0.0, 0.0, layer="ground")
+        assert top.counts()["raised"] == vegetation and top.counts()["lowered"] == 0
+        assert ground.counts() == {"unchanged": 400, "raised": 0, "lowered": 0, "insufficient": 0}
+    top = _change_planes(a, swayed, 0.0, 0.0, layer="vegetation")
+    assert top.min_detectable_m == pytest.approx(3 * math.sqrt(2 * 0.02**2 + 2 * 0.25**2))
+    assert top.motion_m == change.VEGETATION_MOTION_M and top.horizontal_cells == 2
+    ground = _change_planes(a, grown, 0.0, 0.0, layer="ground")
+    assert ground.min_detectable_m == pytest.approx(3 * math.sqrt(2 * 0.04**2))
+    assert ground.motion_m == 0.0 and ground.horizontal_cells == 0
+
+
+def test_ground_never_observed_is_insufficient_for_the_ground_and_compared_for_vegetation() -> None:
+    """P5 writes no ground (NO_HEIGHT, groundSigma 0) under a surface where its window saw
+    only canopy: the ground layer cannot compare there; the top surface still can."""
+    a = Surface(**flat(), ground_reach_m=REACH_1M)
+    fields = flat()
+    fields["ground"] = fields["ground"].copy()
+    fields["ground_sigma"] = fields["ground_sigma"].copy()
+    fields["ground"][0:2, 0:3], fields["ground_sigma"][0:2, 0:3] = NO, 0
+    b = Surface(**fields, ground_reach_m=REACH_1M)
+    ground = _change_planes(a, b, 0.0, 0.0, layer="ground")
+    assert ground.counts()["insufficient"] == 6 and ground.counts()["unchanged"] == 394
+    assert _change_planes(a, b, 0.0, 0.0, layer="vegetation").counts()["unchanged"] == 400
+
+
+def test_the_ground_envelope_drifting_down_a_slope_is_not_ground_change() -> None:
+    """On a slope the ground is the least 2nd-lowest over its window, so it reads up to
+    g R low, R the window's half-diagonal, and which cell it reads moves with what stands
+    in the window: half a metre lower over 10 x 10 m on a 1 in 5 slope (R = 2.83 m) is
+    within its drift. The same drop on flat ground is a change, away from its rim (where
+    the step itself is a grade of 1 in 4 over the window's half-width, so drift too)."""
+    for grade_cm, expected in ((20, 0), (0, 36)):
+        fields = flat()
+        slope = np.arange(20, dtype=np.int16)[None, :] * grade_cm
+        fields["dsm"] = (fields["dsm"] + slope).astype(np.int16)
+        fields["ground"] = fields["dsm"].copy()
+        a = Surface(**fields, ground_reach_m=REACH_1M)
+        drifted: dict[str, Any] = {
+            k: v.copy() if isinstance(v, np.ndarray) else v for k, v in fields.items()
+        }
+        drifted["ground"][6:16, 6:16] -= 50
+        b = Surface(**drifted, ground_reach_m=REACH_1M)
+        ground = _change_planes(a, b, 0.0, 0.0, layer="ground")
+        assert ground.counts()["lowered"] == expected, grade_cm
+        assert ground.drift_reach_m == pytest.approx(REACH_1M)
+
+
+def test_ground_lowered_over_an_area_is_ground_change() -> None:
+    """Earth moved: the ground a metre lower over 8 x 8 m (wider than the window, so the
+    envelope follows it), its top with it."""
+    a = Surface(**flat(), ground_reach_m=REACH_1M)
+    fields = flat()
+    for name in ("dsm", "ground"):
+        fields[name] = fields[name].copy()
+        fields[name][6:14, 6:14] -= 100
+    b = Surface(**fields, ground_reach_m=REACH_1M)
+    ground = _change_planes(a, b, 0.0, 0.0, layer="ground")
+    lowered = classes_at(ground, "lowered")
+    # Its rim reads the drift of the step itself (a grade of 1 m over the window's span).
+    assert {(i, j) for i in range(8, 12) for j in range(8, 12)} <= lowered
+    assert ground.counts()["raised"] == 0
+
+
+def test_the_grounds_reach_is_its_windows_half_diagonal() -> None:
+    assert change.ground_reach_m({"estimators": {"groundWindowCells": 21}}, 0) == pytest.approx(
+        10 * 0.25 * math.sqrt(2.0)
+    )
+    assert change.ground_reach_m({"estimators": {"groundWindowCells": 1}}, 4) == 0.0
+    # Not stated: P5's own 5 m window at that level (centres within 2.5 m).
+    assert change.ground_reach_m({}, 2) == pytest.approx(2 * 1.0 * math.sqrt(2.0))
+    assert change.ground_reach_m({}, 4) == 0.0

@@ -34,13 +34,15 @@ def test_each_surface_is_on_its_confidence_grid_s_plane() -> None:
 
 
 def test_the_reference_change_finds_what_was_built() -> None:
-    """P5's demo rule over the fixture: the shed and the stack raised, the spoil lowered,
-    the hedge and the noise unchanged, the holes insufficient, the stack weak."""
+    """P5's demo rule over the fixture (the top surface, cell for cell): the shed and the
+    stack raised, the spoil and the pond lowered, the hedge and the noise unchanged, the
+    holes insufficient, the stack weak."""
     change = json.loads((COMMITTED / "surfaces.json").read_text(encoding="utf-8"))["change"]
     assert (change["level"], change["cellM"]) == (2, 1.0)
     tally = Counter((row["class"], row["weak"]) for row in change["changed"])
-    # 6 x 4 one-metre cells each; one stack cell is where e1 saw nothing (insufficient).
-    assert tally == {("raised", False): 24, ("lowered", False): 24, ("raised", True): 23}
+    # 6 x 4 one-metre cells each; one stack cell is where e1 saw nothing (insufficient);
+    # the pond's 10 x 10 less the one cell whose e2 sigma saturates (insufficient).
+    assert tally == {("raised", False): 24, ("lowered", False): 24 + 99, ("raised", True): 23}
     # e2's 2 m strip along the west edge (64 cells), e1's 8 unseen cells, e2's saturated
     # sigma (1), and e1's south row past the strip (39) and east column above that row
     # (31), where e2's 0.5 m window covers half of each 1 m cell: a partial child set is

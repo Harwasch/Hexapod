@@ -4092,17 +4092,6 @@
               }
             ],
             "title": "Meandeltam"
-          },
-          "meanGroundDeltaM": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Meangrounddeltam"
           }
         },
         "required": [
@@ -4113,8 +4102,7 @@
           "lowConfidence",
           "lowConfidenceCells",
           "meanDeltaM",
-          "maxAbsDeltaM",
-          "meanGroundDeltaM"
+          "maxAbsDeltaM"
         ],
         "title": "ChangeArea",
         "type": "object"
@@ -4149,9 +4137,95 @@
         "title": "ChangeCountsRead",
         "type": "object"
       },
+      "ChangeLayerRead": {
+        "additionalProperties": false,
+        "description": "One layer of the change map (ADR 0018 \u00a7 API): `ground`, the bare earth (P5's `ground`\nand `groundSigma`), the primary product; or `vegetation`, the top surface (`dsm` and\n`sigma`: canopy, crops, and anything standing on the ground), with its own motion term\nso that wind in a crown is never a change and growth is never ground change.\n\nPer cell, `delta = h_to - h_from` of the layer's height against\n`t = thresholdSigma * sqrt(s_from^2 + s_to^2 + u_from^2 + u_to^2 + 2 motionM^2) + drift`\n(`drift` the ground envelope's on a slope, up to `grade * driftReachM`; 0 for\nvegetation), each cell against the other epoch's neighbourhood within\n`horizontalRadiusM`: `raised` above `t`, `lowered` below `-t`, else `unchanged`;\n`insufficient` where either measured the layer but they cannot be compared (no shared\nchild, a partial child set, a saturated sigma, ground never observed).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "areaCellM": {
+            "title": "Areacellm",
+            "type": "number"
+          },
+          "areaLevel": {
+            "title": "Arealevel",
+            "type": "integer"
+          },
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeArea"
+            },
+            "title": "Areas",
+            "type": "array"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ChangeCountsRead"
+          },
+          "driftReachM": {
+            "title": "Driftreachm",
+            "type": "number"
+          },
+          "heights": {
+            "enum": [
+              "ground",
+              "dsm"
+            ],
+            "title": "Heights",
+            "type": "string"
+          },
+          "horizontalRadiusM": {
+            "title": "Horizontalradiusm",
+            "type": "number"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "layer": {
+            "enum": [
+              "ground",
+              "vegetation"
+            ],
+            "title": "Layer",
+            "type": "string"
+          },
+          "lowConfidence": {
+            "$ref": "#/components/schemas/ChangeLowConfidenceRead"
+          },
+          "minDetectableM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mindetectablem"
+          },
+          "motionM": {
+            "title": "Motionm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "layer",
+          "label",
+          "heights",
+          "minDetectableM",
+          "motionM",
+          "horizontalRadiusM",
+          "driftReachM",
+          "counts",
+          "lowConfidence",
+          "areaLevel",
+          "areaCellM",
+          "areas"
+        ],
+        "title": "ChangeLayerRead",
+        "type": "object"
+      },
       "ChangeLowConfidenceRead": {
         "additionalProperties": false,
-        "description": "Of each compared class, the cells either epoch's confidence does not vouch for (weak,\nunseen or no evidence in its grid at the compared level) or whose sigma saturates. They\nare classified all the same, and counted in `counts` too.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "description": "Of each compared class, the cells either epoch's confidence does not vouch for (weak,\nunseen or no evidence in its grid at the compared level). They are classified all the\nsame, and counted in `counts` too.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
         "properties": {
           "lowered": {
             "title": "Lowered",
@@ -4176,25 +4250,10 @@
       },
       "ChangeMapRead": {
         "additionalProperties": false,
-        "description": "The change from epoch `fromEpochId` to `toEpochId` of one site (`change-v1`, ADR 0018):\nderived from their height surfaces, never observed and never from splat pixels.\n\nPer cell of the coarser of the two surfaces' levels, each side taken over only the\nchildren both epochs measured: `delta = dsm_to - dsm_from` against\n`t = thresholdSigma * sqrt(sigma_from^2 + sigma_to^2 + u_from^2 + u_to^2)`, with `u` each\nepoch's uncertainty from the site frame (`uncertainty`): `raised` above `t`, `lowered`\nbelow `-t`, else `unchanged`; `insufficient` where either measured something but they\nshare no child. A cell compared over fewer children than either side measured is low\nconfidence. The 3 sigma rule is a first-principles choice, `uncalibrated` until a site\nscanned twice measures it.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "description": "The change from epoch `fromEpochId` to `toEpochId` of one site (`change-v1`, ADR 0018):\nderived from their height surfaces, never observed and never from splat pixels. Two\nlayers, each classified on its own: `ground` (the bare earth: the primary product) and\n`vegetation` (the top surface, at its own higher threshold). Per cell of the coarser of\nthe two surfaces' levels, each side taken over the children both epochs measured (a\npartial child set is insufficient), with `u` each epoch's placement uncertainty\n(`uncertainty`). The 3 sigma rule is a first-principles choice, `uncalibrated` until a\nsite scanned twice measures it.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
         "properties": {
           "appearance": {
             "$ref": "#/components/schemas/ChangeAppearanceRead"
-          },
-          "areaCellM": {
-            "title": "Areacellm",
-            "type": "number"
-          },
-          "areaLevel": {
-            "title": "Arealevel",
-            "type": "integer"
-          },
-          "areas": {
-            "items": {
-              "$ref": "#/components/schemas/ChangeArea"
-            },
-            "title": "Areas",
-            "type": "array"
           },
           "calibration": {
             "const": "uncalibrated",
@@ -4204,9 +4263,6 @@
           "cellM": {
             "title": "Cellm",
             "type": "number"
-          },
-          "counts": {
-            "$ref": "#/components/schemas/ChangeCountsRead"
           },
           "derived": {
             "const": true,
@@ -4228,6 +4284,9 @@
             "title": "Fromepochid",
             "type": "string"
           },
+          "ground": {
+            "$ref": "#/components/schemas/ChangeLayerRead"
+          },
           "label": {
             "title": "Label",
             "type": "string"
@@ -4235,20 +4294,6 @@
           "level": {
             "title": "Level",
             "type": "integer"
-          },
-          "lowConfidence": {
-            "$ref": "#/components/schemas/ChangeLowConfidenceRead"
-          },
-          "minDetectableM": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Mindetectablem"
           },
           "nativeLevel": {
             "title": "Nativelevel",
@@ -4280,6 +4325,9 @@
           },
           "uncertainty": {
             "$ref": "#/components/schemas/ChangeUncertaintyRead"
+          },
+          "vegetation": {
+            "$ref": "#/components/schemas/ChangeLayerRead"
           }
         },
         "required": [
@@ -4297,14 +4345,10 @@
           "nativeLevel",
           "cellM",
           "thresholdSigma",
-          "minDetectableM",
           "uncertainty",
-          "counts",
-          "lowConfidence",
-          "appearance",
-          "areaLevel",
-          "areaCellM",
-          "areas"
+          "ground",
+          "vegetation",
+          "appearance"
         ],
         "title": "ChangeMapRead",
         "type": "object"

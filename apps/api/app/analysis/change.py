@@ -1,60 +1,91 @@
 """The change between two epochs, from their height surfaces (M5, ADR 0018 § API).
 
 **Geometry first.** Each epoch's run measured a height surface per cell (P5, `surface.bin`:
-its top surface `dsm`, its bare `ground` and the spread `sigma` of its highest samples, in
-centimetres above the site frame's origin, on its confidence grid's plane). Two epochs of
-one site share that frame, and their cells nest (`0.25 m * 2**level`), so the change is a
-comparison cell by cell -- never of splat pixels, which would read a season or a sky as
-geometry. Appearance is not compared at all (`appearance-only` is a reserved class that is
-never emitted): that needs the new photos compared with the old epoch at fixed geometry.
+its top surface `dsm` and that one's `sigma`, its bare `ground` and that one's
+`groundSigma`, in centimetres above the site frame's origin, on its confidence grid's
+plane; each sigma carries its estimator's bias). Two epochs of one site share that frame,
+and their cells nest (`0.25 m * 2**level`), so the change is a comparison of cells --
+never of splat pixels, which would read a season or a sky as geometry. Appearance is not
+compared at all (`appearance-only` is a reserved class that is never emitted): that needs
+the new photos compared with the old epoch at fixed geometry.
 
-**Resampling.** Both surfaces are brought to the coarser of their two levels, and each
-coarse cell is taken over **only the children both epochs measured**: of those, `dsm` the
-highest, `ground` the lowest and `sigma` the largest (P5's demo `coarsen_surface` rule,
-tools/pipeline `experiments/confidence_demo.py`, which `coarsen_surface` here matches byte
-for byte on the committed fixture `data/tiles/synthetic-yard-surfaces`). Coarsening each
-epoch on its own would let one side's single ground child stand for a whole cell against
-the other side's crate in a sibling, or set one side's uphill children against the other's
-downhill ones: a change that is only a difference in what was measured. So the finer epoch
-is first brought to the coarser one's level over the children whose coarse cell the coarser
-one measured, then both go up together over the children both measured. A coarse cell where
-each side measured something but no child is shared is `insufficient`, and so is one whose
-shared children are fewer than either side measured (the coarser epoch counts as having
-measured all of its cell): its value would be those children's alone against the whole
-(review B5a; it was compared and only flagged). If the two windows together would
+**Two layers** (review B5a's ruling). **Ground** -- the bare earth, `ground` and
+`groundSigma` -- is the primary product. **Vegetation** -- the top surface, `dsm` and
+`sigma`: canopy, crops, and anything else standing on the ground -- is a separate layer
+with its own, higher threshold, so that wind in a crown or a crop grown is never read as
+the ground moving. Each layer is classified on its own: `raised`, `lowered`, `unchanged`,
+`insufficient`. A change of the ground wider than P5's ground window shows in both; one
+narrower (a crate, a spoil heap), and anything that grows, only in vegetation.
+
+**Resampling.** Both surfaces are brought to the coarser of their two levels. The finer
+epoch is first brought to the coarser one's level over the children whose coarse cell the
+coarser one measured, then both go up together over the children both measured: of
+those, the top surface the highest, the ground the lowest, each sigma the largest (P5's
+demo `coarsen_surface` rule, tools/pipeline `experiments/confidence_demo.py`, which
+`coarsen_surface` here matches byte for byte on the committed fixture
+`data/tiles/synthetic-yard-surfaces`). A coarse cell where each side measured something
+but no child is shared is `insufficient`, and so is one whose shared children are fewer
+than either side measured (the coarser epoch counts as having measured all of its cell):
+its value would be those children's alone against the whole, a difference in what was
+measured (review B5a; it was compared and only flagged). If the two windows together would
 still be over `MAX_CHANGE_CELLS` cells, both go up further until they are not (and say so).
 
-**The rule** (`change-v1`). Where both epochs have a surface, `delta = dsm_to - dsm_from`
-(computed in 32 bits: two i2 heights can differ by more than i2 holds) against `t = 3 *
-sqrt(sigma_from^2 + sigma_to^2 + u_from^2 + u_to^2)`, where `u` is each epoch's
-uncertainty from the site frame (its confidence grid's `alignmentCap.uncertaintyM`: 0 for
-the epoch that made the frame, its alignment's for one aligned to it, its GPS's for one
-nobody could align). `raised` when `delta > t`, `lowered` when `delta < -t`, else
-`unchanged`; `insufficient` where either epoch measured something but they share no child,
-or share fewer than either measured;
-no class where neither measured anything. The 3 is a first-principles choice (three
-standard deviations of the sum of two independent errors), not a measurement: the map says
-`uncalibrated` until a site scanned twice measures it. `minDetectableM` is the least `t`
-over the compared cells: a change smaller than it cannot be seen anywhere between these
-two dates -- an epoch placed by GPS alone at +/-10 m makes it about 30 m, and so finds no
-change rather than false ones.
+**The rule** (`change-v1`). Where both epochs have the layer's height, `delta = h_to -
+h_from` (computed in 32 bits: two i2 heights can differ by more than i2 holds) against
+
+    t = 3 sqrt(s_from^2 + s_to^2 + u_from^2 + u_to^2 + 2 w^2) + drift
+
+with `s` each side's sigma for the layer, `u` each epoch's placement uncertainty (the
+larger of its uncertainty from the site frame and its alignment's own claim, so a coarse
+epoch brings its metres: `services/change_maps.py` decides it), `w` the layer's own motion
+between visits (0 for the ground; `VEGETATION_MOTION_M` for vegetation, below) and `drift`
+the ground envelope's on a slope (0 for vegetation; below). `insufficient` where either
+epoch measured the layer but the two cannot be compared; no class where neither did. The 3
+is a first-principles choice (three standard deviations of the sum of independent
+errors), not a measurement: the map says `uncalibrated` until a site scanned twice
+measures it. `minDetectableM` is the least `t` over a layer's compared cells: a change
+smaller than it cannot be seen anywhere between these two dates -- an epoch placed at
++/-10 m makes it about 30 m, and so finds no change rather than false ones.
 
 **Horizontal uncertainty.** Placement error moves a whole epoch sideways, not only up: a
 roof edge one cell off reads as metres of change cell for cell. So each cell is compared
 with the other epoch's neighbourhood within the horizontal radius `r` (the least whole
-number of cells covering `3 sqrt(u_from^2 + u_to^2)`): `raised` when the later height is
-above everything the earlier epoch had nearby by more than `t`, or the earlier is below
-everything the later has nearby by more than `t` (a hole filled); `lowered` the mirror. A
-pure shift within `r` explains every cell, so it is never change; a post put up or taken
-away still is. `delta` is still the cell's own (review B5a).
+number of cells covering `3 sqrt(u_from^2 + u_to^2 + 2 w^2)`): `raised` when the later
+height is above everything the earlier epoch had nearby by more than `t`, or the earlier is
+below everything the later has nearby by more than `t` (a hole filled); `lowered` the
+mirror. A pure shift within `r` explains every cell, so it is never change; a post put up
+or taken away still is. `delta` is still the cell's own (review B5a).
+
+**Vegetation's threshold** (derived, uncalibrated). Between two visits a canopy's top
+moves without anything having grown: a crown sways in the wind by decimetres at its top,
+and the leaves the 2nd-highest sample lands on flutter by their own size. `w = 0.25 m` per
+epoch -- the lattice's finest cell -- is taken as one standard deviation of that,
+vertically and horizontally, in each epoch independently: it adds `2 w^2` under the root,
+so with perfectly placed, noiseless epochs the least vegetation change seen is `3 sqrt(2)
+w`, about 1.06 m, and the horizontal radius about as much (5 cells at 0.25 m). The ground
+has no such term: what sways is above it. A season (leaf-on against leaf-off) is real
+vegetation change and reads as such.
+
+**The ground envelope's drift** (derived). P5's ground is the least 2nd-lowest sample over
+a window of cells, so on a slope of grade `g` it reads up to `g R` low, `R` the window's
+half-diagonal, and which cell of the window it reads depends on what else stands in it: a
+bush grown at a window's downhill corner moves the ground of every cell within its reach.
+That bound, `g R`, is added to the ground's threshold, so vegetation can never move the
+ground layer: `g` is the steeper of the two epochs' local grades over the window's own
+half-width (one-sided differences of the ground, the larger; `UNKNOWN_GRADE` where no cell
+that far has a ground) and `R` the larger of the two epochs' reaches (`ground_reach_m`; 0
+where the window is the cell alone). On flat ground it is nothing.
+
+**What is not compared.** A cell where either sigma saturates (255 cm: at least 2.55 m, so
+the threshold would be a lower bound only) is `insufficient`, as is one where either epoch
+has no height for the layer -- for the ground, also where it was never observed (P5's
+`NO_HEIGHT` ground under a surface: canopy or roof wider than the window).
 
 **Low confidence is flagged, not hidden.** A compared cell is `lowConfidence` when either
 epoch's confidence grid does not vouch for it at the compared level (weak-v1: scored under
 128, or unseen, or no evidence at all; the grid's own min-of-children pyramid, so a coarse
 cell is as weak as its weakest child). It is still classified: P5's demo found the weak
-cells of a real change were its crate's own sides, so hiding them would hide the change. A
-cell where either sigma saturates (255 cm means at least 2.55 m: the threshold would be a
-lower bound only) is `insufficient`, not compared.
+cells of a real change were its crate's own sides, so hiding them would hide the change.
 
 **Areas.** The changed and insufficient cells become outlines in the site frame
 (`change_areas`): every 4-connected region of one class (raised and lowered split further
@@ -95,13 +126,23 @@ from app.analysis.weak_areas import (
 POLICY = "change-v1"
 #: The threshold's multiple of the combined standard deviation (module docstring).
 THRESHOLD_SIGMA = 3.0
+#: A canopy top's own motion between visits, per epoch, metres: one standard deviation,
+#: vertically and horizontally (module docstring, "Vegetation's threshold").
+VEGETATION_MOTION_M = 0.25
+#: The grade the ground's drift is bounded by where no neighbour gives one: the steepest
+#: slope P5 takes as ground at all (tools/pipeline surface.py `GROUND_MAX_GRADE`).
+UNKNOWN_GRADE = 0.5
 #: The two windows together are compared on at most this many cells (2048 x 2048, the
 #: pipeline's own grid ceiling); past it both go up a level. `change_planes` holds about
-#: 30 bytes a cell: both surfaces over the cells they share (12), its outputs (10), what
-#: each side measured and the vouched cells, plus a band of the classification.
+#: 30 bytes a cell: both sides over the cells they share, its outputs, what each side
+#: measured and the vouched cells, plus a band of the classification; and, with a
+#: horizontal radius, the two sides' neighbourhoods (8 more) and, for the ground, its
+#: local rise (8 more at the peak, 4 kept).
 MAX_CHANGE_CELLS = 1 << 22
+Layer = Literal["ground", "vegetation"]
+LAYERS: tuple[Layer, ...] = ("ground", "vegetation")
 ChangeClass = Literal["unchanged", "raised", "lowered", "insufficient"]
-#: Codes of the class plane, and no class (neither epoch has a surface there).
+#: Codes of the class plane, and no class (neither epoch has the layer's height there).
 UNCHANGED, RAISED, LOWERED, INSUFFICIENT, NONE = 0, 1, 2, 3, -1
 CLASSES: tuple[ChangeClass, ...] = ("unchanged", "raised", "lowered", "insufficient")
 #: Reserved: a change seen only in appearance. Never emitted (module docstring).
@@ -109,6 +150,7 @@ APPEARANCE_ONLY = "appearance-only"
 NO = cell_grid.NO_HEIGHT
 SATURATED = cell_grid.SIGMA_SATURATED
 CM = cell_grid.HEIGHT_UNIT_M
+_I16_MAX = np.int16(np.iinfo(np.int16).max)
 
 
 @dataclass(frozen=True)
@@ -121,7 +163,7 @@ class Surface:
     j0: int
     ni: int
     nj: int
-    #: The container's own types, never widened here: `dsm` and `ground` i2, `sigma` and
+    #: The container's own types, never widened here: `dsm` and `ground` i2, the sigmas and
     #: `support` u1. Differences are taken wide (`change_planes`), never in these.
     dsm: NDArray[np.int16]
     ground: NDArray[np.int16]
@@ -129,6 +171,9 @@ class Surface:
     support: NDArray[np.uint8]
     #: The ground's own sigma (P5): 0 where the ground is `NO`, observed or not.
     ground_sigma: NDArray[np.uint8]
+    #: How far from a cell its ground may have come, metres (`ground_reach_m`; 0: the
+    #: cell alone).
+    ground_reach_m: float = 0.0
 
     @property
     def cells(self) -> int:
@@ -136,8 +181,8 @@ class Surface:
 
     @property
     def has(self) -> NDArray[np.bool_]:
-        """Cells with a surface: a height for both and a spread (P5 writes sigma 0 and
-        `NO` together; a cell that says otherwise is not believed)."""
+        """Cells with a top surface: a height and its spread (P5 writes sigma 0 and `NO`
+        together; a cell that says otherwise is not believed)."""
         found: NDArray[np.bool_] = (self.sigma > 0) & (self.dsm != NO)
         return found
 
@@ -148,8 +193,24 @@ class Surface:
         found: NDArray[np.bool_] = self.has & (self.ground != NO) & (self.ground_sigma > 0)
         return found
 
+    def heights(self, layer: Layer) -> Heights:
+        """The layer's heights and sigma (module docstring): the ground's, or the top's."""
+        how: Literal["max", "min"]
+        if layer == "vegetation":
+            keep, height, sigma, how = self.has, self.dsm, self.sigma, "max"
+        else:
+            keep, height, sigma, how = self.has_ground, self.ground, self.ground_sigma, "min"
+        return Heights(
+            self.level,
+            self.i0,
+            self.j0,
+            np.where(keep, height, np.int16(NO)).astype(np.int16),
+            np.where(keep, sigma, np.uint8(0)).astype(np.uint8),
+            how,
+        )
+
     @staticmethod
-    def of(plane: cell_grid.Plane) -> Surface:
+    def of(plane: cell_grid.Plane, *, ground_reach_m: float = 0.0) -> Surface:
         """A decoded surface grid's plane (`cell_grid.decode` has checked its channels and
         their types; the arrays are its own, not copied)."""
         try:
@@ -178,7 +239,57 @@ class Surface:
             sigma,
             support,
             ground_sigma,
+            ground_reach_m,
         )
+
+
+def ground_reach_m(descriptor: Mapping[str, Any], level: int) -> float:
+    """How far from a cell its ground may have come, metres: the half-diagonal of the window
+    P5 took the least over (`estimators.groundWindowCells` cells a side at the surface's
+    own level), or, where the descriptor does not say, of P5's own 5 m window at that level
+    (the cells whose centres are within 2.5 m along each axis)."""
+    cell = math.ldexp(cell_grid.LATTICE_BASE_M, level)
+    estimators = descriptor.get("estimators")
+    cells = estimators.get("groundWindowCells") if isinstance(estimators, Mapping) else None
+    if isinstance(cells, bool) or not isinstance(cells, int) or cells < 1:
+        half = math.floor(2.5 / cell + 1e-9)
+    else:
+        half = (cells - 1) // 2
+    return half * cell * math.sqrt(2.0)
+
+
+@dataclass(frozen=True)
+class Heights:
+    """One layer of a surface at one level: heights (`NO` where none) and their sigma,
+    and how its children come together a level up (`max`: a top; `min`: a ground)."""
+
+    level: int
+    i0: int
+    j0: int
+    height: NDArray[np.int16]
+    sigma: NDArray[np.uint8]
+    how: Literal["max", "min"]
+
+    @property
+    def ni(self) -> int:
+        return int(self.height.shape[1])
+
+    @property
+    def nj(self) -> int:
+        return int(self.height.shape[0])
+
+    @property
+    def cells(self) -> int:
+        return self.ni * self.nj
+
+    @property
+    def window(self) -> tuple[int, int, int, int]:
+        return self.i0, self.j0, self.ni, self.nj
+
+    @property
+    def has(self) -> NDArray[np.bool_]:
+        found: NDArray[np.bool_] = (self.sigma > 0) & (self.height != NO)
+        return found
 
 
 def _blocks(values: NDArray[Any], i0: int, j0: int, fill: Any) -> NDArray[Any]:
@@ -197,9 +308,43 @@ def _blocks(values: NDArray[Any], i0: int, j0: int, fill: Any) -> NDArray[Any]:
     return out
 
 
-def _quads(values: NDArray[Any], s: Surface, fill: Any) -> NDArray[Any]:
-    """`values` (over `s`) padded to whole parents with `fill`, shaped `(nj, 2, ni, 2)`."""
-    return _blocks(values, s.i0, s.j0, fill)
+def _reduce(
+    values: NDArray[np.int16], keep: NDArray[np.bool_], i0: int, j0: int, how: str
+) -> NDArray[np.int16]:
+    """Each parent's highest (`max`) or lowest (`min`) of the children `keep` holds; `NO`
+    where it holds none."""
+    q, k = _blocks(values, i0, j0, np.int16(NO)), _blocks(keep, i0, j0, False)
+    if how == "max":
+        out = np.where(k, q, np.int16(NO)).max(axis=(1, 3), initial=NO)
+    else:
+        out = np.where(k, q, _I16_MAX).min(axis=(1, 3), initial=_I16_MAX)
+    found: NDArray[np.int16] = np.where(k.any(axis=(1, 3)), out, np.int16(NO)).astype(np.int16)
+    return found
+
+
+def _widest(
+    sigma: NDArray[np.uint8], keep: NDArray[np.bool_], i0: int, j0: int
+) -> NDArray[np.uint8]:
+    """Each parent's largest sigma of the children `keep` holds; 0 where it holds none."""
+    q, k = _blocks(sigma, i0, j0, np.uint8(0)), _blocks(keep, i0, j0, False)
+    out: NDArray[np.uint8] = (
+        np.where(k, q, np.uint8(0)).max(axis=(1, 3), initial=0).astype(np.uint8)
+    )
+    return out
+
+
+def coarsen_heights(h: Heights) -> Heights:
+    """`h` one level up over the children that have a height: its own way for the height,
+    the largest sigma. None where no child has one."""
+    keep = h.has
+    return Heights(
+        h.level + 1,
+        h.i0 >> 1,
+        h.j0 >> 1,
+        _reduce(h.height, keep, h.i0, h.j0, h.how),
+        _widest(h.sigma, keep, h.i0, h.j0),
+        h.how,
+    )
 
 
 def coarsen_surface(s: Surface) -> Surface:
@@ -207,32 +352,24 @@ def coarsen_surface(s: Surface) -> Surface:
     highest and `sigma` the largest; of those whose ground was observed, `ground` the
     lowest and `groundSigma` the largest; `support`'s source bits OR'd over the children
     and its count nibble the largest child's. None where no child has one."""
-    has = _quads(s.has, s, False)
-    grounded = _quads(s.has_ground, s, False)
-    nj, _, ni, _ = has.shape
-    top = np.int16(np.iinfo(np.int16).max)
-    dsm = np.where(has, _quads(s.dsm, s, NO), np.int16(NO)).max(axis=(1, 3), initial=NO)
-    ground = np.where(grounded, _quads(s.ground, s, NO), top).min(axis=(1, 3), initial=top)
-    sigma = np.where(has, _quads(s.sigma, s, 0), np.uint8(0)).max(axis=(1, 3), initial=0)
-    ground_sigma = np.where(grounded, _quads(s.ground_sigma, s, 0), np.uint8(0)).max(
-        axis=(1, 3), initial=0
-    )
-    any_has = has.any(axis=(1, 3))
-    any_ground = grounded.any(axis=(1, 3))
-    support = _quads(s.support, s, 0)
+    has, grounded = s.has, s.has_ground
+    support = _blocks(s.support, s.i0, s.j0, np.uint8(0))
     bits = np.bitwise_or.reduce(np.bitwise_or.reduce(support & 0x0F, axis=3), axis=1)
     count = (support >> 4).max(axis=(1, 3), initial=0)
+    dsm = _reduce(s.dsm, has, s.i0, s.j0, "max")
+    nj, ni = dsm.shape
     return Surface(
         s.level + 1,
         s.i0 >> 1,
         s.j0 >> 1,
         ni,
         nj,
-        np.where(any_has, dsm, np.int16(NO)).astype(np.int16),
-        np.where(any_ground, ground, np.int16(NO)).astype(np.int16),
-        np.where(any_has, sigma, np.uint8(0)).astype(np.uint8),
+        dsm,
+        _reduce(s.ground, grounded, s.i0, s.j0, "min"),
+        _widest(s.sigma, has, s.i0, s.j0),
         (bits | (count << 4)).astype(np.uint8),
-        np.where(any_ground, ground_sigma, np.uint8(0)).astype(np.uint8),
+        _widest(s.ground_sigma, grounded, s.i0, s.j0),
+        s.ground_reach_m,
     )
 
 
@@ -257,24 +394,20 @@ class _Cells:
         return _Cells(self.level + 1, self.i0 >> 1, self.j0 >> 1, out)
 
 
-def _masked(s: Surface, keep: NDArray[np.bool_]) -> Surface:
-    """`s` with a surface only where `keep` (and it had one)."""
-    keep = keep & s.has
-    return Surface(
-        s.level,
-        s.i0,
-        s.j0,
-        s.ni,
-        s.nj,
-        np.where(keep, s.dsm, np.int16(NO)).astype(np.int16),
-        np.where(keep, s.ground, np.int16(NO)).astype(np.int16),
-        np.where(keep, s.sigma, np.uint8(0)).astype(np.uint8),
-        np.where(keep, s.support, np.uint8(0)).astype(np.uint8),
-        np.where(keep, s.ground_sigma, np.uint8(0)).astype(np.uint8),
+def _masked(h: Heights, keep: NDArray[np.bool_]) -> Heights:
+    """`h` with a height only where `keep` (and it had one)."""
+    keep = keep & h.has
+    return Heights(
+        h.level,
+        h.i0,
+        h.j0,
+        np.where(keep, h.height, np.int16(NO)).astype(np.int16),
+        np.where(keep, h.sigma, np.uint8(0)).astype(np.uint8),
+        h.how,
     )
 
 
-def _under(fine: Surface, coarse: Surface) -> tuple[Surface, _Cells]:
+def _under(fine: Heights, coarse: Heights) -> tuple[Heights, _Cells]:
     """`fine` brought up to `coarse`'s level over only the children whose coarse cell
     `coarse` measured, and per coarse cell how many of its finest children that is."""
     k = coarse.level - fine.level
@@ -292,21 +425,22 @@ def _under(fine: Surface, coarse: Surface) -> tuple[Surface, _Cells]:
     masked = _masked(fine, keep)
     count = _Cells(fine.level, fine.i0, fine.j0, masked.has.astype(np.int32))
     for _ in range(k):
-        masked = coarsen_surface(masked)
+        masked = coarsen_heights(masked)
         count = count.up("sum")
     return masked, count
 
 
 @dataclass(frozen=True)
 class _Joint:
-    """Both epochs over one window of one level, each surface taken over the children both
+    """Both epochs over one window of one level, each taken over the children both
     measured only (`shared`); `partial` where that is fewer than either measured."""
 
     level: int
     i0: int
     j0: int
-    a: tuple[NDArray[np.int16], NDArray[np.int16], NDArray[np.uint8]]
-    b: tuple[NDArray[np.int16], NDArray[np.int16], NDArray[np.uint8]]
+    a: tuple[NDArray[np.int16], NDArray[np.uint8]]
+    b: tuple[NDArray[np.int16], NDArray[np.uint8]]
+    how: Literal["max", "min"]
     shared: NDArray[np.bool_]
     partial: NDArray[np.bool_]
 
@@ -324,19 +458,14 @@ def _intersection(*windows: tuple[int, int, int, int]) -> tuple[int, int, int, i
     return i0, j0, max(0, i1 - i0), max(0, j1 - j0)
 
 
-def _window(s: Surface) -> tuple[int, int, int, int]:
-    return s.i0, s.j0, s.ni, s.nj
-
-
-def _joint(pa: Surface, pb: Surface, partial: _Cells | None) -> _Joint:
+def _joint(pa: Heights, pb: Heights, partial: _Cells | None) -> _Joint:
     """`pa` and `pb` (one level) over the intersection of their windows."""
-    w = _intersection(_window(pa), _window(pb))
+    w = _intersection(pa.window, pb.window)
 
-    def side(s: Surface) -> tuple[NDArray[np.int16], NDArray[np.int16], NDArray[np.uint8]]:
+    def side(h: Heights) -> tuple[NDArray[np.int16], NDArray[np.uint8]]:
         return (
-            _place(s.dsm, s.i0, s.j0, w, np.int16(NO)),
-            _place(s.ground, s.i0, s.j0, w, np.int16(NO)),
-            _place(s.sigma, s.i0, s.j0, w, np.uint8(0)),
+            _place(h.height, h.i0, h.j0, w, np.int16(NO)),
+            _place(h.sigma, h.i0, h.j0, w, np.uint8(0)),
         )
 
     shared = _place(pa.has, pa.i0, pa.j0, w, False) & _place(pb.has, pb.i0, pb.j0, w, False)
@@ -345,37 +474,27 @@ def _joint(pa: Surface, pb: Surface, partial: _Cells | None) -> _Joint:
         if partial is not None
         else np.zeros(shared.shape, dtype=bool)
     )
-    return _Joint(pa.level, w[0], w[1], side(pa), side(pb), shared, part)
+    return _Joint(pa.level, w[0], w[1], side(pa), side(pb), pa.how, shared, part)
 
 
 def _joint_up(joint: _Joint, measured_a: _Cells, measured_b: _Cells) -> _Joint:
-    """`joint` one level up, each side's dsm (max), ground (min) and sigma (max) over the
-    children both measured; partial where a parent's shared children are fewer than the
-    children either side measured (`measured_*`: per child, whether that side measured
-    anything under it), or where a shared child was already partial."""
-    i0, j0 = joint.i0, joint.j0
-    sq = _blocks(joint.shared, i0, j0, False)
-    shared = sq.any(axis=(1, 3))
-    top = np.int16(np.iinfo(np.int16).max)
+    """`joint` one level up, each side over the children both measured; partial where a
+    parent's shared children are fewer than the children either side measured
+    (`measured_*`: per child, whether that side measured anything under it), or where a
+    shared child was already partial."""
+    i0, j0, children = joint.i0, joint.j0, joint.shared
 
     def side(
-        values: tuple[NDArray[np.int16], NDArray[np.int16], NDArray[np.uint8]],
-    ) -> tuple[NDArray[np.int16], NDArray[np.int16], NDArray[np.uint8]]:
-        dsm, ground, sigma = values
-        high = np.where(sq, _blocks(dsm, i0, j0, np.int16(NO)), np.int16(NO)).max(
-            axis=(1, 3), initial=NO
-        )
-        grounds = _blocks(ground, i0, j0, np.int16(NO))
-        low = np.where(sq & (grounds != NO), grounds, top).min(axis=(1, 3), initial=top)
-        spread = np.where(sq, _blocks(sigma, i0, j0, np.uint8(0)), np.uint8(0)).max(
-            axis=(1, 3), initial=0
-        )
+        values: tuple[NDArray[np.int16], NDArray[np.uint8]],
+    ) -> tuple[NDArray[np.int16], NDArray[np.uint8]]:
+        height, sigma = values
         return (
-            np.where(shared, high, np.int16(NO)).astype(np.int16),
-            np.where(shared & (low != top), low, np.int16(NO)).astype(np.int16),
-            np.where(shared, spread, np.uint8(0)).astype(np.uint8),
+            _reduce(height, children, i0, j0, joint.how),
+            _widest(sigma, children, i0, j0),
         )
 
+    sq = _blocks(children, i0, j0, False)
+    shared = sq.any(axis=(1, 3))
     window = (i0 >> 1, j0 >> 1, shared.shape[1], shared.shape[0])
     both = sq.sum(axis=(1, 3), dtype=np.int32)
     fewer = np.zeros(shared.shape, dtype=bool)
@@ -391,6 +510,7 @@ def _joint_up(joint: _Joint, measured_a: _Cells, measured_b: _Cells) -> _Joint:
         window[1],
         side(joint.a),
         side(joint.b),
+        joint.how,
         shared,
         shared & (inherited | fewer),
     )
@@ -435,9 +555,7 @@ def vouched(grid: cell_grid.Grid, level: int) -> cell_grid.Plane:
     return cell_grid.Plane(level, plane.i0, plane.j0, plane.ni, plane.nj, {"strong": strong})
 
 
-# --- horizontal uncertainty ----------------------------------------------------------------
-
-_I16_MAX = np.int16(np.iinfo(np.int16).max)
+# --- horizontal uncertainty and the ground's drift -----------------------------------------
 
 
 def _slide(values: NDArray[np.int16], half: int, axis: int, op: Any, fill: np.int16) -> Any:
@@ -478,12 +596,36 @@ def neighbourhood(
     return top, low
 
 
-def horizontal_cells(ua: float, ub: float, cell_m: float, sigmas: float) -> int:
+def horizontal_cells(ua: float, ub: float, motion_m: float, cell_m: float, sigmas: float) -> int:
     """The horizontal radius in whole cells: the least number covering
-    `sigmas * sqrt(ua^2 + ub^2)` (module docstring)."""
-    reach = sigmas * math.sqrt(ua * ua + ub * ub)
+    `sigmas * sqrt(ua^2 + ub^2 + 2 motion^2)` (module docstring)."""
+    reach = sigmas * math.sqrt(ua * ua + ub * ub + 2.0 * motion_m * motion_m)
     return math.ceil(round(reach / cell_m, 9))
 
+
+def local_rise_cm(
+    height: NDArray[np.int16], keep: NDArray[np.bool_], k: int, unknown_cm: int
+) -> NDArray[np.int32]:
+    """Per cell, the steepest rise (centimetres, either way) to a cell `k` away along either
+    axis that also has a height -- one-sided differences, the largest -- or `unknown_cm`
+    where none has (module docstring, "The ground envelope's drift"). Whole centimetres,
+    so exact, and 4 bytes a cell."""
+    nj, ni = height.shape
+    best = np.full((nj, ni), -1, dtype=np.int32)
+    for dj, di in ((0, k), (0, -k), (k, 0), (-k, 0)):
+        if abs(dj) >= nj or abs(di) >= ni:
+            continue
+        # here[j, i] against there[j + dj, i + di], where both are inside the plane.
+        here = (slice(max(0, -dj), nj - max(0, dj)), slice(max(0, -di), ni - max(0, di)))
+        there = (slice(max(0, dj), nj - max(0, -dj)), slice(max(0, di), ni - max(0, -di)))
+        rise = np.abs(height[there].astype(np.int32) - height[here])
+        view = best[here]
+        np.maximum(view, rise, out=view, where=keep[here] & keep[there])
+    best[best < 0] = unknown_cm
+    return best
+
+
+# --- the change ----------------------------------------------------------------------------
 
 #: `change_planes` classifies a band of rows at a time, of about this many cells.
 BAND_CELLS = 1 << 16
@@ -491,10 +633,11 @@ BAND_CELLS = 1 << 16
 
 @dataclass(frozen=True)
 class ChangePlanes:
-    """The change between two surfaces at one level, over the union of their windows:
-    `classes` (`NONE` where neither has a surface), the dsm and ground differences in
-    centimetres (0 where not both), and `low` (low confidence, compared cells only)."""
+    """The change of one layer between two surfaces at one level, over the union of their
+    windows: `classes` (`NONE` where neither has the layer's height), the difference in
+    centimetres (0 where not compared), and `low` (low confidence, compared cells only)."""
 
+    layer: Layer
     level: int
     #: The coarser of the two surfaces' own levels; `level` is above it only when the
     #: windows were too large (`MAX_CHANGE_CELLS`) or the outline was (`change_areas`).
@@ -505,14 +648,17 @@ class ChangePlanes:
     nj: int
     classes: NDArray[np.int8]
     delta_cm: NDArray[np.int32]
-    ground_delta_cm: NDArray[np.int32]
     low: NDArray[np.bool_]
     #: The least threshold over the compared cells, metres; None when none was compared.
     min_detectable_m: float | None
     uncertainty_from_m: float
     uncertainty_to_m: float
-    #: The horizontal radius each cell was compared within, cells (module docstring).
+    #: The layer's own motion between visits (`w`, metres), the horizontal radius each cell
+    #: was compared within (cells), and the reach of the ground's drift (`R`, metres; 0
+    #: for vegetation).
+    motion_m: float = 0.0
     horizontal_cells: int = 0
+    drift_reach_m: float = 0.0
 
     @property
     def cell_m(self) -> float:
@@ -538,29 +684,35 @@ def change_planes(
     ua: float,
     ub: float,
     *,
+    layer: Layer,
     confidence_a: cell_grid.Grid | None = None,
     confidence_b: cell_grid.Grid | None = None,
     level: int | None = None,
     sigmas: float = THRESHOLD_SIGMA,
+    motion_m: float | None = None,
     horizontal: bool = True,
 ) -> ChangePlanes:
-    """The change from `a` to `b` (module docstring), with `ua` and `ub` each epoch's
-    uncertainty from the site frame in metres, at the coarser of their levels (or `level`
+    """The change of `layer` from `a` to `b` (module docstring), with `ua` and `ub` each
+    epoch's placement uncertainty in metres, at the coarser of their levels (or `level`
     when that is coarser still, or coarser yet when the windows would hold over
-    `MAX_CHANGE_CELLS`). A cell is low confidence when a confidence grid given does not
-    vouch for it, or a grid is not given (nothing vouches)."""
+    `MAX_CHANGE_CELLS`). `motion_m` is the layer's own motion (by default 0 for the
+    ground, `VEGETATION_MOTION_M` for vegetation); `horizontal=False` compares cell for
+    cell, as P5's demo does (the committed fixture's reference). A cell is low confidence
+    when a confidence grid given does not vouch for it, or a grid is not given."""
     for name, value in (("ua", ua), ("ub", ub)):
         if not math.isfinite(value) or value < 0:
             raise ValueError(f"{name} must be a finite uncertainty >= 0, not {value!r}")
+    motion = (0.0 if layer == "ground" else VEGETATION_MOTION_M) if motion_m is None else motion_m
     native = max(a.level, b.level)
     at = max(native, level if level is not None else native)
     while _union_cells(a, b, at) > MAX_CHANGE_CELLS and at < cell_grid.MAX_LEVEL:
         at += 1
+    ha, hb = a.heights(layer), b.heights(layer)
     # The finer epoch is brought to the coarser one's level over the children whose coarse
     # cell the coarser one measured; then both go up together over the children both
     # measured (module docstring), knowing per cell what each side measured at all.
-    swap = a.level < b.level
-    fine, coarse = (a, b) if swap else (b, a)
+    swap = ha.level < hb.level
+    fine, coarse = (ha, hb) if swap else (hb, ha)
     if fine.level < coarse.level:
         lifted, count = _under(fine, coarse)
         whole = 1 << (2 * (coarse.level - fine.level))
@@ -570,20 +722,14 @@ def change_planes(
         seen = _Cells(fine.level, fine.i0, fine.j0, fine.has)
         while seen.level < coarse.level:
             seen = seen.up("any")
+        coarse_seen = _Cells(coarse.level, coarse.i0, coarse.j0, coarse.has)
         ca, cb = (lifted, coarse) if swap else (coarse, lifted)
-        seen_a, seen_b = (
-            (seen, _Cells(coarse.level, coarse.i0, coarse.j0, coarse.has))
-            if swap
-            else (
-                _Cells(coarse.level, coarse.i0, coarse.j0, coarse.has),
-                seen,
-            )
-        )
+        seen_a, seen_b = (seen, coarse_seen) if swap else (coarse_seen, seen)
         joint = _joint(ca, cb, partial)
     else:
-        joint = _joint(a, b, None)
-        seen_a = _Cells(a.level, a.i0, a.j0, a.has)
-        seen_b = _Cells(b.level, b.i0, b.j0, b.has)
+        joint = _joint(ha, hb, None)
+        seen_a = _Cells(ha.level, ha.i0, ha.j0, ha.has)
+        seen_b = _Cells(hb.level, hb.i0, hb.j0, hb.has)
     while joint.level < at:
         joint = _joint_up(joint, seen_a, seen_b)
         seen_a, seen_b = seen_a.up("any"), seen_b.up("any")
@@ -592,42 +738,50 @@ def change_planes(
     nj = max(seen_a.j0 + seen_a.window[3], seen_b.j0 + seen_b.window[3]) - j0
     union = (i0, j0, ni, nj)
     # Into the union window: insufficient where one side measured something and the two
-    # share no child; no class where neither measured anything.
+    # cannot be compared; no class where neither measured anything.
     anywhere = _place(seen_a.values, seen_a.i0, seen_a.j0, union, False) | _place(
         seen_b.values, seen_b.i0, seen_b.j0, union, False
     )
     classes = np.where(anywhere, np.int8(INSUFFICIENT), np.int8(NONE)).astype(np.int8)
     del anywhere
     delta_cm = np.zeros((nj, ni), dtype=np.int32)
-    ground_delta_cm = np.zeros((nj, ni), dtype=np.int32)
     low = np.zeros((nj, ni), dtype=bool)
-    # Classified on the joint window (where alone both can have a surface), a band of rows
-    # at a time, so nothing but the outputs is held for the whole window.
+    # Classified on the joint window (where alone both can have a height), a band of rows
+    # at a time; the neighbourhoods and the grade are of the whole joint window.
     jw = joint.window
     di, dj = jw[0] - i0, jw[1] - j0
-    (da, ga, sa), (db, gb, sb) = joint.a, joint.b
+    (da, sa), (db, sb) = joint.a, joint.b
     # Compared only over every child the finer epoch (or, coarser, either) measured, and
     # only where neither sigma saturates (its threshold would be a lower bound); each
     # against the other epoch's neighbourhood within the horizontal radius.
     compared = joint.shared & ~joint.partial & (sa < SATURATED) & (sb < SATURATED)
     cell_m = math.ldexp(cell_grid.LATTICE_BASE_M, at)
-    half = horizontal_cells(ua, ub, cell_m, sigmas) if horizontal else 0
+    half = horizontal_cells(ua, ub, motion, cell_m, sigmas) if horizontal else 0
     top_a, low_a = neighbourhood(da, compared, half)
     top_b, low_b = neighbourhood(db, compared, half)
+    reach = max(a.ground_reach_m, b.ground_reach_m) if layer == "ground" else 0.0
+    rise: NDArray[np.int32] | None = None
+    run_cm = 0.0
+    if reach > 0:
+        k = max(1, round(reach / math.sqrt(2.0) / cell_m))
+        run_cm = k * cell_m / CM
+        unknown = math.ceil(UNKNOWN_GRADE * run_cm)
+        rise = local_rise_cm(da, compared, k, unknown)
+        np.maximum(rise, local_rise_cm(db, compared, k, unknown), out=rise)
     grids = [vouched(g, at) if g is not None else None for g in (confidence_a, confidence_b)]
     least = math.inf
+    floor = ua * ua + ub * ub + 2.0 * motion * motion
     step = max(1, BAND_CELLS // max(jw[2], 1))
     for r0 in range(0, jw[3], step):
         r1 = min(jw[3], r0 + step)
         band = (jw[0], jw[1] + r0, jw[2], r1 - r0)
-        s_a, s_b = sa[r0:r1], sb[r0:r1]
         both = compared[r0:r1]
         here_a, here_b = da[r0:r1].astype(np.int32), db[r0:r1].astype(np.int32)
         delta = here_b - here_a
-        ground = gb[r0:r1].astype(np.int32) - ga[r0:r1].astype(np.int32)
-        grounded = (ga[r0:r1] != NO) & (gb[r0:r1] != NO)
-        spread = (s_a.astype(np.float64) * CM) ** 2 + (s_b.astype(np.float64) * CM) ** 2
-        threshold = sigmas * np.sqrt(spread + ua * ua + ub * ub)
+        spread = (sa[r0:r1].astype(np.float64) * CM) ** 2 + (sb[r0:r1].astype(np.float64) * CM) ** 2
+        threshold = sigmas * np.sqrt(spread + floor)
+        if rise is not None:
+            threshold = threshold + rise[r0:r1] / run_cm * reach
         # Raised: the later height is above all the earlier had nearby, or the earlier one
         # below all the later has nearby (a hole filled); lowered the mirror. A shift within
         # the radius explains every cell, a new height none (module docstring).
@@ -638,7 +792,6 @@ def change_planes(
         out[both & (up * CM > threshold)] = RAISED
         out[both & (down * CM > threshold)] = LOWERED
         delta_cm[dj + r0 : dj + r1, di : di + jw[2]] = np.where(both, delta, 0)
-        ground_delta_cm[dj + r0 : dj + r1, di : di + jw[2]] = np.where(both & grounded, ground, 0)
         if both.any():
             least = min(least, float(threshold[both].min()))
         strong = np.ones(both.shape, dtype=bool)
@@ -649,6 +802,7 @@ def change_planes(
                 strong &= _place(grid.channels["strong"], grid.i0, grid.j0, band, False)
         low[dj + r0 : dj + r1, di : di + jw[2]] = both & ~strong
     return ChangePlanes(
+        layer=layer,
         level=at,
         native_level=native,
         i0=i0,
@@ -657,12 +811,13 @@ def change_planes(
         nj=nj,
         classes=classes,
         delta_cm=delta_cm,
-        ground_delta_cm=ground_delta_cm,
         low=low,
         min_detectable_m=least if math.isfinite(least) else None,
         uncertainty_from_m=ua,
         uncertainty_to_m=ub,
+        motion_m=motion,
         horizontal_cells=half,
+        drift_reach_m=reach,
     )
 
 
@@ -713,7 +868,6 @@ class AreaShape:
     low_confidence_cells: int
     mean_delta_m: float | None
     max_abs_delta_m: float | None
-    mean_ground_delta_m: float | None
 
     @property
     def low_confidence(self) -> bool:
@@ -772,12 +926,10 @@ def change_areas(planes: ChangePlanes, projection: SiteProjection) -> list[AreaS
     flat = labels.ravel()
     compared = np.isin(planes.classes.ravel(), (UNCHANGED, RAISED, LOWERED))
     delta = planes.delta_cm.ravel().astype(np.float64)
-    ground = planes.ground_delta_cm.ravel().astype(np.float64)
     cells = np.bincount(flat, minlength=count)
     lows = np.bincount(flat, weights=planes.low.ravel(), minlength=count)
     measured = np.bincount(flat, weights=compared, minlength=count)
     delta_sum = np.bincount(flat, weights=np.where(compared, delta, 0.0), minlength=count)
-    ground_sum = np.bincount(flat, weights=np.where(compared, ground, 0.0), minlength=count)
     peak = np.zeros(count, dtype=np.float64)
     np.maximum.at(peak, flat, np.where(compared, np.abs(delta), 0.0))
     # Exact cell edges; `simplify(0)` only drops the vertices along a straight run of them.
@@ -797,9 +949,6 @@ def change_areas(planes: ChangePlanes, projection: SiteProjection) -> list[AreaS
                 low_confidence_cells=int(lows[label]),
                 mean_delta_m=float(delta_sum[label] / measured[label] * CM) if has_delta else None,
                 max_abs_delta_m=float(peak[label] * CM) if has_delta else None,
-                mean_ground_delta_m=float(ground_sum[label] / measured[label] * CM)
-                if has_delta
-                else None,
             )
         )
     order: Mapping[str, int] = {"raised": 0, "lowered": 1, "insufficient": 2}
@@ -808,8 +957,9 @@ def change_areas(planes: ChangePlanes, projection: SiteProjection) -> list[AreaS
 
 @dataclass(frozen=True)
 class ChangeMap:
-    """The change at its compared level (`planes`, whose counts the map states) and the
-    areas drawn at `drawn.level` (the same planes unless they were too large to outline)."""
+    """One layer's change at its compared level (`planes`, whose counts the map states)
+    and the areas drawn at `drawn.level` (the same planes unless they were too large to
+    outline)."""
 
     planes: ChangePlanes
     drawn: ChangePlanes
@@ -823,12 +973,15 @@ def change_map(
     ub: float,
     projection: SiteProjection,
     *,
+    layer: Layer,
     confidence_a: cell_grid.Grid | None = None,
     confidence_b: cell_grid.Grid | None = None,
 ) -> ChangeMap:
-    """`change_planes` and its areas, a level up at a time while they are too large to
-    outline (module docstring)."""
-    planes = change_planes(a, b, ua, ub, confidence_a=confidence_a, confidence_b=confidence_b)
+    """`change_planes` of `layer` and its areas, a level up at a time while they are too
+    large to outline (module docstring)."""
+    planes = change_planes(
+        a, b, ua, ub, layer=layer, confidence_a=confidence_a, confidence_b=confidence_b
+    )
     drawn = planes
     while needs_coarser(drawn) and drawn.level < cell_grid.MAX_LEVEL:
         drawn = change_planes(
@@ -836,6 +989,7 @@ def change_map(
             b,
             ua,
             ub,
+            layer=layer,
             confidence_a=confidence_a,
             confidence_b=confidence_b,
             level=drawn.level + 1,
