@@ -1,14 +1,14 @@
 /**
- * Sunlight under PlayCanvas (cesium/scanView/sunHook.ts): the per-frame hook's arithmetic is
- * CesiumJS's relight (lib/splatNormals.ts `sunlightFactor`) on a splat kept as rotation and
- * scales; the word the copy pass leaves beside each splat says whether it is lit (an inferred
+ * Sunlight under PlayCanvas (cesium/scanView/sunHook.ts): the per-frame hook's arithmetic
+ * (its TypeScript twin, lib/splatNormals.ts `scaleSunlightFactor`) is CesiumJS's relight
+ * (`sunlightFactor`) on a splat kept as rotation and scales, with the relight's constants as
+ * its uniforms; the word the copy pass leaves beside each splat says whether it is lit (an inferred
  * layer's is not) and what the cell look drew for a black splat, so that relighting the drawn
  * colour afterwards is the look of the relit colour -- CesiumJS's order, sun before look.
  */
 import { describe, expect, it } from "vitest";
 
 import {
-  hookSunFactor,
   packSunWord,
   relightAfterLook,
   SUN_HOOK_VS,
@@ -16,7 +16,14 @@ import {
   unpackSunWord,
 } from "@/cesium/scanView/sunHook";
 import { cellViewColor, type CellViewMode } from "@/lib/cellLook";
-import { covarianceOf, SUN_AMBIENT, sunlightFactor, type Vec3 } from "@/lib/splatNormals";
+import {
+  covarianceOf,
+  FLAT_RATIO,
+  scaleSunlightFactor as hookSunFactor,
+  SUN_AMBIENT,
+  sunlightFactor,
+  type Vec3,
+} from "@/lib/splatNormals";
 
 function about(axis: Vec3, angle: number): [number, number, number, number] {
   const n = Math.hypot(...axis);
@@ -107,6 +114,10 @@ describe("the word beside each splat", () => {
     expect(SUN_WORD_GLSL).toContain(`${String(2 ** 30)}u`);
     expect(SUN_HOOK_VS).toContain("loadHexapodSun().r");
     expect(SUN_HOOK_VS).toContain("hexapodSunSkipped");
+    // The relight's constants are uniforms the relight hands over with its sun.
+    expect(SUN_HOOK_VS).toContain("lo < uHexapodSunlight.z * mid");
+    expect(SUN_HOOK_VS).toContain("uHexapodSunlight.y + (1.0 - uHexapodSunlight.y) * lambert");
+    expect(FLAT_RATIO).toBe(0.25);
   });
 });
 
@@ -160,6 +171,6 @@ describe("the look's order", () => {
     const factor = SUN_AMBIENT;
     const cesium = look([0.6 * factor, 0.6 * factor, 0.6 * factor, 1]);
     const naive = look(photo).map((v, i) => (i < 3 ? v * factor : v));
-    expect(Math.abs(naive[1]! - cesium[1]!)).toBeGreaterThan(0.1);
+    expect(Math.abs(naive[1]! - cesium[1])).toBeGreaterThan(0.1);
   });
 });

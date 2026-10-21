@@ -246,3 +246,35 @@ export function sunlightFactor(input: SunlightInput): number {
   const light = SUN_AMBIENT + (1 - SUN_AMBIENT) * lambert * input.sunUp;
   return 1 + (light - 1) * input.strength;
 }
+
+/**
+ * What PlayCanvas's per-frame hook multiplies one splat's colour by (cesium/scanView/sunHook.ts
+ * transcribes this): `sunlightFactor` for a splat kept as rotation and scales (`scaleNormal`),
+ * in one frame for all of it -- the scan's, where the eye, the splat and the sun's direction are.
+ */
+export function scaleSunlightFactor(input: {
+  scale: Vec3;
+  quat: readonly [number, number, number, number];
+  centre: Vec3;
+  eye: Vec3;
+  /** Unit direction to the sun. */
+  sun: Vec3;
+  sunUp: number;
+  strength: number;
+}): number {
+  if (!(input.strength > 0)) return 1;
+  let lambert = 1;
+  const n = scaleNormal(input.scale, input.quat);
+  if (n) {
+    const toEye: Vec3 = [
+      input.eye[0] - input.centre[0],
+      input.eye[1] - input.centre[1],
+      input.eye[2] - input.centre[2],
+    ];
+    // Toward the eye: a splat is seen from the side it is drawn on.
+    const side = dot(n, toEye) < 0 ? -1 : 1;
+    lambert = Math.max(side * dot(n, input.sun), 0);
+  }
+  const light = SUN_AMBIENT + (1 - SUN_AMBIENT) * lambert * input.sunUp;
+  return 1 + (light - 1) * input.strength;
+}

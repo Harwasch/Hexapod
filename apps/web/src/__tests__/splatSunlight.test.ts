@@ -4,7 +4,7 @@
  * it works out, against the almanac; and that the relight joins the shader only while the sun
  * is on and As captured is off, reports what it drew, and leaves nothing behind. Under PlayCanvas
  * the same relight hands its sun, in the scan's frame, to the renderer drawing the scan
- * (scanView/scanSunlight.ts) and reports only while one does. The GLSL compiles and lights an
+ * (state/sunReport.ts) and reports only while one does. The GLSL compiles and lights an
  * east-facing slab in a real engine, under both, in e2e/sunlightScene.spec.ts.
  */
 import {
@@ -21,12 +21,6 @@ import {
 } from "cesium";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  publishScanSun,
-  scanSunDrawn,
-  watchScanSun,
-  type ScanSun,
-} from "@/cesium/scanView/scanSunlight";
 import { colorChainOf, composeColorGlsl, type SplatVertexColor } from "@/cesium/splatColor";
 import type { SplatShaderBuilder } from "@/cesium/splatInternals";
 import { SplatSunlight, sunSine } from "@/cesium/splatSunlight";
@@ -37,7 +31,13 @@ import { FLAT_RATIO, SUN_AMBIENT } from "@/lib/splatNormals";
 import { useAsCaptured } from "@/state/asCaptured";
 import { useLighting } from "@/state/lighting";
 import { useRendererOverride, useSettings } from "@/state/settings";
-import { useSunReport } from "@/state/sunReport";
+import {
+  publishScanSun,
+  scanSunDrawn,
+  useSunReport,
+  watchScanSun,
+  type ScanSun,
+} from "@/state/sunReport";
 
 const vec4 = (x: number, y: number, z: number, w: number) => ({ vec4: [x, y, z, w] });
 
@@ -416,11 +416,25 @@ describe("the relight under PlayCanvas", () => {
     const sun = seen.at(-1);
     expect(sun?.strength).toBe(1);
     expect(sun?.sunUp).toBe(1);
+    // The relight's constants travel with it: the hook holds no copy (scanView/sunHook.ts).
+    expect(sun).toMatchObject({ ambient: SUN_AMBIENT, flat: FLAT_RATIO });
     const expected = enuSun(MORNING);
     for (let i = 0; i < 3; i += 1) expect(sun?.dir[i]).toBeCloseTo(expected[i]!, 6);
     // East and up in the morning, as the almanac has it.
     expect(sun!.dir[0]).toBeGreaterThan(0.8);
     expect(useSunReport.getState().reports.a?.at).toBe("2026-06-21T15:30:00.000Z");
+    // A runtime scale (the root's transform scaled) changes no direction.
+    const root = (s.tileset as unknown as { root: { computedTransform: Matrix4 } }).root;
+    const unscaled = root.computedTransform;
+    root.computedTransform = Matrix4.multiplyByUniformScale(unscaled, 3, new Matrix4());
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601("2026-06-21T18:00:00Z"));
+    const scaled = seen.at(-1);
+    root.computedTransform = unscaled;
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601("2026-06-21T18:00:00Z"));
+    expect(seen.at(-1)).toBe(scaled);
+    const noon = enuSun("2026-06-21T18:00:00Z");
+    for (let i = 0; i < 3; i += 1) expect(scaled?.dir[i]).toBeCloseTo(noon[i]!, 6);
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601(MORNING));
     // A frame whose sun barely moved hands nothing on (the overlay would draw for it).
     const handed = seen.length;
     s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601("2026-06-21T15:30:01Z"));

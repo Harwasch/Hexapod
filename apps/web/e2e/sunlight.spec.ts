@@ -16,7 +16,7 @@
  * - Off: the clock given back, running, today.
  *
  * Under PlayCanvas (the default renderer) the same, drawn by PlayCanvas's per-frame hook (what
- * the renderer reads out: scanView/scanSunlight.ts): Now relights and says so, At capture holds
+ * the renderer reads out: state/sunReport.ts): Now relights and says so, At capture holds
  * the clock and gives it back, As captured takes the relight off. Under Spark: the Sun control
  * disabled, saying it needs CesiumJS or PlayCanvas, and "Draw with PlayCanvas" really
  * switching, after which Now relights. The tool rail is as it was. Screenshots go to
@@ -323,13 +323,13 @@ test("under cesium, the sun relights the shown date, says so, and At capture hol
   await railUnchanged(page);
 });
 
-/** What PlayCanvas, drawing `assetId`, says of its sunlight hook (scanView/scanSunlight.ts). */
+/** What PlayCanvas, drawing `assetId`, says of its sunlight hook (state/sunReport.ts). */
 const hook = (
   page: Page,
   assetId: string,
 ): Promise<{ installed: boolean; frames: number } | null> =>
   page.evaluate(async (id) => {
-    const link = "/src/cesium/scanView/scanSunlight.ts";
+    const link = "/src/state/sunReport.ts";
     const module = (await import(/* @vite-ignore */ link)) as {
       scanSunReading(id: string): { installed: boolean; frames: number } | null;
     };

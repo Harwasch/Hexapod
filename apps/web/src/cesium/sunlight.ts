@@ -9,7 +9,7 @@
  * Under CesiumJS the part joins the primitive's colour chain while on and leaves it when off
  * (the draw command is rebuilt either way); the primitive appears with the first tile, so a
  * tile load places it again. Under PlayCanvas the tileset is kept hidden and the renderer draws
- * the scan: this hands it the sun instead (scanView/scanSunlight.ts), in the scan's frame.
+ * the scan: this hands it the sun instead (state/sunReport.ts), in the scan's frame.
  *
  * Each frame drawn while on, the sun at the scan's centre is worked out for that frame's scene
  * time (`sunSine`, `sunInFrame`: the engine's own sun) and set -- a uniform of the part, or the
@@ -22,16 +22,20 @@
 
 import { JulianDate, Matrix4, type Cesium3DTileset, type Scene } from "cesium";
 
-import { sunUpFactor } from "@/lib/splatNormals";
+import { FLAT_RATIO, SUN_AMBIENT, sunUpFactor } from "@/lib/splatNormals";
 import { sunlightDrawable } from "@/lib/viewModes";
 import { useRendererOverride, useSettings } from "@/state/settings";
-import { useSunReport, type SunReport } from "@/state/sunReport";
+import {
+  onScanSunDrawers,
+  publishScanSun,
+  scanSunDrawn,
+  useSunReport,
+  type SunReport,
+} from "@/state/sunReport";
 
-import { onScanSunDrawers, publishScanSun, scanSunDrawn } from "./scanView/scanSunlight";
 import type { ColorPrimitive } from "./splatColor";
 import { splatTilesetOf } from "./splatInternals";
 import { SplatSunlight, sunInFrame, sunSine, type Vec4Factory } from "./splatSunlight";
-import { inverseScaledTransformation } from "./tilesetScale";
 
 export interface SunlightHandle {
   sync(on: boolean): void;
@@ -51,7 +55,13 @@ function minuteOf(time: JulianDate): string {
 }
 
 /** The photograph: what a renderer is handed for a frame with no sun to light by. */
-const UNLIT = { dir: [0, 0, 1], sunUp: 1, strength: 0 } as const;
+const UNLIT = {
+  dir: [0, 0, 1],
+  sunUp: 1,
+  strength: 0,
+  ambient: SUN_AMBIENT,
+  flat: FLAT_RATIO,
+} as const;
 
 export function startSunlight(
   tileset: Cesium3DTileset,
@@ -96,11 +106,15 @@ export function startSunlight(
     report(assetId, null);
   };
 
-  /** The sun in the scan's frame, as the renderer's scene has it (scanView/pose.ts). */
+  /**
+   * The sun in the scan's frame, as the renderer's scene has it (scanView/pose.ts). Only the
+   * direction is wanted, so the root's inverse rotation does: a runtime scale (tilesetScale.ts)
+   * changes a direction's length, which `sunInFrame` normalises, not where it points.
+   */
   const scanFrameSun = (time: JulianDate): readonly [number, number, number] | null => {
     const root = (tileset as { root?: { computedTransform?: Matrix4 } }).root;
     if (!root?.computedTransform) return null;
-    inverseScaledTransformation(root.computedTransform, toLocal);
+    Matrix4.inverseTransformation(root.computedTransform, toLocal);
     return sunInFrame(time, toLocal);
   };
 
@@ -119,7 +133,12 @@ export function startSunlight(
     if (on === "cesium") {
       part.sunUp = lit ? sunUpFactor(sine) : Number.NaN;
     } else {
-      publishScanSun(assetId, lit && dir ? { dir, sunUp: sunUpFactor(sine), strength: 1 } : UNLIT);
+      publishScanSun(
+        assetId,
+        lit && dir
+          ? { dir, sunUp: sunUpFactor(sine), strength: 1, ambient: SUN_AMBIENT, flat: FLAT_RATIO }
+          : UNLIT,
+      );
     }
     if (!lit) {
       withdraw();

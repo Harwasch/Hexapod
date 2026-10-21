@@ -55,7 +55,7 @@
  *
  * Sunlight (sunHook.ts) is the one look drawn every frame instead: PlayCanvas's own per-frame
  * hook in the user material's `gsplatModifyVS`, lit by the sun the relight hands over
- * (scanSunlight.ts) as uniforms, which copy nothing. The copy pass only leaves it one word per
+ * (state/sunReport.ts) as uniforms, which copy nothing. The copy pass only leaves it one word per
  * splat (the `hexapodSun` stream of the work buffer, added with the first sun): whether the
  * splat is lit (a layer's is not), and under Confidence or Data age the look drawn for a black
  * splat, with which the hook keeps CesiumJS's order -- the sun before the look. GLSL only too.
@@ -86,6 +86,7 @@ import { CELL_LOOK_GLSL, type CellLookView } from "@/lib/cellLook";
 import { tileInstanceIds, type InstancesDoc } from "@/lib/instances";
 import { tileSkin, type SkinDoc } from "@/lib/skin";
 import type { PickTile } from "@/lib/splatPick";
+import { reportScanSun, watchScanSun, type ScanSun } from "@/state/sunReport";
 import type { TileNode } from "@/view/tiles";
 
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
@@ -113,7 +114,6 @@ import {
   type ScanMotion,
 } from "./scanMotion";
 import { reportScanCellView, watchScanCellView } from "./scanCellView";
-import { reportScanSun, watchScanSun, type ScanSun } from "./scanSunlight";
 import { countOverlayLoopTick } from "./stats";
 import { SUN_HOOK_VS, SUN_STREAM, SUN_WORD_GLSL } from "./sunHook";
 import type { BackendHooks, GraphicsApi, ScanBackend, ScanPose, SplatRendererKind } from "./types";
@@ -579,7 +579,7 @@ function assemble(
   /** The modifier on each entity now (a tile with no binding has one only for a cell view). */
   const modifiers = new WeakMap<pc.Entity, WorkBufferModifier | null>();
   /**
-   * Sunlight (scanSunlight.ts, sunHook.ts), GLSL only as the motion: the sun to light by now,
+   * Sunlight (state/sunReport.ts, sunHook.ts), GLSL only as the motion: the sun to light by now,
    * whether the work buffer carries the word the copy pass writes for it -- added with the
    * first sun and kept, a stream not being taken back -- and whether the frame's hook is in.
    */
@@ -1088,7 +1088,7 @@ function assemble(
     sunStream ? PLAYCANVAS_LAYER_SUN_MODIFIER : PLAYCANVAS_LAYER_MODIFIER;
 
   /**
-   * The sun to light the scan by (scanSunlight.ts), or none. The first one adds the word to the
+   * The sun to light the scan by (state/sunReport.ts), or none. The first one adds the word to the
    * work buffer and has every tile's copy write it -- each tile copied again once, in the frame
    * this asks for; the hook and its uniforms follow in `render` (`syncSun`).
    */
@@ -1133,7 +1133,7 @@ function assemble(
     }
     if (want && sun && sun !== sunSet) {
       sunValue.set([sun.dir[0], sun.dir[1], sun.dir[2], sun.sunUp]);
-      sunlightValue[0] = sun.strength;
+      sunlightValue.set([sun.strength, sun.ambient, sun.flat, 0]);
       material.setParameter("uHexapodSun", sunValue);
       material.setParameter("uHexapodSunlight", sunlightValue);
       sunSet = sun;

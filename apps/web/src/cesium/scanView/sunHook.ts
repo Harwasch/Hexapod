@@ -13,8 +13,11 @@
  * scales), turned toward the eye, lambert against the sun's direction, and
  * `rgb *= mix(1, 0.35 + 0.65 · lambert · sunUp, strength)`. The sun's direction (in the scan's
  * frame) and `sunUp` are worked out on the CPU each frame by cesium/sunlight.ts, by the
- * engine's own sun arithmetic, and handed over as uniforms (scanSunlight.ts): a uniform set per
- * frame copies nothing into the work buffer.
+ * engine's own sun arithmetic, and handed over as uniforms (state/sunReport.ts): a uniform set per
+ * frame copies nothing into the work buffer. The relight's two constants (the flatness ratio and
+ * the ambient floor) come with the sun too, so this chunk holds no copy of lib/splatNormals.ts
+ * (whose `scaleSunlightFactor` is this GLSL in TypeScript) and the globe's first load gains no
+ * chunk for it.
  *
  * Two things CesiumJS's chain has that a hook after the copy pass does not, carried by one
  * 32-bit word per splat, `hexapodSun`, an extra stream of the work buffer the copy pass writes
@@ -35,7 +38,7 @@
  * GLSL only, as the motion and the cell views: the WebGPU trial does not draw it.
  */
 
-import { FLAT_RATIO, scaleNormal, SUN_AMBIENT, type Vec3 } from "@/lib/splatNormals";
+import type { Vec3 } from "@/lib/splatNormals";
 
 /** The work buffer's extra stream (R32U): PlayCanvas names its accessors `load/writeHexapodSun`. */
 export const SUN_STREAM = "hexapodSun";
@@ -63,7 +66,7 @@ uint hexapodSunWord(vec3 black) {
 /**
  * The final draw's hook (`gsplatModifyVS` on `app.scene.gsplat.material`). Uniforms:
  * `uHexapodSun` (the sun's unit direction in the scan's frame, `sunUp`) and `uHexapodSunlight`
- * (strength, -, -, -). Reads the copy pass's word (`loadHexapodSun`), so it is installed only
+ * (strength, `SUN_AMBIENT`, `FLAT_RATIO`, -). Reads the copy pass's word (`loadHexapodSun`), so it is installed only
  * once the work buffer has the stream.
  */
 export const SUN_HOOK_VS = `
@@ -72,8 +75,8 @@ uniform vec4 uHexapodSunlight;
 uniform vec3 view_position;
 vec4 hexapodSunRotation = vec4(0.0, 0.0, 0.0, 1.0);
 vec3 hexapodSunScale = vec3(1.0);
-// The unit smallest axis of a clearly flat splat (lib/splatNormals.ts scaleNormal); vec3(0)
-// for anything rounder.
+// The unit smallest axis of a clearly flat splat (lib/splatNormals.ts scaleNormal: smallest
+// variance under FLAT_RATIO, uHexapodSunlight.z, of the middle one); vec3(0) for anything rounder.
 vec3 hexapodSunNormal() {
     vec3 v = hexapodSunScale * hexapodSunScale;
     vec3 axis;
@@ -86,7 +89,7 @@ vec3 hexapodSunNormal() {
     } else {
         axis = vec3(0.0, 0.0, 1.0); lo = v.z; mid = min(v.x, v.y);
     }
-    if (!(lo < ${float(FLAT_RATIO)} * mid) || !(dot(hexapodSunRotation, hexapodSunRotation) > 0.0)) {
+    if (!(lo < uHexapodSunlight.z * mid) || !(dot(hexapodSunRotation, hexapodSunRotation) > 0.0)) {
         return vec3(0.0);
     }
     vec4 q = normalize(hexapodSunRotation);
@@ -119,7 +122,7 @@ void modifySplatColor(vec3 center, inout vec4 color) {
         }
         lambert = max(dot(n, uHexapodSun.xyz), 0.0);
     }
-    float light = ${float(SUN_AMBIENT)} + (1.0 - ${float(SUN_AMBIENT)}) * lambert * uHexapodSun.w;
+    float light = uHexapodSunlight.y + (1.0 - uHexapodSunlight.y) * lambert * uHexapodSun.w;
     vec3 black = hexapodSunBlack(word);
     color.rgb = black + (color.rgb - black) * mix(1.0, light, uHexapodSunlight.x);
 }
@@ -151,28 +154,4 @@ export function relightAfterLook(
     black[2] + (drawn[2] - black[2]) * factor,
     drawn[3],
   ];
-}
-
-/** The hook's factor for one splat, in the scan's frame: the GLSL above, in TypeScript. */
-export function hookSunFactor(input: {
-  scale: Vec3;
-  quat: readonly [number, number, number, number];
-  centre: Vec3;
-  eye: Vec3;
-  /** Unit direction to the sun. */
-  sun: Vec3;
-  sunUp: number;
-  strength: number;
-}): number {
-  if (!(input.strength > 0)) return 1;
-  let lambert = 1;
-  const n = scaleNormal(input.scale, input.quat);
-  if (n) {
-    const toEye = [0, 1, 2].map((i) => (input.eye[i] ?? 0) - (input.centre[i] ?? 0));
-    const facing = n[0] * (toEye[0] ?? 0) + n[1] * (toEye[1] ?? 0) + n[2] * (toEye[2] ?? 0);
-    const s = facing < 0 ? -1 : 1;
-    lambert = Math.max(s * (n[0] * input.sun[0] + n[1] * input.sun[1] + n[2] * input.sun[2]), 0);
-  }
-  const light = SUN_AMBIENT + (1 - SUN_AMBIENT) * lambert * input.sunUp;
-  return 1 + (light - 1) * input.strength;
 }

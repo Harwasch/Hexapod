@@ -14,12 +14,7 @@ import { cellTextureRows, confidenceTexels, decodeCellGrid } from "@/lib/cellGri
 import type { CellLookView } from "@/lib/cellLook";
 import { publishScanCellView } from "@/cesium/scanView/scanCellView";
 import type { LayerLook } from "@/cesium/scanView/layerLook";
-import {
-  publishScanSun,
-  scanSunDrawn,
-  scanSunReading,
-  type ScanSun,
-} from "@/cesium/scanView/scanSunlight";
+import { publishScanSun, scanSunDrawn, scanSunReading, type ScanSun } from "@/state/sunReport";
 import { SUN_HOOK_VS, SUN_STREAM } from "@/cesium/scanView/sunHook";
 import type { BackendHooks, ScanPose } from "@/cesium/scanView/types";
 import type { TileWork } from "@/cesium/scanView/tileWork";
@@ -247,8 +242,9 @@ const pose: ScanPose = {
 
 const tile = (uri: string) => ({ uri }) as unknown as TileNode;
 const URL_ = "https://scan.test/tileset.json";
-const MORNING: ScanSun = { dir: [0.87, 0.07, 0.48], sunUp: 1, strength: 1 };
-const EVENING: ScanSun = { dir: [-0.87, 0.06, 0.5], sunUp: 1, strength: 1 };
+const CONSTANTS = { ambient: 0.35, flat: 0.25 };
+const MORNING: ScanSun = { dir: [0.87, 0.07, 0.48], sunUp: 1, strength: 1, ...CONSTANTS };
+const EVENING: ScanSun = { dir: [-0.87, 0.06, 0.5], sunUp: 1, strength: 1, ...CONSTANTS };
 
 async function backendFor(assetId: string) {
   const { createBackend } = await import("@/cesium/scanView/playcanvasBackend");
@@ -339,7 +335,7 @@ describe("Sunlight under PlayCanvas", () => {
     expect(pc.material.params.get("uHexapodSun")).toEqual(
       [0.87, 0.07, 0.48, 1].map((v) => Math.fround(v)),
     );
-    expect(pc.material.params.get("uHexapodSunlight")).toEqual([1, 0, 0, 0]);
+    expect(pc.material.params.get("uHexapodSunlight")).toEqual([1, 0.35, 0.25, 0].map(Math.fround));
     expect(scanSunReading("scan-b")).toMatchObject({ installed: true, stream: true, frames: 1 });
 
     // The sun moves: uniforms only, no tile copied again.
@@ -376,14 +372,14 @@ describe("Sunlight under PlayCanvas", () => {
 
   it("draws the photograph for a sun of strength 0, the hook in", async () => {
     const { backend } = await backendFor("scan-c");
-    publishScanSun("scan-c", { dir: [0, 0, 1], sunUp: 1, strength: 0 });
+    publishScanSun("scan-c", { dir: [0, 0, 1], sunUp: 1, strength: 0, ...CONSTANTS });
     const near = await backend.load(URL_, tile("0_0.glb"));
     backend.add(near);
     backend.render(pose);
     // Already on when the renderer started: the stream from the start, the tiles writing it.
     expect(pc.format.streams).toHaveLength(1);
     expect(component(near).modifier?.glsl).toContain("writeHexapodSun(");
-    expect(pc.material.params.get("uHexapodSunlight")).toEqual([0, 0, 0, 0]);
+    expect(pc.material.params.get("uHexapodSunlight")).toEqual([0, 0.35, 0.25, 0].map(Math.fround));
     backend.destroy();
   });
 

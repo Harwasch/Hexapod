@@ -36,7 +36,6 @@ import {
 
 import { publishScanCellView } from "@/cesium/scanView/scanCellView";
 import { ScanRendererHost } from "@/cesium/scanView/ScanRendererHost";
-import { scanSunReading } from "@/cesium/scanView/scanSunlight";
 import { cesiumCellViewGpu, SplatCellView } from "@/cesium/splatCellView";
 import { colorChainOf, type ColorPrimitive } from "@/cesium/splatColor";
 import { incrementalSplats, splatTilesetOf } from "@/cesium/splatInternals";
@@ -48,7 +47,7 @@ import { SUN_AMBIENT, sunUpFactor } from "@/lib/splatNormals";
 import { useAsCaptured } from "@/state/asCaptured";
 import { useLighting, type SunMode } from "@/state/lighting";
 import { useSettings } from "@/state/settings";
-import { useSunReport } from "@/state/sunReport";
+import { scanSunReading, useSunReport } from "@/state/sunReport";
 
 import { encodeConfidenceGrid } from "./cellGridFixture";
 import { SLAB_GREY } from "./sunlightSlab";
@@ -71,7 +70,7 @@ export interface SlabView {
   sine: number;
   /**
    * The colour chain of the slab's primitive under CesiumJS; under PlayCanvas the frame's hook,
-   * `sunHook`, while it is in the draw material (scanView/scanSunlight.ts's reading).
+   * `sunHook`, while it is in the draw material (state/sunReport.ts's reading).
    */
   parts: string[];
   /** What the relight reported drawing, if anything. */
