@@ -266,3 +266,9 @@ def test_no_mdat_payload_is_fetched() -> None:
     _, storage = checked(data)
     overlap = sum(max(0, min(off + n, end) - max(off, start + 8)) for off, n in storage.reads)
     assert overlap == 0, f"{overlap} mdat payload bytes fetched: {storage.reads}"
+
+
+def test_declared_xyz_text_must_not_be_truncated() -> None:
+    data = box(b"moov", box(b"udta", box(v.XYZ, struct.pack(">HH", 65535, 0) + b"+1+2/")))
+    found, _ = checked(data)
+    assert found is None

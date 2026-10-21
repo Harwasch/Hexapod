@@ -353,6 +353,8 @@ def _xyz(payload: bytes) -> VideoLocation | None:
     if len(payload) < 4:
         return None
     (length,) = struct.unpack(">H", payload[:2])
+    if 4 + length > len(payload):
+        return None  # a string that says it is longer than the atom holding it
     try:
         text = payload[4 : 4 + length].decode("utf-8")
     except UnicodeDecodeError:
