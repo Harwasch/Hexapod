@@ -171,7 +171,7 @@ how well each cell was seen (ADR 0016).
 - **Weak cells.** The change rule above does not consult the confidence score. In the demo every
   changed cell that one epoch's grid calls weak is the crate's own side, so excluding weak cells
   would have hidden real change and caught nothing false; A5 classifies them and flags them
-  `lowConfidence` (§ API 3).
+  `lowConfidence` (§ API 9).
 - **Memory and determinism.** One band of extremes at a time (137 bytes a cell, 2^19 cells a band)
   and the plane (10 bytes a cell); order statistics then roundings, so the bytes depend on neither
   chunk nor band. `points3D.bin` is streamed.
@@ -200,7 +200,7 @@ here was calibrated on it.
 ## API
 
 Date 2026-10-20 · M5 of the splat-pipeline build (design M4–M6 §3 A5, DECISIONS D7), branch
-`claude/feat-splat-change-api`.
+`claude/feat-splat-change-api`. Revised after review B5a (its rulings are marked so).
 
 ### Decision
 
@@ -208,86 +208,127 @@ Date 2026-10-20 · M5 of the splat-pipeline build (design M4–M6 §3 A5, DECISI
    `epoch_maps.kind` to `confidence` · `surface` (the downgrade deletes the surface rows first).
    `register` records `registration.json`'s `surface` on the revision it published, through the
    same record / carry / repoint path as the confidence grid (ADR 0016 § API 2). A descriptor is
-   checked first — the container, a file beside the tiles, a cell on the lattice, the four
-   channels at the types and units the arithmetic assumes (`dsm`, `ground` i2 cm; `sigma` u1 cm;
-   `support` u1), `noData` −32768, the summary counts, a `status`, and
+   checked first — the container, a file beside the tiles, a cell on the lattice, the five
+   channels at the types and units the arithmetic assumes (`dsm`, `ground` i2 cm; `sigma`,
+   `groundSigma` u1 cm; `support` u1), `noData` −32768, the summary counts, a `status`, and
    `vertical.originHeightM` — and one that fails is logged and not recorded. `surface.bin` is a
    sidecar of kind `surface`, bound to the tiles and not attachable, like `confidence.bin`. Every
    epoch says `surface: {status: measured, assetId, url, cellM, level, policy, calibration,
 cells, surfacedCells, medianSigmaM, originHeightM, groundWindowM}`, or null — not measured.
 2. **`GET /sites/{id}/change?from=&to=`** (`change-v1`) compares the current revisions of two
-   published epochs of one site at the coarser of their surfaces' levels, each coarse cell taken
-   over **only the children both epochs measured** — of those, dsm the highest, ground the
-   lowest, sigma the largest (§ Pipeline 4's rule; `coarsen_surface` matches P5's demo byte for
-   byte on the committed fixture `data/tiles/synthetic-yard-surfaces`). Coarsening each epoch
-   on its own would let one side's single ground child stand for a whole cell against the
-   other's crate in a sibling (a 2 m "lowered" with nothing flagged, found in review), or set
-   one side's uphill children against the other's downhill ones. So the finer epoch is first
-   brought up over the children whose coarse cell the coarser one measured, then both go up
-   together over the children both measured. Where both have that, `Δ = dsm_to − dsm_from` (in
-   32 bits: two i2 heights can differ by more than i2 holds) against
-   `t = 3·√(σ_from² + σ_to² + u_from² + u_to²)`, `u` each epoch's confidence grid's
-   `alignmentCap.uncertaintyM`: `raised` above `t`, `lowered` below `−t`, else `unchanged`;
-   `insufficient` where either measured something but no child is shared; no class where
-   neither measured anything (the windows' bounding box is not a place either epoch saw — P5's
-   demo report counts those cells as insufficient too; the API does not, kept in review). `appearance-only`
-   stays reserved: `appearance: {status: not-computed, reason}`. Two windows together over 2^22
-   cells are compared a level up, and the answer says so (`level` above `nativeLevel`).
-3. **Weak cells are classified and flagged, not hidden** (D7). A compared cell is `lowConfidence`
-   when either epoch's confidence grid does not vouch for it at the compared level — weak-v1 weak,
-   unseen, or no evidence at all, through the grid's own min-of-children pyramid, so a coarse cell
-   is as weak as its weakest child — when it was compared over fewer children than either side
-   measured (the coarser epoch counting as having measured its whole cell), or when either sigma
-   is saturated (255 cm: the threshold is then only a lower bound). The answer counts them per compared class beside the class counts.
-4. **`minDetectableM`** is the least threshold over the compared cells: no change smaller can be
-   seen anywhere between those dates (null when none was compared). An epoch placed by GPS alone
-   at ±10 m makes it about 30 m, and so finds no change rather than false ones.
-5. **Areas** are the 4-connected regions of one changed or insufficient class — raised and
-   lowered split further by confidence — outlined on their cells' exact edges (rasterio `shapes`,
-   as weak areas are) and placed on the globe through the site frame's own tangent plane (§ API 5
-   of ADR 0016), each a MultiPolygon with its cells, area, low-confidence cells (and
-   `lowConfidence` when all are), and for raised and lowered the mean and largest dsm change and
-   the mean ground change. Raised and lowered first, then insufficient. **Unchanged cells are
-   counted, never outlined** (decided in review): they are most of a map and of its outline's
-   cost, and an area of them would read as confident wherever the comparison could not see — an
-   epoch placed by GPS alone is unchanged everywhere. The drape draws changes and insufficient
-   only. The outline is held to weak areas' bounds (2^20 cells, 2^18 cell edges): past them the
-   map is classified again a level up, by the same rule, and drawn there (`areaLevel`); the
-   counts stay the compared level's.
-6. **What it says it is.** Every answer is `derived: true`, labelled "Derived from height
-   surfaces, not observed", and `calibration: uncalibrated`: the 3σ rule (and the surfaces' own
-   estimators, the 5 m ground window among them) is first principles until a pilot site scanned
-   twice measures it. It is computed per request from the stored maps and not stored itself.
-7. **Refusals, each with a code**: 404 unknown site or an epoch not of it; 422 the same epoch
-   twice; 409 `epoch-not-published`, `no-site-frame`, `surface-not-measured` (a revision with no
-   surface: one side missing everywhere is no map, not a map of insufficient cells),
-   `confidence-not-measured` (its `u` and its vouching are unknown), `frames-differ` (a surface
-   above another origin height than the site frame's, to the millimetre), `surface-unreadable` /
-   `confidence-unreadable`. Both epochs are found (404) before either one's status is judged
-   (409). The origin-height check is kept (review): a site frame is fixed once created and
-   `register` holds every run to its lat, lon and height exactly, so the descriptor's
-   `vertical.originHeightM` is the one place a surface could still disagree with its frame; lat
-   and lon are not in the descriptor.
-8. **Behind the write token, rate-limited** (decided in review). It stores nothing, but a call
-   decodes four grids, and the 96 MB grid cache cannot hold four of the largest: the same cost and
-   the same pattern as weak areas (POST, token) and fill targets (GET, token). It also spends the
-   per-client cell-map bucket they spend. The drape (W5c) sends the console's token.
-   The comparison holds about 30 bytes a cell for the window (both surfaces over their shared
-   cells, the outputs, what each side measured) and classifies a band of rows at a time; a
-   2048 × 2048 map with confidence pyramids peaked at about 150 MiB here.
+   published epochs of one site in **two layers** (B5a ruling), each classified on its own:
+   - **`ground`**, the bare earth (`ground`, `groundSigma`): the primary product;
+   - **`vegetation`**, the top surface (`dsm`, `sigma`): canopy, crops and anything standing on
+     the ground, labelled "never ground change", at its own higher threshold (6). A change of
+     the ground wider than P5's ground window shows in both; a crate, a spoil heap or a crop
+     only in vegetation.
+
+   Both are compared at the coarser of the surfaces' levels, each coarse cell taken over only
+   the children both epochs measured — the top the highest, the ground the lowest, each sigma
+   the largest (§ Pipeline 4's rule; `coarsen_surface` matches P5's demo byte for byte on the
+   committed fixture `data/tiles/synthetic-yard-surfaces`). The finer epoch is first brought up
+   over the children whose coarse cell the coarser one measured, then both go up together.
+
+3. **What is compared** (B5a). Where both epochs have the layer's height over every child the
+   finer measured, `Δ = h_to − h_from` (in 32 bits) against
+   `t = 3·√(s_from² + s_to² + u_from² + u_to² + 2w²) + drift`. A cell is **`insufficient`**
+   where either measured the layer but the two cannot be compared: no shared child; **fewer
+   shared children than either measured** (a coarse cell against part of it — it was compared
+   and flagged; the review's crate-against-one-ground-child read "lowered 2 m"); **either sigma
+   saturated** (255 cm, "at least": the threshold would be a lower bound — two 30 m floaters read
+   as raised against 7.65 m); for the ground, **ground never observed** (P5's `NO_HEIGHT` under a
+   surface). No class where neither measured anything.
+4. **`u`, each epoch's placement, takes its alignment class** (B5a ruling). `u` is the larger of
+   its uncertainty from the site frame (its confidence grid's `alignmentCap.uncertaintyM`; 0 for
+   the epoch that made the frame) and its alignment's own claim (`alignment.uncertaintyM`, 10 m
+   when none is recorded). A `survey` epoch (an RTK drone with RTK evidence in its frames) claims
+   centimetres; a `coarse` one — any phone, a drone without RTK evidence, anything aligned into
+   a coarse reference — metres, so no change under metres is claimed with it, however well it was
+   aligned visually: a phone epoch is never presented as survey grade. An epoch whose verdict is
+   `unaligned`, or that recorded none, is refused (409 `epoch-unaligned`). The answer states each
+   epoch's verdict, its `u` and its uncertainty from the frame.
+5. **Horizontal uncertainty** (B5a). Placement error moves an epoch sideways too: cell for cell,
+   an unchanged 4 m roof one 25 cm cell off, at 25 cm declared, read as a column lowered 4 m and
+   one raised. Each cell is compared with the other epoch's neighbourhood within the horizontal
+   radius — the least whole number of cells covering `3·√(u_from² + u_to² + 2w²)` — raised when
+   the later height is above everything the earlier had nearby by more than `t`, or the earlier
+   below everything the later has nearby (a hole filled); lowered the mirror. A shift within the
+   radius explains every cell; a post put up or taken away is still a change.
+6. **Vegetation's threshold, derived** (B5a ruling). Between two visits a canopy's top moves
+   without anything having grown: a crown sways by decimetres at its top in the wind, and the
+   leaves the 2nd-highest sample lands on flutter by their own size. `w = 0.25 m` per epoch — the
+   lattice's finest cell — is taken as one standard deviation of that, vertically and
+   horizontally, in each epoch independently: `2w²` under the root, so with perfectly placed,
+   noiseless epochs the least vegetation change seen is `3·√2·w`, about **1.06 m**, and the
+   horizontal radius about as much. The ground has `w = 0`: what sways is above it.
+   Uncalibrated, like the 3σ rule; a leaf-on/leaf-off pair is real vegetation change.
+7. **The ground's drift, derived.** P5's ground is a lower envelope over a window of
+   half-diagonal `R` (from the descriptor's `groundWindowCells`), so on grade `g` it reads up to
+   `g·R` low, and which cell of the window it reads moves with whatever stands in it: a bush grown
+   at a window's downhill corner would move the ground of every cell within its reach. So the
+   ground's `t` adds `g·R`, `g` the steeper of the two epochs' local grades over the window's
+   half-width (one-sided differences of the ground, whole centimetres; 1 in 2 where no cell that
+   far has a ground). Nothing on flat ground; a real ground change is seen where it is wider than
+   the window's span, and its rim reads its own step as drift.
+8. **Refused rather than guessed** (B5a ruling): 409 **`not-metric`** when a surface's heights
+   are not metres (`summary.metric` not true: a run whose scale was never resolved) — a ratio of
+   heights cannot be put against `u`, which is in metres, so no relative-only answer is offered;
+   409 **`scale-corrected`** when an epoch is drawn at a runtime scale other than 1
+   (`renderConfig.scale`): its surface was measured on the files as registered, and honouring the
+   scale would need the heights scaled and the cells resampled about the frame origin, which is
+   not done. The committed fixtures are a scene built in metres, and say `metric: true`.
+9. **Low confidence is flagged, not hidden** (D7). A compared cell is `lowConfidence` when either
+   epoch's confidence grid does not vouch for it at the compared level — weak-v1 weak, unseen, or
+   no evidence, through the grid's own min-of-children pyramid. Counted per class.
+10. **`minDetectableM`**, per layer, is the least threshold over its compared cells: no change of
+    that layer smaller can be seen anywhere between those dates.
+11. **Areas**, per layer, are the 4-connected regions of one changed or insufficient class —
+    raised and lowered split further by confidence — outlined on their cells' exact edges and
+    placed on the globe through the site frame's tangent plane, each with its cells, area,
+    low-confidence cells and, for raised and lowered, the mean and largest change of the layer's
+    height. **Unchanged cells are counted, never outlined.** Past weak areas' outline bounds the
+    layer is classified again a level up and drawn there (`areaLevel`).
+12. **What it says it is.** Every answer is `derived: true`, labelled "Derived from height
+    surfaces, not observed", and `calibration: uncalibrated`. It is computed per request and not
+    stored. The answer: `{…, level, nativeLevel, cellM, thresholdSigma, uncertainty {fromM, toM,
+fromVerdict, toVerdict, fromFrameM, toFrameM}, ground, vegetation, appearance}`, each layer
+    `{layer, label, heights, minDetectableM, motionM, horizontalRadiusM, driftReachM, counts,
+lowConfidence, areaLevel, areaCellM, areas}`.
+13. **Other refusals**: 404 unknown site or an epoch not of it; 422 the same epoch twice; 409
+    `epoch-not-published`, `no-site-frame`, `surface-not-measured`, `confidence-not-measured`,
+    `frames-differ` (another origin height than the site frame's, to the millimetre),
+    `surface-unreadable` / `confidence-unreadable`. Both epochs are found (404) before either
+    one's status is judged (409).
+14. **Behind the write token, rate-limited** (decided in review): a call decodes four grids, the
+    same cost and pattern as weak areas and fill targets, and spends the cell-map bucket. The
+    comparison holds per layer a few tens of bytes a cell and classifies a band of rows at a
+    time: measured with tracemalloc at 1024 × 1024 cells, 36 bytes a cell for vegetation (its
+    5-cell neighbourhoods) and 51 for the ground (its neighbourhoods and local rise), so about
+    210 MiB at the 2^22-cell ceiling for the ground layer.
 
 ### Evidence (synthetic)
 
-The P5 demo's two epochs (`confidence_demo.py --change`) registered through `register` on one site
-and asked `GET /change`: at 0.25 m cells, `u` 0 and 0.062 m, `minDetectableM` 0.191 m; 49 raised
-(the crate's 36 cells and the 13 its sides stand in, mean Δ 1.50 m), 0 lowered, 1,423 unchanged,
-1,997 insufficient (the unchanged ones counted, not outlined); 11 of the raised cells low confidence (the crate's sides, as the demo found).
-From and to swapped: 49 lowered. The same re-scan as if unaligned (±10 m): `minDetectableM` 30.0 m
-and nothing raised or lowered. Every capture is synthetic; nothing was calibrated on it.
+- **The no-change control** (B5a ruling): one unchanged scene scanned by P5's own estimator at 20
+  against 2,000 samples a cell (10 cm of noise) and at 1 cm against 10 cm of noise (100 samples),
+  committed as `control/a..d`: 0 of 1,024 cells changed in either layer of either pair. P5's own
+  control, before its sigma carried its bias: 204 and 329 of 400 cells raised.
+- **Coarse against survey** (B5a ruling): the yard re-scan as a phone epoch aligned coarsely
+  (±5 m), its grid 6 cm from the frame: least detectable change 15 m in both layers, nothing
+  claimed; it had been the 2.5 m shed raised against 0.23 m.
+- **Horizontal shift**: an unchanged 4 m roof one 25 cm cell off at 25 cm declared: nothing
+  changed (cell for cell: 10 cells lowered, 10 raised).
+- **The yard fixture** (`synthetic-yard-surfaces`, both epochs surveyed): ground — the pond dug,
+  48 cells lowered by 1.0 m (its 10 × 10 m less the rim, where its step reads as drift), nothing
+  raised; vegetation — the shed 24 cells raised 2.5 m, the stack 23 raised 1.6 m (low
+  confidence: e1 weak there), the spoil heap 24 lowered 1.8 m, the pond's metre under its 1.09 m
+  threshold. Every capture is synthetic; nothing was calibrated on it.
 
 ### Not done here
 
-- The drape and its legend (W5c). A stored change map per epoch pair: not needed while a call costs
-  about a second at the grid ceiling.
-- Appearance-only change; any measurement behind the 3σ rule or the surface estimators; per-cell
-  output (only areas and counts are answered; a per-cell raster for the web is a later decision).
+- The drape and its legend (W5c), which follows the two-layer answer. A stored change map per
+  epoch pair: not needed while a call costs about a second at the grid ceiling.
+- Appearance-only change; any measurement behind the 3σ rule, the surface estimators, `w` or the
+  drift bound; honouring a runtime scale by resampling; per-cell output (only areas and counts are
+  answered; a per-cell raster for the web is a later decision).
+- P5's demo compares the top surface cell for cell with each epoch's frame-relative `u` only: it
+  is the reference the fixture's coarsening and cell rule are held to, not the API's layers.
