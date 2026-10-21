@@ -317,9 +317,15 @@ describe("Confidence and Data age under PlayCanvas", () => {
     expect(reading?.sampled).toBe(4);
 
     // Photo again: the look comes off, and the tiles are drawn as decoded.
+    const texture = component(near).params.get("uCellGrid") as { destroyed: boolean };
     publishScanCellView("scan-a", null);
     expect(component(near).modifier ?? null).toBeNull();
     expect(component(far).modifier ?? null).toBeNull();
+    // The grid's texture is freed, and no tile is left pointing at it.
+    expect(texture.destroyed).toBe(true);
+    for (const entity of [near, far]) {
+      expect(component(entity).params.get("uCellGrid")).not.toBe(texture);
+    }
     backend.destroy();
     expect(scanCellViewReading("scan-a")).toBeNull();
   });

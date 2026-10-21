@@ -513,7 +513,12 @@ export function createBackend(
   const setCellView = (view: CellLookView | null): void => {
     const before = cells.view;
     if (!cells.setView(view)) return;
-    if (view && view.rows !== before?.rows) {
+    // Photo frees the grid's texture; the dyno reads its 1 x 1 stand-in meanwhile.
+    if (!view && cellGrid.value !== emptyCellGrid) {
+      cellGrid.value.dispose();
+      cellGrid.value = emptyCellGrid;
+    }
+    if (view && (view.rows !== before?.rows || cellGrid.value === emptyCellGrid)) {
       const texture = new THREE.DataTexture(
         view.rows.data,
         CELL_TEXTURE_WIDTH,

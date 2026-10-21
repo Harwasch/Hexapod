@@ -1010,7 +1010,10 @@ function assemble(
     if (!cells) return;
     const before = cells.view;
     if (!cells.setView(view)) return;
-    if (view && view.rows !== before?.rows) {
+    // Photo frees the grid's texture: every tile is pointed at a stand-in before it goes.
+    const freed = view ? null : cellTexture;
+    if (!view) cellTexture = null;
+    if (view && (view.rows !== before?.rows || !cellTexture)) {
       cellTexture?.destroy();
       cellTexture = dataTexture(
         "hexapodCellGrid",
@@ -1021,7 +1024,11 @@ function assemble(
       );
     }
     cellFillOf(view, cellFill);
-    for (const entity of cells.meshes()) applyModifier(entity);
+    for (const entity of cells.meshes()) {
+      applyModifier(entity);
+      if (freed) entity.gsplat?.setParameter("uCellGrid", stand().state);
+    }
+    freed?.destroy();
     for (const entity of layers.keys()) entity.gsplat?.setParameter("uCellFill", cellFill);
     hooks.frameWanted();
   };

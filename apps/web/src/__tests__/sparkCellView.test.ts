@@ -240,9 +240,16 @@ describe("Confidence and Data age under Spark", () => {
     });
 
     // Photo again: the look comes off.
+    const grid = cellStep(near)?.inputs.grid as { value: THREE.DataTexture };
+    const texture = grid.value;
+    const freed = vi.spyOn(texture, "dispose");
     publishScanCellView("spark-a", null);
     expect(near.worldModifier).toBeUndefined();
     expect(far.worldModifier).toBeUndefined();
+    // The grid's texture is freed, the dyno back on its 1 x 1 stand-in.
+    expect(freed).toHaveBeenCalled();
+    expect(grid.value).not.toBe(texture);
+    expect(grid.value.image.width).toBe(1);
     backend.destroy();
     expect(scanCellViewReading("spark-a")).toBeNull();
   });
