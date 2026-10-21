@@ -188,7 +188,38 @@ function secondDate(): string {
   });
 }
 
-async function route(page: Page): Promise<void> {
+/**
+ * March's own tileset.json with an inferred layer declared in its root: the synthetic tree under
+ * the yard's root (as June's date is), served as `tileset.json?fill=1` beside it. June has none.
+ */
+function marchWithFill(): string {
+  const yard = JSON.parse(
+    readFileSync(resolve(TILES, "synthetic-yard/splat/tileset.json"), "utf8"),
+  ) as { root: { extras?: Record<string, unknown> } & Record<string, unknown> };
+  return JSON.stringify({
+    ...yard,
+    root: {
+      ...yard.root,
+      extras: {
+        ...yard.root.extras,
+        inferredLayers: [
+          {
+            uri: "tileset.json?fill=1",
+            evidence: {
+              kind: "inferred",
+              filler: "fixture",
+              views: 3,
+              gaussians: 10,
+              meanConfidence: 0.5,
+            },
+          },
+        ],
+      },
+    },
+  });
+}
+
+async function route(page: Page, options: { marchFill?: boolean } = {}): Promise<void> {
   await mockApi(page);
   await page.route("**/api/v1/sites", (r) =>
     r.request().method() === "GET" ? r.fulfill({ status: 200, json: [summary] }) : r.fallback(),
@@ -199,8 +230,11 @@ async function route(page: Page): Promise<void> {
     const url = new URL(r.request().url());
     const relative = url.pathname.replace(/^.*\/fixture-tiles\//, "");
     if (relative.includes("..")) return r.abort();
-    if (relative === "synthetic-yard/splat/tileset.json" && url.searchParams.get("epoch") === "2")
+    const yardJson = relative === "synthetic-yard/splat/tileset.json";
+    if (yardJson && (url.searchParams.get("epoch") === "2" || url.searchParams.get("fill") === "1"))
       return r.fulfill({ status: 200, contentType: "application/json", body: second });
+    if (yardJson && options.marchFill)
+      return r.fulfill({ status: 200, contentType: "application/json", body: marchWithFill() });
     const file = resolve(TILES, relative);
     if (!existsSync(file)) return r.fulfill({ status: 404, body: "" });
     return r.fulfill({
@@ -242,9 +276,13 @@ async function drawnAs(page: Page): Promise<Record<string, [boolean, number]>> {
   return Object.fromEntries(s.loaded.map((a) => [a.id, [a.shown, a.split]]));
 }
 
-async function arrive(page: Page, renderer: string): Promise<void> {
+async function arrive(
+  page: Page,
+  renderer: string,
+  options: { marchFill?: boolean } = {},
+): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 760 });
-  await route(page);
+  await route(page, options);
   await page.goto(`/?renderer=${renderer}`);
   await page.waitForFunction(() => "__twin" in window && Boolean(window.__twin), undefined, {
     timeout: 120_000,
@@ -363,6 +401,42 @@ const sidePicks = (
     const unique = (list) => [...new Set(list)];
     return { left: unique(out.left), right: unique(out.right), leftUnsided: unique(out.leftUnsided) };
   })()`);
+
+/**
+ * The share of the covered pixels (not the globe's flat teal) that are Highlight's purple, in
+ * columns [x0, x1) and rows [0.08, 0.55) of a screenshot.
+ */
+async function purple(page: Page, shot: Buffer, x0: number, x1: number): Promise<number> {
+  return page.evaluate(
+    async ([data, from, to]) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${data}`;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d");
+      if (!context) return 0;
+      context.drawImage(image, 0, 0);
+      const x = Math.floor(image.width * from);
+      const w = Math.floor(image.width * to) - x;
+      const y = Math.floor(image.height * 0.08);
+      const h = Math.floor(image.height * 0.47);
+      const p = context.getImageData(x, y, w, h).data;
+      let covered = 0;
+      let lit = 0;
+      for (let i = 0; i < p.length; i += 4) {
+        const [r, g, b] = [p[i] ?? 0, p[i + 1] ?? 0, p[i + 2] ?? 0];
+        // The globe's teal background (about 92, 143, 135) is no splat.
+        if (Math.abs(r - 92) + Math.abs(g - 143) + Math.abs(b - 135) < 30) continue;
+        covered += 1;
+        if (b > g + 25 && r > g + 5) lit += 1;
+      }
+      return covered ? lit / covered : 0;
+    },
+    [shot.toString("base64"), x0, x1] as const,
+  );
+}
 
 async function railUnchanged(page: Page): Promise<void> {
   await expect(page.getByRole("toolbar", { name: "Tools" }).getByRole("button")).toHaveText([
@@ -589,5 +663,53 @@ test("under spark, Compare › Dates says it needs CesiumJS or PlayCanvas and sw
     .toEqual({ [A1]: [false, LEFT], [A2]: [false, RIGHT] });
   await closePanel(page);
   await settledShot(page, "spark-switched-compare");
+  await railUnchanged(page);
+});
+
+test("under playcanvas, the left date's inferred fill is labelled, and drawn purple under Highlight", async ({
+  page,
+}) => {
+  test.setTimeout(420_000);
+  // March (left) has an inferred layer; June (right, the date shown before) has none.
+  await arrive(page, "playcanvas", { marchFill: true });
+  await expect.poll(async () => (await state(page)).shown, poll).toBe(A2);
+  await overlayDrawn(page, A2);
+  // June alone: no fill, so no Inferred control.
+  await expect(page.getByTestId("inferred-style")).toHaveCount(0);
+
+  const dates = await openCompare(page);
+  await dates.getByRole("switch", { name: "Swipe between dates" }).click();
+  await expect
+    .poll(() => drawnAs(page), poll)
+    .toEqual({ [A1]: [false, LEFT], [A2]: [false, RIGHT] });
+  await closePanel(page);
+  // The Inferred control speaks for either date's fill: March's, left of the divider.
+  await expect(page.getByTestId("inferred-style")).toBeVisible({ timeout: 60_000 });
+  await page.getByRole("radio", { name: "Show inferred fill" }).click();
+  await expect(page.getByTestId("inferred-legend")).toHaveText(
+    "Inferred: generated where no camera saw. Not measured.",
+  );
+  // PlayCanvas streams March and its layer beside June, the layer on March's side.
+  const marchIn = async () => {
+    const r = await compareReading(page, A2);
+    return r !== null && r.left.tiles > 1 && r.left.loading === 0;
+  };
+  await expect.poll(marchIn, poll).toBe(true);
+  await overlayDrawn(page, A2);
+  const shown = await settledShot(page, "playcanvas-left-fill-show");
+  await page.getByRole("radio", { name: "Highlight inferred fill" }).click();
+  await expect.poll(marchIn, poll).toBe(true);
+  const lit = await settledShot(page, "playcanvas-left-fill-highlight");
+  const figures = {
+    leftShow: await purple(page, shown, 0.08, 0.47),
+    leftHighlight: await purple(page, lit, 0.08, 0.47),
+    rightShow: await purple(page, shown, 0.53, 0.92),
+    rightHighlight: await purple(page, lit, 0.53, 0.92),
+  };
+  test.info().annotations.push({ type: "purple share", description: JSON.stringify(figures) });
+  console.info(JSON.stringify(figures));
+  // March's fill is drawn purple, not in measured colours; June, measured, is untouched.
+  expect(figures.leftHighlight).toBeGreaterThan(figures.leftShow + 0.05);
+  expect(Math.abs(figures.rightHighlight - figures.rightShow)).toBeLessThan(0.005);
   await railUnchanged(page);
 });
