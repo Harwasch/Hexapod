@@ -34,6 +34,26 @@ Either way the seeder (`apps/api/app/seed/captures.py`) creates one site per cap
 like any other, with the representation switcher and the usual quality and provenance
 metadata.
 
+## Phone videos: keep Location on when you share the clip
+
+A phone video joins the site it shows by the location the phone wrote into the video file, not
+by where you are when you upload it (ADR 0013, "Joining a site by the video's GPS"). Record on
+site, upload from anywhere: the worker reads the clip's own location before the run and matches
+it to the nearest site whose boundary is within twice the fix's reported accuracy (at least 10 m,
+at most 50 m; 25 m when the clip gives no accuracy).
+
+- Record with Location Services on for the Camera (iOS: Settings → Privacy & Security →
+  Location Services → Camera → While Using the App).
+- Keep the location when you hand the clip over. iOS can strip it: in the share sheet, tap
+  **Options** and leave **Location** on, and expect a clip picked through Safari's file picker or
+  some Photos sharing paths to arrive without it.
+- If the clip carries no location, the capture is matched by where the phone was when you
+  uploaded it (if the upload page was allowed your location). Uploaded on site, that is close
+  enough; uploaded from elsewhere, it joins nothing and becomes a site of its own, which the
+  console can move onto the right one.
+- The inspector says which happened, beside the scan's placement: "Matched by the video's GPS
+  (±5 m)" or "Matched by where it was uploaded from".
+
 ## What became of `captures.json`
 
 It is not the interface any more. A capture becomes a site by being **registered**: the
