@@ -253,7 +253,8 @@ def test_a_server_that_ignores_the_range_is_refused_after_a_bounded_read() -> No
     with pytest.raises(RangeNotHonouredError):
         _offline_s3({"Body": body}).get_object_range("clip.mov", 0, 65536)
 
-    assert body.served <= 65536 + 1
+    # Checked before a byte is read: an answer that is not the range is not read at all.
+    assert body.served == 0
     assert body.closed
 
 
@@ -263,6 +264,21 @@ def test_a_range_answered_from_elsewhere_is_refused() -> None:
 
     with pytest.raises(RangeNotHonouredError):
         _offline_s3(response).get_object_range("clip.mov", 100, 64)
+    assert body.served == 0
+
+    class Trickle(_Body):
+        """A body that hands over at most 10 bytes a read, as a socket may."""
+
+        def read(self, size: int | None = -1) -> bytes:
+            return super().read(10 if size is None or size < 0 else min(size, 10))
+
+    trickle = Trickle(b"z" * 64)
+    assert (
+        _offline_s3({"Body": trickle, "ContentRange": "bytes 0-63/64"}).get_object_range(
+            "clip.mov", 0, 64
+        )
+        == b"z" * 64
+    )
 
     honest = {"Body": _Body(b"x" * 64), "ContentRange": "bytes 100-163/1000"}
     assert _offline_s3(honest).get_object_range("clip.mov", 100, 64) == b"x" * 64

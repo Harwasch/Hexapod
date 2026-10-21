@@ -181,21 +181,30 @@ class S3Storage:
             raise
         body = response["Body"]
         try:
-            # Never more than was asked for, whatever the server sends: a server that
-            # ignores Range answers with the whole object, and reading that to check it
-            # is the 12 GB read this method exists to avoid (the cross review of #72).
-            data: bytes = body.read(length)
+            # Checked before a byte is read: a server that ignores Range answers with the
+            # whole object, and reading it to find out is the 12 GB read this method
+            # exists to avoid (the cross review of #72). `bytes 100-163/1000`: the span
+            # after the unit, before the slash.
+            content_range = str(response.get("ContentRange") or "")
+            first = content_range.removeprefix("bytes ").partition("/")[0].partition("-")[0]
+            if not first.isdecimal() or int(first) != start:
+                raise RangeNotHonouredError(
+                    f"{key}: asked for bytes {start}-{start + length - 1}, answered with "
+                    f"{content_range or 'no Content-Range (the whole object)'}"
+                )
+            # Then never more than was asked for, a read at a time: a socket may hand
+            # over less than a read asks.
+            chunks: list[bytes] = []
+            taken = 0
+            while taken < length:
+                chunk: bytes = body.read(length - taken)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                taken += len(chunk)
         finally:
             body.close()
-        # `bytes 100-163/1000`: the span after the unit, before the slash.
-        span = str(response.get("ContentRange") or "").removeprefix("bytes ").partition("/")[0]
-        first = span.partition("-")[0]
-        if not first.isdecimal() or int(first) != start:
-            raise RangeNotHonouredError(
-                f"{key}: asked for bytes {start}-{start + length - 1}, answered with "
-                f"{response.get('ContentRange') or 'no Content-Range (the whole object)'}"
-            )
-        return data
+        return b"".join(chunks)
 
     def download_file(self, key: str, target: Path) -> int:
         # boto3's managed transfer: ranged GETs written to a temporary file beside the
