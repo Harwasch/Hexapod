@@ -383,6 +383,41 @@ describe("placementProvenance", () => {
       expect(survey?.measured).toBe(true);
     });
 
+    describe("which point matched it to its site (ADR 0013, the video's GPS)", () => {
+      const joined = (epoch: Record<string, unknown>, units: "metric" | "imperial" = "metric") => {
+        const shaped = withEpoch(
+          { georefMethod: "exif-gps", scaleSource: "exif-gps", uncertaintyM: 5 },
+          null,
+        ) as unknown as { epochs: Record<string, unknown>[] };
+        shaped.epochs = [{ ...shaped.epochs[0], ...epoch }];
+        return placementProvenance(shaped as unknown as Site, "asset-1", units)?.summary;
+      };
+
+      it("says the video's GPS, with the accuracy the phone wrote", () => {
+        expect(joined({ joinPointSource: "video", joinPointAccuracyM: 5 })).toContain(
+          "Matched by the video's GPS (±5 m)",
+        );
+        expect(joined({ joinPointSource: "video", joinPointAccuracyM: null })).toContain(
+          "Matched by the video's GPS",
+        );
+        expect(joined({ joinPointSource: "video", joinPointAccuracyM: null })).not.toContain(
+          "GPS (",
+        );
+      });
+
+      it("says where it was uploaded from, when the video had no location", () => {
+        expect(joined({ joinPointSource: "upload", joinPointAccuracyM: null })).toContain(
+          "Matched by where it was uploaded from",
+        );
+      });
+
+      it("says nothing for an epoch no point matched (named or new site)", () => {
+        const none = joined({ joinPointSource: null, joinPointAccuracyM: null });
+        expect(none).not.toContain("Matched by");
+        expect(joined({})).not.toContain("Matched by");
+      });
+    });
+
     it("an epoch with no recorded verdict keeps the asset's own words", () => {
       const legacy = placementProvenance(
         withEpoch({ georefMethod: "exif-gps", scaleSource: "exif-gps", uncertaintyM: 1.4 }, null),
