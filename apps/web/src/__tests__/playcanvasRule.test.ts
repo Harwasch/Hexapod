@@ -251,6 +251,7 @@ const SCAN = "https://scan.test/march/tileset.json";
 const LAYER = "https://scan.test/march/fill/tileset.json";
 const OBJECT = "https://scan.test/march/objects/7/tileset.json";
 const OTHER = "https://scan.test/elsewhere/tileset.json";
+const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
 const LOOK: LayerLook = {
   highlight: false,
@@ -441,6 +442,66 @@ describe("a per-cell view rule under PlayCanvas", () => {
     const entity = pc.entities.find((e) => e.name === "scan");
     expect(param(entity, "uRuleSource")).toEqual([1, 0, 0, 0]);
     stream?.stop();
+    backend.destroy();
+  });
+});
+
+describe("the other dates a rule draws under PlayCanvas", () => {
+  beforeEach(() => {
+    vi.stubGlobal("Worker", FakeWorker);
+    pc.entities.length = 0;
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    publishScanRule("rule-e", null);
+  });
+
+  it("are streamed into its one app, ruled by their own source, none of the scan's objects", async () => {
+    const JUNE = "https://scan.test/june/tileset.json";
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      fetched.push(url);
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            root: { geometricError: 0, content: { uri: "9_1.glb" }, extras: { gaussians: 2 } },
+          }),
+      });
+    });
+    const { backend } = await backendFor("rule-e");
+    const own = await backend.load(SCAN, tile("1_1.glb"));
+    backend.add(own);
+    publishScanRule(
+      "rule-e",
+      view({
+        sources: new Map([
+          [SCAN, { source: 0 }],
+          [JUNE, { source: 1 }],
+        ]),
+        dates: [{ url: JUNE, assetId: "june", extras: {}, placement: null, root: IDENTITY }],
+      }),
+    );
+    let june: (typeof pc.entities)[number] | undefined;
+    for (let i = 0; i < 20 && !june?.gsplat; i += 1) {
+      backend.render(pose);
+      await new Promise((r) => setTimeout(r, 0));
+      june = pc.entities.find((e) => e.name === "9_1.glb");
+    }
+    expect(fetched).toContain(JUNE);
+    expect(june?.gsplat?.modifier?.glsl).toContain("color.a *= hexapodRuleWeight(center);");
+    expect(param(june, "uRuleSource")).toEqual([1, 0, 0, 0]);
+    // Bound to none of the scan's objects, and not picked as the scan's.
+    expect(backend.instanceTiles?.().tiles).toBe(1);
+    // Shown at the next plan, which waits out the replan interval.
+    for (let i = 0; i < 20 && scanRuleReading("rule-e")?.dates.tiles !== 1; i += 1) {
+      await new Promise((r) => setTimeout(r, 20));
+      backend.render(pose);
+    }
+    expect(scanRuleReading("rule-e")?.dates).toMatchObject({ dates: 1, tiles: 1 });
+    // The rule off: the date is let go.
+    publishScanRule("rule-e", null);
+    expect(scanRuleReading("rule-e")?.dates).toMatchObject({ dates: 0, tiles: 0 });
     backend.destroy();
   });
 });

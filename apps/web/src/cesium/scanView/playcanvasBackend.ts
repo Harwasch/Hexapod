@@ -85,6 +85,7 @@ import { CELL_TEXTURE_WIDTH } from "@/lib/cellGrid";
 import { CELL_LOOK_GLSL, type CellLookView } from "@/lib/cellLook";
 import { NO_OWNER } from "@/lib/compositor";
 import { tileInstanceIds, type InstancesDoc } from "@/lib/instances";
+import { createLogger } from "@/lib/log";
 import { tileSkin, type SkinDoc } from "@/lib/skin";
 import type { PickTile } from "@/lib/splatPick";
 import { reportScanSun, watchScanSun, type ScanSun } from "@/state/sunReport";
@@ -124,7 +125,10 @@ import {
 } from "./scanRule";
 import { countOverlayLoopTick } from "./stats";
 import { SUN_HOOK_VS, SUN_STREAM, SUN_WORD_GLSL } from "./sunHook";
+import type { RuleDates } from "./ruleDates";
 import type { BackendHooks, GraphicsApi, ScanBackend, ScanPose, SplatRendererKind } from "./types";
+
+const log = createLogger("playcanvas");
 
 interface Decoded {
   id: number;
@@ -652,6 +656,9 @@ function assemble(
   const rulePlane = new Float32Array(4);
   const ruleParams = new Float32Array(4);
   let ownCellView: CellLookView | null = null;
+  /** The rule's other dates, streamed into this app (ruleDates.ts, loaded with the first). */
+  let ruleDates: RuleDates<pc.Entity> | null = null;
+  let ruleDatesLoading = false;
   /** The tileset each entity came from: whose source it is under a rule. */
   const fromUrl = new WeakMap<pc.Entity, string>();
   /** A natively streamed scan's one entity: the rule's `native` source. */
@@ -1275,7 +1282,55 @@ function assemble(
       entity.gsplat?.setWorkBufferModifier(layerModifier());
       layerParameters(entity, state);
     }
+    syncRuleDates();
     hooks.frameWanted();
+  };
+
+  /**
+   * Streams the dates the rule names beside the scan (ruleDates.ts), its code fetched with the
+   * first rule that names one; drops them all with the rule.
+   */
+  const syncRuleDates = (): void => {
+    const wanted = rule?.dates ?? [];
+    if (ruleDates || wanted.length === 0) {
+      ruleDates?.setDates(wanted);
+      return;
+    }
+    if (ruleDatesLoading) return;
+    ruleDatesLoading = true;
+    void import("./ruleDates")
+      .then(({ RuleDates }) => {
+        if (destroying) return;
+        ruleDates = new RuleDates<pc.Entity>(
+          {
+            loadDate,
+            loadLayer: (url, tile, signal) =>
+              backend.loadLayer?.(url, tile, signal) ?? Promise.reject(new Error("no layers")),
+            setLayerLook: (entity, look) => backend.setLayerLook?.(entity, look),
+            add: (entity) => backend.add(entity),
+            remove: (entity) => backend.remove(entity),
+            dispose: (entity) => backend.dispose(entity),
+            place: (entity, matrix) => backend.place?.(entity, matrix),
+          },
+          {
+            arrived: () => hooks.frameWanted(),
+            changed: () => hooks.frameWanted(),
+            // The budget the host draws to now: frames slowed by two dates lower it for both.
+            budget: () => app.scene.gsplat.splatBudget,
+          },
+        );
+        ruleDates.setDates(rule?.dates ?? []);
+        hooks.frameWanted();
+      })
+      .catch((error: unknown) => {
+        // The code did not arrive: the other dates' cells draw nothing, as the rule fails closed.
+        log.warn("the rule's other dates did not load; their cells draw nothing", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        ruleDatesLoading = false;
+      });
   };
 
   /**
@@ -1445,6 +1500,20 @@ function assemble(
     return entity;
   };
 
+  /** A tile of another date under a rule (ruleDates.ts): a scan tile bound to none of this one. */
+  const loadDate = async (
+    tilesetUrl: string,
+    tile: TileNode,
+    signal?: AbortSignal,
+  ): Promise<pc.Entity> => {
+    const decoded = await decode(new URL(tile.uri, tilesetUrl).toString());
+    signal?.throwIfAborted();
+    return hooks.work.run(() => {
+      signal?.throwIfAborted();
+      return build(tilesetUrl, tile, decoded, "date");
+    });
+  };
+
   const backend: ScanBackend<pc.Entity> = {
     name: identity.name,
     api,
@@ -1602,6 +1671,8 @@ function assemble(
         entity.gsplat?.setParameter("uCellLevel", cell.level);
         entity.gsplat?.setParameter("uCellTile", cell.tile);
       });
+      // The rule's other dates, planned from the pose this frame is drawn from.
+      ruleDates?.plan(pose);
       syncSun();
       framesDrawn += 1;
       app.render();
@@ -1625,7 +1696,12 @@ function assemble(
     },
     // A moving object's re-sort held back by SORT_REFRESH_MS: due then, whether or not
     // anything else changes by that time.
-    frameDueBy: () => (sortDirty.size > 0 && !lost ? lastSortAt + SORT_REFRESH_MS : null),
+    frameDueBy: () => {
+      if (lost) return null;
+      const dates = ruleDates?.dueBy() ?? null;
+      const sort = sortDirty.size > 0 ? lastSortAt + SORT_REFRESH_MS : null;
+      return sort === null ? dates : dates === null ? sort : Math.min(sort, dates);
+    },
     setBudget: (drawn) => {
       app.scene.gsplat.splatBudget = drawn;
     },
@@ -1696,6 +1772,8 @@ function assemble(
     },
     destroy: () => {
       for (const off of cellLinks) off();
+      ruleDates?.stop();
+      ruleDates = null;
       cellTexture?.destroy();
       cellTexture = null;
       ruleOwners?.destroy();
@@ -1786,7 +1864,7 @@ function assemble(
               renderer: identity.name,
               on: rule !== null,
               sources,
-              dates: { dates: 0, tiles: 0, gaussians: 0, loading: 0 },
+              dates: ruleDates?.status() ?? { dates: 0, tiles: 0, gaussians: 0, loading: 0 },
             };
           }),
           // The scan's sunlight, drawn by the frame's hook (sunHook.ts). Watching is what says
