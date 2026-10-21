@@ -1,0 +1,204 @@
+{
+  "checkTargets": {
+    "checks": 0,
+    "evaluated": 0,
+    "observations": 0,
+    "observedTargets": 0,
+    "perTarget": [],
+    "problems": [],
+    "reason": "no target was seen from enough views at a wide enough angle to triangulate",
+    "rmseM": null,
+    "status": "not-evaluated",
+    "targets": 8,
+    "tolerance": null,
+    "verticalAnchorFree": null,
+    "verticalEvaluated": false,
+    "withinTolerance": null
+  },
+  "confidence": 0.723,
+  "correspondences": 30,
+  "frame": {
+    "headingDeg": null,
+    "headingSource": "epoch-alignment",
+    "recentre": false,
+    "rotation": [
+      [
+        0.6866926053402536,
+        0.21113576184568222,
+        -0.6956112102610613
+      ],
+      [
+        0.7256651654167681,
+        -0.14227149344141804,
+        0.6731782006679979
+      ],
+      [
+        0.043166346517509814,
+        -0.9670473164348228,
+        -0.25091065004207846
+      ]
+    ],
+    "scale": 3.0032950073553324,
+    "source": "visual-epoch",
+    "translationM": [
+      -0.026539536554657333,
+      -0.01352461359963311,
+      1.4132845775743865
+    ],
+    "up": null
+  },
+  "frameSource": "epoch-alignment",
+  "gates": [
+    {
+      "enabled": false,
+      "limit": null,
+      "measured": 0.0,
+      "name": "unaligned",
+      "param": "fail_unaligned",
+      "passed": null
+    },
+    {
+      "enabled": false,
+      "limit": null,
+      "measured": null,
+      "name": "check_target_rmse_m",
+      "param": "max_check_target_rmse_m",
+      "passed": null
+    },
+    {
+      "enabled": false,
+      "limit": null,
+      "measured": null,
+      "name": "check_targets_tolerance_ratio",
+      "param": "fail_check_targets_out_of_tolerance",
+      "passed": null
+    },
+    {
+      "enabled": false,
+      "limit": null,
+      "measured": 0.019281172347232207,
+      "name": "alignment_rms_m",
+      "param": "max_alignment_rms_m",
+      "passed": null
+    },
+    {
+      "enabled": false,
+      "limit": null,
+      "measured": 9.3956,
+      "name": "gnss_visual_offset_m",
+      "param": "max_gnss_visual_offset_m",
+      "passed": null
+    }
+  ],
+  "gnssCheck": {
+    "available": true,
+    "horizontalOffsetM": 9.3956,
+    "kind": "located-point",
+    "note": "the cameras' centroid as aligned, against the capture's located point (horizontal; the point carries no height worth comparing)",
+    "offsetM": 9.3956,
+    "rotationDeg": null,
+    "scaleRatio": null
+  },
+  "inlierFraction": 1.0,
+  "inliers": 30,
+  "label": "Phone video, aligned visually, ±0.068 m",
+  "method": "visual",
+  "origin": {
+    "height": 14.3975,
+    "heightDatum": "msl-unverified",
+    "lat": 28.038900097222225,
+    "lon": -82.69659969444444
+  },
+  "platform": "phone-video",
+  "platformEvidence": "metadata",
+  "platformSource": "frames_meta",
+  "ransac": {
+    "agreeDeg": 0.8082,
+    "agreeM": 0.060743,
+    "iterations": 2000,
+    "method": "lmeds",
+    "seed": 0,
+    "thresholdM": 0.060743
+  },
+  "reasons": [
+    "Phone video is the coarse tier: only an RTK drone can be surveyed"
+  ],
+  "referenceEpochId": "ea623d1f-5072-4ec3-a4ec-3a98a0100ae8",
+  "referenceHeightDatum": "msl-unverified",
+  "referenceJobId": "d95dd852-269a-42e1-a068-fe25792a048f",
+  "registration": {
+    "crossInlierMatches": 20995,
+    "crossPairs": 403,
+    "exifPosePriorsCleared": 40,
+    "newFrames": 30,
+    "pycolmap": "4.2.0",
+    "referenceFrames": 40,
+    "referenceFramesUnmatched": [],
+    "referenceMovedMaxM": 1.9560100690747752e-14,
+    "registered": 30,
+    "registeredFraction": 1.0,
+    "registeredReference": 40,
+    "seconds": {
+      "extract": 0.51,
+      "map": 1.09,
+      "match": 1.47,
+      "triangulate": 0.17
+    },
+    "verifiedPairs": 796
+  },
+  "residualM": {
+    "max": 0.0341,
+    "median": 0.0186,
+    "p90": 0.0261,
+    "rms": 0.0193
+  },
+  "rotationResidualDeg": {
+    "max": 0.1725,
+    "median": 0.1028
+  },
+  "rtkEvidence": null,
+  "sim3": {
+    "from": "this epoch's pose model (COLMAP frame)",
+    "rotation": [
+      [
+        0.6866926053402536,
+        0.21113576184568222,
+        -0.6956112102610613
+      ],
+      [
+        0.7256651654167681,
+        -0.14227149344141804,
+        0.6731782006679979
+      ],
+      [
+        0.043166346517509814,
+        -0.9670473164348228,
+        -0.25091065004207846
+      ]
+    ],
+    "scale": 3.0032950073553324,
+    "to": "east/north/up metres about origin",
+    "translationM": [
+      -0.026539536554657333,
+      -0.01352461359963311,
+      1.4132845775743865
+    ]
+  },
+  "tier": "coarse",
+  "tolerance": {
+    "alignment": {
+      "minCheckTargets": 3,
+      "minInlierFraction": 0.5,
+      "minInliers": 6,
+      "minRegisteredFraction": 0.5,
+      "pixelFootprintM": 0.0232,
+      "rmsM": 0.0695
+    },
+    "basis": "3-sigma of the declared input uncertainties (first principles; not calibrated)",
+    "checkTargets": null
+  },
+  "uncertaintyM": 0.0677,
+  "verdict": "coarse",
+  "version": 1,
+  "visualCheck": null
+}

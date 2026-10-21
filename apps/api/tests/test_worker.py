@@ -921,10 +921,11 @@ def test_a_restarted_step_does_not_show_the_last_attempts_progress(db: Session) 
 def test_a_recipe_that_asks_for_site_context_is_given_an_empty_one(
     db: Session, sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
 ) -> None:
-    """M3b.1: photo-reconstruct declares `site_context`, and `plan.check_inputs` refuses
-    a run whose inputs are not all there. The worker seeds the empty context (no
-    reference epoch, no targets) -- and leaves one already there alone, so a resumed run
-    aligns to the context it started with."""
+    """photo-reconstruct declares `site_context`, and `plan.check_inputs` refuses a run
+    whose inputs are not all there. A capture of no site is seeded the empty context (no
+    reference epoch, no targets) -- and one already there is left alone, so a resumed run
+    aligns to the context it started with (`tests/test_worker_site_context.py` has the
+    rest)."""
     capture = make_capture(db, slug="context")
     job = queue_job(db, capture, "t-site-context")
     session = sessions()
@@ -944,7 +945,7 @@ def test_a_recipe_that_asks_for_site_context_is_given_an_empty_one(
     }
     seeded = next((tmp_path / "runs").rglob("inputs/site_context/site_context.json"))
     seeded.write_text('{"version": 1, "siteId": "frozen"}')
-    from app.worker.runner import _seed_site_context
+    from app.worker.site_context import seed_site_context
 
-    _seed_site_context(seeded.parent)
+    seed_site_context(db, storage, db.get(Capture, capture.id), seeded.parent)
     assert json.loads(seeded.read_text())["siteId"] == "frozen"

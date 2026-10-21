@@ -397,13 +397,29 @@ def test_a_failure_is_classified_narrowly(error_type: str, error: str, log: str,
 
 def test_a_quality_gate_failure_is_not_retried() -> None:
     """A gate measured the capture's own bytes; the next attempt measures them the same way.
-    Locally raised, or carried back inside a provider's error, it is bad input."""
+    Locally raised, or carried back inside a provider's error, it is its own kind -- read
+    before bad input, which it also is by name -- and carries the gate it failed, for the
+    rejected epoch (M3b.2)."""
     gate = "quality gate clipped_frames_fraction: measured 0.5, limit 0.2 -- 2 of 4 clipped"
+    parsed = {
+        "gate": "clipped_frames_fraction",
+        "measured": 0.5,
+        "limit": 0.2,
+        "unit": "",
+        "reason": "2 of 4 clipped",
+    }
 
-    assert retry.classify("QualityGateError", gate, "").kind == "bad-input"
-    assert retry.classify("RemoteStageError", REMOTE + "QualityGateError: " + gate, "").kind == (
-        "bad-input"
-    )
+    local = retry.classify("QualityGateError", gate, "")
+    remote = retry.classify("RemoteStageError", REMOTE + "QualityGateError: " + gate, "")
+    assert (local.kind, local.gate) == ("quality-gate", parsed)
+    assert (remote.kind, remote.gate) == ("quality-gate", parsed)
+
+    decision = retry.decide("normalize", local, retry.History.of(Path("/nonexistent")))
+    assert not decision.retry and "quality gate" in decision.why
+    assert decision.rejected == parsed
+    # Not every refusal is a rejection: bad input names no gate.
+    bad = retry.decide("pose", retry.Failure("bad-input"), retry.History.of(Path("/x")))
+    assert not bad.retry and bad.rejected is None
 
 
 def test_out_of_memory_is_retried_once_and_only_with_a_cap_to_lower(tmp_path: Path) -> None:

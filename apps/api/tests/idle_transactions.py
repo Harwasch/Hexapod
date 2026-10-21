@@ -6,12 +6,15 @@ statement on it fails (`runner._end_transaction`). The tests of that sample
 `pg_stat_activity` at the moment of each download or upload; this is the sample, in one
 place, so that it counts what those tests are about and nothing else:
 
-- Only this process's sessions. `tests/conftest.py` sets `PGAPPNAME`, which libpq reads,
-  so every connection this process opens -- on any engine, and in any worker process it
-  starts -- carries the name `twin-tests-<pid>`, and the probe counts the sessions whose
-  name is its own. A `psql` left in `BEGIN`, or another test run on the same database, is
-  not the code under test. (With no `PGAPPNAME` every name is empty and the probe counts
-  every unnamed session, as before: never fewer than it should.)
+- Only this process's sessions. `tests/conftest.py` sets `PGAPPNAME`, which libpq takes as
+  the default `application_name`, so a connection this process opens -- on any engine, and
+  in any worker process it starts -- is named `twin-tests-<pid>` unless it sets a name of
+  its own, and the probe counts the sessions whose name is the same as its own. A session
+  that sets its own `application_name` is not counted, wherever it comes from. A `psql`
+  left in `BEGIN`, or another test run on the same database, is not the code under test.
+  (With no `PGAPPNAME` the probe's own name is libpq's default, empty, so it counts the
+  sessions that left their name empty; a client that names itself, as `psql` does, is not
+  among them.)
 - A fresh reading every time. The probe's engine is in autocommit, so each sample is its
   own transaction: Postgres keeps the `pg_stat_activity` it read first for the rest of a
   transaction, and the probe's own session is never idle in one either.

@@ -2379,6 +2379,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sites/{site_id}/check-targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a site's active check targets
+         * @description The surveyed ground marks the site's epochs are scored against (M3b), by label.
+         *
+         *     Behind the write token, unlike the site's other reads: these are survey marks on
+         *     private land, and their coordinates are not public (the R2 review of #52).
+         */
+        get: operations["list_check_targets_api_v1_sites__site_id__check_targets_get"];
+        /**
+         * Replace a site's active check targets
+         * @description The whole active set. A target sent unchanged keeps its row; a changed one retires
+         *     its row for a new one; one left out is retired. Nothing is deleted. The next run of a
+         *     capture of this site is scored against the set as it is when that run starts.
+         */
+        put: operations["replace_check_targets_api_v1_sites__site_id__check_targets_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sites/{site_id}/epochs": {
         parameters: {
             query?: never;
@@ -4779,6 +4808,94 @@ export interface components {
             values: (number | null)[];
         };
         /**
+         * CheckTargetCreate
+         * @description One surveyed mark: where it is in WGS84, from which height datum, and how well.
+         *
+         *     `sigmaHM` / `sigmaVM` are the survey's own one-sigma, in metres, as its instrument
+         *     reported them: they decide the tolerance an epoch's check RMSE is held to (3 sigma of
+         *     the declared uncertainties, `tools/pipeline/check_targets.survey_tolerance`), so a
+         *     wrong one makes a wrong claim.
+         */
+        CheckTargetCreate: {
+            /** Height */
+            height: number;
+            heightDatum: components["schemas"]["HeightDatum"];
+            /** Label */
+            label: string;
+            /** Lat */
+            lat: number;
+            /** Lon */
+            lon: number;
+            /** @default check */
+            role?: components["schemas"]["CheckTargetRole"];
+            /** Sigmahm */
+            sigmaHM: number;
+            /** Sigmavm */
+            sigmaVM: number;
+            /** Source */
+            source: string;
+            /** Surveyedat */
+            surveyedAt?: string | null;
+        };
+        /**
+         * CheckTargetRead
+         * @description An active check target. Read model: every field is explicit (no defaults) so the
+         *     OpenAPI contract marks it required.
+         */
+        CheckTargetRead: {
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Height */
+            height: number;
+            heightDatum: components["schemas"]["HeightDatum"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Label */
+            label: string;
+            /** Lat */
+            lat: number;
+            /** Lon */
+            lon: number;
+            role: components["schemas"]["CheckTargetRole"];
+            /** Sigmahm */
+            sigmaHM: number;
+            /** Sigmavm */
+            sigmaVM: number;
+            /**
+             * Siteid
+             * Format: uuid
+             */
+            siteId: string;
+            /** Source */
+            source: string;
+            /** Surveyedat */
+            surveyedAt: string | null;
+        };
+        /**
+         * CheckTargetRole
+         * @description What a surveyed ground mark is for (M3b). A ``check`` target only scores an epoch's
+         *     alignment against its survey; a ``control`` target would also constrain it, but until
+         *     bundle adjustment takes ground control it is stored and scored exactly like a check.
+         * @enum {string}
+         */
+        CheckTargetRole: "check" | "control";
+        /**
+         * CheckTargetSet
+         * @description The site's whole active set. A label sent with the same values is kept as it is; a
+         *     label sent with different values retires its row and starts a new one; a label not
+         *     sent is retired. Rows are never deleted, so what an epoch was scored with stays.
+         */
+        CheckTargetSet: {
+            /** Targets */
+            targets: components["schemas"]["CheckTargetCreate"][];
+        };
+        /**
          * Clarification
          * @description A question the planner asks with a structured answer: a choice (chips), a range
          *     (slider) or an area choice (how the ground is picked). Never free text.
@@ -5923,9 +6040,14 @@ export interface components {
         /**
          * GeorefMethod
          * @description How a reconstruction was placed on the globe.
+         *
+         *     ``visual-epoch`` (M3b): its frames were registered into an earlier epoch of the same
+         *     site and placed by that alignment, not by its own GNSS. It is only as good as the
+         *     epoch it was aligned to -- the uncertainty says how good -- so it is never read as a
+         *     measurement in its own right. Declared before ``none``, where migration 0033 puts it.
          * @enum {string}
          */
-        GeorefMethod: "exif-gps" | "arkit" | "manual" | "none";
+        GeorefMethod: "exif-gps" | "arkit" | "manual" | "visual-epoch" | "none";
         /** GooglePhotorealisticSource */
         GooglePhotorealisticSource: {
             /**
@@ -9876,9 +9998,15 @@ export interface components {
          *     handheld phone is about 1.5 m above the ground and the reconstruction says how many of
          *     its units that is (tools/pipeline/scale_estimate.py). Roughly the right size, at ±20%
          *     or worse -- the provenance carries the figure -- and never counted as metric.
+         *
+         *     ``visual-epoch`` (M3b): the scale of the earlier epoch it was aligned to, carried by
+         *     the alignment's similarity. Written only when that epoch's own scale was measured; an
+         *     epoch aligned to an estimated or unresolved one inherits that word instead
+         *     (`worker/registration.py`). Before ``unresolved``, as 0033 adds it (and as the 0010
+         *     test reads the type's order back).
          * @enum {string}
          */
-        ScaleSource: "arkit" | "exif-gps" | "manual" | "camera-height-estimate" | "unresolved";
+        ScaleSource: "arkit" | "exif-gps" | "manual" | "camera-height-estimate" | "visual-epoch" | "unresolved";
         /** ScenarioCreate */
         ScenarioCreate: {
             /** Boundaryrevision */
@@ -11850,6 +11978,10 @@ export type SchemaCesiumIonSource = components['schemas']['CesiumIonSource'];
 export type SchemaCesiumIonTerrainSource = components['schemas']['CesiumIonTerrainSource'];
 export type SchemaChartOutput = components['schemas']['ChartOutput'];
 export type SchemaChartSeries = components['schemas']['ChartSeries'];
+export type SchemaCheckTargetCreate = components['schemas']['CheckTargetCreate'];
+export type SchemaCheckTargetRead = components['schemas']['CheckTargetRead'];
+export type SchemaCheckTargetRole = components['schemas']['CheckTargetRole'];
+export type SchemaCheckTargetSet = components['schemas']['CheckTargetSet'];
 export type SchemaClarification = components['schemas']['Clarification'];
 export type SchemaClarificationOption = components['schemas']['ClarificationOption'];
 export type SchemaCommandRequest = components['schemas']['CommandRequest'];
@@ -22596,6 +22728,126 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_check_targets_api_v1_sites__site_id__check_targets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckTargetRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    replace_check_targets_api_v1_sites__site_id__check_targets_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckTargetSet"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CheckTargetRead"][];
+                };
             };
             /** @description Missing or wrong write token */
             401: {

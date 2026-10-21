@@ -14,6 +14,7 @@ import json
 import os
 import signal
 import time
+from pathlib import Path
 
 from app.worker.pipeline_bridge import ensure_importable
 
@@ -245,3 +246,104 @@ def t_reads_site_context(ctx: StageContext) -> StageOutcome:
     seeded = ctx.input("site_context") / "site_context.json"
     ctx.output(CONTEXT_SEEN.name).write_text(seeded.read_text(encoding="utf-8"), "utf-8")
     return StageOutcome(metrics={})
+
+
+# --- for tests/test_worker_quality_gate.py ----------------------------------------------
+
+GATED = ArtifactDecl("gated.json", content_type="application/json")
+
+
+@stage_impl(
+    "t_gate",
+    consumes=("georef.json", "site_context"),
+    produces=(GATED,),
+    summary="a quality gate the recipe turned on: fails unless told not to",
+)
+def t_gate(ctx: StageContext) -> StageOutcome:
+    """What `align_epoch`'s `max_check_target_rmse_m` does when it is on and the check
+    targets are out: raises `QualityGateError` with the gate's measurement and limit."""
+    from errors import QualityGateError
+
+    if bool(ctx.param("fail", True)):
+        raise QualityGateError(
+            "max_check_target_rmse_m",
+            0.31,
+            0.12,
+            unit="m",
+            reason="the check targets' RMSE is over the limit the recipe set",
+        )
+    _write(ctx, GATED.name, passed=True)
+    return StageOutcome(metrics={"passed": True})
+
+
+# --- for tests/test_worker_registration.py ----------------------------------------------
+
+REFERENCE_FRAMES = ArtifactDecl("frames", kind="dir", content_type="inode/directory")
+REFERENCE_POSES = ArtifactDecl("poses", kind="dir", content_type="inode/directory")
+PLACEMENT_JSON = ArtifactDecl("placement.json", content_type="application/json")
+EPOCH_ALIGNMENT = ArtifactDecl("epoch_alignment.json", content_type="application/json")
+
+
+@stage_impl(
+    "t_reconstruct",
+    produces=(REFERENCE_FRAMES, REFERENCE_POSES, PLACEMENT_JSON),
+    summary="stand-ins for normalize's frames, pose's model and place's similarity",
+)
+def t_reconstruct(ctx: StageContext) -> StageOutcome:
+    """What a Lane 2 run leaves that a later epoch is aligned to, in name and shape."""
+    frames = ctx.output(REFERENCE_FRAMES.name)
+    for index in range(3):
+        (frames / f"frame_{index:04d}.jpg").write_bytes(f"jpeg {ctx.run_id} {index}".encode())
+    poses = ctx.output(REFERENCE_POSES.name)
+    for name in ("cameras.bin", "images.bin", "points3D.bin"):
+        (poses / name).write_bytes(name.encode())
+    (poses / "poses.json").write_text(json.dumps({"registered": 3}), encoding="utf-8")
+    ctx.output(PLACEMENT_JSON.name).write_text(
+        json.dumps({"scale": 1.0, "rotation": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]}), "utf-8"
+    )
+    return StageOutcome(metrics={"frames": 3})
+
+
+@stage_impl(
+    "t_recorded_align",
+    consumes=("site_context", "georef.json"),
+    produces=(EPOCH_ALIGNMENT,),
+    summary="align_epoch's output, replayed from a recording, after checking the context",
+)
+def t_recorded_align(ctx: StageContext) -> StageOutcome:
+    """Replays `epoch_alignment.json` recorded from the real `align_epoch` (param
+    `recorded`, a path), with its reference ids replaced by the epoch the worker seeded
+    -- after checking the seeded context holds what align_epoch would read: the
+    reference's files at the paths it names, and the targets. Refuses a recording that
+    was aligned to a reference when none was seeded, and the other way round."""
+    root = ctx.input("site_context")
+    context = json.loads((root / "site_context.json").read_text(encoding="utf-8"))
+    document = json.loads(Path(str(ctx.param("recorded"))).read_text(encoding="utf-8"))
+    reference = context.get("reference")
+    files = 0
+    if document.get("referenceEpochId") is not None:
+        if reference is None:
+            raise ValueError("the recording was aligned to a reference; none was seeded")
+        for key in ("frames", "poses"):
+            members = [p for p in (root / reference[key]).iterdir() if p.is_file()]
+            if not members:
+                raise ValueError(f"the seeded reference has no {key}")
+            files += len(members)
+        for key in ("placement", "georef"):
+            if not (root / reference[key]).is_file():
+                raise ValueError(f"the seeded reference has no {key}")
+            files += 1
+        document["referenceEpochId"] = reference["epochId"]
+        document["referenceJobId"] = reference["jobId"]
+    elif reference is not None:
+        raise ValueError("a reference was seeded for a recording aligned to none")
+    ctx.output(EPOCH_ALIGNMENT.name).write_text(json.dumps(document), encoding="utf-8")
+    return StageOutcome(
+        metrics={
+            "referenceEpochId": str(reference["epochId"]) if reference else "",
+            "referenceVerdict": str(reference["verdict"]) if reference else "",
+            "referenceFiles": files,
+            "targets": len(context.get("targets") or []),
+            "observations": len(context.get("observations") or []),
+        }
+    )

@@ -14,19 +14,20 @@ superseded by setting its `valid_to`; nothing about the old row is rewritten. So
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from geoalchemy2 import WKBElement
 from sqlalchemy import Select, String, cast, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Asset, Capture, Epoch, Site, SiteFrame
+from app.models import Artifact, Asset, Capture, Epoch, Job, JobStep, Site, SiteFrame
 from app.models.enums import (
     AssetSourceKind,
     EpochJoinMethod,
@@ -34,6 +35,7 @@ from app.models.enums import (
     EpochStatus,
     HeightDatum,
     ObservedAtSource,
+    RunStatus,
     SiteFrameSource,
 )
 from app.schemas.epoch import EpochRead, SiteFrameRead
@@ -344,14 +346,23 @@ def _number(value: object) -> float | None:
 def frame_for_run(
     db: Session, capture: Capture, located: tuple[float, float] | None = None
 ) -> RunFrame | None:
-    """The frame a run of this capture is placed in, or None to let it define its own.
+    """The frame a run of this capture is placed in, or None to let it define its own:
+    the frame of `site_for_run`'s site, when it has one."""
+    site_id = site_for_run(db, capture, located)
+    return _frame_of(db, site_id) if site_id is not None else None
+
+
+def site_for_run(
+    db: Session, capture: Capture, located: tuple[float, float] | None = None
+) -> uuid.UUID | None:
+    """The site a run of this capture belongs to before it starts, or None for a new one.
 
     The first that applies:
 
-    1. the capture is already an epoch (a re-run): that epoch's site's frame, always;
-    2. the capture was registered into a site with no epoch for it (legacy): its frame;
-    3. the capture named a site (`metadata.siteId`): its frame, or none yet -- the run
-       is then that site's first epoch and defines it;
+    1. the capture is already an epoch (a re-run): that epoch's site, always;
+    2. the capture was registered into a site with no epoch for it (legacy): that site;
+    3. the capture named a site (`metadata.siteId`): that site, framed or not -- with no
+       frame yet the run is its first epoch and defines it;
     4. the run has a located point (`located`, `worker/params.located_point`: a typed
        place in the job's params, else the capture's `metadata.lat`/`lon`): the nearest
        framed site within `SPATIAL_JOIN_BUFFER_M` -- for a phone-key capture, the nearest
@@ -361,15 +372,31 @@ def frame_for_run(
     Decided before the run starts, because the pipeline places the capture in it. A
     capture located only by its EXIF cannot be matched here (nothing knows where it is
     until `normalize` runs); it joins a site only by naming it (M3 moves this later).
+
+    The frame (`frame_for_run`), the reference epoch and the check targets a run is given
+    (`worker/site_context.py`) and the site a rejected run is recorded on
+    (`record_rejected`) all come from this one answer.
     """
     epoch = epoch_of_capture(db, capture.id)
     if epoch is not None:
-        return _frame_of(db, epoch.site_id)
+        return epoch.site_id
     if capture.site_id is not None:
-        return _frame_of(db, capture.site_id)
+        return capture.site_id
     named = requested_site(db, capture)
     if named is not None:
-        return _frame_of(db, named.id)
+        return named.id
+    point = located_or_metadata(capture, located)
+    if point is None:
+        return None
+    site = nearest_framed_site(db, *point, phone_made_only=is_phone_capture(capture))
+    return site.id if site is not None else None
+
+
+def located_or_metadata(
+    capture: Capture, located: tuple[float, float] | None
+) -> tuple[float, float] | None:
+    """`located` (`worker/params.located_point`), else the capture's own `metadata.lat` /
+    `lon`, when it is a point on the globe; else None."""
     if located is None:
         metadata = capture.metadata_ or {}
         lat, lon = _number(metadata.get("lat")), _number(metadata.get("lon"))
@@ -377,5 +404,371 @@ def frame_for_run(
         lat, lon = _number(located[0]), _number(located[1])
     if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return None
-    site = nearest_framed_site(db, lat, lon, phone_made_only=is_phone_capture(capture))
-    return _frame_of(db, site.id) if site is not None else None
+    return lat, lon
+
+
+# ── Which earlier epoch a new one is aligned to (M3b) ─────────────────────────────────────
+
+#: The reference epoch's artifacts a run is seeded with (`worker/site_context.py`), by the
+#: name its recipe gave them: normalize's kept frames, pose's model (`cameras.bin`,
+#: `images.bin`, `points3D.bin`, `poses.json`), place's similarity from that model to its
+#: east/north/up (`placement.json`) and its georeference. Only a Lane 2 run has all four.
+REFERENCE_ARTIFACTS: dict[str, str] = {
+    "frames": "frames",
+    "poses": "poses",
+    "placement": "placement.json",
+    "georef": "georef.json",
+}
+
+#: Verdicts best first; an epoch with no alignment recorded (an M2-era epoch) ranks last.
+VERDICT_RANK: dict[str | None, int] = {"survey": 0, "coarse": 1, "unaligned": 2, None: 3}
+
+#: A run in these states may be writing its artifacts' keys right now (`jobs.ACTIVE_STATUSES`).
+RUNS_IN_FLIGHT = (RunStatus.NOT_STARTED, RunStatus.IN_PROGRESS)
+
+#: The uncertainty a reference is taken at when nothing recorded one: the figure a capture
+#: placed by its GPS point or by hand is given (`manual_placement`'s ten metres).
+UNRECORDED_UNCERTAINTY_M = 10.0
+
+
+@dataclass(frozen=True)
+class ReferenceChoice:
+    """The earlier epoch a run is aligned to, as plain values read in one transaction.
+
+    `keys` maps each of `REFERENCE_ARTIFACTS` to its storage key: a prefix for the two
+    directories (`frames`, `poses`), a key for the two files. `revision` names the
+    artifact rows those keys were read from: a retry that rewrites the keys changes it.
+    """
+
+    epoch_id: uuid.UUID
+    job_id: uuid.UUID
+    observed_at: datetime
+    created_at: datetime
+    platform: str
+    verdict: str | None
+    uncertainty_m: float
+    keys: dict[str, str]
+    revision: str = ""
+    #: The height datum its origin is on, as its own alignment recorded it (`origin.
+    #: heightDatum`), else None: `align_epoch` never reframes across two datums.
+    height_datum: str | None = None
+    #: The factor its shown asset is drawn at (`renderConfig.scale`, "Set real size"), 1
+    #: when none: its files are as registered, and the seed scales the placement to match.
+    runtime_scale: float = 1.0
+    #: The site frame's origin (lat, lon, height): the pivot a runtime scale is about.
+    frame_origin: tuple[float, float, float] | None = None
+
+
+def survey_evidenced(alignment: dict[str, Any]) -> bool:
+    """Whether an alignment records the evidence a `survey` needs beside platform
+    `rtk-drone`: the RTK fix `align_epoch` found in its frames' metadata (`rtkEvidence`),
+    and a platform the frames themselves showed (#49's `platformEvidence` `metadata`; a
+    missing one reads `none`). The platform string alone never makes survey."""
+    evidence = alignment.get("rtkEvidence")
+    shown = alignment.get("platformEvidence") == "metadata"
+    return shown and isinstance(evidence, str) and bool(evidence.strip())
+
+
+def claimed_verdict(alignment: object, platform: str) -> str | None:
+    """The verdict an epoch's alignment claims, as far as it may: `survey` is only ever
+    an RTK drone's with its RTK evidence (D4, D6 amendment, `survey_evidenced`), so
+    anything else that says so reads as `coarse`;
+    a verdict outside the vocabulary, or no alignment, is None."""
+    verdict = alignment.get("verdict") if isinstance(alignment, dict) else None
+    if verdict not in ("survey", "coarse", "unaligned"):
+        return None
+    if verdict == "survey" and (
+        platform != EpochPlatform.RTK_DRONE.value or not survey_evidenced(alignment)  # type: ignore[arg-type]
+    ):
+        return "coarse"
+    return str(verdict)
+
+
+def _reference_uncertainty(epoch: Epoch, capture: Capture | None) -> float:
+    """What the reference epoch is known to: its alignment's `uncertaintyM`, else what its
+    capture was registered with, else `UNRECORDED_UNCERTAINTY_M`. Always positive."""
+    alignment = epoch.alignment if isinstance(epoch.alignment, dict) else {}
+    for value in (alignment.get("uncertaintyM"), capture.uncertainty_m if capture else None):
+        number = _number(value)
+        if number is not None and number > 0:
+            return number
+    return UNRECORDED_UNCERTAINTY_M
+
+
+def _runtime_scale(asset: Asset) -> float:
+    """The factor an asset is drawn at (`renderConfig.scale`), 1 when it has none."""
+    value = _number((asset.render_config or {}).get("scale"))
+    return value if value is not None and value > 0 else 1.0
+
+
+def _reference_datum(epoch: Epoch) -> str | None:
+    """The height datum the reference's origin is on, from its alignment's `origin`, when
+    that names one of the site frames' datums; else None (never a guess)."""
+    alignment = epoch.alignment if isinstance(epoch.alignment, dict) else {}
+    origin = alignment.get("origin")
+    datum = origin.get("heightDatum") if isinstance(origin, dict) else None
+    known = {member.value for member in HeightDatum}
+    return datum if isinstance(datum, str) and datum in known else None
+
+
+def _confirmed_at(epoch: Epoch, shown_at: datetime) -> datetime:
+    """When the epoch's run last published the tiles it shows: the shown asset's creation,
+    or later, a successful re-run by the same run that republished the very same
+    content-hashed tiles -- which keeps that asset and its timestamp, while its artifact
+    rows are new (the R2 review of #52). `register` records each publication in the
+    epoch's history (`tilesPublished`, `replacedAt`); a run that failed records none."""
+    confirmed = shown_at
+    for entry in epoch.history or []:
+        if not isinstance(entry, dict) or entry.get("tilesPublished") is not True:
+            continue
+        if entry.get("replacedByJobId") != str(epoch.job_id):
+            continue
+        try:
+            at = datetime.fromisoformat(str(entry.get("replacedAt")))
+        except ValueError:
+            continue
+        confirmed = max(confirmed, at)
+    return confirmed
+
+
+def _reference_keys(db: Session, job_id: uuid.UUID) -> tuple[dict[str, str], datetime | None, str]:
+    """Each reference artifact's storage key for the run, from its newest row, when the
+    newest of those rows was written, and the revision they make; only the names it has.
+    A directory artifact's key is its prefix (`worker/outputs`). A retried stage writes
+    the same key again, so the newest row is the one whose bytes the bucket holds -- and
+    a new row, so the revision (a digest of the rows chosen) changes with every rewrite
+    while the keys, the epoch and the job do not."""
+    rows = db.execute(
+        select(Artifact.storage_key, Artifact.created_at, Artifact.id)
+        .join(JobStep, Artifact.job_step_id == JobStep.id)
+        .where(JobStep.job_id == job_id)
+        .order_by(Artifact.created_at.desc(), Artifact.id.desc())
+    ).all()
+    keys: dict[str, str] = {}
+    ids: dict[str, str] = {}
+    written: datetime | None = None
+    for key, created, artifact_id in rows:
+        name = str(key).rsplit("/", 1)[-1]
+        for role, wanted in REFERENCE_ARTIFACTS.items():
+            if name == wanted and role not in keys:
+                keys[role] = str(key)
+                ids[role] = str(artifact_id)
+                written = created if written is None else max(written, created)
+    listed = ";".join(f"{role}={ids[role]}" for role in sorted(ids))
+    revision = hashlib.sha256(listed.encode("utf-8")).hexdigest()[:16]
+    return keys, written, revision
+
+
+def reference_epoch(
+    db: Session, site_id: uuid.UUID, *, capture_id: uuid.UUID | None = None
+) -> ReferenceChoice | None:
+    """The earlier epoch of the site a new run of `capture_id` is aligned to, or None.
+
+    Candidates: the site's `published` epochs whose producing run kept every one of
+    `REFERENCE_ARTIFACTS` (a Lane 2 run), other than the capture's own, when those files
+    are the ones the epoch shows. Not by the run row's current status: a phone Refine is a
+    retry of the same row (`jobs.retry_job`), and a Refine that failed leaves the epoch
+    showing its old revision, whose files are still in the bucket -- it stays the scaffold.
+    Two guards instead. A run in flight (queued or running) is skipped: it writes the same
+    keys, and must not be read mid-write. And every reference artifact's newest row must be
+    no newer than when the epoch's current revision was last published (`_confirmed_at`: a
+    run that republished the very same tiles confirms its new rows): a Refine that
+    re-uploaded its placement and then failed left a placement the shown tiles were not
+    made from. For
+    a re-run of an epoch, only epochs that joined the site before it (a lower ordinal):
+    the epoch that made the frame is never aligned onto a later one that was aligned to
+    it, so errors do not go round in a circle.
+
+    Best verdict first (`VERDICT_RANK`, after `claimed_verdict`), then oldest observed,
+    then first recorded: every epoch aligns to one fixed scaffold, and errors do not chain
+    epoch to epoch (the design's open question 2, its default). An RTK epoch is still not
+    moved onto a reference coarser than itself -- the pipeline keeps its own RTK frame and
+    records the visual fit as a check (`tools/pipeline/alignment.py`), which reads the
+    verdict passed here.
+    """
+    own = epoch_of_capture(db, capture_id) if capture_id is not None else None
+    statement = (
+        select(Epoch)
+        .join(Job, Job.id == Epoch.job_id)
+        .where(
+            Epoch.site_id == site_id,
+            Epoch.status == EpochStatus.PUBLISHED.value,
+            Job.status.not_in(RUNS_IN_FLIGHT),
+        )
+    )
+    if capture_id is not None:
+        statement = statement.where((Epoch.capture_id.is_(None)) | (Epoch.capture_id != capture_id))
+    if own is not None:
+        statement = statement.where(Epoch.ordinal < own.ordinal)
+    frame = db.get(SiteFrame, site_id)
+    frame_origin = (frame.lat, frame.lon, frame.height) if frame is not None else None
+    candidates: list[ReferenceChoice] = []
+    for epoch in db.scalars(statement):
+        assert epoch.job_id is not None
+        keys, written, revision = _reference_keys(db, epoch.job_id)
+        if set(keys) != set(REFERENCE_ARTIFACTS):
+            continue
+        shown = current_asset(db, epoch.id)
+        if shown is None or written is None or written > _confirmed_at(epoch, shown.created_at):
+            log.info(
+                "reference: epoch %s is not a reference: %s",
+                epoch.id,
+                "it shows no tiles"
+                if shown is None
+                else "its run's files are newer than the tiles it shows (a Refine that failed)",
+            )
+            continue
+        capture = db.get(Capture, epoch.capture_id) if epoch.capture_id is not None else None
+        candidates.append(
+            ReferenceChoice(
+                epoch_id=epoch.id,
+                job_id=epoch.job_id,
+                observed_at=epoch.observed_at,
+                created_at=epoch.created_at,
+                platform=epoch.platform,
+                verdict=claimed_verdict(epoch.alignment, epoch.platform),
+                uncertainty_m=_reference_uncertainty(epoch, capture),
+                keys=keys,
+                revision=revision,
+                height_datum=_reference_datum(epoch),
+                runtime_scale=_runtime_scale(shown),
+                frame_origin=frame_origin,
+            )
+        )
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda c: (VERDICT_RANK[c.verdict], c.observed_at, c.created_at, str(c.epoch_id)),
+    )
+
+
+# ── A capture a quality gate rejected (M3b) ───────────────────────────────────────────────
+
+#: How far about a rejected capture's located point its epoch's footprint reaches: the
+#: same 25 m a capture may lie outside a site's boundary and still join it (D3).
+REJECTED_FOOTPRINT_M = SPATIAL_JOIN_BUFFER_M
+
+
+@dataclass(frozen=True)
+class Rejection:
+    """A run a quality gate the recipe turned on failed: which stage, which gate
+    (`{gate, measured, limit, unit, reason}`, `errors.parse_quality_gate`; empty when its
+    text could not be read back), and the run's located point, if it had one."""
+
+    stage_id: str
+    gate: dict[str, object]
+    located: tuple[float, float] | None = None
+
+
+def _rejected_alignment(platform: str, job_id: uuid.UUID, rejection: Rejection) -> dict[str, Any]:
+    """What a rejected epoch's `alignment` says, in the shape the web reads (`label`,
+    `verdict`, `uncertaintyM`): unaligned, with the gate as its reason. The API's
+    `CaptureQuality` has no field for a gate, and `quality` stays null rather than holding
+    something that would not parse (the M3b review's fix 8)."""
+    from app.worker.pipeline_bridge import PLATFORM_WORDS
+
+    gate = rejection.gate
+    name = str(gate.get("gate") or "unknown")
+    unit = f" {gate['unit']}" if gate.get("unit") else ""
+    measured = (
+        f"measured {gate['measured']:.4g}{unit} against a limit of {gate['limit']:.4g}{unit}"
+        if isinstance(gate.get("measured"), float) and isinstance(gate.get("limit"), float)
+        else "its measurement could not be read back"
+    )
+    why = f": {gate['reason']}" if gate.get("reason") else ""
+    words = PLATFORM_WORDS.get(platform, "Capture")
+    return {
+        "version": 1,
+        "method": "none",
+        "referenceEpochId": None,
+        "platform": platform,
+        "verdict": "unaligned",
+        "confidence": 0.0,
+        "uncertaintyM": None,
+        "label": f"{words}, rejected: quality gate {name} failed",
+        "reasons": [f"stage {rejection.stage_id!r} failed quality gate {name}, {measured}{why}"],
+        "rejected": {"stage": rejection.stage_id, "jobId": str(job_id), **gate},
+        "frameSource": None,
+    }
+
+
+def record_rejected(
+    db: Session, job_id: uuid.UUID, capture: Capture, rejection: Rejection
+) -> Epoch | None:
+    """Keep a capture a quality gate rejected as a `rejected` epoch of its site (D3, D4).
+
+    Its site is `site_for_run`'s -- the one its run was placed in -- and only a site with
+    a frame: a frameless site's first epoch is the one that defines its frame, and a
+    rejected run defines nothing. No site, no epoch (none is made for it); the job's error
+    still says which gate failed. No asset. Its footprint is the run's located point
+    buffered by `REJECTED_FOOTPRINT_M`, else the site's boundary (the epochs footprint is
+    never null). Dated by the capture row, or its upload flagged `created`.
+
+    The capture already an epoch: a rejected one takes this run's rejection; a published
+    one is left as it is -- its current revision passed, and the gate failed a later run of
+    it, which the job's error records. A later run that passes publishes a rejected epoch
+    (`worker/registration.register`). Not committed here: the caller's transaction.
+    """
+    existing = epoch_of_capture(db, capture.id, lock=True)
+    platform = existing.platform if existing is not None else platform_of(capture).value
+    alignment = _rejected_alignment(platform, job_id, rejection)
+    if existing is not None:
+        if existing.status == EpochStatus.REJECTED.value:
+            # The rejection it replaces stays in the epoch's history (as `register`'s
+            # `_replace_run` keeps a re-run's): each failed gate is evidence.
+            kept = geometry.wkb_to_footprint(existing.footprint)
+            entry = {
+                "jobId": str(existing.job_id) if existing.job_id is not None else None,
+                "footprint": kept.model_dump(mode="json") if kept is not None else None,
+                "quality": existing.quality,
+                "alignment": existing.alignment,
+                "replacedAt": datetime.now(UTC).isoformat(),
+                "replacedByJobId": str(job_id),
+                "tilesPublished": False,
+            }
+            existing.history = [*(existing.history or []), entry]
+            existing.alignment = alignment
+            existing.job_id = job_id if db.get(Job, job_id) is not None else None
+        return existing if existing.status == EpochStatus.REJECTED.value else None
+    site_id = site_for_run(db, capture, rejection.located)
+    site = db.get(Site, site_id, with_for_update=True) if site_id is not None else None
+    if site is None or db.get(SiteFrame, site.id) is None:
+        return None
+    point = located_or_metadata(capture, rejection.located)
+    footprint = (
+        db.scalar(
+            select(
+                func.ST_Multi(
+                    func.geometry(
+                        func.ST_Buffer(func.geography(_point(*point)), REJECTED_FOOTPRINT_M)
+                    )
+                )
+            )
+        )
+        if point is not None
+        else site.boundary
+    )
+    named = requested_site(db, capture)
+    explicit = capture.site_id == site.id or (named is not None and named.id == site.id)
+    ordinal = (db.scalar(select(func.max(Epoch.ordinal)).where(Epoch.site_id == site.id)) or 0) + 1
+    observed = capture.captured_at or capture.created_at
+    epoch = Epoch(
+        site_id=site.id,
+        capture_id=capture.id,
+        job_id=job_id if db.get(Job, job_id) is not None else None,
+        ordinal=ordinal,
+        observed_at=observed,
+        observed_at_source=(
+            ObservedAtSource.CAPTURED_AT if capture.captured_at else ObservedAtSource.CREATED
+        ).value,
+        footprint=footprint,
+        platform=platform,
+        status=EpochStatus.REJECTED.value,
+        join_method=(EpochJoinMethod.EXPLICIT if explicit else EpochJoinMethod.SPATIAL).value,
+        alignment=alignment,
+        quality=None,
+    )
+    db.add(epoch)
+    db.flush()
+    return epoch

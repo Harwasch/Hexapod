@@ -1,0 +1,17 @@
+# Registration across epochs (M3b.2), every part real but the reconstruction: the worker
+# seeds `site_context` (the site's reference epoch, its check targets), `t_recorded_align`
+# replays what the real `align_epoch` wrote for the synthetic tree once the context checks
+# out, and the shipped `catalog` carries it to `register`.
+name: t-align
+version: 1
+description: Reconstruct (stand-in), place, align (recorded), package, register.
+inputs: [site_context]
+stages:
+  - { id: normalize, impl: t_normalize }
+  - { id: reconstruct, impl: t_reconstruct }
+  - id: georeference
+    impl: manual_placement
+    params: { lat: 28.0389, lon: -82.6966, height: 10.8, uncertainty_m: 10.0 }
+  - { id: align, impl: t_recorded_align }
+  - { id: package, impl: t_package }
+  - { id: register, impl: catalog }

@@ -72,6 +72,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import IO, Any, Literal
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import Capture, Job, JobStep
@@ -79,7 +80,18 @@ from app.models.enums import CaptureStatus, RunStatus, UploadStatus
 from app.services import epochs
 from app.storage import ObjectStorage
 from app.storage.null import StorageUnavailableError
-from app.worker import alerts, claim, events, outputs, params, reaper, registration, retry, steps
+from app.worker import (
+    alerts,
+    claim,
+    events,
+    outputs,
+    params,
+    reaper,
+    registration,
+    retry,
+    site_context,
+    steps,
+)
 from app.worker.child import (
     CANCEL_SIGNAL,
     DETACH_SIGNAL,
@@ -93,7 +105,6 @@ from app.worker.pipeline_bridge import (
     CALL_BOOK,
     PIPELINE_DIR,
     SITE_CONTEXT,
-    SITE_CONTEXT_FILE,
     ArtifactRef,
     AttemptLedger,
     CallBook,
@@ -104,7 +115,6 @@ from app.worker.pipeline_bridge import (
     StepResult,
     Workdir,
     checksum_of,
-    empty_site_context,
     latest_live,
     latest_progress,
     plan_recipe,
@@ -273,7 +283,7 @@ class JobSupervisor:
             return self._dead_letter(db, job, f"recipe {job.recipe!r} did not resolve: {error}")
         workdir_root = self._config.workdir_for(job_id)
         try:
-            self._seed(db, job, recipe.inputs, workdir_root)
+            self._seed(db, job, recipe.inputs, workdir_root, plan=plan)
         except StorageUnavailableError as error:
             return self._dead_letter(db, job, f"could not fetch the capture's files: {error}")
         try:
@@ -339,7 +349,12 @@ class JobSupervisor:
             if not state.preempted:
                 decision = self._read_failure(state, attempts, workdir_root)
                 if not decision.retry:
-                    return self._dead_letter(db, job, f"{decision.why}: {state.error}")
+                    return self._dead_letter(
+                        db,
+                        job,
+                        f"{decision.why}: {state.error}",
+                        rejected=self._rejection(db, job, plan, state.failed_stage, decision),
+                    )
                 if decision.params:
                     stage_params = self._override(db, job, plan, state.failed_stage, decision)
             if state.preempted:
@@ -974,7 +989,20 @@ class JobSupervisor:
             self._tidy(workdir_root)
         return "cancelled"
 
-    def _dead_letter(self, db: Session, job: Job, why: str) -> Terminal:
+    @staticmethod
+    def _rejection(
+        db: Session, job: Job, plan: Plan, stage_id: str, decision: retry.Decision
+    ) -> epochs.Rejection | None:
+        """A failed quality gate, as the rejected epoch `_dead_letter` records; else None."""
+        if decision.rejected is None:
+            return None
+        capture = db.get(Capture, job.capture_id)
+        located = params.located_point(plan, capture, job) if capture is not None else None
+        return epochs.Rejection(stage_id=stage_id, gate=decision.rejected, located=located)
+
+    def _dead_letter(
+        self, db: Session, job: Job, why: str, *, rejected: epochs.Rejection | None = None
+    ) -> Terminal:
         """Stop trying, and say why in the place the panel already renders.
 
         Any remote call still written down for the run is cancelled first -- a worker
@@ -982,6 +1010,11 @@ class JobSupervisor:
         would ever pick it up again. Then the workdir is tidied like a finished run's:
         a failed run kept its inputs and every stage's scratch until the volume filled,
         though a retry fetches the inputs again and scratch is scratch.
+
+        `rejected`: a quality gate the recipe turned on rejected the capture (M3b). It is
+        kept as a `rejected` epoch of its site, in the same commit as the job's error
+        (`services/epochs.record_rejected`) -- and if that cannot be written, the job is
+        still dead-lettered: the error says which gate failed either way.
         """
         if not self._still_ours(db, job):
             return "lost"
@@ -997,6 +1030,12 @@ class JobSupervisor:
         capture = db.get(Capture, job.capture_id)
         if capture is not None:
             capture.status = CaptureStatus.ERROR
+        if capture is not None and rejected is not None:
+            try:
+                with db.begin_nested():
+                    epochs.record_rejected(db, job.id, capture, rejected)
+            except SQLAlchemyError:
+                log.exception("worker: job %s: could not record its rejected epoch", job.id)
         db.commit()
         if self._config.tidy_finished_runs:
             self._tidy(workdir_root)
@@ -1117,16 +1156,34 @@ class JobSupervisor:
             return None
         return outputs.checkpoint_key(job_id, stage_id, attempt)
 
-    def _seed(self, db: Session, job: Job, inputs: tuple[str, ...], workdir_root: Path) -> None:
+    def _seed(
+        self,
+        db: Session,
+        job: Job,
+        inputs: tuple[str, ...],
+        workdir_root: Path,
+        *,
+        plan: Plan | None = None,
+    ) -> None:
         """Put the capture's uploaded bytes where the recipe says its inputs live.
 
         A file already in the workdir is not fetched again, so a reclaimed or retried job
         does not download a 12 GB video again. Streamed to disk, not read into memory:
         the worker machine has 2 GB and an iPhone video is routinely larger than that,
         and a whole-object read of one killed the worker before the first stage ran.
+
+        `site_context` (M3b) is what the site knows before the run -- its reference epoch,
+        its check targets, this capture's clicks on them (`worker/site_context.py`) --
+        seeded once and then frozen, for the site this run belongs to: the one its frame
+        came from, found by the same point (`params.located_point`, from `plan`).
         """
         work = Workdir.create(workdir_root)
         capture = db.get(Capture, job.capture_id)
+        located = (
+            params.located_point(plan, capture, job)
+            if plan is not None and capture is not None
+            else None
+        )
         # What to fetch, read now, as plain values: the downloads below take minutes for
         # a large video, and the session's transaction -- opened by these reads and the
         # ones before them -- must not sit idle across them. Neon terminates a connection
@@ -1139,7 +1196,9 @@ class JobSupervisor:
         _end_transaction(db)
         for name in inputs:
             if name == SITE_CONTEXT:
-                _seed_site_context(work.input_path(name))
+                site_context.seed_site_context(
+                    db, self._storage, capture, work.input_path(name), located=located
+                )
                 continue
             if name != "upload" or capture is None:
                 continue
@@ -1461,24 +1520,6 @@ def _tail_lines(path: Path, offset: int) -> str:
     lines = [line for line in _read_from(path, offset).splitlines() if line.strip()]
     tail = "\n".join(lines[-STDERR_TAIL_LINES:])
     return tail if len(tail) <= STDERR_TAIL_CHARS else "..." + tail[-STDERR_TAIL_CHARS:]
-
-
-def _seed_site_context(directory: Path) -> None:
-    """What the site knows before this run, for `align` (M3b; `alignment.py`).
-
-    M3b.1 seeds the empty context -- no reference epoch, no check targets -- so every
-    epoch is aligned by its own georeference until M3b.2 seeds the site's reference.
-    Written only if absent, through a temporary file: a resumed or retried run keeps the
-    context it started with, so its alignment is never measured against a different
-    reference halfway through.
-    """
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / SITE_CONTEXT_FILE
-    if path.exists():
-        return
-    staging = path.with_suffix(".json.tmp")
-    staging.write_text(json.dumps(empty_site_context()) + "\n", encoding="utf-8")
-    staging.replace(path)
 
 
 def _end_transaction(db: Session) -> None:

@@ -2,12 +2,14 @@ from app.models.asset import Asset
 from app.models.base import Base
 from app.models.bookmark import CameraBookmark
 from app.models.capture import Capture, CaptureFile
+from app.models.check_target import SiteCheckTarget
 from app.models.enums import (
     ArtifactKind,
     AssetProvider,
     AssetSourceKind,
     CaptureKind,
     CaptureStatus,
+    CheckTargetRole,
     EpochJoinMethod,
     EpochPlatform,
     EpochStatus,
@@ -73,6 +75,7 @@ __all__ = [
     "CaptureFile",
     "CaptureKind",
     "CaptureStatus",
+    "CheckTargetRole",
     "Epoch",
     "EpochJoinMethod",
     "EpochPlatform",
@@ -125,6 +128,7 @@ __all__ = [
     "RunStatus",
     "ScaleSource",
     "Site",
+    "SiteCheckTarget",
     "SiteFrame",
     "SiteFrameSource",
     "UploadStatus",

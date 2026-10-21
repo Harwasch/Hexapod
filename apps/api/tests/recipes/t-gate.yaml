@@ -1,0 +1,16 @@
+# A quality gate turned on (M3b): Lane 1's shape with a gate between the georeference and
+# the tiles. `t_gate` fails unless its run is told `fail: false`, as a re-run that passes.
+name: t-gate
+version: 1
+description: Place, gate, package, register -- a run a quality gate rejects.
+inputs: [site_context]
+stages:
+  - { id: normalize, impl: t_normalize }
+  - id: georeference
+    impl: manual_placement
+    params: { lat: 44.7965, lon: -111.1346, height: 1520.0, uncertainty_m: 1.5 }
+  - { id: align, impl: t_gate }
+  - { id: package, impl: t_package }
+  - id: register
+    impl: catalog
+    params: { slug: gated-run, title: Gated }

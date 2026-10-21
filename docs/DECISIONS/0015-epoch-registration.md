@@ -137,3 +137,31 @@ worth 3 cm, hence the anchor floor in item 6.
 - Deferred: automatic target detection (M3c, OpenCV is only in tools/captures), control targets as
   BA constraints, splat-ingest alignment (no frames; `unaligned`), vocabulary-tree pairing for large
   joint registrations (sampled to 60 a side).
+
+## Addendum: the API side (M3b.2)
+
+- **Seeding.** The worker seeds `site_context` for the site the run belongs to
+  (`epochs.site_for_run`, the same answer its frame comes from): the reference epoch's frames,
+  model, `placement.json` and `georef.json` from the bucket, the site's active
+  `site_check_targets`, and the capture's uploaded `check_observations.json`. Frozen once
+  written. The reference is a published epoch whose run kept all four, is not in flight (a Refine writes
+  the same keys), and whose files are no newer than the tiles it shows (a failed Refine leaves it
+  the reference unless it replaced the placement); best verdict then oldest (open question 2's default); a re-run of an epoch only takes one that joined
+  before it, so the frame-defining epoch never aligns onto one aligned to it. `survey` is passed
+  on only for an `rtk-drone` epoch, else as `coarse`, which keeps item 6's RTK rule true end to
+  end.
+- **A reference resized at runtime** ("Set real size", `renderConfig.scale` `s`): its files stay
+  as registered, so the seed hands the pipeline the placement as shown, `s × placement`
+  (`placement.shown.json`; exact because the resize is about the site frame's origin, which is the
+  reference's georef origin), and records `runtimeScale`. A reference whose georef is not at the
+  frame's origin is not used when resized: nothing about its pivot is guessed.
+- **Recording.** `register` writes the alignment onto `epochs.alignment` and sets the epoch's
+  platform to the one the verdict was judged for. A visual alignment's capture and asset say
+  `georefMethod: visual-epoch`; their scale is `visual-epoch` only when the reference's was
+  measured, else the reference's own word (an estimate stays an estimate). A run with no align
+  stage records `method: none`, `unaligned`, and why.
+- **Gates.** A `QualityGateError` is its own retry kind (`quality-gate`, never retried, read before
+  bad input) and keeps the capture as a `rejected` epoch on a framed site: footprint the located
+  point buffered 25 m, else the site boundary; the gate in `alignment` (`unaligned`, with a
+  `rejected` block), since `CaptureQuality` has no field for it. A later run that passes publishes
+  the same epoch.
