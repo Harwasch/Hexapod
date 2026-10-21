@@ -24,6 +24,19 @@ import { NO_OWNER, type OwnerPlane } from "@/lib/compositor";
 /** Cells a row of the owner texture holds (R8), as CesiumJS's (splatCompositor.ts). */
 export const RULE_OWNER_WIDTH = 4096;
 
+/**
+ * How much wider PlayCanvas draws a splat than CesiumJS's shader does, for the same covariance:
+ * both take the projected spread's eigenvalues `λ` (plus 0.3 px² of blur) and fall off as
+ * `exp(-4 u²)` across a quad, but PlayCanvas's quad reaches `√(2λ)` pixels each way from the
+ * centre (its `initCornerCov`, offsets scaled by `viewport_size.zw`) and CesiumJS's half that
+ * (`PrimitiveGaussianSplatVS`, offsets divided by `czm_viewport.zw`). So CesiumJS's seam
+ * reach, in the splat's sigmas, is twice that many under PlayCanvas: the same fade in what is
+ * drawn. Measured on the synthetic yard (ADR 0017's method, e2e/compositorScene.spec.ts): a
+ * reach of 2 sigmas under PlayCanvas leaves 1.29% of the seam's pixels blending two dates, 3
+ * leaves 0.01%, 4 none.
+ */
+export const PLAYCANVAS_FOOTPRINT = 2;
+
 /** What a tileset the rule names is. */
 export interface RuleSource {
   /** Its index among the plane's sources (lib/compositor.ts `CompositorSource.source`). */
@@ -61,7 +74,10 @@ export interface ScanRuleView {
   native: number;
   /** The inferred sources tinted as invented (Highlight invented): bit k for source k. */
   tinted: number;
-  /** How far from a seam a splat is drawn whole, in its own sigmas (`SEAM_REACH`; 0: centres). */
+  /**
+   * How far from a seam a splat is drawn whole, in its own sigmas as CesiumJS draws it
+   * (`SEAM_REACH`; 0: centres alone); PlayCanvas scales it by `PLAYCANVAS_FOOTPRINT`.
+   */
   reach: number;
   /** False draws every splat as it was: a harness's comparison. */
   enabled: boolean;

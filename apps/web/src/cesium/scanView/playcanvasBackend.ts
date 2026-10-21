@@ -117,6 +117,7 @@ import {
 } from "./scanMotion";
 import { reportScanCellView, watchScanCellView } from "./scanCellView";
 import {
+  PLAYCANVAS_FOOTPRINT,
   reportScanRule,
   RULE_OWNER_WIDTH,
   RULE_WEIGHT_GLSL,
@@ -1274,7 +1275,8 @@ function assemble(
     }
     if (next) {
       rulePlane.set(next.plane);
-      ruleParams.set([next.enabled ? 1 : 0, next.cellM, next.reach, 0]);
+      // The seam's reach in what PlayCanvas draws: its footprint is wider than CesiumJS's.
+      ruleParams.set([next.enabled ? 1 : 0, next.cellM, next.reach * PLAYCANVAS_FOOTPRINT, 0]);
     }
     setCellView(next?.age ?? ownCellView);
     for (const entity of cells.meshes()) applyModifier(entity);

@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LayerLook } from "@/cesium/scanView/layerLook";
 import {
+  PLAYCANVAS_FOOTPRINT,
   publishScanRule,
   ruleOwnerRows,
   ruleSigma,
@@ -351,7 +352,9 @@ describe("a per-cell view rule under PlayCanvas", () => {
       expect(glsl).toContain("color.a *= hexapodRuleWeight(center);");
       // The spread is read after the motion has moved the splat.
       expect(glsl).toContain("hexapodRuleRotation = rotation;");
-      expect(param(e, "uRuleParams")).toEqual([1, 1, 2, 0]);
+      // The seam's reach in PlayCanvas's own footprints: it draws a splat twice as wide as
+      // CesiumJS for the same spread, so CesiumJS's 2 sigmas are 4 here.
+      expect(param(e, "uRuleParams")).toEqual([1, 1, 2 * PLAYCANVAS_FOOTPRINT, 0]);
       expect(param(e, "uRulePlane")).toEqual([0, 0, 8, 4]);
     }
     // Each tile's source, by the tileset it came from: the scan's own, a fill's, none.
@@ -482,13 +485,14 @@ describe("the other dates a rule draws under PlayCanvas", () => {
         dates: [{ url: JUNE, assetId: "june", extras: {}, placement: null, root: IDENTITY }],
       }),
     );
+    // The dates' code is fetched with the first rule that names one, then June's tileset.
+    await vi.waitFor(() => expect(fetched).toContain(JUNE), { timeout: 20_000 });
     let june: (typeof pc.entities)[number] | undefined;
-    for (let i = 0; i < 20 && !june?.gsplat; i += 1) {
+    for (let i = 0; i < 50 && !june?.gsplat; i += 1) {
       backend.render(pose);
-      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 10));
       june = pc.entities.find((e) => e.name === "9_1.glb");
     }
-    expect(fetched).toContain(JUNE);
     expect(june?.gsplat?.modifier?.glsl).toContain("color.a *= hexapodRuleWeight(center);");
     expect(param(june, "uRuleSource")).toEqual([1, 0, 0, 0]);
     // Bound to none of the scan's objects, and not picked as the scan's.
@@ -503,6 +507,12 @@ describe("the other dates a rule draws under PlayCanvas", () => {
     publishScanRule("rule-e", null);
     expect(scanRuleReading("rule-e")?.dates).toMatchObject({ dates: 0, tiles: 0 });
     backend.destroy();
+  });
+});
+
+describe("a splat's footprint as each renderer draws it", () => {
+  it("is twice as wide under PlayCanvas as under CesiumJS, for the same spread", () => {
+    expect(PLAYCANVAS_FOOTPRINT).toBe(2);
   });
 });
 
