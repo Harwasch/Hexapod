@@ -264,3 +264,64 @@ def test_the_three_new_stages_were_a_recipe_edit_and_three_decorators() -> None:
     assert impls["ground_samples"] == "splat_ground"
     assert impls["manifest"] == "capture_manifest"
     assert {"splat_thumbnail", "splat_ground", "capture_manifest"} <= set(known_impls())
+
+
+@pytest.mark.parametrize(("accuracy", "expected"), [(65.0, 65.0), (4.7, 10.0), (0.0, 10.0)])
+def test_a_hand_placement_carries_the_phones_accuracy(
+    tmp_path: Path, accuracy: float, expected: float
+) -> None:
+    """`locationAccuracyM` on a phone capture reaches `manual_placement`; it widens the
+    hand placement's ten metres and never narrows them. Zero is no accuracy at all."""
+    from conftest import make_recipe
+
+    workdir = Workdir.create(tmp_path / "run")
+    params = {"lat": LAT, "lon": LON, "uncertainty_m": 10.0, "location_accuracy_m": accuracy}
+    recipe = make_recipe(
+        [{"id": "georeference", "impl": "manual_placement", "params": params}], inputs=[]
+    )
+    execute(recipe, workdir, RunnerSet.local())
+
+    georef = _json(workdir, "georeference", "georef.json")
+    assert georef["uncertaintyM"] == expected
+    assert georef["locationAccuracyM"] == (accuracy or None)
+
+
+def test_lane1_registers_no_platform(run: Workdir) -> None:
+    """`ingest_splat` detects nothing; the worker then keeps the epoch's own fallback."""
+    registration = _json(run, "register", "registration.json")
+
+    assert registration["platform"] is None
+    assert registration["platformEvidence"] is None
+    assert registration["capturedAtUtc"] is None
+    assert registration["manifest"]["capture"]["platform"] is None
+    assert registration["manifest"]["capture"]["platformEvidence"] is None
+
+
+def test_the_catalog_copies_the_platform_and_capture_time_from_the_manifest(
+    tmp_path: Path,
+) -> None:
+    from conftest import make_recipe
+
+    workdir = Workdir.create(tmp_path / "run")
+    tiles = workdir.input_path("splat")
+    tiles.mkdir(parents=True)
+    (tiles / "tileset.json").write_text("{}")
+    workdir.input_path("georef.json").write_text(json.dumps({"lat": LAT, "lon": LON}))
+    capture = {
+        "platform": "rtk-drone",
+        "platformEvidence": "claimed",
+        "capturedAtUtc": "2026-10-01T15:20:30.123Z",
+    }
+    workdir.input_path("manifest.json").write_text(json.dumps({"capture": capture}))
+    recipe = make_recipe(
+        [{"id": "register", "impl": "catalog", "params": {}}],
+        inputs=["splat", "georef.json", "manifest.json"],
+    )
+    execute(recipe, workdir, RunnerSet.local())
+
+    registration = _json(workdir, "register", "registration.json")
+    assert (
+        registration["platform"],
+        registration["platformEvidence"],
+        registration["capturedAtUtc"],
+    ) == ("rtk-drone", "claimed", "2026-10-01T15:20:30.123Z")

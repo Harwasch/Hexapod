@@ -78,6 +78,7 @@ import numpy.typing as npt
 
 import resolution
 import sfm
+from frame_meta import META_BYTES, xmp_packet, xmp_value
 from recipe import load_recipe
 
 F64 = npt.NDArray[np.float64]
@@ -87,6 +88,9 @@ __all__ = [
     "GROUPS",
     "HF_REPO",
     "HF_REVISION",
+    # Re-exported from `frame_meta`, where the XMP reader now lives:
+    # `infra/modal/minnetonka.py` reads `tree.META_BYTES`.
+    "META_BYTES",
     "SUSPECT_CAMERAS",
     "DroneMeta",
     "FrameFit",
@@ -326,20 +330,6 @@ class DroneMeta:
         )
 
 
-#: How much of the start of a JPEG to read for its XMP. The DJI packet sits after the
-#: EXIF block and a Lightroom thumbnail; in this dataset it starts as late as ~49 KiB.
-META_BYTES = 192 * 1024
-
-
-def _xmp_value(text: str, prefix: str, name: str) -> str | None:
-    """`prefix:name="v"` (attribute form, what the drone writes) or
-    `<prefix:name>v</prefix:name>` (element form, what the repaired low/mid tiers carry)."""
-    found = re.search(rf'{prefix}:{name}="([^"]*)"', text) or re.search(
-        rf"<{prefix}:{name}>([^<]*)</{prefix}:{name}>", text
-    )
-    return found.group(1).strip() if found else None
-
-
 def _float(value: str | None) -> float | None:
     if value is None:
         return None
@@ -353,19 +343,17 @@ def _float(value: str | None) -> float | None:
 def read_drone_meta(data: bytes) -> DroneMeta:
     """The DJI fields out of a JPEG's XMP. Reads text, not structure: the packet is ASCII
     inside an APP1 segment, and a regex over it is what every DJI metadata tool does."""
-    start = data.find(b"<x:xmpmeta")
-    end = data.find(b"</x:xmpmeta>", start + 1) if start >= 0 else -1
-    if start < 0:
+    text = xmp_packet(data)
+    if text is None:
         return DroneMeta()
-    text = data[start : end if end > 0 else len(data)].decode("utf-8", errors="replace")
-    taken = _xmp_value(text, "xmp", "CreateDate") or _xmp_value(text, "exif", "DateTimeOriginal")
+    taken = xmp_value(text, "xmp", "CreateDate") or xmp_value(text, "exif", "DateTimeOriginal")
     return DroneMeta(
-        relative_altitude_m=_float(_xmp_value(text, "drone-dji", "RelativeAltitude")),
-        absolute_altitude_m=_float(_xmp_value(text, "drone-dji", "AbsoluteAltitude")),
-        gimbal_pitch_deg=_float(_xmp_value(text, "drone-dji", "GimbalPitchDegree")),
-        gimbal_yaw_deg=_float(_xmp_value(text, "drone-dji", "GimbalYawDegree")),
-        latitude=_float(_xmp_value(text, "drone-dji", "GpsLatitude")),
-        longitude=_float(_xmp_value(text, "drone-dji", "GpsLongitude")),
+        relative_altitude_m=_float(xmp_value(text, "drone-dji", "RelativeAltitude")),
+        absolute_altitude_m=_float(xmp_value(text, "drone-dji", "AbsoluteAltitude")),
+        gimbal_pitch_deg=_float(xmp_value(text, "drone-dji", "GimbalPitchDegree")),
+        gimbal_yaw_deg=_float(xmp_value(text, "drone-dji", "GimbalYawDegree")),
+        latitude=_float(xmp_value(text, "drone-dji", "GpsLatitude")),
+        longitude=_float(xmp_value(text, "drone-dji", "GpsLongitude")),
         taken=taken,
     )
 

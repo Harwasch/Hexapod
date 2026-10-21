@@ -9,7 +9,7 @@
 # `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
 # run `none` would be billing a GPU to do nothing.
 name: photo-reconstruct
-version: 11
+version: 12
 description: Reconstruct a splat from a raw capture, then package and register it.
 
 inputs: [upload]
@@ -68,6 +68,22 @@ stages:
       max_side: auto
       auto_base: 1600
       auto_ceiling: 2400
+      # An HLG or PQ clip (an iPhone's "HDR" video) is tonemapped to 8-bit BT.709 before
+      # frames are taken -- the zimg recipe in `video.TONEMAP_FILTER`; `npl=100` is not
+      # tuned on any capture. Frames taken straight from HLG are washed out and flat.
+      # SDR clips and photos are untouched. `off` takes HDR frames as they are.
+      hdr: auto
+      # Exposure is measured on every kept frame and flagged, never failed by default.
+      # The thresholds are first principles, not measurements (`exposure.BASIS`):
+      #   exposure_clip_pct: a frame more than 5% within 5 levels of white or black;
+      #   exposure_ev_spread: the camera's EV100 varying by more than one stop;
+      #   exposure_luma_spread_stops: mean linear light varying by more than one stop.
+      # `max_clipped_frames_fraction` -- fail the run when more than that fraction of
+      # kept frames are clipped -- is deliberately absent (off): no run has measured
+      # where clipping starts to cost a reconstruction, so no threshold is backed.
+      exposure_clip_pct: 5.0
+      exposure_ev_spread: 1.0
+      exposure_luma_spread_stops: 1.0
 
   - id: pose
     impl: colmap # | glomap | arkit
@@ -108,6 +124,12 @@ stages:
       # 0.169 vs 24.07-24.15 / 0.166-0.168); the preview went from ~17-18 min to 11-13.
       # `colmap: "3.9"` runs the old CLI.
       colmap: "4.2"
+      # Bundle adjustment starts from the capture's own focal in frames_meta.json -- DJI's
+      # per-unit calibrated focal, else the EXIF or QuickTime 35 mm equivalent converted
+      # by the diagonal as COLMAP itself does (24 mm at 640x480 is 443.725 px, checked
+      # against pycolmap 4.2) -- and refines it: it seeds, never holds (`hold_focal`),
+      # because an integer 35 mm value can be ~2% off. poses.json records how far it moved.
+      focal_from: exif
     # On Modal's CPU box, not the worker: `cpu4` is 4 cores and 8 GB with no GPU, billed
     # per second ($0.25 an hour) only while a capture is posed. Feature extraction
     # peaked at 1.7 GB on real 1080p frames, more than the 2 GB worker can spare, and a

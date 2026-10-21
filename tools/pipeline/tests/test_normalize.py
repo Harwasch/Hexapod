@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -316,6 +317,106 @@ def test_a_header_with_nothing_in_it_yields_nulls_rather_than_raising() -> None:
 
     assert meta.location is None
     assert meta.duration_s is None and meta.width is None and meta.make is None
+    assert meta.color_transfer is None and meta.pixel_format is None
+    assert not meta.is_hdr
+    assert meta.started_at() is None
+
+
+def test_the_phones_location_accuracy_is_kept() -> None:
+    """The iPhone writes how good its fix is beside the fix; it was scraped and dropped."""
+    meta = video.parse_probe(IPHONE_STDERR)
+
+    assert meta.location is not None
+    assert meta.location.accuracy_m == pytest.approx(4.766775)
+    location = meta.to_dict()["location"]
+    assert isinstance(location, dict)
+    assert location["accuracyM"] == pytest.approx(4.766775)
+
+
+@pytest.mark.parametrize("raw", ["0", "-3", "nan", "inf", "about four metres", ""])
+def test_an_accuracy_nobody_can_use_is_none(raw: str) -> None:
+    text = IPHONE_STDERR.replace("4.766775", raw)
+
+    meta = video.parse_probe(text)
+
+    assert meta.location is not None
+    assert meta.location.accuracy_m is None
+
+
+def test_the_colour_description_is_scraped_and_hlg_counts_as_hdr() -> None:
+    iphone = video.parse_probe(IPHONE_STDERR)
+    assert (iphone.pixel_format, iphone.color_range) == ("yuv420p10le", "tv")
+    assert (iphone.color_matrix, iphone.color_primaries, iphone.color_transfer) == (
+        "bt2020nc",
+        "bt2020",
+        "arib-std-b67",
+    )
+    assert iphone.is_hdr
+
+    cxyz = video.parse_probe(CXYZ_STDERR)
+    assert cxyz.pixel_format == "yuv420p"
+    assert cxyz.color_transfer is None
+    assert not cxyz.is_hdr
+
+    one = video.parse_probe(CXYZ_STDERR.replace("yuv420p,", "yuv420p(tv, bt709, progressive),"))
+    assert one.pixel_format == "yuv420p"
+    assert one.color_range == "tv"
+    assert (one.color_matrix, one.color_primaries, one.color_transfer) == ("bt709",) * 3
+    assert not one.is_hdr
+
+    pq = video.parse_probe(IPHONE_STDERR.replace("arib-std-b67", "smpte2084"))
+    assert pq.is_hdr
+
+    # `unknown` is ffmpeg saying it does not know, not a name; a lone bt470bg is the
+    # matrix only (its transfer is gamma28, which the lone name does not say).
+    jpeg = video.parse_probe(
+        CXYZ_STDERR.replace("yuv420p,", "yuvj420p(pc, bt470bg/unknown/unknown),")
+    )
+    assert (jpeg.pixel_format, jpeg.color_range, jpeg.color_matrix) == ("yuvj420p", "pc", "bt470bg")
+    assert (jpeg.color_primaries, jpeg.color_transfer) == (None, None)
+    lone = video.parse_probe(CXYZ_STDERR.replace("yuv420p,", "yuv420p(tv, bt470bg, progressive),"))
+    assert (lone.color_matrix, lone.color_transfer) == ("bt470bg", None)
+    scan = video.parse_probe(CXYZ_STDERR.replace("yuv420p,", "yuv420p(top first),"))
+    assert (scan.pixel_format, scan.color_matrix, scan.color_range) == ("yuv420p", None, None)
+
+
+def test_a_codec_profile_in_brackets_is_not_a_colour_description() -> None:
+    """`hevc (Main 10) (hvc1 / 0x31637668)` comes before the pixel format and has the
+    same `word(...)` shape; only a pixel-format word may open the colour group."""
+    meta = video.parse_probe(IPHONE_STDERR)
+
+    assert meta.codec == "hevc"
+    assert meta.pixel_format == "yuv420p10le"
+
+
+def test_only_whitelisted_tags_reach_source_meta() -> None:
+    """The full scrape can carry device identifiers; only the named keys are emitted."""
+    tags = video.parse_probe(IPHONE_STDERR).to_dict()["tags"]
+
+    assert isinstance(tags, dict)
+    assert tags["com.apple.quicktime.location.accuracy.horizontal"] == "4.766775"
+    assert tags["com.apple.quicktime.creationdate"] == "2025-06-14T10:41:02+0100"
+    assert "major_brand" not in tags
+    assert "handler_name" not in tags
+    assert "vendor_id" not in tags
+    assert set(tags) <= set(video.VIDEO_TAG_KEYS)
+
+
+def test_the_clip_start_is_timezone_aware_or_none() -> None:
+    meta = video.parse_probe(IPHONE_STDERR)
+
+    # The creation date (local, with its offset) is preferred over the mvhd time.
+    assert meta.started_at() == datetime(2025, 6, 14, 9, 41, 2, tzinfo=UTC)
+    assert meta.started_from() == "quicktime-creationdate"
+
+    mvhd = video.parse_probe(IPHONE_STDERR.replace("com.apple.quicktime.creationdate", "x-y"))
+    assert mvhd.started_at() == datetime(2025, 6, 14, 9, 41, 2, tzinfo=UTC)
+    assert mvhd.started_from() == "mvhd-creation-time"
+
+    naive = video.VideoMeta(creation_date="2025-06-14T10:41:02")
+    assert naive.started_at() is None
+    assert naive.started_from() is None
+    assert video.VideoMeta(creation_time="yesterday").started_at() is None
 
 
 @pytest.mark.parametrize(
@@ -1012,3 +1113,138 @@ def test_an_explicit_max_side_overrides_auto_and_nonsense_is_refused(tmp_path: P
 
     with pytest.raises(Exception, match="max_side"):
         run_normalize(tmp_path / "b", {"select": "all", "max_side": "huge"}, upload)
+
+
+# --- HDR: an iPhone's HLG video is tonemapped before frames are taken ----------------
+
+
+def make_hdr_clip(path: Path, *, transfer: str = "arib-std-b67", frames: int = 20) -> Path:
+    """A 10-bit HEVC clip tagged BT.2020 with an HDR transfer, as an iPhone records."""
+    stills = path.parent / "hdr-stills"
+    stills.mkdir(parents=True, exist_ok=True)
+    for index in range(frames):
+        _frame(index, blurred=False).save(stills / f"in_{index:04d}.png")
+    subprocess.run(
+        [imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-nostdin", "-y",
+         "-framerate", "10", "-i", str(stills / "in_%04d.png"),
+         "-c:v", "libx265", "-x265-params", "log-level=error", "-pix_fmt", "yuv420p10le",
+         "-color_primaries", "bt2020", "-color_trc", transfer, "-colorspace", "bt2020nc",
+         "-tag:v", "hvc1", str(path)],
+        capture_output=True, check=True,
+    )  # fmt: skip
+    return path
+
+
+def _extraction_argv(workdir: Workdir) -> str:
+    log = workdir.log_path("normalize").read_text()
+    [argv] = [
+        line for line in log.splitlines() if line.startswith("$ ") and "-start_number" in line
+    ]
+    return argv
+
+
+def test_the_wheels_ffmpeg_has_the_filters_hdr_needs() -> None:
+    """If a new imageio-ffmpeg wheel drops zimg, this says so before a capture does."""
+    assert {"zscale", "tonemap"} <= video.ffmpeg_filters()
+    assert {"zscale", "tonemap"} == video.TONEMAP_NEEDS
+
+
+def test_the_tonemap_sits_between_the_rate_and_the_size() -> None:
+    argv = video.extract_frames_argv(
+        Path("x.mov"), Path("f_%05d.jpg"), fps=4, tonemap=video.TONEMAP_FILTER, max_side=800
+    )
+    chain = argv[argv.index("-vf") + 1]
+
+    assert chain.startswith("fps=4,zscale=t=linear")
+    assert chain.endswith(video.scale_filter(800))
+    plain = video.extract_frames_argv(Path("x.mov"), Path("f_%05d.jpg"), fps=4, max_side=800)
+    assert "zscale" not in plain[plain.index("-vf") + 1]
+    grab = video.grab_frame_argv(
+        Path("x.mov"), 1.0, Path("s.png"), max_side=1600, tonemap=video.TONEMAP_FILTER
+    )
+    assert grab[grab.index("-vf") + 1] == f"{video.TONEMAP_FILTER},{video.scale_filter(1600)}"
+
+
+@pytest.mark.parametrize("transfer", ["arib-std-b67", "smpte2084"])
+def test_an_hdr_clip_is_tonemapped_before_frames_are_taken(tmp_path: Path, transfer: str) -> None:
+    upload = tmp_path / "upload"
+    upload.mkdir()
+    make_hdr_clip(upload / "IMG_0001.MOV", transfer=transfer)
+
+    workdir = run_normalize(
+        tmp_path, {"fps": 5, "keep": 4, "select": "all", "max_side": "auto"}, upload
+    )
+
+    assert "tonemap=tonemap=hable" in _extraction_argv(workdir)
+    # `max_side: auto` sampled tonemapped frames too: what training will read.
+    log = workdir.log_path("normalize").read_text()
+    grabs = [line for line in log.splitlines() if line.startswith("$ ") and "-frames:v" in line]
+    assert all("zscale=t=linear" in line for line in grabs)
+    meta = json.loads((workdir.out_dir("normalize") / "source_meta.json").read_text())
+    hdr = meta["video"]["hdr"]
+    assert hdr["tonemapped"] is True
+    assert hdr["transfer"] == transfer
+    assert hdr["filter"] == video.TONEMAP_FILTER
+    assert meta["video"]["isHdr"] is True
+    for frame in sorted((workdir.out_dir("normalize") / "frames").iterdir()):
+        with Image.open(frame) as image:
+            assert image.mode == "RGB"
+    step = json.loads((workdir.stage_dir("normalize") / "step.json").read_text())
+    assert step["metrics"]["hdrTonemapped"] is True
+
+
+def test_an_sdr_clip_is_not_tonemapped(tmp_path: Path) -> None:
+    upload = tmp_path / "upload"
+    upload.mkdir()
+    make_clip(upload / "clip.mp4")
+
+    workdir = run_normalize(tmp_path, {"fps": 10, "keep": 4, "select": "all"}, upload)
+
+    assert "zscale" not in _extraction_argv(workdir)
+    hdr = json.loads((workdir.out_dir("normalize") / "source_meta.json").read_text())["video"][
+        "hdr"
+    ]
+    assert hdr["tonemapped"] is False
+    assert str(hdr["reason"]).startswith("not an HDR transfer")
+
+
+def test_hdr_off_leaves_an_hlg_clip_alone(tmp_path: Path) -> None:
+    upload = tmp_path / "upload"
+    upload.mkdir()
+    make_hdr_clip(upload / "IMG_0001.MOV", frames=8)
+
+    workdir = run_normalize(tmp_path, {"fps": 5, "select": "all", "hdr": "off"}, upload)
+
+    assert "zscale" not in _extraction_argv(workdir)
+    hdr = json.loads((workdir.out_dir("normalize") / "source_meta.json").read_text())["video"][
+        "hdr"
+    ]
+    assert (hdr["tonemapped"], hdr["transfer"]) == (False, "arib-std-b67")
+    assert "hdr: off" in str(hdr["reason"])
+
+
+def test_an_ffmpeg_without_the_filters_takes_frames_as_they_are(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upload = tmp_path / "upload"
+    upload.mkdir()
+    make_hdr_clip(upload / "IMG_0001.MOV", frames=8)
+    monkeypatch.setattr(video, "ffmpeg_filters", lambda: frozenset({"fps", "scale"}))
+
+    workdir = run_normalize(tmp_path, {"fps": 5, "select": "all"}, upload)
+
+    assert "zscale" not in _extraction_argv(workdir)
+    hdr = json.loads((workdir.out_dir("normalize") / "source_meta.json").read_text())["video"][
+        "hdr"
+    ]
+    assert hdr["tonemapped"] is False
+    assert "lacks tonemap, zscale" in str(hdr["reason"])
+
+
+def test_an_unknown_hdr_rule_is_refused(tmp_path: Path) -> None:
+    upload = tmp_path / "upload"
+    upload.mkdir()
+    make_clip(upload / "clip.mp4", frames=4)
+
+    with pytest.raises(Exception, match="hdr must be one of auto, off"):
+        run_normalize(tmp_path, {"hdr": "yes"}, upload)

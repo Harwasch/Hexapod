@@ -28,6 +28,7 @@ import subprocess
 import time
 import tomllib
 from collections.abc import Callable, Sequence
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import IO, Any, NoReturn
 
@@ -37,9 +38,12 @@ import PIL
 import PIL.Image
 
 import blocks
+import capture_platform
 import colmap4
 import convergence
 import exif
+import exposure
+import frame_meta
 import gaussian_budget
 import gaussians
 import global_sfm
@@ -67,6 +71,7 @@ from captures_bridge import (
     tile_offsets,
 )
 from contracts import FANOUT_METRIC, MetricValue, StageContext, StageOutcome, fanout_role
+from errors import QualityGateError, check_gate
 from phases import Phases
 from registry import stage_impl
 
@@ -79,6 +84,11 @@ SOURCE_META = ArtifactDecl(
     "source_meta.json",
     content_type="application/json",
     summary="sensor, capture date, frame count, and what the uploaded bytes turned out to be",
+)
+FRAMES_META = ArtifactDecl(
+    "frames_meta.json",
+    content_type="application/json",
+    summary="one record per kept frame, read from the original upload before shrinking",
 )
 FRAMES = ArtifactDecl(
     "frames",
@@ -361,7 +371,7 @@ SELECT_MODES: tuple[str, ...] = ("viewpoint", "sharpness", "sharpness-windowed",
 @stage_impl(
     "ffmpeg_frames",
     consumes=("upload",),
-    produces=(FRAMES, SOURCE_META),
+    produces=(FRAMES, SOURCE_META, FRAMES_META),
     summary="Lane 2: video or image folder to a frame set, keyframes by camera motion",
 )
 def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
@@ -397,9 +407,17 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     sample of the capture's sharpest frames measurably carries detail above it, then up
     to `auto_ceiling` (`resolution.py`). Absent, frames keep their size.
 
-    What it does *not* do is read EXIF off a folder of stills or turn a location into a
-    georeference -- `exif_gps` is that stage, and it lands in B4. A location found here is
-    recorded in `source_meta.json` and goes no further.
+    `frames_meta.json` describes every kept frame from its **original** -- the upload's
+    photo before it was shrunk, or the clip and the frame's place in it -- because
+    shrinking keeps only the EXIF block and the DJI XMP (RTK, gimbal, calibrated focal)
+    is gone from the frame by the time `pose` sees it (`frame_meta.py`). The capture's
+    platform (`capture_platform.py`: `rtk-drone`, `drone`, `phone-video`, `phone-photo`,
+    `unknown`) is decided from those records and recorded in both documents; a
+    `platform` param overrides it and `platform_hint: phone` (a phone-key upload) is the
+    last thing it falls back on.
+
+    What it does *not* do is turn a location into a georeference -- `exif_gps` is that
+    stage. A location found here is recorded and goes no further.
     """
     upload = ctx.input("upload")
     source = video.pick_source(upload)
@@ -426,17 +444,26 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     # measure motion along, and their matching is exhaustive, so `keep` stays their cap.
     applied = "sharpness-windowed" if select == "viewpoint" and not source.is_video else select
 
+    hdr_rule = str(ctx.param("hdr", "auto"))
+    if hdr_rule not in HDR_RULES:
+        raise ValueError(f"hdr must be one of {', '.join(HDR_RULES)}, not {hdr_rule!r}")
     meta = video.VideoMeta()
     rate: float | None = None
     size: resolution.SizeDecision | None = None
+    hdr: dict[str, object] | None = None
     if source.is_video:
         ctx.log(f"$ {' '.join(video.probe_argv(source.path))}")
         text = video.probe_text(source.path)
         for line in text.splitlines():
             ctx.log(line)
         meta = video.parse_probe(text)
+        hdr = _hdr_decision(meta, hdr_rule)
+        tonemap = video.TONEMAP_FILTER if hdr["tonemapped"] else None
+        ctx.log(f"hdr: {hdr['reason']}")
         if size_rule == "auto":
-            size = _video_frame_size(ctx, source.path, meta, base=base, ceiling=size_ceiling)
+            size = _video_frame_size(
+                ctx, source.path, meta, base=base, ceiling=size_ceiling, tonemap=tonemap
+            )
         max_side = size.max_side if size is not None else _fixed_side(size_rule)
         rate = _candidate_rate(ctx, fps, meta) if applied == "viewpoint" else fps
         extracted = ctx.work_dir / "extracted"
@@ -448,6 +475,7 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
                 fps=rate,
                 quality=int(ctx.param("quality", 2)),
                 max_side=max_side,
+                tonemap=tonemap,
             )
         )
         candidates = sorted(extracted.glob("frame_*.jpg"))
@@ -503,6 +531,44 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         max_side=max_side,
     )
 
+    records = _frame_records(source, upload, candidates, chosen, written, meta, rate)
+    records, linear = _measure_exposure(records, written)
+    thresholds = _exposure_thresholds(ctx)
+    clip_pct = thresholds["clip_pct"]
+    exposure_summary = exposure.summarise(records, linear, **thresholds)
+    gate_failure: QualityGateError | None = None
+    names = exposure.clipped_frames(records, clip_pct)
+    flagged = len(names)
+    limit = _optional_float(ctx.param("max_clipped_frames_fraction"))
+    if limit is not None and not 0.0 <= limit <= 1.0:
+        raise ValueError(f"max_clipped_frames_fraction must be between 0 and 1, not {limit}")
+    try:
+        gate = check_gate(
+            "clipped_frames_fraction",
+            flagged / len(written),
+            limit,
+            fail_when="above",
+            reason=(
+                f"{flagged} of {len(written)} kept frames are more than {clip_pct:g}% clipped "
+                f"({', '.join(names[:10])}{', ...' if len(names) > 10 else ''}); "
+                f"max_clipped_frames_fraction is set to {limit}"
+            ),
+        )
+    except QualityGateError as error:
+        gate_failure = error
+        gate = {"name": error.gate, "enabled": True, "limit": limit, "measured": error.measured}
+        gate["passed"] = False
+    exposure_summary["gate"] = {**gate, "param": "max_clipped_frames_fraction"}
+    platform = capture_platform.detect(
+        fmt="video" if source.is_video else "images",
+        records=records,
+        video=meta if source.is_video else None,
+        requested=_optional_str(ctx.param("platform")),
+        hint=_optional_str(ctx.param("platform_hint")),
+    )
+    focal_summary = frame_meta.capture_focal(records)
+    time_range = _time_range(records)
+
     kept_scores = [scores[i] for i in chosen] if scores else []
     chosen_set = set(chosen)
     dropped_scores = [s for i, s in enumerate(scores) if i not in chosen_set]
@@ -548,17 +614,59 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
             "kept": video.summarise(kept_scores),
             "rejected": video.summarise(dropped_scores),
         },
-        "video": meta.to_dict() if source.is_video else None,
+        "video": {**meta.to_dict(), "hdr": hdr} if source.is_video else None,
         "location": None if meta.location is None else meta.location.to_dict(),
         # The capture-level facts, same convention as `ingest_splat`: what the capture row
         # says wins, and the container's own answer is the fallback rather than the other
         # way round -- a phone that was renamed is still the phone the row names.
         "sensor": _optional_str(ctx.param("sensor")) or meta.make,
         "device": _optional_str(ctx.param("device")) or meta.model,
-        "capturedAt": _optional_str(ctx.param("captured_at")) or meta.created_at,
+        # What the capture row says, else the container's date, else the frames' own UTC
+        # time. Never a frame's zoneless local time: the worker reads a naive
+        # `capturedAt` as UTC (`registration._observed_at`), which would date a DJI
+        # photo set -- whose EXIF carries no offset -- hours off and call it measured.
+        "capturedAt": _optional_str(ctx.param("captured_at"))
+        or meta.created_at
+        or time_range["firstUtc"],
+        # The files' own clocks, in UTC, only when a zone was known (`frames_meta.json`
+        # `timeRange`); what the worker dates the epoch by first (`_observed_at`).
+        "capturedAtUtc": time_range["firstUtc"],
+        # The first kept frame's camera clock as written, zone unknown unless `offset`
+        # says: for a person to read, not for anything to date by.
+        "capturedAtLocal": _first_local_time(records),
+        "platform": platform.to_dict(),
+        "focal": focal_summary,
+        "exposure": exposure_summary,
         "tools": {"ffmpeg": video.ffmpeg_version(), "ffmpegFrom": "imageio-ffmpeg"},
     }
     _write_json(ctx.output(SOURCE_META.name), document)
+    _write_json(
+        ctx.output(FRAMES_META.name),
+        {
+            "schema": FRAMES_META_SCHEMA,
+            "format": "video" if source.is_video else "images",
+            "platform": platform.to_dict(),
+            "frames": [record.to_dict() for record in records],
+            "focal": focal_summary,
+            "exposure": exposure_summary,
+            "timeRange": time_range,
+            "masks": {
+                "convention": "COLMAP ImageReader.mask_path: <frame name>.png; 0 = ignore, "
+                "255 = keep",
+                "producedBy": "the ingest_mask stage when its impl is not none: "
+                "ingest_masks/masks.json, keyed by frame name",
+            },
+        },
+    )
+    ctx.log(f"platform: {platform.value} ({platform.source}: {platform.evidence})")
+    ctx.log(
+        f"exposure: {flagged} of {len(written)} frame(s) clipped past {clip_pct:g}%, EV "
+        f"spread {exposure_summary['evSpread']}, brightness spread "
+        f"{exposure_summary['lumaSpreadStops']} stops; gate "
+        + ("off" if limit is None else f"at {limit}")
+    )
+    if gate_failure is not None:
+        raise gate_failure
     ctx.log(
         f"{source.kind}: {len(candidates)} candidate frame(s) -> {len(written)} kept "
         f"by {applied} ({first[0]}x{first[1]})"
@@ -584,9 +692,12 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         "height": first[1],
         "maxSide": max_side if max_side is not None else max(first),
         "maxSideRule": "auto" if size is not None else "fixed" if max_side else "source",
+        "platform": platform.value,
+        "exposureFlaggedFrames": flagged,
     }
     if source.is_video:
         metrics["fps"] = rate if rate is not None else fps
+        metrics["hdrTonemapped"] = bool(hdr and hdr["tonemapped"])
         if meta.duration_s is not None:
             metrics["durationS"] = meta.duration_s
     if segmentation is not None:
@@ -594,6 +705,196 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         metrics["motionScale"] = round(segmentation.scale, 4)
         metrics["unmeasuredPairs"] = segmentation.unmeasured_pairs
     return StageOutcome(metrics=metrics, summary=f"{len(written)} frames by {applied}")
+
+
+#: `hdr`: `auto` tonemaps an HLG or PQ clip to 8-bit BT.709 before frames are taken;
+#: `off` takes them as they are.
+HDR_RULES: tuple[str, ...] = ("auto", "off")
+
+
+def _hdr_decision(meta: video.VideoMeta, rule: str) -> dict[str, object]:
+    """Whether this clip is tonemapped, and why -- what `source_meta.video.hdr` records.
+
+    Not tonemapping is never fatal: a binary without the filters (a different wheel)
+    takes the frames as they are and says so, rather than failing a capture that would
+    still reconstruct, only with flatter colour.
+    """
+    record: dict[str, object] = {
+        "transfer": meta.color_transfer,
+        "primaries": meta.color_primaries,
+        "matrix": meta.color_matrix,
+        "pixelFormat": meta.pixel_format,
+        "tonemapped": False,
+        "filter": None,
+    }
+    if not meta.is_hdr:
+        record["reason"] = f"not an HDR transfer ({meta.color_transfer or 'none given'})"
+    elif rule == "off":
+        record["reason"] = f"{meta.color_transfer} clip, but hdr: off"
+    elif not video.ffmpeg_filters() >= video.TONEMAP_NEEDS:
+        missing = ", ".join(sorted(video.TONEMAP_NEEDS - video.ffmpeg_filters()))
+        record["reason"] = f"{meta.color_transfer} clip, but this ffmpeg lacks {missing}"
+    else:
+        record.update(
+            tonemapped=True,
+            filter=video.TONEMAP_FILTER,
+            reason=f"{meta.color_transfer} clip tonemapped to 8-bit BT.709 (hable, npl=100)",
+        )
+    return record
+
+
+#: The shape of `frames_meta.json`; bumped when a field changes meaning.
+FRAMES_META_SCHEMA = "frames_meta/1"
+
+
+def _measure_exposure(
+    records: Sequence[frame_meta.FrameRecord], written: Sequence[Path]
+) -> tuple[list[frame_meta.FrameRecord], dict[str, float]]:
+    """Each kept frame's luma statistics, on the 8-bit frame training reads; a frame that
+    does not open keeps its record as it was and is left out of the linear means."""
+    measured: list[frame_meta.FrameRecord] = []
+    linear: dict[str, float] = {}
+    for record, frame in zip(records, written, strict=True):
+        try:
+            with PIL.Image.open(frame) as image:
+                grey = np.asarray(image.convert("L"))
+        except (OSError, ValueError, SyntaxError):
+            measured.append(record)
+            continue
+        measured.append(record.with_luma(*exposure.luma_stats(grey)))
+        linear[record.name] = exposure.linear_mean(grey)
+    return measured, linear
+
+
+def _exposure_thresholds(ctx: StageContext) -> dict[str, float]:
+    """The exposure flags' thresholds (first principles: `exposure.BASIS`), checked."""
+    thresholds = {
+        "clip_pct": float(ctx.param("exposure_clip_pct", 5.0)),
+        "ev_spread": float(ctx.param("exposure_ev_spread", 1.0)),
+        "luma_spread_stops": float(ctx.param("exposure_luma_spread_stops", 1.0)),
+    }
+    if not 0.0 < thresholds["clip_pct"] <= 100.0:
+        raise ValueError(f"exposure_clip_pct must be in (0, 100], not {thresholds['clip_pct']}")
+    for name in ("ev_spread", "luma_spread_stops"):
+        if not thresholds[name] > 0.0:
+            raise ValueError(f"exposure_{name} must be above 0, not {thresholds[name]}")
+    return thresholds
+
+
+def _frame_records(
+    source: video.Source,
+    upload: Path,
+    candidates: Sequence[Path],
+    chosen: Sequence[int],
+    written: Sequence[Path],
+    meta: video.VideoMeta,
+    rate: float | None,
+) -> list[frame_meta.FrameRecord]:
+    """One `frame_meta.FrameRecord` per kept frame, in frame order.
+
+    Photos are read from their originals (`candidates[i]`), which still carry the XMP the
+    shrunk frame lost. A video's frames are described by the clip and their place in it:
+    candidate `i` of an `fps` extraction numbered from 0 is the frame at about `i / rate`
+    seconds, so its UTC time is the clip's start plus that -- with the clip's start taken
+    from its QuickTime creation date (assumed to be the start of recording; UNVERIFIED)
+    or its mvhd time. A clip's one location lives in `source_meta.location`, not in each
+    frame's `gps`, where it would read as a per-frame fix.
+    """
+    if not source.is_video:
+        return [
+            frame_meta.read_photo(
+                candidates[index],
+                frame_name=frame.name,
+                upload_root=upload,
+                frame_size=_safe_image_size(frame),
+            )
+            for index, frame in zip(chosen, written, strict=True)
+        ]
+    started, started_from = meta.started_at(), meta.started_from()
+    size = _safe_image_size(written[0]) if written else None
+    focal = frame_meta.Focal(mm35=meta.focal_35mm)
+    implausible: tuple[str, ...] = ()
+    if meta.focal_35mm is not None and size is not None:
+        px = frame_meta.focal_px_from_35mm(meta.focal_35mm, *size)
+        reason = frame_meta.implausible_focal(px, size)
+        if reason is None:
+            focal = frame_meta.Focal(mm35=meta.focal_35mm, px=px, px_from="quicktime-35mm")
+        else:
+            implausible = (f"quicktime-35mm focal {reason}",)
+    coded = (meta.width, meta.height) if meta.width and meta.height else None
+    records: list[frame_meta.FrameRecord] = []
+    for index, frame in zip(chosen, written, strict=True):
+        offset = round(index / rate, 3) if rate else None
+        records.append(
+            frame_meta.FrameRecord(
+                name=frame.name,
+                original=source.path.name,
+                original_path=source.path.relative_to(upload).as_posix()
+                if source.path.is_relative_to(upload)
+                else source.path.name,
+                original_size=coded,
+                frame_size=size,
+                candidate_index=index,
+                offset_s=offset,
+                time=_clip_time(started, started_from, offset),
+                make=meta.make,
+                model=meta.model,
+                lens=meta.lens_model,
+                focal=focal,
+                implausible=implausible,
+            )
+        )
+    return records
+
+
+def _clip_time(
+    started: datetime | None, source: str | None, offset_s: float | None
+) -> frame_meta.FrameTime:
+    """A video frame's time: the clip's start plus its offset into the clip."""
+    if started is None or offset_s is None or source is None:
+        return frame_meta.FrameTime()
+    try:
+        moment = started + timedelta(seconds=offset_s)
+    except OverflowError:
+        return frame_meta.FrameTime()
+    utc = frame_meta.utc_text(moment)
+    if utc is None:
+        # A date outside the calendar in UTC (a container written by a dead clock): no
+        # time for this frame, rather than no frames.
+        return frame_meta.FrameTime()
+    if source != "quicktime-creationdate":
+        # The mvhd time is UTC by definition; the camera's local zone is not in it.
+        return frame_meta.FrameTime(utc=utc, source="mvhd-creation-time")
+    return frame_meta.FrameTime(
+        local=moment.replace(tzinfo=None).isoformat(timespec="milliseconds"),
+        offset=frame_meta.offset_text(moment.utcoffset() or timedelta(0)),
+        utc=utc,
+        source="quicktime-creationdate",
+    )
+
+
+def _time_range(records: Sequence[frame_meta.FrameRecord]) -> dict[str, object]:
+    """The first and last UTC time among the frames, and which clock(s) said so."""
+    times = sorted(r.time.utc for r in records if r.time.utc is not None)
+    sources = sorted({r.time.source for r in records if r.time.utc and r.time.source})
+    return {
+        "firstUtc": times[0] if times else None,
+        "lastUtc": times[-1] if times else None,
+        "source": sources[0] if len(sources) == 1 else ("mixed" if sources else None),
+        "framesWithUtc": len(times),
+    }
+
+
+def _first_local_time(records: Sequence[frame_meta.FrameRecord]) -> str | None:
+    return next((record.time.local for record in records if record.time.local), None)
+
+
+def _safe_image_size(path: Path) -> tuple[int, int] | None:
+    """A frame's size, or None for a file that does not open as an image."""
+    try:
+        return _image_size(path)
+    except (OSError, ValueError, SyntaxError):
+        return None
 
 
 def _frame_size_rule(value: object) -> int | str | None:
@@ -637,7 +938,13 @@ def _candidate_rate(ctx: StageContext, fps: float, meta: video.VideoMeta) -> flo
 
 
 def _video_frame_size(
-    ctx: StageContext, source: Path, meta: video.VideoMeta, *, base: int, ceiling: int
+    ctx: StageContext,
+    source: Path,
+    meta: video.VideoMeta,
+    *,
+    base: int,
+    ceiling: int,
+    tonemap: str | None = None,
 ) -> resolution.SizeDecision:
     """`max_side: auto` for a clip: frames sampled across it at the size that would be
     kept, the sharpest half measured. Eight seeks, not a decode of the whole clip."""
@@ -658,7 +965,7 @@ def _video_frame_size(
     for index, at in enumerate(times):
         target = folder / f"sample_{index:02d}.png"
         try:
-            ctx.run(video.grab_frame_argv(source, at, target, max_side=side))
+            ctx.run(video.grab_frame_argv(source, at, target, max_side=side, tonemap=tonemap))
         except subprocess.CalledProcessError:
             continue
         if target.is_file():
@@ -776,7 +1083,7 @@ def _viewpoint_record(
 @stage_impl(
     "colmap",
     consumes=("frames",),
-    optional_consumes=("source_meta.json",),
+    optional_consumes=("source_meta.json", "frames_meta.json"),
     produces=(POSES,),
     summary="COLMAP SfM poses",
 )
@@ -808,6 +1115,16 @@ def colmap(ctx: StageContext) -> StageOutcome:
     `poses.json` therefore records the recovered focal, whether a prior was held, and
     both measurements, rather than a correction. Pass `focal_px` (EXIF or ARKit) and the
     prior is held through bundle adjustment.
+
+    `focal_from: exif` **seeds** the camera from `frames_meta.json`'s capture focal (DJI's
+    calibrated focal, the EXIF 35 mm equivalent, or the QuickTime one) and lets bundle
+    adjustment refine it from there; `hold_focal: true` holds it instead. Seeding, not
+    holding, is the default because the integer 35 mm value can be ~2% off at 24 mm (half
+    a 1 mm step), the same order as the self-calibration bias above. COLMAP already seeds
+    a photo from its EXIF 35 mm focal; what this adds is a seed for video (no EXIF) and
+    DJI's per-unit calibration. `poses.json` records the initial focal, where it came
+    from, whether it was held, and `recoveredOverInitial` -- collected across captures,
+    the measurement that will decide whether holding is ever right.
 
     `mapper: global` maps with GLOMAP (COLMAP 4, through pycolmap -- `global_sfm.py` has
     the why and the measurements) before any incremental seed, on the first matches; a
@@ -864,7 +1181,24 @@ def colmap(ctx: StageContext) -> StageOutcome:
     )
     width, height = _image_size(images[0])
     focal_prior = _optional_float(ctx.param("focal_px"))
-    params = None if focal_prior is None else (focal_prior, width / 2.0, height / 2.0, 0.0)
+    focal_from = str(ctx.param("focal_from", "none"))
+    if focal_from not in FOCAL_FROM:
+        raise ValueError(f"focal_from must be one of {', '.join(FOCAL_FROM)}, not {focal_from!r}")
+    seed = None if focal_prior is not None else _focal_seed(ctx, focal_from, width, height)
+    if focal_prior is not None:
+        initial: float | None = focal_prior
+        initial_from: str | None = "param"
+        held = True
+    elif seed is not None:
+        initial, initial_from = seed
+        held = _optional_bool(ctx.param("hold_focal", False), "hold_focal")
+    else:
+        initial, initial_from, held = None, None, False
+    params = None if initial is None else (initial, width / 2.0, height / 2.0, 0.0)
+    if initial is not None:
+        ctx.log(
+            f"colmap: focal {'held at' if held else 'seeded at'} {initial:.3f} px ({initial_from})"
+        )
     # A run's own `threads`, else the image's (`sfm.THREADS_ENV`: the CPU box's reservation).
     threads = _optional_int(ctx.param("threads")) or sfm.default_threads()
     seconds = {"extract": 0.0, "match": 0.0, "map": 0.0}
@@ -948,14 +1282,14 @@ def colmap(ctx: StageContext) -> StageOutcome:
         into.mkdir(parents=True)
         began = time.monotonic()
         if global_:
-            if not _map_globally(ctx, database, frames, into, focal_prior is None, threads):
+            if not _map_globally(ctx, database, frames, into, not held, threads):
                 return None, 0
             seconds["global"] = time.monotonic() - began
         else:
             # Cameras as they are solved, for the live viewer (`live.MapperWatch`).
             snapshots = ctx.work_dir / "snapshots" / into.name
             how: dict[str, Any] = {
-                "refine_focal_length": focal_prior is None,
+                "refine_focal_length": not held,
                 "random_seed": seed,
                 "num_threads": threads,
                 "snapshot_path": snapshots if watch else None,
@@ -1056,7 +1390,15 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "focal": {
             "px": round(focal, 3),
             "priorPx": focal_prior,
-            "refined": focal_prior is None,
+            "refined": not held,
+            # Where bundle adjustment started from, and whether it was let move: `param`
+            # (`focal_px`, held), `exif-35mm` / `dji-calibrated` / `quicktime-35mm`
+            # (`focal_from: exif`, seeded unless `hold_focal`), or none (COLMAP's own
+            # default, which for a photo is its EXIF focal when it has one).
+            "initialPx": None if initial is None else round(initial, 5),
+            "initialFrom": initial_from,
+            "held": held,
+            "recoveredOverInitial": round(focal / initial, 5) if initial else None,
             # Said out loud rather than left for somebody to rediscover: a
             # self-calibrated focal that is low makes the whole reconstruction small by
             # about the same fraction, and nothing downstream can see that from the
@@ -1071,8 +1413,13 @@ def colmap(ctx: StageContext) -> StageOutcome:
                 "self-calibrated, so the scale is unverified: A0 #7 measured this 3.1% "
                 "low, B2's rendered-orbit fixture measured it 0.17% high. Neither is a "
                 "correction to apply -- pass focal_px (EXIF or ARKit) to hold a prior"
-                if focal_prior is None
-                else "held at the supplied prior through bundle adjustment"
+                if initial is None
+                else (
+                    f"held at the {initial_from} prior through bundle adjustment"
+                    if held
+                    else f"seeded from {initial_from} and refined by bundle adjustment, so "
+                    "the scale is still unverified; recoveredOverInitial is how far it moved"
+                )
             ),
         },
         "scale": {
@@ -1104,7 +1451,8 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "meanTrackLength": round(model.mean_track_length, 3),
         "meanReprojectionErrorPx": round(model.mean_reprojection_error, 4),
         "focalPx": round(focal, 3),
-        "focalPrior": focal_prior is not None,
+        "focalPrior": initial is not None,
+        "focalFrom": initial_from or "none",
         "matcher": matcher,
         "matchedPairs": pairs[0],
         "fellBack": fell_back,
@@ -1119,6 +1467,52 @@ def colmap(ctx: StageContext) -> StageOutcome:
     return StageOutcome(
         metrics=metrics, summary=f"{model.registered}/{len(images)} frames registered"
     )
+
+
+#: `focal_from`: `none` leaves the initial focal to COLMAP; `exif` seeds it from
+#: `frames_meta.json`'s capture focal.
+FOCAL_FROM: tuple[str, ...] = ("none", "exif")
+
+
+def _focal_seed(
+    ctx: StageContext, focal_from: str, width: int, height: int
+) -> tuple[float, str] | None:
+    """The capture focal `frames_meta.json` names, when `focal_from: exif` asks for it and
+    it applies to these frames: `(px, where from)`, else None.
+
+    None when the capture's frames disagree (`frame_meta.capture_focal` refuses mixed
+    lenses), and when the first record's focal was computed for another frame size than
+    the frames posed here -- a focal in pixels of other pixels is not a focal of these.
+    """
+    if focal_from != "exif" or not ctx.has_input(FRAMES_META.name):
+        return None
+    path = ctx.input(FRAMES_META.name)
+    if not path.is_file():
+        # Planned but absent: a run whose normalize finished before it wrote one.
+        ctx.log("colmap: focal_from: exif, but normalize wrote no frames_meta.json")
+        return None
+    document = _read_json(path)
+    summary = document.get("focal")
+    frames = document.get("frames")
+    if not isinstance(summary, dict) or not isinstance(frames, list) or not frames:
+        return None
+    px, source = _optional_float(summary.get("px")), summary.get("from")
+    first = frames[0] if isinstance(frames[0], dict) else {}
+    if px is None or px <= 0 or not isinstance(source, str):
+        return None
+    if first.get("frameSize") != [width, height]:
+        ctx.log(
+            f"colmap: frames_meta.json's focal is for frames of {first.get('frameSize')}, "
+            f"not {width}x{height}; not seeding from it"
+        )
+        return None
+    # Read again here: the file may predate the guard in `frame_meta`, or come from
+    # anything else, and a camera started at inf px is no camera.
+    reason = frame_meta.implausible_focal(px, (width, height))
+    if reason is not None:
+        ctx.log(f"colmap: frames_meta.json's focal is not a camera's ({reason}); not seeding")
+        return None
+    return px, source
 
 
 #: The seed `_best_reconstruction` is handed for the global mapper's one try.
@@ -2310,13 +2704,18 @@ def manual_placement(ctx: StageContext) -> StageOutcome:
             f"{offset[1]:.3f}) m from its origin"
         )
     _check_normalized_frame(ctx, site_echo)
+    accuracy = _location_accuracy(ctx.param("location_accuracy_m"))
     document: dict[str, object] = {
         "lat": lat,
         "lon": lon,
         "height": height,
         "georefMethod": "manual",
         "scaleSource": str(ctx.param("scale_source", "unresolved")),
-        "uncertaintyM": float(ctx.param("uncertainty_m", DEFAULT_MANUAL_UNCERTAINTY_M)),
+        # A phone's own accuracy can only widen it (`_widened`).
+        "uncertaintyM": _widened(
+            float(ctx.param("uncertainty_m", DEFAULT_MANUAL_UNCERTAINTY_M)), accuracy
+        ),
+        "locationAccuracyM": accuracy,
         "note": note,
     }
     if site_echo is not None:
@@ -2324,6 +2723,22 @@ def manual_placement(ctx: StageContext) -> StageOutcome:
     _write_json(ctx.output(GEOREF.name), document)
     ctx.log(f"placed at {lat}, {lon}, {height} m")
     return StageOutcome(metrics={"lat": lat, "lon": lon, "height": height})
+
+
+def _location_accuracy(value: object) -> float | None:
+    """A phone's reported horizontal accuracy in metres: positive and finite, else None."""
+    accuracy = _optional_float(value)
+    return accuracy if accuracy is not None and math.isfinite(accuracy) and accuracy > 0 else None
+
+
+def _widened(uncertainty_m: float, accuracy_m: float | None) -> float:
+    """The uncertainty a located capture carries, given the phone's own accuracy.
+
+    A phone's accuracy can only widen the uncertainty: a coordinate with no orientation
+    is never better than a dropped pin (`UNALIGNED_UNCERTAINTY_M`), however good the fix
+    -- but a fix the phone itself says is 65 m off is 65 m off, not 10.
+    """
+    return max(uncertainty_m, accuracy_m or 0.0)
 
 
 def _site_point(ctx: StageContext, frame: site_frame.SiteFrame) -> tuple[float, float]:
@@ -2456,6 +2871,15 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
             )
         located, method = placed, "manual"
     lat, lon, height = located
+    # How good the location is by its own account: the capture's `locationAccuracyM` (the
+    # phone's fix) for a hand placement, the video's QuickTime accuracy for a clip's
+    # location; EXIF fixes carry their own errors per frame and are not summarised here.
+    if method == "manual":
+        accuracy = _location_accuracy(ctx.param("location_accuracy_m"))
+    elif not fixes:
+        accuracy = _video_location_accuracy(ctx)
+    else:
+        accuracy = None
     site_echo: dict[str, object] | None = None
     if frame_given is not None:
         offset = site_frame.offset_m(frame_given, lat, lon)
@@ -2483,9 +2907,13 @@ def exif_gps(ctx: StageContext) -> StageOutcome:
         # the run's own `scale` (`manual`), an estimate from the camera's height above the
         # ground (`camera-height-estimate`, evidence in `frame.scaleEstimate`), or neither.
         "scaleSource": scale_source,
-        "uncertaintyM": float(ctx.param("uncertainty_m", UNALIGNED_UNCERTAINTY_M))
-        if method == "manual"
-        else UNALIGNED_UNCERTAINTY_M,
+        "uncertaintyM": _widened(
+            float(ctx.param("uncertainty_m", UNALIGNED_UNCERTAINTY_M))
+            if method == "manual"
+            else UNALIGNED_UNCERTAINTY_M,
+            accuracy,
+        ),
+        "locationAccuracyM": accuracy,
         "note": (
             f"located from {source} but not aligned ({why}): levelled by how the camera "
             f"was held, facing an arbitrary heading unless one was given, "
@@ -2979,6 +3407,14 @@ def _sole_location(
     return lat, lon, _optional_float(altitude) or 0.0
 
 
+def _video_location_accuracy(ctx: StageContext) -> float | None:
+    """`source_meta.location.accuracyM` (the iPhone's own horizontal accuracy), or None."""
+    if not ctx.has_input(SOURCE_META.name):
+        return None
+    location = _read_json(ctx.input(SOURCE_META.name)).get("location")
+    return _location_accuracy(location.get("accuracyM")) if isinstance(location, dict) else None
+
+
 def _count_files(directory: Path) -> int:
     return sum(1 for path in directory.iterdir() if path.is_file())
 
@@ -3196,6 +3632,15 @@ def capture_manifest(ctx: StageContext) -> StageOutcome:
             "sensor": source.get("sensor"),
             "device": source.get("device"),
             "capturedAt": source.get("capturedAt"),
+            # The files' own clocks in UTC (`ffmpeg_frames`), or null: the worker dates the
+            # epoch by this first, labelled `manifest` (`registration._observed_at`).
+            "capturedAtUtc": source.get("capturedAtUtc"),
+            # What captured it, by survey tier (`capture_platform`); null when the lane
+            # did not detect one (`ingest_splat`).
+            "platform": _platform_value(source.get("platform")),
+            # What that rests on (`capture_platform.PLATFORM_EVIDENCE`): `metadata`,
+            # `claimed` or `none`. A claimed `rtk-drone` is never the survey tier.
+            "platformEvidence": _platform_field(source.get("platform"), "platformEvidence"),
             "license": ctx.param("license"),
             "attribution": list(ctx.param("attribution", []) or []),
         },
@@ -3289,10 +3734,17 @@ def catalog(ctx: StageContext) -> StageOutcome:
     ground = (
         _read_json(ctx.input(GROUND_SAMPLES.name)) if ctx.has_input(GROUND_SAMPLES.name) else None
     )
+    facts = manifest.get("capture")
+    facts = facts if isinstance(facts, dict) else {}
     document: dict[str, object] = {
         "slug": str(ctx.param("slug", ctx.run_id)),
         "title": str(ctx.param("title", "")),
         "recipe": ctx.recipe,
+        # What the worker writes onto the epoch (`registration.Registration.platform`),
+        # and when the files say the capture was made; both null when nobody detected.
+        "platform": facts.get("platform"),
+        "platformEvidence": facts.get("platformEvidence"),
+        "capturedAtUtc": facts.get("capturedAtUtc"),
         "georef": georef,
         "artifacts": tiles,
         # `ground_samples.json` in full, not the manifest's five-field summary of it.
@@ -3352,6 +3804,18 @@ def _coverage_name(ctx: StageContext) -> str | None:
     except ValueError:
         return None  # a stub's bytes, not a PLY: nothing to lay over the splat
     return COVERAGE_ENU.name if tiers.size else None
+
+
+def _platform_value(value: object) -> str | None:
+    """`source_meta.platform.value`, or None when there is no such record."""
+    return _platform_field(value, "value")
+
+
+def _platform_field(value: object, key: str) -> str | None:
+    """One field of `source_meta.platform`, or None when there is no such record."""
+    if isinstance(value, dict) and isinstance(value.get(key), str):
+        return str(value[key])
+    return None
 
 
 def _write_json(path: Path, document: dict[str, object]) -> None:

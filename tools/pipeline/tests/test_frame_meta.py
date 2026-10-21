@@ -1,0 +1,503 @@
+"""`frame_meta`: EXIF and DJI XMP read from a photo's original, before it is shrunk.
+
+Every photo here is synthetic (`drone_frames.py` says how it was assembled and from which
+sources); none is a real Mavic 3 Enterprise file, so these tests prove the parser reads the
+fields as ExifTool's table names them, not that a real drone writes them that way.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+from PIL.TiffImagePlugin import IFDRational
+
+import exif
+import frame_meta
+import site_frame
+from drone_frames import dji_m3e_photo, dji_xmp, iphone_photo, write_jpeg
+
+
+def test_dji_rtk_fields_are_read_from_attribute_xmp() -> None:
+    dji = frame_meta.read_dji_xmp(dji_xmp(longtitude_typo=True))
+
+    assert dji is not None
+    assert (dji.rtk_flag, frame_meta.rtk_flag_meaning(dji.rtk_flag)) == (50, "fixed")
+    assert (dji.rtk_std_lon_m, dji.rtk_std_lat_m, dji.rtk_std_hgt_m) == (0.012, 0.011, 0.02)
+    assert dji.calibrated_focal_px == pytest.approx(3713.29)
+    assert dji.calibrated_center_px == (2640.0, 1978.0)
+    assert (dji.gimbal_pitch_deg, dji.gimbal_yaw_deg, dji.gimbal_roll_deg) == (-90.0, -12.3, 0.0)
+    assert (dji.flight_pitch_deg, dji.flight_yaw_deg, dji.flight_roll_deg) == (-3.4, -11.8, 1.2)
+    # ExifTool lists the misspelt `GpsLongtitude`; firmware that writes it is still read.
+    assert dji.longitude == pytest.approx(-93.4259758)
+    assert dji.relative_altitude_m == pytest.approx(60.1)
+    assert dji.create_date == "2026-10-01T10:20:30"
+    assert dji.dewarp_flag == 0
+    record = dji.to_dict()
+    assert record["rtk"] == {
+        "flag": 50,
+        "flagMeaning": "fixed",
+        "stdLonM": 0.012,
+        "stdLatM": 0.011,
+        "stdHgtM": 0.02,
+        "diffAgeS": None,
+    }
+    # A vocabulary value that is no site-frame datum, and the words beside it.
+    assert record["absoluteAltitudeDatum"] == "unverified"
+    assert record["absoluteAltitudeDatum"] not in site_frame.HEIGHT_DATUMS
+    assert "ellipsoidal when RTK-fixed" in str(record["absoluteAltitudeNote"])
+
+
+def test_element_form_xmp_is_read_too() -> None:
+    attribute = frame_meta.read_dji_xmp(dji_xmp())
+    element = frame_meta.read_dji_xmp(dji_xmp(element_form=True))
+
+    assert element is not None
+    assert element == attribute
+
+
+def test_property_names_match_case_insensitively_and_only_whole() -> None:
+    text = dji_xmp(extra={"RtkStdLonX": "9.9"}).replace("drone-dji:RtkFlag", "drone-dji:rtkflag")
+    dji = frame_meta.read_dji_xmp(text)
+
+    assert dji is not None
+    assert dji.rtk_flag == 50
+    # A longer name that starts with the one asked for is a different property.
+    assert dji.rtk_std_lon_m == 0.012
+
+
+def test_a_photo_without_drone_xmp_has_no_dji_record() -> None:
+    assert frame_meta.read_dji_xmp(None) is None
+    assert (
+        frame_meta.read_dji_xmp('<x:xmpmeta><rdf:Description xmp:Rating="5"/></x:xmpmeta>') is None
+    )
+
+
+def test_odd_xmp_is_read_as_far_as_it_goes_and_never_raises() -> None:
+    # Cut short mid-packet, a garbage value, a negative calibrated focal.
+    text = dji_xmp(extra={"RtkFlag": "fixed?", "CalibratedFocalLength": "-1"})[:-40]
+    dji = frame_meta.read_dji_xmp(text)
+
+    assert dji is not None
+    assert dji.rtk_flag is None
+    assert dji.calibrated_focal_px is None
+    assert dji.latitude is not None
+    assert frame_meta.xmp_packet(b"\xff\xd8<x:xmpmeta a='b'>") == "<x:xmpmeta a='b'>"
+    assert frame_meta.xmp_packet(b"\xff\xd8 nothing") is None
+
+
+def test_unverified_dji_fields_are_named_as_such() -> None:
+    dji = frame_meta.read_dji_xmp(dji_xmp(extra={"RtkDiffAge": "1.0"}))
+
+    assert dji is not None
+    assert dji.unverified_fields == ("RtkDiffAge",)
+    assert dji.to_dict()["unverifiedFields"] == ["RtkDiffAge"]
+    assert dji.rtk_diff_age_s == 1.0
+    plain = frame_meta.read_dji_xmp(dji_xmp())
+    assert plain is not None and plain.unverified_fields == ()
+
+
+@pytest.mark.parametrize(
+    ("flag", "meaning"),
+    [(0, "none"), (16, "single"), (34, "float"), (40, "float"), (49, "float"), (50, "fixed"),
+     (7, "unknown"), (None, None)],
+)  # fmt: skip
+def test_rtk_flags_are_named_by_sitemarks_codes(flag: int | None, meaning: str | None) -> None:
+    assert frame_meta.rtk_flag_meaning(flag) == meaning
+
+
+def test_exif_time_with_an_offset_becomes_utc() -> None:
+    time = frame_meta.exif_time({0x9003: "2026:10:01 10:20:30", 0x9291: "123", 0x9011: "-05:00"})
+
+    assert time.utc == "2026-10-01T15:20:30.123Z"
+    assert time.source == "exif-offset"
+    assert time.local == "2026-10-01T10:20:30.123"
+    assert time.offset == "-05:00"
+
+
+def test_an_offset_across_midnight_and_a_half_hour_zone_land_on_the_right_day() -> None:
+    time = frame_meta.exif_time({0x9003: "2026:01:01 01:15:00", 0x9011: "+05:30"})
+
+    assert time.utc == "2025-12-31T19:45:00.000Z"
+    assert time.offset == "+05:30"
+
+
+def test_exif_time_without_an_offset_uses_gps_time_or_says_it_is_local() -> None:
+    gps = {29: "2026:10:01", 7: (IFDRational(15, 1), IFDRational(20, 1), IFDRational(305, 10))}
+
+    by_gps = frame_meta.exif_time({0x9003: "2026:10:01 10:20:30"}, gps)
+    assert (by_gps.utc, by_gps.source, by_gps.offset) == (
+        "2026-10-01T15:20:30.500Z",
+        "gps-time",
+        None,
+    )
+    assert by_gps.local == "2026-10-01T10:20:30"
+
+    local = frame_meta.exif_time({0x9003: "2026:10:01 10:20:30"})
+    assert (local.utc, local.source, local.local) == (None, "exif-local", "2026-10-01T10:20:30")
+
+    # An offset field a camera filled with blanks is no offset.
+    blank = frame_meta.exif_time({0x9003: "2026:10:01 10:20:30", 0x9011: "   :  "})
+    assert blank.source == "exif-local"
+    # A GPS time out of range is no time.
+    bad = {29: "2026:10:01", 7: (IFDRational(25, 1), IFDRational(0, 1), IFDRational(0, 1))}
+    assert frame_meta.exif_time({}, bad).source is None
+
+
+def test_the_xmp_create_date_is_the_last_resort_and_keeps_its_zone_if_it_has_one() -> None:
+    naive = frame_meta.exif_time({}, xmp_create_date="2026-10-01T10:20:30")
+    assert (naive.source, naive.utc, naive.local) == (
+        "xmp-createdate-local",
+        None,
+        "2026-10-01T10:20:30",
+    )
+    zoned = frame_meta.exif_time({}, xmp_create_date="2026-10-01T10:20:30+02:00")
+    assert (zoned.source, zoned.utc, zoned.offset) == (
+        "xmp-createdate",
+        "2026-10-01T08:20:30.000Z",
+        "+02:00",
+    )
+    assert frame_meta.exif_time({}, xmp_create_date="last tuesday").source is None
+
+
+def test_the_horizontal_gps_error_is_read(tmp_path: Path) -> None:
+    photo = iphone_photo(tmp_path / "IMG_0001.JPG", 0, h_error=0.03)
+
+    fix = exif.read_fix(photo)
+    assert fix is not None and fix.h_error_m == pytest.approx(0.03)
+    record = frame_meta.read_photo(
+        photo, frame_name="frame_0000.jpg", upload_root=tmp_path, frame_size=(1600, 1200)
+    ).to_dict()
+    gps = record["gps"]
+    assert isinstance(gps, dict)
+    assert gps["hAccuracyM"] == pytest.approx(0.03)
+    # The height-datum vocabulary of the site frame, with the words beside it.
+    assert gps["altitudeDatum"] == "msl-unverified"
+    assert "geoid" in str(gps["altitudeNote"])
+
+
+def test_an_iphone_photo_is_described_in_full(tmp_path: Path) -> None:
+    photo = iphone_photo(tmp_path / "trip" / "IMG_0001.JPG", 3)
+
+    record = frame_meta.read_photo(
+        photo, frame_name="frame_0002.jpg", upload_root=tmp_path, frame_size=(800, 600)
+    )
+    document = record.to_dict()
+
+    assert document["name"] == "frame_0002.jpg"
+    assert (document["original"], document["originalPath"]) == ("IMG_0001.JPG", "trip/IMG_0001.JPG")
+    assert document["originalSize"] == [1600, 1200]
+    assert document["camera"] == {
+        "make": "Apple",
+        "model": "iPhone 15 Pro",
+        "lens": "iPhone 15 Pro back triple camera 6.765mm f/1.78",
+    }
+    assert document["time"] == {
+        "local": "2025-06-14T10:41:03.123",
+        "offset": "+01:00",
+        "utc": "2025-06-14T09:41:03.123Z",
+        "source": "exif-offset",
+    }
+    focal = document["focal"]
+    assert isinstance(focal, dict)
+    assert (focal["mm"], focal["mm35"], focal["pxFrom"]) == (6.765, 24.0, "exif-35mm")
+    assert focal["px"] == pytest.approx(frame_meta.focal_px_from_35mm(24, 800, 600), abs=1e-4)
+    assert document["dji"] is None
+    assert document["mask"] == "frame_0002.jpg.png"
+    exposure = document["exposure"]
+    assert isinstance(exposure, dict)
+    assert (exposure["exposureTimeS"], exposure["fNumber"], exposure["iso"]) == (
+        pytest.approx(1 / 120),
+        1.78,
+        64.0,
+    )
+
+
+def test_serial_numbers_are_never_read(tmp_path: Path) -> None:
+    photo = write_jpeg(
+        tmp_path / "a.jpg",
+        size=(64, 48),
+        exif={0x010F: "DJI"},
+        exif_ifd={0xA431: "SERIAL-1234"},
+        xmp=dji_xmp(extra={"CameraSerialNumber": "SERIAL-5678", "DroneSerialNumber": "X"}),
+    )
+
+    record = frame_meta.read_photo(
+        photo, frame_name="frame_0000.jpg", upload_root=tmp_path, frame_size=(64, 48)
+    )
+
+    assert "SERIAL" not in str(record.to_dict())
+
+
+def test_the_35mm_focal_is_converted_by_the_diagonal() -> None:
+    assert frame_meta.focal_px_from_35mm(24, 640, 480) == pytest.approx(443.7254, abs=1e-3)
+    # Not "long side over 36", which is what the subsystem map said.
+    assert frame_meta.focal_px_from_35mm(24, 640, 480) != pytest.approx(24 * 640 / 36, abs=1)
+
+
+def _pycolmap_python() -> str | None:
+    import colmap4
+
+    interpreter = colmap4.python()
+    return interpreter if colmap4.version(interpreter) is not None else None
+
+
+@pytest.mark.skipif(_pycolmap_python() is None, reason="needs pycolmap (CI installs the wheel)")
+def test_the_35mm_rule_is_colmaps_own(tmp_path: Path) -> None:
+    """COLMAP's own ImageReader, given a JPEG with only `FocalLengthIn35mmFilm`, seeds the
+    camera with the focal `focal_px_from_35mm` computes -- the diagonal rule."""
+    images = tmp_path / "images"
+    write_jpeg(images / "a.jpg", size=(640, 480), exif_ifd={0xA405: 24})
+    script = (
+        "import sys, pycolmap\n"
+        "db, images = sys.argv[1], sys.argv[2]\n"
+        "pycolmap.extract_features(db, images)\n"
+        "with pycolmap.Database.open(db) as d:\n"
+        "    camera = d.read_all_cameras()[0]\n"
+        "print(camera.params[0], camera.has_prior_focal_length)\n"
+    )
+    interpreter = _pycolmap_python()
+    assert interpreter is not None
+    out = subprocess.run(
+        [interpreter, "-c", script, str(tmp_path / "db.db"), str(images)],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    assert out[-1] == "True"
+    assert float(out[-2]) == pytest.approx(frame_meta.focal_px_from_35mm(24, 640, 480), abs=1e-3)
+
+
+def test_dji_calibrated_focal_is_scaled_to_the_frame() -> None:
+    assert frame_meta.calibrated_focal_px(3713.29, (5280, 3956), (2400, 1798)) == pytest.approx(
+        1687.86, abs=0.01
+    )
+
+
+def test_the_calibrated_focal_wins_over_the_35mm_one(tmp_path: Path) -> None:
+    photo = dji_m3e_photo(tmp_path / "DJI_0001.JPG", 0, size=(3000, 2250))
+
+    record = frame_meta.read_photo(
+        photo, frame_name="frame_0000.jpg", upload_root=tmp_path, frame_size=(1600, 1200)
+    )
+
+    assert record.focal.px_from == "dji-calibrated"
+    # The helper writes the M3E's 3713.29 px at 5280 scaled to the synthetic 3000 px.
+    assert record.focal.px == pytest.approx(3713.29 * 3000 / 5280 * 1600 / 3000, abs=1e-6)
+    assert record.time.source == "exif-local"
+    assert record.dji is not None and record.dji.rtk_flag == 50
+
+
+def test_ev100_of_a_known_exposure() -> None:
+    assert frame_meta.ev100(1 / 1000, 2.8, 100) == pytest.approx(12.937, abs=1e-3)
+    assert frame_meta.ev100(1 / 1000, 2.8, 400) == pytest.approx(10.937, abs=1e-3)
+    assert frame_meta.ev100(None, 2.8, 100) is None
+    assert frame_meta.ev100(0.0, 2.8, 100) is None
+
+
+def _record(px: float | None, source: str | None = "exif-35mm") -> frame_meta.FrameRecord:
+    return frame_meta.FrameRecord(
+        name="f.jpg",
+        original="o.jpg",
+        focal=frame_meta.Focal(px=px, px_from=source),  # type: ignore[arg-type]
+    )
+
+
+def test_mixed_focal_lengths_do_not_seed_one_camera() -> None:
+    f24, f26 = (frame_meta.focal_px_from_35mm(f, 1600, 1200) for f in (24, 26))
+    mixed = frame_meta.capture_focal([_record(f24), _record(f26), _record(f24)])
+
+    assert mixed["px"] is None
+    assert "mixed" in str(mixed["note"])
+    one = frame_meta.capture_focal([_record(f24), _record(f24), _record(None, None)])
+    assert one["px"] == pytest.approx(f24, abs=1e-4)
+    assert (one["frames"], one["of"], one["from"]) == (2, 3, "exif-35mm")
+    sources = frame_meta.capture_focal([_record(f24), _record(f24, "dji-calibrated")])
+    assert sources["px"] is None and sources["from"] == "mixed"
+    assert frame_meta.capture_focal([_record(None, None)])["px"] is None
+
+
+def test_an_unreadable_original_is_a_thin_record(tmp_path: Path) -> None:
+    junk = tmp_path / "broken.jpg"
+    junk.write_bytes(b"\xff\xd8 this is not a jpeg at all")
+
+    record = frame_meta.read_photo(
+        junk, frame_name="frame_0001.jpg", upload_root=tmp_path, frame_size=(10, 10)
+    )
+
+    assert (record.name, record.original, record.mask) == (
+        "frame_0001.jpg",
+        "broken.jpg",
+        "frame_0001.jpg.png",
+    )
+    assert record.unreadable is not None
+    assert record.dji is None and record.gps is None and record.original_size is None
+
+
+def test_xmp_without_the_xmpmeta_wrapper_is_still_read(tmp_path: Path) -> None:
+    """Some writers put a bare `rdf:RDF` in the XMP segment; Pillow surfaces it as is."""
+    bare = dji_xmp().replace('<x:xmpmeta xmlns:x="adobe:ns:meta/">', "").replace("</x:xmpmeta>", "")
+    photo = write_jpeg(tmp_path / "a.jpg", size=(64, 48), xmp=bare)
+
+    record = frame_meta.read_photo(
+        photo, frame_name="frame_0000.jpg", upload_root=tmp_path, frame_size=(64, 48)
+    )
+
+    assert record.dji is not None and record.dji.rtk_flag == 50
+
+
+def test_a_time_at_the_edge_of_the_calendar_is_no_utc_time_not_a_lost_record(
+    tmp_path: Path,
+) -> None:
+    """Year 1 at +01:00 is before datetime's own range in UTC: OverflowError. A camera
+    with a dead clock writes such things, and it must cost the time, not the record."""
+    edge = frame_meta.exif_time({0x9003: "0001:01:01 00:00:00", 0x9011: "+01:00"})
+    assert edge.utc is None
+    assert (edge.local, edge.source) == ("0001-01-01T00:00:00", "exif-local")
+    late = {29: "9999:12:31", 7: (IFDRational(23, 1), IFDRational(59, 1), IFDRational(60, 1))}
+    assert frame_meta.exif_time({}, late).utc is None
+    zoned = frame_meta.exif_time({}, xmp_create_date="0001-01-01T00:00:00+01:00")
+    assert (zoned.utc, zoned.source) == (None, "xmp-createdate-local")
+
+    photo = write_jpeg(
+        tmp_path / "a.jpg",
+        size=(64, 48),
+        exif={0x010F: "DJI"},
+        exif_ifd={0x9003: "0001:01:01 00:00:00", 0x9011: "+01:00", 0xA405: 24},
+        xmp=dji_xmp(),
+    )
+    record = frame_meta.read_photo(
+        photo, frame_name="frame_0000.jpg", upload_root=tmp_path, frame_size=(64, 48)
+    )
+    assert record.unreadable is None
+    assert record.dji is not None and record.focal.px is not None
+    assert record.time.utc is None
+
+
+def test_a_hostile_packet_is_read_in_linear_time() -> None:
+    """192 KiB (`META_BYTES`, all a photo's head is read for) of unclosed
+    `<drone-dji:RtkFlag ` tags. The element-form pattern once let its attribute run cross
+    `<`, which made every one of the ~10,000 starts scan to the end: quadratic, 6 s here.
+    Linear, the ~75 searches `read_dji_xmp` makes take tens of milliseconds; the bound is
+    two orders of magnitude above that, not a measurement of this machine."""
+    import time
+
+    unit = "<drone-dji:RtkFlag "
+    text = "<x:xmpmeta " + unit * (frame_meta.META_BYTES // len(unit))
+
+    began = time.perf_counter()
+    dji = frame_meta.read_dji_xmp(text)
+    elapsed = time.perf_counter() - began
+
+    assert dji is not None and dji.rtk_flag is None
+    assert elapsed < 2.0, f"{elapsed:.2f} s: the XMP patterns have gone quadratic again"
+
+
+@pytest.mark.parametrize(
+    ("time_s", "f_number", "iso"),
+    [
+        (1 / 1000, 1e-200, 100),  # squares to 0.0, then log2(0) raised
+        (1 / 1000, 2.8, 1e-320),  # subnormal ISO
+        (1e-320, 2.8, 100),  # N^2 / t overflows to inf
+        (1 / 1000, 1e300, 100),
+        (1 / 1000, float("nan"), 100),
+        (float("inf"), 2.8, 100),
+    ],
+)
+def test_ev100_of_an_impossible_exposure_is_none_not_an_error(
+    time_s: float, f_number: float, iso: float
+) -> None:
+    assert frame_meta.ev100(time_s, f_number, iso) is None
+    assert frame_meta.Exposure(exposure_time_s=time_s, f_number=f_number, iso=iso).ev100 is None
+
+
+def test_the_plausible_exposure_ranges_hold_real_cameras() -> None:
+    # f/0.95 at 1/8000 s and ISO 102400; f/64 at 30 s and ISO 50: both are real exposures.
+    assert frame_meta.ev100(1 / 8000, 0.95, 102_400) is not None
+    assert frame_meta.ev100(30.0, 64.0, 50) is not None
+
+
+def test_an_implausible_exif_exposure_is_dropped_with_its_reason(tmp_path: Path) -> None:
+    """f/0.0000000002 is no lens (an f-number below 0.5 is impossible in air): the value
+    is dropped, the record says why, and nothing downstream sees it."""
+    photo = write_jpeg(
+        tmp_path / "odd.jpg",
+        size=(64, 48),
+        exif={0x010F: "Canon"},
+        exif_ifd={
+            0x829A: IFDRational(1, 1000),
+            0x829D: IFDRational(1, 4_000_000_000),
+            0x8827: 100,
+        },
+    )
+
+    record = frame_meta.read_photo(
+        photo, frame_name="frame_0000.jpg", upload_root=tmp_path, frame_size=(64, 48)
+    )
+
+    assert record.exposure.f_number is None and record.exposure.exposure_time_s == 0.001
+    assert record.exposure.ev100 is None
+    [reason] = record.implausible
+    assert reason.startswith("fNumber 2.5e-10") and "0.5" in reason
+    assert record.to_dict()["implausible"] == [reason]
+
+
+def test_an_impossible_calibrated_focal_is_dropped_and_the_next_source_used(
+    tmp_path: Path,
+) -> None:
+    """A CalibratedFocalLength of 1e308 px is no lens: a field of view of 0 degrees. It
+    is dropped with its reason, and the 35 mm focal the photo also carries seeds instead."""
+    photo = write_jpeg(
+        tmp_path / "odd.jpg",
+        size=(3000, 2250),
+        exif={0x010F: "DJI", 0x0110: "M3E"},
+        exif_ifd={0xA405: 24},
+        xmp=dji_xmp(extra={"CalibratedFocalLength": "1e308"}),
+    )
+
+    record = frame_meta.read_photo(
+        photo, frame_name="frame_0000.jpg", upload_root=tmp_path, frame_size=(1600, 1200)
+    )
+
+    assert record.focal.px_from == "exif-35mm"
+    assert record.focal.px == pytest.approx(frame_meta.focal_px_from_35mm(24, 1600, 1200))
+    [reason] = record.implausible
+    assert reason.startswith("dji-calibrated focal") and "field of view" in reason
+
+
+@pytest.mark.parametrize(
+    ("px", "plausible"),
+    [
+        (1200.0, True),  # a 24 mm-equivalent at 1600 px
+        (8.0, True),  # a 178-degree fisheye-wide view across 1600 px
+        (800_000.0, True),  # 0.11 degrees: a long telescope
+        (6.0, False),  # wider than 179 degrees: no pinhole camera sees that
+        (1e7, False),
+        (float("inf"), False),
+        (float("nan"), False),
+        (0.0, False),
+    ],
+)
+def test_a_focal_is_held_to_a_field_of_view_a_pinhole_camera_has(
+    px: float, plausible: bool
+) -> None:
+    assert (frame_meta.implausible_focal(px, (1600, 1200)) is None) is plausible
+
+
+def test_frames_that_agree_on_an_impossible_focal_seed_nothing() -> None:
+    """Built by hand (a record from before the guard, or from another writer), frames
+    that all say inf or 1e308 px do not "agree" on a focal: none of them has one."""
+    for value in (float("inf"), 1e308):
+        records = [
+            frame_meta.FrameRecord(
+                name=f"f{i}.jpg",
+                original="o.jpg",
+                frame_size=(1600, 1200),
+                focal=frame_meta.Focal(px=value, px_from="dji-calibrated"),
+            )
+            for i in range(3)
+        ]
+        summary = frame_meta.capture_focal(records)
+        assert summary["px"] is None, value
+        assert summary["frames"] == 0

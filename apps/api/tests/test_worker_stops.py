@@ -395,6 +395,17 @@ def test_a_failure_is_classified_narrowly(error_type: str, error: str, log: str,
     assert retry.classify(error_type, error, log).kind == kind
 
 
+def test_a_quality_gate_failure_is_not_retried() -> None:
+    """A gate measured the capture's own bytes; the next attempt measures them the same way.
+    Locally raised, or carried back inside a provider's error, it is bad input."""
+    gate = "quality gate clipped_frames_fraction: measured 0.5, limit 0.2 -- 2 of 4 clipped"
+
+    assert retry.classify("QualityGateError", gate, "").kind == "bad-input"
+    assert retry.classify("RemoteStageError", REMOTE + "QualityGateError: " + gate, "").kind == (
+        "bad-input"
+    )
+
+
 def test_out_of_memory_is_retried_once_and_only_with_a_cap_to_lower(tmp_path: Path) -> None:
     history = retry.History.of(tmp_path)
     log = f"gsplat: cap_max auto -> 2000000; ...\n[b0] gsplat: cap_max auto -> 900000\n{OOM_LINE}"

@@ -1560,9 +1560,19 @@ class CloudRunner(BaseRunner):
         rather than leaving it: a stale object that quietly resumed a stage the workdir
         says is starting over would be a resume nobody asked for and nobody could see.
         """
+        optional = set(stage.impl.optional_consumes)
         for name, relative in sorted(stage.inputs.items()):
             key = keys.input(relative)
             source = context.input(name)
+            if name in optional and not source.exists():
+                # Planned but not on disk: a job resumed across a deploy whose producer
+                # finished before it wrote this artifact. The remote stage runs without it
+                # (`Transfer.get` of an absent key moves nothing), so any copy an earlier
+                # use left at the key is cleared rather than read as this run's. A
+                # *required* input that is missing still fails here, on the checksum.
+                self._transfer.delete(key)
+                context.log(f"cloud: optional input {name!r} is not on disk; not sent")
+                continue
             # "Already up" means the same bytes, not the same key. Keys are per run and
             # per path, so a stage re-run inside a finished run (retry-from-stage, the
             # phone's Refine) produces a *new* artifact at the *old* key -- and a

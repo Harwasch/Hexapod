@@ -613,3 +613,59 @@ def test_a_stage_that_raises_on_the_box_comes_back_as_a_failure_with_its_own_wor
         execute(recipe, workdir, RunnerSet.cloud(cloud))
 
     assert not (workdir.out_dir("boom") / BROKEN.name).exists()
+
+
+# --- an optional input that was planned but is not on disk ---------------------------
+
+EXTRA = ArtifactDecl("extra.json", content_type="application/json")
+NEEDED = ArtifactDecl("needed.json", content_type="application/json")
+
+
+@stage_impl("t_gpu_makes", consumes=("upload",), produces=(EXTRA, NEEDED))
+def t_gpu_makes(ctx: StageContext) -> StageOutcome:
+    raise AssertionError("runs on the provider")
+
+
+@stage_impl(
+    "t_gpu_uses",
+    consumes=("needed.json",),
+    optional_consumes=("extra.json",),
+    produces=(ArtifactDecl("used.json"),),
+)
+def t_gpu_uses(ctx: StageContext) -> StageOutcome:
+    raise AssertionError("runs on the provider")
+
+
+def test_a_missing_optional_input_is_not_sent_and_a_missing_required_one_still_fails(
+    tmp_path: Path,
+) -> None:
+    """A job resumed across a deploy: the stage that made `extra.json` finished before it
+    was written by that stage (an older normalize and frames_meta.json), and the new plan
+    hands it to a remote stage as an optional input. The remote stage runs without it --
+    and any copy an earlier use left at its key is cleared, so it cannot read stale bytes.
+    A missing *required* input still fails, loudly, before anything is submitted."""
+    transfer = LocalTransfer(tmp_path / "bucket")
+    adapter = FakeAdapter(transfer, tmp_path / "sandbox", script=counts)
+    workdir = seeded_workdir(tmp_path / "run")
+    recipe = make_recipe(
+        [
+            {"id": "make", "impl": "t_gpu_makes", "gpu": {"tier": "a100"}},
+            {"id": "use", "impl": "t_gpu_uses", "gpu": {"tier": "a100"}},
+        ],
+        inputs=["upload"],
+    )
+    cloud = RunnerSet.cloud(runner(Placement((adapter,)), transfer))
+    execute(recipe, workdir, cloud)
+    key = f"runs/{workdir.root.name}/transfer/stages/make/out/extra.json"
+    assert transfer.exists(key)
+
+    workdir.artifact_path("make", "extra.json").unlink()
+    execute(recipe, workdir, cloud, skip={"make"})
+
+    assert not transfer.exists(key)
+    assert "optional input 'extra.json' is not on disk" in workdir.log_path("use").read_text()
+    assert workdir.artifact_path("use", "used.json").is_file()
+
+    workdir.artifact_path("make", "needed.json").unlink()
+    with pytest.raises(Exception, match=r"needed\.json"):
+        execute(recipe, workdir, cloud, skip={"make"})

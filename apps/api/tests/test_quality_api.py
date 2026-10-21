@@ -25,7 +25,7 @@ __all__ = ["client"]  # the fixture, re-used from the phone key's own tests
 
 import_module("stages")  # registers the shipped implementations
 
-#: photo-reconstruct v8, in order: `train` is ordinal 3.
+#: photo-reconstruct v12, in order: `train` is ordinal 3.
 STAGES = (
     "normalize",
     "pose",

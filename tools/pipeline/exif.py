@@ -62,6 +62,9 @@ _LAT_REF, _LAT = 1, 2
 _LON_REF, _LON = 3, 4
 _ALT_REF, _ALT = 5, 6
 _DOP = 11
+#: `GPSHPositioningError` (EXIF 2.31): the receiver's horizontal error, in metres. An
+#: iPhone writes it; a DJI drone's RTK figures are in its XMP instead (`frame_meta`).
+_GPS_H_ERROR = 31
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,8 @@ class Fix:
     alt: float | None = None
     #: `GPSDOP`, the camera's own dilution of precision, when it wrote one.
     dop: float | None = None
+    #: `GPSHPositioningError`, metres, when the camera wrote a positive one.
+    h_error_m: float | None = None
 
 
 def read_fix(path: Path) -> Fix | None:
@@ -105,6 +110,7 @@ def read_fix(path: Path) -> Fix | None:
         lon=lon,
         alt=_altitude(gps.get(_ALT), gps.get(_ALT_REF)),
         dop=_float(gps.get(_DOP)),
+        h_error_m=_positive(_float(gps.get(_GPS_H_ERROR))),
     )
 
 
@@ -161,6 +167,10 @@ def _ref_byte(value: object) -> int:
         return int(str(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _positive(value: float | None) -> float | None:
+    return value if value is not None and value > 0 else None
 
 
 def _float(value: object) -> float | None:

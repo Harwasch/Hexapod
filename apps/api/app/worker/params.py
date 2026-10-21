@@ -39,6 +39,13 @@ ORIENTATION_KEYS: dict[str, str] = {"upAxis": "up_axis", "headingDeg": "heading_
 CATALOG = "catalog"
 #: The artifact whose producer describes the uploaded bytes.
 SOURCE_META = "source_meta.json"
+#: What `api/v1/phone.py` stamps a phone-key capture's `metadata.origin` with
+#: (`phone.ORIGIN`), restated because the worker must not import `app.api`;
+#: `tests/test_worker_params.py` holds the two equal.
+PHONE_ORIGIN = "phone-key"
+#: What a phone-key capture tells `normalize` it is (`capture_platform.PHONE_HINT`): the
+#: last thing platform detection falls back on when the frames say nothing.
+PHONE_HINT = "phone"
 #: The parameter that tells a placing stage which site's frame to place the capture in
 #: (`{siteId, lat, lon, height, heightDatum, epsg}`, `services/epochs.RunFrame.param`;
 #: decision D3).
@@ -89,7 +96,11 @@ def stage_params(
             # carried no location has nowhere to go -- the stage refuses rather than
             # landing it at (0, 0), and a phone recording with location services off is
             # the ordinary way to get there.
-            fallback = {k: v for k, v in placement.items() if k in ("lat", "lon", "height")}
+            fallback = {
+                k: v
+                for k, v in placement.items()
+                if k in ("lat", "lon", "height", "location_accuracy_m")
+            }
             heading = orientation.get(ORIENTATION_KEYS["headingDeg"])
             if heading is not None:
                 fallback["heading_deg"] = heading
@@ -205,6 +216,12 @@ def _placement(capture: Capture) -> dict[str, Any]:
     uncertainty = _number(metadata.get("uncertaintyM"))
     if uncertainty is not None:
         placement["uncertainty_m"] = uncertainty
+    # The phone's own horizontal accuracy for its fix (`api/v1/phone.py` writes it). It
+    # was recorded and never read, so a 65 m fix was placed as if it were good to 10 m;
+    # the placing stages now widen the uncertainty by it.
+    accuracy = _number(metadata.get("locationAccuracyM"))
+    if accuracy is not None:
+        placement["location_accuracy_m"] = accuracy
     return placement
 
 
@@ -229,13 +246,25 @@ def _orientation(capture: Capture) -> dict[str, Any]:
 
 
 def _capture_facts(capture: Capture) -> dict[str, Any]:
+    """What the capture row says about itself, for the stage that describes the upload.
+
+    `platform` (a `metadata.platform` someone set, checked at creation against the epoch
+    vocabulary) overrides detection; `platform_hint` says a phone key uploaded it. Both
+    also reach `ingest_splat`, which produces `source_meta.json` too and ignores them.
+    """
     facts: dict[str, Any] = {}
+    metadata = capture.metadata_ or {}
     if capture.sensor:
         facts["sensor"] = capture.sensor
     if capture.device:
         facts["device"] = capture.device
     if capture.captured_at is not None:
         facts["captured_at"] = capture.captured_at.isoformat()
+    platform = metadata.get("platform")
+    if isinstance(platform, str) and platform.strip():
+        facts["platform"] = platform.strip()
+    if metadata.get("origin") == PHONE_ORIGIN:
+        facts["platform_hint"] = PHONE_HINT
     return facts
 
 

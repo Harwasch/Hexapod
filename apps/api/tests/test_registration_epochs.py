@@ -275,8 +275,8 @@ def test_observed_at_comes_from_the_capture_then_the_manifest_then_the_upload(
 @pytest.mark.parametrize(
     ("utc", "source", "expected"),
     [
-        # M3a copies `capturedAtUtc` into `capture.captured_at` too; read first, it keeps
-        # the `manifest` label rather than passing for a date a person gave.
+        # The files' own clock, with a zone, is read before the capture row's date and
+        # keeps the `manifest` label (M3a does not copy it into `capture.captured_at`).
         ("2026-08-30T14:05:00+00:00", "manifest", datetime(2026, 8, 30, 14, 5, tzinfo=UTC)),
         ("2026-08-30T07:05:00-07:00", "manifest", datetime(2026, 8, 30, 14, 5, tzinfo=UTC)),
         # Not tz-aware, so not a `capturedAtUtc`: the capture row's date is next.
@@ -670,3 +670,117 @@ def test_each_epochs_asset_carries_that_epochs_own_footprint(
     assert joined.footprint is not None
     assert to_shape(joined.footprint).equals(to_shape(epoch2.footprint))
     assert to_shape(joined.footprint).area < to_shape(site.boundary).area
+
+
+# --- the detected platform (M3a) -------------------------------------------------------
+
+
+def _detected(platform: object, evidence: str | None = "metadata") -> dict[str, Any]:
+    document = _document()
+    document["platform"] = platform
+    document["platformEvidence"] = evidence
+    return document
+
+
+@pytest.mark.parametrize(
+    ("metadata", "platform", "expected"),
+    [
+        ({}, "rtk-drone", "rtk-drone"),
+        ({}, "phone-photo", "phone-photo"),
+        # Nothing detected (Lane 1), or a name outside the vocabulary: the row's own guess.
+        ({}, None, "unknown"),
+        ({"origin": "phone-key"}, None, "phone-video"),
+        ({"origin": "phone-key"}, "satellite", "phone-video"),
+        # Detection ran and found nothing: no better than the row's guess, never worse.
+        ({"origin": "phone-key"}, "unknown", "phone-video"),
+        ({}, "unknown", "unknown"),
+    ],
+)
+def test_a_first_run_writes_the_detected_platform_onto_its_epoch(
+    db: Session,
+    storage: S3Storage,
+    tmp_path: Path,
+    metadata: dict[str, Any],
+    platform: object,
+    expected: str,
+) -> None:
+    capture = _capture(db, metadata_=metadata)
+
+    run(db, storage, tmp_path, capture, _detected(platform))
+
+    assert capture.site_id is not None
+    [epoch] = _epochs(db, capture.site_id)
+    assert epoch.platform == expected
+
+
+def test_a_re_run_writes_what_it_detected_and_never_erases_a_known_platform(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    capture = _capture(db)
+    run(db, storage, tmp_path, capture, _detected("drone"))
+    assert capture.site_id is not None
+    site_id = capture.site_id
+
+    run(db, storage, tmp_path, capture, _detected("rtk-drone"))
+    assert [e.platform for e in _epochs(db, site_id)] == ["rtk-drone"]
+    # A re-run that detected nothing, or only `unknown`, keeps what the epoch says.
+    run(db, storage, tmp_path, capture, _detected(None))
+    run(db, storage, tmp_path, capture, _detected("unknown"))
+    assert [e.platform for e in _epochs(db, site_id)] == ["rtk-drone"]
+    # A withheld re-run still records it: the platform is the capture's, not the tiles'.
+    run(db, storage, tmp_path, capture, _detected("phone-photo"), withheld=True)
+    assert [e.platform for e in _epochs(db, site_id)] == ["phone-photo"]
+
+
+@pytest.mark.parametrize(
+    ("evidence", "expected"),
+    [
+        ("metadata", "rtk-drone"),
+        # A write-token client's `metadata.platform`, or a document from before the
+        # field: a claim, which never makes the epoch the survey tier.
+        ("claimed", "drone"),
+        (None, "drone"),
+        ("none", "drone"),
+    ],
+)
+def test_only_an_rtk_drone_the_frames_showed_is_the_survey_tier_on_the_epoch(
+    db: Session, storage: S3Storage, tmp_path: Path, evidence: str | None, expected: str
+) -> None:
+    """`epochs.platform` is the tier D4 reads `survey` off, and it has no column for what
+    a platform rests on. So `rtk-drone` is written there only when the run's frames
+    showed it (`platformEvidence: metadata`); a claimed one is recorded as the `drone` it
+    claims to be, without the survey part. Other claimed platforms never upgrade anything
+    and are written as they are."""
+    capture = _capture(db)
+
+    run(db, storage, tmp_path, capture, _detected("rtk-drone", evidence))
+    assert capture.site_id is not None
+    [epoch] = _epochs(db, capture.site_id)
+    assert epoch.platform == expected
+
+    run(db, storage, tmp_path, capture, _detected("phone-photo", "claimed"))
+    assert [e.platform for e in _epochs(db, capture.site_id)] == ["phone-photo"]
+    # A re-run whose frames do not bear the claim out cannot raise it to the survey tier.
+    run(db, storage, tmp_path, capture, _detected("rtk-drone", "claimed"))
+    assert [e.platform for e in _epochs(db, capture.site_id)] == ["drone"]
+
+
+def test_the_files_utc_time_dates_the_epoch_and_never_becomes_the_captures_own(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """`capture.captured_at` is what a person or the console said. A time read off the
+    files dates the epoch, labelled `manifest`, and leaves the column as it was."""
+    capture = _capture(db)
+    document = _document()
+    document["manifest"] = {"capture": {"capturedAtUtc": "2026-08-30T07:05:00-07:00"}}
+
+    run(db, storage, tmp_path, capture, document)
+
+    db.expire_all()
+    assert capture.captured_at is None
+    assert capture.site_id is not None
+    [epoch] = _epochs(db, capture.site_id)
+    assert (epoch.observed_at, epoch.observed_at_source) == (
+        datetime(2026, 8, 30, 14, 5, tzinfo=UTC),
+        "manifest",
+    )

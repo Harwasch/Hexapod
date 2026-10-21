@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -289,6 +290,60 @@ def test_4_2s_mapper_snapshots_reach_the_live_viewer(
     assert "--snapshot-every" in log
     assert [line for line in log.splitlines() if line.startswith(live.CAMERAS_TAG)]
     assert live.latest(log)["cameras"]["final"] is True
+
+
+def _seeded(root: Path, frames: Path, **params: object) -> tuple[Workdir, dict[str, Any]]:
+    """Pose the orbit with frames_meta.json naming a focal 15% long (600 px, truth 520)."""
+    workdir = Workdir.create(root)
+    shutil.copytree(frames, workdir.input_path("frames"))
+    document = {
+        "schema": "frames_meta/1",
+        "focal": {"px": 600.0, "from": "exif-35mm"},
+        "frames": [{"name": "frame_0000.jpg", "frameSize": [640, 480]}],
+    }
+    workdir.input_path("frames_meta.json").write_text(json.dumps(document))
+    stage = {**RECIPE_POSE, "colmap": "4.2", "focal_from": "exif", **params}
+    recipe = make_recipe(
+        [{"id": "pose", "impl": "colmap", "params": stage}],
+        inputs=["frames", "frames_meta.json"],
+    )
+    execute(recipe, workdir, RunnerSet(cpu=LocalRunner()))
+    poses = json.loads((workdir.artifact_path("pose", "poses") / "poses.json").read_text())
+    return workdir, poses
+
+
+@requires_pycolmap
+def test_a_seeded_focal_is_refined_from_where_it_starts(
+    tmp_path: Path, orbit: tuple[Path, tree_frames.Truth]
+) -> None:
+    """`focal_from: exif` starts bundle adjustment at frames_meta's focal and lets it move:
+    seeded 15% long, it comes back within the bound `test_pose_colmap.py` already holds
+    the free focal to, and `recoveredOverInitial` says how far it moved."""
+    frames, truth = orbit
+    workdir, poses = _seeded(tmp_path / "run", frames)
+
+    focal = poses["focal"]
+    assert (focal["initialPx"], focal["initialFrom"], focal["held"]) == (600.0, "exif-35mm", False)
+    error_pct = 100.0 * (focal["px"] - truth.intrinsics.fx) / truth.intrinsics.fx
+    assert abs(error_pct) < 5.0, f"focal off by {error_pct:.2f}%"
+    assert focal["recoveredOverInitial"] < 1.0
+    assert "seeded from exif-35mm" in focal["biasNote"]
+    metrics = json.loads(workdir.step_path("pose").read_text())["metrics"]
+    assert (metrics["focalPrior"], metrics["focalFrom"]) == (True, "exif-35mm")
+
+
+@requires_pycolmap
+def test_hold_focal_holds_the_seed_where_it_was_put(
+    tmp_path: Path, orbit: tuple[Path, tree_frames.Truth]
+) -> None:
+    frames, _truth = orbit
+    _workdir, poses = _seeded(tmp_path / "run", frames, hold_focal=True)
+
+    focal = poses["focal"]
+    assert (focal["held"], focal["refined"]) == (True, False)
+    assert focal["px"] == pytest.approx(600.0, abs=1e-3)
+    assert focal["recoveredOverInitial"] == pytest.approx(1.0, abs=1e-5)
+    assert "held at the exif-35mm prior" in focal["biasNote"]
 
 
 @requires_pycolmap

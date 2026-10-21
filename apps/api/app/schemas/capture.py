@@ -7,7 +7,14 @@ from typing import Any
 
 from pydantic import Field, field_validator, model_validator
 
-from app.models.enums import CaptureKind, CaptureStatus, GeorefMethod, ScaleSource, UploadStatus
+from app.models.enums import (
+    CaptureKind,
+    CaptureStatus,
+    EpochPlatform,
+    GeorefMethod,
+    ScaleSource,
+    UploadStatus,
+)
 from app.schemas.base import CamelModel
 from app.schemas.common import Attribution, LicenseMetadata, Provenance, TemporalExtent
 from app.schemas.job import JobRead
@@ -39,9 +46,9 @@ class CaptureBase(CamelModel):
     def _orientation(cls, value: dict[str, Any]) -> dict[str, Any]:
         """Refuse an orientation the pipeline would refuse, while the request is open.
 
-        `metadata` is otherwise free-form. These two keys are not: the worker hands them
-        to the normalize stage, and a bad one there fails the run an hour later instead of
-        the upload now.
+        `metadata` is otherwise free-form. These keys are not: the worker hands them to
+        the normalize stage, and a bad one there fails the run an hour later instead of the
+        upload now.
         """
         axis = value.get("upAxis")
         if axis is not None and axis not in UP_AXES:
@@ -54,6 +61,15 @@ class CaptureBase(CamelModel):
             isinstance(heading, bool) or not isinstance(heading, int | float)
         ):
             raise ValueError("metadata.headingDeg must be a number of degrees clockwise from north")
+        platform = value.get("platform")
+        platforms = [p.value for p in EpochPlatform]
+        if platform is not None and platform not in platforms:
+            # The worker hands it to `normalize` as its `platform`, which refuses anything
+            # else; refused here, it fails the upload now rather than the run later.
+            raise ValueError(
+                f"metadata.platform must be one of {', '.join(platforms)} (what captured "
+                f"it, by survey tier), not {platform!r}"
+            )
         return value
 
 
