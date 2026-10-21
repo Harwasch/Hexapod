@@ -857,12 +857,18 @@ export function startCompositor(
         age = { mode: "data-age", rows: cellTextureRows(grid.meta, rg), meta: grid.meta };
       } else age = published.age;
     } else ageKey = "";
+    // Each date's sources: its own, and its inferred layers' (what its share of the budget counts).
+    const ownsOf = (source: number): number[] => [
+      source,
+      ...drawn.flatMap((e, s) => (e.from === placed[source]?.tileset ? [s] : [])),
+    ];
     const others: RuleDate[] = placed.flatMap((d, source) =>
       d.tileset !== target.tileset && d.url && d.assetId !== undefined && source < drawn.length
         ? [
             {
               url: d.url,
               assetId: d.assetId,
+              owns: ownsOf(source),
               extras: d.extras,
               placement: d.placement,
               root: d.root,
@@ -871,6 +877,7 @@ export function startCompositor(
         : [],
     );
     const native = placed.findIndex((d) => d.tileset === target.tileset);
+    const scanOwns = native >= 0 && native < drawn.length ? ownsOf(native) : [];
     const reach = tuning.seamReach ?? SEAM_REACH;
     const key = JSON.stringify([
       planeKey,
@@ -879,7 +886,7 @@ export function startCompositor(
       ageKey,
       reach,
       tuning.enabled,
-      others.map((d) => [d.url, d.placement, d.root]),
+      others.map((d) => [d.url, d.placement, d.root, d.owns]),
     ]);
     if (published?.key !== key || published.assetId !== target.assetId) {
       const view: ScanRuleView = {
@@ -888,6 +895,7 @@ export function startCompositor(
         owners: ruleOwnerRows(found.plane),
         sources: bySource,
         native: native >= 0 && native < drawn.length ? native : NO_OWNER,
+        scanOwns,
         tinted,
         reach,
         enabled: tuning.enabled,

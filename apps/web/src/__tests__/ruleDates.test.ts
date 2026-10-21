@@ -76,6 +76,8 @@ async function flush(): Promise<void> {
 const JUNE: RuleDate = {
   url: "https://tiles.example/june/tileset.json",
   assetId: "june",
+  // Its own source, 1, and its inferred layer's, 2.
+  owns: [1, 2],
   extras: {
     inferredLayers: [
       {
@@ -93,6 +95,47 @@ const JUNE: RuleDate = {
   placement: SHIFTED,
   root: IDENTITY,
 };
+
+/**
+ * A rule's plane over 64 x 24 m of 1 m cells: the scan PlayCanvas draws (source 0) owns the
+ * cells west of `seam`, June (1) those east of it.
+ */
+function owners(seam = 32, dates: RuleDate[] = [JUNE]) {
+  const ni = 64;
+  const nj = 24;
+  const data = new Uint8Array(4096).fill(255);
+  for (let j = 0; j < nj; j += 1)
+    for (let i = 0; i < ni; i += 1) data[j * ni + i] = i < seam ? 0 : 1;
+  return {
+    dates,
+    plane: [0, 0, ni, nj] as const,
+    cellM: 1,
+    owners: { data, height: 1 },
+    scanOwns: [0],
+  };
+}
+
+/** Looking north at the whole plane from above its south edge. */
+const WHOLE: ScanPose = {
+  ...pose,
+  eye: [32, -30, 30],
+  direction: [0, 0.6, -0.8],
+  up: [0, 0.8, 0.6],
+};
+/** Looking north at its west end, close and low: nothing east of x = 32 in view. */
+const WEST: ScanPose = { ...pose, eye: [6, -3, 4], direction: [0, 0.8, -0.6], up: [0, 0.6, 0.8] };
+
+/** The lent kit with a streamer that records the budgets it is handed. */
+function spyKit() {
+  const budgets: number[] = [];
+  class Spy<M> extends KIT.TileStreamer<M> {
+    override setBudget(budget: number, cacheBudget: number): void {
+      budgets.push(budget);
+      super.setBudget(budget, cacheBudget);
+    }
+  }
+  return { kit: { ...KIT, TileStreamer: Spy }, budgets };
+}
 
 describe("the dates a rule draws under PlayCanvas", () => {
   afterEach(() => useSettings.getState().set({ inferredStyle: "hide" }));
@@ -113,7 +156,7 @@ describe("the dates a rule draws under PlayCanvas", () => {
       },
       KIT,
     );
-    dates.setDates([JUNE]);
+    dates.setRule(owners());
     await flush();
     expect(arrivals).toBeGreaterThan(0);
     dates.plan(pose, 1_000);
@@ -128,7 +171,7 @@ describe("the dates a rule draws under PlayCanvas", () => {
     expect(dates.status()).toMatchObject({ dates: 1, tiles: 2 });
 
     // The rule no longer names it: off screen and let go.
-    dates.setDates([]);
+    dates.setRule(owners(32, []));
     expect(onScreen.size).toBe(0);
     expect(calls).toContain("dispose june.glb");
     expect(dates.status()).toMatchObject({ dates: 0, tiles: 0 });
@@ -147,7 +190,7 @@ describe("the dates a rule draws under PlayCanvas", () => {
       },
       KIT,
     );
-    dates.setDates([{ ...JUNE, extras: {} }]);
+    dates.setRule(owners(32, [{ ...JUNE, extras: {} }]));
     await flush();
     dates.plan(pose, 1_000);
     expect(dates.dueBy()).toBeNull();
@@ -158,6 +201,94 @@ describe("the dates a rule draws under PlayCanvas", () => {
     // Nothing moved and nothing came: nothing to plan.
     dates.plan({ ...pose, eye: [1, -20, 5] }, 1_400);
     expect(dates.dueBy()).toBeNull();
+    dates.stop();
+  });
+});
+
+describe("one budget for every date a rule draws", () => {
+  it("is split by each date's share of the visible cells it owns", async () => {
+    const { kit, budgets } = spyKit();
+    const { backend } = fakeBackend();
+    const dates = new RuleDates(
+      backend,
+      {
+        arrived: () => undefined,
+        changed: () => undefined,
+        budget: () => 1e6,
+        fetchJson: () => Promise.resolve(leaf("june.glb")),
+      },
+      kit,
+    );
+    dates.setRule(owners(32, [{ ...JUNE, extras: {} }]));
+    await flush();
+    // The whole plane in view, half of it each: half the budget each. The scan PlayCanvas
+    // draws takes its half through the renderer (`scanShare`); June's streamer the other.
+    dates.plan(WHOLE, 1_000);
+    expect(dates.scanShare()).toBeCloseTo(0.5, 1);
+    expect(budgets.at(-1)).toBeCloseTo(0.5e6, -5);
+    // Three quarters June's: three quarters of the budget June's.
+    dates.setRule(owners(16, [{ ...JUNE, extras: {} }]));
+    dates.plan(WHOLE, 2_000);
+    expect(dates.scanShare()).toBeCloseTo(0.25, 1);
+    expect(budgets.at(-1)).toBeCloseTo(0.75e6, -5);
+    dates.stop();
+  });
+
+  it("streams nothing for a date that owns no cell in view", async () => {
+    const { backend, calls, onScreen } = fakeBackend();
+    const dates = new RuleDates(
+      backend,
+      {
+        arrived: () => undefined,
+        changed: () => undefined,
+        budget: () => 1e6,
+        fetchJson: () => Promise.resolve(leaf("june.glb")),
+      },
+      KIT,
+    );
+    dates.setRule(owners(32, [{ ...JUNE, extras: {} }]));
+    await flush();
+    dates.plan(WHOLE, 1_000);
+    await flush();
+    dates.plan(WHOLE, 2_000);
+    expect([...onScreen].some((m) => m.kind === "date")).toBe(true);
+    // Looking at the west end: June owns nothing in view, so it holds nothing.
+    dates.plan(WEST, 3_000);
+    expect(dates.scanShare()).toBe(1);
+    expect([...onScreen].some((m) => m.kind === "date")).toBe(false);
+    expect(calls).toContain("dispose june.glb");
+    expect(dates.status()).toMatchObject({ dates: 1, tiles: 0, gaussians: 0 });
+    // Back: June streams again.
+    dates.plan(WHOLE, 4_000);
+    await flush();
+    dates.plan(WHOLE, 5_000);
+    expect([...onScreen].some((m) => m.kind === "date")).toBe(true);
+    dates.stop();
+  });
+
+  it("reaches every date when the budget drops with the camera still", async () => {
+    const { kit, budgets } = spyKit();
+    const { backend } = fakeBackend();
+    let budget = 1e6;
+    const dates = new RuleDates(
+      backend,
+      {
+        arrived: () => undefined,
+        changed: () => undefined,
+        budget: () => budget,
+        fetchJson: () => Promise.resolve(leaf("june.glb")),
+      },
+      kit,
+    );
+    dates.setRule(owners(32, [{ ...JUNE, extras: {} }]));
+    await flush();
+    dates.plan(WHOLE, 1_000);
+    await flush();
+    dates.plan(WHOLE, 2_000);
+    // Nothing moves and nothing comes; the frames slowed, and the host's budget dropped.
+    budget = 2e5;
+    dates.plan(WHOLE, 3_000);
+    expect(budgets.at(-1)).toBeCloseTo(1e5, -4);
     dates.stop();
   });
 });

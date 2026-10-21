@@ -491,8 +491,17 @@ describe("a view rule's session under PlayCanvas", () => {
     // The scan PlayCanvas draws is June's; March is streamed beside it, where it is.
     expect(view?.native).toBe(1);
     expect(view?.dates).toEqual([
-      { url: MARCH, assetId: A1.id, extras: march.root.extras, placement: null, root: IDENTITY },
+      {
+        url: MARCH,
+        assetId: A1.id,
+        owns: [0],
+        extras: march.root.extras,
+        placement: null,
+        root: IDENTITY,
+      },
     ]);
+    // What one budget is split by: each date's sources, the scan PlayCanvas draws' too.
+    expect(view?.scanOwns).toEqual([1]);
     // The same plane CesiumJS draws: June's box is June's, the rest March's.
     const [i0, j0, ni] = view?.plane ?? [0, 0, 0];
     const at = (x: number, y: number) =>
@@ -529,6 +538,8 @@ describe("a view rule's session under PlayCanvas", () => {
     });
     // Highlight invented: the inferred sources, by the layers' own look.
     expect(view?.tinted).toBe(1 << 2);
+    // June's fill travels with June: its share of the budget counts the fill's cells.
+    expect(view?.scanOwns).toEqual([1, 2]);
     if (entry.rule) entry.rule.rule = "latest";
     await frame();
     expect(ruleFor(A2.id)?.tinted).toBe(0);

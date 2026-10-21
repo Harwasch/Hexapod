@@ -132,6 +132,15 @@ import type { BackendHooks, GraphicsApi, ScanBackend, ScanPose, SplatRendererKin
 
 const log = createLogger("playcanvas");
 
+/** No rule: no dates beside the scan (ruleDates.ts). */
+const NO_DATES = {
+  dates: [],
+  plane: [0, 0, 0, 0] as const,
+  cellM: 1,
+  owners: { data: new Uint8Array(0), height: 0 },
+  scanOwns: [],
+};
+
 /** Where an object not placed yet is weighed: outside every plane, so it is not drawn. */
 const UNPLACED = 1e9;
 
@@ -664,6 +673,8 @@ function assemble(
   /** The rule's other dates, streamed into this app (ruleDates.ts, loaded with the first). */
   let ruleDates: RuleDates<pc.Entity> | null = null;
   let ruleDatesLoading = false;
+  /** The budget the host draws to (`setBudget`), which a rule's dates share. */
+  let drawBudget = budget;
   /** The tileset each entity came from: whose source it is under a rule. */
   const fromUrl = new WeakMap<pc.Entity, string>();
   /** A natively streamed scan's one entity: the rule's `native` source. */
@@ -1304,7 +1315,7 @@ function assemble(
   const syncRuleDates = (): void => {
     const wanted = rule?.dates ?? [];
     if (ruleDates || wanted.length === 0) {
-      ruleDates?.setDates(wanted);
+      ruleDates?.setRule(rule ?? NO_DATES);
       return;
     }
     const kit = lentRuleKit();
@@ -1327,12 +1338,13 @@ function assemble(
           {
             arrived: () => hooks.frameWanted(),
             changed: () => hooks.frameWanted(),
-            // The budget the host draws to now: frames slowed by two dates lower it for both.
-            budget: () => app.scene.gsplat.splatBudget,
+            // The budget the host draws to now, which every date shares: frames slowed by the
+            // dates lower it for all of them.
+            budget: () => drawBudget,
           },
           kit,
         );
-        ruleDates.setDates(rule?.dates ?? []);
+        ruleDates.setRule(rule ?? NO_DATES);
         hooks.frameWanted();
       })
       .catch((error: unknown) => {
@@ -1710,6 +1722,7 @@ function assemble(
       return sort === null ? dates : dates === null ? sort : Math.min(sort, dates);
     },
     setBudget: (drawn) => {
+      drawBudget = drawn;
       app.scene.gsplat.splatBudget = drawn;
     },
     setInstances,

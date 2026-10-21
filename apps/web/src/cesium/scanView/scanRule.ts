@@ -52,6 +52,8 @@ export interface RuleDate {
   /** Its tileset's URL, absolute, as the renderer fetches it and `sources` names it. */
   url: string;
   assetId: string;
+  /** Its sources in the plane: its own, and its inferred layers' -- what its share counts. */
+  owns: number[];
   /** Its tileset's root extras: its inferred layers and split objects. */
   extras: unknown;
   /** Where its tiles go in the scan's frame (column-major 4x4), or null where they are. */
@@ -85,6 +87,11 @@ export interface ScanRuleView {
   enabled: boolean;
   /** The site's other dates the rule draws, streamed beside the scan. */
   dates: readonly RuleDate[];
+  /**
+   * The sources of the scan the renderer draws: its own and its inferred layers' (none when the
+   * rule leaves it out). With each date's `owns`, what one budget is split by (ruleDates.ts).
+   */
+  scanOwns: readonly number[];
   /** Data age under the rule: each cell by its owner's age (`ownerAgeGrid`), else null. */
   age: CellLookView | null;
 }

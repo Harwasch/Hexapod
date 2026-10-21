@@ -27,13 +27,15 @@
  * of the globe's first-load entry, and the first load would grow.
  */
 
+import { NO_OWNER } from "@/lib/compositor";
 import { createLogger } from "@/lib/log";
 import type { TileStreamer, View } from "@/view/stream";
 import type { Sphere, TileNode } from "@/view/tiles";
 
 import type { LayerBackend, ScanLayers } from "./scanLayers";
 import type { ScanObjects } from "./scanObjects";
-import type { NamedRuleKit, RuleDate } from "./scanRule";
+
+import type { NamedRuleKit, RuleDate, ScanRuleView } from "./scanRule";
 import type { ScanBackend, ScanPose } from "./types";
 
 const log = createLogger("rule-dates");
@@ -121,7 +123,9 @@ export function poseView(pose: ScanPose): View {
 interface DrawnDate<M> {
   date: RuleDate;
   key: string;
-  /** Null until its tileset has been read. */
+  /** Its tileset.json, once read: what a streamer is made from again after an idle spell. */
+  json: unknown;
+  /** Null until its tileset has been read, and while it holds no share of the budget. */
   streamer: TileStreamer<M> | null;
   layers: ScanLayers<M>;
   objects: ScanObjects<M>;
@@ -129,13 +133,69 @@ interface DrawnDate<M> {
   stopped: boolean;
 }
 
-/** The rule's other dates in one renderer: follows the list, plans each from the pose. */
+/** What of a rule the dates are planned from (scanRule.ts `ScanRuleView`). */
+export type RuleDatesPlan = Pick<ScanRuleView, "dates" | "plane" | "cellM" | "owners" | "scanOwns">;
+
+/** Cells sampled at most for the shares, the plane thinned evenly past it. */
+export const SHARE_SAMPLES = 16_384;
+
+/**
+ * Each holder's share of the cells in view that it owns -- the scan the renderer draws
+ * (`scan`: `plan.scanOwns`), and each date (its own source and its inferred layers'). A cell
+ * is in view when a sphere about its middle, on the plane's ground (z = 0), wide enough for the
+ * cells it stands for, meets the frustum (`visible`, or every cell without one). Null when no
+ * holder owns a cell in view: the shares stand as they were.
+ */
+export function viewShares(
+  plan: RuleDatesPlan,
+  visible: ((sphere: Sphere) => boolean) | null,
+): { scan: number; dates: number[] } | null {
+  const [i0, j0, ni, nj] = plan.plane;
+  const holderOf = new Map<number, number>();
+  for (const source of plan.scanOwns) holderOf.set(source, 0);
+  plan.dates.forEach((date, k) => {
+    for (const source of date.owns) holderOf.set(source, k + 1);
+  });
+  const counts = new Array<number>(plan.dates.length + 1).fill(0);
+  const step = Math.max(1, Math.ceil(Math.sqrt((ni * nj) / SHARE_SAMPLES)));
+  const radius = plan.cellM * step * 0.75;
+  let total = 0;
+  for (let cj = Math.floor(step / 2); cj < nj; cj += step)
+    for (let ci = Math.floor(step / 2); ci < ni; ci += step) {
+      const holder = holderOf.get(plan.owners.data[cj * ni + ci] ?? NO_OWNER);
+      if (holder === undefined) continue;
+      const center: [number, number, number] = [
+        (i0 + ci + 0.5) * plan.cellM,
+        (j0 + cj + 0.5) * plan.cellM,
+        0,
+      ];
+      if (visible && !visible({ center, radius })) continue;
+      counts[holder] = (counts[holder] ?? 0) + 1;
+      total += 1;
+    }
+  if (total === 0) return null;
+  return { scan: (counts[0] ?? 0) / total, dates: counts.slice(1).map((c) => c / total) };
+}
+
+/**
+ * The rule's other dates in one renderer: follows the rule, plans each from the pose, and
+ * splits one budget between every date it draws -- the scan the renderer draws included --
+ * by each one's share of the cells in view it owns (`viewShares`), so all of them together
+ * hold what one scan alone would. A date that owns nothing in view streams nothing: its tiles
+ * are let go and nothing of it is fetched until it owns something in view again. The scan's
+ * own share reaches the renderer's host through `scanShare` (its streamer is the host's).
+ */
 export class RuleDates<M> {
   #dates: DrawnDate<M>[] = [];
+  #plan: RuleDatesPlan | null = null;
+  /** The scan's share of the budget, and each date's by key. */
+  #scanShare = 1;
+  readonly #shares = new Map<string, number>();
   #arrived = true;
   #lastPlan = Number.NEGATIVE_INFINITY;
   #lastEye: number[] | null = null;
   #lastDirection: number[] | null = null;
+  #lastBudget = Number.NaN;
   #dueBy: number | null = null;
   #stopped = false;
 
@@ -145,36 +205,50 @@ export class RuleDates<M> {
     private readonly kit: NamedRuleKit,
   ) {}
 
-  /** Draws these dates (none: `[]`), keeping each one already drawn as it was. */
-  setDates(dates: readonly RuleDate[]): void {
+  /**
+   * Draws the rule's dates (none: `[]`), keeping each one already drawn as it was, and takes
+   * its plane: the shares are worked out again at the next plan.
+   */
+  setRule(plan: RuleDatesPlan): void {
     if (this.#stopped) return;
+    this.#plan = plan;
     const keyOf = (d: RuleDate) => JSON.stringify([d.url, d.assetId, d.placement, d.root]);
-    const next = new Map(dates.map((d) => [keyOf(d), d]));
+    const next = new Map(plan.dates.map((d) => [keyOf(d), d]));
     for (const drawn of this.#dates.filter((d) => !next.has(d.key))) this.#drop(drawn);
     this.#dates = this.#dates.filter((d) => next.has(d.key));
     for (const [key, date] of next) {
-      if (this.#dates.some((d) => d.key === key)) continue;
-      this.#dates.push(this.#start(key, date));
+      const drawn = this.#dates.find((d) => d.key === key);
+      if (drawn) drawn.date = date;
+      else this.#dates.push(this.#start(key, date));
     }
+    // Before any view, by the cells each owns at all.
+    if (this.#lastEye === null) this.#reshare(null);
     this.#arrived = true;
     this.options.changed();
   }
 
+  /** The share of the budget the scan the renderer draws takes now (1 without other dates). */
+  scanShare(): number {
+    return this.#dates.length === 0 ? 1 : this.#scanShare;
+  }
+
   /**
-   * Plans every date's tiles for the renderer's `pose`, at most every `DATE_REPLAN_MS` and only
-   * when the eye moved or a tile came; places the dates' split objects at their poses.
+   * Plans every date's tiles for the renderer's `pose`, at most every `DATE_REPLAN_MS`, when
+   * the eye moved, a tile came, or the budget moved (the camera still: a host whose frames
+   * slowed has every date hold less); places the dates' split objects at their poses.
    */
   plan(pose: ScanPose, now: number = performance.now()): void {
     if (this.#stopped) return;
     let moved = false;
     for (const date of this.#dates) moved = date.objects.tick() || moved;
     if (moved) this.options.changed();
+    const budget = Math.max(1, this.options.budget());
     const turned =
       this.#lastEye === null ||
       this.#lastDirection === null ||
       sub(pose.eye, this.#lastEye).some((v) => Math.abs(v) > 1e-3) ||
       sub(pose.direction, this.#lastDirection).some((v) => Math.abs(v) > 1e-5);
-    if (!turned && !this.#arrived) {
+    if (!turned && !this.#arrived && budget === this.#lastBudget) {
       this.#dueBy = null;
       return;
     }
@@ -185,12 +259,19 @@ export class RuleDates<M> {
     this.#dueBy = null;
     this.#lastPlan = now;
     this.#arrived = false;
+    this.#lastBudget = budget;
     this.#lastEye = [...pose.eye];
     this.#lastDirection = [...pose.direction];
     const view = poseView(pose);
-    const budget = Math.max(1, this.options.budget());
+    this.#reshare((sphere) => view.visible(sphere));
     for (const date of this.#dates) {
-      date.streamer?.setBudget(budget, budget * DATE_CACHE_FACTOR);
+      const share = this.#shares.get(date.key) ?? 0;
+      if (share <= 0) {
+        this.#idle(date);
+        continue;
+      }
+      if (!date.streamer && date.json !== undefined) this.#stream(date);
+      date.streamer?.setBudget(share * budget, share * budget * DATE_CACHE_FACTOR);
       date.streamer?.update(this.kit.layerView(view, date.date.placement));
       date.layers.update(view);
     }
@@ -219,16 +300,32 @@ export class RuleDates<M> {
     for (const date of this.#dates.splice(0)) this.#drop(date);
   }
 
+  /** Works the shares out again from what is `visible` (every cell with null). */
+  #reshare(visible: ((sphere: Sphere) => boolean) | null): void {
+    const plan = this.#plan;
+    if (!plan) return;
+    const found = viewShares({ ...plan, dates: this.#dates.map((d) => d.date) }, visible);
+    if (!found) return;
+    this.#dates.forEach((d, k) => this.#shares.set(d.key, found.dates[k] ?? 0));
+    if (found.scan !== this.#scanShare) {
+      this.#scanShare = found.scan;
+      // The host reads the scan's share as its streamer's (`scanShare`): a frame applies it.
+      this.options.changed();
+    }
+  }
+
   #start(key: string, date: RuleDate): DrawnDate<M> {
     const { backend, options, kit } = this;
     const drawn: DrawnDate<M> = {
       date,
       key,
+      json: undefined,
       streamer: null,
       layers: new kit.ScanLayers<M>(backend, date.assetId, date.url, date.extras, date.root, {
         arrived: () => this.#arrive(),
         changed: () => options.changed(),
-        budget: () => options.budget() * kit.layerBudgetShare,
+        // A layer travels with its date: a share of the date's share.
+        budget: () => options.budget() * (this.#shares.get(key) ?? 0) * kit.layerBudgetShare,
         ...(options.fetchJson ? { fetchJson: options.fetchJson } : {}),
       }),
       objects: new kit.ScanObjects<M>(
@@ -256,38 +353,8 @@ export class RuleDates<M> {
     void fetchJson(date.url)
       .then((json) => {
         if (drawn.stopped) return;
-        const budget = Math.max(1, options.budget());
-        const streamer = new kit.TileStreamer<M>(
-          kit.parseTileset(json),
-          {
-            load: (tile, signal) => backend.loadDate(date.url, tile, signal),
-            show: (_tile, mesh) => {
-              drawn.onScreen.add(mesh);
-              if (date.placement) backend.place?.(mesh, date.placement);
-              backend.add(mesh);
-              options.changed();
-            },
-            hide: (_tile, mesh) => {
-              drawn.onScreen.delete(mesh);
-              backend.remove(mesh);
-              options.changed();
-            },
-            dispose: (mesh) => backend.dispose(mesh),
-            failed: (tile, error) =>
-              log.warn("a date's tile did not load; its parent stays", {
-                asset: date.assetId,
-                tile: tile.uri,
-                error: error instanceof Error ? error.message : String(error),
-              }),
-          },
-          {
-            budget,
-            cacheBudget: budget * DATE_CACHE_FACTOR,
-            concurrency: DATE_FETCHES_AT_ONCE,
-          },
-        );
-        streamer.onArrival = () => this.#arrive();
-        drawn.streamer = streamer;
+        drawn.json = json;
+        if ((this.#shares.get(drawn.key) ?? 0) > 0) this.#stream(drawn);
         this.#arrive();
       })
       .catch((error: unknown) =>
@@ -297,6 +364,49 @@ export class RuleDates<M> {
         }),
       );
     return drawn;
+  }
+
+  /** Makes the date's streamer from its tileset.json, at its share of the budget. */
+  #stream(drawn: DrawnDate<M>): void {
+    const { backend, options, kit } = this;
+    const { date } = drawn;
+    const budget = Math.max(1, options.budget() * (this.#shares.get(drawn.key) ?? 0));
+    const streamer = new kit.TileStreamer<M>(
+      kit.parseTileset(drawn.json),
+      {
+        load: (tile, signal) => backend.loadDate(date.url, tile, signal),
+        show: (_tile, mesh) => {
+          drawn.onScreen.add(mesh);
+          if (date.placement) backend.place?.(mesh, date.placement);
+          backend.add(mesh);
+          options.changed();
+        },
+        hide: (_tile, mesh) => {
+          drawn.onScreen.delete(mesh);
+          backend.remove(mesh);
+          options.changed();
+        },
+        dispose: (mesh) => backend.dispose(mesh),
+        failed: (tile, error) =>
+          log.warn("a date's tile did not load; its parent stays", {
+            asset: date.assetId,
+            tile: tile.uri,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+      },
+      { budget, cacheBudget: budget * DATE_CACHE_FACTOR, concurrency: DATE_FETCHES_AT_ONCE },
+    );
+    streamer.onArrival = () => this.#arrive();
+    drawn.streamer = streamer;
+  }
+
+  /** A date that owns nothing in view: its tiles let go, nothing fetched. */
+  #idle(drawn: DrawnDate<M>): void {
+    const streamer = drawn.streamer;
+    if (!streamer) return;
+    drawn.streamer = null;
+    // Hides what it shows (`hide`), then disposes every tile it holds.
+    streamer.stop();
   }
 
   #arrive(): void {

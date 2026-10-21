@@ -113,6 +113,7 @@ export async function startRuleSogHarness(options: {
     reach: 2,
     enabled: true,
     dates: [],
+    scanOwns: [0],
     age: null,
   };
   if (plane.owners.includes(NO_OWNER)) throw new Error("the plane has a cell nobody owns");

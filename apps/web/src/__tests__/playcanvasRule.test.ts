@@ -340,6 +340,7 @@ function view(overrides: Partial<ScanRuleView> = {}): ScanRuleView {
     reach: 2,
     enabled: true,
     dates: [],
+    scanOwns: [0],
     age: null,
     ...overrides,
   };
@@ -527,7 +528,9 @@ describe("the other dates a rule draws under PlayCanvas", () => {
           [SCAN, { source: 0 }],
           [JUNE, { source: 1 }],
         ]),
-        dates: [{ url: JUNE, assetId: "june", extras: {}, placement: null, root: IDENTITY }],
+        dates: [
+          { url: JUNE, assetId: "june", owns: [1], extras: {}, placement: null, root: IDENTITY },
+        ],
       }),
     );
     // The dates' code is fetched with the first rule that names one, then June's tileset.
