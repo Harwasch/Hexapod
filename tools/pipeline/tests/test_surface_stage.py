@@ -967,3 +967,74 @@ def test_ground_sigma_is_the_noise_of_the_sample_that_set_the_minimum_not_an_ave
     a = _uneven_epoch(per_cell, 0.01, 0.01, 0, seeds[0])
     b = _uneven_epoch(per_cell, 0.01, 0.10, every, seeds[1])
     assert _false_ground(a, b, 0.03, 0.03) <= math.ceil(48 * 48 / 370)
+
+
+# --- review round 2: a canopy wider than the window's reach ------------------------------
+
+
+def _crown_epoch(
+    side_m: float, crown_m: float, tall_m: float, seed: int, per_cell: int = 50
+) -> cell_grid.CellPlane:
+    """Flat ground at 0 over a `side_m` square of 0.25 m cells centred on the origin, 1 cm
+    of noise, and a dense square crown `crown_m` wide and `tall_m` high in the middle (0:
+    none) under which nothing was sampled: every sample there is on its top."""
+    rng = np.random.default_rng(seed)
+    side = round(side_m / 0.25)
+    cells = side * side
+    j, i = np.divmod(np.repeat(np.arange(cells), per_cell), side)
+    xy = (
+        np.column_stack([i, j]) - side / 2 + rng.uniform(0.01, 0.99, (cells * per_cell, 2))
+    ) * 0.25
+    under = (np.abs(xy[:, 0]) < crown_m / 2) & (np.abs(xy[:, 1]) < crown_m / 2)
+    z = np.where(under, tall_m, 0.0) + rng.normal(0.0, 0.01, cells * per_cell)
+    window = surface.Window(level=0, i0=-side // 2, j0=-side // 2, ni=side, nj=side)
+    xyz = np.column_stack([xy, z])
+    return surface.surface_plane(lambda: iter([(xyz, surface.SPLAT)]), window).plane
+
+
+@pytest.mark.parametrize(
+    ("side_m", "crown_m", "before_m", "after_m"),
+    [
+        (32.0, 20.0, 0.0, 4.0),  # a 20 m crown appears: 324 false ground changes
+        (32.0, 20.0, 4.0, 0.0),  # and is cut down
+        (32.0, 20.0, 4.0, 6.0),  # grows
+        (56.0, 40.0, 4.0, 6.0),  # a 40 m crown grows 4 -> 6 m: 4,356 false ground raises
+        (16.0, 6.0, 4.0, 6.0),  # a 6 m crown (its core already unobserved): 0
+    ],
+)
+def test_ground_deep_under_a_wide_canopy_is_unobserved_and_never_changes_with_it(
+    side_m: float, crown_m: float, before_m: float, after_m: float
+) -> None:
+    """Review B5a round 2: deep inside a crown wider than about 2 H / grade, the slope
+    test let the canopy itself stand as ground (397 cm at the centre of a 4 m crown), so
+    its growth read as the ground rising. The canopy's edge is a step no slope of 1 in 2
+    can make; every cell reached from that step across the canopy's top, whose window
+    ground stands that far above the ground the step's foot showed, has no ground: never
+    canopy height. Ground within the window's reach of the edge is still observed."""
+    a = _crown_epoch(side_m, crown_m, before_m, seed=11)
+    b = _crown_epoch(side_m, crown_m, after_m, seed=12)
+    assert _false_ground(a, b, 0.03, 0.03) == 0
+    for plane, tall in ((a, before_m), (b, after_m)):
+        ground = _channel(plane, "ground")
+        if tall:
+            centre = ground[
+                plane.nj // 2 - 2 : plane.nj // 2 + 2, plane.ni // 2 - 2 : plane.ni // 2 + 2
+            ]
+            assert (centre == NO).all(), np.unique(centre)
+        seen = ground[ground != NO]
+        assert seen.max() < 50, seen.max()  # what ground there is is the ground
+
+
+@pytest.mark.parametrize("grade", [0.49, 0.50, 0.51])
+def test_ground_on_a_slope_near_the_grade_limit_is_all_observed(grade: float) -> None:
+    """Review B5a round 2's check: 64 x 64 cells of 0.25 m, 1 cm of noise, grades just
+    under, at and over 1 in 2 along one axis: no cell's ground is missing."""
+    rng = np.random.default_rng(int(grade * 100))
+    side, per_cell = 64, 20
+    cells = side * side
+    j, i = np.divmod(np.repeat(np.arange(cells), per_cell), side)
+    xy = (np.column_stack([i, j]) + rng.uniform(0.01, 0.99, (cells * per_cell, 2))) * 0.25
+    z = grade * xy[:, 0] + rng.normal(0.0, 0.01, cells * per_cell)
+    window = surface.Window(level=0, i0=0, j0=0, ni=side, nj=side)
+    found = surface.surface_plane(lambda: iter([(np.column_stack([xy, z]), surface.SPLAT)]), window)
+    assert found.ground_unobserved == 0

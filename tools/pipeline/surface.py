@@ -60,9 +60,26 @@ told from the ground around it: a cell's ground is **unobserved** -- `NO_HEIGHT`
 `GROUND_MAX_GRADE` (1 in 2) from a lower 2nd-lowest sample anywhere allows
 (`grade_envelope`: the least of `low(c') + grade * L1 distance`). A slope that steep or
 gentler never trips it (its own samples are such a slope); a 4 m canopy does, wherever the
-ground beside it is closer than 8 m. Limits: deeper inside a plateau than its height over
-the grade, nothing tells canopy from ground, and ground steeper than 1 in 2 beside a drop
-reads as unobserved (a loss, never a wrong height). `summary.groundUnobserved` counts them.
+ground beside it is closer than 8 m. Ground steeper than 1 in 2 beside a drop reads as
+unobserved (a loss, never a wrong height).
+
+**Under a wide canopy** (`under_canopy`, review B5a round 2). Deeper inside a crown than
+its height over the grade, the slope test lets the canopy stand as ground (397 cm at the
+centre of a 4 m crown 20 m wide), so its growth read as the ground rising. What gives a
+canopy away is its edge: a cell that stands above the ground its own window saw by more
+than any slope of the grade could explain across the window (`grade * R`, R the window's
+half-diagonal: 1.77 m at the 5 m window, plus 3 sigma of its top and ground) is a **seed**,
+on top of something, and keeps the ground it saw. From the seeds that ground is carried
+across the canopy's top -- through adjacent cells that never drop by more than a slope of
+the grade could (plus 3 sigma; any rise, a taller crown on a canopy being canopy still) --
+and every cell it reaches whose own window ground stands more than the same margin above
+it has **no ground**: never canopy height. Ground beside the canopy has its own window
+ground at the ground's level, so it takes nothing. Limits, each a loss rather than a wrong
+height: ground that rises from a canopy's foot to above its top is unobserved where the
+canopy reaches it; and a cliff's top (it stands above its own foot) is unobserved across
+the flat ground it is joined to. Not caught: a canopy or roof lower than that margin
+(about 1.8 m) and wider than the window, whose edge no slope test can tell from a bank.
+`summary.groundUnobserved` counts every unobserved cell.
 
 A cell with fewer than `MIN_SAMPLES` (3) samples has no surface
 (`NO_HEIGHT`, sigma 0): with two, the 2nd highest is the lower and the 2nd lowest the
@@ -86,10 +103,11 @@ confidence grid's summary).
 
 **Memory and determinism.** One pass over the samples per band of at most `BAND_CELLS`
 cells, whose extremes (137 bytes a cell: 72 MB at 2^19) are that band's alone; the plane is
-10 bytes a cell (40 MB at 2^22), and making the ground about 40 more (its filter, envelope
-and box sums), whatever the number of samples. The eight highest and lowest of a set do not
-depend on the order it is read in, and every other step is a rounding of them or exact
-integer arithmetic, so the bytes depend on neither the chunk nor the band.
+10 bytes a cell (40 MB at 2^22), and making the ground about 40 more (its filter, envelope,
+box sums and the canopy test's 24), whatever the number of samples. The eight highest and
+lowest of a set do not depend on the order it is read in, and every other step is a
+rounding of them or exact integer arithmetic, so the bytes depend on neither the chunk nor
+the band.
 """
 
 from __future__ import annotations
@@ -584,6 +602,77 @@ def grade_envelope(low: npt.NDArray[np.int32], step: float) -> F64:
     return out
 
 
+#: Larger than any height difference the canopy test meets, in centimetres.
+_FAR_CM = 1 << 30
+
+
+def under_canopy(
+    dsm: npt.NDArray[np.int16],
+    ground: npt.NDArray[np.int32],
+    sigma: npt.NDArray[np.uint8],
+    ground_sigma_cm: F64,
+    has_ground: npt.NDArray[np.bool_],
+    unobserved: npt.NDArray[np.bool_],
+    *,
+    step_cm: float,
+    stand_cm: float,
+) -> npt.NDArray[np.bool_]:
+    """The cells with a ground whose ground is a canopy's or a roof's (module docstring,
+    "under a wide canopy"): reached across a surface that never drops by more than a slope
+    of the grade could (adjacent tops: a fall of at most `step_cm` plus 3 sigma; any
+    rise, a taller crown on a canopy being canopy still), from a cell that stands
+    more than `stand_cm` plus 3 sigma above the ground its window saw, carrying the lowest
+    such ground `v`, and whose own window ground stands that far above `v`. Cells the slope
+    test already left unobserved relay `v` too. Whole centimetres, so exact; four sweeps a
+    round (east, west, north, south), vectorised across the other axis, until nothing
+    changes (`v` only falls, over a finite set of values)."""
+    nj, ni = dsm.shape
+    has = dsm != cell_grid.NO_HEIGHT
+    # int32 and float32 throughout (heights are i2 centimetres): 24 bytes a cell.
+    top = dsm.astype(np.int32)
+    low = ground.astype(np.int32)
+    spread = sigma.astype(np.float32) ** 2
+    above = np.ceil(stand_cm + 3.0 * np.sqrt(spread + ground_sigma_cm.astype(np.float32) ** 2))
+    above = above.astype(np.int32)
+    seed = has_ground & (top - low > above)
+    value = np.where(seed, low, _FAR_CM).astype(np.int32)
+    # What a cell will take: any value if the slope test left it unobserved; else one
+    # its own window ground stands more than `above` over (`low - v > above`).
+    takes = np.where(
+        unobserved & has, _FAR_CM, np.where(has_ground & ~seed, low - above, -_FAR_CM)
+    ).astype(np.int32)
+
+    # Across a surface the value may climb any step (a taller crown on a canopy is still
+    # canopy) but drop no more than a slope of the grade could, plus 3 sigma of the two tops.
+    rise = np.where(has, top, -_FAR_CM).astype(np.int32)
+
+    def sweep(axis: int, forward: bool) -> bool:
+        changed = False
+        n = ni if axis == 1 else nj
+        steps = range(1, n) if forward else range(n - 2, -1, -1)
+        for k in steps:
+            src = k - 1 if forward else k + 1
+            pick = (slice(None), k) if axis == 1 else (k, slice(None))
+            from_ = (slice(None), src) if axis == 1 else (src, slice(None))
+            tolerance = step_cm + 3.0 * np.sqrt(spread[pick] + spread[from_])
+            link = has[pick] & has[from_] & (rise[pick] - rise[from_] >= -tolerance)
+            incoming, here = value[from_], value[pick]
+            better = link & (incoming < here) & (incoming < takes[pick])
+            if better.any():
+                here[better] = incoming[better]
+                changed = True
+        return changed
+
+    while True:
+        changed = False
+        for axis, forward in ((1, True), (1, False), (0, True), (0, False)):
+            changed |= sweep(axis, forward)
+        if not changed:
+            break
+    out: npt.NDArray[np.bool_] = has_ground & ~seed & (value < _FAR_CM)
+    return out
+
+
 def surface_plane(
     samples: Samples,
     window: Window,
@@ -687,6 +776,22 @@ def surface_plane(
         spread = np.maximum(sigma_floor_m, noise_at * _MM * rms_second(pooled))
         ground_sigma_cm = np.ceil(np.round(spread / cell_grid.HEIGHT_UNIT_M, 6))
     del pooled, noise_at, spread
+    # Ground under a canopy too wide for the window or the slope test: reached from the
+    # canopy's edge step across its top (module docstring, "under a wide canopy").
+    reach_m = half * window.cell_m * math.sqrt(2.0)
+    canopy = under_canopy(
+        dsm,
+        filtered,
+        sigma,
+        ground_sigma_cm,
+        has_ground,
+        unobserved,
+        step_cm=ground_max_grade * window.cell_m / cell_grid.HEIGHT_UNIT_M,
+        stand_cm=ground_max_grade * reach_m / cell_grid.HEIGHT_UNIT_M,
+    )
+    has_ground &= ~canopy
+    unobserved |= canopy
+    del canopy
     ground_saturated = int((has_ground & (ground_sigma_cm > 255)).sum())
     data = np.empty((nj, ni, len(cell_grid.SURFACE_CHANNELS)), dtype=np.int16)
     data[..., 0] = dsm

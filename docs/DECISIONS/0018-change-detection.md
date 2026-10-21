@@ -56,6 +56,14 @@ how well each cell was seen (ADR 0016).
      the window's least is higher than any slope up to 1 in 2 (`GROUND_MAX_GRADE`) from a lower
      2nd-lowest sample anywhere allows (`summary.groundUnobserved` counts them; review B5a: a
      10 m canopy at 4 m with ground seen only around it gave its middle cells 4 m of "ground");
+     and deeper inside a crown than that test reaches (round 2: a 20 m crown at 4 m kept 397 cm
+     of "ground" at its centre; a 40 m crown growing from 4 to 6 m read as 4,356 cells of ground
+     raised), the canopy's edge gives it away: a cell standing above its window's ground by
+     more than any slope of 1 in 2 could explain (1.77 m at the 5 m window, plus 3σ) carries
+     that ground across the canopy's top, never down a drop a slope could not make, and every
+     cell it reaches whose window ground stands that far above it has none. Both round-2 cases
+     now read 0 cells of ground changed. Not caught: a canopy or roof lower than about 1.8 m and
+     wider than the window;
    - `sigma = max(1 cm, (z1 − zm) · RMS2(n) / SPAN(n))`, `m = min(n, 8)`: the root-mean-square
      distance of `z2` from the surface, **its bias included**, under Gaussian noise of the scale
      the top eight's spread shows. `RMS2(n) = √E[Z(2:n)²]` and `SPAN(n) = E[Z(1:n)] − E[Z(m:n)]`
