@@ -244,9 +244,13 @@ cells, surfacedCells, medianSigmaM, originHeightM, groundWindowM}`, or null — 
    when none is recorded). A `survey` epoch (an RTK drone with RTK evidence in its frames) claims
    centimetres; a `coarse` one — any phone, a drone without RTK evidence, anything aligned into
    a coarse reference — metres, so no change under metres is claimed with it, however well it was
-   aligned visually: a phone epoch is never presented as survey grade. An epoch whose verdict is
-   `unaligned`, or that recorded none, is refused (409 `epoch-unaligned`). The answer states each
-   epoch's verdict, its `u` and its uncertainty from the frame.
+   aligned visually: a phone epoch is never presented as survey grade. **A coarse epoch's `u` is
+   at least `max(claim, 1 m)`** (round-2 ruling): coarse is a class, not a number — a phone may
+   claim 3 cm, and a survey claimed without its RTK evidence is recorded coarse with its
+   centimetre claim kept; against a 3 cm survey either read a half-metre rise as 1,024 ground
+   cells raised at a 0.21 m floor. An epoch whose verdict is `unaligned`, or that recorded none,
+   is refused (409 `epoch-unaligned`). The answer states each epoch's verdict, its `u` and its
+   uncertainty from the frame.
 5. **Horizontal uncertainty** (B5a). Placement error moves an epoch sideways too: cell for cell,
    an unchanged 4 m roof one 25 cm cell off, at 25 cm declared, read as a column lowered 4 m and
    one raised. Each cell is compared with the other epoch's neighbourhood within the horizontal
@@ -292,26 +296,58 @@ cells, surfacedCells, medianSigmaM, originHeightM, groundWindowM}`, or null — 
     surfaces, not observed", and `calibration: uncalibrated`. It is computed per request and not
     stored. The answer: `{…, level, nativeLevel, cellM, thresholdSigma, uncertainty {fromM, toM,
 fromVerdict, toVerdict, fromFrameM, toFrameM}, ground, vegetation, appearance}`, each layer
-    `{layer, label, heights, minDetectableM, motionM, horizontalRadiusM, driftReachM, counts,
-lowConfidence, areaLevel, areaCellM, areas}`.
+    `{layer, label, heights, minDetectableM, detectable, detectableGrid, motionM,
+horizontalRadiusM, driftReachM, counts, lowConfidence, areaLevel, areaCellM, areas}`. **Each
+    layer says what it could see** (round-2 ruling): `detectable` sums up its compared cells'
+    thresholds (least, median, 90th percentile, largest), and `detectableGrid` gives every cell's
+    at the area level (u2 centimetres, base64; at most 2^20 cells, 2 MB a layer), so a cell the
+    map calls unchanged reads as "nothing this large", never "nothing".
 13. **Other refusals**: 404 unknown site or an epoch not of it; 422 the same epoch twice; 409
     `epoch-not-published`, `no-site-frame`, `surface-not-measured`, `confidence-not-measured`,
     `frames-differ` (another origin height than the site frame's, to the millimetre),
-    `surface-unreadable` / `confidence-unreadable`. Both epochs are found (404) before either
-    one's status is judged (409).
+    `surface-unreadable` / `confidence-unreadable` — among them a grid whose finest plane is over
+    2^22 cells, refused from its descriptor before any byte is fetched. Both epochs are found
+    (404) before either one's status is judged (409).
 14. **Behind the write token, rate-limited** (decided in review): a call decodes four grids, the
     same cost and pattern as weak areas and fill targets, and spends the cell-map bucket. The
     comparison holds per layer a few tens of bytes a cell and classifies a band of rows at a
     time: measured with tracemalloc at 1024 × 1024 cells, 36 bytes a cell for vegetation (its
-    5-cell neighbourhoods) and 51 for the ground (its neighbourhoods and local rise), so about
-    210 MiB at the 2^22-cell ceiling for the ground layer.
+    5-cell neighbourhoods) and 51 for the ground (its neighbourhoods and local rise), so the
+    ground layer peaks at about **210 MiB at the 2^22-cell ceiling**; round 2 measured a whole
+    call's process at 341 MiB peak RSS for two 2^22-cell surfaces, both layers kept, even at a
+    170-cell horizontal radius (the neighbourhoods are log-time doublings). The API machine moves
+    to 2 GB with the Fly change; grids over 2^22 cells are refused (13), never compared coarser.
+
+### Limits (measured after round 2; synthetic scenes, uncalibrated)
+
+What the map can see, measured on P5's own surfaces of flat 0.25 m-cell scans at 8, 50 and 2,000
+samples a cell, both epochs at 3 cm, with this code (its least detectable change over the scan):
+
+- **Ground: at least 0.23 m, over areas wider than the 5 m window**, at 1 cm of height noise
+  (0.23, 0.30 and 0.43 m at 8, 50 and 2,000 samples: the lower envelope's bias grows with the
+  samples it is the least of), 0.74–1.48 m at 5 cm and 1.34–2.94 m at 10 cm; plus the drift bound
+  on slopes and at a change's own rim. A change narrower than the window is not ground change:
+  the window's least reads the ground beside it.
+- **Vegetation: at least 1.06 m** (3·√2·w; 1.07–1.19 m measured), with a horizontal radius of
+  about a metre.
+- **Small objects under about 1 m are not detected yet**: a 0.5 m crate of 3 × 3 cells is
+  unchanged in both layers in every configuration above (and in all round 2's: 0 of 45 cells),
+  its cells' `detectable` values over half a metre — said, not hidden. A canopy or roof lower
+  than about 1.8 m and wider than the window still reads as ground (§ Pipeline 3), and a cell of
+  fewer than three samples has no surface at all.
 
 ### Evidence (synthetic)
 
-- **The no-change control** (B5a ruling): one unchanged scene scanned by P5's own estimator at 20
-  against 2,000 samples a cell (10 cm of noise) and at 1 cm against 10 cm of noise (100 samples),
-  committed as `control/a..d`: 0 of 1,024 cells changed in either layer of either pair. P5's own
-  control, before its sigma carried its bias: 204 and 329 of 400 cells raised.
+- **The no-change controls** (B5a ruling and round 2), each scan P5's own, committed as
+  `control/a..l`: 20 against 2,000 samples a cell, and 1 against 10 cm of noise: 0 of 1,024
+  cells changed in either layer (P5's own control before its sigma carried its bias: 204 and
+  329 of 400 raised); a sparse lattice of 10 cm cells among 1 cm ones at 2,000 samples: 0 of
+  2,304 (it was 28.7% of ground lowered when the ground's sigma averaged the window's noise); a
+  4 m roof one cell east at 25 cm each: 0 of 2,304; a 40 m crown growing from 4 to 6 m: its
+  25,600 cells raised in vegetation and 0 ground changes (it was 4,356 cells of ground raised).
+- **Coarse claiming centimetres** (round 2): a phone epoch claiming 3 cm, or a survey claimed
+  without evidence, against a 3 cm survey: `u` 1 m, least detectable change over 3 m, nothing
+  claimed (it was 1,024 cells raised at 0.21 m).
 - **Coarse against survey** (B5a ruling): the yard re-scan as a phone epoch aligned coarsely
   (±5 m), its grid 6 cm from the frame: least detectable change 15 m in both layers, nothing
   claimed; it had been the 2.5 m shed raised against 0.23 m.
@@ -328,7 +364,10 @@ lowConfidence, areaLevel, areaCellM, areas}`.
 - The drape and its legend (W5c), which follows the two-layer answer. A stored change map per
   epoch pair: not needed while a call costs about a second at the grid ceiling.
 - Appearance-only change; any measurement behind the 3σ rule, the surface estimators, `w` or the
-  drift bound; honouring a runtime scale by resampling; per-cell output (only areas and counts are
-  answered; a per-cell raster for the web is a later decision).
-- P5's demo compares the top surface cell for cell with each epoch's frame-relative `u` only: it
-  is the reference the fixture's coarsening and cell rule are held to, not the API's layers.
+  drift bound; honouring a runtime scale by resampling; per-cell classes (areas, counts and each
+  cell's least detectable change are answered); detecting objects under about a metre.
+- The surface descriptor names the origin's height, not its datum or the frame's full identity:
+  only the height is checked against the site frame (round 2 found it; not yet done).
+- P5's demo compares the top surface cell for cell, with each epoch's placement as the change map
+  takes it (the cap or the claim, the larger; a metre for coarse): it is the reference the
+  fixture's coarsening and cell rule are held to, not the API's layers.
