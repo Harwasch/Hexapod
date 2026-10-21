@@ -432,7 +432,7 @@ cells in the tileset frame), a score and the reasons it is low, as one container
    distance (a cell must cover 6 px at the size it is drawn, the model's runtime scale
    included), the `weak-v1` colour (weak below 128 or unseen: red; above, amber to green; no
    evidence: grey). PlayCanvas and Spark get a disabled control with the reason and a one-click
-   switch (C5).
+   switch (C5). _Superseded by 7._
 3. **The notice names the real setting.** It reads "Needs the CesiumJS renderer (Settings ›
    Advanced › Splat renderer)", not the design's "Settings › Renderer": the Settings sheet lists
    the renderer under Advanced, as "Splat renderer".
@@ -442,11 +442,22 @@ cells in the tileset frame), a score and the reasons it is low, as one container
    dates change while the model stays loaded (the scene's `site-dates` event).
 5. **Not persisted.** The view is a question asked now; a reload starts on Photo.
 6. **Cost.** A few lines on the globe's first load; the rest loads on demand.
+7. **All three renderers draw the views** (2026-10-20, branch `claude/feat-splat-pc-cell-views`;
+   PlayCanvas stays the default renderer, Harrison's decision). The look is one GLSL source with
+   a TypeScript twin (`lib/cellLook.ts`), written from the legend's ramps, which CesiumJS's part,
+   PlayCanvas's work-buffer modifier and Spark's world modifier all take as it is; the cell view
+   hands each dedicated renderer the same texture, rule and mode (`scanView/scanCellView.ts`).
+   PlayCanvas and Spark colour a splat as they copy or generate its tile, with no eye, so they
+   read one level per tile -- CesiumJS's rule at the tile's centre -- and copy a tile again only
+   when its level steps (`scanView/cellModifier.ts`); the key says cells are sized per tile.
+   An inferred layer's tiles are grey under either view. The notice stays for the per-cell
+   rules, Sunlight and Compare, and names them; the WebGPU trial keeps the gate (no WGSL yet).
 
 ### Consequences
 
-- Confidence and Data age are invisible under the default renderer (PlayCanvas) until a person
-  switches; whether CesiumJS becomes the default is open (design § 6, ADR 0020).
+- Confidence and Data age are drawn under the default renderer (PlayCanvas) too (7). There a
+  tile's far and near edges can draw finer or coarser cells than CesiumJS would; the colours
+  and cues do not differ. A natively streamed scan reads one level for all of it.
 - Every loaded date of a site reacts to the view, including the hidden frame anchor: its grid is
   fetched too. At most a few dates are loaded at once.
 - More than eight separate slot ranges of inferred layers on one scan: the extra ranges are
