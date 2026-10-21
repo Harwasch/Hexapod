@@ -143,7 +143,7 @@ describe("the change overlay", () => {
     );
     const svg = host.querySelector("svg");
     expect(svg?.getAttribute("data-change-overlay")).toBe("vegetation");
-    expect(paths(host).map((p) => p.stroke)).toEqual(["#4cc37f", "#b37be0"]);
+    expect(paths(host).map((p) => p.stroke)).toEqual(["#f2c94c", "#b37be0"]);
   });
 
   it("leaves out a polygon with a point behind the camera", () => {

@@ -168,8 +168,9 @@ describe("the change drape", () => {
       added[0]?.appearance as unknown as { material: { uniforms: Record<string, unknown> } }
     ).material;
     const color = material.uniforms.color as { red: number; green: number; blue: number };
-    // Green (#4cc37f), not the ground's orange.
-    expect(color.green).toBeGreaterThan(color.red);
+    // Yellow (#f2c94c): not the ground's orange, and not the green of grass it lies over.
+    expect(color.green).toBeGreaterThan(0.7);
+    expect(color.blue).toBeLessThan(0.4);
   });
 
   it("keeps a polygon's holes open", () => {

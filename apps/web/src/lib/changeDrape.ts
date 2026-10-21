@@ -32,12 +32,12 @@ export const CHANGE_CLASSES: readonly ChangeClass[] = ["raised", "lowered", "ins
 
 /**
  * Each layer's class colours, on the ground and in its legend. The ground: warm up, cool down,
- * grey unknown. Vegetation in hues of its own (green up, violet down), so the two are never
- * read as one where both are drawn.
+ * grey unknown. Vegetation in hues of its own (yellow up, violet down; not green, which a
+ * scan's grass already is), so the two are never read as one where both are drawn.
  */
 export const CHANGE_COLORS: Record<ChangeLayerName, Record<ChangeClass, string>> = {
   ground: { raised: "#f08c3a", lowered: "#3a9cf0", insufficient: "#a3a7ad" },
-  vegetation: { raised: "#4cc37f", lowered: "#b37be0", insufficient: "#a3a7ad" },
+  vegetation: { raised: "#f2c94c", lowered: "#b37be0", insufficient: "#a3a7ad" },
 };
 
 export const CHANGE_LABELS: Record<ChangeClass | "unchanged", string> = {
