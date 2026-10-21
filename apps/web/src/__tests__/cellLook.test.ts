@@ -51,7 +51,13 @@ describe("the GLSL", () => {
     const cesium = cellViewGlsl();
     expect(cesium).toContain(CELL_LOOK_GLSL);
     expect(cesium).toContain("hexapodCellLook(mode, t, p.xy, cell, u_cellRule, color)");
-    expect(cesium).toContain("hexapodCellTexel(u_cellGrid, p.xy, cell");
+    // Its cell is looked up with integers, as before the look was shared.
+    expect(cesium).toContain(
+      "hexapodCellTexel(u_cellGrid, p.xy, cell, u_cellLevels[k], splatCellOffset(k))",
+    );
+    expect(CELL_LOOK_GLSL).toContain(
+      "ivec2 hexapodCellTexel(highp sampler2D grid, vec2 p, float cell, ivec4 level, int first)",
+    );
     // The ramps are the shared constants now, not a uniform of its own.
     expect(cesium).not.toContain("u_cellRamp");
   });

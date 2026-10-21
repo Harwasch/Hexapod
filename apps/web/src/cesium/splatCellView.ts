@@ -136,7 +136,7 @@ vec4 splatCellViewColor(uint splatIndex, vec3 position, vec4 color) {
     int k = need <= 1.0 ? 0 : int(ceil(log2(need)));
     k = clamp(k, 0, levels - 1);
     float cell = u_cellParams.y * exp2(float(k));
-    ivec2 t = hexapodCellTexel(u_cellGrid, p.xy, cell, vec4(u_cellLevels[k]), float(splatCellOffset(k)));
+    ivec2 t = hexapodCellTexel(u_cellGrid, p.xy, cell, u_cellLevels[k], splatCellOffset(k));
     return hexapodCellLook(mode, t, p.xy, cell, u_cellRule, color);
 }
 `;

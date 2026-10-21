@@ -85,6 +85,13 @@ export const MAX_CELL_LEVELS = 9;
 export const MAX_LATTICE_LEVEL = 16;
 /** Cells a level's plane may hold (C3's level choice keeps `ni * nj` within it). */
 export const MAX_PLANE_CELLS = 2 ** 22;
+/**
+ * Cells the whole pyramid may hold: every texel index then is an integer a float holds exactly
+ * (PlayCanvas and Spark hand a plane's first texel to the shader in a float uniform,
+ * `lib/cellLook.ts`), and the cell texture is at most 2048 rows. C3's levels -- each a quarter
+ * of the one below, the finest within `MAX_PLANE_CELLS` -- stay well under it.
+ */
+export const MAX_GRID_CELLS = 2 ** 23;
 /** `weak-v1`'s threshold when a file does not state one (C3). */
 export const DEFAULT_WEAK_BELOW = 128;
 /** `reasonBits.unseen` when a file does not state it (C2). */
@@ -134,6 +141,7 @@ export function cellGridMeta(extras: unknown, key = "confidence"): CellGridMeta 
     if (k > 0 && l.level !== (sorted[k - 1]?.level ?? Number.NaN) + 1) return null;
   }
   if (sorted[0]?.level !== lattice.level) return null;
+  if (sorted.reduce((sum, l) => sum + l.ni * l.nj, 0) >= MAX_GRID_CELLS) return null;
   return { ...(raw as unknown as CellGridMeta), channels, levels: sorted };
 }
 

@@ -77,6 +77,28 @@ describe("the descriptor", () => {
     expect(cellGridMeta(at(2, big))).toBeNull();
   });
 
+  it("refuses a pyramid with 2^23 cells or more: the shaders address its texels as floats", async () => {
+    const { meta } = await encodeConfidenceGrid({ ...fixture, coarser: 0 });
+    const [first] = meta.levels;
+    if (!first) throw new Error("no levels");
+    const stride = first.bytes / (first.ni * first.nj);
+    const plane = (level: number, ni: number, nj: number) => ({
+      ...first,
+      level,
+      cellM: 0.25 * 2 ** level,
+      ni,
+      nj,
+      bytes: ni * nj * stride,
+    });
+    const pyramid = (...levels: ReturnType<typeof plane>[]) => ({
+      confidence: { ...meta, levels },
+    });
+    // Each plane within C3's 2^22, but 2^23 cells in all: a texel index past float's exact
+    // integers' half (`cellLook.ts`), and a texture 2048 rows tall.
+    expect(cellGridMeta(pyramid(plane(2, 4096, 1024), plane(3, 4096, 1024)))).toBeNull();
+    expect(cellGridMeta(pyramid(plane(2, 4096, 1024), plane(3, 1024, 1024)))).not.toBeNull();
+  });
+
   it("refuses a score or reasons channel that is not one unsigned byte", async () => {
     const { meta } = await encodeConfidenceGrid(fixture);
     const typed = (name: string, type: string) => ({

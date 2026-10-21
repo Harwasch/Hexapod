@@ -49,7 +49,8 @@ vec4 hexapodCellTile(vec3 p, vec4 color, highp sampler2D grid, vec4 rule, vec4 l
     if (mode == 0) {
         return color;
     }
-    ivec2 t = hexapodCellTexel(grid, p.xy, tile.y, level, tile.z);
+    // Whole numbers in floats, exact: the grid holds under 2^23 cells (cellGrid.ts).
+    ivec2 t = hexapodCellTexel(grid, p.xy, tile.y, ivec4(level), int(tile.z));
     return hexapodCellLook(mode, t, p.xy, tile.y, rule, color);
 }
 `;

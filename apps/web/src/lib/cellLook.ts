@@ -66,7 +66,8 @@ function glslRamp(ramp: readonly Rgb[]): string {
  * The look in GLSL ES 3.00, for every renderer: the two ramps (Confidence's six, then Data
  * age's six) and three functions.
  *
- * - `hexapodCellTexel(grid, p, cell, level, first)`: the (R, G) bytes of the cell holding
+ * - `hexapodCellTexel(grid, p, cell, level, first)` (integers, as CesiumJS's uniforms are): the
+ *   (R, G) bytes of the cell holding
  *   grid-frame point `p` (m) on one level -- its cells `cell` m wide, `level` its (i0, j0, ni,
  *   nj), `first` the texel its plane starts at in the cell texture -- or (0, 0) outside it.
  * - `hexapodCellLook(mode, t, p, cell, rule, color)`: what is drawn for a straight-alpha
@@ -78,13 +79,13 @@ const vec3 HEXAPOD_CELL_RAMP[12] = vec3[12](
     ${glslRamp(CONFIDENCE_RAMP)},
     ${glslRamp(AGE_RAMP)});
 
-ivec2 hexapodCellTexel(highp sampler2D grid, vec2 p, float cell, vec4 level, float first) {
-    int ci = int(floor(p.x / cell)) - int(level.x);
-    int cj = int(floor(p.y / cell)) - int(level.y);
-    if (ci < 0 || cj < 0 || ci >= int(level.z) || cj >= int(level.w)) {
+ivec2 hexapodCellTexel(highp sampler2D grid, vec2 p, float cell, ivec4 level, int first) {
+    int ci = int(floor(p.x / cell)) - level.x;
+    int cj = int(floor(p.y / cell)) - level.y;
+    if (ci < 0 || cj < 0 || ci >= level.z || cj >= level.w) {
         return ivec2(0);
     }
-    int linear = int(first + 0.5) + cj * int(level.z) + ci;
+    int linear = first + cj * level.z + ci;
     int row = linear / ${String(CELL_TEXTURE_WIDTH)};
     vec2 texel = texelFetch(grid, ivec2(linear - row * ${String(CELL_TEXTURE_WIDTH)}, row), 0).rg;
     return ivec2(texel * 255.0 + 0.5);
