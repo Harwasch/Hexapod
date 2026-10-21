@@ -19,9 +19,11 @@ and reads only two of them whole --
 
 The places, in the order, that the pipeline reads (`video.LOCATION_KEYS`; A0's sizing
 note: reading one of them is reading half the captures). Nothing is decoded
-and the `mdat` -- the gigabytes -- is skipped by its size, so a 12 GB clip costs a few
-ranged GETs of 64 KiB. Pure Python, no dependency: ffprobe is not on the worker (the
-pipeline's ffmpeg is a wheel in another project) and would need the whole file local.
+and the `mdat` -- the gigabytes -- is skipped by its size (the top-level walk reads box
+headers only, so not one byte of it is fetched): a 12 GB clip costs a handful of
+ranged GETs, 8 bytes each at the top level and at most 64 KiB inside `moov`. Pure
+Python, no dependency: ffprobe is not on the worker (the pipeline's ffmpeg is a wheel in
+another project) and would need the whole file local.
 
 Total: anything that is not a well-formed container, or a location that is not a point
 on the globe, is `None`, never an exception; reads are capped (`MAX_READS`, `MAX_READ_BYTES`,
@@ -143,14 +145,18 @@ class _Reader:
         self._bytes = 0
         self._cached: list[tuple[int, bytes]] = []
 
-    def read(self, offset: int, length: int) -> bytes:
+    def read(self, offset: int, length: int, *, ahead_to: int | None = None) -> bytes:
+        """`length` bytes from `offset`, fetched with up to a chunk of read-ahead, but
+        never past `ahead_to` (the end of the box being walked; the file's end unless
+        said): the top-level walk reads headers only, so it never fetches the `mdat`."""
         if offset < 0 or length <= 0 or offset >= self._size:
             return b""
         length = min(length, self._size - offset)
+        limit = self._size if ahead_to is None else min(ahead_to, self._size)
         for start, data in self._cached:
             if start <= offset and offset + length <= start + len(data):
                 return data[offset - start : offset - start + length]
-        wanted = max(length, min(self._chunk, self._size - offset))
+        wanted = max(length, min(self._chunk, limit - offset))
         if self._reads >= MAX_READS or self._bytes + wanted > MAX_READ_BYTES:
             raise _Exhausted
         self._reads += 1
@@ -167,15 +173,18 @@ def _boxes(read: ReadAt, start: int, end: int) -> Iterator[tuple[bytes, int, int
     for _ in range(MAX_BOXES):
         if offset + 8 > end:
             return
-        head = read(offset, 16)
+        # Eight bytes, then the 64-bit size only when the box has one: sixteen up front
+        # would be eight bytes of an ordinary `mdat`'s payload.
+        head = read(offset, 8)
         if len(head) < 8:
             return
-        size, kind = struct.unpack(">I4s", head[:8])
+        size, kind = struct.unpack(">I4s", head)
         header = 8
         if size == 1:
-            if len(head) < 16:
+            large = read(offset + 8, 8)
+            if len(large) < 8:
                 return
-            (size,) = struct.unpack(">Q", head[8:16])
+            (size,) = struct.unpack(">Q", large)
             header = 16
         elif size == 0:
             size = end - offset  # "to the end of its container"
@@ -193,7 +202,11 @@ def read_location(read_at: ReadAt, size: int, *, chunk: int = CHUNK) -> VideoLoc
     """The location in a container of `size` bytes read through `read_at`, or None."""
     reader = _Reader(read_at, size, chunk)
     try:
-        for kind, start, end in _boxes(reader.read, 0, size):
+        # Headers only at the top level: the box after one may be a 12 GB `mdat`.
+        headers: ReadAt = lambda offset, length: reader.read(  # noqa: E731
+            offset, length, ahead_to=offset + length
+        )
+        for kind, start, end in _boxes(headers, 0, size):
             if kind == b"moov":
                 return _in_moov(reader, start, end)
     except _Exhausted:
@@ -220,7 +233,9 @@ def location_in_storage(storage: ObjectStorage, key: str) -> VideoLocation | Non
 def _in_moov(reader: _Reader, start: int, end: int) -> VideoLocation | None:
     keyed: VideoLocation | None = None
     xyz: VideoLocation | None = None
-    for kind, child_start, child_end in _boxes(reader.read, start, end):
+    # Read ahead freely inside `moov`: it holds no media, only boxes that describe it.
+    within: ReadAt = lambda offset, length: reader.read(offset, length, ahead_to=end)  # noqa: E731
+    for kind, child_start, child_end in _boxes(within, start, end):
         if kind not in (b"meta", b"udta") or child_end - child_start > MAX_METADATA_BYTES:
             continue
         payload = reader.read(child_start, child_end - child_start)

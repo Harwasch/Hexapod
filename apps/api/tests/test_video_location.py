@@ -135,8 +135,10 @@ def test_only_box_headers_and_the_metadata_boxes_are_read() -> None:
     assert found is not None and found.lat == 37.7749
     assert len(reads) <= 8, reads
     assert sum(length for _, length in reads) <= 8 * 4096
-    # Nothing past the mdat's own header was asked for, inside it.
-    assert all(not (mdat_at + 16 <= off < mdat_end - 4096) for off, _ in reads), reads
+    # Not one byte of the mdat's payload was asked for (the cross review of #72: the
+    # first read ran 64 KiB ahead of the top-level headers, into the mdat).
+    overlap = sum(max(0, min(off + n, mdat_end) - max(off, mdat_at + 8)) for off, n in reads)
+    assert overlap == 0, reads
 
 
 def test_read_from_the_bucket_by_ranged_gets(storage: S3Storage) -> None:

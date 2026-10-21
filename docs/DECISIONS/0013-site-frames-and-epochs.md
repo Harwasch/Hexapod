@@ -96,8 +96,9 @@ the video's location at join time:
   pure-Python walk of the box tree: top-level boxes by their sizes, then `moov`'s children, reading
   only `moov/meta` (the iOS camera's `mdta` key `com.apple.quicktime.location.ISO6709` with
   `...location.accuracy.horizontal`) and `moov/udta` (`(c)xyz`, and the 3GPP `loci` ffmpeg's MP4
-  muxer writes) — the places, in the order, the pipeline reads. The `mdat` is never fetched: a
-  12 GB clip costs three or four 64 KiB ranged GETs. Reads, boxes and metadata bytes are capped, so
+  muxer writes) — the places, in the order, the pipeline reads. Not one byte of the `mdat` is
+  fetched (the top-level walk reads 8-byte headers only): a 12 GB clip costs a handful of ranged
+  GETs, at most 64 KiB each inside `moov`. Reads, boxes and metadata bytes are capped, so
   a crafted file costs no more than an honest one; anything malformed is "no location". It reads
   the video `pick_source` will take (the first by name). No dependency.
 

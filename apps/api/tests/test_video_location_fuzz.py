@@ -257,3 +257,12 @@ def test_seeded_mutations_20000(tmp_path: Path) -> None:
         stats["cases"] += 1
     (tmp_path / "mutation_results.json").write_text(json.dumps(stats, indent=2) + "\n")
     assert not stats["failures"], stats
+
+
+def test_no_mdat_payload_is_fetched() -> None:
+    data = mov(iso6709=SF, mdat_bytes=200000)
+    start = data.index(b"mdat") - 4
+    end = start + struct.unpack(">I", data[start : start + 4])[0]
+    _, storage = checked(data)
+    overlap = sum(max(0, min(off + n, end) - max(off, start + 8)) for off, n in storage.reads)
+    assert overlap == 0, f"{overlap} mdat payload bytes fetched: {storage.reads}"
