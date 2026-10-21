@@ -182,10 +182,11 @@ how well each cell was seen (ADR 0016).
 
 `tools/pipeline/experiments/confidence_demo.py --change`: two scans of the M4 demo's field, each
 its own sample with 1 cm of height noise and a sparse SfM cloud, and a 1.5 m crate in the second on
-ground both saw well. At 0.25 m cells, `u` 0 and 0.062 m: every cell on the crate raised by
-1.48–1.51 m, the cells its sides stand in raised too, no cell that does not touch it changed,
-nothing lowered; unchanged cells reach at most 0.09 m, under 0.4 of their threshold (about
-0.19 m). Every capture in it is synthetic; nothing here was calibrated on it.
+ground both saw well, the pair taken as survey grade. At 0.25 m cells, `u` 0.03 and 0.062 m (each
+epoch's placement): all 36 cells on the crate raised by 1.48–1.51 m, the 13 its sides stand in
+raised too, no cell that does not touch it changed, nothing lowered; unchanged cells reach at most
+0.09 m, under 0.17 of their threshold (at least 0.21 m). Every capture in it is synthetic; nothing
+here was calibrated on it.
 
 ### Not done here (stubs and later PRs)
 

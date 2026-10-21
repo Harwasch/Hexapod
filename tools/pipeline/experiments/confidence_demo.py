@@ -507,7 +507,7 @@ def _change_map(classes: np.ndarray) -> list[str]:
 def change_report(found: Mapping[str, Any]) -> str:
     lines = [
         f"Change e1 -> e2 at level {found['level']} ({found['cellM']} m cells): "
-        f"u_e1 = {found['uE1M']} m, u_e2 = {found['uE2M']} m (from the site frame); threshold "
+        f"u_e1 = {found['uE1M']} m, u_e2 = {found['uE2M']} m (each epoch's placement); threshold "
         f"3 sqrt(s1^2 + s2^2 + u1^2 + u2^2), at least {found['minDetectableM']} m here.",
         "| class | cells |",
         "|---|---|",
