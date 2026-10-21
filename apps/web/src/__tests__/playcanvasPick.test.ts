@@ -12,10 +12,15 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { BackendHooks } from "@/cesium/scanView/types";
+import { layerCones } from "@/cesium/scanView/layerLook";
+import type { BackendHooks, ScanPose } from "@/cesium/scanView/types";
 import type { TileWork } from "@/cesium/scanView/tileWork";
-import { centreColumns, mortonOrder, reorderColumns } from "@/lib/splatLayout";
+import { checksumPositions } from "@twin/world";
+
+import { invertAffine, transformPoint } from "@/cesium/splatFrames";
+import { centreColumns, mortonOrder, reorderColumns, tileFrame } from "@/lib/splatLayout";
 import { castRay, labelsNear, type PickTile } from "@/lib/splatPick";
+import { cellCount, type ViewConesMeta } from "@/lib/viewCones";
 import type { TileNode } from "@/view/tiles";
 
 vi.mock("playcanvas", () => {
@@ -75,7 +80,8 @@ vi.mock("playcanvas", () => {
     }
     setPosition = (): void => undefined;
     setLocalPosition = (...p: unknown[]): void => {
-      this.position = p.length === 1 ? [0, 0, 0] : (p as number[]);
+      const [v] = p as [{ x: number; y: number; z: number }];
+      this.position = p.length === 1 ? [v.x, v.y, v.z] : (p as number[]);
     };
     setLocalRotation = (): void => undefined;
     lookAt = (): void => undefined;
@@ -113,6 +119,18 @@ vi.mock("playcanvas", () => {
   class Color {
     readonly rgba = [0, 0, 0, 0];
   }
+  /** A layer's view cones are uploaded as one (playcanvasBackend.ts `dataTexture`). */
+  class Texture {
+    private readonly data: Uint8Array;
+    constructor(_device: unknown, options: { width: number; height: number }) {
+      this.data = new Uint8Array(options.width * options.height * 16);
+    }
+    lock(): Uint8Array {
+      return this.data;
+    }
+    unlock = (): void => undefined;
+    destroy = (): void => undefined;
+  }
   return {
     Application,
     Entity,
@@ -122,6 +140,10 @@ vi.mock("playcanvas", () => {
     Mat4,
     Quat,
     Color,
+    Texture,
+    PIXELFORMAT_RGBA8: 7,
+    FILTER_NEAREST: 0,
+    ADDRESS_CLAMP_TO_EDGE: 1,
     FILLMODE_NONE: "NONE",
     RESOLUTION_AUTO: "AUTO",
     ASPECT_AUTO: 0,
@@ -155,8 +177,11 @@ function ownTile(count: number) {
 const OWN = ownTile(256);
 const CHECKSUM = "fnv1a32:256:0000abcd";
 
-/** The worker's answer for the tile (playcanvasTile.worker.ts), Morton order and all. */
-function workerAnswer(id: number) {
+/**
+ * The worker's answer for the tile (playcanvasTile.worker.ts), Morton order and all; with an
+ * `offset` (the tile's own frame), digested and placed as the worker does it (`tileFrame`).
+ */
+function workerAnswer(id: number, offset?: [number, number, number]) {
   const columns: Record<string, Float32Array> = {
     x: OWN.x.slice(),
     y: OWN.y.slice(),
@@ -166,7 +191,11 @@ function workerAnswer(id: number) {
     scale_2: OWN.scale.slice(),
     opacity: OWN.opacity.slice(),
   };
-  const origin = centreColumns(columns);
+  const own = new Float32Array(OWN.x.length * 3).map(
+    (_, i) => [OWN.x, OWN.y, OWN.z][i % 3]?.[Math.floor(i / 3)] ?? 0,
+  );
+  const framed = offset ? tileFrame(own, columns, offset) : null;
+  const origin = framed?.origin ?? centreColumns(columns);
   const empty = new Float32Array(0);
   const order = mortonOrder(columns.x ?? empty, columns.y ?? empty, columns.z ?? empty);
   return {
@@ -174,20 +203,24 @@ function workerAnswer(id: number) {
     count: OWN.x.length,
     properties: reorderColumns(columns, order),
     origin,
-    checksum: CHECKSUM,
+    checksum: framed?.checksum ?? CHECKSUM,
     order,
   };
 }
 
 class FakeWorker {
+  /** Every message the backend sent a worker, newest last. */
+  static readonly messages: { url: string; offset?: [number, number, number] }[] = [];
   onmessage: ((event: { data: unknown }) => void) | null = null;
-  postMessage(message: { id: number }): void {
-    queueMicrotask(() => this.onmessage?.({ data: workerAnswer(message.id) }));
+  postMessage(message: { id: number; url: string; offset?: [number, number, number] }): void {
+    FakeWorker.messages.push(message);
+    queueMicrotask(() => this.onmessage?.({ data: workerAnswer(message.id, message.offset) }));
   }
   terminate = (): void => undefined;
 }
 
-const tile = (uri: string) => ({ uri }) as unknown as TileNode;
+const tile = (uri: string, offset?: [number, number, number]) =>
+  ({ uri, ...(offset ? { offset } : {}) }) as unknown as TileNode;
 
 async function backend() {
   const { createBackend } = await import("@/cesium/scanView/playcanvasBackend");
@@ -271,6 +304,124 @@ describe("picking in a scan PlayCanvas draws in Morton order", () => {
     // A tile taken off the screen is not picked.
     b.remove(entity);
     expect(b.pickTiles?.()).toEqual([]);
+    b.destroy();
+  });
+
+  it("pickTileOf with an offset origin returns site-frame positions", async () => {
+    // The tile in a frame of its own, 2.6 km east and 1.5 km north: the backend asks the
+    // worker for it with the offset, and the pick and digest come back in the scan's frame.
+    const offset: [number, number, number] = [2601, 1550, 0];
+    const b = await backend();
+    const entity = await b.load("https://scan.test/tileset.json", tile("far.glb", offset));
+    b.add(entity);
+    const pick = b.pickTiles?.()[0];
+    if (!pick) throw new Error("no pick tile");
+    const site = new Float32Array(256 * 3);
+    for (let i = 0; i < 256; i++) {
+      site[i * 3] = (OWN.x[i] ?? 0) + offset[0];
+      site[i * 3 + 1] = (OWN.y[i] ?? 0) + offset[1];
+      site[i * 3 + 2] = (OWN.z[i] ?? 0) + offset[2];
+      expect(pick.positions[i * 3]).toBeCloseTo(site[i * 3] ?? 0, 3);
+      expect(pick.positions[i * 3 + 1]).toBeCloseTo(site[i * 3 + 1] ?? 0, 3);
+      expect(pick.positions[i * 3 + 2]).toBeCloseTo(site[i * 3 + 2] ?? 0, 3);
+    }
+    expect(pick.checksum).toBe(checksumPositions(site));
+    // The entity sits at the tile's middle in the scan's frame. A placement moves that frame,
+    // so the entity goes to M · origin: a turn tells it from origin + M's lift, a pure lift not.
+    const position = (): number[] => (entity as unknown as { position: number[] }).position;
+    b.place?.(entity, null);
+    const origin = position().slice();
+    expect(origin[0]).toBeGreaterThan(2600);
+    expect(origin[1]).toBeGreaterThan(1550);
+    const turn = [0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 10, 20, 30, 1];
+    b.place?.(entity, turn);
+    const [ox = 0, oy = 0, oz = 0] = origin;
+    const want = [10 - oy, 20 + ox, 30 + oz];
+    position().forEach((v, i) => expect(v).toBeCloseTo(want[i] ?? Number.NaN, 6));
+    b.place?.(entity, null);
+    expect(position()).toEqual(origin);
+    b.destroy();
+  });
+
+  it("asks the worker for a layer's tile in its own frame", async () => {
+    const offset: [number, number, number] = [2601, 1550, 0];
+    const b = await backend();
+    const entity = await b.loadLayer?.("https://scan.test/tileset.json", tile("far.glb", offset));
+    expect(FakeWorker.messages.at(-1)?.offset).toEqual(offset);
+    // Decoded about its middle in the scan's frame, and put back there.
+    if (!entity) throw new Error("no layer loaded");
+    b.place?.(entity, null);
+    expect((entity as unknown as { position: number[] }).position[0]).toBeGreaterThan(2600);
+    b.destroy();
+  });
+});
+
+describe("a placed layer's fade in PlayCanvas", () => {
+  beforeEach(() => vi.stubGlobal("Worker", FakeWorker));
+  afterEach(() => vi.unstubAllGlobals());
+
+  const poseAt = (eye: [number, number, number]): ScanPose => ({
+    eye,
+    direction: [0, 1, 0],
+    up: [0, 0, 1],
+    fovy: 1,
+    near: 0.1,
+    far: 1000,
+    width: 960,
+    height: 600,
+    pixelRatio: 1,
+  });
+
+  it("is measured in the layer's frame, eye and tile alike", async () => {
+    const offset: [number, number, number] = [2601, 1550, 0];
+    const b = await backend();
+    const entity = await b.loadLayer?.("https://scan.test/tileset.json", tile("far.glb", offset));
+    if (!entity) throw new Error("no layer loaded");
+    // The tile's middle in the layer's own frame, where it was decoded about.
+    const own = [...(entity as unknown as { position: number[] }).position] as [
+      number,
+      number,
+      number,
+    ];
+    const fades: unknown[] = [];
+    Object.assign(entity.gsplat ?? {}, {
+      setWorkBufferModifier: () => undefined,
+      setParameter: (name: string, value: unknown) => {
+        if (name === "uLayerConeEye") fades.push(value);
+      },
+    });
+    const meta: ViewConesMeta = {
+      format: "hexapod.viewcones",
+      version: 1,
+      uri: "viewcones.bin",
+      origin: [2500, 1400, -10],
+      cell: 50,
+      dims: [8, 8, 1],
+      fadeDeg: 20,
+    };
+    // The layer's frame turned a quarter and 3 km off the scan's (scanLayers.ts: `fromScan`
+    // is the inverse of the placement the layer's tiles are drawn at). Column-major.
+    const placement = [0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, -3000, 500, 0, 1];
+    const fromScan = invertAffine(placement);
+    if (!fromScan) throw new Error("no inverse");
+    b.place?.(entity, placement);
+    b.setLayerLook?.(entity, {
+      highlight: false,
+      cones: layerCones(meta, new Uint8Array(cellCount(meta) * 4)),
+      fromScan,
+    });
+    // Ten metres above the tile where it is drawn, then a metre over: it fades again.
+    const drawn = transformPoint(placement, ...own, [0, 0, 0]);
+    b.render(poseAt([drawn[0], drawn[1], drawn[2] + 10]));
+    let faded = fades.length;
+    b.render(poseAt([drawn[0] + 1, drawn[1], drawn[2] + 10]));
+    expect(fades.length).toBe(faded + 1);
+    // Above where the tile's own coordinates would be in the scan's frame, kilometres from
+    // where it is drawn: a metre is far under a hundredth of the way, so no fade.
+    b.render(poseAt([own[0], own[1], own[2] + 10]));
+    faded = fades.length;
+    b.render(poseAt([own[0] + 1, own[1], own[2] + 10]));
+    expect(fades.length).toBe(faded);
     b.destroy();
   });
 });

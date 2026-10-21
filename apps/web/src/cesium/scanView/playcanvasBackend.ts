@@ -78,6 +78,7 @@ import {
   coneEye,
   eyeMoved,
   LAYER_LOOK_GLSL,
+  layerEye,
   layerUniforms,
   type LayerCones,
   type LayerLook,
@@ -103,9 +104,10 @@ interface Decoded {
   count?: number;
   /** In Morton order already (`order`): playcanvasTile.worker.ts. */
   properties?: Record<string, Float32Array>;
-  /** The tile's centre: the positions are relative to it (playcanvasTile.worker.ts). */
+  /** The tile's centre in the scan's frame, its own frame's offset included: the positions are
+   *  relative to it (playcanvasTile.worker.ts). */
   origin?: [number, number, number];
-  /** `checksumPositions` of the tile's own positions, before centring. */
+  /** `checksumPositions` of the tile's positions in the scan's frame, before centring. */
   checksum?: string;
   /** Slot `i` holds the tile's own splat `order[i]`. */
   order?: Uint32Array;
@@ -547,12 +549,13 @@ function assemble(
       waiting.delete(event.data.id);
     };
   }
-  const decode = (url: string): Promise<Decoded> =>
+  /** A tile decoded off the main thread, `offset` its frame in the scan's (`TileNode.offset`). */
+  const decode = (url: string, offset?: [number, number, number]): Promise<Decoded> =>
     new Promise((resolve) => {
       const id = nextId++;
       waiting.set(id, resolve);
       const worker = workers[turn++ % workers.length];
-      worker?.postMessage({ id, url, maxSh: hooks.maxShDegree });
+      worker?.postMessage({ id, url, maxSh: hooks.maxShDegree, ...(offset ? { offset } : {}) });
     });
 
   const dataTexture = (
@@ -889,7 +892,8 @@ function assemble(
 
   /**
    * The tiles of inferred layers (scanLayers.ts): bound to none of the scan's objects, each
-   * with its layer's look and the eye it was last worked out from.
+   * with its layer's look and the eye it was last worked out from. `lastEye` and `centre` (the
+   * tile's origin) are in the layer's frame, where `eyeMoved` measures (`layerEye`).
    */
   const layers = new Map<
     pc.Entity,
@@ -990,7 +994,7 @@ function assemble(
     apiNote: identity.note,
     loadFactor: 1,
     load: async (tilesetUrl: string, tile: TileNode, signal?: AbortSignal) => {
-      const decoded = await decode(new URL(tile.uri, tilesetUrl).toString());
+      const decoded = await decode(new URL(tile.uri, tilesetUrl).toString(), tile.offset);
       signal?.throwIfAborted();
       // Building the resource packs every splat into textures on the main thread: within the
       // frame's budget, a little at a time while the camera moves.
@@ -1001,7 +1005,7 @@ function assemble(
       return entity;
     },
     loadLayer: async (tilesetUrl: string, tile: TileNode, signal?: AbortSignal) => {
-      const decoded = await decode(new URL(tile.uri, tilesetUrl).toString());
+      const decoded = await decode(new URL(tile.uri, tilesetUrl).toString(), tile.offset);
       signal?.throwIfAborted();
       return hooks.work.run(() => {
         signal?.throwIfAborted();
@@ -1034,7 +1038,7 @@ function assemble(
       component.setParameter("uInstanceDim", dim);
       component.setParameter("uInstanceParams", params);
       // Last: setting a parameter has the tile copied into the work buffer again.
-      state.lastEye = lastPoseEye ? [...lastPoseEye] : null;
+      state.lastEye = lastPoseEye ? layerEye(look, lastPoseEye) : null;
       component.setParameter("uLayerConeEye", coneEye(look, lastPoseEye ?? [0, 0, 0], state.eye));
       if (previous !== look.cones) releaseCones(previous);
     },
@@ -1139,8 +1143,10 @@ function assemble(
       // this frame, once the eye has moved enough to show (layerLook.ts `eyeMoved`).
       lastPoseEye = pose.eye;
       for (const [entity, layer] of layers) {
-        if (!layer.look.cones || !eyeMoved(layer.lastEye, pose.eye, layer.centre)) continue;
-        layer.lastEye = [...pose.eye];
+        if (!layer.look.cones) continue;
+        const eye = layerEye(layer.look, pose.eye);
+        if (!eyeMoved(layer.lastEye, eye, layer.centre)) continue;
+        layer.lastEye = eye;
         entity.gsplat?.setParameter("uLayerConeEye", coneEye(layer.look, pose.eye, layer.eye));
       }
       framesDrawn += 1;

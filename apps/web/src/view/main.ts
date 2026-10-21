@@ -13,7 +13,7 @@
  * watches a capture's run as it happens (live.ts). Reads are open in this API, so the page
  * needs no key.
  */
-import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
+import { ExtSplats, PackedSplats, SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
@@ -21,6 +21,7 @@ import type { Capture, Site, SiteSummary } from "@twin/contracts";
 
 import { loadCollision } from "@/lib/collision";
 import { deviceSplatBudget } from "@/lib/detail";
+import { siteFramePositions } from "@/lib/spzPositions";
 import { tileUrl } from "@/lib/tileProxy";
 import { productHeader } from "@/shared/product";
 
@@ -151,12 +152,15 @@ async function splatTileset(site: Site): Promise<{ url: string; tree: TileTree }
 }
 
 /** One tile as a Spark mesh (sparkStream.ts), with its splat centres for the collision grid
- *  (navigate.ts) when the scan brings no grid of its own. */
+ *  (navigate.ts) when the scan brings no grid of its own: in the scan's frame, so a tile the
+ *  packer gave a frame of its own (`TileNode.offset`) is a surface where it is drawn. */
 async function tileMesh(tilesetUrl: string, tile: TileNode): Promise<SplatMesh> {
   const { mesh, bytes } = await loadSplatTile(tilesetUrl, tile);
   // A tile whose centres cannot be read is still drawn, it just is not a surface.
   const points = readPoints ? await spzPoints(bytes).catch(() => undefined) : undefined;
-  if (points) pointsOf.set(mesh, points);
+  if (points) {
+    pointsOf.set(mesh, { ...points, positions: siteFramePositions(points.positions, tile.offset) });
+  }
   return mesh;
 }
 
@@ -170,14 +174,15 @@ let readPoints = true;
  * some captures carry a sky dome or stray floaters hundreds of metres out, and framing
  * those would leave the subject a dot in the middle of the screen. A LoD mesh keeps only its
  * LoD tree (`packedSplats.lodSplats`), whose leaves are the tile's own splats and whose inner
- * nodes are merged from them, so the percentiles are read from that.
+ * nodes are merged from them, so the percentiles are read from that (`extSplats`' tree, the
+ * 32-bit centres this page keeps, or the packed one). In the mesh's own frame.
  */
 function robustBounds(mesh: SplatMesh): THREE.Box3 {
   const xs: number[] = [];
   const ys: number[] = [];
   const zs: number[] = [];
   let seen = 0;
-  const splats = mesh.packedSplats?.lodSplats ?? mesh;
+  const splats = mesh.packedSplats?.lodSplats ?? mesh.extSplats?.lodSplats ?? mesh;
   splats.forEachSplat((_index, center, _scales, _quaternion, opacity) => {
     seen += 1;
     // Every splat up to 50k, then a stride: plenty for a percentile, cheap on a phone.
@@ -228,7 +233,13 @@ async function showScan(siteId: string): Promise<void> {
   // (lib/detail.ts -- the phone's Detail choice on a phone, several million on a desktop;
   // SparkRenderer `lodSplatCount`).
   const budget = deviceSplatBudget();
-  scene.add(new SparkRenderer({ renderer, lodSplatCount: budget }));
+  // 32-bit centres all the way: each tile's (`extSplats`, sparkStream.ts), which would
+  // otherwise hold its own centres as half floats -- half a metre apart a kilometre from its
+  // origin -- and the renderer's accumulated splats. A half-float accumulator keeps them
+  // relative to the eye (Spark 2.2 `SplatAccumulator`), so its steps are a few millimetres at
+  // the distances anything is looked at from; 32-bit keeps them in the world's frame.
+  const spark = new SparkRenderer({ renderer, lodSplatCount: budget, accumExtSplats: true });
+  scene.add(spark);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.autoRotate = true;
@@ -288,6 +299,8 @@ async function showScan(siteId: string): Promise<void> {
     const root = tileset.tree.root;
     const mesh = await tileMesh(tileset.url, root);
     scan.add(mesh);
+    // Every tile put on screen so far, for the page's tests (`__viewer.drawn`).
+    const drawnMeshes = new Map<string, SplatMesh>([[root.uri, mesh]]);
     scan.updateMatrixWorld(true);
     section.dataset.tiles = root.uri;
 
@@ -341,6 +354,49 @@ async function showScan(siteId: string): Promise<void> {
       /** Metres to the first surface straight ahead, or null. */
       hitAhead: () =>
         navigation?.raycast(camera.position, camera.getWorldDirection(new THREE.Vector3())) ?? null,
+      /**
+       * Each tile put on screen so far (and not let go since), with the box of its splat
+       * centres in the scan's own east/north/up metres: where it is drawn, its frame included.
+       */
+      drawn: () =>
+        [...drawnMeshes].flatMap(([uri, tileMeshDrawn]) => {
+          // Its LoD tree's centres, as `robustBounds` reads them: the leaves are its splats.
+          const box = new THREE.Box3();
+          const splats =
+            tileMeshDrawn.packedSplats?.lodSplats ??
+            tileMeshDrawn.extSplats?.lodSplats ??
+            tileMeshDrawn;
+          try {
+            splats.forEachSplat((_index, centre) => box.expandByPoint(centre));
+          } catch {
+            return []; // let go of (disposed) since it was drawn
+          }
+          if (box.isEmpty()) return [];
+          box.translate(tileMeshDrawn.position);
+          return [{ uri, min: box.min.toArray(), max: box.max.toArray() }];
+        }),
+      /**
+       * What Spark holds centres in on the GPU: each drawn tile's source, the one its
+       * generator reads (`context.splats`: its LoD tree when it draws from one), ExtSplats'
+       * 32-bit floats or PackedSplats' half floats; and the accumulator each frame's splats
+       * are generated into (three render targets with 32-bit centres, two without).
+       */
+      gpu: () => ({
+        accumulator: {
+          extSplats: spark.display.extSplats,
+          textures: spark.display.getTextures().length,
+        },
+        tiles: [...drawnMeshes].map(([uri, tileMeshDrawn]) => {
+          const source: unknown = tileMeshDrawn.context.splats;
+          const centres =
+            source instanceof ExtSplats
+              ? "float32"
+              : source instanceof PackedSplats
+                ? "float16"
+                : "none";
+          return { uri, centres };
+        }),
+      }),
     };
     offerCoverage(site, scene, scan, size);
     status.textContent = "Drag to turn · pinch to zoom · two fingers to move";
@@ -353,6 +409,7 @@ async function showScan(siteId: string): Promise<void> {
       // Tiles arriving while Coverage is on come in faded like the rest.
       more.opacity = mesh.opacity;
       scan.add(more);
+      drawnMeshes.set(tile.uri, more);
       navigation?.show(tile, pointsOf.get(more));
     };
     const hide = (tile: TileNode, gone: SplatMesh): void => {

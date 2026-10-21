@@ -14,6 +14,11 @@
  *   apart at 64-128 m from the origin -- and a tile's splats are in the scan's frame, up to a
  *   hundred metres out: a visible lattice. `extSplats` keeps them as 32-bit floats.
  *
+ * A tile the packer gave a frame of its own (a scan wider than SPZ's +/-2048 m: `TileNode.offset`)
+ * is drawn at that offset (sparkStream.ts `loadSplatTile`); its centres are digested and picked
+ * in the scan's frame, the offset added (`siteFramePositions`), and a placement (`place`) moves
+ * the tile from there.
+ *
  * The scan's objects: each tile's SPZ centres are digested as it loads (`spzPickData`, the
  * checksum `instances.json` and `skin.json` key their per-splat data by), and once the scan
  * has instances or a skin every tile so listed gets a world modifier (a Spark dyno) that reads
@@ -42,7 +47,7 @@ import { checksumPositions } from "@twin/world";
 import { tileInstanceIds, type InstancesDoc } from "@/lib/instances";
 import { tileSkin, type SkinDoc } from "@/lib/skin";
 import type { PickTile } from "@/lib/splatPick";
-import { gunzip, spzPickDataOf } from "@/lib/spzPositions";
+import { gunzip, siteFramePositions, spzPickDataOf } from "@/lib/spzPositions";
 import { loadSplatTile } from "@/view/sparkStream";
 
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
@@ -50,6 +55,7 @@ import {
   coneEye,
   eyeMoved,
   LAYER_LOOK_GLSL,
+  layerEye,
   layerUniforms,
   type LayerCones,
   type LayerLook,
@@ -274,6 +280,9 @@ export function createBackend(
   const direction = new THREE.Vector3();
   const placement = new THREE.Matrix4();
   const placedScale = new THREE.Vector3();
+  /** Each tile's frame in the scan's (`TileNode.offset`), for a tile that has one. */
+  const offsets = new WeakMap<SplatMesh, [number, number, number]>();
+  const shiftBy = new THREE.Matrix4();
   let size = { width: 0, height: 0, pixelRatio: 0 };
 
   // The shared tables and numbers, as dyno uniforms every tile's modifier reads.
@@ -554,6 +563,7 @@ export function createBackend(
         mesh.maxSh = hooks.maxShDegree;
         mesh.updateGenerator();
       }
+      if (tile.offset) offsets.set(mesh, tile.offset);
       return mesh;
     },
     setLayerLook: (mesh, look) => {
@@ -562,14 +572,22 @@ export function createBackend(
       if (!state) {
         const uniforms = layerDynos();
         state = { look, uniforms, lastEye: null, centre: [0, 0, 0] };
+        // How far the eye is from the tile (`eyeMoved`): its box in the layer's root frame,
+        // moved by the tile's offset. The eye is taken into that frame to be measured
+        // (`layerEye`): a pose's is in the scan's, which a placement can turn and move.
         const box = mesh.getBoundingBox(true);
-        if (!box.isEmpty()) state.centre = box.getCenter(new THREE.Vector3()).toArray();
+        const [ox, oy, oz] = offsets.get(mesh) ?? [0, 0, 0];
+        if (!box.isEmpty())
+          state.centre = box
+            .getCenter(new THREE.Vector3())
+            .add(new THREE.Vector3(ox, oy, oz))
+            .toArray();
         layers.set(mesh, state);
         mesh.worldModifier = layerModifier(uniforms, { params, dim });
         mesh.updateGenerator();
       }
       state.look = look;
-      state.lastEye = lastPoseEye ? [...lastPoseEye] : null;
+      state.lastEye = lastPoseEye ? layerEye(look, lastPoseEye) : null;
       writeLook(state.uniforms, look, lastPoseEye ?? [0, 0, 0]);
       mesh.updateVersion();
       if (previous !== look.cones) releaseCones(previous);
@@ -585,13 +603,20 @@ export function createBackend(
         mesh.maxSh = hooks.maxShDegree;
         mesh.updateGenerator();
       }
+      if (tile.offset) offsets.set(mesh, tile.offset);
       const raw = await gunzip(bytes).catch(() => undefined);
       // Reading and digesting every centre is main-thread work: within the frame's budget.
       const read = raw
         ? await hooks.work
             .run(() => {
-              const data = spzPickDataOf(raw);
-              return data ? { data, checksum: checksumPositions(data.positions) } : undefined;
+              const local = spzPickDataOf(raw);
+              if (!local) return undefined;
+              // The scan's frame: what `instances.json` and `skin.json` key a tile by.
+              const data = {
+                ...local,
+                positions: siteFramePositions(local.positions, tile.offset),
+              };
+              return { data, checksum: checksumPositions(data.positions) };
             })
             .catch((error: unknown) => {
               mesh.dispose();
@@ -648,12 +673,13 @@ export function createBackend(
     },
     place: (mesh, matrix) => {
       const tile = tiles.get(mesh);
+      const offset = offsets.get(mesh) ?? [0, 0, 0];
       if (matrix === null) {
         if (tile) {
           tile.placement = null;
           tile.placedPick = null;
         }
-        mesh.position.set(0, 0, 0);
+        mesh.position.set(...offset);
         mesh.quaternion.identity();
         return;
       }
@@ -663,6 +689,8 @@ export function createBackend(
         (tile.placement ??= new THREE.Matrix4()).copy(placement);
         tile.placedPick = null;
       }
+      // `matrix` moves the scan's frame; the mesh holds the tile's own, `offset` inside it.
+      placement.multiply(shiftBy.makeTranslation(...offset));
       placement.decompose(mesh.position, mesh.quaternion, placedScale);
     },
     setInstances,
@@ -731,8 +759,10 @@ export function createBackend(
       // eye has moved enough to show (layerLook.ts `eyeMoved`).
       lastPoseEye = pose.eye;
       for (const [mesh, layer] of layers) {
-        if (!layer.look.cones || !eyeMoved(layer.lastEye, pose.eye, layer.centre)) continue;
-        layer.lastEye = [...pose.eye];
+        if (!layer.look.cones) continue;
+        const eye = layerEye(layer.look, pose.eye);
+        if (!eyeMoved(layer.lastEye, eye, layer.centre)) continue;
+        layer.lastEye = eye;
         layer.uniforms.eye.value.fromArray(coneEye(layer.look, pose.eye));
         mesh.updateVersion();
       }

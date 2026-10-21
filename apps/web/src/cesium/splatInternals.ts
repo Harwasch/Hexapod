@@ -23,6 +23,7 @@
  * | `primitive._selectedTileSet` | `:2029` | the tiles the latest snapshot aggregated, **in aggregation order** |
  * | `primitive._pendingSnapshot` | `:2008` | a rebuild in flight, whose tiles `_selectedTileSet` already names |
  * | `tile.content._lastSplatTransform` | `:1444` | the bake matrix `B`, per tile, for un-baking to the rig's frame |
+ * | `tile.transform` / `tile.parent` | `Cesium3DTile.js` (public) | a tile's own translation, composed into its frame's offset |
  * | `tile.content.positions` / `pointsLength` | `GaussianSplat3DTileContent.js:177,362` | a tile's baked positions, and its count |
  * | `primitive.vertexMotion` | **patch** | the vertex-shader motion hook the GPU path installs |
  * | `primitive.holdRebuilds` | **patch** | no new snapshot while the camera moves (`splatMotionGate.ts`) |
@@ -85,6 +86,14 @@ export interface SplatTileContent {
 /** The tile fields we read. */
 export interface SplatTile {
   readonly children?: readonly SplatTile[];
+  /**
+   * The tile's own 3D Tiles `transform`, relative to its parent: a translation for a tile the
+   * packer gave a frame of its own (`splatTiles.ts` `tileOffsetOf`), the identity otherwise.
+   * The root's is the scan's placement on the globe.
+   */
+  readonly transform?: Mat4;
+  /** The tile above it; undefined for the root. */
+  readonly parent?: SplatTile;
   readonly content?: SplatTileContent;
   /** The tileset the tile is of: another than the primitive's for a companion's tile. */
   readonly tileset?: unknown;

@@ -514,6 +514,45 @@ before anything is built on them (all verified against 1.145):
   asynchronous terrain sample, so even a single-tile site rebuilds seconds after load with every
   baked position changed.
 
+### Large scans: tiles in frames of their own
+
+SPZ holds a position as 24-bit fixed point, ±2,048 m at the 12 fractional bits the packer
+writes. A scan wider than that has its far tiles written in frames of their own
+([ADR 0011](DECISIONS/0011-splat-tile-origins.md)): a 3D Tiles `transform` on the tile,
+**translation only**, relative to its parent, and fewer fractional bits (read from the SPZ
+header) for a tile still too wide. The root never moves: `root.computedTransform` stays the
+scan's ENU frame for every reader. How each renderer composes it:
+
+- **CesiumJS** composes tile transforms natively. Its bake `B` (`_lastSplatTransform`) is then
+  from the tile's own frame, so the bindings (rig, instances, skin, collider, picking, view
+  cones) un-bake with the **site bake** `B · T(-offset)` (`splatTiles.ts` `siteBakeOf`,
+  `splatFrames.ts` `translateBake`), the offset summed from `tile.transform` up the `parent`
+  chain, root excluded. Every digest is over site-frame positions, `float32(local + offset)`.
+  The site bakes are equal in exact maths but not to the last bit, since each `B` is composed
+  in doubles at ECEF scale. So every tile of one tileset gets the same array
+  (`canonicalSiteBake`, within 1e-6 m). The GPU motion path's shared bake, `commonBake` and
+  the view cones compare bakes exactly, and they keep working when a selection mixes moved and
+  unmoved tiles.
+- **Spark and PlayCanvas** get each tile's composed offset from the shared tile tree
+  (`view/tiles.ts` `parseTileset`, which also moves each tile's bounding volume into the root's
+  frame, so the streamer culls in one frame). Spark puts the mesh at the offset
+  (`view/sparkStream.ts`); PlayCanvas adds it to the entity's position (`lib/splatLayout.ts`
+  `tileFrame`). Both digest and pick in the site frame (`lib/spzPositions.ts`
+  `siteFramePositions`), and a placement (`place`) moves the scan's frame with the tile's
+  offset inside it.
+- **view.html** keeps 32-bit centres: `extSplats` on every tile and the live splat, and
+  `accumExtSplats` on its `SparkRenderer`. Spark's packed splats hold a tile's centres as half
+  floats, half a metre apart a kilometre from its origin (a packed accumulator holds them
+  relative to the eye, so finer). It doubles Spark's memory per splat (32 bytes); the
+  globe's Spark renderer already used `extSplats` per tile and keeps its accumulator as it was.
+
+The limit that stays: CesiumJS stores baked positions as float32, so beyond about 2 km from the
+tileset's centre a far tile's un-bake can miss SPZ's grid and its bindings refuse
+("checksum"). Within 2 km it is exact by construction (`splatFrames.test.ts`). Spark and
+PlayCanvas read the SPZ itself and are exact everywhere. The 10.4 km fixture
+`data/tiles/synthetic-far` holds every reader to this: `tileOrigins.test.ts`,
+`e2e/viewFar.spec.ts` (view.html) and `e2e/scanFarTiles.spec.ts` (the three globe renderers).
+
 The Living Survey rewrites the position lanes of that texture every tick so a measured tree can
 sway without its canonical positions ever being touched, using the buffer the engine itself packed
 (no engine fork, no `gl.readPixels` on the steady-state path). The internals it depends on are

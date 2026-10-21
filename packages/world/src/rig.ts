@@ -108,7 +108,11 @@ export interface MotionRig {
   readonly canonicalChecksum: string;
   /**
    * For a level-of-detail (multi-tile) tileset: `checksumPositions` of **every tile's**
-   * canonical positions, in that tile's own gaussian order, leaves and merged parents alike.
+   * canonical positions in the **site frame** (the tileset root's), in that tile's own gaussian
+   * order, leaves and merged parents alike. A tile the packer wrote in a frame of its own (a
+   * translation-only tile `transform`, for a scan wider than SPZ's +/-2048 m) is digested with
+   * its composed offset added, `float32(local + offset)` (`splat_tiles.site_positions`); every
+   * other tile's site-frame positions are its decoded ones, unchanged.
    *
    * A tileset the viewer streams has no single array to checksum — it only ever holds some
    * tiles, and a merged parent is a gaussian no leaf contains — so identity is proven tile by

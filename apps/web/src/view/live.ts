@@ -132,9 +132,9 @@ export function showLive(captureId: string): { stop: () => void } {
     0.01,
     5000,
   );
-  // This device's splat budget is Spark's here too (see main.ts).
+  // This device's splat budget is Spark's here too, and centres stay 32-bit (see main.ts).
   const budget = deviceSplatBudget();
-  scene.add(new SparkRenderer({ renderer, lodSplatCount: budget }));
+  scene.add(new SparkRenderer({ renderer, lodSplatCount: budget, accumExtSplats: true }));
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.autoRotate = true;
@@ -300,6 +300,7 @@ export function showLive(captureId: string): { stop: () => void } {
       fileType: SplatFileType.SPZ,
       lod: true,
       lodAbove: budget,
+      extSplats: true,
     });
     await mesh.initialized;
     if (stopped) {
@@ -309,7 +310,7 @@ export function showLive(captureId: string): { stop: () => void } {
     if (!cameraLines) {
       // No cameras to take the frame from: the splat's own centre and the pose up. A LoD
       // mesh keeps only its LoD tree, so the box is that tree's (its leaves are the splats).
-      const lodSplats = mesh.packedSplats?.lodSplats;
+      const lodSplats = mesh.packedSplats?.lodSplats ?? mesh.extSplats?.lodSplats;
       const box = lodSplats ? new THREE.Box3() : mesh.getBoundingBox(true);
       lodSplats?.forEachSplat((_index, centre) => box.expandByPoint(centre));
       const centre = box.getCenter(new THREE.Vector3());

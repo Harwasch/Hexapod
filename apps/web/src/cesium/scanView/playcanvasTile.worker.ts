@@ -11,35 +11,39 @@
  * every column used to run on the main thread as each tile landed. Spherical-harmonic bands
  * above `maxSh` are left out (a phone keeps one: scanView/quality.ts).
  *
- * It also digests the tile's own positions, before they are moved (`checksumPositions`, the
- * key `instances.json` lists each tile's object ids under), so the scan's objects can be hidden
- * and highlighted in this renderer too (scanInstances.ts); the order says where each of the
- * tile's own splats went.
+ * It also digests the tile's positions in the scan's frame, before they are centred
+ * (`checksumPositions`, the key `instances.json` lists each tile's object ids under), so the
+ * scan's objects can be hidden and highlighted in this renderer too (scanInstances.ts); the
+ * order says where each of the tile's own splats went. A tile the packer gave a frame of its
+ * own (`offset`, a scan wider than SPZ's +/-2048 m) is digested with the offset added and
+ * placed at its centre plus the offset (`tileFrame`).
  */
 
 import { loadSpz } from "@spz-loader/core";
-import { checksumPositions } from "@twin/world";
 
-import {
-  centreColumns,
-  mortonOrder,
-  playcanvasProperties,
-  reorderColumns,
-} from "@/lib/splatLayout";
+import { mortonOrder, playcanvasProperties, reorderColumns, tileFrame } from "@/lib/splatLayout";
 import { spzFromGlb } from "@/view/glb";
 
 self.onmessage = async (
-  event: MessageEvent<{ id: number; url: string; maxSh?: number }>,
+  event: MessageEvent<{
+    id: number;
+    url: string;
+    maxSh?: number;
+    offset?: [number, number, number];
+  }>,
 ): Promise<void> => {
-  const { id, url, maxSh } = event.data;
+  const { id, url, maxSh, offset } = event.data;
   try {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`The scan's data answered ${String(response.status)}.`);
     const spz = spzFromGlb(await response.arrayBuffer());
     const cloud = await loadSpz(spz, { unpackOptions: { coordinateSystem: "UNSPECIFIED" } });
-    const checksum = checksumPositions(cloud.positions.subarray(0, cloud.numPoints * 3));
     const columns = playcanvasProperties(cloud, maxSh ?? 3);
-    const origin = centreColumns(columns);
+    const { checksum, origin } = tileFrame(
+      cloud.positions.subarray(0, cloud.numPoints * 3),
+      columns,
+      offset,
+    );
     const empty = new Float32Array(0);
     const order = mortonOrder(columns.x ?? empty, columns.y ?? empty, columns.z ?? empty);
     const properties = reorderColumns(columns, order);

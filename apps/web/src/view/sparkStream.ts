@@ -18,6 +18,12 @@ import { LOAD_FACTOR, type TileNode, type TileTree } from "./tiles";
  * tile is a fraction of a second) and draw from it within `SparkRenderer.lodSplatCount`,
  * which is shared by every mesh in the scene. The SPZ bytes come back too, for a page that
  * reads the tile's splat centres.
+ *
+ * The mesh is placed at the tile's frame (`TileNode.offset`, zero but for a tile the packer
+ * moved because the scan is wider than SPZ's +/-2048 m), so it sits in the scan's frame like
+ * every other tile. Centres are kept as 32-bit floats (`extSplats`) unless asked otherwise:
+ * Spark's packed splats hold them as half floats, 6 cm apart 64-128 m out and a metre apart
+ * a few kilometres out, which a large scan's tiles are.
  */
 export async function loadSplatTile(
   tilesetUrl: string,
@@ -33,9 +39,10 @@ export async function loadSplatTile(
     fileBytes: bytes,
     fileType: SplatFileType.SPZ,
     lod: options.lod ?? true,
-    extSplats: options.extSplats ?? false,
+    extSplats: options.extSplats ?? true,
   });
   await mesh.initialized;
+  mesh.position.set(...(tile.offset ?? [0, 0, 0]));
   return { mesh, bytes };
 }
 

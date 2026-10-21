@@ -1,7 +1,7 @@
 # ADR 0011 — Per-tile origins: splat tiles that never wrap
 
-**Status:** accepted (Part A: packer, Python readers, API, backfill; Part B, the web readers,
-follows) · **Date:** 2026-10-19
+**Status:** accepted (Part A: packer, Python readers, API, backfill; Part B: the web readers
+and view.html) · **Date:** 2026-10-19
 
 ## Context
 
@@ -44,7 +44,9 @@ origin, so nothing noticed that the packer cast to int32 and kept the low 24 bit
    scan's root times `T(origin)`, its one tile untransformed) keeps object-local checksums, as
    it always had.
 7. **Every reader composes the translations.** `splat_tiles.tile_offsets` (Python),
-   `app/worker/positions.tile_offsets` (API) and, in Part B, `parseTileset` and the renderers.
+   `app/worker/positions.tile_offsets` (API), and on the web `view/tiles.ts` `parseTileset`
+   (Spark, PlayCanvas, the streamer, layers and objects) and `splatTiles.ts` `tileOffsetOf`
+   (CesiumJS's bindings, which un-bake with `B · T(-offset)`; docs/CESIUM.md).
    Each refuses a child transform that is not a pure translation: a tile may be moved, never
    turned or scaled, because Cesium takes the spherical-harmonic frame from the first selected
    tile and `getRotation` of a computed transform ignores translation, so translations keep
@@ -75,13 +77,29 @@ bits and decode error; the worst is exactly half a quantum, on the 11-bit tiles.
 - **Cesium bindings beyond ~2 km from the tileset centre.** Cesium bakes positions to float32
   (ulp 2.4e-4 m at 2–4 km, against a 1.2e-4 m half-quantum), so a far tile's un-baked
   checksum may not match and Cesium may refuse rig, instance and skin bindings there. An engine
-  limit that predates this; PlayCanvas and Spark read SPZ directly and are not affected.
+  limit that predates this; PlayCanvas and Spark read SPZ directly and are not affected. Within
+  2,048 m of the centre the un-bake is exact by construction (`splatFrames.test.ts`). On the
+  fixture every tile happened to un-bake exactly, but the worst pre-snap error was 1.22e-4 m
+  against a 1.2207e-4 m half step: luck, not a margin, so nothing relies on it.
 - **Mixed fractional bits.** `split_objects` refuses an object gathered from tiles of different
   bits rather than re-quantise it.
 - **`tools/pipeline/experiments/lod_compare.py` does not compose.** It reads
   `boundingVolume.box` and decodes tiles without their transforms, so its cut is wrong for a
   far site. It is an experiment, and M1b rewrites it (and adds synthetic-far to its parity
   run), so it is left to M1b rather than changed twice.
-- **Spark memory.** Part B's 32-bit centres in view.html double Spark's per-splat memory; not
-  re-measured on a phone.
+- **Spark memory.** Part B's 32-bit centres in view.html double Spark's per-splat memory (16 to
+  32 bytes); `LOAD_FACTOR` and `MAX_STREAMED` are kept, not re-measured on a phone. The globe's
+  Spark renderer keeps its accumulator at 16 bytes (`accumExtSplats` off), as before.
+- **Spark options in view.html and live mode, tested and not.** `viewFar.spec.ts` holds
+  view.html to 32-bit centres twice. Its `__viewer.gpu()` reads what Spark holds on the GPU:
+  each drawn tile's generator source (ExtSplats, not PackedSplats) and the accumulator's
+  `extSplats` and render targets, so turning off either the tiles' `extSplats` or
+  `accumExtSplats` fails it. And a two-splat tile, 30 cm apart 1 km from its origin, must draw
+  two marks: half floats put both at 1000.0 (recorded run: one mark, at 0.499 of the width).
+  The accumulator cannot be held this way. A half-float accumulator keeps centres relative to
+  the eye (Spark 2.2 `SplatAccumulator`), so its steps are millimetres where anything is looked
+  at from; its flag is what is tested. Still untested, in live mode's entry point (no unit test
+  loads it without WebGL): its `accumExtSplats`, its `extSplats: true`, and the
+  `extSplats.lodSplats` fallback in its framing, which runs only for a snapshot above the
+  Detail budget with no cameras.
 - **SOG precision** for very large sites is not addressed.

@@ -78,19 +78,27 @@ export function layerUniforms(look: LayerLook): LayerUniforms {
 }
 
 /**
- * The eye uniform: where the eye is in the layer's frame, and the fade (degrees) in `w`, 0
- * when the layer has no cones (the shader then leaves every splat's opacity as it is).
+ * Where an eye in the scan's frame (what a pose carries) is in the layer's frame (`fromScan`),
+ * in doubles: where a layer's tiles and cones are, so what `eyeMoved` measures against.
+ */
+export function layerEye(look: LayerLook, eye: readonly number[]): [number, number, number] {
+  const m = look.fromScan;
+  const [x = 0, y = 0, z = 0] = eye;
+  const row = (r: number): number =>
+    (m[r] ?? 0) * x + (m[4 + r] ?? 0) * y + (m[8 + r] ?? 0) * z + (m[12 + r] ?? 0);
+  return [row(0), row(1), row(2)];
+}
+
+/**
+ * The eye uniform: where the eye is in the layer's frame (`layerEye`), and the fade (degrees)
+ * in `w`, 0 when the layer has no cones (the shader then leaves every splat's opacity as it is).
  */
 export function coneEye(
   look: LayerLook,
   eye: readonly number[],
   out: Float32Array<ArrayBuffer> = new Float32Array(4),
 ): Float32Array<ArrayBuffer> {
-  const m = look.fromScan;
-  const [x = 0, y = 0, z = 0] = eye;
-  for (let r = 0; r < 3; r += 1) {
-    out[r] = (m[r] ?? 0) * x + (m[4 + r] ?? 0) * y + (m[8 + r] ?? 0) * z + (m[12 + r] ?? 0);
-  }
+  out.set(layerEye(look, eye));
   out[3] = look.cones ? look.cones.meta.fadeDeg : 0;
   return out;
 }
@@ -98,7 +106,8 @@ export function coneEye(
 /**
  * Whether the eye moved far enough from where a layer's fade was last worked out to work it out
  * again: by more than a hundredth of its distance from the layer (half a degree of the 20 its
- * fade spans), or `minM`, whichever is more.
+ * fade spans), or `minM`, whichever is more. All three in one frame: the layer's (`layerEye`),
+ * where its tiles' centres are -- a placed layer's frame can be kilometres from the scan's.
  */
 export function eyeMoved(
   last: readonly number[] | null,
