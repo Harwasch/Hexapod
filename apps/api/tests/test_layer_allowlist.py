@@ -273,3 +273,83 @@ def test_a_glb_not_written_as_build_glb_writes_one_is_refused(case: str) -> None
     data = GLB_REFUSALS[case]()
     with pytest.raises(positions.TileFormatError):
         positions.packer_spz(data)
+
+
+# --- the SPZ stream: one gzip member of exactly the header and body the packer writes -----
+#
+# Codex R5: Python and Cesium's SPZ loader (@spz-loader/core) disagree on a header the
+# packer never writes. At 32 fractional bits Python decodes 2048 / 2^32 m, inside a target;
+# Cesium draws it at 2048 m. Every header field the packer fixes is held to its value, the
+# fractional bits to the tiler's own rule (12, or the most a tile reaching past 2048 m still
+# fits at, `splat_tiles.fractional_bits_for`), and the stream to one gzip member holding
+# exactly what the header says.
+
+SPZ_HEADER = "<IIIBBBB"
+
+
+def _raw(points: Any = POINT, bits: int = 12) -> bytearray:
+    import gzip
+
+    return bytearray(gzip.decompress(positions.glb_spz(splat_glb(points, fractional_bits=bits))))
+
+
+def _with_spz(spz: bytes) -> bytes:
+    """`splat_glb(POINT)` with its SPZ block replaced by `spz`."""
+    gltf, _ = _chunks(splat_glb(POINT))
+    gltf["bufferViews"][0].update(byteOffset=0, byteLength=len(spz))
+    gltf["buffers"][0]["byteLength"] = len(spz) + (-len(spz) % 4)
+    return _glb(gltf, spz)
+
+
+def _gz(raw: bytes | bytearray) -> bytes:
+    import gzip
+
+    return gzip.compress(bytes(raw), mtime=0)
+
+
+def _header(index: int, value: int) -> Callable[[], bytes]:
+    """The packer's SPZ with header field `index` (of magic, version, count, degree, bits,
+    flags, reserved) set to `value`."""
+
+    def make() -> bytes:
+        raw = _raw()
+        fields = list(struct.unpack_from(SPZ_HEADER, raw, 0))
+        fields[index] = value
+        struct.pack_into(SPZ_HEADER, raw, 0, *fields)
+        return _with_spz(_gz(raw))
+
+    return make
+
+
+SPZ_REFUSALS: dict[str, Callable[[], bytes]] = {
+    **{f"fractional_bits_{bits}": _header(4, bits) for bits in (13, 23, 31, 32, 33, 255)},
+    # Fewer bits than the tiler gives a tile this close to its frame.
+    "fractional_bits_11_small_tile": lambda: splat_glb(POINT, fractional_bits=11),
+    "spz_magic": _header(0, 0x12345678),
+    "spz_version_3": _header(1, 3),
+    "spz_sh_degree_4": _header(3, 4),
+    "spz_flags": _header(5, 1),
+    "spz_reserved": _header(6, 1),
+    "header_count_two": _header(2, 2),
+    "gzip_split": lambda: _with_spz(_gz(_raw()[:16]) + _gz(_raw()[16:])),
+    "gzip_concat": lambda: _with_spz(_gz(_raw()) + _gz(_raw([[30.0, 0.5, 0.5]]))),
+    "gzip_trailing_zero": lambda: _with_spz(_gz(_raw()) + b"\0" * 8),
+    "gzip_trailing_junk": lambda: _with_spz(_gz(_raw()) + b"JUNK"),
+    "spz_raw_trailing": lambda: _with_spz(_gz(_raw() + _raw([[30.0, 0.5, 0.5]]))),
+    "spz_raw_short": lambda: _with_spz(_gz(_raw()[:-1])),
+    "not_gzip": lambda: _with_spz(bytes(_raw())),
+}
+
+
+@pytest.mark.parametrize("case", sorted(SPZ_REFUSALS))
+def test_an_spz_stream_not_written_as_the_packer_writes_one_is_refused(case: str) -> None:
+    with pytest.raises(positions.TileFormatError):
+        positions.packer_spz(SPZ_REFUSALS[case]())
+
+
+def test_a_tile_reaching_past_2048_m_at_the_tilers_fewer_bits_passes() -> None:
+    """The tiler's rule (`fractional_bits_for`): 12 bits to 2047.99 m, 11 to 4095.99 m."""
+    data = splat_glb([[3000.0, 0.5, 0.5]], fractional_bits=11)
+    assert positions.packer_spz(data) == positions.glb_spz(data)
+    with pytest.raises(positions.TileFormatError):
+        positions.packer_spz(splat_glb([[3000.0, 0.5, 0.5]], fractional_bits=10))

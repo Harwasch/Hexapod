@@ -328,6 +328,89 @@ def test_a_glb_not_written_as_build_glb_writes_one_is_refused(tmp_path: Path, ca
         rg.layer_positions(path)
 
 
+# --- the SPZ stream (Codex R5: the header's values, the gzip framing) ----------------------
+
+SPZ_HEADER = "<IIIBBBB"
+
+
+def _raw(points: Any = ((0.5, 0.5, 0.5),), bits: int = 12) -> bytearray:
+    import gzip
+
+    return bytearray(gzip.decompress(glb_spz_bytes(glb_at(points, bits))))
+
+
+def glb_at(points: Any, bits: int) -> bytes:
+    p = np.asarray(points, dtype=np.float32).reshape(-1, 3)
+    n = p.shape[0]
+    quats = np.tile([0, 0, 0, 1.0], (n, 1))
+    spz = pack_spz(p, np.zeros((n, 3)), np.zeros(n), np.zeros((n, 3)), quats, fractional_bits=bits)
+    return build_glb(n, p.min(axis=0).tolist(), p.max(axis=0).tolist(), spz)
+
+
+def _with_spz(spz: bytes) -> bytes:
+    gltf, _ = chunks(SAFE)
+    gltf["bufferViews"][0].update(byteOffset=0, byteLength=len(spz))
+    gltf["buffers"][0]["byteLength"] = len(spz) + (-len(spz) % 4)
+    return repack(gltf, spz)
+
+
+def _gz(raw: bytes | bytearray) -> bytes:
+    import gzip
+
+    return gzip.compress(bytes(raw), mtime=0)
+
+
+def _header(index: int, value: int) -> Callable[[], bytes]:
+    def make() -> bytes:
+        raw = _raw()
+        fields = list(struct.unpack_from(SPZ_HEADER, raw, 0))
+        fields[index] = value
+        struct.pack_into(SPZ_HEADER, raw, 0, *fields)
+        return _with_spz(_gz(raw))
+
+    return make
+
+
+SPZ_REFUSALS: dict[str, Callable[[], bytes]] = {
+    **{f"fractional_bits_{bits}": _header(4, bits) for bits in (13, 23, 31, 32, 33, 255)},
+    "fractional_bits_11_small_tile": lambda: glb_at([[0.5, 0.5, 0.5]], 11),
+    "spz_magic": _header(0, 0x12345678),
+    "spz_version_3": _header(1, 3),
+    "spz_sh_degree_4": _header(3, 4),
+    "spz_flags": _header(5, 1),
+    "spz_reserved": _header(6, 1),
+    "header_count_two": _header(2, 2),
+    "gzip_split": lambda: _with_spz(_gz(_raw()[:16]) + _gz(_raw()[16:])),
+    "gzip_concat": lambda: _with_spz(_gz(_raw()) + _gz(_raw([[30.0, 0.5, 0.5]]))),
+    "gzip_trailing_zero": lambda: _with_spz(_gz(_raw()) + b"\0" * 8),
+    "gzip_trailing_junk": lambda: _with_spz(_gz(_raw()) + b"JUNK"),
+    "spz_raw_trailing": lambda: _with_spz(_gz(_raw() + _raw([[30.0, 0.5, 0.5]]))),
+    "spz_raw_short": lambda: _with_spz(_gz(_raw()[:-1])),
+    "not_gzip": lambda: _with_spz(bytes(_raw())),
+}
+
+
+@pytest.mark.parametrize("case", sorted(SPZ_REFUSALS))
+def test_an_spz_stream_not_written_as_the_packer_writes_one_is_refused(
+    tmp_path: Path, case: str
+) -> None:
+    path = write(tmp_path, tileset(), leaf=SPZ_REFUSALS[case]())
+    with pytest.raises(rg.RescanGateError):
+        rg.layer_positions(path)
+
+
+def test_a_tile_reaching_past_2048_m_at_the_tilers_fewer_bits_passes(tmp_path: Path) -> None:
+    """`splat_tiles.fractional_bits_for` is the rule: 12 bits to 2047.99 m, 11 to 4095.99 m."""
+    from splat_tiles import fractional_bits_for
+
+    assert fractional_bits_for(3000.0) == 11
+    path = write(tmp_path, tileset(), leaf=glb_at([[3000.0, 0.5, 0.5]], 11))
+    assert rg.layer_positions(path).shape == (2, 3)
+    path = write(tmp_path, tileset(), leaf=glb_at([[3000.0, 0.5, 0.5]], 10))
+    with pytest.raises(rg.RescanGateError):
+        rg.layer_positions(path)
+
+
 def test_the_cases_are_the_apis() -> None:
     """The same refusals by name as apps/api tests/test_layer_allowlist.py: one allowlist,
     two transcriptions, held to one list."""

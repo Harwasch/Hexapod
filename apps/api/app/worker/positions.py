@@ -439,7 +439,78 @@ def packer_spz(data: bytes) -> bytes:
     if offset + length > size:
         raise TileFormatError("the SPZ block runs past the buffer")
     start = bin_at + 8 + offset
-    return data[start : start + length]
+    block = data[start : start + length]
+    packer_spz_header(block)
+    return block
+
+
+#: What `splat_tiles.pack_spz` writes in an SPZ header: version 2, no flags, nothing
+#: reserved, SH degree 0 to 3; the fractional bits by the tiler's rule (`_packer_bits`).
+PACKER_SPZ_VERSION = 2
+PACKER_FRACTIONAL_BITS = 12
+SH_DIMS = (0, 3, 8, 15)
+#: The largest magnitude 24-bit two's complement fixed point holds (`splat_tiles`).
+SPZ_FIXED_MAX = (1 << 23) - 1
+#: A tile's SPZ, decompressed, past this is no tile the packer writes (a million
+#: gaussians at SH degree 3 are 64 MB): refused before it is inflated.
+MAX_SPZ_RAW_BYTES = 256 * 1024 * 1024
+
+
+def packer_spz_header(block: bytes) -> tuple[int, int]:
+    """`(count, sh degree)` of an SPZ stream exactly as `splat_tiles.pack_spz` writes one,
+    else `TileFormatError`: one gzip member and nothing after it, holding a 16-byte header
+    and exactly the body it declares; magic, version 2, no flags or reserved byte, SH degree
+    0 to 3; and the fractional bits the tiler gives such a tile (`_packer_bits`). Python
+    and Cesium's SPZ loader agree on what such a stream holds; on others they need not (at
+    32 bits Python reads 2048 / 2^32 m where Cesium draws 2048 m). Inflated no further than
+    the header says it reaches."""
+    inflater = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
+    try:
+        head = inflater.decompress(block, 16)
+        if len(head) < 16:
+            raise TileFormatError("not an SPZ stream: fewer than 16 bytes")
+        magic, version, count, degree, bits, flags, reserved = struct.unpack("<IIIBBBB", head)
+        if magic != SPZ_MAGIC or version != PACKER_SPZ_VERSION or flags or reserved:
+            raise TileFormatError(
+                f"not the packer's SPZ header (magic {magic:#x}, version {version}, flags "
+                f"{flags}, reserved {reserved})"
+            )
+        if degree >= len(SH_DIMS):
+            raise TileFormatError(f"SPZ SH degree {degree} is not 0 to 3")
+        need = (SPZ_BYTES_PER_GAUSSIAN + 3 * SH_DIMS[degree]) * count
+        if need > MAX_SPZ_RAW_BYTES:
+            raise TileFormatError(f"{count} gaussians: past what one packed tile holds")
+        body = inflater.decompress(inflater.unconsumed_tail, need + 1)
+    except zlib.error as error:
+        raise TileFormatError(f"not an SPZ stream: {error}") from error
+    if len(body) != need or inflater.unconsumed_tail or not inflater.eof:
+        raise TileFormatError(f"the SPZ body is not the {need} bytes its header declares")
+    if inflater.unused_data:
+        raise TileFormatError("bytes after the SPZ stream's one gzip member")
+    _packer_bits(bits, body[: 9 * count], count)
+    return count, degree
+
+
+def _packer_bits(bits: int, positions: bytes, count: int) -> None:
+    """The tiler's rule (`splat_tiles.fractional_bits_for`): the most fractional bits, 12 at
+    most, at which the tile's farthest position component still fits 24 bits. So 12, or
+    fewer only when one more would not fit: with `m` the largest stored magnitude, `bits`
+    is 12 or `2 m` overflows."""
+    if count:
+        packed = np.frombuffer(positions, dtype=np.uint8).reshape(count * 3, 3).astype(np.int64)
+        fixed = packed[:, 0] | (packed[:, 1] << 8) | (packed[:, 2] << 16)
+        largest = int(np.abs((fixed ^ 0x800000) - 0x800000).max())
+    else:
+        largest = 0
+    if (
+        bits > PACKER_FRACTIONAL_BITS
+        or largest > SPZ_FIXED_MAX
+        or (bits < PACKER_FRACTIONAL_BITS and 2 * largest <= SPZ_FIXED_MAX)
+    ):
+        raise TileFormatError(
+            f"{bits} fractional bits for positions reaching {largest} steps: not what the "
+            f"tiler writes (12, or the most at which the farthest one fits 24 bits)"
+        )
 
 
 def packer_positions(data: bytes, offset: np.ndarray | None) -> np.ndarray:
