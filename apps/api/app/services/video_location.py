@@ -24,7 +24,7 @@ ranged GETs of 64 KiB. Pure Python, no dependency: ffprobe is not on the worker 
 pipeline's ffmpeg is a wheel in another project) and would need the whole file local.
 
 Total: anything that is not a well-formed container, or a location that is not a point
-on the globe, is `None`, never an exception; reads are capped (`MAX_READS`,
+on the globe, is `None`, never an exception; reads are capped (`MAX_READS`, `MAX_READ_BYTES`,
 `MAX_METADATA_BYTES`, `MAX_BOXES`) so a crafted file costs no more than an honest one.
 """
 
@@ -71,6 +71,9 @@ CHUNK = 64 * 1024
 #: The most reads one file may cost. An iPhone clip takes three or four (the start, the
 #: `moov` header, each `trak` skipped, the `meta`); a file that needs more is not one.
 MAX_READS = 64
+#: The most bytes one file may cost, all reads together: a few metadata boxes' worth. A
+#: moov of many boxes each under `MAX_METADATA_BYTES` stops here, not at 64 of them.
+MAX_READ_BYTES = 4 * 1024 * 1024
 #: The most a `meta` or `udta` box may be and still be read whole: an iPhone's is under a
 #: kilobyte (a few dozen keys). A larger one is skipped, not fetched.
 MAX_METADATA_BYTES = 1024 * 1024
@@ -137,6 +140,7 @@ class _Reader:
         self._size = size
         self._chunk = chunk
         self._reads = 0
+        self._bytes = 0
         self._cached: list[tuple[int, bytes]] = []
 
     def read(self, offset: int, length: int) -> bytes:
@@ -146,10 +150,12 @@ class _Reader:
         for start, data in self._cached:
             if start <= offset and offset + length <= start + len(data):
                 return data[offset - start : offset - start + length]
-        if self._reads >= MAX_READS:
+        wanted = max(length, min(self._chunk, self._size - offset))
+        if self._reads >= MAX_READS or self._bytes + wanted > MAX_READ_BYTES:
             raise _Exhausted
         self._reads += 1
-        data = self._read_at(offset, max(length, min(self._chunk, self._size - offset)))
+        self._bytes += wanted
+        data = self._read_at(offset, wanted)
         self._cached = [(offset, data), *self._cached[:3]]
         return data[:length]
 

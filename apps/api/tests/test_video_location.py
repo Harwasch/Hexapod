@@ -171,3 +171,18 @@ def test_the_api_and_the_pipeline_read_the_same_places_the_same_way(text: str) -
     assert (None if not on_globe else theirs[:2]) == (
         None if ours is None else (ours.lat, ours.lon)
     )
+
+
+def test_a_crafted_moov_of_many_large_metadata_boxes_costs_a_bounded_read() -> None:
+    """Each `udta` is under the 1 MiB a metadata box may be, and there are many: the bytes
+    fetched are capped as well as the reads, so the file costs what an honest one could."""
+    filler = box(b"udta", box(b"free", b"\0" * 900_000))
+    data = box(b"ftyp", b"qt  ") + box(b"moov", filler * 40)
+    fetched: list[int] = []
+
+    def read_at(offset: int, length: int) -> bytes:
+        fetched.append(length)
+        return data[offset : offset + length]
+
+    assert video_location.read_location(read_at, len(data)) is None
+    assert sum(fetched) <= video_location.MAX_READ_BYTES
