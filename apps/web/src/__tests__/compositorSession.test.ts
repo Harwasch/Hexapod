@@ -229,14 +229,25 @@ describe("a view rule's session", () => {
     await frame();
     // Split objects are tilesets of their own beside their scan (splitObjects.ts): the host's
     // shader parts never see them, so the rule says which are drawn.
-    const object = (x: number, y: number) =>
-      ({ boundingSphere: { center: new Cartesian3(x, y, 0.5) } }) as unknown as Cesium3DTileset;
+    // An object is where its declared origin is (extras.objects[].origin, at its pose): its
+    // own frame's translation, as PlayCanvas reads it too (lib/compositor.ts `objectAnchor`)
+    // -- not the middle of its bounds, which the package pads by three scales a splat.
+    const object = (x: number, y: number, middle = x) =>
+      ({
+        root: { computedTransform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, 0, 1] },
+        boundingSphere: { center: new Cartesian3(middle, y, 0.5) },
+      }) as unknown as Cesium3DTileset;
     const inJunes = object(12, 5);
     const inMarchs = object(3, 3);
     expect(ruledObjects.get(march)?.(inMarchs)).toBe(true);
     expect(ruledObjects.get(march)?.(inJunes)).toBe(false);
     expect(ruledObjects.get(june)?.(inJunes)).toBe(true);
     expect(ruledObjects.get(june)?.(inMarchs)).toBe(false);
+    // Near the seam at x = 10: its origin in March's cell, the middle of its bounds in June's.
+    // March's copy is drawn, as under PlayCanvas (playcanvasRule.test.ts, the same case).
+    const astride = object(9.9, 5, 10.3);
+    expect(ruledObjects.get(march)?.(astride)).toBe(true);
+    expect(ruledObjects.get(june)?.(astride)).toBe(false);
     // Outside the plane no date owns the cell: nothing is drawn there, as for the splats.
     expect(ruledObjects.get(march)?.(object(-40, 3))).toBe(false);
     handle.dispose();

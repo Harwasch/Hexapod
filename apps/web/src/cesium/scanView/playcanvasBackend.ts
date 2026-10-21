@@ -83,7 +83,7 @@ import * as pc from "playcanvas";
 
 import { CELL_TEXTURE_WIDTH } from "@/lib/cellGrid";
 import { CELL_LOOK_GLSL, type CellLookView } from "@/lib/cellLook";
-import { NO_OWNER } from "@/lib/compositor";
+import { NO_OWNER, objectAnchor } from "@/lib/compositor";
 import { tileInstanceIds, type InstancesDoc } from "@/lib/instances";
 import { createLogger } from "@/lib/log";
 import { tileSkin, type SkinDoc } from "@/lib/skin";
@@ -131,6 +131,9 @@ import type { RuleDates } from "./ruleDates";
 import type { BackendHooks, GraphicsApi, ScanBackend, ScanPose, SplatRendererKind } from "./types";
 
 const log = createLogger("playcanvas");
+
+/** Where an object not placed yet is weighed: outside every plane, so it is not drawn. */
+const UNPLACED = 1e9;
 
 interface Decoded {
   id: number;
@@ -665,8 +668,12 @@ function assemble(
   const fromUrl = new WeakMap<pc.Entity, string>();
   /** A natively streamed scan's one entity: the rule's `native` source. */
   const natives = new WeakSet<pc.Entity>();
-  /** Where each entity's middle is in the scan's frame (a split object's, weighed whole). */
-  const centres = new WeakMap<pc.Entity, [number, number, number]>();
+  /**
+   * Where each placed entity's own origin is in the scan's frame: for a split object, the
+   * origin its package declares at its pose (lib/compositor.ts `objectAnchor`), by which it is
+   * weighed whole.
+   */
+  const anchors = new WeakMap<pc.Entity, [number, number]>();
   const ruleSources = new WeakMap<pc.Entity, Float32Array>();
   /**
    * Sunlight (state/sunReport.ts, sunHook.ts), GLSL only as the motion: the sun to light by now,
@@ -893,7 +900,8 @@ function assemble(
         : url === undefined
           ? undefined
           : rule.sources.get(url);
-    const [x = 0, y = 0] = centres.get(entity) ?? [];
+    // An object not placed yet has no anchor: outside every plane, it is not drawn.
+    const [x, y] = anchors.get(entity) ?? [UNPLACED, UNPLACED];
     if (found?.whole) out.set([found.source, 1, x, y]);
     else out.set([found?.source ?? NO_OWNER, 0, 0, 0]);
     return out;
@@ -1395,18 +1403,13 @@ function assemble(
   };
 
   /**
-   * Where `entity`'s middle is once placed (its tile's centre under `matrix`): a split object
-   * moved to a pose is weighed whole by the cell it is in now, so it is copied again.
+   * Where `entity`'s own origin is once placed (`matrix`'s translation; none where decoded): a
+   * split object moved to a pose is weighed whole by the cell its anchor is in now, so it is
+   * copied again.
    */
-  const placedCentre = (
-    entity: pc.Entity,
-    matrix: readonly number[] | null,
-    [x, y, z]: readonly [number, number, number],
-  ): void => {
-    const m = matrix ?? [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-    const at = (r: number) =>
-      (m[r] ?? 0) * x + (m[r + 4] ?? 0) * y + (m[r + 8] ?? 0) * z + (m[r + 12] ?? 0);
-    centres.set(entity, [at(0), at(1), at(2)]);
+  const placedAnchor = (entity: pc.Entity, matrix: readonly number[] | null): void => {
+    if (matrix) anchors.set(entity, objectAnchor(matrix));
+    else anchors.delete(entity);
     const url = fromUrl.get(entity);
     if (rule && url !== undefined && rule.sources.get(url)?.whole)
       entity.gsplat?.setParameter("uRuleSource", ruleSourceOf(entity));
@@ -1467,7 +1470,6 @@ function assemble(
     entity.setLocalPosition(...origin);
     origins.set(entity, origin);
     fromUrl.set(entity, url);
-    centres.set(entity, origin);
     entity.addComponent("gsplat", { resource });
     resources.set(entity, resource);
     // Every tile of the scan reads its cell, whether or not it carries ids.
@@ -1612,7 +1614,7 @@ function assemble(
         }
         entity.setLocalPosition(...origin);
         entity.setLocalRotation(pc.Quat.IDENTITY);
-        placedCentre(entity, null, origin);
+        placedAnchor(entity, null);
         return;
       }
       placing ??= { matrix: new pc.Mat4(), position: new pc.Vec3(), rotation: new pc.Quat() };
@@ -1627,7 +1629,7 @@ function assemble(
       rotation.setFromMat4(placement);
       entity.setLocalPosition(position);
       entity.setLocalRotation(rotation);
-      placedCentre(entity, matrix, origin);
+      placedAnchor(entity, matrix);
     },
     render: (pose: ScanPose) => {
       // A lost device draws nothing; the host is already replacing this renderer.

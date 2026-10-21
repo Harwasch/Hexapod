@@ -24,8 +24,8 @@
  * which drawing companions needs, so the rule ends and says why. Per-scan hooks on a date's
  * own primitive (hidden or highlighted objects, skins) do not act while it is a companion: its
  * primitive draws nothing then. Split objects are tilesets of their own beside their scan, out
- * of the host's sort: each is drawn whole by the date owning the cell under its centre
- * (`ruledObjects`), in its own colours (Data age does not tint it).
+ * of the host's sort: each is drawn whole by the date owning the cell under its declared origin
+ * at its pose (`ruledObjects`, `objectAnchor`), in its own colours (Data age does not tint it).
  *
  * **Under PlayCanvas** (the app's default renderer) the same plane is handed to the renderer
  * drawing the site's scan (scanView/scanRule.ts), which draws every date in its one sort: the
@@ -49,6 +49,7 @@ import type { CellLookView } from "@/lib/cellLook";
 import {
   leafTileBoxes,
   NO_OWNER,
+  objectAnchor,
   ownerAgeGrid,
   ownerAt,
   ownerPlane,
@@ -496,11 +497,16 @@ export function startCompositor(
       const plane = compositor?.plane;
       const root = (host?.root as { computedTransform?: Mat4 } | undefined)?.computedTransform;
       const m = root && invertAffine(root);
-      if (!plane || !m) return false;
-      const { x, y, z } = object.boundingSphere.center;
-      const at = (r: number) =>
-        (m[r] ?? 0) * x + (m[r + 4] ?? 0) * y + (m[r + 8] ?? 0) * z + (m[r + 12] ?? 0);
-      return ownerAt(plane, at(0), at(1)) === ruling.indexOf(date);
+      const own = (object.root as { computedTransform?: Mat4 } | undefined)?.computedTransform;
+      if (!plane || !m || !own) return false;
+      // Its declared origin at its pose, in the host's frame (`objectAnchor`).
+      const [x, y] = objectAnchor(
+        times(
+          m,
+          Array.from({ length: 16 }, (_, i) => own[i] ?? 0),
+        ),
+      );
+      return ownerAt(plane, x, y) === ruling.indexOf(date);
     };
 
   /** Lets go of CesiumJS's host: its companions, the parts, the dates it drew, the cones. */

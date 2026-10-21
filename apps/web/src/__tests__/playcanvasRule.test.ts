@@ -180,6 +180,27 @@ vi.mock("playcanvas", () => {
   class GSplatData {
     activated = false;
   }
+  /** Enough of a matrix for `place`: kept, and points moved by its translation. */
+  class Mat4 {
+    data: number[] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+    set(values: number[]): this {
+      this.data = [...values];
+      return this;
+    }
+    copy(other: Mat4): this {
+      this.data = [...other.data];
+      return this;
+    }
+    transformPoint(point: Vec3, out: Vec3): Vec3 {
+      return out;
+    }
+  }
+  class Quat {
+    static readonly IDENTITY = new Quat();
+    setFromMat4(): this {
+      return this;
+    }
+  }
   class Vec3 {
     set(): this {
       return this;
@@ -208,7 +229,8 @@ vi.mock("playcanvas", () => {
     PIXELFORMAT_R8: 6,
     FILTER_NEAREST: 0,
     ADDRESS_CLAMP_TO_EDGE: 0,
-    Quat: { IDENTITY: {} },
+    Quat,
+    Mat4,
     SHADERLANGUAGE_GLSL: "glsl",
   };
 });
@@ -364,8 +386,8 @@ describe("a per-cell view rule under PlayCanvas", () => {
     expect(param(scan, "uRuleSource")).toEqual([0, 0, 0, 0]);
     expect(param(layer, "uRuleSource")).toEqual([2, 0, 0, 0]);
     expect(param(stray, "uRuleSource")).toEqual([NO_OWNER, 0, 0, 0]);
-    // A split object is weighed whole, by the cell under its centre.
-    expect(param(object, "uRuleSource")).toEqual([0, 1, 5, 1]);
+    // A split object is weighed whole, by the cell under its anchor: none until it is placed.
+    expect(param(object, "uRuleSource").slice(0, 2)).toEqual([0, 1]);
     // The plane's bytes, padded with "no owner".
     const owners = component(scan).params.get("uRuleOwners") as { data: Uint8Array };
     expect(Array.from(owners.data.subarray(0, 8))).toEqual([0, 0, 0, 0, 1, 1, 1, 1]);
@@ -438,6 +460,24 @@ describe("a per-cell view rule under PlayCanvas", () => {
     // Without the rule's view the scan's own (none here) is drawn: the photo.
     publishScanRule("rule-d", view());
     expect(component(scan).modifier?.glsl).not.toContain("hexapodCellTile(center, color");
+    backend.destroy();
+  });
+
+  it("weighs a split object by its declared origin at its pose, as CesiumJS does", async () => {
+    const { backend } = await backendFor("rule-b");
+    // The object's tile: its splats' middle 1 m east of the object's origin, in its own frame.
+    const object = await backend.load(OBJECT, tile("1_0.glb"));
+    publishScanRule("rule-b", view());
+    // Not placed yet: no anchor, so nothing of it is drawn (outside every plane).
+    expect(param(object, "uRuleSource")[0]).toBe(0);
+    expect(param(object, "uRuleSource")[2]).toBeGreaterThan(1e8);
+    // Placed with its origin at x = 3.9, in March's cell beside the seam at x = 4; its splats'
+    // middle (x = 4.9) is in June's. The anchor is the origin: March's copy is the one drawn,
+    // as under CesiumJS (compositorSession.test.ts, the same case).
+    backend.place?.(object, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 3.9, 1, 0, 1]);
+    expect(param(object, "uRuleSource").map((v) => Math.round(v * 10) / 10)).toEqual([
+      0, 1, 3.9, 1,
+    ]);
     backend.destroy();
   });
 

@@ -300,6 +300,19 @@ export function compositorWeight(
   return reach > 0 ? smoothstep(reach / 2, reach, d) : 1;
 }
 
+/**
+ * Where a split object is, for a rule (ADR 0017 § "Per-cell view rules", 9): the origin its
+ * package declares (`extras.objects[].origin`: the centre of its splats' bounds, on the ground;
+ * tools/captures/split_objects.py), where its pose puts it -- the translation of the object's
+ * own frame, `frame` (column-major) taking that frame to the plane's. One definition for both
+ * renderers: CesiumJS reads it from the object's root transform, PlayCanvas from the matrix
+ * it is placed with. Not the middle of its bounds, which the package pads by three scales a
+ * splat and which near a seam can fall in another date's cell.
+ */
+export function objectAnchor(frame: readonly number[]): [number, number] {
+  return [frame[12] ?? 0, frame[13] ?? 0];
+}
+
 /** A node of a tileset.json, as far as its boxes go. */
 export interface TilesetNode {
   boundingVolume?: { box?: readonly number[]; sphere?: readonly number[] };

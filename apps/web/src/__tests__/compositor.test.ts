@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import { encodeConfidenceGrid } from "@/dev/cellGridFixture";
 import { decodeCellGrid, type CellGrid } from "@/lib/cellGrid";
 import {
+  objectAnchor,
   compositorWeight,
   leafTileBoxes,
   MAX_PLANE_CELLS,
@@ -311,5 +312,13 @@ describe("a tileset's leaf boxes", () => {
       { minX: 100.5, minY: 0.5, maxX: 101.5, maxY: 1.5 },
     ]);
     expect(leafTileBoxes(undefined)).toEqual([]);
+  });
+});
+
+describe("where a split object is, for a rule", () => {
+  it("is its own frame's origin: the origin the package declares, where its pose puts it", () => {
+    expect(objectAnchor([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 3.9, 1, 0.5, 1])).toEqual([3.9, 1]);
+    // Turned a quarter about its origin: the origin stays where it is.
+    expect(objectAnchor([0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 3.9, 1, 0, 1])).toEqual([3.9, 1]);
   });
 });
