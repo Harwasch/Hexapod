@@ -112,7 +112,9 @@ again) cannot move the rest of the run into another site's frame.
 
 **Order.** The video's GPS, when recorded; else the located point as before (a typed place, else
 the fix sent with the upload). A typed place belongs to the splat lane, whose files carry no
-location, so the video beating it meets no real case.
+location, so the video beating it meets no real case. A valid video fix is authoritative: when no
+site is within its buffer, the capture makes a new site, and the upload's point is not tried after
+it. The upload decides only when the video has no usable location.
 
 **Buffer.** A video fix comes with Apple's horizontal accuracy, so the join buffer follows it:
 `clamp(2 × accuracy, 10 m, 50 m)` (`services/epochs.video_join_buffer_m`); with no accuracy, and

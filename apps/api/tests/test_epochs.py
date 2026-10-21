@@ -354,6 +354,25 @@ def test_a_video_without_gps_falls_back_to_where_it_was_uploaded_from(db: Sessio
         assert point.buffer_m == epochs.SPATIAL_JOIN_BUFFER_M
 
 
+def test_a_valid_video_fix_that_matches_no_site_makes_a_new_one(db: Session) -> None:
+    """Ruled after the cross review of #72: a valid video fix is authoritative. Recorded
+    500 m from any site and uploaded from beside one, the capture joins nothing -- the
+    upload's point is not tried after the video's misses -- and its run makes a new site.
+    The upload decides only when the video has no usable location."""
+    site = make_site(db)
+    edge = ORIGIN[0] + 0.0005
+    beside = {"lat": _north_of(10, edge), "lon": ORIGIN[1]}
+    elsewhere = _capture(db, "c", {**beside, **_video(_north_of(500, edge), ORIGIN[1], 5.0)})
+    unusable = _capture(db, "u", {**beside, "videoLocation": None})
+    db.commit()
+
+    assert epochs.frame_for_run(db, elsewhere) is None
+    point = epochs.join_point(elsewhere, None)
+    assert point is not None and point.source == "video"
+    found = epochs.frame_for_run(db, unusable)
+    assert found is not None and found.site_id == site.id
+
+
 def test_a_video_near_two_sites_joins_the_nearer(db: Session) -> None:
     """A wide fix can reach two sites; the nearer boundary wins, whichever is older."""
     edge = ORIGIN[0] + 0.0005

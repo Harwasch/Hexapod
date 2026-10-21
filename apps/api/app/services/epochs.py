@@ -280,7 +280,9 @@ def join_point(capture: Capture, located: tuple[float, float] | None) -> JoinPoi
 
     The video wins over both: it is where the capture was made, and the browser's fix is
     where it was uploaded from. A typed place is the splat lane's (`manual_placement`),
-    whose files carry no location, so in practice the two never meet."""
+    whose files carry no location, so in practice the two never meet. A valid video fix
+    is authoritative: when no site is within its buffer the capture makes a new site --
+    the upload's point is not tried after it (ruled after the cross review of #72)."""
     video = recorded_video_location(capture)
     if video is not None:
         return JoinPoint(
