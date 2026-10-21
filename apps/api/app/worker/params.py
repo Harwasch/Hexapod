@@ -124,12 +124,6 @@ def stage_params(
                 fallback["heading_deg"] = heading
             if fallback:
                 resolved.setdefault(stage.id, {}).update(fallback)
-        if stage.impl.name == FFMPEG_FRAMES and VIDEO_LOCATION in (capture.metadata_ or {}):
-            # Present even when null: "the worker looked and found none it could vouch
-            # for" must stop the stage falling back to ffmpeg's own reading.
-            resolved.setdefault(stage.id, {})[VIDEO_LOCATION_PARAM] = capture.metadata_[
-                VIDEO_LOCATION
-            ]
         if SOURCE_META in stage.impl.produced_names and facts:
             resolved.setdefault(stage.id, {}).update(facts)
         if stage.impl.name == CATALOG:
@@ -138,6 +132,16 @@ def stage_params(
             resolved.setdefault(stage.id, {}).update({"slug": capture.slug, "title": capture.name})
     for stage_id, overrides in requested.items():
         resolved.setdefault(stage_id, {}).update(overrides)
+    if VIDEO_LOCATION in (capture.metadata_ or {}):
+        for stage in plan.stages:
+            if stage.impl.name == FFMPEG_FRAMES:
+                # After `jobs.params`, which wins everywhere else: this reading already
+                # chose the capture's site, and a run placed by another point would undo
+                # the one source of truth. Present even when null: "the worker found none
+                # it could vouch for" must stop the stage reading ffmpeg's instead.
+                resolved.setdefault(stage.id, {})[VIDEO_LOCATION_PARAM] = capture.metadata_[
+                    VIDEO_LOCATION
+                ]
     return resolved
 
 

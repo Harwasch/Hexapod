@@ -277,6 +277,16 @@ def test_the_videos_recorded_location_is_the_one_normalize_keeps() -> None:
     ).get("normalize", {})
 
 
+def test_a_jobs_params_cannot_hand_normalize_another_video_location() -> None:
+    """`jobs.params` wins everywhere else, but not here: the recorded reading already chose
+    the capture's site, and a run placed by another point would undo the one source of
+    truth."""
+    other = {"normalize": {"video_location": {"lat": 1.0, "lon": 2.0}}}
+    resolved = _params("photo-reconstruct", {"videoLocation": VIDEO}, other)
+
+    assert resolved["normalize"]["video_location"] == VIDEO
+
+
 def test_the_worker_and_the_pipeline_agree_on_the_video_location_names() -> None:
     from app.services import epochs
     from app.worker import params
