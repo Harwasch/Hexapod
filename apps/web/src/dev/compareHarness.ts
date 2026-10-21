@@ -62,6 +62,8 @@ export interface CompareCounts {
 }
 
 export interface CompareHarness {
+  /** June alone, before any comparison: drawn whole, every covered pixel its own colours. */
+  alone(): Promise<Omit<CompareCounts, "pixels">>;
   /**
    * Both dates coloured, the divider where it is but the cut switched off (the frame's
    * `uHexapodDivider.y`): every splat of both drawn in one sort, red and blue interleaved on
@@ -75,6 +77,8 @@ export interface CompareHarness {
    * buffer PlayCanvas copied in each frame drawn on the way, and the counts where it stops.
    */
   swipe(split: number, steps: number): Promise<{ copies: number[]; counts: CompareCounts }>;
+  /** The comparison ended: June drawn alone again, whole, each tile's copy writing no side. */
+  end(): Promise<Omit<CompareCounts, "pixels">>;
   /** Pixels that differ between two counts' images outside columns [x0, x1). */
   diff(a: CompareCounts, b: CompareCounts, x0: number, x1: number): number;
 }
@@ -273,6 +277,11 @@ export async function startCompareHarness(options: {
 
   let coloured = false;
   return {
+    async alone() {
+      await settle();
+      const { pixels: _pixels, ...counts } = count();
+      return counts;
+    },
     async uncut() {
       const material = app().scene.gsplat.material;
       const at = scanCompareReading(SCAN_ASSET)?.dividerPx ?? 0;
@@ -325,6 +334,13 @@ export async function startCompareHarness(options: {
         copies.push(copyShare());
       }
       return { copies, counts: await drawAt(split) };
+    },
+    async end() {
+      entry.compare = null;
+      await settle(() => scanCompareReading(SCAN_ASSET)?.on === false);
+      await drawFrames(10);
+      const { pixels: _pixels, ...counts } = count();
+      return counts;
     },
     diff(a, b, x0, x1) {
       const p = Uint8Array.from(atob(a.pixels), (c) => c.charCodeAt(0));

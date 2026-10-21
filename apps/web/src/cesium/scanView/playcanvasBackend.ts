@@ -63,7 +63,7 @@
  * Two dates compared (scanCompare.ts) are drawn in this one app too: the scan is the right-hand
  * date, the left one is streamed beside it as a per-cell rule's dates are (ruleDates.ts), within
  * the same budget. Every tile's copy writes the side its date is drawn on into one more byte a
- * splat (`hexapodSide`, in the work buffer from start-up), from one uniform a tile; the frame's
+ * splat (`hexapodSide`, in the work buffer from the first comparison on), from one uniform a tile; the frame's
  * hook hands it to the fragment shader as a flat varying, and `gsplatModifyPS` discards each
  * fragment on the other date's side of the divider by `gl_FragCoord.x`. The divider is a uniform
  * of the frame: swiping copies nothing. Scene selection picks each date on its side only.
@@ -773,9 +773,15 @@ function assemble(
    * Two dates compared (scanCompare.ts), GLSL only as the motion: the comparison drawn now, or
    * null. Every entity of another date (`dated`: the left one's tiles, layers and objects, or a
    * rule's dates') is drawn left of the divider, the scan's own right of it; each tile's copy
-   * writes which (`SIDE_STREAM`, added at start-up) and the frame's hook cuts at the divider.
+   * writes which and the frame's hook cuts at the divider. The byte it writes is one more stream
+   * of the work buffer, added with the first comparison and kept (`sideStream`), as the
+   * sunlight's word is: once the buffer has a stream every copy must write it -- with one there
+   * that a tile's copy left unwritten, PlayCanvas drew none of that tile (measured on the yard:
+   * the stream added at start-up, before any tile wrote it, left the scan invisible) -- so from
+   * then on every tile writes its side, `SIDE_NONE` with no comparison.
    */
   let compare: ScanCompareView | null = null;
+  let sideStream = false;
   const dated = new WeakSet<pc.Entity>();
   /** Another date's tiles, for its pick source under a comparison (made on first need). */
   const datePicks = new WeakMap<pc.Entity, PickRecord>();
@@ -823,12 +829,6 @@ function assemble(
   // are already the detail the view asked for. The smallest splat kept is set per resolution,
   // and to none from afar (`splatMinPixelSize`, in render).
   (app.scene.gsplat as unknown as { dataFormat: string }).dataFormat = "large";
-  // The side of the compare divider each splat is drawn on (scanCompare.ts): one byte a splat,
-  // added at start-up so the work buffer's layout never changes under a comparison. Written
-  // only while two dates are compared; read only by the hook drawn then. GLSL only.
-  if (moves) {
-    app.scene.gsplat.format.addExtraStreams([{ name: SIDE_STREAM, format: pc.PIXELFORMAT_R8U }]);
-  }
   const camera = new pc.Entity("scan-camera");
   camera.addComponent("camera", { clearColor: new pc.Color(0, 0, 0, 0) });
   app.root.addChild(camera);
@@ -1039,7 +1039,7 @@ function assemble(
 
   /** The rule's uniforms on `component`, while one is drawn, and the comparison's side. */
   const setRuleUniforms = (component: pc.GSplatComponent, entity: pc.Entity): void => {
-    if (compare) component.setParameter("uHexapodSide", sideOf(entity));
+    if (sideStream) component.setParameter("uHexapodSide", sideOf(entity));
     if (!rule) return;
     component.setParameter("uRuleOwners", ruleOwners ?? stand().state);
     component.setParameter("uRulePlane", rulePlane);
@@ -1084,10 +1084,10 @@ function assemble(
     const cell = cells?.drawing === true && cells.has(entity);
     // Once the work buffer carries the sunlight's word, every scan tile's copy writes it.
     const lit = sunStream && cells?.has(entity) === true;
-    // Under a rule every tile is weighed by it, the scan's own and the other dates'; under a
-    // comparison every tile writes its side.
+    // Under a rule every tile is weighed by it, the scan's own and the other dates'; once the
+    // work buffer has the side's stream, every tile writes its side.
     const ruled = rule !== null;
-    const sided = compare !== null;
+    const sided = sideStream;
     const modifier =
       hasIds || skinned || cell || lit || ruled || sided
         ? playcanvasModifier(hasIds, skinned, tile?.skinWide ?? false, cell, lit, ruled, sided)
@@ -1373,10 +1373,10 @@ function assemble(
 
   /**
    * A layer's modifier: with the skip bit once the work buffer carries the sunlight's word, the
-   * rule's weight while a rule is drawn, and its side while two dates are compared.
+   * rule's weight while a rule is drawn, and its side once the work buffer carries the side's.
    */
   const layerModifier = (): WorkBufferModifier =>
-    layerModifierOf(sunStream, rule !== null, compare !== null);
+    layerModifierOf(sunStream, rule !== null, sideStream);
 
   /**
    * Draws `view` -- a per-cell view rule (scanRule.ts) -- on every tile, or none with null:
@@ -1494,7 +1494,7 @@ function assemble(
   /**
    * Draws `next` -- two dates compared (scanCompare.ts) -- or one date again with null: the
    * left-hand date streamed beside the scan (ruleDates.ts), every tile's copy writing its side
-   * once as the comparison starts or ends (each copied again in the frame this asks for), the
+   * again as the comparison starts or ends (each copied again in the frame this asks for), the
    * side handed to the fragment shader as a varying, and a pick source each side. The divider
    * moving changes one uniform of the frame (`syncHooks`): nothing is copied.
    */
@@ -1502,6 +1502,10 @@ function assemble(
     if (!cells) return;
     const before = compare;
     compare = next;
+    if (next && !sideStream) {
+      app.scene.gsplat.format.addExtraStreams([{ name: SIDE_STREAM, format: pc.PIXELFORMAT_R8U }]);
+      sideStream = true;
+    }
     if ((before === null) !== (next === null)) {
       for (const entity of cells.meshes()) applyModifier(entity);
       for (const [entity, state] of layers) {
@@ -1750,7 +1754,7 @@ function assemble(
         if (binding.ids && motion && motion.rigidByLeaf.size > 0) sortDirty.add(entity);
       }
     }
-    if (!layer && (cells?.drawing || sunStream || rule || compare)) applyModifier(entity);
+    if (!layer && (cells?.drawing || sunStream || rule || sideStream)) applyModifier(entity);
     return entity;
   };
 
@@ -2036,7 +2040,7 @@ function assemble(
       natives.add(entity);
       streamingNatively = true;
       lodBudget();
-      if (cells?.drawing || sunStream || rule || compare) applyModifier(entity);
+      if (cells?.drawing || sunStream || rule || sideStream) applyModifier(entity);
       resumeLoop();
       return {
         splats: () => app.scene.gsplat.splatBudget,

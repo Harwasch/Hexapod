@@ -10,6 +10,7 @@
  *   the covered pixels outside a 2 px band either side of the cut, and no pixel of either date on
  *   the other's side at all, the columns next to the cut included (CesiumJS's split is exact
  *   there too).
+ * - June alone before, and again once the comparison ends: drawn whole.
  * - Swiped to 0.3 and to 0.7 a step a frame: PlayCanvas copies nothing into its work buffer on
  *   the way (the divider is a uniform of the frame), and the picture is unchanged outside the
  *   columns the divider crossed.
@@ -65,9 +66,11 @@ interface Counts {
 }
 
 interface Harness {
+  alone(): Promise<Counts>;
   uncut(): Promise<Counts>;
   compare(split: number): Promise<Counts>;
   swipe(split: number, steps: number): Promise<{ copies: number[]; counts: Counts }>;
+  end(): Promise<Counts>;
 }
 
 test("under playcanvas, each date is drawn only on its side of the divider, cut exactly there", async ({
@@ -117,6 +120,8 @@ test("under playcanvas, each date is drawn only on its side of the divider, cut 
       [name, args] as const,
     ) as ReturnType<Harness[K]>;
 
+  const alone = await harness("alone");
+  await shot("playcanvas-june-alone");
   const half = await harness("compare", 0.5);
   await shot("playcanvas-compare-at-half");
   const uncut = await harness("uncut");
@@ -143,13 +148,17 @@ test("under playcanvas, each date is drawn only on its side of the divider, cut 
     },
     [half, toLeft.counts, toRight.counts] as const,
   );
+  const ended = await harness("end");
+  await shot("playcanvas-compare-ended");
   const strip = (c: Counts) => ({ ...c, pixels: undefined });
   const figures = {
+    alone,
     uncut,
     half: strip(half),
     toLeft: { copies: toLeft.copies, counts: strip(toLeft.counts) },
     toRight: { copies: toRight.copies, counts: strip(toRight.counts) },
     unchanged,
+    ended,
     errors,
   };
   const json = JSON.stringify(figures);
@@ -158,6 +167,8 @@ test("under playcanvas, each date is drawn only on its side of the divider, cut 
   console.info(json);
 
   expect(errors.filter((e) => /shader|compile|link|webgl/i.test(e))).toEqual([]);
+  // June alone, before the comparison: drawn whole, across the yard.
+  expect(alone.left.covered + alone.right.covered).toBeGreaterThan(150_000);
   // Without the cut both dates are drawn on both sides: the measure bites.
   expect(uncut.left.red).toBeLessThan(0.9);
   expect(uncut.right.blue).toBeLessThan(0.9);
@@ -180,4 +191,6 @@ test("under playcanvas, each date is drawn only on its side of the divider, cut 
   expect(toRight.copies.every((c) => c === 0)).toBe(true);
   expect(unchanged.toLeft).toBe(0);
   expect(unchanged.toRight).toBe(0);
+  // Ended: June alone again, whole -- every tile's copy now writes no side, which cuts nothing.
+  expect(ended.left.covered + ended.right.covered).toBeGreaterThan(150_000);
 });

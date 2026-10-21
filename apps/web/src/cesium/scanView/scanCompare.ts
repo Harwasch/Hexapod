@@ -27,7 +27,7 @@ import type { RuleDate } from "./scanRule";
 export const SIDE_STREAM = "hexapodSide";
 /** The varying the frame's hook hands the fragment shader (`set/getHexapodHalf`). */
 export const SIDE_VARYING = "hexapodHalf";
-/** What a tile's copy writes: no comparison (or a tile not yet copied since), left, right. */
+/** What a tile's copy writes: no comparison, left, right. */
 export const SIDE_NONE = 0;
 export const SIDE_LEFT = 1;
 export const SIDE_RIGHT = 2;

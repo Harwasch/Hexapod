@@ -336,6 +336,7 @@ describe("two dates compared under PlayCanvas", () => {
     pc.material.chunks.set("gsplatModifyPS", "default fragment");
     pc.material.params.clear();
     pc.varyings.names = [];
+    pc.format.streams.length = 0;
     // The comparison's session lends the renderer the globe's streaming classes as it starts.
     lendRuleKit(RULE_KIT);
   });
@@ -347,17 +348,30 @@ describe("two dates compared under PlayCanvas", () => {
     }
   });
 
-  it("has the side stream from the start, and changes nothing while one date is drawn", async () => {
+  it("changes nothing while one date is drawn, and keeps every tile writing its side after one", async () => {
+    serveMarch();
     const { backend } = await backendFor("june-a");
     const own = await backend.load(SCAN, tile("1_1.glb"));
     backend.add(own);
     backend.render(pose);
-    expect(pc.format.streams).toContainEqual({ name: SIDE_STREAM, format: 7 });
+    expect(pc.format.streams).toEqual([]);
     expect(component(own).modifier ?? null).toBeNull();
     expect(pc.material.chunks.get("gsplatModifyVS")).toBe("default modify");
     expect(pc.material.chunks.get("gsplatModifyPS")).toBe("default fragment");
     expect(pc.varyings.names).toEqual([]);
     expect(scanCompareReading("june-a")).toMatchObject({ on: false });
+    // The first comparison adds the side's stream; it is kept, and a copy that left it unwritten
+    // would draw nothing, so every tile writes its side from then on: none, with no comparison.
+    publishScanCompare("june-a", view());
+    expect(pc.format.streams).toEqual([{ name: SIDE_STREAM, format: 7 }]);
+    publishScanCompare("june-a", null);
+    backend.render(pose);
+    expect(pc.format.streams).toHaveLength(1);
+    expect(component(own).modifier?.glsl).toContain(SIDE_WRITE_STEP);
+    expect(component(own).params.get("uHexapodSide")).toBe(0);
+    const later = await backend.load(SCAN, tile("3_3.glb"));
+    expect(component(later).modifier?.glsl).toContain(SIDE_WRITE_STEP);
+    expect(component(later).params.get("uHexapodSide")).toBe(0);
     backend.destroy();
   });
 
@@ -387,11 +401,11 @@ describe("two dates compared under PlayCanvas", () => {
       dividerPx: 400,
       sides: { left: 1, right: 2 },
     });
-    // Ended: every tile drawn whole again, the left date let go.
+    // Ended: every tile drawn whole again (no side), the left date let go.
     publishScanCompare("june-b", null);
     backend.render(pose);
-    expect(component(own).modifier ?? null).toBeNull();
-    expect(component(fill).modifier?.glsl).not.toContain(SIDE_WRITE_STEP);
+    expect(component(own).params.get("uHexapodSide")).toBe(0);
+    expect(component(fill).params.get("uHexapodSide")).toBe(0);
     expect(scanCompareReading("june-b")).toMatchObject({ on: false });
     expect(scanCompareReading("june-b")?.left.dates).toBe(0);
     expect(backend.loadFactor).toBe(1);
