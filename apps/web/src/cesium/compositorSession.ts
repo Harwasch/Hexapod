@@ -967,3 +967,6 @@ export function startCompositor(
     },
   };
 }
+
+// Two dates compared under PlayCanvas: loaded with this module, which SiteManager already loads.
+export { startCompare } from "./compareSession";

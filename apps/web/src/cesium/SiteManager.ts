@@ -1453,8 +1453,12 @@ export class SiteManager {
       : active.compare === null;
     if (same) return;
     active.compare = dates ? { left: dates.left, right: dates.right } : null;
-    // A swipe and a view rule are one or the other: either ends the one before.
-    if (dates) this.endRule(active, "compare");
+    // A swipe and a view rule are one or the other: either ends the one before. Under
+    // PlayCanvas the right-hand date's renderer is handed the left one (compareSession.ts).
+    if (dates) {
+      this.endRule(active, "compare");
+      void this.rules().then((m) => m.startCompare(this.scene, active, RULE_KIT));
+    }
     this.events.emit("compare-dates", { siteId: active.site.id, dates: active.compare });
     // A date the comparison has to load is the site's model loading again: the load pill says
     // so until both are in (`watchFirstTiles`), not only for a first visit.
@@ -1578,7 +1582,7 @@ export class SiteManager {
     if (!active) return;
     if (!rule) return void this.endRule(active);
     if (!active.rule) {
-      const { ruleAssets, startCompositor } = await import("./compositorSession");
+      const { ruleAssets, startCompositor } = await this.rules();
       const renderer = () => this.splatRenderer;
       if (this.active !== active || this.ruleAsked !== rule) return;
       if (!active.rule) {
@@ -1601,6 +1605,11 @@ export class SiteManager {
     active.rule.rule = rule;
     useViewRule.setState({ active: { siteId: active.site.id, rule }, ended: null });
     this.scene.requestRender();
+  }
+
+  /** The rules' module, loaded on demand: a comparison's session under PlayCanvas comes with it. */
+  private rules() {
+    return import("./compositorSession");
   }
 
   /**

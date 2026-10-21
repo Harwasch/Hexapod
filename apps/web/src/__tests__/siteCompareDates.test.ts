@@ -17,7 +17,7 @@ import {
   SplitDirection,
   Transforms,
 } from "cesium";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { Site, SiteAsset, SiteSummary } from "@twin/contracts";
 
@@ -28,6 +28,7 @@ import type * as Tiles from "@/cesium/providers/tiles";
 import type * as Footprints from "@/cesium/scanFootprint";
 import { SiteManager } from "@/cesium/SiteManager";
 import type { SceneEvents } from "@/cesium/types";
+import { publishScanCompare, scanCompareOf } from "@/cesium/scanView/scanCompare";
 import { Emitter } from "@/lib/emitter";
 import type { CompareDates } from "@/lib/epochs";
 
@@ -93,6 +94,8 @@ vi.mock("@/cesium/providers/tiles", async (importOriginal) => ({
   ...(await importOriginal<typeof Tiles>()),
   createSiteTileset: vi.fn((asset: SiteAsset) => {
     const tileset = fakeTileset(ROOT);
+    // Where the tileset is fetched from, as a renderer drawing it beside another reads it.
+    Object.assign(tileset.resource, { url: `https://tiles.example/${asset.id}/tileset.json` });
     made.tilesets.set(asset.id, tileset);
     const hold = made.held.get(asset.id);
     if (!hold) return Promise.resolve(tileset);
@@ -158,6 +161,8 @@ function harness(record: Site = twoEpochSite(), others: Site[] = []) {
     canvas: { clientHeight: 800 },
     terrainProvider: {},
     scene: {
+      preUpdate: new Event(),
+      splitPosition: 0.5,
       globe: { getHeight: () => undefined },
       primitives: { add: vi.fn(), remove: vi.fn() },
       requestRender: vi.fn(),
@@ -234,6 +239,12 @@ const BOTH = { left: E1.id, right: E2.id };
 const ALONE = { show: false, split: SplitDirection.NONE };
 
 describe("comparing two dates of a site", () => {
+  // The comparison's session loads on demand (compareSession.ts): loaded once here, so each
+  // test's session starts within that test rather than a slow first import's later.
+  beforeAll(async () => {
+    await import("@/cesium/compositorSession");
+  });
+
   it("draws both dates' current models, left and right of the divider, with one placement", async () => {
     const { manager, said, tileset, drawn } = harness();
     await open(manager);
@@ -300,6 +311,9 @@ describe("comparing two dates of a site", () => {
   });
 
   it("under PlayCanvas, draws the right-hand date as its scan, the left beside it, neither by CesiumJS", async () => {
+    // What earlier sites' sessions handed over is no one's now (each harness its own scene).
+    publishScanCompare(A1.id, null);
+    publishScanCompare(A2.id, null);
     const { manager, said, drawn, tileset } = harness();
     await open(manager, "playcanvas");
     // The date chosen is the earlier one: the comparison's right-hand date is PlayCanvas's scan.
@@ -317,10 +331,20 @@ describe("comparing two dates of a site", () => {
     });
     // Both are walked on and picked (SplatCollider), each on its side, though hidden.
     expect(manager.scanTarget()?.solid).toEqual([tileset(A1.id), tileset(A2.id)]);
+    // PlayCanvas, drawing the right-hand date, is handed the left one and the divider
+    // (compareSession.ts, loaded on demand).
+    await vi.waitFor(() => expect(scanCompareOf(A2.id)?.left.assetId).toBe(A1.id));
+    expect(scanCompareOf(A2.id)?.left.url).toBe(`https://tiles.example/${A1.id}/tileset.json`);
+    expect(scanCompareOf(A2.id)?.split).toBe(0.5);
     // Either way round; and the date chosen comes back as the scan once it ends.
     await manager.setCompareDates({ left: E2.id, right: E1.id });
     expect(manager.scanTarget()?.assetId).toBe(A1.id);
+    await vi.waitFor(() => expect(scanCompareOf(A1.id)?.left.assetId).toBe(A2.id));
     await manager.setCompareDates(null);
+    // Ended: the next frame takes the view back.
+    (manager as unknown as { scene: { preUpdate: Event } }).scene.preUpdate.raiseEvent();
+    expect(scanCompareOf(A1.id)).toBeNull();
+    expect(scanCompareOf(A2.id)).toBeNull();
     expect(manager.scanTarget()?.assetId).toBe(A1.id);
     expect(manager.scanTarget()?.solid).toEqual([tileset(A1.id)]);
     expect(drawn()).toEqual({ [A1.id]: ALONE, [A2.id]: ALONE });
