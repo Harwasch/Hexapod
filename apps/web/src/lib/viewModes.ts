@@ -34,6 +34,15 @@ export function sunlightDrawable(renderer: SplatRenderer): boolean {
 }
 
 /**
+ * Whether `renderer` draws the per-cell view rules (ADR 0017): CesiumJS on its frame anchor's
+ * splat primitive, PlayCanvas in the copy pass of its work buffer (cesium/scanView/scanRule.ts).
+ * Not Spark, whose world modifier has no port of it, nor the WebGPU trial (GLSL only).
+ */
+export function perCellDrawable(renderer: SplatRenderer): boolean {
+  return renderer === "cesium" || renderer === "playcanvas";
+}
+
+/**
  * What the splat view control offers that `renderer` cannot draw and CesiumJS can, in words for
  * its notice (`perCell`: the Per cell rules are offered, the site having two dates or more);
  * null when there is none -- under CesiumJS, which draws all of it, or nothing of it missing.

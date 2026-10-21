@@ -229,7 +229,8 @@ export async function startCompositorHarness(options: {
       {
         scene,
         entry,
-        cesium: () => true,
+        renderer: () => "cesium",
+        target: () => null,
         end: (reason) => {
           throw new Error(`the rule ended: ${reason}`);
         },

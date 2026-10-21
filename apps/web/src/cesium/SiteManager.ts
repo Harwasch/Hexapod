@@ -1555,7 +1555,9 @@ export class SiteManager {
    * `setEpoch`) that shares its placement, as companions in its one sort, and each cell of the
    * site lattice keeps only the date the rule picks (`compositorSession.ts`, loaded on demand).
    * Null draws the date chosen alone again. Off by default; it ends Compare › Dates and is
-   * ended by it. Refused off CesiumJS, without two dates, or for anything but splats; ended,
+   * ended by it. Under PlayCanvas the renderer drawing the scan draws every date in its one
+   * sort (scanView/scanRule.ts), and a switch between the two carries the rule over. Refused
+   * under Spark or the WebGPU trial, without two dates, or for anything but splats; ended,
    * and said, when that changes or a Living Survey rig takes the scan.
    */
   async setViewRule(rule: ViewRule | null): Promise<void> {
@@ -1565,17 +1567,18 @@ export class SiteManager {
     if (!rule) return void this.endRule(active);
     if (!active.rule) {
       const { ruleAssets, startCompositor } = await import("./compositorSession");
-      const cesium = () => this.splatRenderer === "cesium";
+      const renderer = () => this.splatRenderer;
       if (this.active !== active || this.ruleAsked !== rule) return;
       if (!active.rule) {
         // Refused when the dates cannot be drawn as one here.
-        if (!ruleAssets(active, active.representation, cesium())) return;
+        if (!ruleAssets(active, active.representation, renderer())) return;
         active.rule = { rule };
         this.endCompare(active);
         active.rule.session = startCompositor({
           scene: this.scene,
           entry: active,
-          cesium,
+          renderer,
+          target: () => this.scanTarget(),
           end: (reason) => this.endRule(active, reason),
         });
         this.restartLoad(active);
