@@ -322,7 +322,12 @@ def _header(index: int, value: int) -> Callable[[], bytes]:
 
 
 SPZ_REFUSALS: dict[str, Callable[[], bytes]] = {
-    **{f"fractional_bits_{bits}": _header(4, bits) for bits in (13, 23, 31, 32, 33, 255)},
+    "fractional_bits_13": _header(4, 13),
+    "fractional_bits_23": _header(4, 23),
+    "fractional_bits_31": _header(4, 31),
+    "fractional_bits_32": _header(4, 32),
+    "fractional_bits_33": _header(4, 33),
+    "fractional_bits_255": _header(4, 255),
     # Fewer bits than the tiler gives a tile this close to its frame.
     "fractional_bits_11_small_tile": lambda: splat_glb(POINT, fractional_bits=11),
     "spz_magic": _header(0, 0x12345678),

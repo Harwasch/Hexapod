@@ -372,7 +372,12 @@ def _header(index: int, value: int) -> Callable[[], bytes]:
 
 
 SPZ_REFUSALS: dict[str, Callable[[], bytes]] = {
-    **{f"fractional_bits_{bits}": _header(4, bits) for bits in (13, 23, 31, 32, 33, 255)},
+    "fractional_bits_13": _header(4, 13),
+    "fractional_bits_23": _header(4, 23),
+    "fractional_bits_31": _header(4, 31),
+    "fractional_bits_32": _header(4, 32),
+    "fractional_bits_33": _header(4, 33),
+    "fractional_bits_255": _header(4, 255),
     "fractional_bits_11_small_tile": lambda: glb_at([[0.5, 0.5, 0.5]], 11),
     "spz_magic": _header(0, 0x12345678),
     "spz_version_3": _header(1, 3),
@@ -527,9 +532,106 @@ def test_whole_metre_nested_translations_pass(tmp_path: Path) -> None:
     assert sorted(xyz[:, 0].tolist()) == [0.5, 2.5]
 
 
-def test_the_cases_are_the_apis() -> None:
-    """The same refusals by name as apps/api tests/test_layer_allowlist.py: one allowlist,
-    two transcriptions, held to one list."""
-    text = (REPO / "apps" / "api" / "tests" / "test_layer_allowlist.py").read_text()
-    for case in (*TILESET_REFUSALS, *GLB_REFUSALS):
-        assert f'"{case}"' in text, case
+API_TESTS = REPO / "apps" / "api" / "tests" / "test_layer_allowlist.py"
+API_POSITIONS = REPO / "apps" / "api" / "app" / "worker" / "positions.py"
+
+
+def _case_names(path: Path) -> dict[str, set[str]]:
+    """Each `*_REFUSALS` dict literal's keys in a test file, read without importing it."""
+    import ast
+
+    found: dict[str, set[str]] = {}
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        target = node.target if isinstance(node, ast.AnnAssign) else None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        value = getattr(node, "value", None)
+        if (
+            isinstance(target, ast.Name)
+            and target.id.endswith("_REFUSALS")
+            and isinstance(value, ast.Dict)
+        ):
+            keys = {k.value for k in value.keys if isinstance(k, ast.Constant)}
+            assert len(keys) == len(value.keys), f"{target.id}: every key a plain string"
+            found[target.id] = keys
+    return found
+
+
+def test_the_cases_are_the_apis_and_the_apis_are_these() -> None:
+    """One allowlist, two transcriptions, one list of refusals: the same `*_REFUSALS`
+    dicts with the same names in apps/api tests/test_layer_allowlist.py and here, both
+    ways (Codex R5: the check went one way, and a captures-only case passed it)."""
+    here, there = _case_names(Path(__file__)), _case_names(API_TESTS)
+    assert (
+        set(here)
+        == set(there)
+        == {
+            "TILESET_REFUSALS",
+            "GLB_REFUSALS",
+            "SPZ_REFUSALS",
+            "ACCESSOR_REFUSALS",
+            "NUMBER_REFUSALS",
+        }
+    )
+    for name in here:
+        assert here[name] == there[name], (name, here[name] ^ there[name])
+
+
+def _api_positions() -> Any:
+    """The API gate's own module (apps/api app/worker/positions.py: numpy and the standard
+    library), loaded from its file without the API's environment."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("api_positions", API_POSITIONS)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _every_case() -> list[tuple[str, Callable[[], tuple[dict[str, Any], bytes]]]]:
+    cases: list[tuple[str, Callable[[], tuple[dict[str, Any], bytes]]]] = []
+    for table in (TILESET_REFUSALS, NUMBER_REFUSALS):
+        for name, change in table.items():
+
+            def tiles(
+                change: Callable[[dict[str, Any]], object] = change,
+            ) -> tuple[dict[str, Any], bytes]:
+                document = tileset()
+                change(document)
+                return document, SAFE
+
+            cases.append((name, tiles))
+    for table in (GLB_REFUSALS, SPZ_REFUSALS, ACCESSOR_REFUSALS):
+        for name, make in table.items():
+            cases.append((name, lambda make=make: (tileset(), make())))
+    return cases
+
+
+@pytest.mark.parametrize(("case", "build"), _every_case(), ids=[n for n, _ in _every_case()])
+def test_every_case_is_refused_by_both_validators(
+    tmp_path: Path, case: str, build: Callable[[], tuple[dict[str, Any], bytes]]
+) -> None:
+    """Each refusal, run through the publish pre-check (`rescan_gate.layer_positions`) and
+    through the API gate's own functions (`packer_placements`, then `packer_spz` of every
+    tile it places) on the very same files: both refuse."""
+    api = _api_positions()
+    document, leaf = build()
+    path = write(tmp_path, document, leaf=leaf)
+    for name in ("f1.glb?v=1", "f1.glb#x", "f1%2Eglb", "nested.json"):
+        (tmp_path / name).write_bytes(SAFE)
+    with pytest.raises(rg.RescanGateError):
+        rg.layer_positions(path)
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+    with pytest.raises(api.TileFormatError):
+        for uri, _ in api.packer_placements(loaded):
+            api.packer_spz((tmp_path / uri).read_bytes())
+
+
+def test_the_packers_output_passes_both_validators() -> None:
+    api = _api_positions()
+    for path in FIXTURES:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        for uri, _ in api.packer_placements(document):
+            api.packer_spz((path.parent / uri).read_bytes())
+        assert rg.layer_positions(path).shape[0] > 0
