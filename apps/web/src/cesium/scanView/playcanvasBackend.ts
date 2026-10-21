@@ -173,7 +173,8 @@ export function playcanvasModifierGlsl(
   // a cell view, with the look drawn for a black splat, so that the hook relights the look of
   // the relit splat (`A + (drawn - A) · factor`, every branch of the look being affine in the
   // colour's scale) -- CesiumJS's order, the sun (3) before the look (5).
-  const sunStep = sun && !cell ? "writeHexapodSun(uvec4(0u, 0u, 0u, 0u));\n    " : "";
+  const sunStep =
+    sun && !cell ? "writeHexapodSun(uvec4(hexapodSunWord(vec3(0.0)), 0u, 0u, 0u));\n    " : "";
   const cellArgs = "uCellGrid, uCellRule, uCellLevel, uCellTile";
   const blackStep = sun
     ? `writeHexapodSun(uvec4(hexapodSunWord(hexapodCellTile(center, vec4(0.0, 0.0, 0.0, color.a), ${cellArgs}).rgb), 0u, 0u, 0u));

@@ -249,6 +249,10 @@ the spike `claude/research-pc-sunlight-spike`.
     first time the sun is on in a session and kept: nothing while it has never been on). Every
     tile's copy writes it once it is there (a word nobody writes would be undefined), so a tile
     with no objects and no view gets a modifier then too, with an empty colour step. It carries:
+    - **Whether a copy has written it** (bit 31, in every word a copy writes). The stream starts
+      at zero, and so does a work buffer PlayCanvas makes again: until a tile's copy lands
+      (about a frame) its splats are drawn as they are, neither lit with no look nor, a
+      layer's, lit.
     - **Inferred layers skipped.** A layer's tiles are drawn and sorted with the scan's but are
       not the capture, and under CesiumJS (a tileset of their own) are never relit: their
       modifier sets bit 30 and the hook leaves them as drawn.

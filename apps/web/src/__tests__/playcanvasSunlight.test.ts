@@ -322,7 +322,7 @@ describe("Sunlight under PlayCanvas", () => {
     // Every scan tile's copy writes it -- one with no objects and no view too -- and a layer's
     // writes the skip bit.
     const tileGlsl = component(near).modifier?.glsl ?? "";
-    expect(tileGlsl).toContain("writeHexapodSun(uvec4(0u, 0u, 0u, 0u));");
+    expect(tileGlsl).toContain("writeHexapodSun(uvec4(hexapodSunWord(vec3(0.0)), 0u, 0u, 0u));");
     expect(tileGlsl).not.toContain("hexapodInstanceColor(0u");
     expect(component(near).sets.at(-1)).toBe("uInstanceParams");
     const layerGlsl = component(layer).modifier?.glsl ?? "";
@@ -388,7 +388,9 @@ describe("Sunlight under PlayCanvas", () => {
     publishScanSun("scan-c", MORNING);
     const stream = await backend.streamNative?.("https://scan.test/lod-meta.json");
     const entity = pc.entities.find((e) => e.name === "scan");
-    expect(entity?.gsplat?.modifier?.glsl).toContain("writeHexapodSun(uvec4(0u, 0u, 0u, 0u));");
+    expect(entity?.gsplat?.modifier?.glsl).toContain(
+      "writeHexapodSun(uvec4(hexapodSunWord(vec3(0.0)), 0u, 0u, 0u));",
+    );
     stream?.stop();
     backend.destroy();
   });
@@ -427,7 +429,9 @@ describe("Sunlight under PlayCanvas", () => {
     expect(glsl.split("writeHexapodSun(").length).toBe(2);
     // Photo again: the plain word (no look, nothing to undo).
     publishScanCellView("scan-c", null);
-    expect(component(near).modifier?.glsl).toContain("writeHexapodSun(uvec4(0u, 0u, 0u, 0u));");
+    expect(component(near).modifier?.glsl).toContain(
+      "writeHexapodSun(uvec4(hexapodSunWord(vec3(0.0)), 0u, 0u, 0u));",
+    );
     backend.destroy();
   });
 });

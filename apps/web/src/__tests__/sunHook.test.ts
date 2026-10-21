@@ -13,6 +13,7 @@ import {
   relightAfterLook,
   SUN_HOOK_VS,
   SUN_WORD_GLSL,
+  sunWordLit,
   unpackSunWord,
 } from "@/cesium/scanView/sunHook";
 import { cellViewColor, type CellViewMode } from "@/lib/cellLook";
@@ -95,25 +96,50 @@ describe("the word beside each splat", () => {
       [0.0004, 0.9996, 0.5],
     ] as Vec3[]) {
       const word = packSunWord(black, false);
-      expect(word).toBeGreaterThanOrEqual(0);
-      expect(word).toBeLessThan(2 ** 30);
+      // Unsigned, the written bit (31) set, the skip bit (30) not.
+      expect(word).toBeGreaterThanOrEqual(2 ** 31);
+      expect(word).toBeLessThan(2 ** 31 + 2 ** 30);
       const back = unpackSunWord(word);
       expect(back.skip).toBe(false);
+      expect(back.written).toBe(true);
       for (let c = 0; c < 3; c += 1)
         expect(Math.abs(back.black[c]! - black[c]!)).toBeLessThan(0.5 / 1023 + 1e-12);
     }
-    expect(unpackSunWord(packSunWord([0.3, 0.3, 0.3], true)).skip).toBe(true);
-    // A word nobody wrote (zero) is a lit splat with no look: the photograph relit.
-    expect(unpackSunWord(0)).toEqual({ skip: false, black: [0, 0, 0] });
+    expect(unpackSunWord(packSunWord([0.3, 0.3, 0.3], true))).toMatchObject({
+      skip: true,
+      written: true,
+    });
   });
 
-  it("is what the GLSL packs and reads: ten bits a channel, the skip bit 30", () => {
+  it("is lit only once a copy wrote it, and never for a layer's", () => {
+    // A word no copy has written yet (the stream is new, or the work buffer was made again):
+    // zero, so the splat is drawn as it is until its tile's copy lands -- not lit with no look,
+    // and not a layer lit for a frame.
+    expect(unpackSunWord(0)).toEqual({ written: false, skip: false, black: [0, 0, 0] });
+    expect(sunWordLit(0)).toBe(false);
+    expect(sunWordLit(packSunWord([0, 0, 0], false))).toBe(true);
+    expect(sunWordLit(packSunWord([0.4, 0.1, 0.1], false))).toBe(true);
+    expect(sunWordLit(packSunWord([0, 0, 0], true))).toBe(false);
+    // The skip bit alone, as no copy writes it, is not lit either.
+    expect(sunWordLit(2 ** 30)).toBe(false);
+  });
+
+  it("is what the GLSL packs and reads: ten bits a channel, skip bit 30, written bit 31", () => {
     expect(SUN_WORD_GLSL).toContain("1023.0");
     expect(SUN_WORD_GLSL).toContain("<< 10u");
     expect(SUN_WORD_GLSL).toContain("<< 20u");
     expect(SUN_WORD_GLSL).toContain(`${String(2 ** 30)}u`);
+    expect(SUN_WORD_GLSL).toContain(`${String(2 ** 31)}u`);
+    // Every word a copy writes carries the written bit, a layer's the skip bit with it.
+    expect(SUN_WORD_GLSL).toContain(
+      "return HEXAPOD_SUN_WRITTEN | q.r | (q.g << 10u) | (q.b << 20u);",
+    );
+    expect(SUN_WORD_GLSL).toContain("HEXAPOD_SUN_SKIP = HEXAPOD_SUN_WRITTEN |");
     expect(SUN_HOOK_VS).toContain("loadHexapodSun().r");
-    expect(SUN_HOOK_VS).toContain("hexapodSunSkipped");
+    expect(SUN_HOOK_VS).toContain("!hexapodSunLit(word)");
+    expect(SUN_HOOK_VS).toContain(
+      `(word & ${String(2 ** 31)}u) != 0u && (word & ${String(2 ** 30)}u) == 0u`,
+    );
     // The relight's constants are uniforms the relight hands over with its sun.
     expect(SUN_HOOK_VS).toContain("lo < uHexapodSunlight.z * mid");
     expect(SUN_HOOK_VS).toContain("uHexapodSunlight.y + (1.0 - uHexapodSunlight.y) * lambert");
