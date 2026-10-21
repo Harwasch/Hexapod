@@ -200,9 +200,11 @@ name, the axis of its smallest variance.
 8. **Off while As captured is on** (the slot reads `useAsCaptured`, as § As captured asked): the
    part leaves the chain, the badge goes, the clock is given back; the control shows Off, disabled,
    saying "Off while As captured is on", and the choice comes back after.
-9. **CesiumJS only** (C5): under PlayCanvas or Spark the control is disabled beside the views
-   control's shared "Needs the CesiumJS renderer" notice and its one-click switch, and the relight
-   requires CesiumJS to be the splat renderer even for a scan CesiumJS draws under another one (a
+9. **CesiumJS and PlayCanvas** (C5, then port 2 below): under Spark or the WebGPU trial the
+   control is disabled, saying "Needs the CesiumJS or PlayCanvas renderer (Settings › Advanced ›
+   Splat renderer)", with a one-click "Draw with PlayCanvas"; the views control's shared notice
+   no longer names Sunlight. The relight requires the chosen splat renderer to draw it
+   (`lib/viewModes.ts` `sunlightDrawable`), even for a scan CesiumJS draws under another one (a
    Living Survey rig's), which nothing there would label.
 10. **Cost.** Off: nothing in the shader; `SiteManager.attachTileset` holds a slot
     (`cesium/sunlightSlot.ts`) that loads the relight on the first switch. On: one more fetch of a
@@ -213,6 +215,71 @@ name, the axis of its smallest variance.
     chunks loaded on demand. After the second review, with § As captured's fixes beneath it, the
     stack's entry is 195,742 B → 195,811 B (+69 B): the Simulated lighting label in the slot's
     error boundary; Compare, the shown-tileset guard and the NaN guard are in lazy chunks.
+
+### Under PlayCanvas (port 2)
+
+Date 2026-10-20 · branch `claude/feat-splat-pc-sunlight`, on PlayCanvas port 1 (#73); proven by
+the spike `claude/research-pc-sunlight-spike`.
+
+11. **PlayCanvas's per-frame hook, not its copy pass** (`cesium/scanView/sunHook.ts`). The
+    relight depends on the eye (a flat splat is lit on the side it is seen from) and on the sun,
+    which moves with the clock; in the copy pass that draws Confidence and Data age either would
+    copy every tile again. PlayCanvas 2.22.6's user material `app.scene.gsplat.material` takes a
+    `gsplatModifyVS` chunk that it copies onto the unified renderer's draw material whenever the
+    material's version moves; that vertex shader hands the chunk the work buffer's rotation and
+    scales, then `modifySplatColor(centre, colour)`, in the scan's frame (the manager's identity
+    node), with the eye in `view_position`. The chunk transcribes CesiumJS's arithmetic: the
+    smallest scale's axis as the normal when the splat is clearly flat
+    (`lib/splatNormals.ts` `scaleNormal`: the eigenvalues of `R·diag(s²)·Rᵀ` are the `s²`, so
+    it is the covariance's own `λmin/λmid < 0.25`, held to `splatNormal` on 20 000 random
+    splats), flipped toward the eye, lambert against the sun, the same `mix`. In the user
+    material while there is a sun and out when there is none.
+12. **One sun, worked out once.** `cesium/sunlight.ts` still works the sun out on the globe's
+    `preRender` at the frame's scene time by the engine's arithmetic (`sunSine`, and
+    `sunInFrame` for its direction in the scan's frame from the root's inverse rotation); under
+    PlayCanvas the tileset is hidden, so instead of the colour part's uniform it hands
+    `{dir, sunUp, strength}` and the two constants to the renderer drawing that asset
+    (`state/sunReport.ts` `publishScanSun`), which sets them as uniforms: a uniform copies
+    nothing into the work buffer. Handed on only when it moved by 1e-4 (the overlay draws a
+    frame for each). The renderer's watching is what says the relight is on screen, so the
+    badge's report, and with it At capture's held clock, follows a renderer drawing the scan;
+    NaN sun: strength 0, no report, as under CesiumJS. As captured, the badge, At capture and
+    its "more than one date" rule are the renderer-independent code above, unchanged.
+13. **One word per splat** (`hexapodSun`, an R32U stream of PlayCanvas's work buffer, added the
+    first time the sun is on in a session and kept: nothing while it has never been on). Every
+    tile's copy writes it once it is there (a word nobody writes would be undefined), so a tile
+    with no objects and no view gets a modifier then too, with an empty colour step. It carries:
+    - **Inferred layers skipped.** A layer's tiles are drawn and sorted with the scan's but are
+      not the capture, and under CesiumJS (a tileset of their own) are never relit: their
+      modifier sets bit 30 and the hook leaves them as drawn.
+    - **CesiumJS's order, sun before look.** CesiumJS lights (part 3) before Confidence / Data
+      age (5), which tint by the relit luminance; under PlayCanvas the look is drawn in the copy
+      pass and the hook after it. Every branch of the look is affine in the colour's scale,
+      `look(s·c) = A + s·(look(c) − A)` with `A = look(black)`, so under a cell view the copy
+      pass also draws the look of a black splat of the same alpha into the word (ten bits a
+      channel) and the hook relights `A + (drawn − A)·factor`: the look of the relit splat
+      within half a step of 1/1023 (tested on every branch of `cellViewColor`). Relit after the
+      look instead, a shadowed cell's tint would fall to the ambient floor (0.35 of the unlit
+      look at the evening sun) where CesiumJS keeps its floor (0.73). A colour-only copy
+      (spherical harmonics as the eye moves) leaves the word as it was, which still holds: `A`
+      does not depend on the photograph.
+14. **Cost.** Off: nothing (no stream, no chunk). On: the stream, 4 B a splat of the work buffer
+    for the session; in the final draw a stream read, a few comparisons, a quaternion turn and
+    a dot product a splat (the spike: about +10 % frame time on SwiftShader, relative only);
+    under a cell view, the look evaluated twice per splat in the copies it already makes. The
+    globe's entry 196,147 (#73 at de79fc1d) → 196,146 B gzip at the branch's head (a few bytes either way as chunk names change), 83 files up front as before: the hand-off lives in
+    the relight's shared-state chunk the entry already names, and the hook's constants travel
+    with the sun, so the PlayCanvas and relight chunks share no new module.
+15. **Spark: not ported; measured.** Spark's per-frame equivalent is a world modifier with
+    `enableWorldToView`, which regenerates a mesh whenever the view moves. Turned on for every
+    tile of the synthetic yard (43 337 splats, 15 meshes, SwiftShader, 40 moving frames), the
+    moving frame was 420 ms either way (on 420.3 / 419.5, off 421.9 / 424.3 ms; PlayCanvas
+    28–30 ms on the same view): Spark already regenerates while the view moves away from its
+    sort, and SwiftShader's frames are sort-bound, so the measurement cannot see the cost it
+    is meant to show -- a pass over every splat of the scan each moving frame, which grows with
+    the scan where PlayCanvas's uniforms do not. With that unmeasured and a third relight path
+    (a dyno, its harness) to build and keep, Spark keeps its honest notice. **WebGPU trial:**
+    not drawn (the hook is GLSL, as the motion and the cell views).
 
 ### Stubbed
 
@@ -232,9 +299,14 @@ name, the axis of its smallest variance.
 - Splats whose cut-off is close to 0.25 may flip between relit and not from one splat to the next
   on the same surface; the threshold is the design's, not a measurement.
 
-Evidence: `e2e/sunlightScene.spec.ts` (an east-facing slab under SwiftShader: discs 137.6 off,
-126.0 at 07:15 local solar time, 0.916 of the photograph against the mirror's 0.917; 50.3 at
-16:45, 0.366 against 0.35; round splats unchanged by day; everything at the floor at night; the
-sun off and As captured on draw exactly the photograph), `e2e/sunlight.spec.ts` (the app under all
-three renderers), and `splatNormals`, `splatSunlight`, `sunClock` and `sunlightControl` unit
-tests.
+Evidence: `e2e/sunlightScene.spec.ts`, once a renderer (an east-facing slab under SwiftShader;
+the discs' brightness lit over unlit against the mirror's factor). CesiumJS: discs 137.6 off,
+126.0 at 07:15 local solar time, 0.916 of the photograph against 0.917; 50.3 at 16:45, 0.366
+against 0.35. PlayCanvas: 149.5 off, 136.6 in the morning, 0.914 against 0.917; 52.1 in the
+evening, 0.349 against 0.35; night 0.348 (flat) and 0.349 (round). Both: round splats unchanged by
+day, everything at the floor at night, the sun off and As captured on drawing exactly the
+photograph. With Confidence over the wall (every cell strong), lit over unlit: CesiumJS 0.965
+(morning) and 0.738 (evening), PlayCanvas 0.964 and 0.727, against 0.965 and 0.728 for the look of
+the relit grey (0.35 for the look relit after). `e2e/sunlight.spec.ts` (the app under CesiumJS,
+PlayCanvas and Spark), and the `splatNormals`, `sunHook`, `playcanvasSunlight`, `splatSunlight`,
+`sunClock` and `sunlightControl` unit tests.
