@@ -3,11 +3,14 @@
  * it sits in (hexapod.cellgrid v1, `lib/cellGrid.ts`), in the CesiumJS splat primitive's
  * vertex shader, as one part of its colour chain (`splatColor.ts`).
  *
- * - Confidence: `weak-v1` (design M4-6 C3). Weak cells (score below 128, or unseen) red; the
- *   rest from amber to green by score; a cell with no evidence desaturated grey. Not colour
- *   alone: weak cells are hatched with dark diagonal bands and fair ones dotted, strong ones
- *   solid, a band pair or a dot every two cells of the level read (`CELL_PATTERN_CELLS`), so a
- *   reader who cannot tell red from green still finds the weak patches.
+ * The look is `lib/cellLook.ts`'s, the one PlayCanvas and Spark draw too (`CELL_LOOK_GLSL`):
+ *
+ * - Confidence: `weak-v1` (design M4-6 C3). Weak cells (score below the grid's threshold, or
+ *   unseen) red; the rest from amber to green by score; a cell with no evidence desaturated
+ *   grey. Not colour alone: weak cells are hatched with dark diagonal bands and fair ones
+ *   dotted, strong ones solid, a band pair or a dot every two cells of the level read
+ *   (`CELL_PATTERN_CELLS`), so a reader who cannot tell red from green still finds the weak
+ *   patches.
  * - Data age: the shown date's age, one colour per age bucket for every cell it observed
  *   (`lib/dataAge.ts`); light world-space stripes where a later date of the site has evidence,
  *   so "newer data here" can be seen without switching.
@@ -47,7 +50,13 @@ import {
   type CellGrid,
 } from "@/lib/cellGrid";
 
-import { AGE_RAMP, CONFIDENCE_RAMP, type Rgb } from "@/lib/cellRamps";
+import {
+  CELL_LOOK_GLSL,
+  CELL_MIN_PX,
+  CELL_MODE,
+  NEWER_STRIPE_M,
+  type CellViewMode,
+} from "@/lib/cellLook";
 
 import {
   addColorPart,
@@ -62,23 +71,20 @@ import type { OwnedTexture } from "./splatGpuMotion";
 import type { SplatPrimitive, SplatShaderBuilder } from "./splatInternals";
 import { COMPANION_SLOT_VECS, companionSlots, companionSlotsGlsl } from "./splatSlots";
 
-export type CellViewMode = "confidence" | "data-age";
+export type { CellViewMode };
+export {
+  CELL_MIN_PX,
+  CELL_PATTERN_CELLS,
+  cellTexelFor,
+  cellViewColor,
+  NEWER_STRIPE_M,
+} from "@/lib/cellLook";
+export { AGE_RAMP, CONFIDENCE_RAMP } from "@/lib/cellRamps";
 
 /** No companions: one array, so its identity says nothing changed. */
 const NO_FILLS: readonly unknown[] = [];
-export { AGE_RAMP, CONFIDENCE_RAMP };
 
-/** The shader's mode numbers. */
-const MODE: Record<CellViewMode | "off", number> = { off: 0, confidence: 1, "data-age": 2 };
-
-/** Smallest a cell may look on screen before a coarser level is read (pixels). */
-export const CELL_MIN_PX = 6;
-/** Data age's "newer data here" stripes: one light and one plain band per this many metres. */
-export const NEWER_STRIPE_M = 0.6;
-/** Confidence's hatching and dots repeat every this many cells of the level a splat reads. */
-export const CELL_PATTERN_CELLS = 2;
-/** How dark a hatch band or a dot is: the tint times this. */
-const PATTERN_DARK = 0.55;
+const MODE = CELL_MODE;
 
 /** How the part makes its texture and uniform values. The real one wraps CesiumJS. */
 export interface CellViewGpu {
@@ -89,13 +95,12 @@ export interface CellViewGpu {
 }
 
 /**
- * GLSL of the part. Uniforms: the cell texture; the model-to-grid matrix; per level
- * (i0, j0, ni, nj) and its first texel; (mode, finest cell m, minimum px, levels); (weak
- * threshold, unseen bit, stripe m, the model's runtime scale); the mode's ramp; the companion
- * slots drawn grey.
+ * GLSL of the part: the shared look (`CELL_LOOK_GLSL`) and the per-splat level read. Uniforms:
+ * the cell texture; the model-to-grid matrix; per level (i0, j0, ni, nj) and its first texel;
+ * (mode, finest cell m, minimum px, levels); (weak threshold, unseen bit, stripe m, the model's
+ * runtime scale); the companion slots drawn grey.
  */
 export function cellViewGlsl(): string {
-  const width = String(CELL_TEXTURE_WIDTH);
   return `
 uniform highp sampler2D u_cellGrid;
 uniform mat4 u_cellFromModel;
@@ -103,8 +108,8 @@ uniform ivec4 u_cellLevels[${String(MAX_CELL_LEVELS)}];
 uniform ivec4 u_cellOffsets[${String(Math.ceil(MAX_CELL_LEVELS / 4))}];
 uniform vec4 u_cellParams;
 uniform vec4 u_cellRule;
-uniform vec4 u_cellRamp[6];
 uniform ivec4 u_cellFills[${String(COMPANION_SLOT_VECS)}];
+${CELL_LOOK_GLSL}
 ${companionSlotsGlsl("splatCellFill", "u_cellFills")}
 int splatCellOffset(int k) {
     ivec4 o = u_cellOffsets[k / 4];
@@ -117,9 +122,8 @@ vec4 splatCellViewColor(uint splatIndex, vec3 position, vec4 color) {
     if (mode == 0) {
         return color;
     }
-    float lum = dot(color.rgb, vec3(0.299, 0.587, 0.114));
     if (splatCellFill(splatIndex)) {
-        return vec4(vec3(lum * 0.85), color.a);
+        return hexapodCellGrey(color);
     }
     vec3 p = (u_cellFromModel * vec4(position, 1.0)).xyz;
     vec3 eye = (czm_inverseModelView * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
@@ -131,136 +135,10 @@ vec4 splatCellViewColor(uint splatIndex, vec3 position, vec4 color) {
     int k = need <= 1.0 ? 0 : int(ceil(log2(need)));
     k = clamp(k, 0, levels - 1);
     float cell = u_cellParams.y * exp2(float(k));
-    ivec4 l = u_cellLevels[k];
-    int ci = int(floor(p.x / cell)) - l.x;
-    int cj = int(floor(p.y / cell)) - l.y;
-    ivec2 t = ivec2(0);
-    if (ci >= 0 && cj >= 0 && ci < l.z && cj < l.w) {
-        int linear = splatCellOffset(k) + cj * l.z + ci;
-        int row = linear / ${width};
-        vec2 texel = texelFetch(u_cellGrid, ivec2(linear - row * ${width}, row), 0).rg;
-        t = ivec2(texel * 255.0 + 0.5);
-    }
-    float shade = 0.45 + 0.55 * lum;
-    vec3 rgb;
-    if (mode == 1) {
-        bool unseen = (t.y & int(u_cellRule.y + 0.5)) != 0;
-        if (t.x == 0 && !unseen) {
-            rgb = vec3(lum * 0.85);
-        } else {
-            float period = ${String(CELL_PATTERN_CELLS)}.0 * cell;
-            if (unseen || float(t.x) < u_cellRule.x) {
-                rgb = u_cellRamp[1].rgb * shade;
-                if (fract((p.x - p.y) / period) >= 0.5) {
-                    rgb *= ${String(PATTERN_DARK)};
-                }
-            } else {
-                int bin = 2 + clamp(int(4.0 * (float(t.x) - u_cellRule.x) / (256.0 - u_cellRule.x)), 0, 3);
-                rgb = u_cellRamp[bin].rgb * shade;
-                if (bin < 4 && fract(p.x / period) >= 0.6 && fract(p.y / period) >= 0.6) {
-                    rgb *= ${String(PATTERN_DARK)};
-                }
-            }
-        }
-    } else {
-        rgb = t.x == 0 ? vec3(lum * 0.85) : u_cellRamp[clamp(t.x - 1, 0, 5)].rgb * shade;
-        if (t.y > 0 && fract((p.x + p.y) / u_cellRule.z) < 0.5) {
-            rgb = mix(rgb, vec3(1.0), 0.65);
-        }
-    }
-    return vec4(rgb, color.a);
+    ivec2 t = hexapodCellTexel(u_cellGrid, p.xy, cell, vec4(u_cellLevels[k]), float(splatCellOffset(k)));
+    return hexapodCellLook(mode, t, p.xy, cell, u_cellRule, color);
 }
 `;
-}
-
-/**
- * What the shader does to one straight-alpha colour, for tests: `texel` the cell's (R, G)
- * bytes (or null outside the grid), `p` the splat in the grid's metres, `cell` the size of the
- * level's cells it reads (m).
- */
-export function cellViewColor(
-  mode: CellViewMode,
-  texel: readonly [number, number] | null,
-  color: readonly [number, number, number, number],
-  options: {
-    weakBelow?: number;
-    unseenBit?: number;
-    p?: readonly [number, number];
-    cell?: number;
-    fill?: boolean;
-  } = {},
-): [number, number, number, number] {
-  const lum = 0.299 * color[0] + 0.587 * color[1] + 0.114 * color[2];
-  const grey: [number, number, number, number] = [lum * 0.85, lum * 0.85, lum * 0.85, color[3]];
-  if (options.fill) return grey;
-  const [r, g] = texel ?? [0, 0];
-  const shade = 0.45 + 0.55 * lum;
-  const tint = (c: Rgb | undefined): [number, number, number, number] => [
-    (c?.[0] ?? 0) * shade,
-    (c?.[1] ?? 0) * shade,
-    (c?.[2] ?? 0) * shade,
-    color[3],
-  ];
-  if (mode === "confidence") {
-    const weakBelow = options.weakBelow ?? DEFAULT_WEAK_BELOW;
-    const unseen = (g & (options.unseenBit ?? DEFAULT_UNSEEN_BIT)) !== 0;
-    if (r === 0 && !unseen) return grey;
-    const period = CELL_PATTERN_CELLS * (options.cell ?? 1);
-    const fract = (v: number) => v / period - Math.floor(v / period);
-    const [x, y] = options.p ?? [0, 0];
-    const dark = (c: [number, number, number, number]): [number, number, number, number] => [
-      c[0] * PATTERN_DARK,
-      c[1] * PATTERN_DARK,
-      c[2] * PATTERN_DARK,
-      c[3],
-    ];
-    if (unseen || r < weakBelow) {
-      const weak = tint(CONFIDENCE_RAMP[1]);
-      return fract(x - y) >= 0.5 ? dark(weak) : weak;
-    }
-    const bin = 2 + Math.min(3, Math.max(0, Math.floor((4 * (r - weakBelow)) / (256 - weakBelow))));
-    const out = tint(CONFIDENCE_RAMP[bin]);
-    return bin < 4 && fract(x) >= 0.6 && fract(y) >= 0.6 ? dark(out) : out;
-  }
-  const out = r === 0 ? grey : tint(AGE_RAMP[Math.min(5, Math.max(0, r - 1))]);
-  const [x, y] = options.p ?? [0, 0];
-  const band = (x + y) / NEWER_STRIPE_M - Math.floor((x + y) / NEWER_STRIPE_M);
-  if (g > 0 && band < 0.5) {
-    return [
-      out[0] + (1 - out[0]) * 0.65,
-      out[1] + (1 - out[1]) * 0.65,
-      out[2] + (1 - out[2]) * 0.65,
-      out[3],
-    ];
-  }
-  return out;
-}
-
-/**
- * The texel the shader reads for a splat at grid-frame `(x, y)` at `distanceM`, seen at
- * `pxPerRadian`: its level index (finest 0) and its cell's index in the cell texture, or null
- * outside that level's plane. The reference for the lookup in `cellViewGlsl`.
- */
-export function cellTexelFor(
-  meta: Pick<CellGrid["meta"], "levels">,
-  x: number,
-  y: number,
-  distanceM: number,
-  pxPerRadian: number,
-  minPx: number = CELL_MIN_PX,
-  scale = 1,
-): { level: number; texel: number | null } {
-  const levels = meta.levels;
-  const cellM = levels[0]?.cellM ?? 1;
-  const need = (minPx * Math.max(distanceM, 0.001)) / (pxPerRadian * cellM * scale);
-  const k = Math.min(levels.length - 1, Math.max(0, need <= 1 ? 0 : Math.ceil(Math.log2(need))));
-  const l = levels[k];
-  if (!l) return { level: k, texel: null };
-  const cell = cellM * 2 ** k;
-  const ci = Math.floor(x / cell) - l.i0;
-  const cj = Math.floor(y / cell) - l.j0;
-  if (ci < 0 || cj < 0 || ci >= l.ni || cj >= l.nj) return { level: k, texel: null };
-  return { level: k, texel: (cellTexelLayout(meta).offsets[k] ?? 0) + cj * l.ni + ci };
 }
 
 /** Column-major `a · b`. */
@@ -309,7 +187,6 @@ export class SplatCellView implements SplatColorPart {
   readonly #params: { cellM: number; levels: number };
   #rule: { scale: number; value: unknown };
   readonly #modeParams: Record<number, unknown>;
-  readonly #ramps: Record<CellViewMode, unknown[]>;
   readonly #rows: Partial<Record<CellViewMode, { data: Uint8Array; height: number }>> = {};
   readonly #textures = new Map<CellViewMode, OwnedTexture>();
   #context: unknown;
@@ -360,8 +237,6 @@ export class SplatCellView implements SplatColorPart {
       ]),
     );
     this.#rule = { scale: Number.NaN, value: undefined };
-    const ramp = (colors: readonly Rgb[]) => colors.map(([r, g, b]) => gpu.vec4(r, g, b, 1));
-    this.#ramps = { confidence: ramp(CONFIDENCE_RAMP), "data-age": ramp(AGE_RAMP) };
     this.#rows.confidence = cellTextureRows(grid.meta, confidenceTexels(grid));
     this.#fills = companionSlots(undefined, new Set()).vecs.map(([a, b, c, d]) =>
       gpu.vec4(a, b, c, d),
@@ -393,7 +268,6 @@ export class SplatCellView implements SplatColorPart {
     uniformMap.u_cellOffsets = () => this.#offsets;
     uniformMap.u_cellParams = () => this.#modeParams[this.#activeMode()];
     uniformMap.u_cellRule = () => this.#ruleValue();
-    uniformMap.u_cellRamp = () => this.#ramps[this.mode];
     uniformMap.u_cellFills = () => this.#fillSlots();
   }
 
