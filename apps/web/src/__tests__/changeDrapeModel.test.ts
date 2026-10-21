@@ -16,6 +16,9 @@ import {
   calibrationNote,
   legendRows,
   vegetationNote,
+  detectableNote,
+  measuredLimit,
+  SMALL_OBJECTS,
   verdictNote,
   VEGETATION_TITLE,
   NEEDS_TOKEN,
@@ -75,6 +78,22 @@ function layer(name: Layer["layer"], extra: Partial<Layer> = {}): Layer {
     label: name === "ground" ? "Ground: the bare earth" : "Vegetation and objects",
     heights: name === "ground" ? "ground" : "dsm",
     minDetectableM: name === "ground" ? 0.489 : 1.089,
+    detectable:
+      name === "ground"
+        ? { minM: 0.49, medianM: 0.62, p90M: 0.9, maxM: 2.17, cells: 1132 }
+        : { minM: 1.09, medianM: 1.09, p90M: 1.1, maxM: 1.67, cells: 1131 },
+    detectableGrid: {
+      level: 2,
+      cellM: 1,
+      i0: -4,
+      j0: -4,
+      ni: 1,
+      nj: 1,
+      unitM: 0.01,
+      noData: 65535,
+      encoding: "u2le-base64-rows-south-to-north",
+      data: "MQA=",
+    },
     motionM: name === "ground" ? 0 : 0.25,
     horizontalRadiusM: name === "ground" ? 1 : 2,
     driftReachM: name === "ground" ? 3.536 : 0,
@@ -189,6 +208,34 @@ describe("the label", () => {
     expect(vegetationNote(map(), map().vegetation)).toBe(
       "Uncalibrated: the 3σ rule and ±0.25 m of wind sway per date are first principles until a site scanned twice measures them",
     );
+  });
+});
+
+describe("what each layer could see", () => {
+  it("says its least detectable change: the least and the typical, or one figure when they agree", () => {
+    expect(detectableNote(map().ground)).toBe(
+      "Least detectable change: 0.49 m at best, 0.62 m typically (median of 1,132 cells compared)",
+    );
+    expect(detectableNote(map().vegetation)).toBe(
+      "Least detectable change: 1.1 m across the 1,131 cells compared",
+    );
+    // Rounded up, never down.
+    expect(
+      detectableNote(
+        layer("ground", { detectable: { minM: 0.124, medianM: 0.3, p90M: 1, maxM: 1, cells: 1 } }),
+      ),
+    ).toBe("Least detectable change: 0.13 m at best, 0.3 m typically (median of 1 cell compared)");
+    expect(detectableNote(layer("ground", { detectable: null }))).toBe(
+      "Least detectable change: no cell was compared",
+    );
+  });
+
+  it("says small objects are not detected yet, and each layer's measured limit", () => {
+    expect(SMALL_OBJECTS).toBe("Small objects under ~1 m are not detected yet");
+    expect(measuredLimit("ground")).toBe(
+      "Measured at best (synthetic, uncalibrated): 0.23 m over areas wider than the 5 m ground window, at 1 cm of height noise",
+    );
+    expect(measuredLimit("vegetation")).toBe("Measured at best (synthetic, uncalibrated): 1.06 m");
   });
 });
 

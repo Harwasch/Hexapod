@@ -88,12 +88,43 @@ export function changeOffer(epochs: readonly Epoch[], left: string, right: strin
   return { offered: true, from: from.id, to: to.id };
 }
 
-/** `±X m`, X to two significant figures, rounded up: the floor is never understated. */
-function plusMinus(m: number): string {
-  if (!(m > 0)) return `±${String(m)} m`;
+/** `X m`, X to two significant figures, rounded up: a floor is never understated. */
+function metres(m: number): string {
+  if (!(m > 0)) return `${String(m)} m`;
   const step = 10 ** (Math.floor(Math.log10(m)) - 1);
   // Through toPrecision, so 0.13 is not printed 0.13000000000000003.
-  return `±${String(Number((Math.ceil(m / step - 1e-9) * step).toPrecision(2)))} m`;
+  return `${String(Number((Math.ceil(m / step - 1e-9) * step).toPrecision(2)))} m`;
+}
+
+/** `±X m`, as `metres`. */
+function plusMinus(m: number): string {
+  return `±${metres(m)}`;
+}
+
+/** Said beside every layer (ADR 0018 § API Limits): what the map cannot see at all yet. */
+export const SMALL_OBJECTS = "Small objects under ~1 m are not detected yet";
+
+/**
+ * What a layer could see between these dates, from its compared cells' thresholds
+ * (`detectable`): the least and the median, or one figure when they round alike.
+ */
+export function detectableNote(layer: Pick<ChangeLayer, "detectable">): string {
+  const seen = layer.detectable;
+  if (!seen) return "Least detectable change: no cell was compared";
+  const [least, typical] = [metres(seen.minM), metres(seen.medianM)];
+  const cells = `${seen.cells.toLocaleString("en-US")} ${seen.cells === 1 ? "cell" : "cells"}`;
+  return least === typical
+    ? `Least detectable change: ${least} across the ${cells} compared`
+    : `Least detectable change: ${least} at best, ${typical} typically (median of ${cells} compared)`;
+}
+
+/** The best each layer was measured to see (ADR 0018 § API Limits; synthetic, uncalibrated). */
+export function measuredLimit(layer: ChangeLayerName): string {
+  return `Measured at best (synthetic, uncalibrated): ${
+    layer === "ground"
+      ? "0.23 m over areas wider than the 5 m ground window, at 1 cm of height noise"
+      : "1.06 m"
+  }`;
 }
 
 /** A layer's one line on what it is, and the least change it can show. */
