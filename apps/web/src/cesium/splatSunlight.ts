@@ -37,6 +37,7 @@ import {
   Cartesian4,
   Ellipsoid,
   Matrix3,
+  Matrix4,
   Simon1994PlanetaryPositions,
   Transforms,
   type JulianDate,
@@ -206,6 +207,15 @@ export class SplatSunlight implements SplatColorPart {
 const icrfToFixed = new Matrix3();
 const sun = new Cartesian3();
 const up = new Cartesian3();
+const local = new Cartesian3();
+
+/** The sun's position, Earth-fixed, by the engine's arithmetic (see `sunSine`), into `out`. */
+function sunFixed(time: JulianDate, out: Cartesian3): Cartesian3 {
+  if (!Transforms.computeIcrfToCentralBodyFixedMatrix(time, icrfToFixed))
+    Transforms.computeTemeToPseudoFixedMatrix(time, icrfToFixed);
+  Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(time, out);
+  return Matrix3.multiplyByVector(icrfToFixed, out, out);
+}
 
 /**
  * The sine of the sun's elevation at `position` (Earth-fixed metres) at `time`, by the engine's
@@ -217,11 +227,21 @@ const up = new Cartesian3();
 export function sunSine(time: JulianDate, position: Cartesian3): number {
   const normal = Ellipsoid.WGS84.geodeticSurfaceNormal(position, up);
   if (!normal || !Number.isFinite(normal.x)) return Number.NaN;
-  if (!Transforms.computeIcrfToCentralBodyFixedMatrix(time, icrfToFixed))
-    Transforms.computeTemeToPseudoFixedMatrix(time, icrfToFixed);
-  Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(time, sun);
-  Matrix3.multiplyByVector(icrfToFixed, sun, sun);
+  sunFixed(time, sun);
   // Not `normalize`, which throws on a vector that is not a number.
   const sine = Cartesian3.dot(sun, normal) / Cartesian3.magnitude(sun);
   return Number.isFinite(sine) ? sine : Number.NaN;
+}
+
+/**
+ * The sun's unit direction at `time` in the frame `toLocal` takes Earth-fixed coordinates to
+ * (a scan's: its root's east/north/up, scanView/pose.ts), by the same arithmetic as `sunSine`:
+ * what a dedicated renderer lights by (scanView/sunHook.ts). Null when it is not a number.
+ */
+export function sunInFrame(time: JulianDate, toLocal: Matrix4): [number, number, number] | null {
+  sunFixed(time, sun);
+  Matrix4.multiplyByPointAsVector(toLocal, sun, local);
+  const length = Cartesian3.magnitude(local);
+  if (!(length > 0) || !Number.isFinite(length)) return null;
+  return [local.x / length, local.y / length, local.z / length];
 }

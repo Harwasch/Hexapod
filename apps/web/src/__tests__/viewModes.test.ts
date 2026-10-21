@@ -10,6 +10,7 @@ import {
   drawWithCesium,
   NEEDS_CESIUM_NOTICE,
   needsCesiumFor,
+  sunlightDrawable,
   VIEW_MODES,
   viewModeDrawable,
 } from "@/lib/viewModes";
@@ -29,6 +30,10 @@ describe("which renderer draws a view", () => {
       expect(viewModeDrawable("confidence", renderer)).toBe(renderer !== "playcanvas-webgpu");
       expect(viewModeDrawable("data-age", renderer)).toBe(renderer !== "playcanvas-webgpu");
     }
+  });
+
+  it("is CesiumJS or PlayCanvas for Sunlight: not Spark, not the WebGPU trial", () => {
+    expect(SPLAT_RENDERERS.filter((r) => sunlightDrawable(r))).toEqual(["playcanvas", "cesium"]);
   });
 
   it("names what still needs CesiumJS under each renderer, and nothing under CesiumJS", () => {

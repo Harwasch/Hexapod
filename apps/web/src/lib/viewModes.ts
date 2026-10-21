@@ -24,6 +24,15 @@ export function viewModeDrawable(mode: ViewMode, renderer: SplatRenderer): boole
 }
 
 /**
+ * Whether `renderer` draws Sunlight (ADR 0019): CesiumJS in its splat primitive, PlayCanvas in
+ * its per-frame splat hook (cesium/scanView/sunHook.ts). Not Spark, whose per-frame modifier
+ * would generate every splat again each moving frame, nor the WebGPU trial (GLSL only).
+ */
+export function sunlightDrawable(renderer: SplatRenderer): boolean {
+  return renderer === "cesium" || renderer === "playcanvas";
+}
+
+/**
  * What the splat view control offers that `renderer` cannot draw, in words for its notice
  * (`perCell`: the Per cell rules are offered, the site having two dates or more); null under
  * CesiumJS, which draws all of it.
