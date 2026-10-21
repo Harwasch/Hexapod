@@ -21,12 +21,13 @@ import type { Capture, Site, SiteSummary } from "@twin/contracts";
 
 import { loadCollision } from "@/lib/collision";
 import { deviceSplatBudget } from "@/lib/detail";
+import { epochDateLabel } from "@/lib/epochs";
 import { siteFramePositions } from "@/lib/spzPositions";
 import { tileUrl } from "@/lib/tileProxy";
 import { productHeader } from "@/shared/product";
 
 import { parseCoverage } from "./coverage";
-import { shownScan, type ShownCoverage, type ShownScan } from "./shown";
+import { datesNotice, shownScan, type ShownCoverage, type ShownScan } from "./shown";
 import { showLive } from "./live";
 import { ScanNavigation } from "./navigate";
 import { spzPoints, type SpzPoints } from "./spz";
@@ -211,6 +212,7 @@ async function showScan(siteId: string): Promise<void> {
   status.textContent = "Loading the scan…";
   el("scan-name").textContent = "";
   el("scan-date").textContent = "";
+  el("scan-dates").hidden = true;
   el("coverage").hidden = true;
   el("coverage-legend").hidden = true;
   delete section.dataset.tiles;
@@ -292,6 +294,15 @@ async function showScan(siteId: string): Promise<void> {
     // parents) keeps the static plan: its parents are drawn under their children anyway.
     const scanShown = shownScan(site);
     const tileset = await splatTileset(scanShown);
+    // The date of the capture shown, when the site has several (said to be the upload's when
+    // the capture's was not recorded); else when the site was made.
+    const shownDate = scanShown.epoch ? epochDateLabel(scanShown.epoch) : date(site.createdAt);
+    el("scan-date").textContent = shownDate;
+    // Only the latest date is shown here: said, with the way to the others (the globe).
+    const notice = datesNotice(scanShown);
+    const dates = el("scan-dates");
+    dates.textContent = notice ?? "";
+    dates.hidden = notice === null;
     const scan = new THREE.Group();
     // The pipeline's splats are east/north/up with z up (see splat_tiles.py, whose glTF
     // node matrix makes the same turn for Cesium); three.js is y-up.
@@ -434,9 +445,9 @@ async function showScan(siteId: string): Promise<void> {
           section.dataset.gaussians = String(drawn.gaussians);
           el("scan-date").textContent =
             drawn.gaussians < whole
-              ? `${date(site.createdAt)} · ${drawn.gaussians.toLocaleString("en-US")} of ` +
+              ? `${shownDate} · ${drawn.gaussians.toLocaleString("en-US")} of ` +
                 `${whole.toLocaleString("en-US")} splats · finer where you look`
-              : date(site.createdAt);
+              : shownDate;
         },
       );
       return;

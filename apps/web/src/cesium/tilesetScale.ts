@@ -177,6 +177,37 @@ export function inverseScaledTransformation(matrix: Matrix4, result: Matrix4): M
   return Matrix4.fromArray(values, 0, result);
 }
 
+/** Rotation, in radians, that two root transforms may differ by and still be one frame. */
+const SAME_FRAME_ROTATION = 1e-9;
+/** Translation, in metres, that two root transforms may differ by and still be one frame. */
+const SAME_FRAME_TRANSLATION_M = 1e-3;
+
+/**
+ * Whether two tilesets' root transforms (column-major, 16 numbers; undefined is the identity)
+ * are one frame, so that one's model matrix places the other exactly: what lets every date of
+ * a site be drawn with the frame anchor's placement (SiteManager `followAnchor`).
+ *
+ * The thresholds are from first principles, not measured. 1e-9 in a rotation element is 10 µm
+ * over 10 km, far below anything a scan resolves. 1 mm is four SPZ position quanta (2⁻¹² m), and
+ * the rounding noise in an ECEF translation held as doubles is about 1e-9 m: two epochs placed in
+ * the same site frame by the pipeline agree to rounding, and anything further apart is another
+ * frame, not rounding.
+ */
+export function sameRootFrame(
+  a: ArrayLike<number> | undefined,
+  b: ArrayLike<number> | undefined,
+): boolean {
+  const at = (m: ArrayLike<number> | undefined, i: number) =>
+    m ? (m[i] ?? Number.NaN) : (Matrix4.IDENTITY[i] ?? Number.NaN);
+  for (const i of [0, 1, 2, 4, 5, 6, 8, 9, 10]) {
+    if (!(Math.abs(at(a, i) - at(b, i)) <= SAME_FRAME_ROTATION)) return false;
+  }
+  for (const i of [12, 13, 14]) {
+    if (!(Math.abs(at(a, i) - at(b, i)) <= SAME_FRAME_TRANSLATION_M)) return false;
+  }
+  return true;
+}
+
 /**
  * Whether two records of one asset place it the same: a record refetched for another reason (a
  * bookmark saved) leaves the scan where it is, and one that was resized moves it.

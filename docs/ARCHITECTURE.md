@@ -134,7 +134,7 @@ kind is one Pydantic model, one enum value and one provider adapter.
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | STAC catalogs                 | `stac` layer source + client resolver; a backend STAC crawler can populate layers                                                                                 |
 | S3 / COG / COPC / GeoParquet  | `ObjectStorage` abstraction; new `provider`/`sourceType` values; a tile server (TiTiler/COPC) as an imagery/3D Tiles source                                       |
-| Temporal captures             | `observed_at` / `valid_from` / `valid_to` on assets; `TimelineControl` already switches versions                                                                  |
+| Temporal captures             | epochs (`epochs`, `assets.epoch_id`) drive `TimelineControl`; one placement per site, the frame epoch's; hidden dates kept, never preloaded                       |
 | Semantic entities / plants    | new tables keyed to `sites` with geometry; `SelectionManager` already resolves features to catalog objects                                                        |
 | Robotics (ROS/MCAP)           | a live `MissionProvider` replaces the simulated demo; poses feed `MissionManager` tracks and markers                                                              |
 | A living world (wind, growth) | `packages/world` holds the motion model; `LivingSurveyManager` drives it and `SplatDeformer` writes it; a rig is declared by the catalog as `renderConfig.rigUrl` |

@@ -138,7 +138,17 @@ export class SelectionManager {
     window.addEventListener("pointerdown", this.onPointerDown, { capture: true });
     window.addEventListener("pointerup", this.onPointerUp, { capture: true });
     window.addEventListener("pointercancel", this.onPointerUp, { capture: true });
+    // A site's card open while another date of it is chosen: it now names that date's model.
+    this.offEpoch = events.on("epoch", ({ siteId }) => {
+      const current = this.current;
+      const site = this.sites.activeSite;
+      if (current?.kind !== "site" || current.siteId !== siteId || site?.id !== siteId) return;
+      this.current = { ...current, ...this.shownModel(site) };
+      this.events.emit("selection", this.current);
+    });
   }
+
+  private readonly offEpoch: () => void;
 
   /** Disabled while measuring or exploring so those tools own the pointer. */
   /**
@@ -593,32 +603,7 @@ export class SelectionManager {
     const layer = layerId ? this.layers.get(layerId) : undefined;
     if (site && !layer) {
       this.outlineSite(site);
-      const rep = this.sites.activeRepresentation;
-      const asset = site.assets.find((a) => a.representation === rep);
-      return {
-        ...base,
-        kind: "site",
-        title: site.name,
-        siteId: site.id,
-        sourceLabel: asset ? `${asset.name} · ${describeSource(asset.source)}` : "Reality model",
-        observedAt: asset?.observedAt ?? null,
-        attribution: asset?.attribution.length ? asset.attribution : site.attribution,
-        properties: asset?.resolution
-          ? [
-              ...(asset.resolution.groundSampleDistanceM
-                ? [
-                    {
-                      key: "Ground sample distance",
-                      value: `${asset.resolution.groundSampleDistanceM} m`,
-                    },
-                  ]
-                : []),
-              ...(asset.resolution.description
-                ? [{ key: "Resolution", value: asset.resolution.description }]
-                : []),
-            ]
-          : undefined,
-      };
+      return { ...base, kind: "site", title: site.name, siteId: site.id, ...this.shownModel(site) };
     }
     return {
       ...base,
@@ -628,6 +613,38 @@ export class SelectionManager {
       sourceLabel: layer?.name ?? "3D Tiles",
       observedAt: layer?.observedAt ?? null,
       attribution: layer?.attribution,
+    };
+  }
+
+  /**
+   * What a site's card says of the model the scene shows -- on a site with several dates, the
+   * shown one's: its name and source, date, attribution and resolution.
+   */
+  private shownModel(
+    site: Site,
+  ): Pick<Selection, "sourceLabel" | "observedAt" | "attribution" | "properties"> {
+    const rep = this.sites.activeRepresentation;
+    const asset =
+      this.sites.shownAsset(site.id) ?? site.assets.find((a) => a.representation === rep);
+    return {
+      sourceLabel: asset ? `${asset.name} · ${describeSource(asset.source)}` : "Reality model",
+      observedAt: asset?.observedAt ?? null,
+      attribution: asset?.attribution.length ? asset.attribution : site.attribution,
+      properties: asset?.resolution
+        ? [
+            ...(asset.resolution.groundSampleDistanceM
+              ? [
+                  {
+                    key: "Ground sample distance",
+                    value: `${asset.resolution.groundSampleDistanceM} m`,
+                  },
+                ]
+              : []),
+            ...(asset.resolution.description
+              ? [{ key: "Resolution", value: asset.resolution.description }]
+              : []),
+          ]
+        : undefined,
     };
   }
 
@@ -781,6 +798,7 @@ export class SelectionManager {
   }
 
   destroy(): void {
+    this.offEpoch();
     window.removeEventListener("pointerdown", this.onPointerDown, { capture: true });
     window.removeEventListener("pointerup", this.onPointerUp, { capture: true });
     window.removeEventListener("pointercancel", this.onPointerUp, { capture: true });

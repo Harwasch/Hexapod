@@ -13,7 +13,14 @@ import {
   sampleTerrainMostDetailed,
 } from "cesium";
 
-import type { Footprint, Representation, Site, SiteAsset, SiteSummary } from "@twin/contracts";
+import type {
+  Epoch,
+  Footprint,
+  Representation,
+  Site,
+  SiteAsset,
+  SiteSummary,
+} from "@twin/contracts";
 import { boundingRadiusM, centerOf, circleFootprint, haversineDistance } from "@twin/geo";
 
 import {
@@ -22,6 +29,7 @@ import {
   deviceSplatCeiling,
   isHandheld,
 } from "@/lib/detail";
+import { epochOptions, frameAnchor, pickShownAsset, siteEpochs } from "@/lib/epochs";
 import { assetScale, scalableAsset } from "@/lib/realSize";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 
@@ -83,6 +91,7 @@ import {
   liftAt,
   placedMatrix,
   placementFrame,
+  sameRootFrame,
   samePlacement,
   scaledBottom,
   scaledCenter,
@@ -195,6 +204,18 @@ interface AssetHandle {
   /** How the tileset is placed: its runtime scale and the lift it rests at (`placeTileset`). */
   placement?: TilesetPlacement;
   /**
+   * Another date of the site drawn with the frame's anchor (`followAnchor`): the anchor's asset
+   * id, whose model matrix this one copies and is never clamped on its own.
+   */
+  follows?: string;
+  /**
+   * A date of the site waiting to learn whether it can follow its anchor (`followAnchor`: the
+   * anchor loading, the frames compared). Neither following nor placed on its own yet.
+   */
+  followPending?: boolean;
+  /** The dates of the site that copy this anchor's model matrix (`followAnchor`). */
+  followers?: Set<AssetHandle>;
+  /**
    * A splat scan's tall things (scanFootprint.ts), in its own frame, at the height of the ground
    * it rests on: the clip under it covers them too. Undefined until asked for, null while being
    * read or when its root tile could not be (`loadCanopy`).
@@ -244,7 +265,15 @@ export interface LoadedSiteAsset {
 interface ActiveSite {
   site: Site;
   representation: Representation;
-  temporalAssetId: string | null;
+  /** An asset asked for by id (the load pill's Retry), shown while it is of the
+   *  representation shown; null otherwise. */
+  pinnedAssetId: string | null;
+  /** The site's dated captures, from the record the site was loaded with (lib/epochs.ts). */
+  epochs: readonly Epoch[];
+  /** The epoch chosen (`setEpoch`); null for the latest. Kept across Splat / Mesh. */
+  epochId: string | null;
+  /** The epoch last said to be shown (`epoch` event); undefined until one has been. */
+  shownEpochId?: string | null;
   handles: Map<string, AssetHandle>;
   /** Radius of the authored footprint (at least MIN_SITE_RADIUS_M), the yardstick for engagement. */
   radius: number;
@@ -471,7 +500,70 @@ export class SiteManager {
     const entry = this.loaded.get(site.id);
     if (entry) {
       entry.site = { ...entry.site, name: site.name, cameraBookmarks: site.cameraBookmarks };
+      this.applyDatesRecord(entry, site);
     }
+  }
+
+  /**
+   * A fresh record of a loaded site with dates (epochs): a date published since it was loaded,
+   * or one run again (its new model current, the old one superseded and no longer listed). The
+   * controls read the fresh record, so the scene takes it too, or a date they offer could not
+   * be shown and a re-run's new model would be described while the old one stayed drawn.
+   *
+   * Its epochs and assets are replaced; the models of assets no longer listed are let go; a
+   * date whose frame anchor changed is placed again (`placeTileset`); the date chosen stays
+   * while it is still offered, else the latest is shown. A record that changes nothing of the
+   * dates (a rename, a bookmark) changes nothing here, and a site without dates is left as it
+   * was loaded, as before.
+   */
+  private applyDatesRecord(entry: ActiveSite, site: Site): void {
+    const epochs = siteEpochs(site);
+    if (epochs.length === 0 && entry.epochs.length === 0) return;
+    const key = (list: readonly Epoch[], assets: readonly SiteAsset[]) =>
+      JSON.stringify([
+        list.map((e) => [e.id, e.status, e.currentAssetId, e.ordinal, e.observedAt]),
+        assets.map((a) => [a.id, a.epochId, a.validTo, a.sourceKind, a.representation]),
+      ]);
+    const changed = key(entry.epochs, entry.site.assets) !== key(epochs, site.assets);
+    entry.epochs = epochs;
+    if (!changed) return;
+    entry.site = { ...entry.site, assets: site.assets };
+    const listed = new Set(site.assets.map((asset) => asset.id));
+    for (const [id, handle] of entry.handles) {
+      if (listed.has(id)) {
+        handle.asset = site.assets.find((asset) => asset.id === id) ?? handle.asset;
+        continue;
+      }
+      for (const other of entry.handles.values()) other.followers?.delete(handle);
+      this.disposeHandle(handle);
+      entry.handles.delete(id);
+    }
+    if (entry.pinnedAssetId && !listed.has(entry.pinnedAssetId)) entry.pinnedAssetId = null;
+    if (
+      entry.epochId &&
+      !epochOptions(epochs, site.assets, entry.representation).some(
+        (option) => option.epoch.id === entry.epochId,
+      )
+    )
+      entry.epochId = null;
+    // Dates drawn with an anchor that is no longer the frame's own model are placed again.
+    for (const handle of entry.handles.values()) {
+      const tileset = handle.tileset;
+      if (!tileset || tileset.isDestroyed() || !handle.asset.epochId) continue;
+      const anchor = frameAnchor(epochs, site.assets, handle.asset.representation)?.asset.id;
+      const own = anchor === undefined || anchor === handle.asset.id;
+      const placedRight = own
+        ? !handle.follows && !handle.followPending
+        : handle.follows === anchor;
+      if (placedRight) continue;
+      for (const other of entry.handles.values()) other.followers?.delete(handle);
+      handle.follows = undefined;
+      // A clamp still sampling for the old placement applies nothing (`clampToGround`).
+      if (handle.placement) handle.placement.serial += 1;
+      this.placeTileset(entry, handle, tileset);
+    }
+    this.restartLoad(entry);
+    void this.showRepresentation(entry, entry.representation);
   }
 
   private get active(): ActiveSite | null {
@@ -533,13 +625,25 @@ export class SiteManager {
     return views;
   }
 
-  /** Temporal versions of the active representation, newest first. */
-  temporalVersions(): SiteAsset[] {
-    if (!this.active) return [];
-    const rep = this.active.representation;
-    return this.active.site.assets
-      .filter((a) => a.representation === rep && a.observedAt)
-      .sort((a, b) => (b.observedAt ?? "").localeCompare(a.observedAt ?? ""));
+  /**
+   * The asset a loaded site shows now, for its representation (lib/epochs.ts `pickShownAsset`):
+   * the primary site's unless `siteId` names another. Null when nothing is shown.
+   */
+  shownAsset(siteId?: string): SiteAsset | null {
+    const entry = siteId ? this.loaded.get(siteId) : this.active;
+    return entry ? this.pickAsset(entry, entry.representation) : null;
+  }
+
+  /**
+   * Whether a loaded date of a site is drawn with its frame anchor's placement
+   * (`followAnchor`): true while it follows, false once it was placed on its own (the anchor
+   * itself, a date out of the frame, an anchor that did not load), null when the asset has no
+   * tileset in the scene.
+   */
+  sharesPlacement(siteId: string, assetId: string): boolean | null {
+    const handle = this.loaded.get(siteId)?.handles.get(assetId);
+    if (!handle?.tileset || handle.followPending) return null;
+    return handle.follows !== undefined;
   }
 
   /**
@@ -586,7 +690,10 @@ export class SiteManager {
     const entry: ActiveSite = {
       site,
       representation,
-      temporalAssetId: null,
+      pinnedAssetId: null,
+      // The site starts at its latest date every time it is loaded.
+      epochs: siteEpochs(site),
+      epochId: null,
       handles: new Map(),
       radius: Math.max(boundingRadiusM(site.boundary), MIN_SITE_RADIUS_M),
       engaged: false,
@@ -1191,12 +1298,37 @@ export class SiteManager {
   async setRepresentation(representation: Representation): Promise<void> {
     if (!this.active || this.active.representation === representation) return;
     this.active.representation = representation;
-    this.active.temporalAssetId = null;
+    // The date chosen stays: Splat / Mesh switches what is drawn of it, not when.
+    this.active.pinnedAssetId = null;
     this.events.emit("representation", { siteId: this.active.site.id, representation });
     this.restartLoad(this.active);
     await this.showRepresentation(this.active, representation);
   }
 
+  /**
+   * Shows one of the primary site's dated captures (lib/epochs.ts): its current asset of the
+   * representation shown, the others hidden and kept, so switching back is instant under
+   * CesiumJS. An epoch with nothing of that representation is not offered, and is refused.
+   */
+  async setEpoch(epochId: string): Promise<void> {
+    const active = this.active;
+    if (!active) return;
+    const offered = epochOptions(active.epochs, active.site.assets, active.representation);
+    if (!offered.some((option) => option.epoch.id === epochId)) {
+      log.info("no such date to show", { site: active.site.slug, epoch: epochId });
+      return;
+    }
+    active.epochId = epochId;
+    active.pinnedAssetId = null;
+    this.restartLoad(active);
+    await this.showRepresentation(active, active.representation);
+  }
+
+  /**
+   * Shows one asset of the primary site by id (the load pill's Retry). An asset that is an
+   * epoch's current one is shown by choosing its epoch, so the date control says which; any
+   * other is pinned while its representation is shown.
+   */
   async setTemporalAsset(assetId: string): Promise<void> {
     if (!this.active) return;
     const asset = this.active.site.assets.find((a) => a.id === assetId);
@@ -1204,7 +1336,13 @@ export class SiteManager {
     // Chosen on purpose (a version, the load pill's Retry): an ion asset found missing lately
     // is asked for again rather than refused from memory (ion.ts).
     if (asset.source.type === "cesium-ion") forgetIonAssetMissing(asset.source.assetId);
-    this.active.temporalAssetId = assetId;
+    const ofEpoch = epochOptions(
+      this.active.epochs,
+      this.active.site.assets,
+      asset.representation,
+    ).some((option) => option.asset.id === asset.id);
+    this.active.epochId = ofEpoch ? asset.epochId : this.active.epochId;
+    this.active.pinnedAssetId = ofEpoch ? null : assetId;
     if (asset.representation !== this.active.representation) {
       this.active.representation = asset.representation;
       this.events.emit("representation", {
@@ -1263,16 +1401,10 @@ export class SiteManager {
   }
 
   private pickAsset(entry: ActiveSite, representation: Representation): SiteAsset | null {
-    const candidates = entry.site.assets.filter((a) => a.representation === representation);
-    if (entry.temporalAssetId) {
-      const chosen = candidates.find((a) => a.id === entry.temporalAssetId);
-      if (chosen) return chosen;
-    }
-    return (
-      candidates.find((a) => a.defaultVisible) ??
-      candidates.sort((a, b) => (b.observedAt ?? "").localeCompare(a.observedAt ?? ""))[0] ??
-      null
-    );
+    return pickShownAsset(entry.site.assets, entry.epochs, representation, {
+      epochId: entry.epochId,
+      assetId: entry.pinnedAssetId,
+    });
   }
 
   private async showRepresentation(
@@ -1281,11 +1413,23 @@ export class SiteManager {
   ): Promise<void> {
     const asset = this.pickAsset(active, representation);
     for (const handle of active.handles.values()) {
-      if (handle.tileset && handle.asset.id !== asset?.id) handle.tileset.show = false;
+      if (!handle.tileset || handle.asset.id === asset?.id) continue;
+      handle.tileset.show = false;
+      // Another date of the site, kept for switching back: it never streams tiles for a view
+      // it is not drawn in (Cesium preloads hidden tilesets otherwise).
+      if (handle.asset.epochId) handle.tileset.preloadWhenHidden = false;
     }
+    const shownEpoch = asset?.epochId ?? null;
+    if (active.shownEpochId !== shownEpoch) {
+      active.shownEpochId = shownEpoch;
+      this.events.emit("epoch", { siteId: active.site.id, epochId: shownEpoch });
+    }
+    // Said now, not once the new model has loaded: a renderer drawing the scan for CesiumJS
+    // (scanTarget) drops the old one at once, as CesiumJS just hid it, rather than drawing
+    // the date that was while the control already names the next.
+    this.events.emit("tilesets", this.activeTilesetLabels());
     if (!asset) {
       this.clipping.setFootprint(active.site.id, null);
-      this.events.emit("tilesets", this.activeTilesetLabels());
       // Nothing to load for this representation: the site's load is as done as it gets.
       if (this.loads.get(active.site.id)?.phase === "model")
         this.reportLoad(active.site.id, { phase: "ready" });
@@ -1300,6 +1444,7 @@ export class SiteManager {
       return;
     // Now that the scan's own bounds are known, it can be seen from afar.
     active.far = this.farFor(active);
+    tileset.preloadWhenHidden = this.cesiumDraws(asset);
     tileset.show = drawn(active) && this.cesiumDraws(asset);
     setSeenFromAfar(tileset, !active.engaged && active.far);
     if (drawn(active)) this.applyClip(active, asset, tileset);
@@ -1428,17 +1573,25 @@ export class SiteManager {
       },
     )
       .then((tileset) => {
-        if (this.loaded.get(active.site.id) !== active) {
+        // A site let go meanwhile, or a fresh record that no longer lists this model (a date
+        // run again, `applyDatesRecord`) and so dropped its handle: added now, it would be
+        // drawn and listened to by a handle nothing disposes.
+        if (this.loaded.get(active.site.id) !== active || active.handles.get(asset.id) !== handle) {
           tileset.destroy();
           return null;
         }
-        // Drawn by another renderer: loaded for its frame and solids, never streamed here.
-        if (!this.cesiumDraws(asset)) tileset.preloadWhenHidden = false;
+        // Drawn by another renderer: loaded for its frame and solids, never streamed here. A
+        // date of the site that is not shown (loaded as the frame's anchor) is not streamed
+        // either.
+        if (!this.cesiumDraws(asset) || (asset.epochId && !this.showsAsset(active, asset)))
+          tileset.preloadWhenHidden = false;
         this.scene.primitives.add(tileset);
-        this.attachTileset(handle, tileset, asset);
+        this.attachTileset(active, handle, tileset, asset);
         return tileset;
       })
       .catch((error: unknown) => {
+        // A model a fresh record dropped while it loaded is nobody's to report.
+        if (active.handles.get(asset.id) !== handle) return null;
         if (asset.source.type === "cesium-ion" && isIonNotFound(error)) {
           // An asset the catalog names but the key's account was never given (an ion asset
           // the catalog names, loaded by proximity): skipped quietly, remembered so it is not
@@ -1480,7 +1633,11 @@ export class SiteManager {
         // beside Splat / Mesh / Points reads the record above ("Couldn't load the 3D model ·
         // Retry", `SiteLoadStatus`). A toast as well would say it twice, and with the asset's
         // file name rather than the site's. Any other failure has no pill to speak for it.
-        if (!shown || this.primaryId !== active.site.id) {
+        // A date of the site nobody chose, loaded hidden as the frame's anchor, is not said in
+        // a toast either: the date shown is placed on its own and says so (Date shown), and
+        // choosing this date tries it again and speaks through the pill.
+        const hiddenDate = Boolean(asset.epochId) && !shown;
+        if (!hiddenDate && (!shown || this.primaryId !== active.site.id)) {
           this.events.emit("toast", {
             tone: "error",
             title: `${asset.name} failed to load`,
@@ -1505,10 +1662,15 @@ export class SiteManager {
     );
   }
 
-  private attachTileset(handle: AssetHandle, tileset: Cesium3DTileset, asset: SiteAsset): void {
+  private attachTileset(
+    active: ActiveSite,
+    handle: AssetHandle,
+    tileset: Cesium3DTileset,
+    asset: SiteAsset,
+  ): void {
     handle.tileset = tileset;
     this.applyScreenSpaceError(this.screenSpaceError, this.pixelRatio);
-    this.placeTileset(handle, tileset);
+    this.placeTileset(active, handle, tileset);
     const radius = tileset.boundingSphere.radius;
     this.events.emit("asset", {
       id: asset.id,
@@ -1602,12 +1764,35 @@ export class SiteManager {
   }
 
   /**
+   * Places a tileset as its catalog record says (`placeOwn`) -- unless it is one of a site's
+   * dated captures other than the one that made the site's frame (lib/epochs.ts
+   * `frameAnchor`). Every date of a site is drawn with that one's model matrix (`followAnchor`),
+   * so the difference between two dates is the data's own, never the viewer's terrain, and
+   * publishing a new date never moves the ones already there.
+   */
+  private placeTileset(entry: ActiveSite, handle: AssetHandle, tileset: Cesium3DTileset): void {
+    const asset = handle.asset;
+    const anchor = asset.epochId
+      ? frameAnchor(entry.epochs, entry.site.assets, asset.representation)
+      : null;
+    if (anchor && anchor.asset.id !== asset.id) {
+      this.followAnchor(entry, handle, tileset, anchor.asset);
+      return;
+    }
+    this.placeOwn(handle, tileset);
+  }
+
+  /**
    * Places a tileset as its catalog record says: drawn at its runtime scale about its root
    * transform's origin (`renderConfig.scale`; tilesetScale.ts), then rested on the ground
    * (`clampToGround`) or raised by `heightOffsetM`. An asset with none of the three keeps the
-   * identity model matrix it was loaded with.
+   * identity model matrix it was loaded with. Resolves (`placed`, and `roughly` first) once it
+   * rests where it will.
    */
-  private placeTileset(handle: AssetHandle, tileset: Cesium3DTileset): void {
+  private placeOwn(
+    handle: AssetHandle,
+    tileset: Cesium3DTileset,
+  ): { placed: Promise<void>; roughly: Promise<void> } {
     const asset = handle.asset;
     const scale = assetScale(asset);
     const placement: TilesetPlacement = {
@@ -1622,21 +1807,130 @@ export class SiteManager {
     handle.unsubscribe.push(() => {
       if (placement.timer !== null) clearTimeout(placement.timer);
     });
-    this.applyPlacement(tileset, placement);
-    if (asset.renderConfig.clampToGround) {
-      let rough = (): void => undefined;
-      handle.placedRoughly = new Promise<void>((resolve) => (rough = resolve));
-      handle.placed = this.clampToGround(handle, tileset, asset, rough).finally(rough);
-    }
+    this.applyPlacement(handle, tileset, placement);
+    if (!asset.renderConfig.clampToGround)
+      return { placed: Promise.resolve(), roughly: Promise.resolve() };
+    let rough = (): void => undefined;
+    const roughly = new Promise<void>((resolve) => (rough = resolve));
+    const placed = this.clampToGround(handle, tileset, asset, rough).finally(rough);
+    handle.placedRoughly = roughly;
+    handle.placed = placed;
+    return { placed, roughly };
   }
 
-  /** Sets the model matrix a placement asks for, when it is not the one already set. */
-  private applyPlacement(tileset: Cesium3DTileset, placement: TilesetPlacement): void {
-    const matrix = placedMatrix(placement.frame, placement.scale, placement.liftM);
-    if (Matrix4.equals(tileset.modelMatrix ?? Matrix4.IDENTITY, matrix)) return;
-    tileset.modelMatrix = matrix;
-    syncRootTransform(tileset);
+  /**
+   * Draws a date of a site with the model matrix of the date that made the site's frame (the
+   * anchor; lib/epochs.ts `frameAnchor`), copied exactly, and never clamps it on its own.
+   *
+   * The clamp corrects the frame's height (an `msl-unverified` datum, GNSS height error): a
+   * property of the frame, measured once, on the capture it belongs to. With one matrix the
+   * vertical difference between two dates is the data's own. The anchor is loaded for this if
+   * it is not shown (hidden, never preloading: `ensureTileset`), as it is after switching
+   * away from it.
+   *
+   * Copying is only right for tiles expressed in the same frame (`sameRootFrame`). One that is
+   * not -- the pipeline did not place the date in the site frame -- or whose anchor did not
+   * load is placed on its own, and the log says so (a label for it is M3's).
+   */
+  private followAnchor(
+    entry: ActiveSite,
+    handle: AssetHandle,
+    tileset: Cesium3DTileset,
+    anchor: SiteAsset,
+  ): void {
+    const scale = assetScale(handle.asset);
+    const placement: TilesetPlacement = {
+      frame: placementFrame(tileset, lowestHeight(tileset)),
+      saved: scale,
+      scale,
+      liftM: 0,
+      serial: 0,
+      timer: null,
+    };
+    handle.placement = placement;
+    // Still this placement's to decide after each wait: a fresh record that changed the
+    // anchor (a date run again, `applyDatesRecord`) has begun another one, and the old
+    // anchor's load or clamp ending must neither place the date on its own nor copy the old
+    // anchor's matrix over the new one's.
+    const current = (anchorHandle?: AssetHandle): boolean =>
+      handle.placement === placement &&
+      !tileset.isDestroyed() &&
+      this.loaded.get(entry.site.id) === entry &&
+      (!anchorHandle || entry.handles.get(anchor.id) === anchorHandle);
+    // Following only once the guard below has passed: until then it is undecided.
+    handle.followPending = true;
+    let rough = (): void => undefined;
+    handle.placedRoughly = new Promise<void>((resolve) => (rough = resolve));
+    // Whether the date shares the placement is now known: what describes it reads it again
+    // (the Inspector's Date shown, on `tilesets`).
+    const decided = (): void => {
+      handle.followPending = false;
+      this.events.emit("tilesets", this.activeTilesetLabels());
+    };
+    const alone = async (message: string): Promise<void> => {
+      log.warn(message, { asset: handle.asset.id, anchor: anchor.id });
+      decided();
+      const own = this.placeOwn(handle, tileset);
+      void own.roughly.then(rough);
+      await own.placed;
+    };
+    const follow = async (): Promise<void> => {
+      const anchorTileset = await this.ensureTileset(entry, anchor);
+      if (!current()) return;
+      const anchorHandle = entry.handles.get(anchor.id);
+      if (!anchorTileset || anchorTileset.isDestroyed() || !anchorHandle) {
+        await alone("the site frame's own epoch did not load; this date is placed on its own");
+        return;
+      }
+      if (!sameRootFrame(rootTransform(anchorTileset), rootTransform(tileset))) {
+        await alone("an epoch's tiles are not in its site's frame; placed on its own");
+        return;
+      }
+      handle.follows = anchor.id;
+      (anchorHandle.followers ??= new Set()).add(handle);
+      decided();
+      // At once, then each time the anchor moves (`applyPlacement` copies to its followers).
+      this.copyPlacement(anchorTileset, tileset);
+      await anchorHandle.placedRoughly;
+      if (!current(anchorHandle)) return;
+      this.copyPlacement(anchorTileset, tileset);
+      rough();
+      await anchorHandle.placed;
+      if (current(anchorHandle)) this.copyPlacement(anchorTileset, tileset);
+    };
+    handle.placed = follow().finally(rough);
+  }
+
+  /** Gives `to` exactly the model matrix `from` is drawn with. */
+  private copyPlacement(from: Cesium3DTileset, to: Cesium3DTileset): void {
+    if (Matrix4.equals(to.modelMatrix ?? Matrix4.IDENTITY, from.modelMatrix ?? Matrix4.IDENTITY))
+      return;
+    to.modelMatrix = Matrix4.clone(from.modelMatrix ?? Matrix4.IDENTITY);
+    // What reads the scan's frame -- a dedicated renderer drawing it, the collider -- sees it
+    // at once, as after any placement.
+    syncRootTransform(to);
     this.scene.requestRender();
+  }
+
+  /**
+   * Sets the model matrix a placement asks for, when it is not the one already set, and on
+   * every date of the site that follows this one (`followAnchor`).
+   */
+  private applyPlacement(
+    handle: AssetHandle,
+    tileset: Cesium3DTileset,
+    placement: TilesetPlacement,
+  ): void {
+    const matrix = placedMatrix(placement.frame, placement.scale, placement.liftM);
+    if (!Matrix4.equals(tileset.modelMatrix ?? Matrix4.IDENTITY, matrix)) {
+      tileset.modelMatrix = matrix;
+      syncRootTransform(tileset);
+      this.scene.requestRender();
+    }
+    for (const follower of handle.followers ?? []) {
+      if (follower.tileset && !follower.tileset.isDestroyed())
+        this.copyPlacement(tileset, follower.tileset);
+    }
   }
 
   /**
@@ -1701,6 +1995,15 @@ export class SiteManager {
     const placement = handle.placement;
     if (!placement) return;
     const asset = handle.asset;
+    if (handle.follows || handle.followPending) {
+      // Drawn with the frame's anchor, never rested on its own: it moves when the anchor does.
+      // Still undecided, it waits for that (`followAnchor`).
+      const anchor = handle.follows ? entry.handles.get(handle.follows)?.tileset : undefined;
+      if (anchor && !anchor.isDestroyed()) this.copyPlacement(anchor, tileset);
+      if (entry.engaged && this.pickAsset(entry, entry.representation)?.id === asset.id)
+        this.applyClip(entry, asset, tileset);
+      return;
+    }
     const offset = asset.renderConfig.heightOffsetM ?? 0;
     // A clamp still sampling was for the scale before.
     placement.serial += 1;
@@ -1719,7 +2022,7 @@ export class SiteManager {
     } else {
       placement.liftM = offset;
     }
-    this.applyPlacement(tileset, placement);
+    this.applyPlacement(handle, tileset, placement);
     if (entry.engaged && this.pickAsset(entry, entry.representation)?.id === asset.id)
       this.applyClip(entry, asset, tileset);
   }
@@ -1861,15 +2164,18 @@ export class SiteManager {
       const rough = restOn(wanted.map((_, i) => plausible(terrain?.[i]?.height)));
       if (rough) {
         placement.liftM = rough.lift;
-        this.applyPlacement(tileset, placement);
+        this.applyPlacement(handle, tileset, placement);
         onRough?.();
       }
     }
     // The ground that is actually drawn may be a mesh (the photorealistic world, another
     // site's model) sitting metres from the terrain; rest on what is visible when there is
-    // something plausible there.
+    // something plausible there -- but never on another date of the same site, drawn where
+    // this one will be.
     const drawn = this.scene.sampleHeightSupported
-      ? await this.scene.sampleHeightMostDetailed(cartographics(), [tileset]).catch(() => undefined)
+      ? await this.scene
+          .sampleHeightMostDetailed(cartographics(), [tileset, ...this.otherDates(handle)])
+          .catch(() => undefined)
       : undefined;
     // A later clamp (another scale tried meanwhile) has the model now.
     if (tileset.isDestroyed() || placement.serial !== serial) return;
@@ -1898,7 +2204,24 @@ export class SiteManager {
       });
     }
     placement.liftM = rested.lift;
-    this.applyPlacement(tileset, placement);
+    this.applyPlacement(handle, tileset, placement);
+  }
+
+  /** The tilesets of the other dates of `handle`'s site, of its representation. */
+  private otherDates(handle: AssetHandle): Cesium3DTileset[] {
+    if (!handle.asset.epochId) return [];
+    for (const entry of this.loaded.values()) {
+      if (entry.handles.get(handle.asset.id) !== handle) continue;
+      return [...entry.handles.values()]
+        .filter(
+          (other) =>
+            other !== handle &&
+            other.asset.epochId &&
+            other.asset.representation === handle.asset.representation,
+        )
+        .flatMap((other) => (other.tileset && !other.tileset.isDestroyed() ? [other.tileset] : []));
+    }
+    return [];
   }
 
   private applyClip(active: ActiveSite, asset: SiteAsset, tileset: Cesium3DTileset): void {
@@ -2259,8 +2582,10 @@ export class SiteManager {
     for (const { entry, handle } of this.handles()) {
       const tileset = handle.tileset;
       if (!tileset || handle.asset.representation !== "gaussian-splat") continue;
-      tileset.preloadWhenHidden = this.cesiumDraws(handle.asset);
       const current = this.pickAsset(entry, entry.representation)?.id === handle.asset.id;
+      // A date of the site not shown never streams, whoever draws the one that is.
+      tileset.preloadWhenHidden =
+        this.cesiumDraws(handle.asset) && (current || !handle.asset.epochId);
       tileset.show = current && drawn(entry) && this.cesiumDraws(handle.asset);
     }
     this.scene.requestRender();
@@ -2413,6 +2738,11 @@ function bboxArea(footprint: Footprint): number {
 }
 
 /** Ellipsoid height of the lowest corner of a tileset's root oriented bounding box. */
+/** The transform a tileset's root tile declares (its `tileset.json`), or none. */
+function rootTransform(tileset: Cesium3DTileset): Matrix4 | undefined {
+  return (tileset.root as { transform?: Matrix4 } | undefined)?.transform;
+}
+
 function lowestHeight(tileset: Cesium3DTileset): number | undefined {
   const inner = (tileset.root as unknown as { boundingVolume?: TileVolume } | undefined)
     ?.boundingVolume?.boundingVolume;

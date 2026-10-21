@@ -52,8 +52,12 @@ interface SitesState {
   /** Loaded site the camera still frames, from near or a few km out (keeps its controls up). */
   inViewSiteId: string | null;
   representation: Record<string, Representation>;
-  /** Selected temporal version (asset id) per site, when several exist. */
-  temporalAsset: Record<string, string>;
+  /**
+   * The epoch (dated capture, lib/epochs.ts) each loaded site shows, as the scene says it
+   * (SiteManager, `epoch`); null when the site's shown model belongs to no epoch. The scene
+   * owns the choice: a control asks it (`setEpoch`), and this follows what it then shows.
+   */
+  epoch: Record<string, string | null>;
   assets: Record<string, AssetRuntime>;
   /** Per-site load state, by site id; absent once a site is unloaded. */
   siteLoads: Record<string, SiteLoad>;
@@ -75,7 +79,7 @@ interface SitesState {
   setNearSite: (id: string | null) => void;
   setInViewSite: (id: string | null) => void;
   setRepresentation: (siteId: string, representation: Representation) => void;
-  setTemporalAsset: (siteId: string, assetId: string) => void;
+  setEpoch: (siteId: string, epochId: string | null) => void;
   updateAsset: (assetId: string, patch: Partial<AssetRuntime>) => void;
   clearAssets: (assetIds: string[]) => void;
   /** The scene's view of one site's load, or null when the site is unloaded. */
@@ -98,7 +102,7 @@ export const useSites = create<SitesState>()((set) => ({
   nearSiteId: null,
   inViewSiteId: null,
   representation: {},
-  temporalAsset: {},
+  epoch: {},
   assets: {},
   siteLoads: {},
   flightSiteId: null,
@@ -108,8 +112,8 @@ export const useSites = create<SitesState>()((set) => ({
   setInViewSite: (inViewSiteId) => set({ inViewSiteId }),
   setRepresentation: (siteId, representation) =>
     set((s) => ({ representation: { ...s.representation, [siteId]: representation } })),
-  setTemporalAsset: (siteId, assetId) =>
-    set((s) => ({ temporalAsset: { ...s.temporalAsset, [siteId]: assetId } })),
+  setEpoch: (siteId, epochId) =>
+    set((s) => (s.epoch[siteId] === epochId ? {} : { epoch: { ...s.epoch, [siteId]: epochId } })),
   updateAsset: (assetId, patch) =>
     set((s) => ({
       assets: {

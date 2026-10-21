@@ -105,6 +105,32 @@ epoch's newest observed asset with no `valid_to`. A capture names its site with 
 `POST /captures` (or the phone route), kept in `captures.metadata.siteId`; `captures.site_id` is
 still the site a run registered it into.
 
+### Epochs on the globe
+
+The viewer reads a site's epochs from `SiteRead.epochs` and picks what it shows with one rule,
+used by the globe, its controls and view.html alike (`apps/web/src/lib/epochs.ts`
+`pickShownAsset`): an epoch is offered when it is `published` and has a current asset of the
+representation shown (`currentAssetId` first, else the same rule recomputed for that
+representation; never an `inferred` asset). The latest offered epoch is shown unless another
+is chosen in the capture-date control (`TimelineControl`), which lists each by its UTC date,
+platform and alignment. Sites without epochs keep the rule from before them: the
+default-visible asset, else the newest observed.
+
+Every date of a site is drawn with one model matrix: that of the offered epoch with the lowest
+ordinal (the one that made the frame), placed and clamped to the ground as any asset is; the
+others copy it exactly and are never clamped on their own, so the vertical difference between
+two dates is the data's own and a new date never moves the old ones. Copying needs the two
+tilesets' root transforms to be one frame (`sameRootFrame`: rotation elements within 1e-9,
+translation within 1 mm, from first principles: 10 µm over 10 km, and four SPZ quanta against
+~1e-9 m of ECEF rounding). A date that fails it, or whose anchor did not load, is placed on its
+own and the console log says so; the Inspector's "Date shown" says it is placed on its own.
+Hidden dates stay loaded (instant switching under CesiumJS) but never preload tiles.
+
+Alignment is filled by M3. The viewer reads three keys of `alignment` only: `verdict`
+(`survey` · `coarse` · `unaligned`), `uncertaintyM`, and a ready-made `label`, preferred when
+present. Until then every date but the frame's own reads "Not aligned yet: placed by its own
+GPS".
+
 ## Runtime scale
 
 A phone video registered before the pipeline estimated scales (`scaleSource: unresolved`)

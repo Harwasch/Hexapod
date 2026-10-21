@@ -124,6 +124,68 @@ test("a scan opens on its own and renders", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("a site with two dates opens on the latest", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const epoch = (id: string, ordinal: number, observedAt: string, platform: string) => ({
+    id,
+    siteId: SITE,
+    ordinal,
+    observedAt,
+    observedAtSource: "captured-at",
+    platform,
+    status: "published",
+    joinMethod: ordinal === 1 ? "new-site" : "spatial",
+    alignment: null,
+    currentAssetId: `asset-${id}`,
+    createdAt: observedAt,
+  });
+  const splat = (id: string, url: string, createdAt: string) => ({
+    id: `asset-${id}`,
+    representation: "gaussian-splat",
+    source: { type: "3d-tiles-url", url },
+    epochId: id,
+    sourceKind: "observed",
+    validTo: null,
+    defaultVisible: true,
+    createdAt,
+  });
+  // Listed oldest first, both default-visible: "the first splat" would open the March one.
+  await page.route(
+    (url) => url.pathname === `/api/v1/sites/${SITE}`,
+    (route) =>
+      route.fulfill({
+        json: {
+          id: SITE,
+          name: "Garden tree",
+          createdAt: "2026-03-01T15:00:00Z",
+          assets: [
+            splat("e1", TILESET, "2026-03-02T00:00:00Z"),
+            splat("e2", `${TILESET}?epoch=2`, "2026-06-02T00:00:00Z"),
+          ],
+          epochs: [
+            epoch("e1", 1, "2026-03-01T15:00:00Z", "drone"),
+            epoch("e2", 2, "2026-06-01T15:00:00Z", "phone-video"),
+          ],
+        },
+      }),
+  );
+  const requested: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().startsWith("https://tiles.example/")) requested.push(request.url());
+  });
+  await page.goto(`/view.html#${SITE}`);
+  await expect(page.locator("#viewer-status")).toContainText("Drag to turn", { timeout: 30_000 });
+  await expect(page.locator("#scan-date")).toContainText("Jun 1, 2026");
+  // Only the latest is shown here, and the page says so, with the way to the others.
+  const dates = page.locator("#scan-dates");
+  await expect(dates).toHaveText("Latest of 2 dates · the globe shows the others");
+  await expect(dates).toHaveAttribute("href", "/");
+  expect(requested).toContain(`${TILESET}?epoch=2`);
+  expect(requested).not.toContain(TILESET);
+  expect(errors).toEqual([]);
+});
+
 interface Tile {
   boundingVolume: { box: number[] };
   geometricError: number;

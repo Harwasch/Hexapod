@@ -509,6 +509,20 @@ export class SceneSelectController {
     useSceneSelect.getState().clear();
   }
 
+  /**
+   * Scans no longer drawn (another date of their site chosen, SiteManager's `epoch`): an
+   * object of one is not selected any more -- its card's Hide and Show only would act on a
+   * date nobody sees -- and an area painted on one is not kept for Use painted area. The brush
+   * stays out; its next stroke projects what is drawn now.
+   */
+  forgetScans(assetIds: readonly string[]): void {
+    const gone = (assetId = ""): boolean => assetIds.includes(assetId);
+    // The store's clear drops the painted match too (`paint`).
+    if (gone(useSceneSelect.getState().assetId ?? "")) this.clear();
+    if (gone(this.#painted?.assetId)) this.#painted = null;
+    if (gone(this.#paintView?.assetId)) this.#paintView = null;
+  }
+
   /** Hides the selection (every member of a combination, with what it contains) and clears it. */
   hide(): void {
     const s = this.selection();
@@ -874,13 +888,23 @@ export class SceneSelectController {
     }
   }
 
+  /**
+   * The view a projection was made from: the camera's pose, the canvas, and which scans are
+   * drawn and by how many tiles. Another date of a site chosen with the camera standing still
+   * hides one scan and shows another; keyed on the pose alone, the brush went on painting the
+   * projection of the scan no longer drawn.
+   */
   #viewKey(): string {
     const camera = this.#viewer.camera;
     const p = camera.positionWC;
     const d = camera.directionWC;
     const c = this.#viewer.canvas;
+    const drawn = this.#assets().map(
+      (assetId) => `${assetId}:${String(pickSourceOf(assetId)?.tiles().length ?? 0)}`,
+    );
     return [p.x, p.y, p.z, d.x, d.y, d.z, c.clientWidth, c.clientHeight]
       .map((v) => v.toFixed(4))
+      .concat(drawn)
       .join(",");
   }
 
