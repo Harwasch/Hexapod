@@ -569,7 +569,7 @@ export class CesiumSceneManager {
   private updateScanRenderer(): void {
     const target = this.sites.scanTarget();
     this.scanRenderer.setTarget(target);
-    this.collider.setSolidWhileHidden(target?.tileset ?? null);
+    this.collider.setSolidWhileHidden(target?.solid ?? []);
   }
 
   private updateScanView(): void {

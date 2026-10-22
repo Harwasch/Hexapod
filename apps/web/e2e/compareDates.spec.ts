@@ -1,13 +1,15 @@
 /**
  * Compare › Dates in the app itself: two dated captures of one site, one each side of the
- * divider, under CesiumJS; and under PlayCanvas the control disabled, with the reason and the
- * one-click switch.
+ * divider, under CesiumJS and under PlayCanvas (the right-hand date its scan, the left streamed
+ * beside it in its one app); and under Spark the control disabled, with the reason and the
+ * one-click switch to PlayCanvas.
  *
  * E1 is the synthetic yard as a drone flew it on Mar 1 (the capture that made the site's
  * frame); E2 is a phone video of Jun 1, whose tileset is the yard's `tileset.json?epoch=2`
  * rewritten in the route to the committed synthetic tree's tile under the yard's root transform
  * (as epochSlider.spec.ts does), so the two dates look different on screen. Asserted, through
- * `window.__twin`: both dates drawn, E1 split LEFT and E2 RIGHT, one model matrix; the divider
+ * `window.__twin`: both dates drawn, E1 split LEFT and E2 RIGHT, one model matrix (under
+ * PlayCanvas CesiumJS's copies hidden, and PlayCanvas's own reading of the cut); the divider
  * moves the scene's split; turning the comparison off draws the one date shown before, whole.
  * And by pixels: left of the divider looks like E1 alone, right of it like E2 alone, and moving
  * the divider moves where E2 begins. The tool rail is as it was.
@@ -186,7 +188,38 @@ function secondDate(): string {
   });
 }
 
-async function route(page: Page): Promise<void> {
+/**
+ * March's own tileset.json with an inferred layer declared in its root: the synthetic tree under
+ * the yard's root (as June's date is), served as `tileset.json?fill=1` beside it. June has none.
+ */
+function marchWithFill(): string {
+  const yard = JSON.parse(
+    readFileSync(resolve(TILES, "synthetic-yard/splat/tileset.json"), "utf8"),
+  ) as { root: { extras?: Record<string, unknown> } & Record<string, unknown> };
+  return JSON.stringify({
+    ...yard,
+    root: {
+      ...yard.root,
+      extras: {
+        ...yard.root.extras,
+        inferredLayers: [
+          {
+            uri: "tileset.json?fill=1",
+            evidence: {
+              kind: "inferred",
+              filler: "fixture",
+              views: 3,
+              gaussians: 10,
+              meanConfidence: 0.5,
+            },
+          },
+        ],
+      },
+    },
+  });
+}
+
+async function route(page: Page, options: { marchFill?: boolean } = {}): Promise<void> {
   await mockApi(page);
   await page.route("**/api/v1/sites", (r) =>
     r.request().method() === "GET" ? r.fulfill({ status: 200, json: [summary] }) : r.fallback(),
@@ -197,8 +230,11 @@ async function route(page: Page): Promise<void> {
     const url = new URL(r.request().url());
     const relative = url.pathname.replace(/^.*\/fixture-tiles\//, "");
     if (relative.includes("..")) return r.abort();
-    if (relative === "synthetic-yard/splat/tileset.json" && url.searchParams.get("epoch") === "2")
+    const yardJson = relative === "synthetic-yard/splat/tileset.json";
+    if (yardJson && (url.searchParams.get("epoch") === "2" || url.searchParams.get("fill") === "1"))
       return r.fulfill({ status: 200, contentType: "application/json", body: second });
+    if (yardJson && options.marchFill)
+      return r.fulfill({ status: 200, contentType: "application/json", body: marchWithFill() });
     const file = resolve(TILES, relative);
     if (!existsSync(file)) return r.fulfill({ status: 404, body: "" });
     return r.fulfill({
@@ -240,9 +276,13 @@ async function drawnAs(page: Page): Promise<Record<string, [boolean, number]>> {
   return Object.fromEntries(s.loaded.map((a) => [a.id, [a.shown, a.split]]));
 }
 
-async function arrive(page: Page, renderer: string): Promise<void> {
+async function arrive(
+  page: Page,
+  renderer: string,
+  options: { marchFill?: boolean } = {},
+): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 760 });
-  await route(page);
+  await route(page, options);
   await page.goto(`/?renderer=${renderer}`);
   await page.waitForFunction(() => "__twin" in window && Boolean(window.__twin), undefined, {
     timeout: 120_000,
@@ -257,6 +297,24 @@ async function arrive(page: Page, renderer: string): Promise<void> {
     undefined,
     { timeout: 240_000 },
   );
+}
+
+/**
+ * Under a dedicated renderer: until it draws the scan SiteManager hands it (`scanTarget`), all
+ * of it in and still, twice a second apart (a date chosen starts a new session).
+ */
+async function overlayDrawn(page: Page, assetId: string): Promise<void> {
+  const drawn = () =>
+    page.evaluate(`(() => {
+      const twin = window.__twin;
+      twin.scene.requestRender();
+      const s = twin.scanRendererStatus;
+      return twin.sites.scanTarget()?.assetId === "${assetId}" && s.active && s.tiles > 0 &&
+        s.loading === 0 && s.settled;
+    })()`);
+  await expect
+    .poll(async () => (await drawn()) && (await page.waitForTimeout(1_000), await drawn()), poll)
+    .toBe(true);
 }
 
 /** A screenshot once the scene has drawn a few frames at rest; saved as evidence when named. */
@@ -344,6 +402,42 @@ const sidePicks = (
     return { left: unique(out.left), right: unique(out.right), leftUnsided: unique(out.leftUnsided) };
   })()`);
 
+/**
+ * The share of the covered pixels (not the globe's flat teal) that are Highlight's purple, in
+ * columns [x0, x1) and rows [0.08, 0.55) of a screenshot.
+ */
+async function purple(page: Page, shot: Buffer, x0: number, x1: number): Promise<number> {
+  return page.evaluate(
+    async ([data, from, to]) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${data}`;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d");
+      if (!context) return 0;
+      context.drawImage(image, 0, 0);
+      const x = Math.floor(image.width * from);
+      const w = Math.floor(image.width * to) - x;
+      const y = Math.floor(image.height * 0.08);
+      const h = Math.floor(image.height * 0.47);
+      const p = context.getImageData(x, y, w, h).data;
+      let covered = 0;
+      let lit = 0;
+      for (let i = 0; i < p.length; i += 4) {
+        const [r, g, b] = [p[i] ?? 0, p[i + 1] ?? 0, p[i + 2] ?? 0];
+        // The globe's teal background (about 92, 143, 135) is no splat.
+        if (Math.abs(r - 92) + Math.abs(g - 143) + Math.abs(b - 135) < 30) continue;
+        covered += 1;
+        if (b > g + 25 && r > g + 5) lit += 1;
+      }
+      return covered ? lit / covered : 0;
+    },
+    [shot.toString("base64"), x0, x1] as const,
+  );
+}
+
 async function railUnchanged(page: Page): Promise<void> {
   await expect(page.getByRole("toolbar", { name: "Tools" }).getByRole("button")).toHaveText([
     ...(process.env.VITE_ENABLE_LAND_EXPLORATION === "true" ? ["Land"] : []),
@@ -370,11 +464,29 @@ async function closePanel(page: Page) {
 
 const poll = { timeout: 120_000, intervals: [250, 500, 1000] };
 
-test("under cesium, Compare › Dates draws two dates either side of the divider", async ({
-  page,
-}) => {
-  test.setTimeout(420_000);
-  await arrive(page, "cesium");
+/** What PlayCanvas, drawing asset `id`, reads out of the comparison (scanView/scanCompare.ts). */
+const compareReading = (page: Page, id: string) =>
+  page.evaluate(async (asset) => {
+    const link = "/src/cesium/scanView/scanCompare.ts";
+    const module = (await import(/* @vite-ignore */ link)) as {
+      scanCompareReading(id: string): {
+        on: boolean;
+        dividerPx: number;
+        sides: { left: number; right: number };
+        left: { dates: number; tiles: number; loading: number };
+      } | null;
+    };
+    return module.scanCompareReading(asset);
+  }, id);
+
+/**
+ * Compare › Dates under `renderer`: each date alone, then both, each half like its own date,
+ * the picks by side, the divider moved, and off again.
+ */
+async function comparesTwoDates(page: Page, renderer: "cesium" | "playcanvas"): Promise<void> {
+  await arrive(page, renderer);
+  // Drawn by CesiumJS itself, or by PlayCanvas with CesiumJS's copies hidden.
+  const own = renderer === "cesium";
   const timeline = page.getByTestId("timeline");
   const mar = timeline.getByRole("radio", { name: /Mar 1, 2026/ });
   const jun = timeline.getByRole("radio", { name: /Jun 1, 2026/ });
@@ -384,22 +496,24 @@ test("under cesium, Compare › Dates draws two dates either side of the divider
   await expect
     .poll(async () => (await state(page)).loaded.map((a) => a.id).sort(), poll)
     .toEqual([A1, A2].sort());
-  const juneAlone = await settledShot(page, "jun-alone");
+  if (!own) await overlayDrawn(page, A2);
+  const juneAlone = await settledShot(page, `${renderer}-jun-alone`);
   await mar.click();
-  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [true, NONE], [A2]: [false, NONE] });
-  const marchAlone = await settledShot(page, "mar-alone");
+  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [own, NONE], [A2]: [false, NONE] });
+  if (!own) await overlayDrawn(page, A1);
+  const marchAlone = await settledShot(page, `${renderer}-mar-alone`);
   await jun.click();
-  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [false, NONE], [A2]: [true, NONE] });
+  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [false, NONE], [A2]: [own, NONE] });
 
   // Compare › Dates: the latest against the one before, and on.
   const dates = await openCompare(page);
   await expect(dates.getByLabel("Left of the divider")).toHaveValue(E1);
   await expect(dates.getByLabel("Right of the divider")).toHaveValue(E2);
-  await expect(page.getByTestId("compare-dates-needs-cesium")).toHaveCount(0);
+  await expect(page.getByTestId("compare-dates-needs-renderer")).toHaveCount(0);
   const toggle = dates.getByRole("switch", { name: "Swipe between dates" });
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "true");
-  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [true, LEFT], [A2]: [true, RIGHT] });
+  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [own, LEFT], [A2]: [own, RIGHT] });
   const both = await state(page);
   expect(both.compare).toEqual({ left: E1, right: E2 });
   // The single date is kept for after; both are drawn with one model matrix.
@@ -407,6 +521,26 @@ test("under cesium, Compare › Dates draws two dates either side of the divider
   const [m1, m2] = [A1, A2].map((id) => both.loaded.find((a) => a.id === id)?.m);
   expect(m1).toBeDefined();
   expect(m2).toEqual(m1);
+  if (!own) {
+    // PlayCanvas, drawing June, streams March beside it and cuts each at the divider.
+    await expect
+      .poll(async () => {
+        const r = await compareReading(page, A2);
+        return r && { on: r.on, left: r.sides.left > 0, right: r.sides.right > 0 };
+      }, poll)
+      .toEqual({ on: true, left: true, right: true });
+    await expect
+      .poll(async () => {
+        const r = await compareReading(page, A2);
+        return r !== null && r.left.tiles > 0 && r.left.loading === 0;
+      }, poll)
+      .toBe(true);
+    await overlayDrawn(page, A2);
+  }
+  // At capture is off while two dates are drawn: one clock is not each date's.
+  await expect(
+    page.getByTestId("views-sun").getByRole("radio", { name: "At capture" }),
+  ).toBeDisabled();
   // The divider is drawn, and the scene splits where it is.
   const slider = page.getByTestId("split-slider");
   await expect(slider).toBeVisible();
@@ -420,7 +554,7 @@ test("under cesium, Compare › Dates draws two dates either side of the divider
   // It outlives the panel. By pixels: each half looks like its own date alone.
   await closePanel(page);
   await expect(slider).toBeVisible();
-  const compared = await settledShot(page, "compare-at-half");
+  const compared = await settledShot(page, `${renderer}-compare-at-half`);
   const halves = {
     leftVsMar: await differ(page, compared, marchAlone, 0.08, 0.47),
     leftVsJun: await differ(page, compared, juneAlone, 0.08, 0.47),
@@ -453,7 +587,7 @@ test("under cesium, Compare › Dates draws two dates either side of the divider
   await slider.focus();
   for (let i = 0; i < 10; i++) await page.keyboard.press("ArrowLeft");
   await expect.poll(async () => (await state(page)).splitPosition, poll).toBeCloseTo(0.3, 5);
-  const moved = await settledShot(page, "compare-at-0.3");
+  const moved = await settledShot(page, `${renderer}-compare-at-0.3`);
   const band = {
     vsJun: await differ(page, moved, juneAlone, 0.33, 0.47),
     vsMar: await differ(page, moved, marchAlone, 0.33, 0.47),
@@ -466,44 +600,266 @@ test("under cesium, Compare › Dates draws two dates either side of the divider
   expect(band.dates).toBeGreaterThan(0.02);
   expect(band.vsJun).toBeLessThan(band.vsMar / 2);
 
+  if (!own) {
+    // The divider moved one uniform of PlayCanvas's frame, where the canvas's pixels say.
+    const reading = await compareReading(page, A2);
+    const width = await page.evaluate(
+      `document.querySelector("canvas[data-scan-renderer]")?.width ?? 0`,
+    );
+    expect(reading?.dividerPx).toBeCloseTo(0.3 * Number(width), 0);
+  }
   // Off: the one date shown before, whole, and no divider.
   const again = await openCompare(page);
   await again.getByRole("switch", { name: "Swipe between dates" }).click();
-  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [false, NONE], [A2]: [true, NONE] });
+  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [false, NONE], [A2]: [own, NONE] });
   expect((await state(page)).compare).toBeNull();
   await expect(page.getByTestId("split-slider")).toHaveCount(0);
   await expect(jun).toHaveAttribute("aria-checked", "true");
   await closePanel(page);
-  await settledShot(page, "compare-off");
+  await settledShot(page, `${renderer}-compare-off`);
   await railUnchanged(page);
+}
+
+test("under cesium, Compare › Dates draws two dates either side of the divider", async ({
+  page,
+}) => {
+  test.setTimeout(420_000);
+  await comparesTwoDates(page, "cesium");
 });
 
-test("under playcanvas, Compare › Dates says it needs CesiumJS and switches to it in one click", async ({
+test("under playcanvas, Compare › Dates draws two dates in one app, each cut at the divider", async ({
+  page,
+}) => {
+  test.setTimeout(420_000);
+  await comparesTwoDates(page, "playcanvas");
+});
+
+test("under spark, Compare › Dates says it needs CesiumJS or PlayCanvas and switches in one click", async ({
   page,
 }) => {
   test.setTimeout(360_000);
-  await arrive(page, "playcanvas");
+  await arrive(page, "spark");
   const dates = await openCompare(page);
   const toggle = dates.getByRole("switch", { name: "Swipe between dates" });
   await expect(toggle).toBeDisabled();
   await expect(dates.getByLabel("Left of the divider")).toBeDisabled();
-  const notice = page.getByTestId("compare-dates-needs-cesium");
+  const notice = page.getByTestId("compare-dates-needs-renderer");
   await expect(notice).toContainText(
-    "Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
+    "Needs the CesiumJS or PlayCanvas renderer (Settings › Advanced › Splat renderer)",
   );
-  await settledShot(page, "playcanvas-notice");
+  await settledShot(page, "spark-notice");
   await railUnchanged(page);
 
-  // One click: CesiumJS draws the scan, and the comparison can be turned on.
-  await notice.getByRole("button", { name: "Draw with CesiumJS" }).click();
+  // One click: PlayCanvas, the default, draws the scan, and the comparison can be turned on.
+  await notice.getByRole("button", { name: "Draw with PlayCanvas" }).click();
   await expect(notice).toHaveCount(0);
   await expect
-    .poll(() => page.evaluate(`window.__twin.scanRendererStatus.active`), poll)
-    .toBe(false);
+    .poll(() => page.evaluate(`window.__twin.scanRendererStatus.kind`), poll)
+    .toBe("playcanvas");
   await expect(toggle).toBeEnabled();
   await toggle.click();
-  await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [true, LEFT], [A2]: [true, RIGHT] });
+  await expect
+    .poll(() => drawnAs(page), poll)
+    .toEqual({ [A1]: [false, LEFT], [A2]: [false, RIGHT] });
   await closePanel(page);
-  await settledShot(page, "playcanvas-switched-compare");
+  await settledShot(page, "spark-switched-compare");
   await railUnchanged(page);
+});
+
+test("under playcanvas, the left date's inferred fill is labelled, and drawn purple under Highlight", async ({
+  page,
+}) => {
+  test.setTimeout(420_000);
+  // March (left) has an inferred layer; June (right, the date shown before) has none.
+  await arrive(page, "playcanvas", { marchFill: true });
+  await expect.poll(async () => (await state(page)).shown, poll).toBe(A2);
+  await overlayDrawn(page, A2);
+  // June alone: no fill, so no Inferred control.
+  await expect(page.getByTestId("inferred-style")).toHaveCount(0);
+
+  const dates = await openCompare(page);
+  await dates.getByRole("switch", { name: "Swipe between dates" }).click();
+  await expect
+    .poll(() => drawnAs(page), poll)
+    .toEqual({ [A1]: [false, LEFT], [A2]: [false, RIGHT] });
+  await closePanel(page);
+  // The Inferred control speaks for either date's fill: March's, left of the divider.
+  await expect(page.getByTestId("inferred-style")).toBeVisible({ timeout: 60_000 });
+  await page.getByRole("radio", { name: "Show inferred fill" }).click();
+  await expect(page.getByTestId("inferred-legend")).toHaveText(
+    "Inferred: generated where no camera saw. Not measured.",
+  );
+  // PlayCanvas streams March and its layer beside June, the layer on March's side.
+  const marchIn = async () => {
+    const r = await compareReading(page, A2);
+    return r !== null && r.left.tiles > 1 && r.left.loading === 0;
+  };
+  await expect.poll(marchIn, poll).toBe(true);
+  await overlayDrawn(page, A2);
+  const shown = await settledShot(page, "playcanvas-left-fill-show");
+  await page.getByRole("radio", { name: "Highlight inferred fill" }).click();
+  await expect.poll(marchIn, poll).toBe(true);
+  const lit = await settledShot(page, "playcanvas-left-fill-highlight");
+  const figures = {
+    leftShow: await purple(page, shown, 0.08, 0.47),
+    leftHighlight: await purple(page, lit, 0.08, 0.47),
+    rightShow: await purple(page, shown, 0.53, 0.92),
+    rightHighlight: await purple(page, lit, 0.53, 0.92),
+  };
+  test.info().annotations.push({ type: "purple share", description: JSON.stringify(figures) });
+  console.info(JSON.stringify(figures));
+  // March's fill is drawn purple, not in measured colours; June, measured, is untouched.
+  expect(figures.leftHighlight).toBeGreaterThan(figures.leftShow + 0.05);
+  expect(Math.abs(figures.rightHighlight - figures.rightShow)).toBeLessThan(0.005);
+  await railUnchanged(page);
+});
+
+/**
+ * Where the cut is in a screenshot: per pixel column near `around` (device pixels), how many of
+ * the rows [0.08, 0.55) of the view look like `left` alone and not `right` alone, and the other
+ * way round; the cut is the first column from which the right date's columns win, and keep
+ * winning for six columns.
+ */
+async function cutColumn(
+  page: Page,
+  shots: { compared: Buffer; left: Buffer; right: Buffer },
+  around: number,
+): Promise<number | null> {
+  return page.evaluate(
+    async ([compared, left, right, at]) => {
+      const read = async (data: string) => {
+        const image = new Image();
+        image.src = `data:image/png;base64,${data}`;
+        await image.decode();
+        const canvas = document.createElement("canvas");
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const context = canvas.getContext("2d");
+        if (!context) throw new Error("no 2D context");
+        context.drawImage(image, 0, 0);
+        return {
+          data: context.getImageData(0, 0, image.width, image.height).data,
+          w: image.width,
+          h: image.height,
+        };
+      };
+      const [c, l, r] = [await read(compared), await read(left), await read(right)];
+      const near = (a: Uint8ClampedArray, b: Uint8ClampedArray, i: number) =>
+        Math.abs((a[i] ?? 0) - (b[i] ?? 0)) +
+          Math.abs((a[i + 1] ?? 0) - (b[i + 1] ?? 0)) +
+          Math.abs((a[i + 2] ?? 0) - (b[i + 2] ?? 0)) <
+        24;
+      const score: number[] = [];
+      const x0 = Math.max(0, Math.round(at) - 60);
+      const x1 = Math.min(c.w, Math.round(at) + 60);
+      for (let x = x0; x < x1; x++) {
+        let s = 0;
+        for (let y = Math.floor(c.h * 0.08); y < Math.floor(c.h * 0.55); y++) {
+          const i = (y * c.w + x) * 4;
+          const asLeft = near(c.data, l.data, i);
+          const asRight = near(c.data, r.data, i);
+          if (asLeft && !asRight) s += 1;
+          if (asRight && !asLeft) s -= 1;
+        }
+        score.push(s);
+      }
+      for (let k = 0; k + 6 <= score.length; k++)
+        if (score.slice(k, k + 6).every((s) => s < 0)) return x0 + k;
+      return null;
+    },
+    [
+      shots.compared.toString("base64"),
+      shots.left.toString("base64"),
+      shots.right.toString("base64"),
+      around,
+    ] as const,
+  );
+}
+
+test.describe("at a device pixel ratio of 2", () => {
+  test.use({ deviceScaleFactor: 2 });
+
+  test("under playcanvas, the cut is where the divider's handle is, at full and half render scale", async ({
+    page,
+  }) => {
+    test.setTimeout(600_000);
+    await arrive(page, "playcanvas");
+    const timeline = page.getByTestId("timeline");
+    await expect.poll(async () => (await state(page)).shown, poll).toBe(A2);
+    // Screenshots without the divider's own white line over the cut.
+    await page.addStyleTag({ content: ".split-slider { opacity: 0 !important; }" });
+    const measure = async (label: string) => {
+      await overlayDrawn(page, A2);
+      const june = await settledShot(page, `dpr2-${label}-jun-alone`);
+      await timeline.getByRole("radio", { name: /Mar 1, 2026/ }).click();
+      await overlayDrawn(page, A1);
+      const march = await settledShot(page, `dpr2-${label}-mar-alone`);
+      await timeline.getByRole("radio", { name: /Jun 1, 2026/ }).click();
+      await overlayDrawn(page, A2);
+      const dates = await openCompare(page);
+      await dates.getByRole("switch", { name: "Swipe between dates" }).click();
+      await closePanel(page);
+      await expect
+        .poll(async () => {
+          const r = await compareReading(page, A2);
+          return r !== null && r.on && r.left.tiles > 0 && r.left.loading === 0;
+        }, poll)
+        .toBe(true);
+      await overlayDrawn(page, A2);
+      const compared = await settledShot(page, `dpr2-${label}-compare`);
+      const handle = await page.getByTestId("split-slider").boundingBox();
+      const facts: {
+        dpr: number;
+        resolutionScale: number;
+        globe: number;
+        overlay: number;
+        css: number;
+      } = await page.evaluate(`(() => {
+        const twin = window.__twin;
+        const overlay = document.querySelector("canvas[data-scan-renderer]");
+        return {
+          dpr: window.devicePixelRatio,
+          resolutionScale: twin.viewer.resolutionScale,
+          globe: twin.viewer.canvas.width,
+          overlay: overlay ? overlay.width : 0,
+          css: twin.viewer.canvas.clientWidth,
+        };
+      })()`);
+      const reading = await compareReading(page, A2);
+      // The divider's line starts at its CSS x (`left: fraction%`), in the screenshot's pixels.
+      const handleX = (handle?.x ?? Number.NaN) * facts.dpr;
+      const cut = await cutColumn(page, { compared, left: march, right: june }, handleX);
+      const figures = { label, ...facts, handleX, cut, dividerPx: reading?.dividerPx };
+      test.info().annotations.push({ type: "cut vs handle", description: JSON.stringify(figures) });
+      console.info(JSON.stringify(figures));
+      // Off again for the next measure.
+      const again = await openCompare(page);
+      await again.getByRole("switch", { name: "Swipe between dates" }).click();
+      await closePanel(page);
+      await expect
+        .poll(async () => (await compareReading(page, A2))?.on ?? false, poll)
+        .toBe(false);
+      return figures;
+    };
+    const full = await measure("full");
+    expect(full.dpr).toBe(2);
+    expect(full.cut).not.toBeNull();
+    expect(Math.abs((full.cut ?? 0) - full.handleX)).toBeLessThanOrEqual(2);
+    // A render scale of a half: the globe and the overlay draw half the pixels, stretched.
+    await page.evaluate(`(() => {
+      window.__twin.viewer.resolutionScale = 0.5;
+      window.__twin.scene.requestRender();
+    })()`);
+    await expect
+      .poll(
+        () => page.evaluate(`document.querySelector("canvas[data-scan-renderer]")?.width ?? 0`),
+        poll,
+      )
+      .toBeLessThanOrEqual(full.css * 1.01);
+    const half = await measure("half");
+    expect(half.resolutionScale).toBeCloseTo(0.5, 5);
+    expect(half.overlay).toBeLessThanOrEqual(half.css * 1.01);
+    expect(half.cut).not.toBeNull();
+    expect(Math.abs((half.cut ?? 0) - half.handleX)).toBeLessThanOrEqual(2);
+  });
 });

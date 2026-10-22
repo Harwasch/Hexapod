@@ -7,8 +7,10 @@
  * two per tile, which the key says. The WebGPU trial does not draw them yet (the modifier is
  * GLSL only): under it the control says so and offers the switch, rather than leaving a button
  * that silently does nothing. The per-cell view rules are CesiumJS's and PlayCanvas's
- * (`perCellDrawable`): under Spark and the WebGPU trial the notice names them. Sunlight is CesiumJS's and PlayCanvas's (`sunlightDrawable`): under Spark and the WebGPU
- * trial the Sun control says so itself, with the switch to PlayCanvas, the default renderer.
+ * (`perCellDrawable`): under Spark and the WebGPU trial the notice names them. Sunlight is
+ * CesiumJS's and PlayCanvas's (`sunlightDrawable`), and so is Compare › Dates
+ * (`compareDrawable`): under Spark and the WebGPU trial each says so itself, with the switch to
+ * PlayCanvas, the default renderer.
  */
 import { useSettings, type SplatRenderer } from "@/state/settings";
 import type { ViewMode } from "@/state/viewMode";
@@ -67,6 +69,15 @@ export function ruleDateCount(
 }
 
 /**
+ * Whether `renderer` draws two dates side by side (Compare › Dates, ADR 0017): CesiumJS by its
+ * tilesets' split, PlayCanvas in its one app, each fragment cut at the divider by its date
+ * (cesium/scanView/scanCompare.ts). Not Spark, nor the WebGPU trial (the hook is GLSL only).
+ */
+export function compareDrawable(renderer: SplatRenderer): boolean {
+  return renderer === "cesium" || renderer === "playcanvas";
+}
+
+/**
  * What the splat view control offers that `renderer` cannot draw and CesiumJS can, in words for
  * its notice (`perCell`: the Per cell rules are offered, the site having two dates or more);
  * null when there is none -- under CesiumJS, which draws all of it, or nothing of it missing.
@@ -103,9 +114,11 @@ export function cellLevelNote(renderer: SplatRenderer): string | null {
 export const NEEDS_CESIUM_NOTICE =
   "Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)";
 export const DRAW_WITH_CESIUM = "Draw with CesiumJS";
-/** The Sun control's notice under a renderer that does not draw Sunlight. */
-export const NEEDS_SUNLIGHT_RENDERER =
+/** What says a control needs CesiumJS or PlayCanvas: the Sun control's, Compare › Dates'. */
+export const NEEDS_CESIUM_OR_PLAYCANVAS =
   "Needs the CesiumJS or PlayCanvas renderer (Settings › Advanced › Splat renderer)";
+/** The Sun control's notice under a renderer that does not draw Sunlight. */
+export const NEEDS_SUNLIGHT_RENDERER = NEEDS_CESIUM_OR_PLAYCANVAS;
 export const DRAW_WITH_PLAYCANVAS = "Draw with PlayCanvas";
 
 /**

@@ -293,6 +293,8 @@ interface ActiveSite {
    * one date is drawn. `epochId` is kept meanwhile: it is the date shown again after.
    */
   compare: CompareDates | null;
+  /** Lets go of the comparison's session under PlayCanvas at once (compareSession.ts). */
+  stopCompare?: () => void;
   /**
    * A per-cell view rule (`setViewRule`; ADR 0017): the site's dates up to the one chosen drawn
    * as one, each cell from the date the rule picks; null while one date is drawn.
@@ -1433,10 +1435,13 @@ export class SiteManager {
    * placement (`followAnchor`), so what differs between the halves is the data's own. Null
    * draws the single date chosen before (`setEpoch`) again. ADR 0017.
    *
-   * The split is CesiumJS's own: `tileset.splitDirection`, which the splat primitive copies
-   * from its tileset every frame and its fragment shader cuts at the divider. So two dates are
-   * refused where another renderer draws the scan (lib/viewModes.ts says so in the control),
-   * as are two dates that are not both offered, or one date twice.
+   * Under CesiumJS the split is its own: `tileset.splitDirection`, which the splat primitive
+   * copies from its tileset every frame and its fragment shader cuts at the divider. Under
+   * PlayCanvas the right-hand date is the scan it draws (`scanTarget`) and the left is streamed
+   * into the same app, each splat's fragments cut at the divider by the date it is of
+   * (scanView/scanCompare.ts); the tilesets keep their sides for the picks. So two dates are
+   * refused where Spark or the WebGPU trial draws the scan (lib/viewModes.ts says so in the
+   * control), as are two dates that are not both offered, or one date twice.
    */
   async setCompareDates(dates: CompareDates | null): Promise<void> {
     const active = this.active;
@@ -1450,8 +1455,15 @@ export class SiteManager {
       : active.compare === null;
     if (same) return;
     active.compare = dates ? { left: dates.left, right: dates.right } : null;
-    // A swipe and a view rule are one or the other: either ends the one before.
-    if (dates) this.endRule(active, "compare");
+    // A swipe and a view rule are one or the other: either ends the one before. Under
+    // PlayCanvas the right-hand date's renderer is handed the left one (compareSession.ts).
+    if (dates) {
+      this.endRule(active, "compare");
+      void this.rules().then((m) => {
+        active.stopCompare?.();
+        active.stopCompare = m.startCompare(this.scene, active, RULE_KIT);
+      });
+    }
     this.events.emit("compare-dates", { siteId: active.site.id, dates: active.compare });
     // A date the comparison has to load is the site's model loading again: the load pill says
     // so until both are in (`watchFirstTiles`), not only for a first visit.
@@ -1485,8 +1497,10 @@ export class SiteManager {
 
   /**
    * The models two dates are drawn with: each epoch's current asset of `representation`,
-   * both drawn by CesiumJS. Null when the two are one, or either is not offered or not drawn
-   * here (another renderer draws splat scans).
+   * both drawn by CesiumJS, or both by PlayCanvas, which draws the two in its one app and cuts
+   * each at the divider (scanView/scanCompare.ts). Null when the two are one, either is not
+   * offered, or no one renderer draws both with a cut: Spark and the WebGPU trial, or a Living
+   * Survey date (CesiumJS's under any renderer) beside one PlayCanvas draws.
    */
   private comparedAssets(
     entry: ActiveSite,
@@ -1497,7 +1511,13 @@ export class SiteManager {
     const offered = epochOptions(entry.epochs, entry.site.assets, representation);
     const left = offered.find((option) => option.epoch.id === dates.left)?.asset;
     const right = offered.find((option) => option.epoch.id === dates.right)?.asset;
-    if (!left || !right || !this.cesiumDraws(left) || !this.cesiumDraws(right)) return null;
+    if (
+      !left ||
+      !right ||
+      this.cesiumDraws(left) !== this.cesiumDraws(right) ||
+      (!this.cesiumDraws(left) && this.splatRenderer !== "playcanvas")
+    )
+      return null;
     return { left, right };
   }
 
@@ -1505,6 +1525,7 @@ export class SiteManager {
   private endCompare(entry: ActiveSite): boolean {
     if (!entry.compare) return false;
     entry.compare = null;
+    entry.stopCompare?.();
     this.events.emit("compare-dates", { siteId: entry.site.id, dates: null });
     return true;
   }
@@ -1567,7 +1588,7 @@ export class SiteManager {
     if (!active) return;
     if (!rule) return void this.endRule(active);
     if (!active.rule) {
-      const { ruleAssets, startCompositor } = await import("./compositorSession");
+      const { ruleAssets, startCompositor } = await this.rules();
       const renderer = () => this.splatRenderer;
       if (this.active !== active || this.ruleAsked !== rule) return;
       if (!active.rule) {
@@ -1590,6 +1611,11 @@ export class SiteManager {
     active.rule.rule = rule;
     useViewRule.setState({ active: { siteId: active.site.id, rule }, ended: null });
     this.scene.requestRender();
+  }
+
+  /** The rules' module, loaded on demand: a comparison's session under PlayCanvas comes with it. */
+  private rules() {
+    return import("./compositorSession");
   }
 
   /**
@@ -2923,9 +2949,9 @@ export class SiteManager {
   setSplatRenderer(kind: SplatRendererKind): void {
     if (kind === this.splatRenderer) return;
     this.splatRenderer = kind;
-    // Two dates side by side are CesiumJS's split: under a renderer that draws the scan itself
-    // the site shows its one date again, which that renderer draws (loaded if it was not),
-    // and its load record is that date's, not a compared one's that failed.
+    // Two dates side by side are CesiumJS's split and PlayCanvas's cut: under Spark or the
+    // WebGPU trial the site shows its one date again, which that renderer draws (loaded if it
+    // was not), and its load record is that date's, not a compared one's that failed.
     for (const entry of this.loaded.values()) {
       if (this.keepCompare(entry)) {
         this.restartLoad(entry);
@@ -2949,18 +2975,30 @@ export class SiteManager {
   /**
    * The drawn splat scan a dedicated renderer should draw, if any: engaged, or seen from afar
    * (`far`, which is not part of its key: moving between the two keeps the renderer's session).
+   * With two dates compared under PlayCanvas, the right-hand date (`mainAsset`'s, as the clip
+   * and the far view's), whichever date was chosen before.
    */
-  scanTarget(): { key: string; tileset: Cesium3DTileset; assetId: string; far: boolean } | null {
+  scanTarget(): {
+    key: string;
+    tileset: Cesium3DTileset;
+    assetId: string;
+    far: boolean;
+    solid: Cesium3DTileset[];
+  } | null {
     if (this.splatRenderer === "cesium") return null;
     const active = this.active;
     if (!active || !drawn(active) || active.representation !== "gaussian-splat") return null;
-    const asset = this.pickAsset(active, active.representation);
+    // Two dates compared: the right-hand one is the scan, the left drawn beside it in one app.
+    const asset =
+      this.comparedAssets(active)?.right ?? this.pickAsset(active, active.representation);
     const handle = asset ? active.handles.get(asset.id) : undefined;
     if (!asset || this.cesiumDraws(asset) || !handle?.tileset || handle.tileset.isDestroyed())
       return null;
     return {
       key: `${active.site.id}:${asset.id}`,
       tileset: handle.tileset,
+      // Every date drawn: both compared, a rule's; walked on and picked though hidden.
+      solid: this.drawnHandles(active).map((h) => h.tileset),
       assetId: asset.id,
       far: !active.engaged,
     };

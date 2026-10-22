@@ -418,10 +418,10 @@ describe("Sunlight under PlayCanvas", () => {
     const glsl = component(near).modifier?.glsl ?? "";
     // The word: the look drawn for a black splat of the same alpha, then the look itself.
     const word = glsl.indexOf(
-      "writeHexapodSun(uvec4(hexapodSunWord(hexapodCellTile(center, vec4(0.0, 0.0, 0.0, color.a), uCellGrid, uCellRule, uCellLevel, uCellTile).rgb), 0u, 0u, 0u));",
+      "writeHexapodSun(uvec4(hexapodSunWord(hexapodCellTile(hexapodCellAt(center), vec4(0.0, 0.0, 0.0, color.a), uCellGrid, uCellRule, uCellLevel, uCellTile).rgb), 0u, 0u, 0u));",
     );
     const look = glsl.indexOf(
-      "color = hexapodCellTile(center, color, uCellGrid, uCellRule, uCellLevel, uCellTile);",
+      "color = hexapodCellTile(hexapodCellAt(center), color, uCellGrid, uCellRule, uCellLevel, uCellTile);",
     );
     expect(word).toBeGreaterThan(0);
     expect(look).toBeGreaterThan(word);

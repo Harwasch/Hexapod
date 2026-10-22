@@ -32,8 +32,10 @@ time. Seeing what changed means flicking between them; a swipe shows both at onc
 4. **What travels with a scan is cut with it.** Inferred layers drawing themselves and split
    objects copy their scan's `splitDirection` each frame; companions drawn by the scan's
    primitive are cut with it already.
-5. **CesiumJS only (C5).** Under PlayCanvas or Spark, Compare › Dates is disabled with "Needs
-   the CesiumJS renderer (Settings › Advanced › Splat renderer)" and "Draw with CesiumJS".
+5. **CesiumJS only (C5)** when first built. PlayCanvas draws it too since (§ "Compare two dates
+   under PlayCanvas" below); under Spark or the WebGPU trial Compare › Dates is disabled with
+   "Needs the CesiumJS or PlayCanvas renderer (Settings › Advanced › Splat renderer)" and "Draw
+   with PlayCanvas".
 6. **Picks follow the side clicked.** A ray through a point on screen (Measure, selection, the
    orbit pivot, the wheel zoom) is answered by `SplatCollider` only from tilesets drawn at that
    point: a tileset split to the other side of `scene.splitPosition` is skipped. The site card
@@ -66,8 +68,9 @@ time. Seeing what changed means flicking between them; a swipe shows both at onc
   dates share the site's footprint, so the clip is the same in practice. The load pill waits for
   both dates' first tiles.
 - The Living Survey still reads the single date chosen before the comparison (`tilesetFor`).
-- A Living Survey scan, which CesiumJS draws under any renderer, could be compared under
-  PlayCanvas, but the control disables Dates for every splat scan off CesiumJS: one rule to say.
+- A Living Survey scan, which CesiumJS draws under any renderer, is compared under PlayCanvas
+  only beside another Living Survey scan (both CesiumJS's): beside a date PlayCanvas draws, no
+  one renderer would draw both with a cut, and SiteManager refuses the pair.
 - Undo of the switch is scoped to the site (`scope: "site"`), like the site's other steps.
 
 ## Per-cell view rules
@@ -297,15 +300,124 @@ modifier) already draws Confidence, Data age and the objects' rules per tile.
   default) that keeps whatever bands the tiles carry; and the app streams it only for a scan
   that has one and declares no objects (`ScanRendererHost` `runNative`). So no scan published
   with the defaults meets it.
-- Compare › Dates stays CesiumJS's: the stock split is CesiumJS's, and a rule and a comparison
-  remain one or the other. As captured draws a rule as Ground truth, and At capture is off while
-  the rule draws more than one date, under either renderer.
+- A rule and a comparison remain one or the other, under either renderer (PlayCanvas draws the
+  comparison too since, § "Compare two dates under PlayCanvas"). As captured draws a rule as
+  Ground truth, and At capture is off while the rule draws more than one date, under either
+  renderer.
 - The other dates' split objects are placed at their poses as frames are drawn; a pose set on
   one while nothing else changes waits for the next frame.
 - A pick is answered from the dates' solids (the collider) as under CesiumJS; scene selection
   picks the scan's own tiles, never another date's.
 - Sixteen sources at most, as under CesiumJS: past them a tileset is named by no source and not
   drawn, and the key says so.
+
+## Compare two dates under PlayCanvas
+
+Date 2026-10-20 · PlayCanvas port 4; branch `claude/feat-splat-pc-compare`.
+
+### Context
+
+PlayCanvas is the app's default renderer, and Compare › Dates was CesiumJS's alone: most
+visitors met it disabled, with a switch to another renderer. CesiumJS cuts each date's own
+primitive at the divider (`splitDirection`). Port 3 put a rule's dates in PlayCanvas's one app
+and sort; a research spike (`claude/research-pc-sunlight-spike`, Q3) showed PlayCanvas's own
+per-frame splat hook can cut per pixel: a user varying (`app.scene.gsplat.varyings`) from
+`gsplatModifyVS` into `gsplatModifyPS`, which may `discard` by `gl_FragCoord`, with no copy of
+the work buffer when the divider moves. No PlayCanvas patch is needed.
+
+### Decision
+
+1. **One app: the right-hand date is the scan.** Under PlayCanvas SiteManager compares two
+   dates as under CesiumJS (`comparedAssets`: both drawn by CesiumJS, or both by PlayCanvas),
+   and `scanTarget` hands PlayCanvas the right-hand date -- the one the clip, the far view and
+   the load pill already speak for -- whichever date was chosen before. The comparison's session
+   (`cesium/compareSession.ts`, loaded with the rules' module, whose loader SiteManager has) hands
+   that renderer the left-hand date and the divider (`scanView/scanCompare.ts`): the left date's
+   URL, its root's extras, where it is in the scan's frame (`datePlacement.ts`, as a rule's), and
+   `scene.splitPosition`, checked each frame and handed on only when it moves. The renderer
+   streams the left date into the same app with port 3's `RuleDates`, its inferred layers and
+   split objects with it, within the one budget a rule's dates share (§ above): split evenly,
+   half for the scan and half for the left date (`COMPARE_SHARES`), not by `viewShares`. A
+   comparison has no owner plane, and shares that followed the divider would stream both dates
+   again on every frame of a swipe, which copies nothing as it is. A switch between CesiumJS and PlayCanvas keeps the
+   comparison; Spark or the WebGPU trial end it, as before.
+2. **Each splat says its date; the fragment is cut.** Each tile's copy into the work buffer
+   writes the side its date is drawn on -- left for the other date's tiles, layers and objects,
+   right for the scan's -- into one byte a splat, an R8U stream (`hexapodSide`), from one uniform
+   a tile (`uHexapodSide`): no position, rotation or scale is read, so a colour-only refresh of a
+   streamed scan cannot get it wrong. The frame's hook (`gsplatModifyVS`) hands the byte to the
+   fragment shader as a flat varying (`hexapodHalf`), and `gsplatModifyPS` discards a fragment of
+   the left date at or right of the divider, and of the right date left of it, by
+   `gl_FragCoord.x` against `uHexapodDivider` (the divider in the canvas's pixels): exact at the
+   divider, as CesiumJS's split is. The divider is a uniform of the frame: swiping copies
+   nothing. With Sunlight on, its hook runs inside the comparison's.
+3. **The stream comes with the first comparison.** Added at start-up, so the buffer's layout
+   would never change under a comparison, it left every tile whose copy did not write it undrawn
+   (measured on the yard: June alone covered 0 pixels with the stream there, 180,430 without).
+   PlayCanvas needs every copy to write every extra stream, as the sunlight's word found: so the
+   stream is added with the first comparison and kept, and from then on every tile writes its
+   side, none with no comparison.
+4. **Picks by side.** The collider (Measure, the site card's date, the orbit pivot, the wheel
+   zoom) counts every date PlayCanvas draws as solid though CesiumJS hides it (`scanTarget`'s
+   `solid`, now a list: both compared, or a rule's dates), each kept to its side by its
+   tileset's `splitDirection`, which SiteManager still sets. Scene selection gets a pick source
+   for each date, with its side, above the host's own sideless one for the scan (lent the
+   registry through `ruleKit.ts`, as the streaming classes are): a click or a brush stroke acts on
+   the date drawn where it is.
+5. **Measured** (`e2e/compareScene.spec.ts`, the synthetic yard twice, each tile coloured by the
+   side its copy writes, March red and June blue; SwiftShader, 960 x 640): with the divider at a
+   half, left of it 100% of 88,981 covered pixels are March's and right of it 100% of 90,062 are
+   June's, outside 2 px either side; no pixel of either date is on the other's side at all, the
+   columns next to the cut included (at 0.3 and 0.7 too). Swiped to 0.3 in 10 frames and to 0.7
+   in 20, PlayCanvas copied 0% of its work buffer in every frame, and 0 pixels outside the
+   crossed columns changed. With the cut switched off the same view has 57,691 pixels on the
+   wrong side, so the measure bites. June alone, before and after, covers 180,430 pixels.
+   In the app (`e2e/compareDates.spec.ts`), with only the left date carrying an inferred layer,
+   the Inferred control and legend speak for it (decision 7 above, under PlayCanvas), and under
+   Highlight the left half draws it purple (7.4% of the covered pixels, from 0 under Show)
+   while the right, measured, is unchanged (0 and 0). With the switcher reading only the
+   right-hand date the control never appears, and with the other date's layers drawn without
+   their Highlight look the left half stays at 0%: both checks bite.
+   Each date draws its own Confidence and Data age, as CesiumJS draws each date's tileset with
+   its own: the left date's tiles read its own view, as cellView.ts publishes it for its asset,
+   in its own frame (`uCellFrame`, the inverse of its placement). With March's grid weak
+   everywhere and June's strong, the left half is 100% red and the right 100% green
+   (`compareScene.spec.ts`); one grid for both left it 0% red. And the handle on screen is
+   where the cut is: at a device pixel ratio of 2 the cut, found in the screenshot's own pixels,
+   is at the handle's column (1,280 of 2,560) at the full render scale and at a half (the
+   overlay 1,280 px wide, its divider at 640); the divider set in CSS pixels instead moved it
+   off. The cut's decision is also run from the shader's text in the unit tests
+   (`compareCut.test.ts`), which a flipped cut fails without a GPU.
+6. **Cost.** The comparison's PlayCanvas parts load on demand: the session and the placement
+   with the rules' module (`compositorSession`, 20.6 → 21.6 kB raw), the channel with port 3's
+   (`scanRule` and `scanCompare` in one chunk, 7.6 → 9.0 kB raw), the rest in the renderer
+   (2,047.9 → 2,050.3 kB raw). What the globe loads before its first frame grows by what
+   SiteManager, the collider and the scene manager say. Measured on the rules' reviewed branch
+   (0218a39b) and on this one (Node's gzip, as `check-bundle.mjs` counts): index entry 196,329
+   → 196,394 B gzip (+65; budget 197,000), the page's JavaScript before its first frame
+   5,623,554 → 5,623,708 B raw (+154) and 1,602,371 → 1,602,436 B gzip (+65), 83 files before
+   and after. Over the 100 B raw the coordinator first set for this port: about 75 of the 154
+   are the left half's collider picks (the list of solid tilesets), the rest the renderer
+   check, the right-hand scan and the session's start. The coordinator took the overshoot for
+   Measure, the site card's date, the orbit pivot and the wheel zoom on the left half; the
+   entry's gzip guard (+100 B) holds.
+
+### Consequences
+
+- Two dates compared hold what one scan alone would under PlayCanvas, half each, where CesiumJS
+  lets each date's tileset refine on its own (about twice as many resident); frames that slow
+  lower the one budget for both. A side drawing more of the screen gets no more of it.
+- The left date's tiles are drawn as scan tiles but bound to none of the scan's objects or
+  motion, as a rule's dates are: its objects are picked and selected on its side, but hiding or
+  highlighting them is not drawn on it under PlayCanvas, and its skins and telemetry are at rest.
+- Once a site has been compared, every tile PlayCanvas copies writes one more byte, and the
+  work buffer holds one more byte a splat, until the renderer is made again.
+- The cut is GLSL only, as the motion: under the WebGPU trial Compare › Dates is disabled with
+  the notice, as under Spark.
+- The right-hand date being the scan, choosing the sides the other way round starts the
+  renderer again on the other date (as choosing another date does).
+- The comparison's session is let go as the comparison ends, whether or not a frame follows
+  (`startCompare`'s disposer, which SiteManager keeps beside the comparison).
 
 ### Not built: GPU seam stitch
 

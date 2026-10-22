@@ -3,9 +3,10 @@
  * rather than imported (ADR 0017 § "Per-cell view rules under PlayCanvas", Cost).
  *
  * The rules' own code loads on demand: the rule's session (cesium/compositorSession.ts), what
- * reaches PlayCanvas (scanRule.ts) and the other dates' streaming (ruleDates.ts). They need
- * classes and helpers the globe already loads up front -- the tile streamer, a scan's inferred
- * layers and split objects, the parsers. Imported, those modules would be shared by the entry
+ * reaches PlayCanvas (scanRule.ts) and the other dates' streaming (ruleDates.ts); so does a
+ * comparison's under PlayCanvas (compareSession.ts, scanCompare.ts), which streams its left date
+ * the same way. They need classes and helpers the globe already loads up front -- the tile
+ * streamer, a scan's inferred layers and split objects, the parsers, the pick sources' registry. Imported, those modules would be shared by the entry
  * and an on-demand chunk, and the bundler would cut them out of the entry into chunks of their
  * own: no new code on the first load, but more of it (1,602,079 → 1,603,880 B gzip, measured).
  * Lent, nothing the first load holds moves: SiteManager hands this tuple to the rule's session
@@ -20,6 +21,7 @@ import { TileStreamer } from "@/view/stream";
 import { parseTileset } from "@/view/tiles";
 
 import { pickedLayers } from "../inferredLayers";
+import { registerPickSource } from "../sceneSelect/pickSources";
 import { LAYER_BUDGET_SHARE, layerView, ScanLayers } from "./scanLayers";
 import { ScanObjects } from "./scanObjects";
 
@@ -32,6 +34,7 @@ export type RuleKit = readonly [
   layerBudgetShare: number,
   pickedLayers: typeof pickedLayers,
   splitObjectsOf: typeof splitObjectsOf,
+  registerPickSource: typeof registerPickSource,
 ];
 
 export const RULE_KIT: RuleKit = [
@@ -43,4 +46,5 @@ export const RULE_KIT: RuleKit = [
   LAYER_BUDGET_SHARE,
   pickedLayers,
   splitObjectsOf,
+  registerPickSource,
 ];

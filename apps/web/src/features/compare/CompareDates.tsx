@@ -11,7 +11,12 @@ import {
   siteEpochs,
   type CompareDates as Dates,
 } from "@/lib/epochs";
-import { DRAW_WITH_CESIUM, drawWithCesium, NEEDS_CESIUM_NOTICE } from "@/lib/viewModes";
+import {
+  compareDrawable,
+  DRAW_WITH_PLAYCANVAS,
+  drawWithPlaycanvas,
+  NEEDS_CESIUM_OR_PLAYCANVAS,
+} from "@/lib/viewModes";
 import { recordAction } from "@/state/history";
 import { useSplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
@@ -23,9 +28,10 @@ import { useViewRule } from "@/state/viewRule";
  * two dates or more; nothing is faked, so one capture means no section.
  *
  * The scene owns the comparison: the switch asks it, and the section shows what it then says
- * it draws (`compareDates`, from the `compare-dates` event), never its own click. The split is
- * CesiumJS's: under another splat renderer the section is disabled, says so, and offers the
- * one-click switch (lib/viewModes.ts), rather than a switch that silently does nothing.
+ * it draws (`compareDates`, from the `compare-dates` event), never its own click. CesiumJS and
+ * PlayCanvas draw the cut (lib/viewModes.ts `compareDrawable`): under Spark or the WebGPU trial
+ * the section is disabled, says so, and offers the one-click switch to PlayCanvas, the default
+ * renderer, rather than a switch that silently does nothing.
  */
 /** Whether the scene draws `dates` for `siteId` now (null: one date). */
 function isShown(siteId: string, dates: Dates | null): boolean {
@@ -53,7 +59,7 @@ export function CompareDates({ siteId }: { siteId: string }) {
   // What the scene draws, else the choice made here, else the latest against the one before.
   const left = pair?.left ?? offered(choice.left) ?? before.epoch.id;
   const right = pair?.right ?? offered(choice.right) ?? latest.epoch.id;
-  const needsCesium = representation === "gaussian-splat" && renderer !== "cesium";
+  const needsRenderer = representation === "gaussian-splat" && !compareDrawable(renderer);
   const ask = (dates: Dates | null) => void scene?.sites.setCompareDates(dates);
   const choose = (side: keyof Dates, epochId: string) => {
     const next = { left, right, [side]: epochId };
@@ -64,7 +70,7 @@ export function CompareDates({ siteId }: { siteId: string }) {
     <GlassSelect
       id={id}
       value={side === "left" ? left : right}
-      disabled={needsCesium}
+      disabled={needsRenderer}
       onChange={(e) => choose(side, e.target.value)}
     >
       {options.map(({ epoch }) => (
@@ -89,7 +95,7 @@ export function CompareDates({ siteId }: { siteId: string }) {
         </span>
         <GlassSwitch
           checked={pair !== null}
-          disabled={needsCesium || left === right}
+          disabled={needsRenderer || left === right}
           onCheckedChange={(on) => {
             const dates = { left, right };
             const [after, before] = on ? [dates, null] : [null, dates];
@@ -117,16 +123,16 @@ export function CompareDates({ siteId }: { siteId: string }) {
           aria-labelledby="compare-dates-label"
         />
       </div>
-      {needsCesium ? (
+      {needsRenderer ? (
         <div
           className="views__notice"
           style={{ flexWrap: "wrap" }}
           role="note"
-          data-testid="compare-dates-needs-cesium"
+          data-testid="compare-dates-needs-renderer"
         >
-          <span>{NEEDS_CESIUM_NOTICE}</span>
-          <GlassButton size="sm" variant="ghost" onClick={drawWithCesium}>
-            {DRAW_WITH_CESIUM}
+          <span>{NEEDS_CESIUM_OR_PLAYCANVAS}</span>
+          <GlassButton size="sm" variant="ghost" onClick={drawWithPlaycanvas}>
+            {DRAW_WITH_PLAYCANVAS}
           </GlassButton>
         </div>
       ) : (

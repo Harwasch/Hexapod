@@ -153,3 +153,41 @@ describe("picks with two dates either side of the divider", () => {
     expect(collider.distanceToSurface(near, 1)).not.toBeNull();
   });
 });
+
+describe("picks with two dates another renderer draws, both hidden from CesiumJS", () => {
+  it("answer on each side from the date drawn there, and with no point from both", async () => {
+    const meta = makeWall();
+    // Neither has a splat primitive: CesiumJS never loaded a tile of either (PlayCanvas draws).
+    const hidden = (eastM: number, side: SplitDirection) => {
+      const { gaussianSplatPrimitive: _none, ...tileset } = scan(eastM, side, meta);
+      return { ...tileset, show: false, isDestroyed: () => false };
+    };
+    const march = hidden(5, SplitDirection.LEFT);
+    const june = hidden(3, SplitDirection.RIGHT);
+    const preUpdate = new Event();
+    const scene = {
+      preUpdate,
+      primitives: { length: 0, get: () => undefined },
+      requestRender: vi.fn(),
+      splitPosition: 0.4,
+      canvas: { clientWidth: 1000 },
+    };
+    const collider = new SplatCollider(scene as never, () => false);
+    collider.setSolidWhileHidden([march, june]);
+    preUpdate.raiseEvent();
+    await vi.waitFor(() => expect(collider.describe()).toHaveLength(2));
+    preUpdate.raiseEvent();
+    const origin = Matrix4.multiplyByPoint(ROOT, new Cartesian3(0, 2, 2), new Cartesian3());
+    const direction = Cartesian3.normalize(
+      Matrix4.multiplyByPointAsVector(ROOT, Cartesian3.UNIT_X, new Cartesian3()),
+      new Cartesian3(),
+    );
+    const ray = { origin, direction };
+    expect(collider.raycast(ray as never, undefined, { x: 250 })?.tileset).toBe(march);
+    expect(collider.raycast(ray as never, undefined, { x: 750 })?.tileset).toBe(june);
+    expect(collider.raycast(ray as never)?.tileset).toBe(june);
+    // One no longer drawn elsewhere is not walked on.
+    collider.setSolidWhileHidden([june]);
+    expect(collider.raycast(ray as never, undefined, { x: 250 })).toBeNull();
+  });
+});

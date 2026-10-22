@@ -17,7 +17,7 @@ import {
   SplitDirection,
   Transforms,
 } from "cesium";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { Site, SiteAsset, SiteSummary } from "@twin/contracts";
 
@@ -28,6 +28,7 @@ import type * as Tiles from "@/cesium/providers/tiles";
 import type * as Footprints from "@/cesium/scanFootprint";
 import { SiteManager } from "@/cesium/SiteManager";
 import type { SceneEvents } from "@/cesium/types";
+import { publishScanCompare, scanCompareOf } from "@/cesium/scanView/scanCompare";
 import { Emitter } from "@/lib/emitter";
 import type { CompareDates } from "@/lib/epochs";
 
@@ -93,6 +94,8 @@ vi.mock("@/cesium/providers/tiles", async (importOriginal) => ({
   ...(await importOriginal<typeof Tiles>()),
   createSiteTileset: vi.fn((asset: SiteAsset) => {
     const tileset = fakeTileset(ROOT);
+    // Where the tileset is fetched from, as a renderer drawing it beside another reads it.
+    Object.assign(tileset.resource, { url: `https://tiles.example/${asset.id}/tileset.json` });
     made.tilesets.set(asset.id, tileset);
     const hold = made.held.get(asset.id);
     if (!hold) return Promise.resolve(tileset);
@@ -158,6 +161,8 @@ function harness(record: Site = twoEpochSite(), others: Site[] = []) {
     canvas: { clientHeight: 800 },
     terrainProvider: {},
     scene: {
+      preUpdate: new Event(),
+      splitPosition: 0.5,
       globe: { getHeight: () => undefined },
       primitives: { add: vi.fn(), remove: vi.fn() },
       requestRender: vi.fn(),
@@ -234,6 +239,12 @@ const BOTH = { left: E1.id, right: E2.id };
 const ALONE = { show: false, split: SplitDirection.NONE };
 
 describe("comparing two dates of a site", () => {
+  // The comparison's session loads on demand (compareSession.ts): loaded once here, so each
+  // test's session starts within that test rather than a slow first import's later.
+  beforeAll(async () => {
+    await import("@/cesium/compositorSession");
+  });
+
   it("draws both dates' current models, left and right of the divider, with one placement", async () => {
     const { manager, said, tileset, drawn } = harness();
     await open(manager);
@@ -277,7 +288,7 @@ describe("comparing two dates of a site", () => {
     expect(said).toEqual([BOTH, null]);
   });
 
-  it("refuses one date twice, a date it does not offer, and another renderer's scan", async () => {
+  it("refuses one date twice, a date it does not offer, and Spark's scan", async () => {
     const { manager, said, drawn } = harness();
     await open(manager);
     const before = drawn();
@@ -286,19 +297,98 @@ describe("comparing two dates of a site", () => {
     expect(drawn()).toEqual(before);
     expect(said).toEqual([]);
 
-    const other = harness();
-    await open(other.manager, "playcanvas");
-    await other.manager.setCompareDates(BOTH);
-    expect(other.said).toEqual([]);
-    expect(other.manager.compareDates()).toBeNull();
-    expect(other.manager.scanTarget()?.assetId).toBe(A2.id);
+    // Spark and the WebGPU trial have no per-pixel cut: the one date, whole.
+    for (const renderer of ["spark", "playcanvas-webgpu"] as const) {
+      const other = harness();
+      other.manager.setSplatRenderer(renderer);
+      await other.manager.activate(SITE_ID);
+      await settle();
+      await other.manager.setCompareDates(BOTH);
+      expect(other.said).toEqual([]);
+      expect(other.manager.compareDates()).toBeNull();
+      expect(other.manager.scanTarget()?.assetId).toBe(A2.id);
+    }
   });
 
-  it("ends when another renderer is chosen: that renderer draws the one date, whole", async () => {
+  it("under PlayCanvas, draws the right-hand date as its scan, the left beside it, neither by CesiumJS", async () => {
+    // What earlier sites' sessions handed over is no one's now (each harness its own scene).
+    publishScanCompare(A1.id, null);
+    publishScanCompare(A2.id, null);
+    const { manager, said, drawn, tileset } = harness();
+    await open(manager, "playcanvas");
+    // The date chosen is the earlier one: the comparison's right-hand date is PlayCanvas's scan.
+    await manager.setEpoch(E1.id);
+    expect(manager.scanTarget()?.assetId).toBe(A1.id);
+    await manager.setCompareDates(BOTH);
+    await settle();
+    expect(said).toEqual([BOTH]);
+    expect(manager.compareDates()).toEqual(BOTH);
+    expect(manager.scanTarget()?.assetId).toBe(A2.id);
+    // Hidden from CesiumJS, each split to its side, so the picks keep to the side clicked.
+    expect(drawn()).toEqual({
+      [A1.id]: { show: false, split: SplitDirection.LEFT },
+      [A2.id]: { show: false, split: SplitDirection.RIGHT },
+    });
+    // Both are walked on and picked (SplatCollider), each on its side, though hidden.
+    expect(manager.scanTarget()?.solid).toEqual([tileset(A1.id), tileset(A2.id)]);
+    // PlayCanvas, drawing the right-hand date, is handed the left one and the divider
+    // (compareSession.ts, loaded on demand).
+    await vi.waitFor(() => expect(scanCompareOf(A2.id)?.left.assetId).toBe(A1.id));
+    expect(scanCompareOf(A2.id)?.left.url).toBe(`https://tiles.example/${A1.id}/tileset.json`);
+    expect(scanCompareOf(A2.id)?.split).toBe(0.5);
+    // Either way round; and the date chosen comes back as the scan once it ends.
+    await manager.setCompareDates({ left: E2.id, right: E1.id });
+    expect(manager.scanTarget()?.assetId).toBe(A1.id);
+    await vi.waitFor(() => expect(scanCompareOf(A1.id)?.left.assetId).toBe(A2.id));
+    await manager.setCompareDates(null);
+    // Ended: the next frame takes the view back.
+    (manager as unknown as { scene: { preUpdate: Event } }).scene.preUpdate.raiseEvent();
+    expect(scanCompareOf(A1.id)).toBeNull();
+    expect(scanCompareOf(A2.id)).toBeNull();
+    expect(manager.scanTarget()?.assetId).toBe(A1.id);
+    expect(manager.scanTarget()?.solid).toEqual([tileset(A1.id)]);
+    expect(drawn()).toEqual({ [A1.id]: ALONE, [A2.id]: ALONE });
+  });
+
+  it("under PlayCanvas, takes the left date back from the renderer as the site unloads, with no frame after", async () => {
+    publishScanCompare(A2.id, null);
+    const { manager } = harness();
+    await open(manager, "playcanvas");
+    await manager.setCompareDates(BOTH);
+    await vi.waitFor(() => expect(scanCompareOf(A2.id)?.left.assetId).toBe(A1.id));
+    // Torn down: no frame follows, so the comparison's session cannot notice on its own.
+    manager.deactivate();
+    expect(scanCompareOf(A2.id)).toBeNull();
+    const scene = (manager as unknown as { scene: { preUpdate: Event } }).scene;
+    expect(scene.preUpdate.numberOfListeners).toBe(0);
+  });
+
+  it("is kept across a switch between CesiumJS and PlayCanvas, each drawing both dates", async () => {
     const { manager, said, drawn } = harness();
     await open(manager);
     await manager.setCompareDates(BOTH);
     manager.setSplatRenderer("playcanvas");
+    await settle();
+    expect(said).toEqual([BOTH]);
+    expect(manager.scanTarget()?.assetId).toBe(A2.id);
+    expect(drawn()).toEqual({
+      [A1.id]: { show: false, split: SplitDirection.LEFT },
+      [A2.id]: { show: false, split: SplitDirection.RIGHT },
+    });
+    manager.setSplatRenderer("cesium");
+    await settle();
+    expect(said).toEqual([BOTH]);
+    expect(drawn()).toEqual({
+      [A1.id]: { show: true, split: SplitDirection.LEFT },
+      [A2.id]: { show: true, split: SplitDirection.RIGHT },
+    });
+  });
+
+  it("ends when Spark is chosen: Spark draws the one date, whole", async () => {
+    const { manager, said, drawn } = harness();
+    await open(manager);
+    await manager.setCompareDates(BOTH);
+    manager.setSplatRenderer("spark");
     await settle();
     expect(said).toEqual([BOTH, null]);
     expect(drawn()).toEqual({ [A1.id]: ALONE, [A2.id]: ALONE });
@@ -312,6 +402,22 @@ describe("comparing two dates of a site", () => {
     });
   });
 
+  it("refuses a Living Survey date beside one PlayCanvas draws: no one renderer draws both", async () => {
+    const rigged = splat("a1", {
+      epochId: "e1",
+      observedAt: E1.observedAt,
+      renderConfig: { ...A1.renderConfig, rigUrl: "https://tiles.example/a1/rig.json" },
+    });
+    const { manager, said } = harness(twoEpochSite({ assets: [rigged, A2] }));
+    await open(manager, "playcanvas");
+    await manager.setCompareDates(BOTH);
+    expect(said).toEqual([]);
+    // Under CesiumJS, which draws both, they are compared.
+    manager.setSplatRenderer("cesium");
+    await manager.setCompareDates(BOTH);
+    expect(said).toEqual([BOTH]);
+  });
+
   it("ended by another renderer, the load pill speaks for the one date again, not a failed one", async () => {
     const { manager, loads } = harness();
     await open(manager);
@@ -323,7 +429,7 @@ describe("comparing two dates of a site", () => {
       true,
     );
     expect(loads.at(-1)).toBe("error");
-    manager.setSplatRenderer("playcanvas");
+    manager.setSplatRenderer("spark");
     await settle();
     // The date shown alone loaded fine: its load is the record now.
     expect(loads.at(-1)).toBe("ready");

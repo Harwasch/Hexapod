@@ -104,6 +104,11 @@ export interface ScanTarget {
    * budget and nothing culled for size. Not part of `key`: the session carries on either way.
    */
   far?: boolean;
+  /**
+   * The tilesets of every date drawn with it, its own included (two compared, a per-cell
+   * view rule's): hidden from CesiumJS, yet walked on and picked (SplatCollider).
+   */
+  solid?: Cesium3DTileset[];
 }
 
 /** How often the tile cut is re-planned while the camera moves (ms), as the viewer page. */

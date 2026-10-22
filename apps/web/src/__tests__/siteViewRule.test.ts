@@ -341,7 +341,10 @@ describe("a per-cell view rule", () => {
     // the scan PlayCanvas draws is the date chosen, which the rule is As of.
     expect(other.drawn()).toEqual({ [A1.id]: ALONE, [A2.id]: ALONE });
     expect(other.manager.scanTarget()?.assetId).toBe(A2.id);
+    // Every date it draws is walked on and picked, though CesiumJS's copies are hidden.
+    expect(other.manager.scanTarget()?.solid).toEqual([other.tileset(A1.id), other.tileset(A2.id)]);
     await other.manager.setViewRule(null);
+    expect(other.manager.scanTarget()?.solid).toEqual([other.tileset(A2.id)]);
 
     const { manager, rules, drawn } = harness();
     await open(manager);
