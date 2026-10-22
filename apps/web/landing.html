@@ -1,0 +1,1031 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="Fleets of autonomous robots that inspect, maintain and restore land, assets and infrastructure."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- The landing page (src/landing/). It loads no CesiumJS: scripts/check-bundle.mjs checks
+         the build, e2e/landing.spec.ts the dev server. The brand is filled in from
+         src/landing/brand.ts into every [data-brand] element and the title. -->
+    <title>Robots for everything outside</title>
+    <link
+      rel="preload"
+      href="/fonts/archivo-v25-latin.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="/fonts/instrument-sans-v4-latin.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <style>
+      /* Self-hosted, as the other pages' fonts are (public/fonts, with their licences). The
+         design's three faces: Archivo (display, on its width axis), Instrument Sans (body),
+         JetBrains Mono (labels). Latin subsets, as Google Fonts cuts them. */
+      @font-face {
+        font-family: "Archivo";
+        font-style: normal;
+        font-weight: 400 800;
+        font-stretch: 62% 125%;
+        font-display: swap;
+        src: url("/fonts/archivo-v25-latin.woff2") format("woff2");
+        unicode-range:
+          U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+          U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+      @font-face {
+        font-family: "Instrument Sans";
+        font-style: normal;
+        font-weight: 400 700;
+        font-display: swap;
+        src: url("/fonts/instrument-sans-v4-latin.woff2") format("woff2");
+        unicode-range:
+          U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+          U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+      @font-face {
+        font-family: "JetBrains Mono";
+        font-style: normal;
+        font-weight: 400 500;
+        font-display: swap;
+        src: url("/fonts/jetbrains-mono-v24-latin.woff2") format("woff2");
+        unicode-range:
+          U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
+          U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+      }
+      /* Before the bundled stylesheet lands: the page's background, so it never flashes. */
+      html {
+        background: #f7f8f5;
+      }
+      @media (prefers-color-scheme: dark) {
+        html {
+          background: #0d0f0d;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="nav">
+      <div class="in">
+        <a class="brand" href="#top" data-brand></a>
+        <nav aria-label="Main">
+          <a href="#fleet">Fleet</a><a href="#capabilities">Capabilities</a><a href="#app">App</a
+          ><a href="#uses">Use cases</a>
+        </nav>
+        <div class="acts">
+          <button class="tgl" type="button" id="tgl" aria-label="Switch to dark mode">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />
+            </svg></button
+          ><a class="btn pri sm" href="#start">Request a site scan</a>
+        </div>
+      </div>
+    </header>
+    <main>
+      <section class="hero" id="top">
+        <div
+          class="iso stage"
+          style="
+            --anatomy-card: var(--stage);
+            --anatomy-page: var(--stage);
+            --anatomy-lit: var(--glit);
+          "
+        >
+          <img
+            class="lt hero-still"
+            src="/src/landing/img/app.webp"
+            alt=""
+            width="1280"
+            height="740"
+          /><img
+            class="dk hero-still"
+            src="/src/landing/img/app-dark.webp"
+            alt=""
+            width="1280"
+            height="740"
+          /><canvas
+            class="gl"
+            aria-label="Simulation: nine robot crews working at once on land, energy and infrastructure jobs across one landscape. Drag to look around."
+          ></canvas>
+        </div>
+        <div class="shade" aria-hidden="true"></div>
+        <div class="zl" id="zl" aria-hidden="true">
+          <a href="#use-nature" data-z="nature" tabindex="-1"
+            ><i></i><span><b>Pulling broom</b><em>Oak hillside</em></span></a
+          ><a href="#use-range" data-z="range" tabindex="-1"
+            ><i></i><span><b>Pulling starthistle</b><em>Pasture</em></span></a
+          ><a href="#use-forest" data-z="forest" tabindex="-1"
+            ><i></i><span><b>Replanting</b><em>Burn scar</em></span></a
+          ><a href="#use-infra" data-z="infra" tabindex="-1"
+            ><i></i><span><b>Clearing under lines</b><em>Power line</em></span></a
+          ><a href="#use-solar" data-z="solar" tabindex="-1"
+            ><i></i><span><b>Clearing panel rows</b><em>Solar farm</em></span></a
+          ><a href="#use-pipeline" data-z="pipeline" tabindex="-1"
+            ><i></i><span><b>Clearing the right-of-way</b><em>Pipeline</em></span></a
+          ><a href="#use-fuels" data-z="fuels" tabindex="-1"
+            ><i></i><span><b>Cutting fire fuel</b><em>Cabin</em></span></a
+          ><a href="#use-agri" data-z="agri" tabindex="-1"
+            ><i></i><span><b>Weeding</b><em>Vineyard</em></span></a
+          ><a href="#use-reclaim" data-z="reclaim" tabindex="-1"
+            ><i></i><span><b>Stabilizing slopes</b><em>Quarry</em></span></a
+          >
+        </div>
+        <div class="hud" aria-hidden="true">
+          <b>Simulation</b><span>Crews working</span><span>9</span><span>Walkers</span
+          ><span>72</span><span>Carriers</span><span>18</span><span>Drones</span><span>10</span>
+        </div>
+        <div class="in copy">
+          <p class="eyebrow">Autonomous outdoor operations</p>
+          <h1>Robots for<br />everything outside.</h1>
+          <p class="lede">
+            Fleets of autonomous robots that inspect, maintain and restore land, assets and
+            infrastructure.
+          </p>
+          <div class="ctas">
+            <a class="btn pri" href="#start">Request a site scan</a
+            ><a class="btn ghost" href="#fleet">Meet the fleet</a>
+          </div>
+        </div>
+        <nav class="ex" aria-label="Examples in the simulation">
+          <div class="in">
+            <p class="ex-now" id="ex-now" aria-live="polite"></p>
+            <ol id="ex">
+              <li>
+                <button type="button" data-z="nature" aria-label="Oak hillside">
+                  <em>01</em><span>Oak hillside</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" data-z="range" aria-label="Pasture">
+                  <em>02</em><span>Pasture</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" data-z="forest" aria-label="Burn scar">
+                  <em>03</em><span>Burn scar</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" data-z="infra" aria-label="Power line">
+                  <em>04</em><span>Power line</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" data-z="solar" aria-label="Solar farm">
+                  <em>05</em><span>Solar farm</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" data-z="pipeline" aria-label="Pipeline">
+                  <em>06</em><span>Pipeline</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" data-z="fuels" aria-label="Cabin">
+                  <em>07</em><span>Cabin</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" data-z="agri" aria-label="Vineyard">
+                  <em>08</em><span>Vineyard</span>
+                </button>
+              </li>
+              <li>
+                <button type="button" data-z="reclaim" aria-label="Quarry">
+                  <em>09</em><span>Quarry</span>
+                </button>
+              </li>
+            </ol>
+          </div>
+        </nav>
+      </section>
+
+      <section class="band" id="fleet">
+        <div class="in">
+          <div class="head">
+            <p class="num">01</p>
+            <h2>The fleet</h2>
+            <p>
+              Everything ships in a single container and runs on solar power. Nothing to fuel and
+              nothing to plug in.
+            </p>
+          </div>
+          <div
+            class="iso"
+            id="fleet-theme"
+            hidden
+            style="
+              --anatomy-card: var(--stage);
+              --anatomy-page: var(--stage);
+              --anatomy-lit: var(--glit);
+            "
+          ></div>
+          <div class="fleet">
+            <article>
+              <div class="pic live">
+                <img
+                  class="lt"
+                  src="/src/landing/img/hub.webp"
+                  alt="Base, concept render"
+                  loading="lazy"
+                  width="1700"
+                  height="1024"
+                /><img
+                  class="dk"
+                  src="/src/landing/img/hub-dark.webp"
+                  alt="Base, concept render"
+                  loading="lazy"
+                  width="1700"
+                  height="1024"
+                /><canvas
+                  data-unit="hub"
+                  aria-label="Base: live 3D model. Drag to turn it."
+                ></canvas>
+              </div>
+              <h3>Base</h3>
+              <p>
+                A 20-foot container that is the fleet's home on site. It unfolds its own solar array
+                and connects by satellite.
+              </p>
+              <dl>
+                <div>
+                  <dt>Solar</dt>
+                  <dd>≈5.2 kW <abbr title="Estimate, to be confirmed">est.</abbr></dd>
+                </div>
+                <div>
+                  <dt>Link</dt>
+                  <dd>Satellite + mesh radio</dd>
+                </div>
+                <div>
+                  <dt>Holds</dt>
+                  <dd>2 carriers, 32 walkers, 2 drones</dd>
+                </div>
+              </dl>
+            </article>
+            <article>
+              <div class="pic live">
+                <img
+                  class="lt"
+                  src="/src/landing/img/hex.webp"
+                  alt="Walker, concept render"
+                  loading="lazy"
+                  width="1700"
+                  height="1024"
+                /><img
+                  class="dk"
+                  src="/src/landing/img/hex-dark.webp"
+                  alt="Walker, concept render"
+                  loading="lazy"
+                  width="1700"
+                  height="1024"
+                /><canvas
+                  data-unit="hex"
+                  aria-label="Walker: live 3D model. Drag to turn it."
+                ></canvas>
+              </div>
+              <h3>Walker</h3>
+              <p>
+                A dog-sized robot with six legs and two arms, built for slopes, brush and rough
+                ground.
+              </p>
+              <dl>
+                <div>
+                  <dt>Body</dt>
+                  <dd>0.76 m long</dd>
+                </div>
+                <div>
+                  <dt>Arms</dt>
+                  <dd>
+                    2 grippers, ≈0.55 m reach <abbr title="Estimate, to be confirmed">est.</abbr>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Rear hitch</dt>
+                  <dd>Basket, mapping mast or drone pad</dd>
+                </div>
+              </dl>
+            </article>
+            <article>
+              <div class="pic live">
+                <img
+                  class="lt"
+                  src="/src/landing/img/atv.webp"
+                  alt="Carrier, concept render"
+                  loading="lazy"
+                  width="1700"
+                  height="1024"
+                /><img
+                  class="dk"
+                  src="/src/landing/img/atv-dark.webp"
+                  alt="Carrier, concept render"
+                  loading="lazy"
+                  width="1700"
+                  height="1024"
+                /><canvas
+                  data-unit="atv"
+                  aria-label="Carrier: live 3D model. Drag to turn it."
+                ></canvas>
+              </div>
+              <h3>Carrier</h3>
+              <p>
+                A six-wheel hauler on rocking suspension. It moves walkers, tools and whatever gets
+                pulled.
+              </p>
+              <dl>
+                <div>
+                  <dt>Carries</dt>
+                  <dd>16 folded walkers</dd>
+                </div>
+                <div>
+                  <dt>Swaps to</dt>
+                  <dd>Chipper, bin, cargo or sensor mast</dd>
+                </div>
+              </dl>
+            </article>
+            <article>
+              <div class="pic live">
+                <img
+                  class="lt"
+                  src="/src/landing/img/vtol.webp"
+                  alt="Mapping drone, concept render"
+                  loading="lazy"
+                  width="1700"
+                  height="1024"
+                /><img
+                  class="dk"
+                  src="/src/landing/img/vtol-dark.webp"
+                  alt="Mapping drone, concept render"
+                  loading="lazy"
+                  width="1700"
+                  height="1024"
+                /><canvas
+                  data-unit="vtol"
+                  aria-label="Mapping drone: live 3D model. Drag to turn it."
+                ></canvas>
+              </div>
+              <h3>Mapping drone</h3>
+              <p>
+                A fixed-wing mapper that takes off vertically from the base roof and flies the whole
+                site.
+              </p>
+              <dl>
+                <div>
+                  <dt>Altitude</dt>
+                  <dd>120 m</dd>
+                </div>
+                <div>
+                  <dt>Detail</dt>
+                  <dd>≈3 cm per pixel <abbr title="Estimate, to be confirmed">est.</abbr></dd>
+                </div>
+                <div>
+                  <dt>Swath</dt>
+                  <dd>≈180 m per pass <abbr title="Estimate, to be confirmed">est.</abbr></dd>
+                </div>
+              </dl>
+            </article>
+            <article>
+              <div class="pic live">
+                <img
+                  class="lt"
+                  src="/src/landing/img/quad.webp"
+                  alt="Inspection drone, concept render"
+                  loading="lazy"
+                  width="1700"
+                  height="1024"
+                /><img
+                  class="dk"
+                  src="/src/landing/img/quad-dark.webp"
+                  alt="Inspection drone, concept render"
+                  loading="lazy"
+                  width="1700"
+                  height="1024"
+                /><canvas
+                  data-unit="quad"
+                  aria-label="Inspection drone: live 3D model. Drag to turn it."
+                ></canvas>
+              </div>
+              <h3>Inspection drone</h3>
+              <p>
+                A small quadcopter for close looks at poles, panels, pipelines, fences and slopes.
+              </p>
+              <dl>
+                <div>
+                  <dt>Altitude</dt>
+                  <dd>30 m</dd>
+                </div>
+                <div>
+                  <dt>Detail</dt>
+                  <dd>≈0.8 cm per pixel <abbr title="Estimate, to be confirmed">est.</abbr></dd>
+                </div>
+              </dl>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="band alt" id="capabilities">
+        <div class="in">
+          <div class="head">
+            <p class="num">02</p>
+            <h2>Capabilities</h2>
+            <p>The same crew changes tools and tasks from job to job and from season to season.</p>
+          </div>
+          <div class="caps">
+            <div>
+              <b>Map</b>
+              <p>Fly a whole site and build a 3D model of the land and everything on it.</p>
+            </div>
+            <div>
+              <b>Inspect</b>
+              <p>
+                Check panels, poles, pipelines, fences and slopes with cameras, thermal and lidar.
+              </p>
+            </div>
+            <div>
+              <b>Clear</b>
+              <p>Cut back brush and fire fuel around homes, panels, pipes and power lines.</p>
+            </div>
+            <div>
+              <b>Remove</b>
+              <p>Pull weeds and invasive plants by the root, without herbicide.</p>
+            </div>
+            <div>
+              <b>Plant</b>
+              <p>Plant trees, grasses and cover crops exactly where the plan says.</p>
+            </div>
+            <div>
+              <b>Haul</b>
+              <p>Move tools, material and robots over rough ground.</p>
+            </div>
+            <div>
+              <b>Patrol</b>
+              <p>Walk and fly fences and perimeters on a schedule.</p>
+            </div>
+            <div>
+              <b>Monitor</b>
+              <p>Come back on a schedule to catch regrowth, damage and change.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="band" id="app">
+        <div class="in app">
+          <div class="head">
+            <p class="num">03</p>
+            <h2>The app</h2>
+            <p>Your site as a live 3D model, with every asset, every job and the fleet on it.</p>
+            <a class="more" href="https://claude.ai/artifact/Gt3E2K98hKb4aQk3jXiG2f"
+              >Explore the 3D model →</a
+            >
+          </div>
+
+          <figure class="mock" aria-label="Concept of the app">
+            <div class="bar"><i></i><i></i><i></i><span>Site 07 · 160 ha</span></div>
+            <div class="win">
+              <aside>
+                <p class="lbl">Jobs</p>
+                <div class="job">
+                  <b>Panel thermal check</b><span>Block B · 4,200 panels</span
+                  ><em style="--w: 74%"></em>
+                </div>
+                <div class="job">
+                  <b>Right-of-way clearing</b><span>Pipeline · 1.2 km</span
+                  ><em style="--w: 40%"></em>
+                </div>
+                <div class="job">
+                  <b>Pole inspection</b><span>Line 3 · 18 poles</span><em style="--w: 100%"></em>
+                </div>
+                <div class="job">
+                  <b>Broom removal</b><span>North slope · 2.1 ha</span><em style="--w: 62%"></em>
+                </div>
+                <p class="lbl">Fleet</p>
+                <div class="kv"><span>Walkers</span><b>32 working</b></div>
+                <div class="kv"><span>Carriers</span><b>2 in field</b></div>
+                <div class="kv"><span>Base</span><b>Solar · 84%</b></div>
+              </aside>
+              <div class="map">
+                <img
+                  class="lt mapimg"
+                  src="/src/landing/img/app.webp"
+                  alt="The site as a live 3D model in the app"
+                  width="1280"
+                  height="740"
+                /><img
+                  class="dk mapimg"
+                  src="/src/landing/img/app-dark.webp"
+                  alt="The site as a live 3D model in the app"
+                  width="1280"
+                  height="740"
+                />
+              </div>
+            </div>
+            <figcaption>Concept. Values shown are examples.</figcaption>
+          </figure>
+          <ul class="feat">
+            <li>
+              <b>Plan</b
+              ><span
+                >Outline your site, mark what needs doing and approve a plan before any work
+                starts.</span
+              >
+            </li>
+            <li>
+              <b>Watch</b
+              ><span>Follow every robot and every job live on the model of your site.</span>
+            </li>
+            <li>
+              <b>Keep the record</b
+              ><span
+                >Every panel checked, pole inspected, weed pulled and tree planted, mapped and
+                dated.</span
+              >
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="band alt" id="uses">
+        <div class="in">
+          <div class="head">
+            <p class="num">04</p>
+            <h2>Use cases</h2>
+            <p>
+              9 jobs we've worked through in detail, each with its own page. The same fleet does all
+              of them.
+            </p>
+          </div>
+          <div class="group">
+            <div class="ghead">
+              <h3>Utilities & energy</h3>
+              <span class="lbl">3 examples</span>
+            </div>
+            <div class="uses">
+              <a
+                class="use"
+                id="use-infra"
+                href="https://claude.ai/artifact/1P8B8zA63JMjwCRAYaFXJa#infra"
+                ><div class="pic">
+                  <img
+                    class="lt"
+                    src="/src/landing/img/infra.webp"
+                    alt="Line clearance and pole inspection, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  /><img
+                    class="dk"
+                    src="/src/landing/img/infra-dark.webp"
+                    alt="Line clearance and pole inspection, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  />
+                </div>
+                <span class="tag">Power line</span>
+                <h4>Line clearance and pole inspection</h4>
+                <p>
+                  Brush kept low under distribution lines while a drone checks every pole with lidar
+                  and thermal.
+                </p>
+                <em>See the job →</em></a
+              ><a
+                class="use"
+                id="use-solar"
+                href="https://claude.ai/artifact/1P8B8zA63JMjwCRAYaFXJa#solar"
+                ><div class="pic">
+                  <img
+                    class="lt"
+                    src="/src/landing/img/solar.webp"
+                    alt="Solar vegetation and panel checks, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  /><img
+                    class="dk"
+                    src="/src/landing/img/solar-dark.webp"
+                    alt="Solar vegetation and panel checks, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  />
+                </div>
+                <span class="tag">Solar farm</span>
+                <h4>Solar vegetation and panel checks</h4>
+                <p>
+                  Weeds pulled from the aisles between panel rows, a low pollinator mix seeded, and
+                  every panel checked for hot spots.
+                </p>
+                <em>See the job →</em></a
+              ><a
+                class="use"
+                id="use-pipeline"
+                href="https://claude.ai/artifact/1P8B8zA63JMjwCRAYaFXJa#pipeline"
+                ><div class="pic">
+                  <img
+                    class="lt"
+                    src="/src/landing/img/pipeline.webp"
+                    alt="Pipeline right-of-way, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  /><img
+                    class="dk"
+                    src="/src/landing/img/pipeline-dark.webp"
+                    alt="Pipeline right-of-way, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  />
+                </div>
+                <span class="tag">Pipeline</span>
+                <h4>Pipeline right-of-way</h4>
+                <p>
+                  Brush and saplings cleared off a buried line, while a drone flies the right-of-way
+                  with a methane sensor.
+                </p>
+                <em>See the job →</em></a
+              >
+              <div class="use soon">
+                <span class="tag">Next</span>
+                <h4>Substations</h4>
+                <p>
+                  Weeds kept out of the gravel yard, the fence line walked, and thermal checks on
+                  equipment.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="ghead">
+              <h3>Agriculture & ranching</h3>
+              <span class="lbl">2 examples</span>
+            </div>
+            <div class="uses">
+              <a
+                class="use"
+                id="use-agri"
+                href="https://claude.ai/artifact/1P8B8zA63JMjwCRAYaFXJa#agri"
+                ><div class="pic">
+                  <img
+                    class="lt"
+                    src="/src/landing/img/agri.webp"
+                    alt="Under-vine weeding and cover crop, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  /><img
+                    class="dk"
+                    src="/src/landing/img/agri-dark.webp"
+                    alt="Under-vine weeding and cover crop, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  />
+                </div>
+                <span class="tag">Vineyard</span>
+                <h4>Under-vine weeding and cover crop</h4>
+                <p>
+                  Weeds pulled from under the vines without herbicide, and cover crop sown between
+                  the rows.
+                </p>
+                <em>See the job →</em></a
+              ><a
+                class="use"
+                id="use-range"
+                href="https://claude.ai/artifact/1P8B8zA63JMjwCRAYaFXJa#range"
+                ><div class="pic">
+                  <img
+                    class="lt"
+                    src="/src/landing/img/range.webp"
+                    alt="Pasture recovery, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  /><img
+                    class="dk"
+                    src="/src/landing/img/range-dark.webp"
+                    alt="Pasture recovery, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  />
+                </div>
+                <span class="tag">Pasture</span>
+                <h4>Pasture recovery</h4>
+                <p>
+                  Starthistle pulled before it seeds and bagged. Native bunchgrass planted. Troughs
+                  and fences checked.
+                </p>
+                <em>See the job →</em></a
+              >
+              <div class="use soon">
+                <span class="tag">Next</span>
+                <h4>Orchards</h4>
+                <p>Weeds pulled under the trees and irrigation lines checked for leaks.</p>
+              </div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="ghead">
+              <h3>Forestry, wildfire & conservation</h3>
+              <span class="lbl">3 examples</span>
+            </div>
+            <div class="uses">
+              <a
+                class="use"
+                id="use-fuels"
+                href="https://claude.ai/artifact/1P8B8zA63JMjwCRAYaFXJa#fuels"
+                ><div class="pic">
+                  <img
+                    class="lt"
+                    src="/src/landing/img/fuels.webp"
+                    alt="Defensible space, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  /><img
+                    class="dk"
+                    src="/src/landing/img/fuels-dark.webp"
+                    alt="Defensible space, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  />
+                </div>
+                <span class="tag">Cabin</span>
+                <h4>Defensible space</h4>
+                <p>
+                  Ladder fuels cleared from under the trees around a home, with chips spread away
+                  from the house.
+                </p>
+                <em>See the job →</em></a
+              ><a
+                class="use"
+                id="use-forest"
+                href="https://claude.ai/artifact/1P8B8zA63JMjwCRAYaFXJa#forest"
+                ><div class="pic">
+                  <img
+                    class="lt"
+                    src="/src/landing/img/forest.webp"
+                    alt="Post-fire replanting, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  /><img
+                    class="dk"
+                    src="/src/landing/img/forest-dark.webp"
+                    alt="Post-fire replanting, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  />
+                </div>
+                <span class="tag">Burn scar</span>
+                <h4>Post-fire replanting</h4>
+                <p>
+                  Competing brush cleared and conifer seedlings planted on a grid, each one mapped
+                  for survival checks.
+                </p>
+                <em>See the job →</em></a
+              ><a
+                class="use"
+                id="use-nature"
+                href="https://claude.ai/artifact/1P8B8zA63JMjwCRAYaFXJa#nature"
+                ><div class="pic">
+                  <img
+                    class="lt"
+                    src="/src/landing/img/nature.webp"
+                    alt="Broom removal and oak planting, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  /><img
+                    class="dk"
+                    src="/src/landing/img/nature-dark.webp"
+                    alt="Broom removal and oak planting, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  />
+                </div>
+                <span class="tag">Oak hillside</span>
+                <h4>Broom removal and oak planting</h4>
+                <p>
+                  Invasive broom pulled out by the root, chipped on site, and native oaks planted
+                  where it stood.
+                </p>
+                <em>See the job →</em></a
+              >
+              <div class="use soon">
+                <span class="tag">Next</span>
+                <h4>Creeks and wetlands</h4>
+                <p>Invasive plants cleared from banks and natives planted to hold them.</p>
+              </div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="ghead">
+              <h3>Public works & industrial land</h3>
+              <span class="lbl">1 example</span>
+            </div>
+            <div class="uses">
+              <a
+                class="use"
+                id="use-reclaim"
+                href="https://claude.ai/artifact/1P8B8zA63JMjwCRAYaFXJa#reclaim"
+                ><div class="pic">
+                  <img
+                    class="lt"
+                    src="/src/landing/img/reclaim.webp"
+                    alt="Erosion control and seeding, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  /><img
+                    class="dk"
+                    src="/src/landing/img/reclaim-dark.webp"
+                    alt="Erosion control and seeding, concept render"
+                    loading="lazy"
+                    width="1700"
+                    height="1024"
+                  />
+                </div>
+                <span class="tag">Quarry</span>
+                <h4>Erosion control and seeding</h4>
+                <p>
+                  Pampas grass removed, straw wattles staked along the contour, and native seed sown
+                  on bare slopes.
+                </p>
+                <em>See the job →</em></a
+              >
+              <div class="use soon">
+                <span class="tag">Next</span>
+                <h4>Roads and culverts</h4>
+                <p>
+                  Culverts and drains cleared, shoulders cut back, signs and guardrails checked.
+                </p>
+              </div>
+              <div class="use soon">
+                <span class="tag">Next</span>
+                <h4>Parks and trails</h4>
+                <p>Trails cleared and drained, and erosion repaired before the rains.</p>
+              </div>
+              <div class="use soon">
+                <span class="tag">Next</span>
+                <h4>Perimeter patrol</h4>
+                <p>Fences and boundaries walked and flown on a schedule, with changes reported.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="band" id="start">
+        <div class="in">
+          <div class="head">
+            <p class="num">05</p>
+            <h2>Getting started</h2>
+            <p>Find your site, mark the area you want scanned, and tell us what needs doing.</p>
+          </div>
+          <div class="start">
+            <ol class="steps">
+              <li>
+                <b>Scan</b
+                ><span
+                  >We fly your site and build a 3D model of the land and everything on it.</span
+                >
+              </li>
+              <li>
+                <b>Plan</b
+                ><span>You see what we found, mark what needs doing and get a price.</span>
+              </li>
+              <li>
+                <b>Deploy</b
+                ><span>One truck delivers the base and the fleet. The work begins.</span>
+              </li>
+              <li><b>Record</b><span>You keep the map of everything that was done.</span></li>
+            </ol>
+            <!-- Inert without its script: no field has a name, so a native submit carries no data, and
+                 the inline guard stops even that. src/landing/main.ts handles the submit. -->
+            <form id="f" class="pk" novalidate onsubmit="return false;">
+              <div class="pk-top">
+                <label class="pk-search" for="pk-q"
+                  ><span class="lbl">1 · Find your site</span>
+                  <input
+                    id="pk-q"
+                    type="search"
+                    placeholder="Search an address (demo)"
+                    autocomplete="off"
+                    aria-controls="pk-res"
+                /></label>
+                <ul class="pk-res" id="pk-res" hidden></ul>
+              </div>
+              <div class="pk-bar">
+                <span class="lbl">2 · Mark the area</span>
+                <div class="seg" role="group" aria-label="Map tool">
+                  <button type="button" data-pk-mode="select" aria-pressed="true">
+                    Select parcels</button
+                  ><button type="button" data-pk-mode="draw" aria-pressed="false">
+                    Draw an area
+                  </button>
+                </div>
+                <div class="pk-draw">
+                  <button type="button" class="mini" id="pk-undo" disabled>Undo</button
+                  ><button type="button" class="mini" id="pk-finish" disabled>Finish</button>
+                </div>
+              </div>
+              <div class="pk-map">
+                <canvas
+                  id="pk-map"
+                  aria-label="Map of a demo site with selectable parcels. Use the search box or the parcel list as alternatives to the map."
+                ></canvas>
+                <span class="pk-ex" id="pk-ex">Example selection</span>
+                <div class="pk-zoom">
+                  <button type="button" id="pk-in" aria-label="Zoom in">+</button
+                  ><button type="button" id="pk-out" aria-label="Zoom out">−</button
+                  ><button type="button" id="pk-fit" aria-label="Show the whole site">⤢</button>
+                </div>
+              </div>
+              <p class="pk-hint" id="pk-hint"></p>
+              <div class="pk-sum">
+                <ul id="pk-list" class="pk-list"></ul>
+                <p class="pk-empty" id="pk-empty" hidden>
+                  Nothing selected yet. Pick a parcel or draw an area.
+                </p>
+                <p class="err" id="pk-err" hidden></p>
+                <div class="pk-tot">
+                  <span class="lbl">Total</span><b id="pk-total"></b
+                  ><button type="button" class="mini" id="pk-clear">Clear</button>
+                </div>
+              </div>
+              <div class="pk-fields">
+                <span class="lbl wide">3 · Your details</span>
+                <div class="fld">
+                  <label for="f-name"
+                    >Name<input id="f-name" type="text" autocomplete="name" aria-required="true"
+                  /></label>
+                  <p class="err" id="f-name-err" hidden></p>
+                </div>
+                <div class="fld">
+                  <label for="f-org"
+                    >Organization<input id="f-org" type="text" autocomplete="organization"
+                  /></label>
+                </div>
+                <div class="fld">
+                  <label for="f-email"
+                    >Email<input
+                      id="f-email"
+                      type="email"
+                      autocomplete="email"
+                      aria-required="true"
+                  /></label>
+                  <p class="err" id="f-email-err" hidden></p>
+                </div>
+                <div class="fld">
+                  <label for="f-acres"
+                    >Acres<input id="f-acres" type="text" inputmode="decimal"
+                  /></label>
+                  <p class="err" id="f-acres-err" hidden></p>
+                </div>
+                <div class="fld wide">
+                  <label for="f-msg"
+                    >What needs doing?<textarea id="f-msg" rows="3"></textarea>
+                  </label>
+                </div>
+                <button class="btn pri wide" type="submit">Request a site scan</button>
+                <p class="pk-off wide" id="f-ok" role="status" hidden></p>
+                <p class="pk-note wide" id="f-offline">
+                  Not connected yet: this form checks what you enter, but sends nothing.
+                </p>
+              </div>
+              <p class="pk-note">
+                Demo map. On the live site this is a satellite map with real address search.
+              </p>
+            </form>
+          </div>
+        </div>
+      </section>
+    </main>
+    <footer class="foot">
+      <div class="in">
+        <b data-brand></b
+        ><span
+          >The 3D scenes are a simulation of the system, drawn to true scale. Figures marked est.
+          and app values are placeholders.</span
+        >
+      </div>
+    </footer>
+
+    <script type="module" src="/src/landing/main.ts"></script>
+  </body>
+</html>

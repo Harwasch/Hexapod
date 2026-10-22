@@ -4,9 +4,10 @@
 //   node apps/web/scripts/check-bundle.mjs            # reads apps/web/dist
 //   node apps/web/scripts/check-bundle.mjs /tmp/dist  # or any other build directory
 //
-// Three of the four entries have no use for a globe: `admin.html` is a table of runs,
+// Every entry but the globe has no use for one: `admin.html` is a table of runs,
 // `upload.html` is what a phone opens over cellular to pick one file, `view.html` renders a
-// scan with Spark. e2e watches the dev server for a cesium request, which proves the
+// scan with Spark, `worlds.html` is a separate product, `landing.html` is the landing page
+// (three.js scenes, loaded on demand). e2e watches the dev server for a cesium request, which proves the
 // *source* imports none -- but the dev server serves unbundled modules, so it cannot see
 // what the bundler does with them. That gap is real: a shared chunking rule once put `tslib`
 // inside `cesium-*.js`, and the admin page modulepreloaded the whole 4.9 MB engine for three
@@ -14,8 +15,11 @@
 //
 // So this reads each page the way a browser would before any code runs -- its entry
 // scripts, modulepreloads and stylesheets -- and follows every *static* import of every
-// script it finds (a dynamic `import()` is loaded on demand, not before the first frame, and
-// is deliberately not followed). A page fails if anything it reaches is a Cesium chunk: one
+// script it finds: that is what the page loads before its first frame, and what it measures.
+// For the Cesium-free pages it then follows dynamic `import()`s too, because a chunk loaded
+// on demand is still loaded: the landing page's three.js scenes arrive that way, and an
+// engine import that slipped into them would reach every visitor a second later. A page
+// fails if anything it reaches, up front or on demand, is a Cesium chunk: one
 // named `cesium-*` (the chunk vite.config.ts makes for the engine) or one that carries the
 // engine's GLSL built-ins (`czm_`), which nothing but CesiumJS contains, so a renamed or
 // merged chunk is caught too. It prints what each page loads, globe included, so the same
@@ -39,7 +43,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 
 /** Pages that must not reach CesiumJS, and the one that is measured but allowed to. */
-export const CESIUM_FREE_PAGES = ["admin.html", "upload.html", "view.html", "worlds.html"];
+export const CESIUM_FREE_PAGES = [
+  "admin.html",
+  "upload.html",
+  "view.html",
+  "worlds.html",
+  "landing.html",
+];
 export const GLOBE_PAGE = "index.html";
 
 /**
@@ -114,6 +124,18 @@ export function staticImports(code) {
   return [...found];
 }
 
+/**
+ * The relative specifiers a built ES module imports on demand: `import("./a.js")`, with any
+ * of the three quotes (Vite writes backticks).
+ */
+export function dynamicImports(code) {
+  const found = new Set();
+  for (const match of code.matchAll(/\bimport\(\s*(["'`])(\.{1,2}\/[^"'`]+)\1\s*\)/g)) {
+    found.add(match[2]);
+  }
+  return [...found];
+}
+
 /** Whether a built file is (or contains) the CesiumJS engine. */
 export function isCesiumChunk(path, contents) {
   return CESIUM_CHUNK_NAME.test(basename(path)) || contents.includes(CESIUM_CONTENT_MARKER);
@@ -121,10 +143,11 @@ export function isCesiumChunk(path, contents) {
 
 /**
  * Everything one page loads before its first frame, following static imports from every
- * script the document names. Paths are relative to `root`; `missing` lists what the page
- * names that the build does not contain.
+ * script the document names; with `dynamic`, everything it can load at all, following
+ * `import()`s as well. Paths are relative to `root`; `missing` lists what the page names that
+ * the build does not contain.
  */
-export function pageGraph(root, page) {
+export function pageGraph(root, page, { dynamic = false } = {}) {
   const html = readFileSync(join(root, page), "utf8");
   const files = new Map();
   const missing = [];
@@ -140,7 +163,8 @@ export function pageGraph(root, page) {
     const contents = readFileSync(absolute);
     files.set(path, contents);
     if (!/\.m?js$/.test(path)) continue;
-    for (const specifier of staticImports(contents.toString("utf8"))) {
+    const code = contents.toString("utf8");
+    for (const specifier of [...staticImports(code), ...(dynamic ? dynamicImports(code) : [])]) {
       queue.push(posix.normalize(posix.join(posix.dirname(path), specifier)));
     }
   }
@@ -229,9 +253,16 @@ export function checkBundle(root, log = console) {
       log.error(`  ${page} loads CesiumJS: ${path} (${kilobytes(contents.length)})`);
       if (status === 0) status = 1;
     }
+    // On demand: what the page's dynamic imports reach, beyond what it loads up front.
+    for (const [path, contents] of pageGraph(root, page, { dynamic: true }).files) {
+      if (files.has(path) || !/\.m?js$/.test(path)) continue;
+      if (!isCesiumChunk(path, contents.toString("utf8"))) continue;
+      log.error(`  ${page} loads CesiumJS on demand: ${path} (${kilobytes(contents.length)})`);
+      if (status === 0) status = 1;
+    }
   }
   if (status === 0) {
-    log.info(`check-bundle: ${CESIUM_FREE_PAGES.join(", ")} load no CesiumJS`);
+    log.info(`check-bundle: ${CESIUM_FREE_PAGES.join(", ")} load no CesiumJS, even on demand`);
     log.info(`check-bundle: ${GLOBE_PAGE} keeps its entry budget and loads no Land code up front`);
   }
   return status;
