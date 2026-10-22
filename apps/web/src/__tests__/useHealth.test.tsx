@@ -18,7 +18,14 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("pauses health polling while hidden and resumes when visible", async () => {
+/**
+ * useHealth polls /api/v1/health, which queries the database, every 60 s, and only while the
+ * tab is visible. Hidden tabs not polling is TanStack Query's default
+ * (refetchIntervalInBackground: false), not something useHealth adds; useHealth states it,
+ * and this pins it, so a later `true` that would keep Neon awake from a background tab
+ * fails here.
+ */
+it("polls health every minute only while the tab is visible", async () => {
   vi.useFakeTimers();
   get.mockResolvedValue({ data: { status: "ok", database: true } });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

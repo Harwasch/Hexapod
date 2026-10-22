@@ -132,6 +132,8 @@ export function useHealth() {
     queryFn: () => unwrap<HealthStatus>(api.GET("/api/v1/health")),
     ...RETRY,
     refetchInterval: 60_000,
+    // TanStack Query's default, stated so nobody turns it on: /health queries the database,
+    // and a background tab polling it every minute would keep Neon from scaling to zero.
     refetchIntervalInBackground: false,
   });
 }

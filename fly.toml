@@ -178,7 +178,7 @@ kill_timeout = "30s"
   # Worlds provisioning stays off above. The proxy suspends the machine when one of its
   # checks, every few minutes, finds it with no traffic. A visible console tab polls
   # /health every 60 s (apps/web/src/api/queries.ts), so with one open the machine may
-  # stay awake or cycle through resumes; hidden tabs pause this health poll.
+  # stay awake or cycle through resumes; a hidden tab does not poll (TanStack Query's default).
   #
   # The worker and research groups are deliberately not in `processes` here -- they have
   # no service, so the proxy never stops them and they never wait for a request. Neither

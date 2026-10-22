@@ -343,7 +343,9 @@ automatic wake is unavailable: start `pnpm dev:research` locally or set
 (the capture loop can overshoot by one 30 s poll), then Neon's configured idle delay
 (five minutes for this deployment). Fly probes `/api/v1/health/live` every 15 s and
 no longer extend that delay. The web health hook polls the database-backed endpoint
-only while the tab is visible; other open-page queries, external monitors, SQL editors
+every 60 s while its tab is visible, so a visible Hexapod tab keeps Neon awake. A hidden
+tab never polled (TanStack Query's default, which `useHealth` now states explicitly), so
+this change saves nothing there. Other open-page queries, external monitors, SQL editors
 and deploy checks can still keep the database awake.
 
 **Verify in the Neon console after deployment:** close Hexapod tabs and SQL editors,
