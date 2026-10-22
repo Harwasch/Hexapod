@@ -415,76 +415,85 @@
       </section>
 
       <section class="band" id="app">
-        <div class="in app">
-          <div class="head">
+        <!-- Two versions for Harrison to choose between (review of 2026-10-22); ?app=b shows the
+             second. The one not chosen goes. -->
+        <div class="in app" data-app="a">
+          <div class="head" data-variant="a">
             <p class="num">03</p>
-            <h2>The app</h2>
-            <p>Your site as a live 3D model, with every asset, every job and the fleet on it.</p>
-            <a class="more" href="https://claude.ai/artifact/Gt3E2K98hKb4aQk3jXiG2f"
-              >Explore the 3D model →</a
-            >
+            <h2>Mission control</h2>
+            <p>One screen for your land, the work planned on it and the fleet doing it.</p>
+          </div>
+          <div class="head" data-variant="b">
+            <p class="num">03</p>
+            <h2>Your land in 3D</h2>
+            <p>
+              Every slope, fence line and creek on a model of your site, with the work and the fleet
+              on it.
+            </p>
           </div>
 
-          <figure class="mock" aria-label="Concept of the app">
-            <div class="bar"><i></i><i></i><i></i><span>Site 07 · 160 ha</span></div>
-            <div class="win">
-              <aside>
-                <p class="lbl">Jobs</p>
-                <div class="job">
-                  <b>Panel thermal check</b><span>Block B · 4,200 panels</span
-                  ><em style="--w: 74%"></em>
-                </div>
-                <div class="job">
-                  <b>Right-of-way clearing</b><span>Pipeline · 1.2 km</span
-                  ><em style="--w: 40%"></em>
-                </div>
-                <div class="job">
-                  <b>Pole inspection</b><span>Line 3 · 18 poles</span><em style="--w: 100%"></em>
-                </div>
-                <div class="job">
-                  <b>Broom removal</b><span>North slope · 2.1 ha</span><em style="--w: 62%"></em>
-                </div>
-                <p class="lbl">Fleet</p>
-                <div class="kv"><span>Walkers</span><b>32 working</b></div>
-                <div class="kv"><span>Carriers</span><b>2 in field</b></div>
-                <div class="kv"><span>Base</span><b>Solar · 84%</b></div>
-              </aside>
-              <div class="map">
-                <img
-                  class="lt mapimg"
-                  src="/src/landing/img/app.webp"
-                  alt="The site as a live 3D model in the app"
-                  width="1280"
-                  height="740"
-                /><img
-                  class="dk mapimg"
-                  src="/src/landing/img/app-dark.webp"
-                  alt="The site as a live 3D model in the app"
-                  width="1280"
-                  height="740"
-                />
-              </div>
+          <figure class="shots" aria-label="The app">
+            <div class="shot-views">
+              <img
+                id="shot-land"
+                src="/src/landing/img/app-land.webp"
+                alt="The app showing Oak Bench Ranch as a 3D model, with its work zones outlined"
+                width="1600"
+                height="1000"
+                loading="lazy"
+              />
+              <img
+                id="shot-plan"
+                src="/src/landing/img/app-plan.webp"
+                alt="The app's Plans panel: five plans for the ranch, each with its progress"
+                width="1600"
+                height="1000"
+                loading="lazy"
+                hidden
+              />
+              <img
+                id="shot-fleet"
+                src="/src/landing/img/app-fleet.webp"
+                alt="The app's Fleet panel: each machine's task, zone and battery"
+                width="1600"
+                height="1000"
+                loading="lazy"
+                hidden
+              />
             </div>
-            <figcaption>Concept. Values shown are examples.</figcaption>
+            <figcaption>
+              The app today, on our demo ranch. The fleet and its plans are simulated.
+            </figcaption>
           </figure>
-          <ul class="feat">
+          <ul class="feat shot-tabs" aria-label="What the app shows">
             <li>
-              <b>Plan</b
-              ><span
-                >Outline your site, mark what needs doing and approve a plan before any work
-                starts.</span
-              >
+              <button type="button" aria-controls="shot-land" aria-pressed="true">
+                <b data-variant="a">See your land</b><b data-variant="b">The whole site</b
+                ><span data-variant="a"
+                  >Your site as a 3D model, with every zone, track and tree on it.</span
+                ><span data-variant="b"
+                  >Slopes, trees, fences and creeks, on a model you can turn and measure.</span
+                >
+              </button>
             </li>
             <li>
-              <b>Watch</b
-              ><span>Follow every robot and every job live on the model of your site.</span>
+              <button type="button" aria-controls="shot-plan" aria-pressed="false">
+                <b data-variant="a">Plan the work</b><b data-variant="b">Plans drawn on it</b
+                ><span data-variant="a"
+                  >Mark what needs doing and approve a plan before any work starts.</span
+                ><span data-variant="b"
+                  >Zones, passes and schedules, laid out on the land itself.</span
+                >
+              </button>
             </li>
             <li>
-              <b>Keep the record</b
-              ><span
-                >Every panel checked, pole inspected, weed pulled and tree planted, mapped and
-                dated.</span
-              >
+              <button type="button" aria-controls="shot-fleet" aria-pressed="false">
+                <b data-variant="a">Watch it done</b><b data-variant="b">The fleet on it, live</b
+                ><span data-variant="a">Follow every robot and every job as it happens.</span
+                ><span data-variant="b"
+                  >Where each robot is, what it is doing and what needs a person.</span
+                >
+              </button>
             </li>
           </ul>
         </div>
