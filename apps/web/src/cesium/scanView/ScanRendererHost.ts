@@ -1005,17 +1005,23 @@ export class ScanRendererHost {
       },
     );
     let arrived = true;
-    /** Hands the renderer and the streamer what may be drawn now (`drawBudget`, `planBudget`). */
-    const applyBudget = (): void => {
-      backend.setBudget(drawBudget());
-      streamer.setBudget(streamedFor(planBudget()), cacheBudget());
-      arrived = true;
-    };
-    /** The camera came to rest, or moved again: the cut is planned again under its budget. */
-    const rest = (next: boolean): void => {
-      if (next === resting) return;
-      resting = next;
-      streamer.setBudget(streamedFor(planBudget()), cacheBudget());
+    /** Hands the renderer what it may draw now (`drawBudget`); the streamer follows (`hold`). */
+    const applyBudget = (): void => backend.setBudget(drawBudget());
+    /** What the cut was last planned for (`hold`). */
+    let held = 0;
+    /**
+     * Hands the streamer what the cut may hold now when it moved -- the adaptive budget, rest or
+     * motion, near or far, the renderer's own share of it (`loadFactor`: a per-cell rule splits
+     * one budget between its dates) -- and has the cut planned again. Checked as each frame is
+     * drawn, so a share that moves with the camera still is planned for at once. (The cache's
+     * budget moves with it, but for an adaptive step while a still view holds the ceiling,
+     * which the next move hands over.)
+     */
+    const hold = (): void => {
+      const plan = streamedFor(planBudget());
+      if (plan === held) return;
+      held = plan;
+      streamer.setBudget(plan, cacheBudget());
       arrived = true;
     };
     // A tile arrived or failed, a deferred swap is due, a failed tile may be tried again.
@@ -1117,7 +1123,7 @@ export class ScanRendererHost {
       const replanMs = !moving && this.holding() ? HELD_REPLAN_MS : REPLAN_MS;
       // Still long enough: the cut may refine to the rest budget. Moving: back to the motion
       // budget at once, so the first re-plan of a gesture swaps the surplus out.
-      rest(now - lastMotionAt >= REST_AFTER_MS);
+      resting = now - lastMotionAt >= REST_AFTER_MS;
       const size = inputSize();
       const pose = {
         ...scanPose(
@@ -1145,6 +1151,7 @@ export class ScanRendererHost {
         log.info("splat budget", { kind, budget: adaptive.budget });
       }
       lastMotionFrameAt = motion ? now : 0;
+      hold();
       let replanAt: number | null = null;
       if (arrived || moved) {
         if (now - lastPlan >= replanMs) {

@@ -23,6 +23,8 @@ export const VIEW_RULE_ENDED: Record<ViewRuleEnd, string> = {
   living:
     "Per-cell dates ended: a Living Survey rig moves this scan, and its motion needs the scan drawn on its own",
   "one-model": "Per-cell dates ended: one model was asked for by itself (a version, or Retry)",
+  dates:
+    "Per-cell dates ended: As of now has more than 4 dates up to it, and a rule draws 4 at most",
   unsupported: "Per-cell dates ended: this CesiumJS build cannot draw them",
 };
 
@@ -35,6 +37,8 @@ export const VIEW_RULE_TEXT = {
   compare: "Choosing a rule ends Compare › Dates: the two are one or the other",
   tileBounds: "tile bounds, overstates what it saw",
   ownFrame: "placed in its own frame, not the site's",
+  tooMany:
+    "Draws 4 dates at most: choose an As of date with 4 or fewer up to it (the capture-date control)",
   holdsViews:
     "Per-cell dates are on: a date's own Confidence and Data age can be chosen again with One date",
 } as const;

@@ -164,7 +164,12 @@ describe.each([
     expect(legend).toHaveTextContent(
       `Cell size picked per tile by ${name} (per splat by CesiumJS)`,
     );
-    // The notice stays for what CesiumJS alone draws, and no longer names the views.
+    // The notice stays for what this renderer cannot draw, and never names the views: under
+    // Spark the per-cell rules; under PlayCanvas, which draws those too, there is none.
+    if (renderer === "playcanvas") {
+      expect(screen.queryByTestId("views-needs-cesium")).toBeNull();
+      return;
+    }
     const notice = screen.getByTestId("views-needs-cesium");
     expect(notice).toHaveTextContent(
       "Per cell: Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",

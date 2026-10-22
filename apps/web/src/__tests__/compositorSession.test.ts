@@ -20,6 +20,9 @@ import { colorChainOf } from "@/cesium/splatColor";
 import { ruledObjects } from "@/cesium/companions";
 import type { CompositorGpu } from "@/cesium/splatCompositor";
 import { addVisibilityPart, visibilityChainOf } from "@/cesium/splatVisibility";
+import { RULE_KIT } from "@/cesium/scanView/ruleKit";
+import { watchScanRule, type ScanRuleView } from "@/cesium/scanView/scanRule";
+import type { SplatRendererKind } from "@/cesium/scanView/types";
 import { encodeConfidenceGrid } from "@/dev/cellGridFixture";
 import { decodeCellGrid } from "@/lib/cellGrid";
 import type { ViewRule } from "@/lib/compositor";
@@ -28,7 +31,7 @@ import { useSettings } from "@/state/settings";
 import { useViewMode } from "@/state/viewMode";
 import { useViewRule } from "@/state/viewRule";
 
-import { A1, A2, E1, E2 } from "./epochFixtures";
+import { A1, A2, datedSite, E1, E2 } from "./epochFixtures";
 
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
@@ -63,6 +66,13 @@ function primitive() {
 }
 
 const CONFIDENCE = { format: "hexapod.cellgrid", uri: "confidence.bin" };
+const EVIDENCE = {
+  kind: "inferred",
+  filler: "fixture",
+  views: 3,
+  gaussians: 10,
+  meanConfidence: 0.5,
+};
 
 function tileset(name: string, extras: Record<string, unknown> = {}) {
   return {
@@ -92,11 +102,14 @@ async function everywhere() {
 
 const settle = () => new Promise((done) => setTimeout(done, 0));
 
-async function harness(rule: ViewRule = "latest") {
+async function harness(
+  rule: ViewRule = "latest",
+  options: { renderer?: SplatRendererKind; juneExtras?: Record<string, unknown> } = {},
+) {
   const { meta, grid } = await everywhere();
   // March has a grid; June (an upload) has none: its one leaf tile's box stands in.
   const march = tileset("march", { confidence: { ...meta, ...CONFIDENCE } });
-  const june = tileset("june");
+  const june = tileset("june", options.juneExtras);
   const fetchJson = vi.fn(() =>
     Promise.resolve({
       root: {
@@ -125,10 +138,13 @@ async function harness(rule: ViewRule = "latest") {
     ]),
   };
   const end = vi.fn();
+  // Who draws splats. The scan PlayCanvas draws is the date chosen: June, the latest.
+  const drawing: { renderer: SplatRendererKind } = { renderer: options.renderer ?? "cesium" };
   const context: CompositorContext = {
     scene: { preUpdate, requestRender: vi.fn() },
     entry,
-    cesium: () => true,
+    renderer: () => drawing.renderer,
+    kit: RULE_KIT,
     end,
   };
   const handle = startCompositor(context, {
@@ -143,7 +159,16 @@ async function harness(rule: ViewRule = "latest") {
     await settle();
     preUpdate.raiseEvent();
   };
-  return { march, june, handle, frame, end, entry, fetchJson };
+  return { march, june, handle, frame, end, entry, fetchJson, drawing };
+}
+
+/** The rule handed to the renderer drawing asset `assetId` now (scanView/scanRule.ts). */
+function ruleFor(assetId: string): ScanRuleView | null {
+  let view: ScanRuleView | null = null;
+  watchScanRule(assetId, (v) => {
+    view = v;
+  })();
+  return view;
 }
 
 const hostOf = (t: FakeTileset) => t.gaussianSplatPrimitive!;
@@ -204,14 +229,25 @@ describe("a view rule's session", () => {
     await frame();
     // Split objects are tilesets of their own beside their scan (splitObjects.ts): the host's
     // shader parts never see them, so the rule says which are drawn.
-    const object = (x: number, y: number) =>
-      ({ boundingSphere: { center: new Cartesian3(x, y, 0.5) } }) as unknown as Cesium3DTileset;
+    // An object is where its declared origin is (extras.objects[].origin, at its pose): its
+    // own frame's translation, as PlayCanvas reads it too (lib/compositor.ts `objectAnchor`)
+    // -- not the middle of its bounds, which the package pads by three scales a splat.
+    const object = (x: number, y: number, middle = x) =>
+      ({
+        root: { computedTransform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, 0, 1] },
+        boundingSphere: { center: new Cartesian3(middle, y, 0.5) },
+      }) as unknown as Cesium3DTileset;
     const inJunes = object(12, 5);
     const inMarchs = object(3, 3);
     expect(ruledObjects.get(march)?.(inMarchs)).toBe(true);
     expect(ruledObjects.get(march)?.(inJunes)).toBe(false);
     expect(ruledObjects.get(june)?.(inJunes)).toBe(true);
     expect(ruledObjects.get(june)?.(inMarchs)).toBe(false);
+    // Near the seam at x = 10: its origin in March's cell, the middle of its bounds in June's.
+    // March's copy is drawn, as under PlayCanvas (playcanvasRule.test.ts, the same case).
+    const astride = object(9.9, 5, 10.3);
+    expect(ruledObjects.get(march)?.(astride)).toBe(true);
+    expect(ruledObjects.get(june)?.(astride)).toBe(false);
     // Outside the plane no date owns the cell: nothing is drawn there, as for the splats.
     expect(ruledObjects.get(march)?.(object(-40, 3))).toBe(false);
     handle.dispose();
@@ -384,6 +420,29 @@ describe("a view rule's session", () => {
     handle.dispose();
   });
 
+  it("names four dates at most: more up to As of is refused, and ends a rule, saying why", async () => {
+    const { handle, frame, end, entry, march, june } = await harness();
+    await frame();
+    expect(end).not.toHaveBeenCalled();
+    // Five dates up to As of, every one sharing the frame's placement.
+    const { epochs, assets } = datedSite(5);
+    entry.epochs = epochs;
+    entry.site = { assets };
+    entry.handles = new Map(
+      assets.map((a, k) => [
+        a.id,
+        { tileset: (k % 2 === 0 ? march : june) as never, ...(k > 0 ? { follows: "a1" } : {}) },
+      ]),
+    );
+    expect(handle.assets("gaussian-splat")).toBeNull();
+    await frame();
+    expect(end).toHaveBeenCalledWith("dates");
+    // As of the fourth: four dates, drawn.
+    entry.epochId = "e4";
+    expect(handle.assets("gaussian-splat")?.map((a) => a.id)).toEqual(["a1", "a2", "a3", "a4"]);
+    handle.dispose();
+  });
+
   it("ends, saying why, when a Living Survey rig takes a drawn date", async () => {
     const { june, handle, frame, end } = await harness();
     await frame();
@@ -407,6 +466,125 @@ describe("a view rule's session", () => {
     june.gaussianSplatPrimitive = own;
     june.tileLoad.raiseEvent();
     expect(own.drawnBy).toBe(host);
+    handle.dispose();
+  });
+});
+
+describe("a view rule's session under PlayCanvas", () => {
+  const MARCH = "https://tiles.example/march/tileset.json";
+  const JUNE = "https://tiles.example/june/tileset.json";
+
+  it("hands the renderer the plane and each date's source, and touches no primitive", async () => {
+    useViewMode.getState().set("confidence");
+    const { march, june, handle, frame } = await harness("latest", { renderer: "playcanvas" });
+    expect(useViewMode.getState().mode).toBe("photo");
+    await frame();
+    // Nothing on CesiumJS's primitives: PlayCanvas draws every date in its one sort.
+    expect(hostOf(march).companions).toEqual([]);
+    expect(hostOf(june).drawnBy).toBeUndefined();
+    expect(visibilityChainOf(hostOf(march) as never)?.parts ?? []).toEqual([]);
+    expect(handle.compositor()).toBeUndefined();
+    const view = ruleFor(A2.id);
+    expect(view).not.toBeNull();
+    expect(view?.sources.get(MARCH)).toEqual({ source: 0 });
+    expect(view?.sources.get(JUNE)).toEqual({ source: 1 });
+    // The scan PlayCanvas draws is June's; March is streamed beside it, where it is.
+    expect(view?.native).toBe(1);
+    expect(view?.dates).toEqual([
+      {
+        url: MARCH,
+        assetId: A1.id,
+        owns: [0],
+        extras: march.root.extras,
+        placement: null,
+        root: IDENTITY,
+      },
+    ]);
+    // What one budget is split by: each date's sources, the scan PlayCanvas draws' too.
+    expect(view?.scanOwns).toEqual([1]);
+    // The same plane CesiumJS draws: June's box is June's, the rest March's.
+    const [i0, j0, ni] = view?.plane ?? [0, 0, 0];
+    const at = (x: number, y: number) =>
+      view?.owners.data[(Math.floor(y) - j0) * ni + (Math.floor(x) - i0)];
+    expect(at(12, 5)).toBe(1);
+    expect(at(3, 3)).toBe(0);
+    expect(view).toMatchObject({ cellM: 1, reach: 2, enabled: true, tinted: 0, age: null });
+    expect(useViewRule.getState().legend?.dates.map((d) => [d.epochId, d.cells])).toEqual([
+      [E1.id, 192],
+      [E2.id, 8],
+    ]);
+    handle.dispose();
+    expect(ruleFor(A2.id)).toBeNull();
+    expect(useViewRule.getState().legend).toBeNull();
+  });
+
+  it("names each date's inferred layers and split objects by their tilesets, tints invented", async () => {
+    useSettings.getState().set({ inferredStyle: "show" });
+    const { handle, frame, entry } = await harness("highlight-invented", {
+      renderer: "playcanvas",
+      juneExtras: {
+        inferredLayers: [{ uri: "fill/tileset.json", evidence: EVIDENCE }],
+        objects: [{ uri: "objects/7/tileset.json", instance: 7, origin: [12, 5, 0] }],
+      },
+    });
+    await frame();
+    await frame();
+    const view = ruleFor(A2.id);
+    const fill = "https://tiles.example/june/fill/tileset.json";
+    expect(view?.sources.get(fill)).toEqual({ source: 2 });
+    expect(view?.sources.get("https://tiles.example/june/objects/7/tileset.json")).toEqual({
+      source: 1,
+      whole: true,
+    });
+    // Highlight invented: the inferred sources, by the layers' own look.
+    expect(view?.tinted).toBe(1 << 2);
+    // June's fill travels with June: its share of the budget counts the fill's cells.
+    expect(view?.scanOwns).toEqual([1, 2]);
+    if (entry.rule) entry.rule.rule = "latest";
+    await frame();
+    expect(ruleFor(A2.id)?.tinted).toBe(0);
+    handle.dispose();
+  });
+
+  it("draws Data age from the plane's owners' ages", async () => {
+    const { handle, frame, entry } = await harness("data-age", { renderer: "playcanvas" });
+    await frame();
+    expect(ruleFor(A2.id)?.age?.mode).toBe("data-age");
+    if (entry.rule) entry.rule.rule = "latest";
+    await frame();
+    expect(ruleFor(A2.id)?.age).toBeNull();
+    handle.dispose();
+  });
+
+  it("follows the renderer: CesiumJS's companions under CesiumJS, PlayCanvas's rule under it", async () => {
+    const { march, june, handle, frame, drawing } = await harness("latest", {
+      renderer: "playcanvas",
+    });
+    await frame();
+    expect(ruleFor(A2.id)).not.toBeNull();
+    drawing.renderer = "cesium";
+    await frame();
+    expect(ruleFor(A2.id)).toBeNull();
+    expect(hostOf(march).companions).toEqual([june]);
+    drawing.renderer = "playcanvas";
+    await frame();
+    expect(hostOf(march).companions).toEqual([]);
+    expect(hostOf(june).drawnBy).toBeUndefined();
+    expect(ruleFor(A2.id)?.sources.get(JUNE)).toEqual({ source: 1 });
+    // A renderer that draws no rule: the rule cannot be drawn (SiteManager ends it, "changed").
+    drawing.renderer = "spark";
+    expect(handle.assets("gaussian-splat")).toBeNull();
+    handle.dispose();
+  });
+
+  it("places a date in the scan's frame by the two tilesets' transforms", async () => {
+    const { march, handle, frame } = await harness("latest", { renderer: "playcanvas" });
+    // March's tiles sit 3 m east of June's frame on the globe.
+    march.root.computedTransform = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 3, 0, 0, 1];
+    await frame();
+    const date = ruleFor(A2.id)?.dates[0];
+    expect(date?.placement).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 3, 0, 0, 1]);
+    expect(date?.root).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -3, 0, 0, 1]);
     handle.dispose();
   });
 });

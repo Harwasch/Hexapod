@@ -24,8 +24,18 @@
  * which drawing companions needs, so the rule ends and says why. Per-scan hooks on a date's
  * own primitive (hidden or highlighted objects, skins) do not act while it is a companion: its
  * primitive draws nothing then. Split objects are tilesets of their own beside their scan, out
- * of the host's sort: each is drawn whole by the date owning the cell under its centre
- * (`ruledObjects`), in its own colours (Data age does not tint it).
+ * of the host's sort: each is drawn whole by the date owning the cell under its declared origin
+ * at its pose (`ruledObjects`, `objectAnchor`), in its own colours (Data age does not tint it).
+ *
+ * **Under PlayCanvas** (the app's default renderer) the same plane is handed to the renderer
+ * drawing the site's scan (scanView/scanRule.ts), which draws every date in its one sort: the
+ * scan's own tiles, the other dates streamed beside them (scanView/ruleDates.ts), their
+ * inferred layers and split objects, each tile weighed by the plane as it is copied into the
+ * renderer's work buffer, with the same seam fade. The plane is then worked out in the frame of
+ * the scan PlayCanvas draws (SiteManager `scanTarget`, the date chosen, which the rule is As
+ * of): every date's tiles are placed in it. Nothing is put on CesiumJS's primitives, which draw nothing there. A renderer
+ * change carries the rule over, CesiumJS to PlayCanvas and back; under Spark or the WebGPU
+ * trial a rule cannot be drawn (`ruleAssets`), and SiteManager ends it, saying so.
  *
  * **As captured** (state/asCaptured.ts) draws the rule chosen as Ground truth, with no inferred
  * owner, while it is on; the rule chosen stays the viewer's, and comes back when it is off.
@@ -34,10 +44,12 @@
 import type { Epoch, Representation, SiteAsset } from "@twin/contracts";
 import { Matrix4, type Cesium3DTileset, type Scene } from "cesium";
 
-import { cellGridMeta, loadCellGrid, type CellGrid } from "@/lib/cellGrid";
+import { cellGridMeta, cellTextureRows, loadCellGrid, type CellGrid } from "@/lib/cellGrid";
+import type { CellLookView } from "@/lib/cellLook";
 import {
   leafTileBoxes,
   NO_OWNER,
+  objectAnchor,
   ownerAgeGrid,
   ownerAt,
   ownerPlane,
@@ -56,15 +68,30 @@ import {
   observedAtFromUpload,
   shownOption,
 } from "@/lib/epochs";
+// Already reached through splatCompositor.ts: importing it moves nothing (ruleKit.ts).
+import { resolveLayerUrl } from "@/lib/inferred";
 import { createLogger } from "@/lib/log";
+import { MAX_RULE_DATES, perCellDrawable, ruleDateCount } from "@/lib/viewModes";
 import { effectiveInferredStyle, useAsCaptured } from "@/state/asCaptured";
 import { useSettings } from "@/state/settings";
 import { useViewMode } from "@/state/viewMode";
 import { useViewRule, type LeftOut, type ViewRuleLegend } from "@/state/viewRule";
 
 import { companionGroups, ruledObjects, setCompanions, type CompanionHost } from "./companions";
+import type { RuleKit } from "./scanView/ruleKit";
+import {
+  lendRuleKit,
+  namedKit,
+  publishScanRule,
+  ruleOwnerRows,
+  type RuleDate,
+  type RuleSource,
+  type ScanRuleView,
+} from "./scanView/scanRule";
+import type { SplatRendererKind } from "./scanView/types";
 import { cesiumCellViewGpu, SplatCellView, type CellViewGpu } from "./splatCellView";
 import { invertAffine, type Mat4 } from "./splatFrames";
+import { SEAM_REACH } from "@/lib/compositor";
 import {
   cesiumCompositorGpu,
   SplatCompositor,
@@ -107,18 +134,26 @@ export interface CompositorSite {
 
 /**
  * What a site draws under a rule (SiteManager `drawnAssets`): the frame anchor, whose primitive
- * draws them all, then each date up to the one chosen that copies its placement, oldest first.
- * Null when a rule cannot be drawn: not splats, under another renderer than CesiumJS, fewer
- * than two dates.
+ * draws them all under CesiumJS, then each date up to the one chosen that copies its placement,
+ * oldest first. Null when a rule cannot be drawn: not splats, under a renderer that draws no
+ * rule (Spark, the WebGPU trial: lib/viewModes.ts `perCellDrawable`), fewer than two dates, or
+ * more than four up to As of (lib/viewModes.ts `MAX_RULE_DATES`).
  */
 export function ruleAssets(
   site: CompositorSite,
   representation: Representation,
-  cesium: boolean,
+  renderer: SplatRendererKind,
 ): SiteAsset[] | null {
   const options = epochOptions(site.epochs, site.site.assets, representation);
   const anchor = frameAnchor(site.epochs, site.site.assets, representation)?.asset;
-  if (!cesium || !anchor || options.length < 2 || representation !== "gaussian-splat") return null;
+  if (
+    !perCellDrawable(renderer) ||
+    !anchor ||
+    options.length < 2 ||
+    representation !== "gaussian-splat" ||
+    ruleDateCount(options, shownOption(options, site.epochId)?.epoch.observedAt) > MAX_RULE_DATES
+  )
+    return null;
   const until = Date.parse(shownOption(options, site.epochId)?.epoch.observedAt ?? "");
   const dates = options.filter(
     (o) =>
@@ -158,8 +193,13 @@ export function leftOutDates(site: CompositorSite, representation: Representatio
 export interface CompositorContext {
   scene: Pick<Scene, "preUpdate" | "requestRender">;
   entry: CompositorSite;
-  /** Whether CesiumJS draws splat scans now (a rule is CesiumJS's alone). */
-  cesium(): boolean;
+  /** Who draws splat scans now: CesiumJS and PlayCanvas draw a rule (`perCellDrawable`). */
+  renderer(): SplatRendererKind;
+  /**
+   * What the rule borrows from the globe's first load to draw under PlayCanvas (ruleKit.ts:
+   * lent, not imported, so that nothing moves out of the first load's entry).
+   */
+  kit: RuleKit;
   /** Ends the rule, saying why. */
   end(reason: ViewRuleEnd): void;
 }
@@ -170,6 +210,11 @@ export interface CompositorHandle {
   dispose(): void;
   /** The shader parts on the host now, for harnesses and tests. */
   compositor(): SplatCompositor | undefined;
+  /**
+   * For harnesses measuring the seam: the reach (`SEAM_REACH` when undefined; 0, centres
+   * only), and the rule off (`enabled` false) to draw every date at once, under either renderer.
+   */
+  tune(options: { seamReach?: number | undefined; enabled?: boolean }): void;
 }
 
 export interface CompositorOptions {
@@ -184,6 +229,31 @@ export interface CompositorOptions {
 type HostPrimitive = CompositorPrimitive &
   CompanionHost &
   Pick<SplatPrimitive, "incremental" | "drawnBy">;
+
+/** What a source's coverage is read from. */
+interface CoverageInput {
+  /** Its tileset's URL, where its grid and its tileset.json are. */
+  url: string | undefined;
+  extras: unknown;
+  inferred: boolean;
+  /** Its tileset.json. */
+  json(url: string): Promise<unknown>;
+  /** Its root's frame to the plane's (column-major), from its tileset.json; none: the same. */
+  frame(json: unknown): readonly number[] | undefined;
+}
+
+/** A tileset the rule draws, as both renderers see it. */
+interface RuleEntry {
+  /** What its coverage is kept by: its tileset, or (an inferred layer under PlayCanvas) its URL. */
+  key: unknown;
+  epoch: Epoch;
+  inferred: boolean;
+  /** The date an inferred layer travels with. */
+  from?: unknown;
+  /** Its tileset's URL as the renderer names it (PlayCanvas). */
+  url?: string;
+  cover: CoverageInput;
+}
 
 /** One source's coverage, once read (`done`). */
 interface Coverage {
@@ -206,6 +276,53 @@ function urlOf(tileset: Cesium3DTileset): string | undefined {
 /** The root tile's transform as tileset.json declares it (the identity when it declares none). */
 function rootTransform(tileset: Cesium3DTileset): Matrix4 {
   return (tileset.root as { transform?: Matrix4 } | undefined)?.transform ?? Matrix4.IDENTITY;
+}
+
+/** The root tile's transform on the globe now (its placement's model matrix included). */
+function computedTransform(tileset: Cesium3DTileset): number[] {
+  const m = (tileset.root as { computedTransform?: Mat4 } | undefined)?.computedTransform;
+  return Array.from({ length: 16 }, (_, i) => m?.[i] ?? (i % 5 === 0 ? 1 : 0));
+}
+
+/** A tileset's URL as a dedicated renderer fetches it (ScanRendererHost `run`): absolute. */
+function absoluteUrl(tileset: Cesium3DTileset): string | undefined {
+  const url = urlOf(tileset);
+  return url === undefined ? undefined : new URL(url, location.href).toString();
+}
+
+const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
+/** `a · b` (column-major 4x4). */
+function times(a: readonly number[], b: readonly number[]): number[] {
+  return Matrix4.toArray(
+    Matrix4.multiply(Matrix4.fromArray([...a]), Matrix4.fromArray([...b]), new Matrix4()),
+  );
+}
+
+/** `a⁻¹` (column-major 4x4, any affine: a runtime scale too). */
+function inverse(a: readonly number[]): number[] {
+  return Matrix4.toArray(Matrix4.inverse(Matrix4.fromArray([...a]), new Matrix4()));
+}
+
+/** `a⁻¹ · b`, or null when it is the identity (to a micrometre): where `b`'s frame is in `a`'s. */
+function relative(a: readonly number[], b: readonly number[]): number[] | null {
+  const m = times(inverse(a), b);
+  return m.every((v, i) => Math.abs(v - (IDENTITY[i] ?? 0)) < 1e-6) ? null : m;
+}
+
+/** A tileset.json's `root.transform` (column-major), or the identity. */
+function declaredRoot(json: unknown): number[] {
+  const t = (json as { root?: { transform?: unknown } } | null)?.root?.transform;
+  return Array.isArray(t) && t.length === 16 && t.every((v) => Number.isFinite(v))
+    ? (t as number[])
+    : IDENTITY;
+}
+
+/** A tileset.json by plain fetch (an inferred layer under PlayCanvas has no Resource here). */
+async function fetchJsonOf(url: string): Promise<unknown> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`answered ${String(response.status)}`);
+  return response.json();
 }
 
 /** A tileset's own tileset.json, through its Resource where it has one (ion's headers too). */
@@ -231,10 +348,10 @@ export function startCompositor(
   const loadGrid = options.loadGrid ?? loadCellGrid;
   const now = options.now ?? Date.now;
   const { scene, entry: site } = context;
-  /** The loaded dates drawn, the host first; none until the host is in. */
+  /** The loaded dates drawn, the frame anchor first; none until the anchor is in. */
   const datesNow = (): CompositorDate[] => {
     const dates: CompositorDate[] = [];
-    for (const asset of ruleAssets(site, site.representation, context.cesium()) ?? []) {
+    for (const asset of ruleAssets(site, site.representation, context.renderer()) ?? []) {
       const tileset = site.handles.get(asset.id)?.tileset;
       const epoch = epochOf(asset, site.epochs);
       if (tileset && !tileset.isDestroyed() && epoch) dates.push({ tileset, epoch });
@@ -250,14 +367,26 @@ export function startCompositor(
     );
     return option && { epoch: option.epoch, assetId: option.asset.id };
   };
-  if (!gpu) {
+  if (!gpu && context.renderer() === "cesium") {
     context.end("unsupported");
-    return { assets: () => null, dispose: () => undefined, compositor: () => undefined };
+    return {
+      assets: () => null,
+      dispose: () => undefined,
+      compositor: () => undefined,
+      tune: () => undefined,
+    };
   }
   // A date's own Confidence or Data age reads its own grid, not the other dates'.
   useViewMode.getState().set("photo");
+  // PlayCanvas streams the other dates with the globe's own classes, lent (ruleKit.ts).
+  lendRuleKit(context.kit);
+  const kit = namedKit(context.kit);
 
   let disposed = false;
+  /** Which renderer the rule is drawn by now; null before the first frame. */
+  let mode: "cesium" | "playcanvas" | null = null;
+  /** The tileset whose root frame the plane is in: CesiumJS's host, or PlayCanvas's scan. */
+  let frameOf: Cesium3DTileset | undefined;
   let host: Cesium3DTileset | undefined;
   let primitive: HostPrimitive | undefined;
   let compositor: SplatCompositor | undefined;
@@ -268,29 +397,36 @@ export function startCompositor(
   /** The dates drawn, by source index, whose split objects the rule draws (`ruledObjects`). */
   let ruling: Cesium3DTileset[] = [];
   const listening = new Map<Cesium3DTileset, () => void>();
-  const coverage = new Map<Cesium3DTileset, Coverage>();
+  const coverage = new Map<unknown, Coverage>();
   let coverageVersion = 0;
   let sourcesVersion = 0;
+  let sourcesKey = "";
   let planeKey = "";
+  let plane: OwnerPlane | undefined;
   let ageKey = "";
   let later: { key: string; grids: CompositorSource[] } = { key: "", grids: [] };
   let inferred = new Set<unknown>();
   let legendKey = "";
+  /** What PlayCanvas was last handed, and for which asset (`publishScanRule`). */
+  let published: { assetId: string; key: string; age: CellLookView | null } | null = null;
+  const tuning: { seamReach: number | undefined; enabled: boolean } = {
+    seamReach: undefined,
+    enabled: true,
+  };
 
   const changed = (): void => {
     coverageVersion += 1;
     scene.requestRender();
   };
 
-  /** What `tileset` covers, read once: its grid, else its leaf tiles' boxes. */
-  const coverageOf = (tileset: Cesium3DTileset, isInferred: boolean): Coverage => {
-    const known = coverage.get(tileset);
+  /** What a source covers, read once: its grid, else its leaf tiles' boxes. */
+  const coverageOf = (key: unknown, input: CoverageInput): Coverage => {
+    const known = coverage.get(key);
     if (known) return known;
     const entry: Coverage = { done: false };
-    coverage.set(tileset, entry);
-    const url = urlOf(tileset);
-    const extras = (tileset.root as { extras?: unknown } | undefined)?.extras;
-    const meta = isInferred ? null : cellGridMeta(extras, "confidence");
+    coverage.set(key, entry);
+    const { url } = input;
+    const meta = input.inferred ? null : cellGridMeta(input.extras, "confidence");
     const read = async (): Promise<void> => {
       if (!url) return;
       if (meta) {
@@ -303,21 +439,9 @@ export function startCompositor(
           });
         }
       }
-      // The boxes are in the tileset's root frame; the plane is in the host's.
-      const frame =
-        host && host !== tileset
-          ? Matrix4.toArray(
-              Matrix4.multiply(
-                Matrix4.inverseTransformation(rootTransform(host), new Matrix4()),
-                rootTransform(tileset),
-                new Matrix4(),
-              ),
-            )
-          : undefined;
-      const json = (await (options.fetchJson
-        ? options.fetchJson(url)
-        : resourceJson(tileset, url))) as { root?: TilesetNode };
-      entry.boxes = leafTileBoxes(json.root, frame);
+      // The boxes are in the tileset's root frame; the plane is in the frame's.
+      const json = (await input.json(url)) as { root?: TilesetNode };
+      entry.boxes = leafTileBoxes(json.root, input.frame(json));
     };
     void read()
       .catch((error: unknown) =>
@@ -334,7 +458,7 @@ export function startCompositor(
 
   /** Data age's "newer data here": the dates after "As of", whose grids are fetched once. */
   const laterSources = (asOf: { assetId: string } | null): CompositorSource[] => {
-    if (!asOf || !host) return [];
+    if (!asOf || !frameOf) return [];
     const { later: dates } = laterDates(
       { epochs: site.epochs, assets: site.site.assets },
       asOf.assetId,
@@ -344,7 +468,7 @@ export function startCompositor(
     if (key !== later.key) {
       const mine: typeof later = { key, grids: [] };
       later = mine;
-      void loadLaterGrids(dates, Matrix4.toArray(rootTransform(host))).then((grids) => {
+      void loadLaterGrids(dates, Matrix4.toArray(rootTransform(frameOf))).then((grids) => {
         if (disposed || later !== mine) return;
         mine.grids = grids.flatMap((g) =>
           "grid" in g
@@ -366,8 +490,8 @@ export function startCompositor(
   };
 
   /**
-   * Whether a split object of `date` is drawn: whole, when that date owns the plane's cell
-   * under the object's centre -- one date's copy of an object, never two.
+   * Whether a split object of `date` is drawn under CesiumJS: whole, when that date owns the
+   * plane's cell under the object's centre -- one date's copy of an object, never two.
    */
   const ownsObject =
     (date: Cesium3DTileset) =>
@@ -375,15 +499,20 @@ export function startCompositor(
       const plane = compositor?.plane;
       const root = (host?.root as { computedTransform?: Mat4 } | undefined)?.computedTransform;
       const m = root && invertAffine(root);
-      if (!plane || !m) return false;
-      const { x, y, z } = object.boundingSphere.center;
-      const at = (r: number) =>
-        (m[r] ?? 0) * x + (m[r + 4] ?? 0) * y + (m[r + 8] ?? 0) * z + (m[r + 12] ?? 0);
-      return ownerAt(plane, at(0), at(1)) === ruling.indexOf(date);
+      const own = (object.root as { computedTransform?: Mat4 } | undefined)?.computedTransform;
+      if (!plane || !m || !own) return false;
+      // Its declared origin at its pose, in the host's frame (`objectAnchor`).
+      const [x, y] = objectAnchor(
+        times(
+          m,
+          Array.from({ length: 16 }, (_, i) => own[i] ?? 0),
+        ),
+      );
+      return ownerAt(plane, x, y) === ruling.indexOf(date);
     };
 
-  /** Lets go of the host: its companions, the parts, the dates it drew, the cones. */
-  const release = (): void => {
+  /** Lets go of CesiumJS's host: its companions, the parts, the dates it drew, the cones. */
+  const releaseCesium = (): void => {
     for (const tileset of ruling) ruledObjects.delete(tileset);
     ruling = [];
     if (primitive) setCompanions(primitive, DATES, []);
@@ -397,31 +526,94 @@ export function startCompositor(
     cones = undefined;
     primitive = undefined;
     host = undefined;
+  };
+
+  /** Takes the rule back from the renderer it was handed to (PlayCanvas). */
+  const unpublish = (): void => {
+    if (published) publishScanRule(published.assetId, null);
+    published = null;
+  };
+
+  /** The plane is to be read in another frame (another host, another scan, another renderer). */
+  const reframe = (tileset: Cesium3DTileset | undefined): void => {
+    if (frameOf === tileset) return;
+    frameOf = tileset;
     coverage.clear();
     planeKey = "";
     ageKey = "";
+    plane = undefined;
   };
 
-  const sync = (): void => {
-    if (disposed) return;
-    const dates = datesNow();
+  /** The rule's choices now: which rule, as of when, whether inferred layers are drawn. */
+  const choices = () => {
+    const rule: ViewRule = useAsCaptured.getState().on
+      ? "ground-truth"
+      : (site.rule?.rule ?? "latest");
+    const asOf = asOfNow();
+    const style = effectiveInferredStyle();
+    return { rule, asOf, asOfIso: asOf?.epoch.observedAt ?? null, style };
+  };
+
+  /**
+   * The plane of `entries` (the first `MAX_SOURCES`, each its source index), worked out again
+   * when the sources, their coverage, the rule's kind or "As of" changed; and what each source
+   * is, for the legend.
+   */
+  const planeFor = (entries: readonly RuleEntry[]) => {
+    const drawn = entries.slice(0, MAX_SOURCES);
+    const key = drawn.map((e) => `${String(e.inferred)}:${e.url ?? ""}`).join(",");
+    if (key !== sourcesKey) {
+      sourcesKey = key;
+      sourcesVersion += 1;
+    }
+    const pending = new Set<number>();
+    const sources: CompositorSource[] = drawn.map((e, source) => {
+      const c = coverageOf(e.key, e.cover);
+      if (!c.done) pending.add(source);
+      return {
+        source,
+        epochId: e.epoch.id,
+        observedAt: e.epoch.observedAt,
+        inferred: e.inferred,
+        // Dated only by its upload: it fills where no dated date saw, and has no age.
+        dated: !observedAtFromUpload(e.epoch),
+        grid: c.grid ?? null,
+        boxes: c.boxes ?? null,
+      };
+    });
+    const { rule, asOf, asOfIso, style } = choices();
+    const next = [
+      rule === "ground-truth",
+      asOfIso,
+      sourcesVersion,
+      coverageVersion,
+      style !== "hide",
+    ].join("|");
+    let fresh = false;
+    if (next !== planeKey || !plane) {
+      planeKey = next;
+      plane = ownerPlane(rule, sources, asOfIso, { allowInferred: style !== "hide" });
+      fresh = true;
+      scene.requestRender();
+    }
+    return { plane, fresh, drawn, sources, pending, rule, asOf, asOfIso, style };
+  };
+
+  /** The rule as CesiumJS draws it: every date on the frame anchor's primitive. */
+  const syncCesium = (dates: readonly CompositorDate[]): void => {
     const first = dates[0];
-    if (!first) return;
-    for (const { tileset } of dates) {
-      // The date's primitive appears with its first tile: told before it uploads anything.
-      if (!listening.has(tileset)) listening.set(tileset, tileset.tileLoad.addEventListener(sync));
+    if (!first || !gpu) {
+      if (!gpu) context.end("unsupported");
+      return;
     }
     const own = primitiveOf(first.tileset);
-    const rigged = dates.some(
-      (d) => (d.tileset as unknown as { splatIncremental?: boolean }).splatIncremental === false,
-    );
-    if (rigged || own?.incremental === false) {
+    if (own?.incremental === false) {
       context.end("living");
       return;
     }
     if (!own) return;
     if (host !== first.tileset || primitive !== own) {
-      release();
+      releaseCesium();
       host = first.tileset;
       primitive = own;
       const root = first.tileset;
@@ -429,7 +621,10 @@ export function startCompositor(
         gpu,
         () => (root.root as { computedTransform?: Mat4 } | undefined)?.computedTransform,
       );
+      compositor.enabled = tuning.enabled;
+      compositor.seamReach = tuning.seamReach;
     }
+    reframe(first.tileset);
     const target = own;
     const parts = compositor;
     if (!parts) return;
@@ -456,16 +651,45 @@ export function startCompositor(
     ruling = next;
     // Every source the host draws: the dates, then each date's inferred layers.
     const epochOf = new Map<unknown, Epoch>(dates.map((d) => [d.tileset, d.epoch]));
-    const entries: {
-      tileset: Cesium3DTileset;
-      epoch: Epoch;
-      inferred: boolean;
-      from?: unknown;
-    }[] = dates.map((d) => ({ ...d, inferred: false }));
+    const json = (tileset: Cesium3DTileset) => (url: string) =>
+      options.fetchJson ? options.fetchJson(url) : resourceJson(tileset, url);
+    // The boxes are in the tileset's root frame; the plane is in the host's.
+    const frame = (tileset: Cesium3DTileset) => (): number[] | undefined =>
+      host && host !== tileset
+        ? Matrix4.toArray(
+            Matrix4.multiply(
+              Matrix4.inverseTransformation(rootTransform(host), new Matrix4()),
+              rootTransform(tileset),
+              new Matrix4(),
+            ),
+          )
+        : undefined;
+    const input = (tileset: Cesium3DTileset, isInferred: boolean): CoverageInput => ({
+      url: urlOf(tileset),
+      extras: (tileset.root as { extras?: unknown } | undefined)?.extras,
+      inferred: isInferred,
+      json: json(tileset),
+      frame: frame(tileset),
+    });
+    const entries: (RuleEntry & { tileset: Cesium3DTileset })[] = dates.map((d) => ({
+      key: d.tileset,
+      tileset: d.tileset,
+      epoch: d.epoch,
+      inferred: false,
+      cover: input(d.tileset, false),
+    }));
     for (const { owner, from, tilesets } of companionGroups(target)) {
       const epoch = owner === DATES ? undefined : epochOf.get(from);
       if (epoch)
-        for (const tileset of tilesets) entries.push({ tileset, epoch, inferred: true, from });
+        for (const tileset of tilesets)
+          entries.push({
+            key: tileset,
+            tileset,
+            epoch,
+            inferred: true,
+            from,
+            cover: input(tileset, true),
+          });
     }
     if (!parts.installed && !parts.install(target)) {
       context.end("unsupported");
@@ -481,45 +705,12 @@ export function startCompositor(
       }
     }
     if (parts.sources.setSources(entries.map((e) => e.tileset))) sourcesVersion += 1;
-    const drawn = entries.slice(0, MAX_SOURCES);
-    const nextInferred = new Set<unknown>(drawn.filter((e) => e.inferred).map((e) => e.tileset));
+    const found = planeFor(entries);
+    const { drawn, sources, pending, rule, asOf, asOfIso, style } = found;
+    const nextInferred = new Set<unknown>(drawn.filter((e) => e.inferred).map((e) => e.key));
     if ([...nextInferred].some((t) => !inferred.has(t)) || nextInferred.size !== inferred.size)
       inferred = nextInferred;
-    const pending = new Set<number>();
-    const sources: CompositorSource[] = drawn.map((e, source) => {
-      const c = coverageOf(e.tileset, e.inferred);
-      if (!c.done) pending.add(source);
-      return {
-        source,
-        epochId: e.epoch.id,
-        observedAt: e.epoch.observedAt,
-        inferred: e.inferred,
-        // Dated only by its upload: it fills where no dated date saw, and has no age.
-        dated: !observedAtFromUpload(e.epoch),
-        grid: c.grid ?? null,
-        boxes: c.boxes ?? null,
-      };
-    });
-    const rule: ViewRule = useAsCaptured.getState().on
-      ? "ground-truth"
-      : (site.rule?.rule ?? "latest");
-    const asOf = asOfNow();
-    const asOfIso = asOf?.epoch.observedAt ?? null;
-    const style = effectiveInferredStyle();
-    const key = [
-      rule === "ground-truth",
-      asOfIso,
-      sourcesVersion,
-      coverageVersion,
-      style !== "hide",
-    ].join("|");
-    let plane: OwnerPlane | undefined = parts.plane;
-    if (key !== planeKey || !plane) {
-      planeKey = key;
-      plane = ownerPlane(rule, sources, asOfIso, { allowInferred: style !== "hide" });
-      parts.setPlane(plane);
-      scene.requestRender();
-    }
+    if (found.fresh || parts.plane !== found.plane) parts.setPlane(found.plane);
     // Inferred owners tinted: under Highlight invented, and for the viewer's own Highlight
     // on the layers of the dates the host draws -- the host's own layers carry their scan's
     // highlight (inferredLayers.ts), which is not drawn twice.
@@ -544,7 +735,7 @@ export function startCompositor(
       if (nextAge !== ageKey || !ageView) {
         ageKey = nextAge;
         ageView?.destroy();
-        const { grid, rg } = ownerAgeGrid(plane, [...sources, ...newer], asOfIso, now());
+        const { grid, rg } = ownerAgeGrid(found.plane, [...sources, ...newer], asOfIso, now());
         const root = first.tileset;
         ageView = new SplatCellView(
           grid,
@@ -564,7 +755,192 @@ export function startCompositor(
       scene.requestRender();
     }
     if (parts.sync()) scene.requestRender();
-    publishLegend(plane, sources, pending, entries.length - drawn.length);
+    publishLegend(found.plane, sources, pending, entries.length - drawn.length);
+  };
+
+  /**
+   * The rule as PlayCanvas draws it: the plane, in the frame of the scan PlayCanvas draws, and
+   * by URL what each tileset is -- every date, each one's inferred layers and split objects --
+   * handed to that renderer (scanView/scanRule.ts), which streams the other dates beside the
+   * scan and weighs every tile it draws by the plane.
+   */
+  const syncPlaycanvas = (dates: readonly CompositorDate[]): void => {
+    // The scan PlayCanvas draws: the date chosen (SiteManager `scanTarget`; a model asked for
+    // by itself, which it would draw instead, ends the rule).
+    const chosen = asOfNow();
+    const shown = chosen ? site.handles.get(chosen.assetId)?.tileset : null;
+    const target = chosen && shown ? { assetId: chosen.assetId, tileset: shown } : null;
+    if (!target || target.tileset.isDestroyed()) {
+      unpublish();
+      return;
+    }
+    if (published && published.assetId !== target.assetId) unpublish();
+    reframe(target.tileset);
+    // Each date where it is in the scan's frame (`P`), and the root its layers are placed from.
+    const toScan = invertAffine(computedTransform(target.tileset));
+    const placed = dates.map((d) => {
+      const placement = toScan
+        ? relative(computedTransform(target.tileset), computedTransform(d.tileset))
+        : null;
+      const own = Matrix4.toArray(rootTransform(d.tileset));
+      const root = placement ? times(own, inverse(placement)) : own;
+      return {
+        ...d,
+        url: absoluteUrl(d.tileset),
+        assetId: [...site.handles].find(([, h]) => h.tileset === d.tileset)?.[0],
+        extras: (d.tileset.root as { extras?: unknown } | undefined)?.extras,
+        placement,
+        root,
+      };
+    });
+    const json = (url: string) => (options.fetchJson ?? fetchJsonOf)(url);
+    const entries: RuleEntry[] = placed.map((d) => ({
+      key: d.tileset,
+      epoch: d.epoch,
+      inferred: false,
+      ...(d.url ? { url: d.url } : {}),
+      cover: {
+        url: urlOf(d.tileset),
+        extras: d.extras,
+        inferred: false,
+        json: (url) => (options.fetchJson ? options.fetchJson(url) : resourceJson(d.tileset, url)),
+        frame: () => d.placement ?? undefined,
+      },
+    }));
+    // Each date's inferred layers, by the URL the renderer streams them from (scanLayers.ts).
+    for (const d of placed) {
+      if (!d.url || d.assetId === undefined) continue;
+      const base = d.url;
+      for (const ref of kit.pickedLayers(d.assetId, d.extras).refs) {
+        const url = resolveLayerUrl(base, ref.uri);
+        entries.push({
+          key: url,
+          epoch: d.epoch,
+          inferred: true,
+          from: d.tileset,
+          url,
+          cover: {
+            url,
+            extras: undefined,
+            inferred: true,
+            json,
+            frame: (layer) => relative(d.root, declaredRoot(layer)) ?? undefined,
+          },
+        });
+      }
+    }
+    const found = planeFor(entries);
+    const { drawn, sources, pending, rule, asOf, asOfIso } = found;
+    const bySource = new Map<string, RuleSource>();
+    drawn.forEach((e, source) => {
+      if (e.url) bySource.set(e.url, { source });
+    });
+    // Each date's split objects, drawn whole by the date owning the cell under each.
+    placed.forEach((d, source) => {
+      if (!d.url || source >= drawn.length) return;
+      for (const ref of kit.splitObjectsOf(d.extras))
+        bySource.set(resolveLayerUrl(d.url, ref.uri), { source, whole: true });
+    });
+    const tinted =
+      rule === "highlight-invented"
+        ? drawn.reduce((mask, e, i) => (e.inferred ? mask | (1 << i) : mask), 0)
+        : 0;
+    // Data age: each cell by its owner's age, striped where a date after "As of" saw it.
+    let age: CellLookView | null = null;
+    if (rule === "data-age") {
+      const newer = laterSources(asOf);
+      const nextAge = `${planeKey}|${later.key}|${String(newer.length)}|${String(Math.floor(now() / 86_400_000))}`;
+      if (nextAge !== ageKey || !published?.age) {
+        ageKey = nextAge;
+        const { grid, rg } = ownerAgeGrid(found.plane, [...sources, ...newer], asOfIso, now());
+        age = { mode: "data-age", rows: cellTextureRows(grid.meta, rg), meta: grid.meta };
+      } else age = published.age;
+    } else ageKey = "";
+    // Each date's sources: its own, and its inferred layers' (what its share of the budget counts).
+    const ownsOf = (source: number): number[] => [
+      source,
+      ...drawn.flatMap((e, s) => (e.from === placed[source]?.tileset ? [s] : [])),
+    ];
+    const others: RuleDate[] = placed.flatMap((d, source) =>
+      d.tileset !== target.tileset && d.url && d.assetId !== undefined && source < drawn.length
+        ? [
+            {
+              url: d.url,
+              assetId: d.assetId,
+              owns: ownsOf(source),
+              extras: d.extras,
+              placement: d.placement,
+              root: d.root,
+            },
+          ]
+        : [],
+    );
+    const native = placed.findIndex((d) => d.tileset === target.tileset);
+    const scanOwns = native >= 0 && native < drawn.length ? ownsOf(native) : [];
+    const reach = tuning.seamReach ?? SEAM_REACH;
+    const key = JSON.stringify([
+      planeKey,
+      [...bySource],
+      tinted,
+      ageKey,
+      reach,
+      tuning.enabled,
+      others.map((d) => [d.url, d.placement, d.root, d.owns]),
+    ]);
+    if (published?.key !== key || published.assetId !== target.assetId) {
+      const view: ScanRuleView = {
+        plane: [found.plane.i0, found.plane.j0, found.plane.ni, found.plane.nj],
+        cellM: found.plane.cellM,
+        owners: ruleOwnerRows(found.plane),
+        sources: bySource,
+        native: native >= 0 && native < drawn.length ? native : NO_OWNER,
+        scanOwns,
+        tinted,
+        reach,
+        enabled: tuning.enabled,
+        dates: others,
+        age,
+      };
+      published = { assetId: target.assetId, key, age };
+      publishScanRule(target.assetId, view);
+      scene.requestRender();
+    }
+    publishLegend(found.plane, sources, pending, entries.length - drawn.length);
+  };
+
+  const sync = (): void => {
+    if (disposed) return;
+    // As of moved past four dates: the rule ends, and says why (lib/viewModes.ts).
+    const options = epochOptions(site.epochs, site.site.assets, "gaussian-splat");
+    if (
+      ruleDateCount(options, shownOption(options, site.epochId)?.epoch.observedAt) > MAX_RULE_DATES
+    ) {
+      context.end("dates");
+      return;
+    }
+    const dates = datesNow();
+    if (!dates[0]) return;
+    for (const { tileset } of dates) {
+      // The date's primitive appears with its first tile: told before it uploads anything.
+      if (!listening.has(tileset)) listening.set(tileset, tileset.tileLoad.addEventListener(sync));
+    }
+    const rigged = dates.some(
+      (d) => (d.tileset as unknown as { splatIncremental?: boolean }).splatIncremental === false,
+    );
+    if (rigged) {
+      context.end("living");
+      return;
+    }
+    const next = context.renderer() === "cesium" ? "cesium" : "playcanvas";
+    if (next !== mode) {
+      // Carried over to the other renderer: what the last one was handed is taken back.
+      if (mode === "cesium") releaseCesium();
+      if (mode === "playcanvas") unpublish();
+      mode = next;
+      reframe(undefined);
+    }
+    if (mode === "cesium") syncCesium(dates);
+    else syncPlaycanvas(dates);
   };
 
   const publishLegend = (
@@ -610,8 +986,17 @@ export function startCompositor(
   const offAsCaptured = useAsCaptured.subscribe(() => scene.requestRender());
   scene.requestRender();
   return {
-    assets: (representation) => ruleAssets(site, representation, context.cesium()),
+    assets: (representation) => ruleAssets(site, representation, context.renderer()),
     compositor: () => compositor,
+    tune: ({ seamReach, enabled }) => {
+      tuning.seamReach = seamReach;
+      if (enabled !== undefined) tuning.enabled = enabled;
+      if (compositor) {
+        compositor.seamReach = seamReach;
+        compositor.enabled = tuning.enabled;
+      }
+      scene.requestRender();
+    },
     dispose: () => {
       if (disposed) return;
       disposed = true;
@@ -620,7 +1005,8 @@ export function startCompositor(
       offAsCaptured();
       for (const off of listening.values()) off();
       listening.clear();
-      release();
+      releaseCesium();
+      unpublish();
       useViewRule.setState({ legend: null });
       scene.requestRender();
     },

@@ -145,8 +145,10 @@ async function rig(
     destroy: () => {
       destroyed += 1;
     },
-    ...options.backend,
   };
+  // Descriptors, not a spread: a getter given (a renderer's `loadFactor`) stays live.
+  if (options.backend)
+    Object.defineProperties(backend, Object.getOwnPropertyDescriptors(options.backend));
   const module: BackendModule = {
     createBackend: (_canvas, _budget, given) => {
       created += 1;
@@ -541,6 +543,47 @@ describe("a scan seen from afar", () => {
     expect(r.host.status()).toMatchObject({ far: false, tiles: 2 });
     expect(r.loads.length).toBe(loads);
     expect(r.created()).toBe(1);
+    r.host.destroy();
+  });
+
+  it("takes the share of its budget the renderer gives the scan, the camera still", async () => {
+    // A per-cell rule shares one budget between the dates it draws (scanView/ruleDates.ts):
+    // the renderer's `loadFactor` is the scan's share, and it moves without the camera.
+    const heavy = {
+      ...TILESET,
+      root: {
+        ...TILESET.root,
+        extras: { gaussians: 100_000 },
+        children: TILESET.root.children.map((child) => ({
+          ...child,
+          extras: { gaussians: 1_000_000 },
+          children: [],
+        })),
+      },
+    };
+    let share = 1;
+    const r = await rig({
+      tileset: heavy,
+      backend: {
+        get loadFactor() {
+          return share;
+        },
+      },
+    });
+    await settle(r);
+    expect(r.host.status().tiles).toBe(2);
+    // A fifth of the budget: no room for a region, nor to keep both.
+    share = 0.2;
+    r.hooks().frameWanted();
+    await r.run(1000, true);
+    expect(r.host.status().tiles).toBe(1);
+    expect(r.host.status().cached).toBeLessThan(2_000_000);
+    // The whole budget again: both regions back.
+    share = 1;
+    r.hooks().frameWanted();
+    await r.run(400, true);
+    await settle(r);
+    expect(r.host.status().tiles).toBe(2);
     r.host.destroy();
   });
 

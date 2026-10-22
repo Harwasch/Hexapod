@@ -86,3 +86,20 @@ export function twoEpochSite(extra: Partial<Site> = {}): Site {
     ...extra,
   } as unknown as Site;
 }
+
+/**
+ * `count` dated captures a month apart from March 2026, each with its splat: e1/a1 (the
+ * frame's own), e2/a2, ... -- the per-cell rules' cap (lib/viewModes.ts `MAX_RULE_DATES`).
+ */
+export function datedSite(count: number): { epochs: Epoch[]; assets: SiteAsset[] } {
+  const epochs: Epoch[] = [];
+  const assets: SiteAsset[] = [];
+  for (let k = 1; k <= count; k += 1) {
+    const observedAt = new Date(Date.UTC(2026, 1 + k, 1, 15)).toISOString();
+    epochs.push(
+      epoch(`e${String(k)}`, { ordinal: k, observedAt, currentAssetId: `a${String(k)}` }),
+    );
+    assets.push(splat(`a${String(k)}`, { epochId: `e${String(k)}`, observedAt }));
+  }
+  return { epochs, assets };
+}

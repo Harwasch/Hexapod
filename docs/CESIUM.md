@@ -599,10 +599,11 @@ the pipeline's per-cell grid, `hexapod.cellgrid` v1, declared on the root tile a
   98.6 % red under an all-weak grid, 99.3 % green under an all-strong one). Cells are measured
   in the globe's pixels (`ScanPose.globePixelRatio`), so the overlay's lower resolution in
   motion steps nothing.
-- **What still needs CesiumJS.** The per-cell view rules and the Compare swipe: under
-  PlayCanvas or Spark the notice names exactly those ("Per cell: Needs the CesiumJS renderer
-  (Settings › Advanced › Splat renderer)") with the one-click "Draw with CesiumJS". Sunlight is
-  CesiumJS's and PlayCanvas's, and says so itself under Spark (§ Sunlight). The
+- **What still needs CesiumJS.** The Compare swipe (its section says so itself), and under
+  Spark the per-cell view rules: there the notice names exactly that ("Per cell: Needs the
+  CesiumJS renderer (Settings › Advanced › Splat renderer)") with the one-click "Draw with
+  CesiumJS"; PlayCanvas draws the rules (§ Per-cell dates). Sunlight is CesiumJS's and
+  PlayCanvas's, and says so itself under Spark (§ Sunlight). The
   WebGPU trial does not draw the views (the look has no WGSL form): there they are disabled and
   the notice names them too. Nothing silently does nothing.
 - **Zero cost on Photo.** `SiteManager.attachTileset` hooks each splat tileset through a few lines
@@ -638,7 +639,7 @@ the divider (`features/compare/CompareDates.tsx`, `SiteManager.setCompareDates`)
 own tileset with the stock `splitDirection` (`LEFT`, `RIGHT`), which the splat primitive copies
 every frame; the divider sets `scene.splitPosition`. Both share the frame anchor's placement,
 so what differs between the halves is the data. CesiumJS only: under PlayCanvas or Spark the
-section is disabled with the same notice and switch as Per cell. Choosing one date,
+section is disabled with the views' notice and one-click switch. Choosing one date,
 another renderer or a representation one date lacks ends the comparison and draws the date shown
 before. See [ADR 0017](DECISIONS/0017-compare-dates.md). Evidence: `e2e/compareDates.spec.ts`.
 
@@ -652,11 +653,27 @@ cell's owner, none of whose splats reaches across a seam by its own spread
 (`cesium/splatCompositor.ts`, loaded on demand); split objects are drawn whole by the date
 owning the cell under them. The
 capture-date control reads "As of" meanwhile: dates observed after it take no part. Off by
-default; it and Compare › Dates end each other; CesiumJS only; disabled while a Living Survey
-rig moves the scan. See [ADR 0017](DECISIONS/0017-compare-dates.md) § Per-cell view rules.
-Evidence: `e2e/compositorScene.spec.ts` (scene: each cell's pixels from one date, by debug-colour
-pixel counts, and the pixels within a metre of a seam that blend both dates: 0 of 9,459, against
-6.3% with centres alone) and `e2e/compositor.spec.ts` (the app under CesiumJS and PlayCanvas).
+default; it and Compare › Dates end each other; disabled while a Living Survey rig moves the
+scan.
+
+**Under PlayCanvas** (the default renderer) the same plane is handed to the renderer drawing
+the scan (`cesium/scanView/scanRule.ts`), which streams the other dates into its one app beside
+it (`cesium/scanView/ruleDates.ts`), each placed where it is in the scan's frame with its
+inferred layers and split objects; every tile is weighed in the copy pass of the work buffer by
+its own source, read from the tileset it came from, with the same seam fade measured in
+PlayCanvas's footprints (it draws a splat twice as wide as CesiumJS for the same covariance, so
+CesiumJS's 2 σ reach is 4 σ there), read back from the work buffer on PlayCanvas's colour-only
+refresh of a streamed SOG. A tile of no named source draws nothing. The dates share one budget,
+split by each one's share of the cells in view it owns (a date that owns none streams nothing),
+and a rule names four dates at most. A split object is drawn by the date owning the cell under
+its declared origin, under both renderers. Switching between
+CesiumJS and PlayCanvas carries a rule over; under Spark or the WebGPU trial the control is
+disabled with the notice. See [ADR 0017](DECISIONS/0017-compare-dates.md) § Per-cell view rules
+and § Per-cell view rules under PlayCanvas. Evidence: `e2e/compositorScene.spec.ts` (scene,
+under both renderers: each cell's pixels from one date, by debug-colour pixel counts, and the
+pixels within a metre of a seam that blend both dates: CesiumJS 0 of 9,459, PlayCanvas 0 of
+9,276, against 6.3% and 5.6% with centres alone) and `e2e/compositor.spec.ts` (the app under
+CesiumJS and PlayCanvas, and the notice under Spark).
 
 ## As captured
 

@@ -65,7 +65,11 @@ vi.mock("@/cesium/scanView/ScanRendererHost", () => ({
 }));
 // What a splat tileset gets attached reads the real thing's internals; none of it is at issue.
 vi.mock("@/cesium/splatViewCones", () => ({ attachViewCones: () => () => undefined }));
-vi.mock("@/cesium/inferredLayers", () => ({ attachInferredLayers: () => () => undefined }));
+vi.mock("@/cesium/inferredLayers", () => ({
+  attachInferredLayers: () => () => undefined,
+  // Lent to the per-cell rules (scanView/ruleKit.ts), unused here.
+  pickedLayers: () => ({ refs: [], variant: null }),
+}));
 vi.mock("@/cesium/splatInstances", () => ({ attachInstances: () => () => undefined }));
 vi.mock("@/cesium/splitObjects", () => ({ attachSplitObjects: () => () => undefined }));
 vi.mock("@/cesium/splatSkin", () => ({ attachSkin: () => () => undefined }));

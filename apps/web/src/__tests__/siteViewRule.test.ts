@@ -241,7 +241,7 @@ function harness(record: Site = twoEpochSite(), others: Site[] = []) {
 const settle = () => new Promise((done) => setTimeout(done, 0));
 
 /** Loads the site under CesiumJS, which draws the split, and lets it settle. */
-async function open(manager: SiteManager, renderer: "cesium" | "playcanvas" = "cesium") {
+async function open(manager: SiteManager, renderer: "cesium" | "playcanvas" | "spark" = "cesium") {
   manager.setSplatRenderer(renderer);
   await manager.activate(SITE_ID);
   await settle();
@@ -331,9 +331,34 @@ describe("a per-cell view rule", () => {
     });
   });
 
-  it("is refused under another renderer, and ends when one is chosen", async () => {
+  it("is drawn under PlayCanvas, the scan it draws the date chosen, and kept across a switch", async () => {
     const other = harness();
     await open(other.manager, "playcanvas");
+    await other.manager.setViewRule("latest");
+    await settle();
+    expect(other.rules).toEqual([{ rule: "latest" }]);
+    // PlayCanvas draws every date (scanView/ruleDates.ts): CesiumJS's copies stay hidden, and
+    // the scan PlayCanvas draws is the date chosen, which the rule is As of.
+    expect(other.drawn()).toEqual({ [A1.id]: ALONE, [A2.id]: ALONE });
+    expect(other.manager.scanTarget()?.assetId).toBe(A2.id);
+    await other.manager.setViewRule(null);
+
+    const { manager, rules, drawn } = harness();
+    await open(manager);
+    await manager.setViewRule("latest");
+    manager.setSplatRenderer("playcanvas");
+    await settle();
+    expect(rules).toEqual([{ rule: "latest" }]);
+    expect(drawn()).toEqual({ [A1.id]: ALONE, [A2.id]: ALONE });
+    manager.setSplatRenderer("cesium");
+    await settle();
+    expect(rules).toEqual([{ rule: "latest" }]);
+    expect(drawn()).toEqual({ [A1.id]: DRAWN, [A2.id]: DRAWN });
+  });
+
+  it("is refused under a renderer that draws none, and ends when one is chosen", async () => {
+    const other = harness();
+    await open(other.manager, "spark");
     await other.manager.setViewRule("latest");
     expect(other.rules).toEqual([]);
     expect(useViewRule.getState().active).toBeNull();
@@ -341,7 +366,7 @@ describe("a per-cell view rule", () => {
     const { manager, rules, drawn } = harness();
     await open(manager);
     await manager.setViewRule("latest");
-    manager.setSplatRenderer("playcanvas");
+    manager.setSplatRenderer("spark");
     await settle();
     expect(rules).toEqual([{ rule: "latest" }, { rule: null, reason: "changed" }]);
     expect(drawn()).toEqual({ [A1.id]: ALONE, [A2.id]: ALONE });

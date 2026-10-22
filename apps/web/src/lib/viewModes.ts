@@ -6,8 +6,8 @@
  * modifier and Spark's world modifier -- CesiumJS picking the cell level per splat, the other
  * two per tile, which the key says. The WebGPU trial does not draw them yet (the modifier is
  * GLSL only): under it the control says so and offers the switch, rather than leaving a button
- * that silently does nothing. The per-cell view rules are CesiumJS's alone, and the notice names
- * them. Sunlight is CesiumJS's and PlayCanvas's (`sunlightDrawable`): under Spark and the WebGPU
+ * that silently does nothing. The per-cell view rules are CesiumJS's and PlayCanvas's
+ * (`perCellDrawable`): under Spark and the WebGPU trial the notice names them. Sunlight is CesiumJS's and PlayCanvas's (`sunlightDrawable`): under Spark and the WebGPU
  * trial the Sun control says so itself, with the switch to PlayCanvas, the default renderer.
  */
 import { useSettings, type SplatRenderer } from "@/state/settings";
@@ -34,17 +34,51 @@ export function sunlightDrawable(renderer: SplatRenderer): boolean {
 }
 
 /**
+ * Whether `renderer` draws the per-cell view rules (ADR 0017): CesiumJS on its frame anchor's
+ * splat primitive, PlayCanvas in the copy pass of its work buffer (cesium/scanView/scanRule.ts).
+ * Not Spark, whose world modifier has no port of it, nor the WebGPU trial (GLSL only).
+ */
+export function perCellDrawable(renderer: SplatRenderer): boolean {
+  return renderer === "cesium" || renderer === "playcanvas";
+}
+
+/**
+ * The most dates a per-cell view rule names: those observed up to the date it is As of, four
+ * at most. Under PlayCanvas every date a rule draws is resident at once in its one work buffer,
+ * within one budget split between them (scanView/ruleDates.ts); past four a date's share is too
+ * thin to draw it well, and the texture PlayCanvas packs them into nears its limit. The control
+ * and the scene read the same count (`ruleDateCount`): the control is offered disabled, saying
+ * so, and the scene refuses a rule or ends one, saying why (`ViewRuleEnd` "dates").
+ */
+export const MAX_RULE_DATES = 4;
+
+/**
+ * The dates a rule names: of a site's dated options (lib/epochs.ts `epochOptions`), those
+ * observed up to `asOf` (the chosen option's `observedAt`; the latest when absent). Here, beside
+ * the rules' renderers, rather than with the options: this module is shared by the control and
+ * the scene already, so the count adds no chunk to either.
+ */
+export function ruleDateCount(
+  options: readonly { epoch: { observedAt: string } }[],
+  asOf: string | undefined,
+): number {
+  const until = asOf ? Date.parse(asOf) : Number.POSITIVE_INFINITY;
+  return options.filter((o) => Date.parse(o.epoch.observedAt) <= until).length;
+}
+
+/**
  * What the splat view control offers that `renderer` cannot draw and CesiumJS can, in words for
  * its notice (`perCell`: the Per cell rules are offered, the site having two dates or more);
  * null when there is none -- under CesiumJS, which draws all of it, or nothing of it missing.
  * Sunlight is not named: PlayCanvas draws it too, and the Sun control says so where it is not
- * drawn (`NEEDS_SUNLIGHT_RENDERER`).
+ * drawn (`NEEDS_SUNLIGHT_RENDERER`). Per cell is named only where it is not drawn
+ * (`perCellDrawable`).
  */
 export function needsCesiumFor(renderer: SplatRenderer, perCell: boolean): string | null {
   if (renderer === "cesium") return null;
   const parts = [
     ...(viewModeDrawable("confidence", renderer) ? [] : ["Confidence", "Data age"]),
-    ...(perCell ? ["Per cell"] : []),
+    ...(perCell && !perCellDrawable(renderer) ? ["Per cell"] : []),
   ];
   const last = parts.pop();
   if (last === undefined) return null;

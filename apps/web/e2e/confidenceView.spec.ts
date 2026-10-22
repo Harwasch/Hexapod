@@ -10,8 +10,9 @@
  * model's primitive (read through `window.__twin`) and out of it again on Photo, Data age's
  * "newer data here" on the older date. Under PlayCanvas and Spark the same three views and
  * key, drawn by that renderer (what it reads out of its tiles: scanView/scanCellView.ts), the
- * key saying cells are sized per tile, and the "Needs the CesiumJS renderer" notice naming only
- * Per cell (Sunlight says what draws it itself). The tool rail is as it was.
+ * key saying cells are sized per tile, and under Spark the "Needs the CesiumJS renderer" notice
+ * naming only Per cell (PlayCanvas draws the rules too; Sunlight says what draws it itself). The
+ * tool rail is as it was.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -357,13 +358,17 @@ for (const [renderer, name] of [
     for (const label of ["Photo", "Confidence", "Data age"])
       await expect(radio(label)).toBeEnabled();
     await expect(radio("Photo")).toHaveAttribute("aria-checked", "true");
-    // The notice stays for what CesiumJS alone draws, and no longer names the views.
+    // The notice stays for what this renderer cannot draw, and never names the views: under
+    // Spark the per-cell rules; under PlayCanvas, which draws those too, there is none.
     const notice = page.getByTestId("views-needs-cesium");
-    await expect(notice).toContainText(
-      "Per cell: Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
-    );
-    await expect(notice).not.toContainText("Confidence");
-    await expect(notice).not.toContainText("Data age");
+    if (renderer === "playcanvas") await expect(notice).toHaveCount(0);
+    else {
+      await expect(notice).toContainText(
+        "Per cell: Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
+      );
+      await expect(notice).not.toContainText("Confidence");
+      await expect(notice).not.toContainText("Data age");
+    }
 
     // Confidence: the key, and the look on the renderer's own tiles of the shown date.
     await radio("Confidence").click();

@@ -41,7 +41,7 @@ import { ageBucket } from "./dataAge";
 export type ViewRule = "latest" | "ground-truth" | "highlight-invented" | "data-age";
 
 /** Why a rule ended without being turned off (SiteManager `setViewRule`). */
-export type ViewRuleEnd = "compare" | "changed" | "living" | "one-model" | "unsupported";
+export type ViewRuleEnd = "compare" | "changed" | "dates" | "living" | "one-model" | "unsupported";
 
 /** A cell no date owns: nothing is drawn there under a rule. */
 export const NO_OWNER = 255;
@@ -298,6 +298,19 @@ export function compositorWeight(
   if (seam(0, -1)) d = Math.min(d, ty / sigma[1]);
   if (seam(0, 1)) d = Math.min(d, (plane.cellM - ty) / sigma[1]);
   return reach > 0 ? smoothstep(reach / 2, reach, d) : 1;
+}
+
+/**
+ * Where a split object is, for a rule (ADR 0017 § "Per-cell view rules", 9): the origin its
+ * package declares (`extras.objects[].origin`: the centre of its splats' bounds, on the ground;
+ * tools/captures/split_objects.py), where its pose puts it -- the translation of the object's
+ * own frame, `frame` (column-major) taking that frame to the plane's. One definition for both
+ * renderers: CesiumJS reads it from the object's root transform, PlayCanvas from the matrix
+ * it is placed with. Not the middle of its bounds, which the package pads by three scales a
+ * splat and which near a seam can fall in another date's cell.
+ */
+export function objectAnchor(frame: readonly number[]): [number, number] {
+  return [frame[12] ?? 0, frame[13] ?? 0];
 }
 
 /** A node of a tileset.json, as far as its boxes go. */

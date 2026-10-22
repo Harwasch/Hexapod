@@ -17,18 +17,24 @@
  *   fills the south-west green; Ground truth draws nothing there.
  *
  * And the plumbing: June's own primitive is drawn by March's, and the slots know their sources.
+ *
+ * The same, measured the same way, under PlayCanvas (the app's default renderer): March drawn by
+ * the app's PlayCanvas renderer, June and June's inferred layer streamed into its one app and
+ * sort, each tile weighed by the plane in the copy pass (scanView/scanRule.ts). The seam's
+ * figure is asserted under 1% there too.
+ *
  * Headless GL is SwiftShader: pixels are counted, not eyeballed.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const TILES = resolve(process.cwd(), "../../data/tiles");
 const EVIDENCE = process.env.W5B_EVIDENCE_DIR;
 
-const HARNESS_HTML = `<!doctype html>
+const harnessHtml = (renderer: "cesium" | "playcanvas") => `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -45,6 +51,7 @@ const HARNESS_HTML = `<!doctype html>
       window.__compositor = await harness.startCompositorHarness({
         container: document.getElementById("viewer"),
         url: "/fixture-tiles/synthetic-yard/splat/tileset.json",
+        renderer: "${renderer}",
       });
     </script>
   </body>
@@ -66,15 +73,11 @@ interface Counts {
   all: Region;
   seam: { pixels: number; covered: number; mixed: number; profile: number[] };
   companion: boolean;
-  sources: { march: number; june: number; fill: number };
+  sources: { march: number; june: number; fill: number; unnamed?: number };
 }
 
-test("under Latest each cell's pixels come from one date; Ground truth hides the inferred", async ({
-  page,
-}) => {
-  // Five views on software GL, each waiting for three tilesets to refine: about seven minutes
-  // here (2026-10-20), twice that allowed for a slower runner.
-  test.setTimeout(840_000);
+/** Five views of the yard drawn by `renderer`, counted; asserted by each test. */
+async function measure(page: Page, renderer: "cesium" | "playcanvas") {
   await page.setViewportSize({ width: 960, height: 640 });
   const errors: string[] = [];
   page.on("console", (message) => {
@@ -84,6 +87,8 @@ test("under Latest each cell's pixels come from one date; Ground truth hides the
   await page.route("**/fixture-tiles/**", (route) => {
     const relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
     if (relative.includes("..")) return route.abort();
+    // PlayCanvas asks whether the yard has a native package beside its tileset: it has none.
+    if (!existsSync(resolve(TILES, relative))) return route.fulfill({ status: 404, body: "" });
     const type = relative.endsWith(".json")
       ? "application/json"
       : relative.endsWith(".bin")
@@ -96,7 +101,7 @@ test("under Latest each cell's pixels come from one date; Ground truth hides the
     });
   });
   await page.route("**/compositor-harness.html", (route) =>
-    route.fulfill({ status: 200, contentType: "text/html", body: HARNESS_HTML }),
+    route.fulfill({ status: 200, contentType: "text/html", body: harnessHtml(renderer) }),
   );
   await page.goto("/compositor-harness.html");
   await page.waitForFunction(() => "__compositor" in window, undefined, { timeout: 90_000 });
@@ -111,7 +116,8 @@ test("under Latest each cell's pixels come from one date; Ground truth hides the
         ).__compositor.view(s, { seamReach: reach }),
       [scenario, seamReach] as const,
     );
-    const name = seamReach === undefined ? scenario : `${scenario}-reach-${String(seamReach)}`;
+    const base = seamReach === undefined ? scenario : `${scenario}-reach-${String(seamReach)}`;
+    const name = renderer === "cesium" ? base : `${renderer}-${base}`;
     const path = EVIDENCE ? `${EVIDENCE}/scene-${name}.png` : test.info().outputPath(`${name}.png`);
     await page.screenshot({ path });
     await test.info().attach(name, { path, contentType: "image/png" });
@@ -123,13 +129,27 @@ test("under Latest each cell's pixels come from one date; Ground truth hides the
   const centres = await view("latest", 0);
   const gapLatest = await view("gap-latest");
   const gapTruth = await view("gap-truth");
-  test.info().annotations.push({
-    type: "pixels",
-    description: JSON.stringify({ both, latest, centres, gapLatest, gapTruth }),
+  // PlayCanvas names each tile's source by its tileset: one it does not name draws nothing.
+  const gapUnnamed = renderer === "playcanvas" ? await view("gap-unnamed") : null;
+  const figures = JSON.stringify({
+    renderer,
+    both,
+    latest,
+    centres,
+    gapLatest,
+    gapTruth,
+    gapUnnamed,
   });
+  test.info().annotations.push({ type: "pixels", description: figures });
+  if (EVIDENCE) writeFileSync(`${EVIDENCE}/scene-${renderer}.json`, figures);
+  return { errors, both, latest, centres, gapLatest, gapTruth, gapUnnamed };
+}
 
+/** What both renderers must show (ADR 0017's method and figures). */
+function expectOneOwnerPerCell(m: Awaited<ReturnType<typeof measure>>): void {
+  const { errors, both, latest, centres, gapLatest, gapTruth } = m;
   expect(errors.filter((e) => /shader|compile|link|uniform/i.test(e))).toEqual([]);
-  // The plumbing: one primitive draws both dates, and its slots know whose they are.
+  // The plumbing: one sort draws both dates, and each date's splats know whose they are.
   expect(latest.companion).toBe(true);
   expect(latest.sources.march).toBeGreaterThan(0);
   expect(latest.sources.june).toBeGreaterThan(0);
@@ -156,4 +176,102 @@ test("under Latest each cell's pixels come from one date; Ground truth hides the
   expect(gapTruth.southWest.green).toBeLessThan(0.02);
   expect(gapTruth.southWest.covered).toBeLessThan(gapLatest.southWest.covered / 4);
   expect(gapTruth.right.blue).toBeGreaterThan(0.8);
+}
+
+test("under Latest each cell's pixels come from one date; Ground truth hides the inferred", async ({
+  page,
+}) => {
+  // Five views on software GL, each waiting for three tilesets to refine: about seven minutes
+  // here (2026-10-20), twice that allowed for a slower runner.
+  test.setTimeout(840_000);
+  expectOneOwnerPerCell(await measure(page, "cesium"));
+});
+
+test("under PlayCanvas too, one date a cell in one sort, the seam as clean", async ({ page }) => {
+  // The same five views drawn by the app's PlayCanvas renderer, every date streamed into its
+  // one app; software GL again.
+  test.setTimeout(840_000);
+  const measured = await measure(page, "playcanvas");
+  expectOneOwnerPerCell(measured);
+  // Fail closed: June's fill resident, its tiles named by no source, in cells nobody owns
+  // (Ground truth's gap): nothing drawn there, not the fill.
+  const { gapUnnamed, gapLatest } = measured;
+  expect(gapUnnamed?.sources.unnamed).toBeGreaterThan(0);
+  expect(gapUnnamed?.southWest.green).toBeLessThan(0.02);
+  expect(gapUnnamed?.southWest.covered).toBeLessThan(gapLatest.southWest.covered / 4);
+});
+
+/** The tree with SH bands, and its streamed package beside its tileset (where PlayCanvas looks). */
+const TREE = "synthetic-tree-sh/";
+const TREE_NATIVE = `${TREE}sog/`;
+
+const sogHarnessHtml = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Rule on a streamed SOG</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #10141a; }
+      #viewer, #viewer .cesium-widget, #viewer canvas { width: 100vw; height: 100vh; display: block; }
+    </style>
+  </head>
+  <body>
+    <div id="viewer"></div>
+    <script type="module">
+      const harness = await import("/src/dev/ruleSogHarness.ts");
+      window.__ruleSog = await harness.startRuleSogHarness({
+        container: document.getElementById("viewer"),
+        url: "/fixture-tiles/${TREE}tileset.json",
+      });
+    </script>
+  </body>
+</html>`;
+
+test("under PlayCanvas, a colour-only refresh of a natively streamed SH scan keeps the seam", async ({
+  page,
+}) => {
+  // PlayCanvas re-copies an SH splat's colour alone as the camera moves, and for a SOG reads its
+  // geometry back from the work buffer: the rule's weight must see the same spread there.
+  test.setTimeout(300_000);
+  await page.setViewportSize({ width: 960, height: 640 });
+  await page.route("**/fixture-tiles/**", (route) => {
+    let relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
+    if (relative.includes("..")) return route.abort();
+    if (relative.startsWith(TREE_NATIVE))
+      relative = `synthetic-tree-sh-sog/${relative.slice(TREE_NATIVE.length)}`;
+    const file = resolve(TILES, relative);
+    if (!existsSync(file)) return route.fulfill({ status: 404, body: "" });
+    return route.fulfill({ status: 200, body: readFileSync(file) });
+  });
+  await page.route("**/rule-sog-harness.html", (route) =>
+    route.fulfill({ status: 200, contentType: "text/html", body: sogHarnessHtml }),
+  );
+  await page.goto("/rule-sog-harness.html");
+  await page.waitForFunction(() => "__ruleSog" in window, undefined, { timeout: 120_000 });
+  interface Harness {
+    status(): { native: boolean; gaussians: number };
+    cover(): number;
+    move(m: number): Promise<void>;
+  }
+  const status = await page.evaluate(() =>
+    (window as unknown as { __ruleSog: Harness }).__ruleSog.status(),
+  );
+  const before = await page.evaluate(() =>
+    (window as unknown as { __ruleSog: Harness }).__ruleSog.cover(),
+  );
+  await page.evaluate(() => (window as unknown as { __ruleSog: Harness }).__ruleSog.move(4));
+  const after = await page.evaluate(() =>
+    (window as unknown as { __ruleSog: Harness }).__ruleSog.cover(),
+  );
+  const path = EVIDENCE
+    ? `${EVIDENCE}/scene-playcanvas-sog-refresh.png`
+    : test.info().outputPath("sog.png");
+  await page.screenshot({ path });
+  const figures = JSON.stringify({ status, before, after });
+  test.info().annotations.push({ type: "pixels", description: figures });
+  if (EVIDENCE) writeFileSync(`${EVIDENCE}/scene-playcanvas-sog-refresh.json`, figures);
+  expect(status.native).toBe(true);
+  expect(before).toBeGreaterThan(2_000);
+  // The same view before and after: the refresh changes colours, never which splats are drawn.
+  expect(after).toBeGreaterThan(0.9 * before);
 });

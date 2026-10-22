@@ -1,6 +1,6 @@
 /**
  * A bare CesiumJS page that draws two dates of the synthetic yard as one under a per-cell view
- * rule -- the driver for e2e/compositorScene.spec.ts.
+ * rule, by CesiumJS or by PlayCanvas -- the driver for e2e/compositorScene.spec.ts.
  *
  * What it answers, in a real engine with the patch: does the frame anchor's primitive draw the
  * other date as a companion, do the compositor's two shader parts compile into its vertex
@@ -17,6 +17,16 @@
  * - `gap-latest` / `gap-truth`: March saw only the north-west, June the east; an inferred layer
  *   (the yard again, registered as one) covers everything by its tiles' bounds. Latest fills
  *   the south-west green from it; Ground truth draws nothing there.
+ *
+ * Under PlayCanvas (`renderer: "playcanvas"`) the app's own renderer draws June, the date the
+ * rule is As of (ScanRendererHost, handed the scan as SiteManager's `scanTarget` hands it) -- and
+ * in the gap scenarios June's inferred layer, the yard again, declared as one in June's root --
+ * the rule's session hands it the plane (scanView/scanRule.ts), and it streams March into the
+ * same app and sort (scanView/ruleDates.ts). CesiumJS's own copies are hidden. The debug colours are the
+ * rule's source of each tile: once every tile is in, each tile's work-buffer modifier is handed
+ * a copy of itself that colours by `uRuleSource` just before the rule's weight (PlayCanvas's
+ * public `setWorkBufferModifier`, given the code the tile holds -- a read of a private member,
+ * for evidence only). The overlay's canvas is laid over the globe's to be counted.
  *
  * Loaded dynamically by the spec; nothing imports it, so it never reaches the production
  * bundle. Headless GL is SwiftShader: pixels are counted, not eyeballed.
@@ -35,21 +45,36 @@ import {
   type Scene,
 } from "cesium";
 
+import * as pc from "playcanvas";
+
 import { setCompanions } from "@/cesium/companions";
 import {
   startCompositor,
   type CompositorHandle,
   type CompositorSite,
 } from "@/cesium/compositorSession";
+import { RULE_KIT } from "@/cesium/scanView/ruleKit";
+import { ScanRendererHost } from "@/cesium/scanView/ScanRendererHost";
+import {
+  publishScanRule,
+  scanRuleReading,
+  watchScanRule,
+  type ScanRuleView,
+} from "@/cesium/scanView/scanRule";
 import { addColorPart, removeColorPart, type SplatColorPart } from "@/cesium/splatColor";
 import { incrementalSplats, splatTilesetOf } from "@/cesium/splatInternals";
 import { decodeCellGrid, type CellGrid } from "@/lib/cellGrid";
-import type { ViewRule } from "@/lib/compositor";
+import { NO_OWNER, type ViewRule } from "@/lib/compositor";
 import { useSettings } from "@/state/settings";
 
 import { encodeConfidenceGrid } from "./cellGridFixture";
 
-export type Scenario = "both" | "latest" | "gap-latest" | "gap-truth";
+/**
+ * `gap-unnamed` (PlayCanvas only): `gap-truth`, with June's fill streamed and resident but the
+ * rule naming no source for its tileset -- where nobody owns a cell, a tile of no named source
+ * must still draw nothing (the rule fails closed).
+ */
+export type Scenario = "both" | "latest" | "gap-latest" | "gap-truth" | "gap-unnamed";
 
 /** Of the covered pixels in a region: red (March), blue (June), green (inferred), mixed. */
 export interface Region {
@@ -74,9 +99,15 @@ export interface CompositorCounts {
    * it on screen, the share mixed; and that share in 0.1 m bands across it, west to east.
    */
   seam: { pixels: number; covered: number; mixed: number; profile: number[] };
-  /** Whether June's own primitive is drawn by March's, and the slots know their sources. */
+  /**
+   * Whether June is drawn in March's one sort -- CesiumJS: June's own primitive drawn by
+   * March's; PlayCanvas: June streamed into the app drawing March -- and what knows each
+   * source: CesiumJS's slots, PlayCanvas's tiles.
+   */
   companion: boolean;
-  sources: { march: number; june: number; fill: number };
+  sources: { march: number; june: number; fill: number; unnamed?: number };
+  /** The canvases counted (PlayCanvas: the globe's and the overlay's), device pixels. */
+  canvases?: { globe: number[]; overlay: number[] | null };
 }
 
 export interface CompositorHarness {
@@ -118,6 +149,34 @@ const DEBUG: SplatColorPart = {
   addToShader: (builder) => builder.addVertexLines(DEBUG_GLSL),
 };
 
+/** The same debug colours in PlayCanvas's copy pass, by the tile's rule source. */
+const PLAYCANVAS_DEBUG_GLSL = `
+vec4 hexapodRuleDebug(vec4 color) {
+    int source = int(uRuleSource.x + 0.5);
+    if (source == 0) {
+        return vec4(1.0, 0.0, 0.0, color.a);
+    }
+    if (source == 1) {
+        return vec4(0.0, 0.0, 1.0, color.a);
+    }
+    return vec4(0.0, 1.0, 0.0, color.a);
+}
+`;
+const RULE_STEP = "color.a *= hexapodRuleWeight(center);";
+
+/** A tile's own work-buffer modifier, coloured by its source just before the rule's weight. */
+function debugModifier(code: string): string {
+  return code
+    .replace(
+      "float hexapodRuleWeight(vec3 center) {",
+      `${PLAYCANVAS_DEBUG_GLSL}float hexapodRuleWeight(vec3 center) {`,
+    )
+    .replace(RULE_STEP, `color = hexapodRuleDebug(color);\n    ${RULE_STEP}`);
+}
+
+/** The scan PlayCanvas draws: June, the date the rule is As of (SiteManager `scanTarget`). */
+const SHOWN_ASSET = "june-splat";
+
 function nextFrame(scene: Scene): Promise<void> {
   return new Promise((resolve) => {
     const remove = scene.postRender.addEventListener(() => {
@@ -143,7 +202,9 @@ const asset = (e: Epoch): SiteAsset =>
 export async function startCompositorHarness(options: {
   container: HTMLElement;
   url: string;
+  renderer?: "cesium" | "playcanvas";
 }): Promise<CompositorHarness> {
+  const playcanvas = options.renderer === "playcanvas";
   const widget = new CesiumWidget(options.container, {
     baseLayer: false,
     requestRenderMode: true,
@@ -198,6 +259,37 @@ export async function startCompositorHarness(options: {
     const root = date.root as unknown as { _header: { extras?: Record<string, unknown> } };
     root._header.extras = { ...root._header.extras, confidence: grids.everywhere.meta };
   }
+  // Under PlayCanvas, June declares its inferred layer (PlayCanvas streams it from there, as the
+  // scan's own: its session reads June's root once, as it starts); Inferred's Show or Hide says
+  // whether it is drawn, scenario by scenario.
+  const juneRoot = june.root as unknown as { _header: { extras?: Record<string, unknown> } };
+  if (playcanvas)
+    juneRoot._header.extras = {
+      ...juneRoot._header.extras,
+      inferredLayers: [
+        {
+          uri: "tileset.json?fill=1",
+          evidence: {
+            kind: "inferred",
+            filler: "fixture",
+            views: 3,
+            gaussians: 10,
+            meanConfidence: 0.5,
+          },
+        },
+      ],
+    };
+  // Under PlayCanvas the app's renderer draws June, the date the rule is As of, and the rule's
+  // other date beside it.
+  const scanHost = playcanvas
+    ? new ScanRendererHost(widget, { preserveDrawingBuffer: true })
+    : undefined;
+  if (scanHost) {
+    march.show = false;
+    june.show = false;
+    scanHost.setRenderer("playcanvas");
+    scanHost.setTarget({ key: "june", tileset: june, assetId: SHOWN_ASSET });
+  }
 
   const E1 = epoch("march", "2026-03-01T15:00:00Z", 1);
   const E2 = epoch("june", "2026-06-01T15:00:00Z", 2);
@@ -223,13 +315,15 @@ export async function startCompositorHarness(options: {
     if (host) setCompanions(host, inferred, []);
     const own = primitiveOf(fill);
     if (own) own.drawnBy = undefined;
-    fill.show = withFill;
+    fill.show = withFill && !playcanvas;
+    if (playcanvas) useSettings.getState().set({ inferredStyle: withFill ? "show" : "hide" });
     entry.rule = { rule };
     session = startCompositor(
       {
         scene,
         entry,
-        cesium: () => true,
+        renderer: () => (playcanvas ? "playcanvas" : "cesium"),
+        kit: RULE_KIT,
         end: (reason) => {
           throw new Error(`the rule ended: ${reason}`);
         },
@@ -276,6 +370,13 @@ export async function startCompositorHarness(options: {
     const n = { left: region(), right: region(), southWest: region(), all: region() };
     if (!context) throw new Error("no 2D context");
     context.drawImage(canvas, 0, 0);
+    // PlayCanvas's overlay, laid over the globe as the page lays it.
+    const overlay = document.querySelector<HTMLCanvasElement>("canvas[data-scan-renderer]");
+    if (playcanvas && overlay) context.drawImage(overlay, 0, 0, copy.width, copy.height);
+    sizes = {
+      globe: [copy.width, copy.height],
+      overlay: overlay ? [overlay.width, overlay.height] : null,
+    };
     const data = context.getImageData(0, 0, copy.width, copy.height).data;
     const bg = Color.fromCssColorString(BACKGROUND);
     const [br, bgG, bb] = [bg.red * 255, bg.green * 255, bg.blue * 255];
@@ -351,6 +452,84 @@ export async function startCompositorHarness(options: {
     };
   }
 
+  /** The canvases last counted, for the evidence. */
+  let sizes: { globe: number[]; overlay: number[] | null } = { globe: [], overlay: null };
+
+  /** The rule handed to PlayCanvas now (scanView/scanRule.ts). */
+  const ruleNow = (): ScanRuleView | null => {
+    let view: ScanRuleView | null = null;
+    watchScanRule(SHOWN_ASSET, (v) => {
+      view = v;
+    })();
+    return view;
+  };
+
+  /** Under PlayCanvas: every date and layer in, its tiles coloured by source, then counted. */
+  const viewPlaycanvas = async (scenario: Scenario): Promise<CompositorCounts> => {
+    const gap = scenario !== "both" && scenario !== "latest";
+    const unnamed = scenario === "gap-unnamed";
+    let still = 0;
+    for (let frame = 0; frame < 3000 && still < 30; frame += 1) {
+      await nextFrame(scene);
+      const status = scanHost?.status();
+      const reading = scanRuleReading(SHOWN_ASSET);
+      const owners = ruleNow()?.owners.data;
+      const ready =
+        status?.active === true &&
+        status.tiles > 0 &&
+        status.loading === 0 &&
+        reading?.on === true &&
+        reading.dates.dates === 1 &&
+        reading.dates.tiles > 0 &&
+        reading.dates.loading === 0 &&
+        owners?.includes(0) === true &&
+        owners.includes(1) &&
+        (scenario !== "gap-latest" || (owners.includes(2) && (reading.sources[2] ?? 0) > 0)) &&
+        // The fill resident, its tiles named, before the rule stops naming it.
+        (!unnamed || (reading.sources[2] ?? 0) > 0);
+      still = ready ? still + 1 : 0;
+    }
+    if (still < 30) throw new Error("PlayCanvas did not draw every date");
+    const app = pc.AppBase.getApplication();
+    if (!app) throw new Error("no PlayCanvas app");
+    // The same rule again first (a layer's modifier is put on again with it), then each tile's
+    // own modifier coloured by its source; a parameter set copies each into the work buffer.
+    const view = ruleNow();
+    if (view)
+      publishScanRule(SHOWN_ASSET, {
+        ...view,
+        // gap-unnamed: the fill's tileset named by no source, as an unknown tileset would be.
+        sources: unnamed
+          ? new Map([...view.sources].filter(([, named]) => named.source !== 2))
+          : view.sources,
+      });
+    for (const component of app.root.findComponents("gsplat") as pc.GSplatComponent[]) {
+      const code = (component as unknown as { _workBufferModifier?: { code?: string } | null })
+        ._workBufferModifier?.code;
+      if (!code?.includes(RULE_STEP)) continue;
+      component.setWorkBufferModifier({ glsl: debugModifier(code) });
+      component.setParameter("uHexapodHarness", 1);
+    }
+    scene.requestRender();
+    for (let frame = 0; frame < 40; frame += 1) {
+      app.render();
+      await nextFrame(scene);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    const reading = scanRuleReading(SHOWN_ASSET);
+    return {
+      ...count(),
+      canvases: sizes,
+      companion: (reading?.dates.dates ?? 0) === 1 && (reading?.dates.tiles ?? 0) > 0,
+      sources: {
+        march: reading?.sources[0] ?? 0,
+        june: reading?.sources[1] ?? 0,
+        fill: gap ? (reading?.sources[2] ?? 0) : 0,
+        unnamed: reading?.sources[NO_OWNER] ?? 0,
+      },
+    };
+  };
+
   return {
     async view(scenario, viewOptions = {}) {
       // Looking north, nearly straight down: east is the right of the screen.
@@ -358,12 +537,16 @@ export async function startCompositorHarness(options: {
         march.boundingSphere.center,
         new HeadingPitchRange(0, CesiumMath.toRadians(-85), 48),
       );
-      const gap = scenario === "gap-latest" || scenario === "gap-truth";
+      const gap = scenario !== "both" && scenario !== "latest";
       start(
-        scenario === "gap-truth" ? "ground-truth" : "latest",
+        scenario === "gap-truth" || scenario === "gap-unnamed" ? "ground-truth" : "latest",
         gap ? grids.northWest : grids.everywhere,
         gap,
       );
+      if (playcanvas) {
+        session?.tune({ seamReach: viewOptions.seamReach, enabled: scenario !== "both" });
+        return viewPlaycanvas(scenario);
+      }
       let host: ReturnType<typeof primitiveOf>;
       for (let frame = 0; frame < 900; frame += 1) {
         await nextFrame(scene);

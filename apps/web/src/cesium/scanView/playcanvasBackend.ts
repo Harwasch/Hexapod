@@ -83,7 +83,9 @@ import * as pc from "playcanvas";
 
 import { CELL_TEXTURE_WIDTH } from "@/lib/cellGrid";
 import { CELL_LOOK_GLSL, type CellLookView } from "@/lib/cellLook";
+import { NO_OWNER, objectAnchor } from "@/lib/compositor";
 import { tileInstanceIds, type InstancesDoc } from "@/lib/instances";
+import { createLogger } from "@/lib/log";
 import { tileSkin, type SkinDoc } from "@/lib/skin";
 import type { PickTile } from "@/lib/splatPick";
 import { reportScanSun, watchScanSun, type ScanSun } from "@/state/sunReport";
@@ -114,9 +116,33 @@ import {
   type ScanMotion,
 } from "./scanMotion";
 import { reportScanCellView, watchScanCellView } from "./scanCellView";
+import {
+  lentRuleKit,
+  PLAYCANVAS_FOOTPRINT,
+  reportScanRule,
+  RULE_OWNER_WIDTH,
+  RULE_WEIGHT_GLSL,
+  watchScanRule,
+  type ScanRuleView,
+} from "./scanRule";
 import { countOverlayLoopTick } from "./stats";
 import { SUN_HOOK_VS, SUN_STREAM, SUN_WORD_GLSL } from "./sunHook";
+import type { RuleDates } from "./ruleDates";
 import type { BackendHooks, GraphicsApi, ScanBackend, ScanPose, SplatRendererKind } from "./types";
+
+const log = createLogger("playcanvas");
+
+/** No rule: no dates beside the scan (ruleDates.ts). */
+const NO_DATES = {
+  dates: [],
+  plane: [0, 0, 0, 0] as const,
+  cellM: 1,
+  owners: { data: new Uint8Array(0), height: 0 },
+  scanOwns: [],
+};
+
+/** Where an object not placed yet is weighed: outside every plane, so it is not drawn. */
+const UNPLACED = 1e9;
 
 interface Decoded {
   id: number;
@@ -148,7 +174,10 @@ export const SORT_REFRESH_MS = 100;
  * or both: the motion on the centre and the covariance, the scene-object rule on the colour;
  * with `cell`, then the Confidence / Data age look (`CELL_TILE_GLSL`), as CesiumJS runs its
  * cell part after the objects' highlight. A tile with neither ids nor a skin under a cell view
- * gets the look alone: the objects' dim is not put on splats no object was found in.
+ * gets the look alone: the objects' dim is not put on splats no object was found in. With
+ * `rule`, last, a per-cell view rule's weight on the opacity (scanRule.ts), from the spread the
+ * splat has once the motion moved it; under the rule a split object (`uRuleSource.y`) keeps its
+ * own colours, as CesiumJS draws it outside the rule's look.
  */
 export function playcanvasModifierGlsl(
   ids: boolean,
@@ -156,6 +185,7 @@ export function playcanvasModifierGlsl(
   wide = false,
   cell = false,
   sun = false,
+  rule = false,
 ): string {
   const id = ids ? "loadSplatInstance().r" : "0u";
   const second = wide ? "loadSplatWeights2()" : "uvec4(0u)";
@@ -165,7 +195,12 @@ export function playcanvasModifierGlsl(
   const rigidStep = ids
     ? `hexapodRigidMotion(uRigidSlots, uRigidPoses, ${id}, uMotionParams, center, delta, hexapodLinear);`
     : "";
-  const objectStep = `if (uInstanceParams.x < 0.5) {
+  // Under a rule nothing returns early: the rule's weight comes last.
+  const objectStep = rule
+    ? `if (uInstanceParams.x > 0.5) {
+        color = hexapodInstanceColor(${id}, color);
+    }`
+    : `if (uInstanceParams.x < 0.5) {
         return;
     }
     color = hexapodInstanceColor(${id}, color);`;
@@ -180,6 +215,19 @@ export function playcanvasModifierGlsl(
     ? `writeHexapodSun(uvec4(hexapodSunWord(hexapodCellTile(center, vec4(0.0, 0.0, 0.0, color.a), ${cellArgs}).rgb), 0u, 0u, 0u));
     `
     : "";
+  const look = `${blackStep}color = hexapodCellTile(center, color, ${cellArgs});`;
+  // A split object under a rule is drawn in its own colours (and, lit, as the photograph is).
+  const ruledLook = rule
+    ? `if (uRuleSource.y < 0.5) {
+        ${look}
+    }${
+      sun
+        ? ` else {
+        writeHexapodSun(uvec4(0u, 0u, 0u, 0u));
+    }`
+        : ""
+    }`
+    : look;
   const colorStep = !cell
     ? ids || skin
       ? objectStep
@@ -191,7 +239,13 @@ export function playcanvasModifierGlsl(
     }
     `
           : ""
-      }${blackStep}color = hexapodCellTile(center, color, ${cellArgs});`;
+      }${ruledLook}`;
+  const ruleStep = rule ? "\n    color.a *= hexapodRuleWeight(center);" : "";
+  const ruleSpread = rule
+    ? `
+    hexapodRuleRotation = rotation;
+    hexapodRuleScale = scale;`
+    : "";
   const cellUniforms = cell
     ? `uniform highp sampler2D uCellGrid;
 uniform vec4 uCellRule;
@@ -213,6 +267,7 @@ uniform vec4 uMotionExtra;
 ${SCAN_INSTANCE_RULE_GLSL}
 ${SCAN_MOTION_GLSL}
 ${cellUniforms}
+${rule ? RULE_WEIGHT_GLSL : ""}
 mat3 hexapodLinear = mat3(0.0);
 void modifySplatCenter(inout vec3 center) {
     hexapodLinear = mat3(0.0);
@@ -227,10 +282,10 @@ void modifySplatCenter(inout vec3 center) {
 void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout vec4 rotation, inout vec3 scale) {
     if (uMotionExtra.y > 0.5) {
         hexapodCovariance(mat3(1.0) + hexapodLinear, rotation, scale);
-    }
+    }${ruleSpread}
 }
 void modifySplatColor(vec3 center, inout vec4 color) {
-    ${sunStep}${colorStep}
+    ${sunStep}${colorStep}${ruleStep}
 }
 `;
 }
@@ -273,10 +328,11 @@ const MODIFIERS = new Map<string, WorkBufferModifier>();
 
 /**
  * The modifier for a tile with ids, skin weights, a cell view, the sunlight's word (`sun`:
- * every tile writes it once the work buffer has it), or any of them: always GLSL (the colour
- * rule, the motion, the cell look, the word); WGSL only for ids alone, and then hide and
- * highlight alone -- a WebGPU renderer moves nothing and draws no cell view or sunlight (see the
- * file comment). One object per kind, so a tile's modifier is compared by identity.
+ * every tile writes it once the work buffer has it), a per-cell view rule, or any of them:
+ * always GLSL (the colour rule, the motion, the cell look, the word, the rule's weight); WGSL
+ * only for ids alone, and then hide and highlight alone -- a WebGPU renderer moves nothing and
+ * draws no cell view, sunlight or rule (see the file comment). One object per kind, so a tile's
+ * modifier is compared by identity.
  */
 export function playcanvasModifier(
   ids: boolean,
@@ -284,13 +340,14 @@ export function playcanvasModifier(
   wide = false,
   cell = false,
   sun = false,
+  rule = false,
 ): WorkBufferModifier {
-  const key = `${String(ids)}|${String(skin)}|${String(skin && wide)}|${String(cell)}|${String(sun)}`;
+  const key = `${String(ids)}|${String(skin)}|${String(skin && wide)}|${String(cell)}|${String(sun)}|${String(rule)}`;
   let modifier = MODIFIERS.get(key);
   if (!modifier) {
     modifier = {
-      glsl: playcanvasModifierGlsl(ids, skin, skin && wide, cell, sun),
-      ...(ids && !skin && !cell && !sun ? { wgsl: PLAYCANVAS_INSTANCE_WGSL } : {}),
+      glsl: playcanvasModifierGlsl(ids, skin, skin && wide, cell, sun, rule),
+      ...(ids && !skin && !cell && !sun && !rule ? { wgsl: PLAYCANVAS_INSTANCE_WGSL } : {}),
     };
     MODIFIERS.set(key, modifier);
   }
@@ -301,12 +358,14 @@ export function playcanvasModifier(
  * The work-buffer modifier of an inferred layer's tile (scanLayers.ts): its look on the colour
  * -- Highlight and the fade of its view cones (layerLook.ts) -- and, while Confidence or Data
  * age is drawn (`uCellFill`), grey first: a layer has no capture evidence, so it is never given
- * a measured colour (cellModifier.ts). GLSL only, as the motion: the WebGPU trial draws a scan
- * with inferred layers with WebGL2.
+ * a measured colour (cellModifier.ts). With `rule`, last, a per-cell view rule's weight
+ * (scanRule.ts): a layer owns a cell only where no date saw it. GLSL only, as the motion: the
+ * WebGPU trial draws a scan with inferred layers with WebGL2.
  */
-function layerModifierGlsl(sun: boolean): string {
+function layerModifierGlsl(sun: boolean, rule = false): string {
   return `
 ${sun ? SUN_WORD_GLSL : ""}
+${rule ? RULE_WEIGHT_GLSL : ""}
 uniform vec4 uCellFill;
 uniform mat4 uLayerFrame;
 uniform vec4 uLayerTint;
@@ -321,7 +380,13 @@ ${LAYER_LOOK_GLSL}
 ${CELL_LOOK_GLSL}
 void modifySplatCenter(inout vec3 center) {
 }
-void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout vec4 rotation, inout vec3 scale) {
+void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout vec4 rotation, inout vec3 scale) {${
+    rule
+      ? `
+    hexapodRuleRotation = rotation;
+    hexapodRuleScale = scale;`
+      : ""
+  }
 }
 void modifySplatColor(vec3 center, inout vec4 color) {
     ${sun ? "writeHexapodSun(uvec4(HEXAPOD_SUN_SKIP, 0u, 0u, 0u));\n    " : ""}if (uCellFill.x > 0.5) {
@@ -329,7 +394,9 @@ void modifySplatColor(vec3 center, inout vec4 color) {
     }
     color = hexapodLayerColor(center, color, uLayerFrame, uLayerTint, uLayerPattern, uLayerCones,
                               uLayerConeGrid, uLayerConeDims, uLayerConeEye,
-                              hexapodLayerDim(uInstanceParams, uInstanceDim));
+                              hexapodLayerDim(uInstanceParams, uInstanceDim));${
+                                rule ? "\n    color.a *= hexapodRuleWeight(center);" : ""
+                              }
 }
 `;
 }
@@ -341,6 +408,12 @@ export const PLAYCANVAS_LAYER_MODIFIER: WorkBufferModifier = { glsl: layerModifi
  * so the frame's hook leaves the layer as drawn -- it is not the capture (sunHook.ts).
  */
 export const PLAYCANVAS_LAYER_SUN_MODIFIER: WorkBufferModifier = { glsl: layerModifierGlsl(true) };
+
+/** The layer's modifiers under a per-cell view rule, without and with the sunlight's word. */
+const LAYER_RULE_MODIFIERS: readonly WorkBufferModifier[] = [
+  { glsl: layerModifierGlsl(false, true) },
+  { glsl: layerModifierGlsl(true, true) },
+];
 
 /** The decoded columns a pick copy is made from (lib/splatLayout.ts names). */
 type PickColumns = Readonly<Record<string, Float32Array>>;
@@ -427,6 +500,14 @@ interface TileBinding {
   placement: pc.Mat4 | null;
   /** `pick` at `placement`: made on first need, so a moving object costs no copy a frame. */
   placedPick: PickTile | null;
+}
+
+/** An inferred layer's tile as the renderer keeps it: its look and the eye its fade is from. */
+interface LayerState {
+  look: LayerLook;
+  eye: Float32Array<ArrayBuffer>;
+  lastEye: number[] | null;
+  centre: number[];
 }
 
 /** Frames a disposed tile's GPU resource outlives its entity: PlayCanvas's unified renderer
@@ -579,6 +660,44 @@ function assemble(
   const cellFill = new Float32Array(4);
   /** The modifier on each entity now (a tile with no binding has one only for a cell view). */
   const modifiers = new WeakMap<pc.Entity, WorkBufferModifier | null>();
+  /**
+   * A per-cell view rule (scanRule.ts), GLSL only as the motion: the rule drawn now, or null;
+   * its owner texture and plane; and the scan's own cell view, which Data age under the rule
+   * stands in for while it is on.
+   */
+  let rule: ScanRuleView | null = null;
+  let ruleOwners: pc.Texture | null = null;
+  const rulePlane = new Float32Array(4);
+  const ruleParams = new Float32Array(4);
+  let ownCellView: CellLookView | null = null;
+  /** The rule's other dates, streamed into this app (ruleDates.ts, loaded with the first). */
+  let ruleDates: RuleDates<pc.Entity> | null = null;
+  let ruleDatesLoading = false;
+  /** The budget the host draws to (`setBudget`), which a rule's dates share. */
+  let drawBudget = budget;
+  /** The scan is streamed natively (`streamNative`): its own budget is PlayCanvas's. */
+  let streamingNatively = false;
+  /** The scan's share of the budget: all of it, or under a rule its share (ruleDates.ts). */
+  const scanShare = (): number => (rule ? (ruleDates?.scanShare() ?? 1) : 1);
+  /**
+   * What PlayCanvas's own level of detail may draw: the budget, or for a natively streamed scan
+   * under a rule its share of it, as the host streams a tiled scan's share.
+   */
+  const lodBudget = (): void => {
+    const wanted = streamingNatively ? Math.round(drawBudget * scanShare()) : drawBudget;
+    if (app.scene.gsplat.splatBudget !== wanted) app.scene.gsplat.splatBudget = wanted;
+  };
+  /** The tileset each entity came from: whose source it is under a rule. */
+  const fromUrl = new WeakMap<pc.Entity, string>();
+  /** A natively streamed scan's one entity: the rule's `native` source. */
+  const natives = new WeakSet<pc.Entity>();
+  /**
+   * Where each placed entity's own origin is in the scan's frame: for a split object, the
+   * origin its package declares at its pose (lib/compositor.ts `objectAnchor`), by which it is
+   * weighed whole.
+   */
+  const anchors = new WeakMap<pc.Entity, [number, number]>();
+  const ruleSources = new WeakMap<pc.Entity, Float32Array>();
   /**
    * Sunlight (state/sunReport.ts, sunHook.ts), GLSL only as the motion: the sun to light by now,
    * whether the work buffer carries the word the copy pass writes for it -- added with the
@@ -788,6 +907,44 @@ function assemble(
     tile.skinWide = second !== undefined;
   };
 
+  /**
+   * Which source of the rule `entity` is (`uRuleSource`): the rule names its tileset (a natively
+   * streamed scan is `native`), and a split object is weighed whole by its centre. A tileset the
+   * rule does not name is no source: its splats are not drawn.
+   */
+  const ruleSourceOf = (entity: pc.Entity): Float32Array => {
+    let out = ruleSources.get(entity);
+    if (!out) ruleSources.set(entity, (out = new Float32Array(4)));
+    const url = fromUrl.get(entity);
+    const found = !rule
+      ? undefined
+      : natives.has(entity)
+        ? { source: rule.native }
+        : url === undefined
+          ? undefined
+          : rule.sources.get(url);
+    // An object not placed yet has no anchor: outside every plane, it is not drawn.
+    const [x, y] = anchors.get(entity) ?? [UNPLACED, UNPLACED];
+    if (found?.whole) out.set([found.source, 1, x, y]);
+    else out.set([found?.source ?? NO_OWNER, 0, 0, 0]);
+    return out;
+  };
+
+  /** Whether the rule tints `entity` as invented (Highlight invented: an inferred source). */
+  const ruleTinted = (entity: pc.Entity): boolean => {
+    const source = ruleSourceOf(entity)[0] ?? NO_OWNER;
+    return rule !== null && source < 31 && ((rule.tinted >> source) & 1) === 1;
+  };
+
+  /** The rule's uniforms on `component`, while one is drawn. */
+  const setRuleUniforms = (component: pc.GSplatComponent, entity: pc.Entity): void => {
+    if (!rule) return;
+    component.setParameter("uRuleOwners", ruleOwners ?? stand().state);
+    component.setParameter("uRulePlane", rulePlane);
+    component.setParameter("uRuleParams", ruleParams);
+    component.setParameter("uRuleSource", ruleSourceOf(entity));
+  };
+
   /** Sets every uniform the modifier reads; setting any marks the tile for a new copy. */
   const setUniforms = (component: pc.GSplatComponent, entity: pc.Entity): void => {
     const cell = cells?.uniforms(entity);
@@ -807,6 +964,7 @@ function assemble(
       component.setParameter("uMotionExtra", motionExtra);
       component.setParameter("uMotionParams", motionParams);
     }
+    setRuleUniforms(component, entity);
     // Last: setting a parameter marks the tile for a new copy into the work buffer.
     component.setParameter("uInstanceParams", params);
   };
@@ -824,9 +982,11 @@ function assemble(
     const cell = cells?.drawing === true && cells.has(entity);
     // Once the work buffer carries the sunlight's word, every scan tile's copy writes it.
     const lit = sunStream && cells?.has(entity) === true;
+    // Under a rule every tile is weighed by it, the scan's own and the other dates'.
+    const ruled = rule !== null;
     const modifier =
-      hasIds || skinned || cell || lit
-        ? playcanvasModifier(hasIds, skinned, tile?.skinWide ?? false, cell, lit)
+      hasIds || skinned || cell || lit || ruled
+        ? playcanvasModifier(hasIds, skinned, tile?.skinWide ?? false, cell, lit, ruled)
         : null;
     if (modifier !== (modifiers.get(entity) ?? null)) {
       modifiers.set(entity, modifier);
@@ -1018,14 +1178,37 @@ function assemble(
    * with its layer's look and the eye it was last worked out from. `lastEye` and `centre` (the
    * tile's origin) are in the layer's frame, where `eyeMoved` measures (`layerEye`).
    */
-  const layers = new Map<
-    pc.Entity,
-    { look: LayerLook; eye: Float32Array<ArrayBuffer>; lastEye: number[] | null; centre: number[] }
-  >();
+  const layers = new Map<pc.Entity, LayerState>();
   /** Each layer's view cones, uploaded once whatever number of its tiles are drawn. */
   const coneTextures = new Map<LayerCones, pc.Texture>();
   /** The eye of the last frame drawn (the scan's frame): a layer added later starts from it. */
   let lastPoseEye: [number, number, number] | null = null;
+
+  /**
+   * Every uniform a layer's modifier reads, from its look -- Highlight's, or the rule's tint of
+   * an invented source (Highlight invented) -- and the rule's while one is drawn.
+   */
+  const layerParameters = (entity: pc.Entity, state: LayerState): void => {
+    const component = entity.gsplat;
+    if (!component) return;
+    const look =
+      !state.look.highlight && ruleTinted(entity) ? { ...state.look, highlight: true } : state.look;
+    const values = layerUniforms(look);
+    component.setParameter("uLayerFrame", values.frame);
+    component.setParameter("uLayerTint", values.tint);
+    component.setParameter("uLayerPattern", values.pattern);
+    component.setParameter("uLayerCones", coneTexture(look.cones));
+    component.setParameter("uLayerConeGrid", values.grid);
+    component.setParameter("uLayerConeDims", values.dims);
+    // The objects' dim while one is highlighted: a layer belongs to none (layerLook.ts).
+    component.setParameter("uInstanceDim", dim);
+    component.setParameter("uInstanceParams", params);
+    component.setParameter("uCellFill", cellFill);
+    setRuleUniforms(component, entity);
+    // Last: setting a parameter has the tile copied into the work buffer again.
+    state.lastEye = lastPoseEye ? layerEye(state.look, lastPoseEye) : null;
+    component.setParameter("uLayerConeEye", coneEye(look, lastPoseEye ?? [0, 0, 0], state.eye));
+  };
 
   /** The cones' texture, made on first need; a stand-in for a layer without cones. */
   const coneTexture = (cones: LayerCones | null): pc.Texture => {
@@ -1084,9 +1267,108 @@ function assemble(
     hooks.frameWanted();
   };
 
-  /** A layer's modifier: with the skip bit once the work buffer carries the sunlight's word. */
+  /**
+   * A layer's modifier: with the skip bit once the work buffer carries the sunlight's word, and
+   * the rule's weight while a rule is drawn.
+   */
   const layerModifier = (): WorkBufferModifier =>
-    sunStream ? PLAYCANVAS_LAYER_SUN_MODIFIER : PLAYCANVAS_LAYER_MODIFIER;
+    rule
+      ? (LAYER_RULE_MODIFIERS[sunStream ? 1 : 0] ?? PLAYCANVAS_LAYER_MODIFIER)
+      : sunStream
+        ? PLAYCANVAS_LAYER_SUN_MODIFIER
+        : PLAYCANVAS_LAYER_MODIFIER;
+
+  /**
+   * Draws `view` -- a per-cell view rule (scanRule.ts) -- on every tile, or none with null:
+   * each tile's modifier gains or loses the rule's weight, and its source is read again. Data
+   * age under the rule is the rule's own view (each cell by its owner's age), drawn in place of
+   * the scan's own while the rule is on. Each tile is copied again once, in the frame this asks
+   * for.
+   */
+  const setRule = (next: ScanRuleView | null): void => {
+    if (!cells) return;
+    const before = rule;
+    rule = next;
+    if (next && next.owners !== before?.owners) {
+      const { data, height } = next.owners;
+      if (ruleOwners?.height === height) {
+        (ruleOwners.lock() as Uint8Array).set(data);
+        ruleOwners.unlock();
+      } else {
+        ruleOwners?.destroy();
+        ruleOwners = dataTexture(
+          "hexapodRuleOwners",
+          RULE_OWNER_WIDTH,
+          height,
+          pc.PIXELFORMAT_R8,
+          data,
+        );
+      }
+    }
+    if (next) {
+      rulePlane.set(next.plane);
+      // The seam's reach in what PlayCanvas draws: its footprint is wider than CesiumJS's.
+      ruleParams.set([next.enabled ? 1 : 0, next.cellM, next.reach * PLAYCANVAS_FOOTPRINT, 0]);
+    }
+    setCellView(next?.age ?? ownCellView);
+    for (const entity of cells.meshes()) applyModifier(entity);
+    for (const [entity, state] of layers) {
+      entity.gsplat?.setWorkBufferModifier(layerModifier());
+      layerParameters(entity, state);
+    }
+    syncRuleDates();
+    hooks.frameWanted();
+  };
+
+  /**
+   * Streams the dates the rule names beside the scan (ruleDates.ts), its code fetched with the
+   * first rule that names one; drops them all with the rule.
+   */
+  const syncRuleDates = (): void => {
+    const wanted = rule?.dates ?? [];
+    if (ruleDates || wanted.length === 0) {
+      ruleDates?.setRule(rule ?? NO_DATES);
+      return;
+    }
+    const kit = lentRuleKit();
+    if (ruleDatesLoading || !kit) return;
+    ruleDatesLoading = true;
+    void import("./ruleDates")
+      .then(({ RuleDates }) => {
+        if (destroying) return;
+        ruleDates = new RuleDates<pc.Entity>(
+          {
+            loadDate,
+            loadLayer: (url, tile, signal) =>
+              backend.loadLayer?.(url, tile, signal) ?? Promise.reject(new Error("no layers")),
+            setLayerLook: (entity, look) => backend.setLayerLook?.(entity, look),
+            add: (entity) => backend.add(entity),
+            remove: (entity) => backend.remove(entity),
+            dispose: (entity) => backend.dispose(entity),
+            place: (entity, matrix) => backend.place?.(entity, matrix),
+          },
+          {
+            arrived: () => hooks.frameWanted(),
+            changed: () => hooks.frameWanted(),
+            // The budget the host draws to now, which every date shares: frames slowed by the
+            // dates lower it for all of them.
+            budget: () => drawBudget,
+          },
+          kit,
+        );
+        ruleDates.setRule(rule ?? NO_DATES);
+        hooks.frameWanted();
+      })
+      .catch((error: unknown) => {
+        // The code did not arrive: the other dates' cells draw nothing, as the rule fails closed.
+        log.warn("the rule's other dates did not load; their cells draw nothing", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        ruleDatesLoading = false;
+      });
+  };
 
   /**
    * The sun to light the scan by (state/sunReport.ts), or none. The first one adds the word to the
@@ -1144,6 +1426,19 @@ function assemble(
     if (sunHooked) sunFrames += 1;
   };
 
+  /**
+   * Where `entity`'s own origin is once placed (`matrix`'s translation; none where decoded): a
+   * split object moved to a pose is weighed whole by the cell its anchor is in now, so it is
+   * copied again.
+   */
+  const placedAnchor = (entity: pc.Entity, matrix: readonly number[] | null): void => {
+    if (matrix) anchors.set(entity, objectAnchor(matrix));
+    else anchors.delete(entity);
+    const url = fromUrl.get(entity);
+    if (rule && url !== undefined && rule.sources.get(url)?.whole)
+      entity.gsplat?.setParameter("uRuleSource", ruleSourceOf(entity));
+  };
+
   /** A tile's own splats in the scan's frame, for the cell view's reading (`CellTiles`). */
   const cellSample = (entity: pc.Entity): CellTileSample | null => {
     const tile = tiles.get(entity);
@@ -1160,8 +1455,20 @@ function assemble(
     };
   };
 
-  /** A decoded tile made into PlayCanvas's resource and entity: main-thread work. */
-  const build = (tile: TileNode, decoded: Decoded, layer = false): pc.Entity => {
+  /**
+   * A decoded tile of the tileset at `url` made into PlayCanvas's resource and entity:
+   * main-thread work. `kind` says what it is: one of the scan's own tiles (bound to its objects
+   * and picks), an inferred layer's (scanLayers.ts), or another date's under a per-cell view
+   * rule (ruleDates.ts: drawn as a scan tile -- the cell views and the sun -- but bound to none
+   * of this scan's objects, motion or picks, as CesiumJS's companions are not).
+   */
+  const build = (
+    url: string,
+    tile: TileNode,
+    decoded: Decoded,
+    kind: "scan" | "layer" | "date" = "scan",
+  ): pc.Entity => {
+    const layer = kind === "layer";
     const { properties, count, order } = decoded;
     if (!properties || count === undefined || !order) {
       throw new Error(decoded.error ?? "The tile could not be decoded.");
@@ -1186,12 +1493,14 @@ function assemble(
     const origin = decoded.origin ?? [0, 0, 0];
     entity.setLocalPosition(...origin);
     origins.set(entity, origin);
+    fromUrl.set(entity, url);
     entity.addComponent("gsplat", { resource });
     resources.set(entity, resource);
     // Every tile of the scan reads its cell, whether or not it carries ids.
     if (!layer) cells?.add(entity, origin);
-    // A layer's tile carries none of the scan's ids, skins or picks: its look is its own.
-    if (decoded.checksum !== undefined && !layer) {
+    // A layer's tile carries none of the scan's ids, skins or picks: its look is its own. Nor
+    // does another date's.
+    if (decoded.checksum !== undefined && kind === "scan") {
       const binding: TileBinding = {
         checksum: decoded.checksum,
         order,
@@ -1218,15 +1527,33 @@ function assemble(
         if (binding.ids && motion && motion.rigidByLeaf.size > 0) sortDirty.add(entity);
       }
     }
-    if (!layer && (cells?.drawing || sunStream)) applyModifier(entity);
+    if (!layer && (cells?.drawing || sunStream || rule)) applyModifier(entity);
     return entity;
+  };
+
+  /** A tile of another date under a rule (ruleDates.ts): a scan tile bound to none of this one. */
+  const loadDate = async (
+    tilesetUrl: string,
+    tile: TileNode,
+    signal?: AbortSignal,
+  ): Promise<pc.Entity> => {
+    const decoded = await decode(new URL(tile.uri, tilesetUrl).toString());
+    signal?.throwIfAborted();
+    return hooks.work.run(() => {
+      signal?.throwIfAborted();
+      return build(tilesetUrl, tile, decoded, "date");
+    });
   };
 
   const backend: ScanBackend<pc.Entity> = {
     name: identity.name,
     api,
     apiNote: identity.note,
-    loadFactor: 1,
+    // Gaussians streamed per gaussian drawn: all of the budget, or under a per-cell rule the
+    // scan's share of it (ruleDates.ts), which the host streams the scan's tiles within.
+    get loadFactor() {
+      return scanShare();
+    },
     load: async (tilesetUrl: string, tile: TileNode, signal?: AbortSignal) => {
       const decoded = await decode(new URL(tile.uri, tilesetUrl).toString(), tile.offset);
       signal?.throwIfAborted();
@@ -1234,7 +1561,7 @@ function assemble(
       // frame's budget, a little at a time while the camera moves.
       const entity = await hooks.work.run(() => {
         signal?.throwIfAborted();
-        return build(tile, decoded);
+        return build(tilesetUrl, tile, decoded);
       });
       return entity;
     },
@@ -1243,7 +1570,7 @@ function assemble(
       signal?.throwIfAborted();
       return hooks.work.run(() => {
         signal?.throwIfAborted();
-        return build(tile, decoded, true);
+        return build(tilesetUrl, tile, decoded, "layer");
       });
     },
     setLayerLook: (entity, look) => {
@@ -1261,20 +1588,7 @@ function assemble(
       state.look = look;
       layers.set(entity, state);
       if (!before) component.setWorkBufferModifier(layerModifier());
-      const values = layerUniforms(look);
-      component.setParameter("uLayerFrame", values.frame);
-      component.setParameter("uLayerTint", values.tint);
-      component.setParameter("uLayerPattern", values.pattern);
-      component.setParameter("uLayerCones", coneTexture(look.cones));
-      component.setParameter("uLayerConeGrid", values.grid);
-      component.setParameter("uLayerConeDims", values.dims);
-      // The objects' dim while one is highlighted: a layer belongs to none (layerLook.ts).
-      component.setParameter("uInstanceDim", dim);
-      component.setParameter("uInstanceParams", params);
-      component.setParameter("uCellFill", cellFill);
-      // Last: setting a parameter has the tile copied into the work buffer again.
-      state.lastEye = lastPoseEye ? layerEye(look, lastPoseEye) : null;
-      component.setParameter("uLayerConeEye", coneEye(look, lastPoseEye ?? [0, 0, 0], state.eye));
+      layerParameters(entity, state);
       if (previous !== look.cones) releaseCones(previous);
     },
     add: (entity) => {
@@ -1328,6 +1642,7 @@ function assemble(
         }
         entity.setLocalPosition(...origin);
         entity.setLocalRotation(pc.Quat.IDENTITY);
+        placedAnchor(entity, null);
         return;
       }
       placing ??= { matrix: new pc.Mat4(), position: new pc.Vec3(), rotation: new pc.Quat() };
@@ -1342,6 +1657,7 @@ function assemble(
       rotation.setFromMat4(placement);
       entity.setLocalPosition(position);
       entity.setLocalRotation(rotation);
+      placedAnchor(entity, matrix);
     },
     render: (pose: ScanPose) => {
       // A lost device draws nothing; the host is already replacing this renderer.
@@ -1390,6 +1706,10 @@ function assemble(
         entity.gsplat?.setParameter("uCellLevel", cell.level);
         entity.gsplat?.setParameter("uCellTile", cell.tile);
       });
+      // The rule's other dates, planned from the pose this frame is drawn from, and the
+      // scan's share of the budget with them.
+      ruleDates?.plan(pose);
+      lodBudget();
       syncSun();
       framesDrawn += 1;
       app.render();
@@ -1413,9 +1733,15 @@ function assemble(
     },
     // A moving object's re-sort held back by SORT_REFRESH_MS: due then, whether or not
     // anything else changes by that time.
-    frameDueBy: () => (sortDirty.size > 0 && !lost ? lastSortAt + SORT_REFRESH_MS : null),
+    frameDueBy: () => {
+      if (lost) return null;
+      const dates = ruleDates?.dueBy() ?? null;
+      const sort = sortDirty.size > 0 ? lastSortAt + SORT_REFRESH_MS : null;
+      return sort === null ? dates : dates === null ? sort : Math.min(sort, dates);
+    },
     setBudget: (drawn) => {
-      app.scene.gsplat.splatBudget = drawn;
+      drawBudget = drawn;
+      lodBudget();
     },
     setInstances,
     pickTiles: () => {
@@ -1469,11 +1795,15 @@ function assemble(
       // middle of its bounds (cellModifier.ts).
       const middle = (asset.resource as { aabb?: { center?: pc.Vec3 } } | null)?.aabb?.center;
       cells?.add(entity, middle ? [middle.x, middle.y, middle.z] : [0, 0, 0]);
-      if (cells?.drawing || sunStream) applyModifier(entity);
+      natives.add(entity);
+      streamingNatively = true;
+      lodBudget();
+      if (cells?.drawing || sunStream || rule) applyModifier(entity);
       resumeLoop();
       return {
         splats: () => app.scene.gsplat.splatBudget,
         stop: () => {
+          streamingNatively = false;
           cells?.delete(entity);
           entity.destroy();
           app.assets.remove(asset);
@@ -1483,8 +1813,12 @@ function assemble(
     },
     destroy: () => {
       for (const off of cellLinks) off();
+      ruleDates?.stop();
+      ruleDates = null;
       cellTexture?.destroy();
       cellTexture = null;
+      ruleOwners?.destroy();
+      ruleOwners = null;
       for (const worker of workers) worker.terminate();
       waiting.clear();
       tiles.clear();
@@ -1552,8 +1886,28 @@ function assemble(
   const cellLinks =
     cells && assetId !== undefined
       ? [
-          watchScanCellView(assetId, setCellView),
+          watchScanCellView(assetId, (view) => {
+            ownCellView = view;
+            // Data age under a rule is the rule's own: the scan's comes back after it.
+            setCellView(rule?.age ?? view);
+          }),
           reportScanCellView(assetId, () => cells.reading(identity.name, cellSample)),
+          // A per-cell view rule on the site's dates, drawn in this one sort (scanRule.ts).
+          watchScanRule(assetId, setRule),
+          reportScanRule(assetId, () => {
+            const sources: Record<number, number> = {};
+            if (rule)
+              for (const entity of [...cells.meshes(), ...layers.keys()]) {
+                const source = ruleSourceOf(entity)[0] ?? NO_OWNER;
+                sources[source] = (sources[source] ?? 0) + 1;
+              }
+            return {
+              renderer: identity.name,
+              on: rule !== null,
+              sources,
+              dates: ruleDates?.status() ?? { dates: 0, tiles: 0, gaussians: 0, loading: 0 },
+            };
+          }),
           // The scan's sunlight, drawn by the frame's hook (sunHook.ts). Watching is what says
           // this renderer draws it (the badge's report), so only where it can: GLSL, as the
           // cell views.

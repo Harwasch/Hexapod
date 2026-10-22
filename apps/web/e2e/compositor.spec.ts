@@ -1,15 +1,19 @@
 /**
  * Splat view › Per cell in the app itself (ADR 0017 "Per-cell view rules"): the synthetic yard's
- * two dates (as compareDates.spec.ts builds them) drawn as one under a rule, under CesiumJS;
- * and under PlayCanvas the control disabled, with the reason and the one-click switch.
+ * two dates (as compareDates.spec.ts builds them) drawn as one under a rule, under CesiumJS and
+ * under PlayCanvas, the app's default; and under Spark the control disabled, with the reason
+ * and the one-click switch.
  *
  * Asserted, through `window.__twin` and the page: off by default; a rule draws both dates,
  * the later one's primitive drawn by the frame anchor's (one sort), the capture-date control
  * reads "As of", the key names each date with its coverage (neither has a confidence grid, so
  * both are flagged as tile bounds), and a date's own analytic views are held; turning Compare ›
  * Dates on ends the rule and the control says why, choosing a rule again ends the comparison;
- * One date draws the date chosen alone; the tool rail is as it was. That each cell's pixels come
- * from one date is compositorScene.spec.ts's, by pixel counts in a bare engine.
+ * One date draws the date chosen alone; the tool rail is as it was. Under PlayCanvas: CesiumJS's
+ * copies stay hidden while PlayCanvas streams the other date into its one app, its tiles ruled
+ * by their own source (what the renderer reads out: scanView/scanRule.ts), the key the same, At
+ * capture off while both dates are drawn; One date lets the other date go. That each cell's
+ * pixels come from one date is compositorScene.spec.ts's, by pixel counts in a bare engine.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -379,25 +383,99 @@ test("under cesium, Per cell draws the site's dates as one, and gives way to Com
   await railUnchanged(page);
 });
 
-test("under playcanvas, Per cell says it needs CesiumJS and switches to it in one click", async ({
+/** What PlayCanvas, drawing asset `id`, reads out of the rule it draws (scanView/scanRule.ts). */
+const ruleReading = (page: Page, id: string) =>
+  page.evaluate(async (asset) => {
+    const link = "/src/cesium/scanView/scanRule.ts";
+    const module = (await import(/* @vite-ignore */ link)) as {
+      scanRuleReading(id: string): {
+        on: boolean;
+        sources: Record<number, number>;
+        dates: { dates: number; tiles: number };
+      } | null;
+    };
+    return module.scanRuleReading(asset);
+  }, id);
+
+test("under playcanvas, Per cell draws the site's dates in PlayCanvas's one sort", async ({
+  page,
+}) => {
+  test.setTimeout(420_000);
+  await arrive(page, "playcanvas");
+  await expect.poll(async () => (await state(page)).shown, poll).toBe(A2);
+  const rule = page.getByTestId("views-rule").getByLabel("Per cell");
+  await expect(rule).toBeVisible({ timeout: 60_000 });
+  await expect(rule).toBeEnabled();
+  await expect(page.getByTestId("views-needs-cesium")).toHaveCount(0);
+
+  await rule.selectOption("latest");
+  await expect(rule).toHaveValue("latest");
+  // CesiumJS draws neither date: PlayCanvas, drawing June, streams March beside it.
+  await expect
+    .poll(() => drawnAs(page), poll)
+    .toEqual({ [A1]: [false, NONE], [A2]: [false, NONE] });
+  await expect
+    .poll(async () => {
+      const r = await ruleReading(page, A2);
+      return r && { on: r.on, dates: r.dates.dates, drawn: r.dates.tiles > 0 };
+    }, poll)
+    .toEqual({ on: true, dates: 1, drawn: true });
+  // Each tile ruled by its own date: June's own (source 1) and March's (0), none unnamed.
+  const reading = await ruleReading(page, A2);
+  expect(reading?.sources[0]).toBeGreaterThan(0);
+  expect(reading?.sources[1]).toBeGreaterThan(0);
+  expect(reading?.sources[255]).toBeUndefined();
+  await expect(page.getByTestId("timeline")).toContainText("As of");
+  await expect(page.getByTestId("rule-legend-date")).toHaveCount(2, { timeout: 60_000 });
+  await expect(page.getByTestId("rule-legend-date").first()).toContainText(
+    /Mar 1, 2026: \d+ cells \(tile bounds, overstates what it saw\)/,
+    { timeout: 60_000 },
+  );
+  await expect(page.getByTestId("views-rule-holds")).toBeVisible();
+  // At capture is off while more than one date is drawn: one clock is not each date's.
+  await expect(
+    page.getByTestId("views-sun").getByRole("radio", { name: "At capture" }),
+  ).toBeDisabled();
+  await shot(page, "per-cell-playcanvas-latest");
+
+  await rule.selectOption("data-age");
+  await expect(page.getByTestId("rule-legend-date").first()).toContainText("months");
+  await shot(page, "per-cell-playcanvas-data-age");
+
+  // One date: March is let go; June is drawn alone again.
+  await rule.selectOption("");
+  await expect
+    .poll(async () => {
+      const r = await ruleReading(page, A2);
+      return r && { on: r.on, dates: r.dates.dates };
+    }, poll)
+    .toEqual({ on: false, dates: 0 });
+  await expect(page.getByTestId("rule-legend")).toHaveCount(0);
+  await expect(
+    page.getByTestId("views-sun").getByRole("radio", { name: "At capture" }),
+  ).toBeEnabled();
+  await railUnchanged(page);
+});
+
+test("under spark, Per cell says it needs CesiumJS and switches to it in one click", async ({
   page,
 }) => {
   test.setTimeout(360_000);
-  await arrive(page, "playcanvas");
+  await arrive(page, "spark");
   const rule = page.getByTestId("views-rule").getByLabel("Per cell");
   await expect(rule).toBeVisible({ timeout: 60_000 });
   await expect(rule).toBeDisabled();
   const notice = page.getByTestId("views-needs-cesium");
   await expect(notice).toContainText(
-    "Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
+    "Per cell: Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
   );
-  await shot(page, "per-cell-playcanvas-notice");
+  await shot(page, "per-cell-spark-notice");
   await railUnchanged(page);
   await notice.getByRole("button", { name: "Draw with CesiumJS" }).click();
   await expect(notice).toHaveCount(0);
   await expect(rule).toBeEnabled();
   await rule.selectOption("latest");
   await expect.poll(() => drawnAs(page), poll).toEqual({ [A1]: [true, NONE], [A2]: [true, NONE] });
-  await shot(page, "per-cell-playcanvas-switched");
+  await shot(page, "per-cell-spark-switched");
   await railUnchanged(page);
 });
