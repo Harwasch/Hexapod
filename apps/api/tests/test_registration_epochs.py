@@ -713,6 +713,90 @@ def test_each_epochs_asset_carries_that_epochs_own_footprint(
     assert to_shape(joined.footprint).area < to_shape(site.boundary).area
 
 
+def _floaters() -> dict[str, Any]:
+    """`_document()` as an earlier run of a phone video measured it: the object and the far
+    background floaters its splat kept, lopsided to the north-east as they were on Spool,
+    whose first run gave its site a 44 x 53 m boundary for a spool on a table."""
+    document = _document()
+    document["bboxLocalM"] = {"min": [-10.0, -10.0, -1.0], "max": [60.0, 60.0, 3.0]}
+    return document
+
+
+def test_a_re_run_that_measures_less_shrinks_the_boundary_its_epoch_made(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """A site's boundary is the footprint of what its captures showed (ADR 0013). A re-run
+    replaces its epoch's footprint, and the boundary that footprint made follows it: Spool's
+    v15 re-run measured 3.7 x 3.9 m and kept the 2,361 m^2 its first run's floaters drew,
+    because the boundary was only ever grown. The centroid, the old box's middle and now
+    outside the new one, moves inside it."""
+    from geoalchemy2.shape import to_shape
+
+    capture = _capture(db)
+    run(db, storage, tmp_path, capture, _floaters())
+    assert capture.site_id is not None
+
+    run(db, storage, tmp_path, capture)
+
+    db.expire_all()
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    [epoch] = _epochs(db, capture.site_id)
+    boundary, footprint = to_shape(site.boundary), to_shape(epoch.footprint)
+    assert boundary.buffer(1e-9).covers(footprint) and footprint.buffer(1e-9).covers(boundary)
+    assert boundary.covers(to_shape(site.centroid))
+
+
+def test_a_re_run_shrinks_the_boundary_to_the_union_of_its_epochs(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """With two epochs, a re-run of one leaves the other's footprint in the boundary and
+    takes out only what the replaced run alone covered."""
+    from geoalchemy2.shape import to_shape
+
+    first = _capture(db, "first")
+    run(db, storage, tmp_path, first, _floaters())
+    assert first.site_id is not None
+    north = _echoed(first.site_id)
+    north["bboxLocalM"] = {"min": [-4.0, 40.0, -1.0], "max": [6.0, 50.0, 3.0]}
+    run(db, storage, tmp_path, _capture(db, "second"), north)
+
+    run(db, storage, tmp_path, first)
+
+    db.expire_all()
+    site = db.get(Site, first.site_id)
+    assert site is not None
+    epoch1, epoch2 = _epochs(db, first.site_id)
+    union = to_shape(epoch1.footprint).union(to_shape(epoch2.footprint))
+    boundary = to_shape(site.boundary)
+    assert boundary.buffer(1e-9).covers(union) and union.buffer(1e-9).covers(boundary)
+
+
+def test_a_re_run_keeps_a_boundary_somebody_drew(
+    db: Session, storage: S3Storage, tmp_path: Path, client: Any
+) -> None:
+    """A boundary somebody redrew (`PATCH /sites/{id}`) is not the registrations' to take
+    back: a re-run that measures less leaves it as drawn, and still grows it if it must."""
+    from geoalchemy2.shape import to_shape
+
+    capture = _capture(db)
+    run(db, storage, tmp_path, capture, _floaters())
+    assert capture.site_id is not None
+    drawn = client.patch(f"/api/v1/sites/{capture.site_id}", json={"boundary": _around(0.002)})
+    assert drawn.status_code == 200, drawn.text
+    db.expire_all()
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    before = to_shape(site.boundary)
+
+    run(db, storage, tmp_path, capture)
+
+    db.expire_all()
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    assert to_shape(site.boundary).equals(before)
+
+
 # --- the detected platform (M3a) -------------------------------------------------------
 
 

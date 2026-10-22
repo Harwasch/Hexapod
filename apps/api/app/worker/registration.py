@@ -1268,10 +1268,62 @@ def _replace_run(
 
 
 def _grow_boundary(site: Site, footprint: Any) -> None:
-    """The site's boundary, grown to cover an epoch's footprint (never shrunk, so every
-    epoch stays inside it). The centroid stays, which keeps fly-to where it was."""
+    """The site's boundary, grown to cover an epoch's footprint, so every epoch stays
+    inside it (a re-run's shrinking is `_fit_boundary`'s). The centroid stays, which keeps
+    fly-to where it was."""
     if not geometry.contains(site.boundary, footprint):
         site.boundary = geometry.union_footprints(site.boundary, footprint)
+
+
+def _fit_boundary(db: Session, site: Site, epoch: Epoch, replaced: WKBElement | None) -> None:
+    """The site's boundary once `epoch`'s run has published tiles, `replaced` being the
+    footprint that run took the place of (None for an epoch's first).
+
+    A site's boundary is the footprint of what its captures showed (ADR 0013), so when the
+    boundary is exactly what registration made of its published epochs -- the union of
+    their footprints, `replaced` among them -- it is made again with the new footprint in
+    its place: a re-run that measures less shrinks it. Spool's v15 re-run cropped its splat
+    to the object, 3.7 x 3.9 m, and the site kept the 44 x 53 m its first run's background
+    floaters had drawn, because a boundary was only ever grown. Then, as the boundary may
+    have shrunk away from it, a centroid outside it moves to the new one's.
+
+    Any other boundary (somebody redrew it, `PATCH /sites/{id}`) is not registration's to
+    take back, and is only grown (`_grow_boundary`), as every first footprint is."""
+    if replaced is not None:
+        others = list(
+            db.scalars(
+                select(Epoch.footprint).where(
+                    Epoch.site_id == site.id,
+                    Epoch.id != epoch.id,
+                    Epoch.status == EpochStatus.PUBLISHED.value,
+                    Epoch.footprint.is_not(None),
+                )
+            )
+        )
+        if _same(site.boundary, _union([*others, replaced])):
+            fitted = _union([*others, epoch.footprint])
+            if not _same(site.boundary, fitted):
+                # Rewritten only when it changes: a union reorders a ring's vertices.
+                site.boundary = fitted
+            if not geometry.contains(site.boundary, site.centroid):
+                outline = geometry.wkb_to_footprint(site.boundary)
+                assert outline is not None
+                site.centroid = geometry.position_to_wkb(geometry.centroid_of(outline))
+            return
+    _grow_boundary(site, epoch.footprint)
+
+
+def _same(a: WKBElement, b: WKBElement) -> bool:
+    """Whether two stored footprints cover each other, to `geometry.contains`' tolerance."""
+    return geometry.contains(a, b) and geometry.contains(b, a)
+
+
+def _union(footprints: list[WKBElement]) -> WKBElement:
+    """The union of one or more stored footprints; one is itself, its ring as it was drawn."""
+    merged = footprints[0]
+    for footprint in footprints[1:]:
+        merged = geometry.union_footprints(merged, footprint)
+    return merged
 
 
 def _mirror_site_metadata(
@@ -1381,6 +1433,8 @@ def register(
     site: Site | None = None
     # The date a re-run moved the epoch from, for its current asset (below).
     redated_from: datetime | None = None
+    # The footprint a re-run's `_replace_run` takes the place of, for `_fit_boundary`.
+    replaced: WKBElement | None = None
     join = EpochJoinMethod.EXPLICIT
     if epoch is not None or legacy:
         # A re-run of an epoch, or the first run since 0032 of a capture registered into
@@ -1455,6 +1509,7 @@ def register(
             epoch.observed_at = observed_at
             epoch.observed_at_source = observed_source.value
         if url is not None or promoted:
+            replaced = epoch.footprint
             _replace_run(epoch, producing, footprint, quality, now, published=url is not None)
             epoch.alignment = alignment_of(capture, registration)
     same_tiles = published.content_addressed and url == tileset_url(current)
@@ -1518,7 +1573,7 @@ def register(
                 )
     capture.site_id = site.id
     if url is not None:
-        _grow_boundary(site, epoch.footprint)
+        _fit_boundary(db, site, epoch, replaced)
     if thumbnail is not None:
         site.thumbnail_url = thumbnail
     if not published.withheld and epoch.ordinal == 1:

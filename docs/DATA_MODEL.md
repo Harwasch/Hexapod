@@ -33,6 +33,11 @@ Derived on read: `areaM2` (`ST_Area(boundary::geography)`), and for summaries th
 `representations`, `latestObservedAt` (the newest `observed_at` of its assets, leaving out an
 epoch's superseded revisions) and `quality`.
 
+A pipeline-made site's `boundary` is the union of its published epochs' footprints: a new epoch
+grows it, and a re-run that replaces an epoch's footprint makes it again from the current ones, so
+it shrinks when the run measured less (a phone video's re-run cropped to its object). A boundary
+somebody redrew (`PATCH /sites/{id}`) is only ever grown.
+
 ## assets
 
 A derived, renderable delivery asset with provenance.
