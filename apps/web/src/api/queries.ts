@@ -132,6 +132,7 @@ export function useHealth() {
     queryFn: () => unwrap<HealthStatus>(api.GET("/api/v1/health")),
     ...RETRY,
     refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   });
 }
 
