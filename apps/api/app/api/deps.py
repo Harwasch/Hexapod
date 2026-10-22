@@ -195,6 +195,8 @@ def limit_imagery_catalog(request: Request, settings: SettingsDep) -> None:
 def limit_cell_map(request: Request, settings: SettingsDep) -> None:
     """One confidence-map computation per token: see app/services/ratelimit.py."""
     limits_of(request).cell_map.take(client_key(request, settings))
+
+
 def limit_public_parcels(request: Request, settings: SettingsDep) -> None:
     """One public parcel lookup per token: see app/services/ratelimit.py."""
     limits_of(request).public_parcels.take(client_key(request, settings))
