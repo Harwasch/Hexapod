@@ -406,6 +406,17 @@ set by hand is refused unless `--force`. See the script's docstring.
 `site_id`, `name`, `longitude`, `latitude`, `height` (ellipsoidal metres), `heading`,
 `pitch`, `roll` (degrees), `is_default` (one per site; setting a new default clears others).
 
+## scan_requests
+
+Site scans requested from the landing page's form (`POST /api/v1/scan-requests`, open; read with
+the write token, `GET`, and in the admin console's Requests view). Columns: `name`, `email`,
+`notes`, `boundary` (`geometry(MULTIPOLYGON, 4326)`, nullable: acres only), `parcel_ids`
+(text[]), `outline_unvalidated` and `raw_outline` (jsonb; an outline kept as sent when it could
+not be cleaned in time), `created_at` (indexed).
+
+Kept indefinitely, with no automatic deletion: a request is deleted only when the person who
+sent it asks (Harrison, 2026-10-20).
+
 ## Shared metadata objects
 
 - **Attribution** `{ text, organization?, url? }` — must remain visible while shown.

@@ -2314,6 +2314,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/scan-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Requests
+         * @description The most recent scan requests first. Write token required: they hold contact details.
+         */
+        get: operations["list_requests_api_v1_scan_requests_get"];
+        put?: never;
+        /**
+         * Create
+         * @description Request a site scan. No token. Answered `received` whether stored or not.
+         */
+        post: operations["create_api_v1_scan_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sites": {
         parameters: {
             query?: never;
@@ -8971,6 +8995,20 @@ export interface components {
             /** Boundaryrevision */
             boundaryRevision: number;
         };
+        /**
+         * ParcelsMultiPolygon
+         * @description Several parcels as sent: each part a valid polygon, though neighbours share edges, which
+         *     a valid MultiPolygon may not. The service dissolves them into one outline on the way in.
+         */
+        ParcelsMultiPolygon: {
+            /** Coordinates */
+            coordinates: number[][][][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "MultiPolygon";
+        };
         /** PhoneCapture */
         PhoneCapture: {
             capture: components["schemas"]["CaptureRead"];
@@ -10588,6 +10626,77 @@ export interface components {
          * @enum {string}
          */
         ScaleSource: "arkit" | "exif-gps" | "manual" | "camera-height-estimate" | "visual-epoch" | "unresolved";
+        /**
+         * ScanRequestCreate
+         * @description What the landing page's "Request a site scan" form sends (src/landing/form.ts).
+         */
+        ScanRequestCreate: {
+            /** Boundary */
+            boundary?: (components["schemas"]["Polygon"] | components["schemas"]["ParcelsMultiPolygon"]) | null;
+            /** Email */
+            email: string;
+            /** Name */
+            name: string;
+            /**
+             * Notes
+             * @default
+             */
+            notes?: string;
+            /** Parcelids */
+            parcelIds?: string[];
+            /**
+             * Website
+             * @default
+             */
+            website?: string;
+        };
+        /** ScanRequestRead */
+        ScanRequestRead: {
+            /** Aream2 */
+            areaM2: number | null;
+            /** Boundary */
+            boundary: (components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"]) | null;
+            /**
+             * Boundaryunreadable
+             * @default false
+             */
+            boundaryUnreadable?: boolean;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Email */
+            email: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Notes */
+            notes: string;
+            /**
+             * Outlineunvalidated
+             * @default false
+             */
+            outlineUnvalidated?: boolean;
+            /** Parcelids */
+            parcelIds: string[];
+        };
+        /**
+         * ScanRequestReceived
+         * @description The one answer to every accepted submission, stored or not: nothing to probe.
+         */
+        ScanRequestReceived: {
+            /**
+             * Status
+             * @default received
+             * @constant
+             */
+            status?: "received";
+        };
         /** ScenarioCreate */
         ScenarioCreate: {
             /** Boundaryrevision */
@@ -12884,6 +12993,7 @@ export type SchemaOutlinePoint = components['schemas']['OutlinePoint'];
 export type SchemaOutlineRequest = components['schemas']['OutlineRequest'];
 export type SchemaOverviewRead = components['schemas']['OverviewRead'];
 export type SchemaOverviewRequest = components['schemas']['OverviewRequest'];
+export type SchemaParcelsMultiPolygon = components['schemas']['ParcelsMultiPolygon'];
 export type SchemaPhoneCapture = components['schemas']['PhoneCapture'];
 export type SchemaPhoneCaptureCreate = components['schemas']['PhoneCaptureCreate'];
 export type SchemaPhoneRefine = components['schemas']['PhoneRefine'];
@@ -12961,6 +13071,9 @@ export type SchemaRunStatus = components['schemas']['RunStatus'];
 export type SchemaScaleEvidence = components['schemas']['ScaleEvidence'];
 export type SchemaScaleEvidenceInput = components['schemas']['ScaleEvidenceInput'];
 export type SchemaScaleSource = components['schemas']['ScaleSource'];
+export type SchemaScanRequestCreate = components['schemas']['ScanRequestCreate'];
+export type SchemaScanRequestRead = components['schemas']['ScanRequestRead'];
+export type SchemaScanRequestReceived = components['schemas']['ScanRequestReceived'];
 export type SchemaScenarioCreate = components['schemas']['ScenarioCreate'];
 export type SchemaScenarioRead = components['schemas']['ScenarioRead'];
 export type SchemaScenarioRequestRead = components['schemas']['ScenarioRequestRead'];
@@ -23056,6 +23169,152 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Problem"];
                 };
+            };
+        };
+    };
+    list_requests_api_v1_scan_requests_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScanRequestRead"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No write token is configured on this server */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_api_v1_scan_requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScanRequestCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScanRequestReceived"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is larger than this route accepts */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many requests from this client; see Retry-After */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The day's requests are all in; see Retry-After */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
