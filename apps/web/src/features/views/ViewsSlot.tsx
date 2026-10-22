@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 
 import { ErrorBoundary } from "@/app/ErrorBoundary";
 import { useAsCaptured } from "@/state/asCaptured";
+import { useLighting } from "@/state/lighting";
 import { useSites } from "@/state/sites";
 
 const ViewsControl = lazy(() =>
@@ -10,6 +11,7 @@ const ViewsControl = lazy(() =>
 const AsCapturedChip = lazy(() =>
   import("./ViewsControl").then((m) => ({ default: m.AsCapturedChip })),
 );
+const RelitBadge = lazy(() => import("./RelitBadge").then((m) => ({ default: m.RelitBadge })));
 
 /**
  * The splat view control's place in the HUD strip: rendered while a splat scan is the active
@@ -40,4 +42,20 @@ export function ViewsSlot() {
       )}
     </ErrorBoundary>
   );
+}
+
+/**
+ * Sunlight's badge in the HUD's message stack (ADR 0019): the badge (and the clock it holds
+ * for "At capture") loaded only once the sun is turned on; it decides itself whether the
+ * relight can be drawn.
+ */
+export function RelitSlot() {
+  const on = useLighting((s) => s.sun !== "off");
+  return on ? (
+    <ErrorBoundary inline label="Simulated lighting">
+      <Suspense fallback={null}>
+        <RelitBadge />
+      </Suspense>
+    </ErrorBoundary>
+  ) : null;
 }

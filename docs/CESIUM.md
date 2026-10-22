@@ -639,6 +639,23 @@ with the way back. Kept only in the address, which follows the switch. The Simul
 motion badge is not told: it goes because nothing animates. See
 [ADR 0019](DECISIONS/0019-living-map-scoped.md) § As captured. Evidence: `e2e/asCaptured.spec.ts`.
 
+## Sunlight
+
+The splat view control's **Simulated lighting** (Off · Now · At capture, `state/lighting.ts`)
+shades each clearly flat splat as the sun would light it: a part of the splat primitive's colour chain
+(`cesium/splatSunlight.ts`, `colorOrder` 3) refetches the splat's covariance texel, takes the
+smallest axis of a disc-like covariance as its normal (`lib/splatNormals.ts`, closed form; none
+for round splats), and lights it by `czm_sunDirectionEC`, the engine's sun for the scene clock.
+At capture holds the clock at the shown date's capture time and gives it back exactly
+(`cesium/sunClock.ts`); it is off while more than one date is drawn (Compare, a per-cell view
+rule), since one clock cannot be each date's. A badge says "Simulated lighting: the sun (now)
+over shadows baked in at capture, …", and "Sun below horizon" at night, only for a shown
+tileset and a sun that is a number. CesiumJS only (the usual notice and switch elsewhere); off
+while As captured is on; nothing loaded until the sun is turned on. A per-splat normal sidecar
+is stubbed (SPZ has no attribute slot). See [ADR 0019](DECISIONS/0019-living-map-scoped.md) §
+Sunlight. Evidence: `e2e/sunlightScene.spec.ts` (an east-facing slab, morning against evening,
+by pixel brightness) and `e2e/sunlight.spec.ts`.
+
 ## Patched engine
 
 `patches/@cesium__engine@26.3.0.patch` (applied by pnpm on install) guards

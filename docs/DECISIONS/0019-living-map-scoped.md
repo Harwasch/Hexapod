@@ -131,3 +131,110 @@ and the address following the switch; the demo ranch's simulated fleet and its z
 progress), `e2e/poke.spec.ts` (a ring stops), and the unit tests beside each effect
 (`showOnceBridge`, `showOnceCard`, `landAgentAsCaptured`, `researchMap`,
 `siteFixtureAsCaptured`, `rehearsalManager`, `asCaptured`, `asCapturedUrl`).
+
+## Sunlight (web)
+
+Date 2026-10-20 · design M4–M6 §1 C5, W6b; branch `claude/feat-splat-sunlight`.
+
+### Context
+
+A splat scan is lit once, by the sun and sky of the moment it was captured: its colours are the
+photographs'. Seeing it under another sun (now, or the capture's own, beside the sky the globe
+draws for that time) needs a light model the capture never measured, so it is a depiction, not
+data, and it must say so. A Gaussian splat also has no normal; only a flat one has one in all but
+name, the axis of its smallest variance.
+
+### Decision
+
+1. **A colour part, no engine-patch edit** (`cesium/splatSunlight.ts`, `splatSunlightColor`,
+   `colorOrder` 3: after the objects' highlight, before Confidence / Data age (5), which tint by
+   the relit luminance, the inferred layers' Highlight (10) and the compositor's (11)). It
+   refetches the splat's covariance texel (the odd column of `u_splatAttributeTexture`, at the
+   engine's own `u_splatRowMask`/`u_splatRowShift`, as the vertex shader does) and, when the motion
+   chain declares a Jacobian, draws the moved covariance as the engine does.
+2. **A normal only for a clearly flat splat.** The closed-form eigenvalues of the symmetric 3×3
+   (Smith 1961); the smallest axis is the normal only when `λmin/λmid < 0.25`, from the largest
+   cross product of two rows of `A − λmin·I`. Round splats, needles and empty ones have none.
+   `lib/splatNormals.ts` restates the arithmetic in TypeScript, and the GLSL transcribes it; its
+   tests are the test vectors (rotated discs, the 0.25 boundary, a 2 cm splat after the engine's
+   half-float storage, the lambert sign).
+3. **The engine's sun.** The normal is turned toward the eye, into eye coordinates by
+   `mat3(czm_modelView)`, and lit by `czm_sunDirectionEC`, which follows `clock.currentTime`, so the
+   relight's sun is the sky's. The engine declares an automatic uniform only for the `czm_` names
+   a shader's text uses; this text uses it, and it compiles and lights under SwiftShader
+   (`e2e/sunlightScene.spec.ts`). `c.rgb *= mix(1, 0.35 + 0.65 · lambert · sunUp, strength)`,
+   strength 1. `sunUp` is a uniform worked out once a frame on the CPU at the scan's centre by the
+   engine's own sun arithmetic (`sunSine`), faded in over the first 5° of elevation (a rendering
+   choice, not a measurement), so the shader and the badge agree on night. Before the engine's
+   Earth-orientation data loads there is no ICRF matrix; the engine turns by TEME then, and so
+   does `sunSine`. A sun that is still not a number (a scan not placed, a matrix of NaN) is
+   never drawn or claimed: the uniform's strength goes to 0, the colours are the photograph's,
+   and the frame withdraws its report.
+4. **Deviation: a splat without a normal counts as facing the sun** (lambert 1), not as untouched:
+   by day it is unchanged, as designed; at night it goes to the same ambient floor as everything
+   else, instead of the round splats (foliage) staying daylit beside a darkened ground.
+5. **Sun: Off · Now · At capture** (`state/lighting.ts`, not persisted), in the Splat view control
+   (`features/views/SunControl.tsx`, in its lazy chunk; no tool-rail button). At capture is
+   offered only for a date whose capture time was recorded (`observedAtSource` not `created`);
+   a seeded model without a date uses its own `observedAt`. It is labelled **Simulated
+   lighting**, as the repo's rule asks of anything simulated: the control, its hint and the
+   badge say so.
+6. **At capture holds the scene clock** at the shown date's capture time, `shouldAnimate` off,
+   and gives back the clock it found, exactly (`cesium/sunClock.ts`): the time it would read had
+   it never been held (the held span at its own multiplier when it was running, nothing when it
+   was still), its animate flag and its step; a time someone else set meanwhile stands. The hold
+   lives with the badge, so whatever ends the relight ends it, and it needs the scene's report
+   that the shown model is drawn relit, so a moved sky is never unlabelled. **Not under
+   Compare or a per-cell view rule**: more than one date is drawn, each with its own capture
+   time, and the scene has one clock, so holding either would relight the other at a moment
+   that is not its own. At capture is disabled while more than one date is drawn, with the note
+   "At capture is off while more than one date is drawn: one scene clock holds one capture's
+   sun, so the sun of now is drawn"; the choice is kept and holds again with one date.
+7. **The badge is the label** (`features/views/RelitBadge.tsx`, in the HUD's messages):
+   "Simulated lighting: the sun (now) over shadows baked in at capture, {capture date and time}
+   UTC" (or "(at capture)"; "each date's own" while more than one date is drawn), and "Sun
+   below horizon" when the frame drawn had the sun down. It shows only what the scene reports
+   drawing (`state/sunReport.ts`), never the choice: a model reports only while its tileset is
+   shown, so a date kept loaded but hidden, or a site left behind, claims nothing and holds no
+   clock. With one date it reads the shown model's report; with more, any of the site's.
+8. **Off while As captured is on** (the slot reads `useAsCaptured`, as § As captured asked): the
+   part leaves the chain, the badge goes, the clock is given back; the control shows Off, disabled,
+   saying "Off while As captured is on", and the choice comes back after.
+9. **CesiumJS only** (C5): under PlayCanvas or Spark the control is disabled beside the views
+   control's shared "Needs the CesiumJS renderer" notice and its one-click switch, and the relight
+   requires CesiumJS to be the splat renderer even for a scan CesiumJS draws under another one (a
+   Living Survey rig's), which nothing there would label.
+10. **Cost.** Off: nothing in the shader; `SiteManager.attachTileset` holds a slot
+    (`cesium/sunlightSlot.ts`) that loads the relight on the first switch. On: one more fetch of a
+    texel the engine has just read, a closed-form eigen solution (a determinant, an `acos`, two
+    `cos`, three cross products) and a few dozen flops a splat; with a motion Jacobian, that
+    Jacobian once more. The globe's entry: index 194,969 → 195,331 B gzip (+362 B; budget
+    197,000 B), the badge's slot and the store; the relight, its part, the badge and the words are
+    chunks loaded on demand. After the second review, with § As captured's fixes beneath it, the
+    stack's entry is 195,742 B → 195,811 B (+69 B): the Simulated lighting label in the slot's
+    error boundary; Compare, the shown-tileset guard and the NaN guard are in lazy chunks.
+
+### Stubbed
+
+- **A per-splat normal sidecar**: a surface fit from the pipeline's SfM points (keyed by tile
+  checksum, as instances are), which would give round and noisy splats on a surface the normal of
+  the surface. Deferred: SPZ has no attribute slot to carry it, so it needs a sidecar file, its
+  loader and a texture per tile.
+- **Shadows cast by today's sun**: no shadow map of splats; only the facing term is modelled.
+- **Removing the capture's own shading**: not attempted. The badge says the shadows are baked in.
+
+### Consequences
+
+- While At capture holds the clock, everything on the scene clock stands still: the Living
+  Survey's wind stands mid-bend (the Simulated motion badge stays, the bend is still modelled, and
+  the survey's own guard logs that the clock stopped) and the sky is the capture's.
+- A flat surface relit is never brighter than its photograph, only darker where it faces away.
+- Splats whose cut-off is close to 0.25 may flip between relit and not from one splat to the next
+  on the same surface; the threshold is the design's, not a measurement.
+
+Evidence: `e2e/sunlightScene.spec.ts` (an east-facing slab under SwiftShader: discs 137.6 off,
+126.0 at 07:15 local solar time, 0.916 of the photograph against the mirror's 0.917; 50.3 at
+16:45, 0.366 against 0.35; round splats unchanged by day; everything at the floor at night; the
+sun off and As captured on draw exactly the photograph), `e2e/sunlight.spec.ts` (the app under all
+three renderers), and `splatNormals`, `splatSunlight`, `sunClock` and `sunlightControl` unit
+tests.
