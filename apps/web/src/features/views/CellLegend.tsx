@@ -88,17 +88,29 @@ function AgeKey({ report }: { report: Extract<CellViewReport, { kind: "ready" }>
   );
 }
 
-/** The key to an analytic view, or what stands in for one (loading, not measured, failed). */
+/**
+ * The key to an analytic view, or what stands in for one (loading, not measured, failed), and
+ * `note`, what the renderer drawing it does differently (a cell level per tile), if anything.
+ */
 export function CellLegend({
   mode,
   report,
+  note = null,
 }: {
   mode: Exclude<ViewMode, "photo">;
   report: CellViewReport | undefined;
+  note?: string | null;
 }) {
+  // The scan is drawn as the photo until the view's data is in: said, so the photo is not read
+  // as a scan with no evidence.
+  const loading = (
+    <p className="cell-legend__state" data-testid="cell-legend-loading">
+      {mode === "confidence" ? "Loading confidence…" : "Loading data age…"}
+    </p>
+  );
   let body;
   if (!report || report.kind === "loading") {
-    body = <p className="cell-legend__state">Loading…</p>;
+    body = loading;
   } else if (report.kind === "not-measured") {
     body = (
       <p className="cell-legend__state">
@@ -112,7 +124,7 @@ export function CellLegend({
   } else if (report.mode === "data-age") {
     body = <AgeKey report={report} />;
   } else {
-    body = <p className="cell-legend__state">Loading…</p>;
+    body = loading;
   }
   return (
     <div
@@ -124,6 +136,11 @@ export function CellLegend({
       {body}
       {mode === "confidence" && report?.kind === "ready" && (
         <p className="cell-legend__policy">weak-v1</p>
+      )}
+      {note !== null && report?.kind === "ready" && (
+        <p className="cell-legend__policy" data-testid="cell-legend-renderer">
+          {note}
+        </p>
       )}
     </div>
   );

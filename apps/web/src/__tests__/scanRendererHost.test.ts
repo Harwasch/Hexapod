@@ -897,3 +897,40 @@ describe("the scan's inferred layers under the overlay", () => {
     r.host.destroy();
   });
 });
+
+describe("the scan's cell view under the overlay", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: [
+        "setTimeout",
+        "clearTimeout",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "performance",
+      ],
+    });
+    served = TILESET;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(JSON.stringify(served), { status: 200 }))),
+    );
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+  });
+
+  it("names the scan whose view to draw, and measures cells in the globe's pixels", async () => {
+    const r = await rig({ assetId: "scan-cells" });
+    // The renderer draws this asset's Confidence / Data age (scanCellView.ts).
+    expect(r.hooks().assetId).toBe("scan-cells");
+    // A cell's size on screen is CesiumJS's measure: the globe's pixels, whatever the overlay's.
+    r.viewer.resolutionScale = 0.5;
+    r.camera.positionWC = new Cartesian3(-20, -61, 10);
+    await r.run(400, true);
+    const pose = r.renders.at(-1);
+    expect(pose?.globePixelRatio).toBe(0.5);
+    r.host.destroy();
+  });
+});

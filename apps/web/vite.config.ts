@@ -251,6 +251,15 @@ export default defineConfig({
               test: /node_modules[\\/](cesium|@cesium)[\\/]/,
               priority: 1,
             },
+            // The cell views' shared code -- the look, the grid it reads, and what hands a
+            // view to PlayCanvas or Spark -- is reached from five on-demand chunks (the view,
+            // the per-cell rules, the key, both renderers), each a different set, so left alone
+            // it split into four chunks of a few kB, and the globe's entry carries every
+            // chunk's name for the preloader. One chunk for all of it.
+            {
+              name: "cellLook",
+              test: /src[\\/](lib[\\/](cellLook|cellGrid|cellRamps)|cesium[\\/]scanView[\\/](cellModifier|scanCellView))\.ts$/,
+            },
           ],
         },
       },

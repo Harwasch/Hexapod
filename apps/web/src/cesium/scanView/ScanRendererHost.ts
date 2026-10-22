@@ -837,6 +837,7 @@ export class ScanRendererHost {
       maxShDegree: maxShDegree(isHandheld()),
       deviceLost: (reason) => this.deviceLost(token, reason),
       preserveDrawingBuffer: this.preserveDrawingBuffer,
+      assetId: target.assetId,
     };
     const create = async (
       module: Exclude<SplatRendererKind, "cesium">,
@@ -1119,11 +1120,12 @@ export class ScanRendererHost {
       rest(now - lastMotionAt >= REST_AFTER_MS);
       const size = inputSize();
       const pose = {
-        ...scanPose(viewer.camera, toLocal, {
-          width: size.width,
-          height: size.height,
-          pixelRatio: overlayPixelRatio(this.globeResolution(), { handheld, moving }),
-        }),
+        ...scanPose(
+          viewer.camera,
+          toLocal,
+          size,
+          overlayPixelRatio(this.globeResolution(), { handheld, moving }),
+        ),
         farView: far,
       };
       const drawn = Math.min(streamer.drawnGaussians, adaptive.budget);
@@ -1403,7 +1405,7 @@ export class ScanRendererHost {
       const size = inputSize();
       const ratio = overlayPixelRatio(this.globeResolution(), { handheld, moving });
       const pose = {
-        ...scanPose(camera, toLocal, { width: size.width, height: size.height, pixelRatio: ratio }),
+        ...scanPose(camera, toLocal, size, ratio),
         farView: far,
       };
       if (layers && (motion || layersArrived)) {

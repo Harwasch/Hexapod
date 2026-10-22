@@ -10,13 +10,19 @@
  * colour (by hue: a wrong bucket fails), and with a later date's evidence everywhere it is
  * striped with light bands besides (a missing stripe fails).
  *
+ * The same grids drawn by PlayCanvas (the app's default renderer) and Spark, through the
+ * shared cell look at one level per tile (scanView/cellModifier.ts): weak cells red-majority,
+ * strong ones green, the split red left and green right -- and how many sampled splats read
+ * the level CesiumJS would have given them. And the shared look itself run on the GPU against
+ * its TypeScript twin, case for case (src/dev/cellLookGpuCheck.ts).
+ *
  * Headless GL is SwiftShader: pixels are counted, not eyeballed.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const TILES = resolve(process.cwd(), "../../data/tiles");
 const EVIDENCE = process.env.W4A_EVIDENCE_DIR;
@@ -38,6 +44,7 @@ const HARNESS_HTML = `<!doctype html>
       window.__cellView = await harness.startCellViewHarness({
         container: document.getElementById("viewer"),
         url: "/fixture-tiles/synthetic-yard/splat/tileset.json",
+        renderer: new URLSearchParams(location.search).get("renderer") ?? "cesium",
       });
     </script>
   </body>
@@ -58,48 +65,88 @@ interface Counts {
 interface Harness {
   view(grid: string, mode?: string): Promise<Counts>;
   installed(): boolean;
+  reading(): { tiles: number; steps: number; sampled: number; agree: number } | null;
+  native(): boolean;
 }
 
-test("weak cells draw red, strong ones green, each splat by its own cell", async ({ page }) => {
-  // Seven views on software GL, the first waiting for the yard to refine: minutes, not seconds.
-  test.setTimeout(420_000);
+/** The yard's PlayCanvas streamed package (splat-transform's lod-meta.json and SOG chunks). */
+const NATIVE = "synthetic-yard/splat/sog/";
+
+/**
+ * Opens the harness drawn by `renderer`, collecting the page's errors into `errors`. With
+ * `native`, the yard's streamed package is served where a scan keeps it (`sog/` beside the
+ * tileset) and PlayCanvas streams that; without, the tileset says it has none
+ * (`extras.nativeLod: false`), so nothing is probed for and nothing answers 404.
+ */
+async function openHarness(
+  page: Page,
+  renderer: string,
+  errors: string[],
+  options: { native?: boolean } = {},
+): Promise<void> {
   await page.setViewportSize({ width: 960, height: 640 });
-  const errors: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
   });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.route("**/fixture-tiles/**", (route) => {
-    const relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
+    let relative = new URL(route.request().url()).pathname.replace(/^.*\/fixture-tiles\//, "");
     if (relative.includes("..")) return route.abort();
+    if (relative.startsWith(NATIVE) && options.native) {
+      relative = `synthetic-yard-sog/${relative.slice(NATIVE.length)}`;
+    }
+    const file = resolve(TILES, relative);
+    if (!existsSync(file)) {
+      errors.push(`404: ${relative}`);
+      return route.fulfill({ status: 404, body: "" });
+    }
+    if (relative === "synthetic-yard/splat/tileset.json" && !options.native) {
+      const tileset = JSON.parse(readFileSync(file, "utf8")) as {
+        root: { extras?: Record<string, unknown> };
+      };
+      tileset.root.extras = { ...tileset.root.extras, nativeLod: false };
+      return route.fulfill({ status: 200, contentType: "application/json", json: tileset });
+    }
     const type = relative.endsWith(".json")
       ? "application/json"
       : relative.endsWith(".bin")
         ? "application/octet-stream"
-        : "model/gltf-binary";
-    return route.fulfill({
-      status: 200,
-      contentType: type,
-      body: readFileSync(resolve(TILES, relative)),
-    });
+        : relative.endsWith(".webp")
+          ? "image/webp"
+          : "model/gltf-binary";
+    return route.fulfill({ status: 200, contentType: type, body: readFileSync(file) });
   });
-  await page.route("**/cell-view-harness.html", (route) =>
+  await page.route(/\/cell-view-harness\.html/, (route) =>
     route.fulfill({ status: 200, contentType: "text/html", body: HARNESS_HTML }),
   );
-  await page.goto("/cell-view-harness.html");
+  await page.goto(`/cell-view-harness.html?renderer=${renderer}`);
   await page.waitForFunction(() => "__cellView" in window, undefined, { timeout: 90_000 });
+}
 
-  const view = async (grid: string, mode = "confidence") => {
-    const counts = await page.evaluate(
-      ([g, m]) => (window as unknown as { __cellView: Harness }).__cellView.view(g, m),
-      [grid, mode] as [string, string],
-    );
-    const name = mode === "confidence" ? grid : `${grid}-${mode}`;
-    const path = EVIDENCE ? `${EVIDENCE}/scene-${name}.png` : test.info().outputPath(`${name}.png`);
-    await page.screenshot({ path });
-    await test.info().attach(name, { path, contentType: "image/png" });
-    return counts;
-  };
+/** Draws `grid` in `mode` and counts the pixels; the screenshot goes with the evidence. */
+async function viewOf(
+  page: Page,
+  prefix: string,
+  grid: string,
+  mode = "confidence",
+): Promise<Counts> {
+  const counts = await page.evaluate(
+    ([g, m]) => (window as unknown as { __cellView: Harness }).__cellView.view(g, m),
+    [grid, mode] as [string, string],
+  );
+  const name = `${prefix}${mode === "confidence" ? grid : `${grid}-${mode}`}`;
+  const path = EVIDENCE ? `${EVIDENCE}/scene-${name}.png` : test.info().outputPath(`${name}.png`);
+  await page.screenshot({ path });
+  await test.info().attach(name, { path, contentType: "image/png" });
+  return counts;
+}
+
+test("weak cells draw red, strong ones green, each splat by its own cell", async ({ page }) => {
+  // Seven views on software GL, the first waiting for the yard to refine: minutes, not seconds.
+  test.setTimeout(420_000);
+  const errors: string[] = [];
+  await openHarness(page, "cesium", errors);
+  const view = (grid: string, mode?: string) => viewOf(page, "", grid, mode);
 
   // Twice: the first view also waits for the level-of-detail tiles to finish refining.
   await view("off");
@@ -140,4 +187,106 @@ test("weak cells draw red, strong ones green, each splat by its own cell", async
   expect(newer.coverage).toBeGreaterThan(off.coverage * 0.8);
   expect(newer.light).toBeGreaterThan(age.light + 0.15);
   expect(newer.ageHue + newer.light).toBeGreaterThan(0.7);
+});
+
+for (const renderer of ["playcanvas", "spark"] as const) {
+  test(`under ${renderer}, weak cells draw red, strong ones green, a cell level a tile`, async ({
+    page,
+  }) => {
+    test.setTimeout(480_000);
+    const errors: string[] = [];
+    await openHarness(page, renderer, errors);
+    const view = (grid: string, mode?: string) => viewOf(page, `${renderer}-`, grid, mode);
+    await view("off");
+    const off = await view("off");
+    const weak = await view("weak");
+    const reading = await page.evaluate(() =>
+      (window as unknown as { __cellView: Harness }).__cellView.reading(),
+    );
+    const strong = await view("strong");
+    const split = await view("split");
+    const age = await view("weak", "data-age");
+    const newer = await view("split", "data-age");
+    test.info().annotations.push({
+      type: "pixels",
+      description: JSON.stringify({ off, weak, strong, split, age, newer, reading }),
+    });
+    expect(errors.filter((e) => /shader|compile|link|uniform|^404/i.test(e))).toEqual([]);
+    // The look is on the renderer's tiles, and the level each reads agrees with CesiumJS's.
+    expect(reading?.tiles ?? 0).toBeGreaterThan(0);
+    expect(reading?.sampled ?? 0).toBeGreaterThan(0);
+    expect((reading?.agree ?? 0) / Math.max(1, reading?.sampled ?? 0)).toBeGreaterThan(0.9);
+    expect(off.coverage).toBeGreaterThan(0.05);
+    expect(off.red).toBeLessThan(0.1);
+    // Weak everywhere: red-majority of what the scan covers.
+    expect(weak.red).toBeGreaterThan(0.6);
+    expect(weak.green).toBeLessThan(0.05);
+    expect(strong.green).toBeGreaterThan(0.6);
+    expect(strong.red).toBeLessThan(0.05);
+    expect(split.leftRed).toBeGreaterThan(0.5);
+    expect(split.rightRed).toBeLessThan(0.1);
+    expect(split.rightGreen).toBeGreaterThan(0.5);
+    expect(age.ageHue).toBeGreaterThan(0.6);
+    expect(newer.light).toBeGreaterThan(age.light + 0.15);
+  });
+}
+
+test("under playcanvas streaming the yard's own package, the look is drawn at one level for all of it", async ({
+  page,
+}) => {
+  test.setTimeout(480_000);
+  const errors: string[] = [];
+  await openHarness(page, "playcanvas", errors, { native: true });
+  const view = (grid: string, mode?: string) => viewOf(page, "playcanvas-native-", grid, mode);
+  await view("off");
+  const off = await view("off");
+  const weak = await view("weak");
+  const reading = await page.evaluate(() =>
+    (window as unknown as { __cellView: Harness }).__cellView.reading(),
+  );
+  const native = await page.evaluate(() =>
+    (window as unknown as { __cellView: Harness }).__cellView.native(),
+  );
+  const strong = await view("strong");
+  const split = await view("split");
+  test.info().annotations.push({
+    type: "pixels",
+    description: JSON.stringify({ off, weak, strong, split, reading, native }),
+  });
+  expect(errors.filter((e) => /shader|compile|link|uniform|^404/i.test(e))).toEqual([]);
+  // PlayCanvas streams the package itself: one entity, the look on it.
+  expect(native).toBe(true);
+  expect(reading?.tiles).toBe(1);
+  expect(off.coverage).toBeGreaterThan(0.05);
+  expect(off.red).toBeLessThan(0.1);
+  expect(weak.red).toBeGreaterThan(0.6);
+  expect(strong.green).toBeGreaterThan(0.6);
+  expect(strong.red).toBeLessThan(0.05);
+  expect(split.leftRed).toBeGreaterThan(0.5);
+  expect(split.rightGreen).toBeGreaterThan(0.5);
+});
+
+test("the shared colour code draws on a GPU what its reference says, case for case", async ({
+  page,
+}) => {
+  await page.route(/\/cell-look-check\.html/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: `<!doctype html><html><body><script type="module">
+        const check = await import("/src/dev/cellLookGpuCheck.ts");
+        window.__look = check.cellLookAgreement();
+      </script></body></html>`,
+    }),
+  );
+  await page.goto("/cell-look-check.html");
+  await page.waitForFunction(() => "__look" in window, undefined, { timeout: 90_000 });
+  const look = await page.evaluate(
+    () =>
+      (window as unknown as { __look: { cases: number; maxError: number; worst: unknown } }).__look,
+  );
+  test.info().annotations.push({ type: "look", description: JSON.stringify(look) });
+  expect(look.cases).toBeGreaterThan(5000);
+  // Bytes on the GPU, doubles here: within two steps of a byte, every colour and every cue.
+  expect(look.maxError).toBeLessThanOrEqual(2 / 255);
 });

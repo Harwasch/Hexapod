@@ -569,12 +569,41 @@ the pipeline's per-cell grid, `hexapod.cellgrid` v1, declared on the root tile a
 `extras.confidence` and decoded by `lib/cellGrid.ts` (Cesium-free). See
 [ADR 0016](DECISIONS/0016-confidence-map.md) § Web.
 
-- **Only the CesiumJS splat primitive draws them.** The tint is one part of the primitive's
-  colour chain (`cesium/splatCellView.ts`, `colorOrder` 5: after the objects' highlight, before
-  the inferred layer's), so no engine-patch change was needed. PlayCanvas and Spark have no such
-  hook: under them the control offers the analytic views disabled, says "Needs the CesiumJS
-  renderer (Settings › Advanced › Splat renderer)", and offers a one-click "Draw with CesiumJS".
-  Nothing silently does nothing.
+- **All three renderers draw them, from one colour code.** The look -- the cell lookup, the
+  `weak-v1` ramp from the grid's own `weakBelow`, the hatch (weak) and dot (fair) cues, grey for
+  no evidence, Data age's buckets and newer-data stripes -- is one GLSL source written from the
+  legend's ramp tables, `CELL_LOOK_GLSL` in `lib/cellLook.ts`, with its TypeScript twin
+  `cellViewColor`. CesiumJS draws it as one part of the splat primitive's colour chain
+  (`cesium/splatCellView.ts`, `colorOrder` 5: after the objects' highlight, before the inferred
+  layer's), so no engine-patch change was needed. PlayCanvas draws it in its work-buffer
+  modifier and Spark in its world modifier (`cesium/scanView/cellModifier.ts`, after the
+  objects' rule), from the view `cesium/cellView.ts` hands over per asset
+  (`scanView/scanCellView.ts`): the same texture bytes and rule, and no Data age until its own
+  texture is built. Neither library is patched.
+- **The level: per splat in CesiumJS, per tile in PlayCanvas and Spark.** Those two change a
+  splat's colour only as they copy or generate a tile, with no eye at hand; re-copying the scan
+  as the eye moves would cost every camera move. So each tile reads one level, CesiumJS's rule
+  at the tile's centre, as a uniform the host re-picks each frame; a tile is copied or
+  generated again only when its level steps. The key says so ("Cell size picked per tile by
+  PlayCanvas (per splat by CesiumJS)"). The colours and cues are the same; only the cell size
+  at a tile's near and far edges can differ, and each renderer reads out how many sampled
+  splats read CesiumJS's level (`scanCellViewReading`). Measured on the synthetic yard
+  (2026-10-20, SwiftShader), two different things. Pixel coverage, from 48 m overhead: of the
+  pixels the scan covers, under an all-weak grid 98.6 % drew red under PlayCanvas, 98.8 % under
+  Spark and 99.0 % under CesiumJS; under an all-strong grid 99.3 %, 99.4 % and 99.5 % drew green.
+  That is how much of the scan shows the right verdict, not a per-cell match. Level agreement:
+  from 48 m overhead, 989 of 989 sampled splats read CesiumJS's level under both renderers;
+  from the app's landing view, 989 of 989 under PlayCanvas but 871 of 989 (88 %) under Spark --
+  the other 12 % draw cells a level finer or coarser than CesiumJS would there. A natively
+  streamed scan (SOG) is one entity: one level for all of it (the yard's own package draws
+  98.6 % red under an all-weak grid, 99.3 % green under an all-strong one). Cells are measured
+  in the globe's pixels (`ScanPose.globePixelRatio`), so the overlay's lower resolution in
+  motion steps nothing.
+- **What still needs CesiumJS.** The per-cell view rules, Sunlight and the Compare swipe: under
+  PlayCanvas or Spark the notice names exactly those ("Per cell and Sunlight: Needs the CesiumJS
+  renderer (Settings › Advanced › Splat renderer)") with the one-click "Draw with CesiumJS". The
+  WebGPU trial does not draw the views (the look has no WGSL form): there they are disabled and
+  the notice names them too. Nothing silently does nothing.
 - **Zero cost on Photo.** `SiteManager.attachTileset` hooks each splat tileset through a few lines
   on the first load (`cesium/cellViewSlot.ts`); the view, the part and the decoder load on demand
   the first time a view is chosen, and the part leaves the chain on Photo. Mode switches and a new
@@ -587,15 +616,19 @@ the pipeline's per-cell grid, `hexapod.cellgrid` v1, declared on the root tile a
   so far views read the pyramid's coarser levels, which hold the weakest child: a weak patch is
   never averaged away.
 - **Honesty.** A model without a grid is "Not measured" in the key and in the Inspector's
-  Date shown (a splat upload, or a run before confidence maps). An inferred layer drawn in the
-  scan's sort is grey: it carries no capture evidence. Data age gives one date one age (one
+  Date shown (a splat upload, or a run before confidence maps). Until a view's data is in, the
+  scan stays the photo and the key says "Loading confidence…" or "Loading data age…", so the
+  photo is not read as no evidence. An inferred layer drawn in the
+  scan's sort is grey: it carries no capture evidence (under PlayCanvas and Spark a layer's
+  tiles are their own, and grey whatever their number). Data age gives one date one age (one
   capture time), and stripes cells where a later date scored evidence; a later date is compared
   only when its tileset is in the same frame, and one that is not, has no grid, or cannot be read
   is named in the key.
 
-Evidence: `e2e/confidenceViewScene.spec.ts` (scene: weak cells red-dominant by pixel count,
-each splat by its own cell) and `e2e/confidenceView.spec.ts` (the app under all three
-renderers).
+Evidence: `e2e/confidenceViewScene.spec.ts` (scene: weak cells red-dominant by pixel count
+under CesiumJS, PlayCanvas and Spark, with the per-tile level's agreement with CesiumJS's; and
+the shared GLSL run on the GPU against `cellViewColor`, case for case) and
+`e2e/confidenceView.spec.ts` (the app under all three renderers).
 
 ## Comparing two dates
 
@@ -604,7 +637,7 @@ the divider (`features/compare/CompareDates.tsx`, `SiteManager.setCompareDates`)
 own tileset with the stock `splitDirection` (`LEFT`, `RIGHT`), which the splat primitive copies
 every frame; the divider sets `scene.splitPosition`. Both share the frame anchor's placement,
 so what differs between the halves is the data. CesiumJS only: under PlayCanvas or Spark the
-section is disabled with the same notice and switch as the analytic views. Choosing one date,
+section is disabled with the same notice and switch as Per cell and Sunlight. Choosing one date,
 another renderer or a representation one date lacks ends the comparison and draws the date shown
 before. See [ADR 0017](DECISIONS/0017-compare-dates.md). Evidence: `e2e/compareDates.spec.ts`.
 

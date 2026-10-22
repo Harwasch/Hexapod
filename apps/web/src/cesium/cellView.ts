@@ -12,6 +12,11 @@
  *
  * What the view found is reported per model (`useViewMode.report`): not measured (no grid on
  * the root), failed (and why), or ready, with Data age's bucket and the later dates compared.
+ *
+ * The same view is handed to PlayCanvas or Spark when one of them draws the scan
+ * (scanView/scanCellView.ts): the mode drawn, its texture and the grid, or nothing on Photo --
+ * and nothing for Data age until its texture is built, as here. CesiumJS's own copy of the scan
+ * is hidden then; its part costs nothing there.
  */
 
 import type { Cesium3DTileset, Scene } from "cesium";
@@ -27,6 +32,7 @@ import {
 } from "@/lib/dataAge";
 import { observedAtFromUpload } from "@/lib/epochs";
 import { createLogger } from "@/lib/log";
+import { useRendererOverride, useSettings } from "@/state/settings";
 import { useViewMode, type CellViewReport, type ViewMode } from "@/state/viewMode";
 
 import {
@@ -36,6 +42,7 @@ import {
   type CellViewPrimitive,
 } from "./splatCellView";
 import type { Mat4 } from "./splatFrames";
+import { publishScanCellView } from "./scanView/scanCellView";
 import { splatTilesetOf } from "./splatInternals";
 
 const log = createLogger("cellView");
@@ -82,9 +89,18 @@ export function startCellView(
   const primitive = (): CellViewPrimitive | undefined =>
     splatTilesetOf(tileset).gaussianSplatPrimitive;
 
+  /** What a dedicated renderer drawing the scan draws now. */
+  const publish = (): void => {
+    publishScanCellView(
+      assetId,
+      !disposed && part && mode !== "photo" ? part.lookView(mode) : null,
+    );
+  };
+
   /** Puts the part where the view says, on the primitive there is now. */
   const place = (): void => {
     if (disposed || !part) return;
+    publish();
     const target = primitive();
     if (mode === "photo") {
       if (part.installed) {
@@ -118,7 +134,10 @@ export function startCellView(
     age = loadLaterGrids(later, asArray(root()?.transform)).then((grids): CellViewReport => {
       const { compared, skipped } = comparedGrids(grids, g);
       const { rg, newerCells } = dataAgeTexels(g, bucket, compared);
-      if (!disposed && key === ageKey) part?.setDataAge(rg);
+      if (!disposed && key === ageKey) {
+        part?.setDataAge(rg);
+        publish();
+      }
       return {
         kind: "ready",
         mode: "data-age",
@@ -130,7 +149,7 @@ export function startCellView(
     return age;
   };
 
-  const sync = (next: ViewMode): void => {
+  const draw = (next: ViewMode): void => {
     mode = next;
     if (disposed) return;
     if (part && next !== "photo") part.mode = next;
@@ -183,13 +202,39 @@ export function startCellView(
       });
   };
 
+  /**
+   * The view chosen, drawn where the renderer drawing splats now can draw it -- CesiumJS,
+   * PlayCanvas, Spark -- and Photo under the WebGPU trial, as the control says
+   * (lib/viewModes.ts). A rigged model is drawn by CesiumJS under any renderer, so the
+   * renderer, not the model's tileset being shown, decides.
+   */
+  let asked: ViewMode = "photo";
+  const drawable = (): ViewMode =>
+    // lib/viewModes.ts `viewModeDrawable`, not imported: that chunk is the control's.
+    (useRendererOverride.getState().renderer ?? useSettings.getState().splatRenderer) ===
+    "playcanvas-webgpu"
+      ? "photo"
+      : asked;
+  const rendererChanged = (): void => {
+    const next = drawable();
+    if (next !== mode) draw(next);
+  };
+  const unsubscribeRenderer = [
+    useSettings.subscribe(rendererChanged),
+    useRendererOverride.subscribe(rendererChanged),
+  ];
   // The primitive appears with the first tile, and an unloaded tileset's comes back with one.
   const unsubscribe = tileset.tileLoad.addEventListener(place);
   return {
-    sync,
+    sync: (next) => {
+      asked = next;
+      draw(drawable());
+    },
     dispose: () => {
       disposed = true;
+      for (const off of unsubscribeRenderer) off();
       unsubscribe();
+      publish();
       part?.destroy();
       part = undefined;
       report(assetId, null);

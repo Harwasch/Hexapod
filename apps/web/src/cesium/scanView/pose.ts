@@ -21,11 +21,15 @@ const SCALED_EPSILON = 1e-9;
  * among the splats, the direction and up come out `1 / scale` long and are made unit again, and
  * the near and far planes -- distances from the eye -- are converted the same way, so the
  * renderer clips where Cesium's camera does.
+ *
+ * `size` is the canvas in CSS pixels and the device pixels a CSS pixel the globe renders at
+ * (`globePixelRatio`); `pixelRatio` the overlay's own, which can be less.
  */
 export function scanPose(
   camera: Camera,
   toLocal: Matrix4,
   size: { width: number; height: number; pixelRatio: number },
+  pixelRatio: number,
 ): ScanPose {
   // Units of the scan's frame to a metre on the globe: 1, or 1 / scale.
   const perMetre = uniformScale(toLocal);
@@ -48,5 +52,7 @@ export function scanPose(
     near: scaled ? near * perMetre : near,
     far: scaled ? far * perMetre : far,
     ...size,
+    pixelRatio,
+    globePixelRatio: size.pixelRatio,
   };
 }

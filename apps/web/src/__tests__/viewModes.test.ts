@@ -1,13 +1,15 @@
 /**
  * The splat views and the renderers that can draw them (lib/viewModes.ts, state/viewMode.ts):
- * Photo everywhere, the analytic views on CesiumJS only, and a switch that really switches.
+ * Photo everywhere, the analytic views everywhere but the WebGPU trial, what still needs
+ * CesiumJS named, and a switch that really switches.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  cellLevelNote,
   drawWithCesium,
   NEEDS_CESIUM_NOTICE,
-  needsCesium,
+  needsCesiumFor,
   VIEW_MODES,
   viewModeDrawable,
 } from "@/lib/viewModes";
@@ -20,16 +22,32 @@ afterEach(() => {
 });
 
 describe("which renderer draws a view", () => {
-  it("is any for Photo and CesiumJS alone for Confidence and Data age", () => {
+  it("is any for Photo, and any but the WebGPU trial for Confidence and Data age", () => {
     expect(VIEW_MODES.map((m) => m.value)).toEqual(["photo", "confidence", "data-age"]);
-    expect(needsCesium("photo")).toBe(false);
-    expect(needsCesium("confidence")).toBe(true);
-    expect(needsCesium("data-age")).toBe(true);
     for (const renderer of SPLAT_RENDERERS) {
       expect(viewModeDrawable("photo", renderer)).toBe(true);
-      expect(viewModeDrawable("confidence", renderer)).toBe(renderer === "cesium");
-      expect(viewModeDrawable("data-age", renderer)).toBe(renderer === "cesium");
+      expect(viewModeDrawable("confidence", renderer)).toBe(renderer !== "playcanvas-webgpu");
+      expect(viewModeDrawable("data-age", renderer)).toBe(renderer !== "playcanvas-webgpu");
     }
+  });
+
+  it("names what still needs CesiumJS under each renderer, and nothing under CesiumJS", () => {
+    expect(needsCesiumFor("cesium", true)).toBeNull();
+    expect(needsCesiumFor("playcanvas", true)).toBe("Per cell and Sunlight");
+    expect(needsCesiumFor("spark", false)).toBe("Sunlight");
+    expect(needsCesiumFor("playcanvas-webgpu", true)).toBe(
+      "Confidence, Data age, Per cell and Sunlight",
+    );
+  });
+
+  it("says when cells are sized per tile rather than per splat", () => {
+    expect(cellLevelNote("cesium")).toBeNull();
+    expect(cellLevelNote("playcanvas")).toBe(
+      "Cell size picked per tile by PlayCanvas (per splat by CesiumJS)",
+    );
+    expect(cellLevelNote("spark")).toBe(
+      "Cell size picked per tile by Spark (per splat by CesiumJS)",
+    );
   });
 
   it("names where the renderer is chosen", () => {

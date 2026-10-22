@@ -108,7 +108,6 @@ describe("what the part declares", () => {
       "u_cellOffsets",
       "u_cellParams",
       "u_cellRule",
-      "u_cellRamp",
       "u_cellFills",
     ]) {
       expect(lines).toContain(name);
@@ -317,7 +316,6 @@ describe("in the colour chain", () => {
     expect(mode()).toBe(0);
     part.setDataAge(new Uint8Array([3, 255]));
     expect(mode()).toBe(2);
-    expect(uniforms.u_cellRamp?.()).toHaveLength(6);
     uniforms.u_cellGrid?.();
     expect(Array.from(created.at(-1)?.data.subarray(0, 2) ?? [])).toEqual([3, 255]);
     part.uninstall();

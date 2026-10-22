@@ -8,7 +8,6 @@
 import type { Cesium3DTileset, Scene } from "cesium";
 
 import type { DataAgeContext } from "@/lib/dataAge";
-import { useRendererOverride, useSettings } from "@/state/settings";
 import { useViewMode, type ViewMode } from "@/state/viewMode";
 
 import type { CellViewHandle, startCellView } from "./cellView";
@@ -32,15 +31,11 @@ export function attachCellView(
   let loading = false;
   let disposed = false;
   /**
-   * The view drawn: the one chosen while CesiumJS is the renderer, else Photo, as the control
-   * says (ViewsControl). A rigged model is drawn by CesiumJS under any renderer, so the
-   * renderer, not the model's tileset being shown, decides.
+   * The view chosen, as it is now. Which renderer can draw it is the view's own to say
+   * (cellView.ts), once loaded: CesiumJS, PlayCanvas and Spark all do, so this first load
+   * stays a few lines.
    */
-  const drawn = (): ViewMode =>
-    (useRendererOverride.getState().renderer ?? useSettings.getState().splatRenderer) === "cesium"
-      ? useViewMode.getState().mode
-      : "photo";
-  let last = drawn();
+  let last = useViewMode.getState().mode;
   const apply = (mode: ViewMode): void => {
     if (handle) {
       handle.sync(mode);
@@ -52,7 +47,7 @@ export function attachCellView(
       .then(({ startCellView }) => {
         if (disposed) return;
         handle = startCellView(tileset, scene, assetId, context);
-        handle.sync(drawn());
+        handle.sync(last);
       })
       .catch((error: unknown) => {
         loading = false;
@@ -60,21 +55,15 @@ export function attachCellView(
         if (!disposed) useViewMode.getState().report(assetId, { kind: "failed", message });
       });
   };
-  const changed = (): void => {
-    const next = drawn();
-    if (next !== last) apply((last = next));
-  };
-  const unsubscribe = [
-    useViewMode.subscribe(changed),
-    useSettings.subscribe(changed),
-    useRendererOverride.subscribe(changed),
-  ];
+  const unsubscribe = useViewMode.subscribe(({ mode }) => {
+    if (mode !== last) apply((last = mode));
+  });
   // Data age compares with the later dates: a new one counts once it is published.
-  const unsubscribeDates = options.onDatesChange?.(() => handle?.sync(drawn()));
+  const unsubscribeDates = options.onDatesChange?.(() => handle?.sync(last));
   apply(last);
   return () => {
     disposed = true;
-    for (const off of unsubscribe) off();
+    unsubscribe();
     unsubscribeDates?.();
     handle?.dispose();
     handle = undefined;

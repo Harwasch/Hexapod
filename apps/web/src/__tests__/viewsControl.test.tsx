@@ -1,6 +1,7 @@
 /**
  * The splat view control (features/views): a slot that renders only for a splat site; under
- * CesiumJS the three views and the key to what is drawn; under PlayCanvas and Spark the
+ * CesiumJS, PlayCanvas and Spark the three views and the key to what is drawn, and under the
+ * latter two a notice naming only what still needs CesiumJS; under the WebGPU trial the
  * analytic views disabled, the reason, and a switch that works.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -67,7 +68,9 @@ describe("under CesiumJS", () => {
     expect(screen.queryByTestId("cell-legend")).toBeNull();
     await userEvent.click(screen.getByRole("radio", { name: "Confidence" }));
     expect(useViewMode.getState().mode).toBe("confidence");
-    expect(screen.getByTestId("cell-legend")).toHaveTextContent("Loading…");
+    // The scan stays the photo until the grid is in: the key says it is coming, so the photo
+    // is not read as a scan with no evidence.
+    expect(screen.getByTestId("cell-legend")).toHaveTextContent("Loading confidence…");
     report({ kind: "ready", mode: "confidence", weakBelow: 128 });
     expect(screen.getByTestId("cell-legend")).toHaveTextContent(
       /Weak: score under 128 \(under half its splats pass the capture checks\), or unseen.*Fair: score 128–191.*Strong: score 192–255.*No evidence.*weak-v1/,
@@ -122,6 +125,10 @@ describe("under CesiumJS", () => {
   it("says an age counted from the upload is one", async () => {
     show("cesium");
     await userEvent.click(await screen.findByRole("radio", { name: "Data age" }));
+    expect(screen.getByTestId("cell-legend")).toHaveTextContent("Loading data age…");
+    // Confidence is in, Data age's comparison not yet: still loading, not Confidence's key.
+    report({ kind: "ready", mode: "confidence", weakBelow: 128 });
+    expect(screen.getByTestId("cell-legend")).toHaveTextContent("Loading data age…");
     report({
       kind: "ready",
       mode: "data-age",
@@ -135,7 +142,39 @@ describe("under CesiumJS", () => {
   });
 });
 
-describe.each(["playcanvas", "spark", "playcanvas-webgpu"] as const)("under %s", (renderer) => {
+describe.each([
+  ["playcanvas", "PlayCanvas"],
+  ["spark", "Spark"],
+] as const)("under %s", (renderer, name) => {
+  it("offers all three views, keys the one drawn, and names only what still needs CesiumJS", async () => {
+    useViewMode.getState().set("confidence");
+    show(renderer);
+    await screen.findByTestId("views");
+    for (const view of ["Photo", "Confidence", "Data age"]) {
+      expect(screen.getByRole("radio", { name: view })).not.toHaveAttribute("disabled");
+    }
+    expect(screen.getByRole("radio", { name: "Confidence" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    report({ kind: "ready", mode: "confidence", weakBelow: 128 });
+    const legend = screen.getByTestId("cell-legend");
+    expect(legend).toHaveTextContent(/Weak: score under 128 .*Strong: score 192–255.*weak-v1/);
+    // Honest about what this renderer draws: one cell level a tile.
+    expect(legend).toHaveTextContent(
+      `Cell size picked per tile by ${name} (per splat by CesiumJS)`,
+    );
+    // The notice stays for what CesiumJS alone draws, and no longer names the views.
+    const notice = screen.getByTestId("views-needs-cesium");
+    expect(notice).toHaveTextContent(
+      "Per cell and Sunlight: Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
+    );
+    expect(notice).not.toHaveTextContent(/Confidence|Data age/);
+  });
+});
+
+describe("under the WebGPU trial", () => {
+  const renderer = "playcanvas-webgpu" as const;
   it("disables the analytic views, says why, and switches to CesiumJS in one click", async () => {
     useViewMode.getState().set("confidence");
     show(renderer);
@@ -147,7 +186,7 @@ describe.each(["playcanvas", "spark", "playcanvas-webgpu"] as const)("under %s",
     expect(screen.getByRole("radio", { name: "Photo" })).toHaveAttribute("aria-checked", "true");
     expect(screen.queryByTestId("cell-legend")).toBeNull();
     expect(screen.getByTestId("views-needs-cesium")).toHaveTextContent(
-      "Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
+      "Confidence, Data age, Per cell and Sunlight: Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
     );
     act(() => useRendererOverride.setState({ renderer }));
     await userEvent.click(screen.getByRole("button", { name: "Draw with CesiumJS" }));

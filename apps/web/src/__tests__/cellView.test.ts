@@ -14,6 +14,7 @@ import type { SplatCellView } from "@/cesium/splatCellView";
 import { colorChainOf, type SplatVertexColor } from "@/cesium/splatColor";
 import { encodeConfidenceGrid, REASON_BITS } from "@/dev/cellGridFixture";
 import type { CellGridMeta } from "@/lib/cellGrid";
+import type { CellLookView } from "@/lib/cellLook";
 import { useRendererOverride, useSettings } from "@/state/settings";
 import { useViewMode } from "@/state/viewMode";
 
@@ -25,7 +26,7 @@ let served: { meta: CellGridMeta; planes: Uint8Array };
 let fetched: string[];
 
 beforeEach(async () => {
-  // The analytic views are CesiumJS's (lib/viewModes.ts): drawn only while it is the renderer.
+  // CesiumJS draws the scan here (the part in its primitive is what these tests read).
   useSettings.getState().set({ splatRenderer: "cesium" });
   served = await encodeConfidenceGrid({
     level: 2,
@@ -77,6 +78,41 @@ function scan(extras: unknown) {
 const context = () => ({ epochs: [E1, E2], assets: [A1, A2] });
 const parts = (p: { vertexColor?: SplatVertexColor }) =>
   colorChainOf(p)?.parts.map((part) => part.colorFunction) ?? [];
+
+describe("for the renderer drawing the scan, when CesiumJS does not", () => {
+  it("hands over what is drawn: Confidence's texture, Data age's once built, nothing on Photo or once gone", async () => {
+    const { watchScanCellView } = await import("@/cesium/scanView/scanCellView");
+    let last: CellLookView | null = null;
+    const seen: (string | null)[] = [];
+    const unwatch = watchScanCellView(A1.id, (view) => {
+      last = view;
+      seen.push(view?.mode ?? null);
+    });
+    // No CesiumJS primitive at all: a dedicated renderer draws the scan, CesiumJS's is hidden.
+    const { asCesium } = scan({ confidence: served.meta });
+    const dispose = attachCellView(asCesium, { requestRender: vi.fn() }, A1.id, context);
+    const view = (): CellLookView | null => last;
+    useViewMode.getState().set("confidence");
+    await vi.waitFor(() => expect(view()?.mode).toBe("confidence"));
+    expect(view()?.meta.levels).toEqual(served.meta.levels);
+    expect(view()?.meta.weakBelow ?? 128).toBe(128);
+    // The grid's own bytes: (score, reasons) of the first cell.
+    expect(Array.from(view()?.rows.data.subarray(0, 2) ?? [])).toEqual([50, REASON_BITS.spread]);
+    useViewMode.getState().set("data-age");
+    await vi.waitFor(() => expect(view()?.mode).toBe("data-age"));
+    // The later date has evidence everywhere: "newer data here" on the first cell.
+    expect(view()?.rows.data[1]).toBe(255);
+    useViewMode.getState().set("photo");
+    expect(view()).toBeNull();
+    useViewMode.getState().set("confidence");
+    await vi.waitFor(() => expect(view()?.mode).toBe("confidence"));
+    dispose();
+    expect(view()).toBeNull();
+    unwatch();
+    // Data age never drew with Confidence's bytes: the photo until its own were built.
+    expect(seen).toEqual([null, "confidence", null, "data-age", null, "confidence", null]);
+  });
+});
 
 describe("on Photo", () => {
   it("loads nothing and joins nothing", async () => {
@@ -245,36 +281,39 @@ describe("Confidence, then Data age, then Photo", () => {
     expect(listeners.size).toBe(0);
   });
 
-  it("is drawn only while CesiumJS is the renderer, as the control says, rigged model or not", async () => {
+  it("is drawn under every renderer but the WebGPU trial, as the control says, rigged model or not", async () => {
     // A rigged model is drawn by CesiumJS whatever the renderer (SiteManager `cesiumDraws`);
-    // under PlayCanvas the control says Photo, so Photo is what it must show.
+    // PlayCanvas and Spark draw the view too, so it stays; under the WebGPU trial the control
+    // says Photo, so Photo is what it must show.
     const { asCesium, tileset, primitive } = scan({ confidence: served.meta });
     tileset.gaussianSplatPrimitive = primitive;
     const dispose = attachCellView(asCesium, { requestRender: vi.fn() }, A1.id, context);
     useViewMode.getState().set("confidence");
     await vi.waitFor(() => expect(parts(primitive)).toEqual(["splatCellViewColor"]));
     useSettings.getState().set({ splatRenderer: "playcanvas" });
+    expect(parts(primitive)).toEqual(["splatCellViewColor"]);
+    useSettings.getState().set({ splatRenderer: "playcanvas-webgpu" });
     expect(primitive.vertexColor).toBeUndefined();
     // A `?renderer=` choice counts as the renderer too.
-    useSettings.getState().set({ splatRenderer: "cesium" });
-    await vi.waitFor(() => expect(parts(primitive)).toEqual(["splatCellViewColor"]));
     useRendererOverride.setState({ renderer: "spark" });
-    expect(primitive.vertexColor).toBeUndefined();
-    useRendererOverride.setState({ renderer: null });
     await vi.waitFor(() => expect(parts(primitive)).toEqual(["splatCellViewColor"]));
+    useRendererOverride.setState({ renderer: null });
+    expect(primitive.vertexColor).toBeUndefined();
     dispose();
   });
 
-  it("does not load the view at all under another renderer", async () => {
-    useSettings.getState().set({ splatRenderer: "playcanvas" });
+  it("fetches and joins nothing under the WebGPU trial, and draws once the renderer can", async () => {
+    useSettings.getState().set({ splatRenderer: "playcanvas-webgpu" });
     const { asCesium, tileset, primitive } = scan({ confidence: served.meta });
     tileset.gaussianSplatPrimitive = primitive;
-    const load = vi.fn(() => import("@/cesium/cellView"));
-    const dispose = attachCellView(asCesium, { requestRender: vi.fn() }, A1.id, context, { load });
+    const dispose = attachCellView(asCesium, { requestRender: vi.fn() }, A1.id, context);
     useViewMode.getState().set("confidence");
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(load).not.toHaveBeenCalled();
+    expect(fetched).toEqual([]);
     expect(primitive.vertexColor).toBeUndefined();
+    expect(useViewMode.getState().cells[A1.id]).toBeUndefined();
+    useSettings.getState().set({ splatRenderer: "playcanvas" });
+    await vi.waitFor(() => expect(parts(primitive)).toEqual(["splatCellViewColor"]));
     dispose();
   });
 

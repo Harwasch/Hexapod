@@ -47,6 +47,12 @@
  * step (`eyeMoved`) a uniform is set again, which has PlayCanvas copy it -- a few thousand
  * splats -- into the work buffer again in that frame.
  *
+ * Confidence and Data age (cellModifier.ts) are one more step of the same modifier, on every
+ * tile of the scan: the shared cell look (lib/cellLook.ts) reading the view's texture, at one
+ * level of the grid per tile -- picked from the eye as each frame is drawn, the tile copied
+ * again only when its level steps. A layer's tiles go grey under either view (no evidence).
+ * GLSL only, as the motion: the WebGPU trial does not draw them (lib/viewModes.ts says so).
+ *
  * Selecting in the scene (cesium/sceneSelect) reads the tiles drawn now in each tile's own
  * order (`pickTiles`): the Morton order put back, so a pick's index is the index the tile's
  * ids in `instances.json` are listed by. The copies are made only when a pick first asks for
@@ -68,12 +74,15 @@
 
 import * as pc from "playcanvas";
 
+import { CELL_TEXTURE_WIDTH } from "@/lib/cellGrid";
+import { CELL_LOOK_GLSL, type CellLookView } from "@/lib/cellLook";
 import { tileInstanceIds, type InstancesDoc } from "@/lib/instances";
 import { tileSkin, type SkinDoc } from "@/lib/skin";
 import type { PickTile } from "@/lib/splatPick";
 import type { TileNode } from "@/view/tiles";
 
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
+import { CELL_TILE_GLSL, cellFillOf, CellTiles, type CellTileSample } from "./cellModifier";
 import {
   coneEye,
   eyeMoved,
@@ -96,6 +105,7 @@ import {
   SCAN_MOTION_GLSL,
   type ScanMotion,
 } from "./scanMotion";
+import { reportScanCellView, watchScanCellView } from "./scanCellView";
 import { countOverlayLoopTick } from "./stats";
 import type { BackendHooks, GraphicsApi, ScanBackend, ScanPose, SplatRendererKind } from "./types";
 
@@ -126,9 +136,17 @@ export const SORT_REFRESH_MS = 100;
 
 /**
  * The work-buffer modifier (PlayCanvas's `gsplatModifyVS`) for a tile with ids, skin weights,
- * or both: the motion on the centre and the covariance, the scene-object rule on the colour.
+ * or both: the motion on the centre and the covariance, the scene-object rule on the colour;
+ * with `cell`, then the Confidence / Data age look (`CELL_TILE_GLSL`), as CesiumJS runs its
+ * cell part after the objects' highlight. A tile with neither ids nor a skin under a cell view
+ * gets the look alone: the objects' dim is not put on splats no object was found in.
  */
-export function playcanvasModifierGlsl(ids: boolean, skin: boolean, wide = false): string {
+export function playcanvasModifierGlsl(
+  ids: boolean,
+  skin: boolean,
+  wide = false,
+  cell = false,
+): string {
   const id = ids ? "loadSplatInstance().r" : "0u";
   const second = wide ? "loadSplatWeights2()" : "uvec4(0u)";
   const skinStep = skin
@@ -136,6 +154,27 @@ export function playcanvasModifierGlsl(ids: boolean, skin: boolean, wide = false
     : "";
   const rigidStep = ids
     ? `hexapodRigidMotion(uRigidSlots, uRigidPoses, ${id}, uMotionParams, center, delta, hexapodLinear);`
+    : "";
+  const objectStep = `if (uInstanceParams.x < 0.5) {
+        return;
+    }
+    color = hexapodInstanceColor(${id}, color);`;
+  const colorStep = !cell
+    ? objectStep
+    : `${
+        ids || skin
+          ? `if (uInstanceParams.x > 0.5) {
+        color = hexapodInstanceColor(${id}, color);
+    }
+    `
+          : ""
+      }color = hexapodCellTile(center, color, uCellGrid, uCellRule, uCellLevel, uCellTile);`;
+  const cellUniforms = cell
+    ? `uniform highp sampler2D uCellGrid;
+uniform vec4 uCellRule;
+uniform vec4 uCellLevel;
+uniform vec4 uCellTile;
+${CELL_TILE_GLSL}`
     : "";
   return `
 uniform highp sampler2D uInstanceState;
@@ -149,6 +188,7 @@ uniform vec4 uMotionParams;
 uniform vec4 uMotionExtra;
 ${SCAN_INSTANCE_RULE_GLSL}
 ${SCAN_MOTION_GLSL}
+${cellUniforms}
 mat3 hexapodLinear = mat3(0.0);
 void modifySplatCenter(inout vec3 center) {
     hexapodLinear = mat3(0.0);
@@ -166,10 +206,7 @@ void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout ve
     }
 }
 void modifySplatColor(vec3 center, inout vec4 color) {
-    if (uInstanceParams.x < 0.5) {
-        return;
-    }
-    color = hexapodInstanceColor(${id}, color);
+    ${colorStep}
 }
 `;
 }
@@ -211,18 +248,23 @@ export interface WorkBufferModifier {
 const MODIFIERS = new Map<string, WorkBufferModifier>();
 
 /**
- * The modifier for a tile with ids, skin weights, or both: always GLSL (the colour rule and
- * the motion); WGSL only for ids without a skin, and then hide and highlight alone -- a
- * WebGPU renderer moves nothing (see the file comment). One object per kind, so a tile's
- * modifier is compared by identity.
+ * The modifier for a tile with ids, skin weights, a cell view, or any of them: always GLSL
+ * (the colour rule, the motion, the cell look); WGSL only for ids alone, and then hide and
+ * highlight alone -- a WebGPU renderer moves nothing and draws no cell view (see the file
+ * comment). One object per kind, so a tile's modifier is compared by identity.
  */
-export function playcanvasModifier(ids: boolean, skin: boolean, wide = false): WorkBufferModifier {
-  const key = `${String(ids)}|${String(skin)}|${String(skin && wide)}`;
+export function playcanvasModifier(
+  ids: boolean,
+  skin: boolean,
+  wide = false,
+  cell = false,
+): WorkBufferModifier {
+  const key = `${String(ids)}|${String(skin)}|${String(skin && wide)}|${String(cell)}`;
   let modifier = MODIFIERS.get(key);
   if (!modifier) {
     modifier = {
-      glsl: playcanvasModifierGlsl(ids, skin, skin && wide),
-      ...(ids && !skin ? { wgsl: PLAYCANVAS_INSTANCE_WGSL } : {}),
+      glsl: playcanvasModifierGlsl(ids, skin, skin && wide, cell),
+      ...(ids && !skin && !cell ? { wgsl: PLAYCANVAS_INSTANCE_WGSL } : {}),
     };
     MODIFIERS.set(key, modifier);
   }
@@ -231,11 +273,14 @@ export function playcanvasModifier(ids: boolean, skin: boolean, wide = false): W
 
 /**
  * The work-buffer modifier of an inferred layer's tile (scanLayers.ts): its look on the colour
- * -- Highlight and the fade of its view cones (layerLook.ts) -- and nothing else. GLSL only, as
- * the motion: the WebGPU trial draws a scan with inferred layers with WebGL2.
+ * -- Highlight and the fade of its view cones (layerLook.ts) -- and, while Confidence or Data
+ * age is drawn (`uCellFill`), grey first: a layer has no capture evidence, so it is never given
+ * a measured colour (cellModifier.ts). GLSL only, as the motion: the WebGPU trial draws a scan
+ * with inferred layers with WebGL2.
  */
 export const PLAYCANVAS_LAYER_MODIFIER: WorkBufferModifier = {
   glsl: `
+uniform vec4 uCellFill;
 uniform mat4 uLayerFrame;
 uniform vec4 uLayerTint;
 uniform vec4 uLayerPattern;
@@ -246,11 +291,15 @@ uniform vec4 uLayerConeEye;
 uniform vec4 uInstanceParams;
 uniform vec4 uInstanceDim;
 ${LAYER_LOOK_GLSL}
+${CELL_LOOK_GLSL}
 void modifySplatCenter(inout vec3 center) {
 }
 void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout vec4 rotation, inout vec3 scale) {
 }
 void modifySplatColor(vec3 center, inout vec4 color) {
+    if (uCellFill.x > 0.5) {
+        color = hexapodCellGrey(color);
+    }
     color = hexapodLayerColor(center, color, uLayerFrame, uLayerTint, uLayerPattern, uLayerCones,
                               uLayerConeGrid, uLayerConeDims, uLayerConeEye,
                               hexapodLayerDim(uInstanceParams, uInstanceDim));
@@ -488,6 +537,13 @@ function assemble(
   const sortsOnGpu = device.isWebGPU;
   /** The motion modifier is GLSL only (`playcanvasModifier`): on WebGPU nothing moves. */
   const moves = api === "webgl2";
+  /** The scan's tiles under a cell view, and the levels they read: GLSL only, as the motion. */
+  const cells = moves ? new CellTiles<pc.Entity>() : null;
+  let cellTexture: pc.Texture | null = null;
+  /** `(1, 0, 0, 0)` while a cell view is drawn: what has a layer's tiles drawn grey. */
+  const cellFill = new Float32Array(4);
+  /** The modifier on each entity now (a tile with no binding has one only for a cell view). */
+  const modifiers = new WeakMap<pc.Entity, WorkBufferModifier | null>();
   /** The device is gone for good: nothing more is drawn, and the host replaces the renderer. */
   let lost = false;
   /** The renderer is letting go of its device itself: that loss is not news. */
@@ -684,7 +740,14 @@ function assemble(
   };
 
   /** Sets every uniform the modifier reads; setting any marks the tile for a new copy. */
-  const setUniforms = (component: pc.GSplatComponent): void => {
+  const setUniforms = (component: pc.GSplatComponent, entity: pc.Entity): void => {
+    const cell = cells?.uniforms(entity);
+    if (cells && cell) {
+      component.setParameter("uCellGrid", cellTexture ?? stand().state);
+      component.setParameter("uCellRule", cells.rule);
+      component.setParameter("uCellLevel", cell.level);
+      component.setParameter("uCellTile", cell.tile);
+    }
     component.setParameter("uInstanceState", stateTexture ?? stand().state);
     component.setParameter("uInstanceTint", tint);
     component.setParameter("uInstanceDim", dim);
@@ -699,18 +762,27 @@ function assemble(
     component.setParameter("uInstanceParams", params);
   };
 
-  /** Puts the modifier the tile's streams call for on it, with the current uniforms. */
-  const applyModifier = (entity: pc.Entity, tile: TileBinding): void => {
+  /**
+   * Puts the modifier the tile's streams and the cell view call for on it, with the current
+   * uniforms; none when it needs none (a cell view ended on a tile with neither ids nor a skin).
+   */
+  const applyModifier = (entity: pc.Entity): void => {
     const component = entity.gsplat;
     if (!component) return;
-    const hasIds = tile.doc !== null;
-    if (!hasIds && !tile.skinned) return;
-    const modifier = playcanvasModifier(hasIds, tile.skinned, tile.skinWide);
-    if (modifier !== tile.modifier) {
-      tile.modifier = modifier;
+    const tile = tiles.get(entity);
+    const hasIds = (tile?.doc ?? null) !== null;
+    const skinned = tile?.skinned ?? false;
+    const cell = cells?.drawing === true && cells.has(entity);
+    const modifier =
+      hasIds || skinned || cell
+        ? playcanvasModifier(hasIds, skinned, tile?.skinWide ?? false, cell)
+        : null;
+    if (modifier !== (modifiers.get(entity) ?? null)) {
+      modifiers.set(entity, modifier);
+      if (tile) tile.modifier = modifier;
       component.setWorkBufferModifier(modifier);
     }
-    setUniforms(component);
+    if (modifier) setUniforms(component, entity);
   };
 
   /**
@@ -733,13 +805,13 @@ function assemble(
           .run(() => {
             if (tiles.get(entity) !== tile || tile.skinDoc !== skinDoc) return;
             writeSkin(tile, skinDoc);
-            applyModifier(entity, tile);
+            applyModifier(entity);
             hooks.frameWanted();
           })
           .catch(() => undefined);
       }
     }
-    applyModifier(entity, tile);
+    applyModifier(entity);
   };
 
   const setInstances = (next: InstanceStyle | null): void => {
@@ -929,6 +1001,54 @@ function assemble(
     coneTextures.delete(cones);
   };
 
+  /**
+   * Draws `view` -- Confidence or Data age, its texture and the grid's rule -- on every tile of
+   * the scan, or the photo again with null (cellModifier.ts); a layer's tiles grey while one is
+   * drawn. Each tile is copied again once, in the frame this asks for.
+   */
+  const setCellView = (view: CellLookView | null): void => {
+    if (!cells) return;
+    const before = cells.view;
+    if (!cells.setView(view)) return;
+    // Photo frees the grid's texture: every tile is pointed at a stand-in before it goes.
+    const freed = view ? null : cellTexture;
+    if (!view) cellTexture = null;
+    if (view && (view.rows !== before?.rows || !cellTexture)) {
+      cellTexture?.destroy();
+      cellTexture = dataTexture(
+        "hexapodCellGrid",
+        CELL_TEXTURE_WIDTH,
+        view.rows.height,
+        pc.PIXELFORMAT_RG8,
+        view.rows.data,
+      );
+    }
+    cellFillOf(view, cellFill);
+    for (const entity of cells.meshes()) {
+      applyModifier(entity);
+      if (freed) entity.gsplat?.setParameter("uCellGrid", stand().state);
+    }
+    freed?.destroy();
+    for (const entity of layers.keys()) entity.gsplat?.setParameter("uCellFill", cellFill);
+    hooks.frameWanted();
+  };
+
+  /** A tile's own splats in the scan's frame, for the cell view's reading (`CellTiles`). */
+  const cellSample = (entity: pc.Entity): CellTileSample | null => {
+    const tile = tiles.get(entity);
+    const { x, y, z } = tile?.columns ?? {};
+    if (!tile || !x || !y || !z) return null;
+    const [ox, oy, oz] = tile.origin;
+    return {
+      count: tile.order.length,
+      at: (i, out) => {
+        out[0] = (x[i] ?? 0) + ox;
+        out[1] = (y[i] ?? 0) + oy;
+        out[2] = (z[i] ?? 0) + oz;
+      },
+    };
+  };
+
   /** A decoded tile made into PlayCanvas's resource and entity: main-thread work. */
   const build = (tile: TileNode, decoded: Decoded, layer = false): pc.Entity => {
     const { properties, count, order } = decoded;
@@ -957,6 +1077,8 @@ function assemble(
     origins.set(entity, origin);
     entity.addComponent("gsplat", { resource });
     resources.set(entity, resource);
+    // Every tile of the scan reads its cell, whether or not it carries ids.
+    if (!layer) cells?.add(entity, origin);
     // A layer's tile carries none of the scan's ids, skins or picks: its look is its own.
     if (decoded.checksum !== undefined && !layer) {
       const binding: TileBinding = {
@@ -985,6 +1107,7 @@ function assemble(
         if (binding.ids && motion && motion.rigidByLeaf.size > 0) sortDirty.add(entity);
       }
     }
+    if (!layer && cells?.drawing) applyModifier(entity);
     return entity;
   };
 
@@ -1037,6 +1160,7 @@ function assemble(
       // The objects' dim while one is highlighted: a layer belongs to none (layerLook.ts).
       component.setParameter("uInstanceDim", dim);
       component.setParameter("uInstanceParams", params);
+      component.setParameter("uCellFill", cellFill);
       // Last: setting a parameter has the tile copied into the work buffer again.
       state.lastEye = lastPoseEye ? layerEye(look, lastPoseEye) : null;
       component.setParameter("uLayerConeEye", coneEye(look, lastPoseEye ?? [0, 0, 0], state.eye));
@@ -1067,6 +1191,7 @@ function assemble(
       unconfirmed.delete(entity);
       shown.delete(entity);
       tiles.delete(entity);
+      cells?.delete(entity);
       sortDirty.delete(entity);
       const layer = layers.get(entity);
       if (layer) {
@@ -1149,6 +1274,11 @@ function assemble(
         layer.lastEye = eye;
         entity.gsplat?.setParameter("uLayerConeEye", coneEye(layer.look, pose.eye, layer.eye));
       }
+      // A tile whose cell level stepped is copied again in this frame (cellModifier.ts).
+      cells?.update(pose, (entity, cell) => {
+        entity.gsplat?.setParameter("uCellLevel", cell.level);
+        entity.gsplat?.setParameter("uCellTile", cell.tile);
+      });
       framesDrawn += 1;
       app.render();
       while (doomed[0] && framesDrawn - doomed[0].at >= DESTROY_AFTER_FRAMES) {
@@ -1223,10 +1353,16 @@ function assemble(
       const entity = new pc.Entity("scan");
       entity.addComponent("gsplat", { asset, unified: true });
       app.root.addChild(entity);
+      // Streamed natively the scan is one entity: one cell level for all of it, from the
+      // middle of its bounds (cellModifier.ts).
+      const middle = (asset.resource as { aabb?: { center?: pc.Vec3 } } | null)?.aabb?.center;
+      cells?.add(entity, middle ? [middle.x, middle.y, middle.z] : [0, 0, 0]);
+      if (cells?.drawing) applyModifier(entity);
       resumeLoop();
       return {
         splats: () => app.scene.gsplat.splatBudget,
         stop: () => {
+          cells?.delete(entity);
           entity.destroy();
           app.assets.remove(asset);
           asset.unload();
@@ -1234,6 +1370,9 @@ function assemble(
       };
     },
     destroy: () => {
+      for (const off of cellLinks) off();
+      cellTexture?.destroy();
+      cellTexture = null;
       for (const worker of workers) worker.terminate();
       waiting.clear();
       tiles.clear();
@@ -1296,5 +1435,14 @@ function assemble(
   // A sort that finished while the loop was paused: the loop hands it over (`frame:request`).
   // (Sorted on the CPU only: a GPU sort finishes in the frame that draws.)
   app.scene.on("gsplat:sorted", resumeLoop);
+  // The scan's Confidence / Data age view, drawn as the view says (scanCellView.ts).
+  const assetId = hooks.assetId;
+  const cellLinks =
+    cells && assetId !== undefined
+      ? [
+          watchScanCellView(assetId, setCellView),
+          reportScanCellView(assetId, () => cells.reading(identity.name, cellSample)),
+        ]
+      : [];
   return backend;
 }

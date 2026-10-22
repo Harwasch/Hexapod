@@ -8,6 +8,11 @@
  * weak, every cell strong, or weak west of the yard's middle and strong east of it, so that
  * looking north the left of the screen must turn red and the right green.
  *
+ * With `renderer` PlayCanvas or Spark, the same grids are drawn by that renderer instead
+ * (cesium/scanView): CesiumJS's own copy of the yard hidden, as the app hides it, and the view
+ * handed over as the app's cell view does (scanView/scanCellView.ts); the overlay's pixels are
+ * laid over the globe's before they are counted.
+ *
  * Loaded dynamically by the spec; nothing imports it, so it never reaches the production
  * bundle. Headless GL is SwiftShader: pixels are counted, not eyeballed.
  */
@@ -27,6 +32,12 @@ import {
   type CellViewMode,
   type CellViewPrimitive,
 } from "@/cesium/splatCellView";
+import { ScanRendererHost } from "@/cesium/scanView/ScanRendererHost";
+import {
+  publishScanCellView,
+  scanCellViewReading,
+  type ScanCellViewReading,
+} from "@/cesium/scanView/scanCellView";
 import { incrementalSplats, splatTilesetOf } from "@/cesium/splatInternals";
 import { decodeCellGrid } from "@/lib/cellGrid";
 import { dataAgeTexels } from "@/lib/dataAge";
@@ -56,9 +67,15 @@ export interface PixelCounts {
 export interface CellViewHarness {
   view(grid: GridName | "off", mode?: CellViewMode): Promise<PixelCounts>;
   installed(): boolean;
+  /** What PlayCanvas or Spark says it drew of the view (null under CesiumJS). */
+  reading(): ScanCellViewReading | null;
+  /** Whether the dedicated renderer streams the scan's own package (PlayCanvas's SOG). */
+  native(): boolean;
 }
 
 const BACKGROUND = "#10141a";
+/** The asset id the harness's scan is drawn under, by a dedicated renderer. */
+const HARNESS_ASSET = "cell-view-harness";
 
 function nextFrame(scene: Scene): Promise<void> {
   return new Promise((resolve) => {
@@ -73,6 +90,8 @@ function nextFrame(scene: Scene): Promise<void> {
 export async function startCellViewHarness(options: {
   container: HTMLElement;
   url: string;
+  /** Who draws the yard: CesiumJS (the default), or PlayCanvas or Spark over it. */
+  renderer?: "cesium" | "playcanvas" | "spark";
 }): Promise<CellViewHarness> {
   const widget = new CesiumWidget(options.container, {
     baseLayer: false,
@@ -96,6 +115,15 @@ export async function startCellViewHarness(options: {
   scene.primitives.add(tileset);
   const gpu = cesiumCellViewGpu();
   if (!gpu) throw new Error("no RG8 texture support");
+  const dedicated =
+    options.renderer === "playcanvas" || options.renderer === "spark" ? options.renderer : null;
+  const host = dedicated ? new ScanRendererHost(widget, { preserveDrawingBuffer: true }) : null;
+  if (host && dedicated) {
+    // As the app does (SiteManager.setSplatRenderer): CesiumJS keeps the tileset, hidden.
+    tileset.show = false;
+    host.setRenderer(dedicated);
+    host.setTarget({ key: HARNESS_ASSET, tileset, assetId: HARNESS_ASSET });
+  }
 
   // The yard: 32 x 24 m east/north of its frame's origin. 1 m cells, a margin of 2.
   const build = async (name: GridName) => {
@@ -147,6 +175,9 @@ export async function startCellViewHarness(options: {
     };
     if (!context) return empty;
     context.drawImage(canvas, 0, 0);
+    // A dedicated renderer draws on its own transparent canvas over the globe's.
+    const overlay = document.querySelector<HTMLCanvasElement>("canvas[data-scan-renderer]");
+    if (overlay) context.drawImage(overlay, 0, 0, copy.width, copy.height);
     const data = context.getImageData(0, 0, copy.width, copy.height).data;
     const bg = Color.fromCssColorString(BACKGROUND);
     const [br, bgG, bb] = [bg.red * 255, bg.green * 255, bg.blue * 255];
@@ -209,6 +240,28 @@ export async function startCellViewHarness(options: {
   }
 
   let shown: SplatCellView | undefined;
+  /** The dedicated renderer's view: drawn once its tiles are in, sorted and still. */
+  const viewDedicated = async (
+    renderer: ScanRendererHost,
+    grid: GridName | "off",
+    mode: CellViewMode,
+  ): Promise<PixelCounts> => {
+    publishScanCellView(HARNESS_ASSET, grid === "off" ? null : parts[grid].lookView(mode));
+    let still = 0;
+    for (let frame = 0; frame < 3000 && still < 40; frame += 1) {
+      await nextFrame(scene);
+      const status = renderer.status();
+      // A natively streamed scan has no tiles of the host's, and PlayCanvas streams its chunks
+      // by itself: it is given 300 frames (its WebP chunks decode in the browser) before it counts.
+      const ready =
+        status.active &&
+        (status.native ? frame >= 300 : status.tiles > 0) &&
+        status.loading === 0 &&
+        status.settled;
+      still = ready ? still + 1 : 0;
+    }
+    return count();
+  };
   return {
     async view(grid, mode = "confidence") {
       // Looking north, nearly straight down: east is the right of the screen.
@@ -216,6 +269,7 @@ export async function startCellViewHarness(options: {
         tileset.boundingSphere.center,
         new HeadingPitchRange(0, CesiumMath.toRadians(-85), 48),
       );
+      if (host) return viewDedicated(host, grid, mode);
       for (let frame = 0; frame < 600 && !(tileset.tilesLoaded && primitive()); frame += 1) {
         await nextFrame(scene);
       }
@@ -233,7 +287,10 @@ export async function startCellViewHarness(options: {
       return count();
     },
     installed() {
+      if (host) return (scanCellViewReading(HARNESS_ASSET)?.tiles ?? 0) > 0;
       return Object.values(parts).some((p) => p.installed);
     },
+    reading: () => scanCellViewReading(HARNESS_ASSET),
+    native: () => host?.status().native ?? false,
   };
 }
