@@ -1,0 +1,78 @@
+/* The finder: the globe filling the page, the cards in a dock on the left (a sheet at the foot
+   on a phone), the draw bar centred at the foot, and the map's credits in the corner. On the
+   app's own tokens and glass, so it looks like the app it comes from. */
+.finder {
+  overflow: hidden;
+}
+
+.finder-dock {
+  position: absolute;
+  z-index: var(--z-hud, 10);
+  top: var(--space-4);
+  left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: min(var(--panel-width-wide, 380px), calc(100% - 2 * var(--space-4)));
+  max-height: calc(100% - 2 * var(--space-4) - 64px);
+  min-height: 0;
+  /* The dock scrolls as one, so the picker's "Use" button is never squeezed out of its card. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.finder-dock > * {
+  flex: none;
+}
+.finder-dock > .land-card--scroll {
+  max-height: none;
+  overflow: visible;
+}
+
+.finder-credit,
+.finder-found {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md, 8px);
+  background: var(--glass-bg, rgb(16 19 16 / 0.8));
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+.finder-found {
+  color: var(--text-primary);
+}
+.finder-notice summary {
+  cursor: pointer;
+}
+.finder-notice p {
+  max-height: 40vh;
+  margin: var(--space-2) 0 0;
+  overflow-y: auto;
+  white-space: pre-line;
+}
+
+.finder-strip {
+  position: absolute;
+  z-index: var(--z-hud, 10);
+  left: 50%;
+  bottom: var(--space-4);
+  transform: translateX(-50%);
+  max-width: calc(100% - 2 * var(--space-4));
+}
+
+.finder-credits {
+  position: absolute;
+  z-index: var(--z-hud, 10);
+  right: var(--space-2);
+  bottom: var(--space-2);
+}
+
+@media (max-width: 640px) {
+  .finder-dock {
+    top: auto;
+    bottom: calc(var(--space-4) + 56px);
+    max-height: 55%;
+  }
+  .finder-strip {
+    bottom: var(--space-2);
+  }
+}

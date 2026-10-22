@@ -24,6 +24,7 @@ from app.services.errors import (
     NotFoundError,
     UnauthorizedError,
 )
+from app.services.public_parcels import PublicParcels
 from app.services.ratelimit import RateLimited, RateLimits
 from app.services.text_encoder import LazyTextEncoder, TextEncoderUnavailableError
 from app.services.urls import UrlValidationError
@@ -63,6 +64,13 @@ def _problem(
         status_code=status_code,
         content=payload.model_dump(mode="json", by_alias=True, exclude_none=True),
     )
+
+
+#: Routes open to anyone, and the largest body they accept (bytes): a parcel lookup's point and
+#: radius are well under a hundred.
+PUBLIC_PREFIX = "/api/v1/public/"
+PUBLIC_BODY_LIMIT = 4_096
+BODY_METHODS = frozenset({"POST", "PUT", "PATCH"})
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -156,6 +164,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         expose_headers=["X-Handoff-Token", "Retry-After", "X-Truncated"],
         max_age=600,
     )
+
+    @app.middleware("http")
+    async def public_body_limit(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        """Routes open to anyone (`/api/v1/public/...`) take small bodies only, refused by
+        their declared length before anything reads them: the body is parsed before a
+        route's rate limit runs, so the limit alone does not bound what a request costs."""
+        if request.url.path.startswith(PUBLIC_PREFIX) and request.method in BODY_METHODS:
+            length = request.headers.get("content-length")
+            if length is None:
+                return _problem(status.HTTP_411_LENGTH_REQUIRED, "Length required", None)
+            if not length.isdigit() or int(length) > PUBLIC_BODY_LIMIT:
+                return _problem(
+                    status.HTTP_413_CONTENT_TOO_LARGE,
+                    "Request body too large",
+                    f"Requests here may carry at most {PUBLIC_BODY_LIMIT} bytes.",
+                )
+        return await call_next(request)
 
     @app.middleware("http")
     async def timing_middleware(
@@ -261,6 +288,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings.text_encoder_dir if settings.text_encoder_enabled else None,
         threads=settings.text_encoder_threads,
     )
+    app.state.public_parcels = PublicParcels()
     app.include_router(api_v1)
     # **Development only.** Capture tiles kept on a developer's disk
     # (data/tiles/<slug>/<representation>/tileset.json) are served as static 3D Tiles under

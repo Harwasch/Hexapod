@@ -1,6 +1,6 @@
 """Per-client token buckets for the few routes whose cost is the attack.
 
-Most of this API is cheap to call and open to read, and is left alone. Six things are
+Most of this API is cheap to call and open to read, and is left alone. Seven things are
 not cheap:
 
 * **The phone key.** Every route behind it hashes the supplied key with 200,000 rounds of
@@ -15,6 +15,9 @@ not cheap:
 * **Place facts** (`/research/place/{fact}`) each call a public agency service (USGS, USDA,
   ESA, FEMA, EPA) on the caller's behalf. Behind land identity, and bucketed so the API is
   never a fan-out proxy for one client.
+* **Public parcels** (`/public/parcels/near`) ask one or two county parcel services on the
+  behalf of a visitor who has not signed in (the landing page's site finder). Open on
+  purpose, so bucketed tightly.
 * **Dated imagery** (`/imagery/dated`, `/imagery/usgs-topo/tiles`) asks Planetary Computer,
   The National Map and USGS's sheet bucket on the caller's behalf, before sign-in: public
   data, but not an open proxy either.
@@ -70,6 +73,10 @@ PLACE = Limit(burst=25, per_minute=60)
 #: Map up to twenty questions; one is asked per area as the Time Lantern opens. A catalog this
 #: server already holds is answered without spending a token.
 IMAGERY_CATALOG = Limit(burst=10, per_minute=30)
+#: Public parcel lookups. A visitor finding their land taps near it a few times, and each tap
+#: is one lookup that asks one or two county services: eight at once, then one every five
+#: seconds, is more than a person tapping needs and far less than a scraper wants.
+PUBLIC_PARCELS = Limit(burst=8, per_minute=12)
 #: Historical map tiles (`/imagery/usgs-topo/tiles`): each a few byte-range reads of a USGS
 #: sheet. A lens sweeping a sheet asks a few dozen a second at first, then browsers cache them.
 TOPO_TILE = Limit(burst=200, per_minute=600)
@@ -145,6 +152,7 @@ class RateLimits:
         self.imagery_catalog = TokenBucket(IMAGERY_CATALOG, clock=clock)
         self.topo_tile = TokenBucket(TOPO_TILE, clock=clock)
         self.cell_map = TokenBucket(CELL_MAP, clock=clock)
+        self.public_parcels = TokenBucket(PUBLIC_PARCELS, clock=clock)
 
 
 #: The header Fly's proxy sets on every request, which is `API_CLIENT_IP_HEADER`'s default.

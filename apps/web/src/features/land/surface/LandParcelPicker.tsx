@@ -33,11 +33,25 @@ const KINDS: { value: Kind; label: string }[] = [
 ];
 
 /**
+ * The picker for a visitor who has not signed in (the landing page's finder, src/finder/):
+ * parcels only, looked up through the public route, and handed back as chosen rather than
+ * proposed as a land, since combining shapes, corridors, descriptions and saving all need a
+ * workspace.
+ */
+export interface PublicParcelPick {
+  /** Parcels near a point (`POST /api/v1/public/parcels/near`). */
+  find: (point: [number, number], signal: AbortSignal) => Promise<CandidateResult>;
+  /** The chosen parcels, when the visitor presses "Use". */
+  onUse: (chosen: LandCandidate[]) => void;
+  onCancel: () => void;
+}
+
+/**
  * Pick the land from records instead of drawing it: tap or click near it, the parcels around
  * that spot outline on the map, and choosing them (on the map or here) selects them. Each new
  * tap or click on open ground looks again there and keeps what is already chosen.
  */
-export function LandParcelPicker() {
+export function LandParcelPicker({ publicPick }: { publicPick?: PublicParcelPick } = {}) {
   const points = useLand((s) => s.points);
   const candidates = useLandContext((s) => s.candidates);
   const selectedIds = useLandContext((s) => s.selectedIds);
@@ -61,14 +75,19 @@ export function LandParcelPicker() {
     };
   }, []);
   const point = points[0];
+  const find = publicPick?.find;
   useEffect(() => {
     if (!point) return;
     const controller = new AbortController();
-    void unwrap(
-      api.POST("/api/v1/land/selection/candidates", {
-        body: { point: { type: "Point", coordinates: point }, kind, radiusM: 250 },
-        signal: controller.signal,
-      }),
+    void (
+      find
+        ? find(point, controller.signal)
+        : unwrap(
+            api.POST("/api/v1/land/selection/candidates", {
+              body: { point: { type: "Point", coordinates: point }, kind, radiusM: 250 },
+              signal: controller.signal,
+            }),
+          )
     )
       .then((response) => {
         if (controller.signal.aborted) return;
@@ -82,7 +101,7 @@ export function LandParcelPicker() {
         setError(describeError(cause));
       });
     return () => controller.abort();
-  }, [point, kind]);
+  }, [point, kind, find]);
   const answered = answer !== null && answer.point === point && answer.kind === kind;
   const result = answered ? answer.result : null;
   const searching = Boolean(point) && !answered;
@@ -118,6 +137,10 @@ export function LandParcelPicker() {
         : selected;
       const first = chosen[0];
       if (!first) throw new Error(`${tapOrClick()} a highlighted parcel or feature first.`);
+      if (publicPick) {
+        publicPick.onUse(chosen);
+        return;
+      }
       let boundary: Footprint;
       if (first.geometry.type === "LineString") {
         if (chosen.length !== 1) throw new Error("Choose one line for a corridor.");
@@ -186,17 +209,19 @@ export function LandParcelPicker() {
       <div className="land-eyebrow-row">
         <span className="land-lens-label">Pick your land</span>
       </div>
-      <GlassSegmentedControl
-        aria-label="What to pick"
-        value={kind}
-        options={KINDS}
-        block
-        onValueChange={(value: Kind) => {
-          setKind(value);
-          setAnswer(null);
-          useLandContext.getState().setCandidates([]);
-        }}
-      />
+      {!publicPick && (
+        <GlassSegmentedControl
+          aria-label="What to pick"
+          value={kind}
+          options={KINDS}
+          block
+          onValueChange={(value: Kind) => {
+            setKind(value);
+            setAnswer(null);
+            useLandContext.getState().setCandidates([]);
+          }}
+        />
+      )}
       <p className="land-lede" aria-live="polite">
         {status}
       </p>
@@ -278,31 +303,33 @@ export function LandParcelPicker() {
                   ? `Use ${selected.length} parcels · ${areaLabel(selectedArea)}`
                   : `Use this · ${areaLabel(selectedArea)}`}
           </GlassButton>
-          <GlassButton
-            disabled={busy}
-            onClick={() => {
-              const references = drawingReferences(selected.map((candidate) => candidate.source));
-              useLandContext.getState().setLayer({
-                id: "drawing-guides",
-                title: "Drawing guides",
-                drawingGuideSources: references,
-                features: selected.map((candidate) => ({
-                  id: candidate.id,
-                  label: candidate.label,
-                  geometry: candidate.geometry,
-                })),
-              });
-              const land = useLand.getState();
-              land.setSnapMapped(true);
-              land.begin(line ? "corridor" : "draw");
-              land.setTraceSources(references);
-            }}
-          >
-            Trace over them
-          </GlassButton>
+          {!publicPick && (
+            <GlassButton
+              disabled={busy}
+              onClick={() => {
+                const references = drawingReferences(selected.map((candidate) => candidate.source));
+                useLandContext.getState().setLayer({
+                  id: "drawing-guides",
+                  title: "Drawing guides",
+                  drawingGuideSources: references,
+                  features: selected.map((candidate) => ({
+                    id: candidate.id,
+                    label: candidate.label,
+                    geometry: candidate.geometry,
+                  })),
+                });
+                const land = useLand.getState();
+                land.setSnapMapped(true);
+                land.begin(line ? "corridor" : "draw");
+                land.setTraceSources(references);
+              }}
+            >
+              Trace over them
+            </GlassButton>
+          )}
         </div>
       )}
-      {candidates.length > 0 && (
+      {candidates.length > 0 && !publicPick && (
         <details className="land-details">
           <summary>Describe it instead</summary>
           <form
@@ -351,7 +378,11 @@ export function LandParcelPicker() {
         </p>
       )}
       <div className="land-row">
-        <GlassButton variant="ghost" size="sm" onClick={() => useLand.getState().begin("browse")}>
+        <GlassButton
+          variant="ghost"
+          size="sm"
+          onClick={() => (publicPick ? publicPick.onCancel() : useLand.getState().begin("browse"))}
+        >
           Cancel
         </GlassButton>
       </div>

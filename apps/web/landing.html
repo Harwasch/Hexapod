@@ -918,58 +918,31 @@
             <!-- Inert without its script: no field has a name, so a native submit carries no data, and
                  the inline guard stops even that. src/landing/main.ts handles the submit. -->
             <form id="f" class="pk" novalidate onsubmit="return false;">
-              <div class="pk-top">
-                <label class="pk-search" for="pk-q"
-                  ><span class="lbl">1 · Find your site</span>
-                  <input
-                    id="pk-q"
-                    type="search"
-                    placeholder="Search an address (demo)"
-                    autocomplete="off"
-                    aria-controls="pk-res"
-                /></label>
-                <ul class="pk-res" id="pk-res" hidden></ul>
+              <div class="pk-find">
+                <span class="lbl">1 · Find your land</span>
+                <p class="pk-hint">
+                  Search an address or coordinates, then pick your parcels from county records
+                  (California) or draw the outline.
+                </p>
+                <button type="button" class="btn pri" id="pk-open" aria-haspopup="dialog">
+                  Find my land
+                </button>
               </div>
-              <div class="pk-bar">
-                <span class="lbl">2 · Mark the area</span>
-                <div class="seg" role="group" aria-label="Map tool">
-                  <button type="button" data-pk-mode="select" aria-pressed="true">
-                    Select parcels</button
-                  ><button type="button" data-pk-mode="draw" aria-pressed="false">
-                    Draw an area
-                  </button>
-                </div>
-                <div class="pk-draw">
-                  <button type="button" class="mini" id="pk-undo" disabled>Undo</button
-                  ><button type="button" class="mini" id="pk-finish" disabled>Finish</button>
-                </div>
-              </div>
-              <div class="pk-map">
-                <canvas
-                  id="pk-map"
-                  aria-label="Map of a demo site with selectable parcels. Use the search box or the parcel list as alternatives to the map."
-                ></canvas>
-                <span class="pk-ex" id="pk-ex">Example selection</span>
-                <div class="pk-zoom">
-                  <button type="button" id="pk-in" aria-label="Zoom in">+</button
-                  ><button type="button" id="pk-out" aria-label="Zoom out">−</button
-                  ><button type="button" id="pk-fit" aria-label="Show the whole site">⤢</button>
-                </div>
-              </div>
-              <p class="pk-hint" id="pk-hint"></p>
               <div class="pk-sum">
                 <ul id="pk-list" class="pk-list"></ul>
-                <p class="pk-empty" id="pk-empty" hidden>
-                  Nothing selected yet. Pick a parcel or draw an area.
+                <p class="pk-empty" id="pk-empty">
+                  Nothing chosen yet. Find your land, or enter its acres below.
                 </p>
+                <p class="pk-attr" id="pk-attr" hidden></p>
+                <div class="pk-attr pk-notices" id="pk-notices" hidden></div>
                 <p class="err" id="pk-err" hidden></p>
-                <div class="pk-tot">
+                <div class="pk-tot" id="pk-tot" hidden>
                   <span class="lbl">Total</span><b id="pk-total"></b
                   ><button type="button" class="mini" id="pk-clear">Clear</button>
                 </div>
               </div>
               <div class="pk-fields">
-                <span class="lbl wide">3 · Your details</span>
+                <span class="lbl wide">2 · Your details</span>
                 <div class="fld">
                   <label for="f-name"
                     >Name<input id="f-name" type="text" autocomplete="name" aria-required="true"
@@ -1008,10 +981,10 @@
                   Not connected yet: this form checks what you enter, but sends nothing.
                 </p>
               </div>
-              <p class="pk-note">
-                Demo map. On the live site this is a satellite map with real address search.
-              </p>
             </form>
+            <!-- The site finder (finder.html) in a dialog; its frame is made on first open
+                 (src/landing/finder.ts), so the landing page loads none of it until asked. -->
+            <dialog class="pk-dialog" id="pk-dialog" aria-label="Find your land"></dialog>
           </div>
         </div>
       </section>

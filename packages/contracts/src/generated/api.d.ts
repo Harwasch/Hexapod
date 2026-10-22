@@ -1918,6 +1918,30 @@ export interface paths {
         patch: operations["set_status_api_v1_plans__plan_id__status_patch"];
         trace?: never;
     };
+    "/api/v1/public/parcels/near": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Parcels Near
+         * @description County assessor parcels near a point, with their source, attribution and any notice
+         *     their terms require.
+         *
+         *     California only (elsewhere the answer is `uncovered`), and only the counties whose terms
+         *     were verified (`public_counties`; docs/PUBLIC_PARCELS.md).
+         */
+        post: operations["parcels_near_api_v1_public_parcels_near_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recipes": {
         parameters: {
             query?: never;
@@ -4458,6 +4482,8 @@ export interface components {
             candidates: components["schemas"]["LandCandidate"][];
             /** Message */
             message: string;
+            /** Notices */
+            notices?: components["schemas"]["SourceNotice"][];
             /**
              * Status
              * @enum {string}
@@ -9747,6 +9773,18 @@ export interface components {
             usdPerHourA100: number;
         };
         /**
+         * PublicParcelRequest
+         * @description Parcels near a point, asked by a visitor who has not signed in.
+         */
+        PublicParcelRequest: {
+            point: components["schemas"]["Point"];
+            /**
+             * Radiusm
+             * @default 250
+             */
+            radiusM?: number;
+        };
+        /**
          * QualityCounts
          * @description Gaussians in, gaussians the bar let out, and each tier's count.
          */
@@ -11534,6 +11572,17 @@ export interface components {
             /** Zonebasis */
             zoneBasis: string;
         };
+        /**
+         * SourceNotice
+         * @description A statement a source's terms require with any copy of its data (Kern County's
+         *     disclaimer), to be shown wherever its parcels are.
+         */
+        SourceNotice: {
+            /** Source */
+            source: string;
+            /** Text */
+            text: string;
+        };
         /** SourceRead */
         SourceRead: {
             /** Attribution */
@@ -12870,6 +12919,7 @@ export type SchemaPromptResult = components['schemas']['PromptResult'];
 export type SchemaProposedAction = components['schemas']['ProposedAction'];
 export type SchemaProvenance = components['schemas']['Provenance'];
 export type SchemaProviderRead = components['schemas']['ProviderRead'];
+export type SchemaPublicParcelRequest = components['schemas']['PublicParcelRequest'];
 export type SchemaQualityCounts = components['schemas']['QualityCounts'];
 export type SchemaQualityRoi = components['schemas']['QualityRoi'];
 export type SchemaQualityTip = components['schemas']['QualityTip'];
@@ -12950,6 +13000,7 @@ export type SchemaSolarMonth = components['schemas']['SolarMonth'];
 export type SchemaSolarOutput = components['schemas']['SolarOutput'];
 export type SchemaSolarPreview = components['schemas']['SolarPreview'];
 export type SchemaSolarRequest = components['schemas']['SolarRequest'];
+export type SchemaSourceNotice = components['schemas']['SourceNotice'];
 export type SchemaSourceRead = components['schemas']['SourceRead'];
 export type SchemaSpeciesObservation = components['schemas']['SpeciesObservation'];
 export type SchemaSpeciesTarget = components['schemas']['SpeciesTarget'];
@@ -21515,6 +21566,87 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Problem"];
                 };
+            };
+        };
+    };
+    parcels_near_api_v1_public_parcels_near_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublicParcelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateResult"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The request body is larger than this route accepts */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many lookups from this client; see Retry-After */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Too many lookups running at once; see Retry-After */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

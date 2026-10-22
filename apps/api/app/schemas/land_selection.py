@@ -15,6 +15,18 @@ class CandidateRequest(CamelModel):
     radius_m: float = Field(default=250, gt=0, le=2000, allow_inf_nan=False)
 
 
+#: Widest search the public parcel lookup answers (m from the point): a few neighbours'
+#: parcels, not a neighbourhood. The signed-in picker asks for 250 m.
+PUBLIC_PARCEL_RADIUS_M = 300
+
+
+class PublicParcelRequest(CamelModel):
+    """Parcels near a point, asked by a visitor who has not signed in."""
+
+    point: Point
+    radius_m: float = Field(default=250, gt=0, le=PUBLIC_PARCEL_RADIUS_M, allow_inf_nan=False)
+
+
 class LandCandidate(CamelModel):
     id: str = Field(min_length=1, max_length=200)
     label: str = Field(min_length=1, max_length=300)
@@ -24,11 +36,20 @@ class LandCandidate(CamelModel):
     properties: dict[str, str | float | None] = Field(default_factory=dict)
 
 
+class SourceNotice(CamelModel):
+    """A statement a source's terms require with any copy of its data (Kern County's
+    disclaimer), to be shown wherever its parcels are."""
+
+    source: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=20_000)
+
+
 class CandidateResult(CamelModel):
     status: Literal["available", "empty", "uncovered", "unavailable"]
     message: str
     candidates: list[LandCandidate]
     truncated: bool = False
+    notices: list[SourceNotice] = Field(default_factory=list)
 
 
 class SelectionInstruction(CamelModel):

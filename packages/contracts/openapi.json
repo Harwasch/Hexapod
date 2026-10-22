@@ -2843,6 +2843,13 @@
             "title": "Message",
             "type": "string"
           },
+          "notices": {
+            "items": {
+              "$ref": "#/components/schemas/SourceNotice"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
           "status": {
             "enum": [
               "available",
@@ -17199,6 +17206,27 @@
         "title": "ProviderRead",
         "type": "object"
       },
+      "PublicParcelRequest": {
+        "additionalProperties": false,
+        "description": "Parcels near a point, asked by a visitor who has not signed in.",
+        "properties": {
+          "point": {
+            "$ref": "#/components/schemas/Point"
+          },
+          "radiusM": {
+            "default": 250,
+            "exclusiveMinimum": 0.0,
+            "maximum": 300.0,
+            "title": "Radiusm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "point"
+        ],
+        "title": "PublicParcelRequest",
+        "type": "object"
+      },
       "QualityCounts": {
         "additionalProperties": false,
         "description": "Gaussians in, gaussians the bar let out, and each tier's count.",
@@ -22479,6 +22507,30 @@
           "assumptions"
         ],
         "title": "SolarRequest",
+        "type": "object"
+      },
+      "SourceNotice": {
+        "additionalProperties": false,
+        "description": "A statement a source's terms require with any copy of its data (Kern County's\ndisclaimer), to be shown wherever its parcels are.",
+        "properties": {
+          "source": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Source",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "text"
+        ],
+        "title": "SourceNotice",
         "type": "object"
       },
       "SourceRead": {
@@ -39086,6 +39138,87 @@
         "summary": "Change lifecycle state",
         "tags": [
           "plans"
+        ]
+      }
+    },
+    "/api/v1/public/parcels/near": {
+      "post": {
+        "description": "County assessor parcels near a point, with their source, attribution and any notice\ntheir terms require.\n\nCalifornia only (elsewhere the answer is `uncovered`), and only the counties whose terms\nwere verified (`public_counties`; docs/PUBLIC_PARCELS.md).",
+        "operationId": "parcels_near_api_v1_public_parcels_near_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicParcelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "description": "The request body is larger than this route accepts"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "429": {
+            "description": "Too many lookups from this client; see Retry-After"
+          },
+          "503": {
+            "description": "Too many lookups running at once; see Retry-After"
+          }
+        },
+        "summary": "Parcels Near",
+        "tags": [
+          "public"
         ]
       }
     },
