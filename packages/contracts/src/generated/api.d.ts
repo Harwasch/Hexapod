@@ -358,6 +358,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/health/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Process liveness
+         * @description The Fly probe: serving requests requires no database or storage access.
+         */
+        get: operations["live_api_v1_health_live_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/imagery/dated": {
         parameters: {
             query?: never;
@@ -8635,6 +8655,13 @@ export interface components {
             /** Up */
             up: number[] | null;
         };
+        /** LivenessStatus */
+        LivenessStatus: {
+            /** Status */
+            status: string;
+            /** Version */
+            version: string;
+        };
         /**
          * LiveProgress
          * @description The running stage's tool progress (`metrics.progress`), when it prints one.
@@ -12970,6 +12997,7 @@ export type SchemaLegendMetadata = components['schemas']['LegendMetadata'];
 export type SchemaLicenseMetadata = components['schemas']['LicenseMetadata'];
 export type SchemaLineString = components['schemas']['LineString'];
 export type SchemaLiveCameras = components['schemas']['LiveCameras'];
+export type SchemaLivenessStatus = components['schemas']['LivenessStatus'];
 export type SchemaLiveProgress = components['schemas']['LiveProgress'];
 export type SchemaLiveSplat = components['schemas']['LiveSplat'];
 export type SchemaLiveStage = components['schemas']['LiveStage'];
@@ -14547,6 +14575,62 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthStatus"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    live_api_v1_health_live_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LivenessStatus"];
                 };
             };
             /** @description Missing or wrong write token */
