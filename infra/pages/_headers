@@ -3,7 +3,8 @@
 # Copied into apps/web/dist at deploy time (wrangler.toml says why it is not in
 # apps/web/public/). Pages reads this file from the root of the deployed directory.
 #
-# There is deliberately no Content-Security-Policy here. CesiumJS creates web workers and
+# There is deliberately no Content-Security-Policy here (beyond the finder's frame-ancestors,
+# below, which restricts who may frame it and nothing the page loads). CesiumJS creates web workers and
 # instantiates WebAssembly from its own static directory, and a policy written without a
 # browser to test it against is a policy that breaks the globe on first load and looks
 # like a Cesium bug. Add one when someone can watch the console while it is applied.
@@ -18,6 +19,20 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   X-Frame-Options: DENY
+
+# The site finder, which the landing page shows in a frame inside its "Request a site scan"
+# section (src/landing/finder.ts). DENY above made the browser refuse that frame on the live
+# site ("refused to connect"). This page alone may be framed, and only by this site: the
+# X-Frame-Options from /* is detached (`!`) and frame-ancestors says the same thing to every
+# current browser. Pages answers /finder.html with a redirect to /finder, so both are named.
+# Checked by apps/web/src/__tests__/pagesHeaders.test.ts.
+/finder
+  ! X-Frame-Options
+  Content-Security-Policy: frame-ancestors 'self'
+
+/finder.html
+  ! X-Frame-Options
+  Content-Security-Policy: frame-ancestors 'self'
 
 # Vite's output: content-hashed filenames, so a stale copy is unreachable by name.
 /assets/*
