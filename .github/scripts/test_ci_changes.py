@@ -127,6 +127,10 @@ class CrossProjectReads(unittest.TestCase):
         # scripts/prepare-worlds-land-release.py reads it; scripts/tests test that.
         self.assertEqual(push("fly.toml"), {"image", "worlds"})
 
+    def test_fly_toml_checker_runs_image_and_its_tests(self) -> None:
+        # The image job runs it on fly.toml; the workflows job runs its unit tests.
+        self.assertEqual(push(".github/scripts/check_fly_toml.py"), {"image", "workflows"})
+
     def test_pipeline_runs_captures(self) -> None:
         # tools/captures imports tools/pipeline/captures_bridge.py and cloud.py.
         self.assertIn("captures", push("tools/pipeline/captures_bridge.py"))

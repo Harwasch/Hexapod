@@ -162,13 +162,14 @@ without them.
   `worker` runs `python -m app.worker` with no service at all.
 - **`auto_stop_machines = "suspend"`, `min_machines_running = 0`** on the `app` group
   only. A single-user API idles for hours. Suspend rather than stop: Fly snapshots the
-  machine's memory (it allows this up to 2 GB; the API's is 1 GB), so the next request
+  machine's memory (it allows this up to 2 GB; the API's is 2 GB), so the next request
   resumes a running uvicorn instead of booting Python and importing the app. The first
   request after a deploy is still a cold boot — a new image has no snapshot — and a socket
   held across a suspend (the database pool, an R2 or Anthropic keep-alive) may be found
   reset once on resume; `pool_pre_ping` (`app/db.py`) checks a pooled connection before
   using it. The worker must never be stopped by a proxy that sees no requests, and it is
-  not in `http_service.processes` for that reason.
+  not in `http_service.processes` for that reason. See
+  [letting the API sleep](#letting-the-api-sleep).
 - **the worker stops itself when idle.** `WORKER_IDLE_EXIT_S=900`: with nothing running
   or queued for 15 minutes it exits 0 and its machine stays stopped; queueing a job starts
   it again. See [waking the worker](#waking-the-worker-and-letting-neon-sleep).
@@ -390,6 +391,67 @@ this check when it claims the queued job afterwards.
 minutes after the worker's last poll. The first query after that waits for the compute to
 start (Neon quotes a few hundred milliseconds); a connection the pool held across the
 suspend is checked before use (`pool_pre_ping`) and replaced.
+
+### Letting the API sleep
+
+The `app` group has `auto_stop_machines = "suspend"` and `min_machines_running = 0`: when
+one of Fly Proxy's checks (every few minutes) finds the one API machine with no traffic, it
+suspends it, and the next request resumes it.
+
+**What it costs**, from [Fly's pricing page](https://fly.io/docs/about/pricing/) as read on
+2026-10-20 (`iad`, per 30 days of runtime, billed by the second): shared-cpu-1x with 1 GB
+is $6.70; RAM beyond the preset's is $6.00/GB, so the 2 GB machine is $12.70 for every
+month it is awake. A stopped or suspended machine is billed $0.15/GB/month for its rootfs
+only, about the image's size (not measured; ~$0.30 at 2 GB). The `twin_worlds_data` volume
+is $0.15 whatever the machine does. So the always-on 1 GB API was $6.70; asleep but for
+2 h a day the 2 GB one is about $1.30, at 8 h about $4.40, and it costs more than before
+past about 12 h a day. Estimates: Fly bills what the machine actually ran.
+
+**What wakes it** is a request through the proxy: the console, the phone, a smoke check.
+Nothing else does, and nothing needs to:
+
+- **the worker and research groups never call the API.** They talk to the database, the
+  buckets and Modal. Waking runs the other way: the API starts the worker when it queues a
+  job ([above](#waking-the-worker-and-letting-neon-sleep)), from a request that has itself
+  woken the API.
+- **the 20 s recheck after a wake** (`RECHECK_AFTER_S`, for a worker found on its way
+  out) is an in-memory timer: a suspend inside those 20 s delays it to the next resume,
+  and a cold boot loses it. For a job queued in that moment, `QUEUE_CHECK_URL` is the
+  durable answer: healthchecks.io alerts when the job is not claimed within its grace.
+  For a cancel there is no check to alert, so the worker closes the gap itself: an idle
+  exit reaps once more on its way out (`app/worker/loop.py`), after its last look at the
+  queue, which leaves only the moment between that pass and the process ending. A call
+  missed even then is cancelled by the worker's next start (any enqueue, or a deploy,
+  which starts it), and Modal's six-hour function limit bounds it regardless.
+- **the release command** runs `alembic upgrade head` in a machine of its own.
+- **the Worlds lease reaper** (`app/worlds/lifecycle.py`) is a thread in the API process,
+  so it does not run while the machine is suspended. Its state is on `/worlds-data`, and it
+  carries on where it left off on the next wake; until then a Worlds session whose browser
+  went away stays open on its gateway. That is why every `WORLD_*_ALLOW_PROVISION` stays
+  false: a paid GPU worker past its deadline would keep billing until somebody opened the
+  console. Turning one on means `auto_stop_machines = "off"` and
+  `min_machines_running = 1` again, and `WORLD_API_MAY_SLEEP = "false"`. Two guards say
+  so. CI's image job refuses the combination in `fly.toml`
+  (`.github/scripts/check_fly_toml.py`, which reads the flags as the API does: `1`, `yes`,
+  `on`, any case). A Fly secret overrides `[env]` where CI cannot see it, so the API is the
+  real guard: with `WORLD_API_MAY_SLEEP=true` it refuses every new managed worker (503,
+  logged) and lists no provider as able to provision; workers and sessions that already
+  exist are still reaped.
+
+**The cost of waking.** A resume from suspend takes a few hundred milliseconds (Fly's
+figure), plus Neon's start if its compute has scaled to zero. A resumed process still has
+the app imported and, once it has been used, the text encoder loaded. A cold boot — after
+every deploy, a host migration or a lost snapshot, since a snapshot is never resumed onto
+new code — starts the machine (~2 s), imports the app (~10 s on a desktop; slower on a
+shared vCPU, not measured on Fly), and the first search then loads the encoder (~1 s). The
+console is built for this: a failed first query falls back to the built-in catalogue and
+retries every 5 s (`apps/web/src/api/queries.ts`).
+
+**After a resume**, a socket held across the suspend may be found reset once: the
+database pool checks before use (`pool_pre_ping`, `app/db.py`). The clock can lag a few
+seconds until NTP syncs, inside the 10 s leeway JWT validation allows
+(`app/services/identity.py`). A deploy leaves a suspended API stopped, so `deploy.yml`
+starts it before it checks the ledger volume over `fly ssh console`.
 
 ## GPU training — Modal
 
@@ -1642,8 +1704,9 @@ After verifying all existing API replicas share the source database and have no
 independent Worlds ledgers, the workflow consolidates the API to one replica.
 The Fly configuration now runs one API machine with a separate 1 GB Worlds volume
 and an independent 1 GB Land research process. `--ha=false` prevents an extra API
-machine with a separate ledger. The API stays running for Worlds lease cleanup;
-the research process polls the database continuously, so Neon will not scale to
+machine with a separate ledger. The API suspends when idle, so Worlds lease cleanup
+waits for the next request ([letting the API sleep](#letting-the-api-sleep)); the
+research process polls the database continuously, so Neon will not scale to
 zero while that process is running. These are deliberate personal-testing costs.
 The capture worker and its existing volume remain separate. All Worlds paid
 provider provisioning flags remain false. Existing private-storage, API-token and

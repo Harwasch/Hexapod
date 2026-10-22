@@ -16,7 +16,9 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
@@ -208,6 +210,69 @@ def test_a_worker_does_not_exit_while_any_slot_holds_a_job(
     finally:
         assert not thread.is_alive()
     assert worker.exited_idle
+
+
+class _NoDatabase:
+    def close(self) -> None:
+        pass
+
+
+def _counting(passes: list[str]) -> Callable[[Worker], list[str]]:
+    def reap(self: Worker) -> list[str]:
+        passes.append("pass")
+        return []
+
+    return reap
+
+
+def test_an_idle_exit_reaps_once_more_on_the_way_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A job cancelled while the worker sat idle is the reaper's alone, on a five-minute
+    tick; the API's re-wake finds this machine still up and does nothing more. So the
+    last thing an idle exit does is a pass, after the final look at the queue. No
+    database: the queue is empty and every claim finds nothing."""
+    passes: list[str] = []
+    monkeypatch.setattr(Worker, "reap_abandoned", _counting(passes))
+    monkeypatch.setattr(Worker, "run_one", lambda self, stop=None, *, config=None: None)
+    monkeypatch.setattr(worker_loop, "anything_claimable", lambda session: False)
+    worker = Worker(
+        cast(sessionmaker[Session], _NoDatabase),
+        cast(S3Storage, object()),
+        config(tmp_path, "worker-a", reap_every_s=600.0, **IDLE),
+    )
+
+    thread, ran = _run(worker)
+    thread.join(timeout=30)
+
+    assert not thread.is_alive(), "the worker never exited"
+    assert worker.exited_idle
+    assert ran == [0]
+    # The start-up pass, then the one on the way out; the tick never came round.
+    assert passes == ["pass", "pass"]
+
+
+def test_a_stop_is_not_an_idle_exit_and_does_not_reap_on_the_way_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SIGTERM (a deploy) leaves its GPU calls for a successor: no extra pass then."""
+    passes: list[str] = []
+    monkeypatch.setattr(Worker, "reap_abandoned", _counting(passes))
+    monkeypatch.setattr(Worker, "run_one", lambda self, stop=None, *, config=None: None)
+    worker = Worker(
+        cast(sessionmaker[Session], _NoDatabase),
+        cast(S3Storage, object()),
+        config(tmp_path, "worker-a", reap_every_s=600.0, idle_exit_s=0),
+    )
+    stop = threading.Event()
+    thread, _ = _run(worker, stop)
+    time.sleep(0.3)
+    stop.set()
+    thread.join(timeout=10)
+
+    assert not thread.is_alive()
+    assert not worker.exited_idle
+    assert passes == ["pass"]
 
 
 def test_a_stop_still_interrupts_a_backed_off_wait(

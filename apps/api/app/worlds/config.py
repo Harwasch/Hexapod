@@ -70,6 +70,11 @@ class WorldsSettings(BaseSettings):
     max_managed_workers: int = Field(default=1, ge=1, le=8)
     max_worker_hourly_cost: float | None = Field(default=None, gt=0, le=100, allow_inf_nan=False)
     data_persistent: bool = False
+    # Set by a deployment whose API machine may be stopped or suspended when idle (fly.toml:
+    # auto_stop_machines). The lease reaper is a thread in the API process, so on such a
+    # machine it runs only while the API is awake, so new managed provisioning is refused
+    # (sleep_problem); workers and sessions that already exist are still cleaned up.
+    api_may_sleep: bool = False
 
     @classmethod
     def load(cls) -> WorldsSettings:
@@ -150,6 +155,16 @@ class WorldsSettings(BaseSettings):
         if not self.gateway_token or len(self.gateway_token.get_secret_value()) < 32:
             return "Hosted workers require a WORLD_GATEWAY_TOKEN with at least 32 characters."
         return None
+
+    def sleep_problem(self) -> str | None:
+        """Why new managed provisioning is refused here, if it is: on an API that may sleep
+        the lease reaper that tears a paid worker down sleeps with it."""
+        if not self.api_may_sleep:
+            return None
+        return (
+            "Managed provisioning is refused on an API that may sleep (WORLD_API_MAY_SLEEP): "
+            "its lease reaper could not tear the worker down while the API is suspended."
+        )
 
     @property
     def lifecycle_needed(self) -> bool:

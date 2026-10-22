@@ -194,6 +194,39 @@ def test_provision_failclosed_without_running_reaper(setup: WorldsSetup) -> None
     assert calls == []
 
 
+def test_provision_refused_on_an_api_that_may_sleep(
+    setup: WorldsSetup, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A Fly secret can turn provisioning on behind CI's back; on a machine that suspends,
+    the reaper that would tear the worker down sleeps with it. So the API refuses."""
+    client, config, calls = setup
+    enable_provision(client, config)
+    config.api_may_sleep = True
+    with caplog.at_level("WARNING", logger="twin.worlds.router"):
+        response = client.post("/api/v1/worlds/workers", json={"provider": "runpod"})
+    assert response.status_code == 503
+    assert "WORLD_API_MAY_SLEEP" in response.json()["detail"]
+    assert any("Refused managed runpod" in r.getMessage() for r in caplog.records)
+    assert calls == []
+    listed = client.get("/api/v1/worlds/providers").json()["providers"]
+    assert not any(item["canProvision"] for item in listed)
+    config.api_may_sleep = False
+    listed = client.get("/api/v1/worlds/providers").json()["providers"]
+    assert any(item["canProvision"] for item in listed)  # the refusal above was the flag
+    assert Store(config.data_dir).records("worker") == []
+
+
+def test_existing_workers_are_still_reaped_on_an_api_that_may_sleep(
+    lifecycle: LifecycleSetup,
+) -> None:
+    runner, db, calls = lifecycle
+    runner.config.api_may_sleep = True
+    record_worker(db, hardDeadline=1200, idleDeadline=9999)
+    runner.tick(1201)
+    assert calls == [("destroy", "pod-id")]
+    assert require_record(db.get("worker", "worker"))["status"] == "destroyed"
+
+
 def test_price_cap_terminates_new_worker_before_usable_response(
     setup: WorldsSetup, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -401,3 +434,65 @@ def test_explicit_missing_config_file_fails_closed(
     monkeypatch.setenv("WORLD_ENV_FILE", str(tmp_path / "missing.env"))
     with pytest.raises(RuntimeError, match="WORLD_ENV_FILE"):
         WorldsSettings.load()
+
+
+def paid_modal(tmp_path: Path, **overrides: Any) -> WorldsSettings:
+    """A complete managed-Modal configuration, which the lifespan accepts."""
+    values: dict[str, Any] = {
+        "data_dir": tmp_path,
+        "data_persistent": True,
+        "max_worker_hourly_cost": 5,
+        "modal_allow_provision": True,
+        "modal_token_id": "token-id",
+        "modal_token_secret": "token-secret",
+        "modal_image": "registry.example.test/worlds@sha256:abc",
+        "modal_hourly_cost": 2,
+        "gateway_token": "g" * 32,
+        **overrides,
+    }
+    return WorldsSettings(_env_file=None, **values)
+
+
+def run_lifespan(config: WorldsSettings, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.worlds.lifecycle import worlds_lifespan
+
+    monkeypatch.setattr(WorldsSettings, "load", lambda: config)
+    app = FastAPI(lifespan=worlds_lifespan)
+    app.state.settings = SimpleNamespace(api_write_token="write-token")
+    with TestClient(app):
+        pass
+
+
+def test_paid_provisioning_on_an_api_that_may_sleep_warns_at_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The reaper that tears paid workers down is a thread in the API process; on a
+    machine Fly suspends when idle it stops with it, and the worker bills until the next
+    request. fly.toml sets WORLD_API_MAY_SLEEP for that machine."""
+    with caplog.at_level("WARNING", logger="twin.worlds.lifecycle"):
+        run_lifespan(paid_modal(tmp_path, api_may_sleep=True), monkeypatch)
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert any("(modal)" in m and "lease reaper" in m for m in warnings), warnings
+
+
+def test_no_sleep_warning_when_always_on_or_not_provisioning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from app.worlds.lifecycle import sleep_hazard
+
+    with caplog.at_level("WARNING", logger="twin.worlds.lifecycle"):
+        run_lifespan(paid_modal(tmp_path), monkeypatch)
+        run_lifespan(
+            paid_modal(tmp_path, api_may_sleep=True, modal_allow_provision=False), monkeypatch
+        )
+    assert not [r for r in caplog.records if "lease reaper" in r.getMessage()]
+    # A provider behind an operator's own gateway is not managed: nothing to reap.
+    gateway = paid_modal(
+        tmp_path, api_may_sleep=True, modal_gateway_url="https://gateway.example.test"
+    )
+    assert sleep_hazard(gateway, [gateway]) == []
+
+
+def test_api_may_sleep_reads_world_api_may_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WORLD_API_MAY_SLEEP", "true")
+    assert WorldsSettings(_env_file=None).api_may_sleep is True

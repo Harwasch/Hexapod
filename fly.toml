@@ -2,7 +2,7 @@
 #
 # One app, one image (infra/api.Dockerfile), three process groups:
 #
-#   app     uvicorn, behind Fly's proxy and TLS      -- always on for Worlds cleanup, holds a ledger volume
+#   app     uvicorn, behind Fly's proxy and TLS      -- suspends when idle, holds a ledger volume
 #   worker  `python -m app.worker`, a poll loop      -- runs while there is work, holds a volume
 #   research `python -m app.research`                 -- Land research queue
 #
@@ -69,6 +69,14 @@ kill_timeout = "30s"
   # Personal-testing Worlds ledger: one API machine, on its own persistent volume.
   WORLD_DATA_DIR = "/worlds-data"
   WORLD_DATA_PERSISTENT = "true"
+  # Keep these three false while [http_service] lets the API sleep. The Worlds lease reaper
+  # (app/worlds/lifecycle.py) runs in the API process, and a suspended API does not tear
+  # down a paid GPU worker whose idle or hard deadline passes until the next request wakes
+  # it. Turning one on means auto_stop_machines = "off" and min_machines_running = 1 again
+  # (CI's image job refuses the combination: .github/scripts/check_fly_toml.py), and
+  # WORLD_API_MAY_SLEEP "false". With it "true" the API refuses every new managed worker
+  # (503), which is what holds when a Fly secret sets a flag here behind CI's back.
+  WORLD_API_MAY_SLEEP = "true"
   WORLD_RUNPOD_ALLOW_PROVISION = "false"
   WORLD_LAMBDA_ALLOW_PROVISION = "false"
   WORLD_MODAL_ALLOW_PROVISION = "false"
@@ -136,6 +144,12 @@ kill_timeout = "30s"
   # and without it a stopped worker stays stopped until `fly machine start`. "0" polls
   # forever, the old behaviour.
   WORKER_IDLE_EXIT_S = "900"
+  # Search by meaning (GET /api/v1/text-embeddings): SigLIP 2's text tower, loaded by the
+  # API on the first search (~1 s; ~880 MB resident after, 1.03 GB peak while loading), so
+  # it needs the 2 GB app machine below. App-wide like the rest of [env]; the worker and
+  # research groups never load it. Read only once PR #43's `text_encoder_enabled` setting
+  # exists: until then Settings ignores a variable it has no field for.
+  TEXT_ENCODER_ENABLED = "true"
 
 [processes]
   app = "uvicorn app.main:app --host 0.0.0.0 --port 8000"
@@ -146,10 +160,32 @@ kill_timeout = "30s"
   internal_port = 8000
   force_https = true
   processes = ["app"]
-  # Worlds lease cleanup must continue when the browser disconnects.
-  auto_stop_machines = "off"
+  # A single-user API idles for hours, so it sleeps when nobody is looking and the next
+  # request wakes it. "suspend" rather than "stop": Fly snapshots the machine's memory and
+  # resumes it in a few hundred ms (docs: fly.io/docs/reference/suspend-resume), so a
+  # request after a quiet spell finds a running uvicorn -- the app already imported, the
+  # text encoder still loaded -- instead of a cold boot that imports the app first (~10 s
+  # on a desktop). Fly allows it up to 2 GB, no swap and no schedule; this machine is
+  # 2 GB with neither. The /worlds-data volume is unaffected: a snapshot is not stored on it.
+  #
+  # What it does not change: a deploy, a host migration or a lost snapshot still means a
+  # cold boot; sockets held across a suspend (the database pool, an R2 or Anthropic
+  # keep-alive) may be found reset once on resume, which pool_pre_ping (app/db.py) covers
+  # for the pool; and the clock can lag a few seconds until NTP syncs, inside the 10 s JWT
+  # leeway (app/services/identity.py). While suspended, nothing in the process runs: the
+  # Worlds lease reaper picks up where it left off on the next wake, which is why paid
+  # Worlds provisioning stays off above. The proxy suspends the machine when one of its
+  # checks, every few minutes, finds it with no traffic. A visible console tab polls
+  # /health every 60 s (apps/web/src/api/queries.ts), so with one open the machine may
+  # stay awake or cycle through resumes; either is harmless, and only a closed tab saves.
+  #
+  # The worker and research groups are deliberately not in `processes` here -- they have
+  # no service, so the proxy never stops them and they never wait for a request. Neither
+  # calls the API: the worker stops itself when idle and the API starts it
+  # (WORKER_IDLE_EXIT_S above).
+  auto_stop_machines = "suspend"
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
 
   [[http_service.checks]]
     method = "GET"
@@ -161,7 +197,11 @@ kill_timeout = "30s"
 [[vm]]
   processes = ["app"]
   size = "shared-cpu-1x"
-  memory = "1gb"
+  # 2 GB for the text encoder (TEXT_ENCODER_ENABLED above): loading it takes the API
+  # process from ~360 MB to a 1.03 GB peak (PR #43, measured locally), which a 1 GB machine
+  # would be OOM-killed for. Billed only while awake. 2 GB is also Fly's ceiling for
+  # suspend; raising it means "stop".
+  memory = "2gb"
 
 [[vm]]
   processes = ["worker"]

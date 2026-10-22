@@ -790,22 +790,13 @@ jobs:
       # C1 committed a fly.toml whose [processes] replace the image's CMD. A typo there
       # is a deploy that builds, pushes, boots and then exits 127 -- flyctl's health
       # check is the first thing that notices. This asks the image itself.
+      #
+      # check_fly_toml.py first refuses a top-level key that slid under a table, and paid
+      # Worlds provisioning on an API Fly may stop or suspend (its lease reaper sleeps with
+      # it), then prints the commands to look up.
       - name: fly.toml names commands this image actually has
         run: |
-          python3 - <<'PY' > commands.txt
-          import shlex
-          import tomllib
-
-          config = tomllib.load(open("fly.toml", "rb"))
-          # TOML gives a bare key to whichever table header precedes it, so the worker's
-          # shutdown grace -- which reads most naturally beside the health check -- turns
-          # into a field of that check, and Fly never sees it. It was written that way
-          # first; this is what noticed.
-          assert "kill_timeout" in config, "kill_timeout is not a top-level key in fly.toml"
-          commands = [*config["processes"].values(), config["deploy"]["release_command"]]
-          for command in commands:
-              print(shlex.split(command)[0])
-          PY
+          python3 .github/scripts/check_fly_toml.py fly.toml > commands.txt
           cat commands.txt
           while read -r binary; do
             if ! docker run --rm twin-api sh -c "command -v '$binary'"; then
