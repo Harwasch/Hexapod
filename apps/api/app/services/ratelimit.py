@@ -1,7 +1,7 @@
 """Per-client token buckets for the few routes whose cost is the attack.
 
-Most of this API is cheap to call and open to read, and is left alone. Seven things are
-not cheap:
+Most of this API is cheap to call and open to read, and is left alone. Eight things are
+not cheap, or open to anyone who would abuse them:
 
 * **The phone key.** Every route behind it hashes the supplied key with 200,000 rounds of
   PBKDF2 (app/services/phone_key.py) -- deliberately, so a leaked hash is slow to attack.
@@ -18,6 +18,9 @@ not cheap:
 * **Public parcels** (`/public/parcels/near`) ask one or two county parcel services on the
   behalf of a visitor who has not signed in (the landing page's site finder). Open on
   purpose, so bucketed tightly.
+* **Scan requests** (`POST /scan-requests`) store what a visitor who has not signed in sends
+  from the landing page's form. A person sends one, perhaps again after an error; a flood is
+  rows in the database, so the bucket is the tightest here.
 * **Dated imagery** (`/imagery/dated`, `/imagery/usgs-topo/tiles`) asks Planetary Computer,
   The National Map and USGS's sheet bucket on the caller's behalf, before sign-in: public
   data, but not an open proxy either.
@@ -77,6 +80,9 @@ IMAGERY_CATALOG = Limit(burst=10, per_minute=30)
 #: is one lookup that asks one or two county services: eight at once, then one every five
 #: seconds, is more than a person tapping needs and far less than a scraper wants.
 PUBLIC_PARCELS = Limit(burst=8, per_minute=12)
+#: Scan requests. Three at once, for a person who corrects a mistake and sends again, then one
+#: a minute: a person asks once, and a script gets 1,440 rows a day from one address at most.
+SCAN_REQUESTS = Limit(burst=3, per_minute=1)
 #: Historical map tiles (`/imagery/usgs-topo/tiles`): each a few byte-range reads of a USGS
 #: sheet. A lens sweeping a sheet asks a few dozen a second at first, then browsers cache them.
 TOPO_TILE = Limit(burst=200, per_minute=600)
@@ -153,6 +159,7 @@ class RateLimits:
         self.topo_tile = TokenBucket(TOPO_TILE, clock=clock)
         self.cell_map = TokenBucket(CELL_MAP, clock=clock)
         self.public_parcels = TokenBucket(PUBLIC_PARCELS, clock=clock)
+        self.scan_requests = TokenBucket(SCAN_REQUESTS, clock=clock)
 
 
 #: The header Fly's proxy sets on every request, which is `API_CLIENT_IP_HEADER`'s default.

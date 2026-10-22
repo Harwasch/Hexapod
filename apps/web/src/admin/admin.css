@@ -272,6 +272,12 @@ a {
   font-size: var(--text-xs);
 }
 
+/* A scan request's notes: as the visitor wrote them, line breaks and all. */
+.admin-notes {
+  max-width: 36ch;
+  white-space: pre-line;
+}
+
 .admin-num {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;

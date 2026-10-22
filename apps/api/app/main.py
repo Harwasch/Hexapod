@@ -25,7 +25,7 @@ from app.services.errors import (
     UnauthorizedError,
 )
 from app.services.public_parcels import PublicParcels
-from app.services.ratelimit import RateLimited, RateLimits
+from app.services.ratelimit import RateLimited, RateLimits, client_key, limits_of
 from app.services.text_encoder import LazyTextEncoder, TextEncoderUnavailableError
 from app.services.urls import UrlValidationError
 from app.storage import StorageUnavailableError
@@ -66,11 +66,36 @@ def _problem(
     )
 
 
-#: Routes open to anyone, and the largest body they accept (bytes): a parcel lookup's point and
-#: radius are well under a hundred.
-PUBLIC_PREFIX = "/api/v1/public/"
-PUBLIC_BODY_LIMIT = 4_096
+#: Routes open to anyone, and the largest body each accepts (bytes). A parcel lookup's point and
+#: radius are well under a hundred; a scan request's outline is up to fifty county parcels'
+#: polygons, a few kilobytes each.
+PUBLIC_BODY_LIMITS: dict[str, int] = {
+    "/api/v1/public/": 4_096,
+    "/api/v1/scan-requests": 262_144,
+}
 BODY_METHODS = frozenset({"POST", "PUT", "PATCH"})
+
+
+#: Each open route's per-client bucket (an attribute of RateLimits), taken in the same middleware
+#: as the body cap: before the body is read, so a malformed body spends a token like any other.
+PUBLIC_RATE_LIMITS: dict[str, str] = {
+    "/api/v1/public/parcels/near": "public_parcels",
+    "/api/v1/scan-requests": "scan_requests",
+}
+
+
+def public_body_limit_of(path: str) -> int | None:
+    """The body cap for an open route, or None for any other path."""
+    for prefix, limit in PUBLIC_BODY_LIMITS.items():
+        if path.startswith(prefix):
+            return limit
+    return None
+
+
+def _rate_limited(exc: RateLimited) -> JSONResponse:
+    response = _problem(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests", str(exc))
+    response.headers["Retry-After"] = str(max(1, math.ceil(exc.retry_after_s)))
+    return response
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -141,6 +166,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
     )
 
+    @app.middleware("http")
+    async def public_body_limit(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        """Routes open to anyone (PUBLIC_BODY_LIMITS) take bounded bodies only, refused by
+        their declared length before anything reads them: the body is parsed before a
+        route's rate limit runs, so the limit alone does not bound what a request costs.
+        Added before CORS, so CORS wraps it and a browser can read the refusal."""
+        bucket = PUBLIC_RATE_LIMITS.get(request.url.path)
+        if bucket is not None and request.method in BODY_METHODS:
+            try:
+                getattr(limits_of(request), bucket).take(
+                    client_key(request, request.app.state.settings)
+                )
+            except RateLimited as limited:
+                return _rate_limited(limited)
+        cap = public_body_limit_of(request.url.path)
+        if cap is not None and request.method in BODY_METHODS:
+            length = request.headers.get("content-length")
+            if length is None:
+                return _problem(status.HTTP_411_LENGTH_REQUIRED, "Length required", None)
+            if not length.isdigit() or int(length) > cap:
+                return _problem(
+                    status.HTTP_413_CONTENT_TOO_LARGE,
+                    "Request body too large",
+                    f"Requests here may carry at most {cap} bytes.",
+                )
+        return await call_next(request)
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.api_cors_origins,
@@ -164,25 +218,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         expose_headers=["X-Handoff-Token", "Retry-After", "X-Truncated"],
         max_age=600,
     )
-
-    @app.middleware("http")
-    async def public_body_limit(
-        request: Request, call_next: Callable[[Request], Awaitable[Response]]
-    ) -> Response:
-        """Routes open to anyone (`/api/v1/public/...`) take small bodies only, refused by
-        their declared length before anything reads them: the body is parsed before a
-        route's rate limit runs, so the limit alone does not bound what a request costs."""
-        if request.url.path.startswith(PUBLIC_PREFIX) and request.method in BODY_METHODS:
-            length = request.headers.get("content-length")
-            if length is None:
-                return _problem(status.HTTP_411_LENGTH_REQUIRED, "Length required", None)
-            if not length.isdigit() or int(length) > PUBLIC_BODY_LIMIT:
-                return _problem(
-                    status.HTTP_413_CONTENT_TOO_LARGE,
-                    "Request body too large",
-                    f"Requests here may carry at most {PUBLIC_BODY_LIMIT} bytes.",
-                )
-        return await call_next(request)
 
     @app.middleware("http")
     async def timing_middleware(
@@ -223,9 +258,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(RateLimited)
     async def rate_limited_handler(_: Request, exc: RateLimited) -> JSONResponse:
-        response = _problem(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests", str(exc))
-        response.headers["Retry-After"] = str(max(1, math.ceil(exc.retry_after_s)))
-        return response
+        return _rate_limited(exc)
 
     @app.exception_handler(StorageUnavailableError)
     async def storage_handler(_: Request, exc: StorageUnavailableError) -> JSONResponse:

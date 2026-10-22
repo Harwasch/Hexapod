@@ -2,13 +2,14 @@
  * The data console: everything in storage, every run that produced it, and a form that
  * launches more.
  *
- * Three views and one action, per the plan. The action is not a fourth tab — launching a
+ * Four views and one action: the plan's three, and the scan requests sent from the landing
+ * page. The action is not a fourth tab — launching a
  * run starts from a capture, so it opens over whichever view you are in and comes back to
  * the Runs table with the new row in it.
  */
 import { useEffect, useState } from "react";
 
-import { Boxes, Database, KeyRound, Play, RefreshCw, Rows3 } from "lucide-react";
+import { Boxes, Database, Inbox, KeyRound, Play, RefreshCw, Rows3 } from "lucide-react";
 
 import { GlassButton, GlassSegmentedControl, GlassTooltipProvider } from "@twin/ui";
 
@@ -21,12 +22,13 @@ import { useUi } from "@/state/ui";
 import { CapturesView } from "./CapturesView";
 import { NewRun } from "./NewRun";
 import { OutputsView } from "./OutputsView";
+import { RequestsView } from "./RequestsView";
 import { RunsView } from "./RunsView";
 import { TokenField } from "./TokenField";
 
-export type AdminView = "captures" | "runs" | "outputs";
+export type AdminView = "captures" | "runs" | "outputs" | "requests";
 
-const VIEWS: AdminView[] = ["captures", "runs", "outputs"];
+const VIEWS: AdminView[] = ["captures", "runs", "outputs", "requests"];
 
 function viewFromHash(hash: string): AdminView {
   const name = hash.replace(/^#\/?/, "");
@@ -96,6 +98,7 @@ function Console() {
             { value: "captures", label: "Captures", icon: <Boxes size={13} aria-hidden="true" /> },
             { value: "runs", label: "Runs", icon: <Rows3 size={13} aria-hidden="true" /> },
             { value: "outputs", label: "Outputs", icon: <Database size={13} aria-hidden="true" /> },
+            { value: "requests", label: "Requests", icon: <Inbox size={13} aria-hidden="true" /> },
           ]}
         />
 
@@ -150,6 +153,7 @@ function Console() {
         )}
         {view === "runs" && <RunsView />}
         {view === "outputs" && <OutputsView />}
+        {view === "requests" && <RequestsView />}
       </main>
 
       {launching !== null && (

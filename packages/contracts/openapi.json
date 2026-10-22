@@ -14975,6 +14975,45 @@
         "title": "OverviewRequest",
         "type": "object"
       },
+      "ParcelsMultiPolygon": {
+        "additionalProperties": false,
+        "description": "Several parcels as sent: each part a valid polygon, though neighbours share edges, which\na valid MultiPolygon may not. The service dissolves them into one outline on the way in.",
+        "properties": {
+          "coordinates": {
+            "items": {
+              "items": {
+                "items": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 3,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "minItems": 4,
+                "type": "array"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Coordinates",
+            "type": "array"
+          },
+          "type": {
+            "const": "MultiPolygon",
+            "default": "MultiPolygon",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "coordinates"
+        ],
+        "title": "ParcelsMultiPolygon",
+        "type": "object"
+      },
       "PhoneCapture": {
         "additionalProperties": false,
         "properties": {
@@ -19639,6 +19678,181 @@
         ],
         "title": "ScaleSource",
         "type": "string"
+      },
+      "ScanRequestCreate": {
+        "additionalProperties": false,
+        "description": "What the landing page's \"Request a site scan\" form sends (src/landing/form.ts).",
+        "properties": {
+          "boundary": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "MultiPolygon": "#/components/schemas/ParcelsMultiPolygon",
+                    "Polygon": "#/components/schemas/Polygon"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Polygon"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ParcelsMultiPolygon"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boundary"
+          },
+          "email": {
+            "maxLength": 254,
+            "minLength": 3,
+            "title": "Email",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "default": "",
+            "maxLength": 5000,
+            "title": "Notes",
+            "type": "string"
+          },
+          "parcelIds": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Parcelids",
+            "type": "array"
+          },
+          "website": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Website",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "email"
+        ],
+        "title": "ScanRequestCreate",
+        "type": "object"
+      },
+      "ScanRequestRead": {
+        "additionalProperties": false,
+        "properties": {
+          "areaM2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aream2"
+          },
+          "boundary": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "MultiPolygon": "#/components/schemas/MultiPolygon",
+                    "Polygon": "#/components/schemas/Polygon"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Polygon"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MultiPolygon"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Boundary"
+          },
+          "boundaryUnreadable": {
+            "default": false,
+            "title": "Boundaryunreadable",
+            "type": "boolean"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "title": "Notes",
+            "type": "string"
+          },
+          "outlineUnvalidated": {
+            "default": false,
+            "title": "Outlineunvalidated",
+            "type": "boolean"
+          },
+          "parcelIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Parcelids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "createdAt",
+          "name",
+          "email",
+          "notes",
+          "boundary",
+          "areaM2",
+          "parcelIds"
+        ],
+        "title": "ScanRequestRead",
+        "type": "object"
+      },
+      "ScanRequestReceived": {
+        "additionalProperties": false,
+        "description": "The one answer to every accepted submission, stored or not: nothing to probe.",
+        "properties": {
+          "status": {
+            "const": "received",
+            "default": "received",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "ScanRequestReceived",
+        "type": "object"
       },
       "ScenarioCreate": {
         "additionalProperties": false,
@@ -41570,6 +41784,173 @@
         "summary": "Status",
         "tags": [
           "land research"
+        ]
+      }
+    },
+    "/api/v1/scan-requests": {
+      "get": {
+        "description": "The most recent scan requests first. Write token required: they hold contact details.",
+        "operationId": "list_requests_api_v1_scan_requests_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ScanRequestRead"
+                  },
+                  "title": "Response List Requests Api V1 Scan Requests Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "403": {
+            "description": "No write token is configured on this server"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "List Requests",
+        "tags": [
+          "scan-requests"
+        ]
+      },
+      "post": {
+        "description": "Request a site scan. No token. Answered `received` whether stored or not.",
+        "operationId": "create_api_v1_scan_requests_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanRequestCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanRequestReceived"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "413": {
+            "description": "The request body is larger than this route accepts"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "429": {
+            "description": "Too many requests from this client; see Retry-After"
+          },
+          "503": {
+            "description": "The day's requests are all in; see Retry-After"
+          }
+        },
+        "summary": "Create",
+        "tags": [
+          "scan-requests"
         ]
       }
     },

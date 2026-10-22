@@ -42,17 +42,21 @@ interface Stubs {
   landingCesium: string[];
   /** Uncaught errors in either page. */
   errors: string[];
+  /** Bodies posted to the scan-request route. */
+  requests: Record<string, unknown>[];
 }
 
 async function stub(page: Page, answer: "parcels" | "uncovered"): Promise<Stubs> {
-  const stubs: Stubs = { asked: [], sent: [], landingCesium: [], errors: [] };
+  const stubs: Stubs = { asked: [], sent: [], landingCesium: [], errors: [], requests: [] };
   page.on("pageerror", (error) => stubs.errors.push(error.message));
   page.on("request", (request) => {
     const url = request.url();
     // Allowed out: the public parcel route, and the Descent's own Overpass query for the mapped
     // area at the searched spot (a read-only public lookup; it carries nothing of the form).
     const expected =
-      url.includes("/api/v1/public/parcels/near") || url.startsWith("https://overpass-api.de/");
+      url.includes("/api/v1/public/parcels/near") ||
+      url.includes("/api/v1/scan-requests") ||
+      url.startsWith("https://overpass-api.de/");
     if (request.method() !== "GET" && !expected) stubs.sent.push(`${request.method()} ${url}`);
     if (/cesium/i.test(url) && request.frame() === page.mainFrame()) stubs.landingCesium.push(url);
   });
@@ -72,6 +76,10 @@ async function stub(page: Page, answer: "parcels" | "uncovered"): Promise<Stubs>
   await page.route("**/api/v1/**", (route) =>
     route.fulfill({ status: 404, json: { title: "Not found", status: 404 } }),
   );
+  await page.route("**/api/v1/scan-requests", async (route: Route) => {
+    stubs.requests.push(route.request().postDataJSON() as Record<string, unknown>);
+    await route.fulfill({ status: 202, json: { status: "received" } });
+  });
   await page.route("**/api/v1/public/parcels/near", async (route: Route) => {
     const body = route.request().postDataJSON() as Stubs["asked"][number];
     stubs.asked.push(body);
@@ -210,16 +218,22 @@ test("finds a parcel on the map, selects it, and hands it to the form", async ({
   await page.getByLabel("What needs doing?").fill("Broom on the north slope.");
   await page.locator("form#f").getByRole("button", { name: "Request a site scan" }).click();
   const status = page.locator("form#f").getByRole("status");
-  await expect(status).toContainText("Parcel 2-51-1");
-  await expect(status).toContainText("nothing was sent");
-  const request = JSON.parse((await status.getAttribute("data-request")) ?? "{}") as Record<
-    string,
-    unknown
-  >;
-  expect(Object.keys(request).sort()).toEqual(["boundary", "email", "name", "notes", "parcelIds"]);
-  expect(request.parcelIds).toEqual([PARCEL_ID]);
-  expect((request.boundary as { type: string }).type).toBe("Polygon");
-  expect(request.notes).toContain("Broom on the north slope.");
+  await expect(status).toContainText("We have your request (Parcel 2-51-1");
+  // Sent to our API as exactly name, email, notes, boundary, parcel ids, and the honeypot.
+  const [request] = stubs.requests;
+  expect(stubs.requests).toHaveLength(1);
+  expect(Object.keys(request ?? {}).sort()).toEqual([
+    "boundary",
+    "email",
+    "name",
+    "notes",
+    "parcelIds",
+    "website",
+  ]);
+  expect(request?.parcelIds).toEqual([PARCEL_ID]);
+  expect((request?.boundary as { type: string }).type).toBe("Polygon");
+  expect(request?.notes).toContain("Broom on the north slope.");
+  expect(request?.website).toBe("");
 
   expect(stubs.sent).toEqual([]);
   expect(stubs.landingCesium).toEqual([]);

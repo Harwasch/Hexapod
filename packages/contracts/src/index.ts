@@ -194,6 +194,8 @@ export type ResearchEvent = Schemas["EventRead"];
 export type LandCandidate = Schemas["LandCandidate"];
 export type CandidateResult = Schemas["CandidateResult"];
 export type SourceNotice = Schemas["SourceNotice"];
+export type ScanRequestRead = Schemas["ScanRequestRead"];
+export type ScanRequestCreate = Schemas["ScanRequestCreate"];
 export type SelectionInterpretation = Schemas["SelectionInterpretation"];
 export type LandMapGeometry = LandCandidate["geometry"];
 

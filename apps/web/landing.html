@@ -975,10 +975,16 @@
                     >What needs doing?<textarea id="f-msg" rows="3"></textarea>
                   </label>
                 </div>
+                <!-- A field people never see: bots fill it, and the API drops what they send. -->
+                <div class="hp" aria-hidden="true">
+                  <label for="f-website"
+                    >Website<input id="f-website" type="text" tabindex="-1" autocomplete="off"
+                  /></label>
+                </div>
                 <button class="btn pri wide" type="submit">Request a site scan</button>
-                <p class="pk-off wide" id="f-ok" role="status" hidden></p>
-                <p class="pk-note wide" id="f-offline">
-                  Not connected yet: this form checks what you enter, but sends nothing.
+                <p class="pk-off wide" id="f-ok" role="status" aria-live="polite" hidden></p>
+                <p class="pk-note wide" id="f-privacy">
+                  We use these details only to reply about your scan.
                 </p>
               </div>
             </form>

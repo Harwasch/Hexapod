@@ -41,6 +41,23 @@ function watchLeaks(page: Page) {
 
 const NOTHING_LEFT = { sent: [], navigations: [], search: "" };
 
+/** What the form posted to the scan-request route, answered as the API answers: 202. */
+async function stubRequests(page: Page, status = 202) {
+  const bodies: Record<string, unknown>[] = [];
+  await page.route("**/api/v1/scan-requests", async (route) => {
+    bodies.push(route.request().postDataJSON() as Record<string, unknown>);
+    await route.fulfill(
+      status === 202
+        ? { status, json: { status: "received" } }
+        : { status, json: { title: "Too many requests", status } },
+    );
+  });
+  return bodies;
+}
+
+/** The one request a complete submit is meant to make. */
+const SCAN_REQUEST = /^POST http:\/\/127\.0\.0\.1:\d+\/api\/v1\/scan-requests$/;
+
 test("loads without CesiumJS, with the brand from brand.ts", async ({ page }) => {
   const cesium = watchCesium(page);
   await page.goto("/landing.html");
@@ -130,9 +147,10 @@ test("the toggle switches between light and dark", async ({ page }) => {
   expect(await background()).toBe("rgb(255, 255, 255)");
 });
 
-test("the request form validates, and sends nothing while it is not connected", async ({
+test("the request form validates, sends nothing until complete, then sends the request", async ({
   page,
 }) => {
+  const bodies = await stubRequests(page);
   const leaks = watchLeaks(page);
   await page.goto("/landing.html#start");
   leaks.arm();
@@ -162,28 +180,56 @@ test("the request form validates, and sends nothing while it is not connected", 
   await expect(page.locator("#pk-err")).toBeHidden();
   await expect(page.locator("#f-email-err")).toContainText("name@example.com");
   await expect(email).toBeFocused();
+  // Two refused submits, and nothing has left the page.
+  expect(leaks.left()).toEqual(NOTHING_LEFT);
 
-  // Complete: the page says it is not connected, and nothing left the browser.
+  // Complete: one request to our API, exactly this, and the page says it was received.
   await email.fill("ada@example.com");
   await submit.click();
   await expect(page.locator("#f-email-err")).toBeHidden();
-  await expect(status).toBeVisible();
-  await expect(status).toContainText("not connected yet, so nothing was sent");
-  await expect(status).toContainText("12 acres");
-  // What would be sent, exactly: no land was found, so no boundary and no parcels.
-  expect(JSON.parse((await status.getAttribute("data-request")) ?? "null")).toEqual({
-    name: "Ada Lovelace",
-    email: "ada@example.com",
-    notes: "Area (acres): 12",
-    boundary: null,
-    parcelIds: [],
-  });
-  expect(leaks.left()).toEqual(NOTHING_LEFT);
+  await expect(status).toContainText("We have your request (12 acres)");
+  await expect(status).toContainText("will reply to ada@example.com");
+  await expect(status).toHaveAttribute("data-state", "received");
+  expect(bodies).toEqual([
+    {
+      name: "Ada Lovelace",
+      email: "ada@example.com",
+      notes: "Area (acres): 12",
+      boundary: null,
+      parcelIds: [],
+      website: "",
+    },
+  ]);
+  const { sent, navigations, search } = leaks.left();
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toMatch(SCAN_REQUEST);
+  expect({ navigations, search }).toEqual({ navigations: [], search: "" });
+  await expect(submit).toBeEnabled();
 });
 
-test("when the site finder fails, the form still validates and still sends nothing", async ({
+test("a refused send says what to do, and the form can send again", async ({ page }) => {
+  const bodies = await stubRequests(page, 429);
+  await page.goto("/landing.html#start");
+  const form = page.locator("form#f");
+  await form.getByLabel("Name").fill("Ada Lovelace");
+  await form.getByLabel("Email").fill("ada@example.com");
+  await form.getByLabel("Acres").fill("12");
+  const submit = form.getByRole("button", { name: "Request a site scan" });
+  await submit.click();
+  const status = form.getByRole("status");
+  await expect(status).toContainText("Wait a minute, then send it again");
+  await expect(status).toHaveAttribute("data-state", "error");
+  await expect(submit).toBeEnabled();
+  expect(bodies).toHaveLength(1);
+  // The honeypot is off screen and out of the tab order, and was sent empty.
+  await expect(page.locator("#f-website")).toHaveAttribute("tabindex", "-1");
+  expect(bodies[0]?.website).toBe("");
+});
+
+test("when the site finder fails, the form still validates and sends on acres", async ({
   page,
 }) => {
+  const bodies = await stubRequests(page);
   // The finder module, swapped for one that throws as the page starts it.
   await page.route(
     (url) => url.pathname.endsWith("/src/landing/finder.ts"),
@@ -205,9 +251,12 @@ test("when the site finder fails, the form still validates and still sends nothi
   await expect(page.locator("#pk-err")).toBeVisible();
   await form.getByLabel("Acres").fill("30");
   await submit.click();
-  await expect(form.getByRole("status")).toContainText("nothing was sent");
-  await expect(form.getByRole("status")).toContainText("30 acres");
-  expect(leaks.left()).toEqual(NOTHING_LEFT);
+  await expect(form.getByRole("status")).toContainText("We have your request (30 acres)");
+  expect(bodies).toHaveLength(1);
+  expect(bodies[0]?.boundary).toBeNull();
+  const { sent } = leaks.left();
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toMatch(SCAN_REQUEST);
 });
 
 test.describe("without JavaScript", () => {

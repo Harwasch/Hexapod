@@ -1,8 +1,8 @@
 """Routes for visitors who have not signed in: today, finding their land on the landing page.
 
 Nothing here reads or writes workspace data, and nothing takes a token. What bounds them: a
-per-client rate limit (app/services/ratelimit.py), a body-size cap for the whole `/public`
-prefix (app/main.py), and for the parcel lookup a short county timeout, an answer cache and a
+per-client rate limit (app/services/ratelimit.py) and a body-size cap, both applied before the
+body is read (app/main.py), and for the parcel lookup a short county timeout, an answer cache and a
 cap on lookups running at once (app/services/public_parcels.py).
 """
 
@@ -14,7 +14,7 @@ from typing import Annotated
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.api.deps import DbSession, LimitPublicParcels
+from app.api.deps import DbSession
 from app.schemas.land_selection import CandidateResult, PublicParcelRequest
 from app.services import land_selection
 from app.services.public_parcels import BUSY_RETRY_S, Busy, PublicParcels
@@ -37,7 +37,6 @@ ParcelHttp = Annotated[httpx.Client, Depends(parcel_http)]
 @router.post(
     "/parcels/near",
     response_model=CandidateResult,
-    dependencies=[LimitPublicParcels],
     responses={
         413: {"description": "The request body is larger than this route accepts"},
         429: {"description": "Too many lookups from this client; see Retry-After"},

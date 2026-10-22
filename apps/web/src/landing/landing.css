@@ -1366,10 +1366,25 @@ textarea[aria-invalid="true"] {
     border: 0;
   }
 }
-/* What a valid submission shows while the form is not connected to anything. */
+/* What a sent request ends in: received, or what went wrong and what to do. */
 .pk-off {
   padding: 12px 14px;
-  border: 1px dashed var(--line2);
+  border: 1px solid var(--line2);
   font-size: 15px;
   color: var(--ink);
+}
+.pk-off[data-state="received"] {
+  border-color: var(--accent);
+}
+.pk-off[data-state="error"] {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+/* The honeypot: off screen and out of the tab order, never display: none (bots skip those). */
+.hp {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
 }

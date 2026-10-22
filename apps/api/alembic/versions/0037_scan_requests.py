@@ -1,0 +1,47 @@
+"""Site scans requested from the landing page: who asked, their notes, and the land.
+
+Revision ID: 0037
+Revises: 0036
+"""
+
+from __future__ import annotations
+
+import sqlalchemy as sa
+from geoalchemy2 import Geometry
+from sqlalchemy.dialects import postgresql
+
+from alembic import op
+
+revision = "0037"
+down_revision = "0036"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "scan_requests",
+        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column("name", sa.String(200), nullable=False),
+        sa.Column("email", sa.String(254), nullable=False),
+        sa.Column("notes", sa.Text(), nullable=False),
+        sa.Column("boundary", Geometry("MULTIPOLYGON", srid=4326), nullable=True),
+        sa.Column(
+            "parcel_ids", postgresql.ARRAY(sa.String(200)), nullable=False, server_default="{}"
+        ),
+        sa.Column("outline_unvalidated", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("raw_outline", postgresql.JSONB(), nullable=True),
+    )
+    # Newest first, and counted by the day (the daily cap). Kept indefinitely; the index keeps a
+    # later prune by age cheap, should that change.
+    op.create_index("ix_scan_requests_created_at", "scan_requests", ["created_at"])
+
+
+def downgrade() -> None:
+    op.drop_table("scan_requests")

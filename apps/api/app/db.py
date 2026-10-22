@@ -54,7 +54,11 @@ def get_engine(database_url: str | None = None, pool_size: int = 5) -> Engine:
     """One engine per URL and pool size. 5 is SQLAlchemy's own default, which is what the
     API uses; the worker asks for more when it runs more slots (`loop.pool_size_for`)."""
     url = database_url or get_settings().database_url
-    return make_engine(url, pool_pre_ping=True, future=True, pool_size=pool_size)
+    # hide_parameters: a statement's parameters stay out of its errors, which reach logs and
+    # Sentry. They can hold what a visitor typed (a scan request's email and notes).
+    return make_engine(
+        url, pool_pre_ping=True, future=True, pool_size=pool_size, hide_parameters=True
+    )
 
 
 def get_session_factory(
