@@ -242,8 +242,15 @@ describe("the offer in Compare › Dates", () => {
   });
 
   it("is offered under every splat renderer: it is ground geometry, not splats", () => {
-    show(surfaced(), "playcanvas");
+    // Spark draws no swipe (lib/viewModes.ts compareDrawable), yet the change map is offered.
+    show(surfaced(), "spark");
     expect(screen.getByRole("switch", { name: "Swipe between dates" })).toBeDisabled();
+    expect(changeSwitch()).toBeEnabled();
+  });
+
+  it("is offered beside the swipe where the renderer draws both", () => {
+    show(surfaced(), "playcanvas");
+    expect(screen.getByRole("switch", { name: "Swipe between dates" })).toBeEnabled();
     expect(changeSwitch()).toBeEnabled();
   });
 
