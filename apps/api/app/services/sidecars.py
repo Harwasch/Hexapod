@@ -42,7 +42,8 @@ code that writes each one (docs/SCENE_OBJECTS.md, section 8, has the table):
   the new tiles, decides this (`app/worker/carry.py`, `app/worker/positions.py`).
 * `TILES` -- bound to the tiles' bytes. `collision.bin` and `viewcones.bin` are grids
   computed from the kept splats with nothing recorded to check them by, `confidence.bin`
-  bins this reconstruction's own evidence (ADR 0016), and `sog/` is the
+  bins this reconstruction's own evidence (ADR 0016), `surface.bin` its own heights per
+  cell (ADR 0018), and `sog/` is the
   leaves' gaussians themselves, colours and harmonics included, re-encoded; a split
   rewrote the tiles. These are carried only when the new tiles are the same tiles
   (`tiles_fingerprint`).
@@ -233,6 +234,27 @@ CONFIDENCE = SidecarKind(
         "capture ships one"
     ),
 )
+SURFACE = SidecarKind(
+    name="surface",
+    extras=("surface",),
+    files=("surface.bin",),
+    # This reconstruction's heights per cell -- its SfM points and opaque gaussians, placed
+    # as its tiles were -- so, like the confidence grid it shares a plane with, only the
+    # same tiles keep it.
+    depends=Dependence.TILES,
+    basis=(
+        "the surface stage: the reconstruction's top surface, bare ground and spread per "
+        "cell of its confidence grid's plane, in the tileset's frame (ADR 0018)"
+    ),
+    action="Height surface needs re-measuring",
+    # `register` records the run's surface as the revision's map (`epoch_maps`), which the
+    # change map reads; one attached later would be heights no row describes.
+    attachable=False,
+    refusal=(
+        "is recorded with the run that measured it (epoch_maps), so only a run of the "
+        "capture ships one"
+    ),
+)
 INFERRED = SidecarKind(
     name="inferredLayers",
     extras=("inferredLayers",),
@@ -279,6 +301,7 @@ KINDS: tuple[SidecarKind, ...] = (
     COLLISION,
     VIEW_CONES,
     CONFIDENCE,
+    SURFACE,
     INFERRED,
     NATIVE_LOD,
     RIG,

@@ -3,14 +3,17 @@
 The container (ADR 0016; written by tools/captures/cell_grid.py, which the API does not
 import) is a gzip of level planes, finest first, each `nj x ni` cells row-major (j outer,
 i inner) with its channels interleaved little-endian, all described by a JSON descriptor
-(the tileset's root `extras.confidence`, stored as the epoch map's `descriptor`). A level's
+(the tileset's root `extras.confidence` or `extras.surface`, stored as the epoch map's
+`descriptor`). A level's
 cell is `LATTICE_BASE_M * 2**level` metres in the tileset frame, east (`i`) and north
 (`j`) from the frame origin, so the levels nest and one epoch's cells can be read at
 another's level without resampling.
 
 This reader is the second of three (Python pipeline, API, TypeScript web), held to the
-pipeline's bytes by the committed cross-language fixture `data/tiles/synthetic-yard-epochs`
-(`tests/test_cell_grid_decode.py`). It is stricter about size than the pipeline's: the
+pipeline's bytes by the committed cross-language fixtures `data/tiles/synthetic-yard-epochs`
+(confidence, `tests/test_cell_grid_decode.py`) and `data/tiles/synthetic-yard-surfaces`
+(surfaces, `tests/test_surface_grid_decode.py`). A grid of a known kind must carry that
+kind's channels at their types (`REQUIRED_CHANNELS`). It is stricter about size than the pipeline's: the
 planes are decompressed no further than the descriptor says they reach, so a hostile or
 broken file cannot inflate past what its descriptor declared, and nothing is decoded past
 `MAX_RAW_BYTES`. Levels may not share bytes, so the decoded planes are no larger than that.
@@ -48,9 +51,21 @@ WEAK_BELOW = 128
 #: bytes a cell: ~17 MB of planes. Four times that is not a grid it wrote.
 MAX_RAW_BYTES = 64 * 1024 * 1024
 
-#: The channels a grid of each kind is read by (ADR 0016, C2): one without them is refused
-#: here, as unreadable, not later when a reader asks for the channel.
-REQUIRED: Mapping[str, tuple[str, ...]] = {"confidence": ("score", "reasons", "relief")}
+#: Channels (and their types) a grid of a known kind cannot be read without: the
+#: confidence grid's (ADR 0016, C2) and the height surface's (ADR 0018; `dsm` and `ground`
+#: are i2 centimetres with `NO_HEIGHT` for no surface -- in `ground` alone, ground never
+#: observed under a surface -- and `sigma` and `groundSigma` u1 centimetres, saturating).
+#: One without them is refused here, as unreadable, not later when a reader asks for one.
+REQUIRED_CHANNELS: Mapping[str, Mapping[str, str]] = {
+    "confidence": {"score": "u1", "reasons": "u1", "relief": "u1"},
+    "surface": {"dsm": "i2", "ground": "i2", "sigma": "u1", "support": "u1", "groundSigma": "u1"},
+}
+#: A surface cell's `dsm` and `ground` where it has no surface (i2's least value).
+NO_HEIGHT = -32768
+#: A surface's heights and sigma are whole centimetres.
+HEIGHT_UNIT_M = 0.01
+#: `sigma` at this value means at least 2.55 m: a lower bound, not a measurement.
+SIGMA_SATURATED = 255
 
 TYPES: Mapping[str, str] = {
     "u1": "<u1",
@@ -160,9 +175,13 @@ def decode(descriptor: Mapping[str, Any], blob: bytes) -> Grid:
         types.append(TYPES[str(entry["type"])])
     if len(set(names)) != len(names):
         raise CellGridError(f"channel names must be unique: {names}")
-    missing = [name for name in REQUIRED.get(str(descriptor.get("kind")), ()) if name not in names]
-    if missing:
-        raise CellGridError(f"a {descriptor.get('kind')} grid needs channels {missing}: {names}")
+    declared_types = {str(entry.get("name")): str(entry["type"]) for entry in listed}
+    for name, kind_type in REQUIRED_CHANNELS.get(str(descriptor.get("kind")), {}).items():
+        if declared_types.get(name) != kind_type:
+            raise CellGridError(
+                f"a {descriptor.get('kind')} grid needs channel {name!r} of type {kind_type}, "
+                f"not {declared_types.get(name)!r}"
+            )
     record = np.dtype(list(zip(names, types, strict=True)))
     levels = descriptor.get("levels")
     if not isinstance(levels, list) or not levels:

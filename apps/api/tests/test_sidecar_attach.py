@@ -645,6 +645,9 @@ def test_an_attach_computed_on_tiles_a_republish_replaced_is_refused(
         # A confidence grid is the run's own, recorded as its revision's map (A4).
         ({"confidence.bin": b"cells"}, {}, "only a run of the capture ships one"),
         ({"a.json": b"{}"}, {"extras": {"confidence": {"uri": "a.json"}}}, "epoch_maps"),
+        # So is a height surface (A5): the change map reads the row register records.
+        ({"surface.bin": b"heights"}, {}, "only a run of the capture ships one"),
+        ({"a.json": b"{}"}, {"extras": {"surface": {"uri": "a.json"}}}, "epoch_maps"),
         ({"a.json": b"{}"}, {"extras": {"instances": {"uri": "nope.json"}}}, "neither staged"),
         ({"a.json": b"{}"}, {"extras": {"instances": {"uri": "../x.json"}}}, "plain path"),
         ({"a.json": b"{}"}, {"rigUrl": "rig.json"}, "neither staged"),
@@ -962,6 +965,7 @@ def test_every_kind_is_classified_by_what_it_depends_on() -> None:
         "collision": "tiles",
         "viewCones": "tiles",
         "confidence": "tiles",
+        "surface": "tiles",
         "inferredLayers": "frame",
         "nativeLod": "tiles",
         "rig": "positions",
@@ -969,6 +973,7 @@ def test_every_kind_is_classified_by_what_it_depends_on() -> None:
     assert {kind.name for kind in sidecars.KINDS if not kind.attachable} == {
         "objects",
         "confidence",
+        "surface",
     }
     # A kind keyed by ids says whose; an attach that replaces those drops it.
     follows = {kind.name: kind.follows for kind in sidecars.KINDS if kind.follows}

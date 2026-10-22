@@ -1,15 +1,18 @@
-"""An epoch revision's per-cell maps (`epoch_maps`, ADR 0016): recording and reading them.
+"""An epoch revision's per-cell maps (`epoch_maps`, ADR 0016, 0018): recording and reading them.
 
-`register` records the confidence grid a run shipped beside its tiles as the map of the
-asset it published (`record_map`); an epoch then reads the map of its *current* revision
-(`confidence_of`), so a re-run's new map replaces the old one in what the epoch says while
-the superseded revision keeps its own.
+`register` records the grids a run shipped beside its tiles as the maps of the asset it
+published (`record_map`): its confidence grid (`confidence`, M4) and its height surface
+(`surface`, M5). An epoch then reads the maps of its *current* revision, so a re-run's new
+maps replace the old ones in what the epoch says while the superseded revision keeps its
+own.
 
-What a run says about its grid is checked before it is believed (`confidence_descriptor`):
-the container and version this API can read, a file name beside the tiles and nothing
-else, a cell on the site lattice and the summary keys every reader relies on. A descriptor
-that fails is logged and not recorded -- the epoch then reads as not measured, which is
-what the API can vouch for -- and never fails the registration of tiles that are fine.
+What a run says about a grid is checked before it is believed (`confidence_descriptor`,
+`surface_descriptor`): the container and version this API can read, a file name beside the
+tiles and nothing else, a cell on the site lattice, and the keys every reader of that kind
+relies on -- for a surface, its five channels in centimetres and the frame origin height
+its heights are above. A descriptor that fails is logged and not recorded -- the epoch
+then reads as not measured, which is what the API can vouch for -- and never fails the
+registration of tiles that are fine.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Asset, Epoch, EpochMap
 from app.models.enums import EpochMapKind
+from app.schemas.change import EpochSurfaceRead
 from app.schemas.confidence import AlignmentCapRead, EpochConfidenceRead
 
 log = logging.getLogger(__name__)
@@ -62,9 +66,9 @@ def _number(value: object, what: str) -> float:
     return float(value)
 
 
-def confidence_descriptor(raw: object) -> dict[str, Any]:
-    """`raw` (registration.json's `confidence`, the tileset's `extras.confidence`) when it
-    is a confidence grid this API can read; `DescriptorError` saying why not otherwise."""
+def _container(raw: object, kind: EpochMapKind) -> Mapping[str, Any]:
+    """The checks every grid of `kind` passes: the container, the frame, a file beside
+    the tileset, a cell on the lattice, its levels and its sha256."""
     if not isinstance(raw, Mapping):
         raise DescriptorError("a cell grid descriptor is a JSON object")
     if len(json.dumps(raw)) > MAX_DESCRIPTOR_BYTES:
@@ -73,9 +77,9 @@ def confidence_descriptor(raw: object) -> dict[str, Any]:
         raise DescriptorError(
             f"not a {FORMAT} v{VERSION}: {raw.get('format')!r} v{raw.get('version')!r}"
         )
-    if raw.get("kind") != EpochMapKind.CONFIDENCE.value or raw.get("frame") != "tileset":
+    if raw.get("kind") != kind.value or raw.get("frame") != "tileset":
         raise DescriptorError(
-            f"not a confidence grid in the tileset frame: kind {raw.get('kind')!r}, "
+            f"not a {kind.value} grid in the tileset frame: kind {raw.get('kind')!r}, "
             f"frame {raw.get('frame')!r}"
         )
     uri = raw.get("uri")
@@ -98,6 +102,16 @@ def confidence_descriptor(raw: object) -> dict[str, Any]:
     summary = raw.get("summary")
     if not isinstance(summary, Mapping):
         raise DescriptorError("no summary")
+    if not isinstance(raw.get("policy"), str):
+        raise DescriptorError("no policy")
+    return raw
+
+
+def confidence_descriptor(raw: object) -> dict[str, Any]:
+    """`raw` (registration.json's `confidence`, the tileset's `extras.confidence`) when it
+    is a confidence grid this API can read; `DescriptorError` saying why not otherwise."""
+    checked = _container(raw, EpochMapKind.CONFIDENCE)
+    summary = checked["summary"]
     for key in _SUMMARY_COUNTS:
         _int(summary.get(key), f"summary.{key}")
     _number(summary.get("weakShare"), "summary.weakShare")
@@ -107,15 +121,65 @@ def confidence_descriptor(raw: object) -> dict[str, Any]:
         for name, count in reasons.items()
     ):
         raise DescriptorError("summary.reasons must map each reason to a count")
-    cap = raw.get("alignmentCap")
+    cap = checked.get("alignmentCap")
     if not isinstance(cap, Mapping):
         raise DescriptorError("no alignmentCap")
     _number(cap.get("uncertaintyM"), "alignmentCap.uncertaintyM")
     _number(cap.get("factor"), "alignmentCap.factor")
     _int(cap.get("priorEpochs"), "alignmentCap.priorEpochs")
-    if not isinstance(raw.get("policy"), str):
-        raise DescriptorError("no policy")
-    return dict(raw)
+    return dict(checked)
+
+
+#: A surface's channels as the change map reads them (tools/captures `SURFACE_CHANNELS`):
+#: name, type and, for the heights and their spread, whole centimetres.
+SURFACE_CHANNELS: tuple[tuple[str, str, float | None], ...] = (
+    ("dsm", "i2", 0.01),
+    ("ground", "i2", 0.01),
+    ("sigma", "u1", 0.01),
+    ("support", "u1", None),
+    ("groundSigma", "u1", 0.01),
+)
+#: `dsm` and `ground` where a cell has no surface (tools/captures `NO_HEIGHT`).
+NO_HEIGHT = -32768
+
+
+def surface_descriptor(raw: object) -> dict[str, Any]:
+    """`raw` (registration.json's `surface`, the tileset's `extras.surface`, ADR 0018) when
+    it is a height surface this API can read: its five channels at their types and units,
+    `noData` the i2 sentinel, the counts of its summary, and the height of the frame origin
+    its heights are above (`vertical.originHeightM`), which the change map checks against
+    the site's frame. `DescriptorError` saying why not otherwise."""
+    checked = _container(raw, EpochMapKind.SURFACE)
+    channels = checked.get("channels")
+    if not isinstance(channels, list) or not all(isinstance(c, Mapping) for c in channels):
+        raise DescriptorError("channels must be a list of objects")
+    declared = {str(c.get("name")): c for c in channels}
+    for name, kind, unit in SURFACE_CHANNELS:
+        channel = declared.get(name)
+        if channel is None or channel.get("type") != kind or channel.get("unitM") != unit:
+            raise DescriptorError(
+                f"a surface needs channel {name!r} of type {kind}"
+                + (f" in {unit} m" if unit is not None else "")
+                + f", not {channel!r}"
+            )
+    if checked.get("noData") != NO_HEIGHT:
+        raise DescriptorError(f"noData must be {NO_HEIGHT}, not {checked.get('noData')!r}")
+    summary = checked["summary"]
+    for key in ("cells", "surfaced"):
+        _int(summary.get(key), f"summary.{key}")
+    vertical = checked.get("vertical")
+    if not isinstance(vertical, Mapping):
+        raise DescriptorError("no vertical: the heights are above an origin it must name")
+    _number(vertical.get("originHeightM"), "vertical.originHeightM")
+    if not isinstance(checked.get("status"), str):
+        raise DescriptorError("no status (calibrated or not)")
+    return dict(checked)
+
+
+_CHECKS = {
+    EpochMapKind.CONFIDENCE: confidence_descriptor,
+    EpochMapKind.SURFACE: surface_descriptor,
+}
 
 
 def map_url(tileset_url: str, descriptor: Mapping[str, Any]) -> str:
@@ -131,8 +195,9 @@ def record_map(
     job_id: uuid.UUID | None,
     descriptor: object,
     tileset_url: str,
+    kind: EpochMapKind = EpochMapKind.CONFIDENCE,
 ) -> EpochMap | None:
-    """Make `descriptor` the confidence map of `asset` (a revision of `epoch`), or none.
+    """Make `descriptor` the `kind` map of `asset` (a revision of `epoch`), or none.
 
     The map follows the run that last published the asset's tiles: recorded when it has
     none, replaced when the run says something else (a single bucket rewrites a run's keys
@@ -142,18 +207,17 @@ def record_map(
     caller's transaction; not committed.
     """
     existing = db.scalars(
-        select(EpochMap).where(
-            EpochMap.asset_id == asset.id, EpochMap.kind == EpochMapKind.CONFIDENCE.value
-        )
+        select(EpochMap).where(EpochMap.asset_id == asset.id, EpochMap.kind == kind.value)
     ).first()
     checked: dict[str, Any] | None = None
     if descriptor is not None:
         try:
-            checked = confidence_descriptor(descriptor)
+            checked = _CHECKS[kind](descriptor)
         except DescriptorError as error:
             log.warning(
-                "register: epoch %s: the run's confidence grid is not recorded: %s",
+                "register: epoch %s: the run's %s grid is not recorded: %s",
                 epoch.id,
+                kind.value,
                 error,
             )
     if checked is None:
@@ -163,9 +227,7 @@ def record_map(
     url = map_url(tileset_url, checked)
     if existing is not None and existing.descriptor == checked and existing.url == url:
         return existing
-    row = existing or EpochMap(
-        epoch_id=epoch.id, asset_id=asset.id, kind=EpochMapKind.CONFIDENCE.value
-    )
+    row = existing or EpochMap(epoch_id=epoch.id, asset_id=asset.id, kind=kind.value)
     row.job_id = job_id
     row.format = FORMAT
     row.version = VERSION
@@ -213,17 +275,50 @@ def confidence_to_read(row: EpochMap) -> EpochConfidenceRead:
     )
 
 
+def surface_to_read(row: EpochMap) -> EpochSurfaceRead:
+    descriptor, summary = row.descriptor, row.summary
+    median = summary.get("medianSigmaCm")
+    return EpochSurfaceRead(
+        status="measured",
+        asset_id=row.asset_id,
+        url=row.url,
+        cell_m=row.cell_m,
+        level=row.level,
+        policy=str(descriptor["policy"]),
+        calibration=str(descriptor["status"]),
+        cells=int(summary["cells"]),
+        surfaced_cells=int(summary["surfaced"]),
+        median_sigma_m=round(float(median) / 100.0, 4)
+        if isinstance(median, int | float) and not isinstance(median, bool)
+        else None,
+        origin_height_m=float(descriptor["vertical"]["originHeightM"]),
+        ground_window_m=_finite_or_none((descriptor.get("estimators") or {}).get("groundWindowM")),
+    )
+
+
+def _finite_or_none(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        return None
+    return float(value)
+
+
 def maps_of_asset(db: Session, asset_id: uuid.UUID) -> list[EpochMap]:
     return list(db.scalars(select(EpochMap).where(EpochMap.asset_id == asset_id)))
 
 
 def carry_map(
-    db: Session, *, epoch: Epoch, source: Asset, target: Asset, tileset_url: str
+    db: Session,
+    *,
+    epoch: Epoch,
+    source: Asset,
+    target: Asset,
+    tileset_url: str,
+    kind: EpochMapKind = EpochMapKind.CONFIDENCE,
 ) -> EpochMap | None:
-    """`source`'s confidence map as `target`'s, beside `tileset_url`: a republish of the
-    same tiles carried the grid into a new generation (`app/worker/carry.py`) although
-    the run measured none itself, so the grid is still true of what the revision shows."""
-    found = map_of(maps_of_asset(db, source.id), source.id, EpochMapKind.CONFIDENCE)
+    """`source`'s `kind` map as `target`'s, beside `tileset_url`: a republish of the same
+    tiles carried the grid into a new generation (`app/worker/carry.py`) although the run
+    measured none itself, so the grid is still true of what the revision shows."""
+    found = map_of(maps_of_asset(db, source.id), source.id, kind)
     if found is None:
         return None
     return record_map(
@@ -233,6 +328,7 @@ def carry_map(
         job_id=found.job_id,
         descriptor=found.descriptor,
         tileset_url=tileset_url,
+        kind=kind,
     )
 
 

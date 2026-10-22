@@ -8,6 +8,7 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile, status
 from app.api.deps import DbSession, LimitCellMap, PublicStorage, RequireWriteToken
 from app.schemas.asset import AssetRead
 from app.schemas.bookmark import CameraBookmarkCreate, CameraBookmarkRead
+from app.schemas.change import ChangeMapRead
 from app.schemas.check_target import CheckTargetRead, CheckTargetSet
 from app.schemas.common import Problem
 from app.schemas.confidence import FillTargetsRead, WeakAreasRead, WeakAreasRequest
@@ -15,8 +16,8 @@ from app.schemas.epoch import EpochRead
 from app.schemas.site import SiteCreate, SiteRead, SiteSummary, SiteUpdate
 from app.services import assets as asset_service
 from app.services import bookmarks as bookmark_service
+from app.services import change_maps, confidence_maps
 from app.services import check_targets as check_target_service
-from app.services import confidence_maps
 from app.services import epochs as epoch_service
 from app.services import sites as site_service
 from app.storage import StorageUnavailableError
@@ -150,6 +151,42 @@ def site_fill_targets(
     write token, which its one consumer (the fill workflow) holds: a call may decode a grid
     per earlier epoch, at most the eight most recent (`capped` says when there were more)."""
     return confidence_maps.fill_targets(db, storage, site_id, epoch_id)
+
+
+@router.get(
+    "/{site_id}/change",
+    response_model=ChangeMapRead,
+    summary="The change between two dates, from height surfaces",
+    dependencies=[RequireWriteToken, LimitCellMap],
+    responses={
+        404: {"model": Problem, "description": "No such site, or no such epoch of it."},
+        409: {
+            "model": Problem,
+            "description": "`epoch-not-published`: an epoch is rejected or superseded; "
+            "`surface-not-measured`: an epoch's current revision has no height surface; "
+            "`confidence-not-measured`: or no confidence map (its uncertainty is unknown); "
+            "`frames-differ`: a surface is above another origin than the site frame's; "
+            "`no-site-frame`; `surface-unreadable` / `confidence-unreadable`.",
+        },
+        422: {"model": Problem, "description": "`from` and `to` are the same epoch."},
+    },
+)
+def site_change(
+    site_id: uuid.UUID,
+    db: DbSession,
+    storage: PublicStorage,
+    from_epoch: Annotated[uuid.UUID, Query(alias="from")],
+    to_epoch: Annotated[uuid.UUID, Query(alias="to")],
+) -> ChangeMapRead:
+    """`change-v1` (ADR 0018): from epoch `from` to epoch `to`, both published, per cell of
+    the coarser of their height surfaces' levels over the children both measured,
+    `dsm_to - dsm_from` against three times the combined spread and placement uncertainty
+    -- raised, lowered, unchanged, or insufficient where they share no measured child --
+    with the cells either epoch's confidence does not vouch for flagged, not hidden, and the
+    regions outlined on the globe. Derived, not observed; uncalibrated. It stores nothing, but a call may
+    decode four grids (more than the grid cache holds at their largest), so it takes the
+    write token like weak areas and fill targets and spends the same per-client bucket."""
+    return change_maps.change(db, storage, site_id, from_epoch, to_epoch)
 
 
 @router.get(

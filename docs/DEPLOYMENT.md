@@ -809,10 +809,10 @@ docs/SCENE_OBJECTS.md, section 8): a kind bound to the splats' positions (object
 the rig) is carried when every new tile's position checksum — computed by the worker from
 the run's own tiles, with the function the binding was written with — is one its binding
 lists, so a re-pack with another spherical-harmonics degree keeps it; a kind bound to the
-tiles' bytes (collision, view cones, the confidence grid, `sog/`) is carried only when the new tiles are the very
+tiles' bytes (collision, view cones, the confidence grid, the height surface, `sog/`) is carried only when the new tiles are the very
 same tiles; a kind keyed by instance ids (materials, telemetry) goes with `instances`; an inferred fill,
 placed in the scan's frame with no splat indices, is always carried; a kind the run makes
-itself (the packer's `collision.bin`, `viewcones.bin`, `confidence.bin`) is replaced by the run's. Every
+itself (the packer's `collision.bin`, `viewcones.bin`, `confidence.bin`, `surface.bin`) is replaced by the run's. Every
 dropped kind becomes a flag on the asset — `sidecarFlags` in every asset response, e.g.
 `{"kind": "instances", "action": "Objects need re-segmenting", "reason": …, "jobId": …}` —
 and a warning in the worker's log; attaching that kind again clears it. With one bucket

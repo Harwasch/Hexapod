@@ -8,7 +8,7 @@ Python models are snake_case (`CamelModel` handles both).
 sites 1 ──── * assets            (site_id nullable: assets can exist before a site)
 sites 1 ──── 0..1 site_frames    (the fixed origin every epoch is placed about)
 sites 1 ──── * epochs 1 ──── * assets (revisions of one epoch; epoch_id nullable: legacy)
-epochs 1 ──── * epoch_maps * ──── 1 assets (one map per revision and kind: its confidence grid)
+epochs 1 ──── * epoch_maps * ──── 1 assets (one map per revision and kind: confidence, surface)
 sites 1 ──── * site_check_targets (surveyed ground marks; retired, never deleted)
 sites 1 ──── * camera_bookmarks
 layers                           (independent catalog entries)
@@ -116,7 +116,9 @@ Read as `SiteRead.epochs` and `GET /api/v1/sites/{id}/epochs`, each with `curren
 epoch's newest observed asset with no `valid_to`, and `confidence`: that revision's confidence map
 summarised (`{status: measured, assetId, url, cellM, level, policy, weakShare, weakCells,
 scoredCells, unseenCells, reasons, alignmentCap {uncertaintyM, factor, priorEpochs, source}}`), or
-null — not measured. A capture names its site with `siteId` on
+null — not measured; and `surface`: that revision's height surface summarised (`{status: measured,
+assetId, url, cellM, level, policy, calibration, cells, surfacedCells, medianSigmaM,
+originHeightM, groundWindowM}`), or null — not measured. A capture names its site with `siteId` on
 `POST /captures` (or the phone route), kept in `captures.metadata.siteId`; `captures.site_id` is
 still the site a run registered it into.
 
@@ -173,7 +175,7 @@ from an uploaded `check_observations.json` (`{"version": 1, "observations": [...
 
 ## epoch_maps
 
-An epoch revision's per-cell maps (A4, migration 0035): one row per asset and kind, recorded by
+An epoch revision's per-cell maps (A4, migration 0035; A5, 0036): one row per asset and kind, recorded by
 `register` from the grid the run shipped beside its tiles. A re-run is a new asset with its own
 map; the superseded revision keeps the one it was measured with.
 
@@ -183,18 +185,19 @@ map; the superseded revision keeps the one it was measured with.
 | epoch_id   | uuid → epochs (cascade), index |                                                                                         |
 | asset_id   | uuid → assets (cascade)        | the revision; unique with `kind`                                                        |
 | job_id     | uuid → jobs (set null)         | the run that measured it                                                                |
-| kind       | varchar(20)                    | `confidence` (M5 adds `surface`)                                                        |
+| kind       | varchar(20)                    | `confidence` · `surface` (M5)                                                           |
 | format     | varchar(40), version int       | `hexapod.cellgrid` v1                                                                   |
 | url        | text                           | the file beside the tiles, in the generation the asset shows (an attach moves it along) |
 | cell_m     | float8 > 0, level int          | the finest level                                                                        |
-| descriptor | jsonb                          | the tileset's root `extras.confidence`, verbatim, checked before it is recorded         |
+| descriptor | jsonb                          | the tileset's root `extras.confidence` / `.surface`, verbatim, checked when recorded    |
 | summary    | jsonb                          | `descriptor.summary`                                                                    |
 | created_at | timestamptz                    |                                                                                         |
 
 A descriptor the API cannot vouch for (another container, a `uri` that is not a file beside the
 tiles, a cell off the lattice, missing summary keys) is logged and not recorded: the epoch reads as
-not measured. `confidence.bin` is a sidecar of kind `confidence` (bound to the tiles, not
-attachable).
+not measured. A surface must also carry its five channels at their types and units, `noData`
+−32768 and `vertical.originHeightM`. `confidence.bin` and `surface.bin` are sidecars of kinds
+`confidence` and `surface` (bound to the tiles, not attachable).
 
 - `POST /api/v1/sites/{id}/epochs/{epoch}/weak-areas` (write token) `{budgetM2?, focus?: [lon, lat], maxAreas
 1..8 = 3}` → `{epochId, assetId, policy, cellM, level, weakCells, totalCells,
@@ -205,6 +208,22 @@ diameterM, pattern (nadir · oblique · orbit), targetGsdM, gimbalPitchDeg, hint
 epochId, weakIn, comparedWith (at most the eight most recent earlier epochs), capped, frame: tileset, cellM, level, i0, j0, ni, nj, rowBytes, bitOrder: little, mask
 (base64, rows south to north, at the epoch's own finest level), cells, satisfiedBy (a byte per
 target: which of `comparedWith` it re-scanned), reason}`. 409 `confidence-not-measured` · `no-rescan-yet`.
+- `GET /api/v1/sites/{id}/change?from=&to=` (write token, cell-map rate limit) → `change-v1` (ADR 0018
+  § API): `{policy, derived: true, label, calibration: uncalibrated, siteId, fromEpochId,
+toEpochId, fromAssetId, toAssetId, frame, level, nativeLevel, cellM, thresholdSigma: 3,
+uncertainty {fromM, toM, fromVerdict, toVerdict, fromFrameM, toFrameM}, ground, vegetation,
+appearance {status: not-computed, reason}}`; each layer (`ground`, the bare earth, primary;
+  `vegetation`, the top surface at its own higher threshold) is `{layer, label, heights (ground ·
+dsm), minDetectableM, detectable {minM, medianM, p90M, maxM, cells} (null: none compared),
+detectableGrid {level, cellM, i0, j0, ni, nj, unitM: 0.01, noData: 65535, encoding:
+u2le-base64-rows-south-to-north, data} (each cell's least detectable change, at areaLevel),
+motionM, horizontalRadiusM, driftReachM, counts {unchanged, raised, lowered,
+insufficient}, lowConfidence {unchanged, raised, lowered}, areaLevel, areaCellM, areas (raised,
+lowered and insufficient only; unchanged cells are counted, not outlined): [{class, footprint
+(MultiPolygon), cells, areaM2, lowConfidence, lowConfidenceCells, meanDeltaM, maxAbsDeltaM}]}`. 404
+  · 422 (same epoch) · 409 `epoch-not-published` · `no-site-frame` · `surface-not-measured` ·
+  `confidence-not-measured` · `epoch-unaligned` · `not-metric` · `scale-corrected` · `frames-differ`
+  · `surface-unreadable` · `confidence-unreadable`.
 
 ## Confidence grid
 
@@ -240,10 +259,10 @@ outside, medianGsdMm, metric}` (finest level; `weakShare` is weak over scored + 
 
 ## Height surface
 
-Per epoch revision, the heights change between epochs is measured in (ADR 0018). Like the
-confidence grid, not a table yet (A5 records it): `surface.bin` beside the tiles, declared on the
-root as `extras.surface` (after `extras.confidence`) and copied to the top level of
-`registration.json` as `surface` (null: not measured).
+Per epoch revision, the heights change between epochs is measured in (ADR 0018), recorded per
+asset in `epoch_maps` (kind `surface`, A5): `surface.bin` beside the tiles, declared on the root as
+`extras.surface` (after `extras.confidence`) and copied to the top level of `registration.json` as
+`surface` (null: not measured).
 
 - **Container** `hexapod.cellgrid` v1, kind `surface`, on the epoch's confidence grid's finest
   plane exactly (same `lattice.level`, `i0`, `j0`, `ni`, `nj`). One level.
@@ -263,6 +282,9 @@ samples}`, `noData`, `sourceBits`,
 level, sha256}`, `summary {cells, surfaced, thin, samples {sfm, splat}, outside, nonFinite,
 outOfRange, sigmaSaturated, groundUnobserved, groundSigmaSaturated, medianSigmaCm, metric}`.
 - **Pipeline artifact:** `surface` → `surface/surface.json` and `surface.bin`.
+- **Fixture:** `data/tiles/synthetic-yard-surfaces/` (two surfaces on the planes of
+  `synthetic-yard-epochs`, with `surfaces.json` and P5's demo reference change), the API decoder's
+  and change map's cross-language check.
 
 ## Runtime scale
 

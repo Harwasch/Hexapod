@@ -118,6 +118,7 @@ def epoch_to_read(epoch: Epoch, assets: Sequence[Asset]) -> EpochRead:
     current = current_asset_of(epoch.id, assets)
     current_id = current.id if current is not None else None
     measured = epoch_maps.map_of(epoch.maps, current_id, EpochMapKind.CONFIDENCE)
+    heights = epoch_maps.map_of(epoch.maps, current_id, EpochMapKind.SURFACE)
     return EpochRead(
         id=epoch.id,
         site_id=epoch.site_id,
@@ -138,6 +139,7 @@ def epoch_to_read(epoch: Epoch, assets: Sequence[Asset]) -> EpochRead:
         quality=quality_from(epoch.quality),
         current_asset_id=current_id,
         confidence=epoch_maps.confidence_to_read(measured) if measured is not None else None,
+        surface=epoch_maps.surface_to_read(heights) if heights is not None else None,
         created_at=epoch.created_at,
         updated_at=epoch.updated_at,
     )

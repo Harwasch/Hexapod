@@ -156,12 +156,14 @@ def test_a_site_record_does_not_query_per_epoch(
 def test_the_epoch_list_does_not_query_per_confidence_map(
     client: TestClient, db: Session, engine: Engine
 ) -> None:
-    """Each epoch reads its current revision's map (A4): loaded with the epochs, not one
-    query per epoch, on the site record and on the epochs list alike."""
+    """Each epoch reads its current revision's maps (A4's confidence, A5's surface): loaded
+    with the epochs, not one query per epoch, on the site record and on the epochs list
+    alike."""
     from datetime import timedelta
 
     from app.models import EpochMap
     from tests.confidence_fixtures import descriptor
+    from tests.surface_fixtures import surface_descriptor
     from tests.test_epochs import T0, make_asset, make_epoch, make_site
 
     def site_with(slug: str, count: int) -> str:
@@ -190,6 +192,21 @@ def test_the_epoch_list_does_not_query_per_confidence_map(
                     summary=grid["summary"],
                 )
             )
+            heights = surface_descriptor("e1", 0.0)
+            db.add(
+                EpochMap(
+                    epoch_id=epoch.id,
+                    asset_id=asset.id,
+                    kind="surface",
+                    format="hexapod.cellgrid",
+                    version=1,
+                    url=f"https://cdn.example.com/{slug}/{ordinal}/surface.bin",
+                    cell_m=1.0,
+                    level=2,
+                    descriptor=heights,
+                    summary=heights["summary"],
+                )
+            )
         db.commit()
         return str(site.id)
 
@@ -205,4 +222,5 @@ def test_the_epoch_list_does_not_query_per_confidence_map(
             read = client.get(f"/api/v1/sites/{four}{path}").json()
         epochs = read if path else read["epochs"]
         assert len(epochs) == 4 and all(e["confidence"]["level"] == 2 for e in epochs)
+        assert all(e["surface"]["status"] == "measured" for e in epochs)
         assert len(many) == len(few), many

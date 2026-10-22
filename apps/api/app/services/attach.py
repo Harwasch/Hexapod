@@ -317,7 +317,7 @@ def _attach(
             render["rigUrl"] = payload.rig_url
         asset.render_config = render
     asset.sidecar_flags = sidecars.updated_flags(asset.sidecar_flags, clear=cleared, add=flags)
-    # The revision's confidence map is a file of the generation: it moves with it.
+    # The revision's maps (confidence, surface) are files of the generation: they move with it.
     epoch_maps.repoint(db, asset, new_url, final)
     db.commit()
     db.refresh(asset)

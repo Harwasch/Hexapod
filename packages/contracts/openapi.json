@@ -4018,6 +4018,500 @@
         "title": "CesiumIonTerrainSource",
         "type": "object"
       },
+      "ChangeAppearanceRead": {
+        "additionalProperties": false,
+        "description": "Change seen in appearance only (a repaint, leaf-off): not computed, and why.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "const": "not-computed",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "reason"
+        ],
+        "title": "ChangeAppearanceRead",
+        "type": "object"
+      },
+      "ChangeArea": {
+        "additionalProperties": false,
+        "description": "One 4-connected region of cells of one class (raised and lowered regions are also of\none confidence), outlined on the cells' exact edges and placed on the globe.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "areaM2": {
+            "title": "Aream2",
+            "type": "number"
+          },
+          "cells": {
+            "title": "Cells",
+            "type": "integer"
+          },
+          "class": {
+            "enum": [
+              "raised",
+              "lowered",
+              "insufficient"
+            ],
+            "title": "Class",
+            "type": "string"
+          },
+          "footprint": {
+            "$ref": "#/components/schemas/MultiPolygon"
+          },
+          "lowConfidence": {
+            "title": "Lowconfidence",
+            "type": "boolean"
+          },
+          "lowConfidenceCells": {
+            "title": "Lowconfidencecells",
+            "type": "integer"
+          },
+          "maxAbsDeltaM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxabsdeltam"
+          },
+          "meanDeltaM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meandeltam"
+          }
+        },
+        "required": [
+          "class",
+          "footprint",
+          "cells",
+          "areaM2",
+          "lowConfidence",
+          "lowConfidenceCells",
+          "meanDeltaM",
+          "maxAbsDeltaM"
+        ],
+        "title": "ChangeArea",
+        "type": "object"
+      },
+      "ChangeCountsRead": {
+        "additionalProperties": false,
+        "description": "Cells of each class at the compared level (`level`).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "insufficient": {
+            "title": "Insufficient",
+            "type": "integer"
+          },
+          "lowered": {
+            "title": "Lowered",
+            "type": "integer"
+          },
+          "raised": {
+            "title": "Raised",
+            "type": "integer"
+          },
+          "unchanged": {
+            "title": "Unchanged",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "unchanged",
+          "raised",
+          "lowered",
+          "insufficient"
+        ],
+        "title": "ChangeCountsRead",
+        "type": "object"
+      },
+      "ChangeDetectableGridRead": {
+        "additionalProperties": false,
+        "description": "Per cell of the layer's area level, the least change it could have seen: `data` is\nbase64 of `nj` rows south to north of `ni` little-endian u2 centimetres each, cell\n`(i0 + i, j0 + j)` at `j * ni + i`; `noData` (65535) where nothing was compared.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "cellM": {
+            "title": "Cellm",
+            "type": "number"
+          },
+          "data": {
+            "title": "Data",
+            "type": "string"
+          },
+          "encoding": {
+            "const": "u2le-base64-rows-south-to-north",
+            "title": "Encoding",
+            "type": "string"
+          },
+          "i0": {
+            "title": "I0",
+            "type": "integer"
+          },
+          "j0": {
+            "title": "J0",
+            "type": "integer"
+          },
+          "level": {
+            "title": "Level",
+            "type": "integer"
+          },
+          "ni": {
+            "title": "Ni",
+            "type": "integer"
+          },
+          "nj": {
+            "title": "Nj",
+            "type": "integer"
+          },
+          "noData": {
+            "title": "Nodata",
+            "type": "integer"
+          },
+          "unitM": {
+            "title": "Unitm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "level",
+          "cellM",
+          "i0",
+          "j0",
+          "ni",
+          "nj",
+          "unitM",
+          "noData",
+          "encoding",
+          "data"
+        ],
+        "title": "ChangeDetectableGridRead",
+        "type": "object"
+      },
+      "ChangeDetectableRead": {
+        "additionalProperties": false,
+        "description": "The least change a layer could have seen, summed over its compared cells, metres:\neach cell's threshold `t` (whole centimetres, rounded up). A change smaller than a\ncell's is not one the map could see there, so \"unchanged\" there means \"nothing this\nlarge\", never \"nothing\". Review B5a round 2's ruling: small objects under about a\nmetre are not detected yet (ADR 0018 \u00a7 API, Limits).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "cells": {
+            "title": "Cells",
+            "type": "integer"
+          },
+          "maxM": {
+            "title": "Maxm",
+            "type": "number"
+          },
+          "medianM": {
+            "title": "Medianm",
+            "type": "number"
+          },
+          "minM": {
+            "title": "Minm",
+            "type": "number"
+          },
+          "p90M": {
+            "title": "P90M",
+            "type": "number"
+          }
+        },
+        "required": [
+          "minM",
+          "medianM",
+          "p90M",
+          "maxM",
+          "cells"
+        ],
+        "title": "ChangeDetectableRead",
+        "type": "object"
+      },
+      "ChangeLayerRead": {
+        "additionalProperties": false,
+        "description": "One layer of the change map (ADR 0018 \u00a7 API): `ground`, the bare earth (P5's `ground`\nand `groundSigma`), the primary product; or `vegetation`, the top surface (`dsm` and\n`sigma`: canopy, crops, and anything standing on the ground), with its own motion term\nso that wind in a crown is never a change and growth is never ground change.\n\nPer cell, `delta = h_to - h_from` of the layer's height against\n`t = thresholdSigma * sqrt(s_from^2 + s_to^2 + u_from^2 + u_to^2 + 2 motionM^2) + drift`\n(`drift` the ground envelope's on a slope, up to `grade * driftReachM`; 0 for\nvegetation), each cell against the other epoch's neighbourhood within\n`horizontalRadiusM`: `raised` above `t`, `lowered` below `-t`, else `unchanged`;\n`insufficient` where either measured the layer but they cannot be compared (no shared\nchild, a partial child set, a saturated sigma, ground never observed).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "areaCellM": {
+            "title": "Areacellm",
+            "type": "number"
+          },
+          "areaLevel": {
+            "title": "Arealevel",
+            "type": "integer"
+          },
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeArea"
+            },
+            "title": "Areas",
+            "type": "array"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ChangeCountsRead"
+          },
+          "detectable": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChangeDetectableRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "detectableGrid": {
+            "$ref": "#/components/schemas/ChangeDetectableGridRead"
+          },
+          "driftReachM": {
+            "title": "Driftreachm",
+            "type": "number"
+          },
+          "heights": {
+            "enum": [
+              "ground",
+              "dsm"
+            ],
+            "title": "Heights",
+            "type": "string"
+          },
+          "horizontalRadiusM": {
+            "title": "Horizontalradiusm",
+            "type": "number"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "layer": {
+            "enum": [
+              "ground",
+              "vegetation"
+            ],
+            "title": "Layer",
+            "type": "string"
+          },
+          "lowConfidence": {
+            "$ref": "#/components/schemas/ChangeLowConfidenceRead"
+          },
+          "minDetectableM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mindetectablem"
+          },
+          "motionM": {
+            "title": "Motionm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "layer",
+          "label",
+          "heights",
+          "minDetectableM",
+          "detectable",
+          "detectableGrid",
+          "motionM",
+          "horizontalRadiusM",
+          "driftReachM",
+          "counts",
+          "lowConfidence",
+          "areaLevel",
+          "areaCellM",
+          "areas"
+        ],
+        "title": "ChangeLayerRead",
+        "type": "object"
+      },
+      "ChangeLowConfidenceRead": {
+        "additionalProperties": false,
+        "description": "Of each compared class, the cells either epoch's confidence does not vouch for (weak,\nunseen or no evidence in its grid at the compared level). They are classified all the\nsame, and counted in `counts` too.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "lowered": {
+            "title": "Lowered",
+            "type": "integer"
+          },
+          "raised": {
+            "title": "Raised",
+            "type": "integer"
+          },
+          "unchanged": {
+            "title": "Unchanged",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "unchanged",
+          "raised",
+          "lowered"
+        ],
+        "title": "ChangeLowConfidenceRead",
+        "type": "object"
+      },
+      "ChangeMapRead": {
+        "additionalProperties": false,
+        "description": "The change from epoch `fromEpochId` to `toEpochId` of one site (`change-v1`, ADR 0018):\nderived from their height surfaces, never observed and never from splat pixels. Two\nlayers, each classified on its own: `ground` (the bare earth: the primary product) and\n`vegetation` (the top surface, at its own higher threshold). Per cell of the coarser of\nthe two surfaces' levels, each side taken over the children both epochs measured (a\npartial child set is insufficient), with `u` each epoch's placement uncertainty\n(`uncertainty`). The 3 sigma rule is a first-principles choice, `uncalibrated` until a\nsite scanned twice measures it.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "appearance": {
+            "$ref": "#/components/schemas/ChangeAppearanceRead"
+          },
+          "calibration": {
+            "const": "uncalibrated",
+            "title": "Calibration",
+            "type": "string"
+          },
+          "cellM": {
+            "title": "Cellm",
+            "type": "number"
+          },
+          "derived": {
+            "const": true,
+            "title": "Derived",
+            "type": "boolean"
+          },
+          "frame": {
+            "const": "tileset",
+            "title": "Frame",
+            "type": "string"
+          },
+          "fromAssetId": {
+            "format": "uuid",
+            "title": "Fromassetid",
+            "type": "string"
+          },
+          "fromEpochId": {
+            "format": "uuid",
+            "title": "Fromepochid",
+            "type": "string"
+          },
+          "ground": {
+            "$ref": "#/components/schemas/ChangeLayerRead"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "level": {
+            "title": "Level",
+            "type": "integer"
+          },
+          "nativeLevel": {
+            "title": "Nativelevel",
+            "type": "integer"
+          },
+          "policy": {
+            "const": "change-v1",
+            "title": "Policy",
+            "type": "string"
+          },
+          "siteId": {
+            "format": "uuid",
+            "title": "Siteid",
+            "type": "string"
+          },
+          "thresholdSigma": {
+            "title": "Thresholdsigma",
+            "type": "number"
+          },
+          "toAssetId": {
+            "format": "uuid",
+            "title": "Toassetid",
+            "type": "string"
+          },
+          "toEpochId": {
+            "format": "uuid",
+            "title": "Toepochid",
+            "type": "string"
+          },
+          "uncertainty": {
+            "$ref": "#/components/schemas/ChangeUncertaintyRead"
+          },
+          "vegetation": {
+            "$ref": "#/components/schemas/ChangeLayerRead"
+          }
+        },
+        "required": [
+          "policy",
+          "derived",
+          "label",
+          "calibration",
+          "siteId",
+          "fromEpochId",
+          "toEpochId",
+          "fromAssetId",
+          "toAssetId",
+          "frame",
+          "level",
+          "nativeLevel",
+          "cellM",
+          "thresholdSigma",
+          "uncertainty",
+          "ground",
+          "vegetation",
+          "appearance"
+        ],
+        "title": "ChangeMapRead",
+        "type": "object"
+      },
+      "ChangeUncertaintyRead": {
+        "additionalProperties": false,
+        "description": "Each epoch's placement uncertainty `u`, metres, as the threshold takes it: the larger\nof its uncertainty from the site frame (`fromFrameM`, its confidence grid's\n`alignmentCap.uncertaintyM`: 0 for the epoch that made the frame) and its alignment's\nown claim -- so a `coarse` epoch (a phone, a drone without RTK evidence) brings its\nmetres, however well it was aligned visually, and never less than 1 m whatever it\nclaims. An `unaligned` epoch is refused (409).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "fromFrameM": {
+            "title": "Fromframem",
+            "type": "number"
+          },
+          "fromM": {
+            "title": "Fromm",
+            "type": "number"
+          },
+          "fromVerdict": {
+            "enum": [
+              "survey",
+              "coarse"
+            ],
+            "title": "Fromverdict",
+            "type": "string"
+          },
+          "toFrameM": {
+            "title": "Toframem",
+            "type": "number"
+          },
+          "toM": {
+            "title": "Tom",
+            "type": "number"
+          },
+          "toVerdict": {
+            "enum": [
+              "survey",
+              "coarse"
+            ],
+            "title": "Toverdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fromM",
+          "toM",
+          "fromVerdict",
+          "toVerdict",
+          "fromFrameM",
+          "toFrameM"
+        ],
+        "title": "ChangeUncertaintyRead",
+        "type": "object"
+      },
       "ChartOutput": {
         "additionalProperties": false,
         "properties": {
@@ -6171,6 +6665,16 @@
           "status": {
             "$ref": "#/components/schemas/EpochStatus"
           },
+          "surface": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EpochSurfaceRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "updatedAt": {
             "format": "date-time",
             "title": "Updatedat",
@@ -6195,6 +6699,7 @@
           "quality",
           "currentAssetId",
           "confidence",
+          "surface",
           "createdAt",
           "updatedAt"
         ],
@@ -6210,6 +6715,92 @@
         ],
         "title": "EpochStatus",
         "type": "string"
+      },
+      "EpochSurfaceRead": {
+        "additionalProperties": false,
+        "description": "The height surface an epoch's current revision shipped: per cell of its confidence\ngrid's finest plane, its top surface (`dsm`), bare ground and spread, in centimetres\nabove the site frame's origin. Null on an epoch means not measured: the run that made\nits current revision measured none (a splat upload, or a run before the surface stage).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "properties": {
+          "assetId": {
+            "format": "uuid",
+            "title": "Assetid",
+            "type": "string"
+          },
+          "calibration": {
+            "title": "Calibration",
+            "type": "string"
+          },
+          "cellM": {
+            "title": "Cellm",
+            "type": "number"
+          },
+          "cells": {
+            "title": "Cells",
+            "type": "integer"
+          },
+          "groundWindowM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Groundwindowm"
+          },
+          "level": {
+            "title": "Level",
+            "type": "integer"
+          },
+          "medianSigmaM": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediansigmam"
+          },
+          "originHeightM": {
+            "title": "Originheightm",
+            "type": "number"
+          },
+          "policy": {
+            "title": "Policy",
+            "type": "string"
+          },
+          "status": {
+            "const": "measured",
+            "title": "Status",
+            "type": "string"
+          },
+          "surfacedCells": {
+            "title": "Surfacedcells",
+            "type": "integer"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "assetId",
+          "url",
+          "cellM",
+          "level",
+          "policy",
+          "calibration",
+          "cells",
+          "surfacedCells",
+          "medianSigmaM",
+          "originHeightM",
+          "groundWindowM"
+        ],
+        "title": "EpochSurfaceRead",
+        "type": "object"
       },
       "EventLocation": {
         "additionalProperties": false,
@@ -41604,6 +42195,105 @@
           }
         ],
         "summary": "Delete a camera bookmark",
+        "tags": [
+          "sites"
+        ]
+      }
+    },
+    "/api/v1/sites/{site_id}/change": {
+      "get": {
+        "description": "`change-v1` (ADR 0018): from epoch `from` to epoch `to`, both published, per cell of\nthe coarser of their height surfaces' levels over the children both measured,\n`dsm_to - dsm_from` against three times the combined spread and placement uncertainty\n-- raised, lowered, unchanged, or insufficient where they share no measured child --\nwith the cells either epoch's confidence does not vouch for flagged, not hidden, and the\nregions outlined on the globe. Derived, not observed; uncalibrated. It stores nothing, but a call may\ndecode four grids (more than the grid cache holds at their largest), so it takes the\nwrite token like weak areas and fill targets and spends the same per-client bucket.",
+        "operationId": "site_change_api_v1_sites__site_id__change_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "From",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "To",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeMapRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such site, or no such epoch of it."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "`epoch-not-published`: an epoch is rejected or superseded; `surface-not-measured`: an epoch's current revision has no height surface; `confidence-not-measured`: or no confidence map (its uncertainty is unknown); `frames-differ`: a surface is above another origin than the site frame's; `no-site-frame`; `surface-unreadable` / `confidence-unreadable`."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "`from` and `to` are the same epoch."
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "The change between two dates, from height surfaces",
         "tags": [
           "sites"
         ]
