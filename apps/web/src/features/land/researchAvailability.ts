@@ -31,6 +31,24 @@ function ago(worker: Worker): string {
   return formatAgo(worker.secondsSinceSeen ?? 0);
 }
 
+/**
+ * How long a queued run may wait for a sleeping worker before the words stop saying it is
+ * waking up. The research worker exits after five idle minutes, and queueing a run asks Fly
+ * to start it again (apps/api/app/services/worker_wake.py); its first act is a claim. A
+ * product choice, not a measurement: generous next to a machine start, short enough that a
+ * wake that never happened (no Fly token, a local server with no worker) is not hidden.
+ */
+export const WAKE_GRACE_S = 120;
+
+/**
+ * Asleep, not missing: the worker stopped itself when it ran out of work ("stopped"), or
+ * has not run on this server since its presence was last cleared ("never"). Presence is
+ * written only while a run is active, so both are the normal resting state.
+ */
+function asleep(worker: Worker): boolean {
+  return worker.state === "stopped" || worker.state === "never";
+}
+
 /** What a queued run is waiting for. Null unless `run` is queued and the worker is known. */
 export function workerLine(
   status: ResearchStatus | undefined,
@@ -38,6 +56,12 @@ export function workerLine(
 ): string | null {
   const worker = workerOf(status);
   if (run?.status !== "queued" || !worker) return null;
+  if (asleep(worker)) {
+    const waited = status?.queue?.oldestQueuedSeconds ?? null;
+    if (waited !== null && waited >= WAKE_GRACE_S)
+      return `The research worker has not started yet: this request has waited ${formatAgo(waited)}. It is saved and starts when the worker runs.`;
+    return "Waking the research worker: it sleeps when there is nothing to do and starts for your request. Your request is saved.";
+  }
   switch (worker.state) {
     case "online":
       return worker.busy
@@ -45,27 +69,22 @@ export function workerLine(
         : `Starting. The research worker checked in ${ago(worker)} ago.`;
     case "stale":
       return `Waiting for the research worker: none has checked in for ${ago(worker)}. Your request is saved and starts when a worker runs.`;
-    case "stopped":
-      return `Waiting for the research worker: the last one stopped ${ago(worker)} ago. Your request is saved and starts when a worker runs.`;
-    case "never":
-      return "Waiting for a research worker: none has checked in on this server yet. Your request is saved and starts when one runs.";
   }
+  return null;
 }
 
 /**
- * Said before anyone asks, when no worker is online: a new analysis would wait in the queue.
- * The caller leaves it out while the land's own run is queued, where `workerLine` says more.
+ * Said before anyone asks, when no worker is online. A sleeping worker is the normal state, so
+ * the note says it starts on demand; only a worker that went quiet mid-run ("stale") is said
+ * to be missing, and then a new analysis would wait in the queue. The caller leaves it out
+ * while the land's own run is queued, where `workerLine` says more.
  */
 export function workerIdleNote(status: ResearchStatus | undefined): string | null {
   const worker = workerOf(status);
   if (!worker || worker.state === "online") return null;
-  const which =
-    worker.state === "never"
-      ? "has never checked in here"
-      : worker.state === "stopped"
-        ? `stopped ${ago(worker)} ago`
-        : `has not checked in for ${ago(worker)}`;
-  return `Analyses run on a separate research worker, which ${which}. New requests will wait in the queue.`;
+  if (asleep(worker))
+    return "Analyses run on a separate research worker. It sleeps when there is nothing to do and starts when you ask, so the first request can take a moment longer.";
+  return `Analyses run on a separate research worker, which has not checked in for ${ago(worker)}. New requests will wait in the queue.`;
 }
 
 export interface AnalysisInputs {
