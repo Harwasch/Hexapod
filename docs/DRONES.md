@@ -52,8 +52,10 @@ say 60 m. `useGlobalHeight=1` limits the effect today. Omit it, or convert it pr
 
 ## 3. Route shape
 
-- **One wayline per KMZ?** Keep to one wayline per KMZ unless DJI's docs explicitly allow
-  several, and cite the page if they do. A re-scan's crossing obliques are two passes.
+- **One wayline per KMZ?** The export writes several waylines into one KMZ: an oblique's two
+  crossing passes are two, an orbit (two laps) is one, and consecutive nadir areas share one.
+  Keep to one wayline per KMZ unless DJI's docs explicitly allow several, and cite the page
+  if they do.
 - **Waypoint-count limit.** Nothing caps the waypoints. DJI's documented index range ends at
   65,535, and a very large area produced about 100,000 in the review. Find the practical
   limit for the chosen aircraft and app, and refuse (or split) above it.
@@ -70,11 +72,15 @@ say 60 m. `useGlobalHeight=1` limits the effect today. Omit it, or convert it pr
 ## 4. Where the drone may fly
 
 - **The site boundary and its holes are the flight limits.** No flight path, transit leg or
-  orbit may leave the boundary or enter a hole: holes are no-fly. A zone that cannot be flown
-  inside those limits is refused, with the reason. Not enforced yet: transit legs between
-  clipped lanes can cross a hole.
-- **No download for an empty or partial route.** When a pass cannot be planned, say exactly
-  which, and offer nothing to fly.
+  orbit may leave the boundary or enter a hole: holes are no-fly, and so are holes in an
+  area. A zone that cannot be flown inside those limits is refused, with the reason.
+  Enforced by `flightRefusal` (`apps/web/src/missions/flightLimits.ts`): it samples every leg
+  at most a metre apart (on routes up to 200 km), with a metre's tolerance at an outline. The limit is the Land's boundary
+  zone, else the site project's `SITE` zone; a project with neither (the demo ranch's own
+  fields) is offered nothing. It refuses; it does not re-route round a hole. Separately
+  stored Land exclusions that are not holes are not checked yet.
+- **No download for an empty or partial route.** `routeRefusal` names each area with no
+  lane, no orbit, or only one of its two crossing passes, and nothing is offered to fly.
 - Heights are relative to take-off and do not follow terrain. The relief check assumes take-off
   at the first waypoint and only warns. Transit, take-off and return paths are not checked for
   obstacles.

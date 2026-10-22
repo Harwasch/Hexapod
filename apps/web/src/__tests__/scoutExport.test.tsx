@@ -6,15 +6,29 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { env } from "@/app/env";
+import { DroneScoutExport } from "@/features/mission/DroneScoutExport";
 import { ScoutExport } from "@/features/mission/ScoutExport";
+import type * as Wpml from "@/missions/wpml";
 import { DEFAULT_SCOUT } from "@/missions/scout";
 import type { Zone } from "@/missions/types";
 
 vi.mock("@/cesium/SceneContext", () => ({ useScene: () => null }));
+// The writer as it is, unless a test makes it fail (as a chunk that cannot load does).
+const writer = vi.hoisted(() => ({ fail: null as Error | null }));
+vi.mock("@/missions/wpml", async (importOriginal) => {
+  const actual = await importOriginal<typeof Wpml>();
+  return {
+    ...actual,
+    buildScoutKmz: (...args: Parameters<typeof actual.buildScoutKmz>) => {
+      if (writer.fail) throw writer.fail;
+      return actual.buildScoutKmz(...args);
+    },
+  };
+});
 
 const droneExport = env.droneExportEnabled;
 beforeEach(() => {
@@ -44,10 +58,28 @@ const patch = {
   scout: { ...DEFAULT_SCOUT, altitudeM: 120 },
 } as unknown as Zone;
 
+/** The site the patches lie in (siteProject's SITE zone): the route must stay inside it. */
+const SITE = {
+  id: "SITE",
+  name: "Site boundary",
+  footprint: {
+    type: "Polygon",
+    coordinates: [
+      [
+        [-120.05, 34.69],
+        [-120.02, 34.69],
+        [-120.02, 34.71],
+        [-120.05, 34.71],
+        [-120.05, 34.69],
+      ],
+    ],
+  },
+} as unknown as Zone;
+
 it("shows the return-home height, capped at 120 m above take-off", () => {
   render(
     <QueryClientProvider client={new QueryClient()}>
-      <ScoutExport zones={[patch]} onAltitude={() => undefined} />
+      <DroneScoutExport zones={[patch]} ground={[SITE]} onAltitude={() => undefined} />
     </QueryClientProvider>,
   );
   const facts = screen.getByTestId("scout-facts");
@@ -60,30 +92,34 @@ it("shows the return-home height, capped at 120 m above take-off", () => {
 function card(zones: Zone[]) {
   return render(
     <QueryClientProvider client={new QueryClient()}>
-      <ScoutExport zones={zones} />
+      <DroneScoutExport zones={zones} ground={[SITE]} />
     </QueryClientProvider>,
   );
 }
 
+const planned = (pattern: "nadir" | "oblique" | "orbit", gimbalPitchDeg: number) =>
+  ({
+    ...patch,
+    scout: { ...DEFAULT_SCOUT, altitudeM: 120, purpose: "re-scan-weak", pattern, gimbalPitchDeg },
+  }) as unknown as Zone;
+
+it("refuses to export a nadir capture pitched off straight down: the lanes fly at -90°", () => {
+  card([patch, planned("nadir", -60)]);
+  const refusal = screen.getByTestId("scout-unsupported");
+  expect(refusal).toHaveTextContent("pitched −60°");
+  expect(refusal).toHaveTextContent("only straight-down");
+  expect(screen.queryByTestId("scout-download")).toBeNull();
+  expect(screen.queryByTestId("scout-facts")).toBeNull();
+});
+
 it.each([
-  ["orbit", -30, "orbit"],
-  ["oblique", -45, "oblique"],
-  ["nadir", -60, "pitched −60°"],
-] as const)(
-  "refuses to export a %s capture as straight-down lanes",
-  (pattern, gimbalPitchDeg, words) => {
-    const planned = {
-      ...patch,
-      scout: { ...DEFAULT_SCOUT, altitudeM: 120, purpose: "re-scan-weak", pattern, gimbalPitchDeg },
-    } as unknown as Zone;
-    card([patch, planned]);
-    const refusal = screen.getByTestId("scout-unsupported");
-    expect(refusal).toHaveTextContent(words);
-    expect(refusal).toHaveTextContent("only straight-down");
-    expect(screen.queryByTestId("scout-download")).toBeNull();
-    expect(screen.queryByTestId("scout-facts")).toBeNull();
-  },
-);
+  ["orbit", -30],
+  ["oblique", -45],
+] as const)("exports a %s capture, which the writer flies as planned", (pattern, pitch) => {
+  card([patch, planned(pattern, pitch)]);
+  expect(screen.queryByTestId("scout-unsupported")).toBeNull();
+  expect(screen.getByTestId("scout-download")).toBeInTheDocument();
+});
 
 it("still exports a straight-down capture", () => {
   card([patch]);
@@ -91,8 +127,66 @@ it("still exports a straight-down capture", () => {
   expect(screen.getByTestId("scout-download")).toBeInTheDocument();
 });
 
-describe("with drone missions off (the default)", () => {
-  it("offers no drone export, and says drone missions are not available yet", () => {
+it("offers no download for a route with an area it could not plan, and says which", () => {
+  const tiny = {
+    ...patch,
+    id: "A-02",
+    name: "Weak area 2",
+    footprint: {
+      type: "Polygon",
+      coordinates: [
+        [
+          [-120.03, 34.695],
+          [-120.02995, 34.695],
+          [-120.02995, 34.69505],
+          [-120.03, 34.69505],
+          [-120.03, 34.695],
+        ],
+      ],
+    },
+  } as unknown as Zone;
+  card([patch, tiny]);
+  expect(screen.getByTestId("scout-unsupported")).toHaveTextContent("Weak area 2: no lane fits");
+  expect(screen.queryByTestId("scout-download")).toBeNull();
+  expect(screen.queryByTestId("scout-facts")).toBeNull();
+});
+
+it("offers no route that would leave the site boundary, or with no boundary to check", () => {
+  const edge = { ...SITE, footprint: patch.footprint };
+  const orbit = {
+    ...patch,
+    scout: { ...DEFAULT_SCOUT, purpose: "re-scan-weak", pattern: "orbit", gimbalPitchDeg: -30 },
+  } as unknown as Zone;
+  // The orbit rings the patch from outside it: here the site ends at the patch's edge.
+  const { unmount } = render(
+    <QueryClientProvider client={new QueryClient()}>
+      <DroneScoutExport zones={[orbit]} ground={[edge]} />
+    </QueryClientProvider>,
+  );
+  expect(screen.getByTestId("scout-unsupported")).toHaveTextContent("Fog patch 1: its orbit flies");
+  expect(screen.queryByTestId("scout-download")).toBeNull();
+  unmount();
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <DroneScoutExport zones={[patch]} />
+    </QueryClientProvider>,
+  );
+  expect(screen.getByTestId("scout-unsupported")).toHaveTextContent("No site boundary");
+  expect(screen.queryByTestId("scout-download")).toBeNull();
+});
+
+describe("drone missions behind their flag", () => {
+  it("with the flag on, loads the drone card and its download", async () => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ScoutExport zones={[patch]} ground={[SITE]} />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByTestId("scout-download")).toBeInTheDocument();
+    expect(screen.queryByTestId("scout-drone-stub")).toBeNull();
+  });
+
+  it("with the flag off (the default), offers no drone export, and says drone missions are not available yet", () => {
     env.droneExportEnabled = false;
     render(
       <QueryClientProvider client={new QueryClient()}>
@@ -106,4 +200,70 @@ describe("with drone missions off (the default)", () => {
     expect(screen.queryByTestId("scout-facts")).toBeNull();
     expect(screen.queryByRole("group", { name: "Height above take-off" })).toBeNull();
   });
+});
+
+it("says when areas are flown as their re-scan asks, and counts the crossing passes", () => {
+  const facts = (scout: Zone["scout"]) => {
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <DroneScoutExport zones={[{ ...patch, scout }]} ground={[SITE]} />
+      </QueryClientProvider>,
+    );
+    const card = screen.getByTestId("scout-export").textContent ?? "";
+    const photos = Number(/about ([\d,]+)/.exec(card)?.[1]?.replace(/,/g, "") ?? NaN);
+    cleanup();
+    return { card, photos };
+  };
+  const nadir = facts({ ...DEFAULT_SCOUT, altitudeM: 120 });
+  expect(nadir.card).toContain("flying lines with the camera straight down.");
+  const oblique = facts({
+    ...DEFAULT_SCOUT,
+    altitudeM: 120,
+    purpose: "re-scan-weak",
+    pattern: "oblique",
+    gimbalPitchDeg: -45,
+  });
+  expect(oblique.card).toContain(
+    "flying each area as it asks: lines straight down, crossing obliques or an orbit.",
+  );
+  // Both sets of lanes: about twice the photos of the nadir lines.
+  expect(oblique.photos).toBeGreaterThan(1.5 * nadir.photos);
+});
+
+it("writes the KMZ on the download click, its writer loaded then", async () => {
+  const made: Blob[] = [];
+  vi.spyOn(URL, "createObjectURL").mockImplementation((blob) => {
+    made.push(blob as Blob);
+    return "blob:kmz";
+  });
+  vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <DroneScoutExport zones={[patch]} ground={[SITE]} />
+    </QueryClientProvider>,
+  );
+  fireEvent.click(screen.getByTestId("scout-download"));
+  await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+  expect(made[0]?.type).toBe("application/vnd.google-earth.kmz");
+  expect(made[0]?.size).toBeGreaterThan(1000);
+  expect(screen.queryByRole("alert")).toBeNull();
+  vi.restoreAllMocks();
+});
+
+it("says when the route cannot be written, and downloads nothing", async () => {
+  writer.fail = new Error("Failed to fetch dynamically imported module");
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <DroneScoutExport zones={[patch]} ground={[SITE]} />
+    </QueryClientProvider>,
+  );
+  fireEvent.click(screen.getByTestId("scout-download"));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Failed to fetch dynamically imported module",
+  );
+  expect(click).not.toHaveBeenCalled();
+  writer.fail = null;
+  vi.restoreAllMocks();
 });

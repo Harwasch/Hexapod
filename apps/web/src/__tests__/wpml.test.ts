@@ -1,13 +1,32 @@
 import type { Footprint } from "@twin/contracts";
-import { boundsOf, destination } from "@twin/geo";
+import {
+  bearing,
+  boundsOf,
+  centerOf,
+  destination,
+  haversineDistance,
+  laneStrokes,
+} from "@twin/geo";
 import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_SCOUT,
   MAX_ALTITUDE_M,
+  ORBIT_MIN_STANDOFF_M,
+  ORBIT_STEP_DEG,
+  ORBIT_RINGS,
+  orbitRing,
+  orbitStandoffM,
+  reliefOutlines,
+  routeStats,
   SCOUT_ALTITUDES_M,
   scoutGeometry,
   scoutLanes,
+  scoutPasses,
+  scoutWaylines,
+  waylineStats,
+  type Scout,
+  type ScoutWayline,
 } from "@/missions/scout";
 import { buildScoutKmz, escapeXml, templateKml, waylinesWpml, WPML_NS } from "@/missions/wpml";
 
@@ -57,8 +76,18 @@ const wpml = (node: Element | Document, name: string) =>
 const text = (node: Element | Document, name: string) => wpml(node, name)[0]?.textContent ?? "";
 
 describe("DJI WPML scout route", () => {
-  const routes = [scoutLanes(holed, DEFAULT_SCOUT), scoutLanes(second, DEFAULT_SCOUT)];
-  const lanes = routes.flat();
+  const routes = scoutWaylines([
+    { footprint: holed, scout: DEFAULT_SCOUT },
+    { footprint: second, scout: DEFAULT_SCOUT },
+  ]);
+  const lanes = [scoutLanes(holed, DEFAULT_SCOUT), scoutLanes(second, DEFAULT_SCOUT)].flat();
+
+  it("flies a fog scout's areas as one wayline: the lanes the map draws, in order", () => {
+    expect(routes).toHaveLength(1);
+    expect(routes[0]?.waypoints).toEqual(lanes.flatMap((lane) => [lane.a, lane.b]));
+    expect(routes[0]?.gimbalPitchDeg).toBe(-90);
+    expect(routes[0]?.poi).toBeNull();
+  });
   const waylines = parse(waylinesWpml(routes, DEFAULT_SCOUT));
   const template = parse(templateKml(routes, DEFAULT_SCOUT, new Date(2026, 9, 16)));
 
@@ -78,7 +107,7 @@ describe("DJI WPML scout route", () => {
   it("never climbs over the 400 ft cap to fly home, at any height the export offers", () => {
     for (const altitudeM of SCOUT_ALTITUDES_M) {
       const scout = { ...DEFAULT_SCOUT, altitudeM };
-      const flown = [scoutLanes(holed, scout)];
+      const flown = scoutWaylines([{ footprint: holed, scout }]);
       const heights = [
         Number(text(parse(waylinesWpml(flown, scout)), "globalRTHHeight")),
         Number(text(parse(templateKml(flown, scout, new Date(2026, 9, 16))), "globalRTHHeight")),
@@ -137,6 +166,16 @@ describe("DJI WPML scout route", () => {
     expect(escapeXml(`<a & "b">`)).toBe("&lt;a &amp; &quot;b&quot;&gt;");
   });
 
+  it("writes no KMZ for an empty route", () => {
+    expect(() => buildScoutKmz([], DEFAULT_SCOUT)).toThrow("Nothing to fly");
+    expect(() =>
+      buildScoutKmz(
+        [{ waypoints: [], gimbalPitchDeg: -90, poi: null, photos: "lanes" }],
+        DEFAULT_SCOUT,
+      ),
+    ).toThrow("Nothing to fly");
+  });
+
   it("zips template and waylines under wpmz/", () => {
     const kmz = buildScoutKmz(routes, DEFAULT_SCOUT, new Date(2026, 9, 16));
     const names = new TextDecoder().decode(kmz);
@@ -145,15 +184,267 @@ describe("DJI WPML scout route", () => {
     expect(new DataView(kmz.buffer).getUint32(kmz.length - 22, true)).toBe(0x06054b50);
     expect(new DataView(kmz.buffer).getUint16(kmz.length - 12, true)).toBe(3);
   });
+});
 
-  it("refuses a re-scan that asks for obliques or an orbit, which it cannot fly yet", () => {
-    for (const pattern of ["oblique", "orbit"] as const) {
-      const scout = { ...DEFAULT_SCOUT, purpose: "re-scan-weak" as const, pattern };
-      expect(() => buildScoutKmz(routes, scout)).toThrow(
-        "This re-scan asks for obliques/an orbit; the DJI export flies nadir only so far (W4c)",
+describe("DJI WPML re-scan patterns", () => {
+  const rescan = (pattern: "nadir" | "oblique" | "orbit", gimbalPitchDeg: number): Scout => ({
+    ...DEFAULT_SCOUT,
+    purpose: "re-scan-weak",
+    pattern,
+    gimbalPitchDeg,
+  });
+  const folders = (doc: Document) => Array.from(doc.getElementsByTagName("Folder"));
+  const placemarks = (folder: Element) => Array.from(folder.getElementsByTagName("Placemark"));
+
+  it("flies crossing obliques as two waylines, the second at right angles, camera pitched", () => {
+    const scout = rescan("oblique", -45);
+    const waylines = scoutWaylines([{ footprint: second, scout }]);
+    expect(waylines).toHaveLength(2);
+    const [along, across] = waylines;
+    // The first set is the lanes the map draws; the second crosses them.
+    expect(along?.waypoints).toEqual(scoutLanes(second, scout).flatMap((lane) => [lane.a, lane.b]));
+    const heading = (w: ScoutWayline | undefined) =>
+      w?.waypoints[0] && w.waypoints[1] ? bearing(w.waypoints[0], w.waypoints[1]) : NaN;
+    const turn = Math.abs(((heading(across) - heading(along) + 540) % 360) - 180);
+    expect(Math.abs(turn - 90)).toBeLessThan(1);
+
+    const flown = parse(waylinesWpml(waylines, scout));
+    const template = parse(templateKml(waylines, scout, new Date(2026, 9, 16)));
+    // One executable wayline per template, ids from 0, waypoint indices from 0 in each.
+    expect(folders(flown).map((f) => [text(f, "templateId"), text(f, "waylineId")])).toEqual([
+      ["0", "0"],
+      ["1", "1"],
+    ]);
+    expect(folders(template).map((f) => text(f, "templateId"))).toEqual(["0", "1"]);
+    folders(flown).forEach((folder, k) => {
+      const points = placemarks(folder);
+      expect(points).toHaveLength(waylines[k]?.waypoints.length ?? -1);
+      points.forEach((p, i) => expect(text(p, "index")).toBe(String(i)));
+      expect(text(folder, "waypointHeadingMode")).toBe("followWayline");
+      const gimbal = wpml(folder, "actionGroup").filter(
+        (g) => text(g, "actionActuatorFunc") === "gimbalRotate",
+      );
+      expect(gimbal.map((g) => text(g, "gimbalPitchRotateAngle"))).toEqual(["-45"]);
+      // Photos on every lane, none on the legs between.
+      const photos = wpml(folder, "actionGroup").filter(
+        (g) => text(g, "actionTriggerType") === "multipleDistance",
+      );
+      expect(photos).toHaveLength(points.length / 2);
+    });
+    // The pitch at every waypoint of the template (gimbalPitchMode usePointSetting).
+    for (const folder of folders(template)) {
+      expect(text(folder, "gimbalPitchMode")).toBe("usePointSetting");
+      expect(new Set(placemarks(folder).map((p) => text(p, "gimbalPitchAngle")))).toEqual(
+        new Set(["-45"]),
       );
     }
-    const nadir = { ...DEFAULT_SCOUT, purpose: "re-scan-weak" as const };
-    expect(buildScoutKmz(routes, nadir).length).toBeGreaterThan(0);
+  });
+
+  it("flies an orbit round the outline, the nose on its centre", () => {
+    const scout = rescan("orbit", -30);
+    const [orbit, ...rest] = scoutWaylines([{ footprint: second, scout }]);
+    expect(rest).toEqual([]);
+    if (!orbit?.poi) throw new Error("no orbit");
+    expect(orbit.poi).toEqual(centerOf(second));
+    // Two closed rings round the outline at the stand-off where the pitched camera meets the
+    // ground, as the planner sizes it (its convex hull grown by the stand-off).
+    const standoff = scoutGeometry(scout).altitudeM / Math.tan(Math.PI / 6);
+    expect(orbitStandoffM(scout)).toBeCloseTo(standoff, 6);
+    const ring = orbitRing(second, scout);
+    expect(orbit.waypoints).toEqual([...ring, ...ring, ring[0]]);
+    expect(ORBIT_RINGS).toBe(2);
+    for (const p of ring) expect(outlineDistanceM(second, p)).toBeCloseTo(standoff, 0);
+    // Straight down, an orbit still keeps its distance (the planner's 5 m floor).
+    expect(orbitStandoffM(rescan("orbit", -90))).toBe(ORBIT_MIN_STANDOFF_M);
+
+    const flown = parse(waylinesWpml([orbit], scout));
+    const poi = `${orbit.poi.latitude.toFixed(7)},${orbit.poi.longitude.toFixed(7)},0.000000`;
+    const points = placemarks(folders(flown)[0]!);
+    expect(points).toHaveLength(orbit.waypoints.length);
+    for (const p of points) {
+      expect(text(p, "waypointHeadingMode")).toBe("towardPOI");
+      // WPML's order: latitude, longitude, height (0: it takes none).
+      expect(text(p, "waypointPoiPoint")).toBe(poi);
+    }
+    const template = parse(templateKml([orbit], scout, new Date(2026, 9, 16)));
+    expect(text(template, "waypointHeadingMode")).toBe("towardPOI");
+    expect(text(template, "waypointPoiPoint")).toBe(poi);
+    // Photos all the way round, from the first waypoint to the last.
+    const photos = wpml(flown, "actionGroup").filter(
+      (g) => text(g, "actionTriggerType") === "multipleDistance",
+    );
+    expect(
+      photos.map((g) => [text(g, "actionGroupStartIndex"), text(g, "actionGroupEndIndex")]),
+    ).toEqual([["0", String(orbit.waypoints.length - 1)]]);
+    expect(wpml(flown, "gimbalPitchRotateAngle").map((e) => e.textContent)).toEqual(["-30"]);
+  });
+
+  it("keeps consecutive nadir areas on one wayline and gives each pattern its own", () => {
+    const nadir = rescan("nadir", -90);
+    const waylines = scoutWaylines([
+      { footprint: holed, scout: DEFAULT_SCOUT },
+      { footprint: second, scout: nadir },
+      { footprint: second, scout: rescan("orbit", -45) },
+      { footprint: holed, scout: DEFAULT_SCOUT },
+    ]);
+    expect(waylines.map((w) => (w.poi ? "orbit" : w.gimbalPitchDeg))).toEqual([-90, "orbit", -90]);
+    expect(waylines[0]?.waypoints).toHaveLength(
+      (scoutLanes(holed, DEFAULT_SCOUT).length + scoutLanes(second, nadir).length) * 2,
+    );
+    const kmz = buildScoutKmz(waylines, DEFAULT_SCOUT, new Date(2026, 9, 16));
+    expect(kmz.length).toBeGreaterThan(0);
+  });
+
+  it("counts an oblique's crossing set and an orbit's rings in the route's length", () => {
+    const oblique = rescan("oblique", -45);
+    const nadirStats = waylineStats(
+      scoutWaylines([{ footprint: second, scout: DEFAULT_SCOUT }]),
+      DEFAULT_SCOUT,
+    );
+    const obliqueStats = waylineStats(
+      scoutWaylines([{ footprint: second, scout: oblique }]),
+      oblique,
+    );
+    expect(obliqueStats.workingM).toBeGreaterThan(1.5 * nadirStats.workingM);
+    expect(obliqueStats.photos).toBeGreaterThan(nadirStats.photos);
+    const orbit = rescan("orbit", -30);
+    const ring = scoutWaylines([{ footprint: second, scout: orbit }]);
+    const stats = waylineStats(ring, orbit);
+    // Two rings, all of it photographed, nothing in transit: the planner's ring length (the
+    // outline's convex hull grown by the stand-off: its perimeter plus a circle) twice.
+    const perimeter = 2 * (200 + 100) + 2 * Math.PI * orbitStandoffM(orbit);
+    expect(Math.abs(stats.workingM / (ORBIT_RINGS * perimeter) - 1)).toBeLessThan(0.01);
+    expect(stats.transitM).toBe(0);
+    expect(stats.photos).toBe(Math.floor(stats.workingM / scoutGeometry(orbit).photoSpacingM) + 1);
+    // A fog scout's numbers are routeStats' over the same lanes.
+    const lanes = [scoutLanes(holed, DEFAULT_SCOUT), scoutLanes(second, DEFAULT_SCOUT)];
+    const old = routeStats(lanes, DEFAULT_SCOUT);
+    const now = waylineStats(
+      scoutWaylines([
+        { footprint: holed, scout: DEFAULT_SCOUT },
+        { footprint: second, scout: DEFAULT_SCOUT },
+      ]),
+      DEFAULT_SCOUT,
+    );
+    expect(now.photos).toBe(old.photos);
+    expect(now.workingM).toBeCloseTo(old.workingM, -1);
+    expect(now.transitM).toBeCloseTo(old.transitM, 3);
+  });
+
+  it("numbers action groups once across the KMZ, as WPML asks (unique within a file)", () => {
+    const waylines = scoutWaylines([
+      { footprint: holed, scout: DEFAULT_SCOUT },
+      { footprint: second, scout: rescan("oblique", -45) },
+      { footprint: second, scout: rescan("orbit", -30) },
+    ]);
+    expect(waylines).toHaveLength(4);
+    for (const xml of [
+      waylinesWpml(waylines, DEFAULT_SCOUT),
+      templateKml(waylines, DEFAULT_SCOUT, new Date(2026, 9, 16)),
+    ]) {
+      const ids = wpml(parse(xml), "actionGroupId").map((e) => Number(e.textContent));
+      // Monotonic and continuous from 0, as the reference recommends.
+      expect(ids).toEqual(ids.map((_, i) => i));
+    }
+  });
+
+  it("orbits a long strip along its sides, not round a circle past its ends", () => {
+    // 200 m by 20 m: a circle round its corners would aim the camera ~90 m off the long sides.
+    const strip: Footprint = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [e(0), n(0)],
+          [e(200), n(0)],
+          [e(200), n(20)],
+          [e(0), n(20)],
+          [e(0), n(0)],
+        ],
+      ],
+    };
+    const scout = rescan("orbit", -30);
+    const ring = orbitRing(strip, scout);
+    const standoff = orbitStandoffM(scout);
+    for (const p of ring) expect(Math.abs(outlineDistanceM(strip, p) - standoff)).toBeLessThan(1);
+    const length = ring.reduce(
+      (sum, p, i) => sum + haversineDistance(p, ring[(i + 1) % ring.length] ?? p),
+      0,
+    );
+    const planner = 2 * (200 + 20) + 2 * Math.PI * standoff;
+    expect(Math.abs(length / planner - 1)).toBeLessThan(0.01);
+    // A single point still gets a ring round it.
+    const dot: Footprint = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [e(5), n(5)],
+          [e(5), n(5)],
+          [e(5), n(5)],
+          [e(5), n(5)],
+        ],
+      ],
+    };
+    const round = orbitRing(dot, rescan("orbit", -90));
+    expect(round.length).toBe(360 / ORBIT_STEP_DEG);
+    for (const p of round)
+      expect(haversineDistance({ longitude: e(5), latitude: n(5) }, p)).toBeCloseTo(
+        ORBIT_MIN_STANDOFF_M,
+        1,
+      );
+  });
+
+  it("draws on the map what the export flies", () => {
+    expect(scoutPasses(second, DEFAULT_SCOUT)).toEqual(scoutLanes(second, DEFAULT_SCOUT));
+    const oblique = rescan("oblique", -45);
+    const [along, across] = scoutWaylines([{ footprint: second, scout: oblique }]);
+    const passes = scoutPasses(second, oblique);
+    expect(passes.flatMap((l) => [l.a, l.b])).toEqual([
+      ...(along?.waypoints ?? []),
+      ...(across?.waypoints ?? []),
+    ]);
+    // The two sets are drawn apart: no stroke joins the last lane of one to the next set.
+    expect(laneStrokes(passes).length).toBeGreaterThanOrEqual(2);
+    const orbit = rescan("orbit", -30);
+    const ring = orbitRing(second, orbit);
+    const drawn = scoutPasses(second, orbit);
+    expect(drawn).toHaveLength(ring.length);
+    expect(laneStrokes(drawn)).toEqual([
+      [...ring.flatMap((p, i) => [p, ring[(i + 1) % ring.length]])],
+    ]);
+  });
+
+  it("samples the ground an orbit flies over, not only inside the outline", () => {
+    const orbit = rescan("orbit", -30);
+    const outlines = reliefOutlines([
+      { footprint: holed, scout: DEFAULT_SCOUT },
+      { footprint: second, scout: orbit },
+    ]);
+    expect(outlines.slice(0, 2)).toEqual([holed, second]);
+    const ring = orbitRing(second, orbit);
+    expect(outlines[2]).toEqual({
+      type: "Polygon",
+      coordinates: [[...ring, ring[0]].map((p) => [p?.longitude ?? 0, p?.latitude ?? 0])],
+    });
+    expect(outlines).toHaveLength(3);
   });
 });
+
+/** Metres from `p` to the nearest edge of `footprint`'s outer ring (flat, about `p`). */
+function outlineDistanceM(footprint: Footprint, p: { longitude: number; latitude: number }) {
+  const kx = 111_320 * Math.cos((p.latitude * Math.PI) / 180);
+  const ring = (footprint.type === "Polygon" ? footprint.coordinates[0] : []) ?? [];
+  const xy = ring.map(([lon, lat]) => [
+    ((lon ?? 0) - p.longitude) * kx,
+    ((lat ?? 0) - p.latitude) * 111_320,
+  ]);
+  let best = Infinity;
+  for (let i = 1; i < xy.length; i++) {
+    const [ax = 0, ay = 0] = xy[i - 1] ?? [];
+    const [bx = 0, by = 0] = xy[i] ?? [];
+    const dx = bx - ax;
+    const dy = by - ay;
+    const t = dx || dy ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / (dx * dx + dy * dy))) : 0;
+    best = Math.min(best, Math.hypot(ax + t * dx, ay + t * dy));
+  }
+  return best;
+}
