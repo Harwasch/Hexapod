@@ -353,7 +353,10 @@ def report(seeded: Seeded) -> str:
         run = seeded.overview
         line = f"overview: {run.status} (run {run.id})"
         if run.status == "queued" and seeded.worker != "online":
-            line += "; no research worker is running, start one with `pnpm dev:research`"
+            line += (
+                "; the research worker sleeps between runs and starts on demand when Fly wake "
+                "is configured; locally run `pnpm dev:research`"
+            )
         lines.append(line)
     return "\n".join(lines) + "\n"
 

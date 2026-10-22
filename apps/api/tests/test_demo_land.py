@@ -320,4 +320,6 @@ def test_the_command_says_what_it_did(
     out = capsys.readouterr().out
     assert "Oak Bench Ranch: unchanged" in out
     assert "overview: queued" in out
+    assert "sleeps between runs" in out
+    assert "starts on demand" in out
     assert "pnpm dev:research" in out

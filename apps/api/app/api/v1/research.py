@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Iterator
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Query
+from fastapi import APIRouter, BackgroundTasks, Header, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
@@ -159,10 +159,14 @@ def detail(
     "/research/investigations/{investigation_id}/runs", response_model=RunRead, status_code=201
 )
 def start_run(
-    investigation_id: uuid.UUID, payload: RunCreate, db: DbSession, scope: WorkspaceDep
+    investigation_id: uuid.UUID,
+    payload: RunCreate,
+    db: DbSession,
+    scope: WorkspaceDep,
+    background: BackgroundTasks,
 ) -> RunRead:
     scope.require("owner", "editor")
-    return research.create_run(db, scope.id, investigation_id, payload)
+    return research.create_run(db, scope.id, investigation_id, payload, background=background)
 
 
 @router.get("/research/runs/{run_id}", response_model=RunRead)
@@ -278,11 +282,15 @@ def disposition(
 
 @router.post("/land/{land_id}/overview", response_model=OverviewRead)
 def overview(
-    land_id: uuid.UUID, payload: OverviewRequest, db: DbSession, scope: WorkspaceDep
+    land_id: uuid.UUID,
+    payload: OverviewRequest,
+    db: DbSession,
+    scope: WorkspaceDep,
+    background: BackgroundTasks,
 ) -> OverviewRead:
     scope.require("owner", "editor")
     investigation, run = research.ensure_overview(
-        db, scope.id, land_id, scope.principal.id, payload.boundary_revision
+        db, scope.id, land_id, scope.principal.id, payload.boundary_revision, background=background
     )
     return OverviewRead(investigation=investigation, run=run)
 
