@@ -1461,7 +1461,9 @@ export class SiteManager {
       this.endRule(active, "compare");
       void this.rules().then((m) => {
         active.stopCompare?.();
-        active.stopCompare = m.startCompare(this.scene, active, RULE_KIT);
+        active.stopCompare = m.startCompare(this.scene, active, RULE_KIT, () => {
+          void this.setCompareDates(null);
+        });
       });
     }
     this.events.emit("compare-dates", { siteId: active.site.id, dates: active.compare });

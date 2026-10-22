@@ -12,6 +12,16 @@ import { invertAffine, type Mat4 } from "./splatFrames";
 
 export const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
+/**
+ * The gaussians of a tileset's root tile, as its tileset.json says (`root.extras.gaussians`), or
+ * undefined: what its streamer keeps whatever its budget (scanView/ruleDates.ts `allotments`).
+ */
+export function rootGaussians(tileset: Cesium3DTileset): number | undefined {
+  const count = (tileset.root as { extras?: { gaussians?: unknown } } | undefined)?.extras
+    ?.gaussians;
+  return typeof count === "number" && Number.isFinite(count) ? count : undefined;
+}
+
 export function urlOf(tileset: Cesium3DTileset): string | undefined {
   return (tileset as unknown as { resource?: { url?: string } }).resource?.url;
 }

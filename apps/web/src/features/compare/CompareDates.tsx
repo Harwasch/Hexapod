@@ -20,6 +20,7 @@ import {
 import { recordAction } from "@/state/history";
 import { useSplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
+import { compareRoomKey, useSplatRoom } from "@/state/splatRoom";
 import { useViewRule } from "@/state/viewRule";
 
 /**
@@ -47,6 +48,7 @@ export function CompareDates({ siteId }: { siteId: string }) {
   const pair = useSites((s) => (s.compareDates?.siteId === siteId ? s.compareDates : null));
   const renderer = useSplatRenderer();
   const rule = useViewRule((s) => s.active?.siteId === siteId);
+  const room = useSplatRoom((s) => s.compare);
   const [choice, setChoice] = useState<Partial<Dates>>({});
   const leftId = useFieldId("compare-date-left");
   const rightId = useFieldId("compare-date-right");
@@ -60,6 +62,12 @@ export function CompareDates({ siteId }: { siteId: string }) {
   const left = pair?.left ?? offered(choice.left) ?? before.epoch.id;
   const right = pair?.right ?? offered(choice.right) ?? latest.epoch.id;
   const needsRenderer = representation === "gaussian-splat" && !compareDrawable(renderer);
+  // Refused by PlayCanvas for want of room: this pair's root tiles alone pass the device's
+  // budget (state/splatRoom.ts). Held off, saying so, until another pair or renderer.
+  const noRoom =
+    !pair && renderer === "playcanvas" && room?.key === compareRoomKey(siteId, left, right)
+      ? room
+      : null;
   const ask = (dates: Dates | null) => void scene?.sites.setCompareDates(dates);
   const choose = (side: keyof Dates, epochId: string) => {
     const next = { left, right, [side]: epochId };
@@ -95,7 +103,7 @@ export function CompareDates({ siteId }: { siteId: string }) {
         </span>
         <GlassSwitch
           checked={pair !== null}
-          disabled={needsRenderer || left === right}
+          disabled={needsRenderer || left === right || noRoom !== null}
           onCheckedChange={(on) => {
             const dates = { left, right };
             const [after, before] = on ? [dates, null] : [null, dates];
@@ -138,6 +146,12 @@ export function CompareDates({ siteId }: { siteId: string }) {
       ) : (
         <p className="glass-subtle" style={{ fontSize: "var(--text-xs)", margin: 0 }}>
           Each side draws one date, both with the site&apos;s one placement.
+        </p>
+      )}
+      {noRoom && (
+        <p className="views__notice" role="note" data-testid="compare-dates-room">
+          Not enough room to draw {noRoom.dates} dates on this device: their coarsest tiles alone
+          pass its splat budget
         </p>
       )}
       {rule && !pair && (

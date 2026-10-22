@@ -15,6 +15,7 @@ import {
   type ScanCompareView,
 } from "@/cesium/scanView/scanCompare";
 import { lentRuleKit } from "@/cesium/scanView/scanRule";
+import { useSplatRoom } from "@/state/splatRoom";
 
 import { A1, A2, E1, E2 } from "./epochFixtures";
 
@@ -36,7 +37,7 @@ function compared() {
     compare: { left: E1.id, right: E2.id },
     representation: "gaussian-splat",
     epochs: [E1, E2],
-    site: { assets: [A1, A2] },
+    site: { id: "site-epochs", assets: [A1, A2] },
     handles: new Map([
       [A1.id, { tileset: march }],
       [A2.id, { tileset: june }],
@@ -69,6 +70,27 @@ describe("two dates compared, as PlayCanvas is handed them", () => {
     });
     expect(view?.split).toBe(0.4);
     expect(Matrix4.equals(view?.toWorld(), ROOT)).toBe(true);
+    stop();
+  });
+
+  it("hands over both roots, and ends the comparison, saying why, when the renderer has no room", () => {
+    const { scene, entry, march, june, seen, stop } = compared();
+    (march.root.extras as Record<string, unknown>).gaussians = 300_000;
+    (june.root.extras as Record<string, unknown>).gaussians = 200_000;
+    let ended = 0;
+    startCompare(scene, entry, RULE_KIT, () => {
+      ended += 1;
+    });
+    const view = seen.at(-1);
+    expect(view?.scanRoot).toBe(200_000);
+    expect(view?.left.rootGaussians).toBe(300_000);
+    view?.refuse?.(2);
+    expect(ended).toBe(1);
+    expect(useSplatRoom.getState().compare).toEqual({
+      key: `site-epochs|${E1.id}|${E2.id}`,
+      dates: 2,
+    });
+    useSplatRoom.setState({ compare: null });
     stop();
   });
 

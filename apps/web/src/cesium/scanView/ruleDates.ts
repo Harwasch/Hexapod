@@ -142,7 +142,40 @@ export type RuleDatesPlan = Pick<
    * evenly (playcanvasBackend.ts `COMPARE_SHARES`).
    */
   shares?: { readonly scan: number; readonly dates: readonly number[] };
+  /**
+   * The gaussians of the root tile of the scan the renderer draws, which its host keeps
+   * whatever its share (`allotments`); 0 when not known.
+   */
+  scanRoot?: number;
 };
+
+/** A holder of a share of the budget: the gaussians of its root, and its share. */
+export interface Holder {
+  root: number;
+  share: number;
+}
+
+/**
+ * Each holder's budget out of `budget`: its root first -- a streamer keeps its root tile
+ * whatever its budget (view/stream.ts `chooseCut`), so a plain split of the budget by share
+ * overshoots it by every root past its holder's share (a 400k budget split 200k + 200k between
+ * two 300k roots drew 600k) -- then its share of what the roots leave. The scan's root is held
+ * whatever its share (its host keeps it); a date with no share holds nothing, its root neither.
+ * A budget below the roots leaves each holder its root alone: whether the roots fit at all is
+ * decided before a date is added (scanRule.ts `roomForRoots`, against the device's budget).
+ */
+export function allotments(
+  budget: number,
+  scan: Holder,
+  dates: readonly Holder[],
+): { scan: number; dates: number[] } {
+  const roots = dates.reduce((sum, d) => sum + (d.share > 0 ? d.root : 0), scan.root);
+  const spare = Math.max(0, budget - roots);
+  return {
+    scan: scan.root + scan.share * spare,
+    dates: dates.map((d) => (d.share > 0 ? d.root + d.share * spare : 0)),
+  };
+}
 
 /** Cells sampled at most for the shares, the plane thinned evenly past it. */
 export const SHARE_SAMPLES = 16_384;
@@ -200,6 +233,10 @@ export class RuleDates<M> {
   /** The scan's share of the budget, and each date's by key. */
   #scanShare = 1;
   readonly #shares = new Map<string, number>();
+  /** What the host streams the scan within, as a share of the budget (`scanShare`). */
+  #scanFactor = 1;
+  /** Each date's budget by key, root first (`allotments`). */
+  readonly #allots = new Map<string, number>();
   #arrived = true;
   #lastPlan = Number.NEGATIVE_INFINITY;
   #lastEye: number[] | null = null;
@@ -238,7 +275,7 @@ export class RuleDates<M> {
 
   /** The share of the budget the scan the renderer draws takes now (1 without other dates). */
   scanShare(): number {
-    return this.#dates.length === 0 ? 1 : this.#scanShare;
+    return this.#dates.length === 0 ? 1 : this.#scanFactor;
   }
 
   /**
@@ -273,14 +310,27 @@ export class RuleDates<M> {
     this.#lastDirection = [...pose.direction];
     const view = poseView(pose);
     this.#reshare((sphere) => view.visible(sphere));
+    // Every root first, then the shares of what is left: within the budget, roots and all.
+    const allotted = allotments(
+      budget,
+      { root: this.#plan?.scanRoot ?? 0, share: this.#scanShare },
+      this.#dates.map((d) => ({ root: this.#rootOf(d), share: this.#shares.get(d.key) ?? 0 })),
+    );
+    const factor = allotted.scan / budget;
+    if (factor !== this.#scanFactor) {
+      this.#scanFactor = factor;
+      // The host reads it as the scan's share (`scanShare`): a frame applies it.
+      this.options.changed();
+    }
+    this.#dates.forEach((d, k) => this.#allots.set(d.key, allotted.dates[k] ?? 0));
     for (const date of this.#dates) {
-      const share = this.#shares.get(date.key) ?? 0;
-      if (share <= 0) {
+      const allot = this.#allots.get(date.key) ?? 0;
+      if (allot <= 0) {
         this.#idle(date);
         continue;
       }
       if (!date.streamer && date.json !== undefined) this.#stream(date);
-      date.streamer?.setBudget(share * budget, share * budget * DATE_CACHE_FACTOR);
+      date.streamer?.setBudget(allot, allot * DATE_CACHE_FACTOR);
       date.streamer?.update(this.kit.layerView(view, date.date.placement));
       date.layers.update(view);
     }
@@ -317,11 +367,17 @@ export class RuleDates<M> {
       plan.shares ?? viewShares({ ...plan, dates: this.#dates.map((d) => d.date) }, visible);
     if (!found) return;
     this.#dates.forEach((d, k) => this.#shares.set(d.key, found.dates[k] ?? 0));
-    if (found.scan !== this.#scanShare) {
-      this.#scanShare = found.scan;
-      // The host reads the scan's share as its streamer's (`scanShare`): a frame applies it.
-      this.options.changed();
-    }
+    this.#scanShare = found.scan;
+    // Before any budget is known, the scan's share stands for what it streams within.
+    if (this.#lastEye === null) this.#scanFactor = found.scan;
+  }
+
+  /** A date's root tile's gaussians: as the rule names it, else as its tileset.json says. */
+  #rootOf(drawn: DrawnDate<M>): number {
+    const named = drawn.date.rootGaussians;
+    if (named !== undefined) return named;
+    const root = drawn.json === undefined ? 0 : this.kit.parseTileset(drawn.json).root.gaussians;
+    return Number.isFinite(root) ? root : 0;
   }
 
   #start(key: string, date: RuleDate): DrawnDate<M> {
@@ -335,7 +391,7 @@ export class RuleDates<M> {
         arrived: () => this.#arrive(),
         changed: () => options.changed(),
         // A layer travels with its date: a share of the date's share.
-        budget: () => options.budget() * (this.#shares.get(key) ?? 0) * kit.layerBudgetShare,
+        budget: () => (this.#allots.get(key) ?? 0) * kit.layerBudgetShare,
         ...(options.fetchJson ? { fetchJson: options.fetchJson } : {}),
       }),
       objects: new kit.ScanObjects<M>(
@@ -380,7 +436,7 @@ export class RuleDates<M> {
   #stream(drawn: DrawnDate<M>): void {
     const { backend, options, kit } = this;
     const { date } = drawn;
-    const budget = Math.max(1, options.budget() * (this.#shares.get(drawn.key) ?? 0));
+    const budget = Math.max(1, this.#allots.get(drawn.key) ?? 0);
     const streamer = new kit.TileStreamer<M>(
       kit.parseTileset(drawn.json),
       {

@@ -21,6 +21,7 @@ import { useLiving } from "@/state/living";
 import { useSettings, type SplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
 import { useViewMode } from "@/state/viewMode";
+import { ruleRoomKey, useSplatRoom } from "@/state/splatRoom";
 import { useViewRule } from "@/state/viewRule";
 
 import { A1, datedSite, E1, E2, SITE_ID, twoEpochSite } from "./epochFixtures";
@@ -271,6 +272,22 @@ describe("Per cell", () => {
     act(() => useSites.setState({ epoch: { [SITE_ID]: "e4" } }));
     expect(select).toBeEnabled();
     expect(screen.queryByTestId("views-rule-dates")).toBeNull();
+  });
+
+  it("under PlayCanvas, is held off, saying why, for an As of whose roots had no room", async () => {
+    // PlayCanvas refused the rule as of the latest: its dates' root tiles alone pass the budget.
+    useSplatRoom.setState({ rule: { key: ruleRoomKey(SITE_ID, null), dates: 2 } });
+    show("playcanvas");
+    const select = await screen.findByLabelText(VIEW_RULE_TEXT.label);
+    expect(select).toBeDisabled();
+    expect(screen.getByTestId("views-rule-room")).toHaveTextContent(
+      "Not enough room to draw 2 dates on this device",
+    );
+    // As of another date: other dates, so offered again.
+    act(() => useSites.setState({ epoch: { [SITE_ID]: E1.id } }));
+    expect(select).toBeEnabled();
+    expect(screen.queryByTestId("views-rule-room")).toBeNull();
+    useSplatRoom.setState({ rule: null });
   });
 
   it("is offered under PlayCanvas, which draws it, with no notice", async () => {

@@ -23,7 +23,9 @@ import type { Cesium3DTileset, Matrix4, Scene } from "cesium";
 
 import { epochOptions } from "@/lib/epochs";
 
-import { absoluteUrl, placedIn } from "./datePlacement";
+import { compareRoomKey, useSplatRoom } from "@/state/splatRoom";
+
+import { absoluteUrl, placedIn, rootGaussians } from "./datePlacement";
 import type { RuleKit } from "./scanView/ruleKit";
 import { publishScanCompare, scanCompareOf, type ScanCompareView } from "./scanView/scanCompare";
 import { lendRuleKit } from "./scanView/scanRule";
@@ -33,7 +35,7 @@ export interface CompareSite {
   compare: CompareDates | null;
   representation: Representation;
   epochs: readonly Epoch[];
-  site: { assets: readonly SiteAsset[] };
+  site: { id?: string; assets: readonly SiteAsset[] };
   handles: ReadonlyMap<string, { tileset: Cesium3DTileset | null }>;
 }
 
@@ -49,6 +51,7 @@ export function startCompare(
   scene: Pick<Scene, "preUpdate" | "splitPosition">,
   entry: CompareSite,
   kit: RuleKit,
+  end: () => void = () => undefined,
 ): () => void {
   const pair = entry.compare;
   if (!pair || running.has(pair)) return () => undefined;
@@ -99,7 +102,24 @@ export function startCompare(
     if (published && published.assetId !== right.id) unpublish();
     const view: ScanCompareView = {
       // It owns no cell of a plane: the comparison splits the budget evenly (no plane).
-      left: { url, assetId: left.id, extras, placement, root, owns: [] },
+      left: {
+        url,
+        assetId: left.id,
+        extras,
+        placement,
+        root,
+        owns: [],
+        ...(rootGaussians(leftSet) === undefined ? {} : { rootGaussians: rootGaussians(leftSet) }),
+      },
+      ...(rootGaussians(rightSet) === undefined ? {} : { scanRoot: rootGaussians(rightSet) }),
+      // The two roots do not fit the device's budget (the renderer's own check): the comparison
+      // ends, and the control holds this pair off, saying so.
+      refuse: (dates) => {
+        useSplatRoom.setState({
+          compare: { key: compareRoomKey(entry.site.id ?? "", pair.left, pair.right), dates },
+        });
+        end();
+      },
       split,
       toWorld: () =>
         rightSet.isDestroyed()

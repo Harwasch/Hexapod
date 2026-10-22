@@ -7,9 +7,9 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { poseView, RuleDates, type DatesBackend } from "@/cesium/scanView/ruleDates";
+import { allotments, poseView, RuleDates, type DatesBackend } from "@/cesium/scanView/ruleDates";
 import { RULE_KIT } from "@/cesium/scanView/ruleKit";
-import { namedKit, type RuleDate } from "@/cesium/scanView/scanRule";
+import { namedKit, roomForRoots, type RuleDate } from "@/cesium/scanView/scanRule";
 import type { LayerLook } from "@/cesium/scanView/layerLook";
 import type { ScanPose } from "@/cesium/scanView/types";
 import { useSettings } from "@/state/settings";
@@ -266,6 +266,42 @@ describe("one budget for every date a rule draws", () => {
     dates.stop();
   });
 
+  it("reserves each date's root first, the camera still as the budget drops below them", async () => {
+    // A streamer keeps its root whatever its budget: each date is handed its root, then its
+    // share of what is left. The scan's root (100k) and June's (100k) fit a 1M budget.
+    const { kit, budgets } = spyKit();
+    const { backend } = fakeBackend();
+    let budget = 1e6;
+    const dates = new RuleDates(
+      backend,
+      {
+        arrived: () => undefined,
+        changed: () => undefined,
+        budget: () => budget,
+        fetchJson: () => Promise.resolve(leaf("june.glb")),
+      },
+      kit,
+    );
+    dates.setRule({ ...owners(32, [{ ...JUNE, extras: {}, rootGaussians: 1e5 }]), scanRoot: 1e5 });
+    await flush();
+    dates.plan(WHOLE, 1_000);
+    // Half each of the 800k left: June 100k + 400k; the scan the same, through the host.
+    expect(budgets.at(-1)).toBeCloseTo(5e5, -4);
+    expect(dates.scanShare()).toBeCloseTo(0.5, 2);
+    // The frames slowed, the camera still: 300k leaves 100k to share.
+    budget = 3e5;
+    dates.plan(WHOLE, 2_000);
+    expect(budgets.at(-1)).toBeCloseTo(1.5e5, -4);
+    expect(dates.scanShare() * budget).toBeCloseTo(1.5e5, -4);
+    // Below the roots (they fit the device's budget, or the rule would have been refused):
+    // each holds its root and nothing more.
+    budget = 1.5e5;
+    dates.plan(WHOLE, 3_000);
+    expect(budgets.at(-1)).toBe(1e5);
+    expect(dates.scanShare() * budget).toBeCloseTo(1e5, 0);
+    dates.stop();
+  });
+
   it("reaches every date when the budget drops with the camera still", async () => {
     const { kit, budgets } = spyKit();
     const { backend } = fakeBackend();
@@ -290,6 +326,32 @@ describe("one budget for every date a rule draws", () => {
     dates.plan(WHOLE, 3_000);
     expect(budgets.at(-1)).toBeCloseTo(1e5, -4);
     dates.stop();
+  });
+});
+
+describe("each date's budget, its root first", () => {
+  it("reserves every root and splits what is left by share, within the budget", () => {
+    // 400k: the scan's root 300k, June's 50k, half each of the 50k left -- 400k in all, where a
+    // plain split (200k each) would have drawn the scan's 300k root and June's 200k: 500k.
+    const both = allotments(400_000, { root: 300_000, share: 0.5 }, [{ root: 50_000, share: 0.5 }]);
+    expect(both).toEqual({ scan: 325_000, dates: [75_000] });
+    expect(both.scan + (both.dates[0] ?? 0)).toBe(400_000);
+    // A date with no share holds nothing, its root neither; the scan's root is always held
+    // (the host keeps it, its share or none).
+    expect(allotments(400_000, { root: 300_000, share: 0 }, [{ root: 50_000, share: 1 }])).toEqual({
+      scan: 300_000,
+      dates: [100_000],
+    });
+  });
+
+  it("says when the roots alone do not fit a device's budget, and holds the roots past it", () => {
+    // Two 300k roots in 400k: no split can draw both within it.
+    expect(roomForRoots(400_000, [300_000, 300_000])).toBe(false);
+    expect(roomForRoots(400_000, [200_000, 200_000])).toBe(true);
+    // A budget that drops below roots that fit the device's: each its root, no more.
+    expect(
+      allotments(400_000, { root: 300_000, share: 0.5 }, [{ root: 300_000, share: 0.5 }]),
+    ).toEqual({ scan: 300_000, dates: [300_000] });
   });
 });
 

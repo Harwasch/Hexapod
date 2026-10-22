@@ -261,7 +261,16 @@ modifier) already draws Confidence, Data age and the objects' rules per tile.
    whenever any input of it moves, checked each frame), or for a natively streamed scan through
    PlayCanvas's own budget. A budget or share that moves with the camera still is planned for at
    once. (Each date first took the whole budget: N dates held N + 1 budgets, up to about 18M
-   splats against the 16.8M one texture holds.) **Four dates at most**: a rule names the dates up
+   splats against the 16.8M one texture holds.) **Roots first.** A streamer keeps its root tile whatever its
+   budget (`view/stream.ts` `chooseCut`), so a plain split overshot by every root past its
+   holder's share (a 400k budget split 200k + 200k between two 300k roots drew 600k). Each
+   holder is handed its root first and its share of what the roots leave (`ruleDates.ts`
+   `allotments`): the scan's root always, a date's while it has a share; a budget below the
+   roots leaves each its root alone. A rule or comparison whose roots alone do not fit the
+   device's budget (the one PlayCanvas was started with; `scanRule.ts` `roomForRoots`) is
+   refused: PlayCanvas streams none of its other dates, the session ends it, saying "not enough
+   room", and the control holds that As of or pair off under PlayCanvas, saying "Not enough room
+   to draw N dates on this device". One scan alone keeps its root as before. **Four dates at most**: a rule names the dates up
    to As of, four at most (`lib/viewModes.ts` `MAX_RULE_DATES`), under either renderer; past
    four a date's share is too thin to draw it well. The control is offered disabled with the
    reason and the way out (an earlier As of), the scene refuses such a rule, and a running rule

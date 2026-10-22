@@ -23,10 +23,19 @@ export const VIEW_RULE_ENDED: Record<ViewRuleEnd, string> = {
   living:
     "Per-cell dates ended: a Living Survey rig moves this scan, and its motion needs the scan drawn on its own",
   "one-model": "Per-cell dates ended: one model was asked for by itself (a version, or Retry)",
+  room: "Per-cell dates ended: not enough room to draw them all on this device",
   dates:
     "Per-cell dates ended: As of now has more than 4 dates up to it, and a rule draws 4 at most",
   unsupported: "Per-cell dates ended: this CesiumJS build cannot draw them",
 };
+
+/**
+ * The control's notice when PlayCanvas refused the rule for want of room (state/splatRoom.ts):
+ * the dates' root tiles alone pass the device's budget.
+ */
+export function roomText(dates: number): string {
+  return `Not enough room to draw ${String(dates)} dates on this device: choose an earlier As of`;
+}
 
 /** The control's other words, here so the tests say the same. */
 export const VIEW_RULE_TEXT = {

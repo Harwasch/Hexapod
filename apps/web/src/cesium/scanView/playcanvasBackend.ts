@@ -132,7 +132,9 @@ import {
   reportScanRule,
   RULE_OWNER_WIDTH,
   RULE_WEIGHT_GLSL,
+  roomForRoots,
   watchScanRule,
+  type RuleDate,
   type ScanRuleView,
 } from "./scanRule";
 import {
@@ -773,7 +775,33 @@ function assemble(
    * the one budget split evenly (`COMPARE_SHARES`), or none.
    */
   const datesPlan = (): RuleDatesPlan =>
-    rule ?? (compare ? { ...NO_DATES, dates: [compare.left], shares: COMPARE_SHARES } : NO_DATES);
+    rule
+      ? roomy(rule, rule.dates)
+        ? rule
+        : NO_DATES
+      : compare && roomy(compare, [compare.left])
+        ? { ...NO_DATES, dates: [compare.left], shares: COMPARE_SHARES, scanRoot: compare.scanRoot }
+        : NO_DATES;
+  /** The rules and comparisons refused for want of room, told once each. */
+  const refused = new WeakSet<object>();
+  /**
+   * Whether `dates`, their roots with the scan's, fit the device's budget (`budget`, what this
+   * renderer was started with): a streamer keeps its root whatever its share, so if they do not,
+   * no split draws them all within it. None is streamed then, and the view is refused once (its
+   * session ends the rule or comparison, saying why).
+   */
+  const roomy = (
+    view: { scanRoot?: number; refuse?: (dates: number) => void },
+    dates: readonly RuleDate[],
+  ): boolean => {
+    const roots = [view.scanRoot ?? 0, ...dates.map((d) => d.rootGaussians ?? 0)];
+    if (roomForRoots(budget, roots)) return true;
+    if (!refused.has(view)) {
+      refused.add(view);
+      view.refuse?.(roots.length);
+    }
+    return false;
+  };
   /**
    * What PlayCanvas's own level of detail may draw: the budget, or for a natively streamed scan
    * under a rule its share of it, as the host streams a tiled scan's share.
@@ -1499,8 +1527,9 @@ function assemble(
    * or the comparison.
    */
   const syncRuleDates = (): void => {
-    // A rule's dates, or the left-hand date of two compared: never both (they end each other).
-    const wanted = rule?.dates ?? (compare ? [compare.left] : []);
+    // A rule's dates, or the left-hand date of two compared: never both (they end each other),
+    // and none whose roots do not fit the device (`roomy`).
+    const wanted = datesPlan().dates;
     if (ruleDates || wanted.length === 0) {
       ruleDates?.setRule(datesPlan());
       return;
