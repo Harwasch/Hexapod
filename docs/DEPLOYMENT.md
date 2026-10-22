@@ -7,10 +7,11 @@ operator's report; nothing in this repository has observed it, and this document
 first written before any of it existed. What it describes is what the repository
 _codifies_ — every row of the table below has a file behind it — plus, at the end, a
 [handover](#handover): create accounts, mint tokens, paste secrets, dispatch. Everything
-after a token exists is `.github/workflows/provision.yml`. **The GPU half of Lane 2 has
-never run anywhere**; [GPU training — Modal](#gpu-training--modal) says what proves it and
-what that costs. Read [what is unverified](#what-is-unverified) before trusting any
-provider-specific claim in here.
+after a token exists is `.github/workflows/provision.yml`. **The GPU half of Lane 2 first
+ran on 2026-10-22**: a Modal smoke, then two real iPhone captures in production;
+[GPU training — Modal](#gpu-training--modal) has what each one measured and cost. Read
+[what is unverified](#what-is-unverified) before trusting any provider-specific claim in
+here.
 
 | Layer                           | Where                        | Codified in                                            |
 | ------------------------------- | ---------------------------- | ------------------------------------------------------ |
@@ -18,7 +19,7 @@ provider-specific claim in here.
 | API (`app` process)             | Fly.io                       | `fly.toml`                                             |
 | Worker (`worker` process)       | Fly.io, same image           | `fly.toml` (`[processes]`, `[[mounts]]`)               |
 | Captures, tiles, `catalog.json` | Cloudflare R2                | `infra/cors/production.json`, `infra/cors/apply-r2.sh` |
-| Lane 2 training (`train`)       | Modal, one GPU per stage     | `infra/modal/app.py`, `.github/workflows/modal.yml`    |
+| Lane 2 remote stages            | Modal: `cpu4`, and one L4    | `infra/modal/app.py`, `.github/workflows/modal.yml`    |
 | Database                        | Neon (Postgres 16 + PostGIS) | `.github/workflows/provision.yml`                      |
 | Provisioning                    | GitHub Actions, on demand    | `.github/workflows/provision.yml`                      |
 | Deploys                         | GitHub Actions, on demand    | `.github/workflows/deploy.yml`                         |
@@ -493,20 +494,24 @@ starts it before it checks the ledger volume over `fly ssh console`.
 
 Lane 2 (`photo-reconstruct`: a phone or desktop video in, a placed splat out) splits
 across two machines, and the split is one fact: **only a stage that declares `gpu:` leaves
-the worker.** That is `train`. Frames, poses, georeference, placement and packaging all run
-on the Fly worker, exactly as Lane 1 does.
+the worker.** In `tools/pipeline/recipes/photo-reconstruct.yaml` that is four stages:
+`pose`, `align` and `quality` on tier `cpu4` (Modal's CPU box: 4 cores, 8 GB, no GPU), and
+`train` on tier `l4`. Everything else runs on the Fly worker, exactly as Lane 1 does.
+Production confirmed the split on 2026-10-22: those four ran on Modal, the rest on the
+worker.
 
-| Where          | What runs                                                                        | Why there                                                                                    |
-| -------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Fly `worker`   | `normalize` (ffmpeg), `pose` (COLMAP 3.9.1, CPU), `georeference`, `place`, tiles | CPU work; the worker already holds the upload, and COLMAP's CPU path is what was measured    |
-| Modal, one GPU | `train` (gsplat 1.5.3 `simple_trainer.py`)                                       | needs CUDA; billed per second only while it runs, so an idle deployment costs nothing for it |
+| Where        | What runs                                                                           | Why there                                                                                                             |
+| ------------ | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Fly `worker` | `normalize` (ffmpeg), `georeference`, `place`, `confidence`, `package` and the rest | light CPU work; the worker already holds the upload                                                                   |
+| Modal `cpu4` | `pose` (COLMAP 3.9.1), `align`, `quality`                                           | more memory and sustained CPU than the 2 GB worker has ([below](#the-worker-image-carries-colmap)); billed per second |
+| Modal L4     | `train` (gsplat 1.5.3 `simple_trainer.py`)                                          | needs CUDA; billed per second only while it runs, so an idle deployment costs nothing for it                          |
 
 `fly.toml` sets `WORKER_RUNNER=cloud` and `WORKER_CLOUD_PROVIDERS=modal`. The worker then
 calls `run_stage_<tier>` in the Modal app `twin-pipeline` (`WORKER_MODAL_APP`'s default),
 with `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` from its Fly secrets. The GPU container moves
 bytes through the **private** bucket under `runs/<run id>/`, using the Modal secret
-`twin-object-storage`. Until the app is deployed, a Lane 2 run should fail at `train` on
-the function lookup (not observed). Lane 1 is unaffected either way.
+`twin-object-storage`. Until the app is deployed, a Lane 2 run should fail at `pose`, its
+first remote stage, on the function lookup (not observed). Lane 1 is unaffected either way.
 
 ### Deploying it, and proving it
 
@@ -521,7 +526,7 @@ the function lookup (not observed). Lane 1 is unaffected either way.
    `infra/modal/check_trainer.py`, so an image whose trainer refuses the pipeline's argv
    fails the deploy instead of the first real capture.
 4. It runs a smoke (`infra/modal/smoke.py`). Forty 640×480 renders of the committed
-   synthetic tree go through COLMAP on the runner, then 500 gsplat steps on a Modal L4
+   synthetic tree go through COLMAP on Modal's `cpu4`, then 500 gsplat steps on a Modal L4
    through `CloudRunner` → `ModalAdapter` → R2, then georeference, placement and
    packaging. It asserts that gaussians came back, that PSNR was read from gsplat's own
    stats file, that every step ran, and that a tileset was written. It deletes its
@@ -535,18 +540,47 @@ those changes is a change to what the GPU box runs. Each such push costs a smoke
 
 **Cost.**
 
-- **Each smoke: about $0.07–0.20.** An L4 is $0.000222/s (Modal's list price, read
-  2026-09-22). Budget 5–15 minutes of GPU per smoke. That is an estimate: the cold start
-  pulls an image estimated at roughly 10 GB, and it should dominate the time, not the
-  training.
-- **The first deploy** also builds the image on Modal's builders: 15–30 minutes, once.
-  That covers torch, the gsplat wheel, and fused-ssim compiled with nvcc. Later deploys
-  reuse every unchanged layer.
-- **A real capture** at the recipe's 30 000 steps: unmeasured, because no real capture
-  has been trained anywhere yet. The smoke's attempt ledger (billed seconds for 500
-  steps, in its job summary) is the first number to scale from; every hour of L4 is
-  $0.80.
+List prices: an L4 is $0.000222/s, $0.80 an hour (read 2026-09-22); `cpu4` is $0.2526 an
+hour. Everything below was **measured** on 2026-10-22 from the jobs API's per-stage
+metrics (billed seconds and dollars per remote call), recipe `photo-reconstruct` v15.
+
+- **A smoke: $0.014.** `modal.yml` run 39854929950, 500 steps on the synthetic tree's 40
+  frames at 640×480. `train` on the L4: 40.9 s billed, $0.0109, 4.5 s in the queue.
+  `pose` on `cpu4`: 40.9 s, $0.0029. Held-out PSNR 21.9, SSIM 0.72, LPIPS 0.44; 5,966
+  gaussians.
+- **The first deploy** also builds the image on Modal's builders, once: here, the deploy
+  in the same run as that smoke. It covers torch, the gsplat wheel, and fused-ssim
+  compiled with nvcc. Later deploys reuse every unchanged layer.
+- **Two real iPhone captures**, in production:
+
+  |                              | Pumpkin (`IMG_3081.mov`)                                  | Spool                                         |
+  | ---------------------------- | --------------------------------------------------------- | --------------------------------------------- |
+  | Job                          | `71556411-f25a-481e-8508-e0265c7adfb0`                    | `ec644db5-ceaf-4c01-bf89-b261623327c2`        |
+  | Wall time; total cost        | 23.4 min, **$0.3098**                                     | 45.1 min, **$0.6035**                         |
+  | `normalize`                  | 56 frames, 900×1600                                       | 179 frames                                    |
+  | `pose` (`cpu4`)              | 104.3 s, $0.0073; 56 of 56 registered                     | 225.3 s, $0.0158; 179 of 179 registered       |
+  | `align` (`cpu4`)             | 21.3 s, $0.0015; unaligned                                | 18.2 s, $0.0013; unaligned                    |
+  | `train` (L4)                 | 1,126.6 s, $0.2996; 4.1 s queue                           | 2,197.2 s, $0.5844; 83.3 s queue              |
+  | Steps                        | 26,971 of 27,900 (stopped early)                          | 31,861 of 35,400 (stopped early)              |
+  | Gaussians trained            | 711,907                                                   | 1,388,939                                     |
+  | Held-out PSNR / SSIM / LPIPS | 24.0 / 0.78 / 0.14 (49 train, 7 val frames)               | 26.4 / 0.87 / 0.11 (156 train, 23 val)        |
+  | `quality` (`cpu4`)           | 18.9 s, $0.0013; 69.1% kept: 539,215 packaged in 14 tiles | 28.6 s, $0.0020; 69.2% kept: 978,455 packaged |
+  | `confidence`                 | 91% of scored cells weak                                  | 98% of scored cells weak                      |
+
+  "Unaligned" is expected: a phone video has no reference, so it is placed by its GPS,
+  ±10 m.
+
+- **Rule of thumb, from those two:** the L4 training is about 97% of a capture's cost, at
+  about 20 s of L4 per input frame (1,127 s for 56 frames, 2,197 s for 179). A phone
+  capture of 1–3 minutes costs about $0.3–0.6.
+- **Neon:** not measured separately. A job writes a few rows.
 - **Idle costs nothing.** No container stays warm.
+
+**For whoever films the next capture.** Both captures are mostly "weak" in the confidence
+map because they were filmed from above only, with gaps around the subject. The pipeline's
+capture tips said so: about 75° (Pumpkin) and 165° (Spool) of the circle around the
+subject had no frames, and Pumpkin also had no low loop at subject height. Walk all the way
+around, then do a second, lower loop; that is what raises confidence.
 
 `rehearse` it locally first if you have changed it. That runs the same flow with a
 subprocess in place of Modal, a directory in place of R2, and the test suite's stand-in
