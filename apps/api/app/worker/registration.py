@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -856,7 +857,14 @@ def _check_frame(site: Site, registration: Registration, echo: FrameEcho | None)
 
 
 def _observed_at(capture: Capture, registration: Registration) -> tuple[datetime, ObservedAtSource]:
-    """When the epoch was captured, and on whose say-so.
+    """When the epoch was captured, and on whose say-so (`observed_at_of`)."""
+    return observed_at_of(capture, registration.document)
+
+
+def observed_at_of(
+    capture: Capture, document: Mapping[str, Any]
+) -> tuple[datetime, ObservedAtSource]:
+    """When a capture was made, and on whose say-so, from a run's registration document.
 
     The rule, stated once (ADR 0013, DATA_MODEL `epochs.observed_at_source`):
 
@@ -870,7 +878,7 @@ def _observed_at(capture: Capture, registration: Registration) -> tuple[datetime
        taken as UTC;
     4. the upload's `created_at`, `created`.
     """
-    manifest = registration.document.get("manifest")
+    manifest = document.get("manifest")
     facts = manifest.get("capture") if isinstance(manifest, dict) else None
     facts = facts if isinstance(facts, dict) else {}
     utc = _parsed_time(facts.get("capturedAtUtc"), aware_only=True)
@@ -1412,6 +1420,9 @@ def register(
         promoted = epoch.status == EpochStatus.REJECTED.value
         if promoted:
             epoch.status = EpochStatus.PUBLISHED.value
+        # An epoch dated by its upload (`created`) has no evidence of when it was taken: a
+        # run that reads the files' clock dates it. Any other date stays where it is.
+        if promoted or epoch.observed_at_source == ObservedAtSource.CREATED.value:
             observed_at, observed_source = _observed_at(capture, registration)
             epoch.observed_at = observed_at
             epoch.observed_at_source = observed_source.value
