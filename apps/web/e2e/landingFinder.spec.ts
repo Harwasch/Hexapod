@@ -128,8 +128,14 @@ async function stub(page: Page, answer: "parcels" | "uncovered"): Promise<Stubs>
 async function openFinder(page: Page): Promise<Frame> {
   await page.goto("/landing.html#start");
   await page.getByRole("button", { name: "Find my land" }).click();
-  const dialog = page.getByRole("dialog", { name: "Find your land" });
-  await expect(dialog).toBeVisible();
+  // In the page, inside the request form: not a pop-up over it.
+  const region = page.locator("form#f").getByRole("region", { name: "Find your land" });
+  await expect(region).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Hide the map" })).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
   await expect
     .poll(() => page.frames().some((frame) => frame.url().includes("/finder.html")))
     .toBe(true);
@@ -171,7 +177,7 @@ async function goTo(frame: Frame, lat: number, lon: number) {
 
 /** Clicks the finder's map at a fraction of the frame, clear of the cards on the left. */
 async function clickMap(page: Page, fx: number, fy: number) {
-  const box = await page.locator("#pk-dialog iframe").boundingBox();
+  const box = await page.locator("#pk-finder iframe").boundingBox();
   if (!box) throw new Error("the finder frame has no box");
   await page.mouse.click(box.x + box.width * fx, box.y + box.height * fy);
 }
@@ -205,7 +211,8 @@ test("finds a parcel on the map, selects it, and hands it to the form", async ({
   await picker.getByRole("button", { name: /^Use this/ }).click();
 
   // Back on the form: the dialog closed, the parcel listed with its source's credit.
-  await expect(page.getByRole("dialog", { name: "Find your land" })).toBeHidden();
+  await expect(page.getByRole("region", { name: "Find your land" })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Change my land" })).toBeVisible();
   const list = page.locator("#pk-list");
   await expect(list).toContainText("Parcel 2-51-1");
   await expect(list).toContainText("County parcel record");
@@ -262,7 +269,7 @@ test("outside California, the outline can be drawn instead", async ({ page }) =>
   await expect(drawbar).toContainText("4 corners");
   await drawbar.getByRole("button", { name: "Done", exact: true }).click();
 
-  await expect(page.getByRole("dialog", { name: "Find your land" })).toBeHidden();
+  await expect(page.getByRole("region", { name: "Find your land" })).toBeHidden();
   await expect(page.locator("#pk-list")).toContainText("Drawn outline");
   await expect(page.locator("#pk-attr")).toBeHidden();
   await expect(page.locator("#pk-notices")).toBeHidden();

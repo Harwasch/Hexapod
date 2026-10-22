@@ -317,14 +317,44 @@ canvas.gl.on {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  /* Two fades under the copy, each eased over many stops rather than three: a long, shallow
+     linear ramp on an 8-bit screen shows its steps as bands. */
   background:
     linear-gradient(
       0deg,
-      var(--stage) 0%,
-      color-mix(in srgb, var(--stage) 70%, transparent) 26%,
-      transparent 50%
+      color-mix(in srgb, var(--stage) 100%, transparent) 0%,
+      color-mix(in srgb, var(--stage) 96%, transparent) 6%,
+      color-mix(in srgb, var(--stage) 88%, transparent) 12%,
+      color-mix(in srgb, var(--stage) 77%, transparent) 18%,
+      color-mix(in srgb, var(--stage) 64%, transparent) 24%,
+      color-mix(in srgb, var(--stage) 50%, transparent) 30%,
+      color-mix(in srgb, var(--stage) 36%, transparent) 36%,
+      color-mix(in srgb, var(--stage) 22%, transparent) 42%,
+      color-mix(in srgb, var(--stage) 11%, transparent) 48%,
+      color-mix(in srgb, var(--stage) 4%, transparent) 54%,
+      color-mix(in srgb, var(--stage) 0%, transparent) 60%
     ),
-    linear-gradient(90deg, color-mix(in srgb, var(--stage) 70%, transparent) 0%, transparent 38%);
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--stage) 72%, transparent) 0%,
+      color-mix(in srgb, var(--stage) 67%, transparent) 5%,
+      color-mix(in srgb, var(--stage) 58%, transparent) 10%,
+      color-mix(in srgb, var(--stage) 47%, transparent) 15%,
+      color-mix(in srgb, var(--stage) 36%, transparent) 20%,
+      color-mix(in srgb, var(--stage) 26%, transparent) 25%,
+      color-mix(in srgb, var(--stage) 17%, transparent) 30%,
+      color-mix(in srgb, var(--stage) 9%, transparent) 35%,
+      color-mix(in srgb, var(--stage) 3%, transparent) 40%,
+      color-mix(in srgb, var(--stage) 0%, transparent) 46%
+    );
+}
+/* A faint grain over the fades: what is left of the 8-bit steps disappears into it. */
+.shade::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.06;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .5 0 0 0 0 .5 0 0 0 0 .5 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 .hero .copy {
   position: absolute;
@@ -513,44 +543,6 @@ h1 {
     font-size: 14px;
     white-space: nowrap;
   }
-}
-.hud {
-  position: absolute;
-  top: calc(84px + env(safe-area-inset-top, 0px));
-  right: max(24px, env(safe-area-inset-right, 0px));
-  display: grid;
-  grid-template-columns: auto auto;
-  gap: 6px 18px;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  background: color-mix(in srgb, var(--stage) 78%, transparent);
-  backdrop-filter: blur(8px);
-  font: 500 12px/1.2 var(--mono);
-  color: var(--muted);
-  pointer-events: none;
-}
-.hud b {
-  grid-column: 1/-1;
-  color: var(--accent);
-  font-weight: 500;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.hud b::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-  animation: pulse 2s ease-in-out infinite;
-}
-.hud span:nth-child(odd) {
-  color: var(--ink);
-  text-align: right;
-  font-variant-numeric: tabular-nums;
 }
 @keyframes pulse {
   50% {
@@ -928,16 +920,6 @@ abbr {
   font-stretch: 82%;
   text-transform: uppercase;
 }
-.use.soon {
-  justify-content: flex-start;
-  align-self: start;
-  padding: 22px 20px;
-  border: 1px dashed var(--line2);
-}
-.use.soon .tag {
-  margin-top: 0;
-  color: var(--accent);
-}
 .use p {
   font-size: 15px;
 }
@@ -1180,9 +1162,6 @@ img.dk {
   .start {
     grid-template-columns: 1fr;
   }
-  .hud {
-    display: none;
-  }
 }
 @media (max-width: 520px) {
   .pk {
@@ -1213,9 +1192,16 @@ img.dk {
   .shade {
     background: linear-gradient(
       0deg,
-      var(--stage) 0%,
-      color-mix(in srgb, var(--stage) 80%, transparent) 40%,
-      transparent 62%
+      color-mix(in srgb, var(--stage) 100%, transparent) 0%,
+      color-mix(in srgb, var(--stage) 95%, transparent) 8%,
+      color-mix(in srgb, var(--stage) 86%, transparent) 16%,
+      color-mix(in srgb, var(--stage) 74%, transparent) 24%,
+      color-mix(in srgb, var(--stage) 59%, transparent) 32%,
+      color-mix(in srgb, var(--stage) 44%, transparent) 40%,
+      color-mix(in srgb, var(--stage) 29%, transparent) 48%,
+      color-mix(in srgb, var(--stage) 16%, transparent) 56%,
+      color-mix(in srgb, var(--stage) 6%, transparent) 62%,
+      color-mix(in srgb, var(--stage) 0%, transparent) 68%
     );
   }
   .zl span {
@@ -1241,9 +1227,6 @@ img.dk {
   }
   canvas.gl {
     transition: none;
-  }
-  .hud b::before {
-    animation: none;
   }
 }
 
@@ -1315,8 +1298,8 @@ textarea[aria-invalid="true"] {
   font: 500 14px/1.3 var(--body);
   color: var(--ink);
 }
-/* "Find my land", in place of the design's demo map: the site finder (finder.html) opens in a
-   dialog over the page, and what it hands back is listed under the button. */
+/* "Find my land", in place of the design's demo map: the site finder (finder.html) opens in
+   the form, in the page, and what it hands back is listed under it. */
 .pk-find {
   display: flex;
   flex-direction: column;
@@ -1340,30 +1323,22 @@ textarea[aria-invalid="true"] {
   overflow-y: auto;
   white-space: pre-line;
 }
-.pk-dialog {
-  width: min(1200px, calc(100vw - 32px));
-  height: min(820px, calc(100dvh - 32px));
-  max-width: none;
-  max-height: none;
-  padding: 0;
+.pk-finder {
+  height: min(680px, 78vh);
   border: 1px solid var(--line2);
   background: #0b0c0a;
   overflow: hidden;
 }
-.pk-dialog::backdrop {
-  background: rgb(0 0 0 / 0.55);
-}
-.pk-dialog iframe {
+.pk-finder iframe {
   display: block;
   width: 100%;
   height: 100%;
   border: 0;
 }
 @media (max-width: 640px) {
-  .pk-dialog {
-    width: 100vw;
-    height: 100dvh;
-    border: 0;
+  .pk-finder {
+    height: 82vh;
+    margin-inline: -16px;
   }
 }
 /* What a sent request ends in: received, or what went wrong and what to do. */

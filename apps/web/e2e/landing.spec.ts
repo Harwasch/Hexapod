@@ -303,6 +303,19 @@ test.describe("with reduced motion", () => {
   });
 });
 
+test("shows no placeholder furniture: no counters, spec sheets or coming-soon cards", async ({
+  page,
+}) => {
+  await page.goto("/landing.html");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  // The simulation's robot counter, the fleet's placeholder spec lists, the "Next" cards.
+  await expect(page.getByText("Crews working")).toHaveCount(0);
+  await expect(page.locator("#fleet dl")).toHaveCount(0);
+  await expect(page.locator("#uses .tag", { hasText: /^Next$/ })).toHaveCount(0);
+  // Repair is a capability, beside the others.
+  await expect(page.locator("#capabilities").getByText("Repair", { exact: true })).toBeVisible();
+});
+
 test("fits a phone without scrolling sideways", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/landing.html");
