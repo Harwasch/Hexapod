@@ -433,3 +433,40 @@ def test_research_enqueue_routes_wake_after_commit(
     result = client.post(f"/api/v1/land/{land['id']}/overview", json={"boundaryRevision": 1})
     assert result.status_code == 200
     assert groups == ["research", "research"]
+
+
+def test_retries_of_still_queued_research_wake_it_again(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retry is how a user says "still waiting": if the first wake was lost (the worker
+    was exiting, Fly hiccuped), the idempotent retry of a queued run and the repeated
+    overview request are the next chance to start the worker. A finished run wakes nothing."""
+    from app.services import worker_wake
+    from tests.test_research import start
+
+    groups: list[str] = []
+    monkeypatch.setattr(
+        worker_wake, "after_enqueue", lambda *, process_group: groups.append(process_group)
+    )
+    land, inv, run, body = start(client)
+    assert groups == ["research"]
+    path = f"/api/v1/research/investigations/{inv['id']}/runs"
+    again = client.post(path, json=body)
+    assert again.status_code == 201, again.text
+    assert again.json()["id"] == run["id"]  # The same run, not a second one.
+    assert groups == ["research"] * 2
+
+    overview = f"/api/v1/land/{land['id']}/overview"
+    first = client.post(overview, json={"boundaryRevision": 1})
+    assert first.status_code == 200, first.text
+    assert groups == ["research"] * 3
+    repeat = client.post(overview, json={"boundaryRevision": 1})
+    assert repeat.status_code == 200, repeat.text
+    assert repeat.json()["run"]["id"] == first.json()["run"]["id"]
+    assert groups == ["research"] * 4
+
+    cancelled = client.post(f"/api/v1/research/runs/{run['id']}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "cancelled"
+    assert client.post(path, json=body).status_code == 201
+    assert groups == ["research"] * 4
