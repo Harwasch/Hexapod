@@ -30,7 +30,7 @@ Start with `README.md`, then `docs/HANDOFF.md` and `docs/DEPLOYMENT.md`.
   `tools/{captures,pipeline}` (Python capture and splat pipeline), `workers/worlds`, `infra/`, `docs/` (ADRs in
   `docs/DECISIONS/`).
 - One step per commit; the message explains the decision, not the diff.
-- Run the gate yourself before believing a report; local green has been wrong before, so CI is the judge.
+- Run the DONE WHEN gate yourself after your last edit and report its tail. That local run is the merge gate.
 - Never calibrate a tolerance on one machine's arithmetic. What cannot be verified stays stubbed, with the reason.
 - Simulated things are labelled as simulated in the UI (fleet, Living Survey motion).
 - Trip-wires (`docs/HANDOFF.md` § 6): `data/tiles/synthetic-tree` is byte-identity gated; `openapi.json` is
@@ -44,6 +44,8 @@ Start with `README.md`, then `docs/HANDOFF.md` and `docs/DEPLOYMENT.md`.
 Integration branch: `main`. One short-lived branch per task, `<engine>/<type>-<slug>` (`claude/feat-fog-v2`,
 `codex/fix-watcher-replays`), types `feat fix clean hw sim research review docs`. Draft PR against `main`;
 squash-merged after review. Never commit straight to `main`. Bug fixes start with a failing test.
+Merge when the last local gate run passed and the brief's review is done; CI is advisory.
+A check already red at merge time still blocks merging. Fix a red run on main forward with a new PR.
 
 ## Code Review Rules
 
