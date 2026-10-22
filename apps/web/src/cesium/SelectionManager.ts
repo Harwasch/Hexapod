@@ -17,7 +17,7 @@ import {
   type CesiumWidget,
 } from "cesium";
 
-import type { Site } from "@twin/contracts";
+import type { Site, SiteAsset } from "@twin/contracts";
 import { flattenRing, outerRings } from "@twin/geo";
 
 import type { Emitter } from "@/lib/emitter";
@@ -138,17 +138,19 @@ export class SelectionManager {
     window.addEventListener("pointerdown", this.onPointerDown, { capture: true });
     window.addEventListener("pointerup", this.onPointerUp, { capture: true });
     window.addEventListener("pointercancel", this.onPointerUp, { capture: true });
-    // A site's card open while another date of it is chosen: it now names that date's model.
-    this.offEpoch = events.on("epoch", ({ siteId }) => {
+    // A site's card open while another date of it is chosen, or two dates are compared or no
+    // longer: it now names the date shown, not one that may no longer be drawn.
+    const follow = ({ siteId }: { siteId: string }): void => {
       const current = this.current;
       const site = this.sites.activeSite;
       if (current?.kind !== "site" || current.siteId !== siteId || site?.id !== siteId) return;
       this.current = { ...current, ...this.shownModel(site) };
       this.events.emit("selection", this.current);
-    });
+    };
+    this.offEpoch = [events.on("epoch", follow), events.on("compare-dates", follow)];
   }
 
-  private readonly offEpoch: () => void;
+  private readonly offEpoch: (() => void)[];
 
   /** Disabled while measuring or exploring so those tools own the pointer. */
   /**
@@ -253,7 +255,8 @@ export class SelectionManager {
   private pickPosition(window: Cartesian2, picked: unknown): PickContext | null {
     let position: Cartesian3 | undefined;
     const ray = this.viewer.camera.getPickRay(window);
-    const splat = ray ? this.collider?.raycast(ray) : undefined;
+    // What is drawn where it was clicked: with two dates compared, that side's date only.
+    const splat = ray ? this.collider?.raycast(ray, undefined, window) : undefined;
     if (splat) position = splat.point;
     // The depth-buffer pick is only precise at close range; far from the surface the
     // analytic ray/globe intersection is exact, so prefer it unless 3D content was hit.
@@ -437,8 +440,8 @@ export class SelectionManager {
     };
     // On the active site's scan the point is the scan's, whatever the GPU pick found under it
     // (a zone drawn on the ground, the terrain): splats are invisible to that pick.
-    const scan = mode === "inspect" ? this.activeScan() : null;
-    const onScan = scan !== null && context.splat === scan;
+    const scan = mode === "inspect" ? this.activeScan(context.splat) : null;
+    const onScan = scan !== null;
     if (
       !onScan &&
       isEntityPick(picked) &&
@@ -470,11 +473,14 @@ export class SelectionManager {
     void this.enrichWithTerrain(selection);
   }
 
-  /** The active site's splat scan, while the site shows it. */
-  private activeScan(): Cesium3DTileset | null {
+  /**
+   * `tileset`, when it is the active site's splat scan as drawn: its shown date, or -- two
+   * dates compared -- either of them (the pick answered from the side clicked).
+   */
+  private activeScan(tileset: object | undefined): Cesium3DTileset | null {
     const site = this.sites.activeSite;
-    if (!site || this.sites.activeRepresentation !== "gaussian-splat") return null;
-    return this.sites.tilesetFor(site.id, "gaussian-splat");
+    if (!tileset || !site || this.sites.activeRepresentation !== "gaussian-splat") return null;
+    return this.sites.drawnAssetOf(tileset, site.id) ? (tileset as Cesium3DTileset) : null;
   }
 
   /**
@@ -603,7 +609,15 @@ export class SelectionManager {
     const layer = layerId ? this.layers.get(layerId) : undefined;
     if (site && !layer) {
       this.outlineSite(site);
-      return { ...base, kind: "site", title: site.name, siteId: site.id, ...this.shownModel(site) };
+      // The date that tileset draws: with two compared, the one on the side clicked.
+      const drawnAsset = this.sites.drawnAssetOf(tileset, site.id);
+      return {
+        ...base,
+        kind: "site",
+        title: site.name,
+        siteId: site.id,
+        ...this.shownModel(site, drawnAsset),
+      };
     }
     return {
       ...base,
@@ -622,10 +636,13 @@ export class SelectionManager {
    */
   private shownModel(
     site: Site,
+    drawnAsset: SiteAsset | null = null,
   ): Pick<Selection, "sourceLabel" | "observedAt" | "attribution" | "properties"> {
     const rep = this.sites.activeRepresentation;
     const asset =
-      this.sites.shownAsset(site.id) ?? site.assets.find((a) => a.representation === rep);
+      drawnAsset ??
+      this.sites.shownAsset(site.id) ??
+      site.assets.find((a) => a.representation === rep);
     return {
       sourceLabel: asset ? `${asset.name} · ${describeSource(asset.source)}` : "Reality model",
       observedAt: asset?.observedAt ?? null,
@@ -798,7 +815,7 @@ export class SelectionManager {
   }
 
   destroy(): void {
-    this.offEpoch();
+    for (const off of this.offEpoch) off();
     window.removeEventListener("pointerdown", this.onPointerDown, { capture: true });
     window.removeEventListener("pointerup", this.onPointerUp, { capture: true });
     window.removeEventListener("pointercancel", this.onPointerUp, { capture: true });

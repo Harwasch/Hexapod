@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { Event, Matrix4 } from "cesium";
+import { Event, Matrix4, SplitDirection } from "cesium";
 import type { Cesium3DTileset, Scene } from "cesium";
 
 import {
@@ -231,6 +231,33 @@ describe("inferred layers", () => {
     expect((primitive as { drawnBy?: unknown }).drawnBy).toBeUndefined();
     dispose();
     useSettings.getState().set({ inferredStyle: "hide" });
+  });
+
+  it("keeps its scan's side of the compare divider, drawn by the scan's primitive or its own", async () => {
+    // Two dates compared (SiteManager.setCompareDates): a layer drawing itself would otherwise
+    // be drawn whole across the divider, over the other date's half.
+    for (const incremental of [true, false]) {
+      const { parent, child, scene, preUpdate } = fixture();
+      const host = hostPrimitive();
+      host.incremental = incremental;
+      (parent as unknown as { gaussianSplatPrimitive: unknown }).gaussianSplatPrimitive = host;
+      const dispose = attachInferredLayers(
+        parent,
+        scene,
+        `asset-split-${String(incremental)}`,
+        () => Promise.resolve(child),
+      );
+      await settle();
+      useSettings.getState().set({ inferredStyle: "show" });
+      (parent as { splitDirection: SplitDirection }).splitDirection = SplitDirection.RIGHT;
+      preUpdate.raiseEvent();
+      expect(child.splitDirection).toBe(SplitDirection.RIGHT);
+      (parent as { splitDirection: SplitDirection }).splitDirection = SplitDirection.NONE;
+      preUpdate.raiseEvent();
+      expect(child.splitDirection).toBe(SplitDirection.NONE);
+      dispose();
+      useSettings.getState().set({ inferredStyle: "hide" });
+    }
   });
 
   it("composes Highlight after the objects' highlight in one colour slot", () => {

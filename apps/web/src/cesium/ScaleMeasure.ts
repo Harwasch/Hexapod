@@ -122,7 +122,7 @@ export class ScaleMeasure {
     const tileset = this.tileset;
     if (!this.handler || !tileset || tileset.isDestroyed()) return false;
     const ray = this.viewer.camera.getPickRay(new Cartesian2(x, y));
-    const hit = ray ? this.collider.raycast(ray) : null;
+    const hit = ray ? this.collider.raycast(ray, undefined, { x }) : null;
     const sphere = tileset.boundingSphere;
     // On this scan's solids, not another scan's beside it.
     const onScan = hit && Cartesian3.distance(hit.point, sphere.center) <= sphere.radius * 1.01;

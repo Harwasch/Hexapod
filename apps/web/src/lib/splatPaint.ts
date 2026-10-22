@@ -35,7 +35,8 @@ export interface ScreenSplats {
 
 /**
  * Projects `tiles` with `viewProj` (column-major 4x4, scan frame → clip space, w the view
- * depth) onto a `width` × `height` CSS-pixel screen.
+ * depth) onto a `width` × `height` CSS-pixel screen. A scan cut at the compare divider (`side`
+ * -1 LEFT or 1 RIGHT of x = `divider`, CSS px) is not there on its other side.
  */
 export function projectTiles(
   tiles: readonly PickTile[],
@@ -44,6 +45,8 @@ export function projectTiles(
   height: number,
   cellPx = 4,
   include?: (tile: number, index: number) => boolean,
+  side = 0,
+  divider = 0,
 ): ScreenSplats {
   const cols = Math.max(1, Math.ceil(width / cellPx));
   const rows = Math.max(1, Math.ceil(height / cellPx));
@@ -80,6 +83,7 @@ export function projectTiles(
       const cy = ((m[1] ?? 0) * x + (m[5] ?? 0) * y + (m[9] ?? 0) * z + (m[13] ?? 0)) / w;
       if (cx < -1 || cx > 1 || cy < -1 || cy > 1) continue;
       const px = ((cx + 1) / 2) * width;
+      if (side * (px - divider) < 0) continue;
       const py = ((1 - cy) / 2) * height;
       const c =
         Math.min(rows - 1, Math.floor(py / cellPx)) * cols +

@@ -35,6 +35,7 @@ beforeEach(() => {
     activeSiteId: SITE_ID,
     representation: { [SITE_ID]: "gaussian-splat" },
     epoch: {},
+    compareDates: null,
   });
 });
 
@@ -97,6 +98,23 @@ describe("the capture-date control", () => {
       "aria-checked",
       "true",
     );
+  });
+
+  it("while two dates are compared, checks none and says which side each is on", async () => {
+    show(twoEpochSite());
+    act(() => useSites.getState().setCompareDates(SITE_ID, { left: E1.id, right: E2.id }));
+    const mar = screen.getByRole("radio", { name: /Mar 1, 2026/ });
+    const jun = screen.getByRole("radio", { name: /Jun 1, 2026/ });
+    expect(mar).toHaveAttribute("aria-checked", "false");
+    expect(jun).toHaveAttribute("aria-checked", "false");
+    expect(mar).toHaveTextContent("Drone · left of divider");
+    expect(jun).toHaveTextContent("Phone video · right of divider");
+    expect(jun.getAttribute("aria-label")).toMatch(/shown right of the divider$/);
+    // Choosing one asks for it alone (the scene ends the comparison).
+    await userEvent.click(jun);
+    expect(scene.sites.setEpoch).toHaveBeenCalledWith(E2.id);
+    act(() => useSites.getState().setCompareDates(SITE_ID, null));
+    expect(jun).toHaveAttribute("aria-checked", "true");
   });
 
   it("names an epoch M3 aligned by the label it wrote", () => {

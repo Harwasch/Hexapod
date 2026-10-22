@@ -25,7 +25,8 @@ function controllerModule(): ControllerModule | undefined {
 export function installCameraPickHook(collider: SplatCollider): () => void {
   const module = controllerModule();
   if (!module) return () => undefined;
-  const hook: PickHook = (_window, ray) => collider.raycast(ray)?.point;
+  // On what is drawn under the cursor: with two dates compared, that side's date.
+  const hook: PickHook = (window, ray) => collider.raycast(ray, undefined, window)?.point;
   module.pickHook = hook;
   return () => {
     if (module.pickHook === hook) module.pickHook = undefined;

@@ -99,7 +99,7 @@ import { uniformScale } from "../placement";
 import { paintedDocOf } from "../scanView/scanInstances";
 import { instanceSphere, instancesDocOf } from "../splatInstances";
 import { inverseScaledTransformation } from "../tilesetScale";
-import { pickAssets, pickSourceOf } from "./pickSources";
+import { pickAssets, pickSourceOf, type PickSource } from "./pickSources";
 
 const log = createLogger("scene-select");
 
@@ -386,7 +386,8 @@ export class SceneSelectController {
       const source = pickSourceOf(assetId);
       const doc = paintedDocOf(assetId);
       const toWorld = source?.toWorld();
-      if (!source || !doc || !toWorld) continue;
+      // Two dates compared: only the one drawn on the side clicked is there.
+      if (!source || !doc || !toWorld || !this.#drawnAt(source, x)) continue;
       const tiles = source.tiles();
       if (tiles.length === 0) continue;
       // The ray in the scan's frame, where a unit is `scale` metres under a runtime scale.
@@ -749,6 +750,16 @@ export class SceneSelectController {
     return pickAssets().filter((assetId) => tables[assetId] !== undefined);
   }
 
+  /** Where the compare divider is: window x, CSS px. */
+  #divider(): number {
+    return this.#viewer.scene.splitPosition * this.#viewer.canvas.clientWidth;
+  }
+
+  /** Whether `source`'s scan is drawn at window x `x` (as SplatCollider `raycast` asks). */
+  #drawnAt(source: PickSource, x: number): boolean {
+    return !((source.split?.() ?? 0) * (x - this.#divider()) < 0);
+  }
+
   #pixelAngle(): number {
     const frustum = this.#viewer.camera.frustum as { fovy?: number };
     return (frustum.fovy ?? Math.PI / 3) / Math.max(1, this.#viewer.canvas.clientHeight);
@@ -892,25 +903,30 @@ export class SceneSelectController {
    * The view a projection was made from: the camera's pose, the canvas, and which scans are
    * drawn and by how many tiles. Another date of a site chosen with the camera standing still
    * hides one scan and shows another; keyed on the pose alone, the brush went on painting the
-   * projection of the scan no longer drawn.
+   * projection of the scan no longer drawn. With two dates compared, also where the divider
+   * is and whether each is drawn where a stroke begins (`x`).
    */
-  #viewKey(): string {
+  #viewKey(x: number): string {
     const camera = this.#viewer.camera;
     const p = camera.positionWC;
     const d = camera.directionWC;
     const c = this.#viewer.canvas;
-    const drawn = this.#assets().map(
-      (assetId) => `${assetId}:${String(pickSourceOf(assetId)?.tiles().length ?? 0)}`,
-    );
+    const drawn = this.#assets().map((assetId) => {
+      const source = pickSourceOf(assetId);
+      return `${assetId}:${String(source?.tiles().length ?? 0)}:${String(source && this.#drawnAt(source, x))}`;
+    });
     return [p.x, p.y, p.z, d.x, d.y, d.z, c.clientWidth, c.clientHeight]
       .map((v) => v.toFixed(4))
-      .concat(drawn)
+      .concat(drawn, String(this.#divider()))
       .join(",");
   }
 
-  /** The scan under the brush, projected from the current view (once per view). */
-  #paintViewNow(): PaintView | null {
-    const key = this.#viewKey();
+  /**
+   * The scan under the brush, projected from the current view (once per view): of two dates
+   * compared, the one drawn where the stroke begins (`x`), and only its splats on its side.
+   */
+  #paintViewNow(x: number): PaintView | null {
+    const key = this.#viewKey(x);
     if (this.#paintView?.key === key) return this.#paintView;
     const camera = this.#viewer.camera;
     const width = this.#viewer.canvas.clientWidth;
@@ -920,7 +936,7 @@ export class SceneSelectController {
       const source = pickSourceOf(assetId);
       const doc = paintedDocOf(assetId);
       const toWorld = source?.toWorld();
-      if (!source || !doc || !toWorld) continue;
+      if (!source || !doc || !toWorld || !this.#drawnAt(source, x)) continue;
       const tiles = source.tiles();
       if (tiles.length === 0) continue;
       const viewProj = Matrix4.multiply(
@@ -937,6 +953,8 @@ export class SceneSelectController {
         height,
         CELL_PX,
         hidden.size ? (tile, index) => !hidden.has(ids[tile]?.[index] ?? 0) : undefined,
+        source.split?.(),
+        this.#divider(),
       );
       if (chosen && chosen.screen.count >= screen.count) continue;
       const perSplat = new Uint32Array(screen.count);
@@ -960,7 +978,7 @@ export class SceneSelectController {
   }
 
   #beginStroke(x: number, y: number, mode: "replace" | "add" | "subtract"): void {
-    const view = this.#paintViewNow();
+    const view = this.#paintViewNow(x);
     if (!view) return;
     if (mode === "replace") view.mask.clear();
     const value = mode === "subtract" ? 0 : 1;

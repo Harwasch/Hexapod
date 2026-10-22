@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 
-import type { Site, SiteAsset } from "@twin/contracts";
+import type { Epoch, Representation, Site, SiteAsset } from "@twin/contracts";
 
 import { useScene } from "@/cesium/SceneContext";
 import { confidenceFact } from "@/lib/confidenceFacts";
 import {
   alignmentLabel,
   epochOf,
+  epochOptions,
   formatEpochDate,
   formatEpochDateTime,
   frameAnchor,
@@ -50,7 +51,8 @@ function placementLine(
  * Date shown, in the Inspector: which of a site's dated captures (epochs, lib/epochs.ts) is on
  * screen, whether it was observed or filled in, what captured it, how it is aligned with the
  * rest of the site and how it is placed. Nothing for a site whose shown model belongs to no
- * epoch: every site before epochs reads as it did.
+ * epoch: every site before epochs reads as it did. While two dates are compared (Compare ›
+ * Dates), each of the two, named by its side of the divider.
  */
 export function EpochFacts({ site }: { site: Site }) {
   const scene = useScene();
@@ -60,12 +62,58 @@ export function EpochFacts({ site }: { site: Site }) {
   useEffect(() => scene?.events.on("tilesets", () => refresh((n) => n + 1)), [scene]);
   const representation = useSites((s) => s.representation[site.id]);
   const shownEpoch = useSites((s) => s.epoch[site.id] ?? null);
+  const pair = useSites((s) => (s.compareDates?.siteId === site.id ? s.compareDates : null));
+  if (!representation) return null;
   const epochs = siteEpochs(site);
-  const asset = representation
-    ? pickShownAsset(site.assets, epochs, representation, { epochId: shownEpoch })
-    : null;
+  if (pair) {
+    const options = epochOptions(epochs, site.assets, representation);
+    return (["left", "right"] as const).map((side) => {
+      const option = options.find((o) => o.epoch.id === pair[side]);
+      return option ? (
+        <DateFacts
+          key={side}
+          site={site}
+          asset={option.asset}
+          epoch={option.epoch}
+          representation={representation}
+          heading={`${side === "left" ? "Left" : "Right"} of the divider`}
+          testId={`inspector-epoch-${side}`}
+        />
+      ) : null;
+    });
+  }
+  const asset = pickShownAsset(site.assets, epochs, representation, { epochId: shownEpoch });
   const epoch = epochOf(asset, epochs);
-  if (!asset || !epoch || !representation) return null;
+  if (!asset || !epoch) return null;
+  return (
+    <DateFacts
+      site={site}
+      asset={asset}
+      epoch={epoch}
+      representation={representation}
+      heading="Date shown"
+      testId="inspector-epoch"
+    />
+  );
+}
+
+function DateFacts({
+  site,
+  asset,
+  epoch,
+  representation,
+  heading,
+  testId,
+}: {
+  site: Site;
+  asset: SiteAsset;
+  epoch: Epoch;
+  representation: Representation;
+  heading: string;
+  testId: string;
+}) {
+  const scene = useScene();
+  const epochs = siteEpochs(site);
   const anchor = frameAnchor(epochs, site.assets, representation);
   const isAnchor = anchor?.epoch.id === epoch.id;
   const anchorDate = anchor ? formatEpochDate(anchor.epoch.observedAt) : null;
@@ -76,8 +124,10 @@ export function EpochFacts({ site }: { site: Site }) {
     ? ((loaded.tileset.root as { extras?: unknown } | undefined)?.extras ?? null)
     : undefined;
   return (
-    <section aria-label={`Date shown: ${site.name}`} data-testid="inspector-epoch">
-      <p className="glass-eyebrow">Date shown · {site.name}</p>
+    <section aria-label={`${heading}: ${site.name}`} data-testid={testId}>
+      <p className="glass-eyebrow">
+        {heading} · {site.name}
+      </p>
       <dl className="dl" style={{ marginTop: "0.3rem", fontSize: "var(--text-xs)" }}>
         <dt>Date</dt>
         <dd data-testid="inspector-epoch-date">

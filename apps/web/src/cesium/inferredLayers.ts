@@ -293,6 +293,10 @@ export function attachInferredLayers(
       if (!Matrix4.equals(tileset.modelMatrix, parent.modelMatrix))
         tileset.modelMatrix = Matrix4.clone(parent.modelMatrix);
       if (tileset.show !== wanted) tileset.show = wanted;
+      // The scan's side of the compare divider (SiteManager `setCompareDates`): a layer the
+      // scan's primitive draws is cut with it already, one drawing itself needs its own.
+      if (tileset.splitDirection !== parent.splitDirection)
+        tileset.splitDirection = parent.splitDirection;
       const own: CompanionPrimitive | undefined = splatTilesetOf(tileset).gaussianSplatPrimitive;
       if (own) {
         // Drawn by the scan's primitive, or by its own; its own hooks are there for the latter.

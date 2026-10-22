@@ -1,5 +1,6 @@
 import type { Attribution, Footprint, Representation } from "@twin/contracts";
 
+import type { CompareDates } from "@/lib/epochs";
 import type { AssetRuntime, SiteLoad } from "@/state/sites";
 import type { LayerRuntime, LoadState } from "@/state/layers";
 import type { LivingSurveyStatus } from "@/state/living";
@@ -48,6 +49,13 @@ export interface SceneEvents extends Record<string, unknown> {
    * others (Data age, cesium/cellView.ts) takes the new list.
    */
   "site-dates": string;
+  /**
+   * The two dates a loaded site draws side by side, whenever that changes (SiteManager
+   * `setCompareDates`): null once it draws one date again -- turned off, a date chosen, the
+   * renderer or the representation changed so the two cannot be drawn, the site no longer the
+   * primary one or unloaded.
+   */
+  "compare-dates": { siteId: string; dates: CompareDates | null };
   selection: Selection | null;
   hover: string | null;
   measurement: Measurement;

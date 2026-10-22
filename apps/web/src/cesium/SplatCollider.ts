@@ -31,6 +31,7 @@ import {
   PrimitiveCollection,
   type Ray,
   type Scene,
+  type SplitDirection,
 } from "cesium";
 
 import { PrecomputedSolids, collisionMetaOf, loadCollision, type Solids } from "@/lib/collision";
@@ -76,6 +77,8 @@ interface SplatTilesetShape {
   gaussianSplatPrimitive?: SplatPrimitive;
   boundingSphere: BoundingSphere;
   show: boolean;
+  /** Which side of the compare divider it is drawn on (SiteManager `setCompareDates`). */
+  splitDirection?: SplitDirection;
   modelMatrix?: Matrix4;
   root?: SplatTile & { extras?: unknown; computedTransform?: Matrix4 };
   resource?: { url: string };
@@ -160,15 +163,23 @@ export class SplatCollider {
 
   /**
    * The nearest splat surface along a world ray, within `maxDistance` metres, and the tileset
-   * it belongs to (whose scan the map menu's "What's here" is about).
+   * it belongs to (whose scan the map menu's "What's here" is about). A ray through a point on
+   * screen (`at`, window px) answers only from what is drawn there: with two dates compared,
+   * a tileset split to the other side of the divider is not there.
    */
   raycast(
     ray: Ray,
     maxDistance = 5_000,
+    at?: { x: number },
   ): { point: Cartesian3; distance: number; tileset: object } | null {
     let best: { point: Cartesian3; distance: number; tileset: object } | null = null;
     for (const [tileset, entry] of this.tracked) {
       if ((!tileset.show && tileset !== this.solidWhileHidden) || entry.solids.empty) continue;
+      // Drawn where it is asked: CesiumJS discards LEFT (-1) fragments right of the divider
+      // (`splitPosition` of the canvas width) and RIGHT (1) ones left of it; NONE (0) nowhere.
+      const cut = at && (tileset.splitDirection ?? 0);
+      if (cut && cut * (at.x - this.scene.splitPosition * this.scene.canvas.clientWidth) < 0)
+        continue;
       const origin = Matrix4.multiplyByPoint(entry.toLocal, ray.origin, scratchA);
       const direction = Matrix4.multiplyByPointAsVector(entry.toLocal, ray.direction, scratchB);
       // The grid answers in its own units along the ray; a unit is `scale` metres as drawn.

@@ -69,6 +69,7 @@ export function SceneBridge() {
         sites.setRepresentation(siteId, representation),
       ),
       scene.events.on("epoch", ({ siteId, epochId }) => sites.setEpoch(siteId, epochId)),
+      scene.events.on("compare-dates", ({ siteId, dates }) => sites.setCompareDates(siteId, dates)),
       scene.events.on("selection", (selection) => {
         useSelection.getState().setSelection(selection);
         if (selection) useUi.getState().setInspectorOpen(true);

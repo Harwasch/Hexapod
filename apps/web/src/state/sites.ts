@@ -2,6 +2,8 @@ import { create } from "zustand";
 
 import type { Representation } from "@twin/contracts";
 
+import type { CompareDates } from "@/lib/epochs";
+
 import type { LoadState } from "./layers";
 
 export interface AssetRuntime {
@@ -58,6 +60,12 @@ interface SitesState {
    * owns the choice: a control asks it (`setEpoch`), and this follows what it then shows.
    */
   epoch: Record<string, string | null>;
+  /**
+   * The two dates the primary site draws side by side, as the scene says (SiteManager
+   * `setCompareDates`, the `compare-dates` event); null while it draws one. `epoch` keeps the
+   * single date, the one shown again when the comparison ends.
+   */
+  compareDates: (CompareDates & { siteId: string }) | null;
   assets: Record<string, AssetRuntime>;
   /** Per-site load state, by site id; absent once a site is unloaded. */
   siteLoads: Record<string, SiteLoad>;
@@ -80,6 +88,7 @@ interface SitesState {
   setInViewSite: (id: string | null) => void;
   setRepresentation: (siteId: string, representation: Representation) => void;
   setEpoch: (siteId: string, epochId: string | null) => void;
+  setCompareDates: (siteId: string, dates: CompareDates | null) => void;
   updateAsset: (assetId: string, patch: Partial<AssetRuntime>) => void;
   clearAssets: (assetIds: string[]) => void;
   /** The scene's view of one site's load, or null when the site is unloaded. */
@@ -103,6 +112,7 @@ export const useSites = create<SitesState>()((set) => ({
   inViewSiteId: null,
   representation: {},
   epoch: {},
+  compareDates: null,
   assets: {},
   siteLoads: {},
   flightSiteId: null,
@@ -114,6 +124,14 @@ export const useSites = create<SitesState>()((set) => ({
     set((s) => ({ representation: { ...s.representation, [siteId]: representation } })),
   setEpoch: (siteId, epochId) =>
     set((s) => (s.epoch[siteId] === epochId ? {} : { epoch: { ...s.epoch, [siteId]: epochId } })),
+  setCompareDates: (siteId, dates) =>
+    set((s) => ({
+      compareDates: dates
+        ? { siteId, left: dates.left, right: dates.right }
+        : s.compareDates?.siteId === siteId
+          ? null
+          : s.compareDates,
+    })),
   updateAsset: (assetId, patch) =>
     set((s) => ({
       assets: {

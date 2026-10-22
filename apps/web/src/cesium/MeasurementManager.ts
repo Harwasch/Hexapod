@@ -187,7 +187,8 @@ export class MeasurementManager {
     // A scan's solids first: splats write no depth, so the depth buffer under a scan is the
     // ground beneath it, and a measurement "on" the scan would measure that instead.
     const ray = this.viewer.camera.getPickRay(window);
-    const splat = ray ? this.collider?.raycast(ray) : undefined;
+    // On the date drawn where it was clicked (two dates either side of the divider).
+    const splat = ray ? this.collider?.raycast(ray, undefined, window) : undefined;
     if (splat) return splat.point;
     let position: Cartesian3 | undefined;
     if (this.scene.pickPositionSupported) position = this.scene.pickPosition(window);

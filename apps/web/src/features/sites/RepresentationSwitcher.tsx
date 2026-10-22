@@ -27,8 +27,8 @@ const ORDER: Representation[] = ["gaussian-splat", "mesh", "point-cloud"];
  * not here.
  *
  * Beside a splat, what the scan has: its inferred fill as Show · Highlight · Hide (with a
- * one-line legend while it is drawn), "Methods" when it offers other methods' objects, fill or
- * motion (lib/variants.ts), and its objects.
+ * one-line legend while it is drawn; with two dates compared, either date's fill), "Methods"
+ * when it offers other methods' objects, fill or motion (lib/variants.ts), and its objects.
  */
 export function RepresentationSwitcher() {
   const scene = useScene();
@@ -46,10 +46,16 @@ export function RepresentationSwitcher() {
   // whose sidecars Methods and the objects search read.
   const epochId = useSites((s) => (activeSiteId ? (s.epoch[activeSiteId] ?? null) : null));
   const epochs = siteEpochs(site);
-  const shown = (rep: Representation) =>
-    site ? pickShownAsset(site.assets, epochs, rep, { epochId }) : null;
+  const shown = (rep: Representation, id = epochId) =>
+    site ? pickShownAsset(site.assets, epochs, rep, { epochId: id }) : null;
   const shownAsset = representation ? shown(representation) : null;
-  const evidence = shownAsset ? (inferred[shownAsset.id] ?? []) : [];
+  // Two dates compared are both drawn: the fill of either is labelled as inferred.
+  const compared = useSites((s) => s.compareDates);
+  const evidence = representation
+    ? (compared?.siteId === activeSiteId ? [compared.left, compared.right] : [epochId]).flatMap(
+        (id) => inferred[shown(representation, id)?.id ?? ""] ?? [],
+      )
+    : [];
   const available = ORDER.filter((rep) => site?.assets.some((a) => a.representation === rep));
   // Up while the active site is near or still framed (a pitched view kilometres out).
   const visible = Boolean(

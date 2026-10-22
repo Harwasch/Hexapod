@@ -478,7 +478,7 @@ export class CameraController {
     const camera = this.viewer.camera;
     const ray = camera.getPickRay(scratchWindow, scratchRay);
     if (!ray) return;
-    const hit = collider.raycast(ray);
+    const hit = collider.raycast(ray, undefined, scratchWindow);
     if (!hit) return;
     if (this.occludedAt(scratchWindow, hit.distance)) return;
     event.preventDefault();
@@ -951,7 +951,7 @@ export class CameraController {
   private plausiblePick(window: Cartesian2): Cartesian3 | null {
     const candidates: Cartesian3[] = [];
     const ray = this.viewer.camera.getPickRay(window, scratchRay);
-    const splat = ray ? this.collider?.raycast(ray) : undefined;
+    const splat = ray ? this.collider?.raycast(ray, undefined, window) : undefined;
     if (splat) candidates.push(splat.point);
     const ground = ray ? this.scene.globe.pick(ray, this.scene, new Cartesian3()) : undefined;
     if (ground) candidates.push(ground);
@@ -1086,7 +1086,9 @@ export class CameraController {
     // solids answer on the CPU; otherwise read the depth buffer (a mesh), so the mm/px
     // readout describes the object the user is looking at.
     const centreRay = this.objectScale ? this.viewer.camera.getPickRay(scratchCenter) : undefined;
-    const splatHit = centreRay ? this.collider?.raycast(centreRay) : undefined;
+    const splatHit = centreRay
+      ? this.collider?.raycast(centreRay, undefined, scratchCenter)
+      : undefined;
     if (splatHit) return splatHit.distance;
     if (this.objectScale && this.scene.pickPositionSupported) {
       const picked = this.scene.pickPosition(scratchCenter, scratchPick);

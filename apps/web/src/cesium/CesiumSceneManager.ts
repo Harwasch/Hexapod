@@ -291,17 +291,18 @@ export class CesiumSceneManager {
     this.selection.setMenuGate(
       () => this.areas.editing === null && useSceneSelect.getState().mode !== "paint",
     );
+    // Another date of a site shown, or two compared or no longer: what was selected or painted
+    // on a scan loaded but not drawn (another date) is let go.
+    const forget = (): void =>
+      this.sceneSelect.forgetScans(
+        this.sites
+          .loadedAssets()
+          .filter((a) => !this.sites.drawnAssetOf(a.tileset, a.siteId))
+          .map((a) => a.assetId),
+      );
     this.unsubscribe.push(
-      // Another date of a site shown: what was selected or painted on a scan loaded but not
-      // its site's shown one (another date) is let go.
-      this.events.on("epoch", () =>
-        this.sceneSelect.forgetScans(
-          this.sites
-            .loadedAssets()
-            .filter((a) => a.assetId !== this.sites.shownAsset(a.siteId)?.id)
-            .map((a) => a.assetId),
-        ),
-      ),
+      this.events.on("epoch", forget),
+      this.events.on("compare-dates", forget),
       // A photographic scan close up is shown in its own colours (PerformanceManager
       // setGradeSuppressed): within a few hundred metres of a splat site that is on screen.
       this.events.on("camera", (pose) => {
