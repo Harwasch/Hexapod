@@ -11,7 +11,7 @@
  * "newer data here" on the older date. Under PlayCanvas and Spark the same three views and
  * key, drawn by that renderer (what it reads out of its tiles: scanView/scanCellView.ts), the
  * key saying cells are sized per tile, and the "Needs the CesiumJS renderer" notice naming only
- * Per cell and Sunlight. The tool rail is as it was.
+ * Per cell (Sunlight says what draws it itself). The tool rail is as it was.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -360,7 +360,7 @@ for (const [renderer, name] of [
     // The notice stays for what CesiumJS alone draws, and no longer names the views.
     const notice = page.getByTestId("views-needs-cesium");
     await expect(notice).toContainText(
-      "Per cell and Sunlight: Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
+      "Per cell: Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
     );
     await expect(notice).not.toContainText("Confidence");
     await expect(notice).not.toContainText("Data age");

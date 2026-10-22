@@ -3,6 +3,8 @@
  * transcribes: the closed-form eigenvalues, the normal only for a clearly flat splat (round,
  * needle-like and degenerate splats are neutral), the normal still found after the engine's
  * half-float storage, and the lambert term's sign -- the side facing the eye is the side lit.
+ * And the same normal from a splat's rotation and scales (`scaleNormal`), which PlayCanvas's
+ * per-frame hook transcribes (cesium/scanView/sunHook.ts): flat by the same test, the same axis.
  */
 import { describe, expect, it } from "vitest";
 
@@ -10,6 +12,7 @@ import {
   covarianceOf,
   FLAT_RATIO,
   halfCovariance,
+  scaleNormal,
   splatNormal,
   SUN_AMBIENT,
   sunlightFactor,
@@ -234,5 +237,70 @@ describe("the relight", () => {
     expect(sunUpFactor(sine(2.5))).toBeCloseTo(sine(2.5) / sine(5), 12);
     expect(sunUpFactor(sine(5))).toBeCloseTo(1, 12);
     expect(sunUpFactor(sine(60))).toBe(1);
+  });
+});
+
+/** A deterministic stream of numbers in [0, 1) (mulberry32), so a failure can be replayed. */
+function random(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+describe("the normal from rotation and scales (PlayCanvas's hook)", () => {
+  for (const v of VECTORS) {
+    it(`of ${v.name}: the covariance's answer`, () => {
+      const n = scaleNormal(v.scale, v.quat);
+      if (v.normal === null) {
+        expect(n).toBeNull();
+        return;
+      }
+      expect(n).not.toBeNull();
+      expect(Math.hypot(...n!)).toBeCloseTo(1, 9);
+      expect(alignment(n!, v.normal)).toBeGreaterThan(1 - 1e-9);
+    });
+  }
+
+  it("agrees with the covariance's eigenvalue test on 20 000 random splats", () => {
+    // The eigenvalues of R·diag(s²)·Rᵀ are the s², so "smallest variance under FLAT_RATIO of
+    // the middle one" is the same test on the scales; the eigenvector is R's column for the
+    // smallest. Ratios within 1e-6 of the threshold are where rounding may decide either way.
+    const next = random(64);
+    let flat = 0;
+    let checked = 0;
+    for (let i = 0; i < 20_000; i += 1) {
+      const axis: Vec3 = [next() - 0.5, next() - 0.5, next() - 0.5];
+      const quat = about(axis, next() * 2 * Math.PI);
+      const big = 0.02 + next() * 0.5;
+      // A spread of shapes: discs, near-threshold, round-ish and needles.
+      const scale: Vec3 = [big, big * (0.05 + next() * 0.95), big * next() ** 2];
+      const sorted = [...scale].map((s) => s * s).sort((a, b) => a - b);
+      if (Math.abs(sorted[0]! - FLAT_RATIO * sorted[1]!) < 1e-6 * sorted[2]!) continue;
+      checked += 1;
+      const fromScales = scaleNormal(scale, quat);
+      const fromCovariance = splatNormal(covarianceOf(scale, quat));
+      expect(fromScales === null).toBe(fromCovariance === null);
+      if (fromScales && fromCovariance) {
+        flat += 1;
+        expect(alignment(fromScales, fromCovariance)).toBeGreaterThan(1 - 1e-6);
+      }
+    }
+    expect(checked).toBeGreaterThan(19_000);
+    // Both kinds were asked about.
+    expect(flat).toBeGreaterThan(2_000);
+    expect(checked - flat).toBeGreaterThan(2_000);
+  });
+
+  it("ignores which axis holds the smallest scale and the quaternion's sign and length", () => {
+    const q = about([0.4, -0.1, 0.9], 0.8);
+    const n = scaleNormal([0.2, 0.004, 0.25], q)!;
+    expect(alignment(n, rotate(q, [0, 1, 0]))).toBeGreaterThan(1 - 1e-9);
+    const scaled = scaleNormal([0.2, 0.004, 0.25], [-2 * q[0], -2 * q[1], -2 * q[2], -2 * q[3]])!;
+    expect(alignment(scaled, n)).toBeGreaterThan(1 - 1e-9);
   });
 });

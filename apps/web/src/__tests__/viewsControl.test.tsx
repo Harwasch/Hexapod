@@ -167,9 +167,9 @@ describe.each([
     // The notice stays for what CesiumJS alone draws, and no longer names the views.
     const notice = screen.getByTestId("views-needs-cesium");
     expect(notice).toHaveTextContent(
-      "Per cell and Sunlight: Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
+      "Per cell: Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
     );
-    expect(notice).not.toHaveTextContent(/Confidence|Data age/);
+    expect(notice).not.toHaveTextContent(/Confidence|Data age|Sunlight/);
   });
 });
 
@@ -186,7 +186,7 @@ describe("under the WebGPU trial", () => {
     expect(screen.getByRole("radio", { name: "Photo" })).toHaveAttribute("aria-checked", "true");
     expect(screen.queryByTestId("cell-legend")).toBeNull();
     expect(screen.getByTestId("views-needs-cesium")).toHaveTextContent(
-      "Confidence, Data age, Per cell and Sunlight: Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
+      "Confidence, Data age and Per cell: Needs the CesiumJS renderer (Settings › Advanced › Splat renderer)",
     );
     act(() => useRendererOverride.setState({ renderer }));
     await userEvent.click(screen.getByRole("button", { name: "Draw with CesiumJS" }));

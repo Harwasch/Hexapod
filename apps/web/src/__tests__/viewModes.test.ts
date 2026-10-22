@@ -10,6 +10,7 @@ import {
   drawWithCesium,
   NEEDS_CESIUM_NOTICE,
   needsCesiumFor,
+  sunlightDrawable,
   VIEW_MODES,
   viewModeDrawable,
 } from "@/lib/viewModes";
@@ -31,13 +32,19 @@ describe("which renderer draws a view", () => {
     }
   });
 
+  it("is CesiumJS or PlayCanvas for Sunlight: not Spark, not the WebGPU trial", () => {
+    expect(SPLAT_RENDERERS.filter((r) => sunlightDrawable(r))).toEqual(["playcanvas", "cesium"]);
+  });
+
   it("names what still needs CesiumJS under each renderer, and nothing under CesiumJS", () => {
     expect(needsCesiumFor("cesium", true)).toBeNull();
-    expect(needsCesiumFor("playcanvas", true)).toBe("Per cell and Sunlight");
-    expect(needsCesiumFor("spark", false)).toBe("Sunlight");
-    expect(needsCesiumFor("playcanvas-webgpu", true)).toBe(
-      "Confidence, Data age, Per cell and Sunlight",
-    );
+    // Sunlight is not CesiumJS's alone: the Sun control says what draws it (SunControl).
+    expect(needsCesiumFor("playcanvas", true)).toBe("Per cell");
+    expect(needsCesiumFor("spark", true)).toBe("Per cell");
+    expect(needsCesiumFor("spark", false)).toBeNull();
+    expect(needsCesiumFor("playcanvas", false)).toBeNull();
+    expect(needsCesiumFor("playcanvas-webgpu", true)).toBe("Confidence, Data age and Per cell");
+    expect(needsCesiumFor("playcanvas-webgpu", false)).toBe("Confidence and Data age");
   });
 
   it("says when cells are sized per tile rather than per splat", () => {

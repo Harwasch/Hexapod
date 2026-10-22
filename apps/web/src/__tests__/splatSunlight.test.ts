@@ -2,14 +2,19 @@
  * The sunlight relight in the scene (cesium/splatSunlight.ts, sunlight.ts, sunlightSlot.ts):
  * what the colour part declares to the patched engine and where it sits in the chain; the sun
  * it works out, against the almanac; and that the relight joins the shader only while the sun
- * is on and As captured is off, reports what it drew, and leaves nothing behind. The GLSL
- * compiles and lights an east-facing slab in a real engine in e2e/sunlightScene.spec.ts.
+ * is on and As captured is off, reports what it drew, and leaves nothing behind. Under PlayCanvas
+ * the same relight hands its sun, in the scan's frame, to the renderer drawing the scan
+ * (state/sunReport.ts) and reports only while one does. The GLSL compiles and lights an
+ * east-facing slab in a real engine, under both, in e2e/sunlightScene.spec.ts.
  */
 import {
   Cartesian3,
+  Ellipsoid,
   Event,
   JulianDate,
   Matrix3,
+  Matrix4,
+  Simon1994PlanetaryPositions,
   Transforms,
   type Cesium3DTileset,
   type Scene,
@@ -26,7 +31,13 @@ import { FLAT_RATIO, SUN_AMBIENT } from "@/lib/splatNormals";
 import { useAsCaptured } from "@/state/asCaptured";
 import { useLighting } from "@/state/lighting";
 import { useRendererOverride, useSettings } from "@/state/settings";
-import { useSunReport } from "@/state/sunReport";
+import {
+  publishScanSun,
+  scanSunDrawn,
+  useSunReport,
+  watchScanSun,
+  type ScanSun,
+} from "@/state/sunReport";
 
 const vec4 = (x: number, y: number, z: number, w: number) => ({ vec4: [x, y, z, w] });
 
@@ -51,6 +62,8 @@ function scan() {
     gaussianSplatPrimitive: primitive as typeof primitive | undefined,
     tileLoad,
     boundingSphere: { center: YARD },
+    // The yard's frame: east, north, up at its origin, as a splat tileset's root has it.
+    root: { computedTransform: Transforms.eastNorthUpToFixedFrame(YARD, Ellipsoid.WGS84) },
     show: true,
   } as unknown as Cesium3DTileset & { gaussianSplatPrimitive?: typeof primitive };
   const preRender = new Event();
@@ -357,5 +370,155 @@ describe("the slot", () => {
     await vi.waitFor(() => expect(s.functions()).toEqual(["splatSunlightColor"]));
     detach();
     expect(s.functions()).toEqual([]);
+  });
+});
+
+/** The sun's unit direction in the yard's east/north/up frame at `iso`, by the almanac. */
+function enuSun(iso: string): [number, number, number] {
+  const time = JulianDate.fromIso8601(iso);
+  const m = new Matrix3();
+  Transforms.computeIcrfToCentralBodyFixedMatrix(time, m);
+  const p = Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(time);
+  Matrix3.multiplyByVector(m, p, p);
+  const toLocal = Matrix4.inverseTransformation(
+    Transforms.eastNorthUpToFixedFrame(YARD, Ellipsoid.WGS84),
+    new Matrix4(),
+  );
+  const local = Matrix4.multiplyByPointAsVector(toLocal, p, new Cartesian3());
+  Cartesian3.normalize(local, local);
+  return [local.x, local.y, local.z];
+}
+
+describe("the relight under PlayCanvas", () => {
+  const MORNING = "2026-06-21T15:30:00Z";
+  beforeEach(() => {
+    useSettings.getState().set({ splatRenderer: "playcanvas" });
+  });
+  afterEach(() => {
+    publishScanSun("a", null);
+  });
+
+  it("hands the renderer drawing the scan the sun in the scan's frame, and reports only then", () => {
+    const s = scan();
+    const handle = startSunlight(s.tileset, s.scene, "a", { vec4 });
+    handle.sync(true);
+    // Not CesiumJS's part: PlayCanvas draws the scan.
+    expect(s.functions()).toEqual([]);
+    // No renderer draws it yet: nothing claimed.
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601(MORNING));
+    expect(useSunReport.getState().reports.a).toBeUndefined();
+    // The renderer starts drawing it: a frame is asked for, the sun worked out in it.
+    const seen: (ScanSun | null)[] = [];
+    const renders = s.renders.count;
+    const unwatch = watchScanSun("a", (sun) => seen.push(sun));
+    expect(s.renders.count).toBeGreaterThan(renders);
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601(MORNING));
+    const sun = seen.at(-1);
+    expect(sun?.strength).toBe(1);
+    expect(sun?.sunUp).toBe(1);
+    // The relight's constants travel with it: the hook holds no copy (scanView/sunHook.ts).
+    expect(sun).toMatchObject({ ambient: SUN_AMBIENT, flat: FLAT_RATIO });
+    const expected = enuSun(MORNING);
+    for (let i = 0; i < 3; i += 1) expect(sun?.dir[i]).toBeCloseTo(expected[i]!, 6);
+    // East and up in the morning, as the almanac has it.
+    expect(sun!.dir[0]).toBeGreaterThan(0.8);
+    expect(useSunReport.getState().reports.a?.at).toBe("2026-06-21T15:30:00.000Z");
+    // A runtime scale (the root's transform scaled) changes no direction.
+    const root = (s.tileset as unknown as { root: { computedTransform: Matrix4 } }).root;
+    const unscaled = root.computedTransform;
+    root.computedTransform = Matrix4.multiplyByUniformScale(unscaled, 3, new Matrix4());
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601("2026-06-21T18:00:00Z"));
+    const scaled = seen.at(-1);
+    root.computedTransform = unscaled;
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601("2026-06-21T18:00:00Z"));
+    expect(seen.at(-1)).toBe(scaled);
+    const noon = enuSun("2026-06-21T18:00:00Z");
+    for (let i = 0; i < 3; i += 1) expect(scaled?.dir[i]).toBeCloseTo(noon[i]!, 6);
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601(MORNING));
+    // A frame whose sun barely moved hands nothing on (the overlay would draw for it).
+    const handed = seen.length;
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601("2026-06-21T15:30:01Z"));
+    expect(seen.length).toBe(handed);
+    // Night: sunUp 0, reported below the horizon.
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601("2026-06-22T08:21:00Z"));
+    expect(seen.at(-1)?.sunUp).toBe(0);
+    expect(useSunReport.getState().reports.a?.sine).toBeLessThan(0);
+    // The renderer stops drawing it: its report goes with the next frame.
+    unwatch();
+    expect(scanSunDrawn("a")).toBe(false);
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601(MORNING));
+    expect(useSunReport.getState().reports.a).toBeUndefined();
+    handle.dispose();
+  });
+
+  it("draws the photograph for a sun that is not a number, and claims nothing", () => {
+    const s = scan();
+    const handle = startSunlight(s.tileset, s.scene, "a", { vec4 });
+    handle.sync(true);
+    const seen: (ScanSun | null)[] = [];
+    const unwatch = watchScanSun("a", (sun) => seen.push(sun));
+    const icrf = vi
+      .spyOn(Transforms, "computeIcrfToCentralBodyFixedMatrix")
+      .mockImplementation((_time, result) =>
+        Matrix3.fromArray(new Array<number>(9).fill(Number.NaN), 0, result),
+      );
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601(MORNING));
+    expect(seen.at(-1)?.strength).toBe(0);
+    expect(useSunReport.getState().reports.a).toBeUndefined();
+    icrf.mockRestore();
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601(MORNING));
+    expect(seen.at(-1)?.strength).toBe(1);
+    unwatch();
+    handle.dispose();
+  });
+
+  it("takes the sun back when turned off, under As captured's slot, and on dispose", () => {
+    const s = scan();
+    const handle = startSunlight(s.tileset, s.scene, "a", { vec4 });
+    const seen: (ScanSun | null)[] = [];
+    const unwatch = watchScanSun("a", (sun) => seen.push(sun));
+    handle.sync(true);
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601(MORNING));
+    expect(seen.at(-1)?.strength).toBe(1);
+    handle.sync(false);
+    expect(seen.at(-1)).toBeNull();
+    expect(useSunReport.getState().reports.a).toBeUndefined();
+    // Frames while off hand nothing on.
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601(MORNING));
+    expect(seen.at(-1)).toBeNull();
+    handle.sync(true);
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601(MORNING));
+    expect(seen.at(-1)?.strength).toBe(1);
+    handle.dispose();
+    expect(seen.at(-1)).toBeNull();
+    unwatch();
+  });
+
+  it("hands nothing to Spark or the WebGPU trial, which do not draw it, and moves with the setting", () => {
+    const s = scan();
+    const handle = startSunlight(s.tileset, s.scene, "a", { vec4 });
+    const seen: (ScanSun | null)[] = [];
+    const unwatch = watchScanSun("a", (sun) => seen.push(sun));
+    handle.sync(true);
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601(MORNING));
+    expect(seen.at(-1)?.strength).toBe(1);
+    for (const renderer of ["spark", "playcanvas-webgpu"] as const) {
+      useSettings.getState().set({ splatRenderer: renderer });
+      expect(seen.at(-1)).toBeNull();
+      s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601(MORNING));
+      expect(seen.at(-1)).toBeNull();
+      expect(s.functions()).toEqual([]);
+      expect(useSunReport.getState().reports.a).toBeUndefined();
+    }
+    // CesiumJS: its own part, and no sun handed to a renderer that is not drawing.
+    useSettings.getState().set({ splatRenderer: "cesium" });
+    expect(s.functions()).toEqual(["splatSunlightColor"]);
+    expect(seen.at(-1)).toBeNull();
+    useSettings.getState().set({ splatRenderer: "playcanvas" });
+    expect(s.functions()).toEqual([]);
+    s.preRender.raiseEvent(s.scene, JulianDate.fromIso8601(MORNING));
+    expect(seen.at(-1)?.strength).toBe(1);
+    unwatch();
+    handle.dispose();
   });
 });

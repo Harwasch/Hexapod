@@ -12,6 +12,7 @@ import {
   drawWithCesium,
   NEEDS_CESIUM_NOTICE,
   needsCesiumFor,
+  sunlightDrawable,
   VIEW_MODES,
   viewModeDrawable,
 } from "@/lib/viewModes";
@@ -31,9 +32,9 @@ import { VIEW_RULE_TEXT } from "./ruleText";
  * with the key to what is drawn. CesiumJS, PlayCanvas and Spark draw all three, the key saying
  * where a renderer sizes cells per tile (lib/viewModes.ts); under the WebGPU trial the analytic
  * views are offered disabled, and Photo is what the control says is shown, because it is.
- * Beside them, the per-cell rules (RuleControl) and the sun the scan is relit by (SunControl),
- * CesiumJS's alone: under another renderer the notice names exactly those, with the one-click
- * switch. And the As captured switch (state/asCaptured.ts): only what was measured drawn,
+ * Beside them, the per-cell rules (RuleControl), CesiumJS's alone -- under another renderer the
+ * notice names them, with the one-click switch -- and the sun the scan is relit by (SunControl),
+ * which CesiumJS and PlayCanvas draw and which says so itself elsewhere. And the As captured switch (state/asCaptured.ts): only what was measured drawn,
  * plans kept as annotations.
  */
 export function ViewsControl({ siteId }: { siteId: string }) {
@@ -94,7 +95,10 @@ export function ViewsControl({ siteId }: { siteId: string }) {
         <CellLegend mode={shown} report={report} note={cellLevelNote(renderer)} />
       )}
       {dates >= 2 && <RuleControl siteId={siteId} epochs={epochs} onCesium={onCesium} />}
-      <SunControl onCesium={onCesium} captureTime={captureTimeOf(asset, epochs)} />
+      <SunControl
+        drawable={sunlightDrawable(renderer)}
+        captureTime={captureTimeOf(asset, epochs)}
+      />
       <span className="views__rule" title={AS_CAPTURED_TEXT.hint}>
         <GlassSwitch
           id="views-as-captured"

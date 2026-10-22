@@ -599,9 +599,10 @@ the pipeline's per-cell grid, `hexapod.cellgrid` v1, declared on the root tile a
   98.6 % red under an all-weak grid, 99.3 % green under an all-strong one). Cells are measured
   in the globe's pixels (`ScanPose.globePixelRatio`), so the overlay's lower resolution in
   motion steps nothing.
-- **What still needs CesiumJS.** The per-cell view rules, Sunlight and the Compare swipe: under
-  PlayCanvas or Spark the notice names exactly those ("Per cell and Sunlight: Needs the CesiumJS
-  renderer (Settings › Advanced › Splat renderer)") with the one-click "Draw with CesiumJS". The
+- **What still needs CesiumJS.** The per-cell view rules and the Compare swipe: under
+  PlayCanvas or Spark the notice names exactly those ("Per cell: Needs the CesiumJS renderer
+  (Settings › Advanced › Splat renderer)") with the one-click "Draw with CesiumJS". Sunlight is
+  CesiumJS's and PlayCanvas's, and says so itself under Spark (§ Sunlight). The
   WebGPU trial does not draw the views (the look has no WGSL form): there they are disabled and
   the notice names them too. Nothing silently does nothing.
 - **Zero cost on Photo.** `SiteManager.attachTileset` hooks each splat tileset through a few lines
@@ -637,7 +638,7 @@ the divider (`features/compare/CompareDates.tsx`, `SiteManager.setCompareDates`)
 own tileset with the stock `splitDirection` (`LEFT`, `RIGHT`), which the splat primitive copies
 every frame; the divider sets `scene.splitPosition`. Both share the frame anchor's placement,
 so what differs between the halves is the data. CesiumJS only: under PlayCanvas or Spark the
-section is disabled with the same notice and switch as Per cell and Sunlight. Choosing one date,
+section is disabled with the same notice and switch as Per cell. Choosing one date,
 another renderer or a representation one date lacks ends the comparison and draws the date shown
 before. See [ADR 0017](DECISIONS/0017-compare-dates.md). Evidence: `e2e/compareDates.spec.ts`.
 
@@ -682,12 +683,28 @@ for round splats), and lights it by `czm_sunDirectionEC`, the engine's sun for t
 At capture holds the clock at the shown date's capture time and gives it back exactly
 (`cesium/sunClock.ts`); it is off while more than one date is drawn (Compare, a per-cell view
 rule), since one clock cannot be each date's. A badge says "Simulated lighting: the sun (now)
-over shadows baked in at capture, …", and "Sun below horizon" at night, only for a shown
-tileset and a sun that is a number. CesiumJS only (the usual notice and switch elsewhere); off
-while As captured is on; nothing loaded until the sun is turned on. A per-splat normal sidecar
-is stubbed (SPZ has no attribute slot). See [ADR 0019](DECISIONS/0019-living-map-scoped.md) §
-Sunlight. Evidence: `e2e/sunlightScene.spec.ts` (an east-facing slab, morning against evening,
-by pixel brightness) and `e2e/sunlight.spec.ts`.
+over shadows baked in at capture, …", and "Sun below horizon" at night, only for a model on
+screen and a sun that is a number. Off while As captured is on; nothing loaded until the sun is
+turned on. A per-splat normal sidecar is stubbed (SPZ has no attribute slot).
+
+**Under PlayCanvas** (the default renderer) the same relight is drawn by PlayCanvas's per-frame
+splat hook (`cesium/scanView/sunHook.ts`): the user material `app.scene.gsplat.material`'s
+`gsplatModifyVS`, which sees the work buffer's rotation and scales (the normal from the scales by
+the covariance's own test, `scaleNormal`), the centre in the scan's frame and the eye
+(`view_position`). `cesium/sunlight.ts` works the sun out as before and hands its direction in
+the scan's frame, `sunUp` and the strength to the renderer drawing the scan
+(`state/sunReport.ts` `publishScanSun`) as uniforms, which copy nothing; the renderer's watching
+is what lets the badge say it is drawn. The copy pass leaves one word a splat in a work-buffer
+stream added with the first sun (`hexapodSun`): an inferred layer's says "skip" (CesiumJS never
+relights a layer), and under Confidence or Data age it holds the look of a black splat, with
+which the hook keeps CesiumJS's order -- the look tinted by the relit luminance, not the look
+relit (every branch of the look is affine in the colour's scale). **Spark** does not draw it (its
+per-frame modifier would regenerate every splat each moving frame; measured in ADR 0019): the
+control says "Needs the CesiumJS or PlayCanvas renderer" with "Draw with PlayCanvas"; nor the
+WebGPU trial (GLSL only). See [ADR 0019](DECISIONS/0019-living-map-scoped.md) § Sunlight.
+Evidence: `e2e/sunlightScene.spec.ts` (an east-facing slab under CesiumJS and PlayCanvas, morning
+against evening and with Confidence over it, by pixel brightness against the mirror) and
+`e2e/sunlight.spec.ts`.
 
 ## Patched engine
 

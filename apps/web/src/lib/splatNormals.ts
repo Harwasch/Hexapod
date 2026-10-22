@@ -110,6 +110,51 @@ export function splatNormal(a: Sym3): Vec3 | null {
   return [best[0] * inv, best[1] * inv, best[2] * inv];
 }
 
+/**
+ * The same normal from what a renderer that keeps a splat as a rotation and three scales holds
+ * (PlayCanvas's work buffer: cesium/scanView/sunHook.ts transcribes this): the eigenvalues of
+ * `R · diag(s²) · Rᵀ` are the `s²`, so the flatness test is `splatNormal`'s on the squared
+ * scales -- the smallest under `FLAT_RATIO` of the middle one -- and the normal is the
+ * quaternion's turn of the axis holding the smallest. Ties go to the first axis, as the GLSL
+ * has them; null for anything not clearly flat.
+ */
+export function scaleNormal(
+  scale: Vec3,
+  quat: readonly [number, number, number, number],
+): Vec3 | null {
+  const vx = scale[0] * scale[0];
+  const vy = scale[1] * scale[1];
+  const vz = scale[2] * scale[2];
+  let axis: Vec3;
+  let lo: number;
+  let mid: number;
+  if (vx <= vy && vx <= vz) {
+    axis = [1, 0, 0];
+    lo = vx;
+    mid = Math.min(vy, vz);
+  } else if (vy <= vz) {
+    axis = [0, 1, 0];
+    lo = vy;
+    mid = Math.min(vx, vz);
+  } else {
+    axis = [0, 0, 1];
+    lo = vz;
+    mid = Math.min(vx, vy);
+  }
+  if (!(lo < FLAT_RATIO * mid)) return null;
+  const length = Math.hypot(quat[0], quat[1], quat[2], quat[3]);
+  if (!(length > 0)) return null;
+  const [x, y, z, w] = [quat[0] / length, quat[1] / length, quat[2] / length, quat[3] / length];
+  // v + 2·q×(q×v + w·v), the unit quaternion's turn (as the GLSL has it).
+  const q: Vec3 = [x, y, z];
+  const inner = cross(q, axis);
+  const t: Vec3 = [inner[0] + w * axis[0], inner[1] + w * axis[1], inner[2] + w * axis[2]];
+  const outer = cross(q, t);
+  const n: Vec3 = [axis[0] + 2 * outer[0], axis[1] + 2 * outer[1], axis[2] + 2 * outer[2]];
+  const inv = 1 / Math.hypot(n[0], n[1], n[2]);
+  return [n[0] * inv, n[1] * inv, n[2] * inv];
+}
+
 /** `Σ = R · diag(s²) · Rᵀ` for a splat of axis scales `s` turned by the quaternion `xyzw`. */
 export function covarianceOf(scale: Vec3, quat: readonly [number, number, number, number]): Sym3 {
   const n = Math.hypot(quat[0], quat[1], quat[2], quat[3]) || 1;
@@ -197,6 +242,38 @@ export function sunlightFactor(input: SunlightInput): number {
     // Toward the eye: a splat is seen from the side it is drawn on.
     if (dot(nEC, input.positionEC) > 0) nEC = [-nEC[0], -nEC[1], -nEC[2]];
     lambert = Math.max(dot(nEC, input.sunEC), 0);
+  }
+  const light = SUN_AMBIENT + (1 - SUN_AMBIENT) * lambert * input.sunUp;
+  return 1 + (light - 1) * input.strength;
+}
+
+/**
+ * What PlayCanvas's per-frame hook multiplies one splat's colour by (cesium/scanView/sunHook.ts
+ * transcribes this): `sunlightFactor` for a splat kept as rotation and scales (`scaleNormal`),
+ * in one frame for all of it -- the scan's, where the eye, the splat and the sun's direction are.
+ */
+export function scaleSunlightFactor(input: {
+  scale: Vec3;
+  quat: readonly [number, number, number, number];
+  centre: Vec3;
+  eye: Vec3;
+  /** Unit direction to the sun. */
+  sun: Vec3;
+  sunUp: number;
+  strength: number;
+}): number {
+  if (!(input.strength > 0)) return 1;
+  let lambert = 1;
+  const n = scaleNormal(input.scale, input.quat);
+  if (n) {
+    const toEye: Vec3 = [
+      input.eye[0] - input.centre[0],
+      input.eye[1] - input.centre[1],
+      input.eye[2] - input.centre[2],
+    ];
+    // Toward the eye: a splat is seen from the side it is drawn on.
+    const side = dot(n, toEye) < 0 ? -1 : 1;
+    lambert = Math.max(side * dot(n, input.sun), 0);
   }
   const light = SUN_AMBIENT + (1 - SUN_AMBIENT) * lambert * input.sunUp;
   return 1 + (light - 1) * input.strength;

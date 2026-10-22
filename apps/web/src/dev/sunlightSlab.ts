@@ -27,6 +27,24 @@ export const SLAB_SPLIT_NORTH_M = 0.1;
 /** The splats' grey (sRGB byte), the same for both halves. */
 export const SLAB_GREY = 150;
 
+/**
+ * An inferred layer for the slab (lib/inferred.ts): east-facing discs like the wall's, but red
+ * (`SLAB_LAYER_RGB`) and 40 cm in front of its north half -- flat, so a relight that did not
+ * skip it would darken it as it darkens the wall's discs.
+ */
+export function slabLayerSplats(): SlabSplat[] {
+  const out: SlabSplat[] = [];
+  for (let i = 0; i < 10; i += 1) {
+    for (let k = 0; k < 20; k += 1) {
+      out.push({ position: [0.4, 0.5 + i * 0.1, 0.5 + k * 0.1], scale: [0.004, 0.09, 0.09] });
+    }
+  }
+  return out;
+}
+
+/** The layer's colour (sRGB bytes): red, told apart from the grey wall by its hue alone. */
+export const SLAB_LAYER_RGB = [220, 70, 60] as const;
+
 /** The wall's splats: 30 x 30 discs south of the split, 30 x 30 round splats north of it. */
 export function slabSplats(): SlabSplat[] {
   const out: SlabSplat[] = [];
@@ -46,7 +64,10 @@ export function slabSplats(): SlabSplat[] {
 }
 
 /** SPZ v2, uncompressed (the caller gzips): header, then positions, alphas, colours, scales, rotations. */
-export function slabSpz(splats: readonly SlabSplat[]): Uint8Array {
+export function slabSpz(
+  splats: readonly SlabSplat[],
+  rgb: readonly [number, number, number] = [SLAB_GREY, SLAB_GREY, SLAB_GREY],
+): Uint8Array {
   const n = splats.length;
   const bytes = new Uint8Array(16 + n * 19);
   const view = new DataView(bytes.buffer);
@@ -67,9 +88,11 @@ export function slabSpz(splats: readonly SlabSplat[]): Uint8Array {
   }
   for (let i = 0; i < n; i += 1) bytes[at++] = 250;
   // Colour bytes: sh0 * (0.15 * 255) + 127.5, with the engine reading 0.5 + C0 * sh0; the byte
-  // for an sRGB grey g is 127.5 + (g / 255 - 0.5) / C0 * 38.25.
-  const colour = Math.round(127.5 + ((SLAB_GREY / 255 - 0.5) / 0.28209479177387814) * 38.25);
-  for (let i = 0; i < n * 3; i += 1) bytes[at++] = colour;
+  // for an sRGB channel g is 127.5 + (g / 255 - 0.5) / C0 * 38.25.
+  const colour = rgb.map((g) =>
+    Math.round(127.5 + ((g / 255 - 0.5) / 0.28209479177387814) * 38.25),
+  );
+  for (let i = 0; i < n; i += 1) for (const c of colour) bytes[at++] = c;
   for (const s of splats) {
     for (const v of s.scale) bytes[at++] = Math.round((Math.log(v) + 10) * 16);
   }
@@ -161,8 +184,14 @@ export function enuToEcef(origin: { lon: number; lat: number; height: number }):
   return [-sl, cl, 0, 0, -sp * cl, -sp * sl, cp, 0, cp * cl, cp * sl, sp, 0, x, y, z, 1];
 }
 
-/** The slab's tileset.json, its one tile at `slab.glb`. */
-export function slabTileset(splats: readonly SlabSplat[]): unknown {
+/**
+ * The slab's tileset.json, its one tile at `content` (`slab.glb`); `extras` on its root (the
+ * layer's `evidence`, or the measured slab's `inferredLayers`).
+ */
+export function slabTileset(
+  splats: readonly SlabSplat[],
+  options: { content?: string; extras?: Record<string, unknown> } = {},
+): unknown {
   const min = [0, 1, 2].map((a) => Math.min(...splats.map((s) => s.position[a] ?? 0)) - 0.1);
   const max = [0, 1, 2].map((a) => Math.max(...splats.map((s) => s.position[a] ?? 0)) + 0.1);
   const centre = min.map((v, a) => (v + (max[a] ?? 0)) / 2);
@@ -182,7 +211,8 @@ export function slabTileset(splats: readonly SlabSplat[]): unknown {
         box: [...centre, half[0], 0, 0, 0, half[1], 0, 0, 0, half[2]],
       },
       geometricError: 0,
-      content: { uri: "slab.glb" },
+      content: { uri: options.content ?? "slab.glb" },
+      ...(options.extras ? { extras: options.extras } : {}),
     },
   };
 }
