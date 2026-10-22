@@ -74,9 +74,17 @@ function isPrivateRead(request: Request): boolean {
   return PRIVATE_READS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
 
-/** All private workspace requests carry identity, including reads. */
+/**
+ * All private workspace requests carry identity, including reads; so does a site's change map,
+ * a read behind the write token for its cost (ADR 0018 § API 8).
+ */
 function needsToken(request: Request): boolean {
-  return !SAFE_METHODS.has(request.method) || isLandRequest(request) || isPrivateRead(request);
+  return (
+    !SAFE_METHODS.has(request.method) ||
+    isLandRequest(request) ||
+    isPrivateRead(request) ||
+    /^\/api\/v1\/sites\/[^/]+\/change$/.test(new URL(request.url).pathname)
+  );
 }
 
 /**

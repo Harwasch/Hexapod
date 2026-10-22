@@ -1,0 +1,559 @@
+{
+  "policy": "change-v1",
+  "derived": true,
+  "label": "Derived from height surfaces, not observed",
+  "calibration": "uncalibrated",
+  "siteId": "99999999-9999-4999-8999-999999999999",
+  "fromEpochId": "99999999-9999-4999-8999-000000000001",
+  "toEpochId": "99999999-9999-4999-8999-000000000002",
+  "fromAssetId": "99999999-9999-4999-8999-0000000000a1",
+  "toAssetId": "99999999-9999-4999-8999-0000000000a2",
+  "frame": "tileset",
+  "level": 2,
+  "nativeLevel": 2,
+  "cellM": 1.0,
+  "thresholdSigma": 3.0,
+  "uncertainty": {
+    "fromM": 0.03,
+    "toM": 1.0,
+    "fromVerdict": "survey",
+    "toVerdict": "coarse",
+    "fromFrameM": 0.0,
+    "toFrameM": 0.062
+  },
+  "ground": {
+    "layer": "ground",
+    "label": "Ground: the bare earth",
+    "heights": "ground",
+    "minDetectableM": 3.187,
+    "detectable": {
+      "minM": 3.19,
+      "medianM": 3.19,
+      "p90M": 3.19,
+      "maxM": 4.87,
+      "cells": 1170
+    },
+    "detectableGrid": {
+      "level": 2,
+      "cellM": 1.0,
+      "i0": -4,
+      "j0": -4,
+      "ni": 41,
+      "nj": 32,
+      "unitM": 0.01,
+      "noData": 65535,
+      "encoding": "u2le-base64-rows-south-to-north",
+      "data": "//////////////////////////////////////////////////////////////////////////////////////////////////////////////////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B1QHVAdUB1QHVAdUB1QHVAdUB1QH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AdUB1QHVAdUB1QHVAdUB1QHVAdUB////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Ac0BzQHVAdUB1QHVAdUB1QHVAdUB1QHVAf///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwHNAc0B1QHVAdUB1QHVAdUB1QHVAdUB1QH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BzQHNAc0BzQE/AT8BPwE/AT8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Ac0BzQHNAc0BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwHNAc0BzQHNAT8BPwE/AT8BPwE/AT8BPwH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BzQHNAc0BzQE/AT8BPwE/AT8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Ac0BzQHNAc0BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwHNAc0BzQHNAT8BPwE/AT8BPwE/AT8BPwH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BzQHNAecB5wHnAecB5wHnAecB5wHnAecB////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Ac0BzQHnAecB5wHnAecB5wHnAecB5wHnAf///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B5wHnAecB5wHnAecB5wHnAecB5wH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AecB5wHnAecB5wHnAecB5wHnAecB////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/Af//PwE/AT8BPwE/AT8BPwE/Af//PwE/AT8BPwE/AT8BPwE/Af//PwE/AT8BPwE/AT8BPwE/Af//PwE/AT8BPwH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwH///////8/AT8BPwE/AT8BPwH//z8BPwE/AT8BPwE/AT8BPwH//z8BPwE/AT8BPwE/AT8BPwH//z8BPwE/AT8BPwE/AT8BPwH//z8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B//8="
+    },
+    "motionM": 0.0,
+    "horizontalRadiusM": 4.0,
+    "driftReachM": 3.536,
+    "counts": {
+      "unchanged": 1170,
+      "raised": 0,
+      "lowered": 0,
+      "insufficient": 142
+    },
+    "lowConfidence": {
+      "unchanged": 600,
+      "raised": 0,
+      "lowered": 0
+    },
+    "areaLevel": 2,
+    "areaCellM": 1.0,
+    "areas": [
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.880051762, 46.133464014],
+                [-123.879521202, 46.133464013],
+                [-123.879521199, 46.133751902],
+                [-123.87953414, 46.133751902],
+                [-123.879534142, 46.133473009],
+                [-123.880025881, 46.13347301],
+                [-123.880025881, 46.133751903],
+                [-123.880051762, 46.133751903],
+                [-123.880051762, 46.133464014]
+              ]
+            ]
+          ]
+        },
+        "cells": 134,
+        "areaM2": 134.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879948238, 46.133652941],
+                [-123.879935297, 46.133652941],
+                [-123.879935297, 46.133661938],
+                [-123.879948238, 46.133661938],
+                [-123.879948238, 46.133652941]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879831773, 46.133652941],
+                [-123.879818833, 46.133652941],
+                [-123.879818833, 46.133661937],
+                [-123.879831773, 46.133661937],
+                [-123.879831773, 46.133652941]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879715308, 46.133652941],
+                [-123.879702368, 46.133652941],
+                [-123.879702368, 46.133661937],
+                [-123.879715308, 46.133661937],
+                [-123.879715308, 46.133652941]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879598844, 46.13365294],
+                [-123.879585903, 46.13365294],
+                [-123.879585903, 46.133661937],
+                [-123.879598843, 46.133661937],
+                [-123.879598844, 46.13365294]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879948238, 46.133715917],
+                [-123.879935297, 46.133715917],
+                [-123.879935297, 46.133724913],
+                [-123.879948238, 46.133724913],
+                [-123.879948238, 46.133715917]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879831773, 46.133715917],
+                [-123.879818832, 46.133715917],
+                [-123.879818832, 46.133724913],
+                [-123.879831773, 46.133724913],
+                [-123.879831773, 46.133715917]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879715308, 46.133715916],
+                [-123.879702367, 46.133715916],
+                [-123.879702367, 46.133724913],
+                [-123.879715308, 46.133724913],
+                [-123.879715308, 46.133715916]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879598843, 46.133715916],
+                [-123.879585903, 46.133715916],
+                [-123.879585902, 46.133724913],
+                [-123.879598843, 46.133724913],
+                [-123.879598843, 46.133715916]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      }
+    ]
+  },
+  "vegetation": {
+    "layer": "vegetation",
+    "label": "Vegetation and objects: the top surface, at a higher threshold; never ground change",
+    "heights": "dsm",
+    "minDetectableM": 3.186,
+    "detectable": {
+      "minM": 3.19,
+      "medianM": 3.19,
+      "p90M": 3.19,
+      "maxM": 3.43,
+      "cells": 1169
+    },
+    "detectableGrid": {
+      "level": 2,
+      "cellM": 1.0,
+      "i0": -4,
+      "j0": -4,
+      "ni": 41,
+      "nj": 32,
+      "unitM": 0.01,
+      "noData": 65535,
+      "encoding": "u2le-base64-rows-south-to-north",
+      "data": "//////////////////////////////////////////////////////////////////////////////////////////////////////////////////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BVwFXAT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AVcBVwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwFXAVcBPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwH//z8BPwE/AT8BPwH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BVwFXAT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AVcBVwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwFXAVcBPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BVwFXAT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AVcBVwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwFXAVcBPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BVwFXAT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/Af//PwE/AT8BPwE/AT8BPwE/Af//PwE/AT8BPwE/AT8BPwE/Af//PwE/AT8BPwE/AT8BPwE/Af//PwE/AT8BPwH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwH///////8/AT8BPwE/AT8BPwH//z8BPwE/AT8BPwE/AT8BPwH//z8BPwE/AT8BPwE/AT8BPwH//z8BPwE/AT8BPwE/AT8BPwH//z8BPwE/AT8B////////PwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/Af///////z8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwH///////8/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8BPwE/AT8B//8="
+    },
+    "motionM": 0.25,
+    "horizontalRadiusM": 4.0,
+    "driftReachM": 0.0,
+    "counts": {
+      "unchanged": 1169,
+      "raised": 0,
+      "lowered": 0,
+      "insufficient": 143
+    },
+    "lowConfidence": {
+      "unchanged": 600,
+      "raised": 0,
+      "lowered": 0
+    },
+    "areaLevel": 2,
+    "areaCellM": 1.0,
+    "areas": [
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.880051762, 46.133464014],
+                [-123.879521202, 46.133464013],
+                [-123.879521199, 46.133751902],
+                [-123.87953414, 46.133751902],
+                [-123.879534142, 46.133473009],
+                [-123.880025881, 46.13347301],
+                [-123.880025881, 46.133751903],
+                [-123.880051762, 46.133751903],
+                [-123.880051762, 46.133464014]
+              ]
+            ]
+          ]
+        },
+        "cells": 134,
+        "areaM2": 134.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879611785, 46.133517992],
+                [-123.879598844, 46.133517992],
+                [-123.879598844, 46.133526989],
+                [-123.879611785, 46.133526989],
+                [-123.879611785, 46.133517992]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879948238, 46.133652941],
+                [-123.879935297, 46.133652941],
+                [-123.879935297, 46.133661938],
+                [-123.879948238, 46.133661938],
+                [-123.879948238, 46.133652941]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879831773, 46.133652941],
+                [-123.879818833, 46.133652941],
+                [-123.879818833, 46.133661937],
+                [-123.879831773, 46.133661937],
+                [-123.879831773, 46.133652941]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879715308, 46.133652941],
+                [-123.879702368, 46.133652941],
+                [-123.879702368, 46.133661937],
+                [-123.879715308, 46.133661937],
+                [-123.879715308, 46.133652941]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879598844, 46.13365294],
+                [-123.879585903, 46.13365294],
+                [-123.879585903, 46.133661937],
+                [-123.879598843, 46.133661937],
+                [-123.879598844, 46.13365294]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879948238, 46.133715917],
+                [-123.879935297, 46.133715917],
+                [-123.879935297, 46.133724913],
+                [-123.879948238, 46.133724913],
+                [-123.879948238, 46.133715917]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879831773, 46.133715917],
+                [-123.879818832, 46.133715917],
+                [-123.879818832, 46.133724913],
+                [-123.879831773, 46.133724913],
+                [-123.879831773, 46.133715917]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879715308, 46.133715916],
+                [-123.879702367, 46.133715916],
+                [-123.879702367, 46.133724913],
+                [-123.879715308, 46.133724913],
+                [-123.879715308, 46.133715916]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      },
+      {
+        "class": "insufficient",
+        "footprint": {
+          "type": "MultiPolygon",
+          "coordinates": [
+            [
+              [
+                [-123.879598843, 46.133715916],
+                [-123.879585903, 46.133715916],
+                [-123.879585902, 46.133724913],
+                [-123.879598843, 46.133724913],
+                [-123.879598843, 46.133715916]
+              ]
+            ]
+          ]
+        },
+        "cells": 1,
+        "areaM2": 1.0,
+        "lowConfidence": false,
+        "lowConfidenceCells": 0,
+        "meanDeltaM": null,
+        "maxAbsDeltaM": null
+      }
+    ]
+  },
+  "appearance": {
+    "status": "not-computed",
+    "reason": "needs the new photos compared with the old epoch at fixed geometry; never splat pixels"
+  }
+}

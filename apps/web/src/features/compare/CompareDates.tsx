@@ -4,6 +4,7 @@ import { GlassButton, GlassField, GlassSelect, GlassSwitch, useFieldId } from "@
 
 import { useSite } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
+import { changeOffer } from "@/lib/changeDrape";
 import {
   epochOptions,
   formatEpochDate,
@@ -17,6 +18,7 @@ import {
   drawWithPlaycanvas,
   NEEDS_CESIUM_OR_PLAYCANVAS,
 } from "@/lib/viewModes";
+import { useChangeDrape, type ChangeDrapeRequest } from "@/state/changeDrape";
 import { recordAction } from "@/state/history";
 import { useSplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
@@ -33,12 +35,28 @@ import { useViewRule } from "@/state/viewRule";
  * PlayCanvas draw the cut (lib/viewModes.ts `compareDrawable`): under Spark or the WebGPU trial
  * the section is disabled, says so, and offers the one-click switch to PlayCanvas, the default
  * renderer, rather than a switch that silently does nothing.
+ *
+ * Below it, the change map between the two dates (features/change, ADR 0018): offered once
+ * both measured a height surface, under any renderer (it lies on the ground; it is not
+ * splats), and beside the swipe or a per-cell view rule, which draw splats. It follows a date
+ * chosen while it is on, and ends, saying why, when the new pair cannot have one.
  */
 /** Whether the scene draws `dates` for `siteId` now (null: one date). */
 function isShown(siteId: string, dates: Dates | null): boolean {
   const pair = useSites.getState().compareDates;
   const own = pair?.siteId === siteId ? pair : null;
   return dates ? own?.left === dates.left && own.right === dates.right : own === null;
+}
+
+/** Whether the change map asked for is `request` (null: none) on `siteId`. */
+function isDraped(siteId: string, request: ChangeDrapeRequest | null): boolean {
+  const asked = useChangeDrape.getState().request;
+  const own = asked?.siteId === siteId ? asked : null;
+  return request ? own?.left === request.left && own.right === request.right : own === null;
+}
+
+function askDrape(request: ChangeDrapeRequest | null): void {
+  useChangeDrape.setState({ request, error: null });
 }
 
 export function CompareDates({ siteId }: { siteId: string }) {
@@ -49,18 +67,24 @@ export function CompareDates({ siteId }: { siteId: string }) {
   const renderer = useSplatRenderer();
   const rule = useViewRule((s) => s.active?.siteId === siteId);
   const room = useSplatRoom((s) => s.compare);
+  const drape = useChangeDrape((s) => (s.request?.siteId === siteId ? s.request : null));
+  const refused = useChangeDrape((s) => s.error);
   const [choice, setChoice] = useState<Partial<Dates>>({});
   const leftId = useFieldId("compare-date-left");
   const rightId = useFieldId("compare-date-right");
   if (!site || !representation) return null;
-  const options = epochOptions(siteEpochs(site), site.assets, representation);
+  const epochs = siteEpochs(site);
+  const options = epochOptions(epochs, site.assets, representation);
   const [before, latest] = [options.at(-2), options.at(-1)];
   if (!before || !latest) return null;
   const offered = (id: string | undefined) =>
     options.some((option) => option.epoch.id === id) ? id : undefined;
-  // What the scene draws, else the choice made here, else the latest against the one before.
-  const left = pair?.left ?? offered(choice.left) ?? before.epoch.id;
-  const right = pair?.right ?? offered(choice.right) ?? latest.epoch.id;
+  // What the scene draws, else the dates the change map was asked for (it outlives this panel,
+  // and an undo can bring it back), else the choice made here, else the latest against the one
+  // before.
+  const shown = pair ?? drape;
+  const left = shown?.left ?? offered(choice.left) ?? before.epoch.id;
+  const right = shown?.right ?? offered(choice.right) ?? latest.epoch.id;
   const needsRenderer = representation === "gaussian-splat" && !compareDrawable(renderer);
   // Refused by PlayCanvas for want of room: this pair's root tiles alone pass the device's
   // budget (state/splatRoom.ts). Held off, saying so, until another pair or renderer.
@@ -73,7 +97,12 @@ export function CompareDates({ siteId }: { siteId: string }) {
     const next = { left, right, [side]: epochId };
     setChoice(next);
     if (pair && next.left !== next.right) ask(next);
+    if (drape) {
+      const follows = changeOffer(epochs, next.left, next.right);
+      askDrape(follows.offered ? { siteId, from: follows.from, to: follows.to, ...next } : null);
+    }
   };
+  const offer = changeOffer(epochs, left, right);
   const select = (side: keyof Dates, id: string, other: string) => (
     <GlassSelect
       id={id}
@@ -152,6 +181,49 @@ export function CompareDates({ siteId }: { siteId: string }) {
         <p className="views__notice" role="note" data-testid="compare-dates-room">
           Not enough room to draw {noRoom.dates} dates on this device: their coarsest tiles alone
           pass its splat budget
+        </p>
+      )}
+      <div className="setting">
+        <span className="setting__label" id="compare-change-label">
+          Change map
+        </span>
+        <GlassSwitch
+          checked={drape !== null}
+          disabled={!offer.offered}
+          onCheckedChange={(on) => {
+            const request = offer.offered
+              ? { siteId, from: offer.from, to: offer.to, left, right }
+              : null;
+            const [after, before] = on ? [request, null] : [null, drape];
+            let applied = true;
+            recordAction(
+              `Turn the change map ${on ? "on" : "off"}`,
+              () => {
+                applied = true;
+                askDrape(after);
+              },
+              () => {
+                applied = false;
+                askDrape(before);
+              },
+              { scope: "site", alive: () => isDraped(siteId, applied ? after : before) },
+            );
+          }}
+          aria-labelledby="compare-change-label"
+        />
+      </div>
+      {!offer.offered ? (
+        <p className="views__notice" role="note" data-testid="compare-change-not-offered">
+          {offer.why}
+        </p>
+      ) : drape && refused ? (
+        <p className="views__notice" role="note" data-testid="compare-change-refused">
+          {refused}
+        </p>
+      ) : (
+        <p className="glass-subtle" style={{ fontSize: "var(--text-xs)", margin: 0 }}>
+          Where the ground rose or fell between the two dates, from their height surfaces; on the
+          ground under any renderer.
         </p>
       )}
       {rule && !pair && (

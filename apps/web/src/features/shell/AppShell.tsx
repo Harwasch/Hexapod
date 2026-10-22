@@ -14,6 +14,7 @@ import { useScene } from "@/cesium/SceneContext";
 import { useHotkey } from "@/lib/hotkeys";
 import { bindDockRules, useLayout } from "@/state/layout";
 import { useMission } from "@/state/mission";
+import { useChangeDrape } from "@/state/changeDrape";
 import { useSettings } from "@/state/settings";
 import { useSkinPoke } from "@/state/skinPoke";
 import { useLantern } from "@/state/lantern";
@@ -109,6 +110,8 @@ const KnowledgeCellCard = lazyNamed(
   () => import("../knowledge/KnowledgeCellCard"),
   "KnowledgeCellCard",
 );
+// The change map between two dates and its legend (Compare › Dates), loaded when one is asked for.
+const ChangeDrape = lazyNamed(() => import("../change/ChangeDrape"), "ChangeDrape");
 const KnowledgeLegend = lazyNamed(() => import("../knowledge/KnowledgeLegend"), "KnowledgeLegend");
 
 /** The app's own keys, bound from the registry (`app/hotkeys.ts`) that the `?` sheet prints. */
@@ -236,6 +239,7 @@ function OnDemand({ label, children }: { label: string; children: ReactNode }) {
 export function AppShell() {
   const sheet = useLayout((s) => s.focus);
   const view = useMission((s) => s.view);
+  const changeAsked = useChangeDrape((s) => s.request !== null);
   useEffect(() => bindDockRules(), []);
   return (
     <>
@@ -307,6 +311,11 @@ export function AppShell() {
             <Toasts />
           </div>
           <div className="hud-stack hud-detail">
+            {changeAsked && (
+              <OnDemand label="Change map">
+                <ChangeDrape />
+              </OnDemand>
+            )}
             {env.landExplorationEnabled && (
               <OnDemand label="Land agent">
                 <LandAgent />

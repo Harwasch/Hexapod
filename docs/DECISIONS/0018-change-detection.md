@@ -361,8 +361,8 @@ samples a cell, both epochs at 3 cm, with this code (its least detectable change
 
 ### Not done here
 
-- The drape and its legend (W5c), which follows the two-layer answer. A stored change map per
-  epoch pair: not needed while a call costs about a second at the grid ceiling.
+- The drape and its legend: § Web. A stored change map per epoch pair: not needed while a call
+  costs about a second at the grid ceiling.
 - Appearance-only change; any measurement behind the 3σ rule, the surface estimators, `w` or the
   drift bound; honouring a runtime scale by resampling; per-cell classes (areas, counts and each
   cell's least detectable change are answered); detecting objects under about a metre.
@@ -371,3 +371,74 @@ samples a cell, both epochs at 3 cm, with this code (its least detectable change
 - P5's demo compares the top surface cell for cell, with each epoch's placement as the change map
   takes it (the cap or the claim, the larger; a metre for coarse): it is the reference the
   fixture's coarsening and cell rule are held to, not the API's layers.
+
+## Web
+
+Date 2026-10-20 · M5 of the splat-pipeline build (design M4–M6 §3 W5c), branch
+`claude/feat-splat-change-drape`. Follows the two-layer answer of § API.
+
+### Decision
+
+1. **Offered from Compare › Dates, for two dates that both measured a surface.** A Change map
+   switch below the date swipe asks for the map from the older of the two chosen dates to the
+   newer, whichever side each is on, so raised always means higher later. A date with no
+   `surface` is named instead ("Not offered: … has no height surface measured"); a date chosen
+   while it is on moves it to the new pair, or ends it with that reason. The request keeps the
+   two dates as they stood either side of the divider, so the panel shows them again.
+2. **The ground first; vegetation apart** (coordinator ruling). The ground layer, the primary
+   product, is drawn and keyed whenever the drape is on. Vegetation is a separate layer labelled
+   "Vegetation: canopy height change, higher threshold, wind and growth not ground change",
+   behind its own switch (off each time the map is drawn), drawn in its own colours (yellow up,
+   violet down; the ground orange up, blue down) and keyed in its own section, so its counts are
+   never read as the ground's. Each section's "changes under ±X m cannot be seen between these
+   dates" uses that layer's own `minDetectableM`, rounded up to two figures (a floor is never
+   understated).
+3. **Ground geometry, and outlines over the scan, under every renderer.** Each layer is drawn
+   as `GroundPrimitive`s classified onto terrain and 3D tiles, one per class and confidence,
+   never picked, low confidence hatched in its class's colour in screen space. Splats cover the
+   ground where they are dense, so each layer is also outlined over the scan
+   (`cesium/changeOverlay.ts`): an SVG laid above every renderer's canvas, never in a pointer's
+   way, each class outlined with a light fill (low confidence hatched, not comparable dashed
+   grey), projected through the camera at the globe's height (the answer carries no absolute
+   heights), a polygon with a point behind the camera left out, redrawn after a frame only when
+   the view changed, at most every 50 ms. The scan's own colours are not touched.
+4. **Beside the swipe and a per-cell rule, not instead of them.** Those choose which splats are
+   drawn; the drape marks change under and over them and names its own two dates. It outlives
+   the Layers panel (a slot in the details dock loads it on demand), and ends from its own Hide
+   or when another site takes the globe.
+5. **What the legend says.** Each layer's classes, their low-confidence cells (hatched) and
+   unchanged counted, not drawn; the label and that layer's floor; the 3σ rule and the ground
+   window (for vegetation, its wind sway) uncalibrated; appearance-only change not computed;
+   and, when either verdict is coarse, "Not survey-grade" with both dates' verdicts and the `u`
+   they were compared with, so a phone date never reads as a survey. Each layer also says what it
+   could see (round 2): its least detectable change from `detectable`, the least and the median
+   (one figure when they round alike), "Small objects under ~1 m are not detected yet", and the
+   best that layer was measured to see (§ API Limits: ground 0.23 m over areas wider than the
+   5 m window at 1 cm of noise; vegetation 1.06 m), named synthetic and uncalibrated.
+6. **The token is the client's rule.** The auth middleware sends the write token on this one read
+   as on a write, and a 401 opens the token field; the legend and Compare say the map "needs the
+   pilot's write token", open Settings in one click, and ask again once a token is entered
+   (the query is keyed by a fingerprint of the token, never the token). Every 409 code,
+   `epoch-unaligned`, `not-metric` and `scale-corrected` among them, has its sentence; nothing is
+   drawn on a refusal.
+
+### Evidence (synthetic)
+
+`e2e/changeDrape.spec.ts` mocks `/change` with the API's own answer for the committed yard fixture
+(`e2e/fixtures/changeYard.py` runs § API's analysis and response code over
+`synthetic-yard-surfaces` and `synthetic-yard-epochs`, both dates surveyed, placed in the yard's
+frame): under CesiumJS, PlayCanvas and Spark, the ground drawn alone first (the pond lowered, 48
+cells, under ±0.49 m), on the ground and outlined over the scan, its colours on screen from above;
+vegetation apart behind its switch (the shed and the stack raised, the stack hatched, the spoil
+heap lowered, under ±1.1 m) and gone again when it is off; a coarse later date (its claimed 0.062 m held to the 1 m floor) claiming nothing under a metre (both floors 3.2 m) and saying "Not survey-grade" with both verdicts; the token asked for and then
+sent; no offer without surfaces. Before the outlines over the scan, the ground drape alone showed
+only 0.24–0.48 % of the view in its raised colour from 70 m over the yard (the grass splats
+covered the rest); with them, 1.13–1.31 % (one-layer answer, SwiftShader, one run each).
+
+### Not done here
+
+- Outlines stand at the globe's height, not each area's own: the answer carries no absolute
+  heights, so over a raised area they sit at its foot.
+- Per-cell change (areas and counts only) and appearance-only change.
+- A "least detectable" overlay drawn from `detectableGrid`: the legend states the layer's
+  summary; drawing each cell's threshold is a later decision.
