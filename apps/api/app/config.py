@@ -278,6 +278,10 @@ class Settings(BaseSettings):
     # checkout wants, having nothing to start it again: .env.example sets 0.
     worker_idle_exit_s: float = Field(default=900.0, ge=0)
 
+    # Research checks in only during runs, then exits after five idle minutes. 0 disables
+    # idle exit for local development; enqueue wakes the Fly research process group.
+    research_idle_exit_s: float = Field(default=300.0, ge=0)
+
     # --- Waking the worker (app/services/worker_wake.py) ----------------------------
     # A Fly token that may start this app's machines (`fly tokens create deploy`). Unset,
     # queueing a job wakes nothing, which is right for development: there is no machine.

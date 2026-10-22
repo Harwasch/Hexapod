@@ -91,9 +91,11 @@ def test_research_pins_revision_idempotency_cancel_and_stream(
     assert detail["investigation"]["boundaryRevision"] == 1
     assert len(detail["messages"]) == 1
     assert detail["page"]["totals"]["runs"] == 1
+    assert queue.anything_claimable(db)
     claimed = queue.claim(db)
     assert claimed is not None
     run_id, lease = claimed
+    assert not queue.anything_claimable(db)
     eid = queue.save_evidence(db, run_id, lease, "survey", evidence())
     assert queue.save_evidence(db, run_id, lease, "survey", evidence()) == eid
     fid = queue.save_finding(db, run_id, lease, "woodland", finding(eid))
@@ -129,6 +131,7 @@ def test_expired_worker_is_fenced_and_checkpoints_survive(client: TestClient, db
     assert run is not None
     run.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
     db.commit()
+    assert queue.anything_claimable(db)
     reclaimed = queue.claim(db)
     assert reclaimed and reclaimed[0] == run_id and reclaimed[1] != first
     second = reclaimed[1]

@@ -37,7 +37,7 @@ from app.schemas.research import (
 from app.services.errors import InvalidInputError
 from app.services.research import event, now
 
-#: How often a worker records that it is alive, idle or busy (ResearchWorker._check_in).
+#: How often an active worker records presence (ResearchWorker._check_in).
 CHECK_IN_EVERY_S = 15
 #: A worker seen within this long, and not stopped, is "online" in /research/status: three
 #: missed check-ins, so one slow database round trip never reads as an outage.
@@ -93,6 +93,27 @@ def prune_presence(db: Session, older_than: timedelta = timedelta(days=7)) -> No
         )
     )
     db.commit()
+
+
+def anything_claimable(db: Session) -> bool:
+    """Final idle-exit check, including runs whose recovery lease has expired."""
+    return bool(
+        db.scalar(
+            select(
+                select(ResearchRun.id)
+                .where(
+                    or_(
+                        ResearchRun.status == "queued",
+                        and_(
+                            ResearchRun.status == "running",
+                            ResearchRun.lease_expires_at <= func.clock_timestamp(),
+                        ),
+                    )
+                )
+                .exists()
+            )
+        )
+    )
 
 
 def claim(

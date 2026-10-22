@@ -218,6 +218,7 @@ class ResearchWorker:
         self._pid = os.getpid()
         self._last_check_in = 0.0
         self._check_in_lock = threading.Lock()
+        self._presence_active = False
 
     def _check_in(
         self,
@@ -228,7 +229,7 @@ class ResearchWorker:
     ) -> None:
         """Tell /research/status this worker is alive, at most every CHECK_IN_EVERY_S.
 
-        Called from the poll loop and the lease keeper's thread, hence the lock. Presence is
+        Called at run transitions and from the lease keeper's thread, hence the lock. Presence is
         advisory: a failure is logged and never breaks the loop or a run."""
         with self._check_in_lock:
             if (
@@ -252,8 +253,10 @@ class ResearchWorker:
                 log.warning("Research worker check-in failed: %s", type(error).__name__)
 
     def stop(self) -> None:
-        """Mark this worker stopped, so a queued run says so instead of "not seen lately"."""
-        self._check_in(None, force=True, stopping=True)
+        """Close active presence once; idle polling and idle exit write nothing."""
+        if self._presence_active:
+            self._check_in(None, force=True, stopping=True)
+            self._presence_active = False
 
     def _keep_alive(self, run_id: uuid.UUID, token: uuid.UUID, stopped: threading.Event) -> None:
         while not stopped.wait(5):
@@ -280,13 +283,17 @@ class ResearchWorker:
                 log.warning("Research heartbeat failed: %s", type(error).__name__)
                 # The lease expires naturally if the database remains unreachable.
 
+    def has_pending_work(self) -> bool:
+        with self.sessions() as db:
+            return queue.anything_claimable(db)
+
     def run_once(self) -> bool:
-        self._check_in()
         with self.sessions() as db:
             claimed = queue.claim(db)
         if claimed is None:
             return False
         run_id, token = claimed
+        self._presence_active = True
         self._check_in(run_id, force=True)
         stopped = threading.Event()
         keeper = threading.Thread(
@@ -311,7 +318,7 @@ class ResearchWorker:
         finally:
             stopped.set()
             keeper.join(timeout=6)
-            self._check_in(None, force=True)
+            self.stop()
             if self.client is None:
                 client.close()
         return True
