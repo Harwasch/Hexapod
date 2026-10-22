@@ -72,6 +72,7 @@ export function useAgentFindingsOnMap(
       ? {
           id: "agent-findings",
           title: "What the agent found",
+          agent: true,
           features,
           style: { color: AGENT_COLOR, fill: 0.14, width: 2 },
         }
@@ -93,6 +94,7 @@ export function useAgentLookingOnMap(
         ? {
             id: "agent-looking",
             title: "Where the agent is looking",
+            agent: true,
             features: [{ id: "looking", label: "Where the agent is looking", geometry: area }],
             style: { color: AGENT_COLOR, fill: 0.06, width: 1.5 },
           }

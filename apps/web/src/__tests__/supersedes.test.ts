@@ -22,6 +22,7 @@ import {
   type SupersedesDoc,
 } from "@/lib/supersedes";
 import { variantsOf } from "@/lib/variants";
+import { useAsCaptured } from "@/state/asCaptured";
 import { useInstances } from "@/state/instances";
 import { effectiveDoc, onCustomSetsChange, useSceneSelect } from "@/state/sceneSelect";
 import { useSettings } from "@/state/settings";
@@ -201,6 +202,7 @@ describe("when superseded splats are hidden", () => {
     useVariants.setState({ offered: {}, picks: {}, status: {} });
     useSupersedes.setState({ active: {} });
     useSettings.getState().set({ inferredStyle: "show" });
+    useAsCaptured.getState().set(false);
   });
 
   it("only while the method is picked and Inferred is Show or Highlight", async () => {
@@ -249,6 +251,25 @@ describe("when superseded splats are hidden", () => {
     useViewRule.setState({ active: null });
     await settle();
     expect(activeSupersedes("scan")).toBe(doc);
+    off();
+  });
+
+  it("gives back the untouched scan while As captured is on, and the swap after", async () => {
+    const off = followSupersedes("scan-ac", VARIANTS, "https://x.test/scan/tileset.json", load);
+    useVariants.getState().pick("scan-ac", "fill", "rebuilt");
+    await release("variants/fill/rebuilt/s.json");
+    const doc = files["variants/fill/rebuilt/s.json"];
+    expect(activeSupersedes("scan-ac")).toBe(doc);
+    useAsCaptured.getState().set(true);
+    expect(activeSupersedes("scan-ac")).toBeNull();
+    // The viewer's style is untouched; changing it meanwhile swaps nothing.
+    expect(useSettings.getState().inferredStyle).toBe("show");
+    useSettings.getState().set({ inferredStyle: "highlight" });
+    expect(activeSupersedes("scan-ac")).toBeNull();
+    useAsCaptured.getState().set(false);
+    await settle();
+    expect(activeSupersedes("scan-ac")).toBe(doc);
+    expect(asked).toEqual(["variants/fill/rebuilt/s.json"]); // loaded once
     off();
   });
 

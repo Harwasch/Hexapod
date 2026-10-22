@@ -25,6 +25,7 @@ import {
   type LayerBackend,
 } from "@/cesium/scanView/scanLayers";
 import { PLAYCANVAS_LAYER_MODIFIER } from "@/cesium/scanView/playcanvasBackend";
+import { useAsCaptured } from "@/state/asCaptured";
 import { useSettings } from "@/state/settings";
 import { useVariants } from "@/state/variants";
 import type { View } from "@/view/stream";
@@ -123,6 +124,7 @@ const EXTRAS = {
 
 describe("an inferred layer drawn by the overlay's renderer", () => {
   afterEach(() => {
+    useAsCaptured.getState().set(false);
     useSettings.getState().set({ inferredStyle: "hide" });
     useVariants.getState().pick("layers-1", "fill", null);
   });
@@ -211,6 +213,72 @@ describe("an inferred layer drawn by the overlay's renderer", () => {
     expect(looks.get(mesh)?.highlight).toBe(false);
     // Nothing fetched again.
     expect(calls.filter((c) => c.startsWith("load")).length).toBe(loads);
+    layers.stop();
+  });
+
+  it("takes the tiles off screen while As captured is on, and the same ones back after", async () => {
+    useSettings.getState().set({ inferredStyle: "show" });
+    const { backend, calls, onScreen } = fakeBackend();
+    const layers = new ScanLayers(
+      backend,
+      "layers-ac",
+      "https://tiles.example/s/tileset.json",
+      EXTRAS,
+      SCAN_ROOT,
+      {
+        arrived: () => undefined,
+        changed: () => undefined,
+        budget: () => 1e6,
+        fetchJson: () => Promise.resolve(layerJson()),
+      },
+    );
+    await flush();
+    layers.update(VIEW);
+    await flush();
+    layers.update(VIEW);
+    const [mesh] = [...onScreen];
+    if (!mesh) throw new Error("no layer tile on screen");
+    useAsCaptured.getState().set(true);
+    expect(onScreen.size).toBe(0);
+    expect(layers.status()).toMatchObject({ wanted: 0, drawn: 0, style: "hide" });
+    // Nothing is streamed meanwhile.
+    const loads = calls.filter((c) => c.startsWith("load")).length;
+    layers.update(VIEW);
+    await flush();
+    expect(onScreen.size).toBe(0);
+    expect(useSettings.getState().inferredStyle).toBe("show");
+    useAsCaptured.getState().set(false);
+    expect([...onScreen]).toEqual([mesh]);
+    expect(calls.filter((c) => c.startsWith("load")).length).toBe(loads);
+    layers.stop();
+  });
+
+  it("loads nothing when As captured is on from the start (`?asCaptured=1`)", async () => {
+    useSettings.getState().set({ inferredStyle: "show" });
+    useAsCaptured.getState().set(true);
+    const { backend } = fakeBackend();
+    const fetched: string[] = [];
+    const layers = new ScanLayers(
+      backend,
+      "layers-ac2",
+      "https://tiles.example/s/tileset.json",
+      EXTRAS,
+      SCAN_ROOT,
+      {
+        arrived: () => undefined,
+        changed: () => undefined,
+        budget: () => 1e6,
+        fetchJson: (url) => {
+          fetched.push(url);
+          return Promise.resolve(layerJson());
+        },
+      },
+    );
+    await flush();
+    expect(fetched).toEqual([]);
+    useAsCaptured.getState().set(false);
+    await flush();
+    expect(fetched).toHaveLength(1);
     layers.stop();
   });
 

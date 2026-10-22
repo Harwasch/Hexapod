@@ -4,8 +4,10 @@ import { useScene } from "@/cesium/SceneContext";
 import type { ViewRule } from "@/lib/compositor";
 import { AGE_RAMP, rampCss } from "@/lib/cellRamps";
 import { AGE_BUCKETS } from "@/lib/dataAge";
+import { AS_CAPTURED_TEXT } from "@/lib/asCapturedText";
 import { formatEpochDate, observedAtFromUpload } from "@/lib/epochs";
 import type { Epoch } from "@twin/contracts";
+import { useAsCaptured } from "@/state/asCaptured";
 import { useLiving } from "@/state/living";
 import { useSites } from "@/state/sites";
 import { useViewRule, type ViewRuleLegend } from "@/state/viewRule";
@@ -92,7 +94,8 @@ function RuleLegend({
  * while the site has two dates or more under CesiumJS (the caller's notice covers another
  * renderer); disabled, and says why, while a Living Survey rig moves the scan. The scene owns
  * the rule: the select shows what it says it draws (state/viewRule.ts), never its own click,
- * and why the last one ended when nobody turned it off.
+ * and why the last one ended when nobody turned it off. While As captured is on the rule
+ * chosen is drawn as Ground truth (compositorSession.ts), and the control says so.
  */
 export function RuleControl({
   siteId,
@@ -109,6 +112,7 @@ export function RuleControl({
   const legend = useViewRule((s) => s.legend);
   const compare = useSites((s) => s.compareDates?.siteId === siteId);
   const rigged = useLiving((s) => s.status.sites.some((site) => site.siteId === siteId));
+  const held = useAsCaptured((s) => s.on);
   const disabled = !onCesium || rigged;
   return (
     <div className="views__rule" data-testid="views-rule">
@@ -143,7 +147,14 @@ export function RuleControl({
           {VIEW_RULE_ENDED[ended]}
         </span>
       )}
-      {active && legend && <RuleLegend legend={legend} epochs={epochs} rule={active} />}
+      {active && held && active !== "ground-truth" && (
+        <span className="views__notice" role="note" data-testid="views-rule-as-captured">
+          {AS_CAPTURED_TEXT.rule}
+        </span>
+      )}
+      {active && legend && (
+        <RuleLegend legend={legend} epochs={epochs} rule={held ? "ground-truth" : active} />
+      )}
     </div>
   );
 }

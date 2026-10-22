@@ -1,4 +1,4 @@
-import { type CesiumWidget, Color, EntityCollection } from "cesium";
+import { type CesiumWidget, Color, EntityCollection, JulianDate } from "cesium";
 import { DEG_TO_RAD, EARTH_RADIUS_M, type LonLat } from "@twin/geo";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -45,13 +45,43 @@ function rehearsal(machineIds = ["TR-04"]) {
   });
 }
 
+/**
+ * Eight lanes side by side, 10 m apart, each crossing the same creek: eight hands, one band of
+ * neighbouring lanes, so one marker that counts them as the ghost reaches them.
+ */
+function eightHands() {
+  const lanes = Array.from({ length: 8 }, (_, i) => ({
+    points:
+      i % 2 === 0
+        ? [at(-200 + i * 10, -300), at(-200 + i * 10, 300)]
+        : [at(-200 + i * 10, 300), at(-200 + i * 10, -300)],
+    pass: i,
+  }));
+  return planRehearsal({
+    zones: [{ zoneId: "A-01", label: "A-01", lanes, machineIds: ["TR-04"], classId: "mower" }],
+    machines: [{ id: "TR-04", name: "TR-04 Kestrel", model: "Ranger 2 · mower" }],
+    elevation: null,
+    creeks: {
+      label: "USGS NHD flowlines, 1:24,000",
+      lines: [
+        {
+          id: "nhd-1",
+          name: "Figueroa Creek",
+          kind: "intermittent",
+          coordinates: [at(-300, 0), at(0, 0)],
+        },
+      ],
+    },
+  });
+}
+
 let frames: FrameRequestCallback[] = [];
 
 function setup() {
   const entities = new EntityCollection();
   const requestRender = vi.fn();
   const viewer = { entities, scene: { requestRender } } as unknown as CesiumWidget;
-  const mission = { setPreviewPassesShown: vi.fn(), flyToPoint: vi.fn() };
+  const mission = { setPreviewPassesShown: vi.fn(), flyToPoint: vi.fn(), hideAgents: vi.fn() };
   const manager = new RehearsalManager(viewer, mission as unknown as MissionManager);
   const heard: (RehearsalFrame | null)[] = [];
   manager.onFrame((frame) => heard.push(frame));
@@ -78,6 +108,81 @@ afterEach(() => {
 });
 
 describe("RehearsalManager", () => {
+  it("draws none of its simulated run while As captured hides it, and the run as it is after", () => {
+    const { manager, entities, requestRender, shown, heard } = setup();
+    const run = rehearsal();
+    manager.load(run, look);
+    const ghost = entities.getById("rehearsal:ghost:TR-04");
+    const now = JulianDate.now();
+    expect(ghost?.position?.getValue(now)).toBeDefined();
+    const first = run.lanes[0];
+    const hand = run.hands[0];
+    if (!first || !hand) throw new Error("expected a lane and a hand");
+    manager.seek(first.t1 + 1);
+    expect(shown("rehearsal:done:A-01:0")).toBe(true);
+    expect(shown(`rehearsal:hand:${hand.id}`)).toBe(true);
+    requestRender.mockClear();
+    manager.hideAgents(true);
+    expect(requestRender).toHaveBeenCalled();
+    // No ghost (no position: the billboard and its label go with it), no lane done, no hand
+    // raised: every lane is the plan's, pending. The mapped creek stays.
+    expect(ghost?.position?.getValue(now)).toBeUndefined();
+    expect(shown("rehearsal:done:A-01:0")).toBe(false);
+    expect(shown("rehearsal:lane:A-01:0")).toBe(true);
+    expect(shown(`rehearsal:hand:${hand.id}`)).toBe(false);
+    expect(shown("rehearsal:creek:0")).not.toBe(false);
+    // Its own state is untouched: the clock and the hands raised are where they were.
+    expect(heard.at(-1)).toMatchObject({ raised: 1 });
+    expect(manager.frame).toMatchObject({ t: first.t1 + 1, raised: 1 });
+    // The clock moved meanwhile draws nothing of it either.
+    manager.seek(run.durationS);
+    expect(shown("rehearsal:done:A-01:1")).toBe(false);
+    expect(shown("rehearsal:lane:A-01:1")).toBe(true);
+    // A rehearsal loaded meanwhile is hidden too, until it is shown again, as it stands.
+    manager.load(rehearsal(), look, first.t1 + 1);
+    const again = entities.getById("rehearsal:ghost:TR-04");
+    expect(again?.position?.getValue(now)).toBeUndefined();
+    expect(shown("rehearsal:done:A-01:0")).toBe(false);
+    manager.hideAgents(false);
+    expect(again?.position?.getValue(now)).toBeDefined();
+    expect(shown("rehearsal:done:A-01:0")).toBe(true);
+    expect(shown("rehearsal:lane:A-01:0")).toBe(false);
+    expect(shown(`rehearsal:hand:${hand.id}`)).toBe(true);
+  });
+
+  it("counts the hands raised while As captured hid them once it is off", () => {
+    const run = eightHands();
+    const { manager, ids, entities } = setup();
+    manager.load(run, look);
+    const marker = entities.getById(ids().find((id) => id.startsWith("rehearsal:hand:")) ?? "");
+    const image = () => decodeURIComponent(String(marker?.billboard?.image?.getValue()));
+    manager.seek((run.hands[2]?.t ?? 0) + 1);
+    expect(image()).toContain(">3</text>");
+    // The clock runs on while hidden; the marker drawn again counts every hand up by then.
+    manager.hideAgents(true);
+    manager.seek(Number.POSITIVE_INFINITY);
+    manager.hideAgents(false);
+    expect(marker?.show).toBe(true);
+    expect(image()).toContain(">8</text>");
+  });
+
+  it("hides the hand open in the card with the rest of the run while As captured is on", () => {
+    const { manager, shown, ids } = setup();
+    const run = rehearsal();
+    manager.load(run, look);
+    const hand = run.hands[0];
+    if (!hand) throw new Error("expected a hand");
+    manager.seek(hand.t + 1);
+    manager.focus(hand.id, false);
+    const focus = ids().find((id) => id.startsWith("rehearsal:focus:"));
+    if (!focus) throw new Error("no focus marker");
+    expect(shown(focus)).not.toBe(false);
+    manager.hideAgents(true);
+    expect(shown(focus)).toBe(false);
+    manager.hideAgents(false);
+    expect(shown(focus)).toBe(true);
+  });
+
   it("draws pending lanes, ghosts and the checked creek, hides the plan's passes", () => {
     const { manager, mission, ids, shown, heard } = setup();
     const run = rehearsal();
@@ -171,31 +276,7 @@ describe("RehearsalManager", () => {
   });
 
   it("stands one counting marker per cluster of hands, never one per hand", () => {
-    // Eight lanes side by side, 10 m apart, each crossing the same creek: eight hands, one
-    // band of neighbouring lanes, so one marker that counts them as the ghost reaches them.
-    const lanes = Array.from({ length: 8 }, (_, i) => ({
-      points:
-        i % 2 === 0
-          ? [at(-200 + i * 10, -300), at(-200 + i * 10, 300)]
-          : [at(-200 + i * 10, 300), at(-200 + i * 10, -300)],
-      pass: i,
-    }));
-    const run = planRehearsal({
-      zones: [{ zoneId: "A-01", label: "A-01", lanes, machineIds: ["TR-04"], classId: "mower" }],
-      machines: [{ id: "TR-04", name: "TR-04 Kestrel", model: "Ranger 2 · mower" }],
-      elevation: null,
-      creeks: {
-        label: "USGS NHD flowlines, 1:24,000",
-        lines: [
-          {
-            id: "nhd-1",
-            name: "Figueroa Creek",
-            kind: "intermittent",
-            coordinates: [at(-300, 0), at(0, 0)],
-          },
-        ],
-      },
-    });
+    const run = eightHands();
     expect(run.hands).toHaveLength(8);
     const { manager, ids, entities } = setup();
     manager.load(run, look);

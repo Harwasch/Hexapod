@@ -9,6 +9,7 @@ import { api, unwrap } from "@/api/client";
 import { useScene } from "@/cesium/SceneContext";
 import { describeError } from "@/lib/log";
 import { TOUCH_MEDIA, useMediaQuery } from "@/lib/media";
+import { HIDDEN_AS_CAPTURED, useAsCaptured } from "@/state/asCaptured";
 import { useLandAccessReady, useLandCanEdit } from "@/state/landIdentity";
 import { useShowOnce } from "@/state/showOnce";
 import { useUi } from "@/state/ui";
@@ -199,6 +200,7 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
   const tap = touch ? "Tap" : "Click";
   const headingId = useId();
 
+  const asCaptured = useAsCaptured((s) => s.on);
   const session = useShowOnce((s) => s.session);
   const mode = useShowOnce((s) => s.mode);
   const result = useShowOnce((s) => s.result);
@@ -305,6 +307,12 @@ export function ShowOnceCard({ land }: { land: LandArea }) {
         </span>
         <span className="show-once__chip show-once__chip--inferred">Inferred: similarity</span>
       </p>
+      {asCaptured && (
+        <p className="land-footnote" role="status" data-testid="show-once-as-captured">
+          {HIDDEN_AS_CAPTURED}: the answer is inferred, so the map draws none of it and takes no
+          taps until it is off.
+        </p>
+      )}
 
       {!raster && rasters.isLoading && (
         <p className="land-footnote" role="status">

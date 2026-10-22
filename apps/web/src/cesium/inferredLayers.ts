@@ -47,8 +47,8 @@ import {
   type InferredStyle,
 } from "@/lib/inferred";
 import { inferredLayersFor, variantsOf } from "@/lib/variants";
+import { effectiveInferredStyle, onInferredStyle } from "@/state/asCaptured";
 import { useInferred } from "@/state/inferred";
-import { useSettings } from "@/state/settings";
 import { followSupersedes } from "@/state/supersedes";
 import { onPickChange, pickedVariant, useVariants, type VariantStatus } from "@/state/variants";
 
@@ -271,7 +271,8 @@ export function attachInferredLayers(
   if (!url || (current().refs.length === 0 && !offersVariants)) return () => undefined;
   const layers: Layer[] = [];
   let disposed = false;
-  let style: InferredStyle = useSettings.getState().inferredStyle;
+  // The viewer's Show, Highlight or Hide -- Hide while As captured is on (state/asCaptured.ts).
+  let style: InferredStyle = effectiveInferredStyle();
   /** Highlight on the scan's primitive, for the layers it draws (one for them all). */
   const companionHighlight = new CompanionHighlight();
   /** This scan's place in the host's companion list (companions.ts), beside other owners'. */
@@ -323,9 +324,8 @@ export function attachInferredLayers(
     }
   };
   const offUpdate = scene.preUpdate.addEventListener(sync);
-  const offStyle = useSettings.subscribe((state) => {
-    if (state.inferredStyle === style) return;
-    style = state.inferredStyle;
+  const offStyle = onInferredStyle((next) => {
+    style = next;
     scene.requestRender();
   });
   const report = (status: VariantStatus | null): void => {

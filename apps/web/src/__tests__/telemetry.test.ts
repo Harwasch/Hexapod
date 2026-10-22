@@ -390,6 +390,36 @@ describe("the telemetry driver", () => {
     close(start.translation, [0, 0, 0], 1e-9);
   });
 
+  it("holds every bound object at rest while held (As captured), reading on meanwhile", () => {
+    const { driver } = driverFor(yardTelemetry());
+    const skin = new FakeSkin(skinDoc);
+    const rigid = new FakeRigid();
+    for (let now = 0; now <= 4000; now += 100) driver.tick(now, skin, () => rigid);
+    expect(rigid.current.get(8)).not.toBeNull();
+    expect(skin.current.get(10)).not.toBeNull();
+    // Held: written back to rest at once, both paths, and kept there.
+    const held = driver.tick(4100, skin, () => rigid, true);
+    expect(held).toEqual({ changed: true, moving: 0 });
+    expect(rigid.current.get(8)).toBeNull();
+    expect(skin.current.get(10)).toBeNull();
+    for (let now = 4200; now <= 6000; now += 100)
+      expect(driver.tick(now, skin, () => rigid, true)).toEqual({ changed: false, moving: 0 });
+    expect(driver.status(8)?.pose).toBeNull();
+    expect(driver.status(8)?.state).toBe("live");
+    // Let go: the pose of now, not of when it was held.
+    driver.tick(6100, skin, () => rigid);
+    const motion = rigid.current.get(8);
+    const status = driver.status(8);
+    if (!motion || !status?.rest || !status.pose) throw new Error("not moved again");
+    const loop = yardTelemetry().sources.get("yard-loop");
+    if (loop?.kind !== "synthetic") throw new Error("no loop");
+    close(
+      applyMotion(motion, status.rest.position),
+      pathPose(loop.path, status.playoutMs / 1000).position,
+      0.01,
+    );
+  });
+
   it("moves the skinned shrub by its constant handle only, exactly the rigid motion", () => {
     const { driver } = driverFor(yardTelemetry());
     const skin = new FakeSkin(skinDoc);

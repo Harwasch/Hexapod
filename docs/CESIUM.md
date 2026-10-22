@@ -624,6 +624,21 @@ Evidence: `e2e/compositorScene.spec.ts` (scene: each cell's pixels from one date
 pixel counts, and the pixels within a metre of a seam that blend both dates: 0 of 9,459, against
 6.3% with centres alone) and `e2e/compositor.spec.ts` (the app under CesiumJS and PlayCanvas).
 
+## As captured
+
+The splat view control's **As captured** switch (`state/asCaptured.ts`; `?asCaptured=1` in the
+address) draws only what a capture measured: no inferred layer or hole fill (under CesiumJS and
+under PlayCanvas or Spark, `scanView/scanLayers.ts`), no supersedes swap, a view rule as Ground
+truth, the wind calm, the poke tool off, telemetry and split objects at rest, and nothing a
+simulated machine did (a rehearsal's ghosts, finished lanes and raised hands; a simulated fleet's
+machines, tracks and zone progress; the Land agent's pins, outlines and research maps; Show
+once's inferred heatmap; the procedural synthetic tree). Plans and zones' outlines and names
+stay, as annotations, and the chip says so. It writes none of the viewer's own choices (the poke
+tool is given back), so turning it off draws what was drawn before; a HUD chip says it is on,
+with the way back. Kept only in the address, which follows the switch. The Simulated
+motion badge is not told: it goes because nothing animates. See
+[ADR 0019](DECISIONS/0019-living-map-scoped.md) § As captured. Evidence: `e2e/asCaptured.spec.ts`.
+
 ## Patched engine
 
 `patches/@cesium__engine@26.3.0.patch` (applied by pnpm on install) guards

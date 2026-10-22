@@ -9,7 +9,9 @@ import {
   type Entity,
 } from "cesium";
 import { polygonsOf } from "@twin/geo";
+import { useAsCaptured } from "@/state/asCaptured";
 import {
+  agentMade,
   useLandContext,
   type LandContextFeature,
   type LandContextLayer,
@@ -29,7 +31,10 @@ function featureColor(layer: LandContextLayer, feature: LandContextFeature, sele
   );
 }
 
-/** Separate, disposable analytical/candidate overlays; never change the land scope. */
+/**
+ * Separate, disposable analytical/candidate overlays; never change the land scope. While As
+ * captured is on, what the Land agent made (`agentMade`) is not drawn; the store keeps it.
+ */
 export function LandContextBridge() {
   const host = useScene();
   useEffect(() => {
@@ -43,7 +48,10 @@ export function LandContextBridge() {
       Cartesian3.fromDegreesArray(points.flatMap((point) => [point[0] ?? 0, point[1] ?? 0]));
     const sync = () => {
       if (host.isDestroyed) return;
-      const { layers } = useLandContext.getState();
+      const all = useLandContext.getState().layers;
+      const layers = useAsCaptured.getState().on
+        ? Object.fromEntries(Object.entries(all).filter(([, layer]) => !agentMade(layer)))
+        : all;
       host.viewer.entities.suspendEvents();
       try {
         for (const [id, current] of rendered) {
@@ -194,6 +202,9 @@ export function LandContextBridge() {
     const offContext = useLandContext.subscribe((next, previous) => {
       if (next.layers !== previous.layers) sync();
     });
+    const offAsCaptured = useAsCaptured.subscribe((next, previous) => {
+      if (next.on !== previous.on) sync();
+    });
     const offLand = useLand.subscribe((next, previous) => {
       if (next.active?.id !== previous.active?.id) useLandContext.getState().clear();
       else if (previous.mode === "candidates" && next.mode !== "candidates")
@@ -209,6 +220,7 @@ export function LandContextBridge() {
       offInventoryPick();
       offResearchPick();
       offContext();
+      offAsCaptured();
       offLand();
       offIdentity();
       if (!host.isDestroyed)

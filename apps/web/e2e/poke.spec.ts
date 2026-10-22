@@ -316,3 +316,56 @@ for (const renderer of ["cesium", "playcanvas", "spark"] as const) {
     expect(offStatus.holding).toBe(false);
   });
 }
+
+// As captured (state/asCaptured.ts): a ring is modelled motion, so turning it on stops one at
+// once -- the measured frame, pixel for pixel -- rather than letting it ring down.
+test("a ringing tree is at rest the moment As captured is on (cesium)", async ({ page }) => {
+  test.setTimeout(900_000);
+  const errors: string[] = [];
+  await open(page, "cesium", errors);
+  const call = caller(page);
+  const asCaptured = (on: boolean): Promise<void> =>
+    page.evaluate(
+      `import("/src/state/asCaptured.ts").then((m) => m.useAsCaptured.getState().set(${String(on)}))`,
+    );
+  await call("view", 30, -35, 32);
+  await call("view", 30, -35, 32);
+  const rest = await call("frame");
+  const tree = (await call("rectOf", 1, 1.2)) ?? undefined;
+  const crown = await call("screenPoint", 1, [0, 0, 6.5]);
+  if (!crown) throw new Error("the crown is off screen");
+  await call("pokeOn", 0);
+  await page.mouse.move(crown.x, crown.y);
+  await page.mouse.down();
+  for (let k = 1; k <= 6; k += 1) await page.mouse.move(crown.x + 12 * k, crown.y - 2 * k);
+  await call("pokeAdvance", 1.5);
+  await page.mouse.up();
+  await call("pokeAdvance", 0.35);
+  const ringing = await call("frame");
+  const ringingStatus = await call("pokeStatus");
+  await asCaptured(true);
+  // One tick: no decay.
+  await call("pokeAdvance", 1 / 60);
+  const still = await call("frame");
+  const status = await call("pokeStatus");
+  const measures = {
+    ringingActive: ringingStatus.active,
+    ring: await call("difference", rest, ringing, tree),
+    still: await call("difference", rest, still, undefined, 0),
+    status,
+    overlay: await call("pokeOverlay", 1),
+    toolOn: await page.evaluate(
+      `import("/src/state/skinPoke.ts").then((m) => m.useSkinPoke.getState().active)`,
+    ),
+  };
+  test.info().annotations.push({ type: "measures", description: JSON.stringify(measures) });
+  await asCaptured(false);
+  expect(shaderErrors(errors)).toEqual([]);
+  expect(measures.ringingActive).toBeGreaterThan(0);
+  expect(measures.ring).toBeGreaterThan(0.002);
+  expect(measures.still).toBe(0);
+  expect(status.active).toBe(0);
+  expect(status.holding).toBe(false);
+  expect(measures.overlay).toBeNull();
+  expect(measures.toolOn).toBe(false);
+});

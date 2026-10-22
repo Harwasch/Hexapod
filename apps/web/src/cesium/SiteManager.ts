@@ -38,6 +38,7 @@ import {
   siteEpochs,
   type CompareDates,
 } from "@/lib/epochs";
+import { PROCEDURAL_SLUGS } from "@/lib/procedural";
 import { assetScale, scalableAsset } from "@/lib/realSize";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 
@@ -296,6 +297,8 @@ interface ActiveSite {
    */
   rule: { rule: ViewRule; session?: CompositorHandle } | null;
   handles: Map<string, AssetHandle>;
+  /** A procedural fixture's model, not drawn while As captured is on (`hideFixtures`). */
+  withheld?: boolean;
   /** Radius of the authored footprint (at least MIN_SITE_RADIUS_M), the yardstick for engagement. */
   radius: number;
   /**
@@ -315,9 +318,9 @@ interface ActiveSite {
   far: boolean;
 }
 
-/** Whether a site's model is drawn: engaged, or a scan seen from afar. */
+/** Whether a site's model is drawn: engaged, or a scan seen from afar, and not withheld. */
 function drawn(entry: ActiveSite): boolean {
-  return entry.engaged || entry.far;
+  return (entry.engaged || entry.far) && !entry.withheld;
 }
 
 /** Where to arrive at `site` in `viewport` instead of its bookmark, or null to keep it. */
@@ -425,6 +428,7 @@ export class SiteManager {
    *  (scanView/ScanRendererHost.ts) while CesiumJS keeps the tileset, hidden, for its frame
    *  and its solids. */
   private splatRenderer: SplatRendererKind = DEFAULT_SPLAT_RENDERER;
+  private fixturesHidden = false;
   /** The view rule asked for last (`setViewRule`): an earlier call still loading gives way. */
   private ruleAsked: ViewRule | null = null;
   /** The site the representation switcher, clipping and the HUD refer to. */
@@ -730,6 +734,7 @@ export class SiteManager {
       engaged: false,
       // Measured on the tileset, which is not loaded yet (`showRepresentation`).
       far: false,
+      withheld: this.fixturesHidden && PROCEDURAL_SLUGS.has(site.slug),
     };
     entry.engaged = this.shouldEngage(entry, false);
     this.loaded.set(siteId, entry);
@@ -1802,13 +1807,19 @@ export class SiteManager {
    * the scan a dedicated renderer draws follows through the `tilesets` event (`scanTarget`),
    * near and far alike, as one session (ScanRendererHost.setTarget).
    */
-  private setView(entry: ActiveSite, engaged: boolean, far: boolean): void {
-    if (entry.engaged === engaged && entry.far === far) return;
+  private setView(
+    entry: ActiveSite,
+    engaged: boolean,
+    far: boolean,
+    withheld = entry.withheld,
+  ): void {
+    if (entry.engaged === engaged && entry.far === far && entry.withheld === withheld) return;
     const wasDrawn = drawn(entry);
     const engagedBefore = entry.engaged;
     const farBefore = entry.far;
     entry.engaged = engaged;
     entry.far = far;
+    entry.withheld = withheld;
     // Both dates when two are compared, each as soon as it is in: the right-hand one (the
     // main, which carries the clip) may still be loading while the left one is drawn.
     for (const other of this.drawnHandles(entry)) {
@@ -2882,6 +2893,18 @@ export class SiteManager {
       entry.representation === "gaussian-splat" &&
       this.pickAsset(entry, entry.representation)?.id === handle.asset.id
     );
+  }
+
+  /**
+   * As captured (ADR 0019): a procedural fixture (`lib/procedural.ts`), generated and never
+   * captured, is not drawn while it is on -- its tileset hidden, the world under it whole, no
+   * other renderer handed it -- and is drawn as the camera has it once it is off.
+   */
+  hideFixtures(hidden: boolean): void {
+    this.fixturesHidden = hidden;
+    for (const entry of this.loaded.values())
+      if (PROCEDURAL_SLUGS.has(entry.site.slug))
+        this.setView(entry, entry.engaged, entry.far, hidden);
   }
 
   /**

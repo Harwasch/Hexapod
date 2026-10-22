@@ -19,7 +19,10 @@ export interface LandContextStyle {
 }
 export interface LandContextLayer {
   drawingGuideSources?: LandCandidate["source"][];
+  /** A research map: made by the Land agent, so As captured draws none of it (`agentMade`). */
   researchArtifactId?: string;
+  /** Made by the Land agent (its findings, where it is looking): see `agentMade`. */
+  agent?: boolean;
   unit?: string | null;
   legend?: string;
   id: string;
@@ -28,6 +31,14 @@ export interface LandContextLayer {
   selectedIds?: string[];
   style?: LandContextStyle;
 }
+/**
+ * Whether the Land agent made a layer: its findings and where it is looking, or a research map
+ * it produced. As captured draws none of it (ADR 0019); the layer is kept for after.
+ */
+export function agentMade(layer: LandContextLayer): boolean {
+  return layer.agent === true || layer.researchArtifactId !== undefined;
+}
+
 export interface LandRasterLayer {
   kind?: "archive-alignment";
   categorical?: boolean;

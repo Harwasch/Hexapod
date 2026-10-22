@@ -13,6 +13,7 @@ import {
   VARIANT_SYSTEMS,
   type VariantSystem,
 } from "@/lib/variants";
+import { HIDDEN_AS_CAPTURED, useAsCaptured } from "@/state/asCaptured";
 import { useSettings } from "@/state/settings";
 import { useVariants, type OfferedVariants, type VariantStatus } from "@/state/variants";
 
@@ -80,13 +81,19 @@ function SystemRow({
   const picked = useVariants((s) => s.picks[assetId]?.[system]);
   const status = useVariants((s) => s.status[assetId]?.[system]);
   const pick = useVariants((s) => s.pick);
+  // A fill is inferred: As captured draws none, so the row waits, its pick kept for after.
+  const held = useAsCaptured((s) => s.on) && system === "fill";
   const variants = offered[system];
   const variant = findVariant(offered, system, resolvePick(system, picked));
   const value = variant?.name ?? TODAY;
-  const about = variant ? variant.about : todayAbout(system, offered.today[system]);
+  const about = held
+    ? HIDDEN_AS_CAPTURED
+    : variant
+      ? variant.about
+      : todayAbout(system, offered.today[system]);
   const options = [
-    { value: TODAY, label: "Today" },
-    ...variants.map((v) => ({ value: v.name, label: v.label })),
+    { value: TODAY, label: "Today", disabled: held },
+    ...variants.map((v) => ({ value: v.name, label: v.label, disabled: held })),
   ];
   const oneLine =
     options.length <= SEGMENTS_MAX &&

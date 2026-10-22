@@ -2,8 +2,8 @@
  * A scan's inferred layers (lib/inferred.ts) drawn by the dedicated splat renderer that draws
  * the scan (ScanRendererHost), as `cesium/inferredLayers.ts` draws them under CesiumJS: the
  * layers of the fill method picked (state/variants.ts), or Today's `extras.inferredLayers`,
- * shown while Inferred is Show or Highlight (state/settings.ts), in Highlight's look, and faded
- * by their own view cones (layerLook.ts).
+ * shown while Inferred is Show or Highlight (state/settings.ts) and As captured is off
+ * (state/asCaptured.ts), in Highlight's look, and faded by their own view cones (layerLook.ts).
  *
  * **One sort.** Splats write no depth in any renderer, so what decides which of two splats is
  * in front is the order they are blended in -- and only one renderer's sort can order both.
@@ -34,7 +34,7 @@ import { resolveLayerUrl, type InferredLayerRef, type InferredStyle } from "@/li
 import { createLogger } from "@/lib/log";
 import { variantsOf } from "@/lib/variants";
 import { loadViewCones, viewConesMetaOf, type ViewConesMeta } from "@/lib/viewCones";
-import { useSettings } from "@/state/settings";
+import { effectiveInferredStyle, onInferredStyle } from "@/state/asCaptured";
 import { onPickChange } from "@/state/variants";
 import { TileStreamer, type View } from "@/view/stream";
 import { parseTileset, type Sphere } from "@/view/tiles";
@@ -167,15 +167,11 @@ export class ScanLayers<M> {
     private readonly scanRoot: Mat4,
     private readonly options: ScanLayersOptions,
   ) {
-    this.#style = useSettings.getState().inferredStyle;
+    this.#style = effectiveInferredStyle();
     if (!backend.loadLayer || !backend.setLayerLook) return;
     if (variantsOf(extras).fill.length > 0)
       this.#offs.push(onPickChange(assetId, "fill", () => this.#follow()));
-    this.#offs.push(
-      useSettings.subscribe((state) => {
-        if (state.inferredStyle !== this.#style) this.#restyle(state.inferredStyle);
-      }),
-    );
+    this.#offs.push(onInferredStyle((style) => this.#restyle(style)));
     this.#follow();
   }
 

@@ -26,6 +26,9 @@
  * primitive draws nothing then. Split objects are tilesets of their own beside their scan, out
  * of the host's sort: each is drawn whole by the date owning the cell under its centre
  * (`ruledObjects`), in its own colours (Data age does not tint it).
+ *
+ * **As captured** (state/asCaptured.ts) draws the rule chosen as Ground truth, with no inferred
+ * owner, while it is on; the rule chosen stays the viewer's, and comes back when it is off.
  */
 
 import type { Epoch, Representation, SiteAsset } from "@twin/contracts";
@@ -54,6 +57,7 @@ import {
   shownOption,
 } from "@/lib/epochs";
 import { createLogger } from "@/lib/log";
+import { effectiveInferredStyle, useAsCaptured } from "@/state/asCaptured";
 import { useSettings } from "@/state/settings";
 import { useViewMode } from "@/state/viewMode";
 import { useViewRule, type LeftOut, type ViewRuleLegend } from "@/state/viewRule";
@@ -496,10 +500,12 @@ export function startCompositor(
         boxes: c.boxes ?? null,
       };
     });
-    const rule = site.rule?.rule ?? "latest";
+    const rule: ViewRule = useAsCaptured.getState().on
+      ? "ground-truth"
+      : (site.rule?.rule ?? "latest");
     const asOf = asOfNow();
     const asOfIso = asOf?.epoch.observedAt ?? null;
-    const style = useSettings.getState().inferredStyle;
+    const style = effectiveInferredStyle();
     const key = [
       rule === "ground-truth",
       asOfIso,
@@ -601,6 +607,7 @@ export function startCompositor(
   const offStyle = useSettings.subscribe((s, previous) => {
     if (s.inferredStyle !== previous.inferredStyle) scene.requestRender();
   });
+  const offAsCaptured = useAsCaptured.subscribe(() => scene.requestRender());
   scene.requestRender();
   return {
     assets: (representation) => ruleAssets(site, representation, context.cesium()),
@@ -610,6 +617,7 @@ export function startCompositor(
       disposed = true;
       offUpdate();
       offStyle();
+      offAsCaptured();
       for (const off of listening.values()) off();
       listening.clear();
       release();

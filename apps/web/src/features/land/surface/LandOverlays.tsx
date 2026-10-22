@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from "react";
 
 import { LandAnchorProjector } from "@/cesium/LandAnchorProjector";
 import { useScene } from "@/cesium/SceneContext";
+import { useAsCaptured } from "@/state/asCaptured";
 import { currentLeaders, onLeadersChange, useLandMap, type MapPin } from "@/state/landMap";
 
 import { leaderPath } from "./leaderPath";
@@ -27,12 +28,20 @@ function leaderNode(svg: SVGSVGElement): SVGGElement {
 /**
  * Land marks that live on the map: labelled pins and the leader lines that tie a card to the
  * place it describes. Both are positioned straight into the DOM after each rendered frame, as
- * the fleet markers are; React renders only when the set of pins changes.
+ * the fleet markers are; React renders only when the set of pins changes. A mark in the agent's
+ * tone is the agent's work, which As captured does not draw (ADR 0019).
  */
 export function LandOverlays() {
   const scene = useScene();
   const pinsByOwner = useLandMap((s) => s.pins);
-  const pins = useMemo(() => Object.values(pinsByOwner).flat(), [pinsByOwner]);
+  const asCaptured = useAsCaptured((s) => s.on);
+  const pins = useMemo(
+    () =>
+      Object.values(pinsByOwner)
+        .flat()
+        .filter((pin) => !(asCaptured && pin.tone === "agent")),
+    [pinsByOwner, asCaptured],
+  );
   const root = useRef<HTMLDivElement>(null);
   const svg = useRef<SVGSVGElement>(null);
   const nodes = useRef(new Map<string, HTMLElement>());
@@ -61,9 +70,10 @@ export function LandOverlays() {
           node.style.transform = `translate3d(${(at.x + dx).toFixed(1)}px, ${(at.y + dy).toFixed(1)}px, 0)`;
       }
       const live = new Set<string>();
+      const hideAgent = useAsCaptured.getState().on;
       for (const leader of currentLeaders()) {
         const element = leader.element;
-        if (!element.isConnected) continue;
+        if (!element.isConnected || (hideAgent && leader.tone === "agent")) continue;
         const rect = element.getBoundingClientRect();
         if (!rect.width || !rect.height) continue;
         const at = created.project(leader.anchor);

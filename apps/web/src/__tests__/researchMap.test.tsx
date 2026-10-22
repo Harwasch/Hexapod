@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, expect, it, vi } from "vitest";
 import { ResearchMapExplorer } from "@/features/land/ResearchMapExplorer";
 import { researchMapBounds, mapValue } from "@/features/land/researchMap";
+import { HIDDEN_AS_CAPTURED, useAsCaptured } from "@/state/asCaptured";
 import { useLandContext } from "@/state/landContext";
 import type { ResearchArtifact } from "@twin/contracts";
 const { flyToRectangle } = vi.hoisted(() => ({ flyToRectangle: vi.fn() }));
@@ -18,6 +19,7 @@ const output: Extract<ResearchArtifact["output"], { kind: "map" }> = {
 };
 afterEach(() => {
   cleanup();
+  useAsCaptured.getState().set(false);
   useLandContext.getState().clear();
   vi.clearAllMocks();
 });
@@ -83,4 +85,12 @@ it("retains selection when replacing a layer and clears it when the feature disa
   useLandContext.getState().setLayer({ ...layer, features: layer.features.slice(1) });
   expect(useLandContext.getState().selectedMapFeature).toBeNull();
   expect(useLandContext.getState().layers.map?.selectedIds).toEqual([]);
+});
+it("says the agent's map is not drawn while As captured is on, and keeps it shown for after", () => {
+  render(<ResearchMapExplorer artifactId="map" title="Samples" output={output} />);
+  fireEvent.click(screen.getByRole("button", { name: "Show map layer" }));
+  expect(screen.queryByText(new RegExp(HIDDEN_AS_CAPTURED))).toBeNull();
+  act(() => useAsCaptured.getState().set(true));
+  expect(screen.getByRole("status").textContent).toContain(HIDDEN_AS_CAPTURED);
+  expect(useLandContext.getState().layers.map).toBeDefined();
 });

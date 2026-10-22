@@ -2,11 +2,12 @@
  * Which measured splats each scan's chosen fill method supersedes (lib/supersedes.ts), now.
  *
  * A scan's entry is set only while a fill variant that names a `supersedes` file is picked
- * (state/variants.ts) and Inferred is Show or Highlight (state/settings.ts); Hide, Today, a
- * method without the file, or one whose file did not load, leave none -- the untouched scan.
- * None either while a per-cell view rule is on (state/viewRule.ts): the rule draws each cell
- * from one date, measured or inferred, and a fill it does not draw there (never under Ground
- * truth, only where no date saw under the others) must not hide the measured splats.
+ * (state/variants.ts) and Inferred is Show or Highlight (state/settings.ts); Hide, As captured
+ * (state/asCaptured.ts), Today, a method without the file, or one whose file did not load,
+ * leave none -- the untouched scan. None either while a per-cell view rule is on
+ * (state/viewRule.ts): the rule draws each cell from one date, measured or inferred, and a fill
+ * it does not draw there (never under Ground truth, only where no date saw under the others)
+ * must not hide the measured splats.
  * Switching methods clears the entry before the next one loads, so another method's splats are
  * never hidden under this one. `effectiveDoc` (state/sceneSelect.ts) draws from it.
  *
@@ -19,7 +20,7 @@ import { create } from "zustand";
 import { createLogger } from "@/lib/log";
 import { loadSupersedes, type SupersedesDoc } from "@/lib/supersedes";
 import type { ScanVariants } from "@/lib/variants";
-import { useSettings } from "@/state/settings";
+import { effectiveInferredStyle, onInferredStyle } from "@/state/asCaptured";
 import { onPickChange, pickedVariant } from "@/state/variants";
 import { useViewRule } from "@/state/viewRule";
 
@@ -71,8 +72,7 @@ export function followSupersedes(
   let disposed = false;
   const follow = (): void => {
     const uri = pickedVariant(assetId, "fill", variants)?.supersedes ?? null;
-    const next =
-      useSettings.getState().inferredStyle === "hide" || useViewRule.getState().active ? null : uri;
+    const next = effectiveInferredStyle() === "hide" || useViewRule.getState().active ? null : uri;
     if (next === wanted) return;
     wanted = next;
     store.getState().setActive(assetId, null);
@@ -105,9 +105,7 @@ export function followSupersedes(
     );
   };
   const offPick = onPickChange(assetId, "fill", follow);
-  const offStyle = useSettings.subscribe((state, previous) => {
-    if (state.inferredStyle !== previous.inferredStyle) follow();
-  });
+  const offStyle = onInferredStyle(follow);
   const offRule = useViewRule.subscribe(follow);
   follow();
   return () => {

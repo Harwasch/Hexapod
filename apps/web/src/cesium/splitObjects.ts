@@ -9,7 +9,8 @@
  * drawn under the model matrix `P · S · L · S⁻¹` (`L` = `poseLocalMatrix`, `P` the scan's
  * model matrix) it lands at `P · S · T(origin + t) · R`, its pose in the scan's frame
  * wherever the scan itself has been put. A pose set in the store (`useSceneObjects.setPose`,
- * a driver or a person) overrides the one the scan declares.
+ * a driver or a person) overrides the one the scan declares; As captured (state/asCaptured.ts)
+ * draws every object at rest, where it was measured (`objectPose`).
  */
 import { Cesium3DTileset, Matrix4, type Scene } from "cesium";
 
@@ -22,7 +23,7 @@ import {
   type ObjectPose,
   type SplitObjectRef,
 } from "@/lib/sceneObjects";
-import { useSceneObjects } from "@/state/sceneObjects";
+import { objectPose, useSceneObjects } from "@/state/sceneObjects";
 
 import { ruledObjects } from "./companions";
 import { keepOffscreenSplats } from "./splatInternals";
@@ -94,8 +95,7 @@ export function attachSplitObjects(
     key: string;
   }[] = [];
   let disposed = false;
-  const poseFor = (ref: SplitObjectRef): ObjectPose =>
-    useSceneObjects.getState().poses[assetId]?.[ref.instance] ?? ref.pose;
+  const poseFor = (ref: SplitObjectRef): ObjectPose => objectPose(assetId, ref);
   const sync = (): void => {
     const ruled = ruledObjects.get(parent);
     for (const object of drawn) {

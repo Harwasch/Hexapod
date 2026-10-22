@@ -13,6 +13,7 @@ import { anywhereProject } from "@/missions/anywhere";
 import { DemoMissionProvider, demoRanchArrival } from "@/missions/demo";
 import { hiddenMissionZoneIds } from "@/missions/landGround";
 import { siteProject } from "@/missions/siteProject";
+import { useAsCaptured } from "@/state/asCaptured";
 import { isReplaying } from "@/state/history";
 import { useLand } from "@/state/land";
 import { useLayers } from "@/state/layers";
@@ -246,12 +247,20 @@ export function SceneBridge() {
     scene?.scaleMeasure.setUnits(units);
   }, [scene, units]);
 
-  // Wind → scene. Reduced motion wins outright: it forces the scene calm while leaving the
-  // person's chosen wind in the store, so turning the preference back off restores it.
+  // Wind → scene. Reduced motion and As captured (state/asCaptured.ts) win outright: they
+  // force the scene calm while leaving the person's chosen wind in the store, so turning them
+  // back off restores it. As captured also hides simulated machines: a rehearsal's, and a
+  // simulated fleet's tracks (its markers: MissionOverlays), and procedural fixtures.
   const wind = useLiving((s) => s.wind);
+  const asCaptured = useAsCaptured((s) => s.on);
   useEffect(() => {
-    scene?.living.setWind(reducedMotion ? WIND_CALM : wind);
-  }, [scene, wind, reducedMotion]);
+    if (!scene) return;
+    scene.living.setWind(reducedMotion || asCaptured ? WIND_CALM : wind);
+    scene.rehearsal.hideAgents(asCaptured);
+    scene.sites.hideFixtures(asCaptured);
+    // A frame for what reads As captured as it draws: split objects and telemetry at rest.
+    scene.scene.requestRender();
+  }, [scene, wind, reducedMotion, asCaptured]);
 
   // Motion on GPU → scene. Every rigged site switches path in place, restoring the measured
   // pose through the path it leaves; the build flag and the engine can still force the CPU.
