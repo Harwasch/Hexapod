@@ -9,6 +9,10 @@ top covered. Positions are already east/north/up metres: `georef.json` places th
 identity, so the COLMAP frame, `canonical.ply`'s and the tileset's are the same and a cell
 of the grid is a cell of this field.
 
+The surface stage's tests and the demo's `--change` add to it: a crate (a solid box with
+no ground under it, `with_crate`), a re-scan's own noise (`jitter`) and a sparse SfM point
+cloud written into the pose model (`write_points3d`).
+
 Every capture here is synthetic. Nothing in it is a measurement of a real one.
 """
 
@@ -22,6 +26,7 @@ from typing import Any
 import numpy as np
 
 import gaussians
+import sfm
 from synthetic_scene import look_at, write_model
 
 #: Where every camera here looks: the tree's middle.
@@ -91,6 +96,81 @@ def field(
     }
 
 
+def with_crate(
+    columns: dict[str, np.ndarray],
+    *,
+    centre: tuple[float, float],
+    side_m: float = 1.5,
+    height_m: float = 1.5,
+    seed: int = 0,
+) -> dict[str, np.ndarray]:
+    """`columns` with a crate on the ground: a `side_m` square box `height_m` tall at
+    `centre`, its top and four sides covered at the ground's own density, and the ground
+    under it taken away (it stands on the ground, not in it)."""
+    rng = np.random.default_rng(seed)
+    x, y, z = (np.asarray(columns[name], dtype=np.float64) for name in ("x", "y", "z"))
+    half = side_m / 2
+    # Ground: within 5 cm of z = 0 (a jittered scan's ground too).
+    flat = np.abs(z) < 0.05
+    under = (np.abs(x - centre[0]) < half) & (np.abs(y - centre[1]) < half) & flat
+    ground = int((flat & ~under).sum())
+    # The ground's density, from what is left of it over the field it covers.
+    span = float(np.ptp(x[flat])) * float(np.ptp(y[flat])) if flat.any() else 0.0
+    density = ground / max(span, 1.0)
+    faces = side_m * side_m + 4 * side_m * height_m
+    count = int(density * faces)
+    face = rng.choice(5, size=count, p=[side_m * height_m / faces] * 4 + [side_m**2 / faces])
+    u = rng.uniform(-half, half, count)
+    v = rng.uniform(0, height_m, count)
+    w = rng.uniform(-half, half, count)
+    sides = [face == 0, face == 1, face == 2, face == 3]
+    crate = np.stack(
+        [
+            centre[0] + np.select(sides[:2], [half, -half], u),
+            centre[1] + np.select(sides, [u, u, half, -half], w),
+            np.where(face == 4, height_m, v),
+        ],
+        axis=1,
+    )
+    keep = ~under
+    out = {name: np.asarray(values)[keep] for name, values in columns.items()}
+    template = {name: np.asarray(values)[keep][:1] for name, values in columns.items()}
+    extra = {name: np.repeat(template[name], count) for name in template}
+    extra["x"], extra["y"], extra["z"] = (crate[:, axis].astype(np.float32) for axis in range(3))
+    return {name: np.concatenate([out[name], extra[name]]).astype(np.float32) for name in out}
+
+
+def jitter(
+    columns: dict[str, np.ndarray], sigma_m: float, *, seed: int = 0
+) -> dict[str, np.ndarray]:
+    """`columns` with each centre's height moved by N(0, `sigma_m`): another scan's noise."""
+    rng = np.random.default_rng(seed)
+    out = dict(columns)
+    out["z"] = (columns["z"] + rng.normal(0, sigma_m, columns["z"].shape)).astype(np.float32)
+    return out
+
+
+def write_points3d(directory: Path, xyz: np.ndarray, *, track: int = 2) -> Path:
+    """`points3D.bin` holding `xyz` (COLMAP's frame), each point seen by `track` frames:
+    what a pose model's sparse cloud is to the surface stage."""
+    points = np.asarray(xyz, dtype=np.float64).reshape(-1, 3)
+    n = points.shape[0]
+    rows = np.zeros((n * track, 2), dtype=np.uint32)
+    rows[:, 0] = np.tile(np.arange(1, track + 1, dtype=np.uint32), n)
+    rows[:, 1] = np.repeat(np.arange(n, dtype=np.uint32), track)
+    model = sfm.Points3D(
+        ids=np.arange(1, n + 1, dtype=np.uint64),
+        xyz=points,
+        rgb=np.full((n, 3), 128, dtype=np.uint8),
+        error=np.full(n, 0.5),
+        track=rows,
+        track_offsets=np.arange(0, n * track + 1, track, dtype=np.int64),
+    )
+    directory.mkdir(parents=True, exist_ok=True)
+    sfm.write_points3d(directory / "points3D.bin", model)
+    return directory / "points3D.bin"
+
+
 def arc(
     count: int,
     *,
@@ -142,13 +222,17 @@ def write_epoch(
     prior_epochs: int | None = None,
     alignment: dict[str, Any] | None = None,
     uncertainty_m: float = 5.0,
+    points: np.ndarray | None = None,
 ) -> list[str]:
     """An epoch's recipe inputs under `root` (a workdir's `inputs/`): `trained.ply`,
-    `poses`, `georef.json` (the identity, metric), `site_context/` (with `priorEpochs`
-    when given) and, when given, `epoch_alignment.json`. Returns the input names."""
+    `poses` (with `points` as its sparse cloud when given, else none), `georef.json` (the
+    identity, metric), `site_context/` (with `priorEpochs` when given) and, when given,
+    `epoch_alignment.json`. Returns the input names."""
     root.mkdir(parents=True, exist_ok=True)
     gaussians.write_ply(root / "trained.ply", columns)
     write_model(root / "poses", cameras)
+    if points is not None:
+        write_points3d(root / "poses", points)
     frame = {
         "source": "exif-gps-similarity",
         "scale": 1.0,

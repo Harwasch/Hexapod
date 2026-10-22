@@ -58,7 +58,7 @@ def test_memory_does_not_grow_with_the_splat(tmp_path: Path) -> None:
     for count in (150_000, 600_000):
         root = tmp_path / f"n{count}"
         _probe("make", str(root), str(count), "8", "--held")
-        stages = ("quality", "place", "confidence", "thumbnail", "ground")
+        stages = ("quality", "place", "confidence", "surface", "thumbnail", "ground")
         chunked = _probe("chunked", str(root), *stages, "--small", "--chunk", "32768")
         peaks[count] = float(chunked["peakMb"])
         whole[count] = float(_probe("whole", str(root))["peakMb"])
@@ -85,13 +85,14 @@ def test_eight_million_gaussians_fit_in_a_fixed_budget(tmp_path: Path) -> None:
         "quality",
         "place",
         "confidence",
+        "surface",
         "thumbnail",
         "ground",
         "--limit-mb",
         str(limit),
     )
     sys.stdout.write(
-        f"\n8M gaussians, quality + place + confidence + thumbnail + ground: {result}\n"
+        f"\n8M gaussians, quality + place + confidence + surface + thumbnail + ground: {result}\n"
     )
     assert result["peakMb"] < limit
     run = next(root.glob("run-*"))

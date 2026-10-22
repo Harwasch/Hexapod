@@ -178,21 +178,49 @@ def test_two_byte_channels_are_little_endian_and_signed(tmp_path: Path) -> None:
     data = np.zeros((1, 2, 2), dtype=np.int32)
     data[0, 0] = [-2, 7]
     data[0, 1] = [0x1234, 255]
-    grid = CellGrid("surface", channels, (CellPlane(3, 4, -1, 2, 1, data),))
+    # A kind of no fixed channels: the container's own rules only (a `surface` grid must
+    # have all four of its channels, `test_a_surface_grid_needs_its_four_channels`).
+    grid = CellGrid("heights", channels, (CellPlane(3, 4, -1, 2, 1, data),))
 
     descriptor = cell_grid.encode(grid, tmp_path)
-    raw = gzip.decompress((tmp_path / "surface.bin").read_bytes())
+    raw = gzip.decompress((tmp_path / "heights.bin").read_bytes())
 
     # Interleaved per cell: dsm (2 bytes, little-endian), then support.
     assert raw == b"\xfe\xff\x07\x34\x12\xff"
-    back = cell_grid.decode(descriptor, (tmp_path / "surface.bin").read_bytes())
+    back = cell_grid.decode(descriptor, (tmp_path / "heights.bin").read_bytes())
     assert back.planes[0].data.dtype == np.int32
     np.testing.assert_array_equal(back.planes[0].data, data)
     with pytest.raises(CellGridError, match="outside i2"):
         data[0, 0, 0] = 40_000
         cell_grid.encode(
-            CellGrid("surface", channels, (CellPlane(3, 4, -1, 2, 1, data),)), tmp_path
+            CellGrid("heights", channels, (CellPlane(3, 4, -1, 2, 1, data),)), tmp_path
         )
+
+
+def test_a_surface_grid_needs_its_five_channels(tmp_path: Path) -> None:
+    """`surface` (ADR 0018): dsm and ground i2 centimetres, sigma and support u1, and the
+    ground's own sigma u1, in that order; the no-height sentinel is i2's least value and
+    survives the round trip, in ground alone too (ground never observed)."""
+    assert [(c.name, c.type, c.unit_m) for c in cell_grid.SURFACE_CHANNELS] == [
+        ("dsm", "i2", 0.01),
+        ("ground", "i2", 0.01),
+        ("sigma", "u1", 0.01),
+        ("support", "u1", None),
+        ("groundSigma", "u1", 0.01),
+    ]
+    data = np.zeros((1, 3, 5), dtype=np.int16)
+    data[0, 0] = [cell_grid.NO_HEIGHT, cell_grid.NO_HEIGHT, 0, 0x11, 0]
+    data[0, 1] = [32767, -32767, 255, 0xF3, 255]
+    data[0, 2] = [400, cell_grid.NO_HEIGHT, 3, 0x72, 0]
+    grid = CellGrid("surface", cell_grid.SURFACE_CHANNELS, (CellPlane(2, -1, 0, 3, 1, data),))
+    descriptor = cell_grid.encode(grid, tmp_path)
+    assert descriptor["uri"] == "surface.bin"
+    assert descriptor["channels"][0] == {"name": "dsm", "type": "i2", "unitM": 0.01}
+    back = cell_grid.decode(descriptor, (tmp_path / "surface.bin").read_bytes())
+    np.testing.assert_array_equal(back.planes[0].data, data)
+    short = dict(descriptor, channels=descriptor["channels"][:4])
+    with pytest.raises(CellGridError, match="needs channels"):
+        cell_grid.decode(short, (tmp_path / "surface.bin").read_bytes())
 
 
 def test_lookup_finds_each_points_cell_and_zero_outside(tmp_path: Path) -> None:

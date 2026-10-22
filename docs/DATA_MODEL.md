@@ -238,6 +238,32 @@ outside, medianGsdMm, metric}` (finest level; `weakShare` is weak over scored + 
 - **Fixture:** `data/tiles/synthetic-yard-epochs/` (two grids over the synthetic yard, with
   `grids.json`), the cross-language decoder check.
 
+## Height surface
+
+Per epoch revision, the heights change between epochs is measured in (ADR 0018). Like the
+confidence grid, not a table yet (A5 records it): `surface.bin` beside the tiles, declared on the
+root as `extras.surface` (after `extras.confidence`) and copied to the top level of
+`registration.json` as `surface` (null: not measured).
+
+- **Container** `hexapod.cellgrid` v1, kind `surface`, on the epoch's confidence grid's finest
+  plane exactly (same `lattice.level`, `i0`, `j0`, `ni`, `nj`). One level.
+- **Channels:** `dsm` i2 and `ground` i2 (centimetres above the tileset frame's origin height,
+  along its up: a tangent plane, not a datum; `-32768` = no surface, or in `ground` alone under a
+  surface, ground never observed), `sigma` u1 (centimetres,
+  `max(1 cm, (z1 − zm)·FEW(n)·RMS2(n)/SPAN(n))`, dsm's bias included, widened for 3–6 samples, 255 = at least 2.55 m, 0 = no
+  surface), `support` u1 (bit 1 SfM points,
+  bit 2 splat centres; high nibble `floor(log2 samples)`, at most 15), `groundSigma` u1
+  (centimetres, ground's own: `max(1 cm, s_low·RMS2(N))` over the window's `N` samples, `s_low` the noise of the cell that set
+  the minimum, 255 = at
+  least 2.55 m, 0 = no ground).
+- **Keys:** `policy: surface-v1`, `status: uncalibrated`, `estimators {dsm, ground, sigma,
+minSamples, groundWindowM, groundWindowCells, groundUnobserved, groundMaxGrade, groundSigma,
+samples}`, `noData`, `sourceBits`,
+  `sigmaSaturatesAt`, `vertical {zero, originHeightM, surface}`, `alignedTo {kind: confidence,
+level, sha256}`, `summary {cells, surfaced, thin, samples {sfm, splat}, outside, nonFinite,
+outOfRange, sigmaSaturated, groundUnobserved, groundSigmaSaturated, medianSigmaCm, metric}`.
+- **Pipeline artifact:** `surface` → `surface/surface.json` and `surface.bin`.
+
 ## Runtime scale
 
 A phone video registered before the pipeline estimated scales (`scaleSource: unresolved`)

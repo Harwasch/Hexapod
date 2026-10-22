@@ -89,6 +89,7 @@ known-first-party = [
   "site_frame",
   "splat_tiles",
   "stages",
+  "surface",
   "synthetic_scene",
   "test_train_gsplat",
   "training",

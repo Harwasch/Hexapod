@@ -314,6 +314,11 @@ pnpm lint && pnpm typecheck && pnpm test`, `pnpm e2e` if `apps/web` changed, plu
 - An epoch's confidence lives in `epoch_maps` per **asset**, and an attach moves the row's URL
   with the generation it cuts (`epoch_maps.repoint`); a `confidence` sidecar is not attachable.
   `GET /sites/{id}/epochs` loads the maps eagerly (`test_query_counts.py`).
+- The height surface is opt-in the same way: `convert(surface=None)` writes every fixture's bytes,
+  and its descriptor is appended **after** `confidence` (after `collision` without one). It is
+  written on the confidence grid's own plane; a surface stage that chose its own level or window
+  would break every comparison between epochs (ADR 0018). Its estimators are uncalibrated and the
+  descriptor says so; nothing may present a change map from them as observed.
 - A new `photo-reconstruct` stage bumps the recipe version, `SHIPPED_RECIPE_VERSIONS`,
   `apps/api/tests/test_quality_api.py` `STAGES`, `experiments/run_variants.py` `STAGE_ORDER` and
   the upload page's `STAGE_TEXT` together.
