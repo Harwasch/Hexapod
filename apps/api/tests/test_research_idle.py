@@ -12,14 +12,28 @@ from app.research.worker import ResearchWorker
 
 
 class Clock:
+    """A fake clock for poll(). It also bounds the loop: poll() asks the time or sleeps on
+    every idle pass, so a regression that never exits (idle exit removed, no sleep at all)
+    fails after STEPS calls instead of hanging the suite. pytest-timeout is not installed."""
+
+    STEPS = 5000
+
     def __init__(self) -> None:
         self.now = 0.0
         self.delays: list[float] = []
+        self.steps = 0
+
+    def _step(self) -> None:
+        self.steps += 1
+        if self.steps > self.STEPS:
+            raise AssertionError(f"poll() still looping after {self.STEPS} clock calls")
 
     def time(self) -> float:
+        self._step()
         return self.now
 
     def sleep(self, delay: float) -> None:
+        self._step()
         self.delays.append(delay)
         self.now += delay
 
