@@ -1353,6 +1353,32 @@ curl -fsS -X DELETE -H "Authorization: Bearer $API_WRITE_TOKEN" \
   https://twin-api.fly.dev/api/v1/land/b1cc807c-652c-574a-8a56-caef5599b71c
 ```
 
+### Re-process a capture
+
+Actions tab → **Process capture** → **Run workflow** (`.github/workflows/process-capture.yml`).
+Enter the `capture_id` UUID and choose `recipe`: `photo-reconstruct` (default) or
+`splat-ingest`. Run with `dry_run` checked first to read the capture's slug, kind and
+status without queueing anything. Then dispatch again with `dry_run` unchecked (its
+default) to queue one job using the repository secret `API_WRITE_TOKEN`.
+
+- Pumpkin: `510d624e-dad2-4b7b-966b-357c4447af02`
+- Spool: `87d772f0-92c9-49be-8570-3c830425d3a3`
+
+The API origin is the repository variable `VITE_API_BASE_URL`, falling back to the app
+in `fly.toml` (`https://twin-api.fly.dev`). Like the API, the workflow requires at least
+one completed upload and refuses a capture with a `not-started` or `in-progress` job;
+the capture's own status is informational. Runs for the same capture share a concurrency
+group and do not cancel an in-progress workflow.
+
+The run summary records the capture, recipe and job id, with public GET URLs:
+`/api/v1/captures/{capture_id}` for capture details and job history,
+`/api/v1/jobs?captureId={capture_id}` for jobs filtered to this capture,
+`/api/v1/jobs/{job_id}` for status and steps, and
+`/api/v1/jobs/{job_id}/steps/{step_id}/log` for a step's log. Workflow success means the
+job was queued; follow those endpoints to see processing finish. If the POST fails or
+times out, check the capture's job history before dispatching again: it may have queued
+a job even if the response was lost. Only a manual dispatch triggers this workflow.
+
 ## Security checklist
 
 - No secrets in git; `.env` is ignored, `.env.example` is the template, and everything
