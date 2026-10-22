@@ -5,6 +5,7 @@ import { useState } from "react";
 import type { Footprint } from "@twin/contracts";
 import type { LonLat } from "@twin/geo";
 
+import { env } from "@/app/env";
 import type { CesiumSceneManager } from "@/cesium/CesiumSceneManager";
 import { useScene } from "@/cesium/SceneContext";
 import {
@@ -130,8 +131,26 @@ function km(metres: number): string {
  * heights or overlaps differ are not exported together. The plan card's machine-hours come
  * from the planner flying the same capture. `onAltitude` (a draft) changes the patches'
  * height; an approved plan exports what it stored.
+ *
+ * Drone missions are a stub until there is a drone (`env.droneExportEnabled`, off): the card
+ * then offers no export, heights or battery figures, only a note, and samples no relief.
  */
-export function ScoutExport({
+export function ScoutExport(props: {
+  zones: readonly Zone[];
+  onAltitude?: (altitudeM: number) => void;
+}) {
+  if (env.droneExportEnabled) return <DroneScoutExport {...props} />;
+  if (!props.zones.some((z) => z.scout)) return null;
+  return (
+    <section className="mc-scout" data-testid="scout-export" aria-label="Scout route">
+      <p className="mc-muted" data-testid="scout-drone-stub">
+        Drone missions: not available yet
+      </p>
+    </section>
+  );
+}
+
+function DroneScoutExport({
   zones,
   onAltitude,
 }: {

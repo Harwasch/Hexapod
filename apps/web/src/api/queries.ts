@@ -35,6 +35,8 @@ import type {
   SiteAsset,
   SiteCreate,
   SiteSummary,
+  WeakAreas,
+  WeakAreasRequest,
   WorkspaceMissionCreate,
 } from "@twin/contracts";
 
@@ -204,6 +206,24 @@ export function draftPlan(body: PlanDraftRequest): Promise<PlanDraft> {
 /** The model outlines the feature under a clicked point in a picture of the view. */
 export function outlineGround(body: OutlineRequest): Promise<GroundOutline> {
   return unwrap<GroundOutline>(api.POST("/api/v1/agent/outline", { body }));
+}
+
+/**
+ * An epoch's weak cells (weak-v1) as at most `maxAreas` re-scan zones, each with the pattern
+ * to fly it again (ADR 0016). Stores nothing, but takes the write token: it is the first step
+ * of planning a flight. A 409 says why there is nothing to outline (`problem.code`).
+ */
+export function requestWeakAreas(
+  siteId: string,
+  epochId: string,
+  body: WeakAreasRequest,
+): Promise<WeakAreas> {
+  return unwrap<WeakAreas>(
+    api.POST("/api/v1/sites/{site_id}/epochs/{epoch_id}/weak-areas", {
+      params: { path: { site_id: siteId, epoch_id: epochId } },
+      body,
+    }),
+  );
 }
 
 const NO_PLANS: PlanRecord[] = [];

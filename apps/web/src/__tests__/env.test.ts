@@ -33,6 +33,16 @@ describe("readEnv", () => {
     expect(read("false")).toBe(false);
   });
 
+  it("keeps drone missions off unless the build turns them on (no drone yet)", () => {
+    const read = (value?: string) =>
+      readEnv({ DEV: true, VITE_ENABLE_DRONE_EXPORT: value } as unknown as ImportMetaEnv)
+        .droneExportEnabled;
+    expect(read()).toBe(false);
+    expect(read("")).toBe(false);
+    expect(read("false")).toBe(false);
+    expect(read("true")).toBe(true);
+  });
+
   it("defaults to no token and dev tools on in development", () => {
     const env = readEnv({ DEV: true } as unknown as ImportMetaEnv);
     expect(env.ionAccessToken).toBeUndefined();

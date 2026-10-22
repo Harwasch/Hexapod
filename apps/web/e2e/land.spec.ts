@@ -375,9 +375,17 @@ test("show the fog of knowing, read a cell, and draft a scout flight with its DJ
   await expect(plans.getByTestId("plan-review")).toBeVisible({ timeout: 30_000 });
   await expect(plans.getByTestId("plan-ground")).toContainText("Fog patch 1");
   const scout = plans.getByTestId("scout-export");
+  expect(asked.scouted[0]).toMatchObject({ threshold: 0.5, maxAreas: 3, cellM: 20 });
+  // Drone missions are a stub until there is a drone (VITE_ENABLE_DRONE_EXPORT, off).
+  if (process.env.VITE_ENABLE_DRONE_EXPORT !== "true") {
+    await expect(scout.getByTestId("scout-drone-stub")).toHaveText(
+      "Drone missions: not available yet",
+    );
+    await expect(scout.getByTestId("scout-download")).toHaveCount(0);
+    return;
+  }
   await expect(scout).toContainText("DJI Mavic 3 Enterprise wide camera (assumed)");
   await expect(scout).toContainText("Draft, not flight-tested");
-  expect(asked.scouted[0]).toMatchObject({ threshold: 0.5, maxAreas: 3, cellM: 20 });
   // A new height redrafts the plan at the detail it gives, and the plan says so.
   await expect(plans.getByLabel("Plan title")).toHaveValue(/1\.7 cm per pixel/);
   await scout.getByRole("button", { name: "120 m", exact: true }).click();

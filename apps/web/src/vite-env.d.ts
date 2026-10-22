@@ -24,6 +24,7 @@ declare global {
     readonly VITE_ENABLE_PHOTOREALISTIC?: string;
     readonly VITE_ENABLE_DEV_TOOLS?: string;
     readonly VITE_SPLAT_GPU_MOTION?: string;
+    readonly VITE_ENABLE_DRONE_EXPORT?: string;
   }
 }
 

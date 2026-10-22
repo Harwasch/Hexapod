@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import type { PlanDraft } from "@twin/contracts";
+import type { PlanDraft, PlanRecord } from "@twin/contracts";
 import { footprintAreaM2, toAcres } from "@twin/geo";
 
 import { anywhereProject } from "@/missions/anywhere";
 import { viewAreaZone } from "@/missions/areas";
 import { demoRanchProject } from "@/missions/demo";
 import { landProject } from "@/missions/landGround";
+import { DEFAULT_SCOUT, RESCAN_SHORT, SCOUT_SHORT } from "@/missions/scout";
 import {
   buildDraftRequest,
   describeDraft,
@@ -471,5 +472,19 @@ describe("scout areas", () => {
     expect(zone?.task).toBe("Scout");
     expect(zone?.private).toBe(true);
     expect(planFromRecord(record, anywhere).zoneIds).toEqual(["A-01"]);
+  });
+
+  it("restores a re-scan area as a re-scan, and a fog patch as a scout", () => {
+    const rescan = { ...DEFAULT_SCOUT, purpose: "re-scan-weak" as const, pattern: "oblique" };
+    const record = {
+      private: false,
+      areas: [
+        { id: "A-01", name: "Weak area 1", footprint: patch.footprint, capture: rescan },
+        { id: "A-02", name: "Fog patch 1", footprint: patch.footprint, capture },
+      ],
+    } as unknown as PlanRecord;
+    const [weak, fog] = zonesFromRecord(record);
+    expect([weak?.task, weak?.short]).toEqual(["Re-scan", RESCAN_SHORT]);
+    expect([fog?.task, fog?.short]).toEqual(["Scout", SCOUT_SHORT]);
   });
 });

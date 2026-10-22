@@ -173,6 +173,18 @@ describe("one route, one capture", () => {
     ).toBeNull();
     expect(sharedScout([])).toBeNull();
   });
+
+  it("shares no capture between areas flown in different patterns or pitches", () => {
+    // The export writes one pattern for the route: a nadir area first must not carry an
+    // oblique re-scan past the refusal as nadir lines.
+    const rescan = { ...DEFAULT_SCOUT, purpose: "re-scan-weak" as const };
+    const oblique = { ...rescan, pattern: "oblique" as const, gimbalPitchDeg: -45 };
+    expect(sharedScout([area("A", rescan), area("B", oblique)])).toBeNull();
+    expect(
+      sharedScout([area("A", oblique), area("B", { ...oblique, gimbalPitchDeg: -60 })]),
+    ).toBeNull();
+    expect(sharedScout([area("A", oblique), area("B", oblique)])).toEqual(oblique);
+  });
 });
 
 describe("relief samples", () => {

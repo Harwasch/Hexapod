@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { Epoch, Representation, Site, SiteAsset } from "@twin/contracts";
+import { GlassButton } from "@twin/ui";
 
 import { useScene } from "@/cesium/SceneContext";
 import { confidenceFact } from "@/lib/confidenceFacts";
@@ -17,6 +18,7 @@ import {
   siteEpochs,
 } from "@/lib/epochs";
 import { useSites } from "@/state/sites";
+import { useToasts } from "@/state/toasts";
 
 /** How the shown date is placed, in words: with the frame's own date, or on its own. */
 function placementLine(
@@ -113,6 +115,7 @@ function DateFacts({
   testId: string;
 }) {
   const scene = useScene();
+  const [planning, setPlanning] = useState(false);
   const epochs = siteEpochs(site);
   const anchor = frameAnchor(epochs, site.assets, representation);
   const isAnchor = anchor?.epoch.id === epoch.id;
@@ -157,6 +160,25 @@ function DateFacts({
           </>
         )}
       </dl>
+      {/* Mission zones and the API only, so under every renderer; the flow loads on demand. */}
+      {representation === "gaussian-splat" && (
+        <GlassButton
+          size="sm"
+          disabled={planning}
+          onClick={() => {
+            setPlanning(true);
+            void import("@/features/rescan/rescanWeak")
+              .then((m) => m.rescanWeak(scene, site, epoch.id))
+              // A chunk gone after a deploy: say so rather than nothing happening.
+              .catch(() =>
+                useToasts.getState().push({ tone: "error", title: "Could not plan the re-scan" }),
+              )
+              .finally(() => setPlanning(false));
+          }}
+        >
+          Plan a re-scan of weak areas
+        </GlassButton>
+      )}
     </section>
   );
 }

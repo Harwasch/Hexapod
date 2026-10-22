@@ -1,19 +1,29 @@
 /**
  * The scout card lists every height its KMZ writes: the route's and the return-home height,
- * which stays under the same 400 ft cap at the highest height offered.
+ * which stays under the same 400 ft cap at the highest height offered. Drone missions are a
+ * stub until there is a drone (`VITE_ENABLE_DRONE_EXPORT`, off): with the flag off the card
+ * offers no export, only a note; the flight tests below run with it on.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { env } from "@/app/env";
 import { ScoutExport } from "@/features/mission/ScoutExport";
 import { DEFAULT_SCOUT } from "@/missions/scout";
 import type { Zone } from "@/missions/types";
 
 vi.mock("@/cesium/SceneContext", () => ({ useScene: () => null }));
 
-afterEach(cleanup);
+const droneExport = env.droneExportEnabled;
+beforeEach(() => {
+  env.droneExportEnabled = true;
+});
+afterEach(() => {
+  cleanup();
+  env.droneExportEnabled = droneExport;
+});
 
 const patch = {
   id: "A-01",
@@ -79,4 +89,21 @@ it("still exports a straight-down capture", () => {
   card([patch]);
   expect(screen.queryByTestId("scout-unsupported")).toBeNull();
   expect(screen.getByTestId("scout-download")).toBeInTheDocument();
+});
+
+describe("with drone missions off (the default)", () => {
+  it("offers no drone export, and says drone missions are not available yet", () => {
+    env.droneExportEnabled = false;
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ScoutExport zones={[patch]} onAltitude={() => undefined} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByTestId("scout-drone-stub")).toHaveTextContent(
+      "Drone missions: not available yet",
+    );
+    expect(screen.queryByTestId("scout-download")).toBeNull();
+    expect(screen.queryByTestId("scout-facts")).toBeNull();
+    expect(screen.queryByRole("group", { name: "Height above take-off" })).toBeNull();
+  });
 });
