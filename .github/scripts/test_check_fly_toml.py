@@ -33,6 +33,22 @@ class SleepingApiTests(unittest.TestCase):
             committed = tomllib.load(handle)
         self.assertEqual(problems(committed), [])
 
+    def test_database_health_probe_is_rejected(self) -> None:
+        broken = config()
+        broken["http_service"]["checks"] = [{"path": "/api/v1/health"}]
+        self.assertTrue(any("database" in problem for problem in problems(broken)))
+        broken["http_service"]["checks"] = [{"path": "/api/v1/health/live"}]
+        self.assertEqual(problems(broken), [])
+
+    def test_idle_workers_are_configured_to_stop_after_five_minutes(self) -> None:
+        with open(ROOT / "fly.toml", "rb") as handle:
+            committed = tomllib.load(handle)
+        for group in ("worker", "research"):
+            self.assertEqual(committed["env"][f"{group.upper()}_IDLE_EXIT_S"], "300")
+            policy = next(p for p in committed["restart"] if group in p["processes"])
+            self.assertEqual(policy["policy"], "on-failure")
+        self.assertEqual(committed["http_service"]["checks"][0]["path"], "/api/v1/health/live")
+
     def test_a_sleeping_api_without_paid_provisioning_passes(self) -> None:
         self.assertEqual(problems(config()), [])
 

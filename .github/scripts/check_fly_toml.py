@@ -48,6 +48,9 @@ def problems(config: dict[str, Any]) -> list[str]:
     # a field of that check, and Fly never sees it. It was written that way first.
     if "kill_timeout" not in config:
         found.append("kill_timeout is not a top-level key in fly.toml")
+    for check in config.get("http_service", {}).get("checks", []):
+        if check.get("path", "").rstrip("/") == "/api/v1/health":
+            found.append("Fly health checks must use /api/v1/health/live without database queries")
     # Paid Worlds workers are torn down by the lease reaper, a thread in the API process.
     # An API the proxy may stop or suspend runs no reaper while it sleeps, and a worker
     # past its deadline bills until the next request. CI sees only fly.toml: a Fly secret

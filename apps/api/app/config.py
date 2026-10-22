@@ -278,6 +278,12 @@ class Settings(BaseSettings):
     # checkout wants, having nothing to start it again: .env.example sets 0.
     worker_idle_exit_s: float = Field(default=900.0, ge=0)
 
+    # The same for the Land research worker (app/research/__main__.py): it backs off from
+    # 2 s to 30 s, writes presence only during runs, and exits 0 after this long idle; the
+    # API wakes the `research` process group when it queues research. 0 polls forever,
+    # which a checkout wants for the same reason as above: .env.example sets 0.
+    research_idle_exit_s: float = Field(default=300.0, ge=0)
+
     # --- Waking the worker (app/services/worker_wake.py) ----------------------------
     # A Fly token that may start this app's machines (`fly tokens create deploy`). Unset,
     # queueing a job wakes nothing, which is right for development: there is no machine.

@@ -136,14 +136,15 @@ kill_timeout = "30s"
   # put the worst overlap -- Lane 2's ffmpeg (~0.45 GB) beside Lane 1's out-of-core
   # `package` of an 8M splat (~0.38 GB) -- near 1.1 GB with the supervisor, on 2 GB.
   WORKER_CPU_ONLY_SLOTS = "1"
-  # Exit 0 after 15 minutes with nothing running or queued (the empty queue is polled
+  # Exit 0 after 5 minutes with nothing running or queued (the empty queue is polled
   # every 2 s for a minute, then backs off to every 30 s). The machine stays stopped --
   # Fly restarts the group only on a failure -- and Neon, with nobody polling, scales to
   # zero five minutes later. Queueing a job starts the machine again: the `app` group
   # needs the FLY_API_TOKEN secret for that (docs/DEPLOYMENT.md § Waking the worker),
   # and without it a stopped worker stays stopped until `fly machine start`. "0" polls
   # forever, the old behaviour.
-  WORKER_IDLE_EXIT_S = "900"
+  WORKER_IDLE_EXIT_S = "300"
+  RESEARCH_IDLE_EXIT_S = "300"
   # Search by meaning (GET /api/v1/text-embeddings): SigLIP 2's text tower, loaded by the
   # API on the first search (~1 s; ~880 MB resident after, 1.03 GB peak while loading), so
   # it needs the 2 GB app machine below. App-wide like the rest of [env]; the worker and
@@ -177,19 +178,19 @@ kill_timeout = "30s"
   # Worlds provisioning stays off above. The proxy suspends the machine when one of its
   # checks, every few minutes, finds it with no traffic. A visible console tab polls
   # /health every 60 s (apps/web/src/api/queries.ts), so with one open the machine may
-  # stay awake or cycle through resumes; either is harmless, and only a closed tab saves.
+  # stay awake or cycle through resumes; a hidden tab does not poll (TanStack Query's default).
   #
   # The worker and research groups are deliberately not in `processes` here -- they have
   # no service, so the proxy never stops them and they never wait for a request. Neither
-  # calls the API: the worker stops itself when idle and the API starts it
-  # (WORKER_IDLE_EXIT_S above).
+  # calls the API: each stops itself when idle and the API starts its process group
+  # (WORKER_IDLE_EXIT_S and RESEARCH_IDLE_EXIT_S above).
   auto_stop_machines = "suspend"
   auto_start_machines = true
   min_machines_running = 0
 
   [[http_service.checks]]
     method = "GET"
-    path = "/api/v1/health"
+    path = "/api/v1/health/live"
     interval = "15s"
     timeout = "5s"
     grace_period = "20s"

@@ -184,31 +184,26 @@ def test_redirects_are_not_followed() -> None:
     assert result.status == "unavailable"
 
 
-def test_worker_checks_in_when_idle_and_clears_current_run(
+def test_worker_only_writes_presence_for_active_runs(
     client: TestClient, db: Session, sessions: sessionmaker[Session]
 ) -> None:
-    """Presence is what lets a queued run tell an idle worker from a missing one."""
     with httpx.Client(transport=httpx.MockTransport(transport)) as http:
         worker = ResearchWorker(sessions, Settings(_env_file=None), client=http)
-        assert not worker.run_once()
-        row = db.get(ResearchWorkerPresence, worker.worker_id)
-        assert row is not None and row.current_run_id is None and row.stopped_at is None
-        idle_seen = row.last_seen_at
-        # Throttled: a second idle poll inside CHECK_IN_EVERY_S writes nothing.
-        assert not worker.run_once()
-        db.expire_all()
-        row = db.get(ResearchWorkerPresence, worker.worker_id)
-        assert row is not None and row.last_seen_at == idle_seen
+        for _ in range(3):
+            assert not worker.run_once()
+        worker.stop()
+        assert db.get(ResearchWorkerPresence, worker.worker_id) is None
         start(client)
         assert worker.run_once()
         db.expire_all()
         row = db.get(ResearchWorkerPresence, worker.worker_id)
-        assert row is not None and row.last_seen_at > idle_seen
-        assert row.current_run_id is None  # Cleared once the run is done.
+        assert row is not None and row.current_run_id is None
+        assert row.stopped_at is not None
+        last_seen = row.last_seen_at
+        assert not worker.run_once()
         worker.stop()
         db.expire_all()
-        row = db.get(ResearchWorkerPresence, worker.worker_id)
-        assert row is not None and row.stopped_at is not None
+        assert row.last_seen_at == last_seen
     status = client.get("/api/v1/research/status").json()
     assert status["worker"]["state"] == "stopped"
 
@@ -219,7 +214,9 @@ def test_presence_failures_never_break_the_poll() -> None:
             raise RuntimeError("database unavailable")
 
     worker = ResearchWorker(Broken(), Settings(_env_file=None))  # type: ignore[arg-type]
-    worker.stop()  # Logged, not raised: presence is advisory.
+    worker._check_in(uuid.uuid4(), force=True)  # Logged, not raised: presence is advisory.
+    worker._presence_active = True
+    worker.stop()
     assert worker._last_check_in == 0.0
 
 

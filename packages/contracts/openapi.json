@@ -14300,6 +14300,25 @@
         "title": "LiveState",
         "type": "object"
       },
+      "LivenessStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "version"
+        ],
+        "title": "LivenessStatus",
+        "type": "object"
+      },
       "LonLatGrid": {
         "additionalProperties": false,
         "description": "`value = raw * scale + offset`, except raw == `nodata`. `data` is base64 of the raw\nvalues, little-endian, row-major from the north-west cell.",
@@ -27526,6 +27545,68 @@
           }
         },
         "summary": "Health check",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/health/live": {
+      "get": {
+        "description": "The Fly probe: serving requests requires no database or storage access.",
+        "operationId": "live_api_v1_health_live_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LivenessStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Process liveness",
         "tags": [
           "system"
         ]

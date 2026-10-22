@@ -128,8 +128,8 @@ function researchStatus(
     },
     queue: {
       queued: 1,
-      oldestQueuedAt: "2026-10-16T17:46:00Z",
-      oldestQueuedSeconds: 840,
+      oldestQueuedAt: "2026-10-16T17:59:40Z",
+      oldestQueuedSeconds: 20,
       running: 0,
     },
   };
@@ -282,7 +282,7 @@ describe("the Overview lens", () => {
         details: { "inv-terrain": detail(terrainInv, [queuedRun("raster")]) },
       });
       mount(<OverviewLens land={land} />);
-      await screen.findByText(/none has checked in on this server yet/);
+      await screen.findByText(/Waking the research worker/);
       const calls = () =>
         (get.mock.calls as unknown as [string][]).filter(([path]) => path.endsWith("/status"))
           .length;
@@ -386,7 +386,7 @@ describe("the agent card", () => {
     });
     mount(<AgentCard land={land} />);
     expect(
-      await screen.findByText(/the last one stopped 5 min ago/, { selector: "p" }),
+      await screen.findByText(/Waking the research worker/, { selector: "p" }),
     ).toHaveAttribute("data-testid", "research-worker-notice");
     fireEvent.click(screen.getByRole("button", { name: "Cancel queued request" }));
     await waitFor(() => expect(posts).toContain("/api/v1/research/runs/{run_id}/cancel"));
@@ -402,7 +402,7 @@ describe("the other lenses", () => {
       details: { "inv-eco": detail(ecology, [queuedRun("ecology")]) },
     });
     mount(<EcologyLens land={land} />);
-    const notice = await screen.findByText(/the last one stopped 5 min ago/, { selector: "p" });
+    const notice = await screen.findByText(/Waking the research worker/, { selector: "p" });
     expect(notice).toHaveClass("land-muted");
     expect(notice.closest(".land-eco-running")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Cancel queued request" })).toBeVisible();
@@ -433,7 +433,7 @@ describe("the other lenses", () => {
       details: { "inv-overview": detail(overview, [queuedRun("overview")]) },
     });
     mount(<WaterLens land={land} />);
-    const notice = await screen.findByText(/none has checked in on this server yet/, {
+    const notice = await screen.findByText(/Waking the research worker/, {
       selector: "p",
     });
     expect(notice).toHaveAttribute("data-testid", "research-worker-notice");

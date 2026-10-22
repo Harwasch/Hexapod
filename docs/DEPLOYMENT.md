@@ -170,13 +170,15 @@ without them.
   using it. The worker must never be stopped by a proxy that sees no requests, and it is
   not in `http_service.processes` for that reason. See
   [letting the API sleep](#letting-the-api-sleep).
-- **the worker stops itself when idle.** `WORKER_IDLE_EXIT_S=900`: with nothing running
-  or queued for 15 minutes it exits 0 and its machine stays stopped; queueing a job starts
+- **the worker stops itself when idle.** `WORKER_IDLE_EXIT_S=300`: with nothing running
+  or queued for five minutes it exits 0 and its machine stays stopped; queueing a job starts
   it again. See [waking the worker](#waking-the-worker-and-letting-neon-sleep).
 - **two worker slots**: `WORKER_CONCURRENCY=1` general slot and `WORKER_CPU_ONLY_SLOTS=1`,
   which claims only recipes with no `gpu:` stage, so a one-minute `splat-ingest` is not
   queued behind a two-hour training run and two training runs never share the machine.
-- **a health check** on `GET /api/v1/health`.
+- **a liveness check** on `GET /api/v1/health/live`, returning status and API version
+  without opening a database session. `/api/v1/health` keeps its PostGIS check for
+  humans and `deploy.yml`.
 - **`kill_signal = "SIGTERM"`, `kill_timeout = "30s"`.** The worker treats SIGTERM as a stop
   flag: on its next tick it stops the recipe process, clears the lease on the job it holds
   and exits, so the next worker can take that job immediately instead of waiting the lease
@@ -319,7 +321,41 @@ or `[env]` in `fly.toml`), then watch the first search.
 A worker that polls the queue every two seconds forever keeps two things awake that need
 not be: its own machine, and Neon's compute, which scales to zero only after five minutes
 with no queries. So the worker now stops when it has nothing to do, and the API starts it
-when it queues something.
+when it queues something. Both the capture and Land research process groups exit after
+five idle minutes in `fly.toml`. Research uses `RESEARCH_IDLE_EXIT_S` (default 300;
+0 disables exit for local development). It polls every 2 s for the first minute,
+then 4, 8 and 16 s a minute at a time, capped at 30 s. Completing a run resets its
+idle timer. Presence check-ins run every 15 s only during active research, with one
+final stopped record when the run ends; empty polls and idle exit write no presence.
+The API's research status retains the latest active/stopped presence for diagnosis.
+
+Research enqueue paths, including the Land overview and the demo seed, wake the
+`research` process group after the run is committed. HTTP routes do this in a background
+task after the response; the command-line seed wakes synchronously. An idempotent retry
+of a still-queued request also retries the wake. Both groups use the same bounded
+Machines API calls and 20 s recheck; only capture jobs use `QUEUE_CHECK_URL`, since
+research does not acknowledge that check. Without `FLY_API_TOKEN` and `FLY_APP_NAME`,
+automatic wake is unavailable: start `pnpm dev:research` locally or set
+`RESEARCH_IDLE_EXIT_S=0` to keep it running.
+
+**Expected quiet period:** with no active jobs or other database clients, allow about
+10 minutes from the last job finishing: five minutes until both worker groups stop
+(the capture loop can overshoot by one 30 s poll), then Neon's configured idle delay
+(five minutes for this deployment). Fly probes `/api/v1/health/live` every 15 s and
+no longer extend that delay. The web health hook polls the database-backed endpoint
+every 60 s while its tab is visible, so a visible Hexapod tab keeps Neon awake. A hidden
+tab never polled (TanStack Query's default, which `useHealth` now states explicitly), so
+this change saves nothing there. Other open-page queries, external monitors, SQL editors
+and deploy checks can still keep the database awake.
+
+**Verify in the Neon console after deployment:** close Hexapod tabs and SQL editors,
+wait for both workers to exit, then check that the compute endpoint becomes **Idle**
+after its configured scale-to-zero delay. Inspect compute active time / CU-hours in
+usage metrics over the following quiet hour; it should stop accumulating while idle.
+Check the configured suspend delay and the $10 monthly budget's usage/alerts. Submit a
+research request and confirm the endpoint becomes active, the request leaves the queue,
+and the research machine stops again after completion plus five minutes. Repeat with a
+capture job. These are acceptance checks, not production observations from this change.
 
 **The worker side** (`app/worker/loop.py`):
 
@@ -328,7 +364,7 @@ when it queues something.
 | `WORKER_IDLE_S`               | —          | 2       | how often an empty queue is polled at first                           |
 | `WORKER_IDLE_BACKOFF_AFTER_S` | —          | 60      | then doubling once a period: 4, 8, 16 s a minute at a time…           |
 | `WORKER_IDLE_MAX_S`           | —          | 30      | …up to this                                                           |
-| `WORKER_IDLE_EXIT_S`          | 900        | 900     | exit 0 after this long with nothing running or claimed; 0 never exits |
+| `WORKER_IDLE_EXIT_S`          | 300        | 900     | exit 0 after this long with nothing running or claimed; 0 never exits |
 
 The exit is only ever between jobs — a slot holding a job counts as busy, and the clock
 restarts when a job ends — so nothing about leases or SIGTERM changes. An exit status of 0
@@ -358,7 +394,7 @@ queue once more, under the lock every claim takes, immediately before exiting; a
 lands after that question finds the machine still `started`, which a start request does not
 change. So when the wake call finds a worker machine already up, it looks again 20 s later
 and starts any that have stopped by then. A worker that took the job cannot be among them:
-it would not exit for another 15 minutes.
+it would not exit for another five minutes with the deployed settings.
 
 **`FLY_API_TOKEN`** is a Fly **secret on the app** (`fly secrets set`), read by the `app`
 machines — not the GitHub secret of the same name, which is org-scoped so that
@@ -1706,8 +1742,10 @@ The Fly configuration now runs one API machine with a separate 1 GB Worlds volum
 and an independent 1 GB Land research process. `--ha=false` prevents an extra API
 machine with a separate ledger. The API suspends when idle, so Worlds lease cleanup
 waits for the next request ([letting the API sleep](#letting-the-api-sleep)); the
-research process polls the database continuously, so Neon will not scale to
-zero while that process is running. These are deliberate personal-testing costs.
+research process exits after five idle minutes and is woken when research is queued.
+Both worker groups can stop, and the Fly liveness probe does not query Postgres, so
+Neon can scale to zero after its idle delay when no other clients query it. See
+[waking the worker](#waking-the-worker-and-letting-neon-sleep) for console checks.
 The capture worker and its existing volume remain separate. All Worlds paid
 provider provisioning flags remain false. Existing private-storage, API-token and
 Anthropic secrets are shared with the research process; no new secret values are

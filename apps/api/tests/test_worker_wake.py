@@ -19,7 +19,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.deps import _db
 from app.config import Settings
@@ -29,7 +29,7 @@ from app.models.capture import CaptureFile
 from app.models.enums import CaptureKind, RunStatus, UploadStatus
 from app.observability import configure_logging
 from app.services import phone_key, worker_wake
-from app.services.worker_wake import Wake, after_enqueue, wake_workers
+from app.services.worker_wake import ProcessGroup, Wake, after_enqueue, wake_workers
 from tests.conftest import TEST_DATABASE_URL
 from tests.test_job_api import failed_run
 
@@ -296,7 +296,8 @@ def wakes() -> list[int]:
 def client(
     db: Session, engine: Engine, wakes: list[int], monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[TestClient]:
-    def recording() -> None:
+    def recording(*, process_group: str = "worker") -> None:
+        assert process_group == "worker"
         with Session(engine) as fresh:
             wakes.append(
                 fresh.scalar(select(func.count(Job.id)).where(Job.status == RunStatus.NOT_STARTED))
@@ -387,3 +388,85 @@ def test_the_machine_listing_is_what_the_fly_api_documents() -> None:
     assert wake_workers(fly_settings(), transport=fly.transport) == Wake(started=("w1",))
     assert fly.requests[0].url == httpx.URL(f"https://api.machines.dev/v1/apps/{APP}/machines")
     assert fly.requests[1].url.path == f"/v1/apps/{APP}/machines/w1/start"
+
+
+@pytest.mark.parametrize("group", ["worker", "research"])
+def test_each_group_wakes_only_its_own_machines_and_rechecks(group: ProcessGroup) -> None:
+    fly = FakeFly([machine("w", "stopped"), machine("r", "started", "research")])
+    callbacks = []
+    result = after_enqueue(
+        fly_settings(queue_check_url="https://hc-ping.test/check"),
+        process_group=group,
+        transport=fly.transport,
+        running=lambda: False,
+        later=lambda delay, call: callbacks.append(call),
+    )
+    assert result is not None
+    if group == "research":
+        assert result.up == ("r",)
+        assert fly.started() == []
+        assert all("hc-ping" not in str(request.url) for request in fly.requests)
+        fly.machines["r"]["state"] = "stopped"
+        callbacks[0]()
+        assert fly.started() == ["r"]
+    else:
+        assert fly.started() == ["w"]
+
+
+def test_research_enqueue_routes_wake_after_commit(
+    client: TestClient, sessions: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.models.research import ResearchRun
+    from app.services import worker_wake
+    from tests.test_research import start
+
+    groups = []
+
+    def wake(*, process_group: str) -> None:
+        with sessions() as db:
+            assert db.scalar(select(ResearchRun.id).where(ResearchRun.status == "queued"))
+        groups.append(process_group)
+
+    monkeypatch.setattr(worker_wake, "after_enqueue", wake)
+    land, _, _, _ = start(client)
+    assert groups == ["research"]
+    result = client.post(f"/api/v1/land/{land['id']}/overview", json={"boundaryRevision": 1})
+    assert result.status_code == 200
+    assert groups == ["research", "research"]
+
+
+def test_retries_of_still_queued_research_wake_it_again(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retry is how a user says "still waiting": if the first wake was lost (the worker
+    was exiting, Fly hiccuped), the idempotent retry of a queued run and the repeated
+    overview request are the next chance to start the worker. A finished run wakes nothing."""
+    from app.services import worker_wake
+    from tests.test_research import start
+
+    groups: list[str] = []
+    monkeypatch.setattr(
+        worker_wake, "after_enqueue", lambda *, process_group: groups.append(process_group)
+    )
+    land, inv, run, body = start(client)
+    assert groups == ["research"]
+    path = f"/api/v1/research/investigations/{inv['id']}/runs"
+    again = client.post(path, json=body)
+    assert again.status_code == 201, again.text
+    assert again.json()["id"] == run["id"]  # The same run, not a second one.
+    assert groups == ["research"] * 2
+
+    overview = f"/api/v1/land/{land['id']}/overview"
+    first = client.post(overview, json={"boundaryRevision": 1})
+    assert first.status_code == 200, first.text
+    assert groups == ["research"] * 3
+    repeat = client.post(overview, json={"boundaryRevision": 1})
+    assert repeat.status_code == 200, repeat.text
+    assert repeat.json()["run"]["id"] == first.json()["run"]["id"]
+    assert groups == ["research"] * 4
+
+    cancelled = client.post(f"/api/v1/research/runs/{run['id']}/cancel")
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "cancelled"
+    assert client.post(path, json=body).status_code == 201
+    assert groups == ["research"] * 4

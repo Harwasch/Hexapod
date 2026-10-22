@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from sqlalchemy import text
 
 from app.api.deps import DbSession, Storage
@@ -33,3 +33,14 @@ def health(db: DbSession, storage: Storage) -> HealthStatus:
         object_storage=storage.name,
         object_storage_available=storage.available,
     )
+
+
+class LivenessStatus(CamelModel):
+    status: str
+    version: str
+
+
+@router.get("/health/live", response_model=LivenessStatus, summary="Process liveness")
+async def live(request: Request) -> LivenessStatus:
+    """The Fly probe: serving requests requires no database or storage access."""
+    return LivenessStatus(status="ok", version=request.app.version)

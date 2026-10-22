@@ -5,7 +5,8 @@ The worker exits 0 once it has had nothing to do for `WORKER_IDLE_EXIT_S`
 failure), and Neon's compute, with nobody polling it, scales to zero. Something then has
 to start the worker again, and the only thing that knows a job has just been queued is
 the request that queued it. So after a route commits a job, this asks Fly's Machines API
-to start the app's stopped `worker` machines.
+to start the app's stopped `worker` or `research` machines. Research uses
+`RESEARCH_IDLE_EXIT_S` and shares the delayed recheck, but not the capture queue alert.
 
 The rules it keeps, and why:
 
@@ -63,7 +64,7 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 from fastapi import BackgroundTasks
@@ -87,7 +88,7 @@ log = logging.getLogger("twin.worker_wake")
 FLY_MACHINES_API = "https://api.machines.dev/v1"
 #: The process group fly.toml's `[processes]` names the worker; Fly records it on every
 #: machine as `config.metadata.fly_process_group`.
-WORKER_PROCESS_GROUP = "worker"
+ProcessGroup = Literal["worker", "research"]
 #: Per request. Fly answers a start in well under a second; anything slower is an outage
 #: this call should not be part of.
 TIMEOUT_S = 5.0
@@ -109,16 +110,17 @@ class Wake:
     up: tuple[str, ...] = ()
 
 
-def schedule(background: BackgroundTasks) -> None:
+def schedule(background: BackgroundTasks, *, process_group: ProcessGroup = "worker") -> None:
     """What a route that has just committed a job calls: wake the worker after the
     response has gone. One line in each enqueue path, so none of them can forget the
     ordering."""
-    background.add_task(after_enqueue)
+    background.add_task(after_enqueue, process_group=process_group)
 
 
 def after_enqueue(
     settings: Settings | None = None,
     *,
+    process_group: ProcessGroup = "worker",
     transport: httpx.BaseTransport | None = None,
     later: Callable[[float, Callable[[], object]], None] | None = None,
     running: Callable[[], bool] | None = None,
@@ -126,10 +128,15 @@ def after_enqueue(
     """Ping the queue check (onto an idle worker), start the stopped worker machines, and
     look again later if one was found already up. Never raises."""
     resolved = settings or get_settings()
-    ping_queue_check(resolved, transport=transport, running=running)
-    wake = wake_workers(resolved, transport=transport)
+    # Only capture claims acknowledge QUEUE_CHECK_URL; research must not start its timer.
+    if process_group == "worker":
+        ping_queue_check(resolved, transport=transport, running=running)
+    wake = wake_workers(resolved, process_group=process_group, transport=transport)
     if wake is not None and wake.up:
-        (later or _later)(RECHECK_AFTER_S, lambda: wake_workers(resolved, transport=transport))
+        (later or _later)(
+            RECHECK_AFTER_S,
+            lambda: wake_workers(resolved, process_group=process_group, transport=transport),
+        )
     return wake
 
 
@@ -160,7 +167,10 @@ def after_cancel(
 
 
 def wake_workers(
-    settings: Settings, *, transport: httpx.BaseTransport | None = None
+    settings: Settings,
+    *,
+    process_group: ProcessGroup = "worker",
+    transport: httpx.BaseTransport | None = None,
 ) -> Wake | None:
     """Start every stopped or suspended machine in the worker's process group.
 
@@ -181,12 +191,12 @@ def wake_workers(
         ) as client:
             listing = client.get(f"/apps/{app_name}/machines")
             listing.raise_for_status()
-            machines = [m for m in _machines(listing.json()) if _group(m) == WORKER_PROCESS_GROUP]
+            machines = [m for m in _machines(listing.json()) if _group(m) == process_group]
             if not machines:
                 log.warning(
                     "wake: app %s has no machine in process group %r; nothing to start",
                     app_name,
-                    WORKER_PROCESS_GROUP,
+                    process_group,
                 )
             for machine in machines:
                 machine_id, state = str(machine.get("id", "")), str(machine.get("state", ""))
@@ -199,7 +209,10 @@ def wake_workers(
                     client.post(f"/apps/{app_name}/machines/{machine_id}/start").raise_for_status()
                 except httpx.HTTPError as error:
                     log.warning(
-                        "wake: could not start worker machine %s: %s", machine_id, _why(error)
+                        "wake: could not start %s machine %s: %s",
+                        process_group,
+                        machine_id,
+                        _why(error),
                     )
                     continue
                 started.append(machine_id)
@@ -208,7 +221,9 @@ def wake_workers(
         log.warning("wake: could not list app %s's machines: %s", app_name, _why(error))
         return None
     if started:
-        log.info("wake: started worker machine(s) %s for a queued job", ", ".join(started))
+        log.info(
+            "wake: started %s machine(s) %s for a queued job", process_group, ", ".join(started)
+        )
     return Wake(started=tuple(started), up=tuple(up))
 
 

@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
+from fastapi import BackgroundTasks
 from pydantic import TypeAdapter
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
@@ -43,6 +44,7 @@ from app.schemas.research import (
     RunCreate,
     RunRead,
 )
+from app.services import worker_wake
 from app.services.errors import ConflictError, InvalidInputError, NotFoundError
 from app.services.land import get_land
 
@@ -161,7 +163,12 @@ def list_investigations(
 
 
 def create_run(
-    db: Session, workspace_id: uuid.UUID, identifier: uuid.UUID, payload: RunCreate
+    db: Session,
+    workspace_id: uuid.UUID,
+    identifier: uuid.UUID,
+    payload: RunCreate,
+    *,
+    background: BackgroundTasks | None = None,
 ) -> RunRead:
     target = investigation(db, workspace_id, identifier, lock=True)
     existing = db.scalar(
@@ -189,6 +196,7 @@ def create_run(
             raise ConflictError(
                 "This request key was already used for a different research request."
             )
+        _wake_queued_run(existing.status, background)
         return RunRead.model_validate(existing)
     fields = payload.model_dump()
     fields["analysis"] = payload.analysis.model_dump(mode="json") if payload.analysis else None
@@ -201,7 +209,17 @@ def create_run(
     db.add(ResearchMessage(investigation_id=identifier, role="user", content=payload.question))
     event(db, run, "queued", {"kind": payload.kind}, focus_location(run.focus_snapshot))
     db.commit()
+    _wake_queued_run(run.status, background)
     return RunRead.model_validate(run)
+
+
+def _wake_queued_run(status: str, background: BackgroundTasks | None) -> None:
+    if status != "queued":
+        return
+    if background is None:
+        worker_wake.after_enqueue(process_group="research")
+    else:
+        worker_wake.schedule(background, process_group="research")
 
 
 def pin_research_focus(
@@ -332,7 +350,13 @@ def detail(
 
 
 def ensure_overview(
-    db: Session, workspace_id: uuid.UUID, land_id: uuid.UUID, principal_id: str, revision: int
+    db: Session,
+    workspace_id: uuid.UUID,
+    land_id: uuid.UUID,
+    principal_id: str,
+    revision: int,
+    *,
+    background: BackgroundTasks | None = None,
 ) -> tuple[InvestigationRead, RunRead]:
     area = db.scalar(
         select(LandArea)
@@ -356,6 +380,7 @@ def ensure_overview(
         .limit(1)
     ).first()
     if existing:
+        _wake_queued_run(existing[1].status, background)
         return read_investigation(db, existing[0]), RunRead.model_validate(existing[1])
     question = "What is useful and interesting about this land?"
     row = Investigation(
@@ -368,7 +393,11 @@ def ensure_overview(
     db.add(row)
     db.flush()
     run = create_run(
-        db, workspace_id, row.id, RunCreate(request_key=land_id, kind="overview", question=question)
+        db,
+        workspace_id,
+        row.id,
+        RunCreate(request_key=land_id, kind="overview", question=question),
+        background=background,
     )
     return read_investigation(db, row), run
 
