@@ -27,6 +27,7 @@ import { effectiveDoc, onCustomSetsChange, useSceneSelect } from "@/state/sceneS
 import { useSettings } from "@/state/settings";
 import { activeSupersedes, followSupersedes, useSupersedes } from "@/state/supersedes";
 import { useVariants } from "@/state/variants";
+import { useViewRule } from "@/state/viewRule";
 
 const A = "fnv1a32:6:0000abcd";
 const B = "fnv1a32:4:0000abce";
@@ -230,6 +231,24 @@ describe("when superseded splats are hidden", () => {
     expect(activeSupersedes("scan")).toBe(doc);
     useVariants.getState().pick("scan", "fill", null);
     expect(activeSupersedes("scan")).toBeNull();
+    off();
+  });
+
+  it("not while a per-cell view rule decides each cell, so no measured splat is hidden there", async () => {
+    const off = followSupersedes("scan", VARIANTS, "https://x.test/scan/tileset.json", load);
+    useVariants.getState().pick("scan", "fill", "rebuilt");
+    await release("variants/fill/rebuilt/s.json");
+    const doc = files["variants/fill/rebuilt/s.json"];
+    expect(activeSupersedes("scan")).toBe(doc);
+    // Ground truth never draws the fill; Latest only where no date saw: the measured splats
+    // it stands in for are the rule's to draw or not, never hidden behind a fill not drawn.
+    useViewRule.setState({ active: { siteId: "site", rule: "ground-truth" } });
+    expect(activeSupersedes("scan")).toBeNull();
+    useViewRule.setState({ active: { siteId: "site", rule: "latest" } });
+    expect(activeSupersedes("scan")).toBeNull();
+    useViewRule.setState({ active: null });
+    await settle();
+    expect(activeSupersedes("scan")).toBe(doc);
     off();
   });
 

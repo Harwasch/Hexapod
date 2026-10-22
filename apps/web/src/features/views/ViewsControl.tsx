@@ -3,7 +3,7 @@ import { Palette } from "lucide-react";
 import { GlassButton, GlassPanel, GlassSegmentedControl } from "@twin/ui";
 
 import { useSite } from "@/api/queries";
-import { pickShownAsset, siteEpochs } from "@/lib/epochs";
+import { epochOptions, pickShownAsset, siteEpochs } from "@/lib/epochs";
 import {
   DRAW_WITH_CESIUM,
   drawWithCesium,
@@ -14,8 +14,11 @@ import {
 import { useSplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
 import { useViewMode } from "@/state/viewMode";
+import { useViewRule } from "@/state/viewRule";
 
 import { CellLegend } from "./CellLegend";
+import { RuleControl } from "./RuleControl";
+import { VIEW_RULE_TEXT } from "./ruleText";
 
 /**
  * How the active splat scan is coloured: Photo, Confidence or Data age (state/viewMode.ts),
@@ -33,8 +36,11 @@ export function ViewsControl({ siteId }: { siteId: string }) {
     ? pickShownAsset(site.assets, siteEpochs(site), "gaussian-splat", { epochId: shownEpoch })
     : null;
   const report = useViewMode((s) => (asset ? s.cells[asset.id] : undefined));
+  const ruleOn = useViewRule((s) => s.active?.siteId === siteId);
   const onCesium = renderer === "cesium";
-  const shown = onCesium ? mode : "photo";
+  const shown = onCesium && !ruleOn ? mode : "photo";
+  const epochs = site ? siteEpochs(site) : [];
+  const dates = site ? epochOptions(epochs, site.assets, "gaussian-splat").length : 0;
   return (
     <GlassPanel
       strong
@@ -53,9 +59,14 @@ export function ViewsControl({ siteId }: { siteId: string }) {
         options={VIEW_MODES.map(({ value, label }) => ({
           value,
           label,
-          disabled: !viewModeDrawable(value, renderer),
+          disabled: !viewModeDrawable(value, renderer) || (ruleOn && value !== "photo"),
         }))}
       />
+      {ruleOn && (
+        <span className="views__notice" role="note" data-testid="views-rule-holds">
+          {VIEW_RULE_TEXT.holdsViews}
+        </span>
+      )}
       {!onCesium && (
         <div className="views__notice" role="note" data-testid="views-needs-cesium">
           <span>{NEEDS_CESIUM_NOTICE}</span>
@@ -65,6 +76,7 @@ export function ViewsControl({ siteId }: { siteId: string }) {
         </div>
       )}
       {onCesium && shown !== "photo" && <CellLegend mode={shown} report={report} />}
+      {dates >= 2 && <RuleControl siteId={siteId} epochs={epochs} onCesium={onCesium} />}
     </GlassPanel>
   );
 }

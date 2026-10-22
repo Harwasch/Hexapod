@@ -19,6 +19,7 @@ import { CompareDates } from "@/features/compare/CompareDates";
 import { clearHistory, undo } from "@/state/history";
 import { useRendererOverride, useSettings, type SplatRenderer } from "@/state/settings";
 import { useSites } from "@/state/sites";
+import { useViewRule } from "@/state/viewRule";
 
 import { A1, E1, E2, SITE_ID, epoch, splat, twoEpochSite } from "./epochFixtures";
 
@@ -64,6 +65,16 @@ afterEach(() => {
 });
 
 describe("Compare › Dates", () => {
+  it("says that swiping ends a per-cell view rule, while one is on", () => {
+    useViewRule.setState({ active: { siteId: SITE_ID, rule: "latest" } });
+    show();
+    expect(screen.getByTestId("compare-dates-ends-rule")).toHaveTextContent(
+      "Swiping ends the per-cell dates (Splat view › Per cell): the two are one or the other.",
+    );
+    act(() => useViewRule.setState({ active: null }));
+    expect(screen.queryByTestId("compare-dates-ends-rule")).toBeNull();
+  });
+
   it("shows nothing for a site with fewer than two dates of the model shown", () => {
     show(twoEpochSite({ epochs: [E1], assets: [A1] }));
     expect(screen.queryByTestId("compare-dates")).toBeNull();

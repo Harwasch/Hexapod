@@ -13,6 +13,7 @@ import type { Site } from "@twin/contracts";
 import { queryKeys } from "@/api/queries";
 import { TimelineControl } from "@/features/timeline/TimelineControl";
 import { useSites } from "@/state/sites";
+import { useViewRule } from "@/state/viewRule";
 
 import { A1, E1, E2, SITE_ID, twoEpochSite } from "./epochFixtures";
 
@@ -39,9 +40,23 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  useViewRule.setState({ active: null, ended: null, legend: null });
+});
 
 describe("the capture-date control", () => {
+  it("reads As of while a per-cell view rule draws the dates as one", () => {
+    useViewRule.setState({ active: { siteId: SITE_ID, rule: "latest" } });
+    show(twoEpochSite());
+    expect(screen.getByTestId("timeline")).toHaveTextContent(/^As of/);
+    expect(screen.getByTestId("timeline-epochs")).toHaveAttribute("aria-label", "As of");
+    // Another site's rule says nothing here.
+    act(() => useViewRule.setState({ active: { siteId: "elsewhere", rule: "latest" } }));
+    expect(screen.getByTestId("timeline")).not.toHaveTextContent(/^As of/);
+    expect(screen.getByTestId("timeline-epochs")).toHaveAttribute("aria-label", "Capture date");
+  });
+
   it("shows nothing for a site with fewer than two epochs", () => {
     show(twoEpochSite({ epochs: [E1], assets: [A1] }));
     expect(screen.queryByTestId("timeline")).toBeNull();
