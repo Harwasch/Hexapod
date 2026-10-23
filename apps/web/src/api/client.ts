@@ -4,6 +4,7 @@ import type { paths, Problem } from "@twin/contracts";
 
 import { env } from "@/app/env";
 import { ApiError } from "./error";
+import { fetchApi } from "./coldStart";
 import { recordSpan } from "@/lib/timing";
 import { useSettings } from "@/state/settings";
 import { landUsesOidc, useLandIdentity } from "@/state/landIdentity";
@@ -131,7 +132,7 @@ export const auth: Middleware = {
   },
 };
 
-export const api = createClient<paths>({ baseUrl: env.apiBaseUrl });
+export const api = createClient<paths>({ baseUrl: env.apiBaseUrl, fetch: fetchApi });
 api.use(auth);
 api.use(timing);
 
@@ -158,7 +159,11 @@ function asProblem(value: unknown): Problem | undefined {
 }
 
 export function isOffline(error: unknown): boolean {
-  return error instanceof TypeError || (error instanceof ApiError && error.status >= 500);
+  return (
+    error instanceof TypeError ||
+    ((error instanceof Error || error instanceof DOMException) && error.name === "TimeoutError") ||
+    (error instanceof ApiError && error.status >= 500)
+  );
 }
 
 /** True when a write was refused for want of the token `ApiError` already carries the status of. */

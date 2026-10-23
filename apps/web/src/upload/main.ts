@@ -22,6 +22,7 @@ import type {
   UploadWindow,
 } from "@twin/contracts";
 
+import { fetchApi } from "@/api/coldStart";
 import { ApiError, isAbort } from "@/api/error";
 import { partSizeFor, putPart } from "@/api/putPart";
 import { classify, SUPPORTED_TEXT, unsupported } from "@/features/captures/recipes";
@@ -520,7 +521,7 @@ function dollars(usd: number): string {
 /** The recipes and the providers' rates, fetched once. Steps appear only as they start. */
 let catalogue: Promise<PipelineCatalogue | null> | null = null;
 function pipelineCatalogue(): Promise<PipelineCatalogue | null> {
-  catalogue ??= fetch(`${API_BASE}/api/v1/recipes`)
+  catalogue ??= fetchApi(`${API_BASE}/api/v1/recipes`)
     .then((response) => (response.ok ? (response.json() as Promise<PipelineCatalogue>) : null))
     .catch(() => {
       catalogue = null;
@@ -831,7 +832,7 @@ function follow(captureId: string, ui: Ui): void {
     window.clearTimeout(timer);
     if (stopped) return;
     try {
-      const response = await fetch(
+      const response = await fetchApi(
         `${API_BASE}/api/v1/jobs?captureId=${encodeURIComponent(captureId)}&limit=5`,
       );
       const job = response.ok ? latestJob((await response.json()) as Job[]) : undefined;
@@ -847,7 +848,7 @@ function follow(captureId: string, ui: Ui): void {
         }
         if (ENDED.has(job.status)) {
           setState(ui, job.status === "complete" ? "done" : "error");
-          const capture = (await fetch(`${API_BASE}/api/v1/captures/${captureId}`).then((r) =>
+          const capture = (await fetchApi(`${API_BASE}/api/v1/captures/${captureId}`).then((r) =>
             r.json(),
           )) as CaptureDetail;
           if (ui.doneLink && capture.siteId) {
@@ -993,8 +994,8 @@ function refreshMine(ui: Ui): void {
   void (async () => {
     try {
       const [captureResponse, jobResponse] = await Promise.all([
-        fetch(`${API_BASE}/api/v1/captures?limit=100`),
-        fetch(`${API_BASE}/api/v1/jobs?limit=100`),
+        fetchApi(`${API_BASE}/api/v1/captures?limit=100`),
+        fetchApi(`${API_BASE}/api/v1/jobs?limit=100`),
       ]);
       if (!captureResponse.ok) return;
       const captures = ((await captureResponse.json()) as Capture[])

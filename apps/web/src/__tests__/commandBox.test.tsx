@@ -297,9 +297,15 @@ describe("the Land tool in the command box", () => {
 
   beforeEach(() => {
     env.landExplorationEnabled = true;
+    // The saved-land result is the only name match here. A rejected scan catalog now
+    // falls back immediately when api.GET is mocked (transport retries are bypassed),
+    // and its built-in Oak Bench site would compete with this row for Enter.
     vi.spyOn(api, "GET").mockImplementation(((path: string) =>
-      path === "/api/v1/land"
-        ? Promise.resolve({ data: [ranch], response: new Response(null, { status: 200 }) })
+      path === "/api/v1/land" || path === "/api/v1/sites"
+        ? Promise.resolve({
+            data: path === "/api/v1/land" ? [ranch] : [],
+            response: new Response(null, { status: 200 }),
+          })
         : Promise.reject(new TypeError("offline"))) as never);
     useUi.setState({ activePanel: null });
     useMission.setState({ project, composer: null, log: [], selection: null, view: "map" });

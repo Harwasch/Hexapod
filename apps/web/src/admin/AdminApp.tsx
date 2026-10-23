@@ -176,7 +176,7 @@ export function AdminApp() {
   const [client] = useState(
     () =>
       new QueryClient({
-        defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1 } },
+        defaultOptions: { queries: { refetchOnWindowFocus: false, retry: false } },
       }),
   );
   return (

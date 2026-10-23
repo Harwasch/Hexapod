@@ -20,6 +20,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { Capture, Site, SiteSummary } from "@twin/contracts";
 
 import { loadCollision } from "@/lib/collision";
+import { fetchApi } from "@/api/coldStart";
 import { deviceSplatBudget } from "@/lib/detail";
 import { epochDateLabel } from "@/lib/epochs";
 import { siteFramePositions } from "@/lib/spzPositions";
@@ -58,8 +59,8 @@ function date(iso: string): string {
   });
 }
 
-async function json<T>(url: string): Promise<T> {
-  const response = await fetch(url);
+async function json<T>(url: string, transport: typeof fetch = fetch): Promise<T> {
+  const response = await transport(url);
   if (!response.ok) throw new Error(`${url} answered ${String(response.status)}`);
   return (await response.json()) as T;
 }
@@ -79,8 +80,8 @@ async function showGallery(): Promise<void> {
     // Scans are captures that became a site: what you sent, not the demo sites the
     // console seeds (several of which are on Cesium ion, which this page does not read).
     const [captures, sites] = await Promise.all([
-      json<Capture[]>(`${API_BASE}/api/v1/captures?limit=200`),
-      json<SiteSummary[]>(`${API_BASE}/api/v1/sites`),
+      json<Capture[]>(`${API_BASE}/api/v1/captures?limit=200`, fetchApi),
+      json<SiteSummary[]>(`${API_BASE}/api/v1/sites`, fetchApi),
     ]);
     const splatSites = new Map(
       sites
@@ -281,7 +282,10 @@ async function showScan(siteId: string): Promise<void> {
   };
 
   try {
-    const site = await json<Site>(`${API_BASE}/api/v1/sites/${encodeURIComponent(siteId)}`);
+    const site = await json<Site>(
+      `${API_BASE}/api/v1/sites/${encodeURIComponent(siteId)}`,
+      fetchApi,
+    );
     el("scan-name").textContent = site.name;
     el("scan-date").textContent = date(site.createdAt);
     document.title = site.name;

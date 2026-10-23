@@ -29,6 +29,23 @@ const past = () => Math.floor(Date.now() / 1000) - 60;
 test.use({ viewport: PHONE });
 
 test.describe("the phone upload page", () => {
+  test.beforeEach(async ({ page }) => {
+    // Tests override these reads with their own rows. A running row also awaits recipes
+    // before rendering Stop; none of these reads should reach the dev server's API proxy.
+    await page.route("**/api/v1/**", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/v1/captures" || path === "/api/v1/jobs") {
+        return route.fulfill({ json: [] });
+      }
+      if (path === "/api/v1/recipes") {
+        return route.fulfill({ json: { recipes: [], providers: [] } });
+      }
+      // A completed run may read a capture detail absent from this test's fixtures.
+      return route.fulfill({ status: 404, json: { title: "Not found", status: 404 } });
+    });
+  });
+
   for (const colorScheme of ["dark", "light"] as const) {
     test(`the filming guide fits the phone and can be reopened (${colorScheme})`, async ({
       page,

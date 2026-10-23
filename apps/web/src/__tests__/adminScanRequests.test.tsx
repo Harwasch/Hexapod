@@ -70,6 +70,7 @@ it("lists the requests, newest first, with their land and notes", async () => {
   const table = await screen.findByTestId("requests-table");
   const [first, second] = within(table).getAllByTestId("request-row");
   expect(get).toHaveBeenCalledWith("/api/v1/scan-requests", {
+    signal: expect.any(AbortSignal) as AbortSignal,
     params: { query: { limit: 200 } },
   });
   expect(first).toHaveTextContent("Ada Lovelace");

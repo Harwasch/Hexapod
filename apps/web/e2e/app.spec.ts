@@ -1,5 +1,7 @@
 import type { Page } from "@playwright/test";
 
+import { API_RETRY_BUDGET_MS } from "../src/api/coldStart";
+
 import {
   addOnScreenCredit,
   expect,
@@ -13,6 +15,9 @@ import {
   test,
   walnutSite,
 } from "./fixtures";
+
+// Allow the transport to finish waking attempts, then give the UI time to show the fallback.
+const COLD_START_WAIT_MS = API_RETRY_BUDGET_MS + 15_000;
 
 /** Ids of the plan overlay entities the map is drawing (passes, step markers, route). */
 function entityIds(app: Page): Promise<string[]> {
@@ -182,10 +187,16 @@ test.describe("boot", () => {
   });
 
   test("API failure does not crash the viewer", async ({ page }) => {
+    test.setTimeout(COLD_START_WAIT_MS + 90_000);
     await mockApi(page, { apiDown: true });
     await page.goto("/");
     await expect(page.locator("canvas").first()).toBeVisible();
-    await expect(page.getByTestId("notice-api-offline")).toBeVisible();
+    await expect(page.getByText(/Waking the server/)).toBeVisible();
+    await expect(page.getByTestId("notice-api-offline")).toBeVisible({
+      timeout: COLD_START_WAIT_MS,
+    });
+    await expect(page.getByText(/Waking the server/)).toHaveCount(0);
+    await expect(page.getByTestId("onboarding-demo")).toBeEnabled();
     // Sites are in the site switcher, behind the site's name at the top left.
     await page.getByTestId("project-card").getByRole("button").first().click();
     await expect(page.getByTestId(`site-row-${RANCH_SLUG}`)).toBeVisible();
@@ -225,6 +236,7 @@ test.describe("catalog", () => {
   test("a fly-to whose site record fails says so beside the switcher, and Retry flies on", async ({
     app,
   }) => {
+    test.setTimeout(COLD_START_WAIT_MS + 90_000);
     // The site's record answers 503 (a cold or failing API). The camera still leaves on the
     // click, for the catalog summary's pose; the site never becomes active, so the pill has to
     // follow the flight's site to say why no model came.
@@ -237,7 +249,10 @@ test.describe("catalog", () => {
     await app.keyboard.press("s");
     await app.getByTestId("site-row-cesium-splat-demo").click();
     const load = app.getByTestId("site-load");
-    await expect(load).toContainText("Couldn’t load the 3D model", { timeout: 30_000 });
+    await expect(app.getByText(/Waking the server/)).toBeVisible();
+    await expect(load).toContainText("Couldn’t load the 3D model", {
+      timeout: COLD_START_WAIT_MS,
+    });
     await expect(app.getByTestId("representation-switcher")).toHaveCount(0);
     // The API recovers; Retry flies there again and the site loads.
     await app.unroute(record);
