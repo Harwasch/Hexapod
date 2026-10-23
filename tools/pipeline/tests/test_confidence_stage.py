@@ -714,3 +714,29 @@ def test_an_alignment_with_no_frame_relative_figure_is_read_at_its_absolute_one(
     cap = _grid(_again(tmp_path / "older", arc, prior_epochs=1, alignment=older))[0]
     assert cap["alignmentCap"]["source"] == "epoch_alignment.json"
     assert cap["alignmentCap"]["uncertaintyM"] == 5.0
+
+
+def _level_by_median_cell(counts: np.ndarray, level: int) -> int:
+    """The rule before 2026-10-23 (median occupied cell), kept as the reference."""
+    plane = cell_grid.CellPlane(level, 0, 0, counts.shape[1], counts.shape[0], counts[..., None])
+    while True:
+        held = np.sort(plane.data[..., 0][plane.data[..., 0] > 0])
+        n = held.size
+        if n == 0 or int(held[(n - 1) // 2]) + int(held[n // 2]) >= 2 * 16:
+            return plane.level
+        if plane.level >= cell_grid.MAX_LEVEL or (plane.ni <= 2 and plane.nj <= 2):
+            return plane.level
+        plane = confidence._sum_up(plane)
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_weighing_by_gaussians_never_makes_a_grid_coarser(seed: int) -> None:
+    """A cell weighed by what it holds can only raise the median, so no scene -- a phone's
+    dense ground scan above all -- gets coarser cells than the old rule gave it. (Pumpkin and
+    Spool's published coverage clouds, 2026-10-23: 0.25 m cells under both rules.)"""
+    rng = np.random.default_rng(seed)
+    side = int(rng.integers(8, 96))
+    counts = rng.poisson(rng.uniform(0.2, 40.0), size=(side, side)).astype(np.int64)
+    counts *= rng.random((side, side)) < rng.uniform(0.05, 1.0)  # gaps, as a scan has
+    level = int(rng.integers(0, 4))
+    assert confidence.choose_level(counts, level, 0, 0) <= _level_by_median_cell(counts, level)
