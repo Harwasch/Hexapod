@@ -113,7 +113,7 @@ $("#pk-clear", HTMLButtonElement).addEventListener("click", clearLand);
 try {
   startFinder({
     open: $("#pk-open", HTMLButtonElement),
-    dialog: $("#pk-dialog", HTMLDialogElement),
+    region: $("#pk-finder", HTMLElement),
     onFound: (found) => {
       land = found;
       fields.acres.value = acresOf(found.areaM2);
