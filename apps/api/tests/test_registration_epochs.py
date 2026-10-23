@@ -8,6 +8,7 @@ what lands in the database.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -867,3 +868,81 @@ def test_a_rerun_never_redates_an_epoch_whose_date_is_evidence(
     assert capture.site_id is not None
     [epoch] = _epochs(db, capture.site_id)
     assert (epoch.observed_at, epoch.observed_at_source) == (said, "captured-at")
+
+
+def test_a_rerun_never_moves_a_date_read_from_the_files(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """A `manifest` date is evidence too: a re-run whose manifest says otherwise leaves it."""
+    capture = _capture(db)
+    first = _document()
+    first["manifest"] = {"capture": {"capturedAtUtc": "2026-08-30T14:05:00Z"}}
+    run(db, storage, tmp_path, capture, first)
+    document = _document()
+    document["manifest"] = {"capture": {"capturedAtUtc": "2026-01-01T00:00:00Z"}}
+
+    run(db, storage, tmp_path, capture, document)
+
+    assert capture.site_id is not None
+    [epoch] = _epochs(db, capture.site_id)
+    assert (epoch.observed_at, epoch.observed_at_source) == (
+        datetime(2026, 8, 30, 14, 5, tzinfo=UTC),
+        "manifest",
+    )
+
+
+@pytest.mark.parametrize("second", ["same tiles", "no tiles"])
+def test_a_redating_rerun_redates_the_current_asset_whatever_it_published(
+    db: Session, storage: S3Storage, tmp_path: Path, second: str
+) -> None:
+    """The very same tiles (no new revision) or none at all: the asset shown is the one
+    the epoch had, and it takes the epoch's new date."""
+    same = "https://cdn.example.com/twin-worker-test/runs/fixed/package/splat/tileset.json"
+    capture = _capture(db)
+    run(db, storage, tmp_path, capture, url=same)
+    document = _document()
+    document["manifest"] = {"capture": {"capturedAtUtc": "2026-09-27T12:19:47-07:00"}}
+
+    run(db, storage, tmp_path, capture, document, url=same if second == "same tiles" else None)
+
+    taken = datetime(2026, 9, 27, 19, 19, 47, tzinfo=UTC)
+    assert capture.site_id is not None
+    [epoch] = _epochs(db, capture.site_id)
+    assert epoch.observed_at == taken
+    [current] = [a for a in _assets(db, capture.site_id) if a.valid_to is None]
+    assert current.observed_at == taken
+
+
+def test_the_sites_mirror_names_the_run_its_document_came_from(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """`jobId` is the latest run; `registrationJobId` the run the mirrored document is from,
+    which a run with no georeference (the stub runner's) does not replace."""
+    capture = _capture(db)
+    first = run(db, storage, tmp_path, capture)
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    assert site.metadata_["registrationJobId"] == str(first)
+    loaded = _registration(tmp_path, _document())
+    bare = dataclasses.replace(
+        loaded, document={k: v for k, v in loaded.document.items() if k != "georef"}
+    )
+    later = uuid.uuid4()
+
+    registration._mirror_site_metadata(site, bare, later, None)
+
+    assert (site.metadata_["jobId"], site.metadata_["registrationJobId"]) == (
+        str(later),
+        str(first),
+    )
+
+
+def test_a_capture_date_without_a_zone_is_taken_as_utc() -> None:
+    """A column value a caller set without a zone, before the database gave it back."""
+    capture = Capture(
+        slug="naive", name="Naive", kind=CaptureKind.VIDEO, captured_at=datetime(2026, 9, 12, 10)
+    )
+
+    when, source = registration.observed_at_of(capture, {})
+
+    assert (when, source.value) == (datetime(2026, 9, 12, 10, tzinfo=UTC), "captured-at")

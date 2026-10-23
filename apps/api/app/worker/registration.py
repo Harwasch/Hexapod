@@ -877,6 +877,9 @@ def observed_at_of(
     3. the manifest's naive `capture.capturedAt` (a video's container date), `manifest`,
        taken as UTC;
     4. the upload's `created_at`, `created`.
+
+    Every answer has a zone: a column value a caller set without one (before the database
+    gave it back) is taken as UTC, as the manifest's naive date is.
     """
     manifest = document.get("manifest")
     facts = manifest.get("capture") if isinstance(manifest, dict) else None
@@ -885,11 +888,30 @@ def observed_at_of(
     if utc is not None:
         return utc, ObservedAtSource.MANIFEST
     if capture.captured_at is not None:
-        return capture.captured_at, ObservedAtSource.CAPTURED_AT
+        return _aware(capture.captured_at), ObservedAtSource.CAPTURED_AT
     naive = _parsed_time(facts.get("capturedAt"), aware_only=False)
     if naive is not None:
         return naive, ObservedAtSource.MANIFEST
-    return capture.created_at, ObservedAtSource.CREATED
+    return _aware(capture.created_at), ObservedAtSource.CREATED
+
+
+def _aware(when: datetime) -> datetime:
+    """`when` with a zone: a naive one is taken as UTC."""
+    return when if when.tzinfo is not None else when.replace(tzinfo=UTC)
+
+
+def redate_current_assets(db: Session, epoch: Epoch, old: datetime) -> None:
+    """The epoch's current asset revisions that carried its `old` date take its new one.
+
+    A re-dated epoch's shown asset must say the same date, whether the run that re-dated
+    it published new tiles (a new revision, dated by the epoch anyway), the very same tiles
+    or none. A superseded revision keeps the date it was shown with."""
+    for asset in db.scalars(
+        select(Asset).where(
+            Asset.epoch_id == epoch.id, Asset.valid_to.is_(None), Asset.observed_at == old
+        )
+    ):
+        asset.observed_at = epoch.observed_at
 
 
 def _parsed_time(raw: object, *, aware_only: bool) -> datetime | None:
@@ -1269,6 +1291,9 @@ def _mirror_site_metadata(
     metadata["jobId"] = str(job_id)
     if isinstance(registration.document.get("georef"), dict):
         metadata["registration"] = registration.document
+        # The run the document is from: `jobId` names the latest run, which may have had
+        # no georeference to write one (`scripts.redate_epochs` reads the pair).
+        metadata["registrationJobId"] = str(job_id)
     # Cleared by a run with none, so an overlay never sits on a splat it was not measured on.
     if coverage:
         metadata["coverageUrl"] = coverage
@@ -1424,8 +1449,10 @@ def register(
         # run that reads the files' clock dates it. Any other date stays where it is.
         if promoted or epoch.observed_at_source == ObservedAtSource.CREATED.value:
             observed_at, observed_source = _observed_at(capture, registration)
+            old = epoch.observed_at
             epoch.observed_at = observed_at
             epoch.observed_at_source = observed_source.value
+            redate_current_assets(db, epoch, old)
         if url is not None or promoted:
             _replace_run(epoch, producing, footprint, quality, now, published=url is not None)
             epoch.alignment = alignment_of(capture, registration)
