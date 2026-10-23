@@ -362,11 +362,14 @@ def _put(url: str, payload: bytes, attempts: int = 4) -> str:
                     raise RuntimeError("the storage answered a part PUT with no ETag")
                 return str(etag)
         except urllib.error.HTTPError as error:
-            raise RuntimeError(f"part PUT: HTTP {error.code}") from None
-        except (urllib.error.URLError, TimeoutError):
+            # A storage 5xx is worth another try; a 4xx (an expired or refused URL) is not.
+            # The URL carries its signature, so only the status is said.
+            if error.code < 500 or attempt == attempts - 1:
+                raise RuntimeError(f"part PUT: HTTP {error.code}{_title(error)}") from None
+        except (urllib.error.URLError, TimeoutError) as error:
             if attempt == attempts - 1:
-                raise
-            time.sleep(2**attempt)
+                raise RuntimeError(f"part PUT: {type(error).__name__}") from None
+        time.sleep(2**attempt)
     raise AssertionError("unreachable")
 
 
@@ -375,8 +378,9 @@ def slug_for(timestep: str) -> str:
     return f"nwm-tuwien-{timestep}".lower().replace("_", "-")
 
 
-#: An upload row that is still open, so it is resumed rather than registered again.
-OPEN_UPLOADS = ("not-started", "in-progress")
+#: An upload row that is still open, so it is resumed rather than registered again. Only
+#: `in-progress`: the API presigns parts for no other status (`presign_parts`).
+OPEN_UPLOADS = ("in-progress",)
 
 
 def resumable(capture: dict[str, Any], manifest: dict[str, Any]) -> None:

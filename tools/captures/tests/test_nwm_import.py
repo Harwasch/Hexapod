@@ -368,3 +368,51 @@ def test_upload_needs_the_token_from_the_environment(
     monkeypatch.delenv("API_WRITE_TOKEN", raising=False)
     with pytest.raises(SystemExit):
         nwm_import.main(["upload", str(tmp_path)])
+
+
+class _Storage(http.server.BaseHTTPRequestHandler):
+    """A bucket that answers each part PUT from a script of statuses."""
+
+    script: ClassVar[list[int]] = []
+    seen: ClassVar[int] = 0
+
+    def do_PUT(self) -> None:
+        self.rfile.read(int(self.headers["Content-Length"]))
+        status = self.script[min(type(self).seen, len(self.script) - 1)]
+        type(self).seen += 1
+        self.send_response(status)
+        if status == 200:
+            self.send_header("ETag", '"part-etag"')
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def storage(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    monkeypatch.setattr(nwm_import.time, "sleep", lambda _: None)
+    _Storage.seen = 0
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Storage)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{httpd.server_address[1]}/part?X-Amz-Signature=secret"
+    finally:
+        httpd.shutdown()
+
+
+def test_a_part_put_retries_a_storage_5xx(storage: str) -> None:
+    _Storage.script = [503, 200]
+    assert nwm_import._put(storage, b"jpeg") == '"part-etag"'
+    assert _Storage.seen == 2
+
+
+def test_a_part_put_fails_a_4xx_at_once_without_its_signed_url(storage: str) -> None:
+    _Storage.script = [403]
+    with pytest.raises(RuntimeError) as raised:
+        nwm_import._put(storage, b"jpeg")
+    assert _Storage.seen == 1
+    assert "403" in str(raised.value)
+    assert "Signature" not in str(raised.value)
