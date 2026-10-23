@@ -1441,7 +1441,9 @@ class FillVace14:
 GEN3C_COMMIT = "db2ffe12ced12ddafcec5e0422ee46ce8520746b"
 _APEX_STUBS = (
     "mkdir -p /opt/stubs/apex/multi_tensor_apply && "
-    "touch /opt/stubs/apex/__init__.py /opt/stubs/amp_C.py && "
+    "touch /opt/stubs/apex/__init__.py && "
+    # Module-level names (`amp_C.multi_tensor_l2norm`) are read at import: any name is None.
+    "echo 'def __getattr__(name): return None' > /opt/stubs/amp_C.py && "
     "echo 'multi_tensor_applier = None' > /opt/stubs/apex/multi_tensor_apply/__init__.py"
 )
 gen3c_image = (
