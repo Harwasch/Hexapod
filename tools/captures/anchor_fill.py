@@ -44,6 +44,7 @@ runs it with gsplat on an L4 and the models on H100s.
 
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import sys
@@ -123,14 +124,35 @@ SOFT_ALPHA = 0.05
 ARMS = ("refs", "norefs", "vace")
 #: Arms a run may also name: `splash`, anchors by the splash LoRA (`splash_requests`), then
 #: view by view with photos as `refs`.
-KNOWN_ARMS = (*ARMS, "splash")
+KNOWN_ARMS = (*ARMS, "splash", "gen3c")
 LAYERS = {
     "refs": "anchor-refs",
     "norefs": "anchor-norefs",
     "vace": "anchor-vace",
     "splash": "anchor-splash",
+    "gen3c": "anchor-gen3c",
 }
-ANCHOR_ARM = {"refs": "refs", "norefs": "norefs", "vace": "refs", "splash": "refs"}
+ANCHOR_ARM = {
+    "refs": "refs",
+    "norefs": "norefs",
+    "vace": "refs",
+    "splash": "refs",
+    "gen3c": "gen3c",
+}
+#: Arms with no anchors: every target view comes from one clip of a set filler. `gen3c`:
+#: GEN3C (`gen3c_model`) given the scan rendered at every frame as its 3D cache, frame 0 a
+#: kept photo (`build_gen3c_clip`); then lifted, fused and updated (without photos) as every
+#: arm is.
+SET_ONLY_ARMS = ("gen3c",)
+#: GEN3C's frame size (`gen3c_model.SIZE`, here so the CPU side needs no import).
+GEN3C_SIZE = (1280, 704)
+GEN3C_RULE = (
+    "weak or unknown gaussians (best quality over the real cameras: viewing angle x footprint "
+    "x sharpness) filled at greedily chosen poses by GEN3C, a video model given the scan "
+    "itself rendered at every frame of one camera path through them (a kept photo first); "
+    "lifted at depth completed from the scan's own rendered depth, carved by real sight lines, "
+    "distilled with the measured scan frozen"
+)
 #: The splash arm: the LoRA's own prompt (its card's), its steps, and the gate a seed must
 #: pass to be an anchor: LPIPS on the known pixels against the render, the camera's
 #: rotation re-estimated against the render (`pose_offset_deg`), and after the distil the
@@ -232,6 +254,13 @@ class Options:
     #: Refuse more editor calls than this in one run (the budget guard's own cap).
     max_edit_calls: int = 600
     max_set_calls: int = 4
+    #: GEN3C (the `gen3c` arm): its sampler's steps, and the most calls a run makes (its
+    #: `set_seeds` clips and the diagnostic at the held-out poses).
+    gen3c_steps: int = 35
+    max_gen3c_calls: int = 4
+    #: GEN3C's clip (the model takes 121 frames at 1280x704; smaller only for tests).
+    gen3c_size: tuple[int, int] = GEN3C_SIZE
+    gen3c_frames: int = 121
     #: The exact-mask fallback (InstantX ControlNet inpainting) when every seed drifted.
     fallback: bool = False
     max_fallback_calls: int = 8
@@ -1954,6 +1983,8 @@ class Run:
     splash_gate: list[dict[str, Any]] = field(default_factory=list)
     #: Per splash anchor view: its picture 1, its photo, each seed's raw output.
     splash_frames: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: GEN3C (`RemoteGen3C` or its stand-in), when the `gen3c` arm runs.
+    gen3c_filler: Any = None
 
     def seeds(self, n: int, base: int = 17) -> list[int]:
         return [base + 1000 * k for k in range(n)]
@@ -1998,7 +2029,7 @@ def fill_anchors(
     best of N with agreement between the anchors, composited. The `refs` arm's views carry
     the reprojected weak `surface` (its pixels cleaned at low strength)."""
     setup, opt = run.setup, run.options
-    anchor_arms = sorted({ANCHOR_ARM[a] for a in arms if a != "splash"})
+    anchor_arms = sorted({ANCHOR_ARM[a] for a in arms if a != "splash" and a not in SET_ONLY_ARMS})
     targets = [t for t in run.targets if t.role == "anchor"]
     per_arm_masks: dict[str, dict[str, ViewMasks]] = {}
     for arm in anchor_arms:
@@ -2557,6 +2588,424 @@ def finish_joint(
         )
     lift_fills(run, state, fills)
     state.report["setFrames"] = len(clip["frames"])
+
+
+# --- the GEN3C arm --------------------------------------------------------------------------------------------------
+
+
+def crop_camera(camera: Camera, width: int, height: int) -> Camera:
+    """`camera` scaled to cover `width` x `height` and centre-cropped (`_cover_crop`'s
+    camera: the principal point stays at the centre)."""
+    f = max(width / camera.width, height / camera.height)
+    return Camera(camera.rotation, camera.centre, camera.focal * f, width, height, camera.far)
+
+
+def _rotation_angle_deg(a: np.ndarray, b: np.ndarray) -> float:
+    c = (np.trace(a @ b.T) - 1.0) / 2.0
+    return math.degrees(math.acos(float(np.clip(c, -1.0, 1.0))))
+
+
+def _slerp_dir(a: np.ndarray, b: np.ndarray, t: float) -> np.ndarray:
+    a, b = a / np.linalg.norm(a), b / np.linalg.norm(b)
+    omega = math.acos(float(np.clip(a @ b, -1.0, 1.0)))
+    if omega < 1e-6:
+        return a
+    return (math.sin((1 - t) * omega) * a + math.sin(t * omega) * b) / math.sin(omega)
+
+
+def between(a: Camera, b: Camera, t: float, centre: np.ndarray) -> Camera:
+    """The camera a fraction `t` of the way from `a` to `b`: its rotation slerped, its
+    centre moved round `centre` (the direction slerped, the distance interpolated, so a
+    move from one side to the other orbits instead of cutting through the scan), its focal
+    length interpolated."""
+    from scipy.spatial.transform import Rotation, Slerp
+
+    rot = Slerp([0.0, 1.0], Rotation.from_matrix(np.stack([a.rotation, b.rotation])))([t])
+    va, vb = a.centre - centre, b.centre - centre
+    ra, rb = float(np.linalg.norm(va)), float(np.linalg.norm(vb))
+    if ra < 1e-9 or rb < 1e-9:
+        pos = (1 - t) * a.centre + t * b.centre
+    else:
+        pos = centre + _slerp_dir(va, vb, t) * ((1 - t) * ra + t * rb)
+    return Camera(
+        rot.as_matrix()[0],
+        pos,
+        (1 - t) * a.focal + t * b.focal,
+        a.width,
+        a.height,
+        min(a.far, b.far),
+    )
+
+
+def camera_path(
+    keys: Sequence[Camera], centre: np.ndarray, frames: int
+) -> tuple[list[Camera], list[int]]:
+    """`frames` cameras through `keys` in order (the first is frame 0, the last the last
+    frame), spaced so the camera moves at an even angular speed (the larger of the turn of
+    its view and of its position about `centre`); returns them and the frame of each key."""
+    if len(keys) > frames:
+        raise ValueError(f"{len(keys)} key views do not fit {frames} frames")
+    if len(keys) == 1:
+        return [keys[0]] * frames, [0]
+    steps = []
+    for a, b in itertools.pairwise(keys):
+        orbit = _angle_deg(a.centre - centre, b.centre - centre)
+        steps.append(max(orbit, _rotation_angle_deg(a.rotation, b.rotation), 1e-3))
+    along = np.concatenate([[0.0], np.cumsum(steps)])
+    at = [round(float(x)) for x in along / along[-1] * (frames - 1)]
+    # Every key its own frame, in order, the last on the last frame.
+    for k in range(1, len(at)):
+        at[k] = max(at[k], at[k - 1] + 1)
+    at[-1] = frames - 1
+    for k in range(len(at) - 2, -1, -1):
+        at[k] = min(at[k], at[k + 1] - 1)
+    cams: list[Camera] = []
+    for k in range(len(keys) - 1):
+        span = at[k + 1] - at[k]
+        cams += [between(keys[k], keys[k + 1], j / span, centre) for j in range(span)]
+    cams.append(keys[-1])
+    return cams, at
+
+
+def nearest_view(setup: Setup, camera: Camera) -> int:
+    """The kept camera looking most nearly the way `camera` looks from most nearly where it
+    stands (the angle between their axes plus that between their positions about the focus)."""
+    centre = setup.focus.centre
+    best, score = 0, float("inf")
+    for k, v in enumerate(setup.views):
+        s = _angle_deg(v.camera.rotation[2], camera.rotation[2]) + _angle_deg(
+            v.camera.centre - centre, camera.centre - centre
+        )
+        if s < score:
+            best, score = k, s
+    return best
+
+
+def build_gen3c_clip(
+    setup: Setup,
+    stops: Sequence[tuple[str, Any, Camera]],
+    renderer: Any,
+    options: Options,
+    layer: Splats | None = None,
+) -> tuple[dict[str, Any], list[tuple[str, Any]]]:
+    """GEN3C's clip: frame 0 the kept photo nearest the first stop, then a smooth camera
+    path through every stop (`stops`: (kind, item, camera), in tour order) at GEN3C's size;
+    every frame after the first the scan rendered at its camera, held where known (weak,
+    unknown and open background are the model's to make). Returns the clip and per frame what
+    it is (`("photo", name)`, `(kind, (item, ViewMasks))` at a stop, `("path", None)`)."""
+    w, h = options.gen3c_size
+    n = options.gen3c_frames
+    asked = len(stops)
+    # At least a frame between stops; the tour's tail past that is dropped (reported).
+    stops = list(stops)[: n // 2]
+    first = nearest_view(setup, stops[0][2])
+    view = setup.views[first]
+    photo = setup.photo(first, width=2048)
+    if photo is None:
+        raise ValueError(f"no photo for {view.name}")
+    start = crop_camera(view.camera, w, h)
+    cams, at = camera_path([start, *(c for _, _, c in stops)], setup.focus.centre, n)
+    stop_of = {f: k for k, f in enumerate(at[1:])}
+    frames = np.zeros((n, h, w, 3), np.uint8)
+    held = np.zeros((n, h, w), bool)
+    frames[0] = _cover_crop(photo, (w, h))
+    held[0] = True
+    entries: list[tuple[str, Any]] = [("photo", view.name)]
+    for f in range(1, n):
+        vm = view_masks(
+            setup,
+            cams[f],
+            renderer,
+            layer,
+            options.weak_strength,
+            options.placeholder,
+            options.unknown_strength,
+        )
+        frames[f] = np.where(vm.known[..., None], vm.render, 0)
+        held[f] = vm.known
+        if f in stop_of:
+            kind, item, _ = stops[stop_of[f]]
+            entries.append((kind, (item, vm)))
+        else:
+            entries.append(("path", None))
+    clip = {
+        "frames": frames,
+        "held": held,
+        "prompt": SET_PROMPT.format(caption=setup.caption[0].upper() + setup.caption[1:]),
+        "start": view.name,
+        "stopFrames": at[1:],
+        "dropped": asked - len(stops),
+    }
+    return clip, entries
+
+
+@dataclass
+class StandInGen3C:
+    """The CPU stand-in for GEN3C: every frame's pixels not held inpainted on their own
+    (Telea), the held ones kept."""
+
+    name: str = "standin-telea-gen3c"
+
+    def start(self, clip: dict[str, Any], seeds: Sequence[int]) -> Callable[[], list[EditResult]]:
+        def run() -> list[EditResult]:
+            import cv2
+
+            out = []
+            for seed in seeds:
+                rng = np.random.default_rng(seed)
+                done = np.stack(
+                    [
+                        cv2.inpaint(f, (~m).astype(np.uint8) * 255, 5, cv2.INPAINT_TELEA)
+                        for f, m in zip(clip["frames"], clip["held"], strict=True)
+                    ]
+                ).astype(np.float64)
+                done += rng.normal(0, 4.0, (len(done), 1, 1, 3))
+                done = np.where(clip["held"][..., None], clip["frames"], done)
+                out.append(
+                    EditResult(
+                        f"gen3c-s{seed}", np.clip(done, 0, 255).astype(np.uint8), {"seconds": 0.0}
+                    )
+                )
+            return out
+
+        return run
+
+
+@dataclass
+class RemoteGen3C:
+    """GEN3C (Cosmos-7B) on a Modal H100 (`infra/modal/fill.py` `FillGen3C.fill`)."""
+
+    submit: Submit
+    wait: Wait
+    steps: int = 35
+    name: str = "gen3c-cosmos-7b"
+    calls: int = 0
+    limit: int = 4
+
+    def start(self, clip: dict[str, Any], seeds: Sequence[int]) -> Callable[[], list[EditResult]]:
+        import gen3c_model as gm
+
+        if self.calls + len(seeds) > self.limit:
+            raise RuntimeError(f"{self.calls + len(seeds)} GEN3C calls: past the cap {self.limit}")
+        self.calls += len(seeds)
+        handles = []
+        for seed in seeds:
+            body = gm.pack_request(clip["frames"], clip["held"], clip["prompt"], seed, self.steps)
+            handles.append((seed, self.submit("FillGen3C", "fill", body)))
+
+        def collect() -> list[EditResult]:
+            out = []
+            for seed, handle in handles:
+                try:
+                    response = self.wait(handle)
+                except Exception as error:  # noqa: BLE001
+                    out.append(EditResult(f"gen3c-s{seed}", None, {"error": repr(error)[:1500]}))
+                    continue
+                if "error" in response:
+                    out.append(EditResult(f"gen3c-s{seed}", None, dict(response)))
+                    continue
+                frames = gm.unpack_frames(response["frames"])
+                info = {k: v for k, v in response.items() if k != "frames"}
+                out.append(EditResult(f"gen3c-s{seed}", frames, info))
+            return out
+
+        return collect
+
+
+def start_gen3c(
+    run: Run,
+) -> tuple[Callable[[], list[EditResult]], list[tuple[str, Any]], dict[str, Any]] | None:
+    """The GEN3C arm, sent: every target view (anchors and propagation views alike, none
+    filled first) a stop on one clip, `set_seeds` seeds."""
+    if run.gen3c_filler is None or not run.targets:
+        return None
+    stops = [(t.role, t, fv.scaled(t.camera, *run.options.gen3c_size)) for t in run.targets]
+    dirs = np.array([-c.rotation[2] for _, _, c in stops])
+    order = fv.tour(dirs, list(range(len(stops))), start=0)
+    clip, entries = build_gen3c_clip(
+        run.setup, [stops[k] for k in order], run.renderer, run.options
+    )
+    seeds = run.seeds(run.options.set_seeds, base=53)
+    run.log(
+        f"{run.setup.name}: GEN3C sent, {len(clip['stopFrames'])} views on {len(entries)} frames "
+        f"x {len(seeds)} seeds"
+    )
+    return run.gen3c_filler.start(clip, seeds), entries, clip
+
+
+def finish_gen3c(
+    run: Run,
+    state: ArmState,
+    sent: tuple[Callable[[], list[EditResult]], list[tuple[str, Any]], dict[str, Any]],
+    out: Path | None = None,
+) -> None:
+    """The GEN3C arm, back: each stop frame composited (known pixels as rendered), the seeds'
+    agreement its weight, lifted; the clips saved (cache | made) for the record."""
+    collect, entries, clip = sent
+    (back,) = run.wait([("gen3c", collect)])
+    results = [r for r in back if r.image is not None]
+    state.report["gen3cCalls"] = [r.info for r in back]
+    state.report["gen3cStart"] = clip["start"]
+    state.report["gen3cStopFrames"] = clip["stopFrames"]
+    state.report["gen3cDropped"] = clip["dropped"]
+    if not results:
+        state.report["setFailed"] = True
+        return
+    if out is not None:
+        save_clip(out / f"gen3c-{run.setup.name}.mp4", clip, results[0].image)
+    fills = []
+    for k, (kind, item) in enumerate(entries):
+        if kind not in ("anchor", "prop"):
+            continue
+        target, vm = item
+        drawn = [r.image[k] for r in results]
+        chosen = drawn[0]
+        image = composite(chosen, vm.render, vm.known)
+        weight = seed_agreement(chosen, drawn[1:])
+        fills.append(
+            FilledView(
+                target.key, kind, vm, image, weight, [{"seed": r.key} for r in results], 0, []
+            )
+        )
+    lift_fills(run, state, fills)
+    state.report["setFrames"] = len(clip["frames"])
+
+
+def save_clip(path: Path, clip: dict[str, Any], made: np.ndarray, fps: int = 12) -> None:
+    """The cache (the renders as held, grey where GEN3C had to make the scene) beside what it
+    made, side by side at half size: an mp4 (OpenCV's writer), and every frame as a JPEG in a
+    folder of the same name for the pictures."""
+    import cv2
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    shown = np.where(clip["held"][..., None], clip["frames"], 127).astype(np.uint8)
+    pair = np.ascontiguousarray(np.concatenate([shown, made], axis=2)[:, ::2, ::2])
+    h, w = pair.shape[1:3]
+    writer = None
+    for codec in ("avc1", "mp4v"):
+        writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*codec), fps, (w, h))
+        if writer.isOpened():
+            break
+    folder = path.with_suffix("")
+    folder.mkdir(exist_ok=True)
+    for k, frame in enumerate(pair):
+        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        if writer is not None and writer.isOpened():
+            writer.write(bgr)
+        cv2.imwrite(str(folder / f"{k:03d}.jpg"), bgr, [cv2.IMWRITE_JPEG_QUALITY, 88])
+    if writer is not None:
+        writer.release()
+
+
+def held_out_region(run: Run, camera: Camera) -> np.ndarray:
+    """`score_held_out`'s region at `camera`: where a withheld gaussian is the front surface."""
+    setup = run.setup
+    withheld = setup.measured.take(np.flatnonzero(setup.withheld & ~setup.dropped))
+    if not len(withheld):
+        return np.zeros((camera.height, camera.width), bool)
+    drawn = run.renderer(withheld, camera)
+    front = run.renderer(setup.scene(), camera).depth
+    ahead = np.isfinite(drawn.depth) & (
+        drawn.depth <= np.where(np.isfinite(front), front, np.inf) * 1.03 + 1e-6
+    )
+    return _close(tf._covered(drawn.alpha) & ahead, 3)
+
+
+def start_gen3c_direct(
+    run: Run, max_views: int = 6
+) -> tuple[Callable[[], list[EditResult]], list[tuple[str, Any]], dict[str, Any]] | None:
+    """A diagnostic, never lifted: GEN3C asked straight for the held-out photos' own poses
+    (the photos themselves never shown), one seed. It tells whether the model can paint
+    what is there before any lift or fuse loses it."""
+    setup = run.setup
+    if run.gen3c_filler is None or not setup.held_out:
+        return None
+    w, h = run.options.gen3c_size
+    sized = []
+    for view in setup.held_out:
+        cam = crop_camera(view.camera, w, h)
+        small = fv.scaled(cam, run.options.score_width, round(run.options.score_width * h / w))
+        sized.append((int(held_out_region(run, small).sum()), view, cam))
+    sized.sort(key=lambda x: -x[0])
+    picked = [(v, c) for area, v, c in sized[:max_views] if area >= 50]
+    if not picked:
+        return None
+    dirs = np.array([-c.rotation[2] for _, c in picked])
+    order = fv.tour(dirs, list(range(len(picked))), start=0)
+    stops = [("held", picked[k][0], picked[k][1]) for k in order]
+    clip, entries = build_gen3c_clip(setup, stops, run.renderer, run.options)
+    run.log(f"{setup.name}: GEN3C direct sent, {len(stops)} held-out poses")
+    return run.gen3c_filler.start(clip, [97]), entries, clip
+
+
+def score_gen3c_direct(
+    run: Run,
+    sent: tuple[Callable[[], list[EditResult]], list[tuple[str, Any]], dict[str, Any]],
+    out: Path,
+) -> dict[str, Any]:
+    """The diagnostic's scores: per held-out photo, cropped as GEN3C's frame is and scored at
+    the scoring width, inside `score_held_out`'s region: the scan as the kept cameras know it
+    (before) and GEN3C's frame with the known pixels composited back (what a fill would
+    show). A side by side is saved."""
+    from PIL import Image
+
+    collect, entries, clip = sent
+    (back,) = run.wait([("gen3c-direct", collect)])
+    made = next((r.image for r in back if r.image is not None), None)
+    report: dict[str, Any] = {"calls": [r.info for r in back], "start": clip["start"]}
+    if made is None:
+        report["failed"] = True
+        return report
+    save_clip(out / f"gen3c-direct-{run.setup.name}.mp4", clip, made)
+    setup = run.setup
+    c = setup.shown_classes()
+    visible = ((c != fq.UNKNOWN) & ~setup.withheld[setup.shown]).astype(np.float64)
+    sw = run.options.score_width
+    w, h = run.options.gen3c_size
+    sh = round(sw * h / w)
+    import cv2
+
+    rows, numbers = [], []
+    for k, (kind, item) in enumerate(entries):
+        if kind != "held":
+            continue
+        view, vm = item
+        photo = view.photo(width=min(2048, view.camera.width))
+        if photo is None:
+            continue
+        photo = cv2.resize(_cover_crop(photo, (w, h)), (sw, sh), interpolation=cv2.INTER_AREA)
+        cam = fv.scaled(vm.camera, sw, sh)
+        region = held_out_region(run, cam)
+        if region.sum() < 50:
+            continue
+        before = tf.to_u8(run.renderer(setup.scene(), cam, opacity_scale=visible).rgb)
+        filled = composite(made[k], vm.render, vm.known)
+        filled = cv2.resize(filled, (sw, sh), interpolation=cv2.INTER_AREA)
+        numbers.append(
+            {
+                "view": view.name,
+                "regionPx": int(region.sum()),
+                "before": _metrics(run, before, photo, region),
+                "gen3c": _metrics(run, filled, photo, region),
+            }
+        )
+        outlined = photo.copy()
+        outlined[_dilate(region, 1) & ~region] = (255, 0, 255)
+        rows.append(
+            [
+                gf.label_image(outlined, f"real, held out: {view.name}"),
+                gf.label_image(before, "before"),
+                gf.label_image(filled, "GEN3C at this pose"),
+            ]
+        )
+    if rows:
+        Image.fromarray(gf.grid(rows)).save(out / f"gen3c-direct-{setup.name}.png")
+    report["views"] = numbers
+    report["mean"] = {
+        key: {m: _mean([n[key].get(m) for n in numbers]) for m in ("psnr", "lpips", "dreamsim")}
+        for key in ("before", "gen3c")
+    }
+    return report
 
 
 # --- fuse ---------------------------------------------------------------------------------------------------------
@@ -3270,6 +3719,7 @@ def run_arms(
     distil: Callable[[dict], dict] | None = None,
     fallback: Editor | None = None,
     log: Callable[[str], None] = print,
+    gen3c_filler: Any = None,
 ) -> dict[str, Any]:
     """Every arm on one setup: views, anchors, propagation, fusion, layers, scores and
     pictures under `out`; the report (also `out/report.json`)."""
@@ -3313,6 +3763,7 @@ def run_arms(
         carver,
         log,
         fallback,
+        gen3c_filler=gen3c_filler,
     )
     # Weak surfaces first, in the arms with photos: the best photos reprojected onto the
     # surface they saw, as opaque gaussians every later view is drawn with.
@@ -3355,6 +3806,21 @@ def run_arms(
             base.carved,
             base.surface,
         )
+    # GEN3C needs nothing filled first: its clips go now (the arm's and the diagnostic
+    # at the held-out poses), so their GPU runs while the rest goes on.
+    gen3c_sent = gen3c_direct = None
+    if "gen3c" in options.arms:
+        t = time.time()
+        try:
+            gen3c_sent = start_gen3c(run)
+        except Exception as error:  # noqa: BLE001 - the arm fails, the others go on
+            states["gen3c"].report["setFailed"] = repr(error)[:1500]
+        if setup.held_out:
+            try:
+                gen3c_direct = start_gen3c_direct(run)
+            except Exception as error:  # noqa: BLE001 - a diagnostic
+                report["gen3cDirect"] = {"failed": repr(error)[:1500]}
+        report["timings"]["gen3cClipsS"] = round(time.time() - t, 1)
     # 6B goes first (it needs only the anchors), so its GPU runs while 6A goes on.
     joint = None
     if "vace" in options.arms:
@@ -3365,7 +3831,7 @@ def run_arms(
         except Exception as error:  # noqa: BLE001 - the arm fails, the others go on
             states["vace"].report["setFailed"] = repr(error)[:1500]
     t = time.time()
-    sequential = {a: states[a] for a in options.arms if a != "vace"}
+    sequential = {a: states[a] for a in options.arms if a not in ("vace", *SET_ONLY_ARMS)}
     if sequential:
         propagate_sequential(run, sequential)
     report["timings"]["sequentialS"] = round(time.time() - t, 1)
@@ -3376,6 +3842,19 @@ def run_arms(
         except Exception as error:  # noqa: BLE001
             states["vace"].report["setFailed"] = repr(error)[:1500]
         report["timings"]["jointS"] = round(time.time() - t, 1)
+    if gen3c_sent is not None:
+        t = time.time()
+        try:
+            finish_gen3c(run, states["gen3c"], gen3c_sent, out / "renders")
+        except Exception as error:  # noqa: BLE001
+            states["gen3c"].report["setFailed"] = repr(error)[:1500]
+        report["timings"]["gen3cS"] = round(time.time() - t, 1)
+    if gen3c_direct is not None:
+        try:
+            report["gen3cDirect"] = score_gen3c_direct(run, gen3c_direct, out / "renders")
+        except Exception as error:  # noqa: BLE001 - a diagnostic
+            report["gen3cDirect"] = {"failed": repr(error)[:1500]}
+        log(f"{setup.name}: GEN3C direct: {json.dumps(report['gen3cDirect'].get('mean'))}")
     # The solidity ablation: every sequential arm again from the same fills, distilled with
     # each preset's terms (`distill_fill.SOLIDITY_PRESETS`).
     for preset in options.solidity:
@@ -3427,8 +3906,10 @@ def run_arms(
                 cams,
                 measured_tileset,
                 layer_dir,
-                filler_name(arm, editor, set_filler),
-                rule=RULE.format(
+                filler_name(arm, editor, gen3c_filler if arm == "gen3c" else set_filler),
+                rule=GEN3C_RULE
+                if arm == "gen3c"
+                else RULE.format(
                     refs=(
                         " and two retrieved real photos, after the weak surfaces were made "
                         "solid from the best photos reprojected onto them"
@@ -3831,6 +4312,8 @@ def filler_name(arm: str, editor: Editor, set_filler: SetFiller | None) -> str:
         return f"{base}+photos+6a{solid}"
     if kind == "norefs":
         return f"{base}+6a{solid}"
+    if kind == "gen3c":
+        return f"{getattr(set_filler, 'name', 'gen3c')}+{base}-update"
     return f"{base}+photos+{getattr(set_filler, 'name', 'set')}"
 
 
@@ -3863,6 +4346,7 @@ def parser() -> Any:
     run.add_argument("--min-frame-psnr", type=float, default=13.0)
     run.add_argument("--editor", choices=("remote", "standin"), default="remote")
     run.add_argument("--set-filler", choices=("remote", "standin", "none"), default="remote")
+    run.add_argument("--gen3c", choices=("remote", "standin"), default="remote")
     run.add_argument("--depth", choices=("prompt", "mono", "oracle"), default="prompt")
     run.add_argument("--renderer", choices=("cpu", "gsplat"), default="gsplat")
     run.add_argument("--perceptual", choices=("lpips", "standin"), default="lpips")
@@ -3980,6 +4464,7 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"the editor failed its smoke test: {result.info.get('error')}")
     _log(f"setup: {json.dumps({k: info[k] for k in ('focus', 'kept', 'withheld', 'dropped')})}")
     remote = args.editor == "remote" or args.set_filler == "remote" or args.fallback
+    remote = remote or ("gen3c" in options.arms and args.gen3c == "remote")
     if remote and BACKEND is None:
         raise SystemExit("the remote models need a backend (run through infra/modal/fill.py)")
     editor: Editor = (
@@ -3997,6 +4482,13 @@ def main(argv: list[str] | None = None) -> int:
         )  # type: ignore[misc]
     elif args.set_filler == "standin":
         set_filler = StandInSetFiller()
+    gen3c_filler: Any = None
+    if "gen3c" in options.arms:
+        gen3c_filler = (
+            RemoteGen3C(*BACKEND, steps=options.gen3c_steps, limit=options.max_gen3c_calls)  # type: ignore[misc]
+            if args.gen3c == "remote"
+            else StandInGen3C()
+        )
     fallback = (
         RemoteFallback(*BACKEND, limit=options.max_fallback_calls)
         if args.fallback and BACKEND
@@ -4024,6 +4516,7 @@ def main(argv: list[str] | None = None) -> int:
         distil=distill_fill.run if args.distill_on == "local" else None,
         fallback=fallback,
         log=_log,
+        gen3c_filler=gen3c_filler,
     )
     report["setup"] = info
     gf.write_json(args.out / "report.json", report)

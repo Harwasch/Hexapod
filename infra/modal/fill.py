@@ -281,7 +281,7 @@ inpaint_image = (
 )
 
 
-def _inpaint_module():  # noqa: ANN202 - inpaint_models, imported where it was copied
+def _inpaint_module():
     sys.path.insert(0, "/root")
     import inpaint_models
 
@@ -441,7 +441,7 @@ GEN_JOB_CAP_MIN = 75
 WORST_FACTOR = 1.5
 
 
-def _video_module():  # noqa: ANN202 - video_fill_models, imported where it was copied
+def _video_module():
     sys.path.insert(0, "/root")
     import video_fill_models
 
@@ -709,10 +709,10 @@ def _get(url: str, timeout: float) -> bytes:
     import urllib.error
     import urllib.request
 
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})  # noqa: S310
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     for attempt in range(6):
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.read()
         except urllib.error.HTTPError as error:
             # Several jobs fetching one scan at once meet the bucket's rate limit (429).
@@ -987,7 +987,7 @@ def _wait_video(call: object) -> dict:
         raise
 
 
-def _private_client():  # noqa: ANN202 - boto3's client
+def _private_client():
     import boto3
     from botocore.config import Config
 
@@ -1207,6 +1207,7 @@ def probe(scan: str) -> dict:
     os.chdir(CAPTURES)
     import cv2
     import numpy as np
+
     import teacher_fill as tf
     import view_cones as vc
     from splat_render import load_tileset
@@ -1246,7 +1247,7 @@ def probe(scan: str) -> dict:
             "seen-telea-t100": (seen_telea, FIXER_RESOLUTION, 100),
         }
         covered = frame.alpha >= 0.5
-        blur = lambda x: cv2.GaussianBlur(x, (0, 0), 2.0)  # noqa: E731
+        blur = lambda x: cv2.GaussianBlur(x, (0, 0), 2.0)
         for name, (given, resolution, step) in variants.items():
             request = {"images": [encode_png(given)], "resolution": resolution, "timestep": step}
             out = decode_png(Fixer().fix.remote(request)["images"][0])
@@ -1313,6 +1314,10 @@ SOLIDITY_JOB_MIN = 6
 #: The job's timeout: the eight round-2 jobs so far took 11-16 min of L4 (without the shape
 #: and the solidity clones).
 ANCHOR_JOB_CAP_MIN = 90
+#: With the GEN3C arm: its calls queue on one H100 (a load, then each 121-frame clip in
+#: turn), and the job renders two clips' 120 frames each at 1280x704.
+GEN3C_JOB_CAP_MIN = 150
+GEN3C_WAIT_S = 100 * 60
 #: Views the estimate assumes (the selection's maxima give the worst case).
 ANCHOR_VIEWS = {"anchors": 6, "props": 16}
 #: The hemisphere views (`anchor_fill.hemisphere_targets`) added to the propagation: at most
@@ -1320,7 +1325,7 @@ ANCHOR_VIEWS = {"anchors": 6, "props": 16}
 HEMISPHERE_VIEWS = {"expected": 10, "worst": 17}
 
 
-def _anchor_module():  # noqa: ANN202 - anchor_models, imported where it was copied
+def _anchor_module():
     sys.path.insert(0, "/root")
     import anchor_models
     import video_fill_models
@@ -1426,7 +1431,169 @@ class FillVace14:
             return {"error": repr(error)[:1500], "seconds": round(time.time() - started, 1), **done}
 
 
-ANCHOR_CLASSES = {"EditQwen": EditQwen, "FillVace14": FillVace14, "InpaintQwen": InpaintQwen}
+# --- GEN3C (the `gen3c` arm) ----------------------------------------------------------------------
+
+#: GEN3C (nv-tlabs/GEN3C, Cosmos-7B conditioned on renders of a 3D cache; `gen3c_model`):
+#: its own image, on a public CUDA base with Python 3.10 and its pinned requirements
+#: (torch 2.6), Transformer Engine 1.12 built against them. Apex is only imported by
+#: training code its inference modules import (`amp_C`, `multi_tensor_applier`): stubs
+#: stand in for both, nothing calls them.
+GEN3C_COMMIT = "db2ffe12ced12ddafcec5e0422ee46ce8520746b"
+_APEX_STUBS = (
+    "mkdir -p /opt/stubs/apex/multi_tensor_apply && "
+    "touch /opt/stubs/apex/__init__.py /opt/stubs/amp_C.py && "
+    "echo 'multi_tensor_applier = None' > /opt/stubs/apex/multi_tensor_apply/__init__.py"
+)
+gen3c_image = (
+    modal.Image.from_registry("nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04", add_python="3.10")
+    .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0", "build-essential", "ninja-build")
+    .run_commands(
+        "git clone https://github.com/nv-tlabs/GEN3C.git /opt/GEN3C",
+        f"cd /opt/GEN3C && git checkout {GEN3C_COMMIT}",
+        "pip install --upgrade pip==25.0 setuptools==76.0.0 wheel",
+        "pip install -r /opt/GEN3C/requirements.txt",
+        "pip install pybind11 'nvidia-cudnn-cu12==9.1.0.70'",
+    )
+    .env(
+        {
+            "CUDA_HOME": "/usr/local/cuda",
+            "NVTE_FRAMEWORK": "pytorch",
+            "NVTE_CUDA_ARCHS": "90",
+            "TORCH_CUDA_ARCH_LIST": "9.0",
+            "MAX_JOBS": "8",
+        }
+    )
+    .run_commands("pip install --no-build-isolation 'transformer-engine[pytorch]==1.12.0'")
+    .run_commands(_APEX_STUBS)
+    .env(
+        {
+            "PYTHONPATH": "/opt/GEN3C:/opt/stubs",
+            "HF_HOME": "/weights/hf",
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+        }
+    )
+    .add_local_file(LOCAL_CAPTURES / "gen3c_model.py", "/root/gen3c_model.py")
+)
+GEN3C_GPU = "H100"
+#: What the budget guard plans with (seconds): a 121-frame clip at 1280x704, 35 steps at
+#: guidance 1 on an H100 (no published figure; the 7B Cosmos video2world model, which GEN3C
+#: is, takes several minutes a clip there), the load (29 GB network, T5-11B's 45 GB file and
+#: the tokenizer from the weights volume), the idle tail, and a call's cap (its timeout).
+GEN3C_CALL_S = 600
+GEN3C_LOAD_S = 480
+GEN3C_IDLE_S = 60
+GEN3C_CAP_S = 1800
+#: The job's L4 waits on GEN3C beside its own work: minutes added to `ANCHOR_JOB_MIN`.
+GEN3C_JOB_MIN = 30
+
+
+def _gen3c_module():
+    sys.path.insert(0, "/root")
+    import gen3c_model
+
+    return gen3c_model
+
+
+@app.cls(
+    image=gen3c_image,
+    gpu=GEN3C_GPU,
+    volumes={"/weights": WEIGHTS},
+    memory=163840,
+    timeout=GEN3C_CAP_S,
+    startup_timeout=30 * 60,
+    scaledown_window=GEN3C_IDLE_S,
+    max_containers=1,
+)
+class FillGen3C:
+    """GEN3C-Cosmos-7B (NVIDIA Open Model License): one 121-frame clip per call, the scan's
+    renders as its 3D cache (`gen3c_model.fill`)."""
+
+    @modal.enter()
+    def load(self) -> None:
+        import traceback
+
+        started = time.time()
+        self.error = ""
+        try:
+            self.gm = _gen3c_module()
+            self.pipe = self.gm.load()
+        except Exception:  # noqa: BLE001 - every call reports it (no reload loop)
+            self.error = traceback.format_exc()[-3000:]
+        self.load_seconds = round(time.time() - started, 1)
+
+    def _done(self) -> dict:
+        return {"loadSeconds": self.load_seconds, "gpu": GEN3C_GPU}
+
+    @modal.method()
+    def fill(self, request: dict) -> dict:
+        if self.error:
+            return {"error": f"GEN3C did not load:\n{self.error[-1400:]}", "seconds": 0.0}
+        started = time.time()
+        try:
+            return {**self.gm.fill(self.pipe, request), **self._done()}
+        except Exception as error:  # noqa: BLE001
+            import traceback
+
+            with contextlib.suppress(Exception):
+                import torch
+
+                torch.cuda.empty_cache()
+            return {
+                "error": f"{error!r}\n{traceback.format_exc()[-1500:]}",
+                "seconds": round(time.time() - started, 1),
+                **self._done(),
+            }
+
+    @modal.method()
+    def smoke(self) -> dict:
+        if self.error:
+            return {"error": f"GEN3C did not load:\n{self.error[-2500:]}", **self._done()}
+        try:
+            return {**self.gm.smoke(self.pipe), **self._done()}
+        except Exception:  # noqa: BLE001
+            import traceback
+
+            return {"error": traceback.format_exc()[-2500:], **self._done()}
+
+
+@app.function(
+    image=modal.Image.debian_slim(python_version="3.11")
+    .pip_install("huggingface_hub>=0.34,<1.0", "numpy")
+    .add_local_file(LOCAL_CAPTURES / "gen3c_model.py", "/root/gen3c_model.py"),
+    secrets=[HF_SECRET],
+    volumes={"/weights": WEIGHTS},
+    cpu=4.0,
+    memory=16384,
+    timeout=3 * 3600,
+)
+def gen3c_prefetch() -> dict[str, float]:
+    """GEN3C's three repositories into the weights volume once (only the files it reads), on
+    a CPU, before an H100 waits on them."""
+    from huggingface_hub import snapshot_download
+
+    gm = _gen3c_module()
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    seconds = {}
+    for repo, (folder, patterns) in gm.REPOS.items():
+        started = time.time()
+        snapshot_download(
+            repo,
+            token=token,
+            local_dir=f"{gm.CHECKPOINT_DIR}/{folder}",
+            allow_patterns=list(patterns),
+            max_workers=16,
+        )
+        WEIGHTS.commit()
+        seconds[repo] = round(time.time() - started, 1)
+    return seconds
+
+
+ANCHOR_CLASSES = {
+    "EditQwen": EditQwen,
+    "FillVace14": FillVace14,
+    "InpaintQwen": InpaintQwen,
+    "FillGen3C": FillGen3C,
+}
 #: Each repository the round-2 run reads, and what of it (None: everything).
 ANCHOR_REPOS: dict[str, tuple[str, ...] | None] = {
     "Qwen/Qwen-Image-Edit-2511": None,
@@ -1533,7 +1700,11 @@ ANCHOR_SCANS: dict[str, dict] = {
 }
 #: anchor_fill options a run may set (`--anchor-options k=v,...`), and their checks.
 ANCHOR_OPTIONS = {
-    "arms": r"(refs|norefs|vace|splash)(\+(refs|norefs|vace|splash))*",
+    "arms": r"(refs|norefs|vace|splash|gen3c)(\+(refs|norefs|vace|splash|gen3c))*",
+    "gen3c_steps": r"[1-9][0-9]?",
+    #: Only GEN3C's smoke test (its weights fetched, the model loaded, one synthetic clip),
+    #: then stop: no job runs.
+    "gen3c_smoke": r"true|false",
     "seeds": r"[1-8]",
     "prop_seeds": r"[1-4]",
     "anchor_steps": r"[1-9][0-9]?",
@@ -1580,21 +1751,29 @@ def anchor_argv(options: dict[str, str]) -> list[str]:
             if value == "true":
                 argv.append("--fallback")
             continue
+        if key == "gen3c_smoke":  # this side's, not anchor_fill's
+            continue
         value = value.replace("+", ",")
         argv += [f"--{key.replace('_', '-')}", value]
     return argv
 
 
+_CALL_CLASS: dict[int, str] = {}
+
+
 def _spawn_anchor(cls: str, method: str, request: dict) -> object:
     if cls not in ANCHOR_CLASSES:
         raise ValueError(f"no class {cls!r}")
-    return getattr(ANCHOR_CLASSES[cls](), method).spawn(request)
+    call = getattr(ANCHOR_CLASSES[cls](), method).spawn(request)
+    _CALL_CLASS[id(call)] = cls  # which wait applies
+    return call
 
 
 def _wait_anchor(call: object) -> dict:
     """A call back within its class's cap (and the queue before it), else cancelled."""
+    timeout = GEN3C_WAIT_S if _CALL_CLASS.get(id(call)) == "FillGen3C" else GEN_CALL_TIMEOUT_S
     try:
-        return call.get(timeout=GEN_CALL_TIMEOUT_S)  # type: ignore[attr-defined]
+        return call.get(timeout=timeout)  # type: ignore[attr-defined]
     except TimeoutError:
         call.cancel(terminate_containers=True)  # type: ignore[attr-defined]
         raise
@@ -1605,7 +1784,7 @@ def _wait_anchor(call: object) -> dict:
     gpu="L4",
     cpu=8.0,
     memory=65536,
-    timeout=ANCHOR_JOB_CAP_MIN * 60,
+    timeout=GEN3C_JOB_CAP_MIN * 60,
     volumes={"/weights": WEIGHTS},
     secrets=[STORAGE_SECRET, HF_SECRET],
 )
@@ -1712,6 +1891,9 @@ def anchor_counts(options: dict[str, str], worst: bool = False) -> dict[str, int
         "propNoRefs": props * prop_seeds * int("norefs" in sequential),
         "update": rounds * (anchors + props) * (len(arms) + len(presets) * len(cloned)),
         "set": int(options.get("set_seeds", 2)) * int("vace" in arms),
+        # The GEN3C arm's clips (`set_seeds`) and, in a leave-out, the diagnostic at the
+        # held-out poses (counted for every job: an anchor job only runs fewer).
+        "gen3c": (int(options.get("set_seeds", 2)) + 1) * int("gen3c" in arms),
     }
     return out
 
@@ -1735,14 +1917,26 @@ def estimate_anchor_cost(jobs: list[tuple[str, str]], options: dict[str, str]) -
             table[f"{name} editor{label}"] = factor * edit_s * rate_gpu
             table[f"{name} vace{label}"] = factor * set_s * rate_gpu
             table[f"{name} starts{label}"] = factor * starts * rate_gpu
+            if n["gen3c"]:
+                rate = GPU_RATES[GEN3C_GPU] / 3600
+                table[f"{name} gen3c{label}"] = factor * n["gen3c"] * GEN3C_CALL_S * rate
+                table[f"{name} gen3c start{label}"] = factor * (GEN3C_LOAD_S + GEN3C_IDLE_S) * rate
         presets = [p for p in options.get("solidity", "").split("+") if p]
         minutes = ANCHOR_JOB_MIN.get(scan, 60) + SOLIDITY_JOB_MIN * len(presets)
         minutes += SHAPE_JOB_MIN * int(options.get("shape") == "true")
+        minutes += GEN3C_JOB_MIN * int("gen3c" in options.get("arms", "").split("+"))
         usd[f"{name} L4"] = minutes / 60 * GPU_RATES["L4"]
-        worst[f"{name} L4"] = ANCHOR_JOB_CAP_MIN * 60 * rate_l4
+        cap = (
+            GEN3C_JOB_CAP_MIN
+            if "gen3c" in options.get("arms", "").split("+")
+            else ANCHOR_JOB_CAP_MIN
+        )
+        worst[f"{name} L4"] = cap * 60 * rate_l4
     worst["hung editor call"] = EDIT_CAP_S * rate_gpu
     if "vace" in options.get("arms", "refs+norefs+vace").split("+"):
         worst["hung VACE call"] = SET_CAP_S * rate_gpu
+    if "gen3c" in options.get("arms", "").split("+"):
+        worst["hung GEN3C call"] = GEN3C_CAP_S * GPU_RATES[GEN3C_GPU] / 3600
     return {
         "calls": {f"{k}:{s}": anchor_counts(options) for k, s in jobs},
         "usd": {k: round(v, 3) for k, v in usd.items()},
@@ -1755,23 +1949,31 @@ def actual_anchor_cost(results: list[dict]) -> dict:
     """What the jobs cost from what they report: per GPU class its calls' seconds plus, per
     container start (a distinct load time), its load and idle tail; per job its L4 wall
     time. A floor: Modal also bills image pulls and the CPU side."""
-    seconds = {"EditQwen": 0.0, "FillVace14": 0.0}
-    loads: dict[str, set] = {"EditQwen": set(), "FillVace14": set()}
+    seconds = {"EditQwen": 0.0, "FillVace14": 0.0, "FillGen3C": 0.0}
+    loads: dict[str, set] = {"EditQwen": set(), "FillVace14": set(), "FillGen3C": set()}
     usd: dict[str, float] = {}
     for r in results:
         report = (r.get("result") or {}) if isinstance(r, dict) else {}
         for call in report.get("calls", []) or []:
-            cls = "FillVace14" if str(call.get("key", "")).startswith("set-") else "EditQwen"
+            key = str(call.get("key", ""))
+            cls = (
+                "FillVace14"
+                if key.startswith("set-")
+                else "FillGen3C"
+                if key.startswith("gen3c-")
+                else "EditQwen"
+            )
             seconds[cls] += float(call.get("seconds") or 0.0)
             if call.get("loadSeconds") is not None:
                 loads[cls].add(float(call["loadSeconds"]))
         if isinstance(r, dict) and r.get("timings", {}).get("totalS"):
             usd[f"{r['kind']}:{r['scan']} L4"] = r["timings"]["totalS"] / 3600 * GPU_RATES["L4"]
-    idle = {"EditQwen": EDIT_IDLE_S, "FillVace14": SET_IDLE_S}
+    idle = {"EditQwen": EDIT_IDLE_S, "FillVace14": SET_IDLE_S, "FillGen3C": GEN3C_IDLE_S}
+    gpu = {"EditQwen": ANCHOR_GPU, "FillVace14": ANCHOR_GPU, "FillGen3C": GEN3C_GPU}
     for cls, s in seconds.items():
         if s or loads[cls]:
             total = s + sum(loads[cls]) + idle[cls] * max(1, len(loads[cls]))
-            usd[cls] = total / 3600 * GPU_RATES[ANCHOR_GPU]
+            usd[cls] = total / 3600 * GPU_RATES[gpu[cls]]
     return {
         "usd": {k: round(v, 3) for k, v in usd.items()},
         "gpuSeconds": {k: round(v, 1) for k, v in seconds.items()},
@@ -1822,6 +2024,20 @@ def _run_anchor(
     refused = [r for r, v in access.items() if v != "ok"]
     if refused:
         raise SystemExit(f"the token cannot read {refused}: not started (no workaround)")
+    if "gen3c" in arms:
+        seconds = gen3c_prefetch.remote()
+        sys.stdout.write(f"GEN3C weights fetched: {json.dumps(seconds)}\n")
+        if options.get("gen3c_smoke") == "true":
+            # Only the smoke test: the image builds, the weights load, one clip runs.
+            smoke = FillGen3C().smoke.remote()
+            (out / "gen3c-smoke.json").write_text(json.dumps(smoke, indent=1), encoding="utf-8")
+            sys.stdout.write(f"GEN3C smoke test: {json.dumps(smoke)[:4000]}\n")
+            rate = GPU_RATES[GEN3C_GPU] / 3600
+            gpu_s = float(smoke.get("loadSeconds") or 0) + float(smoke.get("seconds") or 0)
+            sys.stdout.write(f"GEN3C smoke cost: ~${(gpu_s + GEN3C_IDLE_S) * rate:.2f}\n")
+            if "error" in smoke:
+                raise SystemExit("GEN3C failed its smoke test")
+            return
     seconds = anchor_prefetch.remote(repos)
     sys.stdout.write(f"weights fetched: {json.dumps(seconds)}\n")
     results, failed = [], []

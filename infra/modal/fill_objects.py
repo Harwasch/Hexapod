@@ -469,7 +469,6 @@ def run_objects(
     the leave-out scored (its lowest cameras held out), grades and sheets."""
     os.chdir(CAPTURES)
     sys.path.insert(0, CAPTURES)
-    import attach_sidecars
     import object_fill as of
 
     of.BACKEND = (_spawn, _wait)
@@ -479,11 +478,9 @@ def run_objects(
     timings: dict[str, object] = {}
     with tempfile.TemporaryDirectory() as work:
         root = Path(work)
-        try:
-            url = attach_sidecars.resolve_asset(setup["asset"])["url"]
-        except Exception as error:  # noqa: BLE001 - the known URL, and why
-            url = setup["url"]
-            timings["resolveError"] = repr(error)[:300]
+        # Pinned to the tileset the object round graded (2026-10-07): the asset's current
+        # one is a later capture (2026-10-22) the archived poses do not belong to.
+        url = setup["url"]
         timings["tileset"] = url
         variant = f"variants/objects/{setup['variant']}/instances.json"
         tileset = _fetch_scan(url, root / "scan", [variant])

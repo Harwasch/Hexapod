@@ -5,6 +5,7 @@ the held-out score -- on a table seen from below its top, with stand-in models."
 
 from __future__ import annotations
 
+import itertools
 import json
 import math
 from pathlib import Path
@@ -457,3 +458,99 @@ def test_a_scan_seen_everywhere_gets_its_weak_gaussians_refined(tmp_path: Path) 
         else:
             assert entry["weakCopies"] > 0 and entry["weakCopiesKept"] > 0
             assert entry["surface"] == 0
+
+
+def test_a_camera_path_reaches_every_view_on_its_own_frame_and_orbits() -> None:
+    centre = np.zeros(3)
+    keys = [
+        Camera.look_at([2, 0, 0.5], [0, 0, 0], width=64, height=36),
+        Camera.look_at([0, 2, 0.5], [0, 0, 0], width=64, height=36),
+        Camera.look_at([-2, 0, 1.5], [0, 0, 0], width=64, height=36),
+    ]
+    cams, at = af.camera_path(keys, centre, 21)
+    assert len(cams) == 21 and at[0] == 0 and at[-1] == 20
+    assert all(b > a for a, b in itertools.pairwise(at))
+    for k, f in enumerate(at):
+        assert np.allclose(cams[f].centre, keys[k].centre)
+        assert np.allclose(cams[f].rotation, keys[k].rotation, atol=1e-9)
+    # Between two views the camera goes round the centre, never through it.
+    radii = [np.linalg.norm(c.centre[:2]) for c in cams]
+    assert min(radii) > 1.0
+    # Even speed: each leg gets frames in proportion to how far the camera turns on it.
+    legs = [
+        max(
+            af._angle_deg(a.centre, b.centre),
+            af._rotation_angle_deg(a.rotation, b.rotation),
+        )
+        for a, b in itertools.pairwise(keys)
+    ]
+    assert abs(at[1] - 20 * legs[0] / sum(legs)) <= 1
+    for c in cams:
+        assert np.allclose(c.rotation @ c.rotation.T, np.eye(3), atol=1e-9)
+
+
+def test_the_gen3c_arm_fills_the_held_out_top_from_one_clip(tmp_path: Path) -> None:
+    scene, _ = table_scene()
+    cams = spool_cameras() + ring_cameras(5, 65.0, 2.2, phase=0.5)
+    paths = photos(scene, cams, tmp_path / "frames")
+    views = [gf.RealView(p.name, c, None, p) for p, c in zip(paths, cams, strict=True)]
+    setup, _ = af.make_setup(
+        "table",
+        "a round wooden table on a lawn",
+        scene,
+        views,
+        render,
+        leave_out="high",
+        share=5 / len(cams),
+        width=96,
+        log=lambda s: None,
+    )
+    options = af.Options(
+        arms=("gen3c",),
+        fill_size=(96, 56),
+        probe_size=(64, 36),
+        quality_width=96,
+        azimuths=8,
+        anchors=(2, 3),
+        propagation=(2, 3),
+        set_seeds=2,
+        distill=0,
+        update_distill=0,
+        lift_stride=2,
+        score_width=96,
+        carve_width=96,
+        gen3c_size=(96, 52),
+        gen3c_frames=41,
+    )
+    editor = af.StandInEditor()
+    report = af.run_arms(
+        setup,
+        editor,
+        None,
+        af.OracleDepth(scene, render),
+        render,
+        af.StandInPerceptual(),
+        options,
+        _measured_tileset(tmp_path / "scan"),
+        tmp_path / "out",
+        log=lambda s: None,
+        gen3c_filler=af.StandInGen3C(),
+    )
+    entry = report["candidates"]["gen3c"]
+    assert entry["evidence"]["gaussians"] > 0, {k: v for k, v in entry.items() if k != "fills"}
+    assert entry["evidence"]["filler"].startswith("standin-telea-gen3c")
+    # Every target is a stop on the clip, none anchored by the editor first.
+    targets = report["plan"]["targets"]
+    assert len(entry["gen3cStopFrames"]) == len(targets) == len(entry["fills"])
+    editor_keys = [c["key"] for c in report["calls"] if c.get("key", "").startswith("gen3c/")]
+    assert editor_keys and all("/u" in k for k in editor_keys)  # update rounds only
+    assert entry["setFrames"] == 41 and entry["gen3cDropped"] == 0
+    held = report["heldOut"]
+    assert held["mean"]["gen3c"]["psnr"] > held["mean"]["before"]["psnr"]
+    direct = report["gen3cDirect"]
+    assert direct["views"] and direct["mean"]["gen3c"]["psnr"] is not None
+    renders = tmp_path / "out" / "renders"
+    for name in ("gen3c-table.mp4", "gen3c-direct-table.mp4", "gen3c-direct-table.png"):
+        assert (renders / name).exists(), name
+    # The update round still refines the GEN3C views (without photos), as for every arm.
+    assert editor.calls > 0

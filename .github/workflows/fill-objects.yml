@@ -21,7 +21,7 @@ name: Fill objects (Modal GPU, 3D object completion)
 
 on:
   push:
-    branches: ["wm-fill-objects"]
+    branches: ["wm-fill-objects", "claude/research-fill-gen3c-f04389"]
 
 concurrency:
   group: fill-objects-${{ github.ref }}

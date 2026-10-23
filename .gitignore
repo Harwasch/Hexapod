@@ -73,3 +73,7 @@ data/tiles/synthetic-yard/source/
 data/tiles/*-sh[0-3]/
 data/tiles/sh_compare.json
 data/tiles/sh-compare-place/
+
+# Coordinator notes and worktrees stay local (as on main).
+.claude/ops/
+.claude/worktrees/
