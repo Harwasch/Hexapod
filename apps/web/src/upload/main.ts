@@ -26,6 +26,7 @@ import { ApiError, isAbort } from "@/api/error";
 import { partSizeFor, putPart } from "@/api/putPart";
 import { classify, SUPPORTED_TEXT, unsupported } from "@/features/captures/recipes";
 
+import { mountFilmingGuide } from "./filmingGuide";
 import { mountOptions, type OptionsPanel, paramsFor, previewParamsFor } from "./options";
 import { forecast, qualityOf, refineAdvice, summary } from "./quality";
 
@@ -1355,6 +1356,7 @@ function startWithKey(ui: Ui): void {
 export function start(root: Document = document): void {
   const ui = collectUi(root);
   if (!ui) return;
+  mountFilmingGuide(root);
 
   const token = root.location.hash.replace(/^#/, "").trim();
   if (!token) {

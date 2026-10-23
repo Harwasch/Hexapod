@@ -29,6 +29,34 @@ const past = () => Math.floor(Date.now() / 1000) - 60;
 test.use({ viewport: PHONE });
 
 test.describe("the phone upload page", () => {
+  for (const colorScheme of ["dark", "light"] as const) {
+    test(`the filming guide fits the phone and can be reopened (${colorScheme})`, async ({
+      page,
+    }) => {
+      await page.emulateMedia({ colorScheme });
+      await page.goto(`/upload.html#${token(soon())}`);
+      const guide = page.getByRole("region", { name: "How to film a good scan" });
+      await expect(guide).toBeVisible();
+      await expect(guide.getByRole("listitem")).toHaveCount(6);
+      const guideBox = await guide.boundingBox();
+      const pickerBox = await page.locator(".pick").boundingBox();
+      expect(guideBox).not.toBeNull();
+      expect(pickerBox).not.toBeNull();
+      expect(guideBox!.y + guideBox!.height).toBeLessThanOrEqual(pickerBox!.y);
+      const fits = await page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      );
+      expect(fits).toBe(true);
+
+      await page.getByRole("button", { name: "Dismiss guide" }).click();
+      await expect(guide).toBeHidden();
+      await page.reload();
+      await expect(guide).toBeHidden();
+      await page.getByRole("button", { name: "How to film", exact: true }).click();
+      await expect(guide).toBeVisible();
+    });
+  }
+
   test("a valid link offers a file picker", async ({ page }) => {
     await page.goto(`/upload.html#${token(soon())}`);
     await expect(page.getByRole("heading", { name: "Send a capture" })).toBeVisible();
