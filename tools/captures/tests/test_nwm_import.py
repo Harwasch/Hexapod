@@ -8,11 +8,14 @@ summer time and one not, so the offset is the zone's on each day rather than a c
 
 from __future__ import annotations
 
+import http.server
 import json
 import re
 import sys
+import threading
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import PIL.Image
 import pytest
@@ -147,62 +150,91 @@ def test_the_capture_is_located_credited_and_named_for_the_dataset(tmp_path: Pat
     assert "2025-08-29" in payload["description"]
 
 
-class FakeApi(nwm_import.Api):
-    """The API as a dict of captures; records every call in order."""
+RESUME_ID = "c0ffee00-0000-0000-0000-000000000001"
+NWM_CAPTURE = {"slug": "nwm-tuwien-2025-08-25", "metadata": {"dataset": {"doi": nwm_import.DOI}}}
 
-    def __init__(self, files: list[dict[str, Any]] | None = None) -> None:
+
+class FakeApi(nwm_import.Api):
+    """The API as one capture; records every call in order."""
+
+    def __init__(
+        self, files: list[dict[str, Any]] | None = None, capture: dict[str, Any] | None = None
+    ) -> None:
         super().__init__("https://api.invalid", "token")
         self.calls: list[tuple[str, str, Any]] = []
         self.files = files or []
+        self.capture = NWM_CAPTURE if capture is None else capture
 
     def call(self, method: str, path: str, body: object | None = None) -> Any:
         self.calls.append((method, path, body))
+        window = {
+            "partSize": 8 * 1024 * 1024,
+            "parts": [{"partNumber": 1, "url": "https://bucket.invalid/part"}],
+            "nextPartNumber": None,
+        }
         if (method, path) == ("POST", "/captures"):
             return {"id": "c0ffee00-0000-0000-0000-000000000000", "files": []}
         if method == "GET":
-            return {"id": path.rsplit("/", 1)[1], "files": self.files}
+            return {**self.capture, "id": path.rsplit("/", 1)[1], "files": self.files}
         if path.endswith("/files"):
-            return {
-                "file": {"id": f"file-{len(self.calls)}"},
-                "upload": {
-                    "partSize": 8 * 1024 * 1024,
-                    "parts": [{"partNumber": 1, "url": "https://bucket.invalid/part"}],
-                    "nextPartNumber": None,
-                },
-            }
+            return {"file": {"id": f"file-{len(self.calls)}"}, "upload": window}
+        if path.endswith("/parts"):
+            return window
         if path.endswith("/process"):
             return {"id": "job-1"}
         return {}
 
 
+@pytest.fixture
+def puts(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    sent: list[int] = []
+    monkeypatch.setattr(nwm_import, "_put", lambda url, data: sent.append(len(data)) or '"etag"')
+    return sent
+
+
 def test_upload_resumes_without_resending_and_queues_only_when_asked(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, puts: list[int]
 ) -> None:
     folder = tmp_path / "jpeg"
     manifest = nwm_import.prepare(_dataset(tmp_path, RECORDS), folder)
-    put: list[int] = []
-    monkeypatch.setattr(nwm_import, "_put", lambda url, data: put.append(len(data)) or '"etag"')
-
-    first = manifest["files"][0]["name"]
-    api = FakeApi(files=[{"filename": first, "status": "complete"}])
-    result = nwm_import.upload(folder, api, capture_id="c0ffee00-0000-0000-0000-000000000001")
+    first, second, third = (f["name"] for f in manifest["files"])
+    api = FakeApi(
+        files=[
+            {"id": "done", "filename": first, "status": "complete"},
+            # An upload that stopped before completing: resumed on its own row.
+            {"id": "open", "filename": second, "status": "in-progress"},
+            # One that failed for good: registered again, its row left as a record.
+            {"id": "gone", "filename": third, "status": "aborted"},
+        ]
+    )
+    reports: list[dict[str, Any]] = []
+    result = nwm_import.upload(folder, api, capture_id=RESUME_ID, report=reports.append)
     assert result == {
-        "captureId": "c0ffee00-0000-0000-0000-000000000001",
+        "captureId": RESUME_ID,
         "uploaded": 2,
+        "resumedRows": 1,
         "alreadyThere": 1,
         "jobId": None,
     }
-    registered = sorted(b["filename"] for m, p, b in api.calls if p.endswith("/files"))
-    assert registered == sorted(f["name"] for f in manifest["files"][1:])
+    assert reports[0] == {"captureId": RESUME_ID, "resumed": True}
+    assert reports[-1] == result
+    registered = [b["filename"] for _, p, b in api.calls if p.endswith("/files")]
+    assert registered == [third]
+    assert ("POST", f"/captures/{RESUME_ID}/files/open/parts", {"firstPartNumber": 1}) in api.calls
     assert not any(p.endswith("/process") for _, p, _ in api.calls)
-    assert len(put) == 2
-    completes = [b for _, p, b in api.calls if p.endswith("/complete")]
-    assert all(c["parts"] == [{"partNumber": 1, "etag": '"etag"'}] for c in completes)
-    assert all(c["checksum"].startswith("sha256:") for c in completes)
+    assert len(puts) == 2
+    completes = [(p, b) for _, p, b in api.calls if p.endswith("/complete")]
+    assert len(completes) == 2
+    assert f"/captures/{RESUME_ID}/files/open/complete" in [p for p, _ in completes]
+    assert all(b["parts"] == [{"partNumber": 1, "etag": '"etag"'}] for _, b in completes)
+    assert all(b["checksum"].startswith("sha256:") for _, b in completes)
 
     fresh = FakeApi()
-    result = nwm_import.upload(folder, fresh, process=True)
+    reports.clear()
+    result = nwm_import.upload(folder, fresh, process=True, report=reports.append)
     assert fresh.calls[0][:2] == ("POST", "/captures")
+    # The id is reported before any file goes up, so a failed run still names it.
+    assert reports[0] == {"captureId": result["captureId"], "resumed": False}
     assert fresh.calls[-1] == (
         "POST",
         f"/captures/{result['captureId']}/process",
@@ -210,6 +242,124 @@ def test_upload_resumes_without_resending_and_queues_only_when_asked(
     )
     assert result["uploaded"] == 3
     assert result["jobId"] == "job-1"
+
+
+@pytest.mark.parametrize(
+    "capture",
+    [
+        {"slug": "pumpkin", "metadata": {}},
+        {"slug": "nwm-tuwien-2025-08-25", "metadata": {}},
+        {"slug": "nwm-tuwien-2025-11-22", "metadata": NWM_CAPTURE["metadata"]},
+    ],
+)
+def test_resume_refuses_any_capture_but_this_timesteps_nwm_one(
+    tmp_path: Path, puts: list[int], capture: dict[str, Any]
+) -> None:
+    folder = tmp_path / "jpeg"
+    nwm_import.prepare(_dataset(tmp_path, RECORDS), folder)
+    api = FakeApi(capture=capture)
+    with pytest.raises(ValueError, match="nothing was uploaded"):
+        nwm_import.upload(folder, api, capture_id=RESUME_ID, process=True)
+    assert [m for m, _, _ in api.calls] == ["GET"]
+    assert puts == []
+
+
+def test_a_failed_file_fails_the_upload_and_queues_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = tmp_path / "jpeg"
+    nwm_import.prepare(_dataset(tmp_path, RECORDS), folder)
+
+    def refuse(url: str, data: bytes) -> str:
+        raise RuntimeError("part PUT: HTTP 403")
+
+    monkeypatch.setattr(nwm_import, "_put", refuse)
+    api = FakeApi()
+    reports: list[dict[str, Any]] = []
+    with pytest.raises(RuntimeError, match="HTTP 403"):
+        nwm_import.upload(folder, api, process=True, report=reports.append)
+    assert reports == [{"captureId": "c0ffee00-0000-0000-0000-000000000000", "resumed": False}]
+    assert not any(p.endswith("/process") for _, p, _ in api.calls)
+
+
+def test_split_timesteps_get_a_valid_slug() -> None:
+    assert nwm_import.slug_for("2025-12-04_1") == "nwm-tuwien-2025-12-04-1"
+    assert SLUG_RE.match(nwm_import.slug_for("2026-01-10_detail_2"))
+
+
+def test_a_frame_name_that_leaves_input_is_refused(tmp_path: Path) -> None:
+    records = [{**RECORDS[0], "image": "../camera_info.png"}]
+    dataset = _dataset(tmp_path / "a", [RECORDS[0]])
+    (dataset / "camera_info.json").write_text(json.dumps(records))
+    with pytest.raises(ValueError, match="not a plain file name"):
+        nwm_import.prepare(dataset, tmp_path / "jpeg")
+
+
+def test_frames_are_encoded_at_the_stated_quality(tmp_path: Path) -> None:
+    """Decoded pixels equal a reference encode at quality 95: a lower setting shows."""
+    dataset = _dataset(tmp_path, RECORDS[:1])
+    source = dataset / "input" / RECORDS[0]["image"]
+    noise = PIL.Image.effect_noise((64, 36), 60).convert("RGB")
+    noise.save(source)
+    manifest = nwm_import.prepare(dataset, tmp_path / "jpeg")
+    reference = tmp_path / "reference.jpg"
+    noise.save(reference, "JPEG", quality=95)
+    assert nwm_import.JPEG_QUALITY >= 90
+    with (
+        PIL.Image.open(tmp_path / "jpeg" / manifest["files"][0]["name"]) as ours,
+        PIL.Image.open(reference) as theirs,
+    ):
+        assert ours.tobytes() == theirs.tobytes()
+
+
+class _Server(http.server.BaseHTTPRequestHandler):
+    seen: ClassVar[list[tuple[str, str | None]]] = []
+
+    def _answer(self) -> None:
+        self.seen.append((self.path, self.headers.get("Authorization")))
+        if self.path == "/api/v1/captures":
+            self.send_response(302)
+            self.send_header("Location", "/elsewhere")
+            self.end_headers()
+            return
+        body = json.dumps({"title": "Conflict", "detail": "echo of secret-body"}).encode()
+        self.send_response(409)
+        self.send_header("Content-Type", "application/problem+json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    do_GET = do_POST = _answer
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def server() -> Iterator[str]:
+    _Server.seen = []
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Server)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{httpd.server_address[1]}"
+    finally:
+        httpd.shutdown()
+
+
+def test_a_redirect_is_refused_and_the_token_goes_nowhere_else(server: str) -> None:
+    api = nwm_import.Api(server, "test-only-token")
+    with pytest.raises(RuntimeError, match="HTTP 302"):
+        api.call("POST", "/captures", {})
+    assert _Server.seen == [("/api/v1/captures", "Bearer test-only-token")]
+
+
+def test_an_error_names_its_status_and_title_but_not_its_body(server: str) -> None:
+    api = nwm_import.Api(server, "test-only-token")
+    with pytest.raises(RuntimeError) as raised:
+        api.call("GET", "/captures/x")
+    assert str(raised.value) == "GET /captures/x: HTTP 409 (Conflict)"
+    assert "secret-body" not in str(raised.value)
 
 
 def test_upload_needs_the_token_from_the_environment(

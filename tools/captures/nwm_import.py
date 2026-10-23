@@ -33,7 +33,7 @@ Usage::
 
     uv run python nwm_import.py prepare ~/.cache/nwm/raw/nwm_2025-08-25 ~/.cache/nwm/jpeg/2025-08-25
     uv run python nwm_import.py upload ~/.cache/nwm/jpeg/2025-08-25 --api https://twin-api.fly.dev \\
-        [--process] [--capture-id <id to resume>]
+        [--process] [--capture-id <this timestep's NWM capture, to resume>] [--report out.json]
 
 `upload` reads the write token from `API_WRITE_TOKEN` and never from an argument, so it
 stays out of process listings and shell history. `.github/workflows/import-nwm.yml` runs
@@ -53,6 +53,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from fractions import Fraction
@@ -80,6 +81,8 @@ DEFAULT_API = "https://twin-api.fly.dev"
 
 #: `DJI_<YYYYMMDDhhmmss>_<sequence>_D.MP4`, with or without NWM's flight-plan prefix.
 DJI_CLIP = re.compile(r"DJI_(\d{14})_(\d{4})_")
+#: A frame's file name as camera_info.json may give it: no folders, no control characters.
+PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.png")
 
 #: EXIF tag numbers, spelled out as `tools/pipeline/exif.py` does.
 _IMAGE_DESCRIPTION, _SOFTWARE, _ARTIST, _COPYRIGHT = 270, 305, 315, 33432
@@ -119,7 +122,12 @@ def read_frames(dataset: Path, *, fps: float, zone: ZoneInfo) -> list[Frame]:
     records = json.loads((dataset / "camera_info.json").read_text())
     frames = []
     for record in records:
-        source = dataset / "input" / record["image"]
+        image = str(record["image"])
+        # The JSON is archive content: a name that is not one plain file name could reach
+        # outside input/.
+        if not PLAIN_NAME.fullmatch(image):
+            raise ValueError(f"camera_info.json names {image!r}, not a plain file name")
+        source = dataset / "input" / image
         if not source.is_file():
             raise FileNotFoundError(f"camera_info.json lists {record['image']}, not in input/")
         start, sequence = clip_start(record["src_video"], zone)
@@ -264,7 +272,7 @@ def capture_payload(manifest: dict[str, Any]) -> dict[str, Any]:
     recorded = ", ".join(manifest["recordedOn"])
     return {
         "name": f"NWM test (TU Wien, CC BY 4.0) · {timestep}",
-        "slug": f"nwm-tuwien-{timestep}".lower().replace("_", "-"),
+        "slug": slug_for(timestep),
         "description": (
             f"Test data: timestep {timestep} of the public NWM drone dataset, filmed "
             f"{recorded}. {CREDIT}. {manifest['frames']} video frames, converted from PNG "
@@ -296,8 +304,22 @@ def capture_payload(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect: urllib would follow it with the Authorization header on."""
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 class Api:
-    """The handful of API calls an upload makes, over urllib, with the token in a header."""
+    """The handful of API calls an upload makes, over urllib, with the token in a header.
+
+    A failure says the method, path, status and the Problem's `title`, never the body: a
+    body is the server's to word and is not repeated into a public run log.
+    """
 
     def __init__(self, base: str, token: str | None) -> None:
         self.base = base.rstrip("/") + "/api/v1"
@@ -315,11 +337,18 @@ class Api:
             self.base + path, data=data, headers=headers, method=method
         )
         try:
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with _OPENER.open(request, timeout=120) as response:
                 return json.loads(response.read() or b"null")
         except urllib.error.HTTPError as error:
-            detail = error.read().decode("utf-8", errors="replace")[:500]
-            raise RuntimeError(f"{method} {path}: HTTP {error.code}: {detail}") from None
+            raise RuntimeError(f"{method} {path}: HTTP {error.code}{_title(error)}") from None
+
+
+def _title(error: urllib.error.HTTPError) -> str:
+    try:
+        title = json.loads(error.read() or b"null").get("title")
+    except (ValueError, AttributeError):
+        return ""
+    return f" ({str(title)[:120]})" if title else ""
 
 
 def _put(url: str, payload: bytes, attempts: int = 4) -> str:
@@ -327,11 +356,13 @@ def _put(url: str, payload: bytes, attempts: int = 4) -> str:
     for attempt in range(attempts):
         request = urllib.request.Request(url, data=payload, method="PUT")
         try:
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with _OPENER.open(request, timeout=120) as response:
                 etag = response.headers.get("ETag")
                 if not etag:
                     raise RuntimeError("the storage answered a part PUT with no ETag")
                 return str(etag)
+        except urllib.error.HTTPError as error:
+            raise RuntimeError(f"part PUT: HTTP {error.code}") from None
         except (urllib.error.URLError, TimeoutError):
             if attempt == attempts - 1:
                 raise
@@ -339,16 +370,51 @@ def _put(url: str, payload: bytes, attempts: int = 4) -> str:
     raise AssertionError("unreachable")
 
 
-def upload_file(api: Api, capture_id: str, path: Path) -> str:
-    """Register, upload and complete one file; every NWM JPEG is a single part."""
+def slug_for(timestep: str) -> str:
+    """The capture's slug: `nwm-tuwien-<timestep>`, `_` as `-` (`2025-12-04_1` -> `-1`)."""
+    return f"nwm-tuwien-{timestep}".lower().replace("_", "-")
+
+
+#: An upload row that is still open, so it is resumed rather than registered again.
+OPEN_UPLOADS = ("not-started", "in-progress")
+
+
+def resumable(capture: dict[str, Any], manifest: dict[str, Any]) -> None:
+    """Refuse to upload into any capture but this timestep's NWM one.
+
+    `--capture-id` exists to finish an upload that stopped part-way; it must not become a
+    way to add files to someone's real capture, so the slug and the dataset record both
+    have to be the ones `capture_payload` wrote.
+    """
+    expected = slug_for(manifest["timestep"])
+    dataset = (capture.get("metadata") or {}).get("dataset") or {}
+    if capture.get("slug") != expected or dataset.get("doi") != DOI:
+        raise ValueError(
+            f"capture {capture.get('id')} is not this timestep's NWM capture (slug "
+            f"{capture.get('slug')!r}, want {expected!r} with metadata.dataset.doi {DOI}); "
+            "nothing was uploaded"
+        )
+
+
+def upload_file(api: Api, capture_id: str, path: Path, open_row: str | None = None) -> str:
+    """Upload and complete one file; every NWM JPEG is a single part.
+
+    `open_row` is a row this filename already has whose upload never completed: its parts
+    are presigned again and the same row is completed, so a resume registers nothing twice.
+    """
     payload = path.read_bytes()
-    started = api.call(
-        "POST",
-        f"/captures/{capture_id}/files",
-        {"filename": path.name, "contentType": "image/jpeg", "bytes": len(payload)},
-    )
-    file_id = started["file"]["id"]
-    window = started["upload"]
+    if open_row is None:
+        started = api.call(
+            "POST",
+            f"/captures/{capture_id}/files",
+            {"filename": path.name, "contentType": "image/jpeg", "bytes": len(payload)},
+        )
+        file_id, window = started["file"]["id"], started["upload"]
+    else:
+        file_id = open_row
+        window = api.call(
+            "POST", f"/captures/{capture_id}/files/{file_id}/parts", {"firstPartNumber": 1}
+        )
     size = int(window["partSize"])
     parts = []
     for part in window["parts"]:
@@ -372,31 +438,52 @@ def upload(
     capture_id: str | None = None,
     process: bool = False,
     workers: int = 8,
+    report: Callable[[dict[str, Any]], None] = lambda _: None,
 ) -> dict[str, Any]:
-    """Create the capture (or resume `capture_id`), upload every JPEG the manifest names
-    that it does not already hold complete, and queue `photo-reconstruct` if asked."""
+    """Create the capture (or resume `capture_id`, if it is this timestep's NWM capture),
+    upload every JPEG the manifest names that it does not hold complete, and queue
+    `photo-reconstruct` if asked.
+
+    `report` hears the capture id as soon as there is one, so a run that fails part-way
+    still says which capture to resume. Any file's failure fails the upload, and nothing
+    is queued after one.
+    """
     manifest = json.loads((folder / MANIFEST).read_text())
     if capture_id is None:
         capture = api.call("POST", "/captures", capture_payload(manifest))
         capture_id = str(capture["id"])
     else:
         capture = api.call("GET", f"/captures/{capture_id}")
-    done = {f["filename"] for f in capture.get("files", []) if f.get("status") == "complete"}
+        resumable(capture, manifest)
+    report({"captureId": capture_id, "resumed": bool(capture.get("files"))})
+    rows: dict[str, list[dict[str, Any]]] = {}
+    for row in capture.get("files", []):
+        rows.setdefault(str(row.get("filename")), []).append(row)
+    done = {name for name, found in rows.items() if any(r["status"] == "complete" for r in found)}
+    reopen = {
+        name: str(next(r["id"] for r in found if r["status"] in OPEN_UPLOADS))
+        for name, found in rows.items()
+        if name not in done and any(r["status"] in OPEN_UPLOADS for r in found)
+    }
     todo = [folder / f["name"] for f in manifest["files"] if f["name"] not in done]
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        for future in concurrent.futures.as_completed(
-            [pool.submit(upload_file, api, capture_id, path) for path in todo]
-        ):
+        futures = [
+            pool.submit(upload_file, api, capture_id, path, reopen.get(path.name)) for path in todo
+        ]
+        for future in concurrent.futures.as_completed(futures):
             future.result()
     job = None
     if process:
         job = api.call("POST", f"/captures/{capture_id}/process", {"recipe": "photo-reconstruct"})
-    return {
+    result = {
         "captureId": capture_id,
         "uploaded": len(todo),
+        "resumedRows": len(reopen),
         "alreadyThere": len(done),
         "jobId": None if job is None else job["id"],
     }
+    report(result)
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -414,6 +501,7 @@ def main(argv: list[str] | None = None) -> int:
     send.add_argument("--api", default=DEFAULT_API)
     send.add_argument("--capture-id", help="resume an upload into this capture")
     send.add_argument("--process", action="store_true", help="queue photo-reconstruct after")
+    send.add_argument("--report", type=Path, help="keep the capture id and outcome here (JSON)")
     args = parser.parse_args(argv)
     if args.command == "prepare":
         manifest = prepare(
@@ -429,8 +517,18 @@ def main(argv: list[str] | None = None) -> int:
         token = os.environ.get("API_WRITE_TOKEN")
         if not token:
             parser.error("upload needs API_WRITE_TOKEN in the environment")
+
+        def report(state: dict[str, Any]) -> None:
+            print(f"capture {state['captureId']}", flush=True)
+            if args.report is not None:
+                args.report.write_text(json.dumps(state) + "\n")
+
         summary = upload(
-            args.folder, Api(args.api, token), capture_id=args.capture_id, process=args.process
+            args.folder,
+            Api(args.api, token),
+            capture_id=args.capture_id,
+            process=args.process,
+            report=report,
         )
     print(json.dumps(summary, indent=2))
     return 0

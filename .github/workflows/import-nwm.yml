@@ -11,7 +11,11 @@ name: Import NWM test capture
 # be created, with nothing sent to the API. Every real run creates a NEW capture, named
 # for the dataset; the API refuses a second capture with the same slug, so dispatching a
 # timestep twice fails instead of duplicating it. `capture_id` resumes an upload that
-# stopped part-way, sending only the files not already complete.
+# stopped part-way, and only into this timestep's NWM capture (slug and DOI checked).
+#
+# The archive is untrusted content. Nothing from it is written to $GITHUB_ENV or
+# $GITHUB_OUTPUT: the dataset is moved to a path this workflow names, and every later step
+# reads it from there.
 
 on:
   workflow_dispatch:
@@ -20,17 +24,19 @@ on:
         description: NWM timestep (the record's nwm_<timestep>.zip)
         type: choice
         required: true
-        default: 2025-08-25
+        default: "2025-08-25"
         options:
-          - 2025-08-25
-          - 2025-11-11
-          - 2025-11-22
-          - 2025-11-23
-          - 2025-12-04_1
-          - 2025-12-04_2
-          - 2025-12-08
-          - 2026-01-10
-          - 2026-03-28
+          - "2025-08-25"
+          - "2025-11-11"
+          - "2025-11-22"
+          - "2025-11-23"
+          - "2025-12-04_1"
+          - "2025-12-04_2"
+          - "2025-12-08"
+          - "2026-01-10"
+          - "2026-01-10_detail_1"
+          - "2026-01-10_detail_2"
+          - "2026-03-28"
       dry_run:
         description: Download and convert only; create nothing
         type: boolean
@@ -40,7 +46,7 @@ on:
         type: boolean
         default: false
       capture_id:
-        description: Resume the upload into this capture (optional UUID)
+        description: Resume the upload into this timestep's NWM capture (optional UUID)
         type: string
         required: false
         default: ""
@@ -66,11 +72,16 @@ jobs:
         shell: python
         run: |
           import os
-          import re
           import uuid
 
-          if not re.fullmatch(r"20\d\d-\d\d-\d\d(_\d)?", os.environ["TIMESTEP"]):
-              raise SystemExit("::error::timestep must be one of the record's dates")
+          # The record's eleven timesteps, as published (researchdata.tuwien.ac.at).
+          timesteps = {
+              "2025-08-25", "2025-11-11", "2025-11-22", "2025-11-23", "2025-12-04_1",
+              "2025-12-04_2", "2025-12-08", "2026-01-10", "2026-01-10_detail_1",
+              "2026-01-10_detail_2", "2026-03-28",
+          }
+          if os.environ["TIMESTEP"] not in timesteps:
+              raise SystemExit("::error::timestep must be one of the record's eleven timesteps")
           for name in ("DRY_RUN", "PROCESS"):
               if os.environ[name] not in {"true", "false"}:
                   raise SystemExit(f"::error::{name.lower()} must be true or false")
@@ -113,7 +124,7 @@ jobs:
               raise SystemExit(f"::error::the record has no {key}")
           algorithm, expected = entries[key]["checksum"].split(":", 1)
           if algorithm != "md5":
-              raise SystemExit(f"::error::unexpected checksum {entries[key]['checksum']}")
+              raise SystemExit("::error::the record's checksum for this timestep is not an MD5")
           archive = work / key
           fetch(f"{record}/{key}/content", archive)
           digest = hashlib.md5(usedforsecurity=False)
@@ -121,23 +132,25 @@ jobs:
               for block in iter(lambda: handle.read(1 << 20), b""):
                   digest.update(block)
           if digest.hexdigest() != expected:
-              raise SystemExit(f"::error::{key} MD5 {digest.hexdigest()} is not the record's {expected}")
+              raise SystemExit(f"::error::{key} does not match the record's MD5")
           # zipfile drops absolute paths and `..` from member names on extraction.
+          raw = work / "raw"
           with zipfile.ZipFile(archive) as bundle:
-              bundle.extractall(work / "raw")
+              bundle.extractall(raw)
           archive.unlink()
-          found = sorted((work / "raw").rglob("camera_info.json"))
-          if len(found) != 1:
+          found = sorted(raw.rglob("camera_info.json"))
+          if len(found) != 1 or raw not in found[0].parents:
               raise SystemExit(f"::error::expected one camera_info.json in {key}, found {len(found)}")
-          with open(os.environ["GITHUB_ENV"], "a") as env:
-              env.write(f"NWM_DATASET={found[0].parent}\nNWM_JPEG={work / 'jpeg'}\n")
-          print(f"{key}: {entries[key]['size']:,} bytes, MD5 {expected} matches")
+          # A path this workflow names: the archive's own folder names go no further.
+          found[0].parent.rename(work / "dataset")
+          print(f"{key}: {entries[key]['size']:,} bytes, MD5 matches the record")
       - name: Write each frame's GPS and time into JPEG copies
         working-directory: tools/captures
         run: |
           uv sync --frozen
-          uv run python nwm_import.py prepare "$NWM_DATASET" "$NWM_JPEG" --timestep "$TIMESTEP" \
-            | tee "$RUNNER_TEMP/prepare.json"
+          uv run python nwm_import.py prepare "$RUNNER_TEMP/nwm/dataset" "$RUNNER_TEMP/nwm/jpeg" \
+            --timestep "$TIMESTEP" > "$RUNNER_TEMP/prepare.json"
+          cat "$RUNNER_TEMP/prepare.json"
       - name: Create the capture and upload the frames
         if: inputs.dry_run == false
         working-directory: tools/captures
@@ -150,21 +163,25 @@ jobs:
             exit 1
           fi
           app=$(python3 -c 'import tomllib; print(tomllib.load(open("../../fly.toml", "rb"))["app"])')
-          origin="${API_BASE_URL:-https://$app.fly.dev}"
-          args=(upload "$NWM_JPEG" --api "$origin")
+          args=(upload "$RUNNER_TEMP/nwm/jpeg" --api "${API_BASE_URL:-https://$app.fly.dev}"
+                --report "$RUNNER_TEMP/upload.json")
           if [ -n "$CAPTURE_ID" ]; then args+=(--capture-id "$CAPTURE_ID"); fi
           if [ "$PROCESS" = "true" ]; then args+=(--process); fi
-          uv run python nwm_import.py "${args[@]}" | tee "$RUNNER_TEMP/upload.json"
-          echo "API_ORIGIN=$origin" >> "$GITHUB_ENV"
+          uv run python nwm_import.py "${args[@]}"
       - name: Summary
         if: always()
         shell: python
+        env:
+          API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
         run: |
           import json
           import os
+          import tomllib
           from pathlib import Path
 
           temp = Path(os.environ["RUNNER_TEMP"])
+          app = tomllib.loads(Path("fly.toml").read_text())["app"]
+          origin = (os.environ.get("API_BASE_URL") or f"https://{app}.fly.dev").rstrip("/")
           lines = [f"## Import NWM timestep {os.environ['TIMESTEP']}", ""]
           if (temp / "prepare.json").is_file():
               m = json.loads((temp / "prepare.json").read_text())
@@ -180,15 +197,22 @@ jobs:
               lines.append("- Dry run: nothing was sent to the API.")
           elif (temp / "upload.json").is_file():
               u = json.loads((temp / "upload.json").read_text())
-              origin = os.environ.get("API_ORIGIN", "")
-              lines += [
-                  f"- Capture: `{u['captureId']}` ({u['uploaded']} uploaded,"
-                  f" {u['alreadyThere']} already there)",
-                  f"- Public capture: GET `{origin}/api/v1/captures/{u['captureId']}`",
-              ]
-              if u["jobId"]:
-                  lines.append(f"- Job: `{u['jobId']}`, GET `{origin}/api/v1/jobs/{u['jobId']}`")
+              lines.append(f"- Capture: `{u['captureId']}`, GET `{origin}/api/v1/captures/{u['captureId']}`")
+              if "uploaded" not in u:
+                  lines.append(
+                      "- **The upload stopped part-way.** Dispatch again with this capture_id"
+                      " to send only what is missing."
+                  )
               else:
-                  lines.append("- No job queued: dispatch Process capture with this capture id.")
+                  lines.append(
+                      f"- Files: {u['uploaded']} uploaded ({u['resumedRows']} resumed),"
+                      f" {u['alreadyThere']} already there"
+                  )
+                  if u["jobId"]:
+                      lines.append(f"- Job: `{u['jobId']}`, GET `{origin}/api/v1/jobs/{u['jobId']}`")
+                  else:
+                      lines.append("- No job queued: dispatch Process capture with this capture id.")
+          else:
+              lines.append("- No capture was created.")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
               summary.write("\n".join(lines) + "\n")

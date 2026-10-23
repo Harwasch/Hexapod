@@ -1498,10 +1498,16 @@ into a capture:
    and the median fix. Nothing reaches the API.
 2. Run it again with `dry_run` off, and `process` on to queue `photo-reconstruct` straight
    after the upload. It creates a capture named `NWM test (TU Wien, CC BY 4.0) · <timestep>`
-   (slug `nwm-tuwien-<timestep>`), credited and licensed as CC BY 4.0, with the median fix as
-   `metadata.lat`/`lon`, which is what joins a later timestep to the same site
-   (`epochs.located_or_metadata`). A second dispatch of the same timestep fails on the slug
-   instead of duplicating it; `capture_id` resumes an upload that stopped part-way.
+   (slug `nwm-tuwien-<timestep>`, `_` written as `-`: `2025-12-04_1` is `nwm-tuwien-2025-12-04-1`),
+   credited and licensed as CC BY 4.0, with the median fix as `metadata.lat`/`lon`, which is
+   what joins a later timestep to the same site (`epochs.located_or_metadata`). A second
+   dispatch of the same timestep fails on the slug instead of duplicating it. The summary names
+   the capture as soon as it exists; if the upload stops part-way, dispatch again with that
+   `capture_id` to send only what is missing. It refuses any capture but that timestep's NWM one
+   (slug and `metadata.dataset.doi` checked).
+
+The archive is treated as untrusted: the workflow writes nothing from it to `$GITHUB_ENV`,
+moves the dataset to a path it names, and refuses frame names that are not plain file names.
 
 Process the timesteps one at a time and in date order: the second joins the first's site only
 once the first has registered and given the site its frame. The importer's assumptions are in
