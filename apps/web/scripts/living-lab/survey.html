@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Living lab: today's wind</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #9fb3c8; }
+      #viewer, #viewer .cesium-widget, #viewer canvas { width: 100vw; height: 100vh; display: block; }
+      .cesium-widget-credits { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <div id="viewer"></div>
+    <script type="module">
+      // Today's motion on a rigged scan (the Living Survey: modal sway + leaf flutter, ADR 0008),
+      // drawn by CesiumJS through the repo's own harness, stepped at a fixed time per frame.
+      const q = new URLSearchParams(location.search);
+      const harness = await import("/src/dev/livingSurveyHarness.ts");
+      window.__survey = await harness.startLivingSurveyHarness({
+        container: document.getElementById("viewer"),
+        tilesetUrl: q.get("tiles"),
+        rigUrl: q.get("rig"),
+        maximumScreenSpaceError: 1,
+        living: true,
+        background: "#9fb3c8",
+      });
+    </script>
+  </body>
+</html>

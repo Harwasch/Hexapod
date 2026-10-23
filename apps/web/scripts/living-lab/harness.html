@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Living lab</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #9fb3c8; }
+      #viewer, #viewer .cesium-widget, #viewer canvas { width: 100vw; height: 100vh; display: block; }
+      .cesium-widget-credits { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <div id="viewer"></div>
+    <script type="module">
+      const url = new URLSearchParams(location.search).get("tiles");
+      const { startLivingLabHarness } = await import("/src/dev/livingLabHarness.ts");
+      window.__lab = await startLivingLabHarness(document.getElementById("viewer"), url);
+      window.LL = window.__lab.lab;
+    </script>
+  </body>
+</html>

@@ -72,6 +72,8 @@ export interface LivingSurveyHarnessOptions {
    * legacy model, whatever the rig carries.
    */
   readonly living?: boolean;
+  /** The page's background colour (CSS); default a near-black. */
+  readonly background?: string;
 }
 
 /** Which parts of a frame `step` applies: everything, or the sway with flutter held still. */
@@ -177,7 +179,7 @@ export async function startLivingSurveyHarness(
   if (scene.skyBox) scene.skyBox.show = false;
   if (scene.skyAtmosphere) scene.skyAtmosphere.show = false;
   if (scene.sun) scene.sun.show = false;
-  scene.backgroundColor = Color.fromCssColorString("#10141a");
+  scene.backgroundColor = Color.fromCssColorString(options.background ?? "#10141a");
 
   const rigResponse = await fetch(options.rigUrl);
   const rig: MotionRig = parseRig(await rigResponse.text());
