@@ -28,7 +28,7 @@ import struct
 import subprocess
 import time
 import tomllib
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import IO, Any, NoReturn
@@ -3432,6 +3432,76 @@ def _aligned_origin(
     return exif.median_fix(fixes)
 
 
+def _held_by_pose_priors(
+    model_dir: Path, origin: tuple[float, float, float]
+) -> dict[str, object] | None:
+    """`poses.json`'s priors when bundle adjustment held the cameras to their fixes, in
+    all three axes, about `origin` -- so the model is already in this branch's frame and
+    its similarity is the identity -- else None.
+
+    The vertical must have been held too: horizontal priors on cameras that are nearly
+    coplanar (a drone at one altitude) barely constrain a tilt, so a model posed without
+    altitudes still needs the fitted similarity to be levelled."""
+    summary = model_dir / "poses.json"
+    if not summary.is_file():
+        return None
+    try:
+        block = json.loads(summary.read_text(encoding="utf-8")).get("priors")
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(block, dict) or block.get("used") is not True:
+        return None
+    if block.get("vertical") != "constrained":
+        return None
+    held = block.get("origin")
+    if not isinstance(held, dict):
+        return None
+    try:
+        at = (float(held["lat"]), float(held["lon"]), float(held["height"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    # The same numbers by construction (`priors.frame_origin` and `_aligned_origin` both
+    # take the site frame, else `exif.median_fix`); a micro-degree is ~0.1 m.
+    if any(
+        abs(a - b) > tolerance
+        for a, b, tolerance in zip(at, origin, (1e-6, 1e-6, 1e-3), strict=True)
+    ):
+        return None
+    return {
+        "held": True,
+        "origin": held,
+        "why": (
+            "bundle adjustment held each camera to its fix about this origin (pose priors), "
+            "so the model is in this frame already; the free fit is recorded, not applied"
+        ),
+    }
+
+
+def _free_fit_check(
+    similarity: sfm.Similarity,
+    centres: Mapping[str, tuple[float, ...]],
+    common: Mapping[str, tuple[float, ...]],
+    max_error_m: float,
+) -> dict[str, object]:
+    """The free similarity a held model was not given: how far it would have moved, turned
+    and tilted it, and how many fixes it explained."""
+    residuals = np.asarray(
+        list(sfm.alignment_residuals(similarity, centres, common).values()), dtype=np.float64
+    )
+    rotation = np.asarray(similarity.rotation, dtype=np.float64)
+    up = rotation @ np.array([0.0, 0.0, 1.0])
+    return {
+        "scale": similarity.scale,
+        "rotation": [[float(v) for v in row] for row in similarity.rotation],
+        "translationM": [float(v) for v in similarity.translation],
+        "offsetM": round(float(np.linalg.norm(similarity.translation)), 4),
+        "rotationDeg": round(sfm.rotation_angle_deg(rotation, np.eye(3)), 4),
+        "tiltDeg": round(math.degrees(math.acos(min(1.0, max(-1.0, float(up[2]))))), 4),
+        "inliers": int((residuals <= max_error_m).sum()),
+        "residualRmsM": round(float(np.sqrt((residuals**2).mean())), 4),
+    }
+
+
 def _exif_gps_aligned(
     ctx: StageContext,
     fixes: tuple[exif.Fix, ...],
@@ -3491,11 +3561,22 @@ def _exif_gps_aligned(
             "version": sfm.colmap_version(),
             "alignmentType": "custom",
         }
+    held = _held_by_pose_priors(model_dir, (lat, lon, height))
+    free_fit_check: dict[str, object] | None = None
+    if held is not None:
+        # Bundle adjustment already held every camera to its fix about this same origin, so
+        # the model *is* in this frame (`priors.py`). A free similarity to the same fixes
+        # can only add what their errors share: the NWM drone flights' take-off altitudes,
+        # ~9 m apart, tilted a level site 10.5 deg. It is recorded, not applied.
+        free_fit_check = _free_fit_check(similarity, centres, common, max_error_m)
+        similarity = sfm.Similarity(
+            scale=1.0, rotation=np.eye(3), translation=np.zeros(3, dtype=np.float64)
+        )
     residuals = sfm.alignment_residuals(similarity, centres, common)
     values = np.asarray(sorted(residuals.values()), dtype=np.float64)
     rms = float(np.sqrt(float((values**2).mean()))) if values.size else 0.0
     inliers = int((values <= max_error_m).sum())
-    if inliers < sim3.MIN_POINTS:
+    if held is None and inliers < sim3.MIN_POINTS:
         # `model_aligner` has no such refusal of its own; the same rule as `sim3`'s.
         raise sim3.NoConsensusError(
             f"no consensus: {inliers} of {len(common)} fixes agree within {max_error_m:g} m "
@@ -3548,6 +3629,11 @@ def _exif_gps_aligned(
                 "applied by `place`: trained.ply is in the reconstruction's frame and "
                 "canonical.ply is this similarity of it, east/north/up metres about "
                 "(lat, lon, height)"
+            ),
+            **(
+                {"heldByPosePriors": held, "freeFitCheck": free_fit_check}
+                if held is not None
+                else {}
             ),
         },
         # The same similarity, in the shape `place` reads whichever branch wrote it. No
