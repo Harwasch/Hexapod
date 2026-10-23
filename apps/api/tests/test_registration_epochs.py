@@ -8,6 +8,7 @@ what lands in the database.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -822,5 +823,145 @@ def test_the_files_utc_time_dates_the_epoch_and_never_becomes_the_captures_own(
     [epoch] = _epochs(db, capture.site_id)
     assert (epoch.observed_at, epoch.observed_at_source) == (
         datetime(2026, 8, 30, 14, 5, tzinfo=UTC),
+        "manifest",
+    )
+
+
+def test_a_rerun_that_reads_the_files_clock_redates_an_epoch_dated_by_its_upload(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Production, 2026-10-22: Pumpkin's first runs (recipe 10) read no capture time, so its
+    epoch was dated by the upload (`created`). Its re-run on recipe 15 read the video's own
+    clock, but the epoch kept the upload's date, and Data age said "capture time not
+    recorded". The upload time is a stand-in, not evidence: a run with evidence replaces it,
+    and the new revision's asset carries the new date too."""
+    capture = _capture(db)
+    run(db, storage, tmp_path, capture)
+    assert capture.site_id is not None
+    [epoch] = _epochs(db, capture.site_id)
+    assert epoch.observed_at_source == "created"
+
+    document = _document()
+    document["manifest"] = {"capture": {"capturedAtUtc": "2026-09-27T12:19:47-07:00"}}
+    run(db, storage, tmp_path, capture, document)
+
+    taken = datetime(2026, 9, 27, 19, 19, 47, tzinfo=UTC)
+    [epoch] = _epochs(db, capture.site_id)
+    assert (epoch.observed_at, epoch.observed_at_source) == (taken, "manifest")
+    assert _assets(db, capture.site_id)[-1].observed_at == taken
+
+
+def test_a_rerun_never_redates_an_epoch_whose_date_is_evidence(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Only the upload's stand-in date is replaced. A date a person gave, or one an earlier
+    run read off the files, stays: a re-run's manifest saying otherwise does not move the
+    epoch along the site's timeline."""
+    said = datetime(2026, 9, 12, tzinfo=UTC)
+    capture = _capture(db, captured_at=said)
+    run(db, storage, tmp_path, capture)
+    document = _document()
+    document["manifest"] = {"capture": {"capturedAtUtc": "2026-01-01T00:00:00Z"}}
+
+    run(db, storage, tmp_path, capture, document)
+
+    assert capture.site_id is not None
+    [epoch] = _epochs(db, capture.site_id)
+    assert (epoch.observed_at, epoch.observed_at_source) == (said, "captured-at")
+
+
+def test_a_rerun_never_moves_a_date_read_from_the_files(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """A `manifest` date is evidence too: a re-run whose manifest says otherwise leaves it."""
+    capture = _capture(db)
+    first = _document()
+    first["manifest"] = {"capture": {"capturedAtUtc": "2026-08-30T14:05:00Z"}}
+    run(db, storage, tmp_path, capture, first)
+    document = _document()
+    document["manifest"] = {"capture": {"capturedAtUtc": "2026-01-01T00:00:00Z"}}
+
+    run(db, storage, tmp_path, capture, document)
+
+    assert capture.site_id is not None
+    [epoch] = _epochs(db, capture.site_id)
+    assert (epoch.observed_at, epoch.observed_at_source) == (
+        datetime(2026, 8, 30, 14, 5, tzinfo=UTC),
+        "manifest",
+    )
+
+
+@pytest.mark.parametrize("second", ["new tiles", "same tiles", "no tiles"])
+def test_a_redating_rerun_redates_the_current_asset_whatever_it_published(
+    db: Session, storage: S3Storage, tmp_path: Path, second: str
+) -> None:
+    """The very same tiles (no new revision) or none at all: the asset shown is the one
+    the epoch had, and it takes the epoch's new date."""
+    same = "https://cdn.example.com/twin-worker-test/runs/fixed/package/splat/tileset.json"
+    capture = _capture(db)
+    run(db, storage, tmp_path, capture, url=same)
+    document = _document()
+    document["manifest"] = {"capture": {"capturedAtUtc": "2026-09-27T12:19:47-07:00"}}
+
+    url = {"new tiles": "new", "same tiles": same, "no tiles": None}[second]
+    run(db, storage, tmp_path, capture, document, url=url)
+
+    taken = datetime(2026, 9, 27, 19, 19, 47, tzinfo=UTC)
+    assert capture.site_id is not None
+    [epoch] = _epochs(db, capture.site_id)
+    assert epoch.observed_at == taken
+    assets = _assets(db, capture.site_id)
+    [current] = [a for a in assets if a.valid_to is None]
+    assert current.observed_at == taken
+    # A revision the new tiles replaced keeps the date it was shown with.
+    assert all(a.observed_at == capture.created_at for a in assets if a.valid_to is not None)
+    assert len(assets) == (2 if second == "new tiles" else 1)
+
+
+def test_the_sites_mirror_names_the_run_its_document_came_from(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """`jobId` is the latest run; `registrationJobId` the run the mirrored document is from,
+    which a run with no georeference (the stub runner's) does not replace."""
+    capture = _capture(db)
+    first = run(db, storage, tmp_path, capture)
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    assert site.metadata_["registrationJobId"] == str(first)
+    loaded = _registration(tmp_path, _document())
+    bare = dataclasses.replace(
+        loaded, document={k: v for k, v in loaded.document.items() if k != "georef"}
+    )
+    later = uuid.uuid4()
+
+    registration._mirror_site_metadata(site, bare, later, None)
+
+    assert (site.metadata_["jobId"], site.metadata_["registrationJobId"]) == (
+        str(later),
+        str(first),
+    )
+
+
+def test_a_capture_date_without_a_zone_is_taken_as_utc() -> None:
+    """A column value a caller set without a zone, before the database gave it back."""
+    capture = Capture(
+        slug="naive", name="Naive", kind=CaptureKind.VIDEO, captured_at=datetime(2026, 9, 12, 10)
+    )
+
+    when, source = registration.observed_at_of(capture, {})
+
+    assert (when, source.value) == (datetime(2026, 9, 12, 10, tzinfo=UTC), "captured-at")
+
+
+def test_a_manifests_date_without_a_zone_is_taken_as_utc() -> None:
+    """A video's container date (`capturedAt`) can come without an offset: it is UTC."""
+    capture = Capture(slug="naive", name="Naive", kind=CaptureKind.VIDEO)
+    document = {"manifest": {"capture": {"capturedAt": "2026-09-27T12:19:47"}}}
+
+    when, source = registration.observed_at_of(capture, document)
+
+    assert (when, when.tzinfo, source.value) == (
+        datetime(2026, 9, 27, 12, 19, 47, tzinfo=UTC),
+        UTC,
         "manifest",
     )

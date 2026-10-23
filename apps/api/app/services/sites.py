@@ -176,7 +176,14 @@ def site_area_m2(db: Session, site: Site) -> float:
 
 def _summary_fields(site: Site) -> tuple[list[str], datetime | None, SiteQuality | None]:
     representations = sorted({asset.representation.value for asset in site.assets})
-    observed = [a.observed_at for a in site.assets if a.observed_at is not None]
+    # Not an epoch's superseded revisions: one keeps the date it was shown with, which a
+    # re-dated epoch's current revision no longer says. (A catalog asset's `valid_to` is
+    # the end of its validity, not a supersession, so it still counts.)
+    observed = [
+        a.observed_at
+        for a in site.assets
+        if a.observed_at is not None and (a.epoch_id is None or a.valid_to is None)
+    ]
     latest = max(observed) if observed else None
     quality_raw: Any = site.metadata_.get("quality") if site.metadata_ else None
     quality = SiteQuality.model_validate(quality_raw) if isinstance(quality_raw, dict) else None
