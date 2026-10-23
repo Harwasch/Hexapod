@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from geoalchemy2.shape import to_shape
+from shapely import wkt
 from sqlalchemy.orm import Session
 
 from app.models import Site
@@ -41,6 +42,10 @@ def test_a_dry_run_lists_the_fit_with_its_areas_and_writes_nothing(
     assert fitted.after_m2 < fitted.before_m2 / 40
     assert f"{fitted.before_m2:,.1f} m2 -> {fitted.after_m2:,.1f} m2" in fitted.line()
     assert to_shape(_site(db, site_id).boundary).equals(to_shape(floaters))
+    # What a rollback restores: the old boundary in full, exactly as it was stored.
+    assert f"  was boundary {fitted.old_boundary_wkt}" in fitted.line()
+    assert wkt.loads(fitted.old_boundary_wkt).equals_exact(to_shape(floaters), 0)
+    assert fitted.old_centroid_wkt.startswith("POINT")
 
 
 def test_apply_fits_the_boundary_to_the_epoch_keeps_the_centroid_inside_and_is_idempotent(

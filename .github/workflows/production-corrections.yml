@@ -1,0 +1,215 @@
+name: Production corrections
+
+# Runs one of the one-time data corrections against production, on an `app` machine of the
+# Fly app over `flyctl ssh console`, as seed-land.yml runs its seed:
+#
+# * `redate-epochs`: `python -m app.scripts.redate_epochs --epoch <id>...`. Epochs still
+#   dated by their upload (`created`) take the date their own run read off the files.
+# * `fit-site-boundaries`: `python -m app.scripts.fit_site_boundaries --site <id>...`.
+#   Boundaries registration only ever grew are fitted to their epochs' current footprints.
+#
+# The first use, 2026-10-22: Pumpkin and Spool, re-processed on recipe 15, kept their upload
+# dates and their first runs' boundaries (Spool's 2,361 m^2 around a 3.7 x 3.9 m scan).
+#
+# Over SSH so it runs the deployed code with the app's own DATABASE_URL: the runner never
+# holds a database credential. Both commands read and write only database rows (the epochs
+# and their current assets, or the sites, they are given), never object storage, and are
+# idempotent. Guarded three ways:
+# * `ids` must name the epochs or sites. Never "all": a boundary drawn by hand before
+#   migration 0038 can look like registration's (docs/DATA_MODEL.md, sites).
+# * It is a dry run, listing before and after, unless `apply` is ticked, and `apply` needs
+#   `confirm` typed out.
+# * It refuses while a deploy is queued or running.
+# Rollback: each command prints the state it replaces in full (an epoch's old date and
+# source; a site's old boundary as WKT, its area and centroid), so the job summary of the
+# apply run is what to restore from; nothing is deleted. docs/DEPLOYMENT.md, "Production
+# corrections".
+
+on:
+  workflow_dispatch:
+    inputs:
+      correction:
+        description: Which correction to run
+        type: choice
+        options:
+          - redate-epochs
+          - fit-site-boundaries
+      ids:
+        description: Epoch ids (redate-epochs) or site ids (fit-site-boundaries), space-separated
+        type: string
+        required: true
+      apply:
+        description: Write the changes (a dry run that only lists them when off)
+        type: boolean
+        default: false
+      confirm:
+        description: With apply, type correct-production
+        type: string
+        required: false
+        default: ""
+
+concurrency:
+  # One at a time, in its own group for the reason seed-land.yml gives.
+  group: production-corrections
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # `gh run list`, to refuse to start while a deploy is queued or running.
+  actions: read
+
+jobs:
+  correct:
+    name: ${{ inputs.correction }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Read as data and validated here: only a module name and UUIDs reach the shell line.
+      - name: What to run
+        id: plan
+        env:
+          CORRECTION: ${{ inputs.correction }}
+          IDS: ${{ inputs.ids }}
+          APPLY: ${{ inputs.apply }}
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          case "$CORRECTION" in
+            redate-epochs) module=app.scripts.redate_epochs; flag=--epoch ;;
+            fit-site-boundaries) module=app.scripts.fit_site_boundaries; flag=--site ;;
+            *) echo "::error::unknown correction '$CORRECTION'."; exit 1 ;;
+          esac
+          if [ "$APPLY" = "true" ] && [ "$CONFIRM" != "correct-production" ]; then
+            echo "::error::apply needs confirm to be exactly 'correct-production'; nothing was written."
+            exit 1
+          fi
+          flags=""
+          # Word splitting only, never globbing, on the ids.
+          set -f
+          for id in $IDS; do
+            if ! printf '%s' "$id" | grep -Eqx '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; then
+              echo "::error::'$id' is not an id (a lowercase UUID)."
+              exit 1
+            fi
+            flags="${flags} ${flag} ${id}"
+          done
+          if [ -z "$flags" ]; then
+            echo "::error::name at least one id; this workflow never runs on everything."
+            exit 1
+          fi
+          if [ "$APPLY" = "true" ]; then
+            flags="${flags} --apply"
+          fi
+          {
+            echo "module=${module}"
+            echo "flags=${flags}"
+          } >> "$GITHUB_OUTPUT"
+      # Not during a deploy, as seed-land.yml: a deploy replaces the API machine and runs
+      # migrations.
+      - name: No deploy is queued or running
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          busy=""
+          for workflow in deploy.yml provision.yml; do
+            for status in in_progress queued requested waiting; do
+              runs=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" \
+                --status "$status" --json url --jq '.[].url')
+              if [ -n "$runs" ]; then
+                busy="${busy} ${workflow} ${status}: ${runs}"
+              fi
+            done
+          done
+          if [ -n "$busy" ]; then
+            echo "::error::a deploy is queued or in progress, so nothing was run. Dispatch again once it has finished.${busy}"
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      - name: The secret this job needs
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          if [ -z "${FLY_API_TOKEN}" ]; then
+            echo "::error::FLY_API_TOKEN is not set. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+      - name: Install flyctl
+        run: |
+          curl -L https://fly.io/install.sh | sh
+          echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
+      - name: Pick a running API machine
+        id: machine
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          app=$(sed -n 's/^app *= *"\(.*\)"/\1/p' fly.toml | head -1)
+          [ -n "$app" ] || { echo "::error::no app named in fly.toml"; exit 1; }
+          machines=$(flyctl machines list --app "$app" --json)
+          machine=$(printf '%s' "$machines" | jq -r \
+            '[.[] | select(.config.metadata.fly_process_group == "app" and .state == "started") | .id] | first // empty')
+          if [ -z "$machine" ]; then
+            echo "::error::no started machine in the 'app' process group of $app."
+            printf '%s' "$machines" | jq -r '.[] | "\(.id) \(.config.metadata.fly_process_group) \(.state)"'
+            exit 1
+          fi
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+          echo "id=$machine" >> "$GITHUB_OUTPUT"
+      # As seed-land.yml: the venv's python by full path and DATABASE_URL checked first.
+      # Success is the command's exit status, read off a marker the machine prints only
+      # after it exited 0 (`&&`), which must be the last line the machine printed: nothing
+      # the command prints, a site's name included, can stand in for it. flyctl's own
+      # messages go to the log, not into the output that is checked.
+      - name: The correction
+        id: correct
+        shell: bash
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          APP: ${{ steps.machine.outputs.app }}
+          MACHINE: ${{ steps.machine.outputs.id }}
+          MODULE: ${{ steps.plan.outputs.module }}
+          FLAGS: ${{ steps.plan.outputs.flags }}
+        run: |
+          set -euo pipefail
+          py=/app/.venv/bin/python
+          marker=CORRECTION-EXIT-0
+          remote="cd /app || exit 4; if [ -z \"\$DATABASE_URL\" ]; then"
+          remote="${remote} echo \"DATABASE_URL is not set in this SSH session; nothing was written.\";"
+          remote="${remote} exit 3; fi;"
+          remote="${remote} ${py} -m ${MODULE}${FLAGS} && echo ${marker}"
+          rc=0
+          flyctl ssh console --app "$APP" --machine "$MACHINE" --user api \
+            --command "sh -c '${remote}'" \
+            2> flyctl-messages.txt | tee correction-output.txt || rc=$?
+          cat flyctl-messages.txt >&2 || true
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::flyctl ssh console exited ${rc}; treat the run as failed (output above)."
+            exit "$rc"
+          fi
+          last=$(tr -d '\r' < correction-output.txt | grep -v '^[[:space:]]*$' | tail -n 1 || true)
+          if [ "$last" != "$marker" ]; then
+            echo "::error::the command did not finish with exit 0 (its last line is not ${marker}); treat it as failed (output above)."
+            exit 1
+          fi
+      - name: Summary
+        if: always() && steps.machine.outcome == 'success'
+        env:
+          CORRECTION: ${{ inputs.correction }}
+          APPLY: ${{ inputs.apply }}
+          OUTCOME: ${{ steps.correct.outcome }}
+        run: |
+          mode="dry run (nothing written)"
+          if [ "$APPLY" = "true" ]; then
+            mode="apply"
+          fi
+          {
+            echo "## Production correction · ${CORRECTION}"
+            echo
+            echo "- Mode: ${mode}"
+            echo "- Result: ${OUTCOME:-not run}"
+            echo
+            echo '```'
+            cat correction-output.txt 2>/dev/null || echo "(the command did not run)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
