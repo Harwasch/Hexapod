@@ -1413,6 +1413,36 @@ job was queued; follow those endpoints to see processing finish. If the POST fai
 times out, check the capture's job history before dispatching again: it may have queued
 a job even if the response was lost. Only a manual dispatch triggers this workflow.
 
+### Production corrections
+
+`.github/workflows/production-corrections.yml` runs a one-time data correction on an API
+machine over `flyctl ssh console`, as the Land seed runs: the deployed code, the app's own
+`DATABASE_URL`, and no database credential on the runner. Two exist, both written after the
+first real iPhone captures (2026-10-22) showed what a re-run of an older capture leaves
+behind:
+
+| `correction`          | Runs                                        | `ids`  | Fixes                                                                                                                                              |
+| --------------------- | ------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `redate-epochs`       | `python -m app.scripts.redate_epochs`       | epochs | an epoch still dated by its upload (`created`) after a later run read the video's own clock                                                        |
+| `fit-site-boundaries` | `python -m app.scripts.fit_site_boundaries` | sites  | a boundary registration only ever grew, so it still covers what a first run's background floaters drew (Spool: 2,361 m² around a 3.7 × 3.9 m scan) |
+
+Use one when a capture registered before the matching fix (#91, #93) shows the old date or
+the old boundary; a capture re-run since is already right. Run it twice:
+
+1. Actions → **Production corrections** → Run workflow: pick the correction, put the ids in
+   `ids` (space-separated), leave `apply` off. The job summary lists what would change:
+   each epoch's old and new date, or each site's area and centroid before and after.
+2. If that list is right, run it again with `apply` ticked and `confirm` set to
+   `correct-production`. Anything else fails before flyctl is installed.
+
+The ids are required: it never runs on everything. A boundary somebody drew by hand before
+migration 0038 can look exactly like one registration drew (DATA_MODEL.md, sites), so name
+the sites. Both commands are idempotent, so a second apply changes nothing. They refuse to
+start while a deploy is queued or running. Success is the command exiting 0, read off a
+marker the machine prints only then. **Rollback:** the apply run's summary prints what each
+correction replaced in full: an epoch's old date and source, a site's old boundary and
+centroid as WKT. Nothing is deleted.
+
 ## Security checklist
 
 - No secrets in git; `.env` is ignored, `.env.example` is the template, and everything

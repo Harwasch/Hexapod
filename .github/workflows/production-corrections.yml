@@ -12,14 +12,18 @@ name: Production corrections
 # dates and their first runs' boundaries (Spool's 2,361 m^2 around a 3.7 x 3.9 m scan).
 #
 # Over SSH so it runs the deployed code with the app's own DATABASE_URL: the runner never
-# holds a database credential. Both commands read only the database and are idempotent.
-# Guarded three ways:
+# holds a database credential. Both commands read and write only database rows (the epochs
+# and their current assets, or the sites, they are given), never object storage, and are
+# idempotent. Guarded three ways:
 # * `ids` must name the epochs or sites. Never "all": a boundary drawn by hand before
 #   migration 0038 can look like registration's (docs/DATA_MODEL.md, sites).
 # * It is a dry run, listing before and after, unless `apply` is ticked, and `apply` needs
 #   `confirm` typed out.
 # * It refuses while a deploy is queued or running.
-# Rollback: the dry run's lines give each old date, area and centroid; nothing is deleted.
+# Rollback: each command prints the state it replaces in full (an epoch's old date and
+# source; a site's old boundary as WKT, its area and centroid), so the job summary of the
+# apply run is what to restore from; nothing is deleted. docs/DEPLOYMENT.md, "Production
+# corrections".
 
 on:
   workflow_dispatch:
@@ -71,8 +75,8 @@ jobs:
         run: |
           set -euo pipefail
           case "$CORRECTION" in
-            redate-epochs) module=app.scripts.redate_epochs; flag=--epoch; done=REDATE-EPOCHS-OK ;;
-            fit-site-boundaries) module=app.scripts.fit_site_boundaries; flag=--site; done=FIT-SITE-BOUNDARIES-OK ;;
+            redate-epochs) module=app.scripts.redate_epochs; flag=--epoch ;;
+            fit-site-boundaries) module=app.scripts.fit_site_boundaries; flag=--site ;;
             *) echo "::error::unknown correction '$CORRECTION'."; exit 1 ;;
           esac
           if [ "$APPLY" = "true" ] && [ "$CONFIRM" != "correct-production" ]; then
@@ -80,6 +84,8 @@ jobs:
             exit 1
           fi
           flags=""
+          # Word splitting only, never globbing, on the ids.
+          set -f
           for id in $IDS; do
             if ! printf '%s' "$id" | grep -Eqx '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; then
               echo "::error::'$id' is not an id (a lowercase UUID)."
@@ -97,7 +103,6 @@ jobs:
           {
             echo "module=${module}"
             echo "flags=${flags}"
-            echo "done=${done}"
           } >> "$GITHUB_OUTPUT"
       # Not during a deploy, as seed-land.yml: a deploy replaces the API machine and runs
       # migrations.
@@ -151,8 +156,11 @@ jobs:
           fi
           echo "app=$app" >> "$GITHUB_OUTPUT"
           echo "id=$machine" >> "$GITHUB_OUTPUT"
-      # As seed-land.yml: the venv's python by full path, DATABASE_URL checked first, and
-      # success only on the command's own last line, not on flyctl's exit code.
+      # As seed-land.yml: the venv's python by full path and DATABASE_URL checked first.
+      # Success is the command's exit status, read off a marker the machine prints only
+      # after it exited 0 (`&&`), which must be the last line the machine printed: nothing
+      # the command prints, a site's name included, can stand in for it. flyctl's own
+      # messages go to the log, not into the output that is checked.
       - name: The correction
         id: correct
         shell: bash
@@ -162,24 +170,26 @@ jobs:
           MACHINE: ${{ steps.machine.outputs.id }}
           MODULE: ${{ steps.plan.outputs.module }}
           FLAGS: ${{ steps.plan.outputs.flags }}
-          DONE: ${{ steps.plan.outputs.done }}
         run: |
           set -euo pipefail
           py=/app/.venv/bin/python
+          marker=CORRECTION-EXIT-0
           remote="cd /app || exit 4; if [ -z \"\$DATABASE_URL\" ]; then"
           remote="${remote} echo \"DATABASE_URL is not set in this SSH session; nothing was written.\";"
           remote="${remote} exit 3; fi;"
-          remote="${remote} ${py} -m ${MODULE}${FLAGS}"
+          remote="${remote} ${py} -m ${MODULE}${FLAGS} && echo ${marker}"
           rc=0
           flyctl ssh console --app "$APP" --machine "$MACHINE" --user api \
             --command "sh -c '${remote}'" \
-            2>&1 | tee correction-output.txt || rc=$?
+            2> flyctl-messages.txt | tee correction-output.txt || rc=$?
+          cat flyctl-messages.txt >&2 || true
           if [ "$rc" -ne 0 ]; then
             echo "::error::flyctl ssh console exited ${rc}; treat the run as failed (output above)."
             exit "$rc"
           fi
-          if ! tr -d '\r' < correction-output.txt | grep -qx "$DONE"; then
-            echo "::error::the command did not report ${DONE}; treat it as failed (output above)."
+          last=$(tr -d '\r' < correction-output.txt | grep -v '^[[:space:]]*$' | tail -n 1 || true)
+          if [ "$last" != "$marker" ]; then
+            echo "::error::the command did not finish with exit 0 (its last line is not ${marker}); treat it as failed (output above)."
             exit 1
           fi
       - name: Summary

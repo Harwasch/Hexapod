@@ -26,8 +26,10 @@ In production, on the API machine (`fly ssh console -a twin-api --user api`), wi
 image's interpreter, `/app/.venv/bin/python -m app.scripts.fit_site_boundaries`.
 
 Each site is fitted under its row lock, a dry run too (rolled back), so the areas it prints
-are the ones an apply writes. Idempotent: a fitted boundary is its epochs' current union,
-which a second run leaves as it is.
+are the ones an apply writes. Each fitted site's old boundary and centroid are printed in
+full, as WKT at full precision, so an apply's output is what a rollback restores from.
+Idempotent: a fitted boundary is its epochs' current union, which a second run leaves as
+it is.
 """
 
 from __future__ import annotations
@@ -38,6 +40,9 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from geoalchemy2 import WKBElement
+from geoalchemy2.shape import to_shape
+from shapely import wkt
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -53,7 +58,8 @@ DONE = "FIT-SITE-BOUNDARIES-OK"
 
 @dataclass(frozen=True)
 class Fitted:
-    """One site whose boundary was fitted: its area and centroid before and after."""
+    """One site whose boundary was fitted: its area and centroid before and after, and what
+    it replaced in full (WKT, EPSG:4326) for a rollback."""
 
     site_id: uuid.UUID
     name: str
@@ -61,12 +67,21 @@ class Fitted:
     after_m2: float
     before: tuple[float, float]
     after: tuple[float, float]
+    old_boundary_wkt: str
+    old_centroid_wkt: str
 
     def line(self) -> str:
         return (
             f"site {self.site_id} ({self.name}): {self.before_m2:,.1f} m2 -> "
-            f"{self.after_m2:,.1f} m2, centroid {_point(self.before)} -> {_point(self.after)}"
+            f"{self.after_m2:,.1f} m2, centroid {_point(self.before)} -> {_point(self.after)}\n"
+            f"  was boundary {self.old_boundary_wkt}\n"
+            f"  was centroid {self.old_centroid_wkt}"
         )
+
+
+def _wkt(value: WKBElement) -> str:
+    """A stored geometry as WKT at full precision, the form a rollback writes back."""
+    return wkt.dumps(to_shape(value), rounding_precision=-1)
 
 
 def _point(lon_lat: tuple[float, float]) -> str:
@@ -87,11 +102,21 @@ def fit(db: Session, only: Sequence[uuid.UUID] = ()) -> list[Fitted]:
     fitted = []
     for site in db.scalars(query.order_by(Site.created_at).with_for_update()):
         before_m2, before = site_area_m2(db, site), _centroid(site)
+        old_boundary, old_centroid = _wkt(site.boundary), _wkt(site.centroid)
         if not fit_site_boundary(db, site):
             continue
         db.flush()
         fitted.append(
-            Fitted(site.id, site.name, before_m2, site_area_m2(db, site), before, _centroid(site))
+            Fitted(
+                site.id,
+                site.name,
+                before_m2,
+                site_area_m2(db, site),
+                before,
+                _centroid(site),
+                old_boundary,
+                old_centroid,
+            )
         )
     return fitted
 
