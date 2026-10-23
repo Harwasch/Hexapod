@@ -8,10 +8,15 @@ kept it after a later run measured less. Production, 2026-10-22: Spool's v15 re-
 drew; Pumpkin's kept 7.6 x 6.9 m around a 2.3 x 2.1 m epoch.
 
 Each site goes through `fit_site_boundary`, the rule `register` now applies after every
-run: only a boundary registration drew (`boundary_source` `registration`) that is exactly
-every footprint its published epochs have had, current and replaced, with no runtime scale
-in effect; it becomes the union of the current footprints, and a centroid left outside
-moves inside. Anything else is left as it is. It reads only the database.
+run: only a boundary registration drew (`boundary_source` `registration`), with a published
+epoch and no runtime scale in effect; it becomes the union of the current footprints, and
+a centroid left outside moves inside. Anything else is left as it is. It reads only the
+database.
+
+**Name the sites (`--site`).** Migration 0038 backfilled `registration` where a boundary
+was exactly its epochs' footprints, current and replaced; a boundary somebody drew by hand
+before 0038 that happened to equal them cannot be told from the shapes. So in production
+this runs on the sites it was written for (Pumpkin, Spool), never on all of them.
 
     uv run python -m app.scripts.fit_site_boundaries                # dry run: lists, writes nothing
     uv run python -m app.scripts.fit_site_boundaries --apply        # writes, in one transaction

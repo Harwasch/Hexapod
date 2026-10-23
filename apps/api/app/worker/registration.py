@@ -1286,9 +1286,9 @@ def _grow_boundary(site: Site, footprint: Any) -> None:
 def registration_union(db: Session, site: Site) -> WKBElement | None:
     """Every footprint the site's published epochs have had -- the current ones and those
     a re-run replaced, which `_replace_run` keeps in each epoch's `history` -- as one
-    footprint, or None for a site with none. A boundary registration drew is exactly this:
-    each run's footprint was grown into it and none was ever taken out. Migration 0038
-    computes the same union to backfill `boundary_source`."""
+    footprint, or None for a site with none. A boundary registration only ever grew is
+    exactly this, which is how migration 0038 told one apart; `fit_site_boundary` goes by
+    the column instead."""
     db.flush()
     shapes = []
     for footprint, history in db.execute(
@@ -1343,18 +1343,19 @@ def fit_site_boundary(db: Session, site: Site) -> bool:
     A site's boundary is the footprint of what its captures showed (ADR 0013), and a re-run
     replaces what its epoch showed: Spool's v15 re-run cropped its splat to the object, 3.7
     x 3.9 m, and its site kept the 44 x 53 m its first run's background floaters drew,
-    because a boundary was only ever grown. So a `registration` boundary that is exactly
-    `registration_union` -- nothing but footprints its epochs have had -- is made again
-    from their current ones, and a centroid it leaves outside moves to the new one's.
+    because a boundary was only ever grown. So a boundary registration drew
+    (`boundary_source` `registration`) is made again from its published epochs' current
+    footprints, as often as a run measures less, and a centroid it leaves outside moves to
+    the new one's. Who drew it is the column's to say, not the shapes': a test of the
+    boundary against every footprint the epochs ever had (`registration_union`) is what
+    migration 0038 could go by, once, and after one fit the history still holds the
+    footprints that fit took out.
 
-    Left alone: a `manual` boundary (somebody drew it), one that is not that union, and any
-    while a runtime scale is in effect (`_runtime_scaled`). `register` calls this after
-    every run that publishes tiles; a one-time correction of sites registered before it
-    can call it on each site as it stands."""
+    Left alone: a `manual` boundary (somebody drew it), a site with no published epoch,
+    and any while a runtime scale is in effect (`_runtime_scaled`). `register` calls this
+    after every run that publishes tiles; a one-time correction of sites registered before
+    it can call it on each site as it stands."""
     if site.boundary_source != SiteBoundarySource.REGISTRATION.value or _runtime_scaled(db, site):
-        return False
-    drawn = registration_union(db, site)
-    if drawn is None or not _same(site.boundary, drawn):
         return False
     fitted = _current_union(db, site)
     if fitted is None or _same(site.boundary, fitted):

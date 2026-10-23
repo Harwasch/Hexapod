@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+import pytest
 from geoalchemy2.shape import to_shape
 from sqlalchemy.orm import Session
 
@@ -17,7 +18,8 @@ from app.models import Site
 from app.scripts import fit_site_boundaries
 from app.services import geometry
 from app.storage import S3Storage
-from tests.test_registration_epochs import _epochs, _left_by_grow_only
+from tests.test_asset_scale import _document
+from tests.test_registration_epochs import _epochs, _left_by_grow_only, run
 
 
 def _site(db: Session, site_id: uuid.UUID) -> Site:
@@ -76,3 +78,33 @@ def test_only_the_sites_asked_for_are_looked_at(
 
     assert fit_site_boundaries.fit(db, [uuid.uuid4()]) == []
     assert [f.site_id for f in fit_site_boundaries.fit(db, [site_id])] == [site_id]
+
+
+@pytest.mark.parametrize("first_fit", ["by a re-run", "by the command"])
+def test_a_fitted_boundary_shrinks_again_when_a_later_run_measures_less(
+    db: Session, storage: S3Storage, tmp_path: Path, first_fit: str
+) -> None:
+    """Codex's re-check of #93: after one fit the epoch's history still holds the floaters'
+    footprint, and it must not stop the next fit. Who drew the boundary is the column's to
+    say (`boundary_source`), not a comparison with every footprint the site ever had."""
+    capture, site_id, _floaters = _left_by_grow_only(db, storage, tmp_path)
+    if first_fit == "by the command":
+        assert len(fit_site_boundaries.fit(db, [site_id])) == 1
+        db.commit()
+    else:
+        run(db, storage, tmp_path, capture)
+    [epoch] = _epochs(db, site_id)
+    assert to_shape(_site(db, site_id).boundary).equals(to_shape(epoch.footprint))
+    before = to_shape(epoch.footprint)
+    smaller = _document()
+    smaller["bboxLocalM"] = {"min": [-1.0, -1.0, -1.0], "max": [1.0, 1.0, 3.0]}
+
+    run(db, storage, tmp_path, capture, smaller)
+
+    [epoch] = _epochs(db, site_id)
+    assert to_shape(epoch.footprint).area < before.area / 10
+    site = _site(db, site_id)
+    assert geometry.contains(epoch.footprint, site.boundary)
+    assert geometry.contains(site.boundary, epoch.footprint)
+    # And the command, run after it, finds nothing left to fit.
+    assert fit_site_boundaries.fit(db, [site_id]) == []
