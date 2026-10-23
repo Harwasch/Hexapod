@@ -97,11 +97,20 @@ import { tileInstanceIds, type InstancesDoc } from "@/lib/instances";
 import { createLogger } from "@/lib/log";
 import { tileSkin, type SkinDoc } from "@/lib/skin";
 import type { PickTile } from "@/lib/splatPick";
+import { effectiveLivingLab, watchLivingLab, type LivingLabState } from "@/state/livingLab";
 import { reportScanSun, watchScanSun, type ScanSun } from "@/state/sunReport";
 import type { TileNode } from "@/view/tiles";
 
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
 import { CELL_TILE_GLSL, cellFillOf, CellTiles, type CellTileSample } from "./cellModifier";
+import {
+  groundGrid,
+  livingHookVs,
+  livingUniforms,
+  packLiving,
+  sunDirection,
+  type GroundGrid,
+} from "./livingHook";
 import {
   coneEye,
   eyeMoved,
@@ -205,6 +214,8 @@ const WEIGHTS2_STREAM = "splatWeights2";
 
 /** Shortest time between two re-sorts of a moving object's tiles. */
 export const SORT_REFRESH_MS = 100;
+/** The living lab's ground grid is built again at most this often, as tiles come and go. */
+const GROUND_REBUILD_MS = 3000;
 
 /**
  * The work-buffer modifier (PlayCanvas's `gsplatModifyVS`) for a tile with ids, skin weights,
@@ -861,6 +872,19 @@ function assemble(
   let ownModifyPS: string | undefined;
   const sunValue = new Float32Array(4);
   const sunlightValue = new Float32Array(4);
+  /**
+   * The living lab (state/livingLab.ts, livingHook.ts): what it draws now, whether its hook is
+   * in, its uniforms (set every frame it draws), and the ground grid it reads, built from the
+   * scan's tiles again when tiles came or went, at most every `GROUND_REBUILD_MS`.
+   */
+  let living: LivingLabState | null = api === "webgl2" ? effectiveLivingLab() : null;
+  let livingHooked = false;
+  const livingValues = livingUniforms();
+  const livingStart = performance.now();
+  let ground: GroundGrid | null = null;
+  let groundTexture: pc.Texture | null = null;
+  let groundTiles = -1;
+  let groundAt = 0;
   /** The device is gone for good: nothing more is drawn, and the host replaces the renderer. */
   let lost = false;
   /** The renderer is letting go of its device itself: that loss is not news. */
@@ -1718,10 +1742,12 @@ function assemble(
     const material = app.scene.gsplat.material;
     const lit = sun !== null && sunStream;
     const cut = compare !== null;
+    // A bench run with every arm off draws without the hook: the baseline frame.
+    const alive = living !== null && (living.water || living.motion !== "off");
     let changed = false;
-    if (lit !== sunHooked || cut !== cutHooked) {
+    if (lit !== sunHooked || cut !== cutHooked || alive !== livingHooked) {
       const chunks = material.getShaderChunks(pc.SHADERLANGUAGE_GLSL);
-      if (!sunHooked && !cutHooked) {
+      if (!sunHooked && !cutHooked && !livingHooked) {
         ownModifyVS = chunks.get("gsplatModifyVS") as string | undefined;
         ownModifyPS = chunks.get("gsplatModifyPS") as string | undefined;
       }
@@ -1729,13 +1755,12 @@ function assemble(
         if (chunk === undefined) chunks.delete(name);
         else chunks.set(name, chunk);
       };
-      put(
-        "gsplatModifyVS",
-        cut ? compareHookVs(lit ? SUN_HOOK_VS : null) : lit ? SUN_HOOK_VS : ownModifyVS,
-      );
+      const base = cut ? compareHookVs(lit ? SUN_HOOK_VS : null) : lit ? SUN_HOOK_VS : ownModifyVS;
+      put("gsplatModifyVS", alive ? livingHookVs(base) : base);
       put("gsplatModifyPS", cut ? COMPARE_HOOK_PS : ownModifyPS);
       sunHooked = lit;
       cutHooked = cut;
+      livingHooked = alive;
       sunSet = null;
       dividerAt = Number.NaN;
       changed = true;
@@ -1756,8 +1781,74 @@ function assemble(
       dividerAt = at;
       changed = true;
     }
+    if (living) {
+      syncGround();
+      const lab = living;
+      packLiving(
+        livingValues,
+        {
+          ...lab,
+          t: lab.clock ?? (performance.now() - livingStart) / 1000,
+          sunDir:
+            sun && sun.strength > 0
+              ? sun.dir
+              : sunDirection(lab.sunAzimuthDeg, lab.sunElevationDeg),
+          sunUp:
+            sun && sun.strength > 0
+              ? sun.sunUp
+              : Math.max(0, Math.sin((lab.sunElevationDeg * Math.PI) / 180)),
+        },
+        ground,
+      );
+      material.setParameter("uLivingT", livingValues.t);
+      material.setParameter("uLivingWind", livingValues.wind);
+      material.setParameter("uLivingWater", livingValues.water);
+      material.setParameter("uLivingWaterBox", livingValues.waterBox);
+      material.setParameter("uLivingSun", livingValues.sun);
+      material.setParameter("uLivingGroundGrid", livingValues.groundGrid);
+      material.setParameter("uLivingVeg", livingValues.veg);
+      material.setParameter("uLivingGround", groundTexture ?? stand().float);
+      changed = true;
+    }
     if (changed) material.update();
     if (sunHooked) sunFrames += 1;
+  };
+
+  /**
+   * A bench frame's draw, timed to its end on the GPU: a one-pixel read-back waits for every
+   * command before it (`gl.finish` alone returned before SwiftShader drew). `window.__livingBench`.
+   */
+  const benchPixel = new Uint8Array(4);
+  const livingBench = (start: number): void => {
+    const gl = (device as unknown as { gl?: WebGL2RenderingContext }).gl;
+    gl?.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, benchPixel);
+    const out = ((window as unknown as { __livingBench?: number[] }).__livingBench ??= []);
+    out.push(performance.now() - start);
+  };
+
+  /** The ground grid from the scan's own tiles, again when tiles came or went (throttled). */
+  const syncGround = (): void => {
+    const now = performance.now();
+    if (shown.size === groundTiles || now - groundAt < GROUND_REBUILD_MS) return;
+    groundAt = now;
+    groundTiles = shown.size;
+    const samples: CellTileSample[] = [];
+    for (const entity of shown) {
+      if (dated.has(entity) || layers.has(entity)) continue;
+      const sample = cellSample(entity);
+      if (sample) samples.push(sample);
+    }
+    const grid = groundGrid(samples);
+    if (!grid) return;
+    ground = grid;
+    groundTexture?.destroy();
+    groundTexture = dataTexture(
+      "hexapodLivingGround",
+      grid.cells,
+      grid.cells,
+      pc.PIXELFORMAT_R32F,
+      grid.z,
+    );
   };
 
   /**
@@ -2079,7 +2170,9 @@ function assemble(
       farNow = pose.farView === true;
       syncHooks();
       framesDrawn += 1;
+      const benchAt = living?.bench ? performance.now() : null;
       app.render();
+      if (benchAt !== null) livingBench(benchAt);
       while (doomed[0] && framesDrawn - doomed[0].at >= DESTROY_AFTER_FRAMES) {
         doomed.shift()?.resource.destroy();
       }
@@ -2104,7 +2197,10 @@ function assemble(
       if (lost) return null;
       const dates = ruleDates?.dueBy() ?? null;
       const sort = sortDirty.size > 0 ? lastSortAt + SORT_REFRESH_MS : null;
-      return sort === null ? dates : dates === null ? sort : Math.min(sort, dates);
+      const soonest = sort === null ? dates : dates === null ? sort : Math.min(sort, dates);
+      // The living lab animates: a frame every frame while it is on.
+      if (living) return performance.now();
+      return soonest;
     },
     setBudget: (drawn) => {
       drawBudget = drawn;
@@ -2180,6 +2276,7 @@ function assemble(
     },
     destroy: () => {
       for (const off of cellLinks) off();
+      livingLink();
       unpick?.();
       unpick = null;
       ruleDates?.stop();
@@ -2254,6 +2351,13 @@ function assemble(
   // A sort that finished while the loop was paused: the loop hands it over (`frame:request`).
   // (Sorted on the CPU only: a GPU sort finishes in the frame that draws.)
   app.scene.on("gsplat:sorted", resumeLoop);
+  // The living lab: what it draws, as it changes (GLSL only, as the sunlight).
+  const livingLink = moves
+    ? watchLivingLab(() => {
+        living = effectiveLivingLab();
+        hooks.frameWanted();
+      })
+    : () => undefined;
   // The scan's Confidence / Data age view, drawn as the view says (scanCellView.ts).
   const assetId = hooks.assetId;
   const cellLinks =

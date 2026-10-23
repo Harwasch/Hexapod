@@ -44,6 +44,7 @@ import { PROCEDURAL_SLUGS } from "@/lib/procedural";
 import { assetScale, scalableAsset } from "@/lib/realSize";
 import { AdaptiveSplatBudget } from "@/lib/splatBudget";
 
+import { useLivingLab } from "@/state/livingLab";
 import { DEFAULT_SPLAT_RENDERER } from "@/state/settings";
 import type { SiteLoad } from "@/state/sites";
 import { useViewRule } from "@/state/viewRule";
@@ -2920,7 +2921,7 @@ export class SiteManager {
     return (
       this.splatRenderer === "cesium" ||
       asset.representation !== "gaussian-splat" ||
-      Boolean(asset.renderConfig.rigUrl)
+      (Boolean(asset.renderConfig.rigUrl) && !useLivingLab.getState().noRig)
     );
   }
 
