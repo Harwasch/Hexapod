@@ -691,3 +691,31 @@ One dispatch, `anchor:spool` + `leaveout:spool`, with `arms=refs+norefs+splash`,
    splats with Apple's SHARP, so its training pairs are likely SHARP renders, and SHARP's own
    licence terms may bind what was trained on its outputs. Its training data is not
    published. Ask before shipping anything made with it; the variant is for judging by eye.
+
+## 12. GEN3C as a fill arm (2026-10-23, branch `claude/research-fill-gen3c-f04389`)
+
+GEN3C (nv-tlabs/GEN3C, Cosmos-7B conditioned on renders of a 3D cache; weights NVIDIA Open Model
+License) as one more arm of § 11's pipeline (`anchor_fill.py` `gen3c`, `gen3c_model.py`,
+`infra/modal/fill.py` `FillGen3C`): every target view a stop on one 121-frame path at 1280x704,
+frame 0 the nearest kept photo, every frame the scan rendered there and held where known; then
+lifted, fused and updated as the other arms. A diagnostic clip goes straight through the held-out
+poses and is scored without any 3D step.
+
+Pass bar set before the run: both scenes >= 18.0 dB and +1.5 dB over the prior best (spool
+15.85, pumpkin lower edges 16.77), LPIPS <= 0.22, and the owner's blind A/B on 4 of 5 views; stop
+if the first scene is under 16 dB.
+
+Results (run 40002936712, $1.82; smoke runs 39997118013, 39998629513, 40001502787, $0.57):
+
+| spool held-out top           | PSNR  | LPIPS | DreamSim |
+| ---------------------------- | ----- | ----- | -------- |
+| before                       | 10.89 | 0.471 | 0.295    |
+| anchor-refs (§ 11)           | 15.85 | 0.457 | 0.239    |
+| gen3c layer                  | 14.98 | 0.566 | 0.356    |
+| gen3c raw frames at the pose | 17.54 | 0.429 | 0.247    |
+
+Fail, stopped after the spool. The layer closes the top (0 % see-through from above) but paints
+it flat grey: the views look down on a top mostly unknown in the cache, and with most of a frame
+masked GEN3C returns a smooth wash. Its frames at the held-out poses draw convincing but invented
+planks and still stay under 18 dB, so no lift or fuse change passes the bar there. The pumpkin
+was not run. A GEN3C clip takes ~286 s on an H100 (peak 53 GB, load ~80-97 s).
