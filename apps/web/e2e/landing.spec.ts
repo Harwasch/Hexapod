@@ -317,10 +317,14 @@ test("shows no placeholder furniture: no counters, spec sheets or coming-soon ca
   await expect(page.locator("#capabilities").getByText("Repair", { exact: true })).toBeVisible();
 });
 
-// One look with real light, shadows and the finish pass, one with scan dots on a dark stage: the
-// renderer's two new shader paths. A shader that fails to compile logs, it does not throw.
-for (const id of ["golden", "scan"]) {
-  test(`the hero renders in the ${id} look`, async ({ page }) => {
+// One look with real light, shadows and the finish pass, one with scan dots: the renderer's two
+// new shader paths, each in both themes' versions. A shader that fails to compile logs, it does
+// not throw.
+for (const [id, lightStage, darkStage] of [
+  ["golden", "#EFDDBD", "#121A2A"],
+  ["scan", "#F3F5F7", "#070B0F"],
+] as const) {
+  test(`the hero renders in the ${id} look, and turns over with the theme`, async ({ page }) => {
     const shaderErrors: string[] = [];
     page.on("console", (message) => {
       if (/shader|WebGLProgram/i.test(message.text())) shaderErrors.push(message.text());
@@ -332,7 +336,11 @@ for (const id of ["golden", "scan"]) {
     await expect(page.locator('#ex button[aria-current="true"]')).toHaveCount(1, {
       timeout: 60_000,
     });
-    if (id === "scan") await expect(hero).toHaveAttribute("data-tone", "dark");
+    const stage = () => hero.evaluate((el) => getComputedStyle(el).getPropertyValue("--stage"));
+    expect(await stage()).toBe(lightStage);
+    await page.getByRole("button", { name: "Switch to dark mode" }).click();
+    await expect.poll(stage).toBe(darkStage);
+    await expect(page.locator(".stage")).toHaveAttribute("data-theme", "dark");
     expect(shaderErrors).toEqual([]);
   });
 }
@@ -340,17 +348,16 @@ for (const id of ["golden", "scan"]) {
 test("an unknown look is the line drawing, with no review switcher", async ({ page }) => {
   await page.goto("/landing.html?look=nonsense");
   await expect(page.locator("#top")).toHaveAttribute("data-look", "line");
-  await expect(page.locator("#top")).not.toHaveAttribute("data-tone", "dark");
   await expect(page.locator(".review")).toHaveCount(0);
 });
 
 test("with ?review, the switcher changes the look", async ({ page }) => {
   await page.goto("/landing.html?review");
   const review = page.getByRole("complementary", { name: "Review options" });
-  await review.getByRole("combobox", { name: "Look" }).selectOption("night");
+  await review.getByRole("combobox", { name: "Look" }).selectOption("sensor");
   // The switcher reloads the page; wait for the new address, not for the scene to finish loading.
-  await page.waitForURL(/look=night/, { waitUntil: "commit" });
-  await expect(page.locator("#top")).toHaveAttribute("data-tone", "dark");
+  await page.waitForURL(/look=sensor/, { waitUntil: "commit" });
+  await expect(page.locator("#top")).toHaveAttribute("data-look", "sensor");
   await expect(review.getByRole("button", { name: /Your land in 3D/ })).toHaveAttribute(
     "aria-pressed",
     "false",

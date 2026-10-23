@@ -377,7 +377,7 @@ function makeEngine(canvas, { themeEl, maxPixels = 9e6 } = {}) {
   // Colour management is off (the toon palette is used as written), so the lit looks convert
   // their sRGB colours to linear light themselves, and encode the result back.
   const linear = (c) => new THREE.Color(c).convertSRGBToLinear();
-  function litMaterial(color, robot, allRobot) {
+  function litMaterial(color, robot, allRobot, glow = 0) {
     const m = new THREE.MeshStandardMaterial({
       color: linear(color),
       roughness: 0.82,
@@ -387,6 +387,7 @@ function makeEngine(canvas, { themeEl, maxPixels = 9e6 } = {}) {
     m.onBeforeCompile = (shader) => {
       shader.uniforms.uRobot = { value: linear(robot) };
       shader.uniforms.uAllRobot = { value: allRobot ? 1 : 0 };
+      shader.uniforms.uGlow = { value: glow };
       shader.vertexShader = shader.vertexShader
         .replace(
           "#include <common>",
@@ -396,11 +397,16 @@ function makeEngine(canvas, { themeEl, maxPixels = 9e6 } = {}) {
       shader.fragmentShader = shader.fragmentShader
         .replace(
           "#include <common>",
-          "#include <common>\nvarying float vLitF;\nuniform vec3 uRobot;\nuniform float uAllRobot;",
+          "#include <common>\nvarying float vLitF;\nuniform vec3 uRobot;\nuniform float uAllRobot, uGlow;",
         )
         .replace(
           "#include <color_fragment>",
           "#include <color_fragment>\ndiffuseColor.rgb = mix(diffuseColor.rgb, uRobot, max(vLitF, uAllRobot));",
+        )
+        // A dark look's robots give off their own light, so they read against the night.
+        .replace(
+          "#include <emissivemap_fragment>",
+          "#include <emissivemap_fragment>\ntotalEmissiveRadiance += uRobot * uGlow * max(vLitF, uAllRobot);",
         )
         // Lit in linear light; the colour target holds display (sRGB) values like the toon
         // shader writes, so encode here, or every lit look comes out a stop too dark.
@@ -412,10 +418,15 @@ function makeEngine(canvas, { themeEl, maxPixels = 9e6 } = {}) {
     return m;
   }
   let look = { edges: true, lines: true, light: null };
+  // What the current look set, so the next one (the other theme's, say) starts clean.
+  let lookTokens = [];
+  let litMats = [];
   function setLook(next = {}) {
     look = { edges: next.edges ?? true, lines: next.lines ?? true, light: next.light ?? null };
     lookFlat = next.flat || {};
     const el = themeEl || document.body;
+    for (const name of lookTokens) el.style.removeProperty(name);
+    lookTokens = Object.keys(next.tokens || {});
     for (const [name, value] of Object.entries(next.tokens || {}))
       el.style.setProperty(name, value);
     setTheme();
@@ -437,20 +448,31 @@ function makeEngine(canvas, { themeEl, maxPixels = 9e6 } = {}) {
     renderer.shadowMap.type = THREE.PCFShadowMap;
     sun.intensity = L ? L.sun : 0;
     sky.intensity = L ? L.sky : 0;
+    for (const m of litMats) m.dispose();
+    litMats = [];
+    if (!L)
+      scene.traverse((o) => {
+        if (o.isMesh && o.userData.toon) {
+          o.material = o.userData.toon;
+          o.castShadow = o.receiveShadow = false;
+        }
+      });
     if (L) {
       sun.color.copy(linear(L.sunColor));
       sky.color.copy(linear(L.skyColor));
       sky.groundColor.copy(linear(L.groundColor));
+      const glow = L.glow ?? 0;
       const lit = {
-        solid: litMaterial(L.object, L.robot, false),
-        lit: litMaterial(L.object, L.robot, true),
-        dark: litMaterial(L.dark, L.robot, false),
-        solar: litMaterial(L.solar, L.robot, false),
+        solid: litMaterial(L.object, L.robot, false, glow),
+        lit: litMaterial(L.object, L.robot, true, glow),
+        dark: litMaterial(L.dark, L.robot, false, glow),
+        solar: litMaterial(L.solar, L.robot, false, glow),
         terrain: litMaterial(L.ground, L.robot, false),
         water: litMaterial(L.water, L.robot, false),
         road: litMaterial(L.road, L.robot, false),
         mulch: litMaterial(L.mulch, L.robot, false),
       };
+      litMats = Object.values(lit);
       scene.traverse((o) => {
         if (!o.isMesh) return;
         const toon = o.userData.toon ?? o.material;
@@ -5393,17 +5415,18 @@ function startHero(Wd, OPT) {
         : matchMedia("(prefers-color-scheme: dark)").matches
           ? "dark"
           : "light";
-    E.setTheme();
+    look = (themeEl.dataset.theme === "dark" ? OPT.look?.dark : OPT.look?.light) || {};
+    E.setLook(look);
     drawHub();
   }
+  // The look in force: the chosen look's version for the page's theme (looks.ts).
+  let look = {};
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", syncTheme);
   new MutationObserver(syncTheme).observe(document.documentElement, {
     attributes: true,
     attributeFilter: ["data-theme"],
   });
   syncTheme();
-  const look = OPT.look || {};
-  E.setLook(look);
 
   // ── loop ──
   // Everything that moves advances by the frame's time (dt, capped), never by the wall clock:
@@ -5685,7 +5708,7 @@ function startFleetCards(OPT) {
         : matchMedia("(prefers-color-scheme: dark)").matches
           ? "dark"
           : "light";
-    E.setTheme();
+    E.setLook((themeEl.dataset.theme === "dark" ? OPT.look?.dark : OPT.look?.light) || {});
   }
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", syncTheme);
   new MutationObserver(syncTheme).observe(document.documentElement, {
@@ -5693,7 +5716,6 @@ function startFleetCards(OPT) {
     attributeFilter: ["data-theme"],
   });
   syncTheme();
-  E.setLook(OPT.look || {});
 
   // per-card state, sizes and interaction
   let W = 1,

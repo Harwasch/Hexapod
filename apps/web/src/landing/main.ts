@@ -19,7 +19,7 @@ import {
   sendRequest,
 } from "./form";
 import { startFinder } from "./finder";
-import { lookById } from "./looks";
+import { lookById, themed } from "./looks";
 import type * as SceneModule from "./scene.js";
 import type { Hero, HeroLabel, HeroStop, HeroZone } from "./scene.js";
 
@@ -340,11 +340,19 @@ function heroFallback(reason: unknown) {
 const params = new URLSearchParams(window.location.search);
 const look = lookById(params.get("look"));
 heroEl.dataset.look = look.id;
-if (look.dark) heroEl.dataset.tone = "dark";
-if (look.stage) {
-  heroEl.style.setProperty("--stage", look.stage);
-  $(".fleet", HTMLElement).style.setProperty("--stage", look.stage);
+/** The look's ground behind the hero copy and the fleet cards, for the theme in force. */
+function paintStage() {
+  const stage = (isDark() ? look.dark : look.light).stage;
+  for (const el of [heroEl, $(".fleet", HTMLElement)])
+    if (stage) el.style.setProperty("--stage", stage);
+    else el.style.removeProperty("--stage");
 }
+paintStage();
+dark.addEventListener("change", paintStage);
+new MutationObserver(paintStage).observe(document.documentElement, {
+  attributes: true,
+  attributeFilter: ["data-theme"],
+});
 if (params.has("review")) {
   void import("./review").then(({ mountReview }) => mountReview(look.id));
 }
@@ -391,7 +399,7 @@ async function startScenes() {
       width: () => (innerWidth < 700 ? 30 : innerWidth < 1100 ? 40 : 46),
       shift: (W) => (W >= 980 ? { x: 0.2, y: -0.12 } : { y: 0.2 }),
       labels: placeLabels,
-      look: look.scene,
+      look: themed(look),
     });
   } catch (error) {
     heroFallback(error);
@@ -416,7 +424,7 @@ async function startScenes() {
           themeEl: $("#fleet-theme", HTMLElement),
           still,
           maxPixels: () => 0.6e6,
-          look: look.scene,
+          look: themed(look),
         });
       } catch (error) {
         // The cards keep their concept renders.

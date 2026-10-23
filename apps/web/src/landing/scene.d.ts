@@ -1,5 +1,5 @@
 /** Types for scene.js, the landing page's ported three.js scenes: what main.ts calls. */
-import type { SceneLook } from "./looks";
+import type { ThemedLook } from "./looks";
 
 /** One crew's work cell in the hero, in world metres (x east, y south). */
 export interface HeroZone {
@@ -44,8 +44,8 @@ export interface HeroOptions {
   /** Where the focus sits in the frame, as fractions of its size. */
   shift: (width: number, height: number) => { x?: number; y?: number };
   labels: (list: HeroLabel[]) => void;
-  /** A look to draw in (looks.ts); none is the line drawing. */
-  look?: SceneLook;
+  /** A look to draw in, in both themes' versions (looks.ts); none is the line drawing. */
+  look?: ThemedLook;
 }
 
 export interface Hero {
@@ -65,7 +65,7 @@ export interface FleetOptions {
   themeEl: HTMLElement;
   still: MediaQueryList;
   maxPixels: () => number;
-  look?: SceneLook;
+  look?: ThemedLook;
 }
 
 /** Starts the hero; throws when WebGL is unavailable. */

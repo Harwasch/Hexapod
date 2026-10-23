@@ -1309,18 +1309,6 @@ textarea[aria-invalid="true"] {
   overflow: hidden;
 }
 
-/* A dark look (looks.ts) under light copy: the hero's own tokens turn over. */
-.hero[data-tone="dark"] {
-  --bg: #0a0b0a;
-  --ink: #f1f3ef;
-  --text: #c9d0c5;
-  --muted: #9aa396;
-  --line: rgb(255 255 255 / 0.12);
-  --line2: rgb(255 255 255 / 0.28);
-  --accent: #9ad883;
-  --on-accent: #0a1406;
-}
-
 /* The review switcher (review.ts, `?review` only). */
 .review {
   position: fixed;
