@@ -240,7 +240,8 @@ export function useDatedSources(): DatedSources {
     enabled: requested && bbox !== null,
     staleTime: (q) => (incomplete(q.state.data?.catalog) ? INCOMPLETE_STALE_MS : SIX_HOURS_MS),
     gcTime: SIX_HOURS_MS,
-    retry: 1,
+    // The API transport owns cold-start retries; do not multiply its budget here.
+    retry: false,
   });
   const catalog = query.data?.catalog;
   const all = useMemo(() => (catalog?.sources ?? []).map(toLanternSource), [catalog]);

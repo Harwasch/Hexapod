@@ -17,6 +17,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 import type { LiveCameras, LiveState } from "@twin/contracts";
 
+import { fetchApi } from "@/api/coldStart";
 import { deviceSplatBudget } from "@/lib/detail";
 
 import {
@@ -374,7 +375,7 @@ export function showLive(captureId: string): { stop: () => void } {
     if (stopped) return;
     let ended = false;
     try {
-      const response = await fetch(
+      const response = await fetchApi(
         `${API_BASE}/api/v1/captures/${encodeURIComponent(captureId)}/live`,
         { cache: "no-store" },
       );

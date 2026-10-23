@@ -481,14 +481,51 @@ the app imported and, once it has been used, the text encoder loaded. A cold boo
 every deploy, a host migration or a lost snapshot, since a snapshot is never resumed onto
 new code — starts the machine (~2 s), imports the app (~10 s on a desktop; slower on a
 shared vCPU, not measured on Fly), and the first search then loads the encoder (~1 s). The
-console is built for this: a failed first query falls back to the built-in catalogue and
-retries every 5 s (`apps/web/src/api/queries.ts`).
+console waits out transient failures before falling back to the built-in catalogue
+([cold start](#cold-start)); after that it checks again every 5 s.
 
 **After a resume**, a socket held across the suspend may be found reset once: the
 database pool checks before use (`pool_pre_ping`, `app/db.py`). The clock can lag a few
 seconds until NTP syncs, inside the 10 s leeway JWT validation allows
 (`app/services/identity.py`). A deploy leaves a suspended API stopped, so `deploy.yml`
 starts it before it checks the ledger volume over `fly ssh console`.
+
+### Cold start
+
+The globe, admin, upload and scan-view pages share a small API transport
+(`apps/web/src/api/coldStart.ts`). GET, HEAD and OPTIONS retry network errors, timeouts
+and HTTP 502/503/504 after 1, 2, 4, 8, 8, … seconds, within a 45-second total budget
+including attempts and waits. Each attempt has a 10-second timeout, shortened to the
+remaining budget. Caller cancellation stops both attempts and waits. POST, PUT, PATCH
+and DELETE are never automatically retried by this transport.
+
+After the first transient failure, the globe's existing notice area says
+“Waking the server… this takes a few seconds after a quiet spell”. The note clears when
+no requests are retrying or a budget is exhausted. Query retries are disabled so they do not
+multiply the transport budget. If the API is actually down, exhausting a budget marks it
+unavailable and clears the waking note, including for concurrent retries. Recovery reads
+then make one attempt (at most 10 seconds) with no backoff or waking note. The catalog
+polls every 5 seconds after a failed recovery attempt, and the built-in demo stays available
+while those polls are pending. A successful API response clears the unavailable state so
+a later sleep gets the full cold-start retry budget again. The offline catalog is requested
+only after a budget is exhausted.
+
+Measured probes (2026-10-23 UTC), supplied by the wrapper: from its machine to
+`https://twin-api.fly.dev/api/v1/health/live` with `curl --max-time 90`, eight minutes apart.
+These probes did not establish that every request started from a sleeping machine.
+
+| Time (UTC) | HTTP | Total  | Time to first byte | Observation                                                                        |
+| ---------- | ---- | ------ | ------------------ | ---------------------------------------------------------------------------------- |
+| 04:57:09Z  | 200  | 0.22 s | 0.22 s             | The machine was evidently already awake.                                           |
+| 05:05:10Z  | 200  | 1.14 s | 1.14 s             | Consistent with a resume from suspend.                                             |
+| 05:13:11Z  | 200  | 6.89 s | 6.89 s             | TCP connect took 0.03 s; the wait was for the machine, not the network connection. |
+
+None timed out: the earlier production timeout was **not reproduced** in these three
+probes. The 45-second budget provides margin over the worst observed wait (6.9 seconds)
+and a full cold boot (`fly.toml` estimates about 10 seconds or more to import the app).
+The 10-second per-attempt timeout cuts and retries an attempt that is still waiting for
+a boot; the server's boot carries on. The site-detail deadline allows this whole budget
+plus one second for the final response or error to settle.
 
 ## GPU training — Modal
 

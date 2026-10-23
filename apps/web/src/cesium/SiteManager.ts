@@ -24,6 +24,8 @@ import type {
 } from "@twin/contracts";
 import { boundingRadiusM, centerOf, circleFootprint, haversineDistance } from "@twin/geo";
 
+import { API_RETRY_BUDGET_MS } from "@/api/coldStart";
+
 import {
   detailScreenSpaceScale,
   deviceSplatBudget,
@@ -152,11 +154,11 @@ const DISENGAGE_ALTITUDE_RADII = 3.5;
 const ENGAGE_DISTANCE_RADII = 3;
 const DISENGAGE_DISTANCE_RADII = 4.5;
 /**
- * The site's catalog record must answer within this (ms). The API scales to zero between
- * visits (fly.toml), and a cold start takes a few seconds; a request that has not answered by
- * now is stalled, not slow, and is cut off so the HUD can say so and offer Retry.
+ * Let the API transport finish its cold-start retries before this outer catalog deadline
+ * (ms). One second of margin allows its final response/error to settle; a resolver that
+ * still hangs is aborted so the HUD can offer Retry. Keep this tied to the transport budget.
  */
-const DETAIL_TIMEOUT_MS = 12_000;
+const DETAIL_TIMEOUT_MS = API_RETRY_BUDGET_MS + 1000;
 /**
  * One attempt at creating a site's tileset -- the tile proxy probe, `tileset.json`, ion's
  * endpoint -- fails after this long without an answer or, while a tileset's JSON downloads,

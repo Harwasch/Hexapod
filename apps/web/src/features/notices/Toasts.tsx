@@ -1,8 +1,10 @@
 import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import { GlassButton, GlassPanel } from "@twin/ui";
+
+import { apiWaking } from "@/api/waking";
 
 import { useToasts, type Toast } from "@/state/toasts";
 
@@ -64,8 +66,17 @@ function ToastItem({ toast }: { toast: Toast }) {
 
 export function Toasts() {
   const items = useToasts((s) => s.items);
+  const waking = useSyncExternalStore(apiWaking.subscribe, apiWaking.getSnapshot);
   return (
     <div className="toasts" aria-live="polite">
+      {waking && (
+        <GlassPanel compact className="toast toast--info" role="status">
+          <Info className="toast__icon" size={18} aria-hidden="true" />
+          <p className="toast__text">
+            Waking the server… this takes a few seconds after a quiet spell
+          </p>
+        </GlassPanel>
+      )}
       <AnimatePresence initial={false}>
         {items.slice(-4).map((toast) => (
           <ToastItem key={toast.id} toast={toast} />

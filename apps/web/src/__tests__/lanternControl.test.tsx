@@ -342,8 +342,9 @@ describe("open", () => {
     get.mockRejectedValue(new Error("HTTP 502"));
     render(wrap(<TimeLanternControl />));
     await userEvent.click(screen.getByRole("button", { name: /Look back/ }));
-    // After the one automatic retry.
+    // The mocked client has already given up; Query must not retry its transport budget.
     const alert = await screen.findByRole("alert", undefined, { timeout: 4000 });
+    expect(get).toHaveBeenCalledTimes(1);
     get.mockResolvedValue({ data: CATALOG, response: new Response() });
     expect(alert).toHaveTextContent("The dated imagery list could not be loaded (HTTP 502).");
     expect(alert).not.toHaveTextContent("Close the lantern");
