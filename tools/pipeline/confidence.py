@@ -38,9 +38,11 @@ nobody knows where its evidence is to a metre. An alignment from before the
 frame-relative figure existed is read at its absolute `uncertaintyM`, which is never
 smaller.
 
-**Level.** The smallest level at which the median occupied cell holds at least
+**Level.** The smallest level at which the median visible gaussian's cell holds at least
 `MIN_CELL_GAUSSIANS` (16) visible gaussians -- a binomial share from 16 has sigma <= 0.125,
 enough to tell under a half from three quarters -- and the plane holds at most `MAX_CELLS`.
+Weighed by gaussians rather than by cells, so a sparse halo of background a drone sees
+past its site cannot coarsen every cell (`choose_level`).
 Above it, `PYRAMID_LEVELS` coarser levels, min-of-children (`cell_grid.min_pyramid`).
 
 **Extent.** The plane covers the visible gaussians within the packer's own floater rule
@@ -398,10 +400,16 @@ def choose_level(
     *,
     min_cell_gaussians: int = MIN_CELL_GAUSSIANS,
 ) -> int:
-    """The smallest level, from `level` up, at which the median occupied cell holds at
+    """The smallest level, from `level` up, at which the median gaussian's cell holds at
     least `min_cell_gaussians` -- counted exactly at each level from the finest plane's
     counts `(nj, ni)`, since every coarser cell is a union of finer ones. With nothing
-    occupied, `level` itself."""
+    occupied, `level` itself.
+
+    The median *gaussian's* cell, not the median occupied cell: a cell is weighed by what
+    it holds. A drone sees past its site, and a sparse ring of background gaussians, each
+    alone in its cell, can touch more cells than the site fills; counted by cells it was
+    the median, and it made a 200 m site's grid 64 m cells (NWM, 2026-10-23). Weighed by
+    gaussians it is what it is, a small share of the evidence."""
     plane = cell_grid.CellPlane(
         level, i0, j0, counts.shape[1], counts.shape[0], counts.astype(np.int64)[..., None]
     )
@@ -409,14 +417,19 @@ def choose_level(
         occupied = plane.data[..., 0][plane.data[..., 0] > 0]
         if occupied.size == 0:
             return plane.level
-        middle = np.sort(occupied)
-        n = middle.size
-        median2 = int(middle[(n - 1) // 2]) + int(middle[n // 2])  # twice the median
-        if median2 >= 2 * min_cell_gaussians:
+        if _median_gaussians_cell(occupied) >= min_cell_gaussians:
             return plane.level
         if plane.level >= cell_grid.MAX_LEVEL or (plane.ni <= 2 and plane.nj <= 2):
             return plane.level
         plane = _sum_up(plane)
+
+
+def _median_gaussians_cell(occupied: npt.NDArray[np.int64]) -> int:
+    """How many gaussians share the median gaussian's cell: cells sorted by what they hold,
+    the one the middle gaussian (the lower of two) falls in. Integers only: exact."""
+    held = np.sort(occupied)
+    middle = (int(held.sum()) + 1) // 2
+    return int(held[int(np.searchsorted(np.cumsum(held), middle))])
 
 
 def _sum_up(plane: cell_grid.CellPlane) -> cell_grid.CellPlane:

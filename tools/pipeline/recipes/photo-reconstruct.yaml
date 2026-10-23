@@ -403,8 +403,9 @@ stages:
   # only by its GPS is weak everywhere. First principles, not calibrated. No `gpu:`: it
   # runs on the worker, a few passes over ~20 bytes a gaussian. `package` ships the grid.
   #   base_cell_m: the site lattice's finest cell -- fixed, or epochs would not nest.
-  #   min_cell_gaussians: the level is the finest whose median occupied cell holds this
-  #     many visible gaussians (a share from 16 has sigma <= 0.125).
+  #   min_cell_gaussians: the level is the finest whose median visible gaussian's cell
+  #     holds this many (a share from 16 has sigma <= 0.125); weighed by gaussians, so a
+  #     drone's sparse background halo cannot coarsen the grid.
   #   max_cells: the most cells the finest plane may have (2^22).
   #   pyramid_levels: coarser levels above it, min-of-children.
   - id: confidence
