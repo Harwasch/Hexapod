@@ -891,7 +891,7 @@ def test_a_rerun_never_moves_a_date_read_from_the_files(
     )
 
 
-@pytest.mark.parametrize("second", ["same tiles", "no tiles"])
+@pytest.mark.parametrize("second", ["new tiles", "same tiles", "no tiles"])
 def test_a_redating_rerun_redates_the_current_asset_whatever_it_published(
     db: Session, storage: S3Storage, tmp_path: Path, second: str
 ) -> None:
@@ -903,14 +903,19 @@ def test_a_redating_rerun_redates_the_current_asset_whatever_it_published(
     document = _document()
     document["manifest"] = {"capture": {"capturedAtUtc": "2026-09-27T12:19:47-07:00"}}
 
-    run(db, storage, tmp_path, capture, document, url=same if second == "same tiles" else None)
+    url = {"new tiles": "new", "same tiles": same, "no tiles": None}[second]
+    run(db, storage, tmp_path, capture, document, url=url)
 
     taken = datetime(2026, 9, 27, 19, 19, 47, tzinfo=UTC)
     assert capture.site_id is not None
     [epoch] = _epochs(db, capture.site_id)
     assert epoch.observed_at == taken
-    [current] = [a for a in _assets(db, capture.site_id) if a.valid_to is None]
+    assets = _assets(db, capture.site_id)
+    [current] = [a for a in assets if a.valid_to is None]
     assert current.observed_at == taken
+    # A revision the new tiles replaced keeps the date it was shown with.
+    assert all(a.observed_at == capture.created_at for a in assets if a.valid_to is not None)
+    assert len(assets) == (2 if second == "new tiles" else 1)
 
 
 def test_the_sites_mirror_names_the_run_its_document_came_from(
@@ -946,3 +951,17 @@ def test_a_capture_date_without_a_zone_is_taken_as_utc() -> None:
     when, source = registration.observed_at_of(capture, {})
 
     assert (when, source.value) == (datetime(2026, 9, 12, 10, tzinfo=UTC), "captured-at")
+
+
+def test_a_manifests_date_without_a_zone_is_taken_as_utc() -> None:
+    """A video's container date (`capturedAt`) can come without an offset: it is UTC."""
+    capture = Capture(slug="naive", name="Naive", kind=CaptureKind.VIDEO)
+    document = {"manifest": {"capture": {"capturedAt": "2026-09-27T12:19:47"}}}
+
+    when, source = registration.observed_at_of(capture, document)
+
+    assert (when, when.tzinfo, source.value) == (
+        datetime(2026, 9, 27, 12, 19, 47, tzinfo=UTC),
+        UTC,
+        "manifest",
+    )

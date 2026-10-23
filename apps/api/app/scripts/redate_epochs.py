@@ -89,7 +89,10 @@ def _current_document(db: Session, epoch: Epoch, site: Site | None) -> dict[str,
     if "registrationJobId" in metadata:
         return document if metadata["registrationJobId"] == run else None
     # A mirror from before `registrationJobId`: only the latest run's id, trusted when that
-    # run georeferenced (and so wrote the document beside it).
+    # run georeferenced (and so wrote the document beside it) and the document has the
+    # georeference such a run writes.
+    if not isinstance(document.get("georef"), dict):
+        return None
     georeferenced = db.scalar(
         select(JobStep.id).where(
             JobStep.job_id == epoch.job_id,

@@ -11,6 +11,9 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.models import Capture, Epoch, JobStep, Site
@@ -185,3 +188,49 @@ def test_only_the_epochs_asked_for_are_looked_at(
 
     assert redate_epochs.find(db, [uuid.uuid4()]) == []
     assert [f.epoch_id for f in redate_epochs.find(db, [epoch.id])] == [epoch.id]
+
+
+def test_a_mirror_from_before_registration_job_id_needs_a_georef_in_its_document(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """A run that georeferenced always writes `georef`; a document without one is not that
+    run's, whatever its step says."""
+    capture, epoch = _dated_by_its_upload(db, storage, tmp_path)
+    site = _site(db, capture)
+    metadata = {k: v for k, v in (site.metadata_ or {}).items() if k != "registrationJobId"}
+    metadata["registration"] = {k: v for k, v in metadata["registration"].items() if k != "georef"}
+    site.metadata_ = metadata
+    assert epoch.job_id is not None
+    db.add(
+        JobStep(
+            job_id=epoch.job_id,
+            stage_id="georeference",
+            ordinal=3,
+            impl="exif_gps",
+            status=RunStatus.COMPLETE,
+        )
+    )
+    db.commit()
+
+    [finding] = redate_epochs.find(db)
+
+    assert finding.skipped == redate_epochs.NO_DOCUMENT
+
+
+def test_apply_judges_each_epoch_under_its_row_lock(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Apply holds each epoch it judges, even one it leaves alone, until its transaction
+    ends: a run registering the epoch meanwhile waits for it. Shown with NOWAIT, so the
+    test never waits: the epoch here is one whose run read no date, which apply does not
+    write, so only the lock it took when it read the row can hold another session off."""
+    _, epoch = _dated_by_its_upload(db, storage, tmp_path, clock=None)
+
+    [finding] = redate_epochs.apply(db)
+
+    assert finding.skipped == redate_epochs.NO_DATE
+    with Session(db.get_bind()) as other:
+        with pytest.raises(OperationalError):
+            other.execute(select(Epoch).where(Epoch.id == epoch.id).with_for_update(nowait=True))
+        other.rollback()
+    db.rollback()

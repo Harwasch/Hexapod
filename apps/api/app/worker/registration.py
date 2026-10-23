@@ -1379,6 +1379,8 @@ def register(
     # driven by hand, as some tests do, names a run nobody queued).
     producing = job_id if db.get(Job, job_id) is not None else None
     site: Site | None = None
+    # The date a re-run moved the epoch from, for its current asset (below).
+    redated_from: datetime | None = None
     join = EpochJoinMethod.EXPLICIT
     if epoch is not None or legacy:
         # A re-run of an epoch, or the first run since 0032 of a capture registered into
@@ -1449,10 +1451,9 @@ def register(
         # run that reads the files' clock dates it. Any other date stays where it is.
         if promoted or epoch.observed_at_source == ObservedAtSource.CREATED.value:
             observed_at, observed_source = _observed_at(capture, registration)
-            old = epoch.observed_at
+            redated_from = epoch.observed_at
             epoch.observed_at = observed_at
             epoch.observed_at_source = observed_source.value
-            redate_current_assets(db, epoch, old)
         if url is not None or promoted:
             _replace_run(epoch, producing, footprint, quality, now, published=url is not None)
             epoch.alignment = alignment_of(capture, registration)
@@ -1478,6 +1479,10 @@ def register(
         # An epoch's first tiles: its first run, or one after a run that was withheld.
         shown = _new_asset(site, epoch, capture, url, registration, published.carry, job_id, now)
         db.add(shown)
+    if redated_from is not None:
+        # After `_supersede`: a revision these tiles replaced keeps the date it was shown
+        # with; the very same tiles, or none, leave the shown revision to be re-dated.
+        redate_current_assets(db, epoch, redated_from)
     if shown is not None and url is not None:
         # What the run measured on the tiles it published is that revision's maps -- its
         # confidence grid and its height surface; a superseded revision keeps the ones it
