@@ -183,6 +183,7 @@ jobs:
               "deploy.yml",
               "provision.yml",
               "process-capture.yml",
+              "import-nwm.yml",
               "seed-land.yml",
               "production-corrections.yml",
           ):
