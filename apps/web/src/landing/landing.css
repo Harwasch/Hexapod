@@ -774,102 +774,57 @@ abbr {
   color: var(--ink);
   font: 700 18px/1.2 var(--body);
 }
-.mock {
+/* The app section: real screenshots, one per point; the points switch between them. */
+.shots {
   margin: 0;
   border: 1px solid var(--line2);
-  background: var(--tile);
+  background: #0b0c0a;
   box-shadow: 0 30px 70px -40px rgba(0, 0, 0, 0.35);
   min-width: 0;
 }
-.mock .bar {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line);
-  font: 500 12px/1 var(--mono);
-  color: var(--muted);
-}
-.mock .bar i {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--line2);
-}
-.mock .bar span {
-  margin-left: 10px;
-}
-.win {
-  display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-}
-.win aside {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 16px;
-  border-right: 1px solid var(--line);
-}
-.job {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--line);
-}
-.job b {
-  font: 600 13px/1.2 var(--body);
-  color: var(--ink);
-}
-.job span {
-  font: 500 11px/1.2 var(--mono);
-  color: var(--muted);
-}
-.job em {
+.shot-views img {
   display: block;
-  height: 3px;
-  background: var(--line);
-  margin-top: 4px;
-  position: relative;
-}
-.job em::after {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: var(--w);
-  background: var(--accent);
-}
-.kv {
-  display: flex;
-  justify-content: space-between;
-  font: 500 12px/1.3 var(--mono);
-}
-.kv span {
-  color: var(--muted);
-}
-.kv b {
-  color: var(--ink);
-  font-weight: 500;
-}
-.map {
-  background: var(--stage);
-  min-width: 0;
-}
-.map {
-  display: flex;
-  align-items: center;
-}
-.map img {
   width: 100%;
   height: auto;
-  max-width: 100%;
-  aspect-ratio: 1280/740;
+  aspect-ratio: 1600/1000;
 }
-.mock figcaption {
+.shot-views img[hidden] {
+  display: none;
+}
+.shots figcaption {
   padding: 8px 14px;
   border-top: 1px solid var(--line);
-  font: 500 11px/1 var(--mono);
+  background: var(--tile);
+  font: 500 11px/1.4 var(--mono);
   color: var(--muted);
+}
+.shot-tabs li {
+  padding: 0;
+}
+.shot-tabs button {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 16px 0 16px;
+  border: 0;
+  border-top: 2px solid transparent;
+  margin-top: -1px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.shot-tabs button[aria-pressed="true"] {
+  border-top-color: var(--accent);
+}
+.shot-tabs button[aria-pressed="false"] b {
+  color: var(--muted);
+}
+.app[data-app="a"] [data-variant="b"],
+.app[data-app="b"] [data-variant="a"] {
+  display: none;
 }
 .uses {
   display: grid;
@@ -1179,16 +1134,6 @@ img.dk {
   }
 }
 @media (max-width: 640px) {
-  .win {
-    grid-template-columns: 1fr;
-  }
-  .win aside {
-    border-right: 0;
-    border-top: 1px solid var(--line);
-  }
-  .win .map {
-    order: -1;
-  }
   .shade {
     background: linear-gradient(
       0deg,
@@ -1362,4 +1307,70 @@ textarea[aria-invalid="true"] {
   width: 1px;
   height: 1px;
   overflow: hidden;
+}
+
+/* A dark look (looks.ts) under light copy: the hero's own tokens turn over. */
+.hero[data-tone="dark"] {
+  --bg: #0a0b0a;
+  --ink: #f1f3ef;
+  --text: #c9d0c5;
+  --muted: #9aa396;
+  --line: rgb(255 255 255 / 0.12);
+  --line2: rgb(255 255 255 / 0.28);
+  --accent: #9ad883;
+  --on-accent: #0a1406;
+}
+
+/* The review switcher (review.ts, `?review` only). */
+.review {
+  position: fixed;
+  z-index: 50;
+  right: 16px;
+  bottom: 16px;
+  display: grid;
+  gap: 8px;
+  width: min(340px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border: 1px solid var(--line2);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(8px);
+  font: 500 13px/1.35 var(--body);
+  color: var(--ink);
+  box-shadow: 0 18px 40px -20px rgb(0 0 0 / 0.4);
+}
+.review__title {
+  font: 500 11px/1 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.review__row > span {
+  flex-basis: 100%;
+}
+.review__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.review__row select {
+  flex: 1;
+  min-height: 36px;
+  font: inherit;
+}
+.review__row button {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line2);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.review__row button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--bg);
+}
+.review__blurb {
+  color: var(--muted);
 }

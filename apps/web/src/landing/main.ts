@@ -19,6 +19,7 @@ import {
   sendRequest,
 } from "./form";
 import { startFinder } from "./finder";
+import { lookById } from "./looks";
 import type * as SceneModule from "./scene.js";
 import type { Hero, HeroLabel, HeroStop, HeroZone } from "./scene.js";
 
@@ -335,6 +336,46 @@ function heroFallback(reason: unknown) {
   heroEl.dataset.scene = "fallback";
 }
 
+/** The look the 3D scenes draw in (looks.ts): `?look=<id>`, or the line drawing. */
+const params = new URLSearchParams(window.location.search);
+const look = lookById(params.get("look"));
+heroEl.dataset.look = look.id;
+if (look.dark) heroEl.dataset.tone = "dark";
+if (look.stage) {
+  heroEl.style.setProperty("--stage", look.stage);
+  $(".fleet", HTMLElement).style.setProperty("--stage", look.stage);
+}
+if (params.has("review")) {
+  void import("./review").then(({ mountReview }) => mountReview(look.id));
+}
+
+/** The app section: which version of its words (`?app=b`); each point shows its screenshot. */
+$(".app", HTMLElement).dataset.app = params.get("app") === "b" ? "b" : "a";
+const shotTabs = [...document.querySelectorAll<HTMLButtonElement>(".shot-tabs button")];
+for (const tab of shotTabs)
+  tab.addEventListener("click", () => {
+    for (const other of shotTabs) {
+      const on = other === tab;
+      other.setAttribute("aria-pressed", String(on));
+      const view = document.getElementById(other.getAttribute("aria-controls") ?? "");
+      if (view) view.hidden = !on;
+    }
+  });
+
+/**
+ * Pixels the hero renders inside (it draws bigger and scales down, which is what smooths its
+ * lines): about 1.5× this screen each way, within limits. A fixed 4.4 M left a Retina laptop
+ * (5 M physical pixels) with no supersampling at all, and its edges showed steps. scene.js
+ * lowers it on a GPU that cannot keep up.
+ */
+function heroBudget(): number {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const screen = innerWidth * innerHeight * dpr * dpr;
+  return innerWidth < 700
+    ? Math.min(3e6, Math.max(1.6e6, screen * 1.5))
+    : Math.min(10e6, Math.max(4.4e6, screen * 2.25));
+}
+
 async function startScenes() {
   let scene: typeof SceneModule;
   try {
@@ -346,10 +387,11 @@ async function startScenes() {
       zones: ZONES,
       route: ROUTE,
       still,
-      maxPixels: () => (innerWidth < 700 ? 1.6e6 : 4.4e6),
+      maxPixels: heroBudget,
       width: () => (innerWidth < 700 ? 30 : innerWidth < 1100 ? 40 : 46),
       shift: (W) => (W >= 980 ? { x: 0.2, y: -0.12 } : { y: 0.2 }),
       labels: placeLabels,
+      look: look.scene,
     });
   } catch (error) {
     heroFallback(error);
@@ -374,6 +416,7 @@ async function startScenes() {
           themeEl: $("#fleet-theme", HTMLElement),
           still,
           maxPixels: () => 0.6e6,
+          look: look.scene,
         });
       } catch (error) {
         // The cards keep their concept renders.
