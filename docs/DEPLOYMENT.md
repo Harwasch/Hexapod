@@ -1506,6 +1506,8 @@ into a capture:
    `capture_id` to send only what is missing. It refuses any capture but that timestep's NWM one
    (slug and `metadata.dataset.doi` checked).
 
+Before its first write the upload waits up to 60 s for `GET /health` to answer, because an idle API's first request can time out (the first real run's `POST /captures` did, at 120 s). A read is retried on a timeout or a 5xx; a write is never sent twice.
+
 The archive is treated as untrusted: the workflow writes nothing from it to `$GITHUB_ENV`,
 moves the dataset to a path it names, and refuses frame names that are not plain file names.
 

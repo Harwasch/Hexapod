@@ -312,20 +312,69 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 _OPENER = urllib.request.build_opener(_NoRedirect)
+#: Tries for a GET; a write is sent once.
+GET_ATTEMPTS = 4
+#: How long `wake` waits for a cold API. Measured 2026-10-23: 0.2-6.9 s (DEPLOYMENT.md,
+#: "Cold start"); a run's first POST timed out at 120 s on one, so the budget is generous.
+WAKE_BUDGET_S = 60.0
+
+
+class _Transient(Exception):
+    """A failure worth another try: a timeout, a dropped connection, a 5xx."""
 
 
 class Api:
     """The handful of API calls an upload makes, over urllib, with the token in a header.
 
+    A GET is retried with backoff on a timeout, a dropped connection or a 5xx: a read is
+    safe to repeat, and a Fly API waking from idle answers the first request late. Nothing
+    else is ever sent twice -- a POST that timed out may still have created its row.
+    `wake` is what keeps the first write from meeting a cold API.
+
     A failure says the method, path, status and the Problem's `title`, never the body: a
     body is the server's to word and is not repeated into a public run log.
     """
 
-    def __init__(self, base: str, token: str | None) -> None:
+    def __init__(self, base: str, token: str | None, *, timeout_s: float = 120.0) -> None:
         self.base = base.rstrip("/") + "/api/v1"
         self.token = token
+        self.timeout_s = timeout_s
 
-    def call(self, method: str, path: str, body: object | None = None) -> Any:
+    def call(
+        self,
+        method: str,
+        path: str,
+        body: object | None = None,
+        *,
+        timeout_s: float | None = None,
+        attempts: int | None = None,
+    ) -> Any:
+        tries = attempts or (GET_ATTEMPTS if method == "GET" else 1)
+        for attempt in range(tries):
+            try:
+                return self._send(method, path, body, timeout_s or self.timeout_s)
+            except _Transient as error:
+                if attempt == tries - 1:
+                    raise RuntimeError(f"{method} {path}: {error}") from None
+                time.sleep(2**attempt)
+        raise AssertionError("unreachable")
+
+    def wake(self, budget_s: float = WAKE_BUDGET_S, try_timeout_s: float = 15.0) -> None:
+        """Wait until `GET /health` answers, for up to `budget_s`: the API (and the database
+        behind it) may be asleep, and the first write should not be what wakes it."""
+        deadline = time.monotonic() + budget_s
+        while True:
+            try:
+                self.call("GET", "/health", timeout_s=try_timeout_s, attempts=1)
+                return
+            except RuntimeError as error:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"the API did not answer /health within {budget_s:g} s ({error})"
+                    ) from None
+            time.sleep(2)
+
+    def _send(self, method: str, path: str, body: object | None, timeout_s: float) -> Any:
         headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
@@ -337,10 +386,14 @@ class Api:
             self.base + path, data=data, headers=headers, method=method
         )
         try:
-            with _OPENER.open(request, timeout=120) as response:
+            with _OPENER.open(request, timeout=timeout_s) as response:
                 return json.loads(response.read() or b"null")
         except urllib.error.HTTPError as error:
+            if error.code >= 500:
+                raise _Transient(f"HTTP {error.code}{_title(error)}") from None
             raise RuntimeError(f"{method} {path}: HTTP {error.code}{_title(error)}") from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+            raise _Transient(type(error).__name__) from None
 
 
 def _title(error: urllib.error.HTTPError) -> str:
@@ -453,6 +506,7 @@ def upload(
     is queued after one.
     """
     manifest = json.loads((folder / MANIFEST).read_text())
+    api.wake()
     if capture_id is None:
         capture = api.call("POST", "/captures", capture_payload(manifest))
         capture_id = str(capture["id"])
