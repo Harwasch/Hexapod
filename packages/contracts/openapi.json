@@ -21370,6 +21370,15 @@
         "title": "SignatureZonesRequest",
         "type": "object"
       },
+      "SiteBoundarySource": {
+        "description": "Who drew a site's boundary. ``registration``: the union of every footprint its\npublished epochs have had, which a re-run fits to their current ones and may shrink\n(`registration.fit_site_boundary`). ``manual``: anybody else -- created, seeded or\nredrawn by hand (`PATCH /sites/{id}`) -- which registration only ever grows.",
+        "enum": [
+          "registration",
+          "manual"
+        ],
+        "title": "SiteBoundarySource",
+        "type": "string"
+      },
       "SiteCreate": {
         "additionalProperties": false,
         "properties": {
@@ -21621,6 +21630,9 @@
             ],
             "title": "Boundary"
           },
+          "boundarySource": {
+            "$ref": "#/components/schemas/SiteBoundarySource"
+          },
           "cameraBookmarks": {
             "items": {
               "$ref": "#/components/schemas/CameraBookmarkRead"
@@ -21718,6 +21730,7 @@
           "name",
           "description",
           "boundary",
+          "boundarySource",
           "centroid",
           "areaM2",
           "thumbnailUrl",

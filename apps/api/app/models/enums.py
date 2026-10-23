@@ -192,6 +192,16 @@ class EpochStatus(StrEnum):
     SUPERSEDED = "superseded"
 
 
+class SiteBoundarySource(StrEnum):
+    """Who drew a site's boundary. ``registration``: the union of every footprint its
+    published epochs have had, which a re-run fits to their current ones and may shrink
+    (`registration.fit_site_boundary`). ``manual``: anybody else -- created, seeded or
+    redrawn by hand (`PATCH /sites/{id}`) -- which registration only ever grows."""
+
+    REGISTRATION = "registration"
+    MANUAL = "manual"
+
+
 class EpochJoinMethod(StrEnum):
     """How a capture found the site it is an epoch of: named it (``explicit``), was matched
     to it by location before its run (``spatial``), or made it (``new-site``)."""

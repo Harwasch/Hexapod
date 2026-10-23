@@ -546,6 +546,7 @@ def test_the_epoch_vocabularies_match_their_check_constraints(engine: Engine) ->
         EpochStatus,
         HeightDatum,
         ObservedAtSource,
+        SiteBoundarySource,
         SiteFrameSource,
     )
 
@@ -560,6 +561,7 @@ def test_the_epoch_vocabularies_match_their_check_constraints(engine: Engine) ->
         "ck_site_check_targets_role": CheckTargetRole,
         "ck_site_check_targets_height_datum": HeightDatum,
         "ck_epoch_maps_kind": EpochMapKind,
+        "ck_sites_boundary_source": SiteBoundarySource,
     }
     with engine.connect() as connection:
         rows = connection.execute(
@@ -858,11 +860,10 @@ def test_0034a_backfills_every_spatial_join_as_matched_by_the_upload(
     """Before 0034a every spatial join was by the located point -- a typed place or the
     fix sent with the upload -- so that is what the backfill says; the other joins were
     matched by no point and stay null. Down, the two columns are gone."""
-    from tests.test_epochs import make_site
-
     command.downgrade(alembic_config, "0034")
     try:
-        site = make_site(db)
+        # Raw, as 0034's table holds it: the ORM model has 0038's `boundary_source`.
+        site_id = _raw_site(db.connection(), "site", {})
         db.commit()
         ids = {"new-site": uuid.uuid4(), "spatial": uuid.uuid4()}
         for ordinal, (method, epoch_id) in enumerate(ids.items(), start=1):
@@ -874,7 +875,7 @@ def test_0034a_backfills_every_spatial_join_as_matched_by_the_upload(
                     " now(), 'created', ST_Multi(s.boundary), 'unknown', 'published', :method"
                     " FROM sites s WHERE s.id = :site"
                 ),
-                {"id": epoch_id, "ordinal": ordinal, "method": method, "site": site.id},
+                {"id": epoch_id, "ordinal": ordinal, "method": method, "site": site_id},
             )
         db.commit()
         command.upgrade(alembic_config, "0034a")
@@ -1093,3 +1094,69 @@ def test_0036_downgrade_deletes_the_surfaces_and_keeps_the_confidence_maps(
         )
         with pytest.raises(IntegrityError):
             session.commit()
+
+
+_SMALL_WKT = (
+    "MULTIPOLYGON(((-122.301 47.599, -122.299 47.599, -122.299 47.601, -122.301 47.601,"
+    " -122.301 47.599)))"
+)
+
+
+def _raw_epoch(
+    connection: Connection,
+    site_id: str,
+    footprint_wkt: str,
+    history: list[dict[str, object]],
+    *,
+    status: str = "published",
+) -> None:
+    connection.execute(
+        text(
+            "INSERT INTO epochs (id, site_id, ordinal, observed_at, observed_at_source,"
+            " footprint, platform, status, join_method, history) VALUES (gen_random_uuid(),"
+            " :site, 1, now(), 'created', ST_GeomFromText(:wkt, 4326), 'unknown', :status,"
+            " 'new-site', CAST(:history AS jsonb))"
+        ),
+        {"site": site_id, "wkt": footprint_wkt, "status": status, "history": json.dumps(history)},
+    )
+
+
+def test_0038_says_registration_drew_a_boundary_only_where_its_epochs_did(
+    alembic_config: Config, engine: Engine, db: Session
+) -> None:
+    """The backfill can only see shapes, so it is conservative: `registration` where the
+    boundary is exactly the union of every footprint the site's published epochs have had
+    (their current ones and those in `history`), as Spool's is after its grow-only v15
+    re-run; `manual` for everything else -- a boundary wider than its epochs, a site with
+    none, one only a rejected epoch's footprint matches. Down, the column is gone."""
+    from shapely import wkt
+
+    big = json.loads(json.dumps(wkt.loads(_SQUARE_WKT).__geo_interface__))
+    command.downgrade(alembic_config, "0037")
+    try:
+        with engine.begin() as connection:
+            spool = _raw_site(connection, "spool", {})
+            _raw_epoch(connection, spool, _SMALL_WKT, [{"jobId": None, "footprint": big}])
+            first = _raw_site(connection, "first-run", {})
+            _raw_epoch(connection, first, _SQUARE_WKT, [])
+            drawn = _raw_site(connection, "drawn", {})
+            _raw_epoch(connection, drawn, _SMALL_WKT, [])
+            legacy = _raw_site(connection, "legacy", {})
+            rejected = _raw_site(connection, "rejected", {})
+            _raw_epoch(connection, rejected, _SQUARE_WKT, [], status="rejected")
+        command.upgrade(alembic_config, "0038")
+        with engine.connect() as connection:
+            result = connection.execute(text("SELECT id::text, boundary_source FROM sites"))
+            rows = {str(row[0]): str(row[1]) for row in result}
+        assert rows == {
+            spool: "registration",
+            first: "registration",
+            drawn: "manual",
+            legacy: "manual",
+            rejected: "manual",
+        }
+        command.downgrade(alembic_config, "0037")
+        assert "boundary_source" not in {c["name"] for c in inspect(engine).get_columns("sites")}
+    finally:
+        db.rollback()
+        command.upgrade(alembic_config, "head")

@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import Asset, CameraBookmark, Epoch, Site
+from app.models.enums import SiteBoundarySource
 from app.schemas.asset import AssetBase, AssetRead
 from app.schemas.bookmark import CameraBookmarkCreate, CameraBookmarkRead
 from app.schemas.common import Attribution, GeoPosition, LicenseMetadata
@@ -139,6 +140,8 @@ def update_site(db: Session, site_id: uuid.UUID, payload: SiteUpdate) -> Site:
     data = payload.model_dump(exclude_unset=True)
     if "boundary" in data and payload.boundary is not None:
         site.boundary = geometry.footprint_to_wkb(payload.boundary)
+        # Somebody's now: registration grows it and never shrinks it back.
+        site.boundary_source = SiteBoundarySource.MANUAL.value
         if payload.centroid is None and "centroid" not in data:
             centroid = geometry.centroid_of(payload.boundary)
             site.centroid = geometry.position_to_wkb(centroid)
@@ -218,6 +221,7 @@ def site_to_read(db: Session, site: Site) -> SiteRead:
         name=site.name,
         description=site.description,
         boundary=boundary,
+        boundary_source=SiteBoundarySource(site.boundary_source),
         centroid=geometry.wkb_to_position(site.centroid, site.centroid_height),
         area_m2=site_area_m2(db, site),
         thumbnail_url=site.thumbnail_url,

@@ -22,6 +22,7 @@ layers                           (independent catalog entries)
 | slug                   | text unique                  | derived from name when omitted               |
 | name, description      | text                         |                                              |
 | boundary               | MultiPolygon 4326 (GiST)     | Polygons are promoted to MultiPolygon        |
+| boundary_source        | text                         | `registration` · `manual` (see below)        |
 | centroid               | Point 4326 + centroid_height | defaults to the boundary centroid            |
 | thumbnail_url          | text                         | set by the thumbnail upload (object storage) |
 | metadata               | jsonb                        | free-form (`quality`, `origin`, …)           |
@@ -32,6 +33,21 @@ layers                           (independent catalog entries)
 Derived on read: `areaM2` (`ST_Area(boundary::geography)`), and for summaries the set of
 `representations`, `latestObservedAt` (the newest `observed_at` of its assets, leaving out an
 epoch's superseded revisions) and `quality`.
+
+`boundary_source` says who drew the boundary. A pipeline-made site's is `registration`: drawn from
+its published epochs' footprints. A new epoch grows it, and after every run that publishes tiles it
+is fitted to the epochs' current footprints (`fit_site_boundary`), so it shrinks whenever a re-run
+measured less (a phone video's re-run cropped to its object), however often. The column decides,
+not the shapes. Everything else is
+`manual` (created, seeded, or redrawn with `PATCH /sites/{id}`, which sets it): registration only
+ever grows it, and a grown one stays `manual`. Nor does it shrink while a runtime scale is in effect
+on one of the site's current revisions, since a scale resizes the boundary but not the epochs'
+footprints. Migration 0038 backfilled `registration` only where the boundary was exactly the union
+of every footprint the site's published epochs had had, current and replaced. A boundary drawn by
+hand before 0038 that happened to equal that union cannot be told apart from the shapes and was
+backfilled `registration`; so the one-time `app.scripts.fit_site_boundaries` is run on named sites
+(`--site`), never on all of them. A shrink can put a later upload's fix outside the 10–50 m spatial-join buffer it would have
+matched before (`epochs.nearest_framed_site`); it then makes a site of its own, which is accepted.
 
 ## assets
 

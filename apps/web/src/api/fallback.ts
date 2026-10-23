@@ -147,6 +147,8 @@ export function builtinScanSite(): Site {
     description:
       "Cesium's '3D Tiles Gaussian splats with LOD' Sandcastle site in Redmond, WA: the 3D-scan showcase. Its splat (Cesium ion 4547222) is withdrawn in this deployment; VITE_DEFAULT_SPLAT_ASSET_ID or adding the asset from the ion Asset Depot brings it back.",
     boundary: footprint,
+    // Drawn in code, not by a run: registration never shrinks it.
+    boundarySource: "manual",
     centroid: { ...DEMO_CENTER, height: DEMO_HEIGHT },
     areaM2: footprintAreaM2(footprint),
     thumbnailUrl: null,
@@ -189,6 +191,8 @@ export function builtinRanchSite(): Site {
     name: ranch.name,
     description: ranch.description,
     boundary: ranch.boundary.geometry,
+    // Drawn in code, not by a run: registration never shrinks it.
+    boundarySource: "manual",
     centroid: { ...ranch.derived.centroid, height: null },
     // The number the API serves (PostGIS ST_Area on the spheroid), not a spherical estimate.
     areaM2: ranch.derived.siteAreaM2,

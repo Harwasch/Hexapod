@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import Field, HttpUrl, field_validator
 
-from app.models.enums import Representation
+from app.models.enums import Representation, SiteBoundarySource
 from app.schemas.asset import AssetBase, AssetRead
 from app.schemas.base import CamelModel
 from app.schemas.bookmark import CameraBookmarkCreate, CameraBookmarkRead
@@ -96,6 +96,9 @@ class SiteRead(CamelModel):
     name: str
     description: str | None
     boundary: Footprint
+    #: Who drew it: `registration` (its epochs' footprints, refitted as re-runs measure
+    #: them) or `manual` (created or redrawn by hand; registration only grows it).
+    boundary_source: SiteBoundarySource
     centroid: GeoPosition
     area_m2: float
     thumbnail_url: HttpUrl | None
