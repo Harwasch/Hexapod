@@ -165,7 +165,7 @@ class FakeApi(nwm_import.Api):
         self.files = files or []
         self.capture = NWM_CAPTURE if capture is None else capture
 
-    def call(self, method: str, path: str, body: object | None = None) -> Any:
+    def call(self, method: str, path: str, body: object | None = None, **_: Any) -> Any:
         self.calls.append((method, path, body))
         window = {
             "partSize": 8 * 1024 * 1024,
@@ -174,6 +174,8 @@ class FakeApi(nwm_import.Api):
         }
         if (method, path) == ("POST", "/captures"):
             return {"id": "c0ffee00-0000-0000-0000-000000000000", "files": []}
+        if (method, path) == ("GET", "/health"):
+            return {"status": "ok"}
         if method == "GET":
             return {**self.capture, "id": path.rsplit("/", 1)[1], "files": self.files}
         if path.endswith("/files"):
@@ -232,7 +234,7 @@ def test_upload_resumes_without_resending_and_queues_only_when_asked(
     fresh = FakeApi()
     reports.clear()
     result = nwm_import.upload(folder, fresh, process=True, report=reports.append)
-    assert fresh.calls[0][:2] == ("POST", "/captures")
+    assert fresh.calls[1][:2] == ("POST", "/captures")
     # The id is reported before any file goes up, so a failed run still names it.
     assert reports[0] == {"captureId": result["captureId"], "resumed": False}
     assert fresh.calls[-1] == (
@@ -260,7 +262,10 @@ def test_resume_refuses_any_capture_but_this_timesteps_nwm_one(
     api = FakeApi(capture=capture)
     with pytest.raises(ValueError, match="nothing was uploaded"):
         nwm_import.upload(folder, api, capture_id=RESUME_ID, process=True)
-    assert [m for m, _, _ in api.calls] == ["GET"]
+    assert [(m, p) for m, p, _ in api.calls] == [
+        ("GET", "/health"),
+        ("GET", f"/captures/{RESUME_ID}"),
+    ]
     assert puts == []
 
 
@@ -416,3 +421,77 @@ def test_a_part_put_fails_a_4xx_at_once_without_its_signed_url(storage: str) -> 
     assert _Storage.seen == 1
     assert "403" in str(raised.value)
     assert "Signature" not in str(raised.value)
+
+
+class _ColdApi(http.server.BaseHTTPRequestHandler):
+    """An API that is slow, then failing, then up: each path answers from its own script."""
+
+    scripts: ClassVar[dict[str, list[str]]] = {}
+    seen: ClassVar[list[tuple[str, str]]] = []
+
+    def _answer(self) -> None:
+        self.seen.append((self.command, self.path))
+        if self.headers.get("Content-Length"):
+            self.rfile.read(int(self.headers["Content-Length"]))
+        script = self.scripts[f"{self.command} {self.path}"]
+        step = script.pop(0) if len(script) > 1 else script[0]
+        if step == "slow":
+            # Not time.sleep: the fixture stubs that out for the client's backoff.
+            threading.Event().wait(0.5)
+        status = 503 if step == "down" else 200
+        body = b'{"status": "ok", "id": "c0ffee00"}'
+        try:
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    do_GET = do_POST = _answer
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+@pytest.fixture
+def cold_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    monkeypatch.setattr(nwm_import.time, "sleep", lambda _: None)
+    _ColdApi.seen = []
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _ColdApi)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{httpd.server_address[1]}"
+    finally:
+        httpd.shutdown()
+
+
+def test_wake_waits_out_a_cold_api_that_times_out_then_fails(cold_api: str) -> None:
+    _ColdApi.scripts = {"GET /api/v1/health": ["slow", "down", "up"]}
+    nwm_import.Api(cold_api, "t").wake(budget_s=30, try_timeout_s=0.2)
+    assert _ColdApi.seen == [("GET", "/api/v1/health")] * 3
+
+
+def test_wake_gives_up_after_its_budget(cold_api: str) -> None:
+    _ColdApi.scripts = {"GET /api/v1/health": ["down"]}
+    with pytest.raises(RuntimeError, match="did not answer"):
+        nwm_import.Api(cold_api, "t").wake(budget_s=0, try_timeout_s=0.2)
+
+
+def test_a_get_retries_a_timeout_but_a_post_is_never_sent_twice(cold_api: str) -> None:
+    _ColdApi.scripts = {"GET /api/v1/captures/x": ["slow", "up"], "POST /api/v1/captures": ["slow"]}
+    api = nwm_import.Api(cold_api, "t", timeout_s=0.2)
+    assert api.call("GET", "/captures/x")["status"] == "ok"
+    with pytest.raises(RuntimeError, match="POST /captures: TimeoutError"):
+        api.call("POST", "/captures", {})
+    assert _ColdApi.seen.count(("POST", "/api/v1/captures")) == 1
+
+
+def test_upload_wakes_the_api_before_its_first_write(tmp_path: Path, puts: list[int]) -> None:
+    folder = tmp_path / "jpeg"
+    nwm_import.prepare(_dataset(tmp_path, RECORDS), folder)
+    api = FakeApi()
+    nwm_import.upload(folder, api)
+    assert api.calls[0][:2] == ("GET", "/health")
+    assert api.calls[1][:2] == ("POST", "/captures")
