@@ -22,6 +22,7 @@ layers                           (independent catalog entries)
 | slug                   | text unique                  | derived from name when omitted               |
 | name, description      | text                         |                                              |
 | boundary               | MultiPolygon 4326 (GiST)     | Polygons are promoted to MultiPolygon        |
+| boundary_source        | text                         | `registration` · `manual` (see below)        |
 | centroid               | Point 4326 + centroid_height | defaults to the boundary centroid            |
 | thumbnail_url          | text                         | set by the thumbnail upload (object storage) |
 | metadata               | jsonb                        | free-form (`quality`, `origin`, …)           |
@@ -33,10 +34,16 @@ Derived on read: `areaM2` (`ST_Area(boundary::geography)`), and for summaries th
 `representations`, `latestObservedAt` (the newest `observed_at` of its assets, leaving out an
 epoch's superseded revisions) and `quality`.
 
-A pipeline-made site's `boundary` is the union of its published epochs' footprints: a new epoch
-grows it, and a re-run that replaces an epoch's footprint makes it again from the current ones, so
-it shrinks when the run measured less (a phone video's re-run cropped to its object). A boundary
-somebody redrew (`PATCH /sites/{id}`) is only ever grown.
+`boundary_source` says who drew the boundary. A pipeline-made site's is `registration`: the union
+of every footprint its published epochs have had. A new epoch grows it, and after every run that
+publishes tiles it is fitted to the epochs' current footprints (`fit_site_boundary`), so it shrinks
+when a re-run measured less (a phone video's re-run cropped to its object). Everything else is
+`manual` (created, seeded, or redrawn with `PATCH /sites/{id}`, which sets it): registration only
+ever grows it, and a grown one stays `manual`. Nor does it shrink while a runtime scale is in effect
+on one of the site's current revisions, since a scale resizes the boundary but not the epochs'
+footprints. Migration 0038 backfilled `registration` only where the boundary was exactly that
+union. A shrink can put a later upload's fix outside the 10–50 m spatial-join buffer it would have
+matched before (`epochs.nearest_framed_site`); it then makes a site of its own, which is accepted.
 
 ## assets
 

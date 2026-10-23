@@ -797,6 +797,153 @@ def test_a_re_run_keeps_a_boundary_somebody_drew(
     assert to_shape(site.boundary).equals(before)
 
 
+def _left_by_grow_only(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> tuple[Capture, uuid.UUID, Any]:
+    """The state Spool's v15 re-run left (the R2 review of #93): it ran the grow-only
+    register, so its epoch's footprint is already the small box, the floaters' box is in
+    the epoch's history, and the site still has the floaters' boundary. Made by a fixed
+    re-run with the boundary then put back as the old code left it."""
+    capture = _capture(db)
+    run(db, storage, tmp_path, capture, _floaters())
+    assert capture.site_id is not None
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    floaters = site.boundary
+    run(db, storage, tmp_path, capture)
+    db.expire_all()
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    site.boundary = floaters
+    db.commit()
+    return capture, capture.site_id, floaters
+
+
+def test_a_fixed_re_run_shrinks_the_boundary_a_grow_only_re_run_left(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """The replaced footprint is not the only one registration drew: a boundary that is the
+    union of every footprint the site's published epochs have had (now and in their
+    history) is registration's, and the next run fits it to the current ones."""
+    from geoalchemy2.shape import to_shape
+
+    capture, site_id, floaters = _left_by_grow_only(db, storage, tmp_path)
+    [epoch] = _epochs(db, site_id)
+    assert to_shape(floaters).area > 40 * to_shape(epoch.footprint).area
+
+    run(db, storage, tmp_path, capture)
+
+    db.expire_all()
+    site = db.get(Site, site_id)
+    assert site is not None
+    [epoch] = _epochs(db, site_id)
+    boundary, footprint = to_shape(site.boundary), to_shape(epoch.footprint)
+    assert boundary.buffer(1e-9).covers(footprint) and footprint.buffer(1e-9).covers(boundary)
+
+
+def test_fit_site_boundary_corrects_a_site_in_place_unless_a_scale_is_in_effect(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """`fit_site_boundary` is what a one-time correction calls on a site as it stands, with
+    no run. A runtime scale resizes the boundary and the asset's footprint but not the
+    epoch's, so while one is in effect on any current revision the boundary only grows:
+    fitting it to unscaled footprints could leave the scaled model outside its site."""
+    from geoalchemy2.shape import to_shape
+
+    _, site_id, floaters = _left_by_grow_only(db, storage, tmp_path)
+    site = db.get(Site, site_id)
+    assert site is not None
+    drawn = registration.registration_union(db, site)
+    assert drawn is not None and to_shape(drawn).equals(to_shape(floaters))
+    [current] = [a for a in _assets(db, site_id) if a.valid_to is None]
+    current.render_config = {**current.render_config, "scale": 0.5}
+    db.commit()
+
+    site = db.get(Site, site_id)
+    assert site is not None
+    assert registration.fit_site_boundary(db, site) is False
+    db.commit()
+    db.expire_all()
+    site = db.get(Site, site_id)
+    assert site is not None and to_shape(site.boundary).equals(to_shape(floaters))
+
+    [current] = [a for a in _assets(db, site_id) if a.valid_to is None]
+    current.render_config = {k: v for k, v in current.render_config.items() if k != "scale"}
+    db.commit()
+    site = db.get(Site, site_id)
+    assert site is not None
+    assert registration.fit_site_boundary(db, site) is True
+    db.commit()
+    db.expire_all()
+    site = db.get(Site, site_id)
+    assert site is not None
+    [epoch] = _epochs(db, site_id)
+    assert to_shape(site.boundary).equals(to_shape(epoch.footprint))
+    assert to_shape(site.boundary).covers(to_shape(site.centroid))
+    assert registration.fit_site_boundary(db, site) is False
+
+
+def test_a_boundary_patched_to_the_union_is_manual_and_is_not_shrunk(
+    db: Session, storage: S3Storage, tmp_path: Path, client: Any
+) -> None:
+    """Who drew a boundary is recorded (`boundarySource`), not guessed from its shape: one
+    somebody PATCHed is `manual` even when it is exactly the union of the epochs, and a
+    re-run that measures less leaves it as drawn. A new site's is `registration`."""
+    from geoalchemy2.shape import to_shape
+
+    from app.services import geometry
+
+    capture = _capture(db)
+    run(db, storage, tmp_path, capture, _floaters())
+    assert capture.site_id is not None
+    read = client.get(f"/api/v1/sites/{capture.site_id}")
+    assert read.json()["boundarySource"] == "registration"
+    [epoch] = _epochs(db, capture.site_id)
+    union = geometry.wkb_to_footprint(epoch.footprint)
+    assert union is not None
+    drawn = client.patch(
+        f"/api/v1/sites/{capture.site_id}", json={"boundary": union.model_dump(mode="json")}
+    )
+    assert drawn.status_code == 200, drawn.text
+    assert drawn.json()["boundarySource"] == "manual"
+    db.expire_all()
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    before = to_shape(site.boundary)
+
+    run(db, storage, tmp_path, capture)
+
+    db.expire_all()
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    assert to_shape(site.boundary).equals(before)
+    assert site.boundary_source == "manual"
+
+
+def test_growing_a_manual_boundary_keeps_it_manual(
+    db: Session, storage: S3Storage, tmp_path: Path, client: Any
+) -> None:
+    """A joined epoch outside a drawn boundary grows it, and it is still somebody's."""
+    from geoalchemy2.shape import to_shape
+
+    first = _capture(db, "first")
+    run(db, storage, tmp_path, first)
+    assert first.site_id is not None
+    drawn = client.patch(f"/api/v1/sites/{first.site_id}", json={"boundary": _around(0.0002)})
+    assert drawn.status_code == 200, drawn.text
+    north = _echoed(first.site_id)
+    north["bboxLocalM"] = {"min": [-4.0, 40.0, -1.0], "max": [6.0, 50.0, 3.0]}
+
+    run(db, storage, tmp_path, _capture(db, "second"), north)
+
+    db.expire_all()
+    site = db.get(Site, first.site_id)
+    assert site is not None
+    epoch2 = _epochs(db, first.site_id)[1]
+    assert to_shape(site.boundary).buffer(1e-9).covers(to_shape(epoch2.footprint))
+    assert site.boundary_source == "manual"
+
+
 # --- the detected platform (M3a) -------------------------------------------------------
 
 

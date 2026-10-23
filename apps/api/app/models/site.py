@@ -3,11 +3,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from geoalchemy2 import Geometry, WKBElement
-from sqlalchemy import Float, Index, String, Text, text
+from sqlalchemy import CheckConstraint, Float, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.models.enums import SiteBoundarySource
 
 if TYPE_CHECKING:
     from app.models.asset import Asset
@@ -24,6 +25,10 @@ class Site(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         # on `geography(boundary)`, which the geometry column's gist index cannot answer.
         # Migration 0032 builds it CONCURRENTLY.
         Index("ix_sites_boundary_geography", text("geography(boundary)"), postgresql_using="gist"),
+        CheckConstraint(
+            f"boundary_source IN ({', '.join(repr(v.value) for v in SiteBoundarySource)})",
+            name="ck_sites_boundary_source",
+        ),
     )
 
     slug: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
@@ -31,6 +36,14 @@ class Site(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     boundary: Mapped[WKBElement] = mapped_column(
         Geometry(geometry_type="MULTIPOLYGON", srid=4326, spatial_index=True), nullable=False
+    )
+    #: Who drew the boundary (`SiteBoundarySource`, migration 0038): only `registration`'s may
+    #: shrink when a re-run measures less; a `manual` one is only grown.
+    boundary_source: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default=SiteBoundarySource.MANUAL.value,
+        server_default=SiteBoundarySource.MANUAL.value,
     )
     centroid: Mapped[WKBElement] = mapped_column(
         Geometry(geometry_type="POINT", srid=4326, spatial_index=False), nullable=False

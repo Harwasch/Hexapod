@@ -29,7 +29,10 @@ from pathlib import Path
 from typing import Any
 
 from geoalchemy2 import WKBElement
+from geoalchemy2.shape import from_shape, to_shape
 from pydantic import ValidationError
+from shapely.geometry import shape
+from shapely.ops import unary_union
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -47,6 +50,7 @@ from app.models.enums import (
     ObservedAtSource,
     Representation,
     ScaleSource,
+    SiteBoundarySource,
     SiteFrameSource,
 )
 from app.schemas.asset import AssetBase, GroundSample, RenderConfig, TilesUrlSource
@@ -948,8 +952,9 @@ def _frame_from_registration(
 
 
 def _new_site(db: Session, capture: Capture, job_id: uuid.UUID, registration: Registration) -> Site:
-    """The site a capture's first epoch makes, in this transaction (no commit)."""
-    return site_service.create_site(
+    """The site a capture's first epoch makes, in this transaction (no commit). Its
+    boundary is that epoch's footprint, so registration's (`fit_site_boundary`)."""
+    site = site_service.create_site(
         db,
         SiteCreate(
             name=registration.title or capture.name,
@@ -966,6 +971,8 @@ def _new_site(db: Session, capture: Capture, job_id: uuid.UUID, registration: Re
         ),
         commit=False,
     )
+    site.boundary_source = SiteBoundarySource.REGISTRATION.value
+    return site
 
 
 def _target(
@@ -1269,61 +1276,101 @@ def _replace_run(
 
 def _grow_boundary(site: Site, footprint: Any) -> None:
     """The site's boundary, grown to cover an epoch's footprint, so every epoch stays
-    inside it (a re-run's shrinking is `_fit_boundary`'s). The centroid stays, which keeps
-    fly-to where it was."""
+    inside it (a re-run's shrinking is `fit_site_boundary`'s). Its `boundary_source` stays:
+    a drawn boundary grown is still somebody's. The centroid stays, which keeps fly-to
+    where it was."""
     if not geometry.contains(site.boundary, footprint):
         site.boundary = geometry.union_footprints(site.boundary, footprint)
 
 
-def _fit_boundary(db: Session, site: Site, epoch: Epoch, replaced: WKBElement | None) -> None:
-    """The site's boundary once `epoch`'s run has published tiles, `replaced` being the
-    footprint that run took the place of (None for an epoch's first).
-
-    A site's boundary is the footprint of what its captures showed (ADR 0013), so when the
-    boundary is exactly what registration made of its published epochs -- the union of
-    their footprints, `replaced` among them -- it is made again with the new footprint in
-    its place: a re-run that measures less shrinks it. Spool's v15 re-run cropped its splat
-    to the object, 3.7 x 3.9 m, and the site kept the 44 x 53 m its first run's background
-    floaters had drawn, because a boundary was only ever grown. Then, as the boundary may
-    have shrunk away from it, a centroid outside it moves to the new one's.
-
-    Any other boundary (somebody redrew it, `PATCH /sites/{id}`) is not registration's to
-    take back, and is only grown (`_grow_boundary`), as every first footprint is."""
-    if replaced is not None:
-        others = list(
-            db.scalars(
-                select(Epoch.footprint).where(
-                    Epoch.site_id == site.id,
-                    Epoch.id != epoch.id,
-                    Epoch.status == EpochStatus.PUBLISHED.value,
-                    Epoch.footprint.is_not(None),
-                )
-            )
+def registration_union(db: Session, site: Site) -> WKBElement | None:
+    """Every footprint the site's published epochs have had -- the current ones and those
+    a re-run replaced, which `_replace_run` keeps in each epoch's `history` -- as one
+    footprint, or None for a site with none. A boundary registration drew is exactly this:
+    each run's footprint was grown into it and none was ever taken out. Migration 0038
+    computes the same union to backfill `boundary_source`."""
+    db.flush()
+    shapes = []
+    for footprint, history in db.execute(
+        select(Epoch.footprint, Epoch.history).where(
+            Epoch.site_id == site.id, Epoch.status == EpochStatus.PUBLISHED.value
         )
-        if _same(site.boundary, _union([*others, replaced])):
-            fitted = _union([*others, epoch.footprint])
-            if not _same(site.boundary, fitted):
-                # Rewritten only when it changes: a union reorders a ring's vertices.
-                site.boundary = fitted
-            if not geometry.contains(site.boundary, site.centroid):
-                outline = geometry.wkb_to_footprint(site.boundary)
-                assert outline is not None
-                site.centroid = geometry.position_to_wkb(geometry.centroid_of(outline))
-            return
-    _grow_boundary(site, epoch.footprint)
+    ):
+        if footprint is not None:
+            shapes.append(to_shape(footprint))
+        for entry in history or []:
+            replaced = entry.get("footprint") if isinstance(entry, dict) else None
+            if isinstance(replaced, dict):
+                shapes.append(shape(replaced))
+    return _union_of(shapes)
+
+
+def _current_union(db: Session, site: Site) -> WKBElement | None:
+    """The union of the site's published epochs' current footprints."""
+    footprints = db.scalars(
+        select(Epoch.footprint).where(
+            Epoch.site_id == site.id,
+            Epoch.status == EpochStatus.PUBLISHED.value,
+            Epoch.footprint.is_not(None),
+        )
+    )
+    return _union_of([to_shape(footprint) for footprint in footprints])
+
+
+def _union_of(shapes: list[Any]) -> WKBElement | None:
+    if not shapes:
+        return None
+    merged = from_shape(unary_union(shapes), srid=geometry.SRID)
+    return geometry.union_footprints(merged, merged)
+
+
+def _runtime_scaled(db: Session, site: Site) -> bool:
+    """Whether a runtime scale is in effect on any of the site's current revisions. It
+    resizes the boundary and that asset's footprint but not its epoch's (`set_scale`), so
+    the epochs' footprints no longer say what the boundary drew."""
+    configs = db.scalars(
+        select(Asset.render_config).where(Asset.site_id == site.id, Asset.valid_to.is_(None))
+    )
+    return any(
+        _optional_number((config or {}).get("scale")) not in (None, 1.0) for config in configs
+    )
+
+
+def fit_site_boundary(db: Session, site: Site) -> bool:
+    """Fit a boundary registration drew to its epochs' current footprints; True when it
+    changed (the caller commits).
+
+    A site's boundary is the footprint of what its captures showed (ADR 0013), and a re-run
+    replaces what its epoch showed: Spool's v15 re-run cropped its splat to the object, 3.7
+    x 3.9 m, and its site kept the 44 x 53 m its first run's background floaters drew,
+    because a boundary was only ever grown. So a `registration` boundary that is exactly
+    `registration_union` -- nothing but footprints its epochs have had -- is made again
+    from their current ones, and a centroid it leaves outside moves to the new one's.
+
+    Left alone: a `manual` boundary (somebody drew it), one that is not that union, and any
+    while a runtime scale is in effect (`_runtime_scaled`). `register` calls this after
+    every run that publishes tiles; a one-time correction of sites registered before it
+    can call it on each site as it stands."""
+    if site.boundary_source != SiteBoundarySource.REGISTRATION.value or _runtime_scaled(db, site):
+        return False
+    drawn = registration_union(db, site)
+    if drawn is None or not _same(site.boundary, drawn):
+        return False
+    fitted = _current_union(db, site)
+    if fitted is None or _same(site.boundary, fitted):
+        # Rewritten only when it changes: a union reorders a ring's vertices.
+        return False
+    site.boundary = fitted
+    if not geometry.contains(site.boundary, site.centroid):
+        outline = geometry.wkb_to_footprint(site.boundary)
+        assert outline is not None
+        site.centroid = geometry.position_to_wkb(geometry.centroid_of(outline))
+    return True
 
 
 def _same(a: WKBElement, b: WKBElement) -> bool:
     """Whether two stored footprints cover each other, to `geometry.contains`' tolerance."""
     return geometry.contains(a, b) and geometry.contains(b, a)
-
-
-def _union(footprints: list[WKBElement]) -> WKBElement:
-    """The union of one or more stored footprints; one is itself, its ring as it was drawn."""
-    merged = footprints[0]
-    for footprint in footprints[1:]:
-        merged = geometry.union_footprints(merged, footprint)
-    return merged
 
 
 def _mirror_site_metadata(
@@ -1433,8 +1480,6 @@ def register(
     site: Site | None = None
     # The date a re-run moved the epoch from, for its current asset (below).
     redated_from: datetime | None = None
-    # The footprint a re-run's `_replace_run` takes the place of, for `_fit_boundary`.
-    replaced: WKBElement | None = None
     join = EpochJoinMethod.EXPLICIT
     if epoch is not None or legacy:
         # A re-run of an epoch, or the first run since 0032 of a capture registered into
@@ -1509,7 +1554,6 @@ def register(
             epoch.observed_at = observed_at
             epoch.observed_at_source = observed_source.value
         if url is not None or promoted:
-            replaced = epoch.footprint
             _replace_run(epoch, producing, footprint, quality, now, published=url is not None)
             epoch.alignment = alignment_of(capture, registration)
     same_tiles = published.content_addressed and url == tileset_url(current)
@@ -1573,7 +1617,8 @@ def register(
                 )
     capture.site_id = site.id
     if url is not None:
-        _fit_boundary(db, site, epoch, replaced)
+        _grow_boundary(site, epoch.footprint)
+        fit_site_boundary(db, site)
     if thumbnail is not None:
         site.thumbnail_url = thumbnail
     if not published.withheld and epoch.ordinal == 1:
