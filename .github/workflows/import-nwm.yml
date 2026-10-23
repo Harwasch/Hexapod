@@ -1,0 +1,194 @@
+name: Import NWM test capture
+
+# One timestep of the public NWM drone dataset (TU Wien, CC BY 4.0, doi:10.48436/
+# bphp1-hbb20) becomes a photo capture in production: the zip is downloaded from the
+# record and checked against its MD5, tools/captures/nwm_import.py writes each frame's GPS
+# and time into JPEG copies, and the copies are uploaded through the API as any capture's
+# files are. It is how alignment (M3) and the change map (M5) are tried on two real dates
+# of one place (docs/DEPLOYMENT.md, "Two-date test data: NWM").
+#
+# Dry run first (the default): it downloads and converts, and the summary says what would
+# be created, with nothing sent to the API. Every real run creates a NEW capture, named
+# for the dataset; the API refuses a second capture with the same slug, so dispatching a
+# timestep twice fails instead of duplicating it. `capture_id` resumes an upload that
+# stopped part-way, sending only the files not already complete.
+
+on:
+  workflow_dispatch:
+    inputs:
+      timestep:
+        description: NWM timestep (the record's nwm_<timestep>.zip)
+        type: choice
+        required: true
+        default: 2025-08-25
+        options:
+          - 2025-08-25
+          - 2025-11-11
+          - 2025-11-22
+          - 2025-11-23
+          - 2025-12-04_1
+          - 2025-12-04_2
+          - 2025-12-08
+          - 2026-01-10
+          - 2026-03-28
+      dry_run:
+        description: Download and convert only; create nothing
+        type: boolean
+        default: true
+      process:
+        description: Queue photo-reconstruct once the upload is complete
+        type: boolean
+        default: false
+      capture_id:
+        description: Resume the upload into this capture (optional UUID)
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: import-nwm-${{ inputs.timestep }}
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TIMESTEP: ${{ inputs.timestep }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      PROCESS: ${{ inputs.process }}
+      CAPTURE_ID: ${{ inputs.capture_id }}
+    steps:
+      - name: Validate inputs
+        shell: python
+        run: |
+          import os
+          import re
+          import uuid
+
+          if not re.fullmatch(r"20\d\d-\d\d-\d\d(_\d)?", os.environ["TIMESTEP"]):
+              raise SystemExit("::error::timestep must be one of the record's dates")
+          for name in ("DRY_RUN", "PROCESS"):
+              if os.environ[name] not in {"true", "false"}:
+                  raise SystemExit(f"::error::{name.lower()} must be true or false")
+          if os.environ["CAPTURE_ID"]:
+              try:
+                  uuid.UUID(os.environ["CAPTURE_ID"])
+              except ValueError:
+                  raise SystemExit("::error::capture_id must be a UUID or empty")
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Download the timestep and check its MD5
+        shell: python
+        run: |
+          import hashlib
+          import json
+          import os
+          import subprocess
+          import zipfile
+          from pathlib import Path
+
+          record = "https://researchdata.tuwien.ac.at/api/records/bphp1-hbb20/files"
+          work = Path(os.environ["RUNNER_TEMP"]) / "nwm"
+          work.mkdir()
+          key = f"nwm_{os.environ['TIMESTEP']}.zip"
+
+          def fetch(url, target):
+              subprocess.run(
+                  ["curl", "--fail", "--silent", "--show-error", "--location",
+                   "--retry", "3", "--connect-timeout", "30", "--output", str(target), url],
+                  check=True,
+              )
+
+          fetch(record, work / "files.json")
+          entries = {e["key"]: e for e in json.loads((work / "files.json").read_text())["entries"]}
+          if key not in entries:
+              raise SystemExit(f"::error::the record has no {key}")
+          algorithm, expected = entries[key]["checksum"].split(":", 1)
+          if algorithm != "md5":
+              raise SystemExit(f"::error::unexpected checksum {entries[key]['checksum']}")
+          archive = work / key
+          fetch(f"{record}/{key}/content", archive)
+          digest = hashlib.md5(usedforsecurity=False)
+          with archive.open("rb") as handle:
+              for block in iter(lambda: handle.read(1 << 20), b""):
+                  digest.update(block)
+          if digest.hexdigest() != expected:
+              raise SystemExit(f"::error::{key} MD5 {digest.hexdigest()} is not the record's {expected}")
+          # zipfile drops absolute paths and `..` from member names on extraction.
+          with zipfile.ZipFile(archive) as bundle:
+              bundle.extractall(work / "raw")
+          archive.unlink()
+          found = sorted((work / "raw").rglob("camera_info.json"))
+          if len(found) != 1:
+              raise SystemExit(f"::error::expected one camera_info.json in {key}, found {len(found)}")
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              env.write(f"NWM_DATASET={found[0].parent}\nNWM_JPEG={work / 'jpeg'}\n")
+          print(f"{key}: {entries[key]['size']:,} bytes, MD5 {expected} matches")
+      - name: Write each frame's GPS and time into JPEG copies
+        working-directory: tools/captures
+        run: |
+          uv sync --frozen
+          uv run python nwm_import.py prepare "$NWM_DATASET" "$NWM_JPEG" --timestep "$TIMESTEP" \
+            | tee "$RUNNER_TEMP/prepare.json"
+      - name: Create the capture and upload the frames
+        if: inputs.dry_run == false
+        working-directory: tools/captures
+        env:
+          API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+          API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
+        run: |
+          if [ -z "$API_WRITE_TOKEN" ]; then
+            echo "::error::API_WRITE_TOKEN is not set; add the repository secret (docs/DEPLOYMENT.md)"
+            exit 1
+          fi
+          app=$(python3 -c 'import tomllib; print(tomllib.load(open("../../fly.toml", "rb"))["app"])')
+          origin="${API_BASE_URL:-https://$app.fly.dev}"
+          args=(upload "$NWM_JPEG" --api "$origin")
+          if [ -n "$CAPTURE_ID" ]; then args+=(--capture-id "$CAPTURE_ID"); fi
+          if [ "$PROCESS" = "true" ]; then args+=(--process); fi
+          uv run python nwm_import.py "${args[@]}" | tee "$RUNNER_TEMP/upload.json"
+          echo "API_ORIGIN=$origin" >> "$GITHUB_ENV"
+      - name: Summary
+        if: always()
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          temp = Path(os.environ["RUNNER_TEMP"])
+          lines = [f"## Import NWM timestep {os.environ['TIMESTEP']}", ""]
+          if (temp / "prepare.json").is_file():
+              m = json.loads((temp / "prepare.json").read_text())
+              alt = m.get("altitudeM") or {}
+              lines += [
+                  f"- Frames: {m['frames']}, recorded {', '.join(m['recordedOn'])}"
+                  f" (first {m['firstLocal']}, {m['firstUtc']})",
+                  f"- Median fix: {m['medianLat']:.6f}, {m['medianLon']:.6f};"
+                  f" altitude {alt.get('min')} to {alt.get('max')} m (the drone's own figure)",
+                  f"- Time from clip name + frame index at {m['fps']:.3f} fps, {m['timezone']}",
+              ]
+          if os.environ["DRY_RUN"] == "true":
+              lines.append("- Dry run: nothing was sent to the API.")
+          elif (temp / "upload.json").is_file():
+              u = json.loads((temp / "upload.json").read_text())
+              origin = os.environ.get("API_ORIGIN", "")
+              lines += [
+                  f"- Capture: `{u['captureId']}` ({u['uploaded']} uploaded,"
+                  f" {u['alreadyThere']} already there)",
+                  f"- Public capture: GET `{origin}/api/v1/captures/{u['captureId']}`",
+              ]
+              if u["jobId"]:
+                  lines.append(f"- Job: `{u['jobId']}`, GET `{origin}/api/v1/jobs/{u['jobId']}`")
+              else:
+                  lines.append("- No job queued: dispatch Process capture with this capture id.")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("\n".join(lines) + "\n")
