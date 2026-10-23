@@ -1446,7 +1446,10 @@ _APEX_STUBS = (
 )
 gen3c_image = (
     modal.Image.from_registry("nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04", add_python="3.10")
-    .apt_install("git", "ffmpeg", "libgl1", "libglib2.0-0", "build-essential", "ninja-build")
+    # clang: the Python Modal adds was built with it, so extensions compile with clang++.
+    .apt_install(
+        "git", "ffmpeg", "libgl1", "libglib2.0-0", "build-essential", "ninja-build", "clang"
+    )
     .run_commands(
         "git clone https://github.com/nv-tlabs/GEN3C.git /opt/GEN3C",
         f"cd /opt/GEN3C && git checkout {GEN3C_COMMIT}",
