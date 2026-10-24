@@ -46,9 +46,12 @@ weak, in a frame another epoch could be compared in.
    **unseen**: the cell's centre is inside the disc the cameras were
    pointed at (the quality stage's pointed ROI, placed like the gaussians) and nothing is in it. A
    reason bit is set when more than half of the cell's non-keep alpha failed that criterion. The
-   level is the finest at which the median occupied cell holds at least 16 visible gaussians (a
-   binomial share from 16 has σ ≤ 0.125, enough to tell under a half from three quarters) within
-   2^22 cells.
+   level is the finest at which the median visible gaussian's cell holds at least 16 visible
+   gaussians (a binomial share from 16 has σ ≤ 0.125, enough to tell under a half from three
+   quarters) within 2^22 cells. Amended 2026-10-23: first written as the median _occupied cell_,
+   which a drone's sparse background halo (each gaussian alone in its cell, more cells than the
+   site fills) decided: the NWM drone capture's 200 m site got 64 m cells. Weighed by gaussians,
+   the halo is the small share of the evidence it is.
 
    **The weak share** (`summary.weakShare`, and what every later reader — A4's weak areas, the
    web's legend — must mean by it) is `weak / (scored + unseen)` at the finest level: the weak

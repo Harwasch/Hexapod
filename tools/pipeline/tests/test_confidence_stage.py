@@ -292,6 +292,36 @@ def test_a_floater_is_counted_outside_and_does_not_coarsen_the_grid(
     assert grid.planes[0].ni <= original.planes[0].ni + 1
 
 
+def test_a_sparse_halo_of_far_gaussians_does_not_coarsen_the_grid(
+    arc: Workdir, tmp_path: Path
+) -> None:
+    """A drone sees past its site: a thin ring of background gaussians, too many to be cut as
+    floaters, each alone in its cell, and together in more cells than the scene fills (the
+    NWM drone capture, 2026-10-23: ~1.5% of 395k gaussians 100-370 m out, against ~160 a
+    cell in the site, turned a 200 m site's grid into 64 m cells). This fixture's cells
+    hold fewer, so a tenth of it makes the same halo. It must not decide the level."""
+    epoch = Workdir.create(tmp_path / "halo")
+    support = epoch.root / "support"
+    shutil.copytree(arc.out_dir("quality") / "support", support)
+    x = np.fromfile(support / "x.bin", dtype="<f4")
+    y = np.fromfile(support / "y.bin", dtype="<f4")
+    alpha = np.fromfile(support / "alpha.bin", dtype="u1")
+    visible = np.flatnonzero(alpha >= confidence.VISIBLE_ALPHA)
+    halo = visible[::10]
+    span = float(max(np.ptp(x[visible]), np.ptp(y[visible])))
+    angle = np.linspace(0.0, 2.0 * np.pi, len(halo), endpoint=False)
+    radius = span * np.linspace(3.0, 8.0, len(halo))
+    x[halo] = (np.median(x[visible]) + radius * np.cos(angle)).astype("<f4")
+    y[halo] = (np.median(y[visible]) + radius * np.sin(angle)).astype("<f4")
+    x.tofile(support / "x.bin")
+    y.tofile(support / "y.bin")
+    moved = _again_from(tmp_path / "moved", support, arc)
+    descriptor, grid = _grid(moved)
+    _, original = _grid(arc)
+    assert descriptor["summary"]["outside"] < len(halo) / 2, "the halo is kept, not cut"
+    assert grid.level == original.level
+
+
 def _again_from(root: Path, support: Path, epoch: Workdir) -> Workdir:
     workdir = Workdir.create(root)
     inputs = workdir.root / "inputs"
@@ -332,6 +362,14 @@ def test_the_level_is_the_finest_whose_median_cell_holds_sixteen() -> None:
     counts[:] = 16
     assert confidence.choose_level(counts, 0, 0, 0) == 0
     assert confidence.choose_level(np.zeros((3, 3), dtype=np.int64), 2, -1, -1) == 2
+
+
+def test_the_level_follows_where_the_gaussians_are_not_how_many_cells_they_touch() -> None:
+    counts = np.zeros((64, 64), dtype=np.int64)
+    counts[28:36, 28:36] = 40  # the scene: 64 cells, 2,560 gaussians
+    counts[::4, ::4] += np.where(counts[::4, ::4] == 0, 1, 0)  # a halo: ~250 cells of one
+    assert int((counts == 1).sum()) > 200
+    assert confidence.choose_level(counts, 0, 0, 0) == 0
 
 
 def _binned(alpha: int, keep: int, failed: list[int], z: tuple[float, float]) -> confidence.Binned:
@@ -676,3 +714,29 @@ def test_an_alignment_with_no_frame_relative_figure_is_read_at_its_absolute_one(
     cap = _grid(_again(tmp_path / "older", arc, prior_epochs=1, alignment=older))[0]
     assert cap["alignmentCap"]["source"] == "epoch_alignment.json"
     assert cap["alignmentCap"]["uncertaintyM"] == 5.0
+
+
+def _level_by_median_cell(counts: np.ndarray, level: int) -> int:
+    """The rule before 2026-10-23 (median occupied cell), kept as the reference."""
+    plane = cell_grid.CellPlane(level, 0, 0, counts.shape[1], counts.shape[0], counts[..., None])
+    while True:
+        held = np.sort(plane.data[..., 0][plane.data[..., 0] > 0])
+        n = held.size
+        if n == 0 or int(held[(n - 1) // 2]) + int(held[n // 2]) >= 2 * 16:
+            return plane.level
+        if plane.level >= cell_grid.MAX_LEVEL or (plane.ni <= 2 and plane.nj <= 2):
+            return plane.level
+        plane = confidence._sum_up(plane)
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_weighing_by_gaussians_never_makes_a_grid_coarser(seed: int) -> None:
+    """A cell weighed by what it holds can only raise the median, so no scene -- a phone's
+    dense ground scan above all -- gets coarser cells than the old rule gave it. (Pumpkin and
+    Spool's published coverage clouds, 2026-10-23: 0.25 m cells under both rules.)"""
+    rng = np.random.default_rng(seed)
+    side = int(rng.integers(8, 96))
+    counts = rng.poisson(rng.uniform(0.2, 40.0), size=(side, side)).astype(np.int64)
+    counts *= rng.random((side, side)) < rng.uniform(0.05, 1.0)  # gaps, as a scan has
+    level = int(rng.integers(0, 4))
+    assert confidence.choose_level(counts, level, 0, 0) <= _level_by_median_cell(counts, level)
