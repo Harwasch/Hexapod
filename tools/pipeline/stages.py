@@ -24,6 +24,7 @@ import json
 import math
 import os
 import shutil
+import statistics
 import struct
 import subprocess
 import time
@@ -3490,11 +3491,15 @@ def _held_by_pose_priors(
         for a, b, tolerance in zip(at, origin, (1e-6, 1e-6, 1e-3), strict=True)
     ):
         return refused(f"the priors were held about {at}, not this frame's {origin}")
+    sigma_h, sigma_v, basis = _kept_sigmas(block, centres)
     raw = block.get("sigmaM")
-    sigma: dict[str, object] = raw if isinstance(raw, dict) else {}
-    sigma_h = _float_or_none(sigma.get("horizontalMedian"))
-    sigma_v = _float_or_none(sigma.get("verticalMedian"))
-    sigmas = {"horizontalMedian": sigma_h, "verticalMedian": sigma_v, "source": sigma.get("source")}
+    source = raw.get("source") if isinstance(raw, dict) else None
+    sigmas = {
+        "horizontalMedian": sigma_h,
+        "verticalMedian": sigma_v,
+        "source": source,
+        "basis": basis,
+    }
     if sigma_h is None or sigma_v is None or sigma_h > max_sigma_h_m or sigma_v > max_sigma_v_m:
         return refused(
             f"the priors' sigmas ({sigma_h} m, {sigma_v} m vertical) are looser than "
@@ -3522,12 +3527,43 @@ def _held_by_pose_priors(
     }
 
 
-def _float_or_none(value: object) -> float | None:
+def _kept_sigmas(
+    block: Mapping[str, object], centres: Mapping[str, object]
+) -> tuple[float | None, float | None, str]:
+    """The median prior sigmas over the frames the model kept (`priors.sigmaByFrame`), so
+    tight priors on frames it dropped cannot vouch for loose ones on frames it kept; the
+    whole plan's medians from a `poses.json` written before per-frame sigmas existed."""
+    by_frame = block.get("sigmaByFrame")
+    if isinstance(by_frame, dict):
+        pairs = [by_frame[name] for name in centres if name in by_frame]
+        kept = [
+            (_positive_or_none(pair[0]), _positive_or_none(pair[1]))
+            for pair in pairs
+            if isinstance(pair, list) and len(pair) == 2
+        ]
+        if kept and all(h is not None and v is not None for h, v in kept):
+            return (
+                statistics.median(h for h, _ in kept if h is not None),
+                statistics.median(v for _, v in kept if v is not None),
+                f"the {len(kept)} kept frames",
+            )
+        return None, None, "the kept frames' sigmas are missing or not positive"
+    raw = block.get("sigmaM")
+    sigma: Mapping[str, object] = raw if isinstance(raw, dict) else {}
+    return (
+        _positive_or_none(sigma.get("horizontalMedian")),
+        _positive_or_none(sigma.get("verticalMedian")),
+        "every planned frame (poses.json predates per-frame sigmas)",
+    )
+
+
+def _positive_or_none(value: object) -> float | None:
+    """A finite positive number of metres, else None: a zero or negative sigma is no sigma."""
     try:
         number = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
-    return number if math.isfinite(number) else None
+    return number if math.isfinite(number) and number > 0.0 else None
 
 
 def _free_fit_check(
@@ -3644,12 +3680,14 @@ def _exif_gps_aligned(
     )
     holding = held is not None and held["held"] is True
     free_failed: str | None = None
+    failed_as = "no-consensus"
     try:
         similarity, tool = _free_similarity(ctx, model_dir, centres, common, aligner, max_error_m)
-    except sim3.NoConsensusError as error:
+    except (sim3.NoConsensusError, sim3.DegenerateFitError) as error:
         # The free fit is only a check on a held model: its failing does not unplace it.
         if not holding:
             raise
+        failed_as = "degenerate" if isinstance(error, sim3.DegenerateFitError) else "no-consensus"
         free_failed = str(error)
         similarity, tool = _IDENTITY, {"tool": f"{aligner} (no consensus)"}
     free_fit_check: dict[str, object] | None = None
@@ -3659,7 +3697,7 @@ def _exif_gps_aligned(
         # can only add what their errors share: the NWM drone flights' take-off altitudes,
         # ~9 m apart, tilted a level site 10.5 deg. It is recorded, not applied.
         free_fit_check = (
-            {"status": "no-consensus", "reason": free_failed}
+            {"status": failed_as, "reason": free_failed}
             if free_failed is not None
             else _free_fit_check(similarity, centres, common, max_error_m)
         )

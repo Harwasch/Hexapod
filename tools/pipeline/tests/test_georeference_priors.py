@@ -25,6 +25,7 @@ import numpy as np
 import PIL.Image
 import pytest
 
+import alignment
 import exif
 import priors
 import stages
@@ -41,10 +42,17 @@ BIAS_M = 4.5
 MAX_TILT_DEG = 1.5
 
 
-def _flights(seed: int = 0) -> tuple[list[np.ndarray], list[np.ndarray]]:
-    """Camera centres in true east/north/up, and the GPS fixes the drone wrote for them."""
+def _flights(seed: int = 0, *, line: bool = False) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    """Camera centres in true east/north/up, and the GPS fixes the drone wrote for them.
+    `line`: one straight strip, fixes exact -- a model whose centres fix no rotation."""
     rng = np.random.default_rng(seed)
     centres, fixes = [], []
+    if line:
+        for step in range(30):
+            centre = np.array([0.0, -60.0 + 4.0 * step, 30.0])
+            centres.append(centre)
+            fixes.append(centre.copy())
+        return centres, fixes
     for west, bias in ((True, BIAS_M), (False, -BIAS_M)):
         for row in range(5):
             for col in range(6):
@@ -66,11 +74,16 @@ def _georeference(
     shift_east_m: float = 0.0,
     params: dict[str, object] | None = None,
     seed: int = 0,
+    line: bool = False,
+    dropped: int = 0,
+    dropped_sigma: tuple[float, float] | None = None,
 ) -> dict[str, Any]:
     """Run `exif_gps` over the two flights. `priors_block`: None (no priors in poses.json),
     `off`, `held` or `held-no-vertical`; the model is written in the frame bundle adjustment
-    held it in (about the fixes' median), moved `shift_east_m` to make one that was not."""
-    centres, fixes = _flights(seed)
+    held it in (about the fixes' median), moved `shift_east_m` to make one that was not. The
+    last `dropped` frames carry fixes and priors (at `dropped_sigma`) but are not in the
+    model, as frames pose could not register."""
+    centres, fixes = _flights(seed, line=line)
     down = np.diag([1.0, -1.0, -1.0])  # world_from_camera: looking straight down
     workdir = Workdir.create(root)
     frames = workdir.input_path("frames")
@@ -97,8 +110,14 @@ def _georeference(
     shift = np.array([shift_east_m, 0.0, 0.0])
     model = [np.asarray(about[f"c{i}"]) + shift for i in range(len(centres))]
     poses = workdir.input_path("poses")
-    write_model(poses, [(down.T, centre) for centre in model])
+    write_model(poses, [(down.T, centre) for centre in model[: len(model) - dropped]])
     document: dict[str, Any] = {"tool": "colmap", "scale": {"metric": priors_block is not None}}
+    per_frame = {
+        f"frame_{index:04d}.jpg": list(
+            dropped_sigma if dropped_sigma and index >= len(fixes) - dropped else sigma
+        )
+        for index in range(len(fixes))
+    }
     if priors_block is not None:
         lat, lon, height = held_at
         document["priors"] = {
@@ -107,10 +126,11 @@ def _georeference(
             "vertical": "unconstrained" if priors_block == "held-no-vertical" else "constrained",
             "origin": {"lat": lat, "lon": lon, "height": height, "source": "median-fix"},
             "sigmaM": {
-                "horizontalMedian": sigma[0],
-                "verticalMedian": sigma[1],
+                "horizontalMedian": float(np.median([p[0] for p in per_frame.values()])),
+                "verticalMedian": float(np.median([p[1] for p in per_frame.values()])),
                 "source": sigma_source,
             },
+            "sigmaByFrame": per_frame,
         }
     (poses / "poses.json").write_text(json.dumps(document))
     execute(
@@ -259,3 +279,73 @@ def test_without_held_priors_the_free_similarity_is_applied_as_before(
         assert "heldByPosePriors" not in free["alignment"]
     else:
         assert free["alignment"]["heldByPosePriors"]["held"] is False
+
+
+def test_a_held_model_stays_held_when_its_fixes_fix_no_rotation(tmp_path: Path) -> None:
+    """One straight strip: every sample is collinear and the free fit is degenerate. That is
+    the check failing, not the model: it stays held."""
+    georef = _georeference(tmp_path / "line", priors_block="held", line=True)
+    assert georef["alignment"]["heldByPosePriors"]["held"] is True
+    check = georef["alignment"]["freeFitCheck"]
+    assert check["status"] == "degenerate"
+    assert "collinear" in check["reason"]
+    assert _tilt_deg(georef["frame"]["rotation"]) == 0.0
+
+
+def test_the_sigmas_are_the_kept_frames_not_the_planned_ones(tmp_path: Path) -> None:
+    """Tight priors on 40 frames pose dropped cannot vouch for loose ones on the 20 it
+    kept: the median over every planned frame is 0.05 m, over the kept ones 8 m."""
+    georef = _georeference(
+        tmp_path / "dropped",
+        priors_block="held",
+        sigma=(8.0, 16.0),
+        dropped=40,
+        dropped_sigma=(0.05, 0.1),
+    )
+    decision = georef["alignment"]["heldByPosePriors"]
+    assert decision["held"] is False
+    assert decision["sigmaM"]["horizontalMedian"] == 8.0
+    assert decision["sigmaM"]["basis"] == "the 20 kept frames"
+
+
+def test_default_sigma_frames_rest_on_the_residual_guard(tmp_path: Path) -> None:
+    """Frames with no accuracy metadata get the consumer default, 5 m / 10 m -- the bound
+    exactly, so the sigma gate passes them (NWM's frames are such). For them the residual
+    guard is the protection: cameras 40 m from their fixes are not held."""
+    georef = _georeference(
+        tmp_path / "default", priors_block="held", sigma=(5.0, 10.0), shift_east_m=40.0
+    )
+    decision = georef["alignment"]["heldByPosePriors"]
+    assert decision["sigmaM"]["horizontalMedian"] == priors.DEFAULT_STD_M
+    assert decision["held"] is False
+    assert "was not held to these fixes" in decision["why"]
+
+
+def test_a_held_model_few_fixes_agree_with_is_not_called_aligned(tmp_path: Path) -> None:
+    """Held, 9 m from its fixes (inside the 15 m guard) and so with none of them within
+    max_error_m's 5 m: `align` must not report it as placed by its GNSS."""
+    georef = _georeference(tmp_path / "few", priors_block="held", shift_east_m=9.0)
+    assert georef["alignment"]["heldByPosePriors"]["held"] is True
+    assert georef["alignment"]["inliers"] < 3
+    poses = {"priors": {"used": True, "sigmaM": {"horizontalMedian": 5.0}}}
+    candidate = alignment.gnss_candidate(georef, poses)
+    assert candidate.aligned is False
+    assert any("fixes agree with the similarity" in reason for reason in candidate.reasons)
+    # D4: an epoch that is not aligned is `unaligned`, the tier below `coarse`, with why.
+    verdict, reasons = alignment.decide(
+        aligned=candidate.aligned,
+        tier=alignment.TIER_OF["drone"],
+        checks={},
+        platform="drone",
+        method=candidate.method,
+    )
+    assert verdict == "unaligned"
+    assert reasons
+
+
+@pytest.mark.parametrize("bad", [0.0, -5.0])
+def test_a_zero_or_negative_sigma_is_no_sigma(tmp_path: Path, bad: float) -> None:
+    georef = _georeference(tmp_path / "bad", priors_block="held", sigma=(bad, 10.0))
+    decision = georef["alignment"]["heldByPosePriors"]
+    assert decision["held"] is False
+    assert decision["sigmaM"]["horizontalMedian"] is None
