@@ -3432,16 +3432,36 @@ def _aligned_origin(
     return exif.median_fix(fixes)
 
 
-def _held_by_pose_priors(
-    model_dir: Path, origin: tuple[float, float, float]
-) -> dict[str, object] | None:
-    """`poses.json`'s priors when bundle adjustment held the cameras to their fixes, in
-    all three axes, about `origin` -- so the model is already in this branch's frame and
-    its similarity is the identity -- else None.
+#: Held pose priors make the similarity the identity only when they held the cameras at
+#: least as tightly as this stage would test a fit: horizontally the residual a fix counts
+#: as agreeing within (`max_error_m`), vertically that times `priors.VERTICAL_FACTOR`, the
+#: vertical a consumer fix's horizontal implies. Looser priors (an indoor phone's 65 m, an
+#: unconstrained 1 km vertical) barely hold a tilt, so the free fit decides.
+DEFAULT_HELD_PRIORS_MAX_SIGMA_H_M = DEFAULT_ALIGNMENT_MAX_ERROR_M
+DEFAULT_HELD_PRIORS_MAX_SIGMA_V_M = DEFAULT_ALIGNMENT_MAX_ERROR_M * priors.VERTICAL_FACTOR
+#: A held model whose median camera is further than this from its own fix was not held to
+#: these fixes, whatever poses.json says: three of its own sigmas, and never under 15 m.
+HELD_PRIORS_RESIDUAL_SIGMAS = 3.0
+HELD_PRIORS_RESIDUAL_FLOOR_M = 15.0
 
-    The vertical must have been held too: horizontal priors on cameras that are nearly
-    coplanar (a drone at one altitude) barely constrain a tilt, so a model posed without
-    altitudes still needs the fitted similarity to be levelled."""
+
+def _held_by_pose_priors(
+    model_dir: Path,
+    origin: tuple[float, float, float],
+    centres: Mapping[str, tuple[float, ...]],
+    common: Mapping[str, tuple[float, ...]],
+    *,
+    max_sigma_h_m: float,
+    max_sigma_v_m: float,
+) -> dict[str, object] | None:
+    """Whether bundle adjustment held the cameras to these fixes in this frame, so the model
+    is already where its fixes say and its similarity is the identity.
+
+    None when `pose` used no priors (every phone video, `pose_priors: off`): the free fit, as
+    always, with nothing recorded. Otherwise `{held, why, ...}`, and `held` only when the
+    priors held all three axes (horizontal priors on nearly coplanar cameras -- a drone at one
+    altitude -- barely constrain a tilt), about this same origin, with sigmas within
+    `max_sigma_*`, and the model's cameras do sit near their fixes."""
     summary = model_dir / "poses.json"
     if not summary.is_file():
         return None
@@ -3451,30 +3471,63 @@ def _held_by_pose_priors(
         return None
     if not isinstance(block, dict) or block.get("used") is not True:
         return None
+
+    def refused(why: str, **facts: object) -> dict[str, object]:
+        return {"held": False, "why": f"{why}; the free fit decides", **facts}
+
     if block.get("vertical") != "constrained":
-        return None
-    held = block.get("origin")
-    if not isinstance(held, dict):
-        return None
+        return refused(f"the priors held no vertical ({block.get('vertical')!r})")
+    held_at = block.get("origin")
     try:
-        at = (float(held["lat"]), float(held["lon"]), float(held["height"]))
-    except (KeyError, TypeError, ValueError):
-        return None
+        assert isinstance(held_at, dict)
+        at = (float(held_at["lat"]), float(held_at["lon"]), float(held_at["height"]))
+    except (AssertionError, KeyError, TypeError, ValueError):
+        return refused("poses.json names no origin the priors were held about")
     # The same numbers by construction (`priors.frame_origin` and `_aligned_origin` both
     # take the site frame, else `exif.median_fix`); a micro-degree is ~0.1 m.
-    if any(
+    if not all(math.isfinite(v) for v in (*at, *origin)) or any(
         abs(a - b) > tolerance
         for a, b, tolerance in zip(at, origin, (1e-6, 1e-6, 1e-3), strict=True)
     ):
-        return None
+        return refused(f"the priors were held about {at}, not this frame's {origin}")
+    raw = block.get("sigmaM")
+    sigma: dict[str, object] = raw if isinstance(raw, dict) else {}
+    sigma_h = _float_or_none(sigma.get("horizontalMedian"))
+    sigma_v = _float_or_none(sigma.get("verticalMedian"))
+    sigmas = {"horizontalMedian": sigma_h, "verticalMedian": sigma_v, "source": sigma.get("source")}
+    if sigma_h is None or sigma_v is None or sigma_h > max_sigma_h_m or sigma_v > max_sigma_v_m:
+        return refused(
+            f"the priors' sigmas ({sigma_h} m, {sigma_v} m vertical) are looser than "
+            f"{max_sigma_h_m:g} m / {max_sigma_v_m:g} m",
+            sigmaM=sigmas,
+        )
+    median = float(np.median(list(sfm.alignment_residuals(_IDENTITY, centres, common).values())))
+    bound = max(HELD_PRIORS_RESIDUAL_SIGMAS * sigma_h, HELD_PRIORS_RESIDUAL_FLOOR_M)
+    if median > bound:
+        return refused(
+            f"the cameras sit {median:.1f} m (median) from their fixes, over {bound:g} m: the "
+            "model was not held to these fixes",
+            sigmaM=sigmas,
+            residualMedianM=round(median, 4),
+        )
     return {
         "held": True,
-        "origin": held,
         "why": (
             "bundle adjustment held each camera to its fix about this origin (pose priors), "
             "so the model is in this frame already; the free fit is recorded, not applied"
         ),
+        "origin": held_at,
+        "sigmaM": sigmas,
+        "residualMedianM": round(median, 4),
     }
+
+
+def _float_or_none(value: object) -> float | None:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _free_fit_check(
@@ -3491,6 +3544,7 @@ def _free_fit_check(
     rotation = np.asarray(similarity.rotation, dtype=np.float64)
     up = rotation @ np.array([0.0, 0.0, 1.0])
     return {
+        "status": "fitted",
         "scale": similarity.scale,
         "rotation": [[float(v) for v in row] for row in similarity.rotation],
         "translationM": [float(v) for v in similarity.translation],
@@ -3502,28 +3556,18 @@ def _free_fit_check(
     }
 
 
-def _exif_gps_aligned(
-    ctx: StageContext,
-    fixes: tuple[exif.Fix, ...],
-    model_dir: Path,
-    frame_given: site_frame.SiteFrame | None = None,
-) -> StageOutcome:
-    """The aligned branch: fixes define the frame, COLMAP solves for the similarity."""
-    lat, lon, height = _aligned_origin(fixes, frame_given)
-    reference = exif.enu_offsets(fixes, (lat, lon, height))
-    model = sfm.read_model(model_dir)
-    centres = {image.name: tuple(float(v) for v in image.centre) for image in model.images}
-    common = {name: value for name, value in reference.items() if name in centres}
-    if len(common) < 3:
-        raise ValueError(
-            f"{len(common)} of {len(fixes)} frames with an EXIF fix are in the pose model "
-            f"({model.registered} registered), and a similarity needs three. Either the "
-            f"reconstruction dropped the frames that had fixes, or the frame names moved "
-            f"between `normalize` and `pose`"
-        )
+_IDENTITY = sfm.Similarity(scale=1.0, rotation=np.eye(3), translation=np.zeros(3))
 
-    max_error_m = float(ctx.param("max_error_m", DEFAULT_ALIGNMENT_MAX_ERROR_M))
-    aligner = str(ctx.param("aligner", "model_aligner"))
+
+def _free_similarity(
+    ctx: StageContext,
+    model_dir: Path,
+    centres: Mapping[str, tuple[float, ...]],
+    common: Mapping[str, tuple[float, ...]],
+    aligner: str,
+    max_error_m: float,
+) -> tuple[sfm.Similarity, dict[str, object]]:
+    """The similarity a free fit gives, by the recipe's aligner, and what made it."""
     tool: dict[str, object]
     if aligner == "ransac":
         seed = int(ctx.param("seed", sim3.DEFAULT_SEED))
@@ -3561,22 +3605,70 @@ def _exif_gps_aligned(
             "version": sfm.colmap_version(),
             "alignmentType": "custom",
         }
-    held = _held_by_pose_priors(model_dir, (lat, lon, height))
+    return similarity, tool
+
+
+def _exif_gps_aligned(
+    ctx: StageContext,
+    fixes: tuple[exif.Fix, ...],
+    model_dir: Path,
+    frame_given: site_frame.SiteFrame | None = None,
+) -> StageOutcome:
+    """The aligned branch: fixes define the frame, COLMAP solves for the similarity."""
+    lat, lon, height = _aligned_origin(fixes, frame_given)
+    reference = exif.enu_offsets(fixes, (lat, lon, height))
+    model = sfm.read_model(model_dir)
+    centres = {image.name: tuple(float(v) for v in image.centre) for image in model.images}
+    common = {name: value for name, value in reference.items() if name in centres}
+    if len(common) < 3:
+        raise ValueError(
+            f"{len(common)} of {len(fixes)} frames with an EXIF fix are in the pose model "
+            f"({model.registered} registered), and a similarity needs three. Either the "
+            f"reconstruction dropped the frames that had fixes, or the frame names moved "
+            f"between `normalize` and `pose`"
+        )
+
+    max_error_m = float(ctx.param("max_error_m", DEFAULT_ALIGNMENT_MAX_ERROR_M))
+    aligner = str(ctx.param("aligner", "model_aligner"))
+    held = _held_by_pose_priors(
+        model_dir,
+        (lat, lon, height),
+        centres,
+        common,
+        max_sigma_h_m=float(
+            ctx.param("held_priors_max_sigma_h_m", DEFAULT_HELD_PRIORS_MAX_SIGMA_H_M)
+        ),
+        max_sigma_v_m=float(
+            ctx.param("held_priors_max_sigma_v_m", DEFAULT_HELD_PRIORS_MAX_SIGMA_V_M)
+        ),
+    )
+    holding = held is not None and held["held"] is True
+    free_failed: str | None = None
+    try:
+        similarity, tool = _free_similarity(ctx, model_dir, centres, common, aligner, max_error_m)
+    except sim3.NoConsensusError as error:
+        # The free fit is only a check on a held model: its failing does not unplace it.
+        if not holding:
+            raise
+        free_failed = str(error)
+        similarity, tool = _IDENTITY, {"tool": f"{aligner} (no consensus)"}
     free_fit_check: dict[str, object] | None = None
-    if held is not None:
+    if holding:
         # Bundle adjustment already held every camera to its fix about this same origin, so
         # the model *is* in this frame (`priors.py`). A free similarity to the same fixes
         # can only add what their errors share: the NWM drone flights' take-off altitudes,
         # ~9 m apart, tilted a level site 10.5 deg. It is recorded, not applied.
-        free_fit_check = _free_fit_check(similarity, centres, common, max_error_m)
-        similarity = sfm.Similarity(
-            scale=1.0, rotation=np.eye(3), translation=np.zeros(3, dtype=np.float64)
+        free_fit_check = (
+            {"status": "no-consensus", "reason": free_failed}
+            if free_failed is not None
+            else _free_fit_check(similarity, centres, common, max_error_m)
         )
+        similarity = _IDENTITY
     residuals = sfm.alignment_residuals(similarity, centres, common)
     values = np.asarray(sorted(residuals.values()), dtype=np.float64)
     rms = float(np.sqrt(float((values**2).mean()))) if values.size else 0.0
     inliers = int((values <= max_error_m).sum())
-    if held is None and inliers < sim3.MIN_POINTS:
+    if not holding and inliers < sim3.MIN_POINTS:
         # `model_aligner` has no such refusal of its own; the same rule as `sim3`'s.
         raise sim3.NoConsensusError(
             f"no consensus: {inliers} of {len(common)} fixes agree within {max_error_m:g} m "
@@ -3630,11 +3722,8 @@ def _exif_gps_aligned(
                 "canonical.ply is this similarity of it, east/north/up metres about "
                 "(lat, lon, height)"
             ),
-            **(
-                {"heldByPosePriors": held, "freeFitCheck": free_fit_check}
-                if held is not None
-                else {}
-            ),
+            **({} if held is None else {"heldByPosePriors": held}),
+            **({} if free_fit_check is None else {"freeFitCheck": free_fit_check}),
         },
         # The same similarity, in the shape `place` reads whichever branch wrote it. No
         # recentring: the origin is the median fix, and the similarity already puts the

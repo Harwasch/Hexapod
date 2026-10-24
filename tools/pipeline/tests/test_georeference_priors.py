@@ -27,6 +27,7 @@ import pytest
 
 import exif
 import priors
+import stages
 from conftest import make_recipe
 from executor import execute
 from runners import LocalRunner, RunnerSet
@@ -56,9 +57,19 @@ def _flights(seed: int = 0) -> tuple[list[np.ndarray], list[np.ndarray]]:
     return centres, fixes
 
 
-def _georeference(root: Path, *, priors_block: str | None, seed: int = 0) -> dict[str, Any]:
+def _georeference(
+    root: Path,
+    *,
+    priors_block: str | None,
+    sigma: tuple[float, float] = (5.0, 10.0),
+    sigma_source: str = "default",
+    shift_east_m: float = 0.0,
+    params: dict[str, object] | None = None,
+    seed: int = 0,
+) -> dict[str, Any]:
     """Run `exif_gps` over the two flights. `priors_block`: None (no priors in poses.json),
-    `off`, `held` or `held-no-vertical`."""
+    `off`, `held` or `held-no-vertical`; the model is written in the frame bundle adjustment
+    held it in (about the fixes' median), moved `shift_east_m` to make one that was not."""
     centres, fixes = _flights(seed)
     down = np.diag([1.0, -1.0, -1.0])  # world_from_camera: looking straight down
     workdir = Workdir.create(root)
@@ -70,17 +81,36 @@ def _georeference(root: Path, *, priors_block: str | None, seed: int = 0) -> dic
         PIL.Image.new("RGB", (16, 12)).save(frames / name)
         names[name] = fix
     gps_frames.tag_orbit(frames, names, ORIGIN)
+    # The origin the priors were held about: the fixes' median, as `pose` takes it, and
+    # each true camera centre expressed about it, as bundle adjustment would leave it.
+    held_at = exif.median_fix(exif.read_fixes(frames))
+    true_fixes = tuple(
+        exif.Fix(
+            f"c{index}",
+            *gps_frames.enu_to_geodetic(
+                float(centre[0]), float(centre[1]), float(centre[2]), *ORIGIN
+            ),
+        )
+        for index, centre in enumerate(centres)
+    )
+    about = exif.enu_offsets(true_fixes, held_at)
+    shift = np.array([shift_east_m, 0.0, 0.0])
+    model = [np.asarray(about[f"c{i}"]) + shift for i in range(len(centres))]
     poses = workdir.input_path("poses")
-    write_model(poses, [(down.T, centre) for centre in centres])
+    write_model(poses, [(down.T, centre) for centre in model])
     document: dict[str, Any] = {"tool": "colmap", "scale": {"metric": priors_block is not None}}
     if priors_block is not None:
-        # The origin bundle adjustment held the fixes about: their median, as `pose` takes it.
-        lat, lon, height = exif.median_fix(exif.read_fixes(frames))
+        lat, lon, height = held_at
         document["priors"] = {
             "used": priors_block != "off",
             "coordinateSystem": priors.COORDINATE_SYSTEM,
             "vertical": "unconstrained" if priors_block == "held-no-vertical" else "constrained",
             "origin": {"lat": lat, "lon": lon, "height": height, "source": "median-fix"},
+            "sigmaM": {
+                "horizontalMedian": sigma[0],
+                "verticalMedian": sigma[1],
+                "source": sigma_source,
+            },
         }
     (poses / "poses.json").write_text(json.dumps(document))
     execute(
@@ -89,7 +119,12 @@ def _georeference(root: Path, *, priors_block: str | None, seed: int = 0) -> dic
                 {
                     "id": "georeference",
                     "impl": "exif_gps",
-                    "params": {"aligner": "ransac", "max_error_m": 5.0, "seed": 0},
+                    "params": {
+                        "aligner": "ransac",
+                        "max_error_m": 5.0,
+                        "seed": 0,
+                        **(params or {}),
+                    },
                 }
             ],
             inputs=["frames", "poses"],
@@ -114,24 +149,103 @@ def test_with_pose_priors_a_level_model_stays_level_through_biased_fixes(
     georef = _georeference(tmp_path / "held", priors_block="held")
     assert _tilt_deg(georef["frame"]["rotation"]) < MAX_TILT_DEG
     assert georef["frame"]["scale"] == pytest.approx(1.0)
+    # Held where its fixes say, give or take the take-off bias and the noise: not merely
+    # level because the identity is level by definition.
+    held = georef["alignment"]["heldByPosePriors"]
+    assert held["held"] is True
+    assert held["residualMedianM"] < BIAS_M + 1.5
+    assert georef["alignment"]["residualM"]["median"] < BIAS_M + 1.5
+    assert georef["alignment"]["inliers"] > len(_flights()[0]) // 2
 
 
 def test_with_pose_priors_the_free_fit_is_recorded_as_a_check(tmp_path: Path) -> None:
     georef = _georeference(tmp_path / "held", priors_block="held")
     assert georef["alignment"]["heldByPosePriors"]["origin"]["source"] == "median-fix"
     check = georef["alignment"]["freeFitCheck"]
+    assert check["status"] == "fitted"
     # The fit the stage would have applied: it does tilt, which is why it is not applied.
-    assert check["rotationDeg"] > MAX_TILT_DEG
     assert check["tiltDeg"] > MAX_TILT_DEG
     assert check["inliers"] >= 3
-    assert {"scale", "rotation", "translationM", "rotationDeg", "tiltDeg", "inliers"} <= set(check)
+    assert {"scale", "rotation", "translationM", "offsetM", "rotationDeg", "inliers"} <= set(check)
+
+
+@pytest.mark.parametrize(
+    ("sigma", "source", "held"),
+    [
+        ((5.0, 10.0), "default", True),  # the recipe's bound exactly: consumer GNSS
+        ((4.7, 9.4), "exif", True),  # an iPhone still outdoors (GPSHPositioningError 4.7 m)
+        ((5.01, 10.0), "default", False),
+        ((5.0, 10.01), "default", False),
+        ((65.0, 130.0), "exif", False),  # an iPhone still indoors: Wi-Fi only
+    ],
+    ids=["at-bound", "phone-still-outdoors", "h-over", "v-over", "phone-still-indoors"],
+)
+def test_the_priors_hold_the_model_only_within_the_sigma_bound(
+    tmp_path: Path, sigma: tuple[float, float], source: str, held: bool
+) -> None:
+    georef = _georeference(tmp_path / "s", priors_block="held", sigma=sigma, sigma_source=source)
+    decision = georef["alignment"]["heldByPosePriors"]
+    assert decision["held"] is held, decision
+    tilt = _tilt_deg(georef["frame"]["rotation"])
+    assert (tilt < MAX_TILT_DEG) if held else (tilt > MAX_TILT_DEG)
+    if not held:
+        assert "looser than 5 m / 10 m" in decision["why"]
+        assert "freeFitCheck" not in georef["alignment"]
+
+
+def test_a_model_far_from_its_fixes_is_not_held_whatever_poses_json_says(
+    tmp_path: Path,
+) -> None:
+    georef = _georeference(tmp_path / "far", priors_block="held", shift_east_m=40.0)
+    decision = georef["alignment"]["heldByPosePriors"]
+    assert decision["held"] is False
+    assert decision["residualMedianM"] > 15.0
+    assert "was not held to these fixes" in decision["why"]
+    assert "freeFitCheck" not in georef["alignment"]
+
+
+def test_a_held_model_stays_held_when_the_free_fit_finds_no_consensus(tmp_path: Path) -> None:
+    """With the production aligner (ransac) a free fit can find no consensus; the check
+    failing must not unplace a model the priors held."""
+    georef = _georeference(tmp_path / "nc", priors_block="held", params={"max_error_m": 0.001})
+    assert georef["alignment"]["heldByPosePriors"]["held"] is True
+    assert georef["alignment"]["freeFitCheck"]["status"] == "no-consensus"
+    assert "no consensus" in georef["alignment"]["freeFitCheck"]["reason"]
+    assert georef["frame"]["source"] == "exif-gps-similarity"
+    assert _tilt_deg(georef["frame"]["rotation"]) < MAX_TILT_DEG
+
+
+def test_without_held_priors_the_same_no_consensus_still_locates_it(tmp_path: Path) -> None:
+    georef = _georeference(tmp_path / "nc", priors_block=None, params={"max_error_m": 0.001})
+    assert georef["frame"]["source"] != "exif-gps-similarity"
+
+
+def test_a_non_finite_origin_is_never_held(tmp_path: Path) -> None:
+    poses = tmp_path / "poses"
+    poses.mkdir()
+    (poses / "poses.json").write_text(
+        json.dumps(
+            {
+                "priors": {
+                    "used": True,
+                    "vertical": "constrained",
+                    "origin": {"lat": float("nan"), "lon": 16.2, "height": 300.0},
+                    "sigmaM": {"horizontalMedian": 5.0, "verticalMedian": 10.0},
+                }
+            }
+        )
+    )
+    decision = stages._held_by_pose_priors(
+        poses, (float("nan"), 16.2, 300.0), {}, {}, max_sigma_h_m=5.0, max_sigma_v_m=10.0
+    )
+    assert decision is not None and decision["held"] is False
 
 
 @pytest.mark.parametrize("priors_block", [None, "off", "held-no-vertical"])
 def test_without_held_priors_the_free_similarity_is_applied_as_before(
     tmp_path: Path, priors_block: str | None
 ) -> None:
-    """The phone path (Pumpkin, Spool: no per-frame fixes held in bundle adjustment) keeps
+    """The phone path (Pumpkin, Spool: videos, whose frames carry no fixes to hold) keeps
     today's free fit, so ground scans do not change: the similarity applied is exactly the
     free fit the held run records as its check, tilt and all."""
     free = _georeference(tmp_path / "free", priors_block=priors_block)
@@ -141,4 +255,7 @@ def test_without_held_priors_the_free_similarity_is_applied_as_before(
     assert free["frame"]["scale"] == check["scale"]
     assert free["frame"]["translationM"] == check["translationM"]
     assert _tilt_deg(free["frame"]["rotation"]) > MAX_TILT_DEG
-    assert "heldByPosePriors" not in free["alignment"]
+    if priors_block in (None, "off"):
+        assert "heldByPosePriors" not in free["alignment"]
+    else:
+        assert free["alignment"]["heldByPosePriors"]["held"] is False

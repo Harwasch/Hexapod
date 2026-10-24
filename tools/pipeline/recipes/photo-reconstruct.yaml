@@ -176,6 +176,13 @@ stages:
       # needed. `aligner: model_aligner` is the A/B.
       aligner: ransac
       seed: 0
+      # When pose priors held every camera to its fix in all three axes (`pose_priors`), the
+      # model is already east/north/up and the similarity is the identity, the free fit
+      # recorded as a check: a free fit to the same fixes tilted the NWM drone site 10.5 deg
+      # (take-offs ~9 m apart). Only for priors at least as tight as this stage tests a fit:
+      # max_error_m horizontally, twice that vertically (priors.VERTICAL_FACTOR).
+      held_priors_max_sigma_h_m: 5.0
+      held_priors_max_sigma_v_m: 10.0
 
   # Register this epoch to its site (D4, `alignment.py`): its frames into the site's
   # reference epoch's fixed model (COLMAP 4.2 through pycolmap), a seeded similarity from
