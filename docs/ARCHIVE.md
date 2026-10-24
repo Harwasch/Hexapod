@@ -3,7 +3,7 @@
 Seven branches (six experiment branches and the hexapod design study) were parked on 2026-10-19
 and kept only as annotated tags, `archive/<branch>`. This page is the map to them: what each one
 asked, what it found, where its results are written down on the tag, and what reached `main` by
-another route. Every number below
+another route. One more fill tag, `archive/fill-gen3c`, was added on 2026-10-24. Every number below
 names the file (or commit message) it comes from. `archive/<b>:<path>` means that path on the
 tag; a path written with a `main:` prefix is that path on `main`.
 
@@ -26,24 +26,26 @@ one is hundreds of commits behind.
 ## Index
 
 Ahead and behind are against `main` at `f74ece8f` (2026-10-19). The numbers' sources are in
-each branch's section below.
+each branch's section below (`archive/fill-gen3c`'s against `1e1368aa`, 2026-10-24).
 
-| Tag                                          | Dates            | Ahead / behind | Area                                            | Verdict in one line                                                                                                                                                                                            |
-| -------------------------------------------- | ---------------- | -------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `archive/bakeoff-fill-generative`            | 2026-10-05 to 06 | 8 / 348        | Fill: video models fill a scan's holes          | Wan2.1-VACE 1.3B ranked first in every held-out view (+~4 dB), but no model drew the spool's real top; about $7.05 of $12.                                                                                     |
-| `archive/bakeoff-fill-v2`                    | 2026-10-05 to 07 | 28 / 301       | Fill round 2: anchor, then propagate            | +5.0 dB on the spool's held-out top with or without photos; shape under the flange passes; the Splash LoRA's invented detail costs fidelity (-0.63 dB) and was published only by the owner's decision.         |
-| `archive/fill-objects`                       | 2026-10-05 to 07 | 30 / 301       | Fill, object round: 3D models for undersides    | TRELLIS (stand-in for gated SAM 3D Objects) beat every round-2 layer on the pumpkins' held-out lower edges (16.77 against 15.82 dB); about $1.13 of $7; no verdict recorded on adoption.                       |
-| `archive/bakeoff-living-view`                | 2026-10-08 to 09 | 34 / 278       | Living view: slight wind on a still render      | No overall verdict recorded. LTX-2.5 + Cinemagraph LoRA is the only arm with real wind; pinning the render at both ends (`ltx-loop`) brings sway to 2-4 px; $6.82 (round 1) and $7.41 of the $8 cap (round 2). |
-| `archive/bakeoff-seg-feature-fields`         | 2026-10-05       | 18 / 346       | Segmentation bake-off candidate B               | No verdict recorded. Feature-field segmentation built, run ($0.19 spool, $0.15 pumpkin) and published as the `feature-fields` objects variant; never merged.                                                   |
-| `archive/search-meaning`                     | 2026-10-02       | 5 / 621        | Object search by meaning (SigLIP 2 text)        | Decided 2026-10-02: the text tower on the API's CPU (cos ≥ 0.9999998, ~140 ms a query, +565 MB image); never merged. Re-port is Harrison's decision.                                                           |
-| `archive/claude/hexapod-robot-design-mt516g` | 2026-09-01 to 08 | 56 / 988       | Hexapod design study (actuators, leg, platform) | No: on the unit as built the hexapod does not close at any leg mass (round 14c); a tracked platform beats it (round 15); the study ends on a 109 kg tracked carrier with a 22 kg quadruped scout (round 17).   |
+| Tag                                          | Dates            | Ahead / behind | Area                                                      | Verdict in one line                                                                                                                                                                                            |
+| -------------------------------------------- | ---------------- | -------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `archive/bakeoff-fill-generative`            | 2026-10-05 to 06 | 8 / 348        | Fill: video models fill a scan's holes                    | Wan2.1-VACE 1.3B ranked first in every held-out view (+~4 dB), but no model drew the spool's real top; about $7.05 of $12.                                                                                     |
+| `archive/bakeoff-fill-v2`                    | 2026-10-05 to 07 | 28 / 301       | Fill round 2: anchor, then propagate                      | +5.0 dB on the spool's held-out top with or without photos; shape under the flange passes; the Splash LoRA's invented detail costs fidelity (-0.63 dB) and was published only by the owner's decision.         |
+| `archive/fill-objects`                       | 2026-10-05 to 07 | 30 / 301       | Fill, object round: 3D models for undersides              | TRELLIS (stand-in for gated SAM 3D Objects) beat every round-2 layer on the pumpkins' held-out lower edges (16.77 against 15.82 dB); about $1.13 of $7; no verdict recorded on adoption.                       |
+| `archive/fill-gen3c`                         | 2026-10-23       | 34 / 361       | Fill: GEN3C, a video model given the scan as its 3D cache | Fail against a bar set before the run: the spool's held-out top 14.98 dB as a 3D layer against the prior best 15.85 (bar 18.0); the pumpkin not run (stop rule); $2.42 of $20; fill stopped 2026-10-24.        |
+| `archive/bakeoff-living-view`                | 2026-10-08 to 09 | 34 / 278       | Living view: slight wind on a still render                | No overall verdict recorded. LTX-2.5 + Cinemagraph LoRA is the only arm with real wind; pinning the render at both ends (`ltx-loop`) brings sway to 2-4 px; $6.82 (round 1) and $7.41 of the $8 cap (round 2). |
+| `archive/bakeoff-seg-feature-fields`         | 2026-10-05       | 18 / 346       | Segmentation bake-off candidate B                         | No verdict recorded. Feature-field segmentation built, run ($0.19 spool, $0.15 pumpkin) and published as the `feature-fields` objects variant; never merged.                                                   |
+| `archive/search-meaning`                     | 2026-10-02       | 5 / 621        | Object search by meaning (SigLIP 2 text)                  | Decided 2026-10-02: the text tower on the API's CPU (cos ≥ 0.9999998, ~140 ms a query, +565 MB image); never merged. Re-port is Harrison's decision.                                                           |
+| `archive/claude/hexapod-robot-design-mt516g` | 2026-09-01 to 08 | 56 / 988       | Hexapod design study (actuators, leg, platform)           | No: on the unit as built the hexapod does not close at any leg mass (round 14c); a tracked platform beats it (round 15); the study ends on a 109 kg tracked carrier with a 22 kg quadruped scout (round 17).   |
 
 The three fill branches are one line of work: every commit of `bakeoff-fill-generative` is also in
 `bakeoff-fill-v2` and `fill-objects`, and those two share 19 commits (fill-generative's 8, a merge
 of main, round 2's 9 and the spool experiments' set-up commit `0b45df32`). `fill-objects` forked
 from `bakeoff-fill-v2` at `22d238bb` and took `0b45df32` in later through the merge `d368d329`.
 After that, `bakeoff-fill-v2` adds the spool experiments' results (9 commits) and `fill-objects`
-adds the object round (11 commits).
+adds the object round (11 commits). `fill-gen3c` is `fill-objects` plus 4 commits (the GEN3C arm,
+two image fixes and its results).
 
 ## Fill: what reached main by other routes
 
@@ -181,6 +183,68 @@ gated for the workspace's token (commit `2bf4e500` message).
 
 **Landed by other routes.** Nothing of the object round; see "Fill: what reached main by other
 routes" for the viewer side.
+
+## `archive/fill-gen3c`
+
+**Question.** Does GEN3C (NVIDIA, Cosmos-7B conditioned on renders of a 3D cache), ranked the most
+promising untested surface-fill model by the 2026-10-23 research, fill what a scan never saw better
+than the earlier rounds, on the same held-out tests? Source:
+`archive/fill-gen3c:docs/WORLD_MODEL_RUNBOOK.md` § 12.
+
+**Bar, set before any run.** On both scenes: masked PSNR in the held-out region of at least
+18.0 dB and at least +1.5 dB over the prior best (the spool's top 15.85 dB, `anchor-refs` in run
+37518566607; the pumpkins' lower edges 16.77 dB, TRELLIS in run 37552051186), LPIPS at most 0.22,
+and the owner preferring it in a blind A/B on at least 4 of 5 views. Stop if the first scene is
+under 16 dB.
+
+**Built.** A `gen3c` arm in round 2's pipeline
+(`archive/fill-gen3c:tools/captures/anchor_fill.py`), so it is scored exactly as round 2's arms:
+the same leave-out, views, lift, carve, distil, update round and region. Every target view is a
+stop on one 121-frame camera path at 1280x704, frame 0 the nearest kept photo, and every frame the
+scan rendered at that camera, held where the kept cameras know it. A diagnostic clip goes straight
+through the held-out poses and is scored without any 3D step. The model side is
+`archive/fill-gen3c:tools/captures/gen3c_model.py`; the GPU class `FillGen3C` (one H100, its own
+image with Transformer Engine 1.12 and apex stubbed) is in `archive/fill-gen3c:infra/modal/fill.py`.
+`archive/fill-gen3c:infra/modal/fill_objects.py` pins the pumpkin to the tileset the object round
+graded, because the asset now resolves to the 2026-10-22 capture.
+
+**Outcome.** From `archive/fill-gen3c:docs/WORLD_MODEL_RUNBOOK.md` § 12 (run 40002936712, $1.82;
+smoke runs 39997118013, 39998629513 and 40001502787, $0.57; about $2.42 of the $20 cap with CPU):
+
+- The spool's held-out top: the GEN3C layer 14.98 dB / LPIPS 0.566 / DreamSim 0.356, against
+  10.89 / 0.471 / 0.295 before (the archived run's figure, so the setup matches) and 15.85 / 0.457
+  / 0.239 for `anchor-refs`. A fail, under the 16 dB stop line, so the pumpkin was not run.
+- GEN3C's raw frames at the held-out poses (the diagnostic, never lifted): 17.54 / 0.429 / 0.247.
+  They draw convincing but invented planks, and they stay under 18 dB, so no change to the lift or
+  the fuse can pass the bar on the spool.
+- Why the layer fails: it closes the top (0 % see-through from straight above) but paints it a
+  flat grey. The views look down on a top that is mostly unknown in the cache, and when most of a
+  frame is unknown GEN3C returns a smooth wash, not surface detail; the layer is fused from those
+  views.
+- The LPIPS part of the bar cannot be met on the spool by any fill measured so far: the scan
+  itself scores 0.47 there.
+- A 121-frame clip takes about 286 s on an H100 (peak 53 GB, load 80-97 s), about $0.32 a clip.
+- Licence: the code is Apache-2.0; the weights are under the NVIDIA Open Model License (commercial
+  use allowed, no claim on outputs, "Built on NVIDIA Cosmos" where distributed). Its rights end if a
+  safety guardrail is bypassed without an equivalent of one's own. NVIDIA's own GEN3C scripts turn
+  the guardrail off, and so did this run; settle that before shipping anything made with it.
+- Decided 2026-10-24 (Harrison): stop fill for now; TRELLIS's pumpkin layer stays the labelled
+  inferred option.
+
+**Other techniques (the research shortlist, 2026-10-23, read-only).** No candidate publishes a
+score on truly unseen regions of a real scan; the chance that any clears the bar was judged at
+about 20 % in all. The top ones, with the judged chance of passing: SAM 3D Objects (Meta; gated:
+the owner submits Meta's access form, legal name, date of birth and organisation, not editable
+after; SAM Licence allows commercial use) about 15 %; TRELLIS.2 (MIT) about 8 %; Pixal3D (MIT)
+about 8 %; GenFusion (MIT) about 5 %; ViewCrafter, Gen3R and Hunyuan3D 2.1 about 4 % each.
+Excluded on licence: Lyra 2.0, Amodal3R, SEVA (and ViewCrafter's DUSt3R weights are
+non-commercial). Re-check GSComplete (arXiv 2609.08449, new gaussians only where a scan is
+missing; no code yet) for code around 2026-12.
+
+**Relationship.** `archive/fill-objects` plus 4 commits; contains round 2's pipeline and the object
+round's grader unchanged apart from the pinned tileset.
+
+**Landed by other routes.** Nothing.
 
 ## `archive/bakeoff-living-view`
 
