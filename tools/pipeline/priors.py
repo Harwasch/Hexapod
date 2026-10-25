@@ -160,6 +160,11 @@ class PriorPlan:
                 "verticalMedian": statistics.median(vertical) if vertical else None,
                 "source": sources[0] if len(sources) == 1 else (sources or None),
             },
+            # Per frame, so a reader can take the sigmas of the frames a model kept rather
+            # than of every frame planned (`stages._held_by_pose_priors`).
+            "sigmaByFrame": {
+                p.name: [round(p.std_h_m, 4), round(p.std_v_m, 4)] for p in self.priors
+            },
             "vertical": self.vertical(),
             "robustLoss": True,
             "lossScale": LOSS_SCALE,

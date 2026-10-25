@@ -50,6 +50,7 @@ __all__ = [
     "DEFAULT_SEED",
     "LMEDS_CUTOFF",
     "MIN_POINTS",
+    "DegenerateFitError",
     "NoConsensusError",
     "Sim3Fit",
     "fit_sim3",
@@ -132,6 +133,10 @@ class NoConsensusError(ValueError):
     """RANSAC found fewer than `MIN_POINTS` correspondences agreeing within its threshold."""
 
 
+class DegenerateFitError(ValueError):
+    """Every sample was collinear: the points fix no rotation about their own line."""
+
+
 def residuals(similarity: sfm.Similarity, source: F64, target: F64) -> F64:
     """Per-row distance between `similarity(source)` and `target`."""
     moved = similarity.apply(source)
@@ -206,7 +211,7 @@ def fit_sim3(
         if best is None or key < best:
             best, best_fit = key, candidate
     if best is None or best_fit is None:
-        raise ValueError(
+        raise DegenerateFitError(
             f"every 3-point sample of the {n} correspondences is collinear; a line does not "
             f"fix a rotation about itself"
         )
