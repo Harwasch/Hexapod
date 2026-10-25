@@ -19,10 +19,24 @@ dev = [
   "pytest>=8.4",
   "ruff>=0.13",
 ]
+light = [
+    "accelerate>=1",
+    "diffusers>=0.35,<0.37",
+    "torch>=2.6",
+    "transformers>=4.45,<5",
+]
 
 [tool.uv]
 # Scripts run from this directory; there is nothing to build or install.
 package = false
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.ruff]
 line-length = 100
