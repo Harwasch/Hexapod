@@ -69,7 +69,7 @@ export class LightRuntime {
       });
       const loaded = await this.manifest;
       const entry = loaded.doc.tiles[binding.checksum];
-      if (!entry || entry.count !== binding.order.length) return;
+      if (entry?.count !== binding.order.length) return;
       const response = await fetch(new URL(entry.uri, loaded.url), { signal: this.abort.signal });
       if (!response.ok) throw new Error(`Lighting sidecar HTTP ${String(response.status)}`);
       const streams = lightStreamData(await response.arrayBuffer(), binding.order);
