@@ -1,16 +1,36 @@
 // Deterministic four-arm recording + interleaved completed-frame timings.
 // Requires driver.mjs, light-cache.mjs and Vite on distinct 5600–5699 ports.
+import { request } from "node:http";
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 const out = resolve(process.env.LIGHT_OUTPUT);
 const driver = process.env.LIGHT_DRIVER ?? "http://localhost:5601";
 const cache = process.env.LIGHT_CACHE_URL ?? "http://localhost:5602";
-const call = async (route, body) => {
-  const response = await fetch(driver + route, { method: "POST", body });
-  const value = await response.text();
-  if (!response.ok) throw new Error(value);
-  return JSON.parse(value);
-};
+// Node fetch imposes a five-minute headers timeout. Software-rendered screenshots
+// can be paused by a shared host; use HTTP without that unrelated transport deadline.
+const call = (route, body) =>
+  new Promise((resolve, reject) => {
+    const req = request(driver + route, { method: "POST" }, (response) => {
+      let value = "";
+      response.on("data", (chunk) => {
+        value += chunk;
+      });
+      response.on("end", () => {
+        if (response.statusCode !== 200) {
+          reject(new Error(value));
+          return;
+        }
+        try {
+          resolve(JSON.parse(value));
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
 const evaluate = (code) => call("/eval", code);
 const shot = (name) => call(`/shot?path=${encodeURIComponent(resolve(out, name))}`);
 const frames = async (n) =>
@@ -51,6 +71,7 @@ const measure = async (arm, round) => {
   await frames(12);
   const ms = await evaluate("window.__livingBench.slice(0,12)");
   timings.push({ arm, round, ms });
+  await writeFile(resolve(out, "bench-partial.json"), JSON.stringify(timings, null, 2));
 };
 await measure("captured", "before-streams");
 await set("b");
@@ -64,6 +85,7 @@ await shot("captured-after.png");
 for (const arm of ["captured", "today", "a", "b"]) {
   await mkdir(resolve(out, arm), { recursive: true });
   for (let i = 0; i < 24; i++) {
+    if (existsSync(resolve(out, arm, `${String(i).padStart(3, "0")}.png`))) continue;
     await set(arm, i / 23, i * 0.5);
     await shot(`${arm}/${String(i).padStart(3, "0")}.png`);
   }
