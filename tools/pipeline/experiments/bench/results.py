@@ -83,14 +83,15 @@ def markdown(results: list[dict[str, Any]]) -> str:
     def cell(value: Any) -> str:
         return "-" if number(value) is None else f"{value:.4f}"
 
-    lines = [
-        "# Frozen-input bench",
-        "",
-        "Rehearsal rows are synthetic; they are not quality measurements.",
-        "",
+    lines = ["# Frozen-input bench", ""]
+    if any(row.get("rehearsal") for row in results):
+        lines += ["Rehearsal rows are synthetic; they are not quality measurements.", ""]
+    # Test PSNR/SSIM/LPIPS are of the shipped SH degree; full-SH PSNR is what dropping the
+    # higher bands costs on the same frames.
+    lines += [
         "| run | scene | variant | seed | schedule | status | test PSNR | SSIM | LPIPS "
-        "| splats | train s | wall s | $ |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| full-SH PSNR | splats | MB | train s | wall s | $ |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in results:
@@ -106,8 +107,9 @@ def markdown(results: list[dict[str, Any]]) -> str:
                     str(row["seed"]),
                     row["schedule"],
                     row["status"],
-                    *(cell(test[k]) for k in ("psnr", "ssim", "lpips")),
+                    *(cell(test[k]) for k in ("psnr", "ssim", "lpips", "psnrFullSh")),
                     cell(row["splats"]),
+                    cell(None if row.get("outputBytes") is None else row["outputBytes"] / 1e6),
                     cell(row["trainSeconds"]),
                     cell(row["wallSeconds"]),
                     cell(row["costUsd"]),
@@ -143,7 +145,17 @@ def markdown(results: list[dict[str, Any]]) -> str:
         label += f" ({str(first.get('manifestDigest'))[:8]}, {first['gpu']['tier']})"
         if first.get("rehearsal"):
             label += " REHEARSAL"
-        for key in ("psnr", "ssim", "lpips", "splats", "trainSeconds", "wallSeconds", "costUsd"):
+        for key in (
+            "psnr",
+            "ssim",
+            "lpips",
+            "psnrFullSh",
+            "psnrFullShGap",
+            "splats",
+            "trainSeconds",
+            "wallSeconds",
+            "costUsd",
+        ):
             values = [
                 value
                 for r in rows

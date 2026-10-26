@@ -130,6 +130,18 @@ def test_summary_spread_over_seeds_and_separates_refrozen_scene(tmp_path: Path) 
     assert "| psnr | 2 |" not in markdown([a, b])
 
 
+def test_table_shows_full_sh_and_size_and_flags_only_rehearsals(tmp_path: Path) -> None:
+    a = result(tmp_path)
+    a["test"].update(psnr=22.0, psnrFullSh=25.0, psnrFullShGap=3.0)
+    a["outputBytes"] = 32_000_000
+    table = markdown([a])
+    assert "| full-SH PSNR | splats | MB |" in table
+    assert "| 25.0000 |" in table and "| 32.0000 |" in table
+    assert "| psnrFullShGap | 1 | 3.0000 |" in table
+    assert "Rehearsal rows" not in table
+    assert "Rehearsal rows" in markdown([{**a, "rehearsal": True}])
+
+
 def test_non_numeric_optional_metrics_become_null(tmp_path: Path) -> None:
     write_json(tmp_path / "train_metrics.json", {"psnr": "bad", "ssim": True})
     parsed = result(tmp_path)
