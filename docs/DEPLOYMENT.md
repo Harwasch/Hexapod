@@ -1480,6 +1480,40 @@ marker the machine prints only then. **Rollback:** the apply run's summary print
 correction replaced in full: an epoch's old date and source, a site's old boundary and
 centroid as WKT. Nothing is deleted.
 
+### Exporting a run's inputs
+
+Actions → **Export run inputs** (`.github/workflows/export-run-inputs.yml`) is dispatch-only.
+Set `run` to a lowercase job UUID or `runs/<uuid>/`, optionally ending in `p<16 hex>/`.
+For Spool, use `runs/ec644db5-ceaf-4c01-bf89-b261623327c2/`. The default `items` are
+`normalize/frames/ normalize/frames_meta.json pose/poses/ place/placement.json`;
+any space-separated subset of those four paths is accepted. Every requested item must
+exist. The workflow discovers a single populated root or generation and logs which prefix
+it used; if several contain requested inputs, dispatch with the explicit generation.
+
+It uses `CLOUDFLARE_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and
+`R2_BUCKET` (default `twin-assets`) to **list and get from the private bucket only**.
+Logs contain the selected prefix and aggregate counts and sizes, never file contents or
+individual filenames. No plaintext is written to the job summary. Plaintext stays in the
+runner workspace and is deleted before upload, with cleanup on failures too.
+
+Download and unzip the `run-inputs-encrypted` workflow artifact within **one day**.
+Its only file is `run-inputs.tar.gpg`, encrypted to `.github/keys/run-export.asc`
+(primary fingerprint `25398747159F3E911B4DAD38FEC5E5D75D14CBAE`; the workflow also pins
+its encryption subkey). On the research machine that holds the private key:
+
+```bash
+umask 077
+gpg --output run-inputs.tar --decrypt run-inputs.tar.gpg
+mkdir -p run-inputs
+tar -xf run-inputs.tar -C run-inputs
+rm run-inputs.tar
+```
+
+Keep decrypted inputs outside the public repository. The private key stays on Harrison's
+machine; rotation requires reviewing both the committed public key and the workflow's
+fingerprint pins. **Rollback:** delete the artifact or disable the workflow; it never
+changes R2 objects. Real production export is verified only by a later operator dispatch.
+
 ### Two-date test data: NWM
 
 No Hexapod site has two dates yet, so alignment (M3) and the change map (M5) are tried on
