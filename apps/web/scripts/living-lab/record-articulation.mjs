@@ -16,6 +16,18 @@ await mkdir(out, { recursive: true });
 const manifest = JSON.parse(await readFile(`${source}/tileset.json`, "utf8"));
 manifest.root.extras ??= {};
 manifest.root.extras.nativeLod = false;
+// Retain existing scan LOD tiles when the full tree exceeds shared-machine memory.
+const treeDepth = process.env.LAB_TREE_DEPTH ? Number(process.env.LAB_TREE_DEPTH) : null;
+if (scene === "tree" && treeDepth !== null) {
+  if (!Number.isInteger(treeDepth) || treeDepth < 1) throw new Error("Invalid LAB_TREE_DEPTH");
+  const prune = (tile, depth) => {
+    if (depth >= treeDepth) delete tile.children;
+    tile.geometricError = tile.children?.length ? 1000 : 0;
+    for (const child of tile.children ?? []) prune(child, depth + 1);
+  };
+  prune(manifest.root, 0);
+  console.info("Existing tree LOD depth cap", treeDepth);
+}
 await writeFile(`${source}/lab-tileset.json`, JSON.stringify(manifest));
 const call = (route, body = "") =>
   new Promise((resolve, reject) => {
@@ -60,7 +72,7 @@ await call(
 await ev(`(async()=>{while(!window.__lab) await new Promise(r=>setTimeout(r,500));
   ${scene === "tree" ? "__lab.viewBounds(35,-12,15.4)" : "__lab.view([1.1,.7,.42],35,-18,1.4)"};
   LL.getState().set({motion:'off',clock:0,bench:true,flatGround:${scene === "tree" ? "0" : ".29"}});
-  while(__lab.status().loading || __lab.status().gaussians<${scene === "tree" ? "1500000" : "30000"} || !__lab.status().settled)
+  while(__lab.status().loading || __lab.status().gaussians<${scene === "tree" ? (treeDepth === null ? "1500000" : "100000") : "30000"} || !__lab.status().settled)
     await new Promise(r=>setTimeout(r,500)); return __lab.status();})()`);
 console.info(scene, "loaded", await ev("__lab.status()"));
 await ev(
@@ -134,6 +146,7 @@ if (!preview) {
       const row = {
         scene,
         viewport,
+        treeDepth,
         round,
         arm,
         samples,
