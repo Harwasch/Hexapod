@@ -69,6 +69,7 @@ export function LivingLabPanel() {
             <option value="off">Off</option>
             <option value="gust">Gust field + shimmer</option>
             <option value="clumps">Resonant clumps</option>
+            <option value="spectra">Voxel spectra</option>
           </select>
         </label>
         <label className="living-lab__row">
@@ -79,6 +80,17 @@ export function LivingLabPanel() {
           />{" "}
           Show classes
         </label>
+        {lab.motion === "spectra" && (
+          <label className="living-lab__row">
+            Spectra sidecar
+            <input
+              aria-label="Spectra sidecar URL"
+              value={lab.spectraUrl}
+              onChange={(e) => lab.set({ spectraUrl: e.target.value })}
+            />
+            <span role="status">{lab.spectraStatus}</span>
+          </label>
+        )}
         {slider("Strength", "strength", 0, 3, 0.05)}
         {slider("Wind to (°)", "windBearingDeg", 0, 360, 5)}
         {slider("Greenness", "greenness", -1, 0.4, 0.01)}

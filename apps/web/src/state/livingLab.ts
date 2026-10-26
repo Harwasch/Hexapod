@@ -19,13 +19,16 @@ import { useAsCaptured } from "@/state/asCaptured";
  * level surface with ripples, a sky reflection, sun glints and streaks carried along
  * `flowBearingDeg`. The shore is where the ground meets the level.
  */
-export type LivingMotionArm = "off" | "gust" | "clumps";
+export type LivingMotionArm = "off" | "gust" | "clumps" | "spectra";
 
 export interface LivingLabState {
   /** The lab's panel shows (the developer toggle). */
   open: boolean;
   water: boolean;
   motion: LivingMotionArm;
+  /** Explicit lab-only sidecar URL, in this scan's metre frame. */
+  spectraUrl: string;
+  spectraStatus: string;
   /** Overall motion amplitude, 1 a moderate breeze. */
   strength: number;
   /** Where the wind blows to, degrees clockwise from north. */
@@ -74,6 +77,8 @@ export const useLivingLab = create<LivingLabState>()((set) => ({
   open: flagFromLocation("living"),
   water: false,
   motion: "off",
+  spectraUrl: "",
+  spectraStatus: "No spectra loaded",
   strength: 1,
   windBearingDeg: 60,
   gustSpeed: 4,

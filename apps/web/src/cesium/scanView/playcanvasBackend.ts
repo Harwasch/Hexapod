@@ -1,3 +1,10 @@
+import {
+  loadSpectra,
+  evaluateSpectra,
+  SPECTRA_INDEX_WIDTH,
+  SPECTRA_DISPLACEMENT_WIDTH,
+  type LivingSpectra,
+} from "./livingSpectra";
 /**
  * The PlayCanvas back-end of the scan renderer (ScanRendererHost): SuperSplat's own engine
  * (MIT). Each tile is decoded in a worker into the columns PlayCanvas's `GSplatData` takes
@@ -97,7 +104,12 @@ import { tileInstanceIds, type InstancesDoc } from "@/lib/instances";
 import { createLogger } from "@/lib/log";
 import { tileSkin, type SkinDoc } from "@/lib/skin";
 import type { PickTile } from "@/lib/splatPick";
-import { effectiveLivingLab, watchLivingLab, type LivingLabState } from "@/state/livingLab";
+import {
+  useLivingLab,
+  effectiveLivingLab,
+  watchLivingLab,
+  type LivingLabState,
+} from "@/state/livingLab";
 import { reportScanSun, watchScanSun, type ScanSun } from "@/state/sunReport";
 import type { TileNode } from "@/view/tiles";
 
@@ -881,6 +893,15 @@ function assemble(
   let livingHooked = false;
   const livingValues = livingUniforms();
   const livingStart = performance.now();
+  let spectra: LivingSpectra | null = null;
+  let spectraUrl = "";
+  let spectraRequest: AbortController | null = null;
+  let spectraIndex: pc.Texture | null = null;
+  let spectraDisplacement: pc.Texture | null = null;
+  let spectraPixels = new Float32Array(0);
+  let spectraTime = "";
+  const spectraOrigin = new Float32Array(4);
+  const spectraStep = new Float32Array([1, 1, 1]);
   let ground: GroundGrid | null = null;
   let groundTexture: pc.Texture | null = null;
   let groundTiles = -1;
@@ -978,6 +999,54 @@ function assemble(
       texture.unlock();
     }
     return texture;
+  };
+  /** Requests are cancelled on replacement/destruction; old scans never keep the old field. */
+  const syncSpectra = (lab: LivingLabState): void => {
+    if (lab.spectraUrl === spectraUrl) return;
+    spectraUrl = lab.spectraUrl;
+    spectraRequest?.abort();
+    spectra = null;
+    spectraOrigin.fill(0);
+    spectraIndex?.destroy();
+    spectraDisplacement?.destroy();
+    spectraIndex = spectraDisplacement = null;
+    spectraTime = "";
+    if (!spectraUrl) return;
+    const controller = new AbortController();
+    spectraRequest = controller;
+    useLivingLab.getState().set({ spectraStatus: "Loading spectra…" });
+    void loadSpectra(spectraUrl, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted || destroying) return;
+        spectra = loaded;
+        const h = loaded.header;
+        spectraOrigin.set([...h.origin, h.resolution]);
+        spectraStep.set(h.size.map((v) => v / (h.resolution - 1)));
+        spectraIndex = dataTexture(
+          "livingSpectraIndex",
+          SPECTRA_INDEX_WIDTH,
+          loaded.index.length / SPECTRA_INDEX_WIDTH,
+          pc.PIXELFORMAT_R32F,
+          loaded.index,
+        );
+        const rows = Math.ceil(h.occupied / SPECTRA_DISPLACEMENT_WIDTH);
+        spectraPixels = new Float32Array(SPECTRA_DISPLACEMENT_WIDTH * rows * 4);
+        spectraDisplacement = dataTexture(
+          "livingSpectraDisplacement",
+          SPECTRA_DISPLACEMENT_WIDTH,
+          rows,
+          pc.PIXELFORMAT_RGBA32F,
+          spectraPixels,
+        );
+        useLivingLab.getState().set({
+          spectraStatus: `Simulated · ${String(h.occupied)} voxels · ${String(h.frequenciesHz.length)} terms`,
+        });
+        hooks.frameWanted();
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted && !destroying)
+          useLivingLab.getState().set({ spectraStatus: String(error) });
+      });
   };
   /** Stand-ins for tables not there yet: every sampler the GLSL modifier declares is bound. */
   let empty: { state: pc.Texture; float: pc.Texture; uint: pc.Texture } | null = null;
@@ -1782,8 +1851,9 @@ function assemble(
       changed = true;
     }
     if (living) {
-      syncGround();
       const lab = living;
+      if (lab.motion !== "spectra" || lab.water) syncGround();
+      if (lab.motion === "spectra") syncSpectra(lab);
       packLiving(
         livingValues,
         {
@@ -1800,6 +1870,20 @@ function assemble(
         },
         ground,
       );
+      if (lab.motion === "spectra" && spectra && spectraDisplacement) {
+        const t = lab.clock ?? (performance.now() - livingStart) / 1000;
+        const key = `${String(t)}:${String(lab.strength)}:${String(lab.windBearingDeg)}`;
+        if (key !== spectraTime) {
+          evaluateSpectra(spectra, t, lab.strength, lab.windBearingDeg, spectraPixels);
+          (spectraDisplacement.lock() as Float32Array).set(spectraPixels);
+          spectraDisplacement.unlock();
+          spectraTime = key;
+        }
+      }
+      material.setParameter("uSpectraOrigin", spectraOrigin);
+      material.setParameter("uSpectraStep", spectraStep);
+      material.setParameter("uSpectraIndex", spectraIndex ?? stand().float);
+      material.setParameter("uSpectraDisplacement", spectraDisplacement ?? stand().float);
       material.setParameter("uLivingT", livingValues.t);
       material.setParameter("uLivingWind", livingValues.wind);
       material.setParameter("uLivingWater", livingValues.water);
@@ -2168,9 +2252,9 @@ function assemble(
       ruleDates?.plan(pose);
       lodBudget();
       farNow = pose.farView === true;
+      const benchAt = living?.bench ? performance.now() : null;
       syncHooks();
       framesDrawn += 1;
-      const benchAt = living?.bench ? performance.now() : null;
       app.render();
       if (benchAt !== null) livingBench(benchAt);
       while (doomed[0] && framesDrawn - doomed[0].at >= DESTROY_AFTER_FRAMES) {
@@ -2277,6 +2361,10 @@ function assemble(
     destroy: () => {
       for (const off of cellLinks) off();
       livingLink();
+      spectraRequest?.abort();
+      spectraIndex?.destroy();
+      spectraDisplacement?.destroy();
+      groundTexture?.destroy();
       unpick?.();
       unpick = null;
       ruleDates?.stop();

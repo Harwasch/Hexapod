@@ -1,3 +1,5 @@
+import { SPECTRA_GLSL } from "./livingSpectra";
+
 /**
  * The living lab under PlayCanvas (state/livingLab.ts): water and wind drawn every frame by the
  * final-draw hook, `gsplatModifyVS` on the user material -- the place the sunlight draws from
@@ -50,6 +52,7 @@ export function livingUniforms(): LivingUniforms {
 }
 
 const LIVING_GLSL = `
+${SPECTRA_GLSL}
 uniform vec4 uLivingT;
 uniform vec4 uLivingWind;
 uniform vec4 uLivingWater;
@@ -196,6 +199,10 @@ void modifySplatCenter(inout vec3 center) {
             livingWaterW = w;
         }
     }
+    if (uLivingT.z > 2.5) {
+        center += livingSpectrum(center);
+        return;
+    }
     if (uLivingT.z > 0.5 && livingWaterW < 0.5) {
         vec3 c = livingColor().rgb;
         float exg = (2.0 * c.g - c.r - c.b) / (c.r + c.g + c.b + 0.001);
@@ -290,7 +297,7 @@ export function livingHookVs(inner: string | undefined): string {
 export interface LivingSettings {
   t: number;
   water: boolean;
-  motion: "off" | "gust" | "clumps";
+  motion: "off" | "gust" | "clumps" | "spectra";
   strength: number;
   windBearingDeg: number;
   gustSpeed: number;
@@ -311,7 +318,7 @@ const RAD = Math.PI / 180;
 
 /** Fills `u` from `s`. A bearing is clockwise from north: east is +x, north +y. */
 export function packLiving(u: LivingUniforms, s: LivingSettings, ground: GroundGrid | null): void {
-  const arm = s.motion === "gust" ? 1 : s.motion === "clumps" ? 2 : 0;
+  const arm = s.motion === "gust" ? 1 : s.motion === "clumps" ? 2 : s.motion === "spectra" ? 3 : 0;
   u.t.set([s.t, s.water ? 1 : 0, arm, s.strength]);
   const wb = s.windBearingDeg * RAD;
   u.wind.set([Math.sin(wb), Math.cos(wb), s.gustSpeed, s.mask ? 1 : 0]);
