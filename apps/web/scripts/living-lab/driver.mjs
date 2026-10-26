@@ -1,6 +1,7 @@
 // A long-lived headless browser on the dev app, driven over HTTP on 127.0.0.1:$DRIVER_PORT:
 // POST /eval (body: JS expression, awaited) -> JSON; POST /shot?path=... -> PNG saved;
 // POST /goto (body: URL path). For iterating on the living-lab shaders by eye.
+import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 
 import { chromium } from "@playwright/test";
@@ -51,6 +52,25 @@ createServer(async (req, res) => {
       out = "ok";
     } else if (url.pathname === "/eval") {
       out = await page.evaluate(`(async () => (${await body(req)}))()`);
+    } else if (url.pathname === "/canvas") {
+      // Read the preserved harness buffers without waiting for compositor screenshots.
+      const png = await page.evaluate(() => {
+        const output = document.createElement("canvas");
+        output.width = window.innerWidth;
+        output.height = window.innerHeight;
+        const ctx = output.getContext("2d");
+        ctx.fillStyle = "#9fb3c8";
+        ctx.fillRect(0, 0, output.width, output.height);
+        for (const canvas of document.querySelectorAll("canvas")) {
+          const gl = canvas.getContext("webgl2");
+          if (!gl?.getContextAttributes()?.preserveDrawingBuffer) continue;
+          const box = canvas.getBoundingClientRect();
+          if (box.width && box.height) ctx.drawImage(canvas, box.x, box.y, box.width, box.height);
+        }
+        return output.toDataURL("image/png").split(",")[1];
+      });
+      await writeFile(url.searchParams.get("path"), Buffer.from(png, "base64"));
+      out = "saved";
     } else if (url.pathname === "/shot") {
       await page.screenshot({
         path: url.searchParams.get("path"),

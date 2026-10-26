@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { request } from "node:http";
 
 const root = process.cwd();
-const out = resolve(root, ".lab-out/living-spectra");
+const out = resolve(process.env.LAB_OUT ?? resolve(root, ".lab-out/living-spectra"));
 const data = resolve(root, ".lab-data/minnetonka-tree");
 const driver = process.env.DRIVER_URL ?? "http://localhost:5742";
 await mkdir(out, { recursive: true });
@@ -14,7 +14,7 @@ const manifest = JSON.parse(await readFile(`${data}/splat/tileset.json`, "utf8")
 manifest.root.extras.nativeLod = false; // mirror contains GLBs, not SOG; preserve every tile
 await writeFile(`${data}/splat/lab-tileset.json`, JSON.stringify(manifest));
 const tiles = `/@fs${data}/splat/lab-tileset.json`;
-const spectra = `/@fs${out}/bake/spectra.json`;
+const spectra = `/@fs${root}/.lab-out/living-spectra/bake/spectra.json`;
 function call(route, body = "") {
   // Rendering may take many minutes under SwiftShader: no five-minute fetch header timeout.
   return new Promise((resolve, reject) => {
@@ -40,7 +40,7 @@ function call(route, body = "") {
   });
 }
 const ev = (expression) => call("eval", expression);
-const shot = (name) => call(`shot?path=${encodeURIComponent(`${out}/${name}`)}`);
+const shot = (name) => call(`canvas?path=${encodeURIComponent(`${out}/${name}`)}`);
 const median = (a) => [...a].sort((a, b) => a - b)[Math.floor(a.length / 2)];
 async function benchLine(arm, round, samples, status) {
   const line = JSON.stringify({ arm, round, medianMs: median(samples), samples, status });

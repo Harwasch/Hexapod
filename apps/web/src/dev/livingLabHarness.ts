@@ -47,7 +47,7 @@ export async function startLivingLabHarness(container: HTMLElement, tilesetUrl: 
   tileset.show = false;
   tileset.preloadWhenHidden = false;
   scene.primitives.add(tileset);
-  const host = new ScanRendererHost(widget);
+  const host = new ScanRendererHost(widget, { preserveDrawingBuffer: true });
   host.setRenderer("playcanvas");
   host.setTarget({ key: "lab", tileset });
   const view = (
