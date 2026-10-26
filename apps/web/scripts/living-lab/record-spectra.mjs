@@ -45,7 +45,7 @@ const median = (a) => [...a].sort((a, b) => a - b)[Math.floor(a.length / 2)];
 async function benchLine(arm, round, samples, status) {
   const line = JSON.stringify({ arm, round, medianMs: median(samples), samples, status });
   await appendFile(`${out}/bench-raw.jsonl`, `${line}\n`);
-  console.log(line);
+  console.info(line);
 }
 async function captured(name) {
   if (process.env.RESUME !== "1") return false;
@@ -67,7 +67,7 @@ if (!survey) {
     __lab.viewBounds(35,-12,15.4); LL.getState().set({motion:"off",clock:0,bench:true});
     while(__lab.status().loading || __lab.status().gaussians<1500000) await new Promise(r=>setTimeout(r,1000));
     return __lab.status();})()`);
-  console.log("PlayCanvas loaded", await ev(`__lab.status()`));
+  console.info("PlayCanvas loaded", await ev(`__lab.status()`));
   // Warm up spectra and both shader configurations before recording/timing.
   await ev(`(async()=>{LL.getState().set({motion:"spectra",spectraUrl:${JSON.stringify(spectra)},clock:0});
     while(!LL.getState().spectraStatus.startsWith("Simulated")) await new Promise(r=>setTimeout(r,500));
@@ -89,7 +89,7 @@ if (!survey) {
         await ev(`(async()=>{LL.getState().set({motion:${JSON.stringify(arm)},strength:1,windBearingDeg:60,clock:${i / 12}});
           const n=__lab.status().frames; while(__lab.status().frames<n+2) await new Promise(r=>setTimeout(r,100)); return __lab.status().frames;})()`);
         await shot(`${view}-${arm}-frames/${String(i).padStart(3, "0")}.png`);
-        console.log(`${view} ${arm} ${i + 1}/24`);
+        console.info(`${view} ${arm} ${i + 1}/24`);
       }
     }
   }
@@ -117,7 +117,7 @@ if (!survey) {
       await ev(`__survey.step(${i / 12},${wind})`);
       if (await captured(`${view}-today-frames/${String(i).padStart(3, "0")}.png`)) continue;
       await shot(`${view}-today-frames/${String(i).padStart(3, "0")}.png`);
-      console.log(`${view} today ${i + 1}/24`);
+      console.info(`${view} today ${i + 1}/24`);
     }
   }
   await ev(`__survey.view(15.4,0,${wind},600000)`);
@@ -139,4 +139,4 @@ await writeFile(
   `${out}/${survey ? "survey" : "playcanvas"}-console.json`,
   JSON.stringify(await call("logs"), null, 2),
 );
-console.log("Recording and bench complete");
+console.info("Recording and bench complete");
