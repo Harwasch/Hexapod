@@ -1143,6 +1143,83 @@ to whichever stage places captures by hand, its sensor and date to whichever sta
 `source_meta.json`, its slug and name to `catalog`, and `jobs.params` — recorded since A2
 and ignored until A8 — wins over all of them.
 
+## Frozen-input splat bench
+
+`experiments/bench/` compares train recipes without re-posing a scene. The separate
+`hexapod-bench` Modal app reuses the production training image and stores frozen scenes
+and results in its own `/bench` volume. Its CPU freeze function has a list/get-only R2
+wrapper; **it never writes to production storage**. GPU functions receive no storage
+secret and run only the local `train` stage. The editable registry names `spool`
+(private phone capture), `pumpkin`, and `nwm-d1` (public TU Wien capture c94ec4e6).
+
+Freeze records every downloaded file's bytes/hash, source generation and bench commit.
+An 8-hex run prefix must resolve uniquely; generation discovery requires exactly one
+populated root or `p<16 hex>` generation, even if another candidate is only partially
+populated. Use `--generation root|p<16 hex>` to resolve ambiguity. Existing scenes
+require `--refreeze`. Each batch pins the manifest; each worker verifies its own local
+snapshot, and a changed split or input fails before training.
+
+The test set is the lowest eighth of registered frames ranked by
+`sha256("scene:frame_name")`, rounded half up, minimum one. All other frames form the
+pool; gsplat holds every eighth pool frame out for validation/convergence. Test images
+and their COLMAP tracks are absent from train inputs. Poses are the frozen joint solve,
+not re-estimated. `full` retains the recipe's current train params, including its
+capture-size scaling and convergence. `screen` overlays `schedule_scale: 0.1` and
+`train_max_side: 800`, **not** Preview's 200k `cap_max`. Variant overrides apply last.
+Seed 42 uses the unpatched trainer; other seeds change exactly its one seed call in a
+sibling script. Rehearsal uses a stand-in and labels all numbers as synthetic.
+
+Test PSNR/SSIM/AlexNet LPIPS (`normalize=True`) measure the shipped PLY over whole
+test images, using gsplat's own downscale/undistortion path and the full frozen cameras.
+Full-SH PSNR comes from the original export's exactly matching rows (including cropped
+subsets); merged exports without a matching source report a null diagnostic and a
+reason. Region metrics remain null until annotated masks and an adapter exist.
+Nothing fabricates subject masks. Raw trainer/argv and external initialisation
+overrides are refused to protect the input/split boundary. `pose_opt` can optimise
+pool poses inside training; scoring always uses the frozen test cameras.
+
+Run from `tools/pipeline` (Modal credentials and `twin-object-storage` must already
+exist). Every remote operation is one command; no separate deployment is needed:
+
+```bash
+uv run --with modal==1.6.2 python -m experiments.bench freeze --scene spool --dry-run
+uv run --with modal==1.6.2 python -m experiments.bench freeze --scene spool
+uv run --with modal==1.6.2 python -m experiments.bench run --scene spool --variant baseline --schedule screen --cap 2 --dry-run
+uv run --with modal==1.6.2 python -m experiments.bench run --scene spool --variant baseline --schedule screen --cap 2
+uv run --with modal==1.6.2 python -m experiments.bench run --scene spool --variant baseline --seeds 42,43 --schedule full --cap 2 --dry-run
+uv run --with modal==1.6.2 python -m experiments.bench run --scene spool --variant baseline --seeds 42,43 --schedule full --cap 2
+uv run python -m experiments.bench report
+uv run python -m experiments.bench ledger
+# No Modal, GPU, bucket, or model downloads; synthetic scene created automatically:
+uv run python -m experiments.bench run --scene spool --seeds 42,43 --rehearse
+uv run python -m experiments.bench report --rehearse
+```
+
+Use `--set '{"train": {"gaussian_density": 0.2}}'`, or `--variants file.yaml` containing
+`baseline: {}` and `dense: {train: {gaussian_density: 0.2}}`. Each variant/seed gets a
+unique run ID; at most four spawn concurrently. `--keep-splat` retains the shipped PLY
+on the volume. Reports and small stage artifacts also land locally under
+`~/.local/share/hexapod-bench/runs/<run_id>/`; `report --runs ID ...` selects runs.
+Summaries separate scenes, snapshots, schedules, tiers, overrides and bench commits.
+
+The append-only, locked ledger defaults to `~/.local/share/hexapod-bench/ledger.jsonl`
+(`--ledger PATH`, always outside the repo). Rehearsal has a separate `rehearsal/` state
+directory and zero cost. Before any launch, the entire batch must fit `--cap` (default
+$2), including earlier spend and unresolved reservations. Forecasts use the maximum
+earlier actual cost for scene/schedule/tier, else $0.20 screen / $0.90 full on L4,
+$0.05 freeze; other GPU forecasts scale by the repo's rates including CPU/RAM.
+**Forecasts alone cannot enforce a dollar cap:** the bench also reserves the larger
+timeout cost (30 min screen, 55 min full, 10 min freeze), plus a 60-second startup
+limit and 60-second teardown allowance. Containers are single-use, with CPU/RAM hard
+limits equal to their priced reservations. A two-seed full L4 baseline reserves about
+$1.82, so it fits the default $2 once earlier runs have recorded their actual cost.
+Missing/unknown outcomes retain the reservation; corrupt ledger lines refuse launches.
+Returned costs use container seconds and the repo's GPU + reservation price table,
+not a Modal invoice. The cap bounds this model; image builds, provider billing beyond
+the configured lifecycle limits and price changes still require reconciliation with Modal.
+The dry plan is offline and writes nothing; remote calls, image mounting and CUDA
+rendering must be validated in the coordinator's screen smoke run.
+
 ## Verify
 
 ```bash
