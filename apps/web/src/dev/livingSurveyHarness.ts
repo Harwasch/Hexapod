@@ -83,6 +83,10 @@ export type StepParts = "all" | "sway";
 export interface LivingSurveyHarness {
   /** Applies the rig at time `t` under `wind`, then renders one frame. */
   step(t: number, wind: WindSettings, parts?: StepParts): Promise<DeformerStatus>;
+  /** Lab comparison: simulation + draw fenced by one-pixel read-back; excludes RAF wait. */
+  benchFrame(t: number, wind: WindSettings): Promise<number>;
+  /** Lab crown framing in the same scan frame as the PlayCanvas harness. */
+  viewAt(target: [number, number, number], heading: number, pitch: number, range: number): void;
   /** Renders frames until the deformer attaches or `timeoutMs` elapses. */
   waitUntilReady(timeoutMs: number): Promise<DeformerStatus>;
   status(): HarnessStatus;
@@ -290,6 +294,39 @@ export async function startLivingSurveyHarness(
 
   return {
     step,
+    viewAt(target, heading, pitch, range) {
+      const at = Matrix4.multiplyByPoint(
+        tileset.root.computedTransform,
+        Cartesian3.fromArray(target),
+        new Cartesian3(),
+      );
+      scene.camera.lookAt(
+        at,
+        new HeadingPitchRange(CesiumMath.toRadians(heading), CesiumMath.toRadians(pitch), range),
+      );
+      scene.camera.lookAtTransform(Matrix4.IDENTITY);
+    },
+    async benchFrame(t, wind) {
+      const before = performance.now();
+      const { transforms, flutter } = frameAt(t, wind);
+      deformer.apply(transforms, flutter);
+      const cpu = performance.now() - before;
+      return new Promise<number>((resolve) => {
+        let start = 0;
+        const pre = scene.preRender.addEventListener(() => {
+          start = performance.now();
+        });
+        const post = scene.postRender.addEventListener(() => {
+          const gl = scene.canvas.getContext("webgl2");
+          if (!gl) throw new Error("Lab bench requires WebGL2");
+          gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+          pre();
+          post();
+          resolve(cpu + performance.now() - start);
+        });
+        scene.requestRender();
+      });
+    },
     status,
     staticAudit(): StaticAudit | null {
       return deformer.staticAudit() ?? null;
