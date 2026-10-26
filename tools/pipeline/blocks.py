@@ -1011,6 +1011,9 @@ def _coarse_prior(ctx: StageContext, settings: Settings, work: Path) -> Prior:
         steps_scaler=scaler,
         cap_max=cap,
         antialiased=bool(settings.switches.get("antialiased")),
+        packed=bool(settings.switches.get("packed", True)),
+        sparse_grad=bool(settings.switches.get("sparse_grad")),
+        visible_adam=bool(settings.switches.get("visible_adam")),
         batch_size=settings.batch_size,
         extra=settings.extra,
     )
@@ -1386,6 +1389,9 @@ def _train_block(
         antialiased=bool(settings.switches.get("antialiased")),
         opacity_reg=settings.switches.get("opacity_reg"),
         depth_loss=bool(settings.switches.get("depth_loss")),
+        packed=bool(settings.switches.get("packed", True)),
+        sparse_grad=bool(settings.switches.get("sparse_grad")),
+        visible_adam=bool(settings.switches.get("visible_adam")),
         pose_opt=bool(settings.switches.get("pose_opt")),
         app_opt=bool(settings.switches.get("app_opt")),
         bilateral_grid=bool(settings.switches.get("bilateral_grid")),
@@ -1704,6 +1710,9 @@ def _evaluate(
             data_factor=settings.data_factor,
             steps_scaler=settings.steps_scaler,
             antialiased=bool(switches.get("antialiased")),
+            packed=bool(switches.get("packed", True)),
+            sparse_grad=bool(switches.get("sparse_grad")),
+            visible_adam=bool(switches.get("visible_adam")),
             # The PLY is baked (degree-0 colour under a zero embedding), so it is scored
             # as the plain splat it is, never through an appearance module.
             bilateral_grid=bool(switches.get("bilateral_grid")),

@@ -10,6 +10,7 @@ from typing import Any
 
 from holdout_error import read_ply
 
+from .gpu import summarise_samples
 from .ledger import hourly_rate
 from .scene import read_json
 
@@ -43,6 +44,7 @@ def parse_result(
     test = optional(directory / "test.json")
     ply = directory / "trained.ply"
     count = len(read_ply(ply)["x"]) if ply.is_file() else None
+    iterations = number(metrics.get("iterations"))
     return {
         "schemaVersion": 1,
         "runId": plan["runId"],
@@ -60,6 +62,8 @@ def parse_result(
             "regions": test.get("regions"),
             "regionsReason": test.get("regionsReason", "evaluation did not run"),
             "fullShReason": test.get("fullShReason"),
+            "shDegree": test.get("shDegree"),
+            "byDegree": test.get("byDegree", {}),
         },
         "val": {
             **{k: number(metrics.get(k)) for k in ("psnr", "ssim", "lpips")},
@@ -68,6 +72,13 @@ def parse_result(
         "splats": count,
         "outputBytes": ply.stat().st_size if ply.is_file() else None,
         "trainSeconds": train_seconds,
+        "iterations": iterations,
+        "trainSecondsPer1kSteps": (
+            train_seconds * 1000 / iterations
+            if train_seconds is not None and iterations is not None and iterations > 0
+            else None
+        ),
+        **summarise_samples(optional(directory / "gpu_samples.json").get("samples", [])),
         "wallSeconds": wall,
         "gpu": {"name": gpu_name, "tier": plan["tier"]},
         "costUsd": 0.0 if plan.get("rehearsal") else wall * hourly_rate(plan["tier"]) / 3600,
@@ -90,8 +101,9 @@ def markdown(results: list[dict[str, Any]]) -> str:
     # higher bands costs on the same frames.
     lines += [
         "| run | scene | variant | seed | schedule | status | test PSNR | SSIM | LPIPS "
-        "| full-SH PSNR | splats | MB | train s | wall s | $ |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| full-SH PSNR | splats | MB | train s | train s/1k steps "
+        "| GPU util mean % | GPU util p50 % | GPU mem max MiB | wall s | $ |",
+        "|" + "---|" * 19,
     ]
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in results:
@@ -111,6 +123,15 @@ def markdown(results: list[dict[str, Any]]) -> str:
                     cell(row["splats"]),
                     cell(None if row.get("outputBytes") is None else row["outputBytes"] / 1e6),
                     cell(row["trainSeconds"]),
+                    *(
+                        cell(row.get(k))
+                        for k in (
+                            "trainSecondsPer1kSteps",
+                            "gpuUtilMean",
+                            "gpuUtilP50",
+                            "gpuMemMaxMiB",
+                        )
+                    ),
                     cell(row["wallSeconds"]),
                     cell(row["costUsd"]),
                 ]
@@ -134,6 +155,20 @@ def markdown(results: list[dict[str, Any]]) -> str:
         groups[key].append(row)
     lines += [
         "",
+        "Test colour by degree (same frames and geometry):",
+        "",
+        "| run | SH degree | frames | PSNR | SSIM | LPIPS |",
+        "|---|---|---|---|---|---|",
+    ]
+    for row in results:
+        for degree, scores in sorted(row["test"].get("byDegree", {}).items()):
+            lines.append(
+                f"| {row['runId']} | {degree} | {scores.get('frames', '-')} | "
+                + " | ".join(cell(scores.get(k)) for k in ("psnr", "ssim", "lpips"))
+                + " |"
+            )
+    lines += [
+        "",
         "Across completed seeds (mean / min / max / spread):",
         "",
         "| experiment | metric | n | mean | min | max | spread |",
@@ -153,6 +188,10 @@ def markdown(results: list[dict[str, Any]]) -> str:
             "psnrFullShGap",
             "splats",
             "trainSeconds",
+            "trainSecondsPer1kSteps",
+            "gpuUtilMean",
+            "gpuUtilP50",
+            "gpuMemMaxMiB",
             "wallSeconds",
             "costUsd",
         ):
@@ -172,6 +211,31 @@ def markdown(results: list[dict[str, Any]]) -> str:
                 lines.append(
                     f"| {label} | {key} | {len(values)} | " + " | ".join(map(cell, stats)) + " |"
                 )
+        for degree in range(4):
+            for metric in ("psnr", "ssim", "lpips"):
+                values = [
+                    value
+                    for r in rows
+                    if r["status"] == "complete"
+                    if (
+                        value := number(
+                            r["test"].get("byDegree", {}).get(str(degree), {}).get(metric)
+                        )
+                    )
+                    is not None
+                ]
+                if values:
+                    stats = [
+                        sum(values) / len(values),
+                        min(values),
+                        max(values),
+                        max(values) - min(values),
+                    ]
+                    lines.append(
+                        f"| {label} | sh{degree}.{metric} | {len(values)} | "
+                        + " | ".join(map(cell, stats))
+                        + " |"
+                    )
     for row in results:
         if row.get("error"):
             lines += ["", f"Failed `{row['runId']}`: {row['error']}"]

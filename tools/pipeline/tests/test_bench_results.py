@@ -102,6 +102,14 @@ def test_region_hook_never_invents_masks(tmp_path: Path) -> None:
     assert "no annotated-mask adapter" in region_info(tmp_path)["regionsReason"]
 
 
+def test_full_sh_uses_shipped_degree_three_without_raw_export(tmp_path: Path) -> None:
+    ply = tmp_path / "trained.ply"
+    write_ply(ply, 7, 42, 3)
+    columns = read_ply(ply)
+    full, reason = full_sh_columns(columns, None)
+    assert full is columns and reason is None
+
+
 def test_full_sh_refuses_ambiguous_duplicate_geometry(tmp_path: Path) -> None:
     raw = tmp_path / "raw.ply"
     write_ply(raw, 3, 42, 3)
@@ -147,3 +155,50 @@ def test_non_numeric_optional_metrics_become_null(tmp_path: Path) -> None:
     parsed = result(tmp_path)
     assert parsed["val"]["psnr"] is None and parsed["val"]["ssim"] is None
     assert parsed["trainSeconds"] == pytest.approx(90)
+
+
+def test_degree_reports_and_gpu_metrics_survive_parsing_and_seed_summary(tmp_path: Path) -> None:
+    by_degree = {
+        str(d): {
+            "psnr": 20 + d,
+            "ssim": 0.8,
+            "lpips": 0.2,
+            "frames": 1,
+            "perFrame": [{"name": "frame.png", "psnr": 20 + d}],
+        }
+        for d in range(4)
+    }
+    write_json(tmp_path / "test.json", {"psnr": 21, "byDegree": by_degree, "shDegree": 1})
+    write_json(tmp_path / "train_metrics.json", {"iterations": 3000})
+    write_json(tmp_path / "gpu_samples.json", {"samples": ["10, 100", "30, 200"]})
+    a = result(tmp_path)
+    assert a["test"]["byDegree"] == by_degree and a["test"]["psnr"] == 21
+    assert a["test"]["shDegree"] == 1
+    assert a["gpuUtilMean"] == a["gpuUtilP50"] == 20 and a["gpuMemMaxMiB"] == 200
+    assert a["iterations"] == 3000 and a["trainSecondsPer1kSteps"] == 30
+    b = copy.deepcopy(a)
+    b.update(seed=43, runId="two")
+    b["test"]["byDegree"]["2"]["psnr"] = 24
+    table = markdown([a, b])
+    assert "| one | 2 | 1 | 22.0000 | 0.8000 | 0.2000 |" in table
+    assert "| sh2.psnr | 2 | 23.0000 | 22.0000 | 24.0000 | 2.0000 |" in table
+    assert "train s/1k steps" in table and "GPU mem max MiB" in table
+    b["status"] = "failed"
+    assert "| sh2.psnr | 2 |" not in markdown([a, b])
+    b["status"] = "complete"
+    b["manifestDigest"] = "other"
+    assert "| sh2.psnr | 2 |" not in markdown([a, b])
+
+
+@pytest.mark.parametrize("iterations", [None, 0, -1, "bad"])
+def test_seconds_per_steps_missing_invalid_or_zero_is_null(tmp_path: Path, iterations: Any) -> None:
+    write_json(tmp_path / "train_metrics.json", {"iterations": iterations})
+    assert result(tmp_path)["trainSecondsPer1kSteps"] is None
+
+
+def test_incomplete_raw_sh_is_not_mislabelled_as_full(tmp_path: Path) -> None:
+    raw = tmp_path / "raw.ply"
+    write_ply(raw, 4, 42, 2)
+    columns = {k: v for k, v in read_ply(raw).items() if not k.startswith("f_rest_")}
+    full, reason = full_sh_columns(columns, raw)
+    assert full is None and reason is not None and "degree-3" in reason

@@ -850,7 +850,7 @@ it.
 
 gsplat trains spherical harmonics to degree 3 -- 45 `f_rest_*` of a gaussian's 59 floats
 -- and until `ship_sh_degree` every capture shipped degree 0: one colour from every side.
-The packer and both web renderers already carry and draw SH when a PLY has it; the
+The packer and web renderers already carry and draw SH when a PLY has it; the
 pipeline was dropping it in the middle. **`ship_sh_degree`** (0-3, **0 by default**, so
 nothing changes until it is chosen) is how many bands ship:
 
@@ -865,6 +865,30 @@ since the bands are orthonormal. The bands are truncated channel-major -- degree
 degree-3 file is `f_rest_{0-2, 15-17, 30-32}`, renumbered `f_rest_0-8` -- and written after
 `f_dc_*`, where the trainers put them (`gaussians.ply_properties`; degree 0 is the
 fourteen, byte for byte).
+
+**Degree support audit (Step 2, source checked; device measurements still pending).**
+All four configured globe choices (`apps/web/src/state/settings.ts:15`) support SH 0-3,
+including degree 2. The dedicated renderers intentionally keep only SH 0-1 on handhelds:
+
+| Path | Degrees drawn/carried | Source |
+| ---- | --------------------- | ------ |
+| PlayCanvas default (WebGL2) and WebGPU trial | 0-3 desktop; 0-1 handheld | `apps/web/src/lib/splatLayout.ts:112`, `apps/web/src/cesium/scanView/playcanvasTile.worker.ts:41`, `apps/web/src/cesium/scanView/quality.ts:79` |
+| Spark globe overlay | 0-3 desktop; 0-1 handheld | `apps/web/src/cesium/scanView/sparkBackend.ts:705`, same `quality.ts` cap |
+| Spark gallery (`view.html`) | 0-3, no app SH cap | `apps/web/src/view/sparkStream.ts:38` passes SPZ to `SplatMesh`, including its LOD path |
+| Spark local Worlds PLY/SPZ viewer | 0-3 for Gaussian splats; ordinary point clouds use vertex colours | `apps/web/src/worlds/reconstruction/LocalSplatViewer.tsx:78` |
+| Spark live training preview | Renderer supports 0-3, but snapshots carry only 0 | `apps/web/src/view/live.ts:299`, `tools/pipeline/live.py:390` deliberately strips SH for previews |
+| CesiumJS | 0-3 | `apps/web/src/cesium/spzDecode.worker.ts:16`, `apps/web/src/lib/splatLayout.ts:41` |
+| Packer, including parent tiles | 0-3 | `tools/captures/splat_tiles.py:377` (channel-major conversion), `:658` (3/8/15 glTF attributes) |
+| Placement rotation | 0-3 | `tools/pipeline/harmonics.py` `rotate`; `tests/test_harmonics.py:185` tests degrees 1, 2 and 3 against the colour-preserving definition |
+
+The lockfile versions' installed sources were also checked: PlayCanvas 2.22.6 maps 24
+`f_rest` columns to degree 2 and has degree-2 GLSL/WGSL shading; Cesium engine 26.3.0
+counts eight attributes as degree 2 and its splat shader evaluates bands 1/2/3; Spark
+2.2.0 retains SH in its LOD data, defaults `maxSh` to 3 and evaluates SH2 in both packed
+and extended splats. No renderer fix was needed. Degree 2 is **capped to 1**, not drawn
+as degree 2, by the handheld PlayCanvas and Spark globe policy. The gallery's
+`view/spz.ts` reader skips SH only when extracting positions for tools; rendering gets
+the full SPZ. The Living Survey `real_tree.py` pipeline still reads DC only (below).
 
 **Turning them.** A gaussian's SH colour is a function of direction in the frame it was
 fitted in, so every stage that turns the splat turns the bands: `place` (COLMAP's frame
@@ -909,6 +933,8 @@ not been measured, and what `experiments/sh_compare.py` exists for:
 cd tools/pipeline
 uv run python experiments/sh_compare.py <run>/stages/place/out/canonical.ply ../../data/tiles \
   --georef <run>/stages/georeference/out/georef.json --site spool
+# Or measure tile bytes from a bench export, in its own frame, without georeferencing:
+uv run python experiments/sh_compare.py full_sh.ply out/ --bytes-only --degrees 0,1,2,3
 #    or from the run's trained.ply (COLMAP's frame), placed by the real place stage:
 #    ... <run>/stages/train/out/trained.ply out/ --georef georef.json --place [--poses poses/]
 # 3. Seed and look: data/tiles/spool-sh{0,1,3}/ each hold splat/ and a site.json.
@@ -1171,12 +1197,32 @@ sibling script. Rehearsal uses a stand-in and labels all numbers as synthetic.
 
 Test PSNR/SSIM/AlexNet LPIPS (`normalize=True`) measure the shipped PLY over whole
 test images, using gsplat's own downscale/undistortion path and the full frozen cameras.
-Full-SH PSNR comes from the original export's exactly matching rows (including cropped
-subsets); merged exports without a matching source report a null diagnostic and a
-reason. Region metrics remain null until annotated masks and an adapter exist.
+`test.byDegree["0".."3"]` holds PSNR/SSIM/LPIPS means and `perFrame` scores on those same
+frames, from the original export's exactly matching rows (including cropped subsets),
+or `trained.ply` itself when it carries SH-3. Truncation uses `holdout_error.shipped_sh`,
+the same channel-major, least-squares band cut the stage ships. The existing headline
+`test.psnr/ssim/lpips` still score the shipped PLY; `psnrFullSh` and its gap remain for
+older reports. Without a matching full-SH source, `byDegree` is empty and `fullShReason`
+explains why, rather than labelling lower bands as degree 3. Region metrics remain null
+until annotated masks and an adapter exist.
 Nothing fabricates subject masks. Raw trainer/argv and external initialisation
 overrides are refused to protect the input/split boundary. `pose_opt` can optimise
 pool poses inside training; scoring always uses the frozen test cameras.
+
+`packed` remains on by default. Its experimental companions `sparse_grad` and
+`visible_adam` are opt-in train params for bench trials, both **off by default** (no argv
+change when off). `sparse_grad` requires `packed: true`, as gsplat v1.5.3 asserts; the
+stage refuses an incompatible pair before invoking the trainer. These change optimiser
+updates, so only measurements can justify adopting them. They pass through the same
+argv in single-scene, convergence and block training. Fused SSIM is already used by
+v1.5.3; there is no new switch for it.
+
+During the train stage, a background thread probes `nvidia-smi` every five seconds.
+`gpu_samples.json` retains CSV samples; `gpuUtilMean`, `gpuUtilP50` (percent) and
+`gpuMemMaxMiB` (sampled device usage, not an allocation peak) appear in the result and
+table. Missing/failed probes leave nulls and never fail training. The sampler stops
+before bench evaluation. `trainSecondsPer1kSteps` uses the actual `train_metrics.json`
+`iterations`, not the requested schedule; absent/zero iterations leave it null.
 
 Run from `tools/pipeline` (Modal credentials and `twin-object-storage` must already
 exist). Every remote operation is one command; no separate deployment is needed:
@@ -1197,10 +1243,44 @@ uv run python -m experiments.bench report --rehearse
 
 Use `--set '{"train": {"gaussian_density": 0.2}}'`, or `--variants file.yaml` containing
 `baseline: {}` and `dense: {train: {gaussian_density: 0.2}}`. Each variant/seed gets a
-unique run ID; at most four spawn concurrently. `--keep-splat` retains the shipped PLY
-on the volume. Reports and small stage artifacts also land locally under
+unique run ID; at most four spawn concurrently. `--keep-splat` retains `trained.ply`
+and, when the raw export differs, `full_sh.ply` in `/bench/runs/<run_id>/` on the volume.
+The latter is the raw export, before any stage crop. A merged SH-3 run needs only its
+`trained.ply`; lower-degree merged runs may have no full-SH source to retain.
+`--renders N` saves the first N frozen test frames to
+`renders/<frame-name>/{gt,sh0,sh1,sh2,sh3}.png`, including the shipped degree, on that
+volume (not returned over RPC). Without full SH, only GT and the shipped degree are
+available. PNGs use the evaluator's clamped RGB and invalid-pixel mask; metrics stay
+float precision. Rehearsals do not produce GPU renders. Reports and small stage
+artifacts also land locally under
 `~/.local/share/hexapod-bench/runs/<run_id>/`; `report --runs ID ...` selects runs.
-Summaries separate scenes, snapshots, schedules, tiers, overrides and bench commits.
+The report includes a per-degree table and per-degree mean/min/max/spread over completed
+seeds. Summaries separate scenes, snapshots, schedules, tiers, overrides and bench commits.
+
+Step 2 measurement commands, from `tools/pipeline`, after the Spool freeze exists. These
+use separate ledgers outside the checkout so earlier bench spend does not consume their
+caps; reruns still count against the same ledger. No recipe default is changed:
+
+```bash
+bench() { uv run --with modal==1.6.2 python -m experiments.bench "$@"; }
+bench run --scene spool --variant baseline-sh3 --schedule full --tier l4 --seeds 42,43 \
+  --set '{"train": {"ship_sh_degree": 3}}' --keep-splat --renders 3 \
+  --ledger "$HOME/.local/share/hexapod-bench/step2-colour.jsonl" --cap 2
+
+bench run --scene spool --variant speed-baseline --schedule screen --tier l4 --seeds 42,43 \
+  --set '{"train": {"ship_sh_degree": 3}}' \
+  --ledger "$HOME/.local/share/hexapod-bench/step2-speed.jsonl" --cap 4
+bench run --scene spool --variant sparse-grad --schedule screen --tier l4 --seeds 42,43 \
+  --set '{"train": {"ship_sh_degree": 3, "sparse_grad": true}}' \
+  --ledger "$HOME/.local/share/hexapod-bench/step2-speed.jsonl" --cap 4
+bench run --scene spool --variant visible-adam --schedule screen --tier l4 --seeds 42,43 \
+  --set '{"train": {"ship_sh_degree": 3, "visible_adam": true}}' \
+  --ledger "$HOME/.local/share/hexapod-bench/step2-speed.jsonl" --cap 4
+bench report
+```
+
+Add `--dry-run` to preview reservations. Screening is not a full-schedule quality verdict;
+the GPU session must confirm quality across seeds before choosing any new default.
 
 The append-only, locked ledger defaults to `~/.local/share/hexapod-bench/ledger.jsonl`
 (`--ledger PATH`, always outside the repo). Rehearsal has a separate `rehearsal/` state

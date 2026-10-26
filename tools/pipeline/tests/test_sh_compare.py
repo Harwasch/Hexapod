@@ -100,3 +100,41 @@ def test_a_splat_without_its_sh_is_refused_by_name(tmp_path: Path) -> None:
     gaussians.write_ply(ply, columns)
     with pytest.raises(SystemExit, match="sh_degree: 3"):
         sh_compare.main([str(ply), str(tmp_path / "out"), "--lat", "1", "--lon", "2"])
+
+
+def test_degree_two_only_still_compares_bytes_against_degree_zero(tmp_path: Path) -> None:
+    ply = write_raw_ply(tmp_path / "raw.ply", columns_with_sh(100, 3))
+    all_degrees = sh_compare.compare(ply, tmp_path / "all", lat=0, lon=0, height=0, degrees=(0, 2))
+    single = sh_compare.compare(ply, tmp_path / "single", lat=0, lon=0, height=0, degrees=(2,))
+    assert single["variants"][0]["tileBytesRatio"] == all_degrees["variants"][1]["tileBytesRatio"]
+    assert single["variants"][0]["tileBytesRatio"] > 1
+
+
+def test_bytes_only_all_degrees_no_georef_and_degree_two_tiles(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ply = write_raw_ply(tmp_path / "raw.ply", columns_with_sh(100, 3))
+    out = tmp_path / "bytes"
+    assert (
+        sh_compare.main(
+            [str(ply), str(out), "--bytes-only", "--degrees", "0,1,2,3", "--tile-gaussians", "30"]
+        )
+        == 0
+    )
+    manifest = json.loads((out / "sh_compare.json").read_text())
+    assert manifest["origin"] == {"lat": 0, "lon": 0, "height": 0}
+    assert [v["shDegree"] for v in manifest["variants"]] == [0, 1, 2, 3]
+    for variant in manifest["variants"]:
+        assert variant["tiles"] > 1
+        assert {_glb_degree(p) for p in (out / variant["dir"]).glob("*.glb")} == {
+            variant["shDegree"]
+        }
+        assert variant["bytesPerGaussian"] > 0 and variant["packSeconds"] >= 0
+    assert "SH 2:" in capsys.readouterr().out
+    assert not list(out.rglob("site.json"))
+
+
+@pytest.mark.parametrize("degrees", ["", "4", "-1", "0,0", "a", "0,"])
+def test_bad_degree_subset_refused_by_cli(tmp_path: Path, degrees: str) -> None:
+    with pytest.raises(SystemExit):
+        sh_compare.main(["not-read.ply", str(tmp_path), "--bytes-only", "--degrees", degrees])

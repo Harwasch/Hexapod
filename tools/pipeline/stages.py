@@ -1798,6 +1798,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     * `antialiased`, `opacity_reg`, `depth_loss`, `pose_opt`, `app_opt` and
       `bilateral_grid` are gsplat's own switches (`training.gsplat_argv` says what each
       does);
+    * `sparse_grad` and `visible_adam` opt into experimental optimisers for bench trials;
+      both default off. `packed` defaults on, and `sparse_grad` requires it.
     * `roi` (`{"center": [x, y, z], "radius": r}`, COLMAP frame) crops the initial points
       to the sphere before training and the trained gaussians to 1.5 radii after it;
     * `variant` is `3dgs`; `2dgs` is refused, and `training.py` says why;
@@ -1864,6 +1866,11 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         )
     # Refused before any GPU time is spent on a run that could not ship it.
     sh_degree = harmonics.check_degree(ctx.param("ship_sh_degree"), name="ship_sh_degree")
+    packed = _optional_bool(ctx.param("packed", True), "packed")
+    sparse_grad = _optional_bool(ctx.param("sparse_grad"), "sparse_grad")
+    visible_adam = _optional_bool(ctx.param("visible_adam"), "visible_adam")
+    if sparse_grad and not packed:
+        raise ValueError("sparse_grad requires packed=true (gsplat v1.5.3)")
     frames = ctx.input(FRAMES.name)
     poses = ctx.input(POSES.name)
     full_iterations = int(ctx.param("iterations", 30_000))
@@ -2005,6 +2012,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
                 trainer=trainer,
                 python=training.trainer_python(ctx.param("python")),
                 switches={
+                    "packed": packed,
+                    "sparse_grad": sparse_grad,
+                    "visible_adam": visible_adam,
                     "antialiased": _optional_bool(ctx.param("antialiased"), "antialiased"),
                     "opacity_reg": _optional_float(ctx.param("opacity_reg")),
                     "depth_loss": _optional_bool(ctx.param("depth_loss"), "depth_loss"),
@@ -2153,6 +2163,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         antialiased=antialiased,
         opacity_reg=opacity_reg,
         depth_loss=depth_loss,
+        packed=packed,
+        sparse_grad=sparse_grad,
+        visible_adam=visible_adam,
         pose_opt=pose_opt,
         app_opt=app_opt,
         bilateral_grid=bilateral_grid,
@@ -2258,6 +2271,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         "antialiased": antialiased,
         "opacityReg": opacity_reg,
         "depthLoss": depth_loss,
+        "packed": packed,
+        "sparseGrad": sparse_grad,
+        "visibleAdam": visible_adam,
         "poseOpt": pose_opt,
         "appOpt": app_opt,
         "bilateralGrid": bilateral_grid,
@@ -2520,6 +2536,9 @@ def _train_in_blocks(
         "antialiased": settings.switches.get("antialiased"),
         "opacityReg": settings.switches.get("opacity_reg"),
         "depthLoss": settings.switches.get("depth_loss"),
+        "packed": settings.switches.get("packed", True),
+        "sparseGrad": settings.switches.get("sparse_grad", False),
+        "visibleAdam": settings.switches.get("visible_adam", False),
         "poseOpt": settings.switches.get("pose_opt"),
         "appOpt": settings.switches.get("app_opt"),
         "bilateralGrid": settings.switches.get("bilateral_grid"),

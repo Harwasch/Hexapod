@@ -124,7 +124,13 @@ def test_the_curve_is_read_in_step_order_as_steps_completed(tmp_path: Path) -> N
 
 def test_the_wrapper_takes_the_trainers_place_and_passes_its_argv_on_unchanged() -> None:
     argv = training.gsplat_argv(
-        "python3", Path("/t/simple_trainer.py"), Path("/d"), Path("/r"), strategy="mcmc"
+        "python3",
+        Path("/t/simple_trainer.py"),
+        Path("/d"),
+        Path("/r"),
+        strategy="mcmc",
+        sparse_grad=True,
+        visible_adam=True,
     )
 
     wrapped = training.converge_argv(
