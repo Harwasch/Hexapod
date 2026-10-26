@@ -1,0 +1,157 @@
+name: Export run inputs
+
+# Manual research export of ONE capture run from PRIVATE R2. Only list/get calls;
+# never publishes objects. Inputs are validated as data before checkout or credentials.
+# Auto-discovery accepts exactly one populated root or p<16 hex> generation; ambiguity
+# requires an explicit generation. Every requested item must exist in that generation.
+# The public repo receives only a tar encrypted to Harrison's pinned OpenPGP key.
+# Plaintext stays in the runner workspace, is removed before upload (also on failure),
+# and never enters logs or summaries. The encrypted artifact expires after one day.
+# Rollback: delete the workflow artifact or disable this workflow; R2 is unchanged.
+# Key rotation requires review of BOTH the public key and fingerprints below.
+# See docs/DEPLOYMENT.md, "Exporting a run's inputs".
+
+on:
+  workflow_dispatch:
+    inputs:
+      run:
+        description: Lowercase job UUID or runs/<uuid>[/p<16 hex>]/
+        type: string
+        required: true
+      items:
+        description: Space-separated subset of these four paths (directories include trailing /)
+        type: string
+        required: true
+        default: normalize/frames/ normalize/frames_meta.json pose/poses/ place/placement.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: export-run-inputs
+  cancel-in-progress: false
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate inputs before using credentials
+        id: plan
+        env:
+          RUN: ${{ inputs.run }}
+          ITEMS: ${{ inputs.items }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          uuid='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+          if [[ "$RUN" =~ ^${uuid}$ ]]; then
+            prefix="runs/$RUN/"
+          elif [[ "$RUN" =~ ^runs/${uuid}(/p[0-9a-f]{16})?/?$ ]]; then
+            prefix="${RUN%/}/"
+          else
+            echo '::error::run must be a lowercase UUID or runs/<uuid>[/p<16 hex>]/.'
+            exit 1
+          fi
+          # No evaluation, globbing, newlines or output-file injection.
+          if [[ ! "$ITEMS" =~ ^[a-z_./\ ]+$ ]]; then
+            echo '::error::items must be a space-separated subset of the four allowed paths.'
+            exit 1
+          fi
+          read -r -a items <<< "$ITEMS"
+          if (( ${#items[@]} == 0 )); then
+            echo '::error::name at least one item.'
+            exit 1
+          fi
+          declare -A seen=()
+          for item in "${items[@]}"; do
+            case "$item" in
+              normalize/frames/|normalize/frames_meta.json|pose/poses/|place/placement.json) ;;
+              *) echo '::error::item is outside the allow-list.'; exit 1 ;;
+            esac
+            if [[ -v "seen[$item]" ]]; then
+              echo '::error::duplicate item.'
+              exit 1
+            fi
+            seen[$item]=1
+          done
+          {
+            echo "prefix=$prefix"
+            echo "items=${items[*]}"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: The secrets this job needs
+        id: secrets
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in CLOUDFLARE_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::missing:$missing. See docs/DEPLOYMENT.md."
+            exit 1
+          fi
+      - name: Download, pack, encrypt and remove plaintext
+        id: encrypt
+        env:
+          RUN_PREFIX: ${{ steps.plan.outputs.prefix }}
+          EXPORT_ITEMS: ${{ steps.plan.outputs.items }}
+          OBJECT_STORAGE_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          OBJECT_STORAGE_BUCKET: ${{ vars.R2_BUCKET || 'twin-assets' }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_PAGER: ""
+          AWS_EC2_METADATA_DISABLED: "true"
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          private="$GITHUB_WORKSPACE/.run-export-private"
+          artifact="$GITHUB_WORKSPACE/.run-export-artifact"
+          trap 'status=$?; rm -rf -- "$private"; if (( status != 0 )); then rm -rf -- "$artifact"; fi; exit "$status"' EXIT
+          mkdir "$private" "$artifact" "$private/gnupg"
+          export GNUPGHOME="$private/gnupg"
+          # Pin the primary AND encryption subkey; reject extra keys as well as swaps.
+          expected=$'25398747159F3E911B4DAD38FEC5E5D75D14CBAE\n911483FD04C64E81117807D371D3ED3B448CE7B7'
+          fingerprints=$(gpg --no-options --batch --with-colons --show-keys \
+            .github/keys/run-export.asc 2> "$private/gpg.log" | awk -F: '$1 == "fpr" {print $10}')
+          if [ "$fingerprints" != "$expected" ]; then
+            echo '::error::export key fingerprint mismatch; nothing downloaded.'
+            exit 1
+          fi
+          python3 .github/scripts/export_run_inputs.py "$private/inputs"
+          if ! tar -cf "$private/run-inputs.tar" -C "$private/inputs" . 2> "$private/tar.log"; then
+            echo '::error::packing failed; no artifact will be uploaded.'
+            exit 1
+          fi
+          if ! gpg --no-options --batch --trust-model always \
+            --recipient-file .github/keys/run-export.asc --encrypt \
+            --output "$artifact/run-inputs.tar.gpg" "$private/run-inputs.tar" 2> "$private/gpg.log"; then
+            echo '::error::encryption failed; no artifact will be uploaded.'
+            exit 1
+          fi
+          test -s "$artifact/run-inputs.tar.gpg"
+          # Explicit deletion must succeed before the step (and thus upload) succeeds.
+          rm -rf -- "$private"
+          test ! -e "$private"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: run-inputs-encrypted
+          path: .run-export-artifact/run-inputs.tar.gpg
+          retention-days: 1
+          if-no-files-found: error
+          # The exact encrypted file is inside a hidden staging directory.
+          include-hidden-files: true
+      - name: Clean up after failure or cancellation
+        if: always()
+        run: |
+          set -euo pipefail
+          rm -rf -- "$GITHUB_WORKSPACE/.run-export-private" "$GITHUB_WORKSPACE/.run-export-artifact"
