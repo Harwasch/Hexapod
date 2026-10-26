@@ -7,6 +7,7 @@ const root = process.cwd();
 const scene = process.argv[2] ?? "spool";
 if (!["tree", "spool"].includes(scene)) throw new Error("Expected tree or spool");
 const preview = process.argv.includes("--preview");
+const resume = process.argv.includes("--resume");
 const out = resolve(process.env.LAB_OUT ?? ".lab-out/round3");
 const driver = process.env.DRIVER_URL ?? "http://localhost:5742";
 const bake = `${root}/.lab-out/round3/${scene}-bake`;
@@ -43,6 +44,14 @@ const shot = (name) => call(`canvas?path=${encodeURIComponent(`${out}/${name}.pn
 const settle = (patch) =>
   ev(`(async()=>{LL.getState().set(${JSON.stringify(patch)}); const n=__lab.status().frames;
   while(__lab.status().frames<n+2) await new Promise(r=>setTimeout(r,100)); return __lab.status();})()`);
+const exists = async (path) => {
+  try {
+    return await readFile(path);
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+};
 await call("fresh");
 await call(
   "goto",
@@ -68,6 +77,18 @@ if (scene === "tree") {
     `(async()=>{while(!LL.getState().spectraStatus.startsWith('Simulated')) await new Promise(r=>setTimeout(r,500)); return true;})()`,
   );
 }
+const viewport = await ev("[innerWidth,innerHeight]");
+const priorTiming = resume ? await exists(`${out}/bench-raw.jsonl`) : null;
+const completedBlocks = priorTiming
+  ? priorTiming
+      .toString()
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((row) => row.scene === scene)
+  : [];
+let blockIndex = 0;
 for (const [name, patch] of [
   ["static", { motion: "off", strength: 1 }],
   ["calm", { motion: "articulated", strength: 0 }],
@@ -82,8 +103,16 @@ for (const view of views) {
   for (const arm of arms) {
     await mkdir(`${out}/${view}-${arm}-frames`, { recursive: true });
     for (const i of preview ? [0, 8, 16, 23] : Array.from({ length: 24 }, (_, i) => i)) {
+      const frameName = `${view}-${arm}-frames/${String(i).padStart(3, "0")}`;
+      const previous = resume ? await exists(`${out}/${frameName}.png`) : null;
+      if (previous) {
+        if (previous.readUInt32BE(16) !== viewport[0] || previous.readUInt32BE(20) !== viewport[1])
+          throw new Error(`Resume viewport differs for ${frameName}`);
+        console.info(`Resume: ${frameName}`);
+        continue;
+      }
       await settle({ motion: arm, strength: 1, windBearingDeg: 60, clock: i / 12 });
-      await shot(`${view}-${arm}-frames/${String(i).padStart(3, "0")}`);
+      await shot(frameName);
       console.info(`${view} ${arm} ${i + 1}/24`);
     }
   }
@@ -92,12 +121,19 @@ if (!preview) {
   if (scene === "tree") await ev("__lab.viewBounds(35,-12,15.4)");
   for (let round = 0; round < 3; round++)
     for (const arm of ["off", arms[0], "off", "articulated"]) {
+      const prior = completedBlocks[blockIndex++];
+      if (prior) {
+        if (prior.round !== round || prior.arm !== arm)
+          throw new Error("Invalid benchmark resume order");
+        continue;
+      }
       const samples =
         await ev(`(async()=>{LL.getState().set({motion:${JSON.stringify(arm)},strength:1,clock:null,bench:true});
       window.__livingBench=[]; while(__livingBench.length<12) await new Promise(r=>setTimeout(r,100));
       return __livingBench.slice(4,12);})()`);
       const row = {
         scene,
+        viewport,
         round,
         arm,
         samples,
