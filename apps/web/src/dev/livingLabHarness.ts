@@ -22,6 +22,9 @@ import { createSiteTileset } from "@/cesium/providers/tiles";
 import { ScanRendererHost } from "@/cesium/scanView/ScanRendererHost";
 import { installSplatDecoder } from "@/cesium/splatDecoder";
 import { installSplatSorter } from "@/cesium/splatSorter";
+import { useAsCaptured } from "@/state/asCaptured";
+import { useLivingLight, lightSun } from "@/state/livingLight";
+import { publishScanSun } from "@/state/sunReport";
 import { useLivingLab } from "@/state/livingLab";
 
 export async function startLivingLabHarness(container: HTMLElement, tilesetUrl: string) {
@@ -49,7 +52,7 @@ export async function startLivingLabHarness(container: HTMLElement, tilesetUrl: 
   scene.primitives.add(tileset);
   const host = new ScanRendererHost(widget);
   host.setRenderer("playcanvas");
-  host.setTarget({ key: "lab", tileset });
+  host.setTarget({ key: "lab", assetId: "light-lab", tileset });
   const view = (
     target: [number, number, number],
     headingDeg: number,
@@ -91,6 +94,17 @@ export async function startLivingLabHarness(container: HTMLElement, tilesetUrl: 
     view,
     viewBounds,
     lab: useLivingLab,
+    light: useLivingLight,
+    captured: useAsCaptured,
+    today: (day: number, on: boolean) => {
+      const dir = lightSun(day);
+      publishScanSun(
+        "light-lab",
+        on && !useAsCaptured.getState().on
+          ? { dir, sunUp: Math.max(0, dir[2]), strength: 1, ambient: 0.35, flat: 0.25 }
+          : null,
+      );
+    },
     status: () => host.status(),
   };
 }

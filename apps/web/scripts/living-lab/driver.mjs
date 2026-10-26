@@ -5,13 +5,19 @@ import { createServer } from "node:http";
 
 import { chromium } from "@playwright/test";
 
-const base = process.env.LAB_URL ?? "http://localhost:5291";
-const port = Number(process.env.DRIVER_PORT ?? 5391);
+const base = process.env.LAB_URL ?? "http://localhost:5600";
+const port = Number(process.env.DRIVER_PORT ?? 5601);
 const gpu = process.env.LAB_GPU === "1";
 const browser = await chromium.launch({
   args: gpu
-    ? ["--use-gl=angle", "--use-angle=vulkan", "--enable-gpu", "--ignore-gpu-blocklist"]
-    : ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
+    ? [
+        "--no-sandbox",
+        "--use-gl=angle",
+        "--use-angle=vulkan",
+        "--enable-gpu",
+        "--ignore-gpu-blocklist",
+      ]
+    : ["--no-sandbox", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
 });
 let page = await browser.newPage({
   viewport: { width: Number(process.env.LAB_W ?? 1280), height: Number(process.env.LAB_H ?? 720) },
