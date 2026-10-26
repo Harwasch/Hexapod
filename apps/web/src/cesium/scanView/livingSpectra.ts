@@ -33,8 +33,7 @@ export function parseSpectraHeader(value: unknown): SpectraHeader {
     v.length === 3 &&
     v.every((n: unknown) => typeof n === "number" && Number.isFinite(n));
   if (
-    !h ||
-    h.format !== "hexapod.living-spectra" ||
+    h?.format !== "hexapod.living-spectra" ||
     h.version !== 1 ||
     h.encoding !== "float16-le" ||
     h.motionEvidence !== "simulated" ||
