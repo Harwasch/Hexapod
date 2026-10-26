@@ -66,12 +66,13 @@ def test_corrupt_line_fails_closed(tmp_path: Path, line: str) -> None:
 
 def test_timeout_reservation_catches_cheap_forecast_and_includes_cpu_memory() -> None:
     plans = [plan("a", schedule="full"), plan("b", schedule="full")]
+    # The forecasts ($1.80) fit a $1.81 cap; the two 55-min timeouts do not.
     with pytest.raises(ValueError, match="timeout reservations"):
-        ledger.price_plan([], plans, 2)
-    priced = ledger.price_plan([], plans, 3)
+        ledger.price_plan([], plans, 1.81)
+    priced = ledger.price_plan([], plans, 2)
     assert priced["estimateUsd"] == 1.8
     assert plans[0]["timeoutSeconds"] == 3300
-    assert plans[0]["worstCaseUsd"] > 1.19
+    assert plans[0]["worstCaseUsd"] == pytest.approx(ledger.hourly_rate("l4") * 3420 / 3600)
     assert ledger.hourly_rate("l4") == pytest.approx(0.7992 + 2 * 0.04716 + 8 * 0.007992)
 
 
