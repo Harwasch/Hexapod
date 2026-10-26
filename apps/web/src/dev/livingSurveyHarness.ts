@@ -83,6 +83,8 @@ export type StepParts = "all" | "sway";
 export interface LivingSurveyHarness {
   /** Applies the rig at time `t` under `wind`, then renders one frame. */
   step(t: number, wind: WindSettings, parts?: StepParts): Promise<DeformerStatus>;
+  /** Stop idle draws once loading has settled; lab steps explicitly render thereafter. */
+  manualFrames(): void;
   /** Lab comparison: simulation + draw fenced by one-pixel read-back; excludes RAF wait. */
   benchFrame(t: number, wind: WindSettings): Promise<number>;
   /** Lab crown framing in the same scan frame as the PlayCanvas harness. */
@@ -243,6 +245,8 @@ export async function startLivingSurveyHarness(
     ...(plantBinding === undefined ? {} : { plantBinding }),
   });
 
+  let manual = false;
+
   async function step(
     t: number,
     wind: WindSettings,
@@ -250,7 +254,11 @@ export async function startLivingSurveyHarness(
   ): Promise<DeformerStatus> {
     const { transforms, flutter } = frameAt(t, wind);
     const status = deformer.apply(transforms, parts === "sway" ? FLUTTER_STILL : flutter);
-    await nextFrame(scene);
+    if (manual) {
+      widget.render();
+      // Let pending tile/sort worker messages run between explicit frames.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    } else await nextFrame(scene);
     return status;
   }
 
@@ -294,6 +302,10 @@ export async function startLivingSurveyHarness(
 
   return {
     step,
+    manualFrames() {
+      manual = true;
+      widget.useDefaultRenderLoop = false;
+    },
     viewAt(target, heading, pitch, range) {
       const at = Matrix4.multiplyByPoint(
         tileset.root.computedTransform,
@@ -324,7 +336,8 @@ export async function startLivingSurveyHarness(
           post();
           resolve(cpu + performance.now() - start);
         });
-        scene.requestRender();
+        if (manual) widget.render();
+        else scene.requestRender();
       });
     },
     status,

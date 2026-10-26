@@ -108,7 +108,8 @@ if (!survey) {
 } else {
   const wind = `{strength:0.1,bearingDeg:60}`;
   await ev(`(async()=>{while(!window.__survey) await new Promise(r=>setTimeout(r,500));
-    await __survey.waitUntilReady(600000); return await __survey.view(15.4,0,${wind},600000);})()`);
+    await __survey.waitUntilReady(600000); const ready = await __survey.view(15.4,0,${wind},600000);
+    __survey.manualFrames(); return ready;})()`);
   for (const view of ["tree", "crown"]) {
     if (view === "crown") await ev(`__survey.viewAt([0,0,4.6],35,-12,7.8)`);
     await mkdir(`${out}/${view}-today-frames`, { recursive: true });
