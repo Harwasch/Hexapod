@@ -2,6 +2,8 @@ import { Waves } from "lucide-react";
 
 import { GlassPanel } from "@twin/ui";
 
+import { LivingLightControls } from "./LivingLightControls";
+
 import { useAsCaptured } from "@/state/asCaptured";
 import { useLivingLab, type LivingMotionArm } from "@/state/livingLab";
 
@@ -50,6 +52,7 @@ export function LivingLabPanel() {
               ? "Invented water and wind, drawn per frame. The data underneath is never altered."
               : "Prototype water and wind. Off."}
         </span>
+        <LivingLightControls />
         <label className="living-lab__row">
           <input
             type="checkbox"

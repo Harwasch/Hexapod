@@ -98,6 +98,9 @@ import { createLogger } from "@/lib/log";
 import { tileSkin, type SkinDoc } from "@/lib/skin";
 import type { PickTile } from "@/lib/splatPick";
 import { effectiveLivingLab, watchLivingLab, type LivingLabState } from "@/state/livingLab";
+import { effectiveLightArm } from "@/state/livingLight";
+import { LIGHT_HOOK } from "./lightHook";
+import { LightRuntime } from "./lightRuntime";
 import { reportScanSun, watchScanSun, type ScanSun } from "@/state/sunReport";
 import type { TileNode } from "@/view/tiles";
 
@@ -879,6 +882,7 @@ function assemble(
    */
   let living: LivingLabState | null = api === "webgl2" ? effectiveLivingLab() : null;
   let livingHooked = false;
+  let lightHooked = false;
   const livingValues = livingUniforms();
   const livingStart = performance.now();
   let ground: GroundGrid | null = null;
@@ -1177,10 +1181,11 @@ function assemble(
     // work buffer has the side's stream, every tile writes its side.
     const ruled = rule !== null;
     const sided = sideStream;
-    const modifier =
+    const originalModifier =
       hasIds || skinned || cell || lit || ruled || sided
         ? playcanvasModifier(hasIds, skinned, tile?.skinWide ?? false, cell, lit, ruled, sided)
         : null;
+    const modifier = light?.modifier(originalModifier, entity) ?? originalModifier;
     if (modifier !== (modifiers.get(entity) ?? null)) {
       modifiers.set(entity, modifier);
       if (tile) tile.modifier = modifier;
@@ -1188,6 +1193,13 @@ function assemble(
     }
     if (modifier) setUniforms(component, entity);
   };
+
+  const light = moves
+    ? new LightRuntime(app, (entity) => {
+        if (entity) applyModifier(entity);
+        hooks.frameWanted();
+      })
+    : null;
 
   /**
    * Writes what the tile needs for the current style and motion and puts the modifier on. The
@@ -1740,14 +1752,29 @@ function assemble(
    */
   const syncHooks = (): void => {
     const material = app.scene.gsplat.material;
-    const lit = sun !== null && sunStream;
+    // Research relight replaces captured RGB. Other semantic looks/moving geometry
+    // have no validated composition with baked albedo/visibility, so fail closed.
+    const relight =
+      light?.stream === true &&
+      effectiveLightArm() !== "off" &&
+      !compare &&
+      !rule &&
+      !cells?.drawing &&
+      !(motion && (motion.params[0] > 0 || motion.params[2] > 0)) &&
+      !(living && (living.water || living.motion !== "off"));
+    const lit = !relight && sun !== null && sunStream;
     const cut = compare !== null;
     // A bench run with every arm off draws without the hook: the baseline frame.
     const alive = living !== null && (living.water || living.motion !== "off");
     let changed = false;
-    if (lit !== sunHooked || cut !== cutHooked || alive !== livingHooked) {
+    if (
+      lit !== sunHooked ||
+      cut !== cutHooked ||
+      alive !== livingHooked ||
+      relight !== lightHooked
+    ) {
       const chunks = material.getShaderChunks(pc.SHADERLANGUAGE_GLSL);
-      if (!sunHooked && !cutHooked && !livingHooked) {
+      if (!sunHooked && !cutHooked && !livingHooked && !lightHooked) {
         ownModifyVS = chunks.get("gsplatModifyVS") as string | undefined;
         ownModifyPS = chunks.get("gsplatModifyPS") as string | undefined;
       }
@@ -1755,12 +1782,19 @@ function assemble(
         if (chunk === undefined) chunks.delete(name);
         else chunks.set(name, chunk);
       };
-      const base = cut ? compareHookVs(lit ? SUN_HOOK_VS : null) : lit ? SUN_HOOK_VS : ownModifyVS;
+      const base = relight
+        ? LIGHT_HOOK
+        : cut
+          ? compareHookVs(lit ? SUN_HOOK_VS : null)
+          : lit
+            ? SUN_HOOK_VS
+            : ownModifyVS;
       put("gsplatModifyVS", alive ? livingHookVs(base) : base);
       put("gsplatModifyPS", cut ? COMPARE_HOOK_PS : ownModifyPS);
       sunHooked = lit;
       cutHooked = cut;
       livingHooked = alive;
+      lightHooked = relight;
       sunSet = null;
       dividerAt = Number.NaN;
       changed = true;
@@ -1771,6 +1805,10 @@ function assemble(
       material.setParameter("uHexapodSun", sunValue);
       material.setParameter("uHexapodSunlight", sunlightValue);
       sunSet = sun;
+      changed = true;
+    }
+    if (relight) {
+      light?.update(material);
       changed = true;
     }
     // The divider in the canvas's own pixels, as `gl_FragCoord` counts them.
@@ -1962,6 +2000,7 @@ function assemble(
         placedPick: null,
       };
       tiles.set(entity, binding);
+      light?.register({ entity, resource, order, checksum: decoded.checksum });
       if (style || motion) {
         bind(entity, binding, true);
         if (binding.ids && motion && motion.rigidByLeaf.size > 0) sortDirty.add(entity);
@@ -2071,6 +2110,7 @@ function assemble(
       unconfirmed.delete(entity);
       shown.delete(entity);
       tiles.delete(entity);
+      light?.remove(entity);
       cells?.delete(entity);
       dateCells?.delete(entity);
       sortDirty.delete(entity);
@@ -2199,7 +2239,7 @@ function assemble(
       const sort = sortDirty.size > 0 ? lastSortAt + SORT_REFRESH_MS : null;
       const soonest = sort === null ? dates : dates === null ? sort : Math.min(sort, dates);
       // The living lab animates: a frame every frame while it is on.
-      if (living) return performance.now();
+      if (living || lightHooked) return performance.now();
       return soonest;
     },
     setBudget: (drawn) => {
@@ -2267,6 +2307,7 @@ function assemble(
         splats: () => app.scene.gsplat.splatBudget,
         stop: () => {
           streamingNatively = false;
+          light?.remove(entity);
           cells?.delete(entity);
           entity.destroy();
           app.assets.remove(asset);
@@ -2277,6 +2318,7 @@ function assemble(
     destroy: () => {
       for (const off of cellLinks) off();
       livingLink();
+      light?.destroy();
       unpick?.();
       unpick = null;
       ruleDates?.stop();
