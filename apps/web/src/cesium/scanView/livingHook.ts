@@ -1,3 +1,4 @@
+import { ARTICULATION_GLSL } from "./livingArticulation";
 import { SPECTRA_GLSL } from "./livingSpectra";
 
 /**
@@ -19,8 +20,8 @@ import { SPECTRA_GLSL } from "./livingSpectra";
  *   ground grid the back-end builds from the tiles' own splats (the 10th percentile of z in
  *   each cell, `groundGrid`), or a flat ground where it has no splats to read (a streamed scan).
  *
- * The motion moves only the centre: the splat keeps its shape, and the sort -- from the
- * centres at rest -- is off by at most the sway, a few centimetres.
+ * Gust/clump/voxel arms move centres only. The articulated arm also rotates covariance
+ * through a cached branch binding. Sorting still uses centres at rest for every lab arm.
  *
  * GLSL only, as the sunlight: the WebGPU trial does not draw it.
  */
@@ -61,6 +62,7 @@ uniform vec4 uLivingSun;
 uniform vec4 uLivingGroundGrid;
 uniform vec4 uLivingVeg;
 uniform highp sampler2D uLivingGround;
+${ARTICULATION_GLSL}
 float livingWaterW = 0.0;
 vec3 livingWaterN = vec3(0.0, 0.0, 1.0);
 float livingFoam = 0.5;
@@ -199,6 +201,10 @@ void modifySplatCenter(inout vec3 center) {
             livingWaterW = w;
         }
     }
+    if (uLivingT.z > 3.5) {
+        livingArtCenter(center);
+        return;
+    }
     if (uLivingT.z > 2.5) {
         center += livingSpectrum(center);
         return;
@@ -234,6 +240,7 @@ void modifySplatCenter(inout vec3 center) {
 }
 void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout vec4 rotation, inout vec3 scale) {
     hexapodLivingInnerRotationScale(originalCenter, modifiedCenter, rotation, scale);
+    if (uLivingT.z > 3.5) livingArtCovariance(rotation, scale);
     // Water lies flat: a thin disc on the surface, its long axis along the flow. The rotation
     // here is (w, x, y, z) (containerPackedRead.js, quatToMat3).
     if (livingWaterW > 0.0) {
@@ -249,6 +256,7 @@ void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout ve
 }
 void modifySplatColor(vec3 center, inout vec4 color) {
     hexapodLivingInnerColor(center, color);
+    if (uLivingT.z > 3.5) color.rgb *= livingArtLight;
     if (uLivingWind.w > 0.5) {
         if (livingWaterW > 0.0) color.rgb = mix(color.rgb, vec3(0.1, 0.4, 1.0), 0.75 * livingWaterW);
         if (livingVegW > 0.0) color.rgb = mix(color.rgb, vec3(1.0, 0.15, 0.8), 0.65 * livingVegW);
@@ -297,7 +305,7 @@ export function livingHookVs(inner: string | undefined): string {
 export interface LivingSettings {
   t: number;
   water: boolean;
-  motion: "off" | "gust" | "clumps" | "spectra";
+  motion: "off" | "gust" | "clumps" | "spectra" | "articulated";
   strength: number;
   windBearingDeg: number;
   gustSpeed: number;
@@ -318,7 +326,16 @@ const RAD = Math.PI / 180;
 
 /** Fills `u` from `s`. A bearing is clockwise from north: east is +x, north +y. */
 export function packLiving(u: LivingUniforms, s: LivingSettings, ground: GroundGrid | null): void {
-  const arm = s.motion === "gust" ? 1 : s.motion === "clumps" ? 2 : s.motion === "spectra" ? 3 : 0;
+  const arm =
+    s.motion === "gust"
+      ? 1
+      : s.motion === "clumps"
+        ? 2
+        : s.motion === "spectra"
+          ? 3
+          : s.motion === "articulated"
+            ? 4
+            : 0;
   u.t.set([s.t, s.water ? 1 : 0, arm, s.strength]);
   const wb = s.windBearingDeg * RAD;
   u.wind.set([Math.sin(wb), Math.cos(wb), s.gustSpeed, s.mask ? 1 : 0]);

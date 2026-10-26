@@ -116,6 +116,15 @@ import type { TileNode } from "@/view/tiles";
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
 import { CELL_TILE_GLSL, cellFillOf, CellTiles, type CellTileSample } from "./cellModifier";
 import {
+  ARTICULATION_STREAM,
+  ARTICULATION_WIDTH,
+  articulationPixels,
+  evaluateArticulation,
+  loadArticulation,
+  orderedArticulationBinding,
+  type Articulation,
+} from "./livingArticulation";
+import {
   groundGrid,
   livingHookVs,
   livingUniforms,
@@ -248,6 +257,7 @@ export function playcanvasModifierGlsl(
   sun = false,
   rule = false,
   side = false,
+  art = false,
 ): string {
   const id = ids ? "loadSplatInstance().r" : "0u";
   const second = wide ? "loadSplatWeights2()" : "uvec4(0u)";
@@ -356,6 +366,7 @@ void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout ve
     }${ruleSpread}
 }
 void modifySplatColor(vec3 center, inout vec4 color) {
+    ${art ? "writeHexapodArticulation(loadHexapodArticulation());" : ""}
     ${sideStep}${sunStep}${colorStep}${ruleStep}
 }
 `;
@@ -414,13 +425,14 @@ export function playcanvasModifier(
   sun = false,
   rule = false,
   side = false,
+  art = false,
 ): WorkBufferModifier {
-  const key = `${String(ids)}|${String(skin)}|${String(skin && wide)}|${String(cell)}|${String(sun)}|${String(rule)}|${String(side)}`;
+  const key = `${String(ids)}|${String(skin)}|${String(skin && wide)}|${String(cell)}|${String(sun)}|${String(rule)}|${String(side)}|${String(art)}`;
   let modifier = MODIFIERS.get(key);
   if (!modifier) {
     modifier = {
-      glsl: playcanvasModifierGlsl(ids, skin, skin && wide, cell, sun, rule, side),
-      ...(ids && !skin && !cell && !sun && !rule && !side
+      glsl: playcanvasModifierGlsl(ids, skin, skin && wide, cell, sun, rule, side, art),
+      ...(ids && !skin && !cell && !sun && !rule && !side && !art
         ? { wgsl: PLAYCANVAS_INSTANCE_WGSL }
         : {}),
     };
@@ -893,6 +905,16 @@ function assemble(
   let livingHooked = false;
   const livingValues = livingUniforms();
   const livingStart = performance.now();
+  let articulation: Articulation | null = null;
+  let articulationUrl = "";
+  let articulationRequest: AbortController | null = null;
+  let articulationStream = false;
+  let articulationPoseTexture: pc.Texture | null = null;
+  let articulationLeafTexture: pc.Texture | null = null;
+  let articulationPoses = new Float32Array(0);
+  let articulationLeaves = new Float32Array(0);
+  let articulationTime = "";
+  const articulationBound = new WeakMap<TileBinding, Articulation | null>();
   let spectra: LivingSpectra | null = null;
   let spectraUrl = "";
   let spectraRequest: AbortController | null = null;
@@ -1102,6 +1124,82 @@ function assemble(
     tile.matched = listed !== undefined;
   };
 
+  /** Bind once in Morton resource order, then carry the IDs unchanged through the copy pass. */
+  const bindArticulation = (tile: TileBinding): void => {
+    if (
+      !articulationStream ||
+      (articulationBound.has(tile) && articulationBound.get(tile) === articulation)
+    )
+      return;
+    if (!tile.resource.getTexture(ARTICULATION_STREAM))
+      tile.resource.format.addExtraStreams([
+        { name: ARTICULATION_STREAM, format: pc.PIXELFORMAT_RGBA32U },
+      ]);
+    const texture = tile.resource.getTexture(ARTICULATION_STREAM);
+    if (!texture) return;
+    const output = texture.lock() as Uint32Array;
+    orderedArticulationBinding(articulation, tile.checksum, tile.order, output);
+    texture.unlock();
+    articulationBound.set(tile, articulation);
+  };
+
+  const syncArticulation = (lab: LivingLabState): void => {
+    if (articulationUrl === lab.articulationUrl) return;
+    articulationUrl = lab.articulationUrl;
+    articulationRequest?.abort();
+    articulation = null;
+    articulationTime = "";
+    articulationPoseTexture?.destroy();
+    articulationLeafTexture?.destroy();
+    articulationPoseTexture = articulationLeafTexture = null;
+    if (!articulationUrl) {
+      useLivingLab.getState().set({ articulationStatus: "No articulation loaded" });
+      return;
+    }
+    if (!articulationStream) {
+      app.scene.gsplat.format.addExtraStreams([
+        { name: ARTICULATION_STREAM, format: pc.PIXELFORMAT_RGBA32U },
+      ]);
+      articulationStream = true;
+      app.scene.gsplat.material.setDefine("HEXAPOD_ARTICULATION", "");
+      app.scene.gsplat.material.update();
+    }
+    for (const entity of tiles.keys()) applyModifier(entity);
+    const controller = new AbortController();
+    articulationRequest = controller;
+    useLivingLab.getState().set({ articulationStatus: "Loading articulated spectra…" });
+    void loadArticulation(articulationUrl, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted) return;
+        articulation = loaded;
+        articulationPoses = articulationPixels(loaded.header.nodes.length);
+        articulationLeaves = articulationPixels(loaded.header.leafCount);
+        articulationPoseTexture = dataTexture(
+          "articulationPoses",
+          ARTICULATION_WIDTH,
+          articulationPoses.length / (ARTICULATION_WIDTH * 4),
+          pc.PIXELFORMAT_RGBA32F,
+          articulationPoses,
+        );
+        articulationLeafTexture = dataTexture(
+          "articulationLeaves",
+          ARTICULATION_WIDTH,
+          articulationLeaves.length / (ARTICULATION_WIDTH * 4),
+          pc.PIXELFORMAT_RGBA32F,
+          articulationLeaves,
+        );
+        for (const entity of tiles.keys()) applyModifier(entity);
+        useLivingLab.getState().set({
+          articulationStatus: `Simulated · ${String(loaded.header.nodes.length)} nodes · ${String(loaded.header.leafCount)} leaf packets`,
+        });
+        hooks.frameWanted();
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted)
+          useLivingLab.getState().set({ articulationStatus: String(error) });
+      });
+  };
+
   /** Writes the tile's skin and weight streams from `doc`: main-thread work (`hooks.work`). */
   const writeSkin = (tile: TileBinding, doc: SkinDoc): void => {
     const found = tileSkin(doc, tile.checksum);
@@ -1236,6 +1334,8 @@ function assemble(
     const component = entity.gsplat;
     if (!component) return;
     const tile = tiles.get(entity);
+    if (tile) bindArticulation(tile);
+    const art = articulationStream && tile !== undefined;
     const hasIds = (tile?.doc ?? null) !== null;
     const skinned = tile?.skinned ?? false;
     const group = dated.has(entity) ? dateCells : cells;
@@ -1247,8 +1347,8 @@ function assemble(
     const ruled = rule !== null;
     const sided = sideStream;
     const modifier =
-      hasIds || skinned || cell || lit || ruled || sided
-        ? playcanvasModifier(hasIds, skinned, tile?.skinWide ?? false, cell, lit, ruled, sided)
+      hasIds || skinned || cell || lit || ruled || sided || art
+        ? playcanvasModifier(hasIds, skinned, tile?.skinWide ?? false, cell, lit, ruled, sided, art)
         : null;
     if (modifier !== (modifiers.get(entity) ?? null)) {
       modifiers.set(entity, modifier);
@@ -1852,7 +1952,8 @@ function assemble(
     }
     if (living) {
       const lab = living;
-      if (lab.motion !== "spectra" || lab.water) syncGround();
+      if ((lab.motion !== "spectra" && lab.motion !== "articulated") || lab.water) syncGround();
+      if (lab.motion === "articulated") syncArticulation(lab);
       if (lab.motion === "spectra") syncSpectra(lab);
       packLiving(
         livingValues,
@@ -1880,6 +1981,33 @@ function assemble(
           spectraTime = key;
         }
       }
+      if (
+        lab.motion === "articulated" &&
+        articulation &&
+        articulationPoseTexture &&
+        articulationLeafTexture
+      ) {
+        const t = lab.clock ?? (performance.now() - livingStart) / 1000;
+        const key = `${String(t)}:${String(lab.strength)}:${String(lab.windBearingDeg)}`;
+        if (key !== articulationTime) {
+          evaluateArticulation(
+            articulation,
+            t,
+            lab.strength,
+            lab.windBearingDeg,
+            articulationPoses,
+            articulationLeaves,
+          );
+          (articulationPoseTexture.lock() as Float32Array).set(articulationPoses);
+          articulationPoseTexture.unlock();
+          (articulationLeafTexture.lock() as Float32Array).set(articulationLeaves);
+          articulationLeafTexture.unlock();
+          articulationTime = key;
+        }
+      }
+      material.setParameter("uArticulationReady", articulation ? 1 : 0);
+      material.setParameter("uArticulationPoses", articulationPoseTexture ?? stand().float);
+      material.setParameter("uArticulationLeaves", articulationLeafTexture ?? stand().float);
       material.setParameter("uSpectraOrigin", spectraOrigin);
       material.setParameter("uSpectraStep", spectraStep);
       material.setParameter("uSpectraIndex", spectraIndex ?? stand().float);
@@ -2046,7 +2174,7 @@ function assemble(
         placedPick: null,
       };
       tiles.set(entity, binding);
-      if (style || motion) {
+      if (style || motion || articulationStream) {
         bind(entity, binding, true);
         if (binding.ids && motion && motion.rigidByLeaf.size > 0) sortDirty.add(entity);
       }
@@ -2361,6 +2489,9 @@ function assemble(
     destroy: () => {
       for (const off of cellLinks) off();
       livingLink();
+      articulationRequest?.abort();
+      articulationPoseTexture?.destroy();
+      articulationLeafTexture?.destroy();
       spectraRequest?.abort();
       spectraIndex?.destroy();
       spectraDisplacement?.destroy();

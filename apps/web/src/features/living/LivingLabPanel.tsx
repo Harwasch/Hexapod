@@ -70,6 +70,7 @@ export function LivingLabPanel() {
             <option value="gust">Gust field + shimmer</option>
             <option value="clumps">Resonant clumps</option>
             <option value="spectra">Voxel spectra</option>
+            <option value="articulated">Articulated branch spectra</option>
           </select>
         </label>
         <label className="living-lab__row">
@@ -89,6 +90,17 @@ export function LivingLabPanel() {
               onChange={(e) => lab.set({ spectraUrl: e.target.value })}
             />
             <span role="status">{lab.spectraStatus}</span>
+          </label>
+        )}
+        {lab.motion === "articulated" && (
+          <label className="living-lab__row">
+            Articulation sidecar
+            <input
+              aria-label="Articulation sidecar URL"
+              value={lab.articulationUrl}
+              onChange={(e) => lab.set({ articulationUrl: e.target.value })}
+            />
+            <span role="status">{lab.articulationStatus}</span>
           </label>
         )}
         {slider("Strength", "strength", 0, 3, 0.05)}
