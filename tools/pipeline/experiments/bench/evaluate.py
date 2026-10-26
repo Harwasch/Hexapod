@@ -79,6 +79,28 @@ def full_sh_columns(
     return raw, None
 
 
+def lookup_frames(image_names: list[str], indices: Any, names: list[str]) -> dict[str, int]:
+    """Each frozen test name -> its item in gsplat's dataset, or refuse the whole set."""
+    if not names:
+        raise ValueError("no test names")
+    if len(set(names)) != len(names):
+        raise ValueError("test names duplicated")
+    items = {image_names[int(index)]: item for item, index in enumerate(indices)}
+    missing = sorted(set(names) - items.keys())
+    if missing:
+        raise ValueError(f"test names missing from the gsplat dataset: {missing}")
+    return {name: items[name] for name in names}
+
+
+def summarise(rows: list[dict[str, Any]], keys: tuple[str, ...]) -> dict[str, float | None]:
+    """Mean of each metric over the frames that have it; None where none do."""
+    summary: dict[str, float | None] = {}
+    for key in keys:
+        values = [row[key] for row in rows if row.get(key) is not None]
+        summary[key] = float(np.mean(values)) if values else None
+    return summary
+
+
 def evaluate(
     data_dir: Path,
     ply: Path,
@@ -118,9 +140,7 @@ def evaluate(
     full = colors(raw, 3) if raw is not None else None
     parser = Parser(data_dir=str(data_dir), factor=1, normalize=False, test_every=1)
     dataset = Dataset(parser, split="val")
-    lookup = {parser.image_names[int(index)]: item for item, index in enumerate(dataset.indices)}
-    if not names or len(set(names)) != len(names) or set(names) - lookup.keys():
-        raise ValueError("test names missing/duplicated in gsplat dataset")
+    lookup = lookup_frames(parser.image_names, dataset.indices, names)
     metrics = {
         "psnr": PeakSignalNoiseRatio(data_range=1.0).to(device),
         "ssim": StructuralSimilarityIndexMeasure(data_range=1.0).to(device),
@@ -181,9 +201,7 @@ def evaluate(
         "lpipsNet": "alex",
         "lpipsNormalize": True,
     }
-    for key in ("psnr", "ssim", "lpips", "psnrFullSh", "psnrFullShGap"):
-        values = [row[key] for row in per_frame if row[key] is not None]
-        result[key] = float(np.mean(values)) if values else None
+    result.update(summarise(per_frame, ("psnr", "ssim", "lpips", "psnrFullSh", "psnrFullShGap")))
     return result
 
 

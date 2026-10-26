@@ -72,7 +72,7 @@ def test_timeout_reservation_catches_cheap_forecast_and_includes_cpu_memory() ->
     priced = ledger.price_plan([], plans, 2)
     assert priced["estimateUsd"] == 1.8
     assert plans[0]["timeoutSeconds"] == 3300
-    assert plans[0]["worstCaseUsd"] == pytest.approx(ledger.hourly_rate("l4") * 3420 / 3600)
+    assert plans[0]["worstCaseUsd"] == pytest.approx(ledger.hourly_rate("l4") * 3540 / 3600)
     assert ledger.hourly_rate("l4") == pytest.approx(0.7992 + 2 * 0.04716 + 8 * 0.007992)
 
 

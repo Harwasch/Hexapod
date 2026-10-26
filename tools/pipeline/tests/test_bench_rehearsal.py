@@ -117,3 +117,7 @@ def test_modal_app_reuses_image_and_gpu_has_no_secret() -> None:
     gpu_definitions = source.split("FUNCTIONS =", 1)[1]
     assert "secrets=" not in gpu_definitions
     assert "timeout=TIMEOUTS[schedule]" in gpu_definitions
+    # The restart marker is committed before any training, so a preempted input that
+    # Modal re-runs is refused rather than paid for twice.
+    train = source.split("def _train", 1)[1].split("FUNCTIONS =", 1)[0]
+    assert train.index("claim(") < train.index("volume.commit()") < train.index("run_training(")

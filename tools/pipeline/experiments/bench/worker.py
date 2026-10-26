@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import tempfile
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from . import rehearsal
+from .ledger import STARTUP_SECONDS
 from .recipe import make_recipe, patch_seed
 from .results import parse_result
 from .scene import prepare_pool, read_json, verify, write_json
@@ -23,6 +25,56 @@ ARTIFACTS = (
 )
 
 
+class RestartedError(RuntimeError):
+    """This run already started once: Modal is re-running a preempted input."""
+
+
+def claim(destination: Path, *, attempt_started: float) -> None:
+    """Mark the run started, or refuse: the caller commits the volume before training.
+
+    A preempted container's input is restarted by Modal on another container. Without
+    this marker the second attempt would train again and bill again, and the ledger
+    would only ever see the last attempt's cost.
+    """
+    destination.mkdir(parents=True, exist_ok=True)
+    marker = destination / "started.json"
+    try:
+        with marker.open("x") as handle:
+            handle.write(json.dumps({"attemptStartedAt": attempt_started}) + "\n")
+    except FileExistsError as error:
+        raise RestartedError(f"run {destination.name} already started ({marker})") from error
+
+
+def restart_result(plan: dict[str, Any], error: RestartedError) -> dict[str, Any]:
+    """What a refused restart returns. Unknown cost: the ledger keeps the reservation."""
+    return {
+        "schemaVersion": 1,
+        "runId": plan["runId"],
+        "scene": plan["scene"],
+        "seed": plan.get("seed"),
+        "schedule": plan["schedule"],
+        "status": "preempted",
+        "error": f"Preempted; restart refused, no second attempt: {error}",
+        "costUsd": None,
+    }
+
+
+def billed_from(
+    *, started_at: float | None, booted_at: float, first_call: bool, now: float
+) -> tuple[float, str]:
+    """When this call's bill began, and how that was known.
+
+    A cold call is billed from the container's start. When the sandbox's uptime cannot
+    say when that was, the import time misses the image mount and Python's start, so
+    the startup limit is billed on top of it rather than nothing.
+    """
+    if not first_call:
+        return now, "warm-call"
+    if started_at is not None:
+        return started_at, "container-uptime"
+    return booted_at - STARTUP_SECONDS, "boot-minus-startup-limit"
+
+
 def run_training(
     scene: Path, destination: Path, plan: dict[str, Any], *, billed_since: float | None = None
 ) -> dict[str, Any]:
@@ -33,7 +85,9 @@ def run_training(
     from runners import LocalRunner, RunnerSet
     from workdir import Workdir
 
-    destination.mkdir(parents=True, exist_ok=False)
+    destination.mkdir(parents=True, exist_ok=True)
+    if (destination / "result.json").exists():
+        raise ValueError(f"run {destination.name} already has a result")
     params = dict(plan["trainParams"])
     split_digest = manifest_digest = None
     train_seconds = None

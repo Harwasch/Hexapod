@@ -26,6 +26,11 @@ TIMEOUTS = {"screen": 1800, "full": 3300, "freeze": 600}
 # Startup/teardown allowance in the modelled reservation, not a measured invoice.
 STARTUP_SECONDS = 60
 OVERHEAD_SECONDS = STARTUP_SECONDS + 60
+# Modal re-runs a preempted GPU input on a fresh container (GPU functions cannot be made
+# nonpreemptible; retries=0 does not stop it). The worker refuses that second attempt at
+# entry (worker.claim), so a run pays for one attempt plus one refused restart: its cold
+# start and the check, never a second training.
+RESTART_SECONDS = STARTUP_SECONDS + 60
 
 
 def hourly_rate(tier: str) -> float:
@@ -124,7 +129,8 @@ def price_plan(
     for plan in plans:
         forecast = estimate(entries, plan["scene"], plan["schedule"], plan["tier"])
         timeout = TIMEOUTS[plan["schedule"]]
-        maximum = hourly_rate(plan["tier"]) * (timeout + OVERHEAD_SECONDS) / 3600
+        seconds = timeout + OVERHEAD_SECONDS + RESTART_SECONDS
+        maximum = hourly_rate(plan["tier"]) * seconds / 3600
         plan.update(
             estimateUsd=forecast,
             timeoutSeconds=timeout,

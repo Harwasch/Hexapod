@@ -34,11 +34,17 @@ image = shared.image.add_local_file(SHARED_PATH, "/root/bench_training_app.py")
 _calls = 0
 
 
-def _billed_since() -> float:
+def _billed_since() -> tuple[float, str]:
+    from experiments.bench.worker import billed_from
+
     global _calls
     _calls += 1
-    now = time.time()
-    return (shared.STARTED_AT or shared.BOOTED_AT) if _calls == 1 else now
+    return billed_from(
+        started_at=shared.STARTED_AT,
+        booted_at=shared.BOOTED_AT,
+        first_call=_calls == 1,
+        now=time.time(),
+    )
 
 
 @app.function(
@@ -56,7 +62,7 @@ def _billed_since() -> float:
 def freeze(plan: dict[str, Any]) -> dict[str, Any]:
     from experiments.bench.freeze import ReadOnlyR2, freeze_scene
 
-    started = _billed_since()
+    started, billed = _billed_since()
     volume.reload()
     transfer = shared._transfer()
     # Only the list/get capability crosses into freeze_scene; never S3Transfer itself.
@@ -86,6 +92,7 @@ def freeze(plan: dict[str, Any]) -> dict[str, Any]:
             "error": f"{type(error).__name__}: {error}",
         }
     result["wallSeconds"] = time.time() - started
+    result["billedFrom"] = billed
     result["costUsd"] = result["wallSeconds"] * hourly_rate("cpu4") / 3600
     write_json(Path("/bench/runs") / plan["runId"] / "result.json", result)
     volume.commit()
@@ -93,21 +100,29 @@ def freeze(plan: dict[str, Any]) -> dict[str, Any]:
 
 
 def _train(plan: dict[str, Any]) -> dict[str, Any]:
-    from experiments.bench.worker import run_training
+    from experiments.bench.worker import RestartedError, claim, restart_result, run_training
 
-    started = _billed_since()
+    started, billed = _billed_since()
     volume.reload()
-    result = run_training(
-        Path("/bench/scenes") / plan["scene"],
-        Path("/bench/runs") / plan["runId"],
-        plan,
-        billed_since=started,
-    )
+    run = Path("/bench/runs") / plan["runId"]
+    try:
+        claim(run, attempt_started=started)
+    except RestartedError as error:
+        # Modal re-ran a preempted input. Train nothing; the ledger keeps the run's
+        # worst-case reservation, which covers the lost attempt and this refusal.
+        refused = restart_result(plan, error)
+        write_json(run / f"preempted-{int(time.time())}.json", refused)
+        volume.commit()
+        return refused
+    # Committed before training, so a restart on another container sees it.
+    volume.commit()
+    result = run_training(Path("/bench/scenes") / plan["scene"], run, plan, billed_since=started)
     volume.commit()
     # Commit latency is part of the container bill, and is returned to the local ledger.
     result["wallSeconds"] = time.time() - started
+    result["billedFrom"] = billed
     result["costUsd"] = result["wallSeconds"] * hourly_rate(plan["tier"]) / 3600
-    write_json(Path("/bench/runs") / plan["runId"] / "result.json", result)
+    write_json(run / "result.json", result)
     volume.commit()
     return result
 

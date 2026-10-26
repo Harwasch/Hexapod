@@ -1211,8 +1211,20 @@ $0.05 freeze; other GPU forecasts scale by the repo's rates including CPU/RAM.
 **Forecasts alone cannot enforce a dollar cap:** the bench also reserves the larger
 timeout cost (30 min screen, 55 min full, 10 min freeze), plus a 60-second startup
 limit and 60-second teardown allowance. Containers are single-use, with CPU/RAM hard
-limits equal to their priced reservations. A two-seed full L4 baseline reserves about
-$1.82, so it fits the default $2 once earlier runs have recorded their actual cost.
+limits equal to their priced reservations.
+
+**Preemption: one attempt, never two.** GPU functions cannot be made nonpreemptible,
+and Modal re-runs a preempted input on a new container even with `retries=0`. Each GPU
+call writes and commits `runs/<id>/started.json` to the volume before it trains; a
+call that finds the marker trains nothing, writes `preempted-<time>.json` and returns
+status `preempted` with an unknown cost, so the ledger keeps the run's whole
+reservation. That reservation is one attempt plus one refused restart (another
+2 min). A two-seed full L4 baseline reserves about $1.88, so it fits the default $2
+from a fresh ledger. A preempted run is re-run by hand, under a new run ID.
+
+A cold call is billed from the container's start (its sandbox uptime). Where that is
+unavailable, it is billed from the module's import less the 60-second startup limit,
+not from the import alone; `billedFrom` in each result says which.
 Missing/unknown outcomes retain the reservation; corrupt ledger lines refuse launches.
 Returned costs use container seconds and the repo's GPU + reservation price table,
 not a Modal invoice. The cap bounds this model; image builds, provider billing beyond
