@@ -9,7 +9,8 @@ RECIPES = Path(__file__).resolve().parents[1] / "recipes"
 
 def _params(recipe: str, stage: str) -> dict[str, object]:
     document = yaml.safe_load((RECIPES / recipe).read_text())
-    return next(s for s in document["stages"] if s["id"] == stage)["params"]
+    params: dict[str, object] = next(s for s in document["stages"] if s["id"] == stage)["params"]
+    return params
 
 
 def test_photo_reconstruct_ships_every_trained_band() -> None:
