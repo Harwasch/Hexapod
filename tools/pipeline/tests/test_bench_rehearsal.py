@@ -132,7 +132,20 @@ def test_keep_splat_retains_raw_full_sh_beside_shipped(
     from holdout_error import read_ply
 
     monkeypatch.setattr(cli, "git_commit", lambda: "test")
-    args = cli.parser().parse_args(["run", "--scene", "spool", "--rehearse", "--renders", "3"])
+    # Shipping degree 0 (not the recipe's 3), so the shipped PLY lacks the bands the
+    # kept full-SH export has.
+    args = cli.parser().parse_args(
+        [
+            "run",
+            "--scene",
+            "spool",
+            "--rehearse",
+            "--renders",
+            "3",
+            "--set",
+            '{"train": {"ship_sh_degree": 0}}',
+        ]
+    )
     plan = cli.plans_for(args)[0]
     plan.update(timeoutSeconds=1800, keepSplat=keep)
     assert plan["renders"] == 3
