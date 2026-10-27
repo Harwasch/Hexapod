@@ -274,14 +274,16 @@ stages:
       # this is how many of those bands trained.ply keeps, and so gated.ply, canonical.ply
       # (turned into east/north/up with the splat by `place`: harmonics.py) and the tiles.
       # The held-out error above is rendered at this degree, so `quality` gates what is
-      # published. 0 is every capture so far: one colour from every side. Not yet chosen
-      # for the deployment: measured on the packer's SH-3 samples, degree 1 makes the
-      # tileset 1.17-1.20x the bytes of degree 0 and degree 3 1.6-1.7x; frame rate and
-      # GPU memory in the viewers are what experiments/sh_compare.py packs one site three
-      # ways to look at (tools/pipeline/README.md, "Shipping SH"). A run may set it
-      # (`{"train": {"ship_sh_degree": 3}}`) without a recipe change. Not gsplat's own
-      # `--sh_degree`, the degree it trains at: that stays at its default, 3.
-      ship_sh_degree: 0
+      # published. 3, every band trained, chosen on the frozen-input bench (Spool, 2 full
+      # seeds, 22 untouched test frames; tools/pipeline/README.md, "Shipping SH"): test
+      # PSNR 21.36 / 22.83 / 24.64 / 26.97 dB at degree 0 / 1 / 2 / 3, SSIM 0.728 -> 0.875,
+      # LPIPS 0.214 -> 0.103 -- degree 0 looked washed out against the photos. The cost:
+      # tiles 1.00 / 1.19 / 1.44 / 1.78x the bytes of degree 0 (17.2 -> 30.7 B a gaussian),
+      # and on a T4 (headless Chromium, PlayCanvas) mean frame time +8% and GPU memory
+      # +27% at degree 3. Handheld viewers already draw at most degree 1. A run may set
+      # less (`{"train": {"ship_sh_degree": 0}}`). Not gsplat's own `--sh_degree`, the
+      # degree it trains at: that stays at its default, 3.
+      ship_sh_degree: 3
       # What is written here is the Standard run. A run may override any of it per
       # capture (`jobs.params`), and two named presets are:
       #
