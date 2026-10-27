@@ -26,6 +26,8 @@ import { join } from "node:path";
 
 import type { Page } from "@playwright/test";
 
+import { API_RETRY_BUDGET_MS } from "../src/api/coldStart";
+
 import {
   addGoogleCredit,
   expect,
@@ -372,7 +374,12 @@ for (const viewport of VIEWPORTS) {
     test("offline, with the captures panel and a sheet", async ({ page }) => {
       test.setTimeout(240_000);
       await boot(page, { apiDown: true });
-      await expect(page.getByTestId("notice-api-offline")).toBeVisible();
+      await expect(page.getByText(/Waking the server/)).toBeVisible();
+      // Match the transport's intentional cold-start wait before checking the offline layout.
+      await expect(page.getByTestId("notice-api-offline")).toBeVisible({
+        timeout: API_RETRY_BUDGET_MS + 15_000,
+      });
+      await expect(page.getByText(/Waking the server/)).toHaveCount(0);
       await expectNoOverlap(page, "offline");
       await shortcut(page, "u");
       await expect(page.getByTestId("captures-offline")).toBeVisible();
