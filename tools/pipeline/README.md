@@ -1309,6 +1309,24 @@ updates, so only measurements can justify adopting them. They pass through the s
 argv in single-scene, convergence and block training. Fused SSIM is already used by
 v1.5.3; there is no new switch for it.
 
+**Measured, and not adopted** (Spool, L4, shipping SH 3; screen = 1/10 schedule at 800 px,
+2 seeds; full = the recipe as is). The screen baseline trained in 133 s for 25.63 dB
+(seed spread 0.11 dB); the full baseline in 2,417 s for 26.97 dB / SSIM 0.875 / LPIPS
+0.103 (seed spread 0.22 dB).
+
+| trial (screen)           | test PSNR | SSIM  | LPIPS  | train s | verdict           |
+| ------------------------ | --------- | ----- | ------ | ------- | ----------------- |
+| `sparse_grad`            | 25.50     | 0.851 | 0.1171 | 154     | slower and worse  |
+| `visible_adam`           | 25.86     | 0.856 | 0.1145 | 108     | to full           |
+| `packed: false`          | 25.63     | 0.855 | 0.1139 | 132     | no change         |
+| `batch_size: 2`          | 25.52     | 0.853 | 0.1146 | 115     | at the noise edge |
+| `visible_adam` + batch 2 | 25.77     | 0.856 | 0.1140 | 99      | to full           |
+
+At full length both lost quality the screen did not show: `visible_adam` + batch 2 (2
+seeds) 26.54 dB / 0.862 / 0.115 in 1,879 s, `visible_adam` alone (seed 42) 26.54 dB /
+0.860 / 0.118 in 1,864 s, against 27.08 / 0.877 / 0.101 for the baseline's seed 42. So
+both stay off; a speed-up is adopted only on a full-schedule run, never on a screen.
+
 During the train stage, a background thread probes `nvidia-smi` every five seconds.
 `gpu_samples.json` retains CSV samples; `gpuUtilMean`, `gpuUtilP50` (percent) and
 `gpuMemMaxMiB` (sampled device usage, not an allocation peak) appear in the result and
