@@ -88,6 +88,34 @@ async function rest(page: Page, ms: number): Promise<{ draws: number; ticks: num
   };
 }
 
+/**
+ * Waits until the renderer has shown what it was last asked for (`ScanRendererStatus.settled`)
+ * for a second on end, and fails if it never does. Spark sorts in a worker and shows a frame
+ * only once that sort lands; under SwiftShader the last sort landed 6 to 12 s after `use`
+ * returned and about 16 s after a turn (measured on hwgeekom, 2026-10-27), each landing
+ * drawing a frame and sometimes starting the next sort. Those are frames of a view still settling, not of a
+ * still one. A brief `true` between one sort landing and the next starting is not settled,
+ * hence the second. A renderer that never settles fails here; one that settles and still
+ * draws fails the rest below. PlayCanvas has no such flag (always settled): this costs it
+ * nothing. Returns how long it waited, recorded with the result.
+ */
+async function settle(page: Page): Promise<number> {
+  const waited: number | null = await page.evaluate(`(async () => {
+    const start = performance.now();
+    const until = start + 60000;
+    let since = null;
+    while (performance.now() < until) {
+      if (!window.__scan.status().settled) since = null;
+      else if (since === null) since = performance.now();
+      else if (performance.now() - since >= 1000) return Math.round(since - start);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return null;
+  })()`);
+  expect(waited, "the renderer settled within a minute").not.toBeNull();
+  return waited ?? 0;
+}
+
 interface Status {
   tiles: number;
   error: string | null;
@@ -119,7 +147,8 @@ for (const [kind, native] of [
       expect(status.native).toBe(native);
       // The trial is measured on WebGPU, not on its WebGL2 fallback.
       if (webgpu) expect(status.api).toBe("webgpu");
-      // Whatever was still settling (fades, the last sorts) has a few seconds to finish.
+      // Whatever was still settling (the last sorts, then fades) has a few seconds to finish.
+      const settledMs = await settle(page);
       await page.waitForTimeout(3000);
       const idle = await rest(page, 5000);
       // A move wakes it: frames are drawn while the camera turns, and stop again after.
@@ -131,16 +160,19 @@ for (const [kind, native] of [
       // The turn's frames are what the developer readouts' frame meter reads.
       const current: Status = await page.evaluate(`window.__scan.status()`);
       const meter = current.meter;
+      const settledAfterMs = await settle(page);
       await page.waitForTimeout(3000);
       const after = await rest(page, 5000);
       const result = {
         kind,
         native,
         status,
+        settledMs,
         idle,
         moved,
         turnMs,
         meter,
+        settledAfterMs,
         after,
         stats: await stats(page),
       };
