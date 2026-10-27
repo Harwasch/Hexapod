@@ -1,6 +1,6 @@
 /**
- * The review switcher (`?review`): Harrison compares the 3D scenes' looks (looks.ts) and the two
- * versions of the app section on the page itself. Loaded only with `?review`; it goes once the
+ * The review switcher (`?review`): Harrison compares the 3D scenes' looks (looks.ts) on the page
+ * itself. Loaded only with `?review`; it goes once the
  * choices are made.
  */
 import { LOOKS } from "./looks";
@@ -55,24 +55,6 @@ export function mountReview(lookId: string): void {
   row.className = "review__row";
   row.append(step(-1, "‹"), select, step(1, "›"));
 
-  const app = document.createElement("div");
-  app.className = "review__row";
-  const appLabel = document.createElement("span");
-  appLabel.textContent = "App section";
-  app.append(appLabel);
-  const variant = new URL(window.location.href).searchParams.get("app") ?? "a";
-  for (const [id, label] of [
-    ["a", "A · Mission control"],
-    ["b", "B · Your land in 3D"],
-  ] as const) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = label;
-    button.setAttribute("aria-pressed", String(variant === id));
-    button.addEventListener("click", () => go((url) => url.searchParams.set("app", id)));
-    app.append(button);
-  }
-
-  panel.append(title, row, blurb, app);
+  panel.append(title, row, blurb);
   document.body.append(panel);
 }

@@ -78,8 +78,8 @@
       <div class="in">
         <a class="brand" href="#top" data-brand></a>
         <nav aria-label="Main">
-          <a href="#fleet">Fleet</a><a href="#capabilities">Capabilities</a><a href="#app">App</a
-          ><a href="#uses">Use cases</a>
+          <a href="#fleet">Fleet</a><a href="#capabilities">Capabilities</a
+          ><a href="#app">Mission Control</a><a href="#uses">Use cases</a>
         </nav>
         <div class="acts">
           <button class="tgl" type="button" id="tgl" aria-label="Switch to dark mode">
@@ -415,21 +415,11 @@
       </section>
 
       <section class="band" id="app">
-        <!-- Two versions for Harrison to choose between (review of 2026-10-22); ?app=b shows the
-             second. The one not chosen goes. -->
-        <div class="in app" data-app="a">
-          <div class="head" data-variant="a">
+        <div class="in app">
+          <div class="head">
             <p class="num">03</p>
-            <h2>Mission control</h2>
-            <p>One screen for your land, the work planned on it and the fleet doing it.</p>
-          </div>
-          <div class="head" data-variant="b">
-            <p class="num">03</p>
-            <h2>Your land in 3D</h2>
-            <p>
-              Every slope, fence line and creek on a model of your site, with the work and the fleet
-              on it.
-            </p>
+            <h2>Mission Control</h2>
+            <p>The live overview of your fleet on your land.</p>
           </div>
 
           <figure class="shots" aria-label="The app">
@@ -465,34 +455,22 @@
               The app today, on our demo ranch. The fleet and its plans are simulated.
             </figcaption>
           </figure>
-          <ul class="feat shot-tabs" aria-label="What the app shows">
+          <ul class="feat shot-tabs" aria-label="What Mission Control shows">
             <li>
               <button type="button" aria-controls="shot-land" aria-pressed="true">
-                <b data-variant="a">See your land</b><b data-variant="b">The whole site</b
-                ><span data-variant="a"
-                  >Your site as a 3D model, with every zone, track and tree on it.</span
-                ><span data-variant="b"
-                  >Slopes, trees, fences and creeks, on a model you can turn and measure.</span
-                >
+                <b>See</b><span>Your land in 3D, with every zone, track and tree on it.</span>
               </button>
             </li>
             <li>
               <button type="button" aria-controls="shot-plan" aria-pressed="false">
-                <b data-variant="a">Plan the work</b><b data-variant="b">Plans drawn on it</b
-                ><span data-variant="a"
-                  >Mark what needs doing and approve a plan before any work starts.</span
-                ><span data-variant="b"
-                  >Zones, passes and schedules, laid out on the land itself.</span
-                >
+                <b>Plan</b
+                ><span>Mark what needs doing and approve the plan before a robot moves.</span>
               </button>
             </li>
             <li>
               <button type="button" aria-controls="shot-fleet" aria-pressed="false">
-                <b data-variant="a">Watch it done</b><b data-variant="b">The fleet on it, live</b
-                ><span data-variant="a">Follow every robot and every job as it happens.</span
-                ><span data-variant="b"
-                  >Where each robot is, what it is doing and what needs a person.</span
-                >
+                <b>Do</b
+                ><span>The fleet does the work; follow every robot and every job live.</span>
               </button>
             </li>
           </ul>

@@ -822,10 +822,6 @@ abbr {
 .shot-tabs button[aria-pressed="false"] b {
   color: var(--muted);
 }
-.app[data-app="a"] [data-variant="b"],
-.app[data-app="b"] [data-variant="a"] {
-  display: none;
-}
 .uses {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));

@@ -124,12 +124,12 @@ test("the nav scrolls to each section", async ({ page }) => {
   for (const [name, id] of [
     ["Fleet", "fleet"],
     ["Capabilities", "capabilities"],
-    ["App", "app"],
+    ["Mission Control", "app"],
     ["Use cases", "uses"],
   ] as const) {
     await nav.getByRole("link", { name, exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`#${id}$`));
-    await expect(page.locator(`#${id} h2:visible`)).toBeInViewport();
+    await expect(page.locator(`#${id} h2`)).toBeInViewport();
   }
   await page.locator("header").getByRole("link", { name: "Request a site scan" }).click();
   await expect(page.locator("#start h2")).toBeInViewport();
@@ -358,30 +358,17 @@ test("with ?review, the switcher changes the look", async ({ page }) => {
   // The switcher reloads the page; wait for the new address, not for the scene to finish loading.
   await page.waitForURL(/look=sensor/, { waitUntil: "commit" });
   await expect(page.locator("#top")).toHaveAttribute("data-look", "sensor");
-  await expect(review.getByRole("button", { name: /Your land in 3D/ })).toHaveAttribute(
-    "aria-pressed",
-    "false",
-  );
-});
-
-test("?app=b shows the app section's second version", async ({ page }) => {
-  await page.goto("/landing.html?app=b");
-  await expect(page.locator("#app h2:visible")).toHaveText("Your land in 3D");
-  await expect(page.locator("#app").getByRole("button", { name: /The whole site/ })).toBeVisible();
 });
 
 test("the app section's points switch its screenshot", async ({ page }) => {
   await page.goto("/landing.html");
   const app = page.locator("#app");
-  await expect(app.locator("h2:visible")).toHaveText("Mission control");
+  await expect(app.locator("h2")).toHaveText("Mission Control");
   await expect(app.locator("#shot-land")).toBeVisible();
-  await app.getByRole("button", { name: /Plan the work/ }).click();
+  await app.getByRole("button", { name: /^Plan/ }).click();
   await expect(app.locator("#shot-plan")).toBeVisible();
   await expect(app.locator("#shot-land")).toBeHidden();
-  await expect(app.getByRole("button", { name: /Plan the work/ })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  await expect(app.getByRole("button", { name: /^Plan/ })).toHaveAttribute("aria-pressed", "true");
   // Simulated things are labelled as simulated.
   await expect(app.locator("figcaption")).toContainText("simulated");
   await expect(app.getByText("Keep the record")).toHaveCount(0);

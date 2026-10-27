@@ -357,8 +357,7 @@ if (params.has("review")) {
   void import("./review").then(({ mountReview }) => mountReview(look.id));
 }
 
-/** The app section: which version of its words (`?app=b`); each point shows its screenshot. */
-$(".app", HTMLElement).dataset.app = params.get("app") === "b" ? "b" : "a";
+/** Mission Control: each point shows its screenshot. */
 const shotTabs = [...document.querySelectorAll<HTMLButtonElement>(".shot-tabs button")];
 for (const tab of shotTabs)
   tab.addEventListener("click", () => {
