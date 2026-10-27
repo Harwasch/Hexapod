@@ -276,8 +276,8 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
     own ground. What was done is written into `source_meta.json` as `frame`, so a capture
     that lands wrong carries the reason with it.
 
-    `ship_sh_degree` (0 by default: DC colour only, as always) ships that many of the upload's
-    own SH bands -- a phone app's gsplat-style PLY or a Scaniverse `.spz` often carries
+    `ship_sh_degree` (code default 0; splat-ingest normalize ships 3) ships that many of
+    the upload's own SH bands -- a phone app's gsplat-style PLY or a Scaniverse `.spz` often carries
     degree 3 -- turned with the splat by the up-axis and heading rotation
     (`harmonics.rotate`); an upload with fewer bands ships what it has, and
     `source_meta.json`'s `shDegree` says which.
@@ -1846,8 +1846,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     * `batch_size` (1-8, default 1): images per training step, with gsplat's own
       sqrt(batch) learning-rate scaling and the schedule divided by it so the images
       trained on stay the same (`training.gsplat_argv`). Not with `depth_loss`.
-    * `ship_sh_degree` (0-3, default 0): the spherical-harmonic bands above DC that
-      `trained.ply` ships -- and so `gated.ply`, `canonical.ply` and the tiles, which
+    * `ship_sh_degree` (0-3, code default 0; photo-reconstruct train ships 3): the bands
+      above DC that `trained.ply` ships -- and so `gated.ply`, `canonical.ply` and the tiles, which
       carry whatever it has (`place` turning them into east/north/up). The trainer always
       fits degree 3 (gsplat's own `--sh_degree`, left at its default -- a different knob,
       which is why this one is not called that); this is how many of its bands survive,
@@ -3177,11 +3177,12 @@ def place_splat(ctx: StageContext) -> StageOutcome:
     and recentring (`place_points`) into `coverage_enu.ply`, so a viewer can lay it over
     the splat; with no quality stage that file holds no points.
 
-    The SH bands `train` shipped (`ship_sh_degree`; none by default) are carried into
-    `canonical.ply` and **turned with the splat**: each band by the frame rotation's
-    Wigner D-matrix (`gaussians.transform` -> `harmonics.rotate`), so a gaussian placed in
-    east/north/up shows, from every direction, the colour it was trained to show from the
-    same direction in COLMAP's frame. The recentring is a translation and touches no band.
+    The SH bands `train` shipped (`ship_sh_degree`; code default 0, photo-reconstruct
+    train ships 3) are carried into `canonical.ply` and **turned with the splat**: each
+    band by the frame rotation's Wigner D-matrix (`gaussians.transform` ->
+    `harmonics.rotate`), so a gaussian placed in east/north/up shows, from every
+    direction, the colour it was trained to show from the same direction in COLMAP's
+    frame. The recentring is a translation and touches no band.
 
     A `georef.json` with no `frame` (written by `manual_placement`) is levelled by the
     camera-up estimate in `poses`, if there is one, and otherwise passed through with a
@@ -3938,10 +3939,11 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
     what it writes: the committed tree is one tile, and its `splat.glb` did not change by
     a byte when merged parents arrived -- only `tileset.json`'s `refine` did.
 
-    **Colour.** The tiles carry every SH band `canonical.ply` does -- the run's own
-    `ship_sh_degree`, chosen on `train` (Lane 2) or `normalize` (Lane 1), 0 by default -- so
-    what ships is what the held-out error measured. `ship_sh_degree` here only caps that, for
-    a re-package of a canonical.ply that carries more; a cap below what `train` measured
+    **Colour.** The tiles carry every SH band `canonical.ply` does. The run's
+    `ship_sh_degree`, chosen on `train` (Lane 2) or `normalize` (Lane 1), has code default 0;
+    photo-reconstruct train and splat-ingest normalize ship 3. What ships is what the
+    held-out error measured. `ship_sh_degree` here only caps that, for a re-package of a
+    canonical.ply that carries more; a cap below what `train` measured
     is logged, since the held-out error then describes more colour than the tiles hold.
     Degree 3 is measured at 1.6-1.7x the tileset bytes of degree 0 on real SH-3 scans,
     degree 1 at 1.17-1.20x (`splat_tiles.convert`).

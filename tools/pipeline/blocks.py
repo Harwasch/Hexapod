@@ -1546,9 +1546,9 @@ def _merge_and_measure(
     directories = [_state_dir(ctx) / _block_dir(i) for i in range(plan.partition.count)]
     parts = [part for directory in directories for part in block_parts(directory)]
     full = work / "merged_full.ply"
-    # trained.ply ships the DC colour and `ship_sh_degree` of the blocks' SH bands (0 by
-    # default), truncated channel-major as a single run's are (stages.gsplat); the
-    # held-out error below is rendered at the same degree.
+    # trained.ply ships the DC colour and `ship_sh_degree` of the blocks' SH bands (code
+    # default 0; photo-reconstruct train ships 3), truncated channel-major as a single
+    # run's are (stages.gsplat); the held-out error below is rendered at the same degree.
     names = ply_layout(parts[0]).names if parts else ()
     asked = harmonics.check_degree(settings.params.get("ship_sh_degree"))
     shipped = min(asked, harmonics.degree_of(names)) if asked else 0
