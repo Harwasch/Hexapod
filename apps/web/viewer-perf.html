@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Viewer frame cost benchmark</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #10141a;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="viewer"></canvas>
+    <script type="module" src="/src/dev/viewerPerfEntry.ts"></script>
+  </body>
+</html>

@@ -870,16 +870,16 @@ fourteen, byte for byte).
 All four configured globe choices (`apps/web/src/state/settings.ts:15`) support SH 0-3,
 including degree 2. The dedicated renderers intentionally keep only SH 0-1 on handhelds:
 
-| Path | Degrees drawn/carried | Source |
-| ---- | --------------------- | ------ |
-| PlayCanvas default (WebGL2) and WebGPU trial | 0-3 desktop; 0-1 handheld | `apps/web/src/lib/splatLayout.ts:112`, `apps/web/src/cesium/scanView/playcanvasTile.worker.ts:41`, `apps/web/src/cesium/scanView/quality.ts:79` |
-| Spark globe overlay | 0-3 desktop; 0-1 handheld | `apps/web/src/cesium/scanView/sparkBackend.ts:705`, same `quality.ts` cap |
-| Spark gallery (`view.html`) | 0-3, no app SH cap | `apps/web/src/view/sparkStream.ts:38` passes SPZ to `SplatMesh`, including its LOD path |
-| Spark local Worlds PLY/SPZ viewer | 0-3 for Gaussian splats; ordinary point clouds use vertex colours | `apps/web/src/worlds/reconstruction/LocalSplatViewer.tsx:78` |
-| Spark live training preview | Renderer supports 0-3, but snapshots carry only 0 | `apps/web/src/view/live.ts:299`, `tools/pipeline/live.py:390` deliberately strips SH for previews |
-| CesiumJS | 0-3 | `apps/web/src/cesium/spzDecode.worker.ts:16`, `apps/web/src/lib/splatLayout.ts:41` |
-| Packer, including parent tiles | 0-3 | `tools/captures/splat_tiles.py:377` (channel-major conversion), `:658` (3/8/15 glTF attributes) |
-| Placement rotation | 0-3 | `tools/pipeline/harmonics.py` `rotate`; `tests/test_harmonics.py:185` tests degrees 1, 2 and 3 against the colour-preserving definition |
+| Path                                         | Degrees drawn/carried                                             | Source                                                                                                                                          |
+| -------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| PlayCanvas default (WebGL2) and WebGPU trial | 0-3 desktop; 0-1 handheld                                         | `apps/web/src/lib/splatLayout.ts:112`, `apps/web/src/cesium/scanView/playcanvasTile.worker.ts:41`, `apps/web/src/cesium/scanView/quality.ts:79` |
+| Spark globe overlay                          | 0-3 desktop; 0-1 handheld                                         | `apps/web/src/cesium/scanView/sparkBackend.ts:705`, same `quality.ts` cap                                                                       |
+| Spark gallery (`view.html`)                  | 0-3, no app SH cap                                                | `apps/web/src/view/sparkStream.ts:38` passes SPZ to `SplatMesh`, including its LOD path                                                         |
+| Spark local Worlds PLY/SPZ viewer            | 0-3 for Gaussian splats; ordinary point clouds use vertex colours | `apps/web/src/worlds/reconstruction/LocalSplatViewer.tsx:78`                                                                                    |
+| Spark live training preview                  | Renderer supports 0-3, but snapshots carry only 0                 | `apps/web/src/view/live.ts:299`, `tools/pipeline/live.py:390` deliberately strips SH for previews                                               |
+| CesiumJS                                     | 0-3                                                               | `apps/web/src/cesium/spzDecode.worker.ts:16`, `apps/web/src/lib/splatLayout.ts:41`                                                              |
+| Packer, including parent tiles               | 0-3                                                               | `tools/captures/splat_tiles.py:377` (channel-major conversion), `:658` (3/8/15 glTF attributes)                                                 |
+| Placement rotation                           | 0-3                                                               | `tools/pipeline/harmonics.py` `rotate`; `tests/test_harmonics.py:185` tests degrees 1, 2 and 3 against the colour-preserving definition         |
 
 The lockfile versions' installed sources were also checked: PlayCanvas 2.22.6 maps 24
 `f_rest` columns to degree 2 and has degree-2 GLSL/WGSL shading; Cesium engine 26.3.0
@@ -949,6 +949,81 @@ and the whole tileset in the browser's network panel, and look at shine and colo
 view goes round. Then set `ship_sh_degree` in `recipes/photo-reconstruct.yaml` (and
 `splat-ingest.yaml`) to the degree chosen. The site folders are local only
 (`data/tiles/*-sh[0-3]/` is gitignored).
+
+### Viewer frame cost per SH degree
+
+The offline runner measures the console's default **PlayCanvas WebGL2** backend through
+an opt-in `/viewer-perf.html` entry. It uses the production decoder, resource builder,
+SH shaders and sorting. It preloads the full-detail cut (REPLACE leaves, every ADD tile),
+checks the decoded SH degree/count, waits for drawn and idle-loading frames, warms up
+120 frames, then records 450 frames of a full orbit at three bounding radii and 150 of a
+dolly to 0.15 radii. Desktop SH cap 3, device pixel ratio 1, fixed 1600×900, no adaptive
+resolution or tile budget changes. This isolates renderer cost; it excludes the globe,
+UI and network/LOD streaming. Ordinary builds omit this entry.
+
+From the repository root, with an SH-3 PLY exported from the same frozen scene:
+
+```bash
+mkdir -p .viewer-perf-tmp
+export TMPDIR="$PWD/.viewer-perf-tmp" HEAVY_CPUS=4
+export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
+# sh_compare's bytes-only layout is shN/tileset.json; shN/splat/ also works.
+(cd tools/pipeline && heavy uv run python experiments/sh_compare.py \
+  /absolute/path/full_sh.ply /absolute/path/sh-tiles --bytes-only --degrees 0,1,2,3)
+VIEWER_PERF=1 heavy pnpm build
+node apps/web/scripts/check-bundle.mjs
+VIEWER_PERF_TILES=/absolute/path/sh-tiles \
+  modal run infra/modal/viewer_perf.py
+# Same inputs on an L4, with an explicit output directory (must not exist):
+VIEWER_PERF_TILES=/absolute/path/sh-tiles \
+  modal run infra/modal/viewer_perf.py --gpu L4 --width 1600 --height 900 \
+  --output "$HOME/.local/share/hexapod-bench/viewer/my-l4-run"
+rm -rf .viewer-perf-tmp
+```
+
+This is **`modal run`, never deploy**. `add_local_dir(copy=False)` mounts the built bundle
+and this run's tiles at startup, leaving the reusable Chromium image independent of the
+scan. That needs no volume upload/cleanup, secrets, object storage or production API.
+`VIEWER_PERF_DIST` can override `apps/web/dist`. The image pins Python Playwright 1.55.0
+and installs its Chromium with system dependencies. The local Modal SDK must support
+`Function.with_options` (the repository's existing bench tooling uses Modal 1.5.5).
+
+Each degree gets a fresh browser/page. The renderer string comes from the **drawing
+canvas** and must identify NVIDIA, with SwiftShader/llvmpipe explicitly refused. The
+proven Vulkan/ANGLE flags, plus `--disable-gpu-vsync` and `--disable-frame-rate-limit`,
+are recorded alongside the browser version. A suspicious 60/120 Hz timing plateau gets
+a warning, not a fabricated cost difference: inspect it before interpreting ratios.
+Repeat runs on the same GPU and inputs to assess noise; do not compare T4 and L4 rows
+as if only SH changed.
+
+Output defaults to `~/.local/share/hexapod-bench/viewer/<UTC-run>/`: `sh0.json` through
+`sh3.json` keep all rAF timestamps/intervals, median, nearest-rank p95, mean, input hashes,
+splat counts, tile/tileset bytes, camera settings and raw 0.5-second `nvidia-smi` samples.
+`summary.md` gives median and p95 ratios to SH 0, plus max GPU MiB and mean utilization.
+Memory is whole-device usage during measured frames, not isolated resource allocations
+or loading peaks. No FPS claim. When available, `EXT_disjoint_timer_query_webgl2` measures GPU time around
+`backend.render()`, read after the path; disjoint/incomplete queries are discarded.
+These times exclude asynchronous CPU sorting and remain separate from rAF wall time.
+Use these relative costs alongside `sh_compare.json`'s bytes and held-out quality when
+choosing `ship_sh_degree`; this runner does not choose or change the shipped degree.
+
+Local smoke uses the same driver, with only the committed SH-0 synthetic tree and
+10 warmup + 12 orbit + 4 dolly frames, explicitly labelled **software renderer, relative
+only**. It does not create pretend SH-1/2/3 results. Run in an environment with Python
+Playwright and its Chromium installed (no Modal import needed):
+
+```bash
+mkdir -p .viewer-perf-tmp
+export TMPDIR="$PWD/.viewer-perf-tmp" HEAVY_CPUS=4
+# Use the opt-in bundle built above. --executable can name an existing Chromium.
+heavy python infra/modal/viewer_perf.py --local --width 320 --height 200 \
+  --output "$PWD/viewer-smoke-results"
+rm -rf .viewer-perf-tmp
+```
+
+The synthetic tiles are served unchanged. Both modes bind an ephemeral loopback port
+and refuse browser requests outside that origin. The bare renderer entry needs no API
+stubs. `--warmup`, `--orbit` and `--dolly` override frame counts in both modes.
 
 ## Lane 1
 
