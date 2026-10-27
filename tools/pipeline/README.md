@@ -851,8 +851,8 @@ it.
 gsplat trains spherical harmonics to degree 3 -- 45 `f_rest_*` of a gaussian's 59 floats
 -- and until `ship_sh_degree` every capture shipped degree 0: one colour from every side.
 The packer and web renderers already carry and draw SH when a PLY has it; the
-pipeline was dropping it in the middle. **`ship_sh_degree`** (0-3, **0 by default**, so
-nothing changes until it is chosen) is how many bands ship:
+pipeline was dropping it in the middle. **`ship_sh_degree`** (0-3, **3 by default** since
+the measurements below; 0 is one parameter away) is how many bands ship:
 
 | lane | where it is set                  | what carries it                                                                                  |
 | ---- | -------------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -920,8 +920,25 @@ SH-3 scans (nianticlabs/spz's samples) 1.17-1.20x the tileset bytes at degree 1 
 (Laplace, b = 0.03) 1.15x and 1.51x (16.1, 18.5 and 24.4 bytes a gaussian), with larger
 coefficients (b = 0.1) 1.27x and 2.15x; packing 1.6, 2.1 and 3.2 s. `canonical.ply` grows
 from 56 to 92 (degree 1) or 236 (degree 3) bytes a gaussian, read a chunk at a time like
-the rest. What it costs the viewers -- frame rate, GPU memory, load time -- is what has
-not been measured, and what `experiments/sh_compare.py` exists for:
+the rest.
+
+**Chosen: degree 3.** Measured on the frozen-input bench (Spool, L4, 2 full seeds, the 22
+untouched test frames; `experiments/bench`), the tiles packed from the same run
+(`sh_compare.py --bytes-only`) and the viewer on a T4 (`infra/modal/viewer_perf.py`,
+headless Chromium, PlayCanvas, 1600x900, 600 frames per degree):
+
+| degree | test PSNR dB | SSIM  | LPIPS | tiles (x degree 0) | B a gaussian | T4 mean frame ms | T4 p95 ms | GPU MiB |
+| ------ | ------------ | ----- | ----- | ------------------ | ------------ | ---------------- | --------- | ------- |
+| 0      | 21.36        | 0.728 | 0.214 | 1.00               | 17.2         | 3.34             | 6.6       | 312     |
+| 1      | 22.83        | 0.766 | 0.182 | 1.19               | 20.4         | 3.54             | 8.4       | 344     |
+| 2      | 24.64        | 0.825 | 0.139 | 1.44               | 24.8         | 3.61             | 10.4      | 356     |
+| 3      | 26.97        | 0.875 | 0.103 | 1.78               | 30.7         | 3.62             | 11.7      | 396     |
+
+Degree 0 looked washed out beside the photos; degree 3 matched their contrast and colour.
+The T4's own GPU time per render was flat across degrees (3.33-3.45 ms); frame-time
+medians there are sub-millisecond and pipelined, so read the mean and p95, relative only.
+Handheld viewers draw at most degree 1 whatever ships. A real laptop or phone is still
+to be measured, which is what `experiments/sh_compare.py`'s side-by-side sites are for:
 
 ```bash
 # 1. A run of the capture that ships degree 3: jobs.params
@@ -1040,9 +1057,9 @@ upload/capture.ply ──▶ canonical.ply ──▶ splat/ ──▶ thumbnail.
 OpenSplat, gsplat) or an **`.spz`** — the format Scaniverse exports natively and the one
 `splat_tiles.pack_spz` already writes, so ingesting it is a 38-line inverse and nothing
 else. A PLY that carries `red/green/blue/alpha` instead of `f_dc_*`/`opacity` is converted;
-`f_rest_*` is read and dropped unless the run ships SH (`ship_sh_degree`, 0 by default --
-see [Shipping SH](#shipping-sh-view-dependent-colour)): at degree 3 it would quadruple
-`canonical.ply`, and whether the colour is worth that is still to be chosen.
+`f_rest_*` is kept to the run's `ship_sh_degree` (3 by default -- see
+[Shipping SH](#shipping-sh-view-dependent-colour)), which makes `canonical.ply` about four
+times the bytes of a degree-0 one; `ship_sh_degree: 0` reads and drops them.
 
 Everything else **refuses with a message that names the file and the problem** rather than
 producing a splat-shaped nothing: ASCII PLY, a vertex element with list properties, a
