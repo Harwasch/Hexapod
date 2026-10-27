@@ -2400,11 +2400,14 @@ function makeScenarios(Wd) {
       view: { c: [0.6, 0.4, 0.8], w: 14.5 },
       quad: (t) => {
         const tr = cl(TROUGH[0] + 0.4, TROUGH[1] + 0.6);
-        if (t < 13) return [tr[0] + Math.sin(t * 0.7) * 0.4, tr[1] + Math.cos(t * 0.7) * 0.3, 2.4];
-        const u = Math.min(1, (t - 13) / 9);
+        const circle = (tt) => [tr[0] + Math.sin(tt * 0.7) * 0.4, tr[1] + Math.cos(tt * 0.7) * 0.3];
+        if (t < 13) return [...circle(t), 2.4];
+        // off to the fence from where the circling left it, not from the trough's centre
+        const o = circle(13),
+          u = Math.min(1, (t - 13) / 9);
         return [
-          tr[0] + (C[0] + 7 - tr[0]) * u,
-          tr[1] + (C[1] + FENCE_Y - tr[1]) * Math.min(1, u * 3),
+          o[0] + (C[0] + 7 - o[0]) * u,
+          o[1] + (C[1] + FENCE_Y - o[1]) * Math.min(1, u * 3),
           2.4 + 0.6 * Math.min(1, u * 3),
         ];
       },
@@ -3727,7 +3730,7 @@ function makeStory(Wd, ground, SCN, opts = {}) {
         };
   const DRIVE_OUT = 1.8,
     WAVE = 0.8,
-    CLIMB = 1.4;
+    CLIMB = 2.0;
   function driveOut(i, t, t0) {
     const d = atvDock(i),
       o = OUT_A();
@@ -3935,17 +3938,19 @@ function makeStory(Wd, ground, SCN, opts = {}) {
       left.sort((a, b) => dist2(q.pos, TGT[a]) - dist2(q.pos, TGT[b]));
       const n = left.shift();
       const stand = standOff(q.pos, TGT[n], 0.72);
-      const walk = Math.max(0.7, Math.min(2.6, dist2(q.pos, stand) / 0.9));
+      // walks and carries at a set pace, however far: a cap on their time made long ones
+      // sprint (4 m/s and more at the peak of the ease)
+      const walk = Math.max(0.7, dist2(q.pos, stand) / 0.9);
       const s = { n, from: q.pos, stand, t0: q.t, tw: q.t + walk, h: hdg(stand, TGT[n]) };
       s.tr = s.tw + 0.5;
       s.tg = s.tr + 0.3;
       s.tp = s.tg + 1.0;
       s.tl = s.tp + 0.35;
       s.feedAt = fan(q.k);
-      s.carry = Math.max(0.8, Math.min(4, dist2(stand, s.feedAt) / 0.75));
+      s.carry = Math.max(0.8, dist2(stand, s.feedAt) / 0.75);
       s.arrive = s.tl + s.carry;
       s.fs = Math.max(s.arrive, hopperFree);
-      s.ff = s.fs + 0.5;
+      s.ff = s.fs + Math.max(0.5, dist2(s.feedAt, L.FEED) / 0.75);
       s.fe = s.ff + 0.9;
       hopperFree = s.fe + 0.35;
       s.fh = hdg(s.feedAt, L.HOPPER);
@@ -3975,7 +3980,7 @@ function makeStory(Wd, ground, SCN, opts = {}) {
         bestT = Infinity;
       for (const i of remain) {
         const st = standOff(q.pos, SPOTS[i].p, 0.62);
-        const walk = Math.max(0.5, dist2(q.pos, st) / 1.0);
+        const walk = Math.max(0.5, dist2(q.pos, st) / 0.9);
         const fin = Math.max(q.t, gate[i] - walk) + walk;
         if (fin < bestT - 1e-9) {
           bestT = fin;
@@ -3985,7 +3990,7 @@ function makeStory(Wd, ground, SCN, opts = {}) {
       remain.splice(remain.indexOf(best), 1);
       const sp = SPOTS[best],
         stand = standOff(q.pos, sp.p, 0.62),
-        walk = Math.max(0.5, dist2(q.pos, stand) / 1.0);
+        walk = Math.max(0.5, dist2(q.pos, stand) / 0.9);
       const t0 = Math.max(q.t, gate[best] - walk);
       const st = {
         i: best,
@@ -4496,7 +4501,8 @@ function makeStory(Wd, ground, SCN, opts = {}) {
       oy = new Float64Array(n),
       px = new Float64Array(n),
       py = new Float64Array(n);
-    const maxStep = 2.4 * DT,
+    // nudges at a brisk walk at most: the legs now step for every one of them
+    const maxStep = 1.2 * DT,
       B2 = BODY * BODY;
     for (let st = 0; st < steps; st++) {
       const t = t0 + st * DT,
@@ -4637,14 +4643,78 @@ function makeStory(Wd, ground, SCN, opts = {}) {
       );
     return out;
   }
+  // ── locomotion: legs and heading, from where each body actually goes ──
+  // The plan says where a robot stands and walks, and the crowd pass then nudges robots apart.
+  // Either can move a body the plan calls standing (it slid with its legs still), and the plan
+  // swaps headings outright at the start and end of a walk (half a turn in one frame). So legs
+  // and heading are worked out afterwards, along the path that results: a body that moves
+  // steps, its gait advancing with the ground it covers so the feet do not slip, and its
+  // heading turns toward the plan's at a robot's pace.
+  const TURN = 4, // rad/s: half a turn in about 0.8 s
+    STRIDE = 7.5, // gait radians per metre walked (the plan's old t * 9 at 1.2 m/s)
+    PIVOT = 0.35; // m a foot travels per radian of turning on the spot
+  const wrapA = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+  function solveGait(n, at, t0, t1) {
+    const DT = 0.04,
+      steps = Math.max(2, Math.ceil((t1 - t0) / DT) + 1);
+    const H = Array.from({ length: n }, () => new Float32Array(steps)),
+      G = Array.from({ length: n }, () => new Float32Array(steps)),
+      M = Array.from({ length: n }, () => new Uint8Array(steps));
+    for (let k = 0; k < n; k++) {
+      let h = null,
+        g = 0,
+        px = 0,
+        py = 0,
+        on = false;
+      for (let st = 0; st < steps; st++) {
+        const r = at(k, t0 + st * DT);
+        if (!r || r.carried || !r.p) {
+          h = null;
+          continue;
+        }
+        if (h === null) {
+          h = r.h;
+          px = r.p[0];
+          py = r.p[1];
+        }
+        const dh = Math.max(-TURN * DT, Math.min(TURN * DT, wrapA(r.h - h)));
+        h += dh;
+        const travel = Math.hypot(r.p[0] - px, r.p[1] - py) + PIVOT * Math.abs(dh);
+        px = r.p[0];
+        py = r.p[1];
+        g += travel * STRIDE;
+        // steps start above 0.1 m/s and stop below 0.04, so the legs do not flicker on and off
+        on = travel / DT > (on ? 0.04 : 0.1);
+        H[k][st] = h;
+        G[k][st] = g;
+        M[k][st] = on ? 1 : 0;
+      }
+    }
+    return { t0, DT, steps, H, G, M };
+  }
+  function withGait(r, C, k, t) {
+    if (!C || !r || r.carried || !r.p) return r;
+    const f = Math.max(0, Math.min(C.steps - 1.001, (t - C.t0) / C.DT)),
+      i = Math.floor(f),
+      u = f - i,
+      h0 = C.H[k][i];
+    return {
+      ...r,
+      h: h0 + wrapA(C.H[k][i + 1] - h0) * u,
+      gait: C.G[k][i] * (1 - u) + C.G[k][i + 1] * u,
+      // either neighbour stepping counts, so a frame between samples never slides
+      moving: (C.M[k][i] | C.M[k][i + 1]) === 1,
+    };
+  }
   const carObs = (p, h) => (p ? [[p[0], p[1], h, 1.04, 0.86]] : []);
   let OFF_OP = null,
-    OFF_DEP = null;
+    OFF_DEP = null,
+    GAIT_OP = null;
   function hexOperate(k, t) {
-    return withOff(hexRaw(k, t), OFF_OP, k, t);
+    return withGait(withOff(hexRaw(k, t), OFF_OP, k, t), GAIT_OP, k, t);
   }
   function solveOperate() {
-    OFF_OP = null;
+    OFF_OP = GAIT_OP = null;
     const stat = SC.obstacles || [];
     OFF_OP = solveCrowd(
       WORK,
@@ -4659,6 +4729,7 @@ function makeStory(Wd, ground, SCN, opts = {}) {
         }),
       stat,
     );
+    GAIT_OP = solveGait(WORK, (k, t) => withOff(hexRaw(k, t), OFF_OP, k, t), 0, OPS.end + 2);
   }
   function solveDeploy() {
     OFF_DEP = null;
@@ -4679,7 +4750,7 @@ function makeStory(Wd, ground, SCN, opts = {}) {
     const key = SC.id + "|" + variant,
       hit = OPS_CACHE.get(key);
     if (hit) {
-      ({ OPS, OPS_PULLER_OF, OFF_OP, STAND } = hit);
+      ({ OPS, OPS_PULLER_OF, OFF_OP, GAIT_OP, STAND } = hit);
       OFF_DEP = DEP_CACHE.get(variant);
       return;
     }
@@ -4693,7 +4764,7 @@ function makeStory(Wd, ground, SCN, opts = {}) {
       solveDeploy();
       DEP_CACHE.set(variant, OFF_DEP);
     } else OFF_DEP = DEP_CACHE.get(variant);
-    OPS_CACHE.set(key, { OPS, OPS_PULLER_OF, OFF_OP, STAND });
+    OPS_CACHE.set(key, { OPS, OPS_PULLER_OF, OFF_OP, GAIT_OP, STAND });
   }
   rebuildOps();
 
@@ -5822,3 +5893,9 @@ function startFleetCards(OPT) {
 /** The hero over the bundled world data. */
 export const startHeroScene = (opt) => startHero(WORLD, opt);
 export { startFleetCards };
+
+/** For tests: one hero crew's story, built as startHero builds it, with no renderer. */
+export function crewStory(zone) {
+  const W2 = { ...WORLD, CELL: zone.c };
+  return makeStory(W2, makeGround(WORLD), makeScenarios(W2).S, { init: zone.id, lazyDeploy: true });
+}
