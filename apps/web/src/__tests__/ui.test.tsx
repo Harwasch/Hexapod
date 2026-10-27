@@ -196,6 +196,68 @@ describe("Developer readouts + Onboarding", () => {
     vi.restoreAllMocks();
   });
 
+  it("onboarding closes on Escape, and when a site is flown to some other way", async () => {
+    // Production, 2026-10-22: a scan picked from the site switcher was flown to and drawn
+    // with the welcome card still over it, and Escape did not close the card.
+    vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
+    useViewer.getState().setStatus("ready");
+    const { unmount } = render(wrap(<OnboardingCard />));
+    await screen.findByTestId("onboarding");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument());
+    expect(useSettings.getState().onboardingDismissed).toBe(true);
+    unmount();
+
+    useSettings.getState().set({ onboardingDismissed: false });
+    render(wrap(<OnboardingCard />));
+    await screen.findByTestId("onboarding");
+    // A site that only became active (the camera came near it) leaves the card up...
+    act(() => useSites.getState().setActiveSite("pumpkin"));
+    expect(screen.getByTestId("onboarding")).toBeInTheDocument();
+    // ...one flown to (the switcher) closes it.
+    act(() => useSites.getState().setFlightSite("pumpkin"));
+    await waitFor(() => expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument());
+    expect(useSettings.getState().onboardingDismissed).toBe(true);
+    useSites.setState({ activeSiteId: null, flightSiteId: null });
+    vi.restoreAllMocks();
+  });
+
+  it("once the card is closed, Escape passes through to whatever else listens", async () => {
+    // The site switcher closes on Escape (app.spec.ts): the card's own handler is there only
+    // while the card is, and never stops the key from going on.
+    vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
+    useViewer.getState().setStatus("ready");
+    render(wrap(<OnboardingCard />));
+    await userEvent.click(await screen.findByTestId("onboarding-explore"));
+    await waitFor(() => expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument());
+    const seen: KeyboardEvent[] = [];
+    const listener = (event: KeyboardEvent) => seen.push(event);
+    document.addEventListener("keydown", listener);
+    onTestFinished(() => document.removeEventListener("keydown", listener));
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(seen.map((e) => [e.key, e.defaultPrevented])).toEqual([["Escape", false]]);
+    vi.restoreAllMocks();
+  });
+
+  it("while the card is open, Escape closes it and still reaches other listeners", async () => {
+    vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
+    useViewer.getState().setStatus("ready");
+    render(wrap(<OnboardingCard />));
+    await screen.findByTestId("onboarding");
+    const seen: string[] = [];
+    const listener = (event: KeyboardEvent) => seen.push(event.key);
+    document.addEventListener("keydown", listener);
+    onTestFinished(() => document.removeEventListener("keydown", listener));
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByTestId("onboarding")).not.toBeInTheDocument());
+    expect(seen).toEqual(["Escape"]);
+    vi.restoreAllMocks();
+  });
+
   it("onboarding opens the demo ranch, and offers a scan only where there is one", async () => {
     vi.spyOn(api, "GET").mockRejectedValue(new TypeError("offline"));
     const flyTo = vi.fn(() => Promise.resolve());

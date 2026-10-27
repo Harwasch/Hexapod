@@ -52,8 +52,8 @@ const POLL_MS = 10_000;
 export function useCaptures() {
   return useQuery({
     queryKey: adminKeys.captures,
-    queryFn: () =>
-      unwrap<Capture[]>(api.GET("/api/v1/captures", { params: { query: { limit: 200 } } })),
+    queryFn: ({ signal }) =>
+      unwrap<Capture[]>(api.GET("/api/v1/captures", { signal, params: { query: { limit: 200 } } })),
     refetchInterval: POLL_MS,
   });
 }
@@ -61,7 +61,8 @@ export function useCaptures() {
 export function useJobs() {
   return useQuery({
     queryKey: adminKeys.jobs,
-    queryFn: () => unwrap<Job[]>(api.GET("/api/v1/jobs", { params: { query: { limit: 200 } } })),
+    queryFn: ({ signal }) =>
+      unwrap<Job[]>(api.GET("/api/v1/jobs", { signal, params: { query: { limit: 200 } } })),
     refetchInterval: POLL_MS,
   });
 }
@@ -69,8 +70,10 @@ export function useJobs() {
 export function useArtifacts() {
   return useQuery({
     queryKey: adminKeys.artifacts,
-    queryFn: () =>
-      unwrap<ArtifactRow[]>(api.GET("/api/v1/artifacts", { params: { query: { limit: 500 } } })),
+    queryFn: ({ signal }) =>
+      unwrap<ArtifactRow[]>(
+        api.GET("/api/v1/artifacts", { signal, params: { query: { limit: 500 } } }),
+      ),
     refetchInterval: POLL_MS,
   });
 }
@@ -79,7 +82,7 @@ export function useArtifacts() {
 export function useSites() {
   return useQuery({
     queryKey: adminKeys.sites,
-    queryFn: () => unwrap<SiteSummary[]>(api.GET("/api/v1/sites")),
+    queryFn: ({ signal }) => unwrap<SiteSummary[]>(api.GET("/api/v1/sites", { signal })),
     staleTime: 60_000,
   });
 }
@@ -92,7 +95,7 @@ export function useSites() {
 export function useAssets() {
   return useQuery({
     queryKey: adminKeys.assets,
-    queryFn: () => unwrap<SiteAsset[]>(api.GET("/api/v1/assets", {})),
+    queryFn: ({ signal }) => unwrap<SiteAsset[]>(api.GET("/api/v1/assets", { signal })),
     refetchInterval: POLL_MS,
   });
 }
@@ -125,7 +128,7 @@ export function useReconciliation(enabled: boolean) {
 export function useRecipes() {
   return useQuery({
     queryKey: adminKeys.recipes,
-    queryFn: () => unwrap<PipelineCatalogue>(api.GET("/api/v1/recipes", {})),
+    queryFn: ({ signal }) => unwrap<PipelineCatalogue>(api.GET("/api/v1/recipes", { signal })),
     staleTime: 5 * 60_000,
     retry: false,
   });
@@ -178,9 +181,10 @@ export function useRetryRun() {
 export function useStepLog(jobId: string | null, stepId: string | null) {
   return useQuery({
     queryKey: ["admin", "log", jobId, stepId] as const,
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       unwrap<{ text: string; logKey: string }>(
         api.GET("/api/v1/jobs/{job_id}/steps/{step_id}/log", {
+          signal,
           params: { path: { job_id: jobId ?? "", step_id: stepId ?? "" } },
         }),
       ),
@@ -204,9 +208,9 @@ export function siteIndex(sites: SiteSummary[] | Site[] | undefined): Record<str
 export function useScanRequests() {
   return useQuery({
     queryKey: adminKeys.scanRequests,
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       unwrap<ScanRequestRead[]>(
-        api.GET("/api/v1/scan-requests", { params: { query: { limit: 200 } } }),
+        api.GET("/api/v1/scan-requests", { signal, params: { query: { limit: 200 } } }),
       ),
     refetchInterval: POLL_MS,
   });

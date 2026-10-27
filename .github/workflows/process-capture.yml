@@ -1,0 +1,132 @@
+name: Process capture
+
+on:
+  workflow_dispatch:
+    inputs:
+      capture_id:
+        description: Production capture UUID
+        type: string
+        required: true
+      recipe:
+        description: Recipe to run over the capture
+        type: choice
+        required: true
+        default: photo-reconstruct
+        options:
+          - photo-reconstruct
+          - splat-ingest
+      dry_run:
+        description: Inspect the capture without queueing a job
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: process-capture-${{ inputs.capture_id }}
+  cancel-in-progress: false
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CAPTURE_ID: ${{ inputs.capture_id }}
+      RECIPE: ${{ inputs.recipe }}
+      DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - name: Validate inputs
+        shell: python
+        run: |
+          import os
+          import uuid
+
+          try:
+              uuid.UUID(os.environ["CAPTURE_ID"])
+          except ValueError:
+              raise SystemExit("::error::capture_id must be a UUID")
+          # app.services.recipes reads these names from tools/pipeline/recipes.
+          if os.environ["RECIPE"] not in {"photo-reconstruct", "splat-ingest"}:
+              raise SystemExit("::error::recipe must be photo-reconstruct or splat-ingest")
+          if os.environ["DRY_RUN"] not in {"true", "false"}:
+              raise SystemExit("::error::dry_run must be true or false")
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Inspect capture and queue the recipe
+        shell: python
+        env:
+          API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+          API_WRITE_TOKEN: ${{ secrets.API_WRITE_TOKEN }}
+        run: |
+          import json
+          import os
+          import subprocess
+          import tomllib
+          import uuid
+          from pathlib import Path
+
+          app = tomllib.loads(Path("fly.toml").read_text())["app"]
+          origin = (os.environ.get("API_BASE_URL") or f"https://{app}.fly.dev").rstrip("/")
+          capture_id = str(uuid.UUID(os.environ["CAPTURE_ID"]))
+          recipe = os.environ["RECIPE"]
+          capture_url = f"{origin}/api/v1/captures/{capture_id}"
+
+          def request(url, *args, input=None):
+              # No redirects or automatic POST retries: an ambiguous failure must be
+              # checked through the public job endpoints before another dispatch.
+              result = subprocess.run(
+                  ["curl", "--fail-with-body", "--silent", "--show-error",
+                   "--connect-timeout", "30", "--max-time", "120", *args, url],
+                  capture_output=True, text=True, input=input,
+              )
+              if result.returncode:
+                  print(result.stdout)
+                  print(result.stderr)
+                  raise SystemExit("::error::API request failed; check the public job endpoints before retrying")
+              return json.loads(result.stdout)
+
+          capture = request(capture_url)
+          print(f"Capture: {capture['slug']} | kind: {capture['kind']} | status: {capture['status']}")
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary.open("a") as output:
+              output.write(
+                  f"## Process capture\n\n"
+                  f"- Capture: `{capture_id}` ({capture['slug']})\n"
+                  f"- Recipe: `{recipe}`\n"
+                  f"- Public capture and job history: GET `{capture_url}`\n"
+                  f"- Public jobs: GET `{origin}/api/v1/jobs?captureId={capture_id}`\n"
+              )
+          if os.environ["DRY_RUN"] == "true":
+              with summary.open("a") as output:
+                  output.write("- Job id: none (dry run; no POST)\n")
+              print("Dry run: no job submitted.")
+              raise SystemExit(0)
+
+          # Match app.services.jobs.create_job: capture.status is not an eligibility
+          # gate. A completed upload and no queued/running job are required; the API
+          # enforces the latter atomically if another caller races this preflight.
+          if not any(file["status"] == "complete" for file in capture["files"]):
+              raise SystemExit("::error::capture has no completed upload; nothing was queued")
+          if any(job["status"] in {"not-started", "in-progress"} for job in capture["jobs"]):
+              raise SystemExit("::error::capture already has a queued or running job; nothing was queued")
+          token = os.environ.get("API_WRITE_TOKEN", "")
+          if not token:
+              raise SystemExit("::error::API_WRITE_TOKEN is not set; add the repository secret (docs/DEPLOYMENT.md)")
+          # Read the Authorization header from stdin so the token stays off curl's argv.
+          job = request(
+              f"{capture_url}/process", "--request", "POST",
+              "--header", "@-",
+              "--header", "Content-Type: application/json",
+              "--data", json.dumps({"recipe": recipe}),
+              input=f"Authorization: Bearer {token}\n",
+          )
+          print(f"Job id: {job['id']} | status: {job['status']}")
+          with summary.open("a") as output:
+              output.write(
+                  f"- Job id: `{job['id']}`\n"
+                  f"- Job status: `{job['status']}`\n"
+                  f"- Follow status and steps: GET `{origin}/api/v1/jobs/{job['id']}`\n"
+                  f"- Read a step log: GET `{origin}/api/v1/jobs/{job['id']}/steps/<step_id>/log`\n"
+              )

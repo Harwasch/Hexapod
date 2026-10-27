@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import Asset, CameraBookmark, Epoch, Site
+from app.models.enums import SiteBoundarySource
 from app.schemas.asset import AssetBase, AssetRead
 from app.schemas.bookmark import CameraBookmarkCreate, CameraBookmarkRead
 from app.schemas.common import Attribution, GeoPosition, LicenseMetadata
@@ -139,6 +140,8 @@ def update_site(db: Session, site_id: uuid.UUID, payload: SiteUpdate) -> Site:
     data = payload.model_dump(exclude_unset=True)
     if "boundary" in data and payload.boundary is not None:
         site.boundary = geometry.footprint_to_wkb(payload.boundary)
+        # Somebody's now: registration grows it and never shrinks it back.
+        site.boundary_source = SiteBoundarySource.MANUAL.value
         if payload.centroid is None and "centroid" not in data:
             centroid = geometry.centroid_of(payload.boundary)
             site.centroid = geometry.position_to_wkb(centroid)
@@ -176,7 +179,14 @@ def site_area_m2(db: Session, site: Site) -> float:
 
 def _summary_fields(site: Site) -> tuple[list[str], datetime | None, SiteQuality | None]:
     representations = sorted({asset.representation.value for asset in site.assets})
-    observed = [a.observed_at for a in site.assets if a.observed_at is not None]
+    # Not an epoch's superseded revisions: one keeps the date it was shown with, which a
+    # re-dated epoch's current revision no longer says. (A catalog asset's `valid_to` is
+    # the end of its validity, not a supersession, so it still counts.)
+    observed = [
+        a.observed_at
+        for a in site.assets
+        if a.observed_at is not None and (a.epoch_id is None or a.valid_to is None)
+    ]
     latest = max(observed) if observed else None
     quality_raw: Any = site.metadata_.get("quality") if site.metadata_ else None
     quality = SiteQuality.model_validate(quality_raw) if isinstance(quality_raw, dict) else None
@@ -211,6 +221,7 @@ def site_to_read(db: Session, site: Site) -> SiteRead:
         name=site.name,
         description=site.description,
         boundary=boundary,
+        boundary_source=SiteBoundarySource(site.boundary_source),
         centroid=geometry.wkb_to_position(site.centroid, site.centroid_height),
         area_m2=site_area_m2(db, site),
         thumbnail_url=site.thumbnail_url,

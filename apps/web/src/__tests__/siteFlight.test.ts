@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Site, SiteAsset, SiteSummary } from "@twin/contracts";
 import { boundingRadiusM } from "@twin/geo";
 
+import { API_RETRY_BUDGET_MS } from "@/api/coldStart";
 import type { CameraController } from "@/cesium/CameraController";
 import type { ClippingManager } from "@/cesium/ClippingManager";
 import type { GlideOptions } from "@/cesium/CameraController";
@@ -410,12 +411,14 @@ describe("SiteManager.flyTo", () => {
       return Promise.resolve(site());
     });
     const first = manager.flyTo(SITE_ID);
-    await vi.advanceTimersByTimeAsync(12_000);
+    await vi.advanceTimersByTimeAsync(API_RETRY_BUDGET_MS);
+    expect(loads.at(-1)?.phase).not.toBe("error");
+    await vi.advanceTimersByTimeAsync(1000);
     await first;
     const failed = loads.at(-1);
     expect(failed?.phase).toBe("error");
     expect(failed?.retryable).toBe(true);
-    expect(failed?.error).toContain("did not answer within 12 s");
+    expect(failed?.error).toContain("did not answer within 46 s");
     // The camera was not held back by the stall: it left for the summary's pose at once.
     expect(flights).toHaveLength(1);
 
@@ -1046,7 +1049,7 @@ describe("the site load store", () => {
     const load: SiteLoad = {
       phase: "error",
       progress: 0.05,
-      error: "The catalog did not answer within 12 s",
+      error: "The catalog did not answer within 46 s",
       retryable: true,
       attempt: 1,
       flight: true,

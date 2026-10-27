@@ -178,8 +178,15 @@ jobs:
                           f"{path} reads {kind}.{name}, which docs/DEPLOYMENT.md never names"
                       )
 
-          # ci.yml runs on push; the two that spend money or create resources must not.
-          for name in ("deploy.yml", "provision.yml"):
+          # ci.yml runs on push; the ones that spend money, create resources or write production must not.
+          for name in (
+              "deploy.yml",
+              "provision.yml",
+              "process-capture.yml",
+              "import-nwm.yml",
+              "seed-land.yml",
+              "production-corrections.yml",
+          ):
               triggers = yaml.safe_load(pathlib.Path(".github/workflows", name).read_text())
               # `on` is YAML 1.1's boolean true, which is why this is not triggers["on"].
               on = triggers.get(True, triggers.get("on"))

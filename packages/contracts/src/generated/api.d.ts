@@ -11262,6 +11262,15 @@ export interface components {
              */
             threshold?: number;
         };
+        /**
+         * SiteBoundarySource
+         * @description Who drew a site's boundary. ``registration``: the union of every footprint its
+         *     published epochs have had, which a re-run fits to their current ones and may shrink
+         *     (`registration.fit_site_boundary`). ``manual``: anybody else -- created, seeded or
+         *     redrawn by hand (`PATCH /sites/{id}`) -- which registration only ever grows.
+         * @enum {string}
+         */
+        SiteBoundarySource: "registration" | "manual";
         /** SiteCreate */
         SiteCreate: {
             /** Assets */
@@ -11344,6 +11353,7 @@ export interface components {
             attribution: components["schemas"]["Attribution"][];
             /** Boundary */
             boundary: components["schemas"]["Polygon"] | components["schemas"]["MultiPolygon"];
+            boundarySource: components["schemas"]["SiteBoundarySource"];
             /** Camerabookmarks */
             cameraBookmarks: components["schemas"]["CameraBookmarkRead"][];
             centroid: components["schemas"]["GeoPosition"];
@@ -13126,6 +13136,7 @@ export type SchemaSignatureSimilarityRead = components['schemas']['SignatureSimi
 export type SchemaSignatureZone = components['schemas']['SignatureZone'];
 export type SchemaSignatureZonesRead = components['schemas']['SignatureZonesRead'];
 export type SchemaSignatureZonesRequest = components['schemas']['SignatureZonesRequest'];
+export type SchemaSiteBoundarySource = components['schemas']['SiteBoundarySource'];
 export type SchemaSiteCreate = components['schemas']['SiteCreate'];
 export type SchemaSiteFrameRead = components['schemas']['SiteFrameRead'];
 export type SchemaSiteFrameSource = components['schemas']['SiteFrameSource'];

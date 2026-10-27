@@ -176,6 +176,17 @@ stages:
       # needed. `aligner: model_aligner` is the A/B.
       aligner: ransac
       seed: 0
+      # When pose priors held every camera to its fix in all three axes (`pose_priors`), the
+      # model is already east/north/up and the similarity is the identity, the free fit
+      # recorded as a check: a free fit to the same fixes tilted the NWM drone site 10.5 deg
+      # (take-offs ~9 m apart). Only for priors at least as tight as this stage tests a fit:
+      # max_error_m horizontally, twice that vertically (priors.VERTICAL_FACTOR), as medians
+      # over the frames the model kept. A frame with no accuracy in its metadata gets the
+      # consumer default, 5 m / 10 m, which is this bound exactly, so it passes (NWM's do):
+      # for those the protection is the residual guard -- cameras further than
+      # max(3 sigma, 15 m) from their own fixes were not held to them, and are not held.
+      held_priors_max_sigma_h_m: 5.0
+      held_priors_max_sigma_v_m: 10.0
 
   # Register this epoch to its site (D4, `alignment.py`): its frames into the site's
   # reference epoch's fixed model (COLMAP 4.2 through pycolmap), a seeded similarity from
@@ -403,8 +414,9 @@ stages:
   # only by its GPS is weak everywhere. First principles, not calibrated. No `gpu:`: it
   # runs on the worker, a few passes over ~20 bytes a gaussian. `package` ships the grid.
   #   base_cell_m: the site lattice's finest cell -- fixed, or epochs would not nest.
-  #   min_cell_gaussians: the level is the finest whose median occupied cell holds this
-  #     many visible gaussians (a share from 16 has sigma <= 0.125).
+  #   min_cell_gaussians: the level is the finest whose median visible gaussian's cell
+  #     holds this many (a share from 16 has sigma <= 0.125); weighed by gaussians, so a
+  #     drone's sparse background halo cannot coarsen the grid.
   #   max_cells: the most cells the finest plane may have (2^22).
   #   pyramid_levels: coarser levels above it, min-of-children.
   - id: confidence

@@ -63,3 +63,9 @@ A check already red at merge time still blocks merging. Fix a red run on main fo
 ## Lessons
 
 <!-- one line per lesson learned after a merge; repo-specific only -->
+
+- Playwright reuses a dev server already on its port (`reuseExistingServer`), so on a shared machine `pnpm e2e` can
+  silently test another worktree's code on 5173. Give every e2e run its own `E2E_PORT`.
+- `/tmp` on the shared dev machine is a small RAM disk with a per-user quota. Set `TMPDIR` to a folder under
+  `~/.cache` for pytest and Playwright runs: test databases and browsers fill `/tmp`, and the capture worker
+  refuses jobs below 5 GB free.

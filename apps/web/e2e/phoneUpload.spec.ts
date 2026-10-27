@@ -29,6 +29,51 @@ const past = () => Math.floor(Date.now() / 1000) - 60;
 test.use({ viewport: PHONE });
 
 test.describe("the phone upload page", () => {
+  test.beforeEach(async ({ page }) => {
+    // Tests override these reads with their own rows. A running row also awaits recipes
+    // before rendering Stop; none of these reads should reach the dev server's API proxy.
+    await page.route("**/api/v1/**", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const path = new URL(route.request().url()).pathname;
+      if (path === "/api/v1/captures" || path === "/api/v1/jobs") {
+        return route.fulfill({ json: [] });
+      }
+      if (path === "/api/v1/recipes") {
+        return route.fulfill({ json: { recipes: [], providers: [] } });
+      }
+      // A completed run may read a capture detail absent from this test's fixtures.
+      return route.fulfill({ status: 404, json: { title: "Not found", status: 404 } });
+    });
+  });
+
+  for (const colorScheme of ["dark", "light"] as const) {
+    test(`the filming guide fits the phone and can be reopened (${colorScheme})`, async ({
+      page,
+    }) => {
+      await page.emulateMedia({ colorScheme });
+      await page.goto(`/upload.html#${token(soon())}`);
+      const guide = page.getByRole("region", { name: "How to film a good scan" });
+      await expect(guide).toBeVisible();
+      await expect(guide.getByRole("listitem")).toHaveCount(6);
+      const guideBox = await guide.boundingBox();
+      const pickerBox = await page.locator(".pick").boundingBox();
+      expect(guideBox).not.toBeNull();
+      expect(pickerBox).not.toBeNull();
+      expect(guideBox!.y + guideBox!.height).toBeLessThanOrEqual(pickerBox!.y);
+      const fits = await page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      );
+      expect(fits).toBe(true);
+
+      await page.getByRole("button", { name: "Dismiss guide" }).click();
+      await expect(guide).toBeHidden();
+      await page.reload();
+      await expect(guide).toBeHidden();
+      await page.getByRole("button", { name: "How to film", exact: true }).click();
+      await expect(guide).toBeVisible();
+    });
+  }
+
   test("a valid link offers a file picker", async ({ page }) => {
     await page.goto(`/upload.html#${token(soon())}`);
     await expect(page.getByRole("heading", { name: "Send a capture" })).toBeVisible();

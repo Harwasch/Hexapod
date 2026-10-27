@@ -7,10 +7,11 @@ operator's report; nothing in this repository has observed it, and this document
 first written before any of it existed. What it describes is what the repository
 _codifies_ — every row of the table below has a file behind it — plus, at the end, a
 [handover](#handover): create accounts, mint tokens, paste secrets, dispatch. Everything
-after a token exists is `.github/workflows/provision.yml`. **The GPU half of Lane 2 has
-never run anywhere**; [GPU training — Modal](#gpu-training--modal) says what proves it and
-what that costs. Read [what is unverified](#what-is-unverified) before trusting any
-provider-specific claim in here.
+after a token exists is `.github/workflows/provision.yml`. **The GPU half of Lane 2 first
+ran on 2026-10-22**: a Modal smoke, then two real iPhone captures in production;
+[GPU training — Modal](#gpu-training--modal) has what each one measured and cost. Read
+[what is unverified](#what-is-unverified) before trusting any provider-specific claim in
+here.
 
 | Layer                           | Where                        | Codified in                                            |
 | ------------------------------- | ---------------------------- | ------------------------------------------------------ |
@@ -18,7 +19,7 @@ provider-specific claim in here.
 | API (`app` process)             | Fly.io                       | `fly.toml`                                             |
 | Worker (`worker` process)       | Fly.io, same image           | `fly.toml` (`[processes]`, `[[mounts]]`)               |
 | Captures, tiles, `catalog.json` | Cloudflare R2                | `infra/cors/production.json`, `infra/cors/apply-r2.sh` |
-| Lane 2 training (`train`)       | Modal, one GPU per stage     | `infra/modal/app.py`, `.github/workflows/modal.yml`    |
+| Lane 2 remote stages            | Modal: `cpu4`, and one L4    | `infra/modal/app.py`, `.github/workflows/modal.yml`    |
 | Database                        | Neon (Postgres 16 + PostGIS) | `.github/workflows/provision.yml`                      |
 | Provisioning                    | GitHub Actions, on demand    | `.github/workflows/provision.yml`                      |
 | Deploys                         | GitHub Actions, on demand    | `.github/workflows/deploy.yml`                         |
@@ -480,8 +481,8 @@ the app imported and, once it has been used, the text encoder loaded. A cold boo
 every deploy, a host migration or a lost snapshot, since a snapshot is never resumed onto
 new code — starts the machine (~2 s), imports the app (~10 s on a desktop; slower on a
 shared vCPU, not measured on Fly), and the first search then loads the encoder (~1 s). The
-console is built for this: a failed first query falls back to the built-in catalogue and
-retries every 5 s (`apps/web/src/api/queries.ts`).
+console waits out transient failures before falling back to the built-in catalogue
+([cold start](#cold-start)); after that it checks again every 5 s.
 
 **After a resume**, a socket held across the suspend may be found reset once: the
 database pool checks before use (`pool_pre_ping`, `app/db.py`). The clock can lag a few
@@ -489,24 +490,65 @@ seconds until NTP syncs, inside the 10 s leeway JWT validation allows
 (`app/services/identity.py`). A deploy leaves a suspended API stopped, so `deploy.yml`
 starts it before it checks the ledger volume over `fly ssh console`.
 
+### Cold start
+
+The globe, admin, upload and scan-view pages share a small API transport
+(`apps/web/src/api/coldStart.ts`). GET, HEAD and OPTIONS retry network errors, timeouts
+and HTTP 502/503/504 after 1, 2, 4, 8, 8, … seconds, within a 45-second total budget
+including attempts and waits. Each attempt has a 10-second timeout, shortened to the
+remaining budget. Caller cancellation stops both attempts and waits. POST, PUT, PATCH
+and DELETE are never automatically retried by this transport.
+
+After the first transient failure, the globe's existing notice area says
+“Waking the server… this takes a few seconds after a quiet spell”. The note clears when
+no requests are retrying or a budget is exhausted. Query retries are disabled so they do not
+multiply the transport budget. If the API is actually down, exhausting a budget marks it
+unavailable and clears the waking note, including for concurrent retries. Recovery reads
+then make one attempt (at most 10 seconds) with no backoff or waking note. The catalog
+polls every 5 seconds after a failed recovery attempt, and the built-in demo stays available
+while those polls are pending. A successful API response clears the unavailable state so
+a later sleep gets the full cold-start retry budget again. The offline catalog is requested
+only after a budget is exhausted.
+
+Measured probes (2026-10-23 UTC), supplied by the wrapper: from its machine to
+`https://twin-api.fly.dev/api/v1/health/live` with `curl --max-time 90`, eight minutes apart.
+These probes did not establish that every request started from a sleeping machine.
+
+| Time (UTC) | HTTP | Total  | Time to first byte | Observation                                                                        |
+| ---------- | ---- | ------ | ------------------ | ---------------------------------------------------------------------------------- |
+| 04:57:09Z  | 200  | 0.22 s | 0.22 s             | The machine was evidently already awake.                                           |
+| 05:05:10Z  | 200  | 1.14 s | 1.14 s             | Consistent with a resume from suspend.                                             |
+| 05:13:11Z  | 200  | 6.89 s | 6.89 s             | TCP connect took 0.03 s; the wait was for the machine, not the network connection. |
+
+None timed out: the earlier production timeout was **not reproduced** in these three
+probes. The 45-second budget provides margin over the worst observed wait (6.9 seconds)
+and a full cold boot (`fly.toml` estimates about 10 seconds or more to import the app).
+The 10-second per-attempt timeout cuts and retries an attempt that is still waiting for
+a boot; the server's boot carries on. The site-detail deadline allows this whole budget
+plus one second for the final response or error to settle.
+
 ## GPU training — Modal
 
 Lane 2 (`photo-reconstruct`: a phone or desktop video in, a placed splat out) splits
 across two machines, and the split is one fact: **only a stage that declares `gpu:` leaves
-the worker.** That is `train`. Frames, poses, georeference, placement and packaging all run
-on the Fly worker, exactly as Lane 1 does.
+the worker.** In `tools/pipeline/recipes/photo-reconstruct.yaml` that is four stages:
+`pose`, `align` and `quality` on tier `cpu4` (Modal's CPU box: 4 cores, 8 GB, no GPU), and
+`train` on tier `l4`. Everything else runs on the Fly worker, exactly as Lane 1 does.
+Production confirmed the split on 2026-10-22: those four ran on Modal, the rest on the
+worker.
 
-| Where          | What runs                                                                        | Why there                                                                                    |
-| -------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Fly `worker`   | `normalize` (ffmpeg), `pose` (COLMAP 3.9.1, CPU), `georeference`, `place`, tiles | CPU work; the worker already holds the upload, and COLMAP's CPU path is what was measured    |
-| Modal, one GPU | `train` (gsplat 1.5.3 `simple_trainer.py`)                                       | needs CUDA; billed per second only while it runs, so an idle deployment costs nothing for it |
+| Where        | What runs                                                                           | Why there                                                                                                             |
+| ------------ | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Fly `worker` | `normalize` (ffmpeg), `georeference`, `place`, `confidence`, `package` and the rest | light CPU work; the worker already holds the upload                                                                   |
+| Modal `cpu4` | `pose` (COLMAP 3.9.1), `align`, `quality`                                           | more memory and sustained CPU than the 2 GB worker has ([below](#the-worker-image-carries-colmap)); billed per second |
+| Modal L4     | `train` (gsplat 1.5.3 `simple_trainer.py`)                                          | needs CUDA; billed per second only while it runs, so an idle deployment costs nothing for it                          |
 
 `fly.toml` sets `WORKER_RUNNER=cloud` and `WORKER_CLOUD_PROVIDERS=modal`. The worker then
 calls `run_stage_<tier>` in the Modal app `twin-pipeline` (`WORKER_MODAL_APP`'s default),
 with `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` from its Fly secrets. The GPU container moves
 bytes through the **private** bucket under `runs/<run id>/`, using the Modal secret
-`twin-object-storage`. Until the app is deployed, a Lane 2 run should fail at `train` on
-the function lookup (not observed). Lane 1 is unaffected either way.
+`twin-object-storage`. Until the app is deployed, a Lane 2 run should fail at `pose`, its
+first remote stage, on the function lookup (not observed). Lane 1 is unaffected either way.
 
 ### Deploying it, and proving it
 
@@ -521,7 +563,7 @@ the function lookup (not observed). Lane 1 is unaffected either way.
    `infra/modal/check_trainer.py`, so an image whose trainer refuses the pipeline's argv
    fails the deploy instead of the first real capture.
 4. It runs a smoke (`infra/modal/smoke.py`). Forty 640×480 renders of the committed
-   synthetic tree go through COLMAP on the runner, then 500 gsplat steps on a Modal L4
+   synthetic tree go through COLMAP on Modal's `cpu4`, then 500 gsplat steps on a Modal L4
    through `CloudRunner` → `ModalAdapter` → R2, then georeference, placement and
    packaging. It asserts that gaussians came back, that PSNR was read from gsplat's own
    stats file, that every step ran, and that a tileset was written. It deletes its
@@ -535,18 +577,47 @@ those changes is a change to what the GPU box runs. Each such push costs a smoke
 
 **Cost.**
 
-- **Each smoke: about $0.07–0.20.** An L4 is $0.000222/s (Modal's list price, read
-  2026-09-22). Budget 5–15 minutes of GPU per smoke. That is an estimate: the cold start
-  pulls an image estimated at roughly 10 GB, and it should dominate the time, not the
-  training.
-- **The first deploy** also builds the image on Modal's builders: 15–30 minutes, once.
-  That covers torch, the gsplat wheel, and fused-ssim compiled with nvcc. Later deploys
-  reuse every unchanged layer.
-- **A real capture** at the recipe's 30 000 steps: unmeasured, because no real capture
-  has been trained anywhere yet. The smoke's attempt ledger (billed seconds for 500
-  steps, in its job summary) is the first number to scale from; every hour of L4 is
-  $0.80.
+List prices: an L4 is $0.000222/s, $0.80 an hour (read 2026-09-22); `cpu4` is $0.2526 an
+hour. Everything below was **measured** on 2026-10-22 from the jobs API's per-stage
+metrics (billed seconds and dollars per remote call), recipe `photo-reconstruct` v15.
+
+- **A smoke: $0.014.** `modal.yml` run 39854929950, 500 steps on the synthetic tree's 40
+  frames at 640×480. `train` on the L4: 40.9 s billed, $0.0109, 4.5 s in the queue.
+  `pose` on `cpu4`: 40.9 s, $0.0029. Held-out PSNR 21.9, SSIM 0.72, LPIPS 0.44; 5,966
+  gaussians.
+- **The first deploy** also builds the image on Modal's builders, once: here, the deploy
+  in the same run as that smoke. It covers torch, the gsplat wheel, and fused-ssim
+  compiled with nvcc. Later deploys reuse every unchanged layer.
+- **Two real iPhone captures**, in production:
+
+  |                              | Pumpkin (`IMG_3081.mov`)                                  | Spool                                         |
+  | ---------------------------- | --------------------------------------------------------- | --------------------------------------------- |
+  | Job                          | `71556411-f25a-481e-8508-e0265c7adfb0`                    | `ec644db5-ceaf-4c01-bf89-b261623327c2`        |
+  | Wall time; total cost        | 23.4 min, **$0.3098**                                     | 45.1 min, **$0.6035**                         |
+  | `normalize`                  | 56 frames, 900×1600                                       | 179 frames                                    |
+  | `pose` (`cpu4`)              | 104.3 s, $0.0073; 56 of 56 registered                     | 225.3 s, $0.0158; 179 of 179 registered       |
+  | `align` (`cpu4`)             | 21.3 s, $0.0015; unaligned                                | 18.2 s, $0.0013; unaligned                    |
+  | `train` (L4)                 | 1,126.6 s, $0.2996; 4.1 s queue                           | 2,197.2 s, $0.5844; 83.3 s queue              |
+  | Steps                        | 26,971 of 27,900 (stopped early)                          | 31,861 of 35,400 (stopped early)              |
+  | Gaussians trained            | 711,907                                                   | 1,388,939                                     |
+  | Held-out PSNR / SSIM / LPIPS | 24.0 / 0.78 / 0.14 (49 train, 7 val frames)               | 26.4 / 0.87 / 0.11 (156 train, 23 val)        |
+  | `quality` (`cpu4`)           | 18.9 s, $0.0013; 69.1% kept: 539,215 packaged in 14 tiles | 28.6 s, $0.0020; 69.2% kept: 978,455 packaged |
+  | `confidence`                 | 91% of scored cells weak                                  | 98% of scored cells weak                      |
+
+  "Unaligned" is expected: a phone video has no reference, so it is placed by its GPS,
+  ±10 m.
+
+- **Rule of thumb, from those two:** the L4 training is about 97% of a capture's cost, at
+  about 20 s of L4 per input frame (1,127 s for 56 frames, 2,197 s for 179). A phone
+  capture of 1–3 minutes costs about $0.3–0.6.
+- **Neon:** not measured separately. A job writes a few rows.
 - **Idle costs nothing.** No container stays warm.
+
+**For whoever films the next capture.** Both captures are mostly "weak" in the confidence
+map because they were filmed from above only, with gaps around the subject. The pipeline's
+capture tips said so: about 75° (Pumpkin) and 165° (Spool) of the circle around the
+subject had no frames, and Pumpkin also had no low loop at subject height. Walk all the way
+around, then do a second, lower loop; that is what raises confidence.
 
 `rehearse` it locally first if you have changed it. That runs the same flow with a
 subprocess in place of Modal, a directory in place of R2, and the test suite's stand-in
@@ -1352,6 +1423,134 @@ rollback deletes the Land and, by cascade, its features and anything attached to
 curl -fsS -X DELETE -H "Authorization: Bearer $API_WRITE_TOKEN" \
   https://twin-api.fly.dev/api/v1/land/b1cc807c-652c-574a-8a56-caef5599b71c
 ```
+
+### Re-process a capture
+
+Actions tab → **Process capture** → **Run workflow** (`.github/workflows/process-capture.yml`).
+Enter the `capture_id` UUID and choose `recipe`: `photo-reconstruct` (default) or
+`splat-ingest`. Run with `dry_run` checked first to read the capture's slug, kind and
+status without queueing anything. Then dispatch again with `dry_run` unchecked (its
+default) to queue one job using the repository secret `API_WRITE_TOKEN`.
+
+- Pumpkin: `510d624e-dad2-4b7b-966b-357c4447af02`
+- Spool: `87d772f0-92c9-49be-8570-3c830425d3a3`
+
+The API origin is the repository variable `VITE_API_BASE_URL`, falling back to the app
+in `fly.toml` (`https://twin-api.fly.dev`). Like the API, the workflow requires at least
+one completed upload and refuses a capture with a `not-started` or `in-progress` job;
+the capture's own status is informational. Runs for the same capture share a concurrency
+group and do not cancel an in-progress workflow.
+
+The run summary records the capture, recipe and job id, with public GET URLs:
+`/api/v1/captures/{capture_id}` for capture details and job history,
+`/api/v1/jobs?captureId={capture_id}` for jobs filtered to this capture,
+`/api/v1/jobs/{job_id}` for status and steps, and
+`/api/v1/jobs/{job_id}/steps/{step_id}/log` for a step's log. Workflow success means the
+job was queued; follow those endpoints to see processing finish. If the POST fails or
+times out, check the capture's job history before dispatching again: it may have queued
+a job even if the response was lost. Only a manual dispatch triggers this workflow.
+
+### Production corrections
+
+`.github/workflows/production-corrections.yml` runs a one-time data correction on an API
+machine over `flyctl ssh console`, as the Land seed runs: the deployed code, the app's own
+`DATABASE_URL`, and no database credential on the runner. Two exist, both written after the
+first real iPhone captures (2026-10-22) showed what a re-run of an older capture leaves
+behind:
+
+| `correction`          | Runs                                        | `ids`  | Fixes                                                                                                                                              |
+| --------------------- | ------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `redate-epochs`       | `python -m app.scripts.redate_epochs`       | epochs | an epoch still dated by its upload (`created`) after a later run read the video's own clock                                                        |
+| `fit-site-boundaries` | `python -m app.scripts.fit_site_boundaries` | sites  | a boundary registration only ever grew, so it still covers what a first run's background floaters drew (Spool: 2,361 m² around a 3.7 × 3.9 m scan) |
+
+Use one when a capture registered before the matching fix (#91, #93) shows the old date or
+the old boundary; a capture re-run since is already right. Run it twice:
+
+1. Actions → **Production corrections** → Run workflow: pick the correction, put the ids in
+   `ids` (space-separated), leave `apply` off. The job summary lists what would change:
+   each epoch's old and new date, or each site's area and centroid before and after.
+2. If that list is right, run it again with `apply` ticked and `confirm` set to
+   `correct-production`. Anything else fails before flyctl is installed.
+
+The ids are required: it never runs on everything. A boundary somebody drew by hand before
+migration 0038 can look exactly like one registration drew (DATA_MODEL.md, sites), so name
+the sites. Both commands are idempotent, so a second apply changes nothing. They refuse to
+start while a deploy is queued or running. Success is the command exiting 0, read off a
+marker the machine prints only then. **Rollback:** the apply run's summary prints what each
+correction replaced in full: an epoch's old date and source, a site's old boundary and
+centroid as WKT. Nothing is deleted.
+
+### Exporting a run's inputs
+
+Actions → **Export run inputs** (`.github/workflows/export-run-inputs.yml`) is dispatch-only.
+Set `run` to a lowercase job UUID or `runs/<uuid>/`, optionally ending in `p<16 hex>/`.
+For Spool, use `runs/ec644db5-ceaf-4c01-bf89-b261623327c2/`. The default `items` are
+`normalize/frames/ normalize/frames_meta.json pose/poses/ place/placement.json`;
+any space-separated subset of those four paths is accepted. Every requested item must
+exist. The workflow discovers a single populated root or generation and logs which prefix
+it used; if several contain requested inputs, dispatch with the explicit generation.
+
+It uses `CLOUDFLARE_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and
+`R2_BUCKET` (default `twin-assets`) to **list and get from the private bucket only**.
+Logs contain the selected prefix and aggregate counts and sizes, never file contents or
+individual filenames. No plaintext is written to the job summary. Plaintext stays in the
+runner workspace and is deleted before upload, with cleanup on failures too.
+
+Download and unzip the `run-inputs-encrypted` workflow artifact within **one day**.
+Its only file is `run-inputs.tar.gpg`, encrypted to `.github/keys/run-export.asc`
+(primary fingerprint `25398747159F3E911B4DAD38FEC5E5D75D14CBAE`; the workflow also pins
+its encryption subkey). On the research machine that holds the private key:
+
+```bash
+umask 077
+gpg --output run-inputs.tar --decrypt run-inputs.tar.gpg
+mkdir -p run-inputs
+tar -xf run-inputs.tar -C run-inputs
+rm run-inputs.tar
+```
+
+Keep decrypted inputs outside the public repository. The private key stays on Harrison's
+machine; rotation requires reviewing both the committed public key and the workflow's
+fingerprint pins. **Rollback:** delete the artifact or disable the workflow; it never
+changes R2 objects. Real production export is verified only by a later operator dispatch.
+
+### Two-date test data: NWM
+
+No Hexapod site has two dates yet, so alignment (M3) and the change map (M5) are tried on
+public data: **NWM, "No Wolf in the Meadow"** (Batik, Marin, Kán, Kaufmann, TU Wien;
+[doi:10.48436/bphp1-hbb20](https://doi.org/10.48436/bphp1-hbb20), CC BY 4.0). It is drone
+video of a 100 × 200 m flood-control site in Vienna on 8 days from August 2025 to March 2026,
+exported as 1600 × 900 PNG frames, one zip per timestep (0.4–0.9 GB), with each frame's GPS in
+`camera_info.json`.
+
+Actions → **Import NWM test capture** (`.github/workflows/import-nwm.yml`) turns one timestep
+into a capture:
+
+1. Run it with `dry_run` on (the default). It downloads `nwm_<timestep>.zip`, checks it against
+   the record's MD5, and runs `tools/captures/nwm_import.py prepare`, which writes each frame's
+   GPS and time into a JPEG copy's EXIF. The summary gives the frame count, the recording day
+   and the median fix. Nothing reaches the API.
+2. Run it again with `dry_run` off, and `process` on to queue `photo-reconstruct` straight
+   after the upload. It creates a capture named `NWM test (TU Wien, CC BY 4.0) · <timestep>`
+   (slug `nwm-tuwien-<timestep>`, `_` written as `-`: `2025-12-04_1` is `nwm-tuwien-2025-12-04-1`),
+   credited and licensed as CC BY 4.0, with the median fix as `metadata.lat`/`lon`, which is
+   what joins a later timestep to the same site (`epochs.located_or_metadata`). A second
+   dispatch of the same timestep fails on the slug instead of duplicating it. The summary names
+   the capture as soon as it exists; if the upload stops part-way, dispatch again with that
+   `capture_id` to send only what is missing. It refuses any capture but that timestep's NWM one
+   (slug and `metadata.dataset.doi` checked).
+
+Before its first write the upload waits up to 60 s for `GET /health` to answer, because an idle API's first request can time out (the first real run's `POST /captures` did, at 120 s). A read is retried on a timeout or a 5xx; a write is never sent twice.
+
+The archive is treated as untrusted: the workflow writes nothing from it to `$GITHUB_ENV`,
+moves the dataset to a path it names, and refuses frame names that are not plain file names.
+
+Process the timesteps one at a time and in date order: the second joins the first's site only
+once the first has registered and given the site its frame. The importer's assumptions are in
+its docstring: time is the DJI clip name's local start plus the frame index at 29.97 fps in
+Europe/Vienna, and the altitude is the drone's own `abs_alt`, which differs by about 160 m
+between the 2025-08-25 and 2025-11-22 timesteps. No camera make or focal length is written:
+the data does not state them.
 
 ## Security checklist
 

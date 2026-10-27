@@ -22,13 +22,17 @@ import json
 import logging
 import math
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from geoalchemy2 import WKBElement
+from geoalchemy2.shape import from_shape, to_shape
 from pydantic import ValidationError
+from shapely.geometry import shape
+from shapely.ops import unary_union
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -46,6 +50,7 @@ from app.models.enums import (
     ObservedAtSource,
     Representation,
     ScaleSource,
+    SiteBoundarySource,
     SiteFrameSource,
 )
 from app.schemas.asset import AssetBase, GroundSample, RenderConfig, TilesUrlSource
@@ -856,7 +861,14 @@ def _check_frame(site: Site, registration: Registration, echo: FrameEcho | None)
 
 
 def _observed_at(capture: Capture, registration: Registration) -> tuple[datetime, ObservedAtSource]:
-    """When the epoch was captured, and on whose say-so.
+    """When the epoch was captured, and on whose say-so (`observed_at_of`)."""
+    return observed_at_of(capture, registration.document)
+
+
+def observed_at_of(
+    capture: Capture, document: Mapping[str, Any]
+) -> tuple[datetime, ObservedAtSource]:
+    """When a capture was made, and on whose say-so, from a run's registration document.
 
     The rule, stated once (ADR 0013, DATA_MODEL `epochs.observed_at_source`):
 
@@ -869,19 +881,41 @@ def _observed_at(capture: Capture, registration: Registration) -> tuple[datetime
     3. the manifest's naive `capture.capturedAt` (a video's container date), `manifest`,
        taken as UTC;
     4. the upload's `created_at`, `created`.
+
+    Every answer has a zone: a column value a caller set without one (before the database
+    gave it back) is taken as UTC, as the manifest's naive date is.
     """
-    manifest = registration.document.get("manifest")
+    manifest = document.get("manifest")
     facts = manifest.get("capture") if isinstance(manifest, dict) else None
     facts = facts if isinstance(facts, dict) else {}
     utc = _parsed_time(facts.get("capturedAtUtc"), aware_only=True)
     if utc is not None:
         return utc, ObservedAtSource.MANIFEST
     if capture.captured_at is not None:
-        return capture.captured_at, ObservedAtSource.CAPTURED_AT
+        return _aware(capture.captured_at), ObservedAtSource.CAPTURED_AT
     naive = _parsed_time(facts.get("capturedAt"), aware_only=False)
     if naive is not None:
         return naive, ObservedAtSource.MANIFEST
-    return capture.created_at, ObservedAtSource.CREATED
+    return _aware(capture.created_at), ObservedAtSource.CREATED
+
+
+def _aware(when: datetime) -> datetime:
+    """`when` with a zone: a naive one is taken as UTC."""
+    return when if when.tzinfo is not None else when.replace(tzinfo=UTC)
+
+
+def redate_current_assets(db: Session, epoch: Epoch, old: datetime) -> None:
+    """The epoch's current asset revisions that carried its `old` date take its new one.
+
+    A re-dated epoch's shown asset must say the same date, whether the run that re-dated
+    it published new tiles (a new revision, dated by the epoch anyway), the very same tiles
+    or none. A superseded revision keeps the date it was shown with."""
+    for asset in db.scalars(
+        select(Asset).where(
+            Asset.epoch_id == epoch.id, Asset.valid_to.is_(None), Asset.observed_at == old
+        )
+    ):
+        asset.observed_at = epoch.observed_at
 
 
 def _parsed_time(raw: object, *, aware_only: bool) -> datetime | None:
@@ -918,8 +952,9 @@ def _frame_from_registration(
 
 
 def _new_site(db: Session, capture: Capture, job_id: uuid.UUID, registration: Registration) -> Site:
-    """The site a capture's first epoch makes, in this transaction (no commit)."""
-    return site_service.create_site(
+    """The site a capture's first epoch makes, in this transaction (no commit). Its
+    boundary is that epoch's footprint, so registration's (`fit_site_boundary`)."""
+    site = site_service.create_site(
         db,
         SiteCreate(
             name=registration.title or capture.name,
@@ -936,6 +971,8 @@ def _new_site(db: Session, capture: Capture, job_id: uuid.UUID, registration: Re
         ),
         commit=False,
     )
+    site.boundary_source = SiteBoundarySource.REGISTRATION.value
+    return site
 
 
 def _target(
@@ -1238,10 +1275,103 @@ def _replace_run(
 
 
 def _grow_boundary(site: Site, footprint: Any) -> None:
-    """The site's boundary, grown to cover an epoch's footprint (never shrunk, so every
-    epoch stays inside it). The centroid stays, which keeps fly-to where it was."""
+    """The site's boundary, grown to cover an epoch's footprint, so every epoch stays
+    inside it (a re-run's shrinking is `fit_site_boundary`'s). Its `boundary_source` stays:
+    a drawn boundary grown is still somebody's. The centroid stays, which keeps fly-to
+    where it was."""
     if not geometry.contains(site.boundary, footprint):
         site.boundary = geometry.union_footprints(site.boundary, footprint)
+
+
+def registration_union(db: Session, site: Site) -> WKBElement | None:
+    """Every footprint the site's published epochs have had -- the current ones and those
+    a re-run replaced, which `_replace_run` keeps in each epoch's `history` -- as one
+    footprint, or None for a site with none. A boundary registration only ever grew is
+    exactly this, which is how migration 0038 told one apart; `fit_site_boundary` goes by
+    the column instead."""
+    db.flush()
+    shapes = []
+    for footprint, history in db.execute(
+        select(Epoch.footprint, Epoch.history).where(
+            Epoch.site_id == site.id, Epoch.status == EpochStatus.PUBLISHED.value
+        )
+    ):
+        if footprint is not None:
+            shapes.append(to_shape(footprint))
+        for entry in history or []:
+            replaced = entry.get("footprint") if isinstance(entry, dict) else None
+            if isinstance(replaced, dict):
+                shapes.append(shape(replaced))
+    return _union_of(shapes)
+
+
+def _current_union(db: Session, site: Site) -> WKBElement | None:
+    """The union of the site's published epochs' current footprints."""
+    footprints = db.scalars(
+        select(Epoch.footprint).where(
+            Epoch.site_id == site.id,
+            Epoch.status == EpochStatus.PUBLISHED.value,
+            Epoch.footprint.is_not(None),
+        )
+    )
+    return _union_of([to_shape(footprint) for footprint in footprints])
+
+
+def _union_of(shapes: list[Any]) -> WKBElement | None:
+    if not shapes:
+        return None
+    merged = from_shape(unary_union(shapes), srid=geometry.SRID)
+    return geometry.union_footprints(merged, merged)
+
+
+def _runtime_scaled(db: Session, site: Site) -> bool:
+    """Whether a runtime scale is in effect on any of the site's current revisions. It
+    resizes the boundary and that asset's footprint but not its epoch's (`set_scale`), so
+    the epochs' footprints no longer say what the boundary drew."""
+    configs = db.scalars(
+        select(Asset.render_config).where(Asset.site_id == site.id, Asset.valid_to.is_(None))
+    )
+    return any(
+        _optional_number((config or {}).get("scale")) not in (None, 1.0) for config in configs
+    )
+
+
+def fit_site_boundary(db: Session, site: Site) -> bool:
+    """Fit a boundary registration drew to its epochs' current footprints; True when it
+    changed (the caller commits).
+
+    A site's boundary is the footprint of what its captures showed (ADR 0013), and a re-run
+    replaces what its epoch showed: Spool's v15 re-run cropped its splat to the object, 3.7
+    x 3.9 m, and its site kept the 44 x 53 m its first run's background floaters drew,
+    because a boundary was only ever grown. So a boundary registration drew
+    (`boundary_source` `registration`) is made again from its published epochs' current
+    footprints, as often as a run measures less, and a centroid it leaves outside moves to
+    the new one's. Who drew it is the column's to say, not the shapes': a test of the
+    boundary against every footprint the epochs ever had (`registration_union`) is what
+    migration 0038 could go by, once, and after one fit the history still holds the
+    footprints that fit took out.
+
+    Left alone: a `manual` boundary (somebody drew it), a site with no published epoch,
+    and any while a runtime scale is in effect (`_runtime_scaled`). `register` calls this
+    after every run that publishes tiles; a one-time correction of sites registered before
+    it can call it on each site as it stands."""
+    if site.boundary_source != SiteBoundarySource.REGISTRATION.value or _runtime_scaled(db, site):
+        return False
+    fitted = _current_union(db, site)
+    if fitted is None or _same(site.boundary, fitted):
+        # Rewritten only when it changes: a union reorders a ring's vertices.
+        return False
+    site.boundary = fitted
+    if not geometry.contains(site.boundary, site.centroid):
+        outline = geometry.wkb_to_footprint(site.boundary)
+        assert outline is not None
+        site.centroid = geometry.position_to_wkb(geometry.centroid_of(outline))
+    return True
+
+
+def _same(a: WKBElement, b: WKBElement) -> bool:
+    """Whether two stored footprints cover each other, to `geometry.contains`' tolerance."""
+    return geometry.contains(a, b) and geometry.contains(b, a)
 
 
 def _mirror_site_metadata(
@@ -1261,6 +1391,9 @@ def _mirror_site_metadata(
     metadata["jobId"] = str(job_id)
     if isinstance(registration.document.get("georef"), dict):
         metadata["registration"] = registration.document
+        # The run the document is from: `jobId` names the latest run, which may have had
+        # no georeference to write one (`scripts.redate_epochs` reads the pair).
+        metadata["registrationJobId"] = str(job_id)
     # Cleared by a run with none, so an overlay never sits on a splat it was not measured on.
     if coverage:
         metadata["coverageUrl"] = coverage
@@ -1346,6 +1479,8 @@ def register(
     # driven by hand, as some tests do, names a run nobody queued).
     producing = job_id if db.get(Job, job_id) is not None else None
     site: Site | None = None
+    # The date a re-run moved the epoch from, for its current asset (below).
+    redated_from: datetime | None = None
     join = EpochJoinMethod.EXPLICIT
     if epoch is not None or legacy:
         # A re-run of an epoch, or the first run since 0032 of a capture registered into
@@ -1412,7 +1547,11 @@ def register(
         promoted = epoch.status == EpochStatus.REJECTED.value
         if promoted:
             epoch.status = EpochStatus.PUBLISHED.value
+        # An epoch dated by its upload (`created`) has no evidence of when it was taken: a
+        # run that reads the files' clock dates it. Any other date stays where it is.
+        if promoted or epoch.observed_at_source == ObservedAtSource.CREATED.value:
             observed_at, observed_source = _observed_at(capture, registration)
+            redated_from = epoch.observed_at
             epoch.observed_at = observed_at
             epoch.observed_at_source = observed_source.value
         if url is not None or promoted:
@@ -1440,6 +1579,10 @@ def register(
         # An epoch's first tiles: its first run, or one after a run that was withheld.
         shown = _new_asset(site, epoch, capture, url, registration, published.carry, job_id, now)
         db.add(shown)
+    if redated_from is not None:
+        # After `_supersede`: a revision these tiles replaced keeps the date it was shown
+        # with; the very same tiles, or none, leave the shown revision to be re-dated.
+        redate_current_assets(db, epoch, redated_from)
     if shown is not None and url is not None:
         # What the run measured on the tiles it published is that revision's maps -- its
         # confidence grid and its height surface; a superseded revision keeps the ones it
@@ -1476,6 +1619,7 @@ def register(
     capture.site_id = site.id
     if url is not None:
         _grow_boundary(site, epoch.footprint)
+        fit_site_boundary(db, site)
     if thumbnail is not None:
         site.thumbnail_url = thumbnail
     if not published.withheld and epoch.ordinal == 1:

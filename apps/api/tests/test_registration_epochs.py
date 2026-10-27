@@ -8,6 +8,7 @@ what lands in the database.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -712,6 +713,237 @@ def test_each_epochs_asset_carries_that_epochs_own_footprint(
     assert to_shape(joined.footprint).area < to_shape(site.boundary).area
 
 
+def _floaters() -> dict[str, Any]:
+    """`_document()` as an earlier run of a phone video measured it: the object and the far
+    background floaters its splat kept, lopsided to the north-east as they were on Spool,
+    whose first run gave its site a 44 x 53 m boundary for a spool on a table."""
+    document = _document()
+    document["bboxLocalM"] = {"min": [-10.0, -10.0, -1.0], "max": [60.0, 60.0, 3.0]}
+    return document
+
+
+def test_a_re_run_that_measures_less_shrinks_the_boundary_its_epoch_made(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """A site's boundary is the footprint of what its captures showed (ADR 0013). A re-run
+    replaces its epoch's footprint, and the boundary that footprint made follows it: Spool's
+    v15 re-run measured 3.7 x 3.9 m and kept the 2,361 m^2 its first run's floaters drew,
+    because the boundary was only ever grown. The centroid, the old box's middle and now
+    outside the new one, moves inside it."""
+    from geoalchemy2.shape import to_shape
+
+    capture = _capture(db)
+    run(db, storage, tmp_path, capture, _floaters())
+    assert capture.site_id is not None
+
+    run(db, storage, tmp_path, capture)
+
+    db.expire_all()
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    [epoch] = _epochs(db, capture.site_id)
+    boundary, footprint = to_shape(site.boundary), to_shape(epoch.footprint)
+    assert boundary.buffer(1e-9).covers(footprint) and footprint.buffer(1e-9).covers(boundary)
+    assert boundary.covers(to_shape(site.centroid))
+
+
+def test_a_re_run_shrinks_the_boundary_to_the_union_of_its_epochs(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """With two epochs, a re-run of one leaves the other's footprint in the boundary and
+    takes out only what the replaced run alone covered."""
+    from geoalchemy2.shape import to_shape
+
+    first = _capture(db, "first")
+    run(db, storage, tmp_path, first, _floaters())
+    assert first.site_id is not None
+    north = _echoed(first.site_id)
+    north["bboxLocalM"] = {"min": [-4.0, 40.0, -1.0], "max": [6.0, 50.0, 3.0]}
+    run(db, storage, tmp_path, _capture(db, "second"), north)
+
+    run(db, storage, tmp_path, first)
+
+    db.expire_all()
+    site = db.get(Site, first.site_id)
+    assert site is not None
+    epoch1, epoch2 = _epochs(db, first.site_id)
+    union = to_shape(epoch1.footprint).union(to_shape(epoch2.footprint))
+    boundary = to_shape(site.boundary)
+    assert boundary.buffer(1e-9).covers(union) and union.buffer(1e-9).covers(boundary)
+
+
+def test_a_re_run_keeps_a_boundary_somebody_drew(
+    db: Session, storage: S3Storage, tmp_path: Path, client: Any
+) -> None:
+    """A boundary somebody redrew (`PATCH /sites/{id}`) is not the registrations' to take
+    back: a re-run that measures less leaves it as drawn, and still grows it if it must."""
+    from geoalchemy2.shape import to_shape
+
+    capture = _capture(db)
+    run(db, storage, tmp_path, capture, _floaters())
+    assert capture.site_id is not None
+    drawn = client.patch(f"/api/v1/sites/{capture.site_id}", json={"boundary": _around(0.002)})
+    assert drawn.status_code == 200, drawn.text
+    db.expire_all()
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    before = to_shape(site.boundary)
+
+    run(db, storage, tmp_path, capture)
+
+    db.expire_all()
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    assert to_shape(site.boundary).equals(before)
+
+
+def _left_by_grow_only(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> tuple[Capture, uuid.UUID, Any]:
+    """The state Spool's v15 re-run left (the R2 review of #93): it ran the grow-only
+    register, so its epoch's footprint is already the small box, the floaters' box is in
+    the epoch's history, and the site still has the floaters' boundary. Made by a fixed
+    re-run with the boundary then put back as the old code left it."""
+    capture = _capture(db)
+    run(db, storage, tmp_path, capture, _floaters())
+    assert capture.site_id is not None
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    floaters = site.boundary
+    run(db, storage, tmp_path, capture)
+    db.expire_all()
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    site.boundary = floaters
+    db.commit()
+    return capture, capture.site_id, floaters
+
+
+def test_a_fixed_re_run_shrinks_the_boundary_a_grow_only_re_run_left(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """The replaced footprint is not the only one registration drew: a boundary that is the
+    union of every footprint the site's published epochs have had (now and in their
+    history) is registration's, and the next run fits it to the current ones."""
+    from geoalchemy2.shape import to_shape
+
+    capture, site_id, floaters = _left_by_grow_only(db, storage, tmp_path)
+    [epoch] = _epochs(db, site_id)
+    assert to_shape(floaters).area > 40 * to_shape(epoch.footprint).area
+
+    run(db, storage, tmp_path, capture)
+
+    db.expire_all()
+    site = db.get(Site, site_id)
+    assert site is not None
+    [epoch] = _epochs(db, site_id)
+    boundary, footprint = to_shape(site.boundary), to_shape(epoch.footprint)
+    assert boundary.buffer(1e-9).covers(footprint) and footprint.buffer(1e-9).covers(boundary)
+
+
+def test_fit_site_boundary_corrects_a_site_in_place_unless_a_scale_is_in_effect(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """`fit_site_boundary` is what a one-time correction calls on a site as it stands, with
+    no run. A runtime scale resizes the boundary and the asset's footprint but not the
+    epoch's, so while one is in effect on any current revision the boundary only grows:
+    fitting it to unscaled footprints could leave the scaled model outside its site."""
+    from geoalchemy2.shape import to_shape
+
+    _, site_id, floaters = _left_by_grow_only(db, storage, tmp_path)
+    site = db.get(Site, site_id)
+    assert site is not None
+    drawn = registration.registration_union(db, site)
+    assert drawn is not None and to_shape(drawn).equals(to_shape(floaters))
+    [current] = [a for a in _assets(db, site_id) if a.valid_to is None]
+    current.render_config = {**current.render_config, "scale": 0.5}
+    db.commit()
+
+    site = db.get(Site, site_id)
+    assert site is not None
+    assert registration.fit_site_boundary(db, site) is False
+    db.commit()
+    db.expire_all()
+    site = db.get(Site, site_id)
+    assert site is not None and to_shape(site.boundary).equals(to_shape(floaters))
+
+    [current] = [a for a in _assets(db, site_id) if a.valid_to is None]
+    current.render_config = {k: v for k, v in current.render_config.items() if k != "scale"}
+    db.commit()
+    site = db.get(Site, site_id)
+    assert site is not None
+    assert registration.fit_site_boundary(db, site) is True
+    db.commit()
+    db.expire_all()
+    site = db.get(Site, site_id)
+    assert site is not None
+    [epoch] = _epochs(db, site_id)
+    assert to_shape(site.boundary).equals(to_shape(epoch.footprint))
+    assert to_shape(site.boundary).covers(to_shape(site.centroid))
+    assert registration.fit_site_boundary(db, site) is False
+
+
+def test_a_boundary_patched_to_the_union_is_manual_and_is_not_shrunk(
+    db: Session, storage: S3Storage, tmp_path: Path, client: Any
+) -> None:
+    """Who drew a boundary is recorded (`boundarySource`), not guessed from its shape: one
+    somebody PATCHed is `manual` even when it is exactly the union of the epochs, and a
+    re-run that measures less leaves it as drawn. A new site's is `registration`."""
+    from geoalchemy2.shape import to_shape
+
+    from app.services import geometry
+
+    capture = _capture(db)
+    run(db, storage, tmp_path, capture, _floaters())
+    assert capture.site_id is not None
+    read = client.get(f"/api/v1/sites/{capture.site_id}")
+    assert read.json()["boundarySource"] == "registration"
+    [epoch] = _epochs(db, capture.site_id)
+    union = geometry.wkb_to_footprint(epoch.footprint)
+    assert union is not None
+    drawn = client.patch(
+        f"/api/v1/sites/{capture.site_id}", json={"boundary": union.model_dump(mode="json")}
+    )
+    assert drawn.status_code == 200, drawn.text
+    assert drawn.json()["boundarySource"] == "manual"
+    db.expire_all()
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    before = to_shape(site.boundary)
+
+    run(db, storage, tmp_path, capture)
+
+    db.expire_all()
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    assert to_shape(site.boundary).equals(before)
+    assert site.boundary_source == "manual"
+
+
+def test_growing_a_manual_boundary_keeps_it_manual(
+    db: Session, storage: S3Storage, tmp_path: Path, client: Any
+) -> None:
+    """A joined epoch outside a drawn boundary grows it, and it is still somebody's."""
+    from geoalchemy2.shape import to_shape
+
+    first = _capture(db, "first")
+    run(db, storage, tmp_path, first)
+    assert first.site_id is not None
+    drawn = client.patch(f"/api/v1/sites/{first.site_id}", json={"boundary": _around(0.0002)})
+    assert drawn.status_code == 200, drawn.text
+    north = _echoed(first.site_id)
+    north["bboxLocalM"] = {"min": [-4.0, 40.0, -1.0], "max": [6.0, 50.0, 3.0]}
+
+    run(db, storage, tmp_path, _capture(db, "second"), north)
+
+    db.expire_all()
+    site = db.get(Site, first.site_id)
+    assert site is not None
+    epoch2 = _epochs(db, first.site_id)[1]
+    assert to_shape(site.boundary).buffer(1e-9).covers(to_shape(epoch2.footprint))
+    assert site.boundary_source == "manual"
+
+
 # --- the detected platform (M3a) -------------------------------------------------------
 
 
@@ -822,5 +1054,145 @@ def test_the_files_utc_time_dates_the_epoch_and_never_becomes_the_captures_own(
     [epoch] = _epochs(db, capture.site_id)
     assert (epoch.observed_at, epoch.observed_at_source) == (
         datetime(2026, 8, 30, 14, 5, tzinfo=UTC),
+        "manifest",
+    )
+
+
+def test_a_rerun_that_reads_the_files_clock_redates_an_epoch_dated_by_its_upload(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Production, 2026-10-22: Pumpkin's first runs (recipe 10) read no capture time, so its
+    epoch was dated by the upload (`created`). Its re-run on recipe 15 read the video's own
+    clock, but the epoch kept the upload's date, and Data age said "capture time not
+    recorded". The upload time is a stand-in, not evidence: a run with evidence replaces it,
+    and the new revision's asset carries the new date too."""
+    capture = _capture(db)
+    run(db, storage, tmp_path, capture)
+    assert capture.site_id is not None
+    [epoch] = _epochs(db, capture.site_id)
+    assert epoch.observed_at_source == "created"
+
+    document = _document()
+    document["manifest"] = {"capture": {"capturedAtUtc": "2026-09-27T12:19:47-07:00"}}
+    run(db, storage, tmp_path, capture, document)
+
+    taken = datetime(2026, 9, 27, 19, 19, 47, tzinfo=UTC)
+    [epoch] = _epochs(db, capture.site_id)
+    assert (epoch.observed_at, epoch.observed_at_source) == (taken, "manifest")
+    assert _assets(db, capture.site_id)[-1].observed_at == taken
+
+
+def test_a_rerun_never_redates_an_epoch_whose_date_is_evidence(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """Only the upload's stand-in date is replaced. A date a person gave, or one an earlier
+    run read off the files, stays: a re-run's manifest saying otherwise does not move the
+    epoch along the site's timeline."""
+    said = datetime(2026, 9, 12, tzinfo=UTC)
+    capture = _capture(db, captured_at=said)
+    run(db, storage, tmp_path, capture)
+    document = _document()
+    document["manifest"] = {"capture": {"capturedAtUtc": "2026-01-01T00:00:00Z"}}
+
+    run(db, storage, tmp_path, capture, document)
+
+    assert capture.site_id is not None
+    [epoch] = _epochs(db, capture.site_id)
+    assert (epoch.observed_at, epoch.observed_at_source) == (said, "captured-at")
+
+
+def test_a_rerun_never_moves_a_date_read_from_the_files(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """A `manifest` date is evidence too: a re-run whose manifest says otherwise leaves it."""
+    capture = _capture(db)
+    first = _document()
+    first["manifest"] = {"capture": {"capturedAtUtc": "2026-08-30T14:05:00Z"}}
+    run(db, storage, tmp_path, capture, first)
+    document = _document()
+    document["manifest"] = {"capture": {"capturedAtUtc": "2026-01-01T00:00:00Z"}}
+
+    run(db, storage, tmp_path, capture, document)
+
+    assert capture.site_id is not None
+    [epoch] = _epochs(db, capture.site_id)
+    assert (epoch.observed_at, epoch.observed_at_source) == (
+        datetime(2026, 8, 30, 14, 5, tzinfo=UTC),
+        "manifest",
+    )
+
+
+@pytest.mark.parametrize("second", ["new tiles", "same tiles", "no tiles"])
+def test_a_redating_rerun_redates_the_current_asset_whatever_it_published(
+    db: Session, storage: S3Storage, tmp_path: Path, second: str
+) -> None:
+    """The very same tiles (no new revision) or none at all: the asset shown is the one
+    the epoch had, and it takes the epoch's new date."""
+    same = "https://cdn.example.com/twin-worker-test/runs/fixed/package/splat/tileset.json"
+    capture = _capture(db)
+    run(db, storage, tmp_path, capture, url=same)
+    document = _document()
+    document["manifest"] = {"capture": {"capturedAtUtc": "2026-09-27T12:19:47-07:00"}}
+
+    url = {"new tiles": "new", "same tiles": same, "no tiles": None}[second]
+    run(db, storage, tmp_path, capture, document, url=url)
+
+    taken = datetime(2026, 9, 27, 19, 19, 47, tzinfo=UTC)
+    assert capture.site_id is not None
+    [epoch] = _epochs(db, capture.site_id)
+    assert epoch.observed_at == taken
+    assets = _assets(db, capture.site_id)
+    [current] = [a for a in assets if a.valid_to is None]
+    assert current.observed_at == taken
+    # A revision the new tiles replaced keeps the date it was shown with.
+    assert all(a.observed_at == capture.created_at for a in assets if a.valid_to is not None)
+    assert len(assets) == (2 if second == "new tiles" else 1)
+
+
+def test_the_sites_mirror_names_the_run_its_document_came_from(
+    db: Session, storage: S3Storage, tmp_path: Path
+) -> None:
+    """`jobId` is the latest run; `registrationJobId` the run the mirrored document is from,
+    which a run with no georeference (the stub runner's) does not replace."""
+    capture = _capture(db)
+    first = run(db, storage, tmp_path, capture)
+    site = db.get(Site, capture.site_id)
+    assert site is not None
+    assert site.metadata_["registrationJobId"] == str(first)
+    loaded = _registration(tmp_path, _document())
+    bare = dataclasses.replace(
+        loaded, document={k: v for k, v in loaded.document.items() if k != "georef"}
+    )
+    later = uuid.uuid4()
+
+    registration._mirror_site_metadata(site, bare, later, None)
+
+    assert (site.metadata_["jobId"], site.metadata_["registrationJobId"]) == (
+        str(later),
+        str(first),
+    )
+
+
+def test_a_capture_date_without_a_zone_is_taken_as_utc() -> None:
+    """A column value a caller set without a zone, before the database gave it back."""
+    capture = Capture(
+        slug="naive", name="Naive", kind=CaptureKind.VIDEO, captured_at=datetime(2026, 9, 12, 10)
+    )
+
+    when, source = registration.observed_at_of(capture, {})
+
+    assert (when, source.value) == (datetime(2026, 9, 12, 10, tzinfo=UTC), "captured-at")
+
+
+def test_a_manifests_date_without_a_zone_is_taken_as_utc() -> None:
+    """A video's container date (`capturedAt`) can come without an offset: it is UTC."""
+    capture = Capture(slug="naive", name="Naive", kind=CaptureKind.VIDEO)
+    document = {"manifest": {"capture": {"capturedAt": "2026-09-27T12:19:47"}}}
+
+    when, source = registration.observed_at_of(capture, document)
+
+    assert (when, when.tzinfo, source.value) == (
+        datetime(2026, 9, 27, 12, 19, 47, tzinfo=UTC),
+        UTC,
         "manifest",
     )

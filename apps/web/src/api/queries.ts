@@ -5,6 +5,7 @@ import {
   type QueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
+import { useSyncExternalStore } from "react";
 
 import type {
   AssetCreate,
@@ -48,6 +49,7 @@ import { useMission } from "@/state/mission";
 import { useSettings } from "@/state/settings";
 
 import { api, isOffline, unwrap } from "./client";
+import { apiUnavailable } from "./waking";
 import {
   builtinLayers,
   builtinScanSite,
@@ -79,12 +81,22 @@ export interface CatalogResult<T> {
   refetch: () => Promise<unknown>;
 }
 
-function withFallback<T>(query: UseQueryResult<T>, fallback: () => T): CatalogResult<T> {
-  const offline = query.isError && isOffline(query.error);
+function useCatalogOffline(query: UseQueryResult): boolean {
+  const unavailable = useSyncExternalStore(apiUnavailable.subscribe, apiUnavailable.getSnapshot);
+  // Query clears an initial error while refetching (there is no cached data yet). Keep
+  // the demo available to existing AND newly mounted observers during recovery polls.
+  return query.isError ? isOffline(query.error) : query.isPending && unavailable;
+}
+
+function withFallback<T>(
+  query: UseQueryResult<T>,
+  fallback: () => T,
+  offline: boolean,
+): CatalogResult<T> {
   return {
     data: query.data ?? (offline ? fallback() : (query.data as T)),
     builtin: offline,
-    isLoading: query.isPending,
+    isLoading: query.isPending && !offline,
     error: query.isError && !offline ? query.error : null,
     refetch: query.refetch,
   };
@@ -92,12 +104,11 @@ function withFallback<T>(query: UseQueryResult<T>, fallback: () => T): CatalogRe
 
 /**
  * The API scales to zero (fly.toml), so a first request can meet a cold start. The built-in
- * catalog stands in after one quick retry, as before, but a query that failed now asks
- * again every few seconds until the API answers: the real sites replace it without a reload.
+ * catalog stands in only after the transport exhausts its cold-start budget. Queries do
+ * not multiply those retries; recovery polling still replaces the fallback without a reload.
  */
 const RETRY = {
-  retry: 1,
-  retryDelay: 800,
+  retry: false,
   staleTime: 30_000,
   refetchInterval: (query: { state: { status: string } }) =>
     query.state.status === "error" ? RECOVER_POLL_MS : false,
@@ -129,7 +140,7 @@ function useOfflineSites(enabled: boolean): Site[] {
 export function useHealth() {
   return useQuery({
     queryKey: queryKeys.health,
-    queryFn: () => unwrap<HealthStatus>(api.GET("/api/v1/health")),
+    queryFn: ({ signal }) => unwrap<HealthStatus>(api.GET("/api/v1/health", { signal })),
     ...RETRY,
     refetchInterval: 60_000,
     // TanStack Query's default, stated so nobody turns it on: /health queries the database,
@@ -141,31 +152,39 @@ export function useHealth() {
 export function useSites(): CatalogResult<SiteSummary[]> {
   const query = useQuery({
     queryKey: queryKeys.sites,
-    queryFn: () => unwrap<SiteSummary[]>(api.GET("/api/v1/sites")),
+    queryFn: ({ signal }) => unwrap<SiteSummary[]>(api.GET("/api/v1/sites", { signal })),
     ...RETRY,
   });
-  const captures = useOfflineSites(query.isError && isOffline(query.error));
-  return withFallback(query, () => {
-    const builtins = builtinSites();
-    // The published catalog lists the seeded ranch and scan showcase too; the built-in copy
-    // of each stands for it, so the fleet is not attached (and counted) twice.
-    const slugs = new Set(builtins.map((site) => site.slug));
-    return [
-      ...builtins.map(toSummary),
-      ...captures.filter((site) => !slugs.has(site.slug)).map((site) => toSummary(site)),
-    ];
-  });
+  const offline = useCatalogOffline(query);
+  const captures = useOfflineSites(offline);
+  return withFallback(
+    query,
+    () => {
+      const builtins = builtinSites();
+      // The published catalog lists the seeded ranch and scan showcase too; the built-in copy
+      // of each stands for it, so the fleet is not attached (and counted) twice.
+      const slugs = new Set(builtins.map((site) => site.slug));
+      return [
+        ...builtins.map(toSummary),
+        ...captures.filter((site) => !slugs.has(site.slug)).map((site) => toSummary(site)),
+      ];
+    },
+    offline,
+  );
 }
 
 export function useSite(id: string | null): CatalogResult<Site | null> {
   const query = useQuery({
     queryKey: queryKeys.site(id ?? "none"),
-    queryFn: () =>
-      unwrap<Site>(api.GET("/api/v1/sites/{site_id}", { params: { path: { site_id: id ?? "" } } })),
+    queryFn: ({ signal }) =>
+      unwrap<Site>(
+        api.GET("/api/v1/sites/{site_id}", { signal, params: { path: { site_id: id ?? "" } } }),
+      ),
     enabled: Boolean(id) && !id?.startsWith("builtin-"),
     ...RETRY,
   });
-  const captures = useOfflineSites(query.isError && isOffline(query.error));
+  const offline = useCatalogOffline(query);
+  const captures = useOfflineSites(offline);
   if (id?.startsWith("builtin-")) {
     return {
       data: builtinSite(id) ?? builtinScanSite(),
@@ -178,8 +197,10 @@ export function useSite(id: string | null): CatalogResult<Site | null> {
   // A published capture keeps its real id, so the same id that resolved against the API
   // resolves against the catalog in the bucket — the site the user was looking at does not
   // change identity when the API goes away.
-  const result = withFallback(query, () =>
-    id ? (captures.find((site) => site.id === id) ?? builtinScanSite()) : null,
+  const result = withFallback(
+    query,
+    () => (id ? (captures.find((site) => site.id === id) ?? builtinScanSite()) : null),
+    offline,
   );
   return { ...result, data: id ? result.data : null };
 }
@@ -187,16 +208,16 @@ export function useSite(id: string | null): CatalogResult<Site | null> {
 export function useLayers(): CatalogResult<Layer[]> {
   const query = useQuery({
     queryKey: queryKeys.layers,
-    queryFn: () => unwrap<Layer[]>(api.GET("/api/v1/layers")),
+    queryFn: ({ signal }) => unwrap<Layer[]>(api.GET("/api/v1/layers", { signal })),
     ...RETRY,
   });
-  return withFallback(query, builtinLayers);
+  return withFallback(query, builtinLayers, useCatalogOffline(query));
 }
 
 export function usePlannerStatus() {
   return useQuery({
     queryKey: ["planner-status"],
-    queryFn: () => unwrap<PlannerStatus>(api.GET("/api/v1/agent/status")),
+    queryFn: ({ signal }) => unwrap<PlannerStatus>(api.GET("/api/v1/agent/status", { signal })),
     staleTime: 5 * 60_000,
   });
 }
@@ -242,14 +263,14 @@ export function usePlans(projectId: string | null): CatalogResult<PlanRecord[]> 
   const landScoped = landIdOfProject(projectId) !== null;
   const query = useQuery({
     queryKey: ["plans", projectId],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       unwrap<PlanRecord[]>(
-        api.GET("/api/v1/plans", { params: { query: { projectId: projectId ?? "" } } }),
+        api.GET("/api/v1/plans", { signal, params: { query: { projectId: projectId ?? "" } } }),
       ),
     enabled: projectId !== null && !landScoped,
     staleTime: 15_000,
   });
-  const result = withFallback(query, () => []);
+  const result = withFallback(query, () => [], useCatalogOffline(query));
   if (!landScoped) return result;
   return { data: NO_PLANS, builtin: false, isLoading: false, error: null, refetch: resolveNoPlans };
 }
@@ -290,9 +311,10 @@ export function useWorkspacePlans(projectId: string | null) {
   );
   return useQuery({
     queryKey: ["workspace-plans", scope, projectId],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       unwrap<PlanRecord[]>(
         api.GET("/api/v1/workspaces/missions", {
+          signal,
           params: { query: { projectId: projectId ?? undefined } },
         }),
       ),
@@ -347,7 +369,7 @@ export function fetchLandGround(landId: string, revision: number): Promise<LandG
 export function useIonStatus() {
   return useQuery({
     queryKey: queryKeys.ion,
-    queryFn: () => unwrap<IonStatus>(api.GET("/api/v1/ion/status")),
+    queryFn: ({ signal }) => unwrap<IonStatus>(api.GET("/api/v1/ion/status", { signal })),
     ...RETRY,
   });
 }
@@ -519,13 +541,13 @@ const JOB_POLL_MS = 4000;
 export function useCaptures(enabled = true): CatalogResult<Capture[]> {
   const query = useQuery({
     queryKey: queryKeys.captures,
-    queryFn: () => unwrap<Capture[]>(api.GET("/api/v1/captures")),
+    queryFn: ({ signal }) => unwrap<Capture[]>(api.GET("/api/v1/captures", { signal })),
     enabled,
     ...RETRY,
     staleTime: 0,
     refetchInterval: enabled ? JOB_POLL_MS : false,
   });
-  return withFallback(query, () => []);
+  return withFallback(query, () => [], useCatalogOffline(query));
 }
 
 /**
@@ -537,13 +559,14 @@ export function useCaptures(enabled = true): CatalogResult<Capture[]> {
 export function useJobs(enabled = true): CatalogResult<Job[]> {
   const query = useQuery({
     queryKey: queryKeys.jobs,
-    queryFn: () => unwrap<Job[]>(api.GET("/api/v1/jobs", { params: { query: { limit: 50 } } })),
+    queryFn: ({ signal }) =>
+      unwrap<Job[]>(api.GET("/api/v1/jobs", { signal, params: { query: { limit: 50 } } })),
     enabled,
     ...RETRY,
     staleTime: 0,
     refetchInterval: enabled ? JOB_POLL_MS : false,
   });
-  return withFallback(query, () => []);
+  return withFallback(query, () => [], useCatalogOffline(query));
 }
 
 /** The newest job for each capture: a retry supersedes the run it retried. */
@@ -628,9 +651,10 @@ export function useRetryJob() {
 export function useStepLog(jobId: string, stepId: string, enabled: boolean) {
   return useQuery({
     queryKey: queryKeys.stepLog(jobId, stepId),
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       unwrap<JobStepLog>(
         api.GET("/api/v1/jobs/{job_id}/steps/{step_id}/log", {
+          signal,
           params: { path: { job_id: jobId, step_id: stepId } },
         }),
       ),
