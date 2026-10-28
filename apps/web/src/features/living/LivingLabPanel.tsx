@@ -1,3 +1,6 @@
+import { useState } from "react";
+import { LivingWeatherControls } from "./LivingWeatherControls";
+import { setLabWeather, useLivingWeather } from "@/state/livingWeather";
 import { Waves } from "lucide-react";
 
 import { GlassPanel } from "@twin/ui";
@@ -21,6 +24,7 @@ function articulationAddress(value: string): URL | null {
  */
 export function LivingLabPanel() {
   const lab = useLivingLab();
+  const [weatherControls, setWeatherControls] = useState(false);
   const captured = useAsCaptured((s) => s.on);
   if (!lab.open) return null;
   const on = !captured && (lab.water || lab.motion !== "off");
@@ -101,7 +105,7 @@ export function LivingLabPanel() {
             <span role="status">{lab.spectraStatus}</span>
           </label>
         )}
-        {lab.motion === "articulated" && (
+        {lab.motion === "articulated" && !weatherControls && (
           <label className="living-lab__row">
             Simulated breeze
             <select
@@ -135,8 +139,20 @@ export function LivingLabPanel() {
             <span role="status">{lab.articulationStatus}</span>
           </label>
         )}
-        {slider("Strength", "strength", 0, 3, 0.05)}
-        {slider("Wind to (°)", "windBearingDeg", 0, 360, 5)}
+        <label className="living-lab__row">
+          <input
+            type="checkbox"
+            checked={weatherControls}
+            onChange={(e) => {
+              setWeatherControls(e.target.checked);
+              setLabWeather(e.target.checked ? useLivingWeather.getState().wind : null);
+            }}
+          />{" "}
+          Weather-driven wind
+        </label>
+        {weatherControls && <LivingWeatherControls />}
+        {!weatherControls && slider("Strength", "strength", 0, 3, 0.05)}
+        {!weatherControls && slider("Wind to (°)", "windBearingDeg", 0, 360, 5)}
         {slider("Greenness", "greenness", -1, 0.4, 0.01)}
         {slider("Water level (m)", "waterLevel", -5, 5, 0.01)}
         {slider("Flow to (°)", "flowBearingDeg", 0, 360, 5)}

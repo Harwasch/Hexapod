@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { WeatherWind } from "@twin/world";
 
 import { useAsCaptured } from "@/state/asCaptured";
 
@@ -25,6 +26,10 @@ export interface LivingLabState {
   /** The lab's panel shows (the developer toggle). */
   open: boolean;
   water: boolean;
+  /** Lab-only continuous weather input; null retains earlier research arms. */
+  weather: WeatherWind | null;
+  /** Segmentation URL for automatic Tier A when no fitted lab sidecar is supplied. */
+  weatherSidecarUrl: string;
   motion: LivingMotionArm;
   /** Explicit lab-only sidecar URL, in this scan's metre frame. */
   spectraUrl: string;
@@ -78,6 +83,8 @@ function flagFromLocation(name: string): boolean {
 export const useLivingLab = create<LivingLabState>()((set) => ({
   open: flagFromLocation("living"),
   water: false,
+  weather: null,
+  weatherSidecarUrl: "",
   motion: "off",
   spectraUrl: "",
   spectraStatus: "No spectra loaded",
