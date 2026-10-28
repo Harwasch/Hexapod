@@ -26,7 +26,7 @@ from app.api.deps import _db
 from app.main import create_app
 from app.models import Capture, Epoch
 from app.models.enums import CaptureKind
-from app.services import confidence_maps
+from app.services import confidence_maps, epochs
 from app.storage import S3Storage, get_public_storage
 from tests.confidence_fixtures import blob, measured, register_run
 from tests.surface_fixtures import surface_blob, surface_descriptor
@@ -580,11 +580,13 @@ def test_visual_pair_answer_uses_fit_without_promoting_coarse_epochs(
         first_aligned=alignment("coarse", 5, "drone"),
         aligned=alignment("coarse", 5.1, "drone"),
     )
+    assert e1.job_id is not None
     e2.alignment = {
         **(e2.alignment or {}),
         "method": "visual",
         "referenceEpochId": str(e1.id),
         "referenceJobId": str(e1.job_id),
+        "referenceRevision": epochs._reference_keys(db, e1.job_id)[2],
         "frameRelativeUncertaintyM": 0.4,
         "frameRelativeBasis": "visual",
     }

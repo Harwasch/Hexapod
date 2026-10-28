@@ -254,16 +254,27 @@ cells, surfacedCells, medianSigmaM, originHeightM, groundWindowM}`, or null — 
    uncertainty from the frame.
 
    **Measured relative fit (Harrison, 2026-10-28: “Use the measured fit”).** When one
-   epoch's accepted visual alignment references the other's **current job**, use that
+   epoch's accepted visual alignment references the other's **current revision**, use that
    alignment's positive, finite `frameRelativeUncertaintyM` once for the pair: `u = 0`
    on the reference and `u = relative` on the aligned epoch. When both visually reference
-   the same epoch **and reference job**, use both recorded relative terms in quadrature.
+   the same epoch **and current reference revision**, use both recorded relative terms in quadrature.
    The record must say `method: visual`, with `frameRelativeBasis: visual` (including
    the older conservative “reference at its absolute uncertainty” basis); a fit refuted by
    check targets, missing measurement or missing/mismatched reference revision keeps the
-   original rule. These fields are recorded by alignment already. No chain inference or
+   original rule. Alignment records `referenceRevision` from the site context alongside
+   reference epoch and job IDs. Both direct and shared-reference cases must match the
+   current reference's artifact-row digest (`epochs._reference_keys`, the same revision
+   used by `ReferenceChoice` and site-context caching). A retry can replace poses and
+   alignment under the same job ID: matching epoch and job alone is insufficient.
+   Records predating `referenceRevision` fall back to B5a. No chain inference or
    variance subtraction is made: frame-relative terms can include earlier reference error,
    and siblings can share it, so retaining both is conservative.
+
+   `frameRelativeUncertaintyM` is already `hypot(ref_rel, 3·RMS)` from alignment
+   (`SIGMA_K = 3`), rather than a raw one-sigma fit residual. The change map deliberately
+   preserves that uncertainty convention: its further 3σ multiplier approaches **9·RMS**
+   when the fit dominates. This is conservative on purpose, and matches the treatment
+   of absolute `uncertaintyM` for survey claims; it does not reinterpret either as raw RMS.
 
    The **1 m coarse floor does not apply to these measured relative terms**. Absolute GPS
    error is shared when one reconstruction inherits the other's frame; it does not measure

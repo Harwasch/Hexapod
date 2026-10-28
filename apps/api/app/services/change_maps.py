@@ -217,7 +217,7 @@ def _placement(epoch: Epoch, graded: EpochMap) -> _Placement:
     return _Placement(verdict, _uncertainty(epoch, graded), claim_m)
 
 
-def _visual_fit(epoch: Epoch) -> tuple[str, str, float] | None:
+def _visual_fit(epoch: Epoch) -> tuple[str, str, str, float] | None:
     """Only a measured, accepted visual fit tied to a reference revision.
 
     Frame-relative values include any inherited frame error, so using them directly
@@ -243,10 +243,14 @@ def _visual_fit(epoch: Epoch) -> tuple[str, str, float] | None:
         job = str(uuid.UUID(alignment["referenceJobId"]))
     except (KeyError, TypeError, ValueError, AttributeError):
         return None
-    return reference, job, float(value)
+    revision = alignment.get("referenceRevision")
+    if not isinstance(revision, str) or not revision:
+        return None
+    return reference, job, revision, float(value)
 
 
 def _pair_placement(
+    db: Session,
     before: Epoch,
     after: Epoch,
     a: _Placement,
@@ -254,19 +258,35 @@ def _pair_placement(
 ) -> tuple[float, float, ChangeRelativeFitRead | None]:
     """Use one relative term for a direct link, two for a shared reference revision.
 
-    Matching the job as well as epoch prevents a fit to a superseded reference run
-    from silently describing its current surface. Otherwise retain B5a exactly.
+    A retry preserves the epoch and job IDs but rewrites reference artifacts. Match
+    their current row digest too, for direct pairs and siblings. Older records with
+    no revision, or stale records, retain B5a exactly.
     """
     va, vb = _visual_fit(before), _visual_fit(after)
     reference: str
     basis: Literal["direct", "shared-reference"]
+    reference_epoch: Epoch | None
     if vb is not None and vb[:2] == (str(before.id), str(before.job_id)):
-        ua, ub, reference, basis = 0.0, vb[2], str(before.id), "direct"
+        ua, ub, reference, basis = 0.0, vb[3], str(before.id), "direct"
+        reference_epoch, fit = before, vb
     elif va is not None and va[:2] == (str(after.id), str(after.job_id)):
-        ua, ub, reference, basis = va[2], 0.0, str(after.id), "direct"
-    elif va is not None and vb is not None and va[:2] == vb[:2]:
-        ua, ub, reference, basis = va[2], vb[2], va[0], "shared-reference"
+        ua, ub, reference, basis = va[3], 0.0, str(after.id), "direct"
+        reference_epoch, fit = after, va
+    elif va is not None and vb is not None and va[:3] == vb[:3]:
+        ua, ub, reference, basis = va[3], vb[3], va[0], "shared-reference"
+        reference_epoch, fit = db.get(Epoch, uuid.UUID(reference)), va
     else:
+        return a.u_m, b.u_m, None
+    if (
+        reference_epoch is None
+        or reference_epoch.site_id != before.site_id
+        or reference_epoch.status != EpochStatus.PUBLISHED.value
+        or reference_epoch.job_id is None
+        or str(reference_epoch.job_id) != fit[1]
+    ):
+        return a.u_m, b.u_m, None
+    _, _, current_revision = epochs._reference_keys(db, reference_epoch.job_id)
+    if fit[2] != current_revision:
         return a.u_m, b.u_m, None
     return (
         ua,
@@ -364,7 +384,7 @@ def change(
         _metric(epoch, surface)
         _same_frame(epoch, surface, frame)
     placed_a, placed_b = _placement(before, graded_a), _placement(after, graded_b)
-    ua, ub, relative_fit = _pair_placement(before, after, placed_a, placed_b)
+    ua, ub, relative_fit = _pair_placement(db, before, after, placed_a, placed_b)
     for epoch, row in (
         (before, surface_a),
         (after, surface_b),

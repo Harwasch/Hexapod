@@ -2,15 +2,22 @@
 
 import math
 import uuid
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pytest
+from sqlalchemy.orm import Session
 
 from app.analysis import change
 from app.models import Epoch, EpochMap
 from app.schemas.change import ChangeRelativeFitRead
-from app.services import change_maps
+from app.services import change_maps, epochs
 from tests.test_change import flat, surface
+
+
+@pytest.fixture(autouse=True)
+def reference_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(epochs, "_reference_keys", lambda *_: ({}, None, "revision-1"))
 
 
 def epoch() -> Epoch:
@@ -19,6 +26,7 @@ def epoch() -> Epoch:
         site_id=uuid.uuid4(),
         job_id=uuid.uuid4(),
         platform="drone",
+        status="published",
         alignment={"verdict": "coarse", "uncertaintyM": 5.0},
     )
 
@@ -32,13 +40,18 @@ def link(child: Epoch, reference: Epoch, relative: object = 0.4) -> None:
         "frameRelativeUncertaintyM": relative,
         "referenceEpochId": str(reference.id),
         "referenceJobId": str(reference.job_id),
+        "referenceRevision": "revision-1",
     }
 
 
-def pair(a: Epoch, b: Epoch) -> tuple[float, float, ChangeRelativeFitRead | None]:
+def pair(
+    a: Epoch, b: Epoch, reference: Epoch | None = None
+) -> tuple[float, float, ChangeRelativeFitRead | None]:
+    db = Mock(spec=Session)
+    db.get.return_value = reference
     graded = EpochMap(descriptor={"alignmentCap": {"uncertaintyM": 5.0}})
     return change_maps._pair_placement(
-        a, b, change_maps._placement(a, graded), change_maps._placement(b, graded)
+        db, a, b, change_maps._placement(a, graded), change_maps._placement(b, graded)
     )
 
 
@@ -92,7 +105,7 @@ def test_same_reference_combines_measured_terms_and_requires_same_revision() -> 
     ref, a, b = epoch(), epoch(), epoch()
     link(a, ref, 0.3)
     link(b, ref, 0.4)
-    ua, ub, fit = pair(a, b)
+    ua, ub, fit = pair(a, b, ref)
     assert (ua, ub) == (0.3, 0.4)
     assert fit is not None
     assert fit.reference_epoch_id == ref.id
@@ -150,7 +163,7 @@ def test_unlinked_coarse_claiming_centimetres_keeps_b5a_floor() -> None:
         e.alignment = {"verdict": "coarse", "uncertaintyM": 0.03}
     graded = EpochMap(descriptor={"alignmentCap": {"uncertaintyM": 0.03}})
     placements = [change_maps._placement(e, graded) for e in (a, b)]
-    assert change_maps._pair_placement(a, b, *placements) == (1, 1, None)
+    assert change_maps._pair_placement(Mock(spec=Session), a, b, *placements) == (1, 1, None)
 
 
 @pytest.mark.parametrize("layer", change.LAYERS)
@@ -180,3 +193,28 @@ def test_drawn_level_retains_slope_budget(monkeypatch: pytest.MonkeyPatch) -> No
     assert found.drawn.level == 3
     expected = 3 * math.sqrt(2 * 0.02**2 + 0.4**2 + 2 * 0.25**2 + (0.5 * 0.4) ** 2)
     assert found.drawn.min_detectable_m == pytest.approx(expected)
+
+
+def test_same_job_reference_retry_falls_back_to_b5a() -> None:
+    a, b = epoch(), epoch()
+    link(b, a)
+    b.alignment = {**(b.alignment or {}), "referenceRevision": "before-retry"}
+    # A retry writes new artifact rows while keeping A's epoch and job IDs.
+    with patch.object(epochs, "_reference_keys", return_value=({}, None, "after-retry")):
+        assert pair(a, b) == (5.0, 5.0, None)
+
+
+def test_shared_reference_retry_invalidates_both_old_fits() -> None:
+    ref, a, b = epoch(), epoch(), epoch()
+    link(a, ref, 0.3)
+    link(b, ref, 0.4)
+    with patch.object(epochs, "_reference_keys", return_value=({}, None, "retry")):
+        assert pair(a, b, ref) == (5.0, 5.0, None)
+
+
+@pytest.mark.parametrize("revision", [None, "", 1, True])
+def test_missing_or_invalid_reference_revision_keeps_b5a(revision: object) -> None:
+    a, b = epoch(), epoch()
+    link(b, a)
+    b.alignment = {**(b.alignment or {}), "referenceRevision": revision}
+    assert pair(a, b) == (5.0, 5.0, None)
