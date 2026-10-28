@@ -79,7 +79,7 @@ test("the hero scene renders and places its crews' labels", async ({ page }) => 
   await page.goto("/landing.html");
   // Software WebGL (playwright.config.ts) is enough for the scene; the fallback has its own test.
   await expect(page.locator("#top")).toHaveAttribute("data-scene", "live", { timeout: 60_000 });
-  await expect(page.locator("canvas.gl")).toHaveClass(/\bon\b/);
+  await expect(page.locator("#top canvas.gl")).toHaveClass(/\bon\b/);
   await expect(page.locator(".hero-still.lt")).toBeHidden();
   // A label is placed from the scene's own projection, every frame: one in view means frames ran.
   await expect
@@ -111,7 +111,10 @@ test("without WebGL the hero falls back to a still and the examples scroll to th
   const hero = page.locator("#top");
   await expect(hero).toHaveAttribute("data-scene", "fallback", { timeout: 60_000 });
   await expect(page.locator(".hero-still.lt")).toBeVisible();
-  await expect(page.locator("canvas.gl")).toBeHidden();
+  await expect(page.locator("#top canvas.gl")).toBeHidden();
+  // The mission section gives way too: its steps as plain text.
+  await expect(page.locator("#mission")).toHaveAttribute("data-scene", "fallback");
+  await expect(page.locator("#mission canvas.gl")).toBeHidden();
   await page.getByRole("button", { name: "Solar farm" }).click();
   await expect(page.locator("#use-solar")).toBeInViewport();
   // The form needs no WebGL of its own: acres alone complete a request.
@@ -340,7 +343,7 @@ for (const [id, lightStage, darkStage] of [
     expect(await stage()).toBe(lightStage);
     await page.getByRole("button", { name: "Switch to dark mode" }).click();
     await expect.poll(stage).toBe(darkStage);
-    await expect(page.locator(".stage")).toHaveAttribute("data-theme", "dark");
+    await expect(page.locator("#top .stage")).toHaveAttribute("data-theme", "dark");
     expect(shaderErrors).toEqual([]);
   });
 }
