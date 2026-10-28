@@ -4368,7 +4368,7 @@
       },
       "ChangeMapRead": {
         "additionalProperties": false,
-        "description": "The change from epoch `fromEpochId` to `toEpochId` of one site (`change-v1`, ADR 0018):\nderived from their height surfaces, never observed and never from splat pixels. Two\nlayers, each classified on its own: `ground` (the bare earth: the primary product) and\n`vegetation` (the top surface, at its own higher threshold). Per cell of the coarser of\nthe two surfaces' levels, each side taken over the children both epochs measured (a\npartial child set is insufficient), with `u` each epoch's placement uncertainty\n(`uncertainty`). The 3 sigma rule is a first-principles choice, `uncalibrated` until a\nsite scanned twice measures it.\n\n`relativeFit` is optional for clients reading older answers; null uses absolute placement.",
+        "description": "The change from epoch `fromEpochId` to `toEpochId` of one site (`change-v1`, ADR 0018):\nderived from their height surfaces, never observed and never from splat pixels. Two\nlayers, each classified on its own: `ground` (the bare earth: the primary product) and\n`vegetation` (the top surface, at its own higher threshold). Per cell of the coarser of\nthe two surfaces' levels, each side taken over the children both epochs measured (a\npartial child set is insufficient), with `u` each epoch's placement uncertainty\n(`uncertainty`). The 3 sigma rule is a first-principles choice, `uncalibrated` until a\nsite scanned twice measures it.\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
         "properties": {
           "appearance": {
             "$ref": "#/components/schemas/ChangeAppearanceRead"
@@ -4474,6 +4474,7 @@
           "cellM",
           "thresholdSigma",
           "uncertainty",
+          "relativeFit",
           "ground",
           "vegetation",
           "appearance"

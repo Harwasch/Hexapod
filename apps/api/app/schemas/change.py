@@ -254,7 +254,7 @@ class ChangeMapRead(CamelModel):
     (`uncertainty`). The 3 sigma rule is a first-principles choice, `uncalibrated` until a
     site scanned twice measures it.
 
-    `relativeFit` is optional for clients reading older answers; null uses absolute placement.
+    Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
     """
 
     policy: Literal["change-v1"]
@@ -277,7 +277,7 @@ class ChangeMapRead(CamelModel):
     threshold_sigma: Finite
     uncertainty: ChangeUncertaintyRead
     #: Null keeps the absolute B5a rule; present also enables the slope error budget.
-    relative_fit: ChangeRelativeFitRead | None = None
+    relative_fit: ChangeRelativeFitRead | None
     #: The bare earth's change: the primary product.
     ground: ChangeLayerRead
     #: The top surface's change: vegetation and anything standing, never read as ground.

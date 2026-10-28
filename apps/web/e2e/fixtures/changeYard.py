@@ -79,6 +79,7 @@ def answer(u_to: float, to_verdict: str) -> dict[str, object]:
         native_level=ground.native_level,
         cell_m=ground.cell_m,
         threshold_sigma=analysis.THRESHOLD_SIGMA,
+        relative_fit=None,
         uncertainty=change_maps.ChangeUncertaintyRead(
             from_m=U_FROM,
             to_m=u_to,

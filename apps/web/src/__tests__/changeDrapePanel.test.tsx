@@ -137,6 +137,7 @@ const changeMap = {
   nativeLevel: 2,
   cellM: 1,
   thresholdSigma: 3,
+  relativeFit: null,
   uncertainty: {
     fromM: 0.03,
     toM: 5,

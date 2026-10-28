@@ -128,6 +128,7 @@ function map(extra: Partial<ChangeMap> = {}): ChangeMap {
     nativeLevel: 2,
     cellM: 1,
     thresholdSigma: 3,
+    relativeFit: null,
     uncertainty: {
       fromM: 0.03,
       toM: 0.062,

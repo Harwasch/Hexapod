@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.analysis import change
 from app.models import Epoch, EpochMap
-from app.schemas.change import ChangeRelativeFitRead
+from app.schemas.change import ChangeMapRead, ChangeRelativeFitRead
 from app.services import change_maps, epochs
 from tests.test_change import flat, surface
 
@@ -217,6 +217,12 @@ def test_three_cell_step_shift_needs_slope_guard() -> None:
         slope_guard=True,
     )
     assert found.counts()["raised"] == found.counts()["lowered"] == 0
+
+
+def test_relative_fit_is_required_but_nullable_in_contract() -> None:
+    schema = ChangeMapRead.model_json_schema(by_alias=True)
+    assert "relativeFit" in schema["required"]
+    assert {"type": "null"} in schema["properties"]["relativeFit"]["anyOf"]
 
 
 def test_shared_reference_retry_invalidates_both_old_fits() -> None:

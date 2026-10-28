@@ -5130,7 +5130,7 @@ export interface components {
          *     (`uncertainty`). The 3 sigma rule is a first-principles choice, `uncalibrated` until a
          *     site scanned twice measures it.
          *
-         *     `relativeFit` is optional for clients reading older answers; null uses absolute placement.
+         *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
          */
         ChangeMapRead: {
             appearance: components["schemas"]["ChangeAppearanceRead"];
@@ -5173,7 +5173,7 @@ export interface components {
              * @constant
              */
             policy: "change-v1";
-            relativeFit?: components["schemas"]["ChangeRelativeFitRead"] | null;
+            relativeFit: components["schemas"]["ChangeRelativeFitRead"] | null;
             /**
              * Siteid
              * Format: uuid
