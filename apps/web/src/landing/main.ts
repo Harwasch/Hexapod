@@ -20,6 +20,7 @@ import {
 } from "./form";
 import { startFinder } from "./finder";
 import { lookById, themed } from "./looks";
+import { mountMissionControl } from "./mc";
 import type * as SceneModule from "./scene.js";
 import type { Hero, HeroLabel, HeroStop, HeroZone } from "./scene.js";
 
@@ -357,17 +358,16 @@ if (params.has("review")) {
   void import("./review").then(({ mountReview }) => mountReview(look.id));
 }
 
-/** Mission Control: each point shows its screenshot. */
-const shotTabs = [...document.querySelectorAll<HTMLButtonElement>(".shot-tabs button")];
-for (const tab of shotTabs)
-  tab.addEventListener("click", () => {
-    for (const other of shotTabs) {
-      const on = other === tab;
-      other.setAttribute("aria-pressed", String(on));
-      const view = document.getElementById(other.getAttribute("aria-controls") ?? "");
-      if (view) view.hidden = !on;
-    }
-  });
+// Mission Control: the app's panels, live, over its map (mc.ts).
+try {
+  mountMissionControl(
+    $("#mc", HTMLElement),
+    [...document.querySelectorAll<HTMLButtonElement>("#app button[data-view]")],
+    matchMedia("(prefers-reduced-motion: reduce)"),
+  );
+} catch (error) {
+  console.warn("landing: Mission Control's live panels could not start", error);
+}
 
 /**
  * Pixels the hero renders inside (it draws bigger and scales down, which is what smooths its

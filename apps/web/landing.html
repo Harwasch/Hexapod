@@ -422,53 +422,175 @@
             <p>The live overview of your fleet on your land.</p>
           </div>
 
-          <figure class="shots" aria-label="The app">
-            <div class="shot-views">
-              <img
-                id="shot-land"
-                src="/src/landing/img/app-land.webp"
-                alt="The app showing Oak Bench Ranch as a 3D model, with its work zones outlined"
-                width="1600"
-                height="1000"
-                loading="lazy"
-              />
-              <img
-                id="shot-plan"
-                src="/src/landing/img/app-plan.webp"
-                alt="The app's Plans panel: five plans for the ranch, each with its progress"
-                width="1600"
-                height="1000"
-                loading="lazy"
-                hidden
-              />
-              <img
-                id="shot-fleet"
-                src="/src/landing/img/app-fleet.webp"
-                alt="The app's Fleet panel: each machine's task, zone and battery"
-                width="1600"
-                height="1000"
-                loading="lazy"
-                hidden
-              />
+          <figure class="mc" aria-label="Mission Control, simulated">
+            <div class="mc-app" id="mc" data-view="see">
+              <div class="mc-stage">
+                <img
+                  class="mc-map"
+                  src="/src/landing/img/app-land.webp"
+                  alt="The app showing Oak Bench Ranch as a 3D model, with its work zones outlined"
+                  width="1600"
+                  height="1000"
+                  loading="lazy"
+                />
+                <svg class="mc-live" viewBox="0 0 1600 1000" aria-hidden="true">
+                  <path
+                    id="mc-r-hx04"
+                    class="mc-route"
+                    d="M530 548 L765 630 L761 643 L526 560 L521 572 L756 655 L752 667 L517 585 L513 597 L748 679 L744 692 L509 609 Z"
+                  />
+                  <path
+                    class="mc-done"
+                    pathLength="1"
+                    d="M530 548 L765 630 L761 643 L526 560 L521 572 L756 655 L752 667 L517 585 L513 597 L748 679 L744 692 L509 609 Z"
+                  >
+                    <animate
+                      attributeName="stroke-dashoffset"
+                      from="1"
+                      to="0"
+                      dur="48s"
+                      repeatCount="indefinite"
+                    />
+                  </path>
+                  <path
+                    id="mc-r-hx12"
+                    class="mc-route"
+                    d="M372 290 L366 360 L360 420 L350 480 L345 532"
+                  />
+                  <path
+                    id="mc-r-qd18"
+                    class="mc-route"
+                    d="M712 236 L698 470 L716 470 L730 236 L748 236 L734 470 L752 470 L766 236 L784 236 L770 470 Z"
+                  />
+                  <g class="mc-bot">
+                    <circle class="mc-ping" r="7">
+                      <animate
+                        attributeName="r"
+                        values="7;22"
+                        dur="2.4s"
+                        repeatCount="indefinite"
+                      />
+                      <animate
+                        attributeName="opacity"
+                        values="0.7;0"
+                        dur="2.4s"
+                        repeatCount="indefinite"
+                      />
+                    </circle>
+                    <circle r="6" />
+                    <text x="12" y="-10">HX-04</text>
+                    <animateMotion dur="48s" repeatCount="indefinite">
+                      <mpath href="#mc-r-hx04" />
+                    </animateMotion>
+                  </g>
+                  <g class="mc-bot">
+                    <circle r="6" />
+                    <text x="12" y="-10">HX-12</text>
+                    <animateMotion
+                      dur="30s"
+                      repeatCount="indefinite"
+                      keyPoints="0;1;0"
+                      keyTimes="0;0.5;1"
+                      calcMode="linear"
+                    >
+                      <mpath href="#mc-r-hx12" />
+                    </animateMotion>
+                  </g>
+                  <g class="mc-bot mc-air">
+                    <circle r="6" />
+                    <text x="12" y="-10">QD-18</text>
+                    <animateMotion dur="26s" repeatCount="indefinite">
+                      <mpath href="#mc-r-qd18" />
+                    </animateMotion>
+                  </g>
+                </svg>
+                <p class="mc-chip mc-site">
+                  <b>Oak Bench Ranch</b><span>5.46 km² · simulated</span>
+                </p>
+                <p class="mc-chip mc-z" style="left: 47.6%; top: 29.2%">
+                  <i class="blue"></i><b>Z-08</b><span>survey sweep</span>
+                </p>
+                <p class="mc-chip mc-z" style="left: 49.8%; top: 49.2%">
+                  <i></i><b>Z-14</b><span data-mc="z14">pulling 58%</span>
+                </p>
+                <p class="mc-chip mc-z" style="left: 63.6%; top: 16.2%">
+                  <i class="amber"></i><b>Z-21</b><span>buffer queued</span>
+                </p>
+                <div class="mc-views" role="group" aria-label="App view">
+                  <button type="button" data-view="see" aria-pressed="true">Map</button
+                  ><button type="button" data-view="plan" aria-pressed="false">Plan</button
+                  ><button type="button" data-view="do" aria-pressed="false">Fleet</button>
+                </div>
+              </div>
+              <section class="mc-panel" data-for="plan" aria-label="Plans" hidden>
+                <header>
+                  <h3>Plans</h3>
+                  <p>Oak Bench Ranch · simulated</p>
+                </header>
+                <ol class="mc-plans" data-mc="plans"></ol>
+              </section>
+              <section class="mc-panel" data-for="do" aria-label="Fleet" hidden>
+                <header>
+                  <h3>Fleet</h3>
+                  <p>Machines on this project · simulated</p>
+                </header>
+                <dl class="mc-figs">
+                  <div>
+                    <dt>Working now</dt>
+                    <dd data-mc="working">2</dd>
+                  </div>
+                  <div>
+                    <dt>Treated, last shift</dt>
+                    <dd>13 ac</dd>
+                  </div>
+                  <div>
+                    <dt>Uptime, 7 days</dt>
+                    <dd>92%</dd>
+                  </div>
+                  <div>
+                    <dt>Need attention</dt>
+                    <dd data-mc="attention">2</dd>
+                  </div>
+                </dl>
+                <table class="mc-fleet">
+                  <thead>
+                    <tr>
+                      <th scope="col">Machine</th>
+                      <th scope="col">Task</th>
+                      <th scope="col">Zone</th>
+                      <th scope="col">Batt</th>
+                      <th scope="col" class="mc-hrs">Hrs</th>
+                    </tr>
+                  </thead>
+                  <tbody data-mc="fleet"></tbody>
+                </table>
+                <p class="mc-notice" data-mc="notice"></p>
+              </section>
+              <p class="mc-status">
+                <span data-mc="bar-fleet">Fleet: 2 working · 2 need attention</span
+                ><em>simulated</em
+                ><span class="mc-agent"><b>Agent:</b> <span data-mc="agent"></span></span>
+              </p>
             </div>
             <figcaption>
-              The app today, on our demo ranch. The fleet and its plans are simulated.
+              Built live in this page over the app&rsquo;s view of our demo ranch. The fleet, its
+              plans and its numbers are simulated, and run faster than real time.
             </figcaption>
           </figure>
           <ul class="feat shot-tabs" aria-label="What Mission Control shows">
             <li>
-              <button type="button" aria-controls="shot-land" aria-pressed="true">
+              <button type="button" data-view="see" aria-controls="mc" aria-pressed="true">
                 <b>See</b><span>Your land in 3D, with every zone, track and tree on it.</span>
               </button>
             </li>
             <li>
-              <button type="button" aria-controls="shot-plan" aria-pressed="false">
+              <button type="button" data-view="plan" aria-controls="mc" aria-pressed="false">
                 <b>Plan</b
                 ><span>Mark what needs doing and approve the plan before a robot moves.</span>
               </button>
             </li>
             <li>
-              <button type="button" aria-controls="shot-fleet" aria-pressed="false">
+              <button type="button" data-view="do" aria-controls="mc" aria-pressed="false">
                 <b>Do</b
                 ><span>The fleet does the work; follow every robot and every job live.</span>
               </button>

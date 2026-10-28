@@ -774,29 +774,478 @@ abbr {
   color: var(--ink);
   font: 700 18px/1.2 var(--body);
 }
-/* The app section: real screenshots, one per point; the points switch between them. */
-.shots {
+/*
+ * Mission Control, live (mc.ts): the app's own panels and chips as HTML over its map view. The
+ * app is dark in both page themes, as it is. On a wide frame the panels sit over the map, as in
+ * the app; on a narrow one (a phone) they drop below it, at a size that can be read.
+ */
+.mc {
   margin: 0;
   border: 1px solid var(--line2);
   background: #0b0c0a;
   box-shadow: 0 30px 70px -40px rgba(0, 0, 0, 0.35);
   min-width: 0;
 }
-.shot-views img {
+.mc-app {
+  --mc-glass: rgba(20, 22, 21, 0.94);
+  --mc-edge: rgba(255, 255, 255, 0.09);
+  --mc-ink: #eceee9;
+  --mc-text: #c9cec6;
+  --mc-muted: #8f978d;
+  --mc-teal: #4fd1a5;
+  --mc-amber: #f2a33a;
+  --mc-blue: #8d9cff;
+  --mc-grey: #8a8f89;
+  position: relative;
+  container-type: inline-size;
+  color: var(--mc-text);
+  font: 400 clamp(10px, 1cqw, 13.5px) / 1.35 var(--body);
+}
+.mc-stage {
+  position: relative;
+  aspect-ratio: 1600/1000;
+  overflow: hidden;
+}
+.mc-map {
   display: block;
   width: 100%;
-  height: auto;
-  aspect-ratio: 1600/1000;
+  height: 100%;
 }
-.shot-views img[hidden] {
+.mc-live {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.mc-route {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.5);
+  stroke-width: 1.6;
+  stroke-dasharray: 5 6;
+}
+.mc-done {
+  fill: none;
+  stroke: rgba(79, 209, 165, 0.55);
+  stroke-width: 11;
+  stroke-linejoin: round;
+  stroke-dasharray: 1 1;
+  stroke-dashoffset: 1;
+}
+.mc-bot circle {
+  fill: var(--mc-teal);
+  stroke: #0b0c0a;
+  stroke-width: 2.5;
+}
+.mc-bot .mc-ping {
+  fill: none;
+  stroke: var(--mc-teal);
+  stroke-width: 2;
+}
+.mc-air circle {
+  fill: var(--mc-blue);
+}
+.mc-bot text {
+  fill: #fff;
+  font: 600 15px var(--mono);
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.75);
+  stroke-width: 4px;
+}
+.mc-chip {
+  position: absolute;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.55em;
+  padding: 0.35em 0.8em;
+  border: 1px solid var(--mc-edge);
+  border-radius: 999px;
+  background: var(--mc-glass);
+  backdrop-filter: blur(10px);
+  white-space: nowrap;
+  font-size: 0.92em;
+}
+.mc-chip b {
+  color: var(--mc-ink);
+  font: 700 1em var(--mono);
+}
+.mc-chip i {
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 50%;
+  background: var(--mc-teal);
+}
+.mc-chip i.blue {
+  background: var(--mc-blue);
+}
+.mc-chip i.amber {
+  background: var(--mc-amber);
+}
+/* Over the app's own site chip, top left. */
+.mc-site {
+  left: 1%;
+  top: 1.6%;
+  width: 17.8%;
+  height: 6%;
+  border-radius: 14px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.1em;
+  font-size: 1em;
+}
+.mc-site b {
+  font: 600 1.15em var(--body);
+}
+.mc-site span {
+  color: var(--mc-muted);
+  font-size: 0.85em;
+}
+/* Over the app's own view tabs, top right. */
+.mc-views {
+  position: absolute;
+  right: 1%;
+  top: 2%;
+  min-width: 12.6%;
+  display: flex;
+  gap: 0.2em;
+  padding: 0.25em;
+  border: 1px solid var(--mc-edge);
+  border-radius: 999px;
+  background: var(--mc-glass);
+}
+.mc-views button {
+  flex: 1;
+  padding: 0.45em 1.1em;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--mc-text);
+  font: 600 1em var(--body);
+  cursor: pointer;
+}
+.mc-views button[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--mc-ink);
+}
+.mc-panel {
+  position: absolute;
+  right: 1%;
+  top: 9%;
+  bottom: 9%;
+  width: 38%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8em;
+  padding: 1.2em 1.1em;
+  border: 1px solid var(--mc-edge);
+  border-radius: 16px;
+  background: var(--mc-glass);
+  backdrop-filter: blur(14px);
+  overflow: hidden;
+}
+.mc-panel[hidden] {
   display: none;
 }
-.shots figcaption {
+.mc-panel[data-for="do"] {
+  bottom: auto;
+}
+.mc-panel header h3 {
+  color: var(--mc-ink);
+  font: 600 1.45em/1.2 var(--body);
+}
+.mc-panel header p {
+  margin: 0.2em 0 0;
+  color: var(--mc-muted);
+}
+.mc-plans {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55em;
+  overflow: hidden;
+}
+.mc-plan {
+  --c: var(--mc-teal);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45em;
+  padding: 0.75em 0.9em;
+  border: 1px solid var(--mc-edge);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.mc-plan[data-state="behind"] {
+  --c: var(--mc-amber);
+}
+.mc-plan[data-state="running"] {
+  --c: var(--mc-blue);
+}
+.mc-plan[data-state="queued"],
+.mc-plan[data-state="draft"] {
+  --c: var(--mc-grey);
+}
+.mc-plan[data-state="draft"] {
+  border-color: rgba(79, 209, 165, 0.55);
+  background: rgba(79, 209, 165, 0.07);
+}
+.mc-plan-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1em;
+}
+.mc-plan-top b {
+  color: var(--mc-ink);
+  font-weight: 600;
+}
+.mc-plan-top b::before {
+  content: "";
+  display: inline-block;
+  width: 0.55em;
+  height: 0.55em;
+  margin-right: 0.6em;
+  border-radius: 50%;
+  background: var(--c);
+  vertical-align: 0.08em;
+}
+.mc-state {
+  flex: none;
+  color: var(--c);
+  font-size: 0.9em;
+}
+.mc-plan[data-state="draft"] .mc-state {
+  color: var(--mc-teal);
+}
+.mc-prog {
+  display: flex;
+  align-items: center;
+  gap: 0.8em;
+}
+.mc-bar-track {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.mc-bar-track i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--c);
+  transition: width 1s linear;
+}
+.mc-num {
+  color: var(--mc-ink);
+  font: 500 0.92em var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.mc-plan-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 1em;
+  color: var(--mc-muted);
+  font-size: 0.88em;
+}
+.mc-approve {
+  align-self: flex-start;
+  padding: 0.5em 1em;
+  border: 1px solid var(--mc-teal);
+  border-radius: 8px;
+  background: rgba(79, 209, 165, 0.16);
+  color: var(--mc-ink);
+  font: 600 0.95em var(--body);
+  cursor: pointer;
+  animation: mc-nudge 2.4s ease-in-out infinite;
+}
+.mc-approve:hover {
+  background: rgba(79, 209, 165, 0.28);
+}
+@keyframes mc-nudge {
+  50% {
+    box-shadow: 0 0 0 5px rgba(79, 209, 165, 0.18);
+  }
+}
+.mc-figs {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.6em;
+  padding-bottom: 0.8em;
+  border-top: 0;
+  border-bottom: 1px solid var(--mc-edge);
+}
+.mc-figs div {
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+  gap: 0.3em;
+  padding: 0;
+  border: 0;
+}
+.mc-figs dt {
+  color: var(--mc-muted);
+  font: 400 0.85em/1.25 var(--body);
+}
+.mc-figs dd {
+  color: var(--mc-ink);
+  font: 600 1.7em/1 var(--mono);
+  text-align: left;
+}
+.mc-fleet {
+  width: 100%;
+  border-collapse: collapse;
+}
+.mc-fleet th {
+  padding: 0 0.5em 0.5em 0;
+  color: var(--mc-muted);
+  font: 500 0.78em var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+}
+.mc-fleet td {
+  padding: 0.5em 0.5em 0.5em 0;
+  border-top: 1px solid var(--mc-edge);
+  vertical-align: top;
+}
+.mc-fleet td:first-child {
+  padding-left: 1.1em;
+  position: relative;
+}
+.mc-fleet td:first-child::before {
+  content: "";
+  position: absolute;
+  left: 0.1em;
+  top: 0.95em;
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: var(--mc-grey);
+}
+.mc-fleet tr[data-state="work"] td:first-child::before {
+  background: var(--mc-teal);
+}
+.mc-fleet tr[data-state="warn"] td:first-child::before {
+  background: var(--mc-amber);
+}
+.mc-fleet td b {
+  display: block;
+  color: var(--mc-ink);
+  font-weight: 600;
+}
+.mc-fleet td span {
+  color: var(--mc-muted);
+  font-size: 0.88em;
+}
+.mc-fleet tr[data-state="work"] .mc-task {
+  color: var(--mc-teal);
+}
+.mc-fleet tr[data-state="warn"] .mc-task {
+  color: var(--mc-amber);
+}
+.mc-notice {
+  margin: 0;
+  padding: 0.8em 0.9em;
+  border: 1px solid var(--mc-edge);
+  border-radius: 10px;
+  color: var(--mc-text);
+  font-size: 0.92em;
+}
+/* Over the app's own status bar, bottom left. */
+.mc-status {
+  position: absolute;
+  left: 1%;
+  bottom: 1.6%;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.8em;
+  max-width: 62%;
+  padding: 0.45em 1em;
+  border: 1px solid var(--mc-edge);
+  border-radius: 999px;
+  background: var(--mc-glass);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.mc-status > span:first-child {
+  color: var(--mc-ink);
+}
+.mc-status em {
+  padding: 0.1em 0.6em;
+  border: 1px solid var(--mc-edge);
+  border-radius: 999px;
+  color: var(--mc-muted);
+  font-style: normal;
+  font-size: 0.9em;
+}
+.mc-agent {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mc-agent b {
+  color: var(--mc-blue);
+  font-weight: 600;
+}
+.mc figcaption {
   padding: 8px 14px;
   border-top: 1px solid var(--line);
   background: var(--tile);
   font: 500 11px/1.4 var(--mono);
   color: var(--muted);
+}
+@container (max-width: 760px) {
+  .mc-app {
+    font-size: 13px;
+  }
+  .mc-chip.mc-z,
+  .mc-bot text {
+    display: none;
+  }
+  .mc-site {
+    font-size: 10px;
+    width: auto;
+    height: auto;
+    padding: 0.5em 0.9em;
+  }
+  .mc-views {
+    font-size: 11px;
+  }
+  .mc-panel,
+  .mc-status {
+    position: static;
+    width: auto;
+    max-width: none;
+    border-radius: 0;
+    border-width: 1px 0 0;
+  }
+  .mc-panel {
+    padding: 16px;
+  }
+  .mc-status {
+    flex-wrap: wrap;
+    white-space: normal;
+    padding: 10px 16px;
+  }
+  .mc-figs {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .mc-hrs {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mc-approve {
+    animation: none;
+  }
+  .mc-bar-track i {
+    transition: none;
+  }
 }
 .shot-tabs li {
   padding: 0;
