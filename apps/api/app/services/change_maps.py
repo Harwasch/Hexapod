@@ -37,16 +37,13 @@ refuses what it cannot compare honestly, each with a code:
   2^22 cells (2048 x 2048, the pipeline's own ceiling: refused before it is fetched), or an
   epoch's confidence grid is coarser than its surface (they must be one plane).
 
-**Each epoch's `u`** is the larger of its uncertainty from the site frame (its confidence
-grid's `alignmentCap.uncertaintyM`: 0 for the epoch that made the frame) and its
-alignment's own claim (`alignment.uncertaintyM`, `UNRECORDED_UNCERTAINTY_M` when it states
-none). A `survey` epoch's claim is centimetres; a `coarse` one's -- a phone, a drone
-without RTK evidence, anything aligned into a coarse reference -- is metres, so a pair
-with a coarse epoch claims no change under metres however well it was aligned visually
-(Harrison's rule: a phone epoch is never presented as survey grade) -- and never under
-`COARSE_FLOOR_M`, 1 m, whatever it claims: a survey claimed without its evidence is recorded
-coarse with its centimetre claim kept, and a phone may claim 3 cm. The answer states each
-epoch's verdict and both figures.
+**Placement** normally uses the larger of each epoch's frame uncertainty and own
+claim, floored at 1 m for coarse (B5a). For an accepted, measured visual link to the
+other epoch's current run, or two visual links to the same reference run, only the
+recorded frame-relative terms enter (one for a direct pair, two in quadrature for
+siblings), without the coarse floor. This cancels shared absolute placement, never
+promotes an epoch to survey, and adds local slope times horizontal uncertainty to
+these pairs' cell error budgets. Missing, refuted or stale fit records keep B5a.
 
 Every answer says it is derived, not observed, and uncalibrated.
 """
@@ -81,6 +78,7 @@ from app.schemas.change import (
     ChangeLayerRead,
     ChangeLowConfidenceRead,
     ChangeMapRead,
+    ChangeRelativeFitRead,
     ChangeUncertaintyRead,
 )
 from app.schemas.geojson import MultiPolygon
@@ -219,6 +217,68 @@ def _placement(epoch: Epoch, graded: EpochMap) -> _Placement:
     return _Placement(verdict, _uncertainty(epoch, graded), claim_m)
 
 
+def _visual_fit(epoch: Epoch) -> tuple[str, str, float] | None:
+    """Only a measured, accepted visual fit tied to a reference revision.
+
+    Frame-relative values include any inherited frame error, so using them directly
+    is conservative even when the reference is not the frame-defining epoch. Never
+    subtract that inherited variance: the record does not expose its covariance.
+    """
+    alignment = epoch.alignment or {}
+    if alignment.get("method") != "visual" or alignment.get("frameRelativeBasis") not in (
+        "visual",
+        "visual, reference at its absolute uncertainty",
+    ):
+        return None
+    value = alignment.get("frameRelativeUncertaintyM")
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        return None
+    try:
+        reference = str(uuid.UUID(alignment["referenceEpochId"]))
+        job = str(uuid.UUID(alignment["referenceJobId"]))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    return reference, job, float(value)
+
+
+def _pair_placement(
+    before: Epoch,
+    after: Epoch,
+    a: _Placement,
+    b: _Placement,
+) -> tuple[float, float, ChangeRelativeFitRead | None]:
+    """Use one relative term for a direct link, two for a shared reference revision.
+
+    Matching the job as well as epoch prevents a fit to a superseded reference run
+    from silently describing its current surface. Otherwise retain B5a exactly.
+    """
+    va, vb = _visual_fit(before), _visual_fit(after)
+    reference: str
+    basis: Literal["direct", "shared-reference"]
+    if vb is not None and vb[:2] == (str(before.id), str(before.job_id)):
+        ua, ub, reference, basis = 0.0, vb[2], str(before.id), "direct"
+    elif va is not None and va[:2] == (str(after.id), str(after.job_id)):
+        ua, ub, reference, basis = va[2], 0.0, str(after.id), "direct"
+    elif va is not None and vb is not None and va[:2] == vb[:2]:
+        ua, ub, reference, basis = va[2], vb[2], va[0], "shared-reference"
+    else:
+        return a.u_m, b.u_m, None
+    return (
+        ua,
+        ub,
+        ChangeRelativeFitRead(
+            reference_epoch_id=uuid.UUID(reference),
+            uncertainty_m=math.hypot(ua, ub),
+            basis=basis,
+        ),
+    )
+
+
 def _within_ceiling(epoch: Epoch, row: EpochMap) -> None:
     """A 409 for a grid whose finest plane is over `MAX_CHANGE_CELLS` (2^22) cells: no grid
     the pipeline writes, and past what the comparison's memory was measured at."""
@@ -304,7 +364,7 @@ def change(
         _metric(epoch, surface)
         _same_frame(epoch, surface, frame)
     placed_a, placed_b = _placement(before, graded_a), _placement(after, graded_b)
-    ua, ub = placed_a.u_m, placed_b.u_m
+    ua, ub, relative_fit = _pair_placement(before, after, placed_a, placed_b)
     for epoch, row in (
         (before, surface_a),
         (after, surface_b),
@@ -339,6 +399,7 @@ def change(
                 layer=layer,
                 confidence_a=grids[2],
                 confidence_b=grids[3],
+                slope_guard=relative_fit is not None,
             )
             for layer in analysis.LAYERS
         }
@@ -362,6 +423,7 @@ def change(
         native_level=ground.native_level,
         cell_m=ground.cell_m,
         threshold_sigma=analysis.THRESHOLD_SIGMA,
+        relative_fit=relative_fit,
         uncertainty=ChangeUncertaintyRead(
             from_m=ua,
             to_m=ub,

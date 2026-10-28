@@ -563,3 +563,41 @@ def test_a_surface_over_the_cell_ceiling_is_refused_not_compared(
     assert response.status_code == 409, response.text
     assert response.json()["code"] == "surface-unreadable"
     assert "2^22" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_visual_pair_answer_uses_fit_without_promoting_coarse_epochs(
+    api: TestClient,
+    db: Session,
+    storage: S3Storage,
+    tmp_path: Path,
+    reverse: bool,
+) -> None:
+    e1, e2 = two_epochs(
+        db,
+        storage,
+        tmp_path,
+        first_aligned=alignment("coarse", 5, "drone"),
+        aligned=alignment("coarse", 5.1, "drone"),
+    )
+    e2.alignment = {
+        **(e2.alignment or {}),
+        "method": "visual",
+        "referenceEpochId": str(e1.id),
+        "referenceJobId": str(e1.job_id),
+        "frameRelativeUncertaintyM": 0.4,
+        "frameRelativeBasis": "visual",
+    }
+    db.commit()
+    response = get(api, e2, e1) if reverse else get(api, e1, e2)
+    assert response.status_code == 200, response.text
+    read = response.json()
+    assert read["relativeFit"] == {
+        "referenceEpochId": str(e1.id),
+        "uncertaintyM": 0.4,
+        "basis": "direct",
+    }
+    assert read["uncertainty"]["fromVerdict"] == read["uncertainty"]["toVerdict"] == "coarse"
+    expected = (0.4, 0.0) if reverse else (0.0, 0.4)
+    assert (read["uncertainty"]["fromM"], read["uncertainty"]["toM"]) == expected
+    assert 1.6 < read["vegetation"]["minDetectableM"] < 2.0
