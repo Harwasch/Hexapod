@@ -5173,6 +5173,7 @@ export interface components {
              * @constant
              */
             policy: "change-v1";
+            relativeFit: components["schemas"]["ChangeRelativeFitRead"] | null;
             /**
              * Siteid
              * Format: uuid
@@ -5194,13 +5195,35 @@ export interface components {
             vegetation: components["schemas"]["ChangeLayerRead"];
         };
         /**
+         * ChangeRelativeFitRead
+         * @description Measured pair placement; shared absolute GPS error is excluded, not survey grade.
+         *
+         *     Direct: one frame-relative term. Shared reference revision: both terms in quadrature
+         *     (conservative if their recorded frame errors share an earlier alignment).
+         */
+        ChangeRelativeFitRead: {
+            /**
+             * Basis
+             * @enum {string}
+             */
+            basis: "direct" | "shared-reference";
+            /**
+             * Referenceepochid
+             * Format: uuid
+             */
+            referenceEpochId: string;
+            /** Uncertaintym */
+            uncertaintyM: number;
+        };
+        /**
          * ChangeUncertaintyRead
          * @description Each epoch's placement uncertainty `u`, metres, as the threshold takes it: the larger
          *     of its uncertainty from the site frame (`fromFrameM`, its confidence grid's
          *     `alignmentCap.uncertaintyM`: 0 for the epoch that made the frame) and its alignment's
          *     own claim -- so a `coarse` epoch (a phone, a drone without RTK evidence) brings its
-         *     metres, however well it was aligned visually, and never less than 1 m whatever it
-         *     claims. An `unaligned` epoch is refused (409).
+         *     metres, and never less than 1 m whatever it claims. When `relativeFit` is present,
+         *     these are instead the measured relative contributions (0 on a direct reference);
+         *     their quadrature sum is the pair placement, without the coarse floor. An `unaligned` epoch is refused (409).
          *
          *     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
          */
@@ -12849,6 +12872,7 @@ export type SchemaChangeDetectableRead = components['schemas']['ChangeDetectable
 export type SchemaChangeLayerRead = components['schemas']['ChangeLayerRead'];
 export type SchemaChangeLowConfidenceRead = components['schemas']['ChangeLowConfidenceRead'];
 export type SchemaChangeMapRead = components['schemas']['ChangeMapRead'];
+export type SchemaChangeRelativeFitRead = components['schemas']['ChangeRelativeFitRead'];
 export type SchemaChangeUncertaintyRead = components['schemas']['ChangeUncertaintyRead'];
 export type SchemaChartOutput = components['schemas']['ChartOutput'];
 export type SchemaChartSeries = components['schemas']['ChartSeries'];

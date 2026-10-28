@@ -137,6 +137,7 @@ const changeMap = {
   nativeLevel: 2,
   cellM: 1,
   thresholdSigma: 3,
+  relativeFit: null,
   uncertainty: {
     fromM: 0.03,
     toM: 5,
@@ -417,6 +418,24 @@ describe("the drape and its legend", () => {
     // Vegetation is neither keyed nor counted in the ground's legend.
     expect(screen.queryByTestId("change-vegetation")).toBeNull();
     expect(legend).not.toHaveTextContent("47 cells");
+  });
+
+  it("labels a visual pair with its reference date and measured fit", async () => {
+    get.mockResolvedValue(
+      answer({
+        ...changeMap,
+        relativeFit: { referenceEpochId: E1.id, uncertaintyM: 0.4, basis: "direct" },
+      }),
+    );
+    show();
+    await userEvent.click(changeSwitch());
+    await screen.findByTestId("change-drape");
+    expect(screen.getByTestId("change-drape-placement")).toHaveTextContent(
+      "Relative to Mar 1, 2026 (visual fit ±0.40 m). Not survey-grade: survey · coarse.",
+    );
+    expect(screen.getByTestId("change-drape-placement")).toHaveTextContent(
+      "Local slope raises the threshold at edges.",
+    );
   });
 
   it("draws vegetation apart, behind its own switch, keyed and floored on its own", async () => {

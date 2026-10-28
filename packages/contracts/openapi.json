@@ -4422,6 +4422,16 @@
             "title": "Policy",
             "type": "string"
           },
+          "relativeFit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChangeRelativeFitRead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "siteId": {
             "format": "uuid",
             "title": "Siteid",
@@ -4464,6 +4474,7 @@
           "cellM",
           "thresholdSigma",
           "uncertainty",
+          "relativeFit",
           "ground",
           "vegetation",
           "appearance"
@@ -4471,9 +4482,39 @@
         "title": "ChangeMapRead",
         "type": "object"
       },
+      "ChangeRelativeFitRead": {
+        "additionalProperties": false,
+        "description": "Measured pair placement; shared absolute GPS error is excluded, not survey grade.\n\nDirect: one frame-relative term. Shared reference revision: both terms in quadrature\n(conservative if their recorded frame errors share an earlier alignment).",
+        "properties": {
+          "basis": {
+            "enum": [
+              "direct",
+              "shared-reference"
+            ],
+            "title": "Basis",
+            "type": "string"
+          },
+          "referenceEpochId": {
+            "format": "uuid",
+            "title": "Referenceepochid",
+            "type": "string"
+          },
+          "uncertaintyM": {
+            "title": "Uncertaintym",
+            "type": "number"
+          }
+        },
+        "required": [
+          "referenceEpochId",
+          "uncertaintyM",
+          "basis"
+        ],
+        "title": "ChangeRelativeFitRead",
+        "type": "object"
+      },
       "ChangeUncertaintyRead": {
         "additionalProperties": false,
-        "description": "Each epoch's placement uncertainty `u`, metres, as the threshold takes it: the larger\nof its uncertainty from the site frame (`fromFrameM`, its confidence grid's\n`alignmentCap.uncertaintyM`: 0 for the epoch that made the frame) and its alignment's\nown claim -- so a `coarse` epoch (a phone, a drone without RTK evidence) brings its\nmetres, however well it was aligned visually, and never less than 1 m whatever it\nclaims. An `unaligned` epoch is refused (409).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
+        "description": "Each epoch's placement uncertainty `u`, metres, as the threshold takes it: the larger\nof its uncertainty from the site frame (`fromFrameM`, its confidence grid's\n`alignmentCap.uncertaintyM`: 0 for the epoch that made the frame) and its alignment's\nown claim -- so a `coarse` epoch (a phone, a drone without RTK evidence) brings its\nmetres, and never less than 1 m whatever it claims. When `relativeFit` is present,\nthese are instead the measured relative contributions (0 on a direct reference);\ntheir quadrature sum is the pair placement, without the coarse floor. An `unaligned` epoch is refused (409).\n\nRead model: every field is explicit (no defaults) so the OpenAPI contract marks it required.",
         "properties": {
           "fromFrameM": {
             "title": "Fromframem",
