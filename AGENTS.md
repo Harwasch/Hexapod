@@ -69,3 +69,5 @@ A check already red at merge time still blocks merging. Fix a red run on main fo
 - `/tmp` on the shared dev machine is a small RAM disk with a per-user quota. Set `TMPDIR` to a folder under
   `~/.cache` for pytest and Playwright runs: test databases and browsers fill `/tmp`, and the capture worker
   refuses jobs below 5 GB free.
+- Heavy jobs run only via `heavy <command>`, one per project at a time, at most 10 cores, 20 GB and about an hour on
+  HGeekom; bigger runs, long runs and any GPU or splat training go to the cloud (Modal).
