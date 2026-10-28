@@ -1,6 +1,8 @@
 /** Joint rotation spectra + immutable per-splat bindings. Lab only; all motion simulated. */
 export interface ArticulationNode {
   parent: number;
+  band?: string;
+  stiffness?: number;
   position: [number, number, number];
 }
 export interface ArticulationHeader {
@@ -22,6 +24,7 @@ export interface Articulation {
   /** pivot xyz, axis xyz, Hz, phase, amplitude radians. */
   leaves: Float32Array;
   bindings: Uint32Array;
+  breeze?: BreezeModel;
 }
 export const ARTICULATION_STREAM = "hexapodArticulation";
 export const ARTICULATION_WIDTH = 1024;
@@ -127,7 +130,11 @@ export async function loadArticulation(url: string, signal?: AbortSignal): Promi
   );
   const [motion, leaf, binding] = buffers;
   if (!motion || !leaf || !binding) throw new Error("Missing articulation payload");
-  return decodeArticulation(h, motion, leaf, binding);
+  const a = decodeArticulation(h, motion, leaf, binding);
+  const preset = new URL(url, window.location.href).searchParams.get("breeze");
+  if (preset === "calm" || preset === "breezy" || preset === "windy")
+    a.breeze = prepareBreeze(a, preset);
+  return a;
 }
 /** Reject unmatched tiles rather than applying a scan's binding to unrelated geometry. */
 export function orderedArticulationBinding(
@@ -184,26 +191,33 @@ export function evaluateArticulation(
 ): void {
   const h = a.header,
     k = h.frequenciesHz.length;
-  const cos = h.frequenciesHz.map((f) => Math.cos(2 * Math.PI * f * t)),
-    sin = h.frequenciesHz.map((f) => Math.sin(2 * Math.PI * f * t));
+  const cos = (a.breeze ? [] : h.frequenciesHz).map((f) => Math.cos(2 * Math.PI * f * t)),
+    sin = (a.breeze ? [] : h.frequenciesHz).map((f) => Math.sin(2 * Math.PI * f * t));
   const angle = ((h.referenceBearingDeg - bearing) * Math.PI) / 180,
     ca = Math.cos(angle),
     sa = Math.sin(angle);
+  const leafSin = a.breeze?.frequenciesHz.map((f) => Math.sin(2 * Math.PI * f * t));
+  const leafCos = a.breeze?.frequenciesHz.map((f) => Math.cos(2 * Math.PI * f * t));
   poses.fill(0, 0, 8);
   poses[3] = 1;
   flutter.fill(0, 0, 8);
   flutter[7] = 1;
   for (const [i, node] of h.nodes.entries()) {
     const v: Point = [0, 0, 0];
-    for (let f = 0; f < k; f++)
-      for (let c = 0; c < 3; c++) {
-        const o = (i * k + f) * 6 + c * 2;
-        v[c] =
-          (v[c] ?? 0) +
-          ((a.coefficients[o] ?? 0) * (cos[f] ?? 0) -
-            (a.coefficients[o + 1] ?? 0) * (sin[f] ?? 0)) *
-            strength;
-      }
+    if (a.breeze) {
+      const yaw = breezeAngle(a.breeze, i, t, bearing) * strength;
+      v[0] = yaw * 0.28;
+      v[1] = yaw;
+    } else
+      for (let f = 0; f < k; f++)
+        for (let c = 0; c < 3; c++) {
+          const o = (i * k + f) * 6 + c * 2;
+          v[c] =
+            (v[c] ?? 0) +
+            ((a.coefficients[o] ?? 0) * (cos[f] ?? 0) -
+              (a.coefficients[o + 1] ?? 0) * (sin[f] ?? 0)) *
+              strength;
+        }
     const x = ca * v[0] - sa * v[1],
       y = sa * v[0] + ca * v[1],
       z = v[2],
@@ -228,19 +242,152 @@ export function evaluateArticulation(
     flutter[o] = a.leaves[l] ?? 0;
     flutter[o + 1] = a.leaves[l + 1] ?? 0;
     flutter[o + 2] = a.leaves[l + 2] ?? 0;
+    const basis = a.breeze?.flutter;
+    const fi = basis?.[i * 3] ?? 0;
+    const wave = basis
+      ? (leafSin?.[fi] ?? 0) * (basis[i * 3 + 1] ?? 0) +
+        (leafCos?.[fi] ?? 0) * (basis[i * 3 + 2] ?? 0)
+      : Math.sin(2 * Math.PI * (a.leaves[l + 6] ?? 0) * t + (a.leaves[l + 7] ?? 0));
     const half =
       0.5 *
       strength *
+      (a.breeze ? BREEZE_PRESETS[a.breeze.preset].leaf : 1) *
       (a.leaves[l + 8] ?? 0) *
-      Math.sin(2 * Math.PI * (a.leaves[l + 6] ?? 0) * t + (a.leaves[l + 7] ?? 0));
-    const s = Math.sin(half),
+      wave;
+    // At |half| <= .15 (all presets through strength 3), Taylor remainders are
+    // <= .15^7/5040 for sin and .15^6/720 for cos. No machine-calibrated tolerance.
+    const fast = a.breeze && Math.abs(half) <= 0.15;
+    const half2 = half * half;
+    const s = fast ? half * (1 - half2 / 6 + (half2 * half2) / 120) : Math.sin(half),
       x = a.leaves[l + 3] ?? 0,
       y = a.leaves[l + 4] ?? 0;
     flutter[o + 4] = (ca * x - sa * y) * s;
     flutter[o + 5] = (sa * x + ca * y) * s;
     flutter[o + 6] = (a.leaves[l + 5] ?? 0) * s;
-    flutter[o + 7] = Math.cos(half);
+    flutter[o + 7] = fast ? 1 - half2 / 2 + (half2 * half2) / 24 : Math.cos(half);
+    if (a.breeze) {
+      // Compose once per packet, rather than twice per splat in the vertex hook.
+      const po = (a.breeze.owners[i] ?? 0) * 8;
+      const px = poses[po] ?? 0,
+        py = poses[po + 1] ?? 0,
+        pz = poses[po + 2] ?? 0,
+        pw = poses[po + 3] ?? 1;
+      const lx = flutter[o + 4] ?? 0,
+        ly = flutter[o + 5] ?? 0,
+        lz = flutter[o + 6] ?? 0,
+        lw = flutter[o + 7] ?? 1;
+      const qx = pw * lx + px * lw + py * lz - pz * ly,
+        qy = pw * ly - px * lz + py * lw + pz * lx,
+        qz = pw * lz + px * ly - py * lx + pz * lw,
+        qw = pw * lw - px * lx - py * ly - pz * lz;
+      const vx = a.leaves[l] ?? 0,
+        vy = a.leaves[l + 1] ?? 0,
+        vz = a.leaves[l + 2] ?? 0;
+      const ax = 2 * (py * vz - pz * vy),
+        ay = 2 * (pz * vx - px * vz),
+        az = 2 * (px * vy - py * vx);
+      const bx = 2 * (qy * vz - qz * vy),
+        by = 2 * (qz * vx - qx * vz),
+        bz = 2 * (qx * vy - qy * vx);
+      flutter[o] = pw * ax + py * az - pz * ay - qw * bx - qy * bz + qz * by + (poses[po + 4] ?? 0);
+      flutter[o + 1] =
+        pw * ay + pz * ax - px * az - qw * by - qz * bx + qx * bz + (poses[po + 5] ?? 0);
+      flutter[o + 2] =
+        pw * az + px * ay - py * ax - qw * bz - qx * by + qy * bx + (poses[po + 6] ?? 0);
+      flutter[o + 4] = qx;
+      flutter[o + 5] = qy;
+      flutter[o + 6] = qz;
+      flutter[o + 7] = qw;
+    }
   }
+}
+
+/** Literature bands and the explicit artistic amplitude limits are documented in LIVING_SPECTRA. */
+export const BREEZE_PRESETS = {
+  calm: { angle: 0.006, leaf: 0.35, speed: 1.5 },
+  breezy: { angle: 0.014, leaf: 0.65, speed: 2.5 },
+  windy: { angle: 0.028, leaf: 1, speed: 4 },
+} as const;
+export type BreezePreset = keyof typeof BREEZE_PRESETS;
+export interface BreezeModel {
+  preset: BreezePreset;
+  /** Prepared once: local angular cap, modal Hz, phase, xy position. */
+  branches: Float64Array;
+  owners: Uint32Array;
+  frequenciesHz: number[];
+  /** Frequency index, cos phase, sin phase, prepared once. */
+  flutter: Float64Array;
+}
+export function prepareBreeze(a: Articulation, preset: BreezePreset): BreezeModel {
+  const branches = new Float64Array(a.header.nodes.length * 5);
+  const order: number[] = [];
+  for (const [i, n] of a.header.nodes.entries()) {
+    const parent = a.header.nodes[n.parent];
+    const depth = parent ? (order[n.parent] ?? 0) + (n.band === "trunk" ? 0 : 1) : 0;
+    order[i] = depth;
+    const length = parent
+      ? Math.hypot(...n.position.map((v, c) => v - (parent.position[c] ?? 0)))
+      : 0;
+    // The rig stiffness is a geometric prior, not measured EI. Bound its response.
+    const compliance =
+      Math.min(1, Math.max(0.15, length / 0.7)) / Math.sqrt(Math.max(1, n.stiffness ?? 1));
+    const cap =
+      !parent || n.band === "trunk"
+        ? 0
+        : (BREEZE_PRESETS[preset].angle * compliance) / (1 + 0.45 * Math.max(0, depth - 1));
+    const seed = ((i + 1) * 0.61803398875) % 1;
+    branches.set(
+      [
+        cap,
+        Math.min(1.1, 0.24 + 0.11 * depth + 0.12 * seed),
+        seed * 2 * Math.PI,
+        n.position[0],
+        n.position[1],
+      ],
+      i * 5,
+    );
+  }
+  const owners = new Uint32Array(a.header.leafCount);
+  for (let j = 0; j < a.bindings.length; j += 4) {
+    const packet = a.bindings[j + 3] ?? 0;
+    if (packet > 0) owners[packet - 1] = a.bindings[j] ?? 0;
+  }
+  const frequenciesHz: number[] = [];
+  const flutter = new Float64Array(a.header.leafCount * 3);
+  for (let i = 0; i < a.header.leafCount; i++) {
+    const f = a.leaves[i * 9 + 6] ?? 0;
+    let index = frequenciesHz.indexOf(f);
+    if (index < 0) {
+      index = frequenciesHz.length;
+      frequenciesHz.push(f);
+    }
+    const phase = a.leaves[i * 9 + 7] ?? 0;
+    flutter.set([index, Math.cos(phase), Math.sin(phase)], i * 3);
+  }
+  return { preset, branches, owners, frequenciesHz, flutter };
+}
+/** Continuous bounded forcing: shared 20/31 s gusts, spatial delay, small independent resonance. */
+export function breezeAngle(model: BreezeModel, node: number, t: number, bearing = 90): number {
+  const o = node * 5,
+    b = model.branches;
+  const cap = b[o] ?? 0;
+  if (cap === 0) return 0;
+  const phase = b[o + 2] ?? 0;
+  const tau =
+    t -
+    ((b[o + 3] ?? 0) * Math.sin((bearing * Math.PI) / 180) +
+      (b[o + 4] ?? 0) * Math.cos((bearing * Math.PI) / 180)) /
+      BREEZE_PRESETS[model.preset].speed;
+  const gust =
+    0.55 +
+    0.25 * Math.sin((2 * Math.PI * tau) / 20) +
+    0.2 * Math.sin((2 * Math.PI * tau) / 31 + 1.7);
+  return (
+    cap *
+    (0.65 * gust +
+      0.25 * Math.sin(2 * Math.PI * (b[o + 1] ?? 0) * t + phase) +
+      0.1 * Math.sin(2 * Math.PI * 0.19 * tau + phase * 0.15))
+  );
 }
 
 /** Cached bindings are copied through the work buffer. No colour/branch search in this hook. */
@@ -268,6 +415,11 @@ void livingArtCenter(inout vec3 p) {
     uvec4 b=loadHexapodArticulation();
     if(b.x==0u) return;
     livingArtActive=1.0;
+    if (b.w>0u && uLivingVeg.z>0.5) {
+        livingArtRotation=livingArtRead(uArticulationLeaves,b.w*2u+1u);
+        p=livingArtRotate(livingArtRotation,p)+livingArtRead(uArticulationLeaves,b.w*2u).xyz;
+        return;
+    }
     vec4 q=livingArtRead(uArticulationPoses,b.x*2u);
     vec3 shift=livingArtRead(uArticulationPoses,b.x*2u+1u).xyz;
     if(b.z<65535u) {

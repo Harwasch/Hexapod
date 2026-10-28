@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Simulated breeze · GPU bench</title>
+    <style>
+      body {
+        margin: 0;
+        font: 15px system-ui;
+        background: #152330;
+        color: #eef3f8;
+      }
+      #viewer {
+        width: 1920px;
+        height: 1080px;
+        position: relative;
+      }
+      #viewer .cesium-widget {
+        width: 100%;
+        height: 100%;
+      }
+      #viewer canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      .cesium-widget-credits {
+        display: none !important;
+      }
+      main {
+        padding: 16px;
+        max-width: 1100px;
+      }
+      button,
+      select {
+        padding: 8px;
+        margin: 6px;
+      }
+      pre {
+        white-space: pre-wrap;
+      }
+      table {
+        border-collapse: collapse;
+      }
+      td,
+      th {
+        padding: 8px;
+        border: 1px solid #678;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Simulated breeze · 1920 × 1080</h1>
+      <p>
+        Minnetonka depth-two LOD, same 687k splats as round 3. Fixed 1920 × 1080 drawing buffer,
+        device pixel ratio 1. Keep this tab foreground. Times include CPU pose evaluation, upload
+        and a one-pixel readPixels fence; they exclude display refresh waits. +1 ms is a laptop
+        acceptance target, not a verified claim.
+      </p>
+      <button id="run" disabled>Run interleaved benchmark</button
+      ><button id="download" disabled>Download JSON</button>
+      <label
+        >Preview
+        <select id="preset">
+          <option>calm</option>
+          <option>breezy</option>
+          <option>windy</option>
+          <option>off</option>
+        </select></label
+      >
+      <label><input type="checkbox" id="captured" /> As captured</label>
+      <p id="status">Loading…</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Arm</th>
+            <th>Median ms</th>
+            <th>p95 ms</th>
+            <th>Paired added ms</th>
+            <th>Ratio</th>
+          </tr>
+        </thead>
+        <tbody id="results"></tbody>
+      </table>
+      <pre id="info"></pre>
+    </main>
+    <div id="viewer"></div>
+    <script type="module" src="/src/dev/livingBreezeBench.ts"></script>
+  </body>
+</html>

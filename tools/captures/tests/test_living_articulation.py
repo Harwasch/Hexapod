@@ -98,3 +98,14 @@ def test_baked_files_roundtrip_and_bind_actual_tile_identity(tmp_path):
     leaves = np.fromfile(out / "leaves.bin", dtype="<f4").reshape(-1, 9)
     assert len(leaves) == loaded["leafCount"]
     assert ((leaves[:, 6] >= 2) & (leaves[:, 6] <= 6)).all()
+
+
+def test_breeze_pins_trunk_and_ground_before_flutter():
+    from living_articulation import pin_static
+
+    nodes = [dict(NODES[0]), dict(NODES[1])]
+    points = np.array([[0, 0, 2], [1, 0, -0.35], [1, 0, 1]])
+    binding = np.array([[1, 0, 65535, 9], [2, 1, 65535, 9], [2, 1, 65535, 9]], dtype="<u4")
+    pin_static(binding, points, nodes, -0.35)
+    np.testing.assert_array_equal(binding[:2], 0)
+    np.testing.assert_array_equal(binding[2], [2, 1, 65535, 9])

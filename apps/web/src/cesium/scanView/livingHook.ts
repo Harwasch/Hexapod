@@ -320,6 +320,7 @@ export interface LivingSettings {
   sunDir: readonly [number, number, number];
   sunUp: number;
   flatGround: number;
+  articulationUrl?: string;
 }
 
 const RAD = Math.PI / 180;
@@ -345,7 +346,12 @@ export function packLiving(u: LivingUniforms, s: LivingSettings, ground: GroundG
   u.waterBox.set(s.waterBox);
   u.sun.set([s.sunDir[0], s.sunDir[1], s.sunDir[2], s.sunUp]);
   u.groundGrid.set(ground ? [ground.x0, ground.y0, ground.cell, ground.cells] : [0, 0, 1, 0]);
-  u.veg.set([s.greenness, 0.03, 0, s.flatGround]);
+  u.veg.set([
+    s.greenness,
+    0.03,
+    /[?&]breeze=(calm|breezy|windy)(?:&|$)/.test(s.articulationUrl ?? "") ? 1 : 0,
+    s.flatGround,
+  ]);
 }
 
 /** The direction to a sun at `azimuthDeg` (from north, clockwise) and `elevationDeg`. */

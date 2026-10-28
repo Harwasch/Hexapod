@@ -232,7 +232,16 @@ def spool_crop(source: Path, out: Path) -> Path:
     return destination.parent
 
 
-def bake(source: Path, out: Path, grass: bool = False, ground: float = -0.35) -> dict:
+def pin_static(binding: np.ndarray, points: np.ndarray, nodes: list[dict], ground: float):
+    """Bake exact zero bindings for ground and trunk-owned splats, before leaf classification."""
+    trunk = np.array([n.get("band") in ("trunk", "root") for n in nodes])
+    static = (points[:, 2] <= ground + 0.035) | trunk[np.maximum(binding[:, 0], 1) - 1]
+    binding[static] = 0
+
+
+def bake(
+    source: Path, out: Path, grass: bool = False, ground: float = -0.35, breeze: bool = False
+) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     folder = source / "splat"
     tileset = json.loads((folder / "tileset.json").read_text())
@@ -263,18 +272,22 @@ def bake(source: Path, out: Path, grass: bool = False, ground: float = -0.35) ->
         for uri in uris:
             columns, points = tile_data(folder, uri, offsets)
             binding = segment_binding(points, nodes)
+            if breeze:
+                pin_static(binding, points, nodes, ground)
             green = vegetation(columns, points, ground if grass else None)
             if grass:
                 binding[~green] = 0
             scales = np.exp(np.stack([columns[f"scale_{i}"] for i in range(3)], axis=1))
             small = (
                 green
+                & (binding[:, 0] > 0)
                 & (scales.max(axis=1) < 0.065)
                 & (points[:, 2] > (ground + 0.08 if grass else 0.8))
             )
             # Tiny spatial packets approximate a leaf, not a semantic leaf segmentation.
             # Membership includes branch ID; neighbouring branches never share flutter.
-            cells = np.floor(points / 0.035).astype(int)
+            packet_m = 0.12 if breeze else 0.035
+            cells = np.floor(points / packet_m).astype(int)
             keys = np.column_stack([binding[:, 0], cells])
             unique, reverse = np.unique(keys[small], axis=0, return_inverse=True)
             local_ids = []
@@ -283,7 +296,7 @@ def bake(source: Path, out: Path, grass: bool = False, ground: float = -0.35) ->
                 if key_tuple not in cluster_ids:
                     index = len(leaves)
                     cluster_ids[key_tuple] = index + 1
-                    pivot = (key[1:] + 0.5) * 0.035
+                    pivot = (key[1:] + 0.5) * packet_m
                     rng = np.random.default_rng(
                         sum((int(v) & 0xFFFF) * p for v, p in zip(key, [3, 5, 7, 11], strict=True))
                     )
@@ -293,7 +306,7 @@ def bake(source: Path, out: Path, grass: bool = False, ground: float = -0.35) ->
                         [
                             *pivot,
                             *axis,
-                            float(rng.integers(20, 61)) / 10,
+                            float(rng.integers(30, 51) if breeze else rng.integers(20, 61)) / 10,
                             float(rng.uniform(0, 2 * np.pi)),
                             float(rng.uniform(0.035, 0.10)),
                         ]
@@ -330,7 +343,7 @@ def bake(source: Path, out: Path, grass: bool = False, ground: float = -0.35) ->
         "metrics": {
             "rotationRmsErrorRad": error,
             "movingSplatsAcrossLods": moving_count,
-            "leafPacketM": 0.035,
+            "leafPacketM": 0.12 if breeze else 0.035,
         },
     }
     (out / "articulation.json").write_text(json.dumps(meta, indent=2) + "\n")
@@ -344,6 +357,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("out", type=Path)
+    parser.add_argument("--breeze", action="store_true")
     parser.add_argument("--grass", action="store_true")
     parser.add_argument("--spool-crop", action="store_true")
     parser.add_argument("--ground", type=float, default=-0.35)
@@ -351,4 +365,4 @@ if __name__ == "__main__":
     if args.spool_crop:
         args.source = spool_crop(args.source, args.out)
         args.grass, args.ground = True, 0.29
-    bake(args.source, args.out, args.grass, args.ground)
+    bake(args.source, args.out, args.grass, args.ground, args.breeze)

@@ -5,6 +5,15 @@ import { GlassPanel } from "@twin/ui";
 import { useAsCaptured } from "@/state/asCaptured";
 import { useLivingLab, type LivingMotionArm } from "@/state/livingLab";
 
+function articulationAddress(value: string): URL | null {
+  try {
+    return new URL(value || "/", window.location.href);
+  } catch {
+    // A sidecar URL may be incomplete while the user types it.
+    return null;
+  }
+}
+
 /**
  * The living lab's developer toggle (`?living=1`): water and wind prototypes drawn on the scan
  * under PlayCanvas (state/livingLab.ts). While anything is on it says Simulated, and As
@@ -90,6 +99,29 @@ export function LivingLabPanel() {
               onChange={(e) => lab.set({ spectraUrl: e.target.value })}
             />
             <span role="status">{lab.spectraStatus}</span>
+          </label>
+        )}
+        {lab.motion === "articulated" && (
+          <label className="living-lab__row">
+            Simulated breeze
+            <select
+              aria-label="Breeze preset"
+              value={
+                articulationAddress(lab.articulationUrl)?.searchParams.get("breeze") ?? "round3"
+              }
+              onChange={(e) => {
+                const url = articulationAddress(lab.articulationUrl);
+                if (!url) return;
+                if (e.target.value === "round3") url.searchParams.delete("breeze");
+                else url.searchParams.set("breeze", e.target.value);
+                lab.set({ articulationUrl: url.toString() });
+              }}
+            >
+              <option value="round3">Round 3 reference</option>
+              <option value="calm">Calm</option>
+              <option value="breezy">Breezy</option>
+              <option value="windy">Windy</option>
+            </select>
           </label>
         )}
         {lab.motion === "articulated" && (

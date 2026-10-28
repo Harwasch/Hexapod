@@ -71,6 +71,12 @@ createServer(async (req, res) => {
       });
       await writeFile(url.searchParams.get("path"), Buffer.from(png, "base64"));
       out = "saved";
+    } else if (url.pathname === "/download") {
+      const pending = page.waitForEvent("download");
+      await page.locator("#download").click();
+      const download = await pending;
+      await download.saveAs(url.searchParams.get("path"));
+      out = download.suggestedFilename();
     } else if (url.pathname === "/shot") {
       await page.screenshot({
         path: url.searchParams.get("path"),
