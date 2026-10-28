@@ -28,6 +28,8 @@ import { resolve } from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
 
+import { API_RETRY_BUDGET_MS } from "../src/api/coldStart";
+
 interface Measure {
   coverage: number;
   amber: number;
@@ -555,13 +557,19 @@ test("search by meaning lists an object no tag names, and falls back to tags wit
   // A deployment without the encoder: the same panel, by tags alone.
   encoder = "down";
   await search.fill("crate");
-  await expect(panel.getByTestId("instance-count")).toHaveText("No objects match");
+  // A 503 may be a sleeping Fly machine: tags-only fallback follows the retry budget.
+  await expect(panel.getByTestId("instance-count")).toHaveText("No objects match", {
+    timeout: API_RETRY_BUDGET_MS + 15_000,
+  });
   await expect(panel.getByTestId("instance-by-meaning")).toHaveCount(0);
   await search.fill("conifer");
   await expect(panel.getByTestId("instance-count")).toHaveText("1 match");
   await expect(panel.getByTestId("instance-by-meaning")).toHaveCount(0);
   // Backed off after the 503: not asked again on every keystroke.
-  expect(asked).toEqual(["spool", "crate"]);
+  // Transport retries repeat "crate"; after fallback, editing to "conifer" sends no request.
+  expect(asked[0]).toBe("spool");
+  expect(asked.slice(1).length).toBeGreaterThan(0);
+  expect(asked.slice(1).every((text) => text === "crate")).toBe(true);
 
   test.info().annotations.push({
     type: "measures",

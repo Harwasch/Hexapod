@@ -1,5 +1,7 @@
 import type { Page } from "@playwright/test";
 
+import { API_RETRY_BUDGET_MS } from "../src/api/coldStart";
+
 import { expect, mockApi, test, type CaptureMockState, type MockOptions } from "./fixtures";
 
 /** Boots the app with the capture mock configured, without the shared `app` fixture. */
@@ -334,9 +336,15 @@ test.describe("the Captures panel", () => {
   });
 
   test("with the API offline the drop zone says so and refuses files", async ({ page }) => {
+    test.setTimeout(API_RETRY_BUDGET_MS + 90_000);
     await boot(page, { apiDown: true });
     await openPanel(page);
-    await expect(page.getByTestId("captures-offline")).toBeVisible();
+    await expect(page.getByText(/Waking the server/)).toBeVisible();
+    // A failed read waits out Fly's cold-start budget before declaring the API offline.
+    await expect(page.getByTestId("captures-offline")).toBeVisible({
+      timeout: API_RETRY_BUDGET_MS + 15_000,
+    });
+    await expect(page.getByText(/Waking the server/)).toHaveCount(0);
     await expect(page.getByTestId("capture-dropzone")).toHaveClass(/dropzone--disabled/);
     await expect(page.getByTestId("capture-file-input")).toBeDisabled();
   });

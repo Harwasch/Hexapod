@@ -7,3 +7,9 @@ overrides:
   # GHSA-68fv-2mgg-jv7q (high): source-map-js before 1.2.2, through jsdom > css-tree and
   # postcss. Drop once both pull 1.2.2 or later on their own.
   source-map-js: ^1.2.2
+  # GHSA dompurify <=3.4.16 (critical/high): @cesium/engine asks ^3.4.14; Cesium stays at 26.3.0.
+  "@cesium/engine>dompurify": ^3.4.17
+  # zod <4.6.6 (high, memory exhaustion), through eslint-plugin-react-hooks only.
+  "eslint-plugin-react-hooks>zod": ^4.6.6
+  # undici 8.0.0-8.12.1 (four highs), through jsdom in the web unit tests only.
+  "jsdom>undici": ^8.12.2
