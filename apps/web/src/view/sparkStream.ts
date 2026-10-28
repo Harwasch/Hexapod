@@ -7,8 +7,8 @@
 import { SplatFileType, SplatMesh } from "@sparkjsdev/spark";
 import * as THREE from "three";
 
-import { maxShDegree } from "@/cesium/scanView/quality";
 import { isHandheld } from "@/lib/detail";
+import { maxShDegree } from "@/lib/shDegree";
 
 import { spzFromGlb } from "./glb";
 import { TileStreamer, type View } from "./stream";

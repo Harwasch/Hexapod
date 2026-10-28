@@ -69,14 +69,5 @@ export function splatMinPixelSize(pixelRatio: number, farView = false): number {
   return farView ? 0 : MIN_SPLAT_CSS_PX * pixelRatio;
 }
 
-/**
- * Spherical-harmonic bands a tile keeps in a dedicated renderer: all three on a desktop, the
- * first on a phone or tablet. Each band costs memory on every splat (degree 3 is 45 floats, 180
- * bytes a splat, more than everything else together) and shading work on every pixel; a
- * phone's memory and fill rate are a fraction of a desktop's, and band 1 keeps most of the
- * view-dependent shine. Tiles carry none today; the pipeline may soon write degree 1 to 3.
- */
-export const MAX_SH_DEGREE = { desktop: 3, handheld: 1 } as const;
-export function maxShDegree(handheld: boolean): number {
-  return handheld ? MAX_SH_DEGREE.handheld : MAX_SH_DEGREE.desktop;
-}
+/** The SH band cap lives in `lib/shDegree.ts`, which the Cesium-free scan gallery shares. */
+export { MAX_SH_DEGREE, maxShDegree } from "@/lib/shDegree";
