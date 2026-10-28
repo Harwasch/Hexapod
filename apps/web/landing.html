@@ -205,6 +205,64 @@
         </nav>
       </section>
 
+      <section class="mission" id="mission" aria-labelledby="mission-h">
+        <div class="mission-pin">
+          <div
+            class="iso stage mission-stage"
+            style="
+              --anatomy-card: var(--stage);
+              --anatomy-page: var(--stage);
+              --anatomy-lit: var(--glit);
+            "
+          >
+            <canvas
+              class="gl"
+              aria-label="Simulation: one robot crew's job on a 160 ha ranch, from planning to the work itself. It moves as you scroll."
+            ></canvas>
+          </div>
+          <div class="shade" aria-hidden="true"></div>
+          <div class="mission-callout" aria-hidden="true"><span></span></div>
+          <div class="in mission-copy">
+            <p class="eyebrow">One job, start to finish</p>
+            <h2 id="mission-h">From a map to finished work</h2>
+            <ol class="mission-steps">
+              <li data-stage="plan" aria-current="step">
+                <button type="button"><em>01</em><b>Plan</b></button>
+                <p>
+                  Find your land in Mission Control, mark the boundary, then pick the hub site and
+                  the work zone.
+                </p>
+              </li>
+              <li data-stage="deploy">
+                <button type="button"><em>02</em><b>Deploy</b></button>
+                <p>
+                  The hub is set down on a gravel pad: a 20 ft container with solar, Starlink, a
+                  radio mast, compute and the robot fleet inside.
+                </p>
+              </li>
+              <li data-stage="scan">
+                <button type="button"><em>03</em><b>Scan</b></button>
+                <p>
+                  The VTOL maps the parcel from 120 m, the quadcopter details the creek from 30 m,
+                  and a carrier lidar-scans under the oaks.
+                </p>
+              </li>
+              <li data-stage="operate">
+                <button type="button"><em>04</em><b>Operate</b></button>
+                <p>
+                  Hexapods pull the broom the scan found and plant oaks in its place; the carrier
+                  hauls; the quadcopter watches the cell.
+                </p>
+              </li>
+            </ol>
+          </div>
+          <p class="mission-status">
+            <em>Simulated</em><b data-ms="stage">01 Plan</b><span data-ms="facts"></span>
+          </p>
+          <div class="mission-rail" aria-hidden="true"><i data-ms="rail"></i></div>
+        </div>
+      </section>
+
       <section class="band" id="fleet">
         <div class="in">
           <div class="head">

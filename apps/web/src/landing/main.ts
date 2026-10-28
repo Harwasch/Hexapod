@@ -21,6 +21,7 @@ import {
 import { startFinder } from "./finder";
 import { lookById, themed } from "./looks";
 import { mountMissionControl } from "./mc";
+import { mountMission } from "./mission";
 import type * as SceneModule from "./scene.js";
 import type { Hero, HeroLabel, HeroStop, HeroZone } from "./scene.js";
 
@@ -335,7 +336,12 @@ function heroFallback(reason: unknown) {
   heroEl.dataset.fallback = "";
   heroCanvas.hidden = true;
   heroEl.dataset.scene = "fallback";
+  mission.fallback();
 }
+
+// ── one job, start to finish: a crew's whole mission, scrubbed by scroll (mission.ts) ──
+const missionEl = $("#mission", HTMLElement);
+const mission = mountMission(missionEl);
 
 /** The look the 3D scenes draw in (looks.ts): `?look=<id>`, or the line drawing. */
 const params = new URLSearchParams(window.location.search);
@@ -344,7 +350,7 @@ heroEl.dataset.look = look.id;
 /** The look's ground behind the hero copy and the fleet cards, for the theme in force. */
 function paintStage() {
   const stage = (isDark() ? look.dark : look.light).stage;
-  for (const el of [heroEl, $(".fleet", HTMLElement)])
+  for (const el of [heroEl, missionEl, $(".fleet", HTMLElement)])
     if (stage) el.style.setProperty("--stage", stage);
     else el.style.removeProperty("--stage");
 }
@@ -408,6 +414,34 @@ async function startScenes() {
   heroEl.dataset.scene = "live";
   const live = hero;
   setInterval(() => followCamera(live), 250);
+
+  // The mission: its scene builds once the section comes near the viewport.
+  new IntersectionObserver(
+    (entries, observer) => {
+      if (!entries.some((e) => e.isIntersecting)) return;
+      observer.disconnect();
+      const canvas = $("#mission canvas.gl", HTMLCanvasElement);
+      try {
+        scene.startMissionScene({
+          canvas,
+          themeEl: $(".mission-stage", HTMLElement),
+          still,
+          maxPixels: heroBudget,
+          progress: mission.progress,
+          zoom: (W) => (W < 700 ? 0.7 : W < 1100 ? 0.88 : 1),
+          shift: (W) => (W >= 980 ? { x: 0.17 } : { y: 0.14 }),
+          onFrame: mission.onFrame,
+          look: themed(look),
+        });
+        canvas.classList.add("on");
+        missionEl.dataset.scene = "live";
+      } catch (error) {
+        console.warn("landing: the mission scene could not start", error);
+        mission.fallback();
+      }
+    },
+    { rootMargin: "600px 0px" },
+  ).observe(missionEl);
 
   // Fleet cards: their turntables start once the fleet section comes near the viewport.
   const fleet = $(".fleet", HTMLElement);

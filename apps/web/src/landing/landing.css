@@ -775,6 +775,258 @@ abbr {
   font: 700 18px/1.2 var(--body);
 }
 /*
+ * One job, start to finish (mission.ts): a tall section whose stage stays pinned while the
+ * reader scrolls through it; the scroll picks the moment of the mission the scene draws.
+ */
+.mission {
+  position: relative;
+  height: 520vh;
+  background: var(--stage);
+}
+.mission-pin {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  height: 100svh;
+  min-height: 560px;
+  overflow: hidden;
+}
+.mission .gl {
+  cursor: default;
+}
+.mission-copy {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-46%);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  pointer-events: none;
+}
+.mission-copy > * {
+  max-width: 420px;
+  pointer-events: auto;
+}
+.mission-copy h2 {
+  font-size: clamp(30px, 3.4vw, 50px);
+  line-height: 1;
+}
+.mission-steps {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mission-steps li {
+  border-top: 1px solid var(--line);
+  padding: 12px 0;
+}
+.mission-steps button {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.mission-steps em {
+  font: 500 12px/1 var(--mono);
+  font-style: normal;
+  letter-spacing: 0.1em;
+}
+.mission-steps b {
+  font: 700 19px/1.2 var(--body);
+}
+.mission-steps p {
+  max-height: 0;
+  overflow: hidden;
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+  opacity: 0;
+  transition:
+    max-height 0.4s var(--anatomy-ease),
+    opacity 0.3s ease,
+    margin 0.4s var(--anatomy-ease);
+}
+.mission-steps li[aria-current="step"] button {
+  color: var(--ink);
+}
+.mission-steps li[aria-current="step"] em {
+  color: var(--accent);
+}
+.mission-steps li[aria-current="step"] p {
+  max-height: 9em;
+  margin-top: 8px;
+  opacity: 1;
+}
+.mission-status {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 18px;
+  margin: 0 auto;
+  max-width: 1280px;
+  padding: 0 max(24px, env(safe-area-inset-left, 0px));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  font: 500 12px/1.4 var(--mono);
+  color: var(--text);
+  pointer-events: none;
+}
+.mission-status em {
+  padding: 2px 8px;
+  border: 1px solid var(--line2);
+  border-radius: 999px;
+  font-style: normal;
+  color: var(--muted);
+}
+.mission-status b {
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.mission-status [data-ms="facts"] {
+  display: contents;
+}
+.mission-status i {
+  font-style: normal;
+  color: var(--muted);
+}
+.mission-rail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--line);
+}
+.mission-rail i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transform: scaleX(0);
+  transform-origin: left;
+}
+.mission-callout {
+  position: absolute;
+  left: 0;
+  top: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+.mission-callout::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: -5px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--glit);
+  background: var(--stage);
+}
+.mission-callout span {
+  position: absolute;
+  left: 18px;
+  bottom: 14px;
+  padding: 6px 10px;
+  border: 1px solid var(--line2);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--tile) 92%, transparent);
+  color: var(--ink);
+  font: 600 13px/1.25 var(--body);
+  white-space: nowrap;
+}
+.mission-callout span::before {
+  content: "";
+  position: absolute;
+  left: -14px;
+  bottom: -10px;
+  width: 14px;
+  height: 10px;
+  border-left: 1px solid var(--glit);
+  border-top: 1px solid var(--glit);
+  transform: skewX(-45deg);
+  transform-origin: bottom left;
+}
+.mission-callout[data-side="left"] span {
+  left: auto;
+  right: 18px;
+}
+.mission-callout[data-side="left"] span::before {
+  display: none;
+}
+.mission[data-scene="fallback"] {
+  height: auto;
+}
+.mission[data-scene="fallback"] .mission-pin {
+  position: static;
+  height: auto;
+  min-height: 0;
+  padding: 96px 0 72px;
+}
+.mission[data-scene="fallback"] :is(.gl, .shade, .mission-callout, .mission-rail, .mission-status) {
+  display: none;
+}
+.mission[data-scene="fallback"] .mission-copy {
+  position: static;
+  transform: none;
+}
+.mission[data-scene="fallback"] .mission-steps p {
+  max-height: none;
+  margin-top: 8px;
+  opacity: 1;
+}
+@media (max-width: 700px) {
+  .mission-copy {
+    top: auto;
+    bottom: 54px;
+    transform: none;
+    gap: 8px;
+  }
+  .mission-copy h2 {
+    font-size: 28px;
+  }
+  .mission-steps {
+    margin-top: 6px;
+  }
+  .mission-steps li {
+    padding: 8px 0;
+  }
+  .mission-steps li:not([aria-current="step"]) {
+    display: none;
+  }
+  .mission[data-scene="fallback"] .mission-steps li {
+    display: block;
+  }
+  .mission-status {
+    top: 74px;
+    bottom: auto;
+    gap: 4px 12px;
+    font-size: 11px;
+  }
+  .mission-callout span {
+    font-size: 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mission-steps p {
+    transition: none;
+  }
+}
+
+/*
  * Mission Control, live (mc.ts): the app's own panels and chips as HTML over its map view. The
  * app is dark in both page themes, as it is. On a wide frame the panels sit over the map, as in
  * the app; on a narrow one (a phone) they drop below it, at a size that can be read.
