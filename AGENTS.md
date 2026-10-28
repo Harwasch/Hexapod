@@ -71,3 +71,5 @@ A check already red at merge time still blocks merging. Fix a red run on main fo
   refuses jobs below 5 GB free.
 - Heavy jobs run only via `heavy <command>`, one per project at a time, at most 10 cores, 20 GB and about an hour on
   HGeekom; bigger runs, long runs and any GPU or splat training go to the cloud (Modal).
+- Spark keeps sorting for 6–16 s after a scan loads, so e2e draw checks wait for its `settled` flag, and offline-state
+  checks wait out `API_RETRY_BUDGET_MS` (45 s), never a fixed sleep.
