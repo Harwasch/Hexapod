@@ -204,6 +204,21 @@ def test_same_job_reference_retry_falls_back_to_b5a() -> None:
         assert pair(a, b) == (5.0, 5.0, None)
 
 
+def test_three_cell_step_shift_needs_slope_guard() -> None:
+    a, b = flat(), flat()
+    a["dsm"][:, 10:] += 400
+    b["dsm"][:, 7:] += 400
+    found = change.change_planes(
+        surface(a),
+        surface(b),
+        0,
+        0.4,
+        layer="vegetation",
+        slope_guard=True,
+    )
+    assert found.counts()["raised"] == found.counts()["lowered"] == 0
+
+
 def test_shared_reference_retry_invalidates_both_old_fits() -> None:
     ref, a, b = epoch(), epoch(), epoch()
     link(a, ref, 0.3)
