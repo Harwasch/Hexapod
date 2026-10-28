@@ -1,4 +1,9 @@
-import { ARTICULATION_GLSL } from "./livingArticulation";
+import { prepareWeatherWind, type WeatherWind } from "@twin/world";
+import {
+  ARTICULATION_GLSL,
+  weatherArticulationTier,
+  weatherArticulationGround,
+} from "./livingArticulation";
 import { SPECTRA_GLSL } from "./livingSpectra";
 
 /**
@@ -201,6 +206,25 @@ void modifySplatCenter(inout vec3 center) {
             livingWaterW = w;
         }
     }
+    if (uLivingT.z > 4.5) {
+        vec3 c=livingColor().rgb;
+        float exg=(2.0*c.g-c.r-c.b)/(c.r+c.g+c.b+0.001);
+        float veg=uLivingVeg.x < -0.5 ? 1.0 : smoothstep(uLivingVeg.x,uLivingVeg.x+0.08,exg);
+        float h=max(0.0,center.z-livingGroundZ(center.xy));
+        veg*=smoothstep(0.035,0.15,h);
+        vec2 wd=uLivingWind.xy, perp=vec2(-wd.y,wd.x);
+        float a=6.28318530718*(dot(center.xy,wd)-uLivingWind.z*t)/uLivingWaterBox.x;
+        float b=6.28318530718*dot(center.xy,perp)/uLivingWaterBox.y;
+        float wave=0.6*sin(a+0.27*sin(b)+uLivingWaterBox.w)+0.4*sin(1.618*a-0.43*b+1.7+uLivingWaterBox.w);
+        float ratio=log((h+0.3)/0.3)/log(10.3/0.3)*exp(2.0*min(0.0,h/6.0-1.0));
+        float u=max(0.0,uLivingWind.z+uLivingWaterBox.z*wave)*ratio;
+        float load=u*u/sqrt(1.0+u*u/16.0);
+        float angle=0.10*load/(28.0+load);
+        // Smooth height weighting keeps terrain exact; no per-splat CPU work.
+        center.xy+=veg*uLivingT.w*h*angle*(wd+0.14*perp*sin(0.73*a+b+0.9+uLivingWaterBox.w));
+        livingVegW=veg;
+        return;
+    }
     if (uLivingT.z > 3.5) {
         livingArtCenter(center);
         return;
@@ -321,12 +345,18 @@ export interface LivingSettings {
   sunUp: number;
   flatGround: number;
   articulationUrl?: string;
+  weather?: WeatherWind | null;
 }
 
 const RAD = Math.PI / 180;
+let weatherTime = 0;
+export function labWeatherClock(): number {
+  return weatherTime;
+}
 
 /** Fills `u` from `s`. A bearing is clockwise from north: east is +x, north +y. */
 export function packLiving(u: LivingUniforms, s: LivingSettings, ground: GroundGrid | null): void {
+  weatherTime = s.t;
   const arm =
     s.motion === "gust"
       ? 1
@@ -349,9 +379,24 @@ export function packLiving(u: LivingUniforms, s: LivingSettings, ground: GroundG
   u.veg.set([
     s.greenness,
     0.03,
-    /[?&]breeze=(calm|breezy|windy)(?:&|$)/.test(s.articulationUrl ?? "") ? 1 : 0,
-    s.flatGround,
+    /[?&]weather=/.test(s.articulationUrl ?? "")
+      ? weatherArticulationTier(s.articulationUrl ?? "") === "C"
+        ? 1
+        : weatherArticulationTier(s.articulationUrl ?? "") === "A"
+          ? -2
+          : -1
+      : /[?&]breeze=(calm|breezy|windy)(?:&|$)/.test(s.articulationUrl ?? "")
+        ? 1
+        : 0,
+    weatherArticulationGround(s.articulationUrl ?? "") ?? s.flatGround,
   ]);
+  if (s.weather && s.motion === "gust") {
+    const f = prepareWeatherWind(s.weather);
+    u.t[2] = 5;
+    u.t[1] = 0;
+    u.wind.set([f.east, f.north, f.meanMps, s.mask ? 1 : 0]);
+    u.waterBox.set([f.alongM, f.crossM, f.gustMps - f.meanMps, f.phase]);
+  }
 }
 
 /** The direction to a sun at `azimuthDeg` (from north, clockwise) and `elevationDeg`. */

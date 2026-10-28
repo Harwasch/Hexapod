@@ -1,8 +1,21 @@
+import { tierAFromInstances } from "./livingTierA";
+import {
+  prepareWeatherWind,
+  weatherBranch,
+  weatherAngle,
+  sampleWeatherWind,
+  plantWindRatio,
+  type WindField,
+} from "@twin/world";
+import { motionTier, type LivingDetail } from "./livingDetail";
+
 /** Joint rotation spectra + immutable per-splat bindings. Lab only; all motion simulated. */
 export interface ArticulationNode {
   parent: number;
   band?: string;
   stiffness?: number;
+  groundM?: number;
+  canopyM?: number;
   position: [number, number, number];
 }
 export interface ArticulationHeader {
@@ -16,6 +29,8 @@ export interface ArticulationHeader {
   leafBinary: string;
   bindingBinary: string;
   leafCount: number;
+  detail?: LivingDetail;
+  groundM?: number;
   tiles: Record<string, { offset: number; count: number }>;
 }
 export interface Articulation {
@@ -25,6 +40,8 @@ export interface Articulation {
   leaves: Float32Array;
   bindings: Uint32Array;
   breeze?: BreezeModel;
+  weather?: WindField;
+  tier?: "off" | "A" | "B" | "C";
 }
 export const ARTICULATION_STREAM = "hexapodArticulation";
 export const ARTICULATION_WIDTH = 1024;
@@ -44,7 +61,8 @@ export function parseArticulationHeader(value: unknown): ArticulationHeader {
         n.parent < i &&
         Array.isArray(n.position) &&
         n.position.length === 3 &&
-        n.position.every(Number.isFinite),
+        n.position.every(Number.isFinite) &&
+        (n.groundM === undefined || Number.isFinite(n.groundM)),
     ) ||
     !Array.isArray(h.frequenciesHz) ||
     h.frequenciesHz.length < 1 ||
@@ -53,6 +71,7 @@ export function parseArticulationHeader(value: unknown): ArticulationHeader {
       (f, i, a) => Number.isFinite(f) && f >= 0 && (i === 0 || f > (a[i - 1] ?? -1)),
     ) ||
     !Number.isFinite(h.referenceBearingDeg) ||
+    (h.groundM !== undefined && !Number.isFinite(h.groundM)) ||
     !Number.isInteger(h.leafCount) ||
     (h.leafCount ?? -1) < 0 ||
     (h.leafCount ?? 0) > 500_000 ||
@@ -116,24 +135,69 @@ export function decodeArticulation(
   }
   return { header: h, coefficients, leaves, bindings };
 }
+const baseArticulations = new Map<string, Articulation>();
+const weatherGround = new Map<string, number>();
+export function weatherArticulationGround(url: string): number | undefined {
+  return weatherGround.get(url);
+}
+const weatherTiers = new Map<string, Articulation["tier"]>();
+export function weatherArticulationTier(url: string): Articulation["tier"] {
+  return weatherTiers.get(url);
+}
 export async function loadArticulation(url: string, signal?: AbortSignal): Promise<Articulation> {
-  const get = async (at: string) => {
-    const r = await fetch(at, { signal });
-    if (!r.ok) throw new Error(`Articulation HTTP ${String(r.status)}`);
-    return r;
-  };
-  const h = parseArticulationHeader(await (await get(url)).json());
-  const buffers = await Promise.all(
-    [h.motionBinary, h.leafBinary, h.bindingBinary].map(async (name) =>
-      (await get(new URL(name, new URL(url, window.location.href)).toString())).arrayBuffer(),
-    ),
-  );
-  const [motion, leaf, binding] = buffers;
-  if (!motion || !leaf || !binding) throw new Error("Missing articulation payload");
-  const a = decodeArticulation(h, motion, leaf, binding);
-  const preset = new URL(url, window.location.href).searchParams.get("breeze");
+  const address = new URL(url, window.location.href),
+    query = address.searchParams;
+  const base = new URL(address);
+  base.search = "";
+  let raw = baseArticulations.get(base.toString());
+  if (!raw) {
+    const get = async (at: string) => {
+      const r = await fetch(at, { signal });
+      if (!r.ok) throw new Error(`Articulation HTTP ${String(r.status)}`);
+      return r;
+    };
+    if (query.get("tier-a") === "1") {
+      raw = tierAFromInstances(await (await get(base.toString())).json());
+    } else {
+      const h = parseArticulationHeader(await (await get(base.toString())).json());
+      const buffers = await Promise.all(
+        [h.motionBinary, h.leafBinary, h.bindingBinary].map(async (name) =>
+          (await get(new URL(name, base).toString())).arrayBuffer(),
+        ),
+      );
+      const [motion, leaf, binding] = buffers;
+      if (!motion || !leaf || !binding) throw new Error("Missing articulation payload");
+      raw = decodeArticulation(h, motion, leaf, binding);
+    }
+    if (baseArticulations.size >= 2)
+      baseArticulations.delete(baseArticulations.keys().next().value ?? "");
+    baseArticulations.set(base.toString(), raw);
+  }
+  const a: Articulation = { ...raw };
+  const preset = query.get("breeze");
   if (preset === "calm" || preset === "breezy" || preset === "windy")
     a.breeze = prepareBreeze(a, preset);
+  if (query.has("weather")) {
+    const input = JSON.parse(query.get("weather") ?? "null") as Parameters<
+      typeof prepareWeatherWind
+    >[0];
+    if (
+      !input ||
+      ![input.meanMps, input.gustMps, input.directionDeg, input.latitude, input.longitude].every(
+        Number.isFinite,
+      )
+    )
+      throw new Error("Invalid weather wind input");
+    a.weather = prepareWeatherWind(input);
+    a.breeze = prepareBreeze(a, "windy");
+    a.tier = a.header.detail ? motionTier(a.header.detail) : "B";
+    if (weatherTiers.size >= 64) {
+      weatherTiers.clear();
+      weatherGround.clear();
+    }
+    weatherTiers.set(url, a.tier);
+    if (a.header.groundM !== undefined) weatherGround.set(url, a.header.groundM);
+  }
   return a;
 }
 /** Reject unmatched tiles rather than applying a scan's binding to unrelated geometry. */
@@ -193,7 +257,7 @@ export function evaluateArticulation(
     k = h.frequenciesHz.length;
   const cos = (a.breeze ? [] : h.frequenciesHz).map((f) => Math.cos(2 * Math.PI * f * t)),
     sin = (a.breeze ? [] : h.frequenciesHz).map((f) => Math.sin(2 * Math.PI * f * t));
-  const angle = ((h.referenceBearingDeg - bearing) * Math.PI) / 180,
+  const angle = a.weather ? 0 : ((h.referenceBearingDeg - bearing) * Math.PI) / 180,
     ca = Math.cos(angle),
     sa = Math.sin(angle);
   const leafSin = a.breeze?.frequenciesHz.map((f) => Math.sin(2 * Math.PI * f * t));
@@ -204,7 +268,25 @@ export function evaluateArticulation(
   flutter[7] = 1;
   for (const [i, node] of h.nodes.entries()) {
     const v: Point = [0, 0, 0];
-    if (a.breeze) {
+    if (a.weather && a.breeze) {
+      const o = i * 5,
+        b = a.breeze.branches;
+      const response = weatherBranch(
+        a.weather,
+        node.position[0],
+        node.position[1],
+        node.position[2] - (node.groundM ?? 0),
+        t,
+        ((b[o] ?? 0) / BREEZE_PRESETS.windy.angle) *
+          (a.tier === "A" ? Math.min(3, 6 / Math.max(0.15, node.canopyM ?? 6)) : 1),
+        b[o + 1] ?? 0.4,
+        b[o + 2] ?? 0,
+        a.tier === "off",
+        node.canopyM ?? 6,
+      );
+      v[0] = response[0] * strength;
+      v[1] = response[1] * strength;
+    } else if (a.breeze) {
       const yaw = breezeAngle(a.breeze, i, t, bearing) * strength;
       v[0] = yaw * 0.28;
       v[1] = yaw;
@@ -236,6 +318,7 @@ export function evaluateArticulation(
     for (let c = 0; c < 3; c++)
       poses[o + 4 + c] = (parentJoint[c] ?? 0) + (poses[po + 4 + c] ?? 0) - (turned[c] ?? 0);
   }
+  if (a.weather && a.tier !== "C") return;
   for (let i = 0; i < h.leafCount; i++) {
     const l = i * 9,
       o = (i + 1) * 8;
@@ -248,7 +331,14 @@ export function evaluateArticulation(
       ? (leafSin?.[fi] ?? 0) * (basis[i * 3 + 1] ?? 0) +
         (leafCos?.[fi] ?? 0) * (basis[i * 3 + 2] ?? 0)
       : Math.sin(2 * Math.PI * (a.leaves[l + 6] ?? 0) * t + (a.leaves[l + 7] ?? 0));
+    const weatherFlutter = a.weather
+      ? weatherAngle(
+          sampleWeatherWind(a.weather, a.leaves[l] ?? 0, a.leaves[l + 1] ?? 0, t).alongMps *
+            plantWindRatio(a.leaves[l + 2] ?? 0),
+        ) / 0.08
+      : 1;
     const half =
+      weatherFlutter *
       0.5 *
       strength *
       (a.breeze ? BREEZE_PRESETS[a.breeze.preset].leaf : 1) *
@@ -428,14 +518,20 @@ void livingArtCenter(inout vec3 p) {
         q=normalize(mix(dot(q,q2)<0.0?-q2:q2,q,w));
         shift=mix(livingArtRead(uArticulationPoses,b.y*2u+1u).xyz,shift,w);
     }
-    if(b.w>0u) {
+    if(b.w>0u && uLivingVeg.z>=0.0) {
         vec3 pivot=livingArtRead(uArticulationLeaves,b.w*2u).xyz;
         vec4 leaf=livingArtRead(uArticulationLeaves,b.w*2u+1u);
         p=pivot+livingArtRotate(leaf,p-pivot);
         livingArtRotation=livingArtMul(q,leaf);
         livingArtLeaf=1.0;
     } else livingArtRotation=q;
+    vec3 rest=p;
     p=livingArtRotate(q,p)+shift;
+    if(uLivingVeg.z < -1.5) {
+        float weight=smoothstep(0.035,0.15,max(0.0,rest.z-uLivingVeg.w));
+        p=mix(rest,p,weight);
+        livingArtRotation=normalize(mix(vec4(0.0,0.0,0.0,1.0),livingArtRotation,weight));
+    }
 #endif
 }
 void livingArtCovariance(inout vec4 rotation,vec3 scale) {

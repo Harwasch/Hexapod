@@ -20,3 +20,6 @@ export * from "./tileRuns";
 export * from "./turbulence";
 export * from "./vec";
 export * from "./wind";
+
+// Independent research model: weather m/s never changes shipped WindSettings.
+export * from "./weatherWind";
