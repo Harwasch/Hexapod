@@ -5092,137 +5092,6 @@ function makeStory(Wd, ground, SCN, opts = {}) {
   };
 }
 
-/** A hexapod's arm targets in its own frame, from the story's world-space targets. */
-const toLocalArms = (hx, S) => {
-  const base = [hx.p[0], hx.p[1], 0];
-  let arms = hx.arms
-    ? hx.arms.map((a) =>
-        a && a.abs
-          ? { target: [a.target[0] - base[0], a.target[1] - base[1], a.target[2]], grip: a.grip }
-          : Array.isArray(a)
-            ? { target: a, grip: 0.4 }
-            : a,
-      )
-    : null;
-  if (hx.reach) {
-    const rd = S.ready(hx.h);
-    arms = hx.reach.map((a, k) => {
-      const off = [a.target[0] - base[0], a.target[1] - base[1], a.target[2]];
-      return { target: rd[k].map((v, i) => v * (1 - a.k) + off[i] * a.k), grip: a.grip };
-    });
-  }
-  return arms ? arms.map((a) => (a ? { target: rot(a.target, -hx.h), grip: a.grip } : a)) : null;
-};
-const dashedRing = (DL, c, r, z, n = 20) => {
-  for (let i = 0; i < n; i++) {
-    const a0 = (i / n) * Math.PI * 2,
-      a1 = ((i + 0.6) / n) * Math.PI * 2;
-    DL.seg(
-      [c[0] + Math.cos(a0) * r, c[1] + Math.sin(a0) * r, z],
-      [c[0] + Math.cos(a1) * r, c[1] + Math.sin(a1) * r, z],
-      "lit",
-    );
-  }
-};
-/** One crew at work (the operate stage) at time tt: its carriers, hexapods, quadcopter, targets and plants. */
-function drawOperate(D, DL, S, SC, m, ground, tt) {
-  for (const a of m.atvs) {
-    if (a.local || !a.p) continue;
-    carrier(D, [a.p[0], a.p[1], ground(a.p[0], a.p[1])], {
-      heading: a.h,
-      payload: a.payload || "carrier",
-      load: a.load ?? 16,
-      skip: a.skip,
-      slotPayloads: S.CARRY_PAY[S.variant][a.vi ?? 0],
-      chip: a.chip,
-      fill: a.fill,
-      chipPhase: tt * 1.4,
-    });
-  }
-  for (const hx of m.hex) {
-    if (!hx || hx.carried) continue;
-    const p = hx.p.length === 2 ? [hx.p[0], hx.p[1], ground(hx.p[0], hx.p[1])] : hx.p;
-    hexapod(D, p, {
-      heading: hx.h,
-      moving: hx.moving,
-      gait: hx.gait,
-      unfold: hx.unfold ?? 1,
-      arms: toLocalArms(hx, S),
-      payload: hx.payload,
-      basketLoad: hx.basketLoad ?? 6,
-      mast: 1,
-      lit: 1,
-    });
-  }
-  if (m.quad) quad(D, m.quad.p, { heading: m.quad.h, lit: 0 }, DL);
-  const TG = S.TGTS;
-  m.shrubs.forEach((s2, i) => {
-    const T = TG[i];
-    if (!T || s2.gone) return;
-    const o = s2.offset
-      ? [T.x + s2.offset[0], T.y + s2.offset[1], s2.offset[2] || 0]
-      : [T.x, T.y, 0];
-    shrub(D, o, {
-      kind: T.kind,
-      seed: T.seed,
-      scale: T.scale,
-      tip: s2.tip || 0,
-      lift: s2.lift || 0,
-      shrink: s2.shrink || 0,
-      dir: s2.dir || [1, 0],
-      lit: s2.flag > 0.5 ? 1 : 0,
-    });
-    if (s2.flag > 0.5) dashedRing(DL, [T.x, T.y], 0.62 * T.scale + 0.25, 0.02);
-  });
-  const item = SC.plant.item;
-  for (const pl of m.plants || []) {
-    const [x, y] = pl.p;
-    if (item === "oak") {
-      if (pl.mulch > 0.01) mulchRing(D, [x, y, 0], 0.48 * pl.mulch);
-      if (pl.g > 0.01) sapling(D, [x, y, 0], 0.4 + 0.6 * pl.g);
-    } else if (item === "conifer") {
-      if (pl.mulch > 0.01) mulchRing(D, [x, y, 0], 0.3 * pl.mulch);
-      if (pl.g > 0.01) conifer(D, [x, y, 0], 0.4 + 0.6 * pl.g);
-    } else if (item === "plug") {
-      if (pl.mulch > 0.01) mulchRing(D, [x, y, 0], 0.18 * pl.mulch);
-      if (pl.g > 0.01) plug(D, [x, y, 0], 0.4 + 0.6 * pl.g, pl.i * 1.7);
-    } else if (item === "seed") {
-      if (pl.mulch > 0.01) mulchRing(D, [x, y, 0], 0.5 * pl.mulch);
-      if (pl.g > 0.01) seedPatch(D, [x, y, 0], pl.g, pl.i + 1);
-    } else if (item === "wattle") {
-      if (pl.g > 0.01) wattle(D, [x, y, 0], 2.0, 0, pl.g);
-      if (m.done > 0.01) seedPatch(D, [x, y + 0.55, 0], m.done * 0.45, pl.i + 3);
-    }
-  }
-  if (m.pile > 0.01) mulchRing(D, [...S.PILE, 0], 0.25 + 0.75 * Math.sqrt(m.pile));
-  if (SC.id === "infra" && tt > 5.4) {
-    const P0 = SC.POLE;
-    for (const tp of POLE_TIPS([P0[0], P0[1], 0], SC.LN)) DL.seg(m.quad.p, tp, "lo");
-  }
-  if (SC.id === "fuels" && m.done > 0.5) dashedRing(DL, SC.HOUSE.c, 9.1, 0.03, 44);
-  if (SC.id === "solar" && tt > 6.4) {
-    const q = m.quad.p,
-      y = SC.PV[1];
-    for (const [dx, dy, z] of [
-      [-1.1, -1.0, 1.6],
-      [1.1, -1.0, 1.6],
-      [-1.1, 1.0, 0.75],
-      [1.1, 1.0, 0.75],
-    ])
-      DL.seg(q, [q[0] + dx, y + dy, z], "lo");
-  }
-  if (SC.id === "pipeline" && tt > 5.6) {
-    const q = m.quad.p;
-    for (const [dx, dy] of [
-      [-0.9, -0.6],
-      [0.9, -0.6],
-      [0.9, 0.6],
-      [-0.9, 0.6],
-    ])
-      DL.seg(q, [q[0] + dx, SC.PIPE_Y + dy, 0.03], "lo");
-  }
-}
-
 // Home hero: one landscape, seven crews working at once, a camera gliding between them.
 // Each crew is its own story instance anchored at its own work cell; scenery around each is a compact vignette.
 
@@ -5288,8 +5157,135 @@ function startHero(Wd, OPT) {
   // ── per-frame drawing ──
   const D = makeKit(E, { n: 22000 });
   const DL = makeLines(E, { dynamic: true, max: 30000 });
+  const toLocalArms = (hx, S) => {
+    const base = [hx.p[0], hx.p[1], 0];
+    let arms = hx.arms
+      ? hx.arms.map((a) =>
+          a && a.abs
+            ? { target: [a.target[0] - base[0], a.target[1] - base[1], a.target[2]], grip: a.grip }
+            : Array.isArray(a)
+              ? { target: a, grip: 0.4 }
+              : a,
+        )
+      : null;
+    if (hx.reach) {
+      const rd = S.ready(hx.h);
+      arms = hx.reach.map((a, k) => {
+        const off = [a.target[0] - base[0], a.target[1] - base[1], a.target[2]];
+        return { target: rd[k].map((v, i) => v * (1 - a.k) + off[i] * a.k), grip: a.grip };
+      });
+    }
+    return arms ? arms.map((a) => (a ? { target: rot(a.target, -hx.h), grip: a.grip } : a)) : null;
+  };
+  const dashedRing = (c, r, z, n = 20) => {
+    for (let i = 0; i < n; i++) {
+      const a0 = (i / n) * Math.PI * 2,
+        a1 = ((i + 0.6) / n) * Math.PI * 2;
+      DL.seg(
+        [c[0] + Math.cos(a0) * r, c[1] + Math.sin(a0) * r, z],
+        [c[0] + Math.cos(a1) * r, c[1] + Math.sin(a1) * r, z],
+        "lit",
+      );
+    }
+  };
   function drawCrew(cr, tt) {
-    drawOperate(D, DL, cr.S, cr.SC, cr.S.model("operate", tt), ground, tt);
+    const { S, SC } = cr;
+    const m = S.model("operate", tt);
+    for (const a of m.atvs) {
+      if (a.local || !a.p) continue;
+      carrier(D, [a.p[0], a.p[1], ground(a.p[0], a.p[1])], {
+        heading: a.h,
+        payload: a.payload || "carrier",
+        load: a.load ?? 16,
+        skip: a.skip,
+        slotPayloads: S.CARRY_PAY[S.variant][a.vi ?? 0],
+        chip: a.chip,
+        fill: a.fill,
+        chipPhase: tt * 1.4,
+      });
+    }
+    for (const hx of m.hex) {
+      if (!hx || hx.carried) continue;
+      const p = hx.p.length === 2 ? [hx.p[0], hx.p[1], ground(hx.p[0], hx.p[1])] : hx.p;
+      hexapod(D, p, {
+        heading: hx.h,
+        moving: hx.moving,
+        gait: hx.gait,
+        unfold: hx.unfold ?? 1,
+        arms: toLocalArms(hx, S),
+        payload: hx.payload,
+        basketLoad: hx.basketLoad ?? 6,
+        mast: 1,
+        lit: 1,
+      });
+    }
+    quad(D, m.quad.p, { heading: m.quad.h, lit: 0 }, DL);
+    const TG = S.TGTS;
+    m.shrubs.forEach((s2, i) => {
+      const T = TG[i];
+      if (!T || s2.gone) return;
+      const o = s2.offset
+        ? [T.x + s2.offset[0], T.y + s2.offset[1], s2.offset[2] || 0]
+        : [T.x, T.y, 0];
+      shrub(D, o, {
+        kind: T.kind,
+        seed: T.seed,
+        scale: T.scale,
+        tip: s2.tip || 0,
+        lift: s2.lift || 0,
+        shrink: s2.shrink || 0,
+        dir: s2.dir || [1, 0],
+        lit: s2.flag > 0.5 ? 1 : 0,
+      });
+      if (s2.flag > 0.5) dashedRing([T.x, T.y], 0.62 * T.scale + 0.25, 0.02);
+    });
+    const item = SC.plant.item;
+    for (const pl of m.plants || []) {
+      const [x, y] = pl.p;
+      if (item === "oak") {
+        if (pl.mulch > 0.01) mulchRing(D, [x, y, 0], 0.48 * pl.mulch);
+        if (pl.g > 0.01) sapling(D, [x, y, 0], 0.4 + 0.6 * pl.g);
+      } else if (item === "conifer") {
+        if (pl.mulch > 0.01) mulchRing(D, [x, y, 0], 0.3 * pl.mulch);
+        if (pl.g > 0.01) conifer(D, [x, y, 0], 0.4 + 0.6 * pl.g);
+      } else if (item === "plug") {
+        if (pl.mulch > 0.01) mulchRing(D, [x, y, 0], 0.18 * pl.mulch);
+        if (pl.g > 0.01) plug(D, [x, y, 0], 0.4 + 0.6 * pl.g, pl.i * 1.7);
+      } else if (item === "seed") {
+        if (pl.mulch > 0.01) mulchRing(D, [x, y, 0], 0.5 * pl.mulch);
+        if (pl.g > 0.01) seedPatch(D, [x, y, 0], pl.g, pl.i + 1);
+      } else if (item === "wattle") {
+        if (pl.g > 0.01) wattle(D, [x, y, 0], 2.0, 0, pl.g);
+        if (m.done > 0.01) seedPatch(D, [x, y + 0.55, 0], m.done * 0.45, pl.i + 3);
+      }
+    }
+    if (m.pile > 0.01) mulchRing(D, [...S.PILE, 0], 0.25 + 0.75 * Math.sqrt(m.pile));
+    if (SC.id === "infra" && tt > 5.4) {
+      const P0 = SC.POLE;
+      for (const tp of POLE_TIPS([P0[0], P0[1], 0], SC.LN)) DL.seg(m.quad.p, tp, "lo");
+    }
+    if (SC.id === "fuels" && m.done > 0.5) dashedRing(SC.HOUSE.c, 9.1, 0.03, 44);
+    if (SC.id === "solar" && tt > 6.4) {
+      const q = m.quad.p,
+        y = SC.PV[1];
+      for (const [dx, dy, z] of [
+        [-1.1, -1.0, 1.6],
+        [1.1, -1.0, 1.6],
+        [-1.1, 1.0, 0.75],
+        [1.1, 1.0, 0.75],
+      ])
+        DL.seg(q, [q[0] + dx, y + dy, z], "lo");
+    }
+    if (SC.id === "pipeline" && tt > 5.6) {
+      const q = m.quad.p;
+      for (const [dx, dy] of [
+        [-0.9, -0.6],
+        [0.9, -0.6],
+        [0.9, 0.6],
+        [-0.9, 0.6],
+      ])
+        DL.seg(q, [q[0] + dx, SC.PIPE_Y + dy, 0.03], "lo");
+    }
   }
 
   // ── camera: a closed spline through the route, slowing near each crew; framing blends toward each crew's preferred angle ──
@@ -5677,452 +5673,6 @@ function startHero(Wd, OPT) {
   };
 }
 
-// ── The mission: one crew's whole job, plan → deploy → scan → operate, scrubbed by scroll ──
-
-// A delivery truck for the deploy stage, facing +x: a hook-lift for the container hub, a pickup
-// for the trailer. Plain on purpose: it is on screen for a few seconds.
-function truck(k, o, h, kind, arm = 0) {
-  const { P, V } = frame(o, h);
-  const box = (c, x, y, z, lit = 0) => k.obox(P(c), V([x, 0, 0]), V([0, y, 0]), [0, 0, z], lit);
-  const wheel = (x, r = 0.48) => {
-    const a = P([x, -1.12, r]),
-      b = P([x, 1.12, r]);
-    k.rod(a, b, r);
-  };
-  if (kind === "pickup") {
-    box([0.2, 0, 0.75], 2.6, 0.95, 0.32);
-    box([0.9, 0, 1.4], 1.0, 0.9, 0.35, 1);
-    box([-1.2, 0, 1.12], 1.2, 0.95, 0.06);
-    for (const x of [-1.6, 1.8]) wheel(x, 0.38);
-    return;
-  }
-  box([-1.6, 0, 0.82], 3.4, 1.05, 0.22);
-  box([2.45, 0, 1.55], 0.95, 1.2, 0.85, 1);
-  for (const x of [-3.9, -2.75, 2.45]) wheel(x);
-  // the hook arm: folded flat on the bed, up and back as it sets the box down
-  const a0 = P([1.3, 0, 1.2]),
-    a1 = P(add([1.3, 0, 1.2], mul([Math.cos(0.4 + arm), 0, Math.sin(0.4 + arm)], 1.6)));
-  k.link(a0, a1, 0.18);
-}
-
-// A plain closed container at c, heading h, pitched by p (on the truck, or being set down).
-function boxAt(k, c, h, p, V0) {
-  const ex = [Math.cos(h) * Math.cos(p), Math.sin(h) * Math.cos(p), Math.sin(p)],
-    ez = [-Math.cos(h) * Math.sin(p), -Math.sin(h) * Math.sin(p), Math.cos(p)],
-    ey = [-Math.sin(h), Math.cos(h), 0];
-  k.obox(c, mul(ex, V0.L / 2), mul(ey, V0.W / 2), mul(ez, V0.H / 2));
-}
-
-/** What the status line says at a moment of the mission: label and value pairs. */
-function missionStatus(S, m, cov) {
-  const TG = S.TGT;
-  if (m.name === "plan")
-    return [
-      ["Boundary", m.boundary > 0.99 ? "160 ha" : m.boundary > 0 ? "drawing" : "to mark"],
-      ["Work zone", m.zones > 0.99 ? "broom patch" : "to pick"],
-      ["Hub site", m.site > 0.5 || m.t > 18 ? "by the road" : "to pick"],
-    ];
-  if (m.name === "deploy") {
-    const out = m.atvs.filter((a) => a.p).length;
-    const off = m.staged.filter((h) => !h.carried).length;
-    return [
-      ["Hub", m.online ? "online" : m.hubOn ? "unfolding" : "on the road"],
-      ["Carriers out", `${out} of ${m.atvs.length}`],
-      ["Hexapods off", `${off} of ${m.staged.length}`],
-    ];
-  }
-  if (m.name === "scan") {
-    const flagged = m.shrubs.filter((s) => s.flag > 0.5).length;
-    return [
-      ["Mapped", `${Math.round((100 * (cov ? cov.done : 0)) / S.PASSES)}%`],
-      ["Detail", "3 cm per pixel"],
-      ["Broom flagged", `${flagged}`],
-    ];
-  }
-  const pulled = m.shrubs.filter((s) => s.gone || s.held).length;
-  const planted = (m.plants || []).filter((p) => p.g > 0.9).length;
-  return [
-    ["Hexapods working", `${m.hex.filter((h) => h && !h.carried).length}`],
-    ["Broom pulled", `${pulled} of ${TG.length}`],
-    ["Oaks planted", `${planted} of ${(m.plants || []).length}`],
-  ];
-}
-
-/**
- * Where the camera looks at a moment of the mission: keyframes per stage, eased between.
- * Each: [t, target x, target y, width in metres, azimuth, elevation].
- */
-function missionKeys(Wd, S) {
-  const [hx, hy] = Wd.HUB0,
-    [cx, cy] = Wd.CELL,
-    [px, py] = Wd.PATCH.c,
-    oak = S.oakC;
-  const end = S.OPS.end;
-  return {
-    plan: [
-      [0, 0, 0, 2500, 28, 40],
-      [9, 0, 0, 2350, 34, 40],
-      [13, -60, 60, 2000, 38, 38],
-      [15.2, px + 80, py, 820, 40, 35],
-      [17.6, hx, hy, 150, 43, 32],
-      [21, hx, hy, 110, 44, 31],
-    ],
-    deploy: [
-      [0, hx + 12, hy + 34, 120, 44, 30],
-      [5, hx + 4, hy + 6, 58, 46, 29],
-      [9, hx + 1, hy + 1, 30, 48, 28],
-      [14, hx + 4, hy, 32, 50, 28],
-      [18, hx + 9, hy - 3, 40, 52, 30],
-      [26, hx + 9, hy - 4, 44, 52, 30],
-    ],
-    scan: [
-      [0, hx, hy, 40, 50, 32],
-      [3.2, 0, 0, 2300, 40, 42],
-      [10.5, 0, 0, 2250, 44, 42],
-      [12.4, 120, 60, 900, 44, 38],
-      [14.6, oak[0], oak[1], 800, 42, 38],
-      [18.2, cx, cy, 70, 40, 32],
-      [22, cx, cy, 48, 40, 31],
-    ],
-    operate: [
-      [0, cx, cy, 36, 36, 31],
-      [end, cx, cy, 32, 56, 33],
-    ],
-  };
-}
-function camAtKeys(keys, t) {
-  let i = 0;
-  while (i < keys.length - 2 && t > keys[i + 1][0]) i++;
-  const a = keys[i],
-    b = keys[Math.min(i + 1, keys.length - 1)];
-  const span = b[0] - a[0] || 1;
-  let u = Math.max(0, Math.min(1, (t - a[0]) / span));
-  u = u * u * (3 - 2 * u);
-  const L = (j) => a[j] + (b[j] - a[j]) * u;
-  return {
-    target: [L(1), L(2), 0],
-    width: Math.exp(Math.log(a[3]) + (Math.log(b[3]) - Math.log(a[3])) * u),
-    az: L(4),
-    el: L(5),
-  };
-}
-
-/** The mission's stretches of story time, per stage, in scroll order. */
-function missionSpans(S) {
-  return [
-    ["plan", 0, S.DUR.plan],
-    ["deploy", 0, S.DUR.deploy],
-    ["scan", 0, S.DUR.scan],
-    // The carriers drive 280 m from the hub in the first three seconds; the crew starts at work.
-    ["operate", 3.2, S.OPS.end + 0.5],
-  ];
-}
-
-function startMission(Wd, OPT) {
-  const { canvas, themeEl, still } = OPT;
-  const E = makeEngine(canvas, { themeEl, maxPixels: OPT.maxPixels() });
-  const world = buildWorld(E, Wd);
-  world.screen.visible = false;
-  const ground = world.ground;
-  const HUB0 = Wd.HUB0;
-  const ID = OPT.scenario || "nature";
-  const SCN = makeScenarios(Wd).S;
-  const S = makeStory(Wd, ground, SCN, { init: ID });
-  const SC = SCN[ID];
-  buildScenes(E, Wd, SCN, ground, { only: [ID] }).show(ID);
-  const keys = missionKeys(Wd, S);
-  const spans = missionSpans(S);
-  const LAND = Wd.LAND;
-
-  // the scan's coverage, painted on the land (the terrain shader reads it: red covered, green the pass)
-  const cov = document.createElement("canvas");
-  cov.width = 800;
-  cov.height = 500;
-  const cg = cov.getContext("2d");
-  const covTex = new E.THREE.CanvasTexture(cov);
-  E.uniforms.uCov.value = covTex;
-  E.uniforms.uCovRect.value.set(LAND.x, LAND.y, LAND.w, LAND.d);
-  const toC = ([x, y]) => [
-    ((x - LAND.x) / LAND.w) * cov.width,
-    ((y - LAND.y) / LAND.d) * cov.height,
-  ];
-  let covKey = "";
-  function paintCoverage(si, t) {
-    const c = S.covState(si, t);
-    const key = si < 2 ? "none" : si === 3 ? "all" : t.toFixed(2);
-    if (key === covKey) return c;
-    covKey = key;
-    cg.clearRect(0, 0, cov.width, cov.height);
-    if (c) {
-      cg.fillStyle = "#f00";
-      if (c.rect) {
-        const [x0, y0] = toC([c.rect[0], c.rect[1]]),
-          [x1, y1] = toC([c.rect[0] + c.rect[2], c.rect[1] + c.rect[3]]);
-        cg.fillRect(x0, y0, x1 - x0, y1 - y0);
-      }
-      cg.lineCap = cg.lineJoin = "round";
-      const stroke = (pts, w, color) => {
-        if (!pts || pts.length < 2) return;
-        cg.strokeStyle = color;
-        cg.lineWidth = (w / LAND.w) * cov.width;
-        cg.beginPath();
-        pts.forEach((p, i) => (i ? cg.lineTo(...toC(p)) : cg.moveTo(...toC(p))));
-        cg.stroke();
-      };
-      stroke(c.qBand, 44, "#f00");
-      stroke(c.aBand, 40, "#f00");
-      if (c.band) {
-        cg.fillStyle = "#0f0";
-        const [x0, y0] = toC([c.band[0], c.band[1]]),
-          [x1, y1] = toC([c.band[0] + c.band[2], c.band[1] + c.band[3]]);
-        cg.fillRect(x0, y0, x1 - x0, y1 - y0);
-      }
-    }
-    covTex.needsUpdate = true;
-    return c;
-  }
-
-  const HK = makeKit(E, { n: 6000 }),
-    HL = makeLines(E, { dynamic: true, max: 6000 });
-  const D = makeKit(E, { n: 16000 });
-  const DL = makeLines(E, { dynamic: true, max: 30000 });
-
-  // a fraction f of a closed outline, as line segments
-  const partOf = (pts, f, z, tone) => {
-    const L = pts.map((p, i) => dist2(p, pts[(i + 1) % pts.length]));
-    let left = f * L.reduce((a, b) => a + b, 0);
-    for (let i = 0; i < pts.length && left > 0; i++) {
-      const a = pts[i],
-        b = pts[(i + 1) % pts.length],
-        u = Math.min(1, left / (L[i] || 1));
-      DL.seg([a[0], a[1], z], [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, z], tone);
-      left -= L[i];
-    }
-  };
-  const dist2 = (a, b) => Math.hypot(b[0] - a[0], b[1] - a[1]);
-
-  function draw(name, t) {
-    const si = S.ORDER.indexOf(name);
-    const m = S.model(name, t);
-    const V0 = S.VAR();
-    HK.begin();
-    HL.begin();
-    D.begin();
-    DL.begin();
-    // plan: the boundary, the work zone and the hub site, drawn on as they are picked
-    // the boundary in the accent colour, three lines a pixel apart so it reads with the whole land in view
-    if (m.boundary > 0) {
-      const px = E.view.width / W;
-      for (const k of [-1.5, 0, 1.5]) {
-        const i = 4 + k * px;
-        partOf(
-          [
-            [LAND.x + i, LAND.y + i],
-            [LAND.x + LAND.w - i, LAND.y + i],
-            [LAND.x + LAND.w - i, LAND.y + LAND.d - i],
-            [LAND.x + i, LAND.y + LAND.d - i],
-          ],
-          m.boundary,
-          0.6,
-          "lit",
-        );
-      }
-    }
-    if (m.zones > 0) for (const z of SC.zone) partOf(z, m.zones, 0.5, "zoneDash");
-    if (m.site > 0.02) {
-      const st = Wd.SITE;
-      partOf(
-        [
-          [st.x, st.y],
-          [st.x + st.w, st.y],
-          [st.x + st.w, st.y + st.d],
-          [st.x, st.y + st.d],
-        ],
-        m.site,
-        0.2,
-        "lit",
-      );
-    }
-    // the hub: on the truck, being set down, then unfolding
-    if (m.dep && m.dep.truck) {
-      const tr = m.dep.truck;
-      const p = S.hubW([tr.p[0], tr.p[1], 0]);
-      truck(D, [p[0], p[1], ground(p[0], p[1])], tr.h, tr.kind, tr.arm || 0);
-    }
-    if (m.hubOn)
-      hub(HK, HL, [HUB0[0], HUB0[1], 0], {
-        variant: S.variant,
-        wings: m.wing,
-        mast: m.mast,
-        dish: m.dish,
-        online: m.online,
-        doors: m.doors,
-        ramp: m.ramp,
-        jacks: m.jacks,
-        lit: m.hubLit,
-      });
-    else if (m.dep && m.dep.box) boxAt(D, S.hubW(m.dep.box.c), m.dep.box.h, m.dep.box.p || 0, V0);
-    // carriers still in the hub, seen through its doors
-    if (m.hubOn && m.doors > 0.2)
-      for (const a of m.atvs)
-        if (a.local)
-          carrier(D, S.hubW(a.local), {
-            heading: a.h || 0,
-            payload: a.payload || "carrier",
-            load: a.load ?? 16,
-            slotPayloads: S.CARRY_PAY[S.variant][a.vi ?? 0],
-          });
-    // hexapods stepping off at the hub
-    for (const hx of m.staged || []) {
-      if (!hx || hx.carried || !hx.p) continue;
-      const p = hx.p.length === 2 ? [hx.p[0], hx.p[1], ground(hx.p[0], hx.p[1])] : hx.p;
-      hexapod(D, p, {
-        heading: hx.h,
-        moving: hx.moving,
-        gait: hx.gait,
-        unfold: hx.unfold ?? 1,
-        arms: toLocalArms(hx, S),
-        payload: hx.payload,
-        mast: hx.mast ?? 0,
-        lit: 1,
-      });
-    }
-    if (!m.hubOn) m.quad = null;
-    else vtol(D, m.vtol.p, { heading: m.vtol.h, lit: m.lit && m.lit.vtol ? 1 : 0 }, DL);
-    drawOperate(D, DL, S, SC, m, ground, t);
-    // scan: the coverage on the land, and the VTOL's flight lines
-    const c = paintCoverage(si, t);
-    if (c && si === 2) for (const [a, b] of c.flights) DL.seg([...a, 0.4], [...b, 0.4], "flight");
-    HK.end();
-    HL.end();
-    D.end();
-    DL.end();
-    return { m, c };
-  }
-
-  // ── theme ──
-  let look = {};
-  function syncTheme() {
-    const pick = document.documentElement.dataset.theme;
-    themeEl.dataset.theme =
-      pick === "light" || pick === "dark"
-        ? pick
-        : matchMedia("(prefers-color-scheme: dark)").matches
-          ? "dark"
-          : "light";
-    look = (themeEl.dataset.theme === "dark" ? OPT.look?.dark : OPT.look?.light) || {};
-    E.setLook(look);
-    dirty = true;
-  }
-  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", syncTheme);
-  new MutationObserver(syncTheme).observe(document.documentElement, {
-    attributes: true,
-    attributeFilter: ["data-theme"],
-  });
-
-  // ── loop: draws only when the scroll position or the camera has moved ──
-  let W = 1,
-    H = 1,
-    dirty = true,
-    raf = 0,
-    visible = false,
-    last = 0,
-    shown = null,
-    camInit = false;
-  const cam = { target: [0, 0, 0], az: 30, el: 40, width: 2500 };
-  function resize() {
-    const r = canvas.getBoundingClientRect();
-    W = Math.max(1, r.width);
-    H = Math.max(1, r.height);
-    E.resize(W, H);
-    dirty = true;
-  }
-  new ResizeObserver(resize).observe(canvas);
-  resize();
-  syncTheme();
-  /** Scroll progress 0…1 → a stage and a moment in it. */
-  function at(p) {
-    const f = Math.max(0, Math.min(0.99999, p)) * spans.length,
-      i = Math.floor(f),
-      [name, t0, t1] = spans[i];
-    return { name, t: t0 + (t1 - t0) * (f - i), i };
-  }
-  let p = OPT.progress(),
-    pShown = -1;
-  function tick(now) {
-    // A slow frame still eases most of the way: the scroll, not the frame rate, sets the moment.
-    const dt = last ? Math.min(0.25, (now - last) / 1000) : 1 / 60;
-    last = now;
-    const want = OPT.progress();
-    // reduced motion: follow the scroll exactly; otherwise ease toward it
-    p = still.matches ? want : p + (want - p) * (1 - Math.exp(-dt / 0.3));
-    if (Math.abs(want - p) < 1e-5) p = want;
-    const { name, t, i } = at(p);
-    const k0 = camAtKeys(keys[name], t);
-    const k = camInit && !still.matches ? 1 - Math.exp(-dt / 0.45) : 1;
-    camInit = true;
-    const moved =
-      Math.abs(cam.width - k0.width) / k0.width > 1e-3 ||
-      Math.hypot(cam.target[0] - k0.target[0], cam.target[1] - k0.target[1]) > k0.width * 1e-4 ||
-      Math.abs(cam.az - k0.az) > 0.01;
-    cam.target = cam.target.map((v, j) => v + (k0.target[j] - v) * k);
-    cam.width = Math.exp(Math.log(cam.width) + (Math.log(k0.width) - Math.log(cam.width)) * k);
-    cam.az += (k0.az - cam.az) * k;
-    cam.el += (k0.el - cam.el) * k;
-    if (dirty || moved || p !== pShown) {
-      dirty = false;
-      pShown = p;
-      const near = OPT.zoom ? OPT.zoom(W, H) : 1;
-      E.view.target.set(...cam.target);
-      // close shots tighten on small screens; the wide ones keep the whole land in frame
-      const w = cam.width * (cam.width < 300 ? near : 1) * (look.camera?.zoom ?? 1);
-      E.view.width = w;
-      E.view.az = cam.az;
-      E.view.el =
-        look.camera?.el != null
-          ? look.camera.el
-          : Math.max(8, Math.min(80, cam.el + (look.camera?.tilt ?? 0)));
-      if (OPT.shift) {
-        const sh = OPT.shift(W, H),
-          A = (E.view.az * Math.PI) / 180,
-          Ee = (E.view.el * Math.PI) / 180,
-          sx = (sh.x || 0) * w,
-          sv = (sh.y || 0) * w * (H / W);
-        E.view.target.x += -Math.sin(A) * sx + Math.cos(A) * Math.sin(Ee) * sv;
-        E.view.target.y += Math.cos(A) * sx + Math.sin(A) * Math.sin(Ee) * sv;
-        E.view.target.z -= Math.cos(Ee) * sv;
-      }
-      LOD.far = E.view.width / W > 0.03;
-      const { m, c } = draw(name, t);
-      E.render();
-      // the one callout for this moment, with where its subject is on screen
-      const co = (S.CALLOUTS[name] || []).find((x) => t >= x.t0 && t <= x.t1);
-      const anchor = co ? co.anchor(m) : null;
-      OPT.onFrame({
-        stage: name,
-        index: i,
-        progress: p,
-        status: missionStatus(S, m, c),
-        callout:
-          co && anchor && anchor.every(Number.isFinite)
-            ? { text: co.text, xy: E.toScreen(anchor), W, H }
-            : null,
-      });
-      if (shown !== name) shown = name;
-    }
-    raf = visible ? requestAnimationFrame(tick) : 0;
-  }
-  new IntersectionObserver((en) => {
-    visible = en[en.length - 1].isIntersecting;
-    if (visible && !raf) {
-      last = 0;
-      dirty = true;
-      raf = requestAnimationFrame(tick);
-    }
-  }).observe(canvas);
-  return { spans: spans.map(([name, t0, t1]) => ({ name, t0, t1 })) };
-}
-
 // Fleet cards: each machine as a live 3D turntable. One renderer draws every card in turn and copies
 // the frame into that card's own canvas, so five cards cost one WebGL context.
 // Default motion is a slow cinematic orbit with a breathing elevation and push-in; drag to turn a card.
@@ -6342,25 +5892,10 @@ function startFleetCards(OPT) {
 
 /** The hero over the bundled world data. */
 export const startHeroScene = (opt) => startHero(WORLD, opt);
-export const startMissionScene = (opt) => startMission(WORLD, opt);
 export { startFleetCards };
 
 /** For tests: one hero crew's story, built as startHero builds it, with no renderer. */
 export function crewStory(zone) {
   const W2 = { ...WORLD, CELL: zone.c };
   return makeStory(W2, makeGround(WORLD), makeScenarios(W2).S, { init: zone.id, lazyDeploy: true });
-}
-
-/** For tests: the mission's story with no renderer (startMissionScene draws the same one). */
-export function missionStory() {
-  const ground = makeGround(WORLD);
-  const S = makeStory(WORLD, ground, makeScenarios(WORLD).S, { init: "nature" });
-  return {
-    spans: missionSpans(S).map(([name, t0, t1]) => ({ name, t0, t1 })),
-    keys: missionKeys(WORLD, S),
-    at(name, t) {
-      const m = S.model(name, t);
-      return { m, status: missionStatus(S, m, S.covState(S.ORDER.indexOf(name), t)) };
-    },
-  };
 }

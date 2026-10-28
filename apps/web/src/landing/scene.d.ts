@@ -68,43 +68,8 @@ export interface FleetOptions {
   look?: ThemedLook;
 }
 
-export type MissionStage = "plan" | "deploy" | "scan" | "operate";
-
-/** What the mission scene reports each time it draws. */
-export interface MissionFrame {
-  stage: MissionStage;
-  /** The stage's place in the order, 0 to 3. */
-  index: number;
-  progress: number;
-  /** The status line: label and value pairs. */
-  status: [string, string][];
-  /** The one callout for this moment, and where its subject is on screen. */
-  callout: { text: string; xy: readonly [number, number]; W: number; H: number } | null;
-}
-
-export interface MissionOptions {
-  canvas: HTMLCanvasElement;
-  themeEl: HTMLElement;
-  still: MediaQueryList;
-  maxPixels: () => number;
-  /** How far through the mission the reader has scrolled, 0 to 1. */
-  progress: () => number;
-  /** Close shots' width on this screen, as a fraction of the desktop's. */
-  zoom?: (width: number, height: number) => number;
-  shift?: (width: number, height: number) => { x?: number; y?: number };
-  onFrame: (frame: MissionFrame) => void;
-  look?: ThemedLook;
-  scenario?: string;
-}
-
-export interface Mission {
-  spans: { name: MissionStage; t0: number; t1: number }[];
-}
-
 /** Starts the hero; throws when WebGL is unavailable. */
 export function startHeroScene(options: HeroOptions): Hero;
-/** Starts the mission scene; throws when WebGL is unavailable. */
-export function startMissionScene(options: MissionOptions): Mission;
 /** Starts the fleet cards' turntables, one WebGL context for all of them. */
 export function startFleetCards(options: FleetOptions): void;
 
@@ -124,24 +89,4 @@ export function crewStory(zone: { id: string; c: [number, number] }): {
     stage: "operate",
     t: number,
   ) => { hex: (StoryBot | undefined)[]; atvs: StoryBot[]; quad: StoryBot & { p: number[] } };
-};
-
-/** For tests: the mission's story, with no renderer. */
-export function missionStory(): {
-  spans: { name: MissionStage; t0: number; t1: number }[];
-  /** Per stage: [t, target x, target y, width, azimuth, elevation]. */
-  keys: Record<MissionStage, number[][]>;
-  at: (
-    stage: MissionStage,
-    t: number,
-  ) => {
-    m: {
-      atvs: StoryBot[];
-      staged?: StoryBot[];
-      hex: (StoryBot | undefined)[];
-      vtol: StoryBot & { p: number[] };
-      quad: StoryBot & { p: number[] };
-    };
-    status: [string, string][];
-  };
 };

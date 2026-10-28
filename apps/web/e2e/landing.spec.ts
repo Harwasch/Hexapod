@@ -79,7 +79,7 @@ test("the hero scene renders and places its crews' labels", async ({ page }) => 
   await page.goto("/landing.html");
   // Software WebGL (playwright.config.ts) is enough for the scene; the fallback has its own test.
   await expect(page.locator("#top")).toHaveAttribute("data-scene", "live", { timeout: 60_000 });
-  await expect(page.locator("#top canvas.gl")).toHaveClass(/\bon\b/);
+  await expect(page.locator("canvas.gl")).toHaveClass(/\bon\b/);
   await expect(page.locator(".hero-still.lt")).toBeHidden();
   // A label is placed from the scene's own projection, every frame: one in view means frames ran.
   await expect
@@ -111,10 +111,7 @@ test("without WebGL the hero falls back to a still and the examples scroll to th
   const hero = page.locator("#top");
   await expect(hero).toHaveAttribute("data-scene", "fallback", { timeout: 60_000 });
   await expect(page.locator(".hero-still.lt")).toBeVisible();
-  await expect(page.locator("#top canvas.gl")).toBeHidden();
-  // The mission section gives way too: its steps as plain text.
-  await expect(page.locator("#mission")).toHaveAttribute("data-scene", "fallback");
-  await expect(page.locator("#mission canvas.gl")).toBeHidden();
+  await expect(page.locator("canvas.gl")).toBeHidden();
   await page.getByRole("button", { name: "Solar farm" }).click();
   await expect(page.locator("#use-solar")).toBeInViewport();
   // The form needs no WebGL of its own: acres alone complete a request.
@@ -343,7 +340,7 @@ for (const [id, lightStage, darkStage] of [
     expect(await stage()).toBe(lightStage);
     await page.getByRole("button", { name: "Switch to dark mode" }).click();
     await expect.poll(stage).toBe(darkStage);
-    await expect(page.locator("#top .stage")).toHaveAttribute("data-theme", "dark");
+    await expect(page.locator(".stage")).toHaveAttribute("data-theme", "dark");
     expect(shaderErrors).toEqual([]);
   });
 }
@@ -361,30 +358,6 @@ test("with ?review, the switcher changes the look", async ({ page }) => {
   // The switcher reloads the page; wait for the new address, not for the scene to finish loading.
   await page.waitForURL(/look=sensor/, { waitUntil: "commit" });
   await expect(page.locator("#top")).toHaveAttribute("data-look", "sensor");
-});
-
-test("the mission's steps follow the scroll, and each step's name jumps to it", async ({
-  page,
-}) => {
-  await page.goto("/landing.html");
-  const mission = page.locator("#mission");
-  await expect(mission.locator("h2")).toHaveText("From a map to finished work");
-  const step = (name: string) => mission.locator(`li[data-stage="${name}"]`);
-  await expect(step("plan")).toHaveAttribute("aria-current", "step");
-  // Six tenths of the way through the section is the scan.
-  await page.evaluate(() => {
-    const s = document.querySelector<HTMLElement>("#mission");
-    if (!s) return;
-    const top = s.getBoundingClientRect().top + window.scrollY;
-    window.scrollTo(0, top + 0.6 * (s.offsetHeight - window.innerHeight));
-  });
-  await expect(step("scan")).toHaveAttribute("aria-current", "step");
-  await expect(step("plan")).not.toHaveAttribute("aria-current", "step");
-  await mission.getByRole("button", { name: /Operate/ }).click();
-  await expect(step("operate")).toHaveAttribute("aria-current", "step");
-  // Simulated things are labelled as simulated.
-  await expect(mission.locator(".mission-status")).toContainText("Simulated");
-  await expect(mission.locator("canvas")).toHaveAttribute("aria-label", /Simulation/);
 });
 
 test("Mission Control runs live: the views switch, and approving a plan sets robots to it", async ({
