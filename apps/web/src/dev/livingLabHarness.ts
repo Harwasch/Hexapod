@@ -9,6 +9,11 @@
  */
 
 import {
+  BoxGeometry,
+  ColorGeometryInstanceAttribute,
+  GeometryInstance,
+  PerInstanceColorAppearance,
+  Primitive,
   Cartesian3,
   CesiumWidget,
   Color,
@@ -24,11 +29,16 @@ import { installSplatDecoder } from "@/cesium/splatDecoder";
 import { installSplatSorter } from "@/cesium/splatSorter";
 import { useLivingLab } from "@/state/livingLab";
 
-export async function startLivingLabHarness(container: HTMLElement, tilesetUrl: string) {
+export async function startLivingLabHarness(
+  container: HTMLElement,
+  tilesetUrl: string,
+  options: { forest?: boolean } = {},
+) {
   const widget = new CesiumWidget(container, {
     baseLayer: false,
     requestRenderMode: false,
     msaaSamples: 1,
+    contextOptions: { webgl: { preserveDrawingBuffer: options.forest === true } },
   });
   const { scene, camera } = widget;
   scene.globe.show = false;
@@ -47,6 +57,27 @@ export async function startLivingLabHarness(container: HTMLElement, tilesetUrl: 
   tileset.show = false;
   tileset.preloadWhenHidden = false;
   scene.primitives.add(tileset);
+  if (options.forest)
+    scene.primitives.add(
+      new Primitive({
+        geometryInstances: new GeometryInstance({
+          geometry: BoxGeometry.fromDimensions({
+            dimensions: new Cartesian3(155, 155, 0.05),
+            vertexFormat: PerInstanceColorAppearance.VERTEX_FORMAT,
+          }),
+          modelMatrix: Matrix4.multiplyByTranslation(
+            tileset.root.computedTransform,
+            new Cartesian3(0, 0, -0.06),
+            new Matrix4(),
+          ),
+          attributes: {
+            color: ColorGeometryInstanceAttribute.fromColor(Color.fromCssColorString("#68745d")),
+          },
+        }),
+        appearance: new PerInstanceColorAppearance({ flat: true, translucent: false }),
+        allowPicking: false,
+      }),
+    );
   const host = new ScanRendererHost(widget, { preserveDrawingBuffer: true });
   host.setRenderer("playcanvas");
   host.setTarget({ key: "lab", tileset });

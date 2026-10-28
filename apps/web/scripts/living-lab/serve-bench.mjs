@@ -15,13 +15,16 @@ const option = (name, fallback) => {
   return i < 0 ? fallback : args[i + 1];
 };
 const host = option("--host", "127.0.0.1");
-const port = Number(option("--port", "5710"));
+const port = Number(option("--port", "5720"));
 if (!host || ["0.0.0.0", "::"].includes(host)) throw new Error("Use a specific interface address");
-if (!Number.isInteger(port) || port < 5710 || port > 5719) throw new Error("Ports 5710–5719 only");
-const cache = process.env.LIVING_BREEZE_CACHE ?? resolve(homedir(), ".cache/hexapod-living-breeze");
+if (!Number.isInteger(port) || port < 5720 || port > 5729) throw new Error("Ports 5720–5729 only");
+const cache =
+  process.env.LIVING_WEATHER_CACHE ?? resolve(homedir(), ".cache/hexapod-living-weather");
 const out = resolve(cache, "bench");
-const source = resolve(option("--source", `${cache}/source`));
-const bake = resolve(option("--bake", `${cache}/bake`));
+const source = resolve(
+  option("--source", resolve(homedir(), ".cache/hexapod-living-breeze/source")),
+);
+const bake = resolve(option("--bake", resolve(homedir(), ".cache/hexapod-living-breeze/bake")));
 config.build.rolldownOptions.input = {};
 // App-specific manual groups create a CJS-helper cycle for this standalone entry.
 config.build.rolldownOptions.output = {};
@@ -41,6 +44,32 @@ await build(
 await mkdir(`${out}/data`, { recursive: true });
 await cp(`${source}/splat`, `${out}/data/tree`, { recursive: true });
 await cp(bake, `${out}/data/bake`, { recursive: true });
+await cp(resolve(option("--forest", `${cache}/forest`)), `${out}/data/forest`, { recursive: true });
+try {
+  await cp(`${cache}/scans/phone-capture-2026-09-26-20-41-utc/splat`, `${out}/data/spool`, {
+    recursive: true,
+  });
+} catch (e) {
+  if (e.code !== "ENOENT") throw e;
+}
+// The existing packets are not leaf instances; the weather arm disables their flutter.
+const headerPath = `${out}/data/bake/articulation.json`;
+const header = JSON.parse(await readFile(headerPath, "utf8"));
+header.detail = {
+  vegetation: true,
+  fittedRig: true,
+  separableCrownShare: 0,
+  attachedCrownShare: 0,
+  smallSplatShare: 0,
+  leafBindings: false,
+};
+const detailPath = option("--detail", `${cache}/minnetonka-detail.json`);
+try {
+  Object.assign(header.detail, JSON.parse(await readFile(detailPath, "utf8")));
+} catch (e) {
+  if (e.code !== "ENOENT") throw e;
+}
+await writeFile(headerPath, JSON.stringify(header));
 // The same depth-two LOD as round 3, with canonical GLB bytes preserved.
 const manifest = JSON.parse(await readFile(`${source}/splat/tileset.json`, "utf8"));
 manifest.root.extras ??= {};
@@ -75,4 +104,6 @@ createServer(async (req, res) => {
   } catch {
     res.writeHead(404).end();
   }
-}).listen(port, host, () => console.info(`Simulated breeze bench: http://${host}:${port}/`));
+}).listen(port, host, () =>
+  console.info(`Simulated weather/forest bench: http://${host}:${port}/`),
+);

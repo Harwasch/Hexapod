@@ -1,76 +1,208 @@
+import { prepareWeatherWind, sampleWeatherWind, type WeatherWind } from "@twin/world";
 import { startLivingLabHarness } from "./livingLabHarness";
+import { labWeatherClock } from "@/cesium/scanView/livingHook";
 import { useAsCaptured } from "@/state/asCaptured";
+import { setLabWeather } from "@/state/livingWeather";
+import { parseWeather, weatherFeed } from "@/lib/weather/openMeteo";
+import fixture from "@/lib/weather/fixtures/minnetonka-hours.json";
 
 const el = (id: string) => {
   const e = document.getElementById(id);
   if (!e) throw new Error(id);
   return e;
 };
+const params = new URLSearchParams(location.search),
+  forest = params.get("living-forest") === "1",
+  spool = params.get("living-scan") === "spool";
+const hours = parseWeather(fixture, 44.944403, -93.425903);
+const names = ["calm", "light", "fresh", "storm"];
 const run = el("run") as HTMLButtonElement,
   download = el("download") as HTMLButtonElement;
-const params = new URLSearchParams(location.search);
 const lab = await startLivingLabHarness(
   el("viewer"),
-  params.get("tiles") ?? "/data/tree/bench-tileset.json",
+  forest
+    ? "/data/forest/tileset.json"
+    : spool
+      ? "/data/spool/tileset.json"
+      : "/data/tree/bench-tileset.json",
+  { forest },
 );
-// Exposed in both static and dev entries for reproducible recordings.
 Object.assign(window, { __lab: lab, LL: lab.lab, captured: useAsCaptured });
 lab.widget.useBrowserRecommendedResolution = true;
 lab.widget.resolutionScale = 1;
-lab.viewBounds(35, -12, 15.4);
-const store = lab.lab;
-const bake = params.get("bake") ?? "/data/bake/articulation.json";
-const delay = () => new Promise<void>((r) => setTimeout(r, 100));
+if (forest) lab.view([0, 0, 3], 35, -28, 180);
+else if (spool) lab.viewBounds(35, -25, 7);
+else lab.viewBounds(35, -12, 15.4);
+const store = lab.lab,
+  bake = forest
+    ? "/data/forest/articulation.json"
+    : spool
+      ? "/data/spool/instances.json?tier-a=1"
+      : "/data/bake/articulation.json";
+const expected = forest ? 1440000 : spool ? 153566 : 687226;
+const delay = () => new Promise<void>((r) => setTimeout(r, 75));
+const firstHour = hours[0];
+if (!firstHour) throw new Error("No recorded weather hours");
+let wind: WeatherWind = firstHour,
+  label = "",
+  requestNumber = 0,
+  applyNumber = 0;
+const field = el("field") as HTMLCanvasElement;
+const context = field.getContext("2d");
+if (!context) throw new Error("Canvas 2D unavailable");
+const ctx = context;
+function overlay() {
+  const f = prepareWeatherWind(wind),
+    t = store.getState().clock ?? labWeatherClock();
+  ctx.fillStyle = "#142333";
+  ctx.fillRect(0, 0, 224, 248);
+  const active = !useAsCaptured.getState().on && store.getState().motion !== "off";
+  for (let y = 0; y < 20; y++)
+    for (let x = 0; x < 20; x++) {
+      const v = active
+        ? sampleWeatherWind(f, (x / 19 - 0.5) * 150, (0.5 - y / 19) * 150, t)
+        : { alongMps: 0 };
+      ctx.fillStyle = `hsl(${220 - 210 * Math.min(1, v.alongMps / 25)} 70% 45%)`;
+      ctx.fillRect(12 + x * 10, 25 + y * 10, 10, 10);
+    }
+  ctx.fillStyle = "white";
+  ctx.font = "11px system-ui";
+  ctx.fillText("Simulated 10 m field · N ↑ · 150 m", 10, 15);
+  ctx.fillText("0           10           20      25 m/s", 12, 240);
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 1.5;
+  for (let y = 0; y < 4; y++)
+    for (let x = 0; x < 4; x++) {
+      const px = 38 + x * 50,
+        py = 50 + y * 50;
+      const v = sampleWeatherWind(f, ((px - 112) / 200) * 150, ((125 - py) / 200) * 150, t);
+      const norm = Math.max(1, Math.hypot(v.eastMps, v.northMps));
+      const dx = (v.eastMps / norm) * 12,
+        dy = (-v.northMps / norm) * 12;
+      ctx.beginPath();
+      ctx.moveTo(px - dx, py - dy);
+      ctx.lineTo(px + dx, py + dy);
+      ctx.lineTo(px + dx - dx * 0.45 + dy * 0.35, py + dy - dy * 0.45 - dx * 0.35);
+      ctx.moveTo(px + dx, py + dy);
+      ctx.lineTo(px + dx - dx * 0.45 - dy * 0.35, py + dy - dy * 0.45 + dx * 0.35);
+      ctx.stroke();
+    }
+  el("caption").textContent = active
+    ? label
+    : forest
+      ? "Simulated forest stand · As captured tree geometry · motion off"
+      : "As captured · motion off";
+}
+lab.widget.scene.postRender.addEventListener(overlay);
 async function ready() {
-  const deadline = performance.now() + 180000;
-  while (lab.status().loading || !lab.status().settled || lab.status().gaussians !== 687226) {
-    if (performance.now() > deadline) throw new Error("Tree loading timed out");
+  const deadline = performance.now() + 240000;
+  while (lab.status().loading || !lab.status().settled || lab.status().gaussians !== expected) {
+    if (performance.now() > deadline)
+      throw new Error("Scene loading timed out: " + JSON.stringify(lab.status()));
     await delay();
   }
 }
-async function preset(arm: string) {
+function controls() {
+  for (const [id, value] of [
+    ["mean", wind.meanMps],
+    ["gust", wind.gustMps ?? wind.meanMps],
+    ["direction", wind.directionDeg],
+  ] as const) {
+    (el(id) as HTMLInputElement).value = String(value);
+    el(id + "-value").textContent = String(value);
+  }
+}
+async function apply(next: WeatherWind | null, note: string) {
+  const generation = ++applyNumber;
+  if (next) wind = next;
+  label = note;
+  controls();
+  store.getState().set({ bench: true, strength: 1, water: false });
   const before = lab.status().frames;
-  store.getState().set({
-    motion: arm === "off" ? "off" : "articulated",
-    strength: 1,
-    windBearingDeg: 60,
-    water: false,
-    bench: true,
-    articulationUrl: bake + (arm === "off" ? "" : `?breeze=${arm}`),
-  });
-  // Let the render hook observe the new URL before checking its load status.
+  setLabWeather(next, bake);
   while (lab.status().frames <= before) await delay();
-  if (arm !== "off" && !useAsCaptured.getState().on) {
+  if (next && !useAsCaptured.getState().on) {
     const deadline = performance.now() + 180000;
     while (!store.getState().articulationStatus.startsWith("Simulated")) {
-      if (store.getState().articulationStatus.startsWith("Error") || performance.now() > deadline)
-        throw new Error(store.getState().articulationStatus);
+      if (performance.now() > deadline) throw new Error(store.getState().articulationStatus);
       await delay();
     }
   }
   await ready();
+  if (generation === applyNumber) el("status").textContent = note;
 }
-interface BenchWindow {
-  __livingBench?: number[];
+async function preset(arm: string) {
+  requestNumber++;
+  (el("source") as HTMLSelectElement).value = "manual";
+  if (arm === "off") return apply(null, "As captured · plain scan");
+  const h = hours[names.indexOf(arm)];
+  if (!h) throw new Error("Unknown weather hour");
+  (el("date") as HTMLInputElement).value = h.time.slice(0, 16);
+  return apply(
+    h,
+    `Simulated from weather at ${spool ? "Minnetonka weather applied to Spool (manual transfer)" : "Minnetonka"}, ${h.time} · mean ${h.meanMps} / gust ${h.gustMps} m/s · from ${h.directionDeg}° · Tier ${spool ? "A" : "B"}${forest ? " · 36 copies" : ""}`,
+  );
 }
-const benchWindow = window as unknown as BenchWindow;
-const quantile = (v: number[], q: number) =>
-  [...v].sort((a, b) => a - b)[Math.min(v.length - 1, Math.floor(v.length * q))] ?? 0;
-let result: unknown;
+Object.assign(window, { __weather: { hours, names, preset, apply, overlay, forest, expected } });
+(el("captured") as HTMLInputElement).checked = useAsCaptured.getState().on;
 el("captured").addEventListener("change", (e) =>
   useAsCaptured.getState().set((e.target as HTMLInputElement).checked),
 );
-(el("captured") as HTMLInputElement).checked = useAsCaptured.getState().on;
 el("preset").addEventListener("change", (e) => {
   void preset((e.target as HTMLSelectElement).value);
 });
+for (const id of ["mean", "gust", "direction"])
+  el(id).addEventListener("change", () => {
+    requestNumber++;
+    (el("source") as HTMLSelectElement).value = "manual";
+    const next = {
+      ...wind,
+      meanMps: Number((el("mean") as HTMLInputElement).value),
+      gustMps: Number((el("gust") as HTMLInputElement).value),
+      directionDeg: Number((el("direction") as HTMLInputElement).value),
+    };
+    next.gustMps = Math.max(next.gustMps, next.meanMps);
+    void apply(
+      next,
+      `Simulated · manual mean ${next.meanMps} / gust ${next.gustMps} m/s · from ${next.directionDeg}°`,
+    );
+  });
+async function live() {
+  if ((el("source") as HTMLSelectElement).value !== "live") return;
+  const generation = ++requestNumber,
+    selectedDate = (el("date") as HTMLInputElement).value;
+  const result = await weatherFeed(
+    wind.latitude,
+    wind.longitude,
+    new Date((el("date") as HTMLInputElement).value + "Z"),
+  );
+  if (
+    generation !== requestNumber ||
+    (el("source") as HTMLSelectElement).value !== "live" ||
+    (el("date") as HTMLInputElement).value !== selectedDate
+  )
+    return;
+  await apply(result.wind, result.note);
+}
+el("source").addEventListener("change", () => {
+  void live();
+});
+el("date").addEventListener("change", () => {
+  void live();
+});
+interface BenchWindow {
+  __livingBench?: number[];
+}
+const bw = window as unknown as BenchWindow;
+const quantile = (v: number[], q: number) =>
+  [...v].sort((a, b) => a - b)[Math.min(v.length - 1, Math.floor(v.length * q))] ?? 0;
+let result: unknown;
 run.onclick = () => {
   void (async () => {
     run.disabled = true;
     download.disabled = true;
     if (useAsCaptured.getState().on)
       throw new Error("Turn off As captured to measure simulated motion");
-    const blocks: { round: number; arm: string; samples: number[] }[] = [];
     const rounds = Number(params.get("rounds") ?? 3),
       samples = Number(params.get("samples") ?? 32);
     if (
@@ -82,20 +214,17 @@ run.onclick = () => {
       samples > 240
     )
       throw new Error("Invalid benchmark length");
+    const blocks: { round: number; arm: string; samples: number[] }[] = [];
     for (let round = 0; round < rounds; round++)
-      for (const arm of ["off", "calm", "off", "breezy", "off", "windy"]) {
-        el("status").textContent = `Round ${round + 1}/${rounds}: ${arm}`;
+      for (const arm of ["off", "calm", "off", "light", "off", "fresh", "off", "storm"]) {
         await preset(arm);
+        el("status").textContent = `Round ${round + 1}/${rounds}: ${arm}`;
         store.getState().set({ clock: null });
-        benchWindow.__livingBench = [];
-        while ((benchWindow.__livingBench?.length ?? 0) < samples + 4) await delay();
-        blocks.push({
-          round,
-          arm,
-          samples: (benchWindow.__livingBench ?? []).slice(4, samples + 4),
-        });
+        bw.__livingBench = [];
+        while ((bw.__livingBench?.length ?? 0) < samples + 4) await delay();
+        blocks.push({ round, arm, samples: (bw.__livingBench ?? []).slice(4, samples + 4) });
       }
-    const summary = ["off", "calm", "breezy", "windy"].map((arm) => {
+    const summary = ["off", ...names].map((arm) => {
       const selected = blocks.filter((b) => b.arm === arm).flatMap((b) => b.samples);
       const pairs = blocks.flatMap((b, i) =>
         b.arm === arm && i > 0
@@ -127,19 +256,19 @@ run.onclick = () => {
               ),
       };
     });
-    const canvas = el("viewer").querySelectorAll("canvas");
-    const gl = Array.from(canvas)
-      .map((c) => c.getContext("webgl2"))
-      .find(Boolean);
-    const debug = gl?.getExtension("WEBGL_debug_renderer_info");
-    if (Array.from(canvas).some((c) => c.width !== 1920 || c.height !== 1080))
+    const canvas = Array.from(el("viewer").querySelectorAll("canvas")).filter((c) => c !== field),
+      gl = canvas.map((c) => c.getContext("webgl2")).find(Boolean),
+      debug = gl?.getExtension("WEBGL_debug_renderer_info");
+    if (canvas.some((c) => c.width !== 1920 || c.height !== 1080))
       throw new Error("Drawing buffer changed: expected 1920 × 1080");
     result = {
       time: new Date().toISOString(),
       userAgent: navigator.userAgent,
       renderer: debug ? String(gl?.getParameter(debug.UNMASKED_RENDERER_WEBGL)) : "unavailable",
-      buffers: Array.from(canvas).map((c) => [c.width, c.height]),
+      buffers: canvas.map((c) => [c.width, c.height]),
+      forest,
       status: lab.status(),
+      hours,
       method: "interleaved, four warmups, one-pixel readPixels fence, CPU+upload+draw",
       summary,
       blocks,
@@ -166,23 +295,17 @@ download.onclick = () => {
   );
   const a = document.createElement("a");
   a.href = url;
-  a.download = "living-breeze-bench.json";
+  a.download = "living-weather-bench.json";
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 try {
   await ready();
   const initial = params.get("preset") ?? "calm";
-  if (!["off", "calm", "breezy", "windy"].includes(initial))
-    throw new Error("Invalid preview preset");
   (el("preset") as HTMLSelectElement).value = initial;
   await preset(initial);
   run.disabled = false;
-  el("status").textContent = useAsCaptured.getState().on
-    ? "Ready · As captured (motion hidden)"
-    : initial === "off"
-      ? "Ready · Plain scan"
-      : `Ready · Simulated ${initial} breeze`;
+  el("info").textContent = JSON.stringify({ forest, status: lab.status() }, null, 2);
 } catch (e) {
   el("status").textContent = String(e);
 }

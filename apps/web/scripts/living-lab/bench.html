@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Simulated breeze · GPU bench</title>
+    <title>Simulated weather wind · lab and bench</title>
     <style>
       body {
         margin: 0;
@@ -36,6 +36,10 @@
         padding: 8px;
         margin: 6px;
       }
+      label {
+        display: inline-block;
+        margin: 6px;
+      }
       pre {
         white-space: pre-wrap;
       }
@@ -47,28 +51,73 @@
         padding: 8px;
         border: 1px solid #678;
       }
+      #field {
+        position: absolute;
+        right: 16px;
+        top: 16px;
+        width: 224px !important;
+        height: 248px !important;
+        background: #142333;
+        z-index: 5;
+      }
+      #caption {
+        position: absolute;
+        bottom: 14px;
+        left: 18px;
+        right: 18px;
+        color: white;
+        background: #142333df;
+        padding: 10px;
+        z-index: 5;
+        font-size: 17px;
+        pointer-events: none;
+      }
     </style>
   </head>
   <body>
     <main>
-      <h1>Simulated breeze · 1920 × 1080</h1>
+      <h1>Simulated from weather · Minnetonka</h1>
       <p>
-        Minnetonka depth-two LOD, same 687k splats as round 3. Fixed 1920 × 1080 drawing buffer,
-        device pixel ratio 1. Keep this tab foreground. Times include CPU pose evaluation, upload
-        and a one-pixel readPixels fence; they exclude display refresh waits. +1 ms is a laptop
-        acceptance target, not a verified claim.
+        Open-Meteo hourly reanalysis drives a shared travelling field. Plant response is simulated,
+        with trunk and ground pinned. Archive samples use a leaf-on scan in every season. The
+        36-copy forest uses 1,440,000 DC-colour splats and 900 branch nodes.
       </p>
+      <p><a href="/?living-forest=1">Forest lab</a> · <a href="/">Single-tree lab</a></p>
       <button id="run" disabled>Run interleaved benchmark</button
       ><button id="download" disabled>Download JSON</button>
       <label
-        >Preview
+        >Weather hour
         <select id="preset">
           <option>calm</option>
-          <option>breezy</option>
-          <option>windy</option>
+          <option>light</option>
+          <option>fresh</option>
+          <option>storm</option>
           <option>off</option>
         </select></label
       >
+      <label
+        >Mode
+        <select id="source">
+          <option value="manual">Manual / recorded hour</option>
+          <option value="live">Live weather</option>
+        </select></label
+      >
+      <label>Map time (UTC) <input id="date" type="datetime-local" /></label>
+      <label
+        >Mean 10 m (m/s) <input id="mean" type="range" min="0" max="25" step="0.1" /><output
+          id="mean-value"
+        ></output
+      ></label>
+      <label
+        >Gust 10 m (m/s) <input id="gust" type="range" min="0" max="40" step="0.1" /><output
+          id="gust-value"
+        ></output
+      ></label>
+      <label
+        >Wind FROM (°) <input id="direction" type="range" min="0" max="360" step="1" /><output
+          id="direction-value"
+        ></output
+      ></label>
       <label><input type="checkbox" id="captured" /> As captured</label>
       <p id="status">Loading…</p>
       <table>
@@ -85,7 +134,10 @@
       </table>
       <pre id="info"></pre>
     </main>
-    <div id="viewer"></div>
+    <div id="viewer">
+      <canvas id="field" width="224" height="248"></canvas>
+      <div id="caption">Simulated</div>
+    </div>
     <script type="module" src="/src/dev/livingBreezeBench.ts"></script>
   </body>
 </html>
