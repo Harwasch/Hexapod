@@ -1,7 +1,7 @@
 /**
  * The landing page (landing.html): it loads without CesiumJS, its hero scene starts or gives way
  * to a still, in any of the looks under review, the nav scrolls to its sections, the theme
- * toggles, the app section's points switch its screenshots, and the request form validates and
+ * toggles, Mission Control's live panels switch and run, and the request form validates and
  * sends.
  */
 import { expect, test, type Page } from "@playwright/test";
@@ -360,18 +360,39 @@ test("with ?review, the switcher changes the look", async ({ page }) => {
   await expect(page.locator("#top")).toHaveAttribute("data-look", "sensor");
 });
 
-test("the app section's points switch its screenshot", async ({ page }) => {
+test("Mission Control runs live: the views switch, and approving a plan sets robots to it", async ({
+  page,
+}) => {
   await page.goto("/landing.html");
   const app = page.locator("#app");
   await expect(app.locator("h2")).toHaveText("Mission Control");
-  await expect(app.locator("#shot-land")).toBeVisible();
-  await app.getByRole("button", { name: /^Plan/ }).click();
-  await expect(app.locator("#shot-plan")).toBeVisible();
-  await expect(app.locator("#shot-land")).toBeHidden();
-  await expect(app.getByRole("button", { name: /^Plan/ })).toHaveAttribute("aria-pressed", "true");
+  const plans = app.getByRole("region", { name: "Plans" });
+  const fleet = app.getByRole("region", { name: "Fleet" });
+  await expect(plans).toBeHidden();
+  // The section's points and the app's own tabs switch the same views.
+  await app.getByRole("button", { name: /^Plan/ }).first().click();
+  await expect(plans).toBeVisible();
+  await expect(
+    app.getByRole("group", { name: "App view" }).getByRole("button", { name: "Plan" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(plans.getByRole("listitem")).toHaveCount(6);
+  await expect(plans).toContainText("simulated");
+  await plans.getByRole("button", { name: "Approve plan" }).click();
+  await expect(plans.getByRole("listitem").first()).toContainText("Running");
+  await app.getByRole("group", { name: "App view" }).getByRole("button", { name: "Fleet" }).click();
+  await expect(fleet).toBeVisible();
+  await expect(plans).toBeHidden();
+  await expect(fleet.getByRole("row", { name: /HX-07 Wren/ })).toContainText("Pulling broom");
+  // It moves: a working machine's hours on shift count up.
+  const hours = fleet
+    .getByRole("row", { name: /HX-04 Kestrel/ })
+    .getByRole("cell")
+    .last();
+  const before = await hours.textContent();
+  await expect(hours).not.toHaveText(before ?? "", { timeout: 5000 });
   // Simulated things are labelled as simulated.
   await expect(app.locator("figcaption")).toContainText("simulated");
-  await expect(app.getByText("Keep the record")).toHaveCount(0);
+  await expect(fleet).toContainText("simulated");
 });
 
 test("fits a phone without scrolling sideways", async ({ page }) => {
