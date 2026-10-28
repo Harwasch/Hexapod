@@ -244,6 +244,19 @@ describe("the placement it is only as good as", () => {
     expect(verdictNote(map().uncertainty, E1, E2)).toBeNull();
   });
 
+  it("names the measured visual fit and keeps coarse dates labelled", () => {
+    const fit = { referenceEpochId: "ref", uncertaintyM: 0.4, basis: "direct" as const };
+    const coarse = {
+      ...map().uncertainty,
+      fromVerdict: "coarse" as const,
+      toVerdict: "coarse" as const,
+    };
+    expect(verdictNote(coarse, E1, E2, fit, E1)).toBe(
+      "Relative to Mar 1, 2026 (visual fit ±0.40 m). Not survey-grade: coarse · coarse. Local slope raises the threshold at edges.",
+    );
+    expect(verdictNote(coarse, E1, E2, fit)).toContain("Relative to epoch ref");
+  });
+
   it("says not survey-grade, with each date's verdict, when either is coarse", () => {
     const coarse = { ...map().uncertainty, toM: 5, toVerdict: "coarse" as const };
     expect(verdictNote(coarse, E1, E2)).toBe(
