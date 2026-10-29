@@ -12,6 +12,25 @@ const doc = {
   tiles: { checksum: [1, 2, 2, 3, 0, 1] },
 };
 describe("automatic Tier A from published segmentation", () => {
+  it("pins Spool shrub fragments under ground parents (tabletop residue regression)", () => {
+    const a = tierAFromInstances({
+      ...doc,
+      instances: [
+        { id: 3, category: "ground", behaviour: "static" },
+        { id: 86, parent: 3, category: "ground", properties: { vegetation: 0.9323 } },
+        {
+          id: 338,
+          parent: 86,
+          category: "shrubs",
+          properties: { vegetation: 0.9846, rigid: 0.3175 },
+          bounds: { min: [-0.3235, -2.5464, -0.3782], max: [0.4116, -2.0205, -0.0481] },
+        },
+      ],
+      tiles: { checksum: [338, 992] },
+    });
+    expect(a.bindings.every((n) => n === 0)).toBe(true);
+    expect(motionTier(a.header.detail!)).toBe("off");
+  });
   it("binds only vegetation in canonical tile order and pins unknown and static objects", () => {
     const a = tierAFromInstances(doc);
     expect(a.header.nodes).toHaveLength(2);

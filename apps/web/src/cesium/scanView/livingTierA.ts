@@ -41,10 +41,13 @@ export function tierAFromInstances(value: unknown): Articulation {
       (i.properties?.static ?? 0) >= 0.8
     )
       return false;
+    const parent = i.parent == null ? null : all.get(i.parent);
+    // A finer shrub label inside a ground/table segment is not independent evidence.
+    // Fail closed on the complete ancestry, including contradictory coarse labels.
+    if (parent && !vegetation(parent, seen)) return false;
     if (i.category) return classes.has(i.category);
     if ((i.properties?.vegetation ?? 0) >= 0.5) return true;
-    const parent = i.parent == null ? null : all.get(i.parent);
-    return parent ? vegetation(parent, seen) : false;
+    return parent !== null && parent !== undefined;
   };
   const candidates = doc.instances.filter(
     (i): i is BoundInstance =>
