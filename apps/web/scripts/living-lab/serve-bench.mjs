@@ -16,6 +16,7 @@ const option = (name, fallback) => {
 };
 const host = option("--host", "127.0.0.1");
 const port = Number(option("--port", "5720"));
+const readyToken = option("--ready-token", "");
 if (!host || ["0.0.0.0", "::"].includes(host)) throw new Error("Use a specific interface address");
 if (!Number.isInteger(port) || port < 5720 || port > 5729) throw new Error("Ports 5720–5729 only");
 const cache =
@@ -91,19 +92,42 @@ const mime = {
   ".svg": "image/svg+xml",
   ".ktx2": "image/ktx2",
 };
-createServer(async (req, res) => {
+const server = createServer(async (req, res) => {
   try {
     const path = decodeURIComponent(new URL(req.url, "http://local").pathname);
+    if (path === "/__living_ready") {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ token: readyToken }));
+      return;
+    }
     const file = resolve(out, "." + (path === "/" ? "/scripts/living-lab/bench.html" : path));
     if (!file.startsWith(out + sep) || !(await stat(file)).isFile()) {
       res.writeHead(404).end();
       return;
     }
     res.setHeader("Content-Type", mime[extname(file)] ?? "application/octet-stream");
-    createReadStream(file).pipe(res);
+    const stream = createReadStream(file);
+    stream.on("error", () => {
+      if (!res.headersSent) res.writeHead(500);
+      res.end();
+    });
+    stream.pipe(res);
   } catch {
     res.writeHead(404).end();
   }
-}).listen(port, host, () =>
+});
+server.on("error", (error) => {
+  console.error(error);
+  process.exit(1);
+});
+// Vite's build workers also register signal handlers. Explicitly close our HTTP
+// listener so build-time handlers cannot leave an orphan holding the bench port.
+for (const signal of ["SIGINT", "SIGTERM"])
+  process.once(signal, () => {
+    server.close(() => process.exit(0));
+    server.closeAllConnections();
+    setTimeout(() => process.exit(0), 2000).unref();
+  });
+server.listen(port, host, () =>
   console.info(`Simulated weather/forest bench: http://${host}:${port}/`),
 );

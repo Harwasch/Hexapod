@@ -80,9 +80,24 @@
       <p>
         Open-Meteo hourly reanalysis drives a shared travelling field. Plant response is simulated,
         with trunk and ground pinned. Archive samples use a leaf-on scan in every season. The
-        36-copy forest uses 1,440,000 DC-colour splats and 900 branch nodes.
+        80-copy grove uses 2,400,000 DC-colour splats and 960 branch nodes.
       </p>
-      <p><a href="/?living-forest=1">Forest lab</a> · <a href="/">Single-tree lab</a></p>
+      <p>
+        <a href="/?living-forest=1&autobench=1"
+          ><button>Run forest benchmark next (80 trees)</button></a
+        >
+        ·
+        <a href="/">Single-tree lab</a>
+      </p>
+      <p>
+        8 randomized rounds, 32 samples/block; differences pair each arm with surrounding off
+        blocks. Spread is p10–p90 across rounds. Off drift above 30% makes the result inconclusive.
+      </p>
+      <p>
+        Forest views: <a href="/?living-forest=1&view=oblique">Oblique</a> ·
+        <a href="/?living-forest=1&view=edge">2 m eye height</a> ·
+        <a href="/?living-forest=1&view=overhead">Overhead + wind field</a>
+      </p>
       <button id="run" disabled>Run interleaved benchmark</button
       ><button id="download" disabled>Download JSON</button>
       <label
@@ -126,7 +141,7 @@
             <th>Arm</th>
             <th>Median ms</th>
             <th>p95 ms</th>
-            <th>Paired added ms</th>
+            <th>Paired added ms [p10, p90]</th>
             <th>Ratio</th>
           </tr>
         </thead>
