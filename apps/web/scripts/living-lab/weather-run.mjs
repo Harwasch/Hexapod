@@ -5,44 +5,76 @@ import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { chromium } from "@playwright/test";
 const [task = "smoke", scene = "tree", hour = "storm"] = process.argv.slice(2);
 if (
-  !["smoke", "record", "bench", "controls", "device", "tier-a", "step-check"].includes(task) ||
-  !["forest", "crown", "tree"].includes(scene)
+  ![
+    "smoke",
+    "record",
+    "record-hours",
+    "bench",
+    "controls",
+    "device",
+    "feed",
+    "tier-a",
+    "step-check",
+  ].includes(task) ||
+  !["forest", "forest-oblique", "forest-edge", "forest-overhead", "crown", "tree"].includes(scene)
 )
   throw new Error("Invalid task/scene");
+const isForest = scene.startsWith("forest");
+const port = Number(process.env.LAB_PORT ?? 5720),
+  readyToken = randomUUID();
+if (!Number.isInteger(port) || port < 5720 || port > 5729) throw new Error("Ports 5720–5729 only");
+const address = `http://127.0.0.1:${port}`;
 const cache = resolve(homedir(), ".cache/hexapod-living-weather"),
   out = resolve(process.env.LAB_OUT ?? `${cache}/artifacts`);
 await mkdir(out, { recursive: true });
 const log = createWriteStream(`${cache}/serve-${task}-${scene}.log`);
 const server = spawn(
   process.execPath,
-  ["apps/web/scripts/living-lab/serve-bench.mjs", "--host", "127.0.0.1", "--port", "5720"],
+  [
+    "apps/web/scripts/living-lab/serve-bench.mjs",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    String(port),
+    "--ready-token",
+    readyToken,
+  ],
   { stdio: ["ignore", "pipe", "pipe"], env: process.env },
 );
 server.stdout.pipe(log);
 server.stderr.pipe(log);
-let browser, progress;
-const close = async () => {
-  clearInterval(progress);
-  await browser?.close();
-  server.kill("SIGTERM");
-  log.end();
-};
+let browser, progress, closing;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const close = () =>
+  (closing ??= (async () => {
+    clearInterval(progress);
+    await browser?.close();
+    if (server.exitCode === null) {
+      const exited = new Promise((r) => server.once("exit", r));
+      server.kill("SIGTERM");
+      await Promise.race([exited, sleep(3000)]);
+      if (server.exitCode === null) server.kill("SIGKILL");
+      await exited;
+    }
+    log.end();
+  })());
 process.on("SIGINT", () => {
   void close().then(() => process.exit(130));
 });
 process.on("SIGTERM", () => {
   void close().then(() => process.exit(143));
 });
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 try {
   let ready = false;
   for (let i = 0; i < 180; i++) {
     if (server.exitCode !== null) throw new Error("Static server exited");
     try {
-      if ((await fetch("http://127.0.0.1:5720/")).ok) {
+      const response = await fetch(`${address}/__living_ready`);
+      if (response.ok && (await response.json()).token === readyToken) {
         ready = true;
         break;
       }
@@ -56,10 +88,13 @@ try {
     args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--disable-dev-shm-usage"],
     headless: true,
   });
+  const deviceViewport = task === "device" || task === "feed";
   const page = await browser.newPage({
-    viewport: { width: task === "device" ? 1920 : 1024, height: task === "device" ? 1600 : 640 },
+    viewport: { width: deviceViewport ? 1920 : 1024, height: deviceViewport ? 1600 : 640 },
     deviceScaleFactor: 1,
   });
+  // Full-HD SwiftShader input dispatch can exceed Playwright's 30-second action default.
+  page.setDefaultTimeout(120000);
   const logs = [];
   page.on("pageerror", (e) => logs.push(String(e)));
   page.on("console", (m) => {
@@ -73,7 +108,7 @@ try {
       ? route.continue()
       : route.abort();
   });
-  const path = `http://127.0.0.1:5720/?preset=off${scene === "forest" ? "&living-forest=1" : task === "tier-a" ? "&living-scan=spool" : ""}${task === "device" ? "&rounds=1&samples=2" : ""}`;
+  const path = `${address}/?preset=off${isForest ? `&living-forest=1&view=${scene.split("-")[1] ?? "oblique"}` : task === "tier-a" ? "&living-scan=spool" : ""}${task === "device" ? "&rounds=1&samples=2" : ""}`;
   progress = setInterval(() => {
     void page
       .evaluate(() => ({
@@ -109,8 +144,17 @@ try {
       `(async()=>{const before=__lab.status().frames;LL.getState().set(${JSON.stringify(patch)});if(window.__manualCapture)__lab.widget.render();while(__lab.status().frames<=before || __lab.status().loading || !__lab.status().settled)await new Promise(r=>setTimeout(r,10));__weather.overlay();return __lab.status();})()`,
     );
   const configure = async (arm) => {
-    await ev(`__weather.preset(${JSON.stringify(arm)})`);
-    await settle({ clock: 0 });
+    // A subsequent hour must be allowed to finish async sidecar loading even
+    // after capture has stopped the automatic loops. No pulse runs while recording.
+    const pulse = await ev(
+      "window.__manualCapture ? setInterval(()=>__lab.widget.render(),100) : null",
+    );
+    try {
+      await ev(`__weather.preset(${JSON.stringify(arm)})`);
+      await settle({ clock: 0 });
+    } finally {
+      if (pulse !== null) await ev(`clearInterval(${pulse})`);
+    }
   };
   const resize = async (w, h) => {
     await ev(
@@ -121,28 +165,42 @@ try {
   const shot = async (file, decorated = true) => {
     const data =
       await ev(`(()=>{const viewer=document.getElementById('viewer');const c=document.createElement('canvas');c.width=viewer.clientWidth;c.height=viewer.clientHeight;const x=c.getContext('2d');x.fillStyle='#9fb3c8';x.fillRect(0,0,c.width,c.height);for(const source of viewer.querySelectorAll('canvas')){if(source.id==='field')continue;const gl=source.getContext('webgl2');if(gl?.getContextAttributes()?.preserveDrawingBuffer)x.drawImage(source,0,0,c.width,c.height);}
-  ${decorated ? `if(__weather.forest)x.drawImage(document.getElementById('field'),c.width-236,12,224,248);x.fillStyle='#142333ee';x.fillRect(0,c.height-62,c.width,62);x.fillStyle='white';x.font='14px sans-serif';const caption=document.getElementById('caption').textContent;const split=caption.indexOf(' · mean');x.fillText(split<0?caption:caption.slice(0,split),16,c.height-36);x.fillText(split<0?'':caption.slice(split+3),16,c.height-14);` : ""}
+  ${decorated ? `if(__weather.forest && new URLSearchParams(location.search).get("view")==="overhead")x.drawImage(document.getElementById('field'),c.width-236,12,224,248);x.fillStyle='#142333ee';x.fillRect(0,c.height-62,c.width,62);x.fillStyle='white';x.font='14px sans-serif';const caption=document.getElementById('caption').textContent;const split=caption.indexOf(' · mean');x.fillText(split<0?caption:caption.slice(0,split),16,c.height-36);x.fillText(split<0?'':caption.slice(split+3),16,c.height-14);` : ""}
   return c.toDataURL('image/png').split(',')[1];})()`);
     await writeFile(file, Buffer.from(data, "base64"));
   };
-  if (task === "device") {
-    await page.getByRole("button", { name: "Run interleaved benchmark" }).click();
-    await page.waitForFunction(() => window.__breezeResult, undefined, { timeout: 1200000 });
-    const result = await ev("__breezeResult");
-    await writeFile(`${out}/device-${scene}.json`, JSON.stringify(result, null, 2));
-    const downloadPromise = page.waitForEvent("download");
-    await page.getByRole("button", { name: "Download JSON" }).click();
-    const downloaded = await downloadPromise;
-    await downloaded.saveAs(`${out}/device-${scene}-download.json`);
-    const actual = JSON.parse(await readFile(`${out}/device-${scene}-download.json`, "utf8"));
-    if (JSON.stringify(result) !== JSON.stringify(actual))
-      throw new Error("Downloaded bench result differs");
+  if (task === "device" || task === "feed") {
+    if (task === "device") {
+      await page.getByRole("button", { name: "Run interleaved benchmark" }).click();
+      await page.waitForFunction(() => window.__breezeResult, undefined, { timeout: 1200000 });
+      const result = await ev("__breezeResult");
+      await writeFile(`${out}/device-${scene}.json`, JSON.stringify(result, null, 2));
+      const downloadPromise = page.waitForEvent("download");
+      await page.getByRole("button", { name: "Download JSON" }).click();
+      const downloaded = await downloadPromise;
+      await downloaded.saveAs(`${out}/device-${scene}-download.json`);
+      const actual = JSON.parse(await readFile(`${out}/device-${scene}-download.json`, "utf8"));
+      if (JSON.stringify(result) !== JSON.stringify(actual))
+        throw new Error("Downloaded bench result differs");
+    }
+    // A feed-only run has not selected a benchmark arm to initialize the date.
+    await page.locator("#date").fill("2024-12-04T21:00");
     await page.selectOption("#source", "live");
-    await page.waitForFunction(
-      () => document.getElementById("status").textContent.includes("Open-Meteo"),
-      undefined,
-      { timeout: 30000 },
-    );
+    await page
+      .waitForFunction(
+        () => document.getElementById("status").textContent.includes("Open-Meteo"),
+        undefined,
+        { timeout: 240000 },
+      )
+      .catch(async (error) => {
+        console.info(
+          "Feed state",
+          await ev(
+            "({note:document.getElementById('status').textContent,date:document.getElementById('date').value,wind:LL.getState().weather,motion:LL.getState().motion})",
+          ),
+        );
+        throw error;
+      });
     const live = await ev(
       "({note:document.getElementById('status').textContent,wind:LL.getState().weather,motion:LL.getState().motion})",
     );
@@ -154,7 +212,7 @@ try {
     await page.waitForFunction(
       () => document.getElementById("status").textContent.includes("Weather HTTP 503"),
       undefined,
-      { timeout: 30000 },
+      { timeout: 240000 },
     );
     const fallback = await ev(
       "({note:document.getElementById('status').textContent,wind:LL.getState().weather,motion:LL.getState().motion})",
@@ -186,6 +244,20 @@ try {
       }
       return route.fulfill({ status: 200, contentType: "application/json", body: payload(day, 4) });
     });
+    // Observe before starting: a slow software-rendered scene can outlast the
+    // feed's 12-second timeout before the later response is released.
+    const oldNetworkDone = new Promise((resolve) => {
+      const finish = (request, outcome) => {
+        if (!request.url().includes("start_date=2024-12-02")) return;
+        page.off("requestfinished", finished);
+        page.off("requestfailed", failed);
+        resolve({ outcome, failure: request.failure()?.errorText ?? null });
+      };
+      const finished = (request) => finish(request, "finished");
+      const failed = (request) => finish(request, "failed");
+      page.on("requestfinished", finished);
+      page.on("requestfailed", failed);
+    });
     const oldRequest = page.waitForRequest((r) => r.url().includes("start_date=2024-12-02"));
     await page.locator("#date").fill("2024-12-02T21:00");
     await page.locator("#date").dispatchEvent("change");
@@ -195,16 +267,15 @@ try {
     await page.waitForFunction(
       () => window.LL.getState().weather?.time === "2024-12-01T21:00Z",
       undefined,
-      { timeout: 30000 },
+      { timeout: 240000 },
     );
     while (!delayed) await sleep(10);
-    const oldResponse = page.waitForResponse((r) => r.url().includes("start_date=2024-12-02"));
     await delayed.fulfill({
       status: 200,
       contentType: "application/json",
       body: payload("2024-12-02", 20),
     });
-    await (await oldResponse).finished();
+    const oldOutcome = await oldNetworkDone;
     const race = await ev(
       "new Promise(r=>setTimeout(()=>r({wind:LL.getState().weather,note:document.getElementById('status').textContent}),200))",
     );
@@ -218,6 +289,7 @@ try {
           fallback,
           fallbackSource: "intercepted HTTP 503",
           race,
+          oldOutcome,
           raceSource: "intercepted fixture with deliberately relabelled test dates",
         },
         null,
@@ -250,38 +322,44 @@ try {
           2,
         ),
       );
-    } else if (task === "record") {
-      await configure(hour);
-      // A fixed-clock recording needs exactly one completed draw per source frame.
-      // Stop repeated identical draws between PNG reads; the normal/fixed pair is pixel-tested.
-      await ev(
-        "(()=>{__lab.widget.useDefaultRenderLoop=false;window.requestAnimationFrame=()=>0;window.__manualCapture=true;return true;})()",
-      );
-      const frames = `${out}/${scene}-${hour}-frames`;
-      await mkdir(frames, { recursive: true });
-      for (let i = 0; i < 192; i++) {
-        const file = `${frames}/${String(i).padStart(3, "0")}.png`;
-        await settle({ clock: i / 24 });
-        await shot(file);
-        if (i % 24 === 0) console.info(scene, hour, `${i}/192`);
+    } else if (task === "record" || task === "record-hours") {
+      for (const selectedHour of task === "record-hours"
+        ? (process.env.LAB_HOURS?.split(",") ?? ["calm", "light", "fresh", "storm"])
+        : [hour]) {
+        await configure(selectedHour);
+        // A fixed-clock recording needs exactly one completed draw per source frame.
+        // Stop repeated identical draws between PNG reads; the normal/fixed pair is pixel-tested.
+        await ev(
+          "(()=>{__lab.widget.useDefaultRenderLoop=false;window.requestAnimationFrame=()=>0;window.__manualCapture=true;return true;})()",
+        );
+        const frames = `${out}/${scene}-${selectedHour}-frames`;
+        await mkdir(frames, { recursive: true });
+        for (let i = 0; i < 192; i++) {
+          const file = `${frames}/${String(i).padStart(3, "0")}.png`;
+          await settle({ clock: i / 24 });
+          await shot(file);
+          if (i % 24 === 0) console.info(scene, selectedHour, `${i}/192`);
+        }
+        await writeFile(
+          `${out}/${scene}-${selectedHour}-record.json`,
+          JSON.stringify(
+            {
+              frames: 192,
+              fps: 24,
+              width: 1024,
+              height: 640,
+              clock: "i/24",
+              interpolation: false,
+              status: await ev("__lab.status()"),
+              weather: await ev(
+                `__weather.hours[__weather.names.indexOf(${JSON.stringify(selectedHour)})]`,
+              ),
+            },
+            null,
+            2,
+          ),
+        );
       }
-      await writeFile(
-        `${out}/${scene}-${hour}-record.json`,
-        JSON.stringify(
-          {
-            frames: 192,
-            fps: 24,
-            width: 1024,
-            height: 640,
-            clock: "i/24",
-            interpolation: false,
-            status: await ev("__lab.status()"),
-            weather: await ev(`__weather.hours[__weather.names.indexOf(${JSON.stringify(hour)})]`),
-          },
-          null,
-          2,
-        ),
-      );
     } else if (task === "bench") {
       for (let round = 0; round < 3; round++)
         for (const arm of ["off", "calm", "off", "storm"]) {

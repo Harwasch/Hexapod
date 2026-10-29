@@ -35,17 +35,43 @@ has its own types so weather speeds cannot silently replace arbitrary shipped st
   `z0=.3 m` (terrain III, EN 1991-1-4 Table 4.1; also the shipped `turbulence.ts`) is normalized
   at 10 m. It uses `ln((z+z0)/z0)` to reach exact zero at the ground. Within the assumed
   6 m canopy it multiplies by `exp(2 min(0,z/6-1))`. Canopy height 6 m and attenuation 2
-  are **assumptions**, not a fitted Minnetonka wind profile. Real urban/forest shelter,
-  roughness displacement and terrain flow are absent. Open-Meteo's grid wind is not the
+  are **assumptions**, not a fitted Minnetonka wind profile. Roughness displacement and terrain flow are absent. Dense-stand shelter is described below. Open-Meteo's grid wind is not the
   wind observed inside this crown.
-- [Vogel 1989](https://doi.org/10.1093/jxb/40.8.941) and
-  [de Langre, Gutierrez & Cossé 2012](https://comptes-rendus.academie-sciences.fr/mecanique/item/10.1016/j.crme.2011.11.005.pdf)
-  motivate subquadratic loading as plants reconfigure. The proxy load is
-  `U²/sqrt(1+(U/4)²)`: quadratic at low speed and linear at high speed (Vogel exponent -1).
-  The 4 m/s transition is a **judgement**. Angle `0.10 load/(28+load)` has a strict .10 rad
-  ceiling; .10 and 28 are visual guardrails, not measured drag, wood modulus or failure loads.
-  This caps motion, not weather speed. Inputs are sanitized to 0..60 mean and 0..90 gust
-  m/s as defensive **software bounds**, not physical thresholds.
+- [Cardona & Dabiri 2022](https://doi.org/10.1017/flo.2021.15), a field study of a
+  **5 m Magnolia grandiflora**, supplies the amplitude constraint. A 10 m anemometer
+  and 20 one-minute, 900-frame optical treetop records span 5.322–15.79 m/s. The
+  supporting MAT data at [Stanford](https://purl.stanford.edu/mg505cc6103) gives OLS
+  `U = 5.42642597 sqrt(sigma_px)`, reproducing the paper's R²=.81. The raw pairs
+  and fit are in `weatherCalibration.ts`. Metric transfer uses approximate 5 m height
+  divided by **265±10 source-image pixels**, then divides by cos(50°), the reported
+  wind angle from the image plane. Thus `sigma_m ≈ .000997 U²` at the study's
+  10–12% turbulence intensity. Height accuracy, image perspective, assumed along-wind
+  motion and transfer to this unknown species are limitations; this is **not a
+  Minnetonka field calibration**. We allow 20% reference-curve error, specified before
+  the final fit. The actual pose probe is within 6% at 6, 9.17, 12 and 15 m/s.
+- Weather angular forcing is now `.0115 U²/sqrt(1+(U/25)^4)`, fitted through the
+  **hierarchical crown-top pose**, including height reduction and geometric compliance.
+  It uses the complete fluctuating load, with a quarter of the mean load retained as
+  static lean. The .25 lean fraction and 25 m/s roll-off are **judgements**: the study
+  constrains dynamic standard deviation, not static bend or survival in a storm.
+  The finite high-speed bound is a software/visual guardrail, not a failure threshold.
+  The four archive hours have different gust excess; they therefore do not all lie on
+  the constant-11%-turbulence curve. Matching that curve under reference forcing and
+  then applying their own gusts gives the following **600 s, 10 Hz** probe results.
+  The probe sits above the highest fitted joint at captured top height 6.2246 m;
+  centimetres are horizontal displacement, not a leaf-resolved motion measurement.
+
+  | Hour                | Before σ cm | After σ cm | Before peak cm | After peak cm |
+  | ------------------- | ----------: | ---------: | -------------: | ------------: |
+  | Calm .40 / 1.10     |        .048 |       .156 |           .183 |          .540 |
+  | Light 2.46 / 4.00   |        .494 |      1.908 |          2.140 |         5.925 |
+  | Fresh 8.51 / 15.40  |       3.577 |     30.684 |         14.497 |        98.267 |
+  | Storm 11.49 / 22.90 |       5.688 |     60.396 |         22.201 |       179.544 |
+
+  Calm/light are extrapolations below the field data; storm gusts exceed it. The
+  gust maximum does not identify turbulence intensity or spectra. The generated
+  motion is weather-conditioned **Simulated**, never a replay of the observed tree.
+
 - Branch modal frequencies reuse round 4's 0.24..1.1 Hz band, informed by
   [Campiformio 2012](https://digitalcommons.lib.uconn.edu/gs_theses/253/) (white ash 0.2..1.1 Hz)
   and [Jackson et al. 2019](https://pmc.ncbi.nlm.nih.gov/articles/PMC6597771/) (architecture-dependent
@@ -123,6 +149,9 @@ bindings. Vegetation categories (trees, shrubs, grass, crops, flowers, ferns, mo
 vegetation property ≥.5 (only when the class is absent) nominate clumps; parents supply
 missing classes. Known non-vegetation classes always stay static. A static behaviour,
 rigidity score ≥.5 or static score ≥.8 excludes the segment even when vegetation is high.
+The same veto applies recursively to **every ancestor**, including a known ground/table
+class above a finer shrub label. This pins all seven unsupported Spool shrub fragments;
+Spool selects off. A fine child label cannot establish a plant inside a rigid ground segment.
 These are conservative **classification judgements**, informed by the shipped object's
 rigid/static exclusions, not botanical truth or measured mechanical stiffness. The real
 Spool check exposed table fragments moving under vegetation scores alone; ground/wood
@@ -157,32 +186,81 @@ Use the captures project's environment for Python. `--source`, `--bake`, `--fore
 binds are refused. Ports 5720..5729 only. Open `/` or `/?living-forest=1`. No API server.
 All paths in committed code derive from the repo or home directory.
 
-The deterministic 6×6 stand has 24 m spacing with ±3 m jitter, random yaw and .9..1.1
-scale (seed 281026, **layout choices**). Per-copy LOD is a 40k systematic sample from
-existing depth-one replacement tiles, DC colour only, with 25 spatially spread fitted
-nodes reconnected to retained ancestors. Total **1,440,000 splats**, **900 nodes**.
-Canonical GLBs remain untouched. A temporary root overview reuses one copy; it is fully
-replaced by the 36 leaf tiles before a recording or timing sample. The inset shows the same field, coordinates and clock
-at 10 m, with a fixed 0..25 m/s colour scale and velocity direction arrows. The stand
-uses height-reduced wind; the inset is not canopy velocity or a weather raster.
+The deterministic **80-copy jittered hex grove** has nominal **3.50013 m** spacing,
+.9 of the measured **3.88903 m** crown diameter. Crown width is the mean of east–west
+3.67919 m and north–south 4.09888 m central-98% splat-centre extents above 1.5 m,
+measured from **all 2,221,311 terminal splats** (no replacement-parent duplication).
+The 1.5 m crown base and 1% tail trimming are measurement conventions. Raw horizontal
+bounds span 4.28418×4.69214 m, including sparse tails. The seed remains 281026.
+Jitter is ±.035 diameters per axis, yaw is uniform, scale .9–1.1, random copies are
+mirrored in local x with covariance orientations reflected correctly, and brightness
+varies .95–1.05 in DC RGB. These are **layout/appearance judgements**, applied only to
+labelled **Simulated** forest derivatives. The original scan GLBs stay byte-identical.
+As captured compares to each scene's immutable derivative baseline; it does not undo
+the simulated forest layout, LOD or colour choices.
 
-The device bench interleaves plain/calm/plain/light/plain/fresh/plain/storm, three
-rounds, four warmups and 32 retained samples/block by default, 1920×1080 buffers at
-DPR 1. The same page supports forest. One-pixel readPixels includes CPU pose evaluation,
-upload and completed draw. SwiftShader cannot verify a laptop's +1 ms target.
+**30,000 splats/copy = 2,400,000 drawn**, 2,430,000 cached including the replaced
+single-copy overview. **12 connected nodes/copy = 960 nodes**, below the existing
+1024-node texture limit. **29,985/30,000 splats per copy** retain moving crown bindings;
+15 measured static pins remain zero. An ancestor-only LOD remap had incorrectly
+pinned 23,358 crown splats to the last trunk joint. A failing regression test now
+guards reskinning to the retained branch segments, preserving original static pins.
+The coarse rig uses **weatherResponseScale=.31**, fitted through an exposed copy
+against the same field curve (within 5% at all four reference speeds); shelter is
+applied afterwards. Geometry is a deterministic sample of existing coarse tiles;
+DC colour only. The low LOD and reduced rig are budget choices. No leaf flutter is enabled.
+
+Shelter closure is computed **once per copy when weather changes**. The Cionco
+height profile then gives each retained joint a fixed ratio:
+`S(z) = exp(-2.5 min(1, fetch/(6 D)) max(0,1-z/H))`, with **H=6 m**.
+[Kim et al. 2014](https://doi.org/10.1016/j.agrformet.2013.11.013) uses **alpha=2.5**,
+explicitly assumed there too, for mixed broadleaf canopy. Wind recovers toward the
+canopy top; lower interior and lee joints stay sheltered. The first look-pass
+incorrectly applied the trunk-space ratio to upper crowns as well and suppressed
+visible weather motion. Its recordings are superseded. Exposed-copy calibration
+is unchanged because windward closure is zero.
+
+The exponential height form and coefficient are cited; fetch closure over six
+crown diameters, the .75 D cross-wind corridor with linear taper, and a uniform
+6 m canopy are **judgements**, not a fitted forest-edge law. Closure is per copy,
+height ratios are prepared once per retained joint; no per-splat or per-frame
+shelter work. The existing roughness/own-crown height profile still applies. At
+full closure the extra ratios are .082 at ground, .287 at 3 m, .535 at 4.5 m and
+1 at/above 6 m. This is still a simple canopy-flow approximation, not a fluid solve.
+
+Cameras: oblique target [0,0,3], heading25°, pitch−25°, range38 m; low target [0,−7,3.4],
+heading10°, pitch+6°, range13.4 m gives **2.00 m eye height** near the edge; overhead
+target [0,0,2], pitch−89.9°, range48 m. `?living-forest=1&view=oblique|edge|overhead`
+selects them. The overhead inset is north-up, **45 m** wide, at 10 m, fixed 0..25 m/s
+colour scale. It shows the shared advected field, not sheltered canopy velocity.
+Ground is still a flat simulated sheet, reduced to 55×45 m.
+
+The laptop page defaults to **8 rounds, eight warmups, 32 retained samples/block**,
+with a recorded random seed and a fresh Fisher–Yates arm order per round. Off blocks
+bracket each arm. Added time is the arm median minus the average of its two adjacent
+off medians; JSON retains each round's pair, ratio, off medians and drift. The page
+shows median added time and p10–p90 across rounds. If max/min off medians exceeds 1.3,
+the verdict is **inconclusive, rerun with the laptop plugged in and nothing else open**.
+A clear **Run forest benchmark next (80 trees)** button starts the forest run. Buffers
+stay 1920×1080, DPR1, with the existing one-pixel readPixels fence. Software rendering
+cannot establish hardware-GPU overhead. Harrison's old tree-only laptop run has 4.08×
+off-block drift and remains inconclusive; the forest was not measured on that laptop.
 
 Detailed scan scores, measured times, fixed-clock 24 fps media, immutable controls,
-gate tails and limitations belong in the task's `living-weather/results.md` gallery.
+gate tails and limitations belong in the task's `living-weather-look/results.md` gallery.
 
 For offline/browser validation and media, set `LAB_OUT` to the task notes folder and run
-`heavy node apps/web/scripts/living-lab/weather-run.mjs record crown storm` (or forest,
-calm/light/fresh). `controls tree`, `controls forest`, `bench tree`, `bench forest` and
+`heavy node apps/web/scripts/living-lab/weather-run.mjs record-hours crown` (or forest-oblique / forest-edge; `record forest-overhead storm` keeps the inset). `controls tree`, `controls forest`, `bench tree`, `bench forest` and
 `device tree` / `device forest` exercise restoration and the real download action.
 The `device` task also tests an actual weather read and an intercepted HTTP 503; build
-it with `VITE_LIVING_WEATHER=1`. `tier-a tree` checks published Spool segmentation,
+it with `VITE_LIVING_WEATHER=1`. `tier-a tree` checks published Spool segmentation and exact rigid pixels,
 using the explicitly labelled manual transfer of Minnetonka weather. It requires the
 cached public Spool tiles; the default tree/forest bench does not. The two-sample
 device run is a smoke check, not a p95 estimate. Use the default page settings on the laptop.
+
+`feed tree` / `feed forest` reruns the weather-read, failure and stale-request checks
+without repeating a completed benchmark. It initializes a known archive hour and
+observes either completion or failure of the deliberately held older request.
 
 Recordings stop the browser's automatic render loops after the assets and camera have
 settled, then call `widget.render()` once at each `i/24`. The existing one-pixel fence
@@ -190,3 +268,29 @@ completes the draw before its PNG is read. Normal versus manually stepped render
 checked at the identical fixed time for crown and forest. This changes capture cadence,
 not the motion clock or interpolation. The initial storm crown reference used the normal
 loop at the same fixed clock. Timings use the normal loop.
+
+Run `heavy node apps/web/scripts/living-lab/weather-amplitude.mjs calibrated` for the
+600 s crown-top amplitude probe and its explicit 20% reference-curve assertions.
+`record-hours` records four hours in one browser; each source frame is still rendered
+at i/24, 192 frames, with no interpolation. `weather-gallery.mjs` encodes the three
+four-panel comparisons, overhead storm, contact sheet and captioned gallery.
+
+Add `forest` after `calibrated` to run the exposed coarse-stand pose probe with the same assertions.
+
+The amplitude probe also checks **all 20 actual field records** after metric transfer.
+The source's inverse-curve relative σ residual reaches **58.47%** (at 15.79 m/s),
+so this check uses a recorded **60% field-scatter envelope**, independently of the
+tighter 20% fitted-curve transfer bound. The source-fit test records that scatter;
+it is not an arithmetic tolerance or a claim of 20% agreement with every noisy record.
+
+For the four hours, the source's force/sway relation also supplies a **gust-adjusted
+comparison curve**. For this simulated field's `.6 sin(a)+.4 sin(b)`, the second
+moment is .26 and `Var(w²)=.077`. With `d=G-U`, quadratic-load standard deviation
+is `sqrt(1.04 U² d² + .077 d⁴)`. Normalize it by
+`sqrt(1.04(.216)²+.077(.216)⁴)` at the reference ~11% turbulence, then multiply by
+`.000997`. This gives target σ **.143, 1.77, 27.6 and 62.5 cm** for calm through
+storm, versus the pose probe's **.156, 1.91, 30.7 and 60.4 cm**. All four are checked
+against the same **20%** bound, with no per-hour gain. These targets follow the
+**imposed sinusoidal field statistics**, not an observed hourly turbulence intensity.
+Clipping, saturation, branch modes and finite observation windows make the relation
+approximate. A mean and maximum gust alone cannot identify the true distribution.
