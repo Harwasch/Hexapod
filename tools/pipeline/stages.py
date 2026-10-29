@@ -276,8 +276,8 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
     own ground. What was done is written into `source_meta.json` as `frame`, so a capture
     that lands wrong carries the reason with it.
 
-    `ship_sh_degree` (0 by default: DC colour only, as always) ships that many of the upload's
-    own SH bands -- a phone app's gsplat-style PLY or a Scaniverse `.spz` often carries
+    `ship_sh_degree` (code default 0; splat-ingest normalize ships 3) ships that many of
+    the upload's own SH bands -- a phone app's gsplat-style PLY or a Scaniverse `.spz` often carries
     degree 3 -- turned with the splat by the up-axis and heading rotation
     (`harmonics.rotate`); an upload with fewer bands ships what it has, and
     `source_meta.json`'s `shDegree` says which.
@@ -1798,6 +1798,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     * `antialiased`, `opacity_reg`, `depth_loss`, `pose_opt`, `app_opt` and
       `bilateral_grid` are gsplat's own switches (`training.gsplat_argv` says what each
       does);
+    * `sparse_grad` and `visible_adam` opt into experimental optimisers for bench trials;
+      both default off. `packed` defaults on, and `sparse_grad` requires it.
     * `roi` (`{"center": [x, y, z], "radius": r}`, COLMAP frame) crops the initial points
       to the sphere before training and the trained gaussians to 1.5 radii after it;
     * `variant` is `3dgs`; `2dgs` is refused, and `training.py` says why;
@@ -1844,8 +1846,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     * `batch_size` (1-8, default 1): images per training step, with gsplat's own
       sqrt(batch) learning-rate scaling and the schedule divided by it so the images
       trained on stay the same (`training.gsplat_argv`). Not with `depth_loss`.
-    * `ship_sh_degree` (0-3, default 0): the spherical-harmonic bands above DC that
-      `trained.ply` ships -- and so `gated.ply`, `canonical.ply` and the tiles, which
+    * `ship_sh_degree` (0-3, code default 0; photo-reconstruct train ships 3): the bands
+      above DC that `trained.ply` ships -- and so `gated.ply`, `canonical.ply` and the tiles, which
       carry whatever it has (`place` turning them into east/north/up). The trainer always
       fits degree 3 (gsplat's own `--sh_degree`, left at its default -- a different knob,
       which is why this one is not called that); this is how many of its bands survive,
@@ -1864,6 +1866,11 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         )
     # Refused before any GPU time is spent on a run that could not ship it.
     sh_degree = harmonics.check_degree(ctx.param("ship_sh_degree"), name="ship_sh_degree")
+    packed = _optional_bool(ctx.param("packed", True), "packed")
+    sparse_grad = _optional_bool(ctx.param("sparse_grad"), "sparse_grad")
+    visible_adam = _optional_bool(ctx.param("visible_adam"), "visible_adam")
+    if sparse_grad and not packed:
+        raise ValueError("sparse_grad requires packed=true (gsplat v1.5.3)")
     frames = ctx.input(FRAMES.name)
     poses = ctx.input(POSES.name)
     full_iterations = int(ctx.param("iterations", 30_000))
@@ -2005,6 +2012,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
                 trainer=trainer,
                 python=training.trainer_python(ctx.param("python")),
                 switches={
+                    "packed": packed,
+                    "sparse_grad": sparse_grad,
+                    "visible_adam": visible_adam,
                     "antialiased": _optional_bool(ctx.param("antialiased"), "antialiased"),
                     "opacity_reg": _optional_float(ctx.param("opacity_reg")),
                     "depth_loss": _optional_bool(ctx.param("depth_loss"), "depth_loss"),
@@ -2153,6 +2163,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         antialiased=antialiased,
         opacity_reg=opacity_reg,
         depth_loss=depth_loss,
+        packed=packed,
+        sparse_grad=sparse_grad,
+        visible_adam=visible_adam,
         pose_opt=pose_opt,
         app_opt=app_opt,
         bilateral_grid=bilateral_grid,
@@ -2258,6 +2271,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         "antialiased": antialiased,
         "opacityReg": opacity_reg,
         "depthLoss": depth_loss,
+        "packed": packed,
+        "sparseGrad": sparse_grad,
+        "visibleAdam": visible_adam,
         "poseOpt": pose_opt,
         "appOpt": app_opt,
         "bilateralGrid": bilateral_grid,
@@ -2520,6 +2536,9 @@ def _train_in_blocks(
         "antialiased": settings.switches.get("antialiased"),
         "opacityReg": settings.switches.get("opacity_reg"),
         "depthLoss": settings.switches.get("depth_loss"),
+        "packed": settings.switches.get("packed", True),
+        "sparseGrad": settings.switches.get("sparse_grad", False),
+        "visibleAdam": settings.switches.get("visible_adam", False),
         "poseOpt": settings.switches.get("pose_opt"),
         "appOpt": settings.switches.get("app_opt"),
         "bilateralGrid": settings.switches.get("bilateral_grid"),
@@ -3158,11 +3177,12 @@ def place_splat(ctx: StageContext) -> StageOutcome:
     and recentring (`place_points`) into `coverage_enu.ply`, so a viewer can lay it over
     the splat; with no quality stage that file holds no points.
 
-    The SH bands `train` shipped (`ship_sh_degree`; none by default) are carried into
-    `canonical.ply` and **turned with the splat**: each band by the frame rotation's
-    Wigner D-matrix (`gaussians.transform` -> `harmonics.rotate`), so a gaussian placed in
-    east/north/up shows, from every direction, the colour it was trained to show from the
-    same direction in COLMAP's frame. The recentring is a translation and touches no band.
+    The SH bands `train` shipped (`ship_sh_degree`; code default 0, photo-reconstruct
+    train ships 3) are carried into `canonical.ply` and **turned with the splat**: each
+    band by the frame rotation's Wigner D-matrix (`gaussians.transform` ->
+    `harmonics.rotate`), so a gaussian placed in east/north/up shows, from every
+    direction, the colour it was trained to show from the same direction in COLMAP's
+    frame. The recentring is a translation and touches no band.
 
     A `georef.json` with no `frame` (written by `manual_placement`) is levelled by the
     camera-up estimate in `poses`, if there is one, and otherwise passed through with a
@@ -3919,10 +3939,11 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
     what it writes: the committed tree is one tile, and its `splat.glb` did not change by
     a byte when merged parents arrived -- only `tileset.json`'s `refine` did.
 
-    **Colour.** The tiles carry every SH band `canonical.ply` does -- the run's own
-    `ship_sh_degree`, chosen on `train` (Lane 2) or `normalize` (Lane 1), 0 by default -- so
-    what ships is what the held-out error measured. `ship_sh_degree` here only caps that, for
-    a re-package of a canonical.ply that carries more; a cap below what `train` measured
+    **Colour.** The tiles carry every SH band `canonical.ply` does. The run's
+    `ship_sh_degree`, chosen on `train` (Lane 2) or `normalize` (Lane 1), has code default 0;
+    photo-reconstruct train and splat-ingest normalize ship 3. What ships is what the
+    held-out error measured. `ship_sh_degree` here only caps that, for a re-package of a
+    canonical.ply that carries more; a cap below what `train` measured
     is logged, since the held-out error then describes more colour than the tiles hold.
     Degree 3 is measured at 1.6-1.7x the tileset bytes of degree 0 on real SH-3 scans,
     degree 1 at 1.17-1.20x (`splat_tiles.convert`).

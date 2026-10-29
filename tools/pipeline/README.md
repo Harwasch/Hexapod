@@ -850,9 +850,9 @@ it.
 
 gsplat trains spherical harmonics to degree 3 -- 45 `f_rest_*` of a gaussian's 59 floats
 -- and until `ship_sh_degree` every capture shipped degree 0: one colour from every side.
-The packer and both web renderers already carry and draw SH when a PLY has it; the
-pipeline was dropping it in the middle. **`ship_sh_degree`** (0-3, **0 by default**, so
-nothing changes until it is chosen) is how many bands ship:
+The packer and web renderers already carry and draw SH when a PLY has it; the
+pipeline was dropping it in the middle. **`ship_sh_degree`** (0-3, **3 by default** since
+the measurements below; 0 is one parameter away) is how many bands ship:
 
 | lane | where it is set                  | what carries it                                                                                  |
 | ---- | -------------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -865,6 +865,30 @@ since the bands are orthonormal. The bands are truncated channel-major -- degree
 degree-3 file is `f_rest_{0-2, 15-17, 30-32}`, renumbered `f_rest_0-8` -- and written after
 `f_dc_*`, where the trainers put them (`gaussians.ply_properties`; degree 0 is the
 fourteen, byte for byte).
+
+**Degree support audit (Step 2, source checked; device measurements still pending).**
+All four configured globe choices (`apps/web/src/state/settings.ts:15`) support SH 0-3,
+including degree 2. The dedicated renderers intentionally keep only SH 0-1 on handhelds:
+
+| Path                                         | Degrees drawn/carried                                             | Source                                                                                                                                          |
+| -------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| PlayCanvas default (WebGL2) and WebGPU trial | 0-3 desktop; 0-1 handheld                                         | `apps/web/src/lib/splatLayout.ts:112`, `apps/web/src/cesium/scanView/playcanvasTile.worker.ts:41`, `apps/web/src/cesium/scanView/quality.ts:79` |
+| Spark globe overlay                          | 0-3 desktop; 0-1 handheld                                         | `apps/web/src/cesium/scanView/sparkBackend.ts:705`, same `quality.ts` cap                                                                       |
+| Spark gallery (`view.html`)                  | 0-3, no app SH cap                                                | `apps/web/src/view/sparkStream.ts:38` passes SPZ to `SplatMesh`, including its LOD path                                                         |
+| Spark local Worlds PLY/SPZ viewer            | 0-3 for Gaussian splats; ordinary point clouds use vertex colours | `apps/web/src/worlds/reconstruction/LocalSplatViewer.tsx:78`                                                                                    |
+| Spark live training preview                  | Renderer supports 0-3, but snapshots carry only 0                 | `apps/web/src/view/live.ts:299`, `tools/pipeline/live.py:390` deliberately strips SH for previews                                               |
+| CesiumJS                                     | 0-3                                                               | `apps/web/src/cesium/spzDecode.worker.ts:16`, `apps/web/src/lib/splatLayout.ts:41`                                                              |
+| Packer, including parent tiles               | 0-3                                                               | `tools/captures/splat_tiles.py:377` (channel-major conversion), `:658` (3/8/15 glTF attributes)                                                 |
+| Placement rotation                           | 0-3                                                               | `tools/pipeline/harmonics.py` `rotate`; `tests/test_harmonics.py:185` tests degrees 1, 2 and 3 against the colour-preserving definition         |
+
+The lockfile versions' installed sources were also checked: PlayCanvas 2.22.6 maps 24
+`f_rest` columns to degree 2 and has degree-2 GLSL/WGSL shading; Cesium engine 26.3.0
+counts eight attributes as degree 2 and its splat shader evaluates bands 1/2/3; Spark
+2.2.0 retains SH in its LOD data, defaults `maxSh` to 3 and evaluates SH2 in both packed
+and extended splats. No renderer fix was needed. Degree 2 is **capped to 1**, not drawn
+as degree 2, by the handheld PlayCanvas and Spark globe policy. The gallery's
+`view/spz.ts` reader skips SH only when extracting positions for tools; rendering gets
+the full SPZ. The Living Survey `real_tree.py` pipeline still reads DC only (below).
 
 **Turning them.** A gaussian's SH colour is a function of direction in the frame it was
 fitted in, so every stage that turns the splat turns the bands: `place` (COLMAP's frame
@@ -896,8 +920,25 @@ SH-3 scans (nianticlabs/spz's samples) 1.17-1.20x the tileset bytes at degree 1 
 (Laplace, b = 0.03) 1.15x and 1.51x (16.1, 18.5 and 24.4 bytes a gaussian), with larger
 coefficients (b = 0.1) 1.27x and 2.15x; packing 1.6, 2.1 and 3.2 s. `canonical.ply` grows
 from 56 to 92 (degree 1) or 236 (degree 3) bytes a gaussian, read a chunk at a time like
-the rest. What it costs the viewers -- frame rate, GPU memory, load time -- is what has
-not been measured, and what `experiments/sh_compare.py` exists for:
+the rest.
+
+**Chosen: degree 3.** Measured on the frozen-input bench (Spool, L4, 2 full seeds, the 22
+untouched test frames; `experiments/bench`), the tiles packed from the same run
+(`sh_compare.py --bytes-only`) and the viewer on a T4 (`infra/modal/viewer_perf.py`,
+headless Chromium, PlayCanvas, 1600x900, 600 frames per degree):
+
+| degree | test PSNR dB | SSIM  | LPIPS | tiles (x degree 0) | B a gaussian | T4 mean frame ms | T4 p95 ms | GPU MiB |
+| ------ | ------------ | ----- | ----- | ------------------ | ------------ | ---------------- | --------- | ------- |
+| 0      | 21.36        | 0.728 | 0.214 | 1.00               | 17.2         | 3.34             | 6.6       | 312     |
+| 1      | 22.83        | 0.766 | 0.182 | 1.19               | 20.4         | 3.54             | 8.4       | 344     |
+| 2      | 24.64        | 0.825 | 0.139 | 1.44               | 24.8         | 3.61             | 10.4      | 356     |
+| 3      | 26.97        | 0.875 | 0.103 | 1.78               | 30.7         | 3.62             | 11.7      | 396     |
+
+Degree 0 looked washed out beside the photos; degree 3 matched their contrast and colour.
+The T4's own GPU time per render was flat across degrees (3.33-3.45 ms); frame-time
+medians there are sub-millisecond and pipelined, so read the mean and p95, relative only.
+Handheld viewers draw at most degree 1 whatever ships. A real laptop or phone is still
+to be measured, which is what `experiments/sh_compare.py`'s side-by-side sites are for:
 
 ```bash
 # 1. A run of the capture that ships degree 3: jobs.params
@@ -909,6 +950,8 @@ not been measured, and what `experiments/sh_compare.py` exists for:
 cd tools/pipeline
 uv run python experiments/sh_compare.py <run>/stages/place/out/canonical.ply ../../data/tiles \
   --georef <run>/stages/georeference/out/georef.json --site spool
+# Or measure tile bytes from a bench export, in its own frame, without georeferencing:
+uv run python experiments/sh_compare.py full_sh.ply out/ --bytes-only --degrees 0,1,2,3
 #    or from the run's trained.ply (COLMAP's frame), placed by the real place stage:
 #    ... <run>/stages/train/out/trained.ply out/ --georef georef.json --place [--poses poses/]
 # 3. Seed and look: data/tiles/spool-sh{0,1,3}/ each hold splat/ and a site.json.
@@ -923,6 +966,81 @@ and the whole tileset in the browser's network panel, and look at shine and colo
 view goes round. Then set `ship_sh_degree` in `recipes/photo-reconstruct.yaml` (and
 `splat-ingest.yaml`) to the degree chosen. The site folders are local only
 (`data/tiles/*-sh[0-3]/` is gitignored).
+
+### Viewer frame cost per SH degree
+
+The offline runner measures the console's default **PlayCanvas WebGL2** backend through
+an opt-in `/viewer-perf.html` entry. It uses the production decoder, resource builder,
+SH shaders and sorting. It preloads the full-detail cut (REPLACE leaves, every ADD tile),
+checks the decoded SH degree/count, waits for drawn and idle-loading frames, warms up
+120 frames, then records 450 frames of a full orbit at three bounding radii and 150 of a
+dolly to 0.15 radii. Desktop SH cap 3, device pixel ratio 1, fixed 1600×900, no adaptive
+resolution or tile budget changes. This isolates renderer cost; it excludes the globe,
+UI and network/LOD streaming. Ordinary builds omit this entry.
+
+From the repository root, with an SH-3 PLY exported from the same frozen scene:
+
+```bash
+mkdir -p .viewer-perf-tmp
+export TMPDIR="$PWD/.viewer-perf-tmp" HEAVY_CPUS=4
+export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
+# sh_compare's bytes-only layout is shN/tileset.json; shN/splat/ also works.
+(cd tools/pipeline && heavy uv run python experiments/sh_compare.py \
+  /absolute/path/full_sh.ply /absolute/path/sh-tiles --bytes-only --degrees 0,1,2,3)
+VIEWER_PERF=1 heavy pnpm build
+node apps/web/scripts/check-bundle.mjs
+VIEWER_PERF_TILES=/absolute/path/sh-tiles \
+  modal run infra/modal/viewer_perf.py
+# Same inputs on an L4, with an explicit output directory (must not exist):
+VIEWER_PERF_TILES=/absolute/path/sh-tiles \
+  modal run infra/modal/viewer_perf.py --gpu L4 --width 1600 --height 900 \
+  --output "$HOME/.local/share/hexapod-bench/viewer/my-l4-run"
+rm -rf .viewer-perf-tmp
+```
+
+This is **`modal run`, never deploy**. `add_local_dir(copy=False)` mounts the built bundle
+and this run's tiles at startup, leaving the reusable Chromium image independent of the
+scan. That needs no volume upload/cleanup, secrets, object storage or production API.
+`VIEWER_PERF_DIST` can override `apps/web/dist`. The image pins Python Playwright 1.55.0
+and installs its Chromium with system dependencies. The local Modal SDK must support
+`Function.with_options` (the repository's existing bench tooling uses Modal 1.5.5).
+
+Each degree gets a fresh browser/page. The renderer string comes from the **drawing
+canvas** and must identify NVIDIA, with SwiftShader/llvmpipe explicitly refused. The
+proven Vulkan/ANGLE flags, plus `--disable-gpu-vsync` and `--disable-frame-rate-limit`,
+are recorded alongside the browser version. A suspicious 60/120 Hz timing plateau gets
+a warning, not a fabricated cost difference: inspect it before interpreting ratios.
+Repeat runs on the same GPU and inputs to assess noise; do not compare T4 and L4 rows
+as if only SH changed.
+
+Output defaults to `~/.local/share/hexapod-bench/viewer/<UTC-run>/`: `sh0.json` through
+`sh3.json` keep all rAF timestamps/intervals, median, nearest-rank p95, mean, input hashes,
+splat counts, tile/tileset bytes, camera settings and raw 0.5-second `nvidia-smi` samples.
+`summary.md` gives median and p95 ratios to SH 0, plus max GPU MiB and mean utilization.
+Memory is whole-device usage during measured frames, not isolated resource allocations
+or loading peaks. No FPS claim. When available, `EXT_disjoint_timer_query_webgl2` measures GPU time around
+`backend.render()`, read after the path; disjoint/incomplete queries are discarded.
+These times exclude asynchronous CPU sorting and remain separate from rAF wall time.
+Use these relative costs alongside `sh_compare.json`'s bytes and held-out quality when
+choosing `ship_sh_degree`; this runner does not choose or change the shipped degree.
+
+Local smoke uses the same driver, with only the committed SH-0 synthetic tree and
+10 warmup + 12 orbit + 4 dolly frames, explicitly labelled **software renderer, relative
+only**. It does not create pretend SH-1/2/3 results. Run in an environment with Python
+Playwright and its Chromium installed (no Modal import needed):
+
+```bash
+mkdir -p .viewer-perf-tmp
+export TMPDIR="$PWD/.viewer-perf-tmp" HEAVY_CPUS=4
+# Use the opt-in bundle built above. --executable can name an existing Chromium.
+heavy python infra/modal/viewer_perf.py --local --width 320 --height 200 \
+  --output "$PWD/viewer-smoke-results"
+rm -rf .viewer-perf-tmp
+```
+
+The synthetic tiles are served unchanged. Both modes bind an ephemeral loopback port
+and refuse browser requests outside that origin. The bare renderer entry needs no API
+stubs. `--warmup`, `--orbit` and `--dolly` override frame counts in both modes.
 
 ## Lane 1
 
@@ -939,9 +1057,9 @@ upload/capture.ply ──▶ canonical.ply ──▶ splat/ ──▶ thumbnail.
 OpenSplat, gsplat) or an **`.spz`** — the format Scaniverse exports natively and the one
 `splat_tiles.pack_spz` already writes, so ingesting it is a 38-line inverse and nothing
 else. A PLY that carries `red/green/blue/alpha` instead of `f_dc_*`/`opacity` is converted;
-`f_rest_*` is read and dropped unless the run ships SH (`ship_sh_degree`, 0 by default --
-see [Shipping SH](#shipping-sh-view-dependent-colour)): at degree 3 it would quadruple
-`canonical.ply`, and whether the colour is worth that is still to be chosen.
+`f_rest_*` is kept to the run's `ship_sh_degree` (3 by default -- see
+[Shipping SH](#shipping-sh-view-dependent-colour)), which makes `canonical.ply` about four
+times the bytes of a degree-0 one; `ship_sh_degree: 0` reads and drops them.
 
 Everything else **refuses with a message that names the file and the problem** rather than
 producing a splat-shaped nothing: ASCII PLY, a vertex element with list properties, a
@@ -1171,12 +1289,50 @@ sibling script. Rehearsal uses a stand-in and labels all numbers as synthetic.
 
 Test PSNR/SSIM/AlexNet LPIPS (`normalize=True`) measure the shipped PLY over whole
 test images, using gsplat's own downscale/undistortion path and the full frozen cameras.
-Full-SH PSNR comes from the original export's exactly matching rows (including cropped
-subsets); merged exports without a matching source report a null diagnostic and a
-reason. Region metrics remain null until annotated masks and an adapter exist.
+`test.byDegree["0".."3"]` holds PSNR/SSIM/LPIPS means and `perFrame` scores on those same
+frames, from the original export's exactly matching rows (including cropped subsets),
+or `trained.ply` itself when it carries SH-3. Truncation uses `holdout_error.shipped_sh`,
+the same channel-major, least-squares band cut the stage ships. The existing headline
+`test.psnr/ssim/lpips` still score the shipped PLY; `psnrFullSh` and its gap remain for
+older reports. Without a matching full-SH source, `byDegree` is empty and `fullShReason`
+explains why, rather than labelling lower bands as degree 3. Region metrics remain null
+until annotated masks and an adapter exist.
 Nothing fabricates subject masks. Raw trainer/argv and external initialisation
 overrides are refused to protect the input/split boundary. `pose_opt` can optimise
 pool poses inside training; scoring always uses the frozen test cameras.
+
+`packed` remains on by default. Its experimental companions `sparse_grad` and
+`visible_adam` are opt-in train params for bench trials, both **off by default** (no argv
+change when off). `sparse_grad` requires `packed: true`, as gsplat v1.5.3 asserts; the
+stage refuses an incompatible pair before invoking the trainer. These change optimiser
+updates, so only measurements can justify adopting them. They pass through the same
+argv in single-scene, convergence and block training. Fused SSIM is already used by
+v1.5.3; there is no new switch for it.
+
+**Measured, and not adopted** (Spool, L4, shipping SH 3; screen = 1/10 schedule at 800 px,
+2 seeds; full = the recipe as is). The screen baseline trained in 133 s for 25.63 dB
+(seed spread 0.11 dB); the full baseline in 2,417 s for 26.97 dB / SSIM 0.875 / LPIPS
+0.103 (seed spread 0.22 dB).
+
+| trial (screen)           | test PSNR | SSIM  | LPIPS  | train s | verdict           |
+| ------------------------ | --------- | ----- | ------ | ------- | ----------------- |
+| `sparse_grad`            | 25.50     | 0.851 | 0.1171 | 154     | slower and worse  |
+| `visible_adam`           | 25.86     | 0.856 | 0.1145 | 108     | to full           |
+| `packed: false`          | 25.63     | 0.855 | 0.1139 | 132     | no change         |
+| `batch_size: 2`          | 25.52     | 0.853 | 0.1146 | 115     | at the noise edge |
+| `visible_adam` + batch 2 | 25.77     | 0.856 | 0.1140 | 99      | to full           |
+
+At full length both lost quality the screen did not show: `visible_adam` + batch 2 (2
+seeds) 26.54 dB / 0.862 / 0.115 in 1,879 s, `visible_adam` alone (seed 42) 26.54 dB /
+0.860 / 0.118 in 1,864 s, against 27.08 / 0.877 / 0.101 for the baseline's seed 42. So
+both stay off; a speed-up is adopted only on a full-schedule run, never on a screen.
+
+During the train stage, a background thread probes `nvidia-smi` every five seconds.
+`gpu_samples.json` retains CSV samples; `gpuUtilMean`, `gpuUtilP50` (percent) and
+`gpuMemMaxMiB` (sampled device usage, not an allocation peak) appear in the result and
+table. Missing/failed probes leave nulls and never fail training. The sampler stops
+before bench evaluation. `trainSecondsPer1kSteps` uses the actual `train_metrics.json`
+`iterations`, not the requested schedule; absent/zero iterations leave it null.
 
 Run from `tools/pipeline` (Modal credentials and `twin-object-storage` must already
 exist). Every remote operation is one command; no separate deployment is needed:
@@ -1197,10 +1353,44 @@ uv run python -m experiments.bench report --rehearse
 
 Use `--set '{"train": {"gaussian_density": 0.2}}'`, or `--variants file.yaml` containing
 `baseline: {}` and `dense: {train: {gaussian_density: 0.2}}`. Each variant/seed gets a
-unique run ID; at most four spawn concurrently. `--keep-splat` retains the shipped PLY
-on the volume. Reports and small stage artifacts also land locally under
+unique run ID; at most four spawn concurrently. `--keep-splat` retains `trained.ply`
+and, when the raw export differs, `full_sh.ply` in `/bench/runs/<run_id>/` on the volume.
+The latter is the raw export, before any stage crop. A merged SH-3 run needs only its
+`trained.ply`; lower-degree merged runs may have no full-SH source to retain.
+`--renders N` saves the first N frozen test frames to
+`renders/<frame-name>/{gt,sh0,sh1,sh2,sh3}.png`, including the shipped degree, on that
+volume (not returned over RPC). Without full SH, only GT and the shipped degree are
+available. PNGs use the evaluator's clamped RGB and invalid-pixel mask; metrics stay
+float precision. Rehearsals do not produce GPU renders. Reports and small stage
+artifacts also land locally under
 `~/.local/share/hexapod-bench/runs/<run_id>/`; `report --runs ID ...` selects runs.
-Summaries separate scenes, snapshots, schedules, tiers, overrides and bench commits.
+The report includes a per-degree table and per-degree mean/min/max/spread over completed
+seeds. Summaries separate scenes, snapshots, schedules, tiers, overrides and bench commits.
+
+Step 2 measurement commands, from `tools/pipeline`, after the Spool freeze exists. These
+use separate ledgers outside the checkout so earlier bench spend does not consume their
+caps; reruns still count against the same ledger. No recipe default is changed:
+
+```bash
+bench() { uv run --with modal==1.6.2 python -m experiments.bench "$@"; }
+bench run --scene spool --variant baseline-sh3 --schedule full --tier l4 --seeds 42,43 \
+  --set '{"train": {"ship_sh_degree": 3}}' --keep-splat --renders 3 \
+  --ledger "$HOME/.local/share/hexapod-bench/step2-colour.jsonl" --cap 2
+
+bench run --scene spool --variant speed-baseline --schedule screen --tier l4 --seeds 42,43 \
+  --set '{"train": {"ship_sh_degree": 3}}' \
+  --ledger "$HOME/.local/share/hexapod-bench/step2-speed.jsonl" --cap 4
+bench run --scene spool --variant sparse-grad --schedule screen --tier l4 --seeds 42,43 \
+  --set '{"train": {"ship_sh_degree": 3, "sparse_grad": true}}' \
+  --ledger "$HOME/.local/share/hexapod-bench/step2-speed.jsonl" --cap 4
+bench run --scene spool --variant visible-adam --schedule screen --tier l4 --seeds 42,43 \
+  --set '{"train": {"ship_sh_degree": 3, "visible_adam": true}}' \
+  --ledger "$HOME/.local/share/hexapod-bench/step2-speed.jsonl" --cap 4
+bench report
+```
+
+Add `--dry-run` to preview reservations. Screening is not a full-schedule quality verdict;
+the GPU session must confirm quality across seeds before choosing any new default.
 
 The append-only, locked ledger defaults to `~/.local/share/hexapod-bench/ledger.jsonl`
 (`--ledger PATH`, always outside the repo). Rehearsal has a separate `rehearsal/` state

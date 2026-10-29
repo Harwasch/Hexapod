@@ -6,8 +6,8 @@ gaussian's 59 floats -- and until this module every stage after training threw t
 degree-0 colour only, the same from every side. The packer (`tools/captures/
 splat_tiles.py`) and both web renderers already carry and draw SH when a PLY has it, so
 the colour detail the GPU paid for was lost in the middle of the pipeline, not at either
-end. `ship_sh_degree` (the `train` stage's for Lane 2, `normalize`'s for Lane 1; 0 by default,
-so every capture is what it was until somebody chooses otherwise) is how many bands now
+end. `ship_sh_degree` (the `train` stage's for Lane 2, `normalize`'s for Lane 1) has code
+default 0; photo-reconstruct train and splat-ingest normalize ship 3. That many bands now
 ride through `trained.ply` -> `gated.ply` -> `canonical.ply` -> the tiles.
 
 **Carrying a band means turning it.** A gaussian's SH colour is a function of the
@@ -120,7 +120,7 @@ SH_DIMS: tuple[int, ...] = (0, 3, 8, 15)
 #: The most any renderer here draws: CesiumJS 1.145 and Spark evaluate bands 1-3, and the
 #: packer writes no more (a fourth band in an SPZ v2 file is unreadable by their loaders).
 MAX_DEGREE = 3
-#: What a recipe may ship. 0 is the default everywhere: the capture as it always was.
+#: What a recipe may ship. Code default 0; photo-reconstruct train / splat-ingest normalize ship 3.
 DEGREES: tuple[int, ...] = (0, 1, 2, 3)
 
 _REST = "f_rest_"
