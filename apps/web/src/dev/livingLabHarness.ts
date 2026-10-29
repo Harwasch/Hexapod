@@ -62,7 +62,7 @@ export async function startLivingLabHarness(
       new Primitive({
         geometryInstances: new GeometryInstance({
           geometry: BoxGeometry.fromDimensions({
-            dimensions: new Cartesian3(155, 155, 0.05),
+            dimensions: new Cartesian3(55, 45, 0.05),
             vertexFormat: PerInstanceColorAppearance.VERTEX_FORMAT,
           }),
           modelMatrix: Matrix4.multiplyByTranslation(
