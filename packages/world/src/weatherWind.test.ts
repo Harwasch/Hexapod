@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  canopyShelter,
+  canopyShelterAtHeight,
   plantWindRatio,
   prepareWeatherWind,
   sampleWeatherWind,
@@ -37,13 +39,49 @@ describe("weather-driven simulated wind", () => {
     expect(weatherBranch(f, 0, 0, 6, 2, 1, 0.4, 0, true)).toEqual([0, 0, 0]);
     expect(weatherBranch(f, 0, 0, 0, 2, 1, 0.4, 0)).toEqual([0, 0, 0]);
   });
-  it("grows continuously then streamlines and saturates without widened tolerances", () => {
-    const v = [0, 0.3, 1, 3, 8, 15, 20, 100, 1000].map(weatherAngle);
-    expect(v.every((x, i) => i === 0 || x > (v[i - 1] ?? 0))).toBe(true);
-    expect(weatherAngle(0.2) / weatherAngle(0.1)).toBeGreaterThan(3.9);
-    expect(weatherAngle(40) / weatherAngle(20)).toBeLessThan(1.5);
-    expect(weatherAngle(1e6)).toBeLessThan(0.1);
-    expect(weatherAngle(0.4)).toBeLessThan(weatherAngle(20) / 100);
+  it("preserves the measured quadratic response then bounds extrapolated storm forcing", () => {
+    expect(weatherAngle(0)).toBe(0);
+    expect(weatherAngle(6) / weatherAngle(3)).toBeCloseTo(4, 1);
+    expect(weatherAngle(1e6)).toBeLessThanOrEqual(0.0115 * 625);
+    expect(weatherAngle(23)).toBeGreaterThan(weatherAngle(12));
+  });
+  it("shelters interior and downwind copies while leaving windward edges exposed", () => {
+    const f = prepareWeatherWind({ ...input, directionDeg: 270 });
+    const ratios = canopyShelter(
+      f,
+      [
+        { x: 0, y: 0 },
+        { x: 3.5, y: 0 },
+        { x: 7, y: 0 },
+        { x: 7, y: 12 },
+      ],
+      3.89,
+    );
+    expect(ratios[0]).toBe(1);
+    expect(ratios[1]).toBeLessThan(1);
+    expect(ratios[2]).toBeLessThan(ratios[1]!);
+    expect(ratios[3]).toBe(1);
+    // Closed-canopy attenuation belongs below the canopy top, not above it.
+    expect(canopyShelterAtHeight(Math.exp(-2.5), 0)).toBe(Math.exp(-2.5));
+    expect(canopyShelterAtHeight(Math.exp(-2.5), 3)).toBeCloseTo(Math.exp(-1.25), 12);
+    expect(canopyShelterAtHeight(Math.exp(-2.5), 6)).toBe(1);
+    expect(canopyShelterAtHeight(Math.exp(-2.5), 8)).toBe(1);
+    expect(canopyShelterAtHeight(1, 3)).toBe(1);
+    const exposed = weatherBranch(f, 7, 0, 5, 3, 1, 0.4, 0, false, 6, 1);
+    const sheltered = weatherBranch(
+      f,
+      7,
+      0,
+      5,
+      3,
+      1,
+      0.4,
+      0,
+      false,
+      6,
+      canopyShelterAtHeight(ratios[2] ?? 1, 5),
+    );
+    expect(Math.hypot(...sheltered)).toBeLessThan(Math.hypot(...exposed));
   });
   it("reduces canopy wind, reaches 10m input, and pins the base", () => {
     expect(plantWindRatio(0)).toBe(0);

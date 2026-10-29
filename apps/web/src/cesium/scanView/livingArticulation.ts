@@ -5,6 +5,8 @@ import {
   weatherAngle,
   sampleWeatherWind,
   plantWindRatio,
+  canopyShelter,
+  canopyShelterAtHeight,
   type WindField,
 } from "@twin/world";
 import { motionTier, type LivingDetail } from "./livingDetail";
@@ -16,6 +18,7 @@ export interface ArticulationNode {
   stiffness?: number;
   groundM?: number;
   canopyM?: number;
+  shelter?: number;
   position: [number, number, number];
 }
 export interface ArticulationHeader {
@@ -31,6 +34,8 @@ export interface ArticulationHeader {
   leafCount: number;
   detail?: LivingDetail;
   groundM?: number;
+  stand?: { diameterM: number; copies: { x: number; y: number }[] };
+  weatherResponseScale?: number;
   tiles: Record<string, { offset: number; count: number }>;
 }
 export interface Articulation {
@@ -72,6 +77,10 @@ export function parseArticulationHeader(value: unknown): ArticulationHeader {
     ) ||
     !Number.isFinite(h.referenceBearingDeg) ||
     (h.groundM !== undefined && !Number.isFinite(h.groundM)) ||
+    (h.weatherResponseScale !== undefined &&
+      (!Number.isFinite(h.weatherResponseScale) ||
+        h.weatherResponseScale <= 0 ||
+        h.weatherResponseScale > 4)) ||
     !Number.isInteger(h.leafCount) ||
     (h.leafCount ?? -1) < 0 ||
     (h.leafCount ?? 0) > 500_000 ||
@@ -189,6 +198,22 @@ export async function loadArticulation(url: string, signal?: AbortSignal): Promi
     )
       throw new Error("Invalid weather wind input");
     a.weather = prepareWeatherWind(input);
+    if (a.header.stand) {
+      const stand = a.header.stand;
+      const ratios = canopyShelter(a.weather, stand.copies, stand.diameterM);
+      const perCopy = a.header.nodes.length / stand.copies.length;
+      a.header = {
+        ...a.header,
+        nodes: a.header.nodes.map((n, i) => ({
+          ...n,
+          shelter: canopyShelterAtHeight(
+            ratios[Math.floor(i / perCopy)] ?? 1,
+            n.position[2] - (n.groundM ?? 0),
+            n.canopyM ?? 6,
+          ),
+        })),
+      };
+    }
     a.breeze = prepareBreeze(a, "windy");
     a.tier = a.header.detail ? motionTier(a.header.detail) : "B";
     if (weatherTiers.size >= 64) {
@@ -278,11 +303,13 @@ export function evaluateArticulation(
         node.position[2] - (node.groundM ?? 0),
         t,
         ((b[o] ?? 0) / BREEZE_PRESETS.windy.angle) *
+          (h.weatherResponseScale ?? 1) *
           (a.tier === "A" ? Math.min(3, 6 / Math.max(0.15, node.canopyM ?? 6)) : 1),
         b[o + 1] ?? 0.4,
         b[o + 2] ?? 0,
         a.tier === "off",
         node.canopyM ?? 6,
+        node.shelter ?? 1,
       );
       v[0] = response[0] * strength;
       v[1] = response[1] * strength;

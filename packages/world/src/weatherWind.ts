@@ -22,6 +22,35 @@ export interface WindField {
 }
 const TAU = 2 * Math.PI;
 const finite = (n: number, fallback = 0) => (Number.isFinite(n) ? n : fallback);
+/** Cionco exponential form, extended along fetch as a cheap grove proxy.
+ * Alpha=2.5 (Kim et al. 2014) and six crown diameters to equilibrium are assumptions, not a flow solver.
+ */
+export function canopyShelter(
+  field: WindField,
+  copies: readonly { x: number; y: number }[],
+  diameterM: number,
+): number[] {
+  return copies.map((at) => {
+    let fetch = 0;
+    for (const other of copies) {
+      const dx = at.x - other.x,
+        dy = at.y - other.y;
+      const along = dx * field.east + dy * field.north;
+      const cross = Math.abs(-dx * field.north + dy * field.east);
+      if (along > 0 && cross < diameterM * 0.75)
+        fetch = Math.max(fetch, along * (1 - cross / (diameterM * 0.75)));
+    }
+    return Math.exp(-2.5 * Math.min(1, fetch / (6 * diameterM)));
+  });
+}
+/** Apply canopy depth to the copy's fetch closure. Cionco's profile recovers
+ * canopy-top flow; a deep interior crown must not inherit trunk-space wind.
+ * Prepared per joint at load time, never per splat or per frame.
+ */
+export function canopyShelterAtHeight(baseRatio: number, heightM: number, canopyM = 6): number {
+  const depth = Math.max(0, 1 - Math.max(0, finite(heightM)) / Math.max(0.3, finite(canopyM, 6)));
+  return Math.pow(Math.max(0, Math.min(1, finite(baseRatio, 1))), depth);
+}
 export function prepareWeatherWind(w: WeatherWind): WindField {
   const meanMps = Math.max(0, Math.min(60, finite(w.meanMps)));
   const gustMps = Math.max(
@@ -71,13 +100,13 @@ export function plantWindRatio(heightM: number, canopyM = 6): number {
     Math.exp(2 * Math.min(0, z / Math.max(0.3, canopyM) - 1))
   );
 }
-/** U² at low speed, ~U at high speed (Vogel exponent -1), bounded angle.
- * 4 m/s transition, .10 rad and load=28 are conservative visual choices.
+/** Quadratic field-data response (Cardona & Dabiri 2022, DOI 10.1017/flo.2021.15).
+ * Coefficient is fitted through the crown-top pose probe; 25 m/s roll-off is a
+ * judgement outside the field study, keeping the derivative bounded in storms.
  */
 export function weatherAngle(speedMps: number): number {
   const u = Math.max(0, finite(speedMps));
-  const load = (u * u) / Math.sqrt(1 + (u / 4) ** 2);
-  return (0.1 * load) / (28 + load);
+  return (0.0115 * u * u) / Math.sqrt(1 + (u / 25) ** 4);
 }
 /** Two-axis angular response; exact root/trunk/ground pin, no integration. */
 export function weatherBranch(
@@ -91,11 +120,16 @@ export function weatherBranch(
   phase: number,
   pinned = false,
   canopyM = 6,
+  shelter = 1,
 ) {
   if (pinned || f.gustMps === 0 || height <= 0 || compliance <= 0) return [0, 0, 0] as const;
   const v = sampleWeatherWind(f, x, y, t),
-    ratio = plantWindRatio(height, canopyM);
-  const angle = weatherAngle(v.alongMps * ratio) * compliance;
+    ratio = plantWindRatio(height, canopyM) * shelter;
+  // The field study constrains dynamic standard deviation, not static lean.
+  // Retain a quarter of the mean load as lean; the full fluctuating load can
+  // reverse around it. This fraction remains a visual assumption.
+  const meanAngle = weatherAngle(f.meanMps * ratio);
+  const angle = (weatherAngle(v.alongMps * ratio) - 0.75 * meanAngle) * compliance;
   const oscillation = 1 + 0.22 * Math.sin(TAU * frequencyHz * t + phase);
   const side =
     angle * 0.14 * Math.sin(TAU * frequencyHz * 0.83 * t + phase + 1.3) +
