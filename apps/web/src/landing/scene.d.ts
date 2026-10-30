@@ -1,4 +1,5 @@
 /** Types for scene.js, the landing page's ported three.js scenes: what main.ts calls. */
+import type { ThemedLook } from "./looks";
 
 /** One crew's work cell in the hero, in world metres (x east, y south). */
 export interface HeroZone {
@@ -43,6 +44,8 @@ export interface HeroOptions {
   /** Where the focus sits in the frame, as fractions of its size. */
   shift: (width: number, height: number) => { x?: number; y?: number };
   labels: (list: HeroLabel[]) => void;
+  /** A look to draw in, in both themes' versions (looks.ts); none is the line drawing. */
+  look?: ThemedLook;
 }
 
 export interface Hero {
@@ -62,9 +65,28 @@ export interface FleetOptions {
   themeEl: HTMLElement;
   still: MediaQueryList;
   maxPixels: () => number;
+  look?: ThemedLook;
 }
 
 /** Starts the hero; throws when WebGL is unavailable. */
 export function startHeroScene(options: HeroOptions): Hero;
 /** Starts the fleet cards' turntables, one WebGL context for all of them. */
 export function startFleetCards(options: FleetOptions): void;
+
+/** One robot as the story places it at a moment (scene.js makeStory). */
+export interface StoryBot {
+  p?: number[];
+  h: number;
+  moving?: boolean;
+  carried?: boolean;
+  local?: number[];
+}
+
+/** For tests: one hero crew's story, with no renderer. */
+export function crewStory(zone: { id: string; c: [number, number] }): {
+  OPS: { end: number };
+  model: (
+    stage: "operate",
+    t: number,
+  ) => { hex: (StoryBot | undefined)[]; atvs: StoryBot[]; quad: StoryBot & { p: number[] } };
+};

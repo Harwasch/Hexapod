@@ -42,6 +42,9 @@ uniform vec3 uTop, uLitTop, uS0, uS1, uS2, uS3, uLitShade, uGridInk, uFlat;
 uniform vec2 uLight;
 uniform vec3 uViewDir;
 uniform float uDark, uSolar, uCovOn, uFlatOn;
+// looks (scene.js setLook): the ground's own colours, and scan dots
+uniform float uIsTer, uTerOn, uStip;
+uniform vec3 uTerTop, uTerSide;
 uniform sampler2D uCov;
 uniform vec4 uCovRect;
 uniform vec3 uCovInk, uBandInk;
@@ -62,6 +65,10 @@ void main() {
   }
   if (uDark > 0.5) c = uS0;
   if (uFlatOn > 0.5 && n.z > 0.62) c = uFlat;
+  if (uIsTer > 0.5 && uTerOn > 0.5) {
+    float s = dot(normalize(n.xy + 1e-6), uLight) * 0.5 + 0.5;
+    c = n.z > 0.62 ? uTerTop : mix(uTerSide * 0.82, uTerSide, s);
+  }
   if (uCovOn > 0.5) {
     vec2 cu = (vW.xy - uCovRect.xy) / uCovRect.zw;
     if (cu.x > 0.0 && cu.x < 1.0 && cu.y > 0.0 && cu.y < 1.0 && n.z > 0.62) {
@@ -78,6 +85,15 @@ void main() {
     float lx = smoothstep(0.5 - w.x * 1.2, 0.5, f.x), ly = smoothstep(0.5 - w.y * 1.2, 0.5, f.y);
     float fade = 1.0 - smoothstep(0.1, 0.25, max(w.x, w.y));
     c = mix(c, uGridInk, max(lx, ly) * 0.8 * fade);
+  }
+  // scan dots: keep a lattice of points on each surface (in world metres, so they stay put
+  // as the camera moves), on the plane facing the surface's strongest axis
+  if (uStip > 0.0) {
+    vec3 an = abs(n);
+    vec2 q = an.z >= max(an.x, an.y) ? vW.xy : (an.x > an.y ? vW.yz : vW.xz);
+    vec2 g = (fract(q / uStip) - 0.5) * uStip;
+    float px = max(fwidth(q.x), fwidth(q.y));
+    if (length(g) > max(uStip * 0.17, px * 0.75)) discard;
   }
   gl_FragColor = vec4(c, 1.0);
 }`;
@@ -123,12 +139,34 @@ void main() {
 }`;
 // resolve: box-filter the supersampled image down to the screen
 const DOWN_FRAG = /* glsl */ `
-uniform sampler2D t; uniform vec2 uSrc; uniform float uR, uK; varying vec2 vUv;
-void main() {
+uniform sampler2D t; uniform vec2 uSrc; uniform float uR, uK;
+uniform float uTilt, uVig, uGrain, uTime, uTintAmt; uniform vec3 uTint;
+varying vec2 vUv;
+float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+vec4 box(vec2 uv) {
   vec4 a = vec4(0.0);
   // well supersampled: one bilinear tap per pixel keeps lines crisp; below 1.6×, 2×2 taps near the centre smooth the stair-steps
-  for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) { vec2 o = (vec2(float(i), float(j)) - 0.5) * uK; a += texture2D(t, vUv + o * uR * uSrc); }
-  gl_FragColor = a / 4.0;
+  for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++) { vec2 o = (vec2(float(i), float(j)) - 0.5) * uK; a += texture2D(t, uv + o * uR * uSrc); }
+  return a / 4.0;
+}
+void main() {
+  vec4 c = box(vUv);
+  // a look's finish: tilt-shift (blur away from a band across the middle), tint, vignette, grain
+  if (uTilt > 0.0) {
+    float b = uTilt * smoothstep(0.1, 0.45, abs(vUv.y - 0.55));
+    if (b > 0.02) {
+      vec4 acc = c;
+      for (int k = 0; k < 12; k++) {
+        float a = float(k) * 0.5236, r = (k < 6 ? 0.5 : 1.0) * b;
+        acc += texture2D(t, vUv + vec2(cos(a), sin(a)) * r * uR * uSrc * 7.0);
+      }
+      c = acc / 13.0;
+    }
+  }
+  if (uTintAmt > 0.0) c.rgb = mix(c.rgb, c.rgb * uTint, uTintAmt);
+  if (uVig > 0.0) c.rgb *= 1.0 - uVig * smoothstep(0.3, 0.9, length((vUv - 0.5) * vec2(1.3, 1.0)));
+  if (uGrain > 0.0) c.rgb += (hash(floor(gl_FragCoord.xy) + uTime) - 0.5) * uGrain;
+  gl_FragColor = c;
 }`;
 // FXAA (Lottes' compact form), run at the internal resolution when the supersampling budget is low
 const FXAA_FRAG = /* glsl */ `
@@ -185,6 +223,10 @@ function makeEngine(canvas, { themeEl, maxPixels = 9e6 } = {}) {
     uBandInk: { value: new THREE.Color() },
     uLight: { value: new THREE.Vector2(0.6, -0.8).normalize() },
     uViewDir: { value: new THREE.Vector3(0, 0, 1) },
+    uTerOn: { value: 0 },
+    uStip: { value: 0 },
+    uTerTop: { value: new THREE.Color() },
+    uTerSide: { value: new THREE.Color() },
   };
   U.uCov.value = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
   U.uCov.value.needsUpdate = true;
@@ -198,6 +240,7 @@ function makeEngine(canvas, { themeEl, maxPixels = 9e6 } = {}) {
         uCovOn: { value: x.cov ? 1 : 0 },
         uFlatOn: { value: x.flat ? 1 : 0 },
         uFlat: { value: new THREE.Color() },
+        uIsTer: { value: x.cov ? 1 : 0 },
       },
       vertexShader: VERT,
       fragmentShader: TOON_FRAG,
@@ -293,6 +336,12 @@ function makeEngine(canvas, { themeEl, maxPixels = 9e6 } = {}) {
       uSrc: { value: new THREE.Vector2() },
       uR: { value: 2 },
       uK: { value: 0 },
+      uTilt: { value: 0 },
+      uVig: { value: 0 },
+      uGrain: { value: 0 },
+      uTime: { value: 0 },
+      uTintAmt: { value: 0 },
+      uTint: { value: new THREE.Color(1, 1, 1) },
     },
     vertexShader: QUAD_VERT,
     fragmentShader: DOWN_FRAG,
@@ -309,6 +358,156 @@ function makeEngine(canvas, { themeEl, maxPixels = 9e6 } = {}) {
   });
   const fxaaScene = quadScene(fxaaMat);
   const clear = new THREE.Color();
+  /** A look's own water, road and mulch colours, kept across theme changes (setTheme). */
+  let lookFlat = {};
+
+  // ── looks (landing review): the same scene in another palette, finish or light ──
+  // A look with `light` swaps the flat-shaded materials for lit ones under a sun with soft
+  // shadows and a sky; the robots keep their own colour through the per-instance `aLit`.
+  const sun = new THREE.DirectionalLight(0xffffff, 0);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.bias = -0.0004;
+  sun.shadow.normalBias = 0.03;
+  sun.shadow.radius = 3;
+  const sky = new THREE.HemisphereLight(0xffffff, 0x808080, 0);
+  for (const light of [sun, sky]) light.layers.enableAll();
+  scene.add(sun, sun.target, sky);
+  const roleOf = new Map(Object.entries(mats).map(([role, m]) => [m, role]));
+  // Colour management is off (the toon palette is used as written), so the lit looks convert
+  // their sRGB colours to linear light themselves, and encode the result back.
+  const linear = (c) => new THREE.Color(c).convertSRGBToLinear();
+  function litMaterial(color, robot, allRobot, glow = 0) {
+    const m = new THREE.MeshStandardMaterial({
+      color: linear(color),
+      roughness: 0.82,
+      metalness: 0,
+      side: THREE.DoubleSide,
+    });
+    m.onBeforeCompile = (shader) => {
+      shader.uniforms.uRobot = { value: linear(robot) };
+      shader.uniforms.uAllRobot = { value: allRobot ? 1 : 0 };
+      shader.uniforms.uGlow = { value: glow };
+      shader.vertexShader = shader.vertexShader
+        .replace(
+          "#include <common>",
+          "#include <common>\nattribute float aLit;\nvarying float vLitF;",
+        )
+        .replace("#include <begin_vertex>", "#include <begin_vertex>\nvLitF = aLit;");
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          "#include <common>",
+          "#include <common>\nvarying float vLitF;\nuniform vec3 uRobot;\nuniform float uAllRobot, uGlow;",
+        )
+        .replace(
+          "#include <color_fragment>",
+          "#include <color_fragment>\ndiffuseColor.rgb = mix(diffuseColor.rgb, uRobot, max(vLitF, uAllRobot));",
+        )
+        // A dark look's robots give off their own light, so they read against the night.
+        .replace(
+          "#include <emissivemap_fragment>",
+          "#include <emissivemap_fragment>\ntotalEmissiveRadiance += uRobot * uGlow * max(vLitF, uAllRobot);",
+        )
+        // Lit in linear light; the colour target holds display (sRGB) values like the toon
+        // shader writes, so encode here, or every lit look comes out a stop too dark.
+        .replace(
+          "#include <colorspace_fragment>",
+          "#include <colorspace_fragment>\ngl_FragColor = sRGBTransferOETF(gl_FragColor);",
+        );
+    };
+    return m;
+  }
+  let look = { edges: true, lines: true, light: null };
+  // What the current look set, so the next one (the other theme's, say) starts clean.
+  let lookTokens = [];
+  let litMats = [];
+  function setLook(next = {}) {
+    look = { edges: next.edges ?? true, lines: next.lines ?? true, light: next.light ?? null };
+    lookFlat = next.flat || {};
+    const el = themeEl || document.body;
+    for (const name of lookTokens) el.style.removeProperty(name);
+    lookTokens = Object.keys(next.tokens || {});
+    for (const [name, value] of Object.entries(next.tokens || {}))
+      el.style.setProperty(name, value);
+    setTheme();
+    U.uTerOn.value = next.terrain ? 1 : 0;
+    if (next.terrain) {
+      U.uTerTop.value.set(next.terrain.top);
+      U.uTerSide.value.set(next.terrain.side);
+    }
+    U.uStip.value = next.stipple ?? 0;
+    edgeMat.uniforms.uAlpha.value = next.edgeAlpha ?? 0.92;
+    const post = next.post || {};
+    downMat.uniforms.uTilt.value = post.tilt ?? 0;
+    downMat.uniforms.uVig.value = post.vignette ?? 0;
+    downMat.uniforms.uGrain.value = post.grain ?? 0;
+    downMat.uniforms.uTintAmt.value = post.tint ? post.tint.amount : 0;
+    if (post.tint) downMat.uniforms.uTint.value.set(post.tint.color);
+    const L = look.light;
+    renderer.shadowMap.enabled = Boolean(L);
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+    sun.intensity = L ? L.sun : 0;
+    sky.intensity = L ? L.sky : 0;
+    for (const m of litMats) m.dispose();
+    litMats = [];
+    if (!L)
+      scene.traverse((o) => {
+        if (o.isMesh && o.userData.toon) {
+          o.material = o.userData.toon;
+          o.castShadow = o.receiveShadow = false;
+        }
+      });
+    if (L) {
+      sun.color.copy(linear(L.sunColor));
+      sky.color.copy(linear(L.skyColor));
+      sky.groundColor.copy(linear(L.groundColor));
+      const glow = L.glow ?? 0;
+      const lit = {
+        solid: litMaterial(L.object, L.robot, false, glow),
+        lit: litMaterial(L.object, L.robot, true, glow),
+        dark: litMaterial(L.dark, L.robot, false, glow),
+        solar: litMaterial(L.solar, L.robot, false, glow),
+        terrain: litMaterial(L.ground, L.robot, false),
+        water: litMaterial(L.water, L.robot, false),
+        road: litMaterial(L.road, L.robot, false),
+        mulch: litMaterial(L.mulch, L.robot, false),
+      };
+      litMats = Object.values(lit);
+      scene.traverse((o) => {
+        if (!o.isMesh) return;
+        const toon = o.userData.toon ?? o.material;
+        const role = roleOf.get(toon);
+        if (!role) return;
+        o.userData.toon = toon;
+        o.material = lit[role];
+        o.castShadow = role !== "terrain" && role !== "water" && role !== "road";
+        o.receiveShadow = true;
+      });
+    }
+  }
+  function placeSun(v) {
+    const L = look.light;
+    if (!L) return;
+    const a = ((v.az + L.az) * Math.PI) / 180,
+      e = (L.el * Math.PI) / 180;
+    const tx = v.target.x,
+      ty = v.target.y;
+    sun.position.set(
+      tx + Math.cos(e) * Math.cos(a) * 600,
+      ty + Math.cos(e) * Math.sin(a) * 600,
+      Math.sin(e) * 600,
+    );
+    sun.target.position.set(tx, ty, 0);
+    const half = v.width * 0.85,
+      cam = sun.shadow.camera;
+    cam.left = -half;
+    cam.right = half;
+    cam.top = half;
+    cam.bottom = -half;
+    cam.near = 1;
+    cam.far = 1400;
+    cam.updateProjectionMatrix();
+  }
 
   function setTheme() {
     const el = themeEl || document.body;
@@ -323,6 +522,7 @@ function makeEngine(canvas, { themeEl, maxPixels = 9e6 } = {}) {
     U.uBandInk.value.copy(col(css(el, "--anatomy-lit-top")));
     for (const [k, tok] of Object.entries(flatTokens))
       mats[k].uniforms.uFlat.value.copy(col(css(el, tok)));
+    for (const [k, color] of Object.entries(lookFlat)) mats[k].uniforms.uFlat.value.set(color);
     edgeMat.uniforms.uInk.value.copy(col(css(el, "--anatomy-hi")));
     for (const [k, m] of Object.entries(lineMats)) m.color.copy(col(css(el, tokenOf[k])));
     for (const [k, m] of Object.entries(dotMats)) m.color.copy(col(css(el, "--anatomy-" + k)));
@@ -330,16 +530,19 @@ function makeEngine(canvas, { themeEl, maxPixels = 9e6 } = {}) {
   }
 
   // a pass = normal/depth target + colour target at a given internal size
-  function makePass(iw, ih) {
+  function makePass(iw, ih, samples = 0) {
     const nrt = new THREE.WebGLRenderTarget(iw, ih, {
       type: THREE.HalfFloatType,
       minFilter: THREE.NearestFilter,
       magFilter: THREE.NearestFilter,
     });
     nrt.depthTexture = new THREE.DepthTexture(iw, ih, THREE.FloatType);
+    // with little supersampling left, the colour pass gets the GPU's own anti-aliasing too:
+    // it smooths what the box filter cannot, the edges of shapes and the 1 px detail lines
     const crt = new THREE.WebGLRenderTarget(iw, ih, {
       minFilter: THREE.LinearFilter,
       magFilter: THREE.LinearFilter,
+      samples,
     });
     let frt = null;
     return {
@@ -376,7 +579,9 @@ function makeEngine(canvas, { themeEl, maxPixels = 9e6 } = {}) {
     const dpr = renderer.getPixelRatio();
     SS = Math.max(1, Math.min(2, Math.sqrt(maxPixels / (W * H * dpr * dpr))));
     if (main) main.dispose();
-    main = makePass(Math.round(W * dpr * SS), Math.round(H * dpr * SS));
+    // 4× MSAA on the colour target only when the pixel budget leaves little supersampling:
+    // on top of real supersampling it buys little and costs four times the memory.
+    main = makePass(Math.round(W * dpr * SS), Math.round(H * dpr * SS), SS < 1.25 ? 4 : 0);
     copyMat.uniforms.t.value = main.crt.texture;
     for (const [k, m] of Object.entries(dotMats)) m.size = dotBase[k] * dpr * SS;
   }
@@ -412,7 +617,17 @@ function makeEngine(canvas, { themeEl, maxPixels = 9e6 } = {}) {
     edgeMat.uniforms.uCrease.value = 1 - 0.12 * far;
     edgeMat.uniforms.uSil.value = 1;
   }
-  function runPass(pass, cam, widthM, cssW) {
+  function runPass(pass, cam, widthM, cssW, v = view) {
+    placeSun(v);
+    if (!look.edges) {
+      renderer.setRenderTarget(pass.crt);
+      renderer.setClearColor(clear, 1);
+      if (look.lines) cam.layers.enableAll();
+      else cam.layers.set(0);
+      renderer.render(scene, cam);
+      cam.layers.enableAll();
+      return;
+    }
     inkFor(widthM, cssW || pass.iw / 2);
     // creases two texels wide unless the supersampling is nearly gone
     edgeMat.uniforms.uTwo.value =
@@ -431,8 +646,10 @@ function makeEngine(canvas, { themeEl, maxPixels = 9e6 } = {}) {
     scene.overrideMaterial = null;
     renderer.setRenderTarget(pass.crt);
     renderer.setClearColor(clear, 1);
-    cam.layers.enableAll();
+    if (look.lines) cam.layers.enableAll();
+    else cam.layers.set(0);
     renderer.render(scene, cam);
+    cam.layers.enableAll();
     renderer.autoClear = false;
     renderer.render(edgeScene, quadCam);
     renderer.autoClear = true;
@@ -475,7 +692,7 @@ function makeEngine(canvas, { themeEl, maxPixels = 9e6 } = {}) {
       aux.set(key, p);
     }
     aim(auxCam, v, cssW / cssH);
-    runPass(p, auxCam, v.width, cssW);
+    runPass(p, auxCam, v.width, cssW, v);
     aim(camera, view, W / H);
     return p.crt.texture;
   }
@@ -499,6 +716,7 @@ function makeEngine(canvas, { themeEl, maxPixels = 9e6 } = {}) {
     lineMats,
     dotMats,
     setTheme,
+    setLook,
     resize,
     render,
     renderAux,
@@ -2182,11 +2400,14 @@ function makeScenarios(Wd) {
       view: { c: [0.6, 0.4, 0.8], w: 14.5 },
       quad: (t) => {
         const tr = cl(TROUGH[0] + 0.4, TROUGH[1] + 0.6);
-        if (t < 13) return [tr[0] + Math.sin(t * 0.7) * 0.4, tr[1] + Math.cos(t * 0.7) * 0.3, 2.4];
-        const u = Math.min(1, (t - 13) / 9);
+        const circle = (tt) => [tr[0] + Math.sin(tt * 0.7) * 0.4, tr[1] + Math.cos(tt * 0.7) * 0.3];
+        if (t < 13) return [...circle(t), 2.4];
+        // off to the fence from where the circling left it, not from the trough's centre
+        const o = circle(13),
+          u = Math.min(1, (t - 13) / 9);
         return [
-          tr[0] + (C[0] + 7 - tr[0]) * u,
-          tr[1] + (C[1] + FENCE_Y - tr[1]) * Math.min(1, u * 3),
+          o[0] + (C[0] + 7 - o[0]) * u,
+          o[1] + (C[1] + FENCE_Y - o[1]) * Math.min(1, u * 3),
           2.4 + 0.6 * Math.min(1, u * 3),
         ];
       },
@@ -3509,7 +3730,7 @@ function makeStory(Wd, ground, SCN, opts = {}) {
         };
   const DRIVE_OUT = 1.8,
     WAVE = 0.8,
-    CLIMB = 1.4;
+    CLIMB = 2.0;
   function driveOut(i, t, t0) {
     const d = atvDock(i),
       o = OUT_A();
@@ -3717,17 +3938,19 @@ function makeStory(Wd, ground, SCN, opts = {}) {
       left.sort((a, b) => dist2(q.pos, TGT[a]) - dist2(q.pos, TGT[b]));
       const n = left.shift();
       const stand = standOff(q.pos, TGT[n], 0.72);
-      const walk = Math.max(0.7, Math.min(2.6, dist2(q.pos, stand) / 0.9));
+      // walks and carries at a set pace, however far: a cap on their time made long ones
+      // sprint (4 m/s and more at the peak of the ease)
+      const walk = Math.max(0.7, dist2(q.pos, stand) / 0.9);
       const s = { n, from: q.pos, stand, t0: q.t, tw: q.t + walk, h: hdg(stand, TGT[n]) };
       s.tr = s.tw + 0.5;
       s.tg = s.tr + 0.3;
       s.tp = s.tg + 1.0;
       s.tl = s.tp + 0.35;
       s.feedAt = fan(q.k);
-      s.carry = Math.max(0.8, Math.min(4, dist2(stand, s.feedAt) / 0.75));
+      s.carry = Math.max(0.8, dist2(stand, s.feedAt) / 0.75);
       s.arrive = s.tl + s.carry;
       s.fs = Math.max(s.arrive, hopperFree);
-      s.ff = s.fs + 0.5;
+      s.ff = s.fs + Math.max(0.5, dist2(s.feedAt, L.FEED) / 0.75);
       s.fe = s.ff + 0.9;
       hopperFree = s.fe + 0.35;
       s.fh = hdg(s.feedAt, L.HOPPER);
@@ -3757,7 +3980,7 @@ function makeStory(Wd, ground, SCN, opts = {}) {
         bestT = Infinity;
       for (const i of remain) {
         const st = standOff(q.pos, SPOTS[i].p, 0.62);
-        const walk = Math.max(0.5, dist2(q.pos, st) / 1.0);
+        const walk = Math.max(0.5, dist2(q.pos, st) / 0.9);
         const fin = Math.max(q.t, gate[i] - walk) + walk;
         if (fin < bestT - 1e-9) {
           bestT = fin;
@@ -3767,7 +3990,7 @@ function makeStory(Wd, ground, SCN, opts = {}) {
       remain.splice(remain.indexOf(best), 1);
       const sp = SPOTS[best],
         stand = standOff(q.pos, sp.p, 0.62),
-        walk = Math.max(0.5, dist2(q.pos, stand) / 1.0);
+        walk = Math.max(0.5, dist2(q.pos, stand) / 0.9);
       const t0 = Math.max(q.t, gate[best] - walk);
       const st = {
         i: best,
@@ -4278,7 +4501,8 @@ function makeStory(Wd, ground, SCN, opts = {}) {
       oy = new Float64Array(n),
       px = new Float64Array(n),
       py = new Float64Array(n);
-    const maxStep = 2.4 * DT,
+    // nudges at a brisk walk at most: the legs now step for every one of them
+    const maxStep = 1.2 * DT,
       B2 = BODY * BODY;
     for (let st = 0; st < steps; st++) {
       const t = t0 + st * DT,
@@ -4419,14 +4643,78 @@ function makeStory(Wd, ground, SCN, opts = {}) {
       );
     return out;
   }
+  // ── locomotion: legs and heading, from where each body actually goes ──
+  // The plan says where a robot stands and walks, and the crowd pass then nudges robots apart.
+  // Either can move a body the plan calls standing (it slid with its legs still), and the plan
+  // swaps headings outright at the start and end of a walk (half a turn in one frame). So legs
+  // and heading are worked out afterwards, along the path that results: a body that moves
+  // steps, its gait advancing with the ground it covers so the feet do not slip, and its
+  // heading turns toward the plan's at a robot's pace.
+  const TURN = 4, // rad/s: half a turn in about 0.8 s
+    STRIDE = 7.5, // gait radians per metre walked (the plan's old t * 9 at 1.2 m/s)
+    PIVOT = 0.35; // m a foot travels per radian of turning on the spot
+  const wrapA = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+  function solveGait(n, at, t0, t1) {
+    const DT = 0.04,
+      steps = Math.max(2, Math.ceil((t1 - t0) / DT) + 1);
+    const H = Array.from({ length: n }, () => new Float32Array(steps)),
+      G = Array.from({ length: n }, () => new Float32Array(steps)),
+      M = Array.from({ length: n }, () => new Uint8Array(steps));
+    for (let k = 0; k < n; k++) {
+      let h = null,
+        g = 0,
+        px = 0,
+        py = 0,
+        on = false;
+      for (let st = 0; st < steps; st++) {
+        const r = at(k, t0 + st * DT);
+        if (!r || r.carried || !r.p) {
+          h = null;
+          continue;
+        }
+        if (h === null) {
+          h = r.h;
+          px = r.p[0];
+          py = r.p[1];
+        }
+        const dh = Math.max(-TURN * DT, Math.min(TURN * DT, wrapA(r.h - h)));
+        h += dh;
+        const travel = Math.hypot(r.p[0] - px, r.p[1] - py) + PIVOT * Math.abs(dh);
+        px = r.p[0];
+        py = r.p[1];
+        g += travel * STRIDE;
+        // steps start above 0.1 m/s and stop below 0.04, so the legs do not flicker on and off
+        on = travel / DT > (on ? 0.04 : 0.1);
+        H[k][st] = h;
+        G[k][st] = g;
+        M[k][st] = on ? 1 : 0;
+      }
+    }
+    return { t0, DT, steps, H, G, M };
+  }
+  function withGait(r, C, k, t) {
+    if (!C || !r || r.carried || !r.p) return r;
+    const f = Math.max(0, Math.min(C.steps - 1.001, (t - C.t0) / C.DT)),
+      i = Math.floor(f),
+      u = f - i,
+      h0 = C.H[k][i];
+    return {
+      ...r,
+      h: h0 + wrapA(C.H[k][i + 1] - h0) * u,
+      gait: C.G[k][i] * (1 - u) + C.G[k][i + 1] * u,
+      // either neighbour stepping counts, so a frame between samples never slides
+      moving: (C.M[k][i] | C.M[k][i + 1]) === 1,
+    };
+  }
   const carObs = (p, h) => (p ? [[p[0], p[1], h, 1.04, 0.86]] : []);
   let OFF_OP = null,
-    OFF_DEP = null;
+    OFF_DEP = null,
+    GAIT_OP = null;
   function hexOperate(k, t) {
-    return withOff(hexRaw(k, t), OFF_OP, k, t);
+    return withGait(withOff(hexRaw(k, t), OFF_OP, k, t), GAIT_OP, k, t);
   }
   function solveOperate() {
-    OFF_OP = null;
+    OFF_OP = GAIT_OP = null;
     const stat = SC.obstacles || [];
     OFF_OP = solveCrowd(
       WORK,
@@ -4441,6 +4729,7 @@ function makeStory(Wd, ground, SCN, opts = {}) {
         }),
       stat,
     );
+    GAIT_OP = solveGait(WORK, (k, t) => withOff(hexRaw(k, t), OFF_OP, k, t), 0, OPS.end + 2);
   }
   function solveDeploy() {
     OFF_DEP = null;
@@ -4461,7 +4750,7 @@ function makeStory(Wd, ground, SCN, opts = {}) {
     const key = SC.id + "|" + variant,
       hit = OPS_CACHE.get(key);
     if (hit) {
-      ({ OPS, OPS_PULLER_OF, OFF_OP, STAND } = hit);
+      ({ OPS, OPS_PULLER_OF, OFF_OP, GAIT_OP, STAND } = hit);
       OFF_DEP = DEP_CACHE.get(variant);
       return;
     }
@@ -4475,7 +4764,7 @@ function makeStory(Wd, ground, SCN, opts = {}) {
       solveDeploy();
       DEP_CACHE.set(variant, OFF_DEP);
     } else OFF_DEP = DEP_CACHE.get(variant);
-    OPS_CACHE.set(key, { OPS, OPS_PULLER_OF, OFF_OP, STAND });
+    OPS_CACHE.set(key, { OPS, OPS_PULLER_OF, OFF_OP, GAIT_OP, STAND });
   }
   rebuildOps();
 
@@ -5197,9 +5486,12 @@ function startHero(Wd, OPT) {
         : matchMedia("(prefers-color-scheme: dark)").matches
           ? "dark"
           : "light";
-    E.setTheme();
+    look = (themeEl.dataset.theme === "dark" ? OPT.look?.dark : OPT.look?.light) || {};
+    E.setLook(look);
     drawHub();
   }
+  // The look in force: the chosen look's version for the page's theme (looks.ts).
+  let look = {};
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", syncTheme);
   new MutationObserver(syncTheme).observe(document.documentElement, {
     attributes: true,
@@ -5208,6 +5500,9 @@ function startHero(Wd, OPT) {
   syncTheme();
 
   // ── loop ──
+  // Everything that moves advances by the frame's time (dt, capped), never by the wall clock:
+  // the supply carriers and the camera's sway used the clock, so after a pause (the hero off
+  // screen, the tab hidden, a slow frame) they leapt ahead by however long it had been.
   let W = 1,
     H = 1,
     last = 0,
@@ -5216,7 +5511,8 @@ function startHero(Wd, OPT) {
     visible = true,
     slowT = 0,
     lastWall = 0,
-    vtA = 0;
+    vtA = 0,
+    clock = 0;
   const cam = { target: [0, 0, 0], az: 40, el: 31, width: 50 };
   let camInit = false;
   function resize() {
@@ -5271,11 +5567,15 @@ function startHero(Wd, OPT) {
       user.az -= user.az * kk;
       user.el -= user.el * kk;
     }
-    const sway = still.matches ? 0 : 3 * Math.sin(now / 10000);
+    if (!still.matches) clock += dt;
+    const sway = still.matches ? 0 : 3 * Math.sin(clock / 10);
     E.view.target.set(...cam.target);
-    E.view.width = cam.width;
+    E.view.width = cam.width * (look.camera?.zoom ?? 1);
     E.view.az = cam.az + sway + user.az;
-    E.view.el = Math.max(8, Math.min(80, cam.el + user.el));
+    E.view.el =
+      look.camera?.el != null
+        ? look.camera.el
+        : Math.max(8, Math.min(80, cam.el + user.el + (look.camera?.tilt ?? 0)));
     if (OPT.shift) {
       const sh = OPT.shift(W, H),
         A = (E.view.az * Math.PI) / 180,
@@ -5291,9 +5591,16 @@ function startHero(Wd, OPT) {
     D.begin();
     DL.begin();
     const vis = [];
+    // "Near" is anything the camera can see, plus a margin: on a tall phone screen the view
+    // reaches much further up and down the ground than across, and a crew there that counted
+    // as off screen was restarted (and stopped being drawn) in plain sight.
+    const halfAcross = E.view.width / 2,
+      halfDeep =
+        (E.view.width * (H / W)) / 2 / Math.max(0.2, Math.sin((E.view.el * Math.PI) / 180)),
+      reach = Math.hypot(halfAcross, halfDeep) + 12;
     for (const c of crews) {
       const d = Math.hypot(c.z.c[0] - E.view.target.x, c.z.c[1] - E.view.target.y),
-        near = d < E.view.width * 0.95 + 18;
+        near = d < reach;
       if (!still.matches) {
         c.t += dt;
         if (c.t > c.end + 1) {
@@ -5309,7 +5616,7 @@ function startHero(Wd, OPT) {
     }
     // supply carriers running the track between jobs
     for (let j = 0; j < 3; j++) {
-      const u = (still.matches ? 0 : now / 1000) * 3.1 + (j * TR.length) / 3,
+      const u = clock * 3.1 + (j * TR.length) / 3,
         a = trackAt(u),
         b = trackAt(u + 1.5),
         h = Math.atan2(b[1] - a[1], b[0] - a[0]);
@@ -5472,7 +5779,7 @@ function startFleetCards(OPT) {
         : matchMedia("(prefers-color-scheme: dark)").matches
           ? "dark"
           : "light";
-    E.setTheme();
+    E.setLook((themeEl.dataset.theme === "dark" ? OPT.look?.dark : OPT.look?.light) || {});
   }
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", syncTheme);
   new MutationObserver(syncTheme).observe(document.documentElement, {
@@ -5586,3 +5893,9 @@ function startFleetCards(OPT) {
 /** The hero over the bundled world data. */
 export const startHeroScene = (opt) => startHero(WORLD, opt);
 export { startFleetCards };
+
+/** For tests: one hero crew's story, built as startHero builds it, with no renderer. */
+export function crewStory(zone) {
+  const W2 = { ...WORLD, CELL: zone.c };
+  return makeStory(W2, makeGround(WORLD), makeScenarios(W2).S, { init: zone.id, lazyDeploy: true });
+}
