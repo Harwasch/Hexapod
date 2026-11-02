@@ -171,7 +171,20 @@ export function verdictNote(
   uncertainty: ChangeMap["uncertainty"],
   from: Pick<Epoch, "observedAt">,
   to: Pick<Epoch, "observedAt">,
+  relativeFit?: ChangeMap["relativeFit"],
+  reference?: Pick<Epoch, "observedAt">,
 ): string | null {
+  if (relativeFit) {
+    const name = reference
+      ? formatEpochDate(reference.observedAt)
+      : `epoch ${relativeFit.referenceEpochId}`;
+    const grade =
+      uncertainty.fromVerdict === "coarse" || uncertainty.toVerdict === "coarse"
+        ? `Not survey-grade: ${uncertainty.fromVerdict} · ${uncertainty.toVerdict}. `
+        : "";
+    const fit = relativeFit.uncertaintyM.toPrecision(2);
+    return `Relative to ${name} (visual fit ±${fit} m). ${grade}Local slope raises the threshold at edges.`;
+  }
   if (uncertainty.fromVerdict === "survey" && uncertainty.toVerdict === "survey") return null;
   const side = (epoch: Pick<Epoch, "observedAt">, verdict: string, m: number) =>
     `${formatEpochDate(epoch.observedAt)} ${verdict} (${plusMinus(m)})`;

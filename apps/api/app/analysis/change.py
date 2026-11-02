@@ -33,7 +33,7 @@ still be over `MAX_CHANGE_CELLS` cells, both go up further until they are not (a
 **The rule** (`change-v1`). Where both epochs have the layer's height, `delta = h_to -
 h_from` (computed in 32 bits: two i2 heights can differ by more than i2 holds) against
 
-    t = 3 sqrt(s_from^2 + s_to^2 + u_from^2 + u_to^2 + 2 w^2) + drift
+    t = 3 sqrt(s_from^2 + s_to^2 + u_from^2 + u_to^2 + 2 w^2 + (g h)^2) + drift
 
 with `s` each side's sigma for the layer, `u` each epoch's placement uncertainty (the
 larger of its uncertainty from the site frame and its alignment's own claim, so a coarse
@@ -46,6 +46,15 @@ errors), not a measurement: the map says `uncalibrated` until a site scanned twi
 measures it. `minDetectableM` is the least `t` over a layer's compared cells: a change
 smaller than it cannot be seen anywhere between these two dates -- an epoch placed at
 +/-10 m makes it about 30 m, and so finds no change rather than false ones.
+
+**Relative-pair slope guard.** For measured visual pairs (`slope_guard=True`), `h =
+sqrt(u_from^2 + u_to^2)` is their horizontal placement uncertainty and `g` the larger
+local gradient magnitude of either layer's surface. The differential `dh = grad(z) dot
+dx` gives a height-error standard deviation bounded by `g h`; its variance enters the
+budget, with coefficient one. Use the larger absolute one-sided derivative on each axis
+and their Euclidean norm, so a step is not halved and a ridge cannot cancel. Missing
+neighbours on either axis make a cell insufficient. Other pairs keep the old rule
+(`g h = 0`). The existing neighbourhood check below remains in force.
 
 **Horizontal uncertainty.** Placement error moves a whole epoch sideways, not only up: a
 roof edge one cell off reads as metres of change cell for cell. So each cell is compared
@@ -627,6 +636,31 @@ def local_rise_cm(
     return best
 
 
+def local_grade(
+    height: NDArray[np.int16],
+    keep: NDArray[np.bool_],
+    cell_m: float,
+) -> NDArray[np.float64]:
+    """Magnitude of the local gradient, using the largest one-sided derivative per axis.
+
+    Central differences would halve a step or cancel a ridge. Missing both neighbours
+    on either axis leaves the slope unbounded, so that cell cannot be compared.
+    """
+    gradients = []
+    for axis in (0, 1):
+        best = np.full(height.shape, -1.0, dtype=np.float64)
+        here, there = [slice(None)] * 2, [slice(None)] * 2
+        here[axis], there[axis] = slice(None, -1), slice(1, None)
+        h, t = tuple(here), tuple(there)
+        rise = np.abs(height[t].astype(np.int32) - height[h]) * CM / cell_m
+        valid = keep[h] & keep[t]
+        np.maximum(best[h], rise, out=best[h], where=valid)
+        np.maximum(best[t], rise, out=best[t], where=valid)
+        best[best < 0] = np.inf
+        gradients.append(best)
+    return np.hypot(gradients[0], gradients[1])
+
+
 # --- the change ----------------------------------------------------------------------------
 
 #: `change_planes` classifies a band of rows at a time, of about this many cells.
@@ -718,6 +752,7 @@ def change_planes(
     sigmas: float = THRESHOLD_SIGMA,
     motion_m: float | None = None,
     horizontal: bool = True,
+    slope_guard: bool = False,
 ) -> ChangePlanes:
     """The change of `layer` from `a` to `b` (module docstring), with `ua` and `ub` each
     epoch's placement uncertainty in metres, at the coarser of their levels (or `level`
@@ -784,6 +819,10 @@ def change_planes(
     # against the other epoch's neighbourhood within the horizontal radius.
     compared = joint.shared & ~joint.partial & (sa < SATURATED) & (sb < SATURATED)
     cell_m = math.ldexp(cell_grid.LATTICE_BASE_M, at)
+    grade = None
+    if slope_guard and ua * ua + ub * ub > 0:
+        grade = np.maximum(local_grade(da, compared, cell_m), local_grade(db, compared, cell_m))
+        compared &= np.isfinite(grade)
     half = horizontal_cells(ua, ub, motion, cell_m, sigmas) if horizontal else 0
     top_a, low_a = neighbourhood(da, compared, half)
     top_b, low_b = neighbourhood(db, compared, half)
@@ -807,7 +846,8 @@ def change_planes(
         here_a, here_b = da[r0:r1].astype(np.int32), db[r0:r1].astype(np.int32)
         delta = here_b - here_a
         spread = (sa[r0:r1].astype(np.float64) * CM) ** 2 + (sb[r0:r1].astype(np.float64) * CM) ** 2
-        threshold = sigmas * np.sqrt(spread + floor)
+        slope_variance = 0.0 if grade is None else grade[r0:r1] ** 2 * (ua * ua + ub * ub)
+        threshold = sigmas * np.sqrt(spread + floor + slope_variance)
         if rise is not None:
             threshold = threshold + rise[r0:r1] / run_cm * reach
         # Raised: the later height is above all the earlier had nearby, or the earlier one
@@ -1010,11 +1050,19 @@ def change_map(
     layer: Layer,
     confidence_a: cell_grid.Grid | None = None,
     confidence_b: cell_grid.Grid | None = None,
+    slope_guard: bool = False,
 ) -> ChangeMap:
     """`change_planes` of `layer` and its areas, a level up at a time while they are too
     large to outline (module docstring)."""
     planes = change_planes(
-        a, b, ua, ub, layer=layer, confidence_a=confidence_a, confidence_b=confidence_b
+        a,
+        b,
+        ua,
+        ub,
+        layer=layer,
+        confidence_a=confidence_a,
+        confidence_b=confidence_b,
+        slope_guard=slope_guard,
     )
     drawn = planes
     while needs_coarser(drawn) and drawn.level < cell_grid.MAX_LEVEL:
@@ -1027,5 +1075,6 @@ def change_map(
             confidence_a=confidence_a,
             confidence_b=confidence_b,
             level=drawn.level + 1,
+            slope_guard=slope_guard,
         )
     return ChangeMap(planes=planes, drawn=drawn, areas=change_areas(drawn, projection))

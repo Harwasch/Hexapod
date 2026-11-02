@@ -90,8 +90,9 @@ class ChangeUncertaintyRead(CamelModel):
     of its uncertainty from the site frame (`fromFrameM`, its confidence grid's
     `alignmentCap.uncertaintyM`: 0 for the epoch that made the frame) and its alignment's
     own claim -- so a `coarse` epoch (a phone, a drone without RTK evidence) brings its
-    metres, however well it was aligned visually, and never less than 1 m whatever it
-    claims. An `unaligned` epoch is refused (409).
+    metres, and never less than 1 m whatever it claims. When `relativeFit` is present,
+    these are instead the measured relative contributions (0 on a direct reference);
+    their quadrature sum is the pair placement, without the coarse floor. An `unaligned` epoch is refused (409).
 
     Read model: every field is explicit (no defaults) so the OpenAPI contract marks it required.
     """
@@ -105,6 +106,18 @@ class ChangeUncertaintyRead(CamelModel):
     #: Each epoch's uncertainty from the site frame alone, metres.
     from_frame_m: Finite
     to_frame_m: Finite
+
+
+class ChangeRelativeFitRead(CamelModel):
+    """Measured pair placement; shared absolute GPS error is excluded, not survey grade.
+
+    Direct: one frame-relative term. Shared reference revision: both terms in quadrature
+    (conservative if their recorded frame errors share an earlier alignment).
+    """
+
+    reference_epoch_id: uuid.UUID
+    uncertainty_m: Finite
+    basis: Literal["direct", "shared-reference"]
 
 
 class ChangeAppearanceRead(CamelModel):
@@ -263,6 +276,8 @@ class ChangeMapRead(CamelModel):
     cell_m: Finite
     threshold_sigma: Finite
     uncertainty: ChangeUncertaintyRead
+    #: Null keeps the absolute B5a rule; present also enables the slope error budget.
+    relative_fit: ChangeRelativeFitRead | None
     #: The bare earth's change: the primary product.
     ground: ChangeLayerRead
     #: The top surface's change: vegetation and anything standing, never read as ground.

@@ -1280,3 +1280,20 @@ def test_align_hands_its_check_targets_to_the_frame_relative_figure(
         math.hypot(document["uncertaintyM"], 0.024), abs=1e-4
     )
     assert document["frameRelativeUncertaintyM"] >= 2.0
+
+
+@pytest.mark.parametrize("revision", ["artifact-revision-1", None])
+def test_visual_alignment_records_reference_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    revision: str | None,
+) -> None:
+    _, model = _ring_model(tmp_path / "m")
+    names = [image.name for image in model.images]
+    monkeypatch.setattr(alignment, "_register", _fake_register(_registered(model, TRUE, names)))
+    _, document = _run(
+        tmp_path / "w",
+        _georef_located(),
+        reference={**REFERENCE, "revision": revision},
+    )
+    assert document["referenceRevision"] == revision

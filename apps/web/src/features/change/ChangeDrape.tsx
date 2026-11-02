@@ -197,7 +197,16 @@ function Drape({ request }: { request: ChangeDrapeRequest }) {
 
   const byId = (id: string) => epochs.find((e) => e.id === id);
   const [from, to] = [byId(request.from), byId(request.to)];
-  const verdicts = map && from && to ? verdictNote(map.uncertainty, from, to) : null;
+  const verdicts =
+    map && from && to
+      ? verdictNote(
+          map.uncertainty,
+          from,
+          to,
+          map.relativeFit,
+          map.relativeFit ? byId(map.relativeFit.referenceEpochId) : undefined,
+        )
+      : null;
   const dates =
     from && to ? `${formatEpochDate(from.observedAt)} → ${formatEpochDate(to.observedAt)}` : "";
 

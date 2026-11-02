@@ -231,7 +231,8 @@ cells, surfacedCells, medianSigmaM, originHeightM, groundWindowM}`, or null — 
 
 3. **What is compared** (B5a). Where both epochs have the layer's height over every child the
    finer measured, `Δ = h_to − h_from` (in 32 bits) against
-   `t = 3·√(s_from² + s_to² + u_from² + u_to² + 2w²) + drift`. A cell is **`insufficient`**
+   `t = 3·√(s_from² + s_to² + u_from² + u_to² + 2w² + (g·h)²) + drift`
+   (`g·h = 0` under the original absolute-placement rule). A cell is **`insufficient`**
    where either measured the layer but the two cannot be compared: no shared child; **fewer
    shared children than either measured** (a coarse cell against part of it — it was compared
    and flagged; the review's crate-against-one-ground-child read "lowered 2 m"); **either sigma
@@ -251,6 +252,60 @@ cells, surfacedCells, medianSigmaM, originHeightM, groundWindowM}`, or null — 
    cells raised at a 0.21 m floor. An epoch whose verdict is `unaligned`, or that recorded none,
    is refused (409 `epoch-unaligned`). The answer states each epoch's verdict, its `u` and its
    uncertainty from the frame.
+
+   **Measured relative fit (Harrison, 2026-10-28: “Use the measured fit”).** When one
+   epoch's accepted visual alignment references the other's **current revision**, use that
+   alignment's positive, finite `frameRelativeUncertaintyM` once for the pair: `u = 0`
+   on the reference and `u = relative` on the aligned epoch. When both visually reference
+   the same epoch **and current reference revision**, use both recorded relative terms in quadrature.
+   The record must say `method: visual`, with `frameRelativeBasis: visual` (including
+   the older conservative “reference at its absolute uncertainty” basis); a fit refuted by
+   check targets, missing measurement or missing/mismatched reference revision keeps the
+   original rule. Alignment records `referenceRevision` from the site context alongside
+   reference epoch and job IDs. Both direct and shared-reference cases must match the
+   current reference's artifact-row digest (`epochs._reference_keys`, the same revision
+   used by `ReferenceChoice` and site-context caching). A retry can replace poses and
+   alignment under the same job ID: matching epoch and job alone is insufficient.
+   Records predating `referenceRevision` fall back to B5a. No chain inference or
+   variance subtraction is made: frame-relative terms can include earlier reference error,
+   and siblings can share it, so retaining both is conservative.
+
+   `frameRelativeUncertaintyM` is already `hypot(ref_rel, 3·RMS)` from alignment
+   (`SIGMA_K = 3`), rather than a raw one-sigma fit residual. The change map deliberately
+   preserves that uncertainty convention: its further 3σ multiplier approaches **9·RMS**
+   when the fit dominates. This is conservative on purpose, and matches the treatment
+   of absolute `uncertaintyM` for survey claims; it does not reinterpret either as raw RMS.
+
+   The **1 m coarse floor does not apply to these measured relative terms**. Absolute GPS
+   error is shared when one reconstruction inherits the other's frame; it does not measure
+   their separation. This changes B5a round 2 for this case only: that review caught a
+   coarse label plus a centimetre claim/cap without a measured relationship. Those cases
+   still take exactly the old floor, and unaligned epochs are still refused. Neither
+   epoch's verdict changes: relative precision does not make a drone or phone survey-grade.
+   The answer adds nullable `relativeFit {referenceEpochId, uncertaintyM, basis}`; its
+   `uncertainty` contributions show the terms actually used, while the verdicts and
+   frame uncertainties remain explicit. The legend names “Relative to <date> (visual fit
+   ±0.40 m)” and still says “Not survey-grade” for coarse dates.
+
+   **Slope propagation for these relative pairs.** A horizontal displacement `dx` on
+   `z(x,y)` causes `dz ≈ ∇z·dx`. With scalar horizontal uncertainty
+   `h = √(u_from² + u_to²)`, its height-error variance is bounded by `(g·h)²`, where
+   `g = max(|∇z_from|, |∇z_to|)` for this layer at the compared cell size. Add that variance
+   under the same 3σ root, with coefficient **one**, derived from the differential, and
+   retain the neighbourhood guard (5) and ground drift (7). The two guards overlap
+   conservatively: the neighbourhood explains discrete shifts; the slope term raises the
+   reported detectable bar at steep edges. Motion's existing `2w²` and neighbourhood
+   allowance remain separate; `h` here is placement uncertainty alone.
+
+   Estimate each gradient component by the **larger absolute one-sided difference** to
+   the adjacent cells on that axis, divided by cell size, then take the Euclidean norm.
+   Central differences halve a step and cancel a ridge; this rule does neither. Take the
+   larger norm from either surface, never a fitted/tuned edge constant. Missing neighbours
+   on an axis leave slope unbounded: that cell is insufficient. Recompute at every drawn
+   level. This is a grid-scale first-order bound, not a guarantee against unresolved
+   sub-cell geometry, and remains uncalibrated. Other pairs keep today's arithmetic and
+   classification exactly.
+
 5. **Horizontal uncertainty** (B5a). Placement error moves an epoch sideways too: cell for cell,
    an unchanged 4 m roof one 25 cm cell off, at 25 cm declared, read as a column lowered 4 m and
    one raised. Each cell is compared with the other epoch's neighbourhood within the horizontal
@@ -410,7 +465,9 @@ Date 2026-10-20 · M5 of the splat-pipeline build (design M4–M6 §3 W5c), bran
    unchanged counted, not drawn; the label and that layer's floor; the 3σ rule and the ground
    window (for vegetation, its wind sway) uncalibrated; appearance-only change not computed;
    and, when either verdict is coarse, "Not survey-grade" with both dates' verdicts and the `u`
-   they were compared with, so a phone date never reads as a survey. Each layer also says what it
+   they were compared with, so a phone date never reads as a survey. For a measured visual
+   pair (§ API 4), name the reference date and relative fit instead of presenting the
+   absolute placement as the comparison error, retaining the coarse verdict warning. Each layer also says what it
    could see (round 2): its least detectable change from `detectable`, the least and the median
    (one figure when they round alike), "Small objects under ~1 m are not detected yet", and the
    best that layer was measured to see (§ API Limits: ground 0.23 m over areas wider than the

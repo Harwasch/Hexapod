@@ -1552,6 +1552,33 @@ Europe/Vienna, and the altitude is the drone's own `abs_alt`, which differs by a
 between the 2025-08-25 and 2025-11-22 timesteps. No camera make or focal length is written:
 the data does not state them.
 
+#### What the first two dates showed (October 2026)
+
+Timesteps `2025-08-25` (filmed 2025-08-29, per the clip names) and `2025-11-22` are in
+production as two epochs of one site, "NWM test (TU Wien, CC BY 4.0) · 2025-08-25"
+(`e86ca619-340b-4438-b2f8-6ac2dda6f58c`). Each run cost about $0.20–0.22 on Modal (L4 training
+is ~95% of it) and took 19–28 min.
+
+- **Alignment (M3) holds across seasons.** Date 1 is placed by its GNSS priors (similarity kept
+  at identity, GPS RMS 4.3 m). Date 2 is aligned visually to date 1: 55 of 60 frames
+  registered, residual median 9 cm, frame-relative ±0.40 m. The camera poses match NWM's own
+  COLMAP model to a median 9 cm and 0.10°. GNSS alone would be 164 m off: the drone's
+  altitude reference moved about 160 m between the two flights.
+- **Change map (M5): the app shows no change on this pair, by its rule.** Both dates are
+  `coarse` (a drone without RTK), each at ±5 m, so the change map's 3σ threshold is about
+  ±22 m (`apps/api/app/services/change_maps.py`, ADR 0018) and every cell is "unchanged" or
+  "not comparable". The surface grids themselves show the expected leaf fall (median −0.34 m,
+  5th percentile −2.65 m in two canopy patches) with the weir and paths stable, plus thin false
+  streaks along wall and path edges. The ground layer is unusable from 20–30 m up (8 cells
+  compared). Water and weir works show no change between these two dates.
+
+Running both again: dispatch `2025-08-25` with `dry_run` off and `process` on, wait until its
+job completes and the epoch registers, then dispatch `2025-11-22` the same way. A slug that
+already exists fails the dispatch, so reprocessing an existing capture is a new job queued by
+**Process capture** (`process-capture.yml`) with its `capture_id`, date 1 first. Expect 1 m confidence and surface
+cells on both dates; much coarser cells mean the confidence grid's level choice has
+regressed.
+
 ## Security checklist
 
 - No secrets in git; `.env` is ignored, `.env.example` is the template, and everything

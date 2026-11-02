@@ -214,6 +214,8 @@ class Reference:
     #: `frameRelativeUncertaintyM`; 0 for the epoch that made the frame), when the worker
     #: knew it; None for an older alignment, read as `uncertainty_m` (conservative).
     frame_relative_uncertainty_m: float | None = None
+    #: Artifact-row digest; epoch and job IDs survive a retry of the reference run.
+    revision: str | None = None
 
 
 @dataclass(frozen=True)
@@ -336,6 +338,7 @@ def read_site_context(directory: Path, log: Callable[[str], None] = print) -> Si
         reference = Reference(
             epoch_id=_str(raw.get("epochId")),
             job_id=_str(raw.get("jobId")),
+            revision=_str(raw.get("revision")),
             observed_at=_str(raw.get("observedAt")),
             platform=_str(raw.get("platform")),
             verdict=_str(raw.get("verdict")),
@@ -1265,6 +1268,7 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
         "method": chosen.method,
         "referenceEpochId": reference.epoch_id if reference is not None else None,
         "referenceJobId": reference.job_id if reference is not None else None,
+        "referenceRevision": reference.revision if reference is not None else None,
         "referenceHeightDatum": reference.height_datum if reference is not None else None,
         "platform": platform,
         "platformSource": platform_source,
