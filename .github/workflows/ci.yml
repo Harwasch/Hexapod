@@ -388,7 +388,9 @@ jobs:
 
   pipeline:
     name: Pipeline · lint, typecheck, test
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, whose apt colmap (3.12.6) fails to load
+    # libPoseLib.so. sfm.py's findings and the worker image are on 24.04's 3.9.1.
+    runs-on: ubuntu-24.04
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.pipeline != 'false' }}
     defaults:
