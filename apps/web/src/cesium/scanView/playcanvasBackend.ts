@@ -1,3 +1,10 @@
+import {
+  loadSpectra,
+  evaluateSpectra,
+  SPECTRA_INDEX_WIDTH,
+  SPECTRA_DISPLACEMENT_WIDTH,
+  type LivingSpectra,
+} from "./livingSpectra";
 /**
  * The PlayCanvas back-end of the scan renderer (ScanRendererHost): SuperSplat's own engine
  * (MIT). Each tile is decoded in a worker into the columns PlayCanvas's `GSplatData` takes
@@ -97,11 +104,34 @@ import { tileInstanceIds, type InstancesDoc } from "@/lib/instances";
 import { createLogger } from "@/lib/log";
 import { tileSkin, type SkinDoc } from "@/lib/skin";
 import type { PickTile } from "@/lib/splatPick";
+import {
+  useLivingLab,
+  effectiveLivingLab,
+  watchLivingLab,
+  type LivingLabState,
+} from "@/state/livingLab";
 import { reportScanSun, watchScanSun, type ScanSun } from "@/state/sunReport";
 import type { TileNode } from "@/view/tiles";
 
 import { INSTANCE_TEXTURE_WIDTH } from "../splatInstances";
 import { CELL_TILE_GLSL, cellFillOf, CellTiles, type CellTileSample } from "./cellModifier";
+import {
+  ARTICULATION_STREAM,
+  ARTICULATION_WIDTH,
+  articulationPixels,
+  evaluateArticulation,
+  loadArticulation,
+  orderedArticulationBinding,
+  type Articulation,
+} from "./livingArticulation";
+import {
+  groundGrid,
+  livingHookVs,
+  livingUniforms,
+  packLiving,
+  sunDirection,
+  type GroundGrid,
+} from "./livingHook";
 import {
   coneEye,
   eyeMoved,
@@ -205,6 +235,8 @@ const WEIGHTS2_STREAM = "splatWeights2";
 
 /** Shortest time between two re-sorts of a moving object's tiles. */
 export const SORT_REFRESH_MS = 100;
+/** The living lab's ground grid is built again at most this often, as tiles come and go. */
+const GROUND_REBUILD_MS = 3000;
 
 /**
  * The work-buffer modifier (PlayCanvas's `gsplatModifyVS`) for a tile with ids, skin weights,
@@ -225,6 +257,7 @@ export function playcanvasModifierGlsl(
   sun = false,
   rule = false,
   side = false,
+  art = false,
 ): string {
   const id = ids ? "loadSplatInstance().r" : "0u";
   const second = wide ? "loadSplatWeights2()" : "uvec4(0u)";
@@ -333,6 +366,7 @@ void modifySplatRotationScale(vec3 originalCenter, vec3 modifiedCenter, inout ve
     }${ruleSpread}
 }
 void modifySplatColor(vec3 center, inout vec4 color) {
+    ${art ? "writeHexapodArticulation(loadHexapodArticulation());" : ""}
     ${sideStep}${sunStep}${colorStep}${ruleStep}
 }
 `;
@@ -391,13 +425,14 @@ export function playcanvasModifier(
   sun = false,
   rule = false,
   side = false,
+  art = false,
 ): WorkBufferModifier {
-  const key = `${String(ids)}|${String(skin)}|${String(skin && wide)}|${String(cell)}|${String(sun)}|${String(rule)}|${String(side)}`;
+  const key = `${String(ids)}|${String(skin)}|${String(skin && wide)}|${String(cell)}|${String(sun)}|${String(rule)}|${String(side)}|${String(art)}`;
   let modifier = MODIFIERS.get(key);
   if (!modifier) {
     modifier = {
-      glsl: playcanvasModifierGlsl(ids, skin, skin && wide, cell, sun, rule, side),
-      ...(ids && !skin && !cell && !sun && !rule && !side
+      glsl: playcanvasModifierGlsl(ids, skin, skin && wide, cell, sun, rule, side, art),
+      ...(ids && !skin && !cell && !sun && !rule && !side && !art
         ? { wgsl: PLAYCANVAS_INSTANCE_WGSL }
         : {}),
     };
@@ -861,6 +896,38 @@ function assemble(
   let ownModifyPS: string | undefined;
   const sunValue = new Float32Array(4);
   const sunlightValue = new Float32Array(4);
+  /**
+   * The living lab (state/livingLab.ts, livingHook.ts): what it draws now, whether its hook is
+   * in, its uniforms (set every frame it draws), and the ground grid it reads, built from the
+   * scan's tiles again when tiles came or went, at most every `GROUND_REBUILD_MS`.
+   */
+  let living: LivingLabState | null = api === "webgl2" ? effectiveLivingLab() : null;
+  let livingHooked = false;
+  const livingValues = livingUniforms();
+  const livingStart = performance.now();
+  let articulation: Articulation | null = null;
+  let articulationUrl = "";
+  let articulationRequest: AbortController | null = null;
+  let articulationStream = false;
+  let articulationPoseTexture: pc.Texture | null = null;
+  let articulationLeafTexture: pc.Texture | null = null;
+  let articulationPoses = new Float32Array(0);
+  let articulationLeaves = new Float32Array(0);
+  let articulationTime = "";
+  const articulationBound = new WeakMap<TileBinding, Articulation | null>();
+  let spectra: LivingSpectra | null = null;
+  let spectraUrl = "";
+  let spectraRequest: AbortController | null = null;
+  let spectraIndex: pc.Texture | null = null;
+  let spectraDisplacement: pc.Texture | null = null;
+  let spectraPixels = new Float32Array(0);
+  let spectraTime = "";
+  const spectraOrigin = new Float32Array(4);
+  const spectraStep = new Float32Array([1, 1, 1]);
+  let ground: GroundGrid | null = null;
+  let groundTexture: pc.Texture | null = null;
+  let groundTiles = -1;
+  let groundAt = 0;
   /** The device is gone for good: nothing more is drawn, and the host replaces the renderer. */
   let lost = false;
   /** The renderer is letting go of its device itself: that loss is not news. */
@@ -955,6 +1022,54 @@ function assemble(
     }
     return texture;
   };
+  /** Requests are cancelled on replacement/destruction; old scans never keep the old field. */
+  const syncSpectra = (lab: LivingLabState): void => {
+    if (lab.spectraUrl === spectraUrl) return;
+    spectraUrl = lab.spectraUrl;
+    spectraRequest?.abort();
+    spectra = null;
+    spectraOrigin.fill(0);
+    spectraIndex?.destroy();
+    spectraDisplacement?.destroy();
+    spectraIndex = spectraDisplacement = null;
+    spectraTime = "";
+    if (!spectraUrl) return;
+    const controller = new AbortController();
+    spectraRequest = controller;
+    useLivingLab.getState().set({ spectraStatus: "Loading spectra…" });
+    void loadSpectra(spectraUrl, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted || destroying) return;
+        spectra = loaded;
+        const h = loaded.header;
+        spectraOrigin.set([...h.origin, h.resolution]);
+        spectraStep.set(h.size.map((v) => v / (h.resolution - 1)));
+        spectraIndex = dataTexture(
+          "livingSpectraIndex",
+          SPECTRA_INDEX_WIDTH,
+          loaded.index.length / SPECTRA_INDEX_WIDTH,
+          pc.PIXELFORMAT_R32F,
+          loaded.index,
+        );
+        const rows = Math.ceil(h.occupied / SPECTRA_DISPLACEMENT_WIDTH);
+        spectraPixels = new Float32Array(SPECTRA_DISPLACEMENT_WIDTH * rows * 4);
+        spectraDisplacement = dataTexture(
+          "livingSpectraDisplacement",
+          SPECTRA_DISPLACEMENT_WIDTH,
+          rows,
+          pc.PIXELFORMAT_RGBA32F,
+          spectraPixels,
+        );
+        useLivingLab.getState().set({
+          spectraStatus: `Simulated · ${String(h.occupied)} voxels · ${String(h.frequenciesHz.length)} terms`,
+        });
+        hooks.frameWanted();
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted && !destroying)
+          useLivingLab.getState().set({ spectraStatus: String(error) });
+      });
+  };
   /** Stand-ins for tables not there yet: every sampler the GLSL modifier declares is bound. */
   let empty: { state: pc.Texture; float: pc.Texture; uint: pc.Texture } | null = null;
   const stand = (): { state: pc.Texture; float: pc.Texture; uint: pc.Texture } =>
@@ -1007,6 +1122,82 @@ function assemble(
     texture.unlock();
     tile.doc = doc;
     tile.matched = listed !== undefined;
+  };
+
+  /** Bind once in Morton resource order, then carry the IDs unchanged through the copy pass. */
+  const bindArticulation = (tile: TileBinding): void => {
+    if (
+      !articulationStream ||
+      (articulationBound.has(tile) && articulationBound.get(tile) === articulation)
+    )
+      return;
+    if (!tile.resource.getTexture(ARTICULATION_STREAM))
+      tile.resource.format.addExtraStreams([
+        { name: ARTICULATION_STREAM, format: pc.PIXELFORMAT_RGBA32U },
+      ]);
+    const texture = tile.resource.getTexture(ARTICULATION_STREAM);
+    if (!texture) return;
+    const output = texture.lock() as Uint32Array;
+    orderedArticulationBinding(articulation, tile.checksum, tile.order, output);
+    texture.unlock();
+    articulationBound.set(tile, articulation);
+  };
+
+  const syncArticulation = (lab: LivingLabState): void => {
+    if (articulationUrl === lab.articulationUrl) return;
+    articulationUrl = lab.articulationUrl;
+    articulationRequest?.abort();
+    articulation = null;
+    articulationTime = "";
+    articulationPoseTexture?.destroy();
+    articulationLeafTexture?.destroy();
+    articulationPoseTexture = articulationLeafTexture = null;
+    if (!articulationUrl) {
+      useLivingLab.getState().set({ articulationStatus: "No articulation loaded" });
+      return;
+    }
+    if (!articulationStream) {
+      app.scene.gsplat.format.addExtraStreams([
+        { name: ARTICULATION_STREAM, format: pc.PIXELFORMAT_RGBA32U },
+      ]);
+      articulationStream = true;
+      app.scene.gsplat.material.setDefine("HEXAPOD_ARTICULATION", "");
+      app.scene.gsplat.material.update();
+    }
+    for (const entity of tiles.keys()) applyModifier(entity);
+    const controller = new AbortController();
+    articulationRequest = controller;
+    useLivingLab.getState().set({ articulationStatus: "Loading articulated spectra…" });
+    void loadArticulation(articulationUrl, controller.signal)
+      .then((loaded) => {
+        if (controller.signal.aborted) return;
+        articulation = loaded;
+        articulationPoses = articulationPixels(loaded.header.nodes.length);
+        articulationLeaves = articulationPixels(loaded.header.leafCount);
+        articulationPoseTexture = dataTexture(
+          "articulationPoses",
+          ARTICULATION_WIDTH,
+          articulationPoses.length / (ARTICULATION_WIDTH * 4),
+          pc.PIXELFORMAT_RGBA32F,
+          articulationPoses,
+        );
+        articulationLeafTexture = dataTexture(
+          "articulationLeaves",
+          ARTICULATION_WIDTH,
+          articulationLeaves.length / (ARTICULATION_WIDTH * 4),
+          pc.PIXELFORMAT_RGBA32F,
+          articulationLeaves,
+        );
+        for (const entity of tiles.keys()) applyModifier(entity);
+        useLivingLab.getState().set({
+          articulationStatus: `Simulated · ${String(loaded.header.nodes.length)} nodes · ${String(loaded.header.leafCount)} leaf packets`,
+        });
+        hooks.frameWanted();
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted)
+          useLivingLab.getState().set({ articulationStatus: String(error) });
+      });
   };
 
   /** Writes the tile's skin and weight streams from `doc`: main-thread work (`hooks.work`). */
@@ -1143,6 +1334,8 @@ function assemble(
     const component = entity.gsplat;
     if (!component) return;
     const tile = tiles.get(entity);
+    if (tile) bindArticulation(tile);
+    const art = articulationStream && tile !== undefined;
     const hasIds = (tile?.doc ?? null) !== null;
     const skinned = tile?.skinned ?? false;
     const group = dated.has(entity) ? dateCells : cells;
@@ -1154,8 +1347,8 @@ function assemble(
     const ruled = rule !== null;
     const sided = sideStream;
     const modifier =
-      hasIds || skinned || cell || lit || ruled || sided
-        ? playcanvasModifier(hasIds, skinned, tile?.skinWide ?? false, cell, lit, ruled, sided)
+      hasIds || skinned || cell || lit || ruled || sided || art
+        ? playcanvasModifier(hasIds, skinned, tile?.skinWide ?? false, cell, lit, ruled, sided, art)
         : null;
     if (modifier !== (modifiers.get(entity) ?? null)) {
       modifiers.set(entity, modifier);
@@ -1718,10 +1911,12 @@ function assemble(
     const material = app.scene.gsplat.material;
     const lit = sun !== null && sunStream;
     const cut = compare !== null;
+    // A bench run with every arm off draws without the hook: the baseline frame.
+    const alive = living !== null && (living.water || living.motion !== "off");
     let changed = false;
-    if (lit !== sunHooked || cut !== cutHooked) {
+    if (lit !== sunHooked || cut !== cutHooked || alive !== livingHooked) {
       const chunks = material.getShaderChunks(pc.SHADERLANGUAGE_GLSL);
-      if (!sunHooked && !cutHooked) {
+      if (!sunHooked && !cutHooked && !livingHooked) {
         ownModifyVS = chunks.get("gsplatModifyVS") as string | undefined;
         ownModifyPS = chunks.get("gsplatModifyPS") as string | undefined;
       }
@@ -1729,13 +1924,12 @@ function assemble(
         if (chunk === undefined) chunks.delete(name);
         else chunks.set(name, chunk);
       };
-      put(
-        "gsplatModifyVS",
-        cut ? compareHookVs(lit ? SUN_HOOK_VS : null) : lit ? SUN_HOOK_VS : ownModifyVS,
-      );
+      const base = cut ? compareHookVs(lit ? SUN_HOOK_VS : null) : lit ? SUN_HOOK_VS : ownModifyVS;
+      put("gsplatModifyVS", alive ? livingHookVs(base) : base);
       put("gsplatModifyPS", cut ? COMPARE_HOOK_PS : ownModifyPS);
       sunHooked = lit;
       cutHooked = cut;
+      livingHooked = alive;
       sunSet = null;
       dividerAt = Number.NaN;
       changed = true;
@@ -1756,8 +1950,117 @@ function assemble(
       dividerAt = at;
       changed = true;
     }
+    if (living) {
+      const lab = living;
+      if ((lab.motion !== "spectra" && lab.motion !== "articulated") || lab.water) syncGround();
+      if (lab.motion === "articulated") syncArticulation(lab);
+      if (lab.motion === "spectra") syncSpectra(lab);
+      packLiving(
+        livingValues,
+        {
+          ...lab,
+          t: lab.clock ?? (performance.now() - livingStart) / 1000,
+          sunDir:
+            sun && sun.strength > 0
+              ? sun.dir
+              : sunDirection(lab.sunAzimuthDeg, lab.sunElevationDeg),
+          sunUp:
+            sun && sun.strength > 0
+              ? sun.sunUp
+              : Math.max(0, Math.sin((lab.sunElevationDeg * Math.PI) / 180)),
+        },
+        ground,
+      );
+      if (lab.motion === "spectra" && spectra && spectraDisplacement) {
+        const t = lab.clock ?? (performance.now() - livingStart) / 1000;
+        const key = `${String(t)}:${String(lab.strength)}:${String(lab.windBearingDeg)}`;
+        if (key !== spectraTime) {
+          evaluateSpectra(spectra, t, lab.strength, lab.windBearingDeg, spectraPixels);
+          (spectraDisplacement.lock() as Float32Array).set(spectraPixels);
+          spectraDisplacement.unlock();
+          spectraTime = key;
+        }
+      }
+      if (
+        lab.motion === "articulated" &&
+        articulation &&
+        articulationPoseTexture &&
+        articulationLeafTexture
+      ) {
+        const t = lab.clock ?? (performance.now() - livingStart) / 1000;
+        const key = `${String(t)}:${String(lab.strength)}:${String(lab.windBearingDeg)}`;
+        if (key !== articulationTime) {
+          evaluateArticulation(
+            articulation,
+            t,
+            lab.strength,
+            lab.windBearingDeg,
+            articulationPoses,
+            articulationLeaves,
+          );
+          (articulationPoseTexture.lock() as Float32Array).set(articulationPoses);
+          articulationPoseTexture.unlock();
+          (articulationLeafTexture.lock() as Float32Array).set(articulationLeaves);
+          articulationLeafTexture.unlock();
+          articulationTime = key;
+        }
+      }
+      material.setParameter("uArticulationReady", articulation ? 1 : 0);
+      material.setParameter("uArticulationPoses", articulationPoseTexture ?? stand().float);
+      material.setParameter("uArticulationLeaves", articulationLeafTexture ?? stand().float);
+      material.setParameter("uSpectraOrigin", spectraOrigin);
+      material.setParameter("uSpectraStep", spectraStep);
+      material.setParameter("uSpectraIndex", spectraIndex ?? stand().float);
+      material.setParameter("uSpectraDisplacement", spectraDisplacement ?? stand().float);
+      material.setParameter("uLivingT", livingValues.t);
+      material.setParameter("uLivingWind", livingValues.wind);
+      material.setParameter("uLivingWater", livingValues.water);
+      material.setParameter("uLivingWaterBox", livingValues.waterBox);
+      material.setParameter("uLivingSun", livingValues.sun);
+      material.setParameter("uLivingGroundGrid", livingValues.groundGrid);
+      material.setParameter("uLivingVeg", livingValues.veg);
+      material.setParameter("uLivingGround", groundTexture ?? stand().float);
+      changed = true;
+    }
     if (changed) material.update();
     if (sunHooked) sunFrames += 1;
+  };
+
+  /**
+   * A bench frame's draw, timed to its end on the GPU: a one-pixel read-back waits for every
+   * command before it (`gl.finish` alone returned before SwiftShader drew). `window.__livingBench`.
+   */
+  const benchPixel = new Uint8Array(4);
+  const livingBench = (start: number): void => {
+    const gl = (device as unknown as { gl?: WebGL2RenderingContext }).gl;
+    gl?.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, benchPixel);
+    const out = ((window as unknown as { __livingBench?: number[] }).__livingBench ??= []);
+    out.push(performance.now() - start);
+  };
+
+  /** The ground grid from the scan's own tiles, again when tiles came or went (throttled). */
+  const syncGround = (): void => {
+    const now = performance.now();
+    if (shown.size === groundTiles || now - groundAt < GROUND_REBUILD_MS) return;
+    groundAt = now;
+    groundTiles = shown.size;
+    const samples: CellTileSample[] = [];
+    for (const entity of shown) {
+      if (dated.has(entity) || layers.has(entity)) continue;
+      const sample = cellSample(entity);
+      if (sample) samples.push(sample);
+    }
+    const grid = groundGrid(samples);
+    if (!grid) return;
+    ground = grid;
+    groundTexture?.destroy();
+    groundTexture = dataTexture(
+      "hexapodLivingGround",
+      grid.cells,
+      grid.cells,
+      pc.PIXELFORMAT_R32F,
+      grid.z,
+    );
   };
 
   /**
@@ -1871,7 +2174,7 @@ function assemble(
         placedPick: null,
       };
       tiles.set(entity, binding);
-      if (style || motion) {
+      if (style || motion || articulationStream) {
         bind(entity, binding, true);
         if (binding.ids && motion && motion.rigidByLeaf.size > 0) sortDirty.add(entity);
       }
@@ -2077,9 +2380,11 @@ function assemble(
       ruleDates?.plan(pose);
       lodBudget();
       farNow = pose.farView === true;
+      const benchAt = living?.bench ? performance.now() : null;
       syncHooks();
       framesDrawn += 1;
       app.render();
+      if (benchAt !== null) livingBench(benchAt);
       while (doomed[0] && framesDrawn - doomed[0].at >= DESTROY_AFTER_FRAMES) {
         doomed.shift()?.resource.destroy();
       }
@@ -2104,7 +2409,10 @@ function assemble(
       if (lost) return null;
       const dates = ruleDates?.dueBy() ?? null;
       const sort = sortDirty.size > 0 ? lastSortAt + SORT_REFRESH_MS : null;
-      return sort === null ? dates : dates === null ? sort : Math.min(sort, dates);
+      const soonest = sort === null ? dates : dates === null ? sort : Math.min(sort, dates);
+      // The living lab animates: a frame every frame while it is on.
+      if (living) return performance.now();
+      return soonest;
     },
     setBudget: (drawn) => {
       drawBudget = drawn;
@@ -2180,6 +2488,14 @@ function assemble(
     },
     destroy: () => {
       for (const off of cellLinks) off();
+      livingLink();
+      articulationRequest?.abort();
+      articulationPoseTexture?.destroy();
+      articulationLeafTexture?.destroy();
+      spectraRequest?.abort();
+      spectraIndex?.destroy();
+      spectraDisplacement?.destroy();
+      groundTexture?.destroy();
       unpick?.();
       unpick = null;
       ruleDates?.stop();
@@ -2254,6 +2570,13 @@ function assemble(
   // A sort that finished while the loop was paused: the loop hands it over (`frame:request`).
   // (Sorted on the CPU only: a GPU sort finishes in the frame that draws.)
   app.scene.on("gsplat:sorted", resumeLoop);
+  // The living lab: what it draws, as it changes (GLSL only, as the sunlight).
+  const livingLink = moves
+    ? watchLivingLab(() => {
+        living = effectiveLivingLab();
+        hooks.frameWanted();
+      })
+    : () => undefined;
   // The scan's Confidence / Data age view, drawn as the view says (scanCellView.ts).
   const assetId = hooks.assetId;
   const cellLinks =

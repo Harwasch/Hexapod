@@ -187,7 +187,11 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      "/api": { target: "http://localhost:8000", changeOrigin: true },
+      // API_PROXY_TARGET: another API for a dev server (the hosted one, read-only use).
+      "/api": {
+        target: process.env.API_PROXY_TARGET ?? "http://localhost:8000",
+        changeOrigin: true,
+      },
     },
   },
   // `pnpm preview` serves the production build against the local API: the real way to

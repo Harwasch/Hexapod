@@ -34,6 +34,7 @@ import { UNAVAILABLE } from "../lantern/lanternWords";
 import { TimeLanternControl } from "../lantern/TimeLanternControl";
 import { LayerAboutSheet } from "../layers/LayerAboutSheet";
 import { LayersPanel } from "../layers/LayersPanel";
+import { LivingLabPanel } from "../living/LivingLabPanel";
 import { PokeBadge } from "../living/PokeBadge";
 import { SimulatedBadge } from "../living/SimulatedBadge";
 import { MapContextMenu } from "../map/MapContextMenu";
@@ -306,6 +307,7 @@ export function AppShell() {
             <ErrorBoundary inline label="Simulated motion">
               <SimulatedBadge />
               <PokeBadge />
+              <LivingLabPanel />
             </ErrorBoundary>
             <RelitSlot />
             <Toasts />
