@@ -1,3 +1,4 @@
+import { resolveBeside } from "@/lib/instances";
 import { tierAFromInstances } from "./livingTierA";
 import {
   prepareWeatherWind,
@@ -156,8 +157,9 @@ export function weatherArticulationTier(url: string): Articulation["tier"] {
 export async function loadArticulation(url: string, signal?: AbortSignal): Promise<Articulation> {
   const address = new URL(url, window.location.href),
     query = address.searchParams;
+  // Only this module's own parameters are stripped: a signed URL's token stays.
   const base = new URL(address);
-  base.search = "";
+  for (const own of ["weather", "breeze", "tier-a"]) base.searchParams.delete(own);
   let raw = baseArticulations.get(base.toString());
   if (!raw) {
     const get = async (at: string) => {
@@ -171,7 +173,7 @@ export async function loadArticulation(url: string, signal?: AbortSignal): Promi
       const h = parseArticulationHeader(await (await get(base.toString())).json());
       const buffers = await Promise.all(
         [h.motionBinary, h.leafBinary, h.bindingBinary].map(async (name) =>
-          (await get(new URL(name, base).toString())).arrayBuffer(),
+          (await get(resolveBeside(base.toString(), name))).arrayBuffer(),
         ),
       );
       const [motion, leaf, binding] = buffers;

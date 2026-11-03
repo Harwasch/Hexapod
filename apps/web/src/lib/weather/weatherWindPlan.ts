@@ -1,3 +1,5 @@
+import { resolveBeside } from "@/lib/instances";
+
 /**
  * Which scan on the active site weather wind moves, and from which sidecar. Pure, so the
  * choice is tested without a renderer (features/living/WeatherWindDriver.tsx drives it).
@@ -23,8 +25,8 @@ export interface WindScan {
   splat: boolean;
   /** Has a Living Survey rig (CesiumJS draws it). */
   rigged: boolean;
-  /** Its `instances.json` loaded. */
-  segmented: boolean;
+  /** Where its loaded `instances.json` came from; "" when it has none. */
+  instancesUrl: string;
 }
 
 export type WindPlan =
@@ -42,11 +44,21 @@ export type WindPlan =
 
 export const ARTICULATION_FILE = "articulation.json";
 
-/** `file` beside the tileset, or "" when the address cannot be read. */
+/** `file` beside the tileset (a signed URL's query kept), or "" when it cannot be read. */
 export function besideTileset(tileset: string, file: string): string {
   try {
-    const base = typeof window === "undefined" ? undefined : window.location.href;
-    return new URL(file, new URL(tileset, base)).toString();
+    return resolveBeside(tileset, file);
+  } catch {
+    return "";
+  }
+}
+
+/** `url` with `tier-a=1`: the renderer builds Tier A clumps from segmentation. */
+function tierA(url: string): string {
+  try {
+    const at = new URL(url, globalThis.location?.href);
+    at.searchParams.set("tier-a", "1");
+    return at.toString();
   } catch {
     return "";
   }
@@ -76,14 +88,14 @@ export function planWeatherWind(
     }
   if (usable.some((s) => rigFound[s.assetId] === undefined)) return { kind: "pending" };
   for (const scan of usable)
-    if (scan.segmented) {
-      const url = besideTileset(scan.tileset, "instances.json");
+    if (scan.instancesUrl) {
+      const url = tierA(scan.instancesUrl);
       if (url)
         return {
           kind: "target",
           assetId: scan.assetId,
           name: scan.name,
-          url: `${url}?tier-a=1`,
+          url,
           source: "segmentation",
         };
     }

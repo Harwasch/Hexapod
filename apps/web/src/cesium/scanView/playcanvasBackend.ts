@@ -2574,6 +2574,13 @@ function assemble(
   const livingLink = moves
     ? watchLivingLab(() => {
         living = effectiveLivingLab();
+        // Not articulated (off, As captured, another arm): forget the address, so asking for the
+        // same one again loads it again and reports its status (weather wind reads the tier
+        // from that report, and a failed load gets another try).
+        if (living?.motion !== "articulated" && articulationUrl !== "") {
+          articulationRequest?.abort();
+          articulationUrl = "";
+        }
         hooks.frameWanted();
       })
     : () => undefined;

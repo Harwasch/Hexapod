@@ -4,8 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSite } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { weatherArticulationTier } from "@/cesium/scanView/livingArticulation";
+import { instancesUrlOf } from "@/cesium/splatInstances";
 import { weatherFeed } from "@/lib/weather/openMeteo";
-import { probeRig } from "@/lib/weather/rigProbe";
+import { probeRig, rigFailed } from "@/lib/weather/rigProbe";
 import { planWeatherWind, type WindPlan, type WindScan } from "@/lib/weather/weatherWindPlan";
 import { useAsCaptured } from "@/state/asCaptured";
 import { useInstances } from "@/state/instances";
@@ -97,6 +98,8 @@ export function WeatherWindDriver() {
   const site = useSite(id).data;
   const segmented = useInstances((s) => s.assets);
   const active = enabled && !captured && !reduced;
+  // The developer lab drives the same renderer state; while it is open, it is in charge.
+  const labOpen = useLivingLab((s) => s.open);
 
   const scans = useMemo<WindScan[]>(
     () =>
@@ -106,14 +109,14 @@ export function WeatherWindDriver() {
         tileset: a.source.type === "3d-tiles-url" ? a.source.url : "",
         splat: a.representation === "gaussian-splat",
         rigged: Boolean(a.renderConfig.rigUrl),
-        segmented: segmented[a.id] !== undefined,
+        instancesUrl: segmented[a.id] !== undefined ? (instancesUrlOf(a.id) ?? "") : "",
       })),
     [site, segmented],
   );
 
   const [rigFound, setRigFound] = useState<Record<string, boolean>>({});
   useEffect(() => {
-    if (!active) return;
+    if (!active || labOpen || renderer !== "playcanvas") return;
     let disposed = false;
     for (const scan of scans)
       if (scan.splat && !scan.rigged && scan.tileset)
@@ -123,9 +126,14 @@ export function WeatherWindDriver() {
     return () => {
       disposed = true;
     };
-  }, [active, scans]);
+  }, [active, labOpen, renderer, scans]);
 
-  const plan: WindPlan | null = active ? planWeatherWind(scans, rigFound, renderer) : null;
+  const plan: WindPlan | null = !active
+    ? null
+    : labOpen
+      ? { kind: "none", reason: "the developer lab (?living=1) is in charge" }
+      : planWeatherWind(scans, rigFound, renderer);
+  const target = useRef<WindPlan | null>(null);
   const latitude = site?.centroid.latitude,
     longitude = site?.centroid.longitude;
   const input = active
@@ -152,6 +160,7 @@ export function WeatherWindDriver() {
   };
 
   useEffect(() => {
+    target.current = plan;
     const store = useWeatherWind.getState();
     if (plan === null) {
       release();
@@ -174,7 +183,10 @@ export function WeatherWindDriver() {
     }
     if (input === null) {
       release();
-      store.set({ scan: { assetId: plan.assetId, name: plan.name, tier: was }, reason: "" });
+      store.set({
+        scan: { assetId: plan.assetId, name: plan.name, tier: was },
+        reason: "waiting for the hour's weather",
+      });
       return;
     }
     setLabWeather(input, plan.url);
@@ -202,6 +214,12 @@ export function WeatherWindDriver() {
           }
         } else if (!status.startsWith("Loading") && !status.startsWith("No articulation")) {
           release();
+          // A rig that would not load: fall back to segmentation (Tier A) where there is one.
+          const plan = target.current;
+          if (plan?.kind === "target" && plan.source === "rig") {
+            rigFailed(plan.assetId);
+            setRigFound((was) => ({ ...was, [plan.assetId]: false }));
+          }
           store.set({ scan: { ...scan, tier: null }, reason: `wind off · ${status}` });
         }
       }),

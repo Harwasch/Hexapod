@@ -29,6 +29,9 @@ const { source, scene } = vi.hoisted(() => {
 });
 vi.mock("@/api/queries", () => ({ useSite: () => ({ data: source.site }) }));
 vi.mock("@/cesium/SceneContext", () => ({ useScene: () => scene }));
+vi.mock("@/cesium/splatInstances", () => ({
+  instancesUrlOf: () => "https://tiles.example/grove/instances.json",
+}));
 vi.mock("@/lib/weather/openMeteo", () => ({ WEATHER_FLAG: true, weatherFeed: vi.fn() }));
 
 const SITE = {
@@ -65,6 +68,7 @@ beforeEach(() => {
     articulationUrl: "",
     articulationStatus: "No articulation loaded",
     weatherSidecarUrl: "",
+    open: false,
   });
   useWeatherWind.setState({
     enabled: false,
@@ -175,6 +179,42 @@ describe("weather wind switch", () => {
     act(() => useLivingLab.getState().set({ articulationStatus: "Error: Articulation HTTP 503" }));
     expect(useLivingLab.getState().motion).toBe("off");
     expect(useWeatherWind.getState().reason).toBe("wind off · Error: Articulation HTTP 503");
+  });
+
+  it("falls back to Tier A when a published rig will not load", async () => {
+    head.mockResolvedValue(
+      new Response(null, { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    render(<WeatherWindDriver />);
+    act(() => useWeatherWind.getState().set({ enabled: true }));
+    await waitFor(() =>
+      expect(useLivingLab.getState().articulationUrl).toContain("/grove/articulation.json"),
+    );
+    act(() => useLivingLab.getState().set({ articulationStatus: "Error: Articulation HTTP 404" }));
+    await waitFor(() =>
+      expect(useLivingLab.getState().articulationUrl).toContain("/grove/instances.json"),
+    );
+    expect(useLivingLab.getState().motion).toBe("articulated");
+  });
+
+  it("steps aside while the developer lab is open", () => {
+    useLivingLab.setState({ open: true });
+    render(<WeatherWindDriver />);
+    act(() => useWeatherWind.getState().set({ enabled: true }));
+    expect(head).not.toHaveBeenCalled();
+    expect(useLivingLab.getState().motion).toBe("off");
+    expect(useWeatherWind.getState().reason).toContain("developer lab");
+  });
+
+  it("says it is waiting while live weather has no hour yet", async () => {
+    vi.mocked(weatherFeed).mockReturnValue(new Promise(() => undefined));
+    useWeatherWind.setState({ mode: "live" });
+    render(<WeatherWindDriver />);
+    act(() => useWeatherWind.getState().set({ enabled: true }));
+    await waitFor(() =>
+      expect(useWeatherWind.getState().reason).toBe("waiting for the hour's weather"),
+    );
+    expect(useLivingLab.getState().motion).toBe("off");
   });
 
   it("live mode follows the feed's hour and stays still until it arrives", async () => {

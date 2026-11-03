@@ -12,13 +12,22 @@ export function probeRig(assetId: string, tileset: string): Promise<boolean> {
   if (!probe) {
     const url = besideTileset(tileset, ARTICULATION_FILE);
     probe = url
-      ? fetch(url, { method: "HEAD" })
+      ? fetch(url, { method: "HEAD", signal: AbortSignal.timeout(8000) })
           .then((r) => r.ok && (r.headers.get("content-type") ?? "").includes("json"))
-          .catch(() => false)
+          .catch(() => {
+            // A network failure or timeout is not an answer: ask again next time.
+            rigProbes.delete(assetId);
+            return false;
+          })
       : Promise.resolve(false);
     rigProbes.set(assetId, probe);
   }
   return probe;
+}
+
+/** A rig that answered the probe but would not load: treated as absent from now on. */
+export function rigFailed(assetId: string): void {
+  rigProbes.set(assetId, Promise.resolve(false));
 }
 
 /** Test hook: forget earlier probes. */
