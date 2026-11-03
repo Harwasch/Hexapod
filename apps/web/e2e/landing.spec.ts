@@ -1,7 +1,8 @@
 /**
  * The landing page (landing.html): it loads without CesiumJS, its hero scene starts or gives way
- * to a still, the nav scrolls to its sections, the theme toggles, and the request form validates
- * and says plainly that it sends nothing yet.
+ * to a still, in any of the looks under review, the nav scrolls to its sections, the theme
+ * toggles, Mission Control's live panels switch and run, and the request form validates and
+ * sends.
  */
 import { expect, test, type Page } from "@playwright/test";
 
@@ -123,7 +124,7 @@ test("the nav scrolls to each section", async ({ page }) => {
   for (const [name, id] of [
     ["Fleet", "fleet"],
     ["Capabilities", "capabilities"],
-    ["App", "app"],
+    ["Mission Control", "app"],
     ["Use cases", "uses"],
   ] as const) {
     await nav.getByRole("link", { name, exact: true }).click();
@@ -316,11 +317,89 @@ test("shows no placeholder furniture: no counters, spec sheets or coming-soon ca
   await expect(page.locator("#capabilities").getByText("Repair", { exact: true })).toBeVisible();
 });
 
+// One look with real light, shadows and the finish pass, one with scan dots: the renderer's two
+// new shader paths, each in both themes' versions. A shader that fails to compile logs, it does
+// not throw.
+for (const [id, lightStage, darkStage] of [
+  ["golden", "#EFDDBD", "#121A2A"],
+  ["scan", "#F3F5F7", "#070B0F"],
+] as const) {
+  test(`the hero renders in the ${id} look, and turns over with the theme`, async ({ page }) => {
+    const shaderErrors: string[] = [];
+    page.on("console", (message) => {
+      if (/shader|WebGLProgram/i.test(message.text())) shaderErrors.push(message.text());
+    });
+    await page.goto(`/landing.html?look=${id}`);
+    const hero = page.locator("#top");
+    await expect(hero).toHaveAttribute("data-look", id);
+    await expect(hero).toHaveAttribute("data-scene", "live", { timeout: 60_000 });
+    await expect(page.locator('#ex button[aria-current="true"]')).toHaveCount(1, {
+      timeout: 60_000,
+    });
+    const stage = () => hero.evaluate((el) => getComputedStyle(el).getPropertyValue("--stage"));
+    expect(await stage()).toBe(lightStage);
+    await page.getByRole("button", { name: "Switch to dark mode" }).click();
+    await expect.poll(stage).toBe(darkStage);
+    await expect(page.locator(".stage")).toHaveAttribute("data-theme", "dark");
+    expect(shaderErrors).toEqual([]);
+  });
+}
+
+test("an unknown look is the line drawing, with no review switcher", async ({ page }) => {
+  await page.goto("/landing.html?look=nonsense");
+  await expect(page.locator("#top")).toHaveAttribute("data-look", "line");
+  await expect(page.locator(".review")).toHaveCount(0);
+});
+
+test("with ?review, the switcher changes the look", async ({ page }) => {
+  await page.goto("/landing.html?review");
+  const review = page.getByRole("complementary", { name: "Review options" });
+  await review.getByRole("combobox", { name: "Look" }).selectOption("sensor");
+  // The switcher reloads the page; wait for the new address, not for the scene to finish loading.
+  await page.waitForURL(/look=sensor/, { waitUntil: "commit" });
+  await expect(page.locator("#top")).toHaveAttribute("data-look", "sensor");
+});
+
+test("Mission Control runs live: the views switch, and approving a plan sets robots to it", async ({
+  page,
+}) => {
+  await page.goto("/landing.html");
+  const app = page.locator("#app");
+  await expect(app.locator("h2")).toHaveText("Mission Control");
+  const plans = app.getByRole("region", { name: "Plans" });
+  const fleet = app.getByRole("region", { name: "Fleet" });
+  await expect(plans).toBeHidden();
+  // The section's points and the app's own tabs switch the same views.
+  await app.getByRole("button", { name: /^Plan/ }).first().click();
+  await expect(plans).toBeVisible();
+  await expect(
+    app.getByRole("group", { name: "App view" }).getByRole("button", { name: "Plan" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(plans.getByRole("listitem")).toHaveCount(6);
+  await expect(plans).toContainText("simulated");
+  await plans.getByRole("button", { name: "Approve plan" }).click();
+  await expect(plans.getByRole("listitem").first()).toContainText("Running");
+  await app.getByRole("group", { name: "App view" }).getByRole("button", { name: "Fleet" }).click();
+  await expect(fleet).toBeVisible();
+  await expect(plans).toBeHidden();
+  await expect(fleet.getByRole("row", { name: /HX-07 Wren/ })).toContainText("Pulling broom");
+  // It moves: a working machine's hours on shift count up.
+  const hours = fleet
+    .getByRole("row", { name: /HX-04 Kestrel/ })
+    .getByRole("cell")
+    .last();
+  const before = await hours.textContent();
+  await expect(hours).not.toHaveText(before ?? "", { timeout: 5000 });
+  // Simulated things are labelled as simulated.
+  await expect(app.locator("figcaption")).toContainText("simulated");
+  await expect(fleet).toContainText("simulated");
+});
+
 test("fits a phone without scrolling sideways", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/landing.html");
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-  for (const id of ["top", "fleet", "uses", "start"]) {
+  for (const id of ["top", "fleet", "app", "uses", "start"]) {
     await page.locator(`#${id}`).scrollIntoViewIfNeeded();
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
