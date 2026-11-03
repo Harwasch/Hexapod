@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import filecmp
 import json
 import shutil
 import subprocess
@@ -11,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from . import rehearsal
+from .gpu import GpuSampler
 from .ledger import STARTUP_SECONDS
 from .recipe import make_recipe, patch_seed
 from .results import parse_result
@@ -21,6 +24,7 @@ ARTIFACTS = (
     "holdout.json",
     "converge.json",
     "trainer_timing.json",
+    "gpu_samples.json",
     "test.json",
 )
 
@@ -93,6 +97,7 @@ def run_training(
     train_seconds = None
     gpu_name = None
     error = None
+    sampler = GpuSampler(None if plan.get("rehearsal") else shutil.which("nvidia-smi"))
     with tempfile.TemporaryDirectory(prefix="bench-work-") as temporary:
         work = Workdir.create(Path(temporary) / plan["runId"])
         try:
@@ -115,17 +120,27 @@ def run_training(
                     params["trainer"] = str(trainer)
                 smi = shutil.which("nvidia-smi")
                 if smi:
-                    gpu_name = subprocess.check_output(  # noqa: S603 - fixed argv, no shell
-                        [smi, "--query-gpu=name", "--format=csv,noheader"], text=True, timeout=10
-                    ).strip()
+                    with contextlib.suppress(OSError, subprocess.SubprocessError):
+                        gpu_name = subprocess.check_output(  # noqa: S603 - fixed argv, no shell
+                            [smi, "--query-gpu=name", "--format=csv,noheader"], text=True, timeout=2
+                        ).strip()
             recipe = make_recipe(params, plan["tier"])
             stage_start = time.monotonic()
+            sampler.start()
             try:
                 execute(recipe, work, RunnerSet(cpu=LocalRunner(), gpu=LocalRunner()))
             finally:
                 train_seconds = time.monotonic() - stage_start
+                sampler.stop()
             shipped = work.out_dir("train") / "trained.ply"
             shutil.copyfile(shipped, destination / "trained.ply")
+            raw = training.latest_ply(work.work_dir("train") / "gsplat")
+            if (
+                plan.get("keepSplat")
+                and raw is not None
+                and not filecmp.cmp(raw, shipped, shallow=False)
+            ):
+                shutil.copyfile(raw, destination / "full_sh.ply")
             if plan.get("rehearsal"):
                 test = rehearsal.evaluation(split["test"])
                 write_json(destination / "test.json", test)
@@ -155,11 +170,17 @@ def run_training(
                     "--degree",
                     str(params.get("ship_sh_degree", 0)),
                 ]
-                raw = training.latest_ply(work.work_dir("train") / "gsplat")
                 if raw is not None:
                     command += ["--raw-ply", str(raw)]
                 if params.get("antialiased"):
                     command.append("--antialiased")
+                if plan.get("renders", 0):
+                    command += [
+                        "--renders",
+                        str(plan["renders"]),
+                        "--render-dir",
+                        str(destination / "renders"),
+                    ]
                 remaining = plan["timeoutSeconds"] - (time.time() - entered) - 15
                 if remaining <= 0:
                     raise TimeoutError("no evaluation time left in function budget")
@@ -167,6 +188,8 @@ def run_training(
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
         finally:
+            sampler.stop()
+            write_json(destination / "gpu_samples.json", {"samples": sampler.samples})
             sources = [
                 work.out_dir("train"),
                 work.out_dir("train") / "holdout",

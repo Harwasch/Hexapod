@@ -583,9 +583,18 @@ def test_lane_1_ships_an_uploads_own_sh_turned_upright(tmp_path: Path, suffix: s
     assert manifest["splat"]["shDegree"] == 3
 
 
-def test_lane_1_by_default_drops_the_uploads_sh_as_it_always_did(tmp_path: Path) -> None:
+def test_lane_1_by_default_ships_the_uploads_sh(tmp_path: Path) -> None:
     upload = write_raw_ply(tmp_path / "scan.ply", columns_with_sh(500, 3, seed=12))
     workdir = _ingest(tmp_path, upload, {"up_axis": "z"})
+    meta = json.loads(workdir.artifact_path("normalize", "source_meta.json").read_text())
+    assert meta["shDegree"] == 3
+    manifest = json.loads(workdir.artifact_path("manifest", "manifest.json").read_text())
+    assert manifest["splat"]["shDegree"] == 3
+
+
+def test_lane_1_at_degree_0_drops_the_uploads_sh_as_it_used_to(tmp_path: Path) -> None:
+    upload = write_raw_ply(tmp_path / "scan.ply", columns_with_sh(500, 3, seed=12))
+    workdir = _ingest(tmp_path, upload, {"up_axis": "z", "ship_sh_degree": 0})
     canonical = workdir.artifact_path("normalize", "canonical.ply")
     assert splat_io.read_layout(canonical).properties == gaussians.CANONICAL_PROPERTIES
     meta = json.loads(workdir.artifact_path("normalize", "source_meta.json").read_text())

@@ -458,6 +458,8 @@ def gsplat_argv(
     eval_steps: Sequence[int] = (),
     extra: Sequence[str] = (),
     packed: bool = True,
+    sparse_grad: bool = False,
+    visible_adam: bool = False,
     batch_size: int = 1,
 ) -> list[str]:
     """The command line, built in one place so a test can read it without a GPU.
@@ -548,16 +550,16 @@ def gsplat_argv(
     3.08 GB at 49M gaussians (12.17 to 6.11 at 107M), for a few percent of speed.
     `gaussian_budget.memory_ceiling` does not yet count that saving; see its docstring.
 
-    Its two companions are read and deliberately *not* passed. `--sparse_grad` (which
-    v1.5.3 asserts needs packed) swaps Adam for `torch.optim.SparseAdam`, and
+    Its two companions are opt-in stage params for bench trials, off by default.
+    `--sparse_grad` (which v1.5.3 asserts needs packed) swaps Adam for `torch.optim.SparseAdam`, and
     `--visible_adam` for gsplat's `SelectiveAdam`: both update only the gaussians a step
     saw, which changes the optimisation, not just its memory -- gsplat marks both
     "(experimental)". Nor do they free the parameter-sized memory the budget's ceiling is
     mostly made of: with sparse gradients the rasterizer's gradients for means, quats and
     scales come out sparse, but the colours' and opacities' are still dense until the
     trainer sparsifies them (`grad[gaussian_ids]`), and both optimisers keep their two
-    moments dense. Either can be tried per run through `extra_args` once a GPU run has
-    measured it against the default.
+    moments dense. Set `sparse_grad` or `visible_adam` to trial them; only adopt a
+    default after GPU measurements show that quality holds.
 
     And `batch_size` (v1.5.3 `Config.batch_size`, default 1): images a step renders and
     averages the loss over. The trainer scales every optimiser's learning rate by
@@ -578,6 +580,8 @@ def gsplat_argv(
     single process. The raster memory grows with the images a step renders, which
     `gaussian_budget.memory_ceiling` counts when given the batch.
     """
+    if sparse_grad and not packed:
+        raise ValueError("sparse_grad requires packed=true (gsplat v1.5.3)")
     steps = str(max_steps)
     argv = [
         python,
@@ -629,6 +633,10 @@ def gsplat_argv(
         argv.append("--use_bilateral_grid")
     if packed:
         argv.append("--packed")
+    if sparse_grad:
+        argv.append("--sparse_grad")
+    if visible_adam:
+        argv.append("--visible_adam")
     argv += list(extra)
     return argv
 

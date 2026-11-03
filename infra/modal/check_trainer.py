@@ -110,6 +110,9 @@ def main() -> int:
             pose_opt=True,
             app_opt=True,
             bilateral_grid=True,
+            packed=True,
+            sparse_grad=True,
+            visible_adam=True,
         )
     )
     # With `converge`: the held-out evaluations the stopping rule reads, as extra
@@ -177,6 +180,9 @@ def main() -> int:
         "steps_scaler": tuned.max_steps == 3_000,
         "antialiased": tuned.antialiased is True and cfg.antialiased is False,
         "opacity_reg": tuned.opacity_reg == 0.001 and tuned.scale_reg == 0.01,
+        "packed": tuned.packed is True and cfg.packed is True,
+        "sparse_grad": tuned.sparse_grad is True and cfg.sparse_grad is False,
+        "visible_adam": tuned.visible_adam is True and cfg.visible_adam is False,
         "depth_loss": tuned.depth_loss is True and cfg.depth_loss is False,
         "pose_opt": tuned.pose_opt is True and cfg.pose_opt is False,
         "app_opt": tuned.app_opt is True and cfg.app_opt is False,

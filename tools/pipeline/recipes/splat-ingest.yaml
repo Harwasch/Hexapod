@@ -25,11 +25,12 @@ stages:
     #
     # `ship_sh_degree`: how many of the upload's own spherical-harmonic bands above DC ship
     # (0-3; a phone app's gsplat-style PLY or a Scaniverse `.spz` often carries 3), turned
-    # with the splat by the up axis and heading (harmonics.py). 0, as every capture so
-    # far: the DC colour only. An upload with fewer bands ships what it has.
+    # with the splat by the up axis and heading (harmonics.py). 3, every band the upload
+    # has, as photo-reconstruct's `train` ships (its comment has the measurements). An
+    # upload with fewer bands ships what it has.
     params:
       recentre: true
-      ship_sh_degree: 0
+      ship_sh_degree: 3
 
   - id: georeference
     # The only choice here: Lane 1 ingests a finished splat, so there are no frames to

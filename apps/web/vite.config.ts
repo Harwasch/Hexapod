@@ -214,6 +214,10 @@ export default defineConfig({
       // build can prove the *chunks* do not, so `scripts/check-bundle.mjs` reads dist/
       // and fails CI when any of these pages reaches a Cesium chunk.
       input: {
+        // Offline benchmark only: absent from ordinary production builds.
+        ...(process.env.VIEWER_PERF === "1"
+          ? { viewerPerf: resolve(import.meta.dirname, "viewer-perf.html") }
+          : {}),
         index: resolve(import.meta.dirname, "index.html"),
         upload: resolve(import.meta.dirname, "upload.html"),
         admin: resolve(import.meta.dirname, "admin.html"),
