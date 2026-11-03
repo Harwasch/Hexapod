@@ -136,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--app_opt", action="store_true")
     parser.add_argument("--use_bilateral_grid", action="store_true")
     parser.add_argument("--packed", action="store_true")
+    parser.add_argument("--sparse_grad", action="store_true")
+    parser.add_argument("--visible_adam", action="store_true")
     parser.add_argument("--batch_size", type=int, default=1)
     # v1.5.3's own flag, whose default there is 3: every real export carries 45
     # f_rest_*. The stand-in's default is 0, so the tests written before SH shipped read
@@ -204,6 +206,8 @@ def main(argv: list[str] | None = None) -> int:
         "app_opt": args.app_opt,
         "use_bilateral_grid": args.use_bilateral_grid,
         "packed": args.packed,
+        "sparse_grad": args.sparse_grad,
+        "visible_adam": args.visible_adam,
         "batch_size": args.batch_size,
         "image_scale": image_scale(args.data_dir),
     }

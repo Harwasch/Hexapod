@@ -27,6 +27,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
+  # Every job is pinned to ubuntu-24.04. ubuntu-latest had moved to 26.04 by 2026-11-02:
+  # its apt colmap (3.12.6) cannot load libPoseLib.so, and its libraries change the
+  # bytes of the committed fixtures that captures and pipeline regenerate. sfm.py's
+  # findings and the worker image are on 24.04 (COLMAP 3.9.1).
   # Which jobs this change needs; every job below is gated on one of these outputs. The
   # mapping from paths to jobs is .github/scripts/ci_changes.py (tested by the workflows
   # job): a pull request runs only the jobs whose inputs it changed, and a push to main
@@ -42,7 +46,7 @@ jobs:
   # as passing. The gates read `!= 'false'`, so if this job fails the others run.
   changes:
     name: Changes · what this diff touches
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       # The nightly lists this workflow's earlier scheduled runs.
@@ -81,7 +85,7 @@ jobs:
 
   web:
     name: Web · lint, typecheck, test, build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.web != 'false' }}
     steps:
@@ -111,7 +115,7 @@ jobs:
 
   worlds:
     name: Worlds · CPU workers, transport and reconstruction contracts
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.worlds != 'false' }}
     timeout-minutes: 15
@@ -133,7 +137,7 @@ jobs:
 
   workflows:
     name: Workflows · parse, and agree with the handover
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.workflows != 'false' }}
     steps:
@@ -207,7 +211,7 @@ jobs:
   # web job: an install and one command.
   format:
     name: Format · prettier --check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.format != 'false' }}
     steps:
@@ -236,7 +240,7 @@ jobs:
     # This enables the test server only; production remains opt-in.
     env:
       VITE_ENABLE_LAND_EXPLORATION: "true"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: changes
     # `!= 'false'`, like every gate here: if the changes job failed, the shards run (all
     # six, through the matrix's fallback) rather than nothing.
@@ -285,7 +289,7 @@ jobs:
 
   e2e-report:
     name: Web · Playwright report
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, e2e-shard]
     # After the shards whatever they found, but not when they were skipped or cancelled.
     if: ${{ !cancelled() && needs.changes.outputs.e2e != 'false' }}
@@ -318,7 +322,7 @@ jobs:
   # skipped matrix never reports -- the hang a job-level `if:` exists to avoid.
   e2e:
     name: Web · Playwright
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [changes, e2e-shard, e2e-report]
     if: ${{ always() }}
     steps:
@@ -345,7 +349,7 @@ jobs:
 
   captures:
     name: Captures · lint, test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.captures != 'false' }}
     defaults:
@@ -368,7 +372,7 @@ jobs:
 
   arm:
     name: Arm · lint, test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.arm != 'false' }}
     defaults:
@@ -388,7 +392,7 @@ jobs:
 
   pipeline:
     name: Pipeline · lint, typecheck, test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.pipeline != 'false' }}
     defaults:
@@ -484,7 +488,7 @@ jobs:
 
   trainer:
     name: Trainer · gsplat v1.5.3 accepts the pipeline's argv (CPU replica)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.trainer != 'false' }}
     # The training image's Python 3.10 environment, minus CUDA: CPU torch at the version
@@ -518,7 +522,7 @@ jobs:
 
   api:
     name: API · lint, typecheck, test, migrations
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.api != 'false' }}
     services:
@@ -613,7 +617,7 @@ jobs:
 
   image:
     name: Image · API and worker, from the real Dockerfile
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.image != 'false' }}
     # The other jobs run the code from the checkout, so none of them can see what is

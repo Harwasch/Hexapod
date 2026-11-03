@@ -7,6 +7,9 @@
 import { SplatFileType, SplatMesh } from "@sparkjsdev/spark";
 import * as THREE from "three";
 
+import { isHandheld } from "@/lib/detail";
+import { maxShDegree } from "@/lib/shDegree";
+
 import { spzFromGlb } from "./glb";
 import { TileStreamer, type View } from "./stream";
 import { LOAD_FACTOR, type TileNode, type TileTree } from "./tiles";
@@ -42,6 +45,11 @@ export async function loadSplatTile(
     extSplats: options.extSplats ?? true,
   });
   await mesh.initialized;
+  const cap = maxShDegree(isHandheld());
+  if (mesh.maxSh > cap) {
+    mesh.maxSh = cap;
+    mesh.updateGenerator();
+  }
   mesh.position.set(...(tile.offset ?? [0, 0, 0]));
   return { mesh, bytes };
 }

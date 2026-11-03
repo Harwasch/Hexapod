@@ -896,7 +896,16 @@ def test_one_block_after_the_minimum_rule_trains_as_a_single_run(tmp_path: Path)
 
 
 def test_the_block_wrapper_hands_the_trainer_its_argv_unchanged() -> None:
-    argv = ["py", "/t/simple_trainer.py", "mcmc", "--data_dir", "/d"]
+    argv = [
+        "py",
+        "/t/simple_trainer.py",
+        "mcmc",
+        "--data_dir",
+        "/d",
+        "--packed",
+        "--sparse_grad",
+        "--visible_adam",
+    ]
     wrapped = blocks.trainer_argv(argv, script=Path("/p/block_trainer.py"), rule=None, ring=None)
     assert wrapped == [
         "py",
@@ -907,6 +916,9 @@ def test_the_block_wrapper_hands_the_trainer_its_argv_unchanged() -> None:
         "mcmc",
         "--data_dir",
         "/d",
+        "--packed",
+        "--sparse_grad",
+        "--visible_adam",
     ]
     assert sys.executable
 
@@ -1162,3 +1174,16 @@ def test_blocks_given_every_frame_train_the_runs_schedule(tmp_path: Path) -> Non
         assert block["cameras"]["train"] + block["cameras"]["val"] == 48
         assert block["scheduleScale"] == 0.8
         assert block["stepsMax"] == training.scaled_steps(300, 0.8)
+
+
+def test_speed_switches_reach_every_block(tmp_path: Path) -> None:
+    work = Workdir.create(tmp_path / "run")
+    seed_walk(work)
+    seed_prior(work, tmp_path / "scratch")
+    result = run_blocks(work, block_params(sparse_grad=True, visible_adam=True))
+    assert result["settings"]["sparseGrad"] and result["settings"]["visibleAdam"]
+    configs = list((work.work_dir("train") / "blocks").glob("b*/gsplat/cfg.yml"))
+    assert len(configs) == 2
+    for config in configs:
+        values = json.loads(config.read_text())
+        assert values["packed"] and values["sparse_grad"] and values["visible_adam"]

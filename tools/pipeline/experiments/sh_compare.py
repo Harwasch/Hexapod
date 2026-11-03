@@ -37,6 +37,12 @@ Usage (from tools/pipeline):
     uv run python experiments/sh_compare.py canonical.ply ../../data/tiles \\
         --georef georef.json --site spool --name "Spool table"
 
+`--degrees` accepts any nonempty subset of 0..3 (default 0,1,3). `--bytes-only` needs
+no georef: it packs in the PLY's own frame, with a dummy origin and no placement. Tile
+bytes per degree do not depend on placement (the root transform lives in tileset.json).
+For example: `uv run python experiments/sh_compare.py full_sh.ply out/ --bytes-only
+--degrees 0,1,2,3`. The bench's `--keep-splat` keeps this raw full-SH source too.
+
 Writes `out/sh0/`, `out/sh1/`, `out/sh3/` (or `out/<site>-sh<d>/splat/` and a `site.json`
 each) and `out/sh_compare.json`: per degree, tiles, bytes, bytes a gaussian, the ratio to
 degree 0, and seconds to pack.
@@ -49,6 +55,7 @@ import json
 import math
 import shutil
 import sys
+import tempfile
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -147,6 +154,9 @@ def compare(
     the one before (by default `SPACING_WIDTHS` times the scan's width): the tiles are the
     same bytes wherever the root transform puts them, so the sizes compare exactly.
     """
+    degrees = tuple(harmonics.check_degree(d) for d in degrees)
+    if not degrees or len(set(degrees)) != len(degrees):
+        raise ValueError("degrees must be a nonempty subset of 0..3 without duplicates")
     layout = splat_io.read_layout(ply)
     carried = harmonics.degree_of(layout.properties, source=ply.name)
     missing = [d for d in degrees if d > carried]
@@ -199,7 +209,23 @@ def compare(
                 target.parent, site, degree, lat=lat, lon=here, height=height, stats=stats
             )
         variants.append(variant)
-    base = next((v for v in variants if v["shDegree"] == 0), variants[0])
+    base = next((v for v in variants if v["shDegree"] == 0), None)
+    if base is None:
+        # Even a subset without 0 reports its ratio to 0, never to its first degree.
+        # This reference pack is temporary and does not add an unrequested variant.
+        with tempfile.TemporaryDirectory(prefix="sh0-reference-", dir=out) as temporary:
+            reference = Path(temporary)
+            splat_tiles_convert(
+                ply,
+                reference,
+                lat=lat,
+                lon=lon,
+                height=height,
+                opacity_min=opacity_min,
+                tile_gaussians=tile_gaussians,
+                sh_degree=0,
+            )
+            base = measure(reference)
     for variant in variants:
         variant["tileBytesRatio"] = round(variant["tileBytes"] / max(1, base["tileBytes"]), 3)
     manifest: dict[str, Any] = {
@@ -295,6 +321,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lon", type=float)
     parser.add_argument("--height", type=float, default=0.0)
     parser.add_argument(
+        "--bytes-only",
+        action="store_true",
+        help="pack in the PLY's own frame, no georef or placement needed",
+    )
+    parser.add_argument(
         "--place",
         action="store_true",
         help="the PLY is in COLMAP's frame (trained.ply, a gsplat export): run the place "
@@ -308,7 +339,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--site", help="also write each as a site: <out>/<site>-sh<d>/")
     parser.add_argument("--spacing-m", type=float, help="metres between the sites (east)")
     args = parser.parse_args(argv)
-    if args.georef is not None:
+    if args.bytes_only:
+        if (
+            args.place
+            or args.site
+            or args.georef is not None
+            or args.lat is not None
+            or args.lon is not None
+        ):
+            parser.error("--bytes-only cannot be combined with placement or site arguments")
+        lat, lon, height = 0.0, 0.0, 0.0
+    elif args.georef is not None:
         lat, lon, height = _georef(args.georef)
     elif args.lat is not None and args.lon is not None:
         lat, lon, height = args.lat, args.lon, args.height
@@ -316,7 +357,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("give --georef, or --lat and --lon")
     if args.place and args.georef is None:
         parser.error("--place needs --georef: its frame is what places the splat")
-    degrees = [harmonics.check_degree(int(d)) for d in args.degrees.split(",") if d.strip()]
+    try:
+        degrees = [harmonics.check_degree(int(d)) for d in args.degrees.split(",")]
+        if len(set(degrees)) != len(degrees):
+            raise ValueError("duplicate degrees")
+    except ValueError:
+        parser.error("--degrees must be a nonempty subset of 0..3 without duplicates")
     ply = args.ply
     if args.place:
         ply = place(args.ply, args.georef, args.poses, args.out / "sh-compare-place")

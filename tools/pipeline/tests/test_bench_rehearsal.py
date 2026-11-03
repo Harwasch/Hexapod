@@ -121,3 +121,48 @@ def test_modal_app_reuses_image_and_gpu_has_no_secret() -> None:
     # Modal re-runs is refused rather than paid for twice.
     train = source.split("def _train", 1)[1].split("FUNCTIONS =", 1)[0]
     assert train.index("claim(") < train.index("volume.commit()") < train.index("run_training(")
+
+
+@pytest.mark.parametrize("keep", [False, True])
+def test_keep_splat_retains_raw_full_sh_beside_shipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keep: bool
+) -> None:
+    from experiments.bench import worker
+    from experiments.bench.rehearsal import synthetic_scene
+    from holdout_error import read_ply
+
+    monkeypatch.setattr(cli, "git_commit", lambda: "test")
+    # Shipping degree 0 (not the recipe's 3), so the shipped PLY lacks the bands the
+    # kept full-SH export has.
+    args = cli.parser().parse_args(
+        [
+            "run",
+            "--scene",
+            "spool",
+            "--rehearse",
+            "--renders",
+            "3",
+            "--set",
+            '{"train": {"ship_sh_degree": 0}}',
+        ]
+    )
+    plan = cli.plans_for(args)[0]
+    plan.update(timeoutSeconds=1800, keepSplat=keep)
+    assert plan["renders"] == 3
+    scene, run = tmp_path / "scene", tmp_path / "run"
+    synthetic_scene(scene, "spool", "test")
+    result = worker.run_training(scene, run, plan)
+    assert result["status"] == "complete", result["error"]
+    assert result["gpuUtilMean"] is None
+    assert (run / "gpu_samples.json").is_file()
+    assert (run / "trained.ply").exists() == keep
+    assert (run / "full_sh.ply").exists() == keep
+    if keep:
+        assert "f_rest_44" in read_ply(run / "full_sh.ply")
+        assert "f_rest_0" not in read_ply(run / "trained.ply")
+
+
+def test_negative_renders_refused_before_any_launch() -> None:
+    args = cli.parser().parse_args(["run", "--scene", "spool", "--renders", "-1"])
+    with pytest.raises(ValueError, match="nonnegative"):
+        cli.plans_for(args)

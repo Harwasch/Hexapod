@@ -23,6 +23,7 @@ import json
 import struct
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -37,7 +38,7 @@ import training
 from adapters import LocalTransfer, SubprocessAdapter
 from cloud import AttemptLedger, CloudRunner, Placement
 from conftest import make_recipe
-from errors import PreemptedError
+from errors import PreemptedError, StageFailedError
 from executor import execute
 from providers import Rate
 from recipe import Recipe
@@ -577,6 +578,9 @@ def test_the_quality_switches_reach_the_trainer_with_the_presets_semantics(
         "antialiased": True,
         "opacityReg": 0.001,
         "depthLoss": True,
+        "packed": True,
+        "sparseGrad": False,
+        "visibleAdam": False,
         "poseOpt": False,
         "appOpt": False,
         "bilateralGrid": False,
@@ -954,3 +958,50 @@ def test_a_batch_holds_that_many_frames_in_the_memory_model() -> None:
     assert ceiling(1) == gaussian_budget.memory_ceiling(1600 * 1200)
     assert ceiling(4) == gaussian_budget.memory_ceiling(4 * 1600 * 1200)
     assert (ceiling(4) or 0) < (ceiling(1) or 0)
+
+
+def test_speed_switches_off_are_argv_identical_and_sparse_requires_packed() -> None:
+    positional = ("p", Path("t"), Path("d"), Path("r"))
+    plain = training.gsplat_argv(*positional)
+    assert plain == training.gsplat_argv(*positional, sparse_grad=False, visible_adam=False)
+    for params, expected in [
+        ({"sparse_grad": True}, ["--sparse_grad"]),
+        ({"visible_adam": True}, ["--visible_adam"]),
+        ({"sparse_grad": True, "visible_adam": True}, ["--sparse_grad", "--visible_adam"]),
+    ]:
+        assert training.gsplat_argv(
+            *positional,
+            sparse_grad=params.get("sparse_grad", False),
+            visible_adam=params.get("visible_adam", False),
+        ) == [*plain, *expected]
+    with pytest.raises(ValueError, match="sparse_grad requires packed=true"):
+        training.gsplat_argv(*positional, packed=False, sparse_grad=True)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"sparse_grad": True}, {"visible_adam": True}, {"packed": False, "visible_adam": True}],
+)
+def test_speed_stage_params_reach_trainer_and_metrics(
+    tmp_path: Path, params: dict[str, Any]
+) -> None:
+    work = Workdir.create(tmp_path / "run")
+    seed_inputs(work)
+    execute(train_recipe(stand_in_params(**params)), work, RunnerSet(cpu=LocalRunner()))
+    cfg = json.loads((work.work_dir("train") / "gsplat/cfg.yml").read_text())
+    settings = json.loads((work.out_dir("train") / "train_metrics.json").read_text())["settings"]
+    for key, metric, default in [
+        ("packed", "packed", True),
+        ("sparse_grad", "sparseGrad", False),
+        ("visible_adam", "visibleAdam", False),
+    ]:
+        assert cfg[key] == settings[metric] == params.get(key, default)
+
+
+def test_invalid_sparse_stage_refuses_before_trainer_lookup(tmp_path: Path) -> None:
+    work = Workdir.create(tmp_path / "run")
+    seed_inputs(work)
+    with pytest.raises(StageFailedError, match="sparse_grad requires packed=true"):
+        execute(
+            train_recipe({"packed": False, "sparse_grad": True}), work, RunnerSet(cpu=LocalRunner())
+        )
