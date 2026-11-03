@@ -68,7 +68,8 @@ concurrency:
 jobs:
   deploy:
     name: Deploy the Modal app, and prove the GPU path
-    runs-on: ubuntu-latest
+    # ubuntu-latest is now 26.04, whose apt colmap 3.12.6 fails on a missing libPoseLib.so.
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
