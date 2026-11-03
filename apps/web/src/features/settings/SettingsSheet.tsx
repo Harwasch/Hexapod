@@ -10,6 +10,8 @@ import {
 
 import { env } from "@/app/env";
 import { MotionRendererNote } from "@/features/sites/MotionRendererNote";
+
+import { WeatherWindSection } from "./WeatherWindSection";
 import {
   CPU_REASON_TEXT,
   DEFAULT_WIND_STRENGTH,
@@ -216,6 +218,7 @@ function WindSection() {
           />
         </>
       )}
+      <WeatherWindSection />
     </section>
   );
 }

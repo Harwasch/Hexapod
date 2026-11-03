@@ -1,8 +1,39 @@
-# Living weather wind research
+# Living weather wind
 
-Research prototype, **Simulated**, not proposed for merge. Nothing changes the shipped
+**Simulated.** Plants on a scan move with the hour's real wind. Nothing changes the shipped
 `WindSettings` or its dimensionless strength mapping. Weather inputs are 10 m m/s and
 meteorological **from** bearings; the older rig UI uses **to** bearings.
+
+## In the app
+
+Behind `VITE_LIVING_WEATHER=1` (off by default). Without it the switch below is not shown and no
+weather is requested.
+
+- **Settings › Living survey › Weather wind · Simulated**: a switch, off at the start of every
+  session and never persisted. Wind comes from **Weather** (Open-Meteo, the active site's
+  centroid at the map's hour) or **Manual** (mean, gusts and direction sliders, in m/s).
+- While plants move, the HUD shows a **Simulated motion · weather wind** badge naming the scan,
+  its tier and the wind.
+- **As captured** and **reduced motion** turn it fully off: the hook leaves the shader and no
+  weather is fetched.
+- **One scan per site moves**, chosen by `planWeatherWind` (`lib/weather/weatherWindPlan.ts`):
+  1. a baked branch rig beside the tiles (`articulation.json`, probed with HEAD and required to be
+     JSON): Tier B, or Tier C when its header's detail score passes (`motionTier`);
+  2. otherwise published segmentation (`instances.json`): Tier A;
+  3. otherwise off. There is no colour-only fallback in the app.
+
+  A Living Survey scan (`renderConfig.rigUrl`) keeps its own Simulated wind. Only the PlayCanvas
+  WebGL2 renderer has the hook. A rig whose detail shows no vegetation is let go and not loaded
+  again that session. No real scan publishes `articulation.json` yet, so today real scans get
+  Tier A or off.
+
+- Cost (Harrison's laptop, Intel graphics, 80-tree grove, 2.4M splats, 2 Nov 2026): 1.3 to 2.2 ms
+  added per frame, frames about 13 to 14 ms; accepted. The four hours overlap; Calm measuring
+  highest was one slow block in round 1. Per-frame work does not depend on wind speed: one
+  `weatherBranch` per rig node on the CPU (a synthetic 960-node loop measured 0.34 to 0.36 ms
+  per frame for all four hours) and the same shader for every wind.
+
+The developer lab (`?living=1`) keeps every research arm below.
 
 ## Model and provenance
 

@@ -1,4 +1,6 @@
 import type { WeatherWind } from "@twin/world";
+
+import { env } from "@/app/env";
 export interface WeatherHour extends WeatherWind {
   gustMps: number;
   time: string;
@@ -7,7 +9,7 @@ export interface WeatherResult {
   wind: WeatherHour | null;
   note: string;
 }
-export const WEATHER_FLAG = import.meta.env.VITE_LIVING_WEATHER === "1";
+export const WEATHER_FLAG = env.livingWeather;
 /** All hours UTC; never reinterpret server times in the browser's local zone. */
 export function parseWeather(value: unknown, latitude: number, longitude: number): WeatherHour[] {
   const d = value as {

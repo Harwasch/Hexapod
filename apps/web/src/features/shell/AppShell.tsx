@@ -37,6 +37,8 @@ import { LayersPanel } from "../layers/LayersPanel";
 import { LivingLabPanel } from "../living/LivingLabPanel";
 import { PokeBadge } from "../living/PokeBadge";
 import { SimulatedBadge } from "../living/SimulatedBadge";
+import { WeatherWindBadge } from "../living/WeatherWindBadge";
+import { WeatherWindDriver } from "../living/WeatherWindDriver";
 import { MapContextMenu } from "../map/MapContextMenu";
 import { MeasurePanel } from "../measure/MeasurePanel";
 import { FeedsPanel } from "../mission/FeedsPanel";
@@ -307,6 +309,8 @@ export function AppShell() {
             <ErrorBoundary inline label="Simulated motion">
               <SimulatedBadge />
               <PokeBadge />
+              {env.livingWeather && <WeatherWindDriver />}
+              {env.livingWeather && <WeatherWindBadge />}
               <LivingLabPanel />
             </ErrorBoundary>
             <RelitSlot />
