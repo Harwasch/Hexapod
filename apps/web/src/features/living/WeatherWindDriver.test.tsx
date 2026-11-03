@@ -43,12 +43,19 @@ const SITE = {
       id: "a",
       name: "Grove",
       representation: "gaussian-splat",
+      defaultVisible: true,
+      epochId: null,
       renderConfig: {},
       source: { type: "3d-tiles-url", url: "https://tiles.example/grove/tileset.json" },
     },
   ],
 };
 const head = vi.fn<typeof fetch>();
+/** What the renderer reports about the address it was asked for. */
+const status = (articulationStatus: string) =>
+  useLivingLab
+    .getState()
+    .set({ articulationStatus, articulationStatusUrl: useLivingLab.getState().articulationUrl });
 
 beforeEach(() => {
   forgetRigProbes();
@@ -58,7 +65,11 @@ beforeEach(() => {
   vi.mocked(weatherFeed).mockReset();
   source.site = SITE;
   source.time = JulianDate.fromIso8601("2024-11-19T04:00Z");
-  useSites.setState({ activeSiteId: "s" });
+  useSites.setState({
+    activeSiteId: "s",
+    representation: { s: "gaussian-splat" },
+    epoch: {},
+  });
   useInstances.setState({ assets: { a: {} as never } });
   useAsCaptured.setState({ on: false });
   useSettings.setState({ reducedMotion: false, splatRenderer: "playcanvas" });
@@ -67,6 +78,7 @@ beforeEach(() => {
     motion: "off",
     articulationUrl: "",
     articulationStatus: "No articulation loaded",
+    articulationStatusUrl: "",
     weatherSidecarUrl: "",
     open: false,
   });
@@ -159,7 +171,7 @@ describe("weather wind switch", () => {
     await waitFor(() => expect(useLivingLab.getState().motion).toBe("articulated"));
     const tiers = await import("@/cesium/scanView/livingArticulation");
     const tier = vi.spyOn(tiers, "weatherArticulationTier").mockReturnValue("off");
-    act(() => useLivingLab.getState().set({ articulationStatus: "Simulated · 1 nodes" }));
+    act(() => status("Simulated · 1 nodes"));
     expect(useWeatherWind.getState().scan?.tier).toBe("off");
     expect(useLivingLab.getState().motion).toBe("off");
     // A new wind does not load the same empty scan again.
@@ -176,7 +188,7 @@ describe("weather wind switch", () => {
     render(<WeatherWindDriver />);
     act(() => useWeatherWind.getState().set({ enabled: true }));
     await waitFor(() => expect(useLivingLab.getState().motion).toBe("articulated"));
-    act(() => useLivingLab.getState().set({ articulationStatus: "Error: Articulation HTTP 503" }));
+    act(() => status("Error: Articulation HTTP 503"));
     expect(useLivingLab.getState().motion).toBe("off");
     expect(useWeatherWind.getState().reason).toBe("wind off · Error: Articulation HTTP 503");
   });
@@ -190,7 +202,7 @@ describe("weather wind switch", () => {
     await waitFor(() =>
       expect(useLivingLab.getState().articulationUrl).toContain("/grove/articulation.json"),
     );
-    act(() => useLivingLab.getState().set({ articulationStatus: "Error: Articulation HTTP 404" }));
+    act(() => status("Error: Articulation HTTP 404"));
     await waitFor(() =>
       expect(useLivingLab.getState().articulationUrl).toContain("/grove/instances.json"),
     );
@@ -217,6 +229,63 @@ describe("weather wind switch", () => {
     expect(useLivingLab.getState().motion).toBe("off");
   });
 
+  it("moves only the scan on screen, not a richer one of another date", async () => {
+    head.mockImplementation((url) =>
+      Promise.resolve(
+        (url as string).includes("/old/")
+          ? new Response(null, { status: 200, headers: { "content-type": "application/json" } })
+          : new Response(null, { status: 404 }),
+      ),
+    );
+    source.site = {
+      ...SITE,
+      assets: [
+        {
+          ...SITE.assets[0],
+          id: "old",
+          name: "Old date",
+          defaultVisible: false,
+          source: { type: "3d-tiles-url", url: "https://tiles.example/old/tileset.json" },
+        },
+        SITE.assets[0],
+      ],
+    };
+    render(<WeatherWindDriver />);
+    act(() => useWeatherWind.getState().set({ enabled: true }));
+    await waitFor(() =>
+      expect(useLivingLab.getState().articulationUrl).toContain("/grove/instances.json"),
+    );
+    expect(head).not.toHaveBeenCalledWith(
+      "https://tiles.example/old/articulation.json",
+      expect.anything(),
+    );
+  });
+
+  it("ignores a late answer about an earlier request", async () => {
+    render(<WeatherWindDriver />);
+    act(() => useWeatherWind.getState().set({ enabled: true }));
+    await waitFor(() => expect(useLivingLab.getState().motion).toBe("articulated"));
+    act(() =>
+      useLivingLab.getState().set({
+        articulationStatus: "Error: Articulation HTTP 503",
+        articulationStatusUrl: "https://tiles.example/elsewhere/instances.json?tier-a=1",
+      }),
+    );
+    expect(useLivingLab.getState().motion).toBe("articulated");
+    expect(useWeatherWind.getState().reason).toBe("");
+  });
+
+  it("cancels a weather request still out when As captured turns on", () => {
+    vi.mocked(weatherFeed).mockReturnValue(new Promise(() => undefined));
+    useWeatherWind.setState({ mode: "live" });
+    render(<WeatherWindDriver />);
+    act(() => useWeatherWind.getState().set({ enabled: true }));
+    const signal = vi.mocked(weatherFeed).mock.calls[0]?.[4];
+    expect(signal?.aborted).toBe(false);
+    act(() => useAsCaptured.setState({ on: true }));
+    expect(signal?.aborted).toBe(true);
+  });
+
   it("live mode follows the feed's hour and stays still until it arrives", async () => {
     const hour = {
       meanMps: 8.51,
@@ -233,7 +302,13 @@ describe("weather wind switch", () => {
     useWeatherWind.setState({ mode: "live" });
     render(<WeatherWindDriver />);
     act(() => useWeatherWind.getState().set({ enabled: true }));
-    expect(weatherFeed).toHaveBeenCalledWith(45, -93, new Date("2024-11-19T04:00Z"));
+    expect(weatherFeed).toHaveBeenCalledWith(
+      45,
+      -93,
+      new Date("2024-11-19T04:00Z"),
+      undefined,
+      expect.any(AbortSignal),
+    );
     await waitFor(() => expect(useLivingLab.getState().weather).toEqual(hour));
     expect(useWeatherWind.getState().feedNote).toBe("Simulated from weather at Oak Bench");
   });

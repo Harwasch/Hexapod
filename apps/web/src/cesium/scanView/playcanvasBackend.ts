@@ -1153,7 +1153,9 @@ function assemble(
     articulationLeafTexture?.destroy();
     articulationPoseTexture = articulationLeafTexture = null;
     if (!articulationUrl) {
-      useLivingLab.getState().set({ articulationStatus: "No articulation loaded" });
+      useLivingLab
+        .getState()
+        .set({ articulationStatus: "No articulation loaded", articulationStatusUrl: "" });
       return;
     }
     if (!articulationStream) {
@@ -1167,8 +1169,13 @@ function assemble(
     for (const entity of tiles.keys()) applyModifier(entity);
     const controller = new AbortController();
     articulationRequest = controller;
-    useLivingLab.getState().set({ articulationStatus: "Loading articulated spectra…" });
-    void loadArticulation(articulationUrl, controller.signal)
+    // Every status names its request, so a late answer to an old one cannot speak for the new.
+    const requested = articulationUrl;
+    useLivingLab.getState().set({
+      articulationStatus: "Loading articulated spectra…",
+      articulationStatusUrl: requested,
+    });
+    void loadArticulation(requested, controller.signal)
       .then((loaded) => {
         if (controller.signal.aborted) return;
         articulation = loaded;
@@ -1191,12 +1198,15 @@ function assemble(
         for (const entity of tiles.keys()) applyModifier(entity);
         useLivingLab.getState().set({
           articulationStatus: `Simulated · ${String(loaded.header.nodes.length)} nodes · ${String(loaded.header.leafCount)} leaf packets`,
+          articulationStatusUrl: requested,
         });
         hooks.frameWanted();
       })
       .catch((error: unknown) => {
         if (!controller.signal.aborted)
-          useLivingLab.getState().set({ articulationStatus: String(error) });
+          useLivingLab
+            .getState()
+            .set({ articulationStatus: String(error), articulationStatusUrl: requested });
       });
   };
 

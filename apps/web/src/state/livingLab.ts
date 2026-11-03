@@ -36,6 +36,8 @@ export interface LivingLabState {
   spectraStatus: string;
   articulationUrl: string;
   articulationStatus: string;
+  /** The articulation address `articulationStatus` is about ("" before any). */
+  articulationStatusUrl: string;
   /** Overall motion amplitude, 1 a moderate breeze. */
   strength: number;
   /** Where the wind blows to, degrees clockwise from north. */
@@ -90,6 +92,7 @@ export const useLivingLab = create<LivingLabState>()((set) => ({
   spectraStatus: "No spectra loaded",
   articulationUrl: "",
   articulationStatus: "No articulation loaded",
+  articulationStatusUrl: "",
   strength: 1,
   windBearingDeg: 60,
   gustSpeed: 4,

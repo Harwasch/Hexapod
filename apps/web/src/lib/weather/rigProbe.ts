@@ -1,33 +1,45 @@
 import { ARTICULATION_FILE, besideTileset } from "./weatherWindPlan";
 
-/** Per asset id: whether a baked rig sits beside its tiles. Probed once per page. */
+/** Per rig address: whether it is published. Only real answers are kept, for the page. */
 const rigProbes = new Map<string, Promise<boolean>>();
+
+/** The baked rig's address beside a tileset ("" when it cannot be read). */
+export function rigUrlOf(tileset: string): string {
+  return besideTileset(tileset, ARTICULATION_FILE);
+}
 
 /**
  * Asks whether `articulation.json` is published beside the tiles. A host that answers every path
- * with its HTML page (a single-page fallback) is not a rig, so the type must be JSON.
+ * with its HTML page (a single-page fallback) is not a rig, so the type must be JSON. A 4xx is
+ * an answer and is kept; a 5xx, a network failure, a timeout or `signal` aborting is not, and the
+ * next ask tries again. Keyed by address, so a scan republished elsewhere is asked afresh.
  */
-export function probeRig(assetId: string, tileset: string): Promise<boolean> {
-  let probe = rigProbes.get(assetId);
+export function probeRig(tileset: string, signal?: AbortSignal): Promise<boolean> {
+  const url = rigUrlOf(tileset);
+  if (!url) return Promise.resolve(false);
+  let probe = rigProbes.get(url);
   if (!probe) {
-    const url = besideTileset(tileset, ARTICULATION_FILE);
-    probe = url
-      ? fetch(url, { method: "HEAD", signal: AbortSignal.timeout(8000) })
-          .then((r) => r.ok && (r.headers.get("content-type") ?? "").includes("json"))
-          .catch(() => {
-            // A network failure or timeout is not an answer: ask again next time.
-            rigProbes.delete(assetId);
-            return false;
-          })
-      : Promise.resolve(false);
-    rigProbes.set(assetId, probe);
+    const timeout = AbortSignal.timeout(8000);
+    const forget = () => {
+      rigProbes.delete(url);
+      return false;
+    };
+    probe = fetch(url, {
+      method: "HEAD",
+      signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
+    })
+      .then((r) =>
+        r.status >= 500 ? forget() : r.ok && (r.headers.get("content-type") ?? "").includes("json"),
+      )
+      .catch(forget);
+    rigProbes.set(url, probe);
   }
   return probe;
 }
 
 /** A rig that answered the probe but would not load: treated as absent from now on. */
-export function rigFailed(assetId: string): void {
-  rigProbes.set(assetId, Promise.resolve(false));
+export function rigFailed(rigUrl: string): void {
+  rigProbes.set(rigUrl, Promise.resolve(false));
 }
 
 /** Test hook: forget earlier probes. */

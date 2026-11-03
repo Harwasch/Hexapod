@@ -5,6 +5,7 @@ import { useSite } from "@/api/queries";
 import { useScene } from "@/cesium/SceneContext";
 import { weatherArticulationTier } from "@/cesium/scanView/livingArticulation";
 import { instancesUrlOf } from "@/cesium/splatInstances";
+import { pickShownAsset, siteEpochs } from "@/lib/epochs";
 import { weatherFeed } from "@/lib/weather/openMeteo";
 import { probeRig, rigFailed } from "@/lib/weather/rigProbe";
 import { planWeatherWind, type WindPlan, type WindScan } from "@/lib/weather/weatherWindPlan";
@@ -31,6 +32,8 @@ function LiveWeatherFeed({
     const store = useWeatherWind.getState();
     let disposed = false,
       latest = "";
+    // Turning off cancels a weather request still out, not only its answer.
+    const stop = new AbortController();
     const update = () => {
       if (!scene || latitude === undefined || longitude === undefined) {
         if (latest !== "missing") {
@@ -44,7 +47,7 @@ function LiveWeatherFeed({
       if (hour === latest) return;
       latest = hour;
       store.set({ live: null, feedNote: "Loading weather…" });
-      void weatherFeed(latitude, longitude, at).then((result) => {
+      void weatherFeed(latitude, longitude, at, undefined, stop.signal).then((result) => {
         if (disposed || latest !== hour) return;
         store.set({
           live: result.wind,
@@ -61,6 +64,7 @@ function LiveWeatherFeed({
     const remove = scene?.viewer.clock.onTick.addEventListener(update);
     return () => {
       disposed = true;
+      stop.abort();
       remove?.();
       useWeatherWind.getState().set({ live: null, feedNote: "" });
     };
@@ -97,34 +101,40 @@ export function WeatherWindDriver() {
   const id = useSites((s) => s.activeSiteId);
   const site = useSite(id).data;
   const segmented = useInstances((s) => s.assets);
+  // Only the scan on screen moves: the date (epoch) shown, as a splat (lib/epochs.ts).
+  const shownEpoch = useSites((s) => (id === null ? null : (s.epoch[id] ?? null)));
+  const splatShown = useSites((s) => id !== null && s.representation[id] === "gaussian-splat");
   const active = enabled && !captured && !reduced;
   // The developer lab drives the same renderer state; while it is open, it is in charge.
   const labOpen = useLivingLab((s) => s.open);
 
-  const scans = useMemo<WindScan[]>(
-    () =>
-      (site?.assets ?? []).map((a) => ({
-        assetId: a.id,
-        name: a.name,
-        tileset: a.source.type === "3d-tiles-url" ? a.source.url : "",
-        splat: a.representation === "gaussian-splat",
-        rigged: Boolean(a.renderConfig.rigUrl),
-        instancesUrl: segmented[a.id] !== undefined ? (instancesUrlOf(a.id) ?? "") : "",
-      })),
-    [site, segmented],
-  );
+  const scans = useMemo<WindScan[]>(() => {
+    if (!site || !splatShown) return [];
+    const shown = pickShownAsset(site.assets, siteEpochs(site), "gaussian-splat", {
+      epochId: shownEpoch,
+    });
+    return (shown ? [shown] : []).map((a) => ({
+      assetId: a.id,
+      name: a.name,
+      tileset: a.source.type === "3d-tiles-url" ? a.source.url : "",
+      splat: a.representation === "gaussian-splat",
+      rigged: Boolean(a.renderConfig.rigUrl),
+      instancesUrl: segmented[a.id] !== undefined ? (instancesUrlOf(a.id) ?? "") : "",
+    }));
+  }, [site, splatShown, shownEpoch, segmented]);
 
   const [rigFound, setRigFound] = useState<Record<string, boolean>>({});
   useEffect(() => {
     if (!active || labOpen || renderer !== "playcanvas") return;
-    let disposed = false;
+    // Turning off (As captured, reduced motion, the switch) cancels probes still out.
+    const stop = new AbortController();
     for (const scan of scans)
       if (scan.splat && !scan.rigged && scan.tileset)
-        void probeRig(scan.assetId, scan.tileset).then((found) => {
-          if (!disposed) setRigFound((was) => ({ ...was, [scan.assetId]: found }));
+        void probeRig(scan.tileset, stop.signal).then((found) => {
+          if (!stop.signal.aborted) setRigFound((was) => ({ ...was, [scan.assetId]: found }));
         });
     return () => {
-      disposed = true;
+      stop.abort();
     };
   }, [active, labOpen, renderer, scans]);
 
@@ -201,6 +211,8 @@ export function WeatherWindDriver() {
     () =>
       useLivingLab.subscribe((lab, prev) => {
         if (!driving.current || lab.articulationStatus === prev.articulationStatus) return;
+        // A late answer about an earlier request says nothing about the one now asked for.
+        if (lab.articulationStatusUrl !== lab.articulationUrl) return;
         const store = useWeatherWind.getState();
         const scan = store.scan;
         if (!scan || !lab.articulationUrl) return;
@@ -217,7 +229,7 @@ export function WeatherWindDriver() {
           // A rig that would not load: fall back to segmentation (Tier A) where there is one.
           const plan = target.current;
           if (plan?.kind === "target" && plan.source === "rig") {
-            rigFailed(plan.assetId);
+            rigFailed(plan.url);
             setRigFound((was) => ({ ...was, [plan.assetId]: false }));
           }
           store.set({ scan: { ...scan, tier: null }, reason: `wind off · ${status}` });

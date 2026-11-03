@@ -73,6 +73,7 @@ export function createWeatherFeed(get: typeof fetch = fetch, now = () => Date.no
     longitude: number,
     at: Date,
     enabled = WEATHER_FLAG,
+    signal?: AbortSignal,
   ): Promise<WeatherResult> => {
     if (!enabled)
       return { wind: null, note: "No weather, wind off · enable VITE_LIVING_WEATHER=1" };
@@ -107,7 +108,10 @@ export function createWeatherFeed(get: typeof fetch = fetch, now = () => Date.no
       if (!entry || entry.expires <= now()) {
         if (cache.size >= 64) cache.delete(cache.keys().next().value ?? "");
         const request = (async () => {
-          const r = await get(key, { signal: AbortSignal.timeout(12000) });
+          const timeout = AbortSignal.timeout(12000);
+          const r = await get(key, {
+            signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
+          });
           if (!r.ok) throw new Error(`Weather HTTP ${r.status}`);
           return parseWeather(await r.json(), latitude, longitude);
         })();
