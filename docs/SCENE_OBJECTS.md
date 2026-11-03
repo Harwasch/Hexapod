@@ -304,8 +304,8 @@ knows none of `kind`, `cover`, `name` reads it as before. The viewer honours `na
 any tag (`lib/categories.ts` object names, `lib/sceneSelect.ts` the selection card,
 `lib/instances.ts` search).
 
-**Running and publishing a variant.** segment.yml runs a candidate on a `seg-*` push whose
-head commit says `[segment|names=spool,pumpkin|variant=ground-first]`
+**Running and publishing a variant.** segment.yml runs a candidate when dispatched with
+`names=spool,pumpkin`, `variant=ground-first`
 (`infra/modal/segment.py` `VARIANT_SCRIPTS`; each call stopped after 50 min, so its worst
 cost is known, ~$1 on the L4; `crop=x0,y0,x1,y1` segments a part of a big scan, every tile
 still bound: candidate A on 8.15 M of the camp's splats, `crop=-5,8,30,33`, did not finish

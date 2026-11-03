@@ -12,26 +12,11 @@ name: Fill scans (Modal GPU, NVIDIA Fixer)
 # one file per scan, and forwarded to its job; a fill job without them fails here, before
 # Modal starts anything. drop and split jobs are not gated (neither is published).
 #
-# A push to a `wm-*` working branch that touches the fill code (not `living-models`, so
-# merges there start no GPU run) has no inputs, so it runs no job and says so; the work is
-# dispatched with `jobs` (workflow_dispatch only works once this file is on the default
-# branch). The Modal token
+# Manual runs (workflow_dispatch) only: it spends Modal GPU money, so no push starts it.
+# The work is chosen with `jobs`; with none it runs nothing and says so. The Modal token
 # is the repository's; Fixer needs no other secret.
 
 on:
-  push:
-    branches: ["wm-*"]
-    paths:
-      - infra/modal/fill.py
-      - tools/captures/teacher_fill.py
-      - tools/captures/rescan_gate.py
-      - tools/captures/split_objects.py
-      - tools/captures/splat_render.py
-      - tools/captures/tests/test_gsplat_parity.py
-      - tools/captures/world_model_client.py
-      - tools/captures/inpaint_models.py
-      - tools/captures/distill_fill.py
-      - .github/workflows/fill.yml
   workflow_dispatch:
     inputs:
       jobs:
@@ -60,8 +45,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # No default: a push (no inputs) runs nothing and says so -- its old default, fill:camp,
-  # can no longer pass the fill gate (the camp has no measured epoch).
+  # No default: a dispatch without jobs runs nothing and says so -- the old default,
+  # fill:camp, can no longer pass the fill gate (the camp has no measured epoch).
   JOBS: ${{ inputs.jobs || '' }}
   # Scans to run fill.py probe on (Fixer on renders prepared several ways); empty: none.
   PROBES: ""
@@ -80,9 +65,6 @@ env:
 jobs:
   fill:
     name: Fill on a Modal GPU
-    # A push whose message carries [skip-fill] (one that only shares a file with the fill
-    # code, such as world_model_client.py) starts no fill run.
-    if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip-fill]')
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:
@@ -92,7 +74,7 @@ jobs:
       - name: Nothing to run without jobs
         if: env.JOBS == ''
         run: |
-          echo "::notice::No jobs: a push runs nothing. Dispatch this workflow with jobs (drop:yard, fill:<scan> with fill_targets_url, ...) to run on Modal."
+          echo "::notice::No jobs given, so nothing runs. Dispatch this workflow with jobs (drop:yard, fill:<scan> with fill_targets_url, ...) to run on Modal."
       - uses: actions/checkout@v4
         if: env.JOBS != ''
       - uses: astral-sh/setup-uv@v6

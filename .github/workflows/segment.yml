@@ -5,33 +5,12 @@ name: Segment scans (Modal GPU)
 # instances.emb, report.json and compare.png (against what is published) per scan as an
 # artifact. Nothing is published.
 #
-# On a push to a `seg-*` working branch that touches the segmentation code, or by
-# workflow_dispatch (which only works once this file is on the default branch). Not on
-# `living-models`: a merge there re-ran the whole ~48 min L4 job (about $2) with nothing
-# about segmentation changed (run 37102914967 was such a duplicate). The Modal token is the
-# repository's.
-#
-# A push chooses what it runs with a token in its head commit's message,
-# `[segment|names=spool,pumpkin|variant=ground-first|views=24|crop=x0,y0,x1,y1]` (every part
-# optional; `crop`, a variant only: segment that part of each scan);
-# without one it runs the defaults below. `variant` runs a segmentation bake-off candidate
+# Manual runs (workflow_dispatch) only: it spends Modal GPU money (the whole L4 job is
+# ~48 min, about $2), so no push starts it. The Modal token is the repository's. `variant` runs a segmentation bake-off candidate
 # (infra/modal/segment.py `VARIANT_SCRIPTS`) instead of segment_scene, each scan's call
 # stopped after `VARIANT_TIMEOUT_S` so a run that hangs has a known worst cost.
 
 on:
-  push:
-    branches: ["seg-*"]
-    paths:
-      - infra/modal/segment.py
-      - tools/captures/segment_scene.py
-      - tools/captures/segment_models.py
-      - tools/captures/segment_ground_first.py
-      - tools/captures/concept_scene.py
-      - tools/captures/concept_models.py
-      - tools/captures/ground_pass.py
-      - tools/captures/data/ground_cover.json
-      - tools/captures/instances_report.py
-      - .github/workflows/segment.yml
   workflow_dispatch:
     inputs:
       names:
@@ -44,6 +23,10 @@ on:
         default: "24"
       variant:
         description: A bake-off candidate to run instead (infra/modal/segment.py VARIANT_SCRIPTS)
+        type: string
+        default: ""
+      crop:
+        description: "A variant only: segment this part of each scan (x0,y0,x1,y1; empty for all)"
         type: string
         default: ""
 
@@ -66,29 +49,20 @@ jobs:
         run: |
           test -n "$MODAL_TOKEN_ID" -a -n "$MODAL_TOKEN_SECRET" \
             || { echo "::error::MODAL_TOKEN_ID / MODAL_TOKEN_SECRET are not set"; exit 1; }
-      # The dispatch inputs (or the push's token) are read as data, validated here, never
+      # The dispatch inputs are read as data, validated here, never
       # interpolated into a shell line (as publish-instances.yml's plan reads its own). The
       # views' ceiling is segment_scene.MAX_VIEWS, the most a run keeps.
       - name: What to run
         id: plan
         env:
-          EVENT: ${{ github.event_name }}
-          MESSAGE: ${{ github.event.head_commit.message }}
           NAMES: ${{ inputs.names || 'spool,pumpkin,camp' }}
           VIEWS: ${{ inputs.views || '24' }}
           VARIANT: ${{ inputs.variant || '' }}
-          CROP: ""
+          CROP: ${{ inputs.crop || '' }}
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os, re
           options = {k: os.environ[k.upper()] for k in ("names", "views", "variant", "crop")}
-          if os.environ["EVENT"] == "push":
-              found = re.search(r"\[segment([^\]]*)\]", os.environ.get("MESSAGE", ""))
-              for part in (found.group(1) if found else "").split("|")[1:]:
-                  name, _, value = part.partition("=")
-                  if name not in options:
-                      raise SystemExit(f"unknown option {name!r} in the [segment] token")
-                  options[name] = value
           names, views, variant, crop = (options[k] for k in ("names", "views", "variant", "crop"))
           if not re.fullmatch(r"[a-z0-9-]+(,[a-z0-9-]+)*", names):
               raise SystemExit(f"names={names!r} is not a comma-separated list of [a-z0-9-] names")

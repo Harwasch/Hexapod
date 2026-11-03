@@ -33,7 +33,7 @@ modal deploy infra/modal/world_models.py
 Fixer itself runs from CI with nothing but the repository's Modal token: dispatch
 `.github/workflows/fill.yml` with `jobs` (and `fill_targets_url` for a `fill:` job); it runs
 `modal run infra/modal/fill.py` and uploads the reports, strips and inferred tileset as the
-`fill` artifact. A push to a `wm-*` branch has no inputs and runs nothing (it says so).
+`fill` artifact. It runs only when dispatched; without `jobs` it runs nothing (it says so).
 
 ## 2. Order of runs (cheapest proof first)
 
