@@ -537,6 +537,7 @@ def test_fallback_can_be_turned_off(role: str | None) -> None:
         ("NVIDIA L4", ("l4", "l40s"), "l4"),
         ("NVIDIA L40S", ("l4", "l40s"), "l40s"),
         ("NVIDIA A10", ("l4", "a10"), "a10"),
+        ("NVIDIA A10G", ("l4", "l40s", "a10"), "a10"),
         ("NVIDIA A100-SXM4-80GB", ("a100-40gb", "a100"), "a100"),
         ("NVIDIA A100-SXM4-40GB", ("a100", "a100-40gb"), "a100-40gb"),
         ("NVIDIA H100 80GB HBM3", ("l4", "l40s"), None),

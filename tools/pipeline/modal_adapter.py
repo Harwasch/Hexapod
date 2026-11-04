@@ -190,7 +190,8 @@ def tier_of_gpu(name: str, chain: Sequence[str]) -> str | None:
 
     Matched on the name's words, so `L4` is never taken for `L40S` or the other way; an
     A100's memory is checked too (`NVIDIA A100-SXM4-80GB`). None when no tier matches."""
-    words = name.upper().replace("NVIDIA", " ").replace("-", " ").split()
+    # `A10` is Modal's identifier; the card itself is an A10G, which is how Modal bills it.
+    words = name.upper().replace("NVIDIA", " ").replace("-", " ").replace("A10G", "A10").split()
     for tier in chain:
         want = GPU_NAMES.get(tier, "").upper().split("-")
         if want and want[0] in words and all(part in name.upper() for part in want[1:]):
