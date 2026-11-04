@@ -7,11 +7,17 @@ all-on:
   train:
     with_ut: true
     with_eval3d: true
+    packed: false # required by the pinned UT/eval3d CUDA kernels
+    # UT/eval3d memory is not calibrated. Bound this experiment explicitly until
+    # the driver measures peak memory; this is a provisional limit, not a fit guarantee.
+    budget_max: 1000000
     # The pinned renderer rejects antialiased + 3DGUT. B keeps 3DGUT explicitly;
     # antialiased is the one unsupported member of the requested all-on combination.
     antialiased: false
     pose_opt: true
     post_processing: ppisp
+    # The exported PLY never uses the controller; distillation freezes its Gaussians.
+    ppisp_use_controller: false
     batch_size: 1
     blocks: 1
     init: sfm+dense

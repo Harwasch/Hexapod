@@ -53,7 +53,15 @@ def train_params(schedule: str, overrides: dict[str, Any]) -> dict[str, Any]:
         params["ppisp_controller_activation_num_steps"] = 2500
     # Raw argv could redirect the dataset, change the split or load an external ckpt.
     # New supported knobs should be added as stage params, with an explicit audit.
-    forbidden = {"trainer", "python", "extra_args", "holdout_script", "init_from", "_bench_quality"}
+    forbidden = {
+        "trainer",
+        "python",
+        "extra_args",
+        "holdout_script",
+        "init_from",
+        "_bench_quality",
+        "_bench_require_dense",
+    }
     if forbidden & set(overrides.get("train", {})):
         raise ValueError("bench refuses trainer/argv/init overrides that bypass frozen inputs")
     if params.get("data_factor", 1) != 1:
@@ -77,6 +85,7 @@ def validate_renderer(params: dict[str, Any]) -> None:
         strategy=params.get("strategy", "default"),
         batch_size=params.get("batch_size", 1),
         antialiased=params.get("antialiased", False),
+        packed=params.get("packed"),
         max_steps=params.get("iterations", 30000),
         steps_scaler=params.get("schedule_scale", 1.0),
         **{key: params[key] for key in quality_stack.RENDER_KEYS if key in params},
@@ -85,6 +94,8 @@ def validate_renderer(params: dict[str, Any]) -> None:
 
 def make_recipe(params: dict[str, Any], tier: str) -> Recipe:
     params = dict(params)
+    if params.get("init") == "sfm+dense":
+        params["_bench_require_dense"] = True
     quality = params.pop("_bench_quality", None)
     tail = [] if quality is None else [{"id": "quality", "impl": "support_gate", "params": quality}]
     return Recipe.from_dict(

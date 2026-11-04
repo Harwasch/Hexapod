@@ -322,19 +322,27 @@ stages:
       #   Quality-stack candidates (all absent/off; no default has flipped):
       #   with_ut: true       -- unscented camera projection at pinned gsplat 512d366b;
       #   with_eval3d: true   -- evaluate the Gaussian in 3D (requires UT + MCMC).
-      #     Both require classic rasterization; antialiased cannot be combined with them.
+      #     Both require classic rasterization and packed: false; antialiased is refused.
+      #     Their memory model is uncalibrated: auto requires explicit budget_max.
+      #     B bounds it at 1M provisionally; GPU peak memory must verify the 24 GB fit.
       #     A plain SH3 3DGS PLY still ships; bench test scores use the shipping renderer.
       #   post_processing: ppisp -- camera/exposure correction, batch_size 1 only;
       #     ppisp_use_controller and ppisp_controller_distillation default true,
       #     ppisp_controller_activation_num_steps defaults 25000 (unscaled upstream).
-      #     Short screens must set that step below their actual iteration count.
+      #     B sets ppisp_use_controller: false: distillation otherwise freezes Gaussians
+      #     at 25k to train a controller the shipped plain-PLY renderer never uses.
+      #     If enabled elsewhere, screens must activate it before their final step.
       #     Rolling shutter is refused: simple_trainer has no COLMAP timing path.
       #   init: sfm+dense     -- pinned Apache MapAnything, train-pool views in overlapping
       #     chunks of four, confidence + robust Sim3 + voxel filtering, at most cap/4
-      #     initial points including SfM. A failed fit records a warning and keeps SfM.
+      #     initial points including SfM. Each fit handles arbitrary COLMAP units;
+      #     no near-one scale gate. Failed chunks warn/skip; successful chunks survive.
+      #     Bench refuses zero added points; production may warn and fall back to SfM.
       #   priors: {depth_weight: 0.05, normal_weight: 0.02, start_step: 1000}
       #     Pinned MIT MoGe-2 depth/normal cache; per-image robust scale/shift depth,
       #     rendered-depth normals; gradient_weight is optional (default 0).
+      #     Cache format npy-mmap-v2 avoids per-step ZIP decompression. Depth alignment
+      #     uses weighted reductions, not tall lstsq. Priors refuse sparse depth_loss.
       #   aniso_cap: {ratio: 10, weight: 0.001} -- hinge on longest/shortest axis ratio.
       #   far_field: sphere   -- frozen background at ten robust sparse-scene radii;
       #     far_field_share: 0.1 and far_field_count: 256 reserve foreground budget.
@@ -343,7 +351,7 @@ stages:
       #     before place computes tile bounds. Depth/normal, dense and far require
       #     blocks: 1, batch_size: 1, MCMC, standard Adam and SH colours.
       #   Candidate weights have no GPU measurements yet. quality-stack.yaml defines
-      #     cumulative arms; flip only after >=2/3 wins and no third loss >0.3 dB.
+      #     Beach A/B; the driver decides defaults from test scores and matched views.
       #   roi: {center: [x, y, z], radius: r}  -- COLMAP frame; crops the initial points
       #     to the sphere and the trained splat to 1.5 radii.
       #   blocks: auto        -- the default without being written: a capture whose budget

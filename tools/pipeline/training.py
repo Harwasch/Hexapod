@@ -455,7 +455,7 @@ def gsplat_argv(
     live_steps: Sequence[int] = (),
     eval_steps: Sequence[int] = (),
     extra: Sequence[str] = (),
-    packed: bool = True,
+    packed: bool | None = None,
     sparse_grad: bool = False,
     visible_adam: bool = False,
     batch_size: int = 1,
@@ -594,6 +594,10 @@ def gsplat_argv(
     ):
         if not isinstance(value, bool):
             raise ValueError(f"{name} must be a boolean")
+    if packed is None:
+        packed = not (with_ut or with_eval3d)
+    if (with_ut or with_eval3d) and packed:
+        raise ValueError("UT/eval3d require packed=false in the pinned CUDA renderer")
     if sparse_grad and not packed:
         raise ValueError("sparse_grad requires packed=true (gsplat v1.6.0)")
     if antialiased and (with_ut or with_eval3d):

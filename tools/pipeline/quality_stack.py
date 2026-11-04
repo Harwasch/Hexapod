@@ -79,6 +79,11 @@ def options(params: Mapping[str, Any]) -> dict[str, Any]:
         result[k] > 0 for k in ("depth_weight", "normal_weight", "gradient_weight")
     )
     result["enabled"] = init != "sfm" or result["priors"] or result["aniso_weight"] > 0 or bool(far)
+    if result["priors"] and params.get("depth_loss"):
+        raise ValueError(
+            "mono priors and depth_loss are incompatible: "
+            "upstream replaces the depth image with sparse samples"
+        )
     if result["enabled"]:
         if params.get("batch_size", 1) != 1:
             raise ValueError("quality-stack extensions require batch_size=1")
@@ -141,6 +146,7 @@ def prepare(
         "loss_report": str(ctx.work_dir / "loss_terms.json"),
         "dense_max": max(0, int(foreground or 100_000) // 4),
         "synthetic": trainer.name == "gsplat_stand_in.py",
+        "require_dense": bool(ctx.param("_bench_require_dense", False)),
     }
     path = ctx.work_dir / "quality_settings.json"
     path.write_text(json.dumps(config, indent=2))
@@ -152,6 +158,12 @@ def prepare(
         ]
     )
     report = dict(json.loads(Path(config["report"]).read_text()))
+    if (
+        config["require_dense"]
+        and not config["synthetic"]
+        and report.get("denseInitAddedPoints", 0) <= 0
+    ):
+        raise ValueError("bench dense init added zero points; refusing to score an SfM fallback")
     config.update(center=report["center"], radius=report["radius"])
     path.write_text(json.dumps(config, indent=2))
     shutil.copytree(cache, output_cache, dirs_exist_ok=True)

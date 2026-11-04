@@ -1419,10 +1419,14 @@ depth/normal priors, anisotropy loss, the sky sphere and far-field cap, and the 
 **One requested pair is unsupported:** pinned gsplat explicitly rejects antialiased
 rasterization with UT/eval3d. B therefore keeps 3DGUT and explicitly sets
 `antialiased: false`; the CLI refuses an override enabling both before importing Modal.
-PPISP requires `batch_size: 1`. Its controller activation is unscaled upstream: full
-runs retain step 25,000; screens explicitly use 2,500 in their 3,000-step schedule.
-Synthetic rehearsal uses step 1 in its 30/300-step stand-in schedule. These settings
-and weights are hypotheses, not measured improvements. No production defaults change yet.
+PPISP requires `batch_size: 1`. B sets `ppisp_use_controller: false`: upstream's
+controller distillation otherwise freezes Gaussians at step 25,000, spending the last
+5,000 full-schedule steps on a controller the shipped PLY renderer never uses.
+UT/eval3d also requires `packed: false`. Its overlap-dependent backward buffers have
+no calibrated memory model here, so auto budgets require an explicit `budget_max`;
+B uses a provisional one-million-splat bound. This does not guarantee a fit on 24 GB.
+The first smoke must measure memory before a full run. These settings and weights
+are hypotheses, not measured improvements. No production defaults change yet.
 
 A has **no quality gate in the bench**. B's headline `test` scores **faded.ply**, after
 support-based opacity fading; `testTrained` scores **trained.ply** before the gate and
@@ -1473,19 +1477,26 @@ a cap. Unresolved calls retain their reservations. As with the existing cap, bui
 provider invoice differences need external reconciliation; leave room under $30 for
 those costs and reduce the tagged cap if needed.
 
+`HEXAPOD_BENCH_FULL_TIMEOUT` overrides the full-run timeout (default 3,300 seconds)
+for both the worker and its ledger reservation. Beach did not finish within 55 minutes
+on the old image; B adds inference and losses, so use an explicit 10,800-second ceiling
+for its preflight and full run. At current L4 rates that reserves about $2.94 including
+startup/restart allowances, requiring a $3 batch cap. This is a ceiling, not a runtime
+estimate; adjust it from the smoke's timing and memory measurements before launch.
+
 From `tools/pipeline`, with the driver's Modal environment:
 
 ```bash
 bench() { uv run --with modal==1.6.2 python -m experiments.bench "$@"; }
 quality_bench() {
-  bench "$@" --tag quality-stack --total-cap 30 --cap 2 \
+  bench "$@" --tag quality-stack --total-cap 30 --cap 3 \
     --ledger "$HOME/.local/share/hexapod-bench/quality-stack.jsonl"
 }
 # New image: Beach B smoke, then full after the driver checks the smoke.
 quality_bench run --scene beach --variants experiments/variants/quality-stack.yaml \
   --variant all-on --schedule screen --tier l4 --seeds 42 --keep-splat
-quality_bench run --scene beach --variants experiments/variants/quality-stack.yaml \
-  --variant all-on --schedule full --tier l4 --seeds 42 --keep-splat
+HEXAPOD_BENCH_FULL_TIMEOUT=10800 quality_bench run --scene beach \
+  --variants experiments/variants/quality-stack.yaml --variant all-on --schedule full --tier l4 --seeds 42 --keep-splat
 # A and B are the FULL run IDs, not the smoke IDs; A is already running on c7fb90c8.
 quality_bench matched-renders --scene beach --runs "$A" "$B"
 bench results --runs "$A" "$B"
@@ -1503,30 +1514,48 @@ none of the quality defaults flips. Source and weights are recorded in
 [NOTICE](NOTICE). No new local dependency is required.
 
 - `with_ut`, `with_eval3d`: both off. Eval3d requires UT and MCMC; antialiased rendering
-  is incompatible. `pose_opt` remains available. `rolling_shutter` is refused: upstream
+  is incompatible. They require unpacked rendering; an omitted `packed` resolves to
+  false, and an explicit true is refused. The classic renderer's measured memory
+  ceiling does not apply: set `budget_max` with `cap_max: auto`, or an explicit cap.
+  Budgets report `memoryModel: ut-eval3d-uncalibrated` and no memory ceiling; the count
+  bound must be checked against GPU peak memory. `pose_opt` remains available. `rolling_shutter` is refused: upstream
   `simple_trainer` has no COLMAP timing input; its AV trainer is a separate path.
 - `post_processing: ppisp`: batch size 1; controller and distillation default true,
   activation step defaults 25000. That step is **not** scaled by upstream's schedule.
   Set `ppisp_controller_activation_num_steps` below the actual steps on a short run,
-  or disable `ppisp_use_controller`. `bilateral_grid: true` remains an alias for
+  or disable `ppisp_use_controller`, as B does to avoid freezing Gaussians for an
+  unshipped controller. `bilateral_grid: true` remains an alias for
   `post_processing: bilateral_grid`, whose upstream argv changed. Color-corrected
   evaluation is now a separate upstream option, so absent metrics remain absent.
 - `init: sfm+dense`: Apache MapAnything uses only staged train frames, four-view chunks
   with one overlap, known intrinsics/poses, confidence masks, robust Sim3 anchors and
   voxel deduplication. Accepted chunks need at least eight SfM correspondences, 60%
-  consensus within 5% of robust scene radius, and scale between 0.5 and 2. These are
-  explicit, uncalibrated acceptance rules. Sparse points win duplicates; additions fit
-  within cap/4 including sparse points. Any dense failure leaves SfM intact and reports
-  a warning. No external init path or split override is admitted by the bench.
+  consensus within 5% of robust scene radius, and a finite positive fitted scale.
+  MapAnything's nonmetric inputs predict their own scale; each chunk is aligned to
+  SfM's arbitrary units, with no near-one scale gate. The consensus rules remain
+  uncalibrated. A failed chunk is skipped and recorded; successful chunks survive.
+  Sparse points win duplicates; additions fit within cap/4 including sparse points.
+  Production can warn and fall back to SfM, but bench dense runs **fail on zero added
+  points**, before priors/training. `prepass.json` retains per-chunk fit/skip diagnostics
+  even on failure. No external init path or split override is admitted by the bench.
 - `priors: {depth_weight, normal_weight, gradient_weight, start_step, model}`: weights
   default zero, start step 1000, sole model `moge-2-vitl-normal`. MoGe runs once per
   training frame; cache identity includes frame SHA256, pinned model revision, K and
-  image dimensions, undistorted pixel/mask hashes and preprocessing version. `prior_cache` is an uploaded stage artifact and checkpoint data,
+  image dimensions, undistorted pixel/mask hashes, preprocessing and cache format
+  versions. Format `npy-mmap-v2` stores uncompressed float32 depth/normals and boolean
+  masks as separate `.npy` files, committed by a JSON marker. Training memory-maps
+  these arrays instead of repeatedly decompressing NPZ; old NPZ predictions are
+  recomputed once under new keys. `prior_cache` is an uploaded stage artifact and checkpoint data,
   reused on retry/from-stage reruns. A caller can supply it as an optional input for a
   new workdir. Bench caches live on its volume and never enter the frozen manifest.
   Test and internal validation images are never inferred. Requested prior inference
-  failure fails the run; it cannot masquerade as a regularized measurement.
-- Depth uses three robust scale/shift fits per image and normalized absolute residuals;
+  failure fails the run; it cannot masquerade as a regularized measurement. Priors
+  cannot combine with upstream `depth_loss`, which replaces the rendered depth image
+  with sparse samples; this combination is refused before invoking the prepass.
+- Depth uses three robust scale/shift fits per image and normalized absolute residuals.
+  Each fit uses centered weighted reductions over the same pixels, avoiding tall
+  GPU least-squares factorizations and host readback for fit validity. NumPy checks
+  the algebra against least squares; GPU timing remains unmeasured;
   optional adjacent-pixel residual differences penalize depth gradients. Normal loss
   compares view-facing normals from expected rendered depth with MoGe's camera-frame
   normals. This works with MCMC and UT without imposing a planar-splat representation.

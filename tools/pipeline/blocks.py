@@ -1285,6 +1285,8 @@ def _block_cap(
         budget_max=budget.budget_max,
         gpu_memory_gb=budget.gpu_memory_gb,
         images_per_step=settings.batch_size,
+        with_ut=bool(settings.switches.get("with_ut")),
+        with_eval3d=bool(settings.switches.get("with_eval3d")),
     )
     return (None if block_budget is None else block_budget.cap), block_budget
 

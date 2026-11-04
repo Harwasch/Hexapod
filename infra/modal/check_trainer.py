@@ -34,8 +34,8 @@ from typing import Any
 def main() -> int:
     trainer = Path(sys.argv[1]).resolve()
     pipeline = Path(sys.argv[2]).resolve()
-    sys.path.insert(0, str(trainer.parent))
     sys.path.insert(0, str(pipeline))
+    sys.path.insert(0, str(trainer.parent))
 
     import convergence  # the stopping rule's schedule; plain Python, 3.10-compatible
     import training  # the pipeline's own argv builder; plain Python, 3.10-compatible

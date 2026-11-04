@@ -22,6 +22,7 @@ from .scene import prepare_pool, read_json, verify, write_json
 
 ARTIFACTS = (
     "train_metrics.json",
+    "prepass.json",
     "holdout.json",
     "converge.json",
     "trainer_timing.json",
@@ -35,11 +36,12 @@ ARTIFACTS = (
 def publish_cache(source: Path, target: Path) -> None:
     """Publish immutable cache entries atomically when several variants share a volume."""
     target.mkdir(parents=True, exist_ok=True)
-    for path in source.iterdir():
+    # Arrays precede entry markers/manifests, including when a copy is interrupted.
+    for path in sorted(source.iterdir(), key=lambda p: (p.suffix == ".json", p.name)):
         if not path.is_file() or path.name.endswith(".tmp.npz"):
             continue
         # Only committed predictions and the small metadata files are cache entries.
-        if path.suffix not in (".npz", ".json"):
+        if path.suffix not in (".npy", ".npz", ".json"):
             continue
         with tempfile.NamedTemporaryFile(dir=target, prefix=".publish-", delete=False) as handle:
             temporary = Path(handle.name)
@@ -340,6 +342,7 @@ def run_training(
             write_json(destination / "gpu_samples.json", {"samples": sampler.samples})
             sources = [
                 work.out_dir("train"),
+                work.work_dir("train"),
                 work.out_dir("train") / "holdout",
                 work.work_dir("train") / "gsplat",
             ]

@@ -1876,11 +1876,15 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         strategy=str(ctx.param("strategy", "default")),
         batch_size=ctx.param("batch_size", 1),
         antialiased=ctx.param("antialiased", False),
+        packed=ctx.param("packed"),
         **render_flags,
     )
     # Refused before any GPU time is spent on a run that could not ship it.
     sh_degree = harmonics.check_degree(ctx.param("ship_sh_degree"), name="ship_sh_degree")
-    packed = _optional_bool(ctx.param("packed", True), "packed")
+    packed = _optional_bool(
+        ctx.param("packed", not (render_flags.get("with_ut") or render_flags.get("with_eval3d"))),
+        "packed",
+    )
     sparse_grad = _optional_bool(ctx.param("sparse_grad"), "sparse_grad")
     visible_adam = _optional_bool(ctx.param("visible_adam"), "visible_adam")
     if sparse_grad and not packed:
@@ -1969,6 +1973,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         budget_max=_optional_int(ctx.param("budget_max")),
         gpu_memory_gb=gaussian_budget.gpu_memory_for(ctx.gpu_tier, ctx.param("gpu_memory_gb")),
         images_per_step=batch_size,
+        with_ut=bool(render_flags.get("with_ut")),
+        with_eval3d=bool(render_flags.get("with_eval3d")),
     )
     preamble.add("budget", time.monotonic() - budgeting)
     cap_max = None if budget is None else budget.cap

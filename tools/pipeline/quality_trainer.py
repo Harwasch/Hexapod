@@ -13,13 +13,14 @@ import importlib
 import json
 import re
 import sys
+import types
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 import block_trainer
+import prior_cache
+import prior_maths
 import quality_stack
 
 ANCHORS = (
@@ -35,9 +36,12 @@ def patch_source(source: str, settings: Path, trainer: Path) -> str:
         if source.count(anchor) != 1:
             raise ValueError(f"quality trainer seam moved: expected one {anchor!r}")
     bootstrap = (
-        f"import sys\nsys.path.insert(0, {str(trainer.parent)!r})\n"
+        "import sys\n"
         f"sys.path.insert(0, {str(Path(__file__).parent)!r})\n"
         "import quality_trainer as _hex_quality\n"
+        # Helper imports (block/converge_trainer) also prepend the pipeline. Set
+        # examples first *after* those imports, so datasets gets upstream's exif.
+        f"sys.path.insert(0, {str(trainer.parent)!r})\n"
         f"_hex_settings = _hex_quality.read_settings({str(settings)!r})\n"
     )
     futures = list(re.finditer(r"(?m)^from __future__ import [^\n]+\n", source))
@@ -60,13 +64,51 @@ def read_settings(path: str) -> dict[str, Any]:
     return dict(json.loads(Path(path).read_text()))
 
 
+def assert_import_origins(trainer: Path) -> None:
+    """Audit every top-level collision, including future additions to either tree."""
+
+    def modules(root: Path) -> set[str]:
+        return {
+            p.stem if p.suffix == ".py" else p.name
+            for p in root.iterdir()
+            if p.suffix == ".py" or (p.is_dir() and not p.name.startswith("."))
+        }
+
+    examples = trainer.parent.resolve()
+    for name in modules(examples) & modules(Path(__file__).parent):
+        if name.startswith("_"):
+            continue
+        module = importlib.import_module(name)
+        origin = getattr(module, "__file__", None)
+        if origin is None or not Path(origin).resolve().is_relative_to(examples):
+            raise ImportError(f"upstream module {name!r} shadowed by {origin}")
+
+
+def import_patched_trainer(trainer: Path, settings: Path) -> types.ModuleType:
+    """Execute the real patched module without entering __main__ or creating a Runner.
+
+    The image has all dependencies but no GPU. Import errors and module collisions
+    must fail its build before a paid prepass can start.
+    """
+    source = patch_source(trainer.read_text(), settings, trainer)
+    module = types.ModuleType("_hexapod_quality_import_check")
+    module.__file__ = str(trainer)
+    sys.modules[module.__name__] = module
+    exec(compile(source, str(trainer), "exec", dont_inherit=True), module.__dict__)  # noqa: S102
+    assert_import_origins(trainer)
+    return module
+
+
 def prepare(runner: Any, namespace: dict[str, Any], settings: dict[str, Any]) -> None:
     runner.hex_settings = settings
     runner.hex_manifest = {}
     if settings["priors"]:
         manifest = json.loads((Path(settings["cache"]) / "manifest.json").read_text())
-        if manifest["revision"] != quality_stack.MOGE_REVISION:
-            raise ValueError("prior cache revision changed")
+        if (
+            manifest["revision"] != quality_stack.MOGE_REVISION
+            or manifest.get("format") != prior_maths.CACHE_FORMAT
+        ):
+            raise ValueError("prior cache revision or format changed")
         runner.hex_manifest = manifest["frames"]
     if settings["far_field"]:
         ring = block_trainer.load_ring(Path(settings["ring"]))
@@ -105,34 +147,27 @@ def prepare(runner: Any, namespace: dict[str, Any], settings: dict[str, Any]) ->
 
 @lru_cache(maxsize=8)
 def prior(path: str) -> dict[str, Any]:
-    with np.load(path, allow_pickle=False) as data:
-        return {name: data[name] for name in ("depth", "normal", "mask")}
+    return prior_cache.load(Path(path))
 
 
 def aligned_depth(prediction: Any, target: Any) -> tuple[Any, Any]:
-    """Differentiable residual with a detached robust alignment (three IRLS solves)."""
+    """Detached three-pass IRLS alignment; differentiable residual, no tall GPU solve."""
     torch = importlib.import_module("torch")
     with torch.no_grad():
         x, y = prediction.detach().float(), target.detach().float()
-        if x.max() - x.min() <= torch.finfo(x.dtype).eps:
-            return prediction * 0, prediction.new_tensor(0.0)
-        design = torch.stack([x, torch.ones_like(x)], 1)
+        epsilon = torch.finfo(x.dtype).eps
         weights = torch.ones_like(x)
-        fit = x.new_tensor([1.0, 0.0])
         for _ in range(3):
-            matrix = design * weights.sqrt()[:, None]
-            fit = torch.linalg.lstsq(matrix, y * weights.sqrt()).solution
-            residual = (design @ fit - y).abs()
-            scale = residual.median().clamp_min(torch.finfo(x.dtype).eps)
-            weights = (1.5 * scale / residual.clamp_min(torch.finfo(x.dtype).eps)).clamp_max(1)
-        # Constant rendered depths cannot establish a scale. No negative-scale inversion.
-        if (
-            not torch.isfinite(fit).all()
-            or fit[0] <= 0
-            or x.max() - x.min() <= torch.finfo(x.dtype).eps
-        ):
-            return prediction * 0, prediction.new_tensor(0.0)
-    return prediction * fit[0] + fit[1] - target, fit[0]
+            slope, offset, variance = prior_maths.weighted_affine(x, y, weights, epsilon)
+            residual = (x * slope + offset - y).abs()
+            scale = residual.median().clamp_min(epsilon)
+            weights = (1.5 * scale / residual.clamp_min(epsilon)).clamp_max(1)
+        valid = torch.isfinite(slope) & torch.isfinite(offset) & (slope > 0) & (variance > epsilon)
+        # Tensor selection avoids host synchronization for fit validity. Constant
+        # depths still contribute zero residual/gradient, as before.
+        slope = torch.where(valid, slope, torch.zeros_like(slope))
+        offset = torch.where(valid, offset, torch.zeros_like(offset))
+    return torch.where(valid, prediction * slope + offset - target, prediction * 0), slope
 
 
 def normals(depth: Any, intrinsic: Any) -> Any:
@@ -296,10 +331,14 @@ def main() -> None:
     parser.add_argument("--cpu-maths", action="store_true")
     parser.add_argument("--trainer", type=Path, required=True)
     args = parser.parse_args()
-    patched = patch_source(args.trainer.read_text(), Path("settings.json"), args.trainer)
-    compile(patched, str(args.trainer), "exec")
     if not args.self_check:
         raise ValueError("this command only checks the upstream seam")
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as directory:
+        settings = Path(directory) / "settings.json"
+        settings.write_text("{}")
+        import_patched_trainer(args.trainer, settings)
     if args.cpu_maths:
         cpu_self_check()
     sys.stdout.write("quality trainer seam: OK\n")

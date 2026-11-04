@@ -72,9 +72,11 @@ GSPLAT_DIR = "/opt/gsplat"
 GSPLAT_TRAINER = f"{GSPLAT_DIR}/examples/simple_trainer.py"
 #: CUDA extensions pinned by the upstream examples, PPISP pinned to its v1.2.1 commit.
 FUSED_SSIM = "git+https://github.com/rahul-goel/fused-ssim@a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38"
-#: T4, A100, A10, L4/L40S, H100. fused-ssim's setup.py adds sm_75/80/89 of its own when
+#: A100, A10, L4/L40S. fused-ssim's setup.py adds sm_75/80/89 of its own when
 #: it sees no GPU; this list is what torch's extension builder adds on top.
-CUDA_ARCHS = "7.5;8.0;8.6;8.9;9.0"
+#: sm_80 runs on A100 and A10 by same-major compatibility; sm_89 is native on L4 and L40S. Five
+#: architectures did not finish compiling in 60 minutes of image build.
+CUDA_ARCHS = "8.0;8.9"
 FUSED_BILAGRID = (
     "git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16"
 )
@@ -166,7 +168,7 @@ image = (
         env={
             "TORCH_CUDA_ARCH_LIST": CUDA_ARCHS,
             "CUDA_HOME": "/usr/local/cuda",
-            "MAX_JOBS": "4",
+            "MAX_JOBS": "8",
             "BUILD_EXPERIMENTAL": "0",
         },
     )

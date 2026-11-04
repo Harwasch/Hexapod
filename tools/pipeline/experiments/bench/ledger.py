@@ -22,7 +22,14 @@ from providers import provider
 
 # Full: Spool's production train stage took 2,197 s on an L4 (job ec644db5); 55 min leaves
 # room for evaluation while two full seeds still reserve under the default $2 cap.
-TIMEOUTS = {"screen": 1800, "full": 3300, "freeze": 600, "matched": 600}
+# A capture far bigger than Spool outgrows 55 min (Beach did); HEXAPOD_BENCH_FULL_TIMEOUT raises it,
+# and the reservation below follows it, so the cap still holds.
+TIMEOUTS = {
+    "screen": 1800,
+    "full": int(os.environ.get("HEXAPOD_BENCH_FULL_TIMEOUT", "3300")),
+    "freeze": 600,
+    "matched": 600,
+}
 # Startup/teardown allowance in the modelled reservation, not a measured invoice.
 STARTUP_SECONDS = 60
 OVERHEAD_SECONDS = STARTUP_SECONDS + 60

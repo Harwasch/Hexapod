@@ -68,13 +68,13 @@ def test_scale_shift_alignment_and_view_facing_normals() -> None:
         prior_maths.scale_shift(np.ones(5), np.ones(5), np.ones(5, dtype=bool))
 
 
-def test_dense_alignment_rejects_bad_scale_and_deduplicates() -> None:
+def test_dense_alignment_rejects_inconsistent_geometry_and_deduplicates() -> None:
     points = np.random.default_rng(42).normal(size=(20, 3))
     mapped, report = prior_maths.aligned_chunk(points, points, points * 1.1 + 2, 5)
     np.testing.assert_allclose(mapped, points * 1.1 + 2, atol=1e-12)
     assert report["inliers"] == 20
-    with pytest.raises(ValueError, match="scale"):
-        prior_maths.aligned_chunk(points, points, points * 10, 5)
+    with pytest.raises(ValueError, match="consensus"):
+        prior_maths.aligned_chunk(points, points, points * [10, 1, 1], 5)
     assert prior_maths.voxel_select(
         np.array([[0.0, 0, 0], [0.01, 0, 0], [1, 0, 0]]), 0.1, 2
     ).tolist() == [0, 2]
@@ -263,6 +263,7 @@ def test_prior_cache_hits_never_open_validation_frames(
     import sys
     from types import SimpleNamespace
 
+    import prior_cache
     import quality_prepass
     import sfm
 
@@ -292,11 +293,14 @@ def test_prior_cache_hits_never_open_validation_frames(
         key = prior_maths.cache_key(
             path, quality_stack.MOGE_REVISION, prior_maths.cache_geometry(image, k)
         )
-        np.savez(
-            cache / f"{key}.npz",
-            depth=np.ones((4, 5)),
-            normal=np.zeros((4, 5, 3)),
-            mask=np.ones((4, 5), dtype=bool),
+        prior_cache.write(
+            cache,
+            key,
+            {
+                "depth": np.ones((4, 5)),
+                "normal": np.zeros((4, 5, 3)),
+                "mask": np.ones((4, 5), dtype=bool),
+            },
         )
 
     class Dataset:

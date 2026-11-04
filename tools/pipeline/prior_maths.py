@@ -13,13 +13,14 @@ import numpy.typing as npt
 import sim3
 
 F64 = npt.NDArray[np.float64]
+CACHE_FORMAT = "npy-mmap-v2"
 
 
 def cache_key(frame: Path, model_revision: str, geometry: Any) -> str:
     digest = hashlib.sha256(frame.read_bytes()).hexdigest()
     # Intrinsics/preprocessing affect the prediction too; frame bytes alone are insufficient.
     return hashlib.sha256(
-        json.dumps([digest, model_revision, geometry], sort_keys=True).encode()
+        json.dumps([CACHE_FORMAT, digest, model_revision, geometry], sort_keys=True).encode()
     ).hexdigest()
 
 
@@ -35,16 +36,29 @@ def scale_shift(
     weights = np.ones_like(x)
     fit = np.array([1.0, 0.0])
     for _ in range(3):
-        design = np.stack([x, np.ones_like(x)], 1)
-        fit = np.linalg.lstsq(design * np.sqrt(weights[:, None]), y * np.sqrt(weights), rcond=None)[
-            0
-        ]
-        residual = np.abs(design @ fit - y)
+        slope, offset, _ = weighted_affine(x, y, weights, np.finfo(float).eps)
+        fit = np.array([slope, offset])
+        residual = np.abs(x * slope + offset - y)
         scale = max(float(np.median(residual)), np.finfo(float).eps)
         weights = np.minimum(1, 1.5 * scale / np.maximum(residual, np.finfo(float).eps))
     if fit[0] <= 0:
         raise ValueError("depth alignment has nonpositive scale")
     return float(fit[0]), float(fit[1])
+
+
+def weighted_affine(x: Any, y: Any, weights: Any, epsilon: float) -> tuple[Any, Any, Any]:
+    """Weighted affine fit via centred reductions, shared by NumPy and torch.
+
+    Centring avoids subtracting large raw second moments. This is the two-parameter
+    least-squares solution without an Nx2 matrix, QR factorization or CPU readback.
+    The caller rejects zero variance/nonpositive slopes and owns robust reweighting.
+    """
+    mass = weights.sum().clip(min=epsilon)
+    mean_x, mean_y = (weights * x).sum() / mass, (weights * y).sum() / mass
+    dx = x - mean_x
+    variance = (weights * dx * dx).sum()
+    slope = (weights * dx * (y - mean_y)).sum() / variance.clip(min=epsilon)
+    return slope, mean_y - slope * mean_x, variance
 
 
 def depth_normals(depth: npt.ArrayLike, intrinsic: npt.ArrayLike) -> F64:
@@ -67,11 +81,13 @@ def aniso_penalty(log_scales: npt.ArrayLike, ratio: float = 10) -> float:
 def aligned_chunk(
     predicted: F64, anchors: F64, sparse: F64, radius: float
 ) -> tuple[F64, dict[str, Any]]:
-    """Robust correspondence fit, then an independent scale/residual refusal in SfM units.
+    """Fit each chunk's free scale/rotation/translation to SfM correspondences.
 
     Anchor pairs are model point-map samples at projected sparse points, never held-out
     images. A 5%-of-scene-radius residual is an explicit uncalibrated acceptance rule,
-    not a numerical tolerance. Pose-conditioned chunks should already have near-unit scale.
+    not a numerical tolerance. Nonmetric MapAnything inputs deliberately omit pose-scale
+    features and predict their own scale. COLMAP units need not be metres, so acceptance
+    depends on positive finite scale and geometric consensus, never proximity to scale 1.
     """
     if len(anchors) < 8 or len(anchors) != len(sparse):
         raise ValueError("dense chunk needs at least eight SfM correspondences")
@@ -81,7 +97,11 @@ def aligned_chunk(
         max_error_m=0.05 * radius,
     )
     transform = fit.similarity
-    if not 0.5 <= transform.scale <= 2 or len(fit.inliers) < 0.6 * len(anchors):
+    if (
+        not np.isfinite(transform.scale)
+        or transform.scale <= 0
+        or len(fit.inliers) < 0.6 * len(anchors)
+    ):
         raise ValueError("dense chunk failed scale/SfM consensus check")
     mapped = transform.scale * (predicted @ transform.rotation.T) + transform.translation
     return mapped, {"scale": transform.scale, "inliers": len(fit.inliers), "anchors": len(anchors)}
