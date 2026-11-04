@@ -175,7 +175,11 @@ def test_the_watch_thread_runs_beside_the_tool_and_cleans_up(tmp_path: Path) -> 
     assert not snapshots.exists()
 
 
-def test_the_mapper_argv_asks_for_snapshots_only_when_told_to() -> None:
+def test_the_mapper_argv_asks_for_snapshots_only_when_told_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # This checks argv, not an installed COLMAP or a running mapper.
+    monkeypatch.setattr(sfm, "colmap_exe", lambda: "/stand-in/colmap")
     plain = sfm.mapper_argv(Path("/db"), Path("/i"), Path("/o"))
     assert "--Mapper.snapshot_path" not in plain
     argv = sfm.mapper_argv(
@@ -358,9 +362,9 @@ def test_the_train_stage_snapshots_intermediate_splats_and_keeps_the_final_one(
     log = workdir.log_path("train").read_text()
     assert "--ply_steps 300 30 75 150 225" in log
     found = live.latest(log)["splat"]
-    # The stand-in is faster than the watcher's poll, so the stage packs the newest
-    # intermediate when the trainer exits: the 75% one, never the final.
-    assert found["step"] in {30, 75, 150, 225}
+    # Even a fast producer keeps every snapshot for timeline scrubbing.
+    assert found["step"] == 225
+    assert len(list((workdir.checkpoint_dir("train") / "live").glob("*.spz"))) == 4
     assert found["total"] == 300 and found["of"] == 64 and found["up"] == [0.0, -1.0, 0.0]
     assert found["key"].startswith("runs/run/train/checkpoint/live/splat_")
     snapshot = workdir.checkpoint_dir("train") / "live" / found["key"].rsplit("/", 1)[1]
@@ -380,7 +384,7 @@ def test_live_false_trains_exactly_as_before(tmp_path: Path) -> None:
 
     log = workdir.log_path("train").read_text()
     assert "--ply_steps 300 --save_steps" in log
-    assert live.latest(log) == {}
+    assert set(live.latest(log)) == {"plan"}
     assert not any(workdir.checkpoint_dir("train").rglob("*.spz"))
 
 
@@ -412,3 +416,15 @@ def test_on_a_remote_box_the_snapshot_is_uploaded_under_the_key_its_line_names(
     found = live.latest(workdir.log_path("train").read_text())["splat"]
     assert bucket.exists(found["key"])
     assert (bucket.root / found["key"]).read_bytes()[:2] == b"\x1f\x8b"  # gzip: an SPZ
+
+
+def test_records_only_parses_live_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import Mock
+
+    parser = Mock(wraps=live.parse_line)
+    monkeypatch.setattr(live, "parse_line", parser)
+    line = 'live-train: {"v":1,"k":"s","step":200}'
+    assert live.records("ordinary output\n" * 1000 + line + "\nmore output") == [
+        ("train", {"v": 1, "k": "s", "step": 200})
+    ]
+    assert parser.call_count == 1
