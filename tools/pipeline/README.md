@@ -1401,32 +1401,67 @@ status or metrics. Rehearsal records it as skipped.
 
 `results` prints the bake-off table: scene, variant, untouched-test PSNR/SSIM/LPIPS,
 splats, GPU minutes (billed container wall time including evaluation), dollars, and
-top-down links. `results --flip-rule --baseline baseline-main` adds the PSNR decision
-table: positive gain on at least two of Spool, Truck and Beach, with no loss exceeding
-0.3 dB on the third. Only full L4 measurements with matching seeds and frozen manifest
-and split digests qualify. Missing, failed, duplicate, or mixed-configuration rows
-produce `incomplete`; synthetic and screen rows never justify a default change.
-Use `--runs ID ...` to disambiguate repeats, and `--baseline upgraded --candidate +dense`
-to test an incremental feature rather than the whole stack. Eligibility is evidence
-for the driver's decision, not an automatic recipe edit.
+top-down links. It also prints separate trained-PLY and faded-PLY scores. Select the
+two full runs with `--runs A B`; screen and synthetic rows never justify a default change.
+The older `--flip-rule` helper implements the previous three-capture rule and is not
+the decision rule for this Beach A/B experiment.
 
 ### Quality-stack bake-off
 
-`experiments/variants/quality-stack.yaml` contains six cumulative arms for 18 full
-runs (three captures, seed 42, L4). `baseline-main` belongs to Phase 0 commit
-`c7fb90c8` and gsplat 1.5.3. Paid runs of that label are refused on the new image;
-all six labels remain available in synthetic rehearsal. Truck and Beach are already
-frozen; reuse those manifests. With `--variants`, `--variant NAME` selects one arm.
+`experiments/variants/quality-stack.yaml` now contains only `baseline-main` and `all-on`:
+two Beach runs with the same frozen frames, poses and test split, seed 42, full schedule,
+L4. A (`baseline-main`) runs from Phase 0 commit `c7fb90c8`, gsplat 1.5.3, with
+`--keep-splat`; paid runs of that label are refused on the new image. Reuse the existing
+Beach freeze. Both labels remain available in synthetic rehearsal.
 
-The upgraded arm uses UT + 3D response evaluation + pose optimization: the first two
-exercise the new camera/rasterization path, while pose refinement addresses small SfM
-errors in phone captures. PPISP remains a separate candidate, because exposure fitting
-and controller distillation would confound that comparison. These are hypotheses;
-no quality default has changed. Test scores and top-downs use the same plain 3DGS
-renderer as the previous bench, including for UT-trained PLYs. They measure what the
-export can render without learned camera/exposure modules. Internal val scores can
-therefore differ. Antialiasing still has the shipping renderer compensation caveat;
-it is also incompatible with UT/eval3d and is rejected before training.
+B enables 3DGUT (`with_ut` + `with_eval3d`), PPISP, pose optimization, dense init,
+depth/normal priors, anisotropy loss, the sky sphere and far-field cap, and the fade gate.
+**One requested pair is unsupported:** pinned gsplat explicitly rejects antialiased
+rasterization with UT/eval3d. B therefore keeps 3DGUT and explicitly sets
+`antialiased: false`; the CLI refuses an override enabling both before importing Modal.
+PPISP requires `batch_size: 1`. Its controller activation is unscaled upstream: full
+runs retain step 25,000; screens explicitly use 2,500 in their 3,000-step schedule.
+Synthetic rehearsal uses step 1 in its 30/300-step stand-in schedule. These settings
+and weights are hypotheses, not measured improvements. No production defaults change yet.
+
+A has **no quality gate in the bench**. B's headline `test` scores **faded.ply**, after
+support-based opacity fading; `testTrained` scores **trained.ply** before the gate and
+`testFaded` repeats the faded scores. Both use exactly the same untouched test cameras,
+resolution, black background, SH degree and scoring renderer. With `--keep-splat`, both
+B exports remain on the volume. `headlinePly`, `qualityGate` and `testRenderer` identify
+what was scored; the two reports are also saved as `test.json` and `test-trained.json`.
+The old A result's `test` is its trained-PLY score. Training exports already include the
+train stage's crop/SH/far-field processing; "trained" here means before the quality gate,
+not the raw upstream checkpoint. Neither score applies PPISP at inference or optimized
+camera poses: these measure the plain PLY that ships. Compare A against B's trained
+score to assess training, and B's trained against faded score to isolate the gate.
+
+`matched-renders --scene beach --runs A B` loads both kept headline PLYs on **one L4**
+with the new image, the same plain-3DGS loader, classic renderer, black background and
+shipped SH degree. It refuses different frozen manifests/splits or SH degrees and
+missing exports. Full run IDs or unambiguous 8+ hex prefixes are accepted. It produces:
+
+- **Ground:** the lower median altitude test camera, projected along the COLMAP up
+  estimate (camera-plane normal fallback), with filename ties broken lexically.
+  `--frame EXACT_FILENAME` overrides this, but only with another frozen test frame.
+  The dataset supplies the frozen undistorted camera and GT, never optimized poses.
+- **Top-down:** one central-90% camera derived from A's Gaussian centres, reused for B.
+- **Close-up:** the same ground pose, central 25% of image area (half width and height),
+  narrower FOV, rendered afresh at native crop resolution. No prediction or GT upscale.
+  GT is the corresponding exact pixel crop.
+
+Individual `A-*.png`, `B-*.png`, `GT-ground.png`, `GT-closeup.png`, and labelled
+`comparison-{ground,topdown,closeup}.png` panels return to
+`~/.local/share/hexapod-bench/runs/matched-<A8>-<B8>/`, alongside `cameras.json` and
+`result.json`. The volume keeps the same artifacts under the comparison's own run ID.
+Rehearsal exercises cameras, cropping, panels and transport with explicitly labelled
+synthetic images; it makes no GPU-quality claim. The call has a 600-second timeout,
+uses the same reservation/total-cap ledger, and refuses preemption replay.
+
+The driver decides whether B wins using the held-out metrics and matched views before
+turning defaults on. This bundled A/B cannot identify which individual training feature
+caused a gain or loss. The trained-versus-faded measurements can isolate gate impact;
+other attribution requires a later ablation rather than a causal claim from these two runs.
 
 Use one ledger and one tag for the entire bake-off, including freeze, smoke, failures
 and full runs. `--total-cap 30 --tag quality-stack` enforces cumulative accounted spend
@@ -1446,25 +1481,20 @@ quality_bench() {
   bench "$@" --tag quality-stack --total-cap 30 --cap 2 \
     --ledger "$HOME/.local/share/hexapod-bench/quality-stack.jsonl"
 }
-# New image: screen each new arm first. The driver runs this; no production deploy.
-for arm in upgraded +dense +priors+aniso +sky-far-cap all-on; do
-  quality_bench run --scene spool --variants experiments/variants/quality-stack.yaml \
-    --variant "$arm" --schedule screen --tier l4 --seeds 42 --topdown --keep-splat || break
-done
-# After smoke results are checked, add the 15 new full runs to the three old baselines.
-for scene in spool truck beach; do
-  for arm in upgraded +dense +priors+aniso +sky-far-cap all-on; do
-    quality_bench run --scene "$scene" --variants experiments/variants/quality-stack.yaml \
-      --variant "$arm" --schedule full --tier l4 --seeds 42 --topdown --keep-splat || break 2
-  done
-done
-bench results --tag quality-stack --flip-rule
+# New image: Beach B smoke, then full after the driver checks the smoke.
+quality_bench run --scene beach --variants experiments/variants/quality-stack.yaml \
+  --variant all-on --schedule screen --tier l4 --seeds 42 --keep-splat
+quality_bench run --scene beach --variants experiments/variants/quality-stack.yaml \
+  --variant all-on --schedule full --tier l4 --seeds 42 --keep-splat
+# A and B are the FULL run IDs, not the smoke IDs; A is already running on c7fb90c8.
+quality_bench matched-renders --scene beach --runs "$A" "$B"
+bench results --runs "$A" "$B"
 bench ledger --ledger "$HOME/.local/share/hexapod-bench/quality-stack.jsonl"
 ```
 
-Add `--dry-run` to any freeze/run command for the offline reservation plan. Freeze
-expects Truck's 251 registered frames (31 test, 220 pool); Beach's counts come from
-its frozen model. No GPU quality result or top-down raster has been verified locally.
+Add `--dry-run` to any freeze/run/matched-renders command for the offline reservation
+plan. Beach counts come from its frozen model. No GPU quality result or matched raster
+has been verified locally.
 
 ### Optional train settings and stable metrics
 
@@ -1539,7 +1569,7 @@ The new image remains unverified on GPU. Build-time checks parse the real upstre
 check the source insertion seam, exercise CPU depth/normal gradients, and round-trip a
 plain SH3 PLY. Stand-in rehearsals exercise dataset isolation, dispatch, artifacts,
 background export, fade and reporting; they do not validate CUDA kernels or model
-quality. Use the existing flip-rule helper only on complete full L4 measurements.
+quality. The Beach A/B decision awaits complete full L4 measurements and matched views.
 
 Step 2 measurement commands, from `tools/pipeline`, after the Spool freeze exists. These
 use separate ledgers outside the checkout so earlier bench spend does not consume their

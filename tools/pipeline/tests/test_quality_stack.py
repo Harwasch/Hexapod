@@ -195,7 +195,7 @@ def test_every_variant_rehearses_without_modal(
             [
                 "run",
                 "--scene",
-                "truck",
+                "beach",
                 "--rehearse",
                 "--variants",
                 str(PIPELINE / "experiments/variants/quality-stack.yaml"),
@@ -209,7 +209,7 @@ def test_every_variant_rehearses_without_modal(
         == 0
     )
     results = list((tmp_path / "rehearsal/runs").glob("*/result.json"))
-    assert len(results) == 6
+    assert len(results) == 2
     for path in results:
         result = read_json(path)
         assert result["status"] == "complete", result["error"]
@@ -220,6 +220,13 @@ def test_every_variant_rehearses_without_modal(
         if result["variant"]["name"] == "all-on":
             quality_report = read_json(path.parent / "quality.json")
             assert quality_report
+            assert result["qualityGate"] == "fade"
+            assert result["headlinePly"] == "faded.ply"
+            assert result["testFaded"] == result["testTrained"]  # synthetic, not GPU quality
+            assert (path.parent / "faded.ply").is_file()
+            assert (path.parent / "trained.ply").is_file()
+        else:
+            assert result["qualityGate"] is None and result["testFaded"] is None
 
 
 def test_dense_param_cannot_redirect_bench_inputs() -> None:

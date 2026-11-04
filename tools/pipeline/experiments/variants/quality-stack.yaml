@@ -1,21 +1,20 @@
-# Baseline-main was measured from c7fb90c8 with gsplat 1.5.3. Do not rerun that
-# label on the new image. Rehearsals are synthetic and may exercise all six labels.
-# All paid arms, screens, freezes and retries share --tag quality-stack --total-cap 30.
-# Candidate weights are unmeasured. No production defaults flip in this change.
+# Beach-only A/B, frozen frames/poses, full schedule, seed 42, L4.
+# A was measured from c7fb90c8 with gsplat 1.5.3; never relabel the new image as A.
+# Share --tag quality-stack --total-cap 30 and the existing ledger for all paid work.
+# Candidate weights are unmeasured. Production defaults wait for the A/B decision.
 baseline-main: {}
-upgraded:
-  train: &upgraded
+all-on:
+  train:
     with_ut: true
     with_eval3d: true
+    # The pinned renderer rejects antialiased + 3DGUT. B keeps 3DGUT explicitly;
+    # antialiased is the one unsupported member of the requested all-on combination.
+    antialiased: false
     pose_opt: true
+    post_processing: ppisp
+    batch_size: 1
     blocks: 1
-+dense:
-  train: &dense
-    <<: *upgraded
     init: sfm+dense
-+priors+aniso:
-  train: &priors
-    <<: *dense
     priors:
       depth_weight: 0.05
       normal_weight: 0.02
@@ -23,14 +22,9 @@ upgraded:
     aniso_cap:
       ratio: 10
       weight: 0.001
-+sky-far-cap:
-  train: &far
-    <<: *priors
     far_field: sphere
     far_field_share: 0.1
     far_field_count: 256
-all-on:
-  train: *far
   quality:
     bar: fade
     context_fade: 0.5

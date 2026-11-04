@@ -15,18 +15,26 @@ from experiments.bench.scene import write_json
 
 @pytest.mark.parametrize("fail_training", [False, True])
 @pytest.mark.parametrize("fail_topdown", [False, True])
+@pytest.mark.parametrize("fade", [False, True])
 def test_training_sampler_scope_and_render_argv(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_training: bool, fail_topdown: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_training: bool,
+    fail_topdown: bool,
+    fade: bool,
 ) -> None:
     import executor
 
     scene, run = tmp_path / "scene", tmp_path / "run"
     synthetic_scene(scene, "spool", "test")
     params = stand_in_params()
+    if fade:
+        params["_bench_quality"] = {"bar": "fade", "context_fade": 0.5}
     monkeypatch.setenv("GSPLAT_TRAINER", params["trainer"])
     monkeypatch.setenv("GSPLAT_PYTHON", sys.executable)
     active = False
     evaluated = False
+    evaluation_commands = []
 
     class Sampler:
         samples = ["60, 1024", "80, 2048"]
@@ -58,10 +66,14 @@ def test_training_sampler_scope_and_render_argv(
         if len(argv) > 1 and Path(argv[1]).name == "evaluate.py":
             assert not active
             assert argv[argv.index("--renders") + 1] == "3"
-            assert argv[argv.index("--render-dir") + 1] == str(run / "renders")
+            before_gate = Path(argv[argv.index("--out") + 1]).name == "test-trained.json"
+            assert argv[argv.index("--render-dir") + 1] == str(
+                run / ("renders-trained" if before_gate else "renders")
+            )
             assert Path(argv[argv.index("--raw-ply") + 1]).is_file()
             assert (run / "full_sh.ply").is_file()
-            write_json(Path(argv[argv.index("--out") + 1]), {"psnr": 20})
+            write_json(Path(argv[argv.index("--out") + 1]), {"psnr": 21 if before_gate else 20})
+            evaluation_commands.append(argv)
             evaluated = True
             return subprocess.CompletedProcess(argv, 0)
         if len(argv) > 1 and Path(argv[1]).name == "topdown.py":
@@ -98,6 +110,20 @@ def test_training_sampler_scope_and_render_argv(
     assert result["gpuUtilMean"] == 70 and result["gpuMemMaxMiB"] == 2048
     assert result["artifacts"]["gpu_samples.json"]["samples"] == Sampler.samples
     if not fail_training:
+        assert len(evaluation_commands) == (2 if fade else 1)
+        assert result["test"]["psnr"] == 20
+        assert result["testTrained"]["psnr"] == (21 if fade else 20)
+        if fade:
+            assert result["testFaded"]["psnr"] == 20
+            assert result["headlinePly"] == "faded.ply"
+            assert (run / "trained.ply").is_file() and (run / "faded.ply").is_file()
+            neutral = []
+            for argv in evaluation_commands:
+                copied = argv.copy()
+                for flag in ("--ply", "--out", "--render-dir"):
+                    copied[copied.index(flag) + 1] = "different-output"
+                neutral.append(copied)
+            assert neutral[0] == neutral[1]  # same data, split, degree and renderer
         assert result["topdown"]["status"] == ("failed" if fail_topdown else "complete")
         if not fail_topdown:
             assert result["topdown"]["pngBase64"]

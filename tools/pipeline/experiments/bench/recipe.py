@@ -9,6 +9,7 @@ from typing import Any
 import yaml
 
 import quality_stack
+import training
 from recipe import Recipe
 
 PIPELINE = Path(__file__).resolve().parents[2]
@@ -42,6 +43,14 @@ def train_params(schedule: str, overrides: dict[str, Any]) -> dict[str, Any]:
     if set(overrides) - {"train", "quality"} or not isinstance(overrides.get("train", {}), dict):
         raise ValueError("overrides must be {train: {parameter: value}}")
     params.update(overrides.get("train", {}))
+    if (
+        schedule == "screen"
+        and params.get("post_processing") == "ppisp"
+        and "ppisp_controller_activation_num_steps" not in overrides.get("train", {})
+    ):
+        # Upstream leaves this controller milestone unscaled. Exercise it during
+        # the 3k screen too, keeping the full arm's 25k/30k fraction explicit.
+        params["ppisp_controller_activation_num_steps"] = 2500
     # Raw argv could redirect the dataset, change the split or load an external ckpt.
     # New supported knobs should be added as stage params, with an explicit audit.
     forbidden = {"trainer", "python", "extra_args", "holdout_script", "init_from", "_bench_quality"}
@@ -56,6 +65,22 @@ def train_params(schedule: str, overrides: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("bench quality overrides only accept bar/context_fade/min_gaussians")
         params["_bench_quality"] = quality
     return params
+
+
+def validate_renderer(params: dict[str, Any]) -> None:
+    """Reject unsupported flag pairs before importing Modal or reserving paid work."""
+    training.gsplat_argv(
+        "python",
+        Path("trainer"),
+        Path("dataset"),
+        Path("result"),
+        strategy=params.get("strategy", "default"),
+        batch_size=params.get("batch_size", 1),
+        antialiased=params.get("antialiased", False),
+        max_steps=params.get("iterations", 30000),
+        steps_scaler=params.get("schedule_scale", 1.0),
+        **{key: params[key] for key in quality_stack.RENDER_KEYS if key in params},
+    )
 
 
 def make_recipe(params: dict[str, Any], tier: str) -> Recipe:

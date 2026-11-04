@@ -26,6 +26,8 @@ ARTIFACTS = (
     "converge.json",
     "trainer_timing.json",
     "gpu_samples.json",
+    "test-trained.json",
+    "quality.json",
     "test.json",
 )
 
@@ -210,6 +212,10 @@ def run_training(
             prepare_pool(scene, work.inputs_dir, split)
             if plan.get("rehearsal"):
                 params.update(rehearsal.stand_in_params())
+                if params.get("post_processing") == "ppisp":
+                    # The synthetic schedule is only 30/300 steps. This exercises
+                    # argv validation; it is not a measured controller schedule.
+                    params["ppisp_controller_activation_num_steps"] = 1
                 gpu_name = "CPU rehearsal (no GPU)"
             else:
                 original = training.trainer_script(None)
@@ -237,13 +243,18 @@ def run_training(
                 cached = work.checkpoint_dir("train") / "prior_cache"
                 if cached.exists():
                     publish_cache(cached, prior_cache)
-            shipped = work.out_dir("train") / "trained.ply"
+            trained = work.out_dir("train") / "trained.ply"
+            shipped = trained
+            shutil.copyfile(trained, destination / "trained.ply")
             if params.get("_bench_quality") is not None:
                 shipped = work.out_dir("quality") / "gated.ply"
                 shutil.copyfile(
                     work.out_dir("quality") / "quality.json", destination / "quality.json"
                 )
-            shutil.copyfile(shipped, destination / "trained.ply")
+                gate = read_json(destination / "quality.json")["bar"]
+                shutil.copyfile(
+                    shipped, destination / ("faded.ply" if gate == "fade" else "gated.ply")
+                )
             raw = training.latest_ply(work.work_dir("train") / "gsplat")
             if (
                 plan.get("keepSplat")
@@ -254,6 +265,7 @@ def run_training(
             if plan.get("rehearsal"):
                 test = rehearsal.evaluation(split["test"])
                 write_json(destination / "test.json", test)
+                write_json(destination / "test-trained.json", test)
                 if plan.get("topdown"):
                     topdown = {"status": "skipped", "warning": "rehearsal has no GPU renders"}
             else:
@@ -297,6 +309,22 @@ def run_training(
                 if remaining <= 0:
                     raise TimeoutError("no evaluation time left in function budget")
                 subprocess.run(command, check=True, timeout=remaining)  # noqa: S603
+                if shipped != trained:
+                    # Same untouched cameras, pixels and renderer; only gate output
+                    # changes. Keep the training export's score beside the headline.
+                    before = command.copy()
+                    before[before.index("--ply") + 1] = str(trained)
+                    before[before.index("--out") + 1] = str(destination / "test-trained.json")
+                    if "--render-dir" in before:
+                        before[before.index("--render-dir") + 1] = str(
+                            destination / "renders-trained"
+                        )
+                    remaining = plan["timeoutSeconds"] - (time.time() - entered) - 15
+                    if remaining <= 0:
+                        raise TimeoutError("no pre-gate evaluation time left in function budget")
+                    subprocess.run(before, check=True, timeout=remaining)  # noqa: S603
+                else:
+                    shutil.copyfile(destination / "test.json", destination / "test-trained.json")
                 if plan.get("topdown"):
                     topdown = topdown_preview(
                         scene,
@@ -339,5 +367,6 @@ def run_training(
         result["topdown"] = topdown
         write_json(destination / "result.json", result)
         if not plan.get("keepSplat"):
-            (destination / "trained.ply").unlink(missing_ok=True)
+            for name in ("trained.ply", "faded.ply", "gated.ply"):
+                (destination / name).unlink(missing_ok=True)
         return result

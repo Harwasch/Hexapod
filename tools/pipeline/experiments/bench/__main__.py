@@ -17,7 +17,7 @@ from typing import Any
 import yaml
 
 from . import ledger, rehearsal
-from .recipe import PIPELINE, train_params
+from .recipe import PIPELINE, train_params, validate_renderer
 from .results import bakeoff_markdown, flip_markdown, markdown, parse_result
 from .scene import PUBLIC_SCENES, SCENES, read_json, verify, write_json
 from .worker import run_training
@@ -65,6 +65,12 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--keep-splat", action="store_true")
     run.add_argument("--topdown", action="store_true", help="best-effort GPU overview PNG")
     run.add_argument("--renders", type=int, default=0, help="save the first N test frames as PNGs")
+    matched = commands.add_parser(
+        "matched-renders", help="same cameras for two kept PLYs, one L4 call"
+    )
+    matched.add_argument("--scene", choices=sorted(SCENES), required=True)
+    matched.add_argument("--runs", nargs=2, required=True, metavar=("A", "B"))
+    matched.add_argument("--frame", help="exact frozen test filename; default: median altitude")
     report = commands.add_parser("report")
     report.add_argument("--runs", nargs="*", help="local run IDs or paths to result.json")
     results = commands.add_parser("results", help="compact bake-off table and optional flip rule")
@@ -73,13 +79,13 @@ def parser() -> argparse.ArgumentParser:
     results.add_argument("--baseline", default="baseline-main")
     results.add_argument("--candidate", help="one candidate for the flip rule; default: all")
     spend = commands.add_parser("ledger")
-    for command in (freeze, run, report, results, spend):
+    for command in (freeze, run, matched, report, results, spend):
         command.add_argument("--ledger", type=Path)
         command.add_argument("--state-dir", type=Path, default=STATE)
         command.add_argument("--dry-run", action="store_true")
         command.add_argument("--rehearse", action="store_true")
         command.add_argument("--tag", help="spend/report group in the shared ledger")
-    for command in (freeze, run):
+    for command in (freeze, run, matched):
         command.add_argument("--cap", type=float, default=2.0)
         command.add_argument(
             "--total-cap", type=float, help="cumulative cap for --tag; --cap bounds each batch"
@@ -96,6 +102,21 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
         "rehearsal": args.rehearse,
         "tag": args.tag,
     }
+    if args.command == "matched-renders":
+        if any(not re.fullmatch(r"[a-f0-9]{8,32}", run) for run in args.runs):
+            raise ValueError("--runs needs bench run IDs or 8+ hex prefixes")
+        if args.runs[0] == args.runs[1]:
+            raise ValueError("matched renders need two distinct runs")
+        return [
+            {
+                **base,
+                "runId": "matched-" + uuid.uuid4().hex,
+                "schedule": "matched",
+                "tier": "l4",
+                "runs": args.runs,
+                "frame": args.frame,
+            }
+        ]
     if args.command == "freeze":
         public = args.scene in PUBLIC_SCENES
         if public and (args.run or args.generation):
@@ -146,6 +167,7 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
         if "quality" in overrides or "quality" in common:
             merged["quality"] = {**overrides.get("quality", {}), **common.get("quality", {})}
         params = train_params(args.schedule, merged)
+        validate_renderer(params)
         for seed in seeds:
             plans.append(
                 {
@@ -166,6 +188,29 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
 
 def save_outcome(state: Path, book: Path, plan: dict[str, Any], result: dict[str, Any]) -> None:
     directory = state / "runs" / plan["runId"]
+    if plan["schedule"] == "matched":
+        from .matched_gpu import PNG_NAMES
+
+        payload = result.pop("pngs", {})
+        if result["status"] == "complete":
+            runs = result["runs"]
+            if len(runs) != 2 or any(not re.fullmatch(r"[a-f0-9]{32}", r) for r in runs):
+                raise ValueError("invalid matched run IDs returned")
+            target = state / "runs" / f"matched-{runs[0][:8]}-{runs[1][:8]}"
+            target.mkdir(parents=True, exist_ok=True)
+            if set(payload) != set(PNG_NAMES):
+                raise ValueError("missing or unexpected matched PNGs")
+            for name in PNG_NAMES:
+                encoded = payload[name]
+                if not isinstance(encoded, str) or len(encoded) > 43_000_000:
+                    raise ValueError("oversized matched PNG")
+                png = base64.b64decode(encoded, validate=True)
+                if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+                    raise ValueError("invalid matched PNG")
+                (target / name).write_bytes(png)
+            result["localPath"] = str(target)
+            write_json(target / "cameras.json", result["cameras"])
+            write_json(target / "result.json", result)
     # Transport only the fixed preview path; do not trust a remote-supplied filename.
     preview = dict(result.get("topdown", {}))
     encoded = preview.pop("pngBase64", None)
@@ -201,7 +246,7 @@ def save_outcome(state: Path, book: Path, plan: dict[str, Any], result: dict[str
 
 def lost_result(state: Path, plan: dict[str, Any], error: Exception) -> dict[str, Any]:
     message = f"Remote outcome unknown: {type(error).__name__}: {error}"
-    if plan["schedule"] == "freeze":
+    if plan["schedule"] in {"freeze", "matched"}:
         return {
             "runId": plan["runId"],
             "scene": plan["scene"],
@@ -250,6 +295,8 @@ def remote_batch(
                 function = (
                     (module.freeze_public if plan.get("sourceType") == "public" else module.freeze)
                     if plan["schedule"] == "freeze"
+                    else module.matched_renders
+                    if plan["schedule"] == "matched"
                     else module.FUNCTIONS[(plan["tier"], plan["schedule"])]
                 )
                 try:
@@ -300,6 +347,10 @@ def local_batch(
                 "rehearsal": True,
                 "tag": plan.get("tag"),
             }
+        elif plan["schedule"] == "matched":
+            from .matched import run_matched
+
+            result = run_matched(state, state / "runs" / plan["runId"], plan)
         else:
             result = run_training(scene, state / "runs" / plan["runId"], plan)
         save_outcome(state, book, plan, result)

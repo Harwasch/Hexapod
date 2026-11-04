@@ -75,6 +75,21 @@ def test_missing_optional_files_and_failed_run_are_null_not_zero(tmp_path: Path)
     assert result(tmp_path)["val"]["meanPsnrFullSh"] == 24
 
 
+def test_gate_scores_keep_trained_and_faded_metrics_distinct(tmp_path: Path) -> None:
+    write_json(tmp_path / "test.json", {"psnr": 21, "ssim": 0.8, "lpips": 0.2})
+    write_json(tmp_path / "test-trained.json", {"psnr": 22, "ssim": 0.9, "lpips": 0.1})
+    write_json(tmp_path / "quality.json", {"bar": "fade"})
+    parsed = result(tmp_path)
+    assert parsed["test"]["psnr"] == 21
+    assert parsed["testTrained"]["psnr"] == 22
+    assert parsed["testFaded"]["psnr"] == 21
+    assert parsed["headlinePly"] == "faded.ply"
+    assert parsed["qualityGate"] == "fade"
+    (tmp_path / "quality.json").unlink()
+    assert result(tmp_path)["testFaded"] is None
+    assert result(tmp_path)["headlinePly"] == "trained.ply"
+
+
 def test_full_sh_diagnostic_refuses_mismatched_geometry(tmp_path: Path) -> None:
     raw = tmp_path / "raw.ply"
     write_ply(raw, 7, 42, 3)
@@ -207,7 +222,7 @@ def test_incomplete_raw_sh_is_not_mislabelled_as_full(tmp_path: Path) -> None:
 def bakeoff_rows(tmp_path: Path) -> list[dict[str, Any]]:
     rows = []
     for scene, gain in zip(("spool", "truck", "beach"), (0.5, 0.2, -0.29), strict=True):
-        for arm, delta in (("baseline-main", 0), ("upgraded", gain)):
+        for arm, delta in (("baseline-main", 0), ("all-on", gain)):
             row = result(tmp_path)
             row.update(scene=scene, schedule="full", benchCommit=arm, runId=f"{scene}-{arm}")
             row["variant"] = {"name": arm, "overrides": {}}
@@ -220,15 +235,15 @@ def test_flip_rule_and_compact_report(tmp_path: Path) -> None:
     from experiments.bench.results import bakeoff_markdown, flip_markdown, flip_rule
 
     rows = bakeoff_rows(tmp_path)
-    assert flip_rule(rows, "baseline-main", "upgraded")["verdict"] == "eligible"
+    assert flip_rule(rows, "baseline-main", "all-on")["verdict"] == "eligible"
     text = bakeoff_markdown(rows)
     assert "GPU min" in text and "spool-baseline-main / full / 42 / complete" in text
-    assert "eligible" in flip_markdown(rows, "baseline-main", "upgraded")
+    assert "eligible" in flip_markdown(rows, "baseline-main", "all-on")
     rows[-1]["test"]["psnr"] = 24.69
-    assert flip_rule(rows, "baseline-main", "upgraded")["verdict"] == "keep-off"
+    assert flip_rule(rows, "baseline-main", "all-on")["verdict"] == "keep-off"
     rows[-1]["test"]["psnr"] = 25
     rows[1]["test"]["psnr"] = 25
-    assert flip_rule(rows, "baseline-main", "upgraded")["verdict"] == "keep-off"
+    assert flip_rule(rows, "baseline-main", "all-on")["verdict"] == "keep-off"
 
 
 @pytest.mark.parametrize(
@@ -270,5 +285,5 @@ def test_flip_rule_abstains_for_incomparable_or_incomplete_results(
         rows.append(copy.deepcopy(last))
     else:
         last["benchCommit"] = "unrelated"
-    rule = flip_rule(rows, "baseline-main", "upgraded")
+    rule = flip_rule(rows, "baseline-main", "all-on")
     assert rule["verdict"] == "incomplete" and rule["reasons"]

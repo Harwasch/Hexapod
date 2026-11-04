@@ -42,7 +42,9 @@ def parse_result(
     metrics = optional(directory / "train_metrics.json")
     holdout = optional(directory / "holdout.json") or metrics.get("holdout", {})
     test = optional(directory / "test.json")
-    ply = directory / "trained.ply"
+    gate = optional(directory / "quality.json").get("bar")
+    headline = "trained.ply" if gate is None else "faded.ply" if gate == "fade" else "gated.ply"
+    ply = directory / headline
     count = len(read_ply(ply)["x"]) if ply.is_file() else None
     iterations = number(metrics.get("iterations"))
     return {
@@ -56,6 +58,11 @@ def parse_result(
         "trainParams": params,
         "splitDigest": split_digest,
         "manifestDigest": manifest_digest,
+        "qualityGate": gate,
+        "headlinePly": headline,
+        "testTrained": optional(directory / "test-trained.json") or (test if gate is None else {}),
+        "testFaded": test if gate == "fade" else None,
+        "testRenderer": "antialiased" if params.get("antialiased") else "classic",
         "test": {
             **{k: number(test.get(k)) for k in METRICS},
             "frames": test.get("frames", 0),
@@ -277,7 +284,28 @@ def bakeoff_markdown(results: list[dict[str, Any]]) -> str:
         "GPU minutes are billed container wall time, including startup and evaluation; "
         "costs use the ledger's rate model.",
         "",
+        "Headline scores use the gate output when enabled. Baseline-main has no bench gate.",
+        "",
+        "| run | PLY scored | PSNR | SSIM | LPIPS |",
+        "|---|---|---|---|---|",
     ]
+    for row in results:
+        for name, scores in (("trained", row.get("testTrained")), ("faded", row.get("testFaded"))):
+            # Old baseline results predate the explicit gate fields; its test score
+            # was of trained.ply. Do not invent a pre-gate score for older candidates.
+            if (
+                scores is None
+                and name == "trained"
+                and row.get("variant", {}).get("name") == "baseline-main"
+            ):
+                scores = row.get("test")
+            if scores:
+                cells = [
+                    "-" if number(scores.get(k)) is None else f"{scores[k]:.4f}"
+                    for k in ("psnr", "ssim", "lpips")
+                ]
+                lines.append(f"| {row['runId']} | {name} | " + " | ".join(cells) + " |")
+    lines.append("")
     return "\n".join(lines)
 
 

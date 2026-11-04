@@ -188,8 +188,20 @@ def test_quality_stack_arms_and_public_freeze_plan() -> None:
     )
     plan = cli.plans_for(args)[0]
     assert plan["variant"]["name"] == "baseline-main" and plan["topdown"]
-    args.variant = "upgraded"
-    assert cli.plans_for(args)[0]["trainParams"]["with_ut"] is True
+    args.variant = "all-on"
+    candidate = cli.plans_for(args)[0]["trainParams"]
+    assert candidate["with_ut"] and candidate["with_eval3d"] and candidate["pose_opt"]
+    assert candidate["antialiased"] is False  # upstream rejects AA + 3DGUT
+    assert candidate["post_processing"] == "ppisp" and candidate["batch_size"] == 1
+    assert candidate["ppisp_controller_activation_num_steps"] == 2500
+    args.schedule = "full"
+    assert (
+        cli.plans_for(args)[0]["trainParams"].get("ppisp_controller_activation_num_steps", 25000)
+        == 25000
+    )
+    args.overrides = '{"train": {"antialiased": true}}'
+    with pytest.raises(ValueError, match="antialiased"):
+        cli.plans_for(args)
     args = cli.parser().parse_args(["freeze", "--scene", "truck"])
     assert cli.plans_for(args)[0]["sourceType"] == "public"
     args.run = "4dd02171"
@@ -288,7 +300,7 @@ def test_results_cli_filters_tag_and_reports_incomplete_flip_rule(
                 "quality-stack",
                 "--flip-rule",
                 "--candidate",
-                "upgraded",
+                "all-on",
             ]
         )
         == 0
