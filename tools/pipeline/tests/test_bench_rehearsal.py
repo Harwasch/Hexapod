@@ -169,7 +169,7 @@ def test_negative_renders_refused_before_any_launch() -> None:
         cli.plans_for(args)
 
 
-def test_quality_stack_only_baseline_enabled_and_public_freeze_plan() -> None:
+def test_quality_stack_arms_and_public_freeze_plan() -> None:
     variants = PIPELINE / "experiments/variants/quality-stack.yaml"
     args = cli.parser().parse_args(
         [
@@ -180,6 +180,7 @@ def test_quality_stack_only_baseline_enabled_and_public_freeze_plan() -> None:
             str(variants),
             "--variant",
             "baseline-main",
+            "--rehearse",
             "--topdown",
             "--tag",
             "quality-stack",
@@ -188,8 +189,7 @@ def test_quality_stack_only_baseline_enabled_and_public_freeze_plan() -> None:
     plan = cli.plans_for(args)[0]
     assert plan["variant"]["name"] == "baseline-main" and plan["topdown"]
     args.variant = "upgraded"
-    with pytest.raises(ValueError, match="pending implementation"):
-        cli.plans_for(args)
+    assert cli.plans_for(args)[0]["trainParams"]["with_ut"] is True
     args = cli.parser().parse_args(["freeze", "--scene", "truck"])
     assert cli.plans_for(args)[0]["sourceType"] == "public"
     args.run = "4dd02171"

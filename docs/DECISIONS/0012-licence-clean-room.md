@@ -650,3 +650,14 @@ Purpose: CesiumJS's REPLACE traversal on screen-space error, used by `experiment
   numpy is imported inside the function, as before (cheap module import).
 
 ---
+
+### Quality-stack provenance (2026-11-04)
+
+The optional train stack records its runtime and model pins in
+[`tools/pipeline/NOTICE`](../../tools/pipeline/NOTICE). Dense initialization uses the
+approved **MapAnything Apache** checkpoint; the prior cache uses the approved **MoGe-2
+vitl-normal** checkpoint. Both HF revisions are explicit and baked into the GPU image.
+The losses are independently written scale/shift, depth-normal and axis-ratio maths,
+with NumPy reference tests; no external loss implementation is included. The new
+training behavior stays off pending the frozen-input bake-off. No capture guidance or
+generative image completion is part of this change.

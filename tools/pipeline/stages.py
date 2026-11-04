@@ -47,6 +47,7 @@ import confidence
 import convergence
 import exif
 import exposure
+import far_field
 import frame_meta
 import gaussian_budget
 import gaussians
@@ -59,6 +60,7 @@ import live
 import placement
 import priors
 import quality
+import quality_stack
 import resolution
 import scale_estimate
 import sfm
@@ -1758,8 +1760,8 @@ def robust(ctx: StageContext) -> StageOutcome:
 @stage_impl(
     "gsplat",
     consumes=("frames", "poses"),
-    optional_consumes=("masks",),
-    produces=(TRAINED_PLY, TRAIN_METRICS, holdout.HOLDOUT),
+    optional_consumes=("masks", "prior_cache"),
+    produces=(TRAINED_PLY, TRAIN_METRICS, holdout.HOLDOUT, ArtifactDecl("prior_cache", kind="dir")),
     summary="gsplat 3DGS training; consumes masks when a mask stage produced any",
 )
 def gsplat(ctx: StageContext) -> StageOutcome:
@@ -1859,18 +1861,30 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     `psnr`, `ssim` and `lpips` are all measured on gsplat's held-out `val` split -- every
     8th registered frame -- and `train_metrics.json` says so and how many frames that is.
     """
+    stack = quality_stack.options(ctx.params)
+    render_flags = {key: ctx.params[key] for key in quality_stack.RENDER_KEYS if key in ctx.params}
     variant = str(ctx.param("variant", "3dgs"))
     if variant != "3dgs":
         raise ValueError(
             training.VARIANT_REFUSALS.get(variant, f"variant={variant!r} is not one of: 3dgs")
         )
+    training.gsplat_argv(
+        "python",
+        Path("trainer"),
+        Path("dataset"),
+        Path("result"),
+        strategy=str(ctx.param("strategy", "default")),
+        batch_size=ctx.param("batch_size", 1),
+        antialiased=ctx.param("antialiased", False),
+        **render_flags,
+    )
     # Refused before any GPU time is spent on a run that could not ship it.
     sh_degree = harmonics.check_degree(ctx.param("ship_sh_degree"), name="ship_sh_degree")
     packed = _optional_bool(ctx.param("packed", True), "packed")
     sparse_grad = _optional_bool(ctx.param("sparse_grad"), "sparse_grad")
     visible_adam = _optional_bool(ctx.param("visible_adam"), "visible_adam")
     if sparse_grad and not packed:
-        raise ValueError("sparse_grad requires packed=true (gsplat v1.5.3)")
+        raise ValueError("sparse_grad requires packed=true (gsplat v1.6.0)")
     frames = ctx.input(FRAMES.name)
     poses = ctx.input(POSES.name)
     full_iterations = int(ctx.param("iterations", 30_000))
@@ -1994,7 +2008,12 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             f"a fan-out {role} call of a stage that plans one block ({block_reason}); only "
             f"a block run fans out, so these params are not the head call's"
         )
+    if block_total > 1 and stack["enabled"]:
+        raise ValueError("quality-stack dense/priors/far-field currently require blocks=1")
     if block_total > 1:
+        if role != "part":
+            ctx.output("prior_cache").mkdir(parents=True, exist_ok=True)
+            _write_json(ctx.output("prior_cache") / "status.json", {"enabled": False})
         in_blocks = _train_in_blocks(
             ctx,
             blocks.Settings(
@@ -2012,6 +2031,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
                 trainer=trainer,
                 python=training.trainer_python(ctx.param("python")),
                 switches={
+                    **render_flags,
                     "packed": packed,
                     "sparse_grad": sparse_grad,
                     "visible_adam": visible_adam,
@@ -2150,6 +2170,14 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         if ctx.param("live") is None or _optional_bool(ctx.param("live"), "live")
         else []
     )
+    original_trainer = trainer
+    training_cap = (
+        gaussian_budget.far_allocation(cap_max, stack["far_field_share"], stack["far_field_count"])[
+            0
+        ]
+        if stack["far_field"]
+        else cap_max
+    )
     argv = training.gsplat_argv(
         training.trainer_python(ctx.param("python")),
         trainer,
@@ -2159,7 +2187,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         max_steps=full_iterations,
         data_factor=data_factor,
         steps_scaler=steps_scaler,
-        cap_max=cap_max,
+        cap_max=training_cap,
         antialiased=antialiased,
         opacity_reg=opacity_reg,
         depth_loss=depth_loss,
@@ -2169,11 +2197,18 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         pose_opt=pose_opt,
         app_opt=app_opt,
         bilateral_grid=bilateral_grid,
+        **render_flags,
         live_steps=live_steps,
         eval_steps=extra_evals,
         batch_size=batch_size,
         extra=[str(value) for value in (ctx.param("extra_args") or [])],
     )
+    trainer, training_cap, prepass_report = quality_stack.prepare(
+        ctx, dataset, trainer, cap_max, stack, data_factor
+    )
+    argv[1] = str(trainer)
+    if stack["enabled"] and original_trainer.name == "gsplat_stand_in.py":
+        argv.extend(["--quality-settings", str(ctx.work_dir / "quality_settings.json")])
     if extra_evals:
         argv = training.converge_argv(
             argv,
@@ -2210,7 +2245,14 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     cropped_rows = None
     if roi is not None:
         cropped_rows = training.crop_rows(columns, roi)
-        columns, kept = training.crop_splat(columns, roi)
+        if stack["far_field"]:
+            cropped_rows |= far_field.mask(
+                np.stack([columns[n] for n in ("x", "y", "z")], 1),
+                prepass_report["center"],
+                prepass_report["radius"],
+            )
+        columns = {key: value[cropped_rows] for key, value in columns.items()}
+        kept = int(cropped_rows.sum())
         ctx.log(
             f"gsplat: kept {kept} of {trained_count} trained gaussians inside the "
             + (
@@ -2219,7 +2261,23 @@ def gsplat(ctx: StageContext) -> StageOutcome:
                 else f"roi ({training.ROI_KEEP_RADII:g} radii)"
             )
         )
-    written = gaussians.write_ply(ctx.output(TRAINED_PLY.name), columns, sh_degree=splat.sh_degree)
+    if stack["far_field"]:
+        columns, retained = far_field.export_rows(
+            columns, prepass_report["center"], prepass_report["radius"], stack["far_field_share"]
+        )
+        if cropped_rows is None:
+            cropped_rows = retained
+        else:
+            cropped_rows[np.flatnonzero(cropped_rows)] = retained
+        with splat_io.PlyWriter(
+            ctx.output(TRAINED_PLY.name), tuple(columns), count=len(columns["x"])
+        ) as writer:
+            writer.append(columns)
+        written = ctx.output(TRAINED_PLY.name).stat().st_size
+    else:
+        written = gaussians.write_ply(
+            ctx.output(TRAINED_PLY.name), columns, sh_degree=splat.sh_degree
+        )
     in_ply = int(columns["x"].shape[0])
     # Per-gaussian error on the held-out frames, in trained.ply's order. After the splat
     # is written, and unable to fail the stage: `holdout.measure` says why.
@@ -2227,7 +2285,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         ctx,
         enabled=_optional_bool(ctx.param("holdout_error"), "holdout_error"),
         python=training.trainer_python(ctx.param("python")),
-        trainer=trainer,
+        trainer=original_trainer,
         dataset=dataset,
         ply=ply,
         rows=trained_count,
@@ -2308,6 +2366,17 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         "hook": report,
         "curve": curve,
     }
+    document.update(quality_stack.metrics(columns, curve, ctx.work_dir, prepass_report))
+    document["qualityStack"] = {
+        "settings": stack,
+        "prepass": prepass_report,
+        "render": render_flags,
+    }
+    if ctx.param("live") is None or _optional_bool(ctx.param("live"), "live"):
+        ctx.log(
+            "live-metrics: "
+            + json.dumps({key: document[key] for key in quality_stack.METRIC_NAMES})
+        )
     document["roi"] = (
         None
         if roi is None or crop is None
@@ -2566,6 +2635,12 @@ def _train_in_blocks(
     }
     document["roi"] = None
     document["blocks"] = record
+    document.update(quality_stack.ply_metrics(ctx.output(TRAINED_PLY.name)))
+    if settings.live:
+        ctx.log(
+            "live-metrics: "
+            + json.dumps({key: document[key] for key in quality_stack.METRIC_NAMES})
+        )
     _write_json(ctx.output(TRAIN_METRICS.name), document)
     ctx.log(
         f"gsplat: {run.gaussians} gaussians from {record['count']} blocks -> "
@@ -3202,8 +3277,9 @@ def place_splat(ctx: StageContext) -> StageOutcome:
     # A chunk at a time (`splat_stream`), so the worker places a splat of any size in the
     # same memory; canonical.ply is byte-identical to transforming it whole. Every SH band
     # the trained splat carries comes along (`sh_degree=None`), turned by each step.
+    placed_source = far_field.strip(ctx.input(source), ctx.work_dir / "foreground.ply")
     trained = splat_stream.open_splat(
-        ctx.input(source),
+        placed_source,
         chunk=int(ctx.param("chunk_gaussians", splat_io.CHUNK)),
         sh_degree=None,
     )

@@ -8,6 +8,7 @@ from typing import Any
 
 import yaml
 
+import quality_stack
 from recipe import Recipe
 
 PIPELINE = Path(__file__).resolve().parents[2]
@@ -38,20 +39,29 @@ def train_params(schedule: str, overrides: dict[str, Any]) -> dict[str, Any]:
         params.update(schedule_scale=0.1, train_max_side=800)
     elif schedule != "full":
         raise ValueError("schedule must be screen or full")
-    if set(overrides) - {"train"} or not isinstance(overrides.get("train", {}), dict):
+    if set(overrides) - {"train", "quality"} or not isinstance(overrides.get("train", {}), dict):
         raise ValueError("overrides must be {train: {parameter: value}}")
     params.update(overrides.get("train", {}))
     # Raw argv could redirect the dataset, change the split or load an external ckpt.
     # New supported knobs should be added as stage params, with an explicit audit.
-    forbidden = {"trainer", "python", "extra_args", "holdout_script", "init_from"}
+    forbidden = {"trainer", "python", "extra_args", "holdout_script", "init_from", "_bench_quality"}
     if forbidden & set(overrides.get("train", {})):
         raise ValueError("bench refuses trainer/argv/init overrides that bypass frozen inputs")
     if params.get("data_factor", 1) != 1:
         raise ValueError("bench uses train_max_side with data_factor=1 for identical preprocessing")
+    quality_stack.options(params)
+    quality = overrides.get("quality")
+    if quality is not None:
+        if not isinstance(quality, dict) or set(quality) - {"bar", "context_fade", "min_gaussians"}:
+            raise ValueError("bench quality overrides only accept bar/context_fade/min_gaussians")
+        params["_bench_quality"] = quality
     return params
 
 
 def make_recipe(params: dict[str, Any], tier: str) -> Recipe:
+    params = dict(params)
+    quality = params.pop("_bench_quality", None)
+    tail = [] if quality is None else [{"id": "quality", "impl": "support_gate", "params": quality}]
     return Recipe.from_dict(
         {
             "name": "frozen-bench",
@@ -63,7 +73,8 @@ def make_recipe(params: dict[str, Any], tier: str) -> Recipe:
                     "impl": "gsplat",
                     "params": params,
                     "gpu": {"tier": tier, "preemptible": False},
-                }
+                },
+                *tail,
             ],
         }
     )

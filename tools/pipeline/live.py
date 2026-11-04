@@ -625,9 +625,18 @@ def _valid_splat(payload: Mapping[str, Any]) -> bool:
     )
 
 
+def _valid_metrics(payload: Mapping[str, Any]) -> bool:
+    import quality_stack
+
+    return bool(set(payload) & set(quality_stack.METRIC_NAMES)) and not (
+        set(payload) - {*quality_stack.METRIC_NAMES, "step"}
+    )
+
+
 _TAGS: tuple[tuple[str, str, Callable[[Mapping[str, Any]], bool]], ...] = (
     ("cameras", CAMERAS_TAG, _valid_cameras),
     ("splat", SPLAT_TAG, _valid_splat),
+    ("metrics", "live-metrics: ", _valid_metrics),
 )
 
 

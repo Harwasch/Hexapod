@@ -1,13 +1,11 @@
 """Dispatching a 3DGS training run: the dataset it needs, the argv, the PLY it writes.
 
-**No training run has been executed anywhere in this repository.** `gsplat` needs CUDA
-and there is no GPU on any machine this was written on. What is built here is the
-*dispatch*, and since 2026-09-23 it is checked against the trainer it dispatches rather
-than against a memory of it: gsplat **v1.5.3**'s `examples/simple_trainer.py`, read at
-that tag, and the argv below **parsed by that file's own `tyro` CLI** (tyro 1.0.16) in a
-CPU venv holding the exact wheel the training image installs
-(`gsplat-1.5.3+pt24cu124-cp310`), torch 2.4.1 and the example's pinned requirements.
-Parsing is all a CPU can do: `Runner` allocates CUDA tensors in its constructor.
+The current image targets gsplat **v1.6.0**, source commit
+512d366b67073d77ca099ede742683c165dfc23b, torch 2.9.1+cu128. The driver's image build
+parses this argv against that trainer, and checks the wrapper seams and PLY export.
+Local tests use stand-ins and NumPy; they cannot validate CUDA kernels. Prior GPU
+measurements belong to the v1.5.3 image. New flags are opt-in; disabled argv remains
+unchanged except the upstream rename of an enabled bilateral-grid option.
 
 Reading the source corrected four things the first version of this file transcribed from
 memory, and each one would have cost a GPU run to discover:
@@ -126,7 +124,7 @@ _STDOUT_SSIM_RE = re.compile(r"(?<!CC_)PSNR:[^\n]*?(?<!CC_)SSIM:\s*([0-9.]+)")
 _STDOUT_LPIPS_RE = re.compile(r"(?<!CC_)PSNR:[^\n]*?(?<!CC_)LPIPS:\s*([0-9.]+)")
 
 #: The gsplat release every flag and file name here was read from.
-GSPLAT_VERSION = "1.5.3"
+GSPLAT_VERSION = "1.6.0"
 
 #: v1.5.3's `Config.test_every`, which this stage never overrides. The parser sorts the
 #: registered images by name and holds out every one whose index is a multiple of it
@@ -461,10 +459,17 @@ def gsplat_argv(
     sparse_grad: bool = False,
     visible_adam: bool = False,
     batch_size: int = 1,
+    with_ut: bool = False,
+    with_eval3d: bool = False,
+    rolling_shutter: bool = False,
+    post_processing: str | None = None,
+    ppisp_use_controller: bool = True,
+    ppisp_controller_distillation: bool = True,
+    ppisp_controller_activation_num_steps: int = 25_000,
 ) -> list[str]:
     """The command line, built in one place so a test can read it without a GPU.
 
-    Every flag was parsed by v1.5.3's own CLI; see the module docstring. Four of them are
+    The image build parses every flag with the pinned upstream CLI. Four of them are
     not optional:
 
     * `--disable_viewer`: the default opens a viewer server and, after training, sleeps
@@ -535,7 +540,7 @@ def gsplat_argv(
       `shN` is empty, so the export is degree 0 -- which is all `canonical.ply` carries
       anyway (`gaussians.CANONICAL_PROPERTIES`). Held-out frames render with the zero
       embedding.
-    * `--use_bilateral_grid` fits a 16x16x8 bilateral grid per training image (BilaRF's
+    * `--post_processing bilateral_grid` fits a 16x16x8 bilateral grid per training image (BilaRF's
       colour model, `examples/lib_bilagrid.py`: plain torch plus `tensorly`, both in the
       training image) to the render before the loss. Nothing of it reaches the PLY.
       `eval()` then reports the raw metrics *and* colour-corrected ones (`cc_psnr`, ...),
@@ -580,8 +585,39 @@ def gsplat_argv(
     single process. The raster memory grows with the images a step renders, which
     `gaussian_budget.memory_ceiling` counts when given the batch.
     """
+    for name, value in (
+        ("with_ut", with_ut),
+        ("with_eval3d", with_eval3d),
+        ("rolling_shutter", rolling_shutter),
+        ("ppisp_use_controller", ppisp_use_controller),
+        ("ppisp_controller_distillation", ppisp_controller_distillation),
+    ):
+        if not isinstance(value, bool):
+            raise ValueError(f"{name} must be a boolean")
     if sparse_grad and not packed:
-        raise ValueError("sparse_grad requires packed=true (gsplat v1.5.3)")
+        raise ValueError("sparse_grad requires packed=true (gsplat v1.6.0)")
+    if antialiased and (with_ut or with_eval3d):
+        raise ValueError("UT/eval3d require classic rasterization; antialiased is incompatible")
+    if with_ut and strategy != "mcmc":
+        raise ValueError("with_ut requires strategy=mcmc")
+    if rolling_shutter:
+        raise ValueError("rolling_shutter is unsupported by simple_trainer's COLMAP path")
+    if with_eval3d and (not with_ut or strategy != "mcmc"):
+        raise ValueError("with_eval3d requires with_ut and strategy=mcmc")
+    if bilateral_grid:
+        if post_processing not in (None, "bilateral_grid"):
+            raise ValueError("bilateral_grid and PPISP are mutually exclusive")
+        post_processing = "bilateral_grid"
+    if post_processing not in (None, "bilateral_grid", "ppisp"):
+        raise ValueError("post_processing must be bilateral_grid or ppisp")
+    if post_processing == "ppisp" and batch_size != 1:
+        raise ValueError("PPISP requires batch_size=1")
+    if post_processing == "ppisp":
+        activation = ppisp_controller_activation_num_steps
+        if isinstance(activation, bool) or not isinstance(activation, int) or activation < 0:
+            raise ValueError("PPISP activation step must be a nonnegative integer")
+        if ppisp_use_controller and activation >= int(max_steps * steps_scaler):
+            raise ValueError("PPISP controller activation must precede the scaled final step")
     steps = str(max_steps)
     argv = [
         python,
@@ -629,8 +665,22 @@ def gsplat_argv(
         argv.append("--pose_opt")
     if app_opt:
         argv.append("--app_opt")
-    if bilateral_grid:
-        argv.append("--use_bilateral_grid")
+    if post_processing:
+        argv += ["--post_processing", post_processing]
+    if post_processing == "ppisp":
+        if not ppisp_use_controller:
+            argv.append("--no-ppisp-use-controller")
+        if not ppisp_controller_distillation:
+            argv.append("--no-ppisp-controller-distillation")
+        if ppisp_controller_activation_num_steps != 25_000:
+            argv += [
+                "--ppisp_controller_activation_num_steps",
+                str(ppisp_controller_activation_num_steps),
+            ]
+    if with_ut:
+        argv.append("--with_ut")
+    if with_eval3d:
+        argv.append("--with_eval3d")
     if packed:
         argv.append("--packed")
     if sparse_grad:

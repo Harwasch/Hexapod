@@ -1,6 +1,9 @@
 """Train one block with gsplat's `simple_trainer.py` unchanged: a frozen ring of the
 prior's gaussians drawn round it, and the convergence stop, as a wrapper.
 
+The gsplat 1.6.0 source pin retains this seam; image-build checks validate it.
+GPU behaviour of the upgraded image still requires the driver's smoke.
+
 **Not executed on a GPU in this repository yet.** The mechanism is `converge_trainer.py`'s,
 and so is the reason for it (read that docstring): the trainer runs as `python
 simple_trainer.py` would, and the one call its `__main__` block ends with -- `cli(main,

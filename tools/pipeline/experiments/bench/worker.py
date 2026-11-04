@@ -30,6 +30,24 @@ ARTIFACTS = (
 )
 
 
+def publish_cache(source: Path, target: Path) -> None:
+    """Publish immutable cache entries atomically when several variants share a volume."""
+    target.mkdir(parents=True, exist_ok=True)
+    for path in source.iterdir():
+        if not path.is_file() or path.name.endswith(".tmp.npz"):
+            continue
+        # Only committed predictions and the small metadata files are cache entries.
+        if path.suffix not in (".npz", ".json"):
+            continue
+        with tempfile.NamedTemporaryFile(dir=target, prefix=".publish-", delete=False) as handle:
+            temporary = Path(handle.name)
+        try:
+            shutil.copyfile(path, temporary)
+            temporary.replace(target / path.name)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
 def topdown_preview(
     scene: Path, ply: Path, destination: Path, params: dict[str, Any], remaining: float
 ) -> dict[str, Any]:
@@ -167,6 +185,7 @@ def run_training(
     if (destination / "result.json").exists():
         raise ValueError(f"run {destination.name} already has a result")
     params = dict(plan["trainParams"])
+    prior_cache = destination.parent.parent / "prior_cache" / str(plan["scene"])
     split_digest = manifest_digest = None
     train_seconds = None
     gpu_name = None
@@ -203,6 +222,10 @@ def run_training(
                         gpu_name = subprocess.check_output(  # noqa: S603 - fixed argv, no shell
                             [smi, "--query-gpu=name", "--format=csv,noheader"], text=True, timeout=2
                         ).strip()
+            if prior_cache.exists():
+                shutil.copytree(
+                    prior_cache, work.checkpoint_dir("train") / "prior_cache", dirs_exist_ok=True
+                )
             recipe = make_recipe(params, plan["tier"])
             stage_start = time.monotonic()
             sampler.start()
@@ -211,7 +234,15 @@ def run_training(
             finally:
                 train_seconds = time.monotonic() - stage_start
                 sampler.stop()
+                cached = work.checkpoint_dir("train") / "prior_cache"
+                if cached.exists():
+                    publish_cache(cached, prior_cache)
             shipped = work.out_dir("train") / "trained.ply"
+            if params.get("_bench_quality") is not None:
+                shipped = work.out_dir("quality") / "gated.ply"
+                shutil.copyfile(
+                    work.out_dir("quality") / "quality.json", destination / "quality.json"
+                )
             shutil.copyfile(shipped, destination / "trained.ply")
             raw = training.latest_ply(work.work_dir("train") / "gsplat")
             if (

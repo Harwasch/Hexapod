@@ -314,10 +314,36 @@ stages:
       #     PLY is baked to degree-0 colour (v1.5.3's export writes no higher bands with
       #     it), so such a run ships DC only whatever `ship_sh_degree` asks, and says so.
       #   bilateral_grid: true -- a per-frame colour/exposure correction (gsplat's
-      #     --use_bilateral_grid); train_metrics.json then also has `colorCorrected`.
+      #     --post_processing bilateral_grid). Colour-corrected evaluation is now
+      #     a separate upstream option; absent metrics stay absent.
       #   These three are the phone-capture recipe the commercial apps are believed to
       #   use; each stays off until experiments/run_variants.py has measured it on a real
       #   capture (experiments/variants/spool-table.yaml is that run).
+      #   Quality-stack candidates (all absent/off; no default has flipped):
+      #   with_ut: true       -- unscented camera projection at pinned gsplat 512d366b;
+      #   with_eval3d: true   -- evaluate the Gaussian in 3D (requires UT + MCMC).
+      #     Both require classic rasterization; antialiased cannot be combined with them.
+      #     A plain SH3 3DGS PLY still ships; bench test scores use the shipping renderer.
+      #   post_processing: ppisp -- camera/exposure correction, batch_size 1 only;
+      #     ppisp_use_controller and ppisp_controller_distillation default true,
+      #     ppisp_controller_activation_num_steps defaults 25000 (unscaled upstream).
+      #     Short screens must set that step below their actual iteration count.
+      #     Rolling shutter is refused: simple_trainer has no COLMAP timing path.
+      #   init: sfm+dense     -- pinned Apache MapAnything, train-pool views in overlapping
+      #     chunks of four, confidence + robust Sim3 + voxel filtering, at most cap/4
+      #     initial points including SfM. A failed fit records a warning and keeps SfM.
+      #   priors: {depth_weight: 0.05, normal_weight: 0.02, start_step: 1000}
+      #     Pinned MIT MoGe-2 depth/normal cache; per-image robust scale/shift depth,
+      #     rendered-depth normals; gradient_weight is optional (default 0).
+      #   aniso_cap: {ratio: 10, weight: 0.001} -- hinge on longest/shortest axis ratio.
+      #   far_field: sphere   -- frozen background at ten robust sparse-scene radii;
+      #     far_field_share: 0.1 and far_field_count: 256 reserve foreground budget.
+      #     Geometrically far means beyond five radii; the final export caps that share,
+      #     including learned outliers. Background survives crop/quality, is removed
+      #     before place computes tile bounds. Depth/normal, dense and far require
+      #     blocks: 1, batch_size: 1, MCMC, standard Adam and SH colours.
+      #   Candidate weights have no GPU measurements yet. quality-stack.yaml defines
+      #     cumulative arms; flip only after >=2/3 wins and no third loss >0.3 dB.
       #   roi: {center: [x, y, z], radius: r}  -- COLMAP frame; crops the initial points
       #     to the sphere and the trained splat to 1.5 radii.
       #   blocks: auto        -- the default without being written: a capture whose budget
@@ -332,7 +358,7 @@ stages:
       #     run's rule on its own frames (`block_schedule: frames`; `share`, its share of
       #     the run's steps, is opt-in). `block_epsilon` (0.05) is the camera test's
       #     1 - SSIM threshold; `bilateral_grid: true` is its per-image exposure correction
-      #     (a 16x16x8 grid: gsplat's `--use_bilateral_grid` per-image affine grid,
+      #     (a 16x16x8 grid: gsplat's `--post_processing bilateral_grid` per-image affine grid,
       #     discarded at export).
       #   batch_size: 2       -- images per step (gsplat's sqrt(batch) learning rates), on
       #     half the steps so the images trained on are the same. Unmeasured on the L4;
@@ -341,7 +367,7 @@ stages:
       # psnr, ssim and lpips in train_metrics.json are on gsplat's held-out split: every
       # 8th registered frame, never trained on (`heldOut` there says how many).
       #
-      # `trainer` and `python` are deliberately absent: gsplat v1.5.3's
+      # `trainer` and `python` are deliberately absent: gsplat v1.6.0's
       # examples/simple_trainer.py and the CPython 3.10 it needs live in the training
       # image (infra/modal/app.py), which says where through $GSPLAT_TRAINER and
       # $GSPLAT_PYTHON. A run started without them says so by name.
@@ -371,6 +397,9 @@ stages:
     params:
       # preview | refine: what this run is, for the phone's forecast and its Refine.
       mode: refine
+      # bar: fade keeps every row, scales context opacity by context_fade (0.5),
+      # and unsupported opacity by its square. `keep` still counts the high-support
+      # tier, not all retained rows; strict remains the default pending the bake-off.
       bar: strict
       keep_min_views: 8
       keep_min_spread_deg: 45

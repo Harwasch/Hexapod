@@ -133,6 +133,8 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
         raise ValueError("seeds must be distinct unsigned 32-bit integers")
     plans = []
     for name, overrides in variants.items():
+        if name == "baseline-main" and not args.rehearse:
+            raise ValueError("baseline-main must run from c7fb90c8 (gsplat 1.5.3), not this image")
         if not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9_.+-]{1,64}", name):
             raise ValueError("variant names must be 1-64 letters, digits, _, ., + or -")
         if not isinstance(overrides, dict):
@@ -141,6 +143,8 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
             )
         train_params(args.schedule, overrides)
         merged = {"train": {**overrides.get("train", {}), **common.get("train", {})}}
+        if "quality" in overrides or "quality" in common:
+            merged["quality"] = {**overrides.get("quality", {}), **common.get("quality", {})}
         params = train_params(args.schedule, merged)
         for seed in seeds:
             plans.append(

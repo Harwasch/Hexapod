@@ -200,7 +200,7 @@ SUPPORT_COLUMNS: tuple[tuple[str, str], ...] = (
 )
 
 #: What `bar` may be, loosest last. The fallback walks this order.
-BARS: tuple[str, ...] = ("strict", "balanced", "everything")
+BARS: tuple[str, ...] = ("strict", "balanced", "everything", "fade")
 #: What `mode` may be: a cheap preview that forecasts, or the full-quality refine.
 MODES: tuple[str, ...] = ("preview", "refine")
 
@@ -1117,18 +1117,39 @@ def gate(
     """The splat the bar lets through, with the same columns it came in with."""
     if bar not in BARS:
         raise ValueError(f"bar must be one of {', '.join(BARS)}, not {bar!r}")
+    if not 0 <= context_fade <= 1:
+        raise ValueError("context_fade must be in [0, 1]")
+    if bar == "fade":
+        out = {
+            name: np.array(values, dtype=np.float32, copy=True) for name, values in columns.items()
+        }
+        factors = np.where(
+            tiers == TIER_KEEP, 1.0, np.where(tiers == TIER_CONTEXT, context_fade, context_fade**2)
+        )
+        if "far_field" in columns:
+            factors = np.where(columns["far_field"] >= 0.5, 1.0, factors)
+        if "opacity" in out:
+            alpha = 1.0 / (1.0 + np.exp(-out["opacity"].astype(np.float64)))
+            alpha = np.clip(alpha * factors, gaussians.ALPHA_EPS, 1.0 - gaussians.ALPHA_EPS)
+            faded = factors < 1
+            out["opacity"][faded] = np.log(alpha[faded] / (1 - alpha[faded])).astype(np.float32)
+        return out
     if bar == "everything":
         return {
             name: np.array(values, dtype=np.float32, copy=True) for name, values in columns.items()
         }
     floor = TIER_KEEP if bar == "strict" else TIER_CONTEXT
     selected = tiers >= floor
+    if "far_field" in columns:
+        selected |= columns["far_field"] >= 0.5
     out = {
         name: np.ascontiguousarray(values[selected], dtype=np.float32)
         for name, values in columns.items()
     }
     if bar == "balanced" and "opacity" in out:
         faded = tiers[selected] == TIER_CONTEXT
+        if "far_field" in out:
+            faded &= out["far_field"] < 0.5
         if faded.any():
             alpha = 1.0 / (1.0 + np.exp(-out["opacity"][faded].astype(np.float64)))
             alpha = np.clip(alpha * context_fade, gaussians.ALPHA_EPS, 1.0 - gaussians.ALPHA_EPS)
@@ -1808,7 +1829,14 @@ def _grade(
         "strict": tally.tiers[TIER_KEEP],
         "balanced": tally.tiers[TIER_KEEP] + tally.tiers[TIER_CONTEXT],
         "everything": count,
+        "fade": count,
     }
+    if "far_field" in source.properties:
+        for start, read in source.chunks():
+            tiers = columns.read("tiers", start, start + read["x"].shape[0])
+            distant = read["far_field"] >= 0.5
+            passing["strict"] += int((distant & (tiers < TIER_KEEP)).sum())
+            passing["balanced"] += int((distant & (tiers < TIER_CONTEXT)).sum())
     applied = bar
     while passing[applied] < min(min_gaussians, count) and applied != "everything":
         applied = BARS[BARS.index(applied) + 1]

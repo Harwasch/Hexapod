@@ -135,6 +135,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pose_opt", action="store_true")
     parser.add_argument("--app_opt", action="store_true")
     parser.add_argument("--use_bilateral_grid", action="store_true")
+    parser.add_argument("--post_processing", default=None)
+    parser.add_argument("--quality-settings", type=Path)
     parser.add_argument("--packed", action="store_true")
     parser.add_argument("--sparse_grad", action="store_true")
     parser.add_argument("--visible_adam", action="store_true")
@@ -163,6 +165,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-ply", action="store_true")
     args, _unknown = parser.parse_known_args(argv)
     # What v1.5.3's `Config.adjust_steps` does to the one number this stand-in uses.
+    args.use_bilateral_grid = args.use_bilateral_grid or args.post_processing == "bilateral_grid"
     args.max_steps = int(args.max_steps * args.steps_scaler)
     ply_at = {int(value * args.steps_scaler) for value in args.ply_steps}
     if args.cap_max is not None:
@@ -283,6 +286,36 @@ def main(argv: list[str] | None = None) -> int:
             args.gaussians,
             seed=step,
             sh_degree=args.sh_degree,
+        )
+    if args.quality_settings:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        import gaussians
+        import splat_io
+
+        settings = json.loads(args.quality_settings.read_text())
+        if settings["far_field"]:
+            path = args.result_dir / "ply" / f"point_cloud_{step - 1}.ply"
+            splat = gaussians.read_splat(path, sh_degree=args.sh_degree)
+            columns = splat.columns
+            with np.load(settings["ring"]) as ring:
+                count = len(ring["means"])
+                extra = {k: np.zeros(count, dtype=np.float32) for k in columns}
+                for i, k in enumerate(("x", "y", "z")):
+                    extra[k] = ring["means"][:, i]
+                for i in range(3):
+                    extra[f"scale_{i}"] = ring["log_scales"][:, i]
+                    extra[f"f_dc_{i}"] = ring["f_dc"][:, i]
+                extra["opacity"] = ring["logit_opacity"]
+                extra["rot_0"] = np.ones(count, dtype=np.float32)
+            with splat_io.PlyWriter(path, tuple(columns)) as writer:
+                writer.append({k: np.concatenate([v, extra[k]]) for k, v in columns.items()})
+        Path(settings["loss_report"]).write_text(
+            json.dumps(
+                {
+                    "synthetic": True,
+                    "lossTerms": {"depth": 0.0, "normal": 0.0, "gradient": 0.0, "anisotropy": 0.0},
+                }
+            )
         )
     sys.stdout.write(f"stand-in: finished at step {step}" + "\n")
     return 0

@@ -585,3 +585,12 @@ def describe(budget: Budget) -> str:
     if budget.clamp is not None:
         parts.append(f"clamped to the {budget.clamp}")
     return "; ".join(parts)
+
+
+def far_allocation(cap: int | None, share: float, requested: int) -> tuple[int, int]:
+    if cap is None or cap < 4 or not 0 < share <= 0.15 or requested < 4:
+        raise ValueError("far field needs cap_max>=4 and 0<far_field_share<=0.15")
+    count = min(requested, int(cap * share))
+    if count < 4:
+        raise ValueError("far-field allocation cannot fit four background gaussians")
+    return cap - count, count

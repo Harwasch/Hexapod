@@ -1,54 +1,14 @@
-"""The Modal function `ModalAdapter` spawns. **Built and checked; never run on a GPU.**
+"""Pinned gsplat 1.6.0 source training image (512d366b), with optional geometry models.
 
-This is the remote half: an image, a GPU, a secret, an S3 `Transfer`, and one call to
-`remote.execute`. Everything that could be got wrong about what a container *does* --
-fetch the inputs, run the stage, sync `checkpoint/`, upload `out/`, report back -- lives
-in `tools/pipeline/remote.py` and is covered by `tools/pipeline/tests/test_remote.py`.
+The pipeline runs in Modal's Python 3.12; the trainer retains its isolated Python 3.10
+venv. CUDA 12.8 devel supplies nvcc without a GPU at image-build time. Explicit CUDA_HOME,
+TORCH_CUDA_ARCH_LIST and MAX_JOBS avoid device discovery and bound compilation. gsplat's
+experimental inference extension is not used by simple_trainer and is not built.
 
-What this file adds is the training image, and it is worth being exact about what has and
-has not been checked about it:
-
-* **Every artifact it names exists, and was read, on 2026-09-23.** The base
-  `nvidia/cuda:12.4.1-devel-ubuntu22.04` (resolved on Docker Hub, amd64 manifest present);
-  torch `2.4.1+cu124` and torchvision `0.19.1+cu124` for cp310 on PyTorch's cu124 index;
-  gsplat's prebuilt `1.5.3+pt24cu124` cp310 wheel, downloaded and pinned by sha256 (its
-  CUDA kernels carry SASS for sm_70/75/80/86/90, which covers T4, A100, A10, H100 and --
-  by same-major compatibility -- the L4's sm_89); the v1.5.3 tag of the gsplat repository
-  for `examples/`; and the example's git pins, fetched at the commits it names.
-* **The trainer environment resolves and the trainer accepts the pipeline's argv.** The
-  same `trainer-requirements.txt`, installed into a CPU replica (CPython 3.10, CPU torch
-  2.4.1), imports `simple_trainer.py` and parses `training.gsplat_argv` with its own CLI.
-  `check_trainer.py` repeats that check as the last step of building this image, so an
-  image whose trainer would refuse the argv fails to build rather than failing a run.
-* **What has not been checked: anything that needs the GPU.** No image has been built by
-  Modal from this file and no training step has run. The first `modal deploy` is where
-  the build is proven (fused-ssim compiles against nvcc there, and nowhere here), and the
-  smoke run in `.github/workflows/modal.yml` is where training is.
-
-Two decisions that shape the image, both forced rather than chosen:
-
-* **Two Pythons.** gsplat publishes its CUDA wheels for CPython 3.10 only, and this
-  project is 3.12. The pipeline and `remote.execute` run under Modal's 3.12
-  (`add_python`); the trainer runs under Ubuntu 22.04's own 3.10 in `/opt/trainer`, which
-  `training.trainer_python` finds through `$GSPLAT_PYTHON`.
-* **A CUDA *devel* base.** gsplat's example imports `fused_ssim`, a CUDA extension
-  distributed only as source, so nvcc has to be in the image to build it. It is built for
-  the architectures in `CUDA_ARCHS` because there is no GPU at build time to detect one.
-
-Why one function per tier: Modal fixes a function's GPU at decoration time, so a single
-`run_stage` cannot serve an L4 request and an A100 request. `FUNCTIONS` is built from the
-tiers `providers.py` offers for Modal, and each one is named `run_stage_<tier>` -- which
-is the name `ModalAdapter` looks up.
-
-Deploy, and prove it, with `.github/workflows/modal.yml`: it creates the
-`twin-object-storage` secret from the R2 private-bucket credentials and runs
-
-    modal deploy infra/modal/app.py
-
-The secret is the private bucket, not the public one. A stage reads raw uploads and
-writes run outputs, and neither belongs in the bucket the world can read -- see
-`apps/api/app/worker/publish.py` for which of a run's outputs are published afterwards,
-and by whom.
+The CPU build checks validate imports, argv, optional modules and our trainer seam.
+The image build, CUDA gradients, memory use and training quality still require the
+coordinator's Modal smoke runs; source inspection and local stand-ins do not prove them.
+No nvidia-ncore: only the optional NCore dataset path imports it; we use COLMAP.
 """
 
 from __future__ import annotations
@@ -95,28 +55,30 @@ else:
 #: an `ImportError` before the first byte moved; the first version of this file installed
 #: two of the six, and `tools/pipeline/tests/test_modal_image.py` now pins the list.
 IMAGE_PACKAGES: tuple[str, ...] = (
-    "boto3>=1.34",
-    "numpy>=1.26",
-    "pillow>=10",
-    "pyyaml>=6.0",
-    "imageio-ffmpeg>=0.5",
+    "boto3==1.43.94",
+    "numpy==2.2.6",
+    "pillow==12.3.0",
+    "pyyaml==6.0.3",
+    "imageio-ffmpeg==0.6.0",
 )
 
-#: The base image. Ubuntu 22.04 because its system Python is the 3.10 gsplat's wheels are
-#: built for; CUDA 12.4 because that is the toolkit the torch and gsplat wheels are.
-CUDA_BASE = "nvidia/cuda:12.4.1-devel-ubuntu22.04"
-TORCH_INDEX = "https://download.pytorch.org/whl/cu124"
-TORCH_PACKAGES: tuple[str, ...] = ("torch==2.4.1+cu124", "torchvision==0.19.1+cu124")
-#: gsplat's `examples/` -- `simple_trainer.py` and its `datasets/` -- at the release the
-#: wheel is, since neither is in the wheel.
-GSPLAT_TAG = "v1.5.3"
+#: CUDA devel and torch agree at 12.8; retain the isolated Python 3.10 trainer venv.
+CUDA_BASE = "nvidia/cuda:12.8.1-devel-ubuntu22.04"
+TORCH_INDEX = "https://download.pytorch.org/whl/cu128"
+TORCH_PACKAGES: tuple[str, ...] = ("torch==2.9.1+cu128", "torchvision==0.24.1+cu128")
+#: The library and examples come from exactly the same source commit.
+GSPLAT_COMMIT = "512d366b67073d77ca099ede742683c165dfc23b"
 GSPLAT_DIR = "/opt/gsplat"
 GSPLAT_TRAINER = f"{GSPLAT_DIR}/examples/simple_trainer.py"
-#: `examples/requirements.txt` at v1.5.3 pins this commit.
-FUSED_SSIM = "git+https://github.com/rahul-goel/fused-ssim@328dc9836f513d00c4b5bc38fe30478b4435cbb5"
+#: CUDA extensions pinned by the upstream examples, PPISP pinned to its v1.2.1 commit.
+FUSED_SSIM = "git+https://github.com/rahul-goel/fused-ssim@a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38"
 #: T4, A100, A10, L4/L40S, H100. fused-ssim's setup.py adds sm_75/80/89 of its own when
 #: it sees no GPU; this list is what torch's extension builder adds on top.
 CUDA_ARCHS = "7.5;8.0;8.6;8.9;9.0"
+FUSED_BILAGRID = (
+    "git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16"
+)
+PPISP = "git+https://github.com/nv-tlabs/ppisp@df33809f7b3b20ac06de088dfc871b144b8fb54d"
 TRAINER_VENV = "/opt/trainer"
 TRAINER_PYTHON = f"{TRAINER_VENV}/bin/python"
 _PIP = f"{TRAINER_VENV}/bin/pip"
@@ -179,7 +141,7 @@ image = (
         # setuptools and wheel too: fused-ssim is built with --no-build-isolation, so it
         # builds with whatever this venv has, and Ubuntu 22.04's bundled setuptools is
         # older than the one that can build a wheel without the `wheel` package.
-        f"{_PIP} install --upgrade pip setuptools wheel",
+        f"{_PIP} install pip==25.3 setuptools==80.9.0 wheel==0.45.1",
         f"{_PIP} install {' '.join(TORCH_PACKAGES)} --index-url {TORCH_INDEX}",
     )
     .add_local_file(
@@ -188,17 +150,34 @@ image = (
     .run_commands(
         # torch pinned by constraint as well as by being installed first: without it an
         # unpinned transitive requirement is free to "upgrade" torch to a CUDA build the
-        # gsplat wheel was not compiled against.
+        # source extensions were not compiled against.
         f"printf '%s\\n' {' '.join(TORCH_PACKAGES)} > /opt/twin/constraints.txt",
         f"{_PIP} install -c /opt/twin/constraints.txt -r /opt/twin/trainer-requirements.txt",
-        f"{_PIP} install -c /opt/twin/constraints.txt --no-build-isolation {FUSED_SSIM}",
-        f"git clone --depth 1 --branch {GSPLAT_TAG} "
-        f"https://github.com/nerfstudio-project/gsplat {GSPLAT_DIR}",
+        f"{_PIP} install -c /opt/twin/constraints.txt --no-build-isolation {FUSED_SSIM} {FUSED_BILAGRID} {PPISP}",
+        f"git init {GSPLAT_DIR} && git -C {GSPLAT_DIR} remote add origin https://github.com/nerfstudio-project/gsplat "
+        f"&& git -C {GSPLAT_DIR} fetch --depth 1 origin {GSPLAT_COMMIT} "
+        f"&& git -C {GSPLAT_DIR} checkout --detach FETCH_HEAD "
+        f"&& git -C {GSPLAT_DIR} submodule update --init --recursive",
+        f"{_PIP} install --no-deps --no-build-isolation {GSPLAT_DIR}",
         # The LPIPS network the trainer builds in its constructor downloads AlexNet's
         # weights on first use; fetched here so a run does not depend on that host.
         f"{TRAINER_PYTHON} -c 'from torchmetrics.image.lpip import "
         f'LearnedPerceptualImagePatchSimilarity as L; L(net_type="alex", normalize=True)\'',
-        env={"TORCH_CUDA_ARCH_LIST": CUDA_ARCHS},
+        env={
+            "TORCH_CUDA_ARCH_LIST": CUDA_ARCHS,
+            "CUDA_HOME": "/usr/local/cuda",
+            "MAX_JOBS": "4",
+            "BUILD_EXPERIMENTAL": "0",
+        },
+    )
+    .run_commands(
+        f"{_PIP} install --no-deps git+https://github.com/facebookresearch/map-anything@3d10cf7a3016fc0f9bb13a071ee66c47b10be0d9 "
+        "git+https://github.com/microsoft/MoGe@74fbce054ebed49800de42d0ad0e83495065719a "
+        "git+https://github.com/EasternJournalist/utils3d-moge@62f09d58509485564e24d5d9f6aac9ee9ebc0c37",
+        f"{TRAINER_PYTHON} -c 'from huggingface_hub import snapshot_download, hf_hub_download; "
+        'snapshot_download("facebook/map-anything-apache", revision="00f9c245bbcb60522d1ed7f9e9d88462c6e3f38a", local_dir="/opt/models/map-anything"); '
+        'hf_hub_download("Ruicheng/moge-2-vitl-normal", "model.pt", revision="cb0e8bbd6b1e243589717c78e750b1ba4c093acf", local_dir="/opt/models/moge")'
+        + "'",
     )
     .pip_install(*IMAGE_PACKAGES)
     .env(
@@ -206,6 +185,8 @@ image = (
             "GSPLAT_TRAINER": GSPLAT_TRAINER,
             "GSPLAT_PYTHON": TRAINER_PYTHON,
             "PYTHONUNBUFFERED": "1",
+            "HEXAPOD_MAP_MODEL": "/opt/models/map-anything",
+            "HEXAPOD_MOGE_MODEL": "/opt/models/moge/model.pt",
             **THREAD_ENV,
         }
     )
@@ -225,6 +206,8 @@ image = (
         # And does it still call the module-global `rasterization` that block training's
         # frozen ring patches (`block_trainer.py`, tools/pipeline/blocks.py)?
         f"{TRAINER_PYTHON} {PIPELINE_DIR}/block_trainer.py --self-check --trainer {GSPLAT_TRAINER}",
+        f"{TRAINER_PYTHON} {PIPELINE_DIR}/quality_trainer.py --self-check --cpu-maths --trainer {GSPLAT_TRAINER}",
+        f"{TRAINER_PYTHON} -c 'from mapanything.models import MapAnything; from moge.model.v2 import MoGeModel; import ppisp, fused_bilagrid'",
         # And does the 3.12 side import every stage (the list above, pinned by a test)?
         f"cd {PIPELINE_DIR} && python -c 'import remote, stages, captures_bridge'",
     )
@@ -294,6 +277,8 @@ cpu_image = (
         {
             "QT_QPA_PLATFORM": "offscreen",
             "PYTHONUNBUFFERED": "1",
+            "HEXAPOD_MAP_MODEL": "/opt/models/map-anything",
+            "HEXAPOD_MOGE_MODEL": "/opt/models/moge/model.pt",
             "COLMAP_VOCAB_TREE": VOCAB_TREE,
             "COLMAP4_VOCAB_TREE": VOCAB_TREE_FAISS,
             "COLMAP_NUM_THREADS": COLMAP_THREADS,

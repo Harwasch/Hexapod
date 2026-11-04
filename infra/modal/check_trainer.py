@@ -6,14 +6,14 @@ renamed flag, a missing dependency, a gsplat that is not the one the pipeline wa
 written against -- fails to *build*, rather than failing a GPU run an hour later.
 
 It is the same check that was run by hand on a CPU venv while this was written, now
-repeated against the real image: import gsplat v1.5.3's `examples/simple_trainer.py` up to
+repeated against the real image: import gsplat v1.6.0's `examples/simple_trainer.py` up to
 (not including) its `__main__` block, build the same `configs` it builds, and parse the
 pipeline's own argv with the same `tyro.extras.overridable_config_cli`. Then the fields
 the pipeline depends on are asserted. Nothing here needs a GPU: `Runner`, which is the
 part that does, is never constructed.
 
 Three switches go further than parsing, because what they need is only imported once the
-trainer is running: `--use_bilateral_grid` imports `lib_bilagrid` (and through it
+trainer is running: `--post_processing bilateral_grid` imports `lib_bilagrid` (and through it
 `tensorly`) in `__main__`, after the CLI has accepted the flag; `--app_opt` reaches into
 `gsplat.cuda._torch_impl` on its first forward; `--pose_opt` builds `CameraOptModule`.
 Each is constructed here and run one forward and backward pass on CPU tensors, with the
@@ -172,7 +172,24 @@ def main() -> int:
         )
     )
 
+    gut: Any = parse(
+        training.gsplat_argv(
+            sys.executable,
+            trainer,
+            Path("/data"),
+            Path("/result"),
+            strategy="mcmc",
+            with_ut=True,
+            with_eval3d=True,
+            post_processing="ppisp",
+            ppisp_use_controller=False,
+        )
+    )
     checks = {
+        "UT/eval3d/PPISP": gut.with_ut
+        and gut.with_eval3d
+        and gut.post_processing == "ppisp"
+        and not gut.ppisp_use_controller,
         "block test_every": block.test_every == 7 and cfg.test_every == 8,
         "block eval ckpt": list(evaluating.ckpt or []) == ["/result/merged.pt"],
         "mcmc strategy": type(tuned.strategy).__name__ == "MCMCStrategy",
@@ -187,11 +204,11 @@ def main() -> int:
         "pose_opt": tuned.pose_opt is True and cfg.pose_opt is False,
         "app_opt": tuned.app_opt is True and cfg.app_opt is False,
         "use_bilateral_grid": (
-            tuned.use_bilateral_grid is True
-            and cfg.use_bilateral_grid is False
+            tuned.post_processing == "bilateral_grid"
+            and cfg.post_processing is None
             # The fused CUDA grid is a different package the image does not install; the
             # flag the pipeline passes must select the plain-torch one.
-            and tuned.use_fused_bilagrid is False
+            and tuned.bilateral_grid_fused is False
         ),
         "benchmark": (
             bench.lpips_net == "vgg"
@@ -213,8 +230,7 @@ def main() -> int:
             list(converging.eval_steps) == [int(i * 0.5) for i in [30_000, *evals]]
         ),
         "refine_stop_iter": (
-            converging.strategy.refine_stop_iter
-            == int(convergence.REFINE_STOP_ITER["mcmc"] * 0.5)
+            converging.strategy.refine_stop_iter == int(convergence.REFINE_STOP_ITER["mcmc"] * 0.5)
             and cfg.strategy.refine_stop_iter == convergence.REFINE_STOP_ITER["default"]
         ),
         "ckpt": cfg.ckpt is None,
@@ -231,14 +247,15 @@ def main() -> int:
 
 
 def _exercise_switches(namespace: dict[str, Any]) -> list[str]:
-    """One forward and backward pass of what `--use_bilateral_grid`, `--app_opt` and
-    `--pose_opt` build, on CPU tensors, called the way v1.5.3's `Runner` calls them.
+    """One forward and backward pass of what `--post_processing bilateral_grid`, `--app_opt` and
+    `--pose_opt` build, on CPU tensors, called the way v1.6.0's `Runner` calls them.
 
     `lib_bilagrid` is imported from beside the trainer, as its `__main__` imports it; the
     other two are the classes the trainer module itself imported from `utils`.
     """
     import torch
-    from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
+    from lib_bilagrid import BilateralGrid, slice, total_variation_loss
+    from gsplat.color_correct import color_correct_affine
 
     ran: list[str] = []
     height, width = 12, 16
@@ -254,7 +271,7 @@ def _exercise_switches(namespace: dict[str, Any]) -> list[str]:
     image_ids = torch.tensor([1])
     out = slice(grids, grid_xy.expand(1, -1, -1, -1), colors, image_ids.unsqueeze(-1))["rgb"]
     (out.mean() + 10 * total_variation_loss(grids.grids)).backward()
-    corrected = color_correct(out.detach(), torch.rand(1, height, width, 3))
+    corrected = color_correct_affine(out.detach(), torch.rand(1, height, width, 3))
     if grids.grids.grad is None or tuple(corrected.shape) != (1, height, width, 3):
         raise SystemExit("lib_bilagrid ran but produced no gradient or the wrong shape")
     ran.append("bilateral grid")

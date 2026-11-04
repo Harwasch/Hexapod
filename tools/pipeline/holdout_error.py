@@ -1,5 +1,8 @@
 """Per-gaussian error on the frames the trainer never saw. Runs on the GPU, after training.
 
+The gsplat 1.6.0 source pin retains this seam; image-build checks validate it.
+GPU behaviour of the upgraded image still requires the driver's smoke.
+
 **Not executed on a GPU in this repository yet.** It needs CUDA (gsplat's rasteriser has
 no CPU path) and no machine this was written on has one. Its numpy half
 (`holdout_maths.py`) is unit-tested; this file is the torch half, written against gsplat
@@ -186,6 +189,21 @@ def main(argv: list[str] | None = None) -> int:
     from gsplat import rasterization
 
     if args.self_check:
+        import inspect
+
+        required = {
+            "means",
+            "quats",
+            "scales",
+            "opacities",
+            "colors",
+            "viewmats",
+            "Ks",
+            "with_ut",
+            "with_eval3d",
+        }
+        if not required <= set(inspect.signature(rasterization).parameters):
+            raise ValueError("gsplat rasterization signature changed")
         sys.stdout.write(f"holdout: torch {torch.__version__}, rasterization and datasets ok\n")
         return 0
     for name in ("data_dir", "ply", "out"):
@@ -216,6 +234,7 @@ def main(argv: list[str] | None = None) -> int:
     dc = np.stack([columns[f"f_dc_{i}"] for i in range(3)], axis=1).astype(np.float32)[:, None]
     shipped, shipped_degree = shipped_sh(dc, rest, args.sh_degree)
     shown_colors = torch.from_numpy(shipped).to(device)
+    # Score the plain exported 3DGS used downstream, even when fitted with UT/eval3d.
     mode = "antialiased" if args.antialiased else "classic"
 
     def render(colors: Any, viewmat: Any, k: Any, width: int, height: int, degree: Any) -> Any:

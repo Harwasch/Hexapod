@@ -126,6 +126,8 @@ def evaluate(
     from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
     from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
+    # Fixed shipping-renderer comparison across the old and upgraded images. UT and
+    # PPISP training settings never change this test camera or its exposure.
     columns = read_ply(ply)
     raw, reason = full_sh_columns(columns, raw_ply)
     device = torch.device("cuda")

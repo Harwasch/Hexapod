@@ -645,7 +645,7 @@ def test_the_phone_capture_switches_are_absent_from_the_default_argv() -> None:
         "p", Path("t"), Path("d"), Path("r"), pose_opt=True, app_opt=True, bilateral_grid=True
     )
 
-    for switch in ("--pose_opt", "--app_opt", "--use_bilateral_grid"):
+    for switch in ("--pose_opt", "--app_opt", "--post_processing"):
         assert switch not in plain
         assert switch in tuned
 

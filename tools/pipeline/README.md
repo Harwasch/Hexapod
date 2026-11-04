@@ -10,7 +10,7 @@ which imports this project as a library.
 registration out. Since 2026-09-23 it **converts the file's up axis** rather than assuming
 z -- see [The up axis](#the-up-axis) -- which is what stopped uploads landing on their side.
 
-**Lane 2 is real up to the GPU, and the GPU half is built and checked but has never run.**
+**Lane 2 has historical GPU runs. The quality-stack image upgrade awaits its first GPU smoke.**
 The state of each piece, in the three-state vocabulary of `docs/HANDOFF.md`:
 
 | Piece                                         | State        | Evidence                                                                                                                                                                                                                                                                                                     |
@@ -20,8 +20,8 @@ The state of each piece, in the three-state vocabulary of `docs/HANDOFF.md`:
 | levelling by camera-up                        | verified     | real reconstruction: dominant plane 0.39 deg from up after levelling; rendered orbit within 5 deg (CI)                                                                                                                                                                                                       |
 | the EXIF similarity, applied (`place`)        | verified     | rendered orbit with synthetic GPS: sparse points 0.011 m from the scene placed, 0.41 m unplaced (CI)                                                                                                                                                                                                         |
 | a video with no location                      | verified     | falls back to the capture's `lat`/`lon`, recorded `manual`; with neither it refuses by name (CI)                                                                                                                                                                                                             |
-| `train` argv and output layout (gsplat 1.5.3) | verified     | parsed by v1.5.3's own `simple_trainer.py` CLI in a CPU replica of the image's venv (CI job `trainer`), then run for real on an L4 (below)                                                                                                                                                                   |
-| the Modal training image                      | verified     | built by Modal on 2026-09-23 (about 8 minutes, once); CUDA 12.4.1, torch 2.4.1, gsplat 1.5.3                                                                                                                                                                                                                 |
+| `train` argv and output layout (gsplat 1.6.0) | unproven on GPU | pinned-source seam checks and stand-in tests; real CLI/gradient/export checks run when the driver builds the image |
+| the Modal training image | unproven upgrade | CUDA 12.8.1, torch 2.9.1+cu128, gsplat source `512d366b`; previous 1.5.3 image was measured on 2026-09-23 |
 | the GPU path end to end                       | verified     | `modal.yml` smoke, 2026-09-23: 500 steps on an L4, 68 s billed, $0.015, PSNR/SSIM read from gsplat's stats file, `trained.ply` placed and packaged to a tileset                                                                                                                                              |
 | `ModalAdapter` against a live workspace       | verified     | the same smoke: submit, poll to success, log tail, outputs back through R2. Its first two real runs found two bugs, both fixed and tested (below)                                                                                                                                                            |
 | a full-length training run on a real capture  | **unproven** | the smoke trained 500 steps; 30,000 steps on a real video has not run. Its cost is unmeasured -- scale from the smoke's billed seconds                                                                                                                                                                       |
@@ -794,7 +794,7 @@ to the serial one's, `test_blocks.py`):
 
 ### Batched steps (`batch_size`)
 
-`batch_size: B` (1-8, default 1) trains B images a step. gsplat v1.5.3 scales every
+`batch_size: B` (1-8, default 1) trains B images a step. gsplat v1.6.0 scales every
 learning rate by `sqrt(B)` and Adam's eps by `1/sqrt(B)` but does not shorten the
 schedule, so the stage divides `--steps_scaler` by B: the same images trained on, in B
 times fewer steps. The refine window, SH interval and evaluation steps are scaled by the
@@ -1324,7 +1324,7 @@ pool poses inside training; scoring always uses the frozen test cameras.
 
 `packed` remains on by default. Its experimental companions `sparse_grad` and
 `visible_adam` are opt-in train params for bench trials, both **off by default** (no argv
-change when off). `sparse_grad` requires `packed: true`, as gsplat v1.5.3 asserts; the
+change when off). `sparse_grad` requires `packed: true`, as gsplat v1.6.0 requires; the
 stage refuses an incompatible pair before invoking the trainer. These change optimiser
 updates, so only measurements can justify adopting them. They pass through the same
 argv in single-scene, convergence and block training. Fused SSIM is already used by
@@ -1410,15 +1410,23 @@ Use `--runs ID ...` to disambiguate repeats, and `--baseline upgraded --candidat
 to test an incremental feature rather than the whole stack. Eligibility is evidence
 for the driver's decision, not an automatic recipe edit.
 
-### Quality-stack Phase 0
+### Quality-stack bake-off
 
-`experiments/variants/quality-stack.yaml` reserves six cumulative arm names for the
-18 full runs (three captures, seed 42, L4). Only `baseline-main` is enabled now; the
-others are null and refused before paid work until their implementations land. With
-`--variants`, `--variant NAME` selects one arm; without it, every arm must be ready.
-Phase 0 keeps the gsplat v1.5.3 training image definition and recipe unchanged. Run
-baseline from this commit before the image upgrade, using the same frozen scenes in
-later phases. Do not refreeze between arms.
+`experiments/variants/quality-stack.yaml` contains six cumulative arms for 18 full
+runs (three captures, seed 42, L4). `baseline-main` belongs to Phase 0 commit
+`c7fb90c8` and gsplat 1.5.3. Paid runs of that label are refused on the new image;
+all six labels remain available in synthetic rehearsal. Truck and Beach are already
+frozen; reuse those manifests. With `--variants`, `--variant NAME` selects one arm.
+
+The upgraded arm uses UT + 3D response evaluation + pose optimization: the first two
+exercise the new camera/rasterization path, while pose refinement addresses small SfM
+errors in phone captures. PPISP remains a separate candidate, because exposure fitting
+and controller distillation would confound that comparison. These are hypotheses;
+no quality default has changed. Test scores and top-downs use the same plain 3DGS
+renderer as the previous bench, including for UT-trained PLYs. They measure what the
+export can render without learned camera/exposure modules. Internal val scores can
+therefore differ. Antialiasing still has the shipping renderer compensation caveat;
+it is also incompatible with UT/eval3d and is rejected before training.
 
 Use one ledger and one tag for the entire bake-off, including freeze, smoke, failures
 and full runs. `--total-cap 30 --tag quality-stack` enforces cumulative accounted spend
@@ -1438,20 +1446,17 @@ quality_bench() {
   bench "$@" --tag quality-stack --total-cap 30 --cap 2 \
     --ledger "$HOME/.local/share/hexapod-bench/quality-stack.jsonl"
 }
-quality_bench freeze --scene truck
-quality_bench freeze --scene beach
-# Only if Spool has no existing frozen snapshot:
-# quality_bench freeze --scene spool
-
-# Run screens first; inspect success, test frame counts, and top-down images.
-for scene in spool truck beach; do
-  quality_bench run --scene "$scene" --variants experiments/variants/quality-stack.yaml \
-    --variant baseline-main --schedule screen --tier l4 --seeds 42 --topdown --keep-splat || break
+# New image: screen each new arm first. The driver runs this; no production deploy.
+for arm in upgraded +dense +priors+aniso +sky-far-cap all-on; do
+  quality_bench run --scene spool --variants experiments/variants/quality-stack.yaml \
+    --variant "$arm" --schedule screen --tier l4 --seeds 42 --topdown --keep-splat || break
 done
-# After the screens pass, measure the three baseline runs on the old image.
+# After smoke results are checked, add the 15 new full runs to the three old baselines.
 for scene in spool truck beach; do
-  quality_bench run --scene "$scene" --variants experiments/variants/quality-stack.yaml \
-    --variant baseline-main --schedule full --tier l4 --seeds 42 --topdown --keep-splat || break
+  for arm in upgraded +dense +priors+aniso +sky-far-cap all-on; do
+    quality_bench run --scene "$scene" --variants experiments/variants/quality-stack.yaml \
+      --variant "$arm" --schedule full --tier l4 --seeds 42 --topdown --keep-splat || break 2
+  done
 done
 bench results --tag quality-stack --flip-rule
 bench ledger --ledger "$HOME/.local/share/hexapod-bench/quality-stack.jsonl"
@@ -1460,6 +1465,81 @@ bench ledger --ledger "$HOME/.local/share/hexapod-bench/quality-stack.jsonl"
 Add `--dry-run` to any freeze/run command for the offline reservation plan. Freeze
 expects Truck's 251 registered frames (31 test, 220 pool); Beach's counts come from
 its frozen model. No GPU quality result or top-down raster has been verified locally.
+
+### Optional train settings and stable metrics
+
+The production recipe documents these as opt-in params; its version stays 15 because
+none of the quality defaults flips. Source and weights are recorded in
+[NOTICE](NOTICE). No new local dependency is required.
+
+- `with_ut`, `with_eval3d`: both off. Eval3d requires UT and MCMC; antialiased rendering
+  is incompatible. `pose_opt` remains available. `rolling_shutter` is refused: upstream
+  `simple_trainer` has no COLMAP timing input; its AV trainer is a separate path.
+- `post_processing: ppisp`: batch size 1; controller and distillation default true,
+  activation step defaults 25000. That step is **not** scaled by upstream's schedule.
+  Set `ppisp_controller_activation_num_steps` below the actual steps on a short run,
+  or disable `ppisp_use_controller`. `bilateral_grid: true` remains an alias for
+  `post_processing: bilateral_grid`, whose upstream argv changed. Color-corrected
+  evaluation is now a separate upstream option, so absent metrics remain absent.
+- `init: sfm+dense`: Apache MapAnything uses only staged train frames, four-view chunks
+  with one overlap, known intrinsics/poses, confidence masks, robust Sim3 anchors and
+  voxel deduplication. Accepted chunks need at least eight SfM correspondences, 60%
+  consensus within 5% of robust scene radius, and scale between 0.5 and 2. These are
+  explicit, uncalibrated acceptance rules. Sparse points win duplicates; additions fit
+  within cap/4 including sparse points. Any dense failure leaves SfM intact and reports
+  a warning. No external init path or split override is admitted by the bench.
+- `priors: {depth_weight, normal_weight, gradient_weight, start_step, model}`: weights
+  default zero, start step 1000, sole model `moge-2-vitl-normal`. MoGe runs once per
+  training frame; cache identity includes frame SHA256, pinned model revision, K and
+  image dimensions, undistorted pixel/mask hashes and preprocessing version. `prior_cache` is an uploaded stage artifact and checkpoint data,
+  reused on retry/from-stage reruns. A caller can supply it as an optional input for a
+  new workdir. Bench caches live on its volume and never enter the frozen manifest.
+  Test and internal validation images are never inferred. Requested prior inference
+  failure fails the run; it cannot masquerade as a regularized measurement.
+- Depth uses three robust scale/shift fits per image and normalized absolute residuals;
+  optional adjacent-pixel residual differences penalize depth gradients. Normal loss
+  compares view-facing normals from expected rendered depth with MoGe's camera-frame
+  normals. This works with MCMC and UT without imposing a planar-splat representation.
+  `aniso_cap: {ratio: 10, weight: 0}` is a mean hinge on longest/shortest axis ratio.
+  These are our implementations of the maths, with NumPy reference tests.
+- `far_field: sphere` reserves at most `far_field_share` (default 0.1, maximum 0.15)
+  of `cap_max`, using up to `far_field_count` (256) frozen gaussians. Their constant
+  colour is the median sparse-point RGB; this first arm measures a simple environment
+  fill, not an inferred sky. They are rendered but never optimized or densified. The
+  sphere sits at ten robust radii; "far" is beyond five radii about the original sparse
+  median. Export bounds all geometrically far rows, including learned outliers, by the
+  surviving foreground count. Marked rows survive crop and quality. `place` streams
+  them out before estimating origin, bounds or tiles; trained/gated artifacts retain them.
+- Dense/priors/aniso/far currently require `blocks: 1`, batch size 1, MCMC, SH colours
+  and standard dense Adam. Preview seed, random image patches, appearance embeddings,
+  sparse gradients and visible Adam are refused with those extensions.
+- `quality.bar: fade` preserves rows and fades opacity by support tier: keep unchanged,
+  context times `context_fade` (0.5), unsupported times its square. `keep` continues to
+  count the high-support tier; `gaussians.out` includes every retained row.
+  `strict` remains the default. Background markers are preserved unchanged.
+
+`train_metrics.json` and `live-metrics: {JSON}` share the names below, exported in
+`quality_stack.METRIC_NAMES`. Live loss samples include a zero-based `step`, every 100
+steps; the final stage line includes the complete available val curve. Losses are raw
+unweighted terms, with weights recorded in `qualityStack.settings`. Synthetic rehearsal
+is explicitly labelled and its zero losses are not measurements.
+
+| Name | Value / units |
+| --- | --- |
+| `splatCount` | Integer Gaussian count; final line is the exported PLY count |
+| `farFieldShare` | Fraction beyond five original sparse-scene radii; final line after cap |
+| `elongationShare` | Fraction whose longest/shortest scale axis exceeds 10 |
+| `lossTerms` | Object: `depth`, `normal`, `gradient`, `anisotropy`; empty when hooks are off |
+| `valPsnrCurve` | List of available validation records with one-based `step`, `psnr` in dB |
+| `denseInitSeconds` | Dense preprocessing wall seconds, including a failed attempt |
+| `denseInitPoints` | Initial point count after dense attempt |
+| `denseInitAddedPoints` | Accepted dense additions (zero on fallback) |
+
+The new image remains unverified on GPU. Build-time checks parse the real upstream CLI,
+check the source insertion seam, exercise CPU depth/normal gradients, and round-trip a
+plain SH3 PLY. Stand-in rehearsals exercise dataset isolation, dispatch, artifacts,
+background export, fade and reporting; they do not validate CUDA kernels or model
+quality. Use the existing flip-rule helper only on complete full L4 measurements.
 
 Step 2 measurement commands, from `tools/pipeline`, after the Spool freeze exists. These
 use separate ledgers outside the checkout so earlier bench spend does not consume their
