@@ -618,8 +618,8 @@ def _register() -> dict[str, Any]:
             secrets=secrets,
         )(_run)
     # The same body over a ranked list of GPUs (`modal_adapter.GPU_FALLBACKS`): Modal
-    # starts the call on the first type it has free, in order. For a fan-out's parts only
-    # (`ModalAdapter` picks it), so a part does not queue for an L4 while another GPU sits
+    # starts the call on the first type it has free, in order. For any call whose tier has
+    # a fallback list (`ModalAdapter` picks it), so it does not queue while another GPU sits
     # idle; the container reports which it got (`remoteGpu`) and is priced at that tier.
     for tier, chain in GPU_FALLBACKS.items():
         if tier not in TIERS or not all(t in TIERS for t in chain):

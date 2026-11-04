@@ -138,8 +138,8 @@ def test_the_function_looked_up_is_the_one_for_the_request_s_tier() -> None:
 
     adapter = ModalAdapter("twin")
     adapter._function = lookup  # type: ignore[method-assign]
-    adapter.submit(request())
-    assert asked == ["run_stage_l4"]
+    adapter.submit(replace(request(), tier="a10"))
+    assert asked == ["run_stage_a10"]
 
 
 def test_submit_sends_the_request_dict_and_keeps_the_call_id() -> None:
@@ -455,9 +455,10 @@ def part_request(tier: str = "l4") -> StageRequest:
     return replace(request(), tier=tier, params={FANOUT_PARAM: {"role": "part", "part": "b0"}})
 
 
-def test_a_part_may_start_on_the_first_free_gpu_of_its_fallback_list() -> None:
-    """A part waits on no one GPU type: `run_stage_l4_fallback` is deployed with
-    `gpu=["L4", "L40S"]`, and the call is priced at what the container says it got."""
+@pytest.mark.parametrize("role", [None, "head", "join", "part"])
+def test_any_call_may_start_on_the_first_free_gpu_of_its_fallback_list(role: str | None) -> None:
+    """A call waits on no one GPU type: `run_stage_l4_fallback` is deployed with
+    `gpu=["L4", "L40S", "A10"]`, and the call is priced at what the container says it got."""
     looked_up: list[str] = []
     call = FakeCall(
         outcome={"metrics": {"remoteGpu": "NVIDIA L40S", "containerCall": 1}, "summary": ""}
@@ -469,15 +470,27 @@ def test_a_part_may_start_on_the_first_free_gpu_of_its_fallback_list() -> None:
 
     adapter = ModalAdapter("twin")
     adapter._function = lookup  # type: ignore[method-assign]
-    handle = adapter.submit(part_request())
+    params = {} if role is None else {FANOUT_PARAM: {"role": role}}
+    handle = adapter.submit(replace(request(), params=params))
     poll = adapter.poll(handle)
 
     assert looked_up == [fallback_tier("l4")] == ["l4_fallback"]
     assert poll.tier == "l40s"
-    # The head, the join and a single run keep the tier they asked for.
-    adapter.submit(request())
-    assert looked_up[-1] == "l4"
-    assert GPU_FALLBACKS["l4"][0] == "l4", "the asked-for tier stays first choice"
+    assert GPU_FALLBACKS["l4"] == ("l4", "l40s", "a10")
+
+
+def test_a_single_run_landing_on_a10_is_priced_at_a10() -> None:
+    adapter, handle, _ = adapter_over(FakeCall(outcome={"metrics": {"remoteGpu": "NVIDIA A10"}}))
+    poll = adapter.poll(handle)
+    assert poll.tier == "a10"
+    modal = provider("modal")
+    reserved = reservation_rate("a10")
+    assert modal is not None and reserved is not None
+    rate = modal.rate("a10")
+    assert rate is not None
+    assert adapter.rate(poll.tier) == Rate(
+        rate.usd_per_hour + reserved.usd_per_hour, f"{rate.source}; {reserved.source}"
+    )
 
 
 def test_a_part_on_its_own_tier_is_priced_at_it_and_an_unknown_gpu_at_the_dearest() -> None:
@@ -488,7 +501,8 @@ def test_a_part_on_its_own_tier_is_priced_at_it_and_an_unknown_gpu_at_the_deares
         assert adapter.poll(adapter.submit(part_request())).tier == expected
 
 
-def test_a_deployment_without_the_fallback_functions_runs_the_part_on_its_tier() -> None:
+@pytest.mark.parametrize("role", [None, "head", "join", "part"])
+def test_a_deployment_without_the_fallback_functions_runs_on_its_tier(role: str | None) -> None:
     not_found = modal_exception("NotFoundError")
     looked_up: list[str] = []
 
@@ -502,15 +516,18 @@ def test_a_deployment_without_the_fallback_functions_runs_the_part_on_its_tier()
 
     adapter = ModalAdapter("twin")
     adapter._function = lookup  # type: ignore[method-assign]
-    adapter.submit(part_request())
+    params = {} if role is None else {FANOUT_PARAM: {"role": role}}
+    adapter.submit(replace(request(), params=params))
     assert looked_up == ["l4_fallback", "l4"]
 
 
-def test_fallback_can_be_turned_off() -> None:
+@pytest.mark.parametrize("role", [None, "head", "join", "part"])
+def test_fallback_can_be_turned_off(role: str | None) -> None:
     looked_up: list[str] = []
     adapter = ModalAdapter("twin", part_fallback=False)
     adapter._function = lambda tier: looked_up.append(tier) or FakeFunction(FakeCall())  # type: ignore[method-assign,func-returns-value]
-    adapter.submit(part_request())
+    params = {} if role is None else {FANOUT_PARAM: {"role": role}}
+    adapter.submit(replace(request(), params=params))
     assert looked_up == ["l4"]
 
 
@@ -520,6 +537,7 @@ def test_fallback_can_be_turned_off() -> None:
         ("NVIDIA L4", ("l4", "l40s"), "l4"),
         ("NVIDIA L40S", ("l4", "l40s"), "l40s"),
         ("NVIDIA A10", ("l4", "a10"), "a10"),
+        ("NVIDIA A10G", ("l4", "l40s", "a10"), "a10"),
         ("NVIDIA A100-SXM4-80GB", ("a100-40gb", "a100"), "a100"),
         ("NVIDIA A100-SXM4-40GB", ("a100", "a100-40gb"), "a100-40gb"),
         ("NVIDIA H100 80GB HBM3", ("l4", "l40s"), None),

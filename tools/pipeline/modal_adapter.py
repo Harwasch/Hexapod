@@ -114,7 +114,6 @@ from cloud import (
     StageRequest,
     container_billing,
 )
-from contracts import FANOUT_PARAM
 from providers import (
     MODAL_CORE_HOUR_USD,
     MODAL_GIB_HOUR_USD,
@@ -158,7 +157,7 @@ GPU_NAMES: Mapping[str, str] = {
     "b300": "B300",
 }
 
-#: A fan-out part's GPU, ranked: tier asked for -> the tiers Modal may start the part on,
+#: A call's GPU, ranked: tier asked for -> the tiers Modal may start the call on,
 #: first free wins (`gpu=[...]` in `infra/modal/app.py`, a ranked list in modal 1.5.5's
 #: `_Function.from_local`). A part otherwise waits for its one tier: in job 33bc1bff one
 #: of two L4 parts waited 1,697 s -- 28 minutes of a 30-minute `max_pending_s` -- while
@@ -169,15 +168,14 @@ GPU_NAMES: Mapping[str, str] = {
 #:   give +6% on the training seconds; the start, fetch and syncs are not sped up) -- for
 #:   a part that ends in under half the time, instead of one that has not started. 48 GB,
 #:   so a block sized for the L4's 24 GB fits with room.
-#: * **A10, out, until measured.** $1.10/h, 1.38x the price, 24 GB; nothing here has timed
-#:   gsplat on one. Its memory bandwidth (600 GB/s against 300) suggests it breaks even,
-#:   but a slower-per-dollar GPU that is merely free would make a part cost more *and* end
-#:   later than a short wait for an L4 would.
+#: * **A10, last.** $1.10/h, 1.38x the price, 24 GB. It is the only other tier proven
+#:   free on 2026-11-03 (a smoke started in about 2 s); gsplat speed per dollar is
+#:   unmeasured, so prefer L4 then L40S.
 #:
-#: Parts only: a single run, a head and a join keep their one tier (the L4 by default),
-#: because they are not waited on by a sibling that is already paid for.
+#: Single runs, heads and joins use the same list as parts: production L4 train calls
+#: have not started since 2026-10-28 and exhaust their 1,800 s pending waits.
 GPU_FALLBACKS: Mapping[str, tuple[str, ...]] = {
-    "l4": ("l4", "l40s"),
+    "l4": ("l4", "l40s", "a10"),
 }
 
 
@@ -192,7 +190,8 @@ def tier_of_gpu(name: str, chain: Sequence[str]) -> str | None:
 
     Matched on the name's words, so `L4` is never taken for `L40S` or the other way; an
     A100's memory is checked too (`NVIDIA A100-SXM4-80GB`). None when no tier matches."""
-    words = name.upper().replace("NVIDIA", " ").replace("-", " ").split()
+    # `A10` is Modal's identifier; the card itself is an A10G, which is how Modal bills it.
+    words = name.upper().replace("NVIDIA", " ").replace("-", " ").replace("A10G", "A10").split()
     for tier in chain:
         want = GPU_NAMES.get(tier, "").upper().split("-")
         if want and want[0] in words and all(part in name.upper() for part in want[1:]):
@@ -326,8 +325,8 @@ class ModalAdapter:
         rates: Mapping[str, Rate] | None = None,
         timeout_s: float = 6 * 3600.0,
         environment_name: str | None = None,
-        #: Start a fan-out's parts on the first free GPU of `GPU_FALLBACKS` rather than
-        #: only their own tier. Off, every call waits for exactly the tier it asked for.
+        #: Start any call on the first free GPU of `GPU_FALLBACKS` rather than
+        #: only its own tier. Off, every call waits for exactly the tier it asked for.
         part_fallback: bool = True,
     ) -> None:
         self._app_name = app_name
@@ -368,8 +367,8 @@ class ModalAdapter:
             try:
                 call = self._function(fallback_tier(request.tier)).spawn(request.to_dict())
             except Exception as error:
-                # A deployment older than the fallback functions: the part waits for its
-                # own tier, as every part did before. Anything else is a real failure.
+                # A deployment older than the fallback functions: the call waits for its
+                # own tier, as every call did before. Anything else is a real failure.
                 if type(error).__name__ != "NotFoundError":
                     raise
                 chain = (request.tier,)
@@ -409,10 +408,8 @@ class ModalAdapter:
         )
 
     def _chain(self, request: StageRequest) -> tuple[str, ...]:
-        """The tiers this call may run on: a part's fallback list, or its own tier."""
-        role = request.params.get(FANOUT_PARAM)
-        is_part = isinstance(role, Mapping) and role.get("role") == "part"
-        if self._part_fallback and is_part and request.tier in GPU_FALLBACKS:
+        """The tiers this call may run on: its fallback list, or its own tier."""
+        if self._part_fallback and request.tier in GPU_FALLBACKS:
             return GPU_FALLBACKS[request.tier]
         return (request.tier,)
 
