@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import filecmp
 import json
@@ -16,7 +17,7 @@ from . import rehearsal
 from .gpu import GpuSampler
 from .ledger import STARTUP_SECONDS
 from .recipe import make_recipe, patch_seed
-from .results import parse_result
+from .results import METRICS, parse_result
 from .scene import prepare_pool, read_json, verify, write_json
 
 ARTIFACTS = (
@@ -27,6 +28,66 @@ ARTIFACTS = (
     "gpu_samples.json",
     "test.json",
 )
+
+
+def topdown_preview(
+    scene: Path, ply: Path, destination: Path, params: dict[str, Any], remaining: float
+) -> dict[str, Any]:
+    """Best effort, at most a minute within the existing function reservation."""
+    deadline = time.monotonic() + min(60, remaining)
+    try:
+        import numpy as np
+
+        import sfm
+        import training
+        from holdout_error import read_ply
+
+        from .topdown_maths import frame_camera
+
+        if remaining <= 0:
+            raise TimeoutError("no top-down time left in function budget")
+        model = sfm.read_model(scene / "poses")
+        up = sfm.camera_up(model)
+        columns = read_ply(ply)
+        camera = frame_camera(
+            np.stack([columns[k] for k in ("x", "y", "z")], axis=1),
+            [image.centre for image in model.images],
+            None if up is None else up.up,
+        )
+        if up is not None:
+            camera["upConsistency"] = up.consistency
+        camera_path = destination / "renders/topdown-camera.json"
+        write_json(camera_path, camera)
+        output = destination / "renders/topdown.png"
+        command = [
+            training.trainer_python(None),
+            str(Path(__file__).with_name("topdown.py")),
+            "--ply",
+            str(ply),
+            "--camera",
+            str(camera_path),
+            "--out",
+            str(output),
+            "--degree",
+            str(params.get("ship_sh_degree", 0)),
+        ]
+        if params.get("antialiased"):
+            command.append("--antialiased")
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("no top-down time left after camera framing")
+        subprocess.run(command, check=True, timeout=left)  # noqa: S603
+        png = output.read_bytes()
+        if len(png) > 1_000_000 or not png.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("top-down output is not a small PNG")
+        return {
+            "status": "complete",
+            "path": "renders/topdown.png",
+            "camera": camera,
+            "pngBase64": base64.b64encode(png).decode("ascii"),
+        }
+    except Exception as error:
+        return {"status": "failed", "warning": f"{type(error).__name__}: {error}"}
 
 
 class RestartedError(RuntimeError):
@@ -55,8 +116,21 @@ def restart_result(plan: dict[str, Any], error: RestartedError) -> dict[str, Any
         "schemaVersion": 1,
         "runId": plan["runId"],
         "scene": plan["scene"],
+        "tag": plan.get("tag"),
+        "variant": plan.get("variant", {"name": "unknown", "overrides": {}}),
         "seed": plan.get("seed"),
         "schedule": plan["schedule"],
+        "splitDigest": plan.get("splitDigest"),
+        "manifestDigest": plan.get("manifestDigest"),
+        "benchCommit": plan.get("benchCommit"),
+        "gpu": {"tier": plan.get("tier"), "name": None},
+        # A refused restart has no new measurements. Keep the report shape so it is
+        # visible in tagged results and cannot crash the batch's Markdown report.
+        "test": dict.fromkeys(METRICS),
+        "splats": None,
+        "trainSeconds": None,
+        "wallSeconds": None,
+        "rehearsal": bool(plan.get("rehearsal")),
         "status": "preempted",
         "error": f"Preempted; restart refused, no second attempt: {error}",
         "costUsd": None,
@@ -97,6 +171,11 @@ def run_training(
     train_seconds = None
     gpu_name = None
     error = None
+    topdown: dict[str, Any] = (
+        {"status": "skipped", "warning": "evaluation did not finish"}
+        if plan.get("topdown")
+        else {"status": "off"}
+    )
     sampler = GpuSampler(None if plan.get("rehearsal") else shutil.which("nvidia-smi"))
     with tempfile.TemporaryDirectory(prefix="bench-work-") as temporary:
         work = Workdir.create(Path(temporary) / plan["runId"])
@@ -144,6 +223,8 @@ def run_training(
             if plan.get("rehearsal"):
                 test = rehearsal.evaluation(split["test"])
                 write_json(destination / "test.json", test)
+                if plan.get("topdown"):
+                    topdown = {"status": "skipped", "warning": "rehearsal has no GPU renders"}
             else:
                 # Full model/images live outside the runner and are only opened now.
                 data = training.build_dataset(
@@ -185,6 +266,14 @@ def run_training(
                 if remaining <= 0:
                     raise TimeoutError("no evaluation time left in function budget")
                 subprocess.run(command, check=True, timeout=remaining)  # noqa: S603
+                if plan.get("topdown"):
+                    topdown = topdown_preview(
+                        scene,
+                        shipped,
+                        destination,
+                        params,
+                        plan["timeoutSeconds"] - (time.time() - entered) - 15,
+                    )
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
         finally:
@@ -216,6 +305,7 @@ def run_training(
             for name in ARTIFACTS
             if (destination / name).is_file()
         }
+        result["topdown"] = topdown
         write_json(destination / "result.json", result)
         if not plan.get("keepSplat"):
             (destination / "trained.ply").unlink(missing_ok=True)

@@ -49,6 +49,7 @@ def parse_result(
         "schemaVersion": 1,
         "runId": plan["runId"],
         "scene": plan["scene"],
+        "tag": plan.get("tag"),
         "variant": plan["variant"],
         "seed": plan["seed"],
         "schedule": plan["schedule"],
@@ -239,4 +240,142 @@ def markdown(results: list[dict[str, Any]]) -> str:
     for row in results:
         if row.get("error"):
             lines += ["", f"Failed `{row['runId']}`: {row['error']}"]
+    return "\n".join(lines) + "\n"
+
+
+def bakeoff_markdown(results: list[dict[str, Any]]) -> str:
+    """One row per run: keep provenance visible instead of silently pooling smoke/full."""
+    lines = [
+        "| scene | variant | test PSNR | SSIM | LPIPS | splats | GPU min | $ "
+        "| run / schedule / seed / status | top-down |",
+        "|" + "---|" * 10,
+    ]
+    for row in results:
+        test = row.get("test", {})
+        wall = number(row.get("wallSeconds"))
+        values = [test.get(k) for k in ("psnr", "ssim", "lpips")]
+        values += [
+            row.get("splats"),
+            None if wall is None or row.get("rehearsal") else wall / 60,
+            row.get("costUsd"),
+        ]
+        cells = ["-" if number(v) is None else f"{v:.4f}" for v in values]
+        preview = row.get("topdown", {})
+        link = preview.get("localPath")
+        image = f"[PNG]({Path(link).as_uri()})" if link else preview.get("status", "off")
+        label = row.get("variant", {}).get("name", "unknown")
+        if row.get("rehearsal"):
+            label += " (synthetic)"
+        lines.append(
+            f"| {row['scene']} | {label} | "
+            + " | ".join(cells)
+            + f" | {row['runId']} / {row.get('schedule')} / {row.get('seed')} "
+            + f"/ {row['status']} | {image} |"
+        )
+    lines += [
+        "",
+        "GPU minutes are billed container wall time, including startup and evaluation; "
+        "costs use the ledger's rate model.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def flip_rule(
+    results: list[dict[str, Any]],
+    baseline: str,
+    candidate: str,
+    scenes: tuple[str, ...] = ("spool", "truck", "beach"),
+) -> dict[str, Any]:
+    """Full L4 only; pair identical frozen inputs/seeds; ambiguous/missing runs abstain.
+
+    Commits may differ (the old image is the baseline), but each arm must use one
+    commit and override set. Screen and synthetic results can never flip a default.
+    Caller can select explicit run IDs to disambiguate reruns, or compare adjacent arms
+    by changing baseline. The verdict is PSNR-only, as specified by the bake-off rule.
+    """
+    rows = [
+        r
+        for r in results
+        if not r.get("rehearsal")
+        and r.get("schedule") == "full"
+        and r.get("gpu", {}).get("tier") == "l4"
+        and r.get("variant", {}).get("name") in {baseline, candidate}
+    ]
+    deltas: dict[str, float | None] = dict.fromkeys(scenes)
+    reasons = []
+    for arm in (baseline, candidate):
+        configs = {
+            json.dumps([r.get("benchCommit"), r["variant"].get("overrides")], sort_keys=True)
+            for r in rows
+            if r["variant"]["name"] == arm
+        }
+        if len(configs) > 1:
+            reasons.append(f"{arm}: mixed commits/overrides; select explicit --runs")
+    for scene in scenes:
+        pairs = []
+        for arm in (baseline, candidate):
+            selected = [r for r in rows if r["scene"] == scene and r["variant"]["name"] == arm]
+            by_seed = {r.get("seed"): r for r in selected}
+            if not selected or len(selected) != len(by_seed):
+                reasons.append(f"{scene}/{arm}: missing or duplicate seeds")
+            pairs.append(by_seed)
+        left, right = pairs
+        if not left or left.keys() != right.keys():
+            reasons.append(f"{scene}: unmatched seeds")
+            continue
+        differences = []
+        for seed in left:
+            a, b = left[seed], right[seed]
+            valid = all(
+                a.get(k) is not None and a.get(k) == b.get(k)
+                for k in ("manifestDigest", "splitDigest")
+            )
+            av, bv = number(a.get("test", {}).get("psnr")), number(b.get("test", {}).get("psnr"))
+            if (
+                not valid
+                or a["status"] != "complete"
+                or b["status"] != "complete"
+                or av is None
+                or bv is None
+            ):
+                reasons.append(f"{scene}/{seed}: failed, unscored, or different frozen inputs")
+                continue
+            differences.append(bv - av)
+        if len(differences) == len(left):
+            deltas[scene] = sum(differences) / len(differences)
+    values = [v for v in deltas.values() if v is not None]
+    eligible = not reasons and len(values) == len(scenes)
+    passes = eligible and sum(v > 0 for v in values) >= 2 and min(values) >= -0.3
+    return {
+        "baseline": baseline,
+        "candidate": candidate,
+        "deltaPsnr": deltas,
+        "verdict": "eligible" if passes else "keep-off" if eligible else "incomplete",
+        "reasons": reasons,
+    }
+
+
+def flip_markdown(results: list[dict[str, Any]], baseline: str, candidate: str | None) -> str:
+    candidates = (
+        [candidate]
+        if candidate
+        else sorted({r.get("variant", {}).get("name", "unknown") for r in results} - {baseline})
+    )
+    lines = [
+        "",
+        f"PSNR flip rule against `{baseline}` (full L4, matched seeds; "
+        "eligible is not an automatic default change):",
+        "",
+        "| candidate | spool Δ dB | truck Δ dB | beach Δ dB | verdict | reason |",
+        "|---|---|---|---|---|---|",
+    ]
+    for name in candidates:
+        rule = flip_rule(results, baseline, name)
+        cells = ["-" if v is None else f"{v:+.4f}" for v in rule["deltaPsnr"].values()]
+        lines.append(
+            f"| {name} | "
+            + " | ".join(cells)
+            + f" | {rule['verdict']} | {'; '.join(rule['reasons'])} |"
+        )
     return "\n".join(lines) + "\n"

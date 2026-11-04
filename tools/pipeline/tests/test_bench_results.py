@@ -202,3 +202,73 @@ def test_incomplete_raw_sh_is_not_mislabelled_as_full(tmp_path: Path) -> None:
     columns = {k: v for k, v in read_ply(raw).items() if not k.startswith("f_rest_")}
     full, reason = full_sh_columns(columns, raw)
     assert full is None and reason is not None and "degree-3" in reason
+
+
+def bakeoff_rows(tmp_path: Path) -> list[dict[str, Any]]:
+    rows = []
+    for scene, gain in zip(("spool", "truck", "beach"), (0.5, 0.2, -0.29), strict=True):
+        for arm, delta in (("baseline-main", 0), ("upgraded", gain)):
+            row = result(tmp_path)
+            row.update(scene=scene, schedule="full", benchCommit=arm, runId=f"{scene}-{arm}")
+            row["variant"] = {"name": arm, "overrides": {}}
+            row["test"]["psnr"] = 25 + delta
+            rows.append(row)
+    return rows
+
+
+def test_flip_rule_and_compact_report(tmp_path: Path) -> None:
+    from experiments.bench.results import bakeoff_markdown, flip_markdown, flip_rule
+
+    rows = bakeoff_rows(tmp_path)
+    assert flip_rule(rows, "baseline-main", "upgraded")["verdict"] == "eligible"
+    text = bakeoff_markdown(rows)
+    assert "GPU min" in text and "spool-baseline-main / full / 42 / complete" in text
+    assert "eligible" in flip_markdown(rows, "baseline-main", "upgraded")
+    rows[-1]["test"]["psnr"] = 24.69
+    assert flip_rule(rows, "baseline-main", "upgraded")["verdict"] == "keep-off"
+    rows[-1]["test"]["psnr"] = 25
+    rows[1]["test"]["psnr"] = 25
+    assert flip_rule(rows, "baseline-main", "upgraded")["verdict"] == "keep-off"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "snapshot",
+        "split",
+        "screen",
+        "synthetic",
+        "failed",
+        "unscored",
+        "seed",
+        "duplicate",
+        "commit",
+    ],
+)
+def test_flip_rule_abstains_for_incomparable_or_incomplete_results(
+    tmp_path: Path, mutation: str
+) -> None:
+    from experiments.bench.results import flip_rule
+
+    rows = bakeoff_rows(tmp_path)
+    last = rows[-1]
+    if mutation == "snapshot":
+        last["manifestDigest"] = "refrozen"
+    elif mutation == "split":
+        last["splitDigest"] = "different"
+    elif mutation == "screen":
+        last["schedule"] = "screen"
+    elif mutation == "synthetic":
+        last["rehearsal"] = True
+    elif mutation == "failed":
+        last["status"] = "failed"
+    elif mutation == "unscored":
+        last["test"]["psnr"] = None
+    elif mutation == "seed":
+        last["seed"] = 43
+    elif mutation == "duplicate":
+        rows.append(copy.deepcopy(last))
+    else:
+        last["benchCommit"] = "unrelated"
+    rule = flip_rule(rows, "baseline-main", "upgraded")
+    assert rule["verdict"] == "incomplete" and rule["reasons"]

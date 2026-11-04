@@ -5,10 +5,13 @@ from __future__ import annotations
 import re
 import shutil
 import tempfile
+import urllib.request
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .scene import seal
+from experiments import benchmark
+
+from .scene import PUBLIC_SCENES, seal
 
 UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 ITEMS = {
@@ -137,6 +140,45 @@ def freeze_scene(
         manifest = seal(stage, scene, prefix, selected, commit)
         if target.exists():
             # Download and validate the replacement before touching the old snapshot.
+            target.rename(Path(temporary) / "previous")
+        stage.rename(target)
+    return manifest
+
+
+def freeze_public_scene(
+    scenes: Path, scene: str, commit: str, *, refreeze: bool = False
+) -> dict[str, Any]:
+    """CPU-only public download, pinned to the existing benchmark archive; no R2 handle.
+
+    Keep the archive beside the scenes on the bench volume for explicit refreezes.
+    Verify its hash even on a cache hit. Publication uses the same seal and transaction
+    as private scenes, and does not import the paper benchmark's split or train params.
+    """
+    source = PUBLIC_SCENES[scene]
+    target = scenes / scene
+    if target.exists() and not refreeze:
+        raise ValueError("scene is already frozen; use --refreeze explicitly")
+    cache = scenes.parent / "archives"
+    cache.mkdir(parents=True, exist_ok=True)
+    archive = cache / f"{source.archive_sha256}.zip"
+    if not archive.exists():
+        # A unique partial prevents concurrent freeze downloads sharing a writable file.
+        with tempfile.TemporaryDirectory(prefix=".download-", dir=cache) as temporary:
+            partial = Path(temporary) / "archive.zip"
+            with (
+                urllib.request.urlopen(source.archive_url, timeout=120) as response,  # noqa: S310 - registry HTTPS URL
+                partial.open("wb") as sink,
+            ):
+                shutil.copyfileobj(response, sink, length=1 << 22)
+            if benchmark.sha256_of(partial) != source.archive_sha256:
+                raise ValueError("public archive sha256 differs from the pinned benchmark")
+            partial.rename(archive)
+    scenes.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".freeze-", dir=scenes) as temporary:
+        stage = Path(temporary) / "scene"
+        benchmark.extract(archive, source, stage)
+        manifest = seal(stage, scene, source.archive_url, f"sha256:{source.archive_sha256}", commit)
+        if target.exists():
             target.rename(Path(temporary) / "previous")
         stage.rename(target)
     return manifest

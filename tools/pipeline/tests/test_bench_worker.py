@@ -14,8 +14,9 @@ from experiments.bench.scene import write_json
 
 
 @pytest.mark.parametrize("fail_training", [False, True])
+@pytest.mark.parametrize("fail_topdown", [False, True])
 def test_training_sampler_scope_and_render_argv(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_training: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_training: bool, fail_topdown: bool
 ) -> None:
     import executor
 
@@ -63,6 +64,15 @@ def test_training_sampler_scope_and_render_argv(
             write_json(Path(argv[argv.index("--out") + 1]), {"psnr": 20})
             evaluated = True
             return subprocess.CompletedProcess(argv, 0)
+        if len(argv) > 1 and Path(argv[1]).name == "topdown.py":
+            assert evaluated and not active
+            assert 0 < kwargs["timeout"] <= 60
+            if fail_topdown:
+                raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+            from PIL import Image
+
+            Image.new("RGB", (2, 2)).save(Path(argv[argv.index("--out") + 1]))
+            return subprocess.CompletedProcess(argv, 0)
         return real_run(argv, **kwargs)
 
     monkeypatch.setattr(executor, "execute", execute)
@@ -78,6 +88,7 @@ def test_training_sampler_scope_and_render_argv(
         "timeoutSeconds": 1800,
         "trainParams": params,
         "renders": 3,
+        "topdown": True,
         "keepSplat": True,
     }
     result = worker.run_training(scene, run, plan)
@@ -86,3 +97,8 @@ def test_training_sampler_scope_and_render_argv(
     assert evaluated == (not fail_training)
     assert result["gpuUtilMean"] == 70 and result["gpuMemMaxMiB"] == 2048
     assert result["artifacts"]["gpu_samples.json"]["samples"] == Sampler.samples
+    if not fail_training:
+        assert result["topdown"]["status"] == ("failed" if fail_topdown else "complete")
+        if not fail_topdown:
+            assert result["topdown"]["pngBase64"]
+            assert (run / "renders/topdown.png").is_file()

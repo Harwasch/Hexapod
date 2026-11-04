@@ -1,0 +1,11 @@
+# Six cumulative arms x spool/truck/beach = 18 full runs, seed 42, tier l4.
+# All freezes, screens, failures and full runs share --tag quality-stack --total-cap 30
+# and ONE ledger. Run baseline-main from the Phase 0 commit (gsplat v1.5.3).
+# Null means not implemented: the CLI refuses it before paid work. Populate each arm
+# with cumulative params as its phase lands, never measure a placeholder as a feature.
+baseline-main: {}
+upgraded: null # Phase 1: pinned gsplat + measured choice of UT/pose/PPISP flags.
++dense: null # upgraded + train-pool-only dense initialisation.
++priors+aniso: null # +dense + mono depth/normals + anisotropy loss.
++sky-far-cap: null # +priors+aniso + bounded far-field sphere.
+all-on: null # +sky-far-cap + context-fade quality mode when wired to the bench.

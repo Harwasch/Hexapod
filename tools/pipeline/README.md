@@ -1273,7 +1273,23 @@ and ignored until A8 — wins over all of them.
 and results in its own `/bench` volume. Its CPU freeze function has a list/get-only R2
 wrapper; **it never writes to production storage**. GPU functions receive no storage
 secret and run only the local `train` stage. The editable registry names `spool`
-(private phone capture), `pumpkin`, and `nwm-d1` (public TU Wien capture c94ec4e6).
+(private phone capture), `pumpkin`, `nwm-d1` (public TU Wien capture c94ec4e6),
+`beach`, and `truck`.
+
+Beach is Harrison's `phone-capture-2026-11-03-23-04-utc`, job prefix `4dd02171`.
+For worker jobs, the job UUID **is** the run UUID: artifacts use `runs/<job UUID>/`
+(`apps/api/app/worker/outputs.py:run_prefix`), not the capture slug. Freeze resolves
+that prefix against R2 and refuses zero or multiple matches; the registry alone does
+not verify that the remote run exists or has completed poses.
+
+Truck uses a separate CPU freeze function **without R2 credentials or operations**.
+It downloads the public `tandt_db.zip` to the bench volume and reuses
+`experiments/benchmark.py`'s SHA256 pin
+`816e62f22a161abbfe841d2a6b10cdf036e297c9fa289b3bfeee9c6ec526d7e1`.
+Only `tandt/truck/images/` and the three `sparse/0` COLMAP binaries enter the frozen
+scene; the archive's URL and checksum are its source and generation. Cached archives
+are also verified. Its manifest, pool/test split and evaluation are the same bench
+protocol as the phone scenes, **not** the published paper's split or LPIPS network.
 
 Freeze records every downloaded file's bytes/hash, source generation and bench commit.
 An 8-hex run prefix must resolve uniquely; generation discovery requires exactly one
@@ -1371,6 +1387,79 @@ artifacts also land locally under
 `~/.local/share/hexapod-bench/runs/<run_id>/`; `report --runs ID ...` selects runs.
 The report includes a per-degree table and per-degree mean/min/max/spread over completed
 seeds. Summaries separate scenes, snapshots, schedules, tiers, overrides and bench commits.
+
+`--topdown` (off by default) adds one GPU render after test evaluation, using the shipped
+PLY. It looks straight down along the frozen COLMAP model's camera-up estimate, with
+the camera-plane normal as fallback; degeneracy leaves a warning. The view encloses
+the nearest 90% of Gaussian centres to their coordinate median, at a 5-degree FOV
+and a 5% framing margin. This is an overview, not a crop or a measured gravity claim.
+The camera and its up estimate are recorded in `topdown.camera` and
+`renders/topdown-camera.json`. The 512px PNG is saved as `renders/topdown.png` on the
+volume and returned to the local run's `topdown.png`. Rendering gets at most 60 seconds
+within the existing timeout; errors become `topdown.warning` without changing run
+status or metrics. Rehearsal records it as skipped.
+
+`results` prints the bake-off table: scene, variant, untouched-test PSNR/SSIM/LPIPS,
+splats, GPU minutes (billed container wall time including evaluation), dollars, and
+top-down links. `results --flip-rule --baseline baseline-main` adds the PSNR decision
+table: positive gain on at least two of Spool, Truck and Beach, with no loss exceeding
+0.3 dB on the third. Only full L4 measurements with matching seeds and frozen manifest
+and split digests qualify. Missing, failed, duplicate, or mixed-configuration rows
+produce `incomplete`; synthetic and screen rows never justify a default change.
+Use `--runs ID ...` to disambiguate repeats, and `--baseline upgraded --candidate +dense`
+to test an incremental feature rather than the whole stack. Eligibility is evidence
+for the driver's decision, not an automatic recipe edit.
+
+### Quality-stack Phase 0
+
+`experiments/variants/quality-stack.yaml` reserves six cumulative arm names for the
+18 full runs (three captures, seed 42, L4). Only `baseline-main` is enabled now; the
+others are null and refused before paid work until their implementations land. With
+`--variants`, `--variant NAME` selects one arm; without it, every arm must be ready.
+Phase 0 keeps the gsplat v1.5.3 training image definition and recipe unchanged. Run
+baseline from this commit before the image upgrade, using the same frozen scenes in
+later phases. Do not refreeze between arms.
+
+Use one ledger and one tag for the entire bake-off, including freeze, smoke, failures
+and full runs. `--total-cap 30 --tag quality-stack` enforces cumulative accounted spend
+plus this batch's worst-case reservation under the same file lock as reservation.
+With a total cap, `--cap` bounds the individual batch; without one it keeps its original
+ledger-wide cumulative meaning. The lowest recorded total cap for a tag persists even
+if later commands omit it or ask for a larger cap. Different ledger files cannot share
+a cap. Unresolved calls retain their reservations. As with the existing cap, builds and
+provider invoice differences need external reconciliation; leave room under $30 for
+those costs and reduce the tagged cap if needed.
+
+From `tools/pipeline`, with the driver's Modal environment:
+
+```bash
+bench() { uv run --with modal==1.6.2 python -m experiments.bench "$@"; }
+quality_bench() {
+  bench "$@" --tag quality-stack --total-cap 30 --cap 2 \
+    --ledger "$HOME/.local/share/hexapod-bench/quality-stack.jsonl"
+}
+quality_bench freeze --scene truck
+quality_bench freeze --scene beach
+# Only if Spool has no existing frozen snapshot:
+# quality_bench freeze --scene spool
+
+# Run screens first; inspect success, test frame counts, and top-down images.
+for scene in spool truck beach; do
+  quality_bench run --scene "$scene" --variants experiments/variants/quality-stack.yaml \
+    --variant baseline-main --schedule screen --tier l4 --seeds 42 --topdown --keep-splat || break
+done
+# After the screens pass, measure the three baseline runs on the old image.
+for scene in spool truck beach; do
+  quality_bench run --scene "$scene" --variants experiments/variants/quality-stack.yaml \
+    --variant baseline-main --schedule full --tier l4 --seeds 42 --topdown --keep-splat || break
+done
+bench results --tag quality-stack --flip-rule
+bench ledger --ledger "$HOME/.local/share/hexapod-bench/quality-stack.jsonl"
+```
+
+Add `--dry-run` to any freeze/run command for the offline reservation plan. Freeze
+expects Truck's 251 registered frames (31 test, 220 pool); Beach's counts come from
+its frozen model. No GPU quality result or top-down raster has been verified locally.
 
 Step 2 measurement commands, from `tools/pipeline`, after the Spool freeze exists. These
 use separate ledgers outside the checkout so earlier bench spend does not consume their

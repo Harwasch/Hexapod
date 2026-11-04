@@ -9,6 +9,7 @@ import pytest
 import sfm
 from experiments.bench import __main__ as cli
 from experiments.bench import ledger
+from experiments.bench.recipe import PIPELINE
 from experiments.bench.scene import read_json
 
 
@@ -166,3 +167,132 @@ def test_negative_renders_refused_before_any_launch() -> None:
     args = cli.parser().parse_args(["run", "--scene", "spool", "--renders", "-1"])
     with pytest.raises(ValueError, match="nonnegative"):
         cli.plans_for(args)
+
+
+def test_quality_stack_only_baseline_enabled_and_public_freeze_plan() -> None:
+    variants = PIPELINE / "experiments/variants/quality-stack.yaml"
+    args = cli.parser().parse_args(
+        [
+            "run",
+            "--scene",
+            "truck",
+            "--variants",
+            str(variants),
+            "--variant",
+            "baseline-main",
+            "--topdown",
+            "--tag",
+            "quality-stack",
+        ]
+    )
+    plan = cli.plans_for(args)[0]
+    assert plan["variant"]["name"] == "baseline-main" and plan["topdown"]
+    args.variant = "upgraded"
+    with pytest.raises(ValueError, match="pending implementation"):
+        cli.plans_for(args)
+    args = cli.parser().parse_args(["freeze", "--scene", "truck"])
+    assert cli.plans_for(args)[0]["sourceType"] == "public"
+    args.run = "4dd02171"
+    with pytest.raises(ValueError, match="pinned archive"):
+        cli.plans_for(args)
+    args = cli.parser().parse_args(["freeze", "--scene", "beach"])
+    plan = cli.plans_for(args)[0]
+    assert plan["sourceType"] == "r2" and plan["sourceRun"] == "4dd02171"
+
+
+def test_total_cap_refused_before_modal_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_modal() -> None:
+        raise AssertionError("must not import Modal")
+
+    monkeypatch.setattr(cli, "load_modal", no_modal)
+    monkeypatch.setattr(cli, "REPO", tmp_path / "not-repo")
+    assert (
+        cli.main(
+            [
+                "run",
+                "--scene",
+                "truck",
+                "--state-dir",
+                str(tmp_path),
+                "--tag",
+                "quality",
+                "--total-cap",
+                "0.01",
+            ]
+        )
+        == 2
+    )
+    assert not (tmp_path / "ledger.jsonl").exists()
+
+
+def test_public_freeze_dispatch_has_no_storage_secret_or_private_function(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ast
+
+    source = (PIPELINE.parents[1] / "infra/modal/bench.py").read_text()
+    public = next(
+        n
+        for n in ast.parse(source).body
+        if isinstance(n, ast.FunctionDef) and n.name == "freeze_public"
+    )
+    decorator = public.decorator_list[0]
+    assert isinstance(decorator, ast.Call)
+    assert "secrets" not in {k.arg for k in decorator.keywords}
+    calls = []
+
+    def spawn(plan: dict[str, Any]) -> Any:
+        calls.append(plan)
+        return SimpleNamespace(
+            get=lambda: {"runId": plan["runId"], "status": "complete", "costUsd": 0.01}
+        )
+
+    # No private function, bucket or volume-read API exists on this stand-in.
+    module = SimpleNamespace(
+        app=SimpleNamespace(run=contextlib.nullcontext), freeze_public=SimpleNamespace(spawn=spawn)
+    )
+    monkeypatch.setattr(cli, "load_modal", lambda: module)
+    plan = cli.plans_for(cli.parser().parse_args(["freeze", "--scene", "truck"]))[0]
+    cli.remote_batch([plan], tmp_path, tmp_path / "ledger.jsonl", 2)
+    assert calls == [plan]
+
+
+def test_results_cli_filters_tag_and_reports_incomplete_flip_rule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from experiments.bench.scene import write_json
+
+    monkeypatch.setattr(cli, "REPO", tmp_path / "not-repo")
+    for run, tag in (("yes", "quality-stack"), ("no", "other")):
+        write_json(
+            tmp_path / f"runs/{run}/result.json",
+            {
+                "schemaVersion": 1,
+                "runId": run,
+                "tag": tag,
+                "scene": "truck",
+                "variant": {"name": "baseline-main"},
+                "status": "complete",
+                "schedule": "screen",
+            },
+        )
+    assert (
+        cli.main(
+            [
+                "results",
+                "--state-dir",
+                str(tmp_path),
+                "--tag",
+                "quality-stack",
+                "--flip-rule",
+                "--candidate",
+                "upgraded",
+            ]
+        )
+        == 0
+    )
+    text = capsys.readouterr().out
+    assert "yes / screen" in text and "no / screen" not in text
+    assert "incomplete" in text

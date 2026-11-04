@@ -26,6 +26,7 @@ sys.path.insert(0, str(shared.LOCAL_PIPELINE))
 
 from experiments.bench.ledger import STARTUP_SECONDS, TIMEOUTS, hourly_rate  # noqa: E402
 from experiments.bench.scene import write_json  # noqa: E402
+
 from modal_adapter import GPU_NAMES  # noqa: E402
 
 app = modal.App("hexapod-bench")
@@ -47,36 +48,32 @@ def _billed_since() -> tuple[float, str]:
     )
 
 
-@app.function(
-    image=image,
-    cpu=(4, 4),
-    memory=(8192, 8192),
-    timeout=TIMEOUTS["freeze"],
-    retries=0,
-    volumes={"/bench": volume},
-    secrets=[modal.Secret.from_name("twin-object-storage")],
-    max_containers=1,
-    startup_timeout=STARTUP_SECONDS,
-    single_use_containers=True,
-)
-def freeze(plan: dict[str, Any]) -> dict[str, Any]:
-    from experiments.bench.freeze import ReadOnlyR2, freeze_scene
+def _freeze(plan: dict[str, Any], *, public: bool) -> dict[str, Any]:
+    from experiments.bench.freeze import ReadOnlyR2, freeze_public_scene, freeze_scene
 
     started, billed = _billed_since()
     volume.reload()
-    transfer = shared._transfer()
-    # Only the list/get capability crosses into freeze_scene; never S3Transfer itself.
-    store = ReadOnlyR2(transfer._client, os.environ["OBJECT_STORAGE_BUCKET"])
     try:
-        manifest = freeze_scene(
-            store,
-            Path("/bench/scenes"),
-            plan["scene"],
-            plan["sourceRun"],
-            plan["benchCommit"],
-            generation=plan.get("generation"),
-            refreeze=plan.get("refreeze", False),
-        )
+        if public:
+            manifest = freeze_public_scene(
+                Path("/bench/scenes"),
+                plan["scene"],
+                plan["benchCommit"],
+                refreeze=plan.get("refreeze", False),
+            )
+        else:
+            transfer = shared._transfer()
+            # Only the list/get capability crosses into freeze_scene.
+            store = ReadOnlyR2(transfer._client, os.environ["OBJECT_STORAGE_BUCKET"])
+            manifest = freeze_scene(
+                store,
+                Path("/bench/scenes"),
+                plan["scene"],
+                plan["sourceRun"],
+                plan["benchCommit"],
+                generation=plan.get("generation"),
+                refreeze=plan.get("refreeze", False),
+            )
         result = {
             "runId": plan["runId"],
             "scene": plan["scene"],
@@ -91,12 +88,45 @@ def freeze(plan: dict[str, Any]) -> dict[str, Any]:
             "status": "failed",
             "error": f"{type(error).__name__}: {error}",
         }
+    volume.commit()
     result["wallSeconds"] = time.time() - started
     result["billedFrom"] = billed
     result["costUsd"] = result["wallSeconds"] * hourly_rate("cpu4") / 3600
     write_json(Path("/bench/runs") / plan["runId"] / "result.json", result)
     volume.commit()
     return result
+
+
+@app.function(
+    image=image,
+    cpu=(4, 4),
+    memory=(8192, 8192),
+    timeout=TIMEOUTS["freeze"],
+    retries=0,
+    volumes={"/bench": volume},
+    secrets=[modal.Secret.from_name("twin-object-storage")],
+    max_containers=1,
+    startup_timeout=STARTUP_SECONDS,
+    single_use_containers=True,
+)
+def freeze(plan: dict[str, Any]) -> dict[str, Any]:
+    return _freeze(plan, public=False)
+
+
+@app.function(
+    image=image,
+    cpu=(4, 4),
+    memory=(8192, 8192),
+    timeout=TIMEOUTS["freeze"],
+    retries=0,
+    volumes={"/bench": volume},
+    max_containers=1,
+    startup_timeout=STARTUP_SECONDS,
+    single_use_containers=True,
+    # Public archive download: no object-storage secret, client, or bucket operations.
+)
+def freeze_public(plan: dict[str, Any]) -> dict[str, Any]:
+    return _freeze(plan, public=True)
 
 
 def _train(plan: dict[str, Any]) -> dict[str, Any]:

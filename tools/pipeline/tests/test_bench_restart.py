@@ -64,3 +64,24 @@ def test_lookup_frames_maps_test_names_and_refuses_missing_or_duplicates() -> No
         lookup_frames(names, [0, 1, 2], ["a.jpg", "a.jpg"])
     with pytest.raises(ValueError, match="no test"):
         lookup_frames(names, [0, 1, 2], [])
+
+
+def test_preempted_run_keeps_tag_and_can_be_reported() -> None:
+    from experiments.bench.results import bakeoff_markdown, markdown
+
+    plan = {
+        "runId": "one",
+        "scene": "spool",
+        "seed": 42,
+        "schedule": "full",
+        "tier": "l4",
+        "tag": "quality-stack",
+        "variant": {"name": "baseline-main", "overrides": {}},
+        "benchCommit": "commit",
+        "manifestDigest": "frozen",
+        "splitDigest": "split",
+    }
+    result = restart_result(plan, RestartedError("already started"))
+    assert result["tag"] == "quality-stack"
+    assert "preempted" in markdown([result])
+    assert "baseline-main" in bakeoff_markdown([result])

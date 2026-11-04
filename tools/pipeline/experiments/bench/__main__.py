@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import importlib.util
 import json
 import re
@@ -17,8 +18,8 @@ import yaml
 
 from . import ledger, rehearsal
 from .recipe import PIPELINE, train_params
-from .results import markdown, parse_result
-from .scene import SCENES, read_json, verify, write_json
+from .results import bakeoff_markdown, flip_markdown, markdown, parse_result
+from .scene import PUBLIC_SCENES, SCENES, read_json, verify, write_json
 from .worker import run_training
 
 REPO = PIPELINE.parents[1]
@@ -55,30 +56,50 @@ def parser() -> argparse.ArgumentParser:
     freeze.add_argument("--refreeze", action="store_true")
     run = commands.add_parser("run")
     run.add_argument("--scene", choices=sorted(SCENES), required=True)
-    run.add_argument("--variant", default="baseline")
+    run.add_argument("--variant", help="one named variant; with --variants, select only this arm")
     run.add_argument("--variants", type=Path, help="YAML mapping name -> {train: overrides}")
     run.add_argument("--set", default="{}", dest="overrides")
     run.add_argument("--seeds", default="42")
     run.add_argument("--schedule", choices=("screen", "full"), default="screen")
     run.add_argument("--tier", choices=("l4", "a10", "l40s", "a100"), default="l4")
     run.add_argument("--keep-splat", action="store_true")
+    run.add_argument("--topdown", action="store_true", help="best-effort GPU overview PNG")
     run.add_argument("--renders", type=int, default=0, help="save the first N test frames as PNGs")
     report = commands.add_parser("report")
     report.add_argument("--runs", nargs="*", help="local run IDs or paths to result.json")
+    results = commands.add_parser("results", help="compact bake-off table and optional flip rule")
+    results.add_argument("--runs", nargs="*")
+    results.add_argument("--flip-rule", action="store_true")
+    results.add_argument("--baseline", default="baseline-main")
+    results.add_argument("--candidate", help="one candidate for the flip rule; default: all")
     spend = commands.add_parser("ledger")
-    for command in (freeze, run, report, spend):
+    for command in (freeze, run, report, results, spend):
         command.add_argument("--ledger", type=Path)
         command.add_argument("--state-dir", type=Path, default=STATE)
         command.add_argument("--dry-run", action="store_true")
         command.add_argument("--rehearse", action="store_true")
+        command.add_argument("--tag", help="spend/report group in the shared ledger")
     for command in (freeze, run):
         command.add_argument("--cap", type=float, default=2.0)
+        command.add_argument(
+            "--total-cap", type=float, help="cumulative cap for --tag; --cap bounds each batch"
+        )
     return root
 
 
 def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
-    base = {"scene": args.scene, "benchCommit": git_commit(), "rehearsal": args.rehearse}
+    if args.tag is not None and not re.fullmatch(r"[a-zA-Z0-9_.-]{1,64}", args.tag):
+        raise ValueError("tag must be 1-64 letters, digits, _, . or -")
+    base = {
+        "scene": args.scene,
+        "benchCommit": git_commit(),
+        "rehearsal": args.rehearse,
+        "tag": args.tag,
+    }
     if args.command == "freeze":
+        public = args.scene in PUBLIC_SCENES
+        if public and (args.run or args.generation):
+            raise ValueError("public scenes use their pinned archive, not --run/--generation")
         return [
             {
                 **base,
@@ -86,6 +107,7 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
                 "schedule": "freeze",
                 "tier": "cpu4",
                 "sourceRun": args.run or SCENES[args.scene],
+                "sourceType": "public" if public else "r2",
                 "generation": args.generation,
                 "refreeze": args.refreeze,
             }
@@ -93,9 +115,17 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
     if args.renders < 0:
         raise ValueError("--renders must be nonnegative")
     common = json.loads(args.overrides)
-    variants = yaml.safe_load(args.variants.read_text()) if args.variants else {args.variant: {}}
+    variants = (
+        yaml.safe_load(args.variants.read_text())
+        if args.variants
+        else {args.variant or "baseline": {}}
+    )
     if not isinstance(variants, dict) or not variants:
         raise ValueError("variants must map names to {train: overrides}")
+    if args.variants and args.variant:
+        if args.variant not in variants:
+            raise ValueError(f"variant {args.variant!r} is absent from {args.variants}")
+        variants = {args.variant: variants[args.variant]}
     # Validate common overrides independently, then merge params with --set last.
     train_params(args.schedule, common)
     seeds = [int(seed) for seed in args.seeds.split(",")]
@@ -106,7 +136,9 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
         if not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9_.+-]{1,64}", name):
             raise ValueError("variant names must be 1-64 letters, digits, _, ., + or -")
         if not isinstance(overrides, dict):
-            raise ValueError("variant overrides must be a mapping")
+            raise ValueError(
+                f"variant {name!r} is pending implementation; overrides must be a mapping"
+            )
         train_params(args.schedule, overrides)
         merged = {"train": {**overrides.get("train", {}), **common.get("train", {})}}
         params = train_params(args.schedule, merged)
@@ -122,6 +154,7 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "trainParams": params,
                     "keepSplat": args.keep_splat,
                     "renders": args.renders,
+                    "topdown": args.topdown,
                 }
             )
     return plans
@@ -129,6 +162,23 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
 
 def save_outcome(state: Path, book: Path, plan: dict[str, Any], result: dict[str, Any]) -> None:
     directory = state / "runs" / plan["runId"]
+    # Transport only the fixed preview path; do not trust a remote-supplied filename.
+    preview = dict(result.get("topdown", {}))
+    encoded = preview.pop("pngBase64", None)
+    if encoded is not None:
+        try:
+            if not isinstance(encoded, str) or len(encoded) > 1_400_000:
+                raise ValueError("oversized top-down payload")
+            png = base64.b64decode(encoded, validate=True)
+            if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+                raise ValueError("invalid top-down PNG")
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "topdown.png").write_bytes(png)
+            preview["localPath"] = str(directory / "topdown.png")
+        except (ValueError, OSError) as error:
+            preview.update(status="failed", warning=f"local top-down save: {error}")
+    if preview:
+        result["topdown"] = preview
     write_json(directory / "result.json", result)
     for name, value in result.get("artifacts", {}).items():
         # Only reports known to this version, never a remote-supplied path.
@@ -171,10 +221,14 @@ def lost_result(state: Path, plan: dict[str, Any], error: Exception) -> dict[str
 
 
 def remote_batch(
-    plans: list[dict[str, Any]], state: Path, book: Path, cap: float
+    plans: list[dict[str, Any]],
+    state: Path,
+    book: Path,
+    cap: float,
+    total_cap: float | None = None,
 ) -> list[dict[str, Any]]:
     # No imports of Modal (nor app/image creation) before the local cap preflight.
-    ledger.price_plan(ledger.read(book), plans, cap)
+    ledger.price_plan(ledger.read(book), plans, cap, total_cap)
     module = load_modal()
     results = []
     with module.app.run():
@@ -185,12 +239,12 @@ def remote_batch(
             )
             for plan in plans:
                 plan.update(manifestDigest=manifest["digest"], splitDigest=manifest["splitDigest"])
-        ledger.reserve(book, plans, cap)
+        ledger.reserve(book, plans, cap, total_cap)
         for offset in range(0, len(plans), 4):
             pending = []
             for plan in plans[offset : offset + 4]:
                 function = (
-                    module.freeze
+                    (module.freeze_public if plan.get("sourceType") == "public" else module.freeze)
                     if plan["schedule"] == "freeze"
                     else module.FUNCTIONS[(plan["tier"], plan["schedule"])]
                 )
@@ -211,7 +265,11 @@ def remote_batch(
 
 
 def local_batch(
-    plans: list[dict[str, Any]], state: Path, book: Path, cap: float
+    plans: list[dict[str, Any]],
+    state: Path,
+    book: Path,
+    cap: float,
+    total_cap: float | None = None,
 ) -> list[dict[str, Any]]:
     scene = state / "scenes" / plans[0]["scene"]
     if plans[0]["schedule"] == "freeze" and scene.exists() and not plans[0]["refreeze"]:
@@ -225,7 +283,7 @@ def local_batch(
         raise ValueError("rehearsal requires synthetic inputs")
     for plan in plans:
         plan.update(manifestDigest=manifest["digest"], splitDigest=split["digest"])
-    ledger.reserve(book, plans, cap)
+    ledger.reserve(book, plans, cap, total_cap)
     results = []
     for plan in plans:
         if plan["schedule"] == "freeze":
@@ -236,6 +294,7 @@ def local_batch(
                 "manifest": manifest,
                 "costUsd": 0.0,
                 "rehearsal": True,
+                "tag": plan.get("tag"),
             }
         else:
             result = run_training(scene, state / "runs" / plan["runId"], plan)
@@ -257,7 +316,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "ledger":
             sys.stdout.write(json.dumps(ledger.summary(entries), indent=2) + "\n")
             return 0
-        if args.command == "report":
+        if args.command in {"report", "results"}:
             paths = (
                 [
                     Path(run) if Path(run).is_file() else state / "runs" / run / "result.json"
@@ -267,14 +326,26 @@ def main(argv: list[str] | None = None) -> int:
                 else sorted((state / "runs").glob("*/result.json"))
             )
             results = [read_json(path) for path in paths]
-            sys.stdout.write(markdown([r for r in results if r.get("schemaVersion") == 1]))
+            results = [
+                r
+                for r in results
+                if r.get("schemaVersion") == 1 and (not args.tag or r.get("tag") == args.tag)
+            ]
+            if args.command == "report":
+                sys.stdout.write(markdown(results))
+            else:
+                sys.stdout.write(bakeoff_markdown(results))
+                if args.flip_rule:
+                    sys.stdout.write(flip_markdown(results, args.baseline, args.candidate))
             return 0
         plans = plans_for(args)
-        priced = ledger.price_plan(entries, plans, args.cap)
+        priced = ledger.price_plan(entries, plans, args.cap, args.total_cap)
         sys.stdout.write(json.dumps(priced, indent=2) + "\n")
         if args.dry_run:
             return 0
-        results = (local_batch if args.rehearse else remote_batch)(plans, state, book, args.cap)
+        results = (local_batch if args.rehearse else remote_batch)(
+            plans, state, book, args.cap, args.total_cap
+        )
         if args.command == "run":
             sys.stdout.write(markdown(results))
         else:
