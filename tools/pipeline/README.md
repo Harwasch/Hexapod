@@ -759,15 +759,20 @@ either: a container's idle scale-down window after its last call, which Modal bi
 no call owns. (The reserved CPU and memory used not to be priced either; since the
 2026-10 audit `ModalAdapter.rate` adds them -- "What a run cost" above.)
 
-**A part may start on an L40S** (`modal_adapter.GPU_FALLBACKS`: `l4 -> (l4, l40s)`,
-deployed as `run_stage_l4_fallback` with `gpu=["L4", "L40S"]`, Modal's ranked list: the
-first type free wins). Parts only -- a single run, a head and a join keep their L4. The
-L40S is 2.44x the L4's price and trained ~2.3x faster on our benchmark, so a block costs
-~17% more by that benchmark (+6% on training seconds at list prices), and ends in under
-half the time instead of waiting half an hour. The A10 ($1.10, 1.38x) is left out until
-gsplat has been timed on one. The container reports its GPU, and the call is priced and
-ledgered at that tier (`fanOutTiers`); a deployment without the fallback function runs the
-part on its own tier; `ModalAdapter(part_fallback=False)` turns it off.
+**Any call may start on an L40S or A10** (`modal_adapter.GPU_FALLBACKS`:
+`l4 -> (l4, l40s, a10)`, deployed as `run_stage_l4_fallback` with
+`gpu=["L4", "L40S", "A10"]`, Modal's ranked list: the first type free wins). Single runs,
+heads and joins use the same list as parts: production L4 `train` calls have not started
+since 2026-10-28 and exhaust their 1,800 s pending waits. The L40S is 2.44x the L4's price
+and trained ~2.3x faster on our benchmark, so a block costs ~17% more by that benchmark
+(+6% on training seconds at list prices), and ends in under half the time instead of
+waiting half an hour. The A10 ($1.10/h, 1.38x) is last because it is the only other tier
+proven free on 2026-11-03 (a smoke started in about 2 s); its gsplat speed per dollar is
+unmeasured. The gaussian memory ceiling stays sized for the requested L4's 24 GB (also
+A10's capacity), even on a 48 GB L40S. The container reports its GPU, and the call is
+priced and ledgered at that tier (`fanOutTiers` records parts); a deployment without the
+fallback function runs the call on its own tier; `ModalAdapter(part_fallback=False)`
+turns fallback off for every call.
 
 What was cut, none of it a training step (the merged `trained.ply` stays byte-identical
 to the serial one's, `test_blocks.py`):
