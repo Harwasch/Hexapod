@@ -111,6 +111,89 @@
         <p id="live-detail" class="live-detail" aria-live="polite"></p>
         <a id="live-final" class="live-final" href="#" hidden>Finished — open the final scan</a>
       </div>
+
+      <div id="live-console" class="lc" hidden>
+        <header class="lc-head">
+          <div>
+            <a href="#" class="lc-back">All scans</a>
+            <h1 id="lc-name"></h1>
+            <span id="lc-pill" class="lc-pill" role="status"></span>
+          </div>
+          <a id="lc-final" class="live-final" href="#" hidden>Finished — open the final scan</a>
+        </header>
+        <section id="lc-kpis" class="lc-kpis" aria-label="Run summary"></section>
+        <div class="lc-main">
+          <section class="lc-panel">
+            <div class="lc-panel-head">
+              <h2>Live splat</h2>
+              <div class="lc-controls">
+                <div class="lc-seg" role="group" aria-label="Colour by">
+                  <button type="button" data-live-color="photo" aria-pressed="true">Photo</button>
+                  <button type="button" data-live-color="distance" aria-pressed="false" disabled>
+                    Distance
+                  </button>
+                </div>
+                <div class="lc-seg" role="group" aria-label="View">
+                  <button type="button" data-live-view="orbit" aria-pressed="true">Orbit</button>
+                  <button type="button" data-live-view="top" aria-pressed="false">Top down</button>
+                </div>
+              </div>
+            </div>
+            <div id="lc-scene" class="lc-scene">
+              <span id="lc-snapshot" class="lc-overlay"></span>
+              <div id="lc-distance" class="lc-distance" hidden>
+                <div></div>
+                <span>0</span><span>40</span><span>120 m+</span>
+              </div>
+            </div>
+            <div class="lc-timeline">
+              <div><span>Timeline</span><span id="lc-follow">live</span></div>
+              <canvas
+                id="lc-timeline"
+                tabindex="0"
+                role="slider"
+                aria-label="Snapshot step"
+                aria-valuemin="0"
+                aria-valuemax="0"
+                aria-valuenow="0"
+              ></canvas>
+            </div>
+            <div id="lc-quality" class="lc-quality" hidden></div>
+          </section>
+          <aside class="lc-side">
+            <section id="lc-stop" class="lc-panel lc-pad">
+              <h2>Stop rule</h2>
+              <div id="lc-rule" class="lc-rule"></div>
+              <div id="lc-checks"></div>
+              <div class="lc-gain-label"><span>Gain</span><span id="lc-gain-value"></span></div>
+              <div class="lc-gain"><i id="lc-gain-fill"></i><b id="lc-gain-threshold"></b></div>
+              <div class="lc-gain-label">
+                <span>0</span><span id="lc-threshold-label"></span><span id="lc-gain-max"></span>
+              </div>
+            </section>
+            <section class="lc-panel lc-pad">
+              <h2>Run size</h2>
+              <dl id="lc-plan"></dl>
+            </section>
+          </aside>
+        </div>
+        <section id="lc-charts" class="lc-charts" aria-label="Training charts"></section>
+        <section class="lc-panel">
+          <div class="lc-panel-head"><h2>Events</h2></div>
+          <div class="lc-events">
+            <table aria-label="Training events">
+              <thead>
+                <tr>
+                  <th>Step</th>
+                  <th>Kind</th>
+                  <th>Event</th>
+                </tr>
+              </thead>
+              <tbody id="lc-events"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
     </section>
 
     <script type="module" src="/src/view/main.ts"></script>
