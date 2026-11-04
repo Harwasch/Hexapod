@@ -8767,6 +8767,155 @@ export interface components {
             stepsDone: number;
             /** Stepsstarted */
             stepsStarted: number;
+            train?: components["schemas"]["LiveTrain"] | null;
+        };
+        /** LiveTrain */
+        LiveTrain: {
+            /** Block */
+            block?: string | null;
+            /** Evals */
+            evals?: components["schemas"]["LiveTrainEval"][];
+            /** Events */
+            events?: components["schemas"]["LiveTrainEvent"][];
+            plan?: components["schemas"]["LiveTrainPlan"] | null;
+            /** Planid */
+            planId?: string | null;
+            quality?: components["schemas"]["LiveTrainQuality"] | null;
+            /** Run */
+            run?: string | null;
+            series?: components["schemas"]["LiveTrainSeries"];
+            /** Snapshots */
+            snapshots?: components["schemas"]["LiveTrainSnapshot"][];
+            stop?: components["schemas"]["LiveTrainStop"] | null;
+        };
+        /** LiveTrainEval */
+        LiveTrainEval: {
+            /** Decision */
+            decision?: string | null;
+            /** Gain */
+            gain?: number | null;
+            /** Psnr */
+            psnr?: number | null;
+            /** Step */
+            step: number;
+        };
+        /** LiveTrainEvent */
+        LiveTrainEvent: {
+            /** Kind */
+            kind: string;
+            /** Step */
+            step: number;
+            /** Stepssaved */
+            stepsSaved?: number | null;
+            /** Text */
+            text: string;
+            /** Usdsaved */
+            usdSaved?: number | null;
+        };
+        /** LiveTrainPlan */
+        LiveTrainPlan: {
+            /** Blocks */
+            blocks?: number | null;
+            /** Cap */
+            cap?: number | null;
+            /** Cardgb */
+            cardGb?: number | null;
+            /** Clamp */
+            clamp?: string | null;
+            /** Frames */
+            frames?: number | null;
+            /** Gpu */
+            gpu?: string | null;
+            /** Metresperunit */
+            metresPerUnit?: number | null;
+            /** Mode */
+            mode?: string | null;
+            /** Refineevery */
+            refineEvery?: number | null;
+            /** Refinestart */
+            refineStart?: number | null;
+            /** Refinestop */
+            refineStop?: number | null;
+            rule?: components["schemas"]["LiveTrainRule"] | null;
+            /** Schedulefactor */
+            scheduleFactor?: number | null;
+            /** Shdegree */
+            shDegree?: number | null;
+            /** Shinterval */
+            shInterval?: number | null;
+            /** Sparse */
+            sparse?: number | null;
+            /** Stepsmax */
+            stepsMax?: number | null;
+            /** Usdperhour */
+            usdPerHour?: number | null;
+        };
+        /** LiveTrainQuality */
+        LiveTrainQuality: {
+            /** Elongationshare */
+            elongationShare?: number | null;
+            /** Farfieldshare */
+            farFieldShare?: number | null;
+            /** Step */
+            step?: number | null;
+        };
+        /** LiveTrainRule */
+        LiveTrainRule: {
+            /** Every */
+            every: number;
+            /** Mingaindb */
+            minGainDb: number;
+            /** Window */
+            window: number;
+        };
+        /** LiveTrainSeries */
+        LiveTrainSeries: {
+            /** Gs */
+            gs?: (number | null)[];
+            /** Its */
+            its?: (number | null)[];
+            /** Loss */
+            loss?: {
+                [key: string]: (number | null)[];
+            };
+            /** Lr */
+            lr?: (number | null)[];
+            /** Mem */
+            mem?: (number | null)[];
+            /** Sh */
+            sh?: (number | null)[];
+            /** Step */
+            step?: number[];
+            /** T */
+            t?: (number | null)[];
+        };
+        /** LiveTrainSnapshot */
+        LiveTrainSnapshot: {
+            /** Bytes */
+            bytes?: number | null;
+            /** Count */
+            count: number;
+            /** Elongationshare */
+            elongationShare?: number | null;
+            /** Farfieldshare */
+            farFieldShare?: number | null;
+            /** Key */
+            key: string;
+            /** Of */
+            of?: number | null;
+            /** Step */
+            step: number;
+            /** Url */
+            url?: string | null;
+        };
+        /** LiveTrainStop */
+        LiveTrainStop: {
+            /** Gain */
+            gain?: number | null;
+            /** Maxsteps */
+            maxSteps?: number | null;
+            /** Step */
+            step: number;
         };
         /**
          * LonLatGrid
@@ -13036,6 +13185,15 @@ export type SchemaLiveProgress = components['schemas']['LiveProgress'];
 export type SchemaLiveSplat = components['schemas']['LiveSplat'];
 export type SchemaLiveStage = components['schemas']['LiveStage'];
 export type SchemaLiveState = components['schemas']['LiveState'];
+export type SchemaLiveTrain = components['schemas']['LiveTrain'];
+export type SchemaLiveTrainEval = components['schemas']['LiveTrainEval'];
+export type SchemaLiveTrainEvent = components['schemas']['LiveTrainEvent'];
+export type SchemaLiveTrainPlan = components['schemas']['LiveTrainPlan'];
+export type SchemaLiveTrainQuality = components['schemas']['LiveTrainQuality'];
+export type SchemaLiveTrainRule = components['schemas']['LiveTrainRule'];
+export type SchemaLiveTrainSeries = components['schemas']['LiveTrainSeries'];
+export type SchemaLiveTrainSnapshot = components['schemas']['LiveTrainSnapshot'];
+export type SchemaLiveTrainStop = components['schemas']['LiveTrainStop'];
 export type SchemaLonLatGrid = components['schemas']['LonLatGrid'];
 export type SchemaMapFeature = components['schemas']['MapFeature'];
 export type SchemaMapOutput = components['schemas']['MapOutput'];
