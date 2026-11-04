@@ -175,7 +175,11 @@ def test_the_watch_thread_runs_beside_the_tool_and_cleans_up(tmp_path: Path) -> 
     assert not snapshots.exists()
 
 
-def test_the_mapper_argv_asks_for_snapshots_only_when_told_to() -> None:
+def test_the_mapper_argv_asks_for_snapshots_only_when_told_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # This checks argv construction, not COLMAP execution; integration tests own that.
+    monkeypatch.setattr(sfm, "colmap_exe", lambda: "/usr/bin/colmap")
     plain = sfm.mapper_argv(Path("/db"), Path("/i"), Path("/o"))
     assert "--Mapper.snapshot_path" not in plain
     argv = sfm.mapper_argv(
