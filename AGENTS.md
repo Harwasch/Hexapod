@@ -18,9 +18,10 @@ Start with `README.md`, then `docs/HANDOFF.md` and `docs/DEPLOYMENT.md`.
 - Contracts: `pnpm contracts:check`. After a Pydantic schema change:
   `cd apps/api && uv run python -m app.scripts.export_openapi ../../packages/contracts/openapi.json`, then
   `pnpm contracts:generate`.
-- CI (`.github/workflows/ci.yml`): a PR, and a push to main, run only the jobs whose paths changed
+- CI (`.github/workflows/ci.yml`): fast checks only, on PRs and `workflow_dispatch`; no push-to-main run, no
+  nightly, no Playwright (run `pnpm e2e` locally). A PR runs only the jobs whose paths changed
   (`.github/scripts/ci_changes.py`, tested by `python3 -m unittest discover -s .github/scripts`); a change to
-  CI itself runs everything; a nightly runs everything when main moved. A draft PR runs only the format and
+  CI itself runs everything. GPU workflows (Modal) are `workflow_dispatch` only. A draft PR runs only the format and
   workflows checks; marking it ready for review (or a `workflow_dispatch` on its branch) runs the full suite.
   Deploy (`deploy.yml`) ships main.
 

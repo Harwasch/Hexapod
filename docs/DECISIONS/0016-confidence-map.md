@@ -396,7 +396,7 @@ Date 2026-10-20 · M4 of the splat-pipeline build (design M4–M6 §2 F4), branc
 
 - A scan with no measured epoch — every legacy scan, the camp included — cannot be filled or
   published until it has two measured epochs on one site, and its existing fill goes on its
-  next republish. A `wm-*` push (no inputs) runs no job. There is no override (design open
+  next republish. fill.yml is dispatch-only; without `jobs` it runs no job. There is no override (design open
   question 8).
 - On the yard at the fill size (CPU renderer, Telea, 8 views at 1024×576): every cell still
   weak gave 1,833 faded targets and an 11,746-gaussian layer, much of it discs lifted along

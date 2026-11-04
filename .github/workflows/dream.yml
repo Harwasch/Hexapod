@@ -6,8 +6,8 @@ name: Dream clips (Modal GPU, Wan 2.2 and Cosmos-Predict2)
 # plants. Uploads clips, sheets, stills and the fitted materials.json as the `dream`
 # artifact. Nothing is published. See docs/WORLD_MODEL_RUNBOOK.md, section 8.
 #
-# On a push to a `wm-*` working branch that touches the dream code (not `living-models`, so
-# merges there start no GPU run). The Modal token is the repository's; the video models read
+# Manual runs (workflow_dispatch) only: it spends Modal GPU money, so no push starts it.
+# The Modal token is the repository's; the video models read
 # the Modal secret `huggingface` (HF_TOKEN).
 #
 # Cancelling the run (or its timeout) cancels the Modal calls it started: dream.py tracks
@@ -16,13 +16,6 @@ name: Dream clips (Modal GPU, Wan 2.2 and Cosmos-Predict2)
 # which outlives the run -- went on billing H100s after the job had gone.
 
 on:
-  push:
-    branches: ["wm-*"]
-    paths:
-      - infra/modal/dream.py
-      - infra/modal/world_models.py
-      - tools/captures/teacher_materials.py
-      - .github/workflows/dream.yml
   workflow_dispatch:
     inputs:
       scans:

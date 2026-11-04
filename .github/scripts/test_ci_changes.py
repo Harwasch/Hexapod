@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import subprocess
 import tempfile
@@ -355,7 +356,9 @@ class Workflow(unittest.TestCase):
 
     def test_every_output_is_wired_through(self) -> None:
         outputs_ = self.jobs["changes"]["outputs"]
-        self.assertEqual(set(outputs_), {*JOBS, "scene", "shards"})
+        # `e2e` (and `scene`, `shards`) are still computed for a local run of the script,
+        # but CI has no Playwright job to gate with them.
+        self.assertEqual(set(outputs_), set(JOBS) - {"e2e"})
 
     def test_every_gated_job_runs_when_changes_failed(self) -> None:
         for name, job in self.jobs.items():
@@ -381,12 +384,14 @@ class Workflow(unittest.TestCase):
         self.assertEqual(step["env"]["DRAFT"], "${{ github.event.pull_request.draft }}")
         self.assertIn('--draft "$DRAFT"', step["run"])
 
-    def test_the_shard_matrix_has_a_fallback(self) -> None:
-        shard = self.jobs["e2e-shard"]
-        self.assertIn("||", shard["strategy"]["matrix"]["shard"])
-        (listing,) = [s for s in shard["steps"] if s.get("name") == "This shard's tests"]
-        self.assertIn('"$SCENE" = "false"', listing["run"])
-
+    def test_ci_runs_no_playwright_and_only_on_pull_requests_and_dispatch(self) -> None:
+        # Tests run on the dev machine (`pnpm e2e`); CI is the fast, advisory backstop.
+        text = (ROOT / ".github/workflows/ci.yml").read_text()
+        triggers = yaml.safe_load(text)[True]
+        self.assertEqual(set(triggers), {"pull_request", "workflow_dispatch"})
+        for name, job in self.jobs.items():
+            with self.subTest(job=name):
+                self.assertNotIn("playwright", json.dumps(job).lower())
 
 if __name__ == "__main__":
     unittest.main()
