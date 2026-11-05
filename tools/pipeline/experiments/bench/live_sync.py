@@ -18,7 +18,14 @@ from workdir import Workdir
 from .ledger import hourly_rate
 
 LOG = logging.getLogger(__name__)
-TAGS = (live.CAMERAS_TAG, live.SPLAT_TAG, live.TRAIN_TAG, live.PLAN_TAG)
+TAGS = (
+    live.CAMERAS_TAG,
+    live.SPLAT_TAG,
+    live.TRAIN_TAG,
+    live.PLAN_TAG,
+    live.SEEDS_TAG,
+    "live-metrics: ",  # The quality branch owns this tag; keep this path independent of it.
+)
 
 
 class CommitLock:
@@ -182,7 +189,11 @@ class LiveSync:
         self.offset = position
 
     def _snapshots(self) -> None:
-        for source in sorted((self.work.checkpoint_dir("train") / "live").glob("splat_*.spz")):
+        directory = self.work.checkpoint_dir("train") / live.LIVE_DIR
+        sources = sorted(directory.glob("splat_*.spz"))
+        if (directory / "seeds.bin").is_file():
+            sources.append(directory / "seeds.bin")
+        for source in sources:
             target = self.directory / source.name
             if target.exists():
                 continue

@@ -96,12 +96,13 @@ def test_commit_failure_retries_without_duplicate_copies_and_warns_once(
     assert sum("commit:" in row.message for row in caplog.records) == 1
 
 
+@pytest.mark.parametrize("name", ["splat_1.spz", "seeds.bin"])
 def test_failed_atomic_copy_never_publishes_partial_and_can_retry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
     calls: list[Any] = []
     sync = setup_sync(tmp_path, lambda: calls.append(True))
-    source = sync.work.checkpoint_dir("train") / "live/splat_1.spz"
+    source = sync.work.checkpoint_dir("train") / "live" / name
     source.parent.mkdir(parents=True)
     source.write_bytes(b"preview")
     original = shutil.copyfile
@@ -363,3 +364,48 @@ def test_stop_uses_sixty_second_join_and_never_raises(tmp_path: Path) -> None:
     sync.thread = thread
     sync.stop()
     assert timeouts == [60] and sync.stop_event.is_set()
+
+
+def test_seeds_and_twenty_snapshots_sync_once_atomically_with_quality_lines(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import numpy as np
+
+    commits: list[bool] = []
+    sync = setup_sync(tmp_path, lambda: commits.append(True))
+    directory = sync.work.checkpoint_dir("train") / "live"
+    payload = live.write_seeds(
+        np.array([[0, 0, 0], [1, 1, 1]]),
+        np.array([[255, 0, 0], [0, 255, 0]]),
+        directory,
+        lambda line: write_log(sync, line + "\n"),
+        key_prefix="runs/r/train/checkpoint/live",
+    )
+    assert payload is not None
+    metrics = 'live-metrics: {"step":1, "farFieldShare":0.25}'
+    write_log(sync, metrics + "\nignored\n")
+    for step in range(1, 21):
+        (directory / f"splat_{step:06d}.spz").write_bytes(bytes([step]))
+    (directory / "seeds.bin.part").write_bytes(b"unfinished")
+    (directory / "other.bin").write_bytes(b"not telemetry")
+    original = Path.replace
+    renamed: list[str] = []
+
+    def replace(source: Path, target: Any) -> Path:
+        assert source.name.endswith(".part")
+        renamed.append(Path(target).name)
+        return original(source, target)
+
+    monkeypatch.setattr(Path, "replace", replace)
+    sync.poll()
+    sync.poll()
+    assert (sync.directory / "seeds.bin").read_bytes() == (directory / "seeds.bin").read_bytes()
+    assert (sync.directory / "seeds.bin").stat().st_size == 20
+    text = (sync.directory / "train.log").read_text()
+    assert live.records(text) == [("seeds", payload)]
+    assert metrics + "\n" in text and "ignored" not in text
+    assert len(list(sync.directory.glob("splat_*.spz"))) == 20
+    assert len(renamed) == 22 and renamed.count("seeds.bin") == 1
+    assert not list(sync.directory.glob("*.part")) and not (sync.directory / "other.bin").exists()
+    assert commits == [True]

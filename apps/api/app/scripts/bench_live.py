@@ -16,7 +16,7 @@ import shutil
 import sys
 import threading
 import uuid
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,11 +28,11 @@ from pydantic import ValidationError
 
 from app.models.enums import RunStatus
 from app.schemas.live import LiveCameras, LiveSplat, LiveStage, LiveState, LiveTrain
-from app.services.live_train import derive_events, merge_live
+from app.services.live_train import derive_events, final_metrics, merge_live
 
 # Deliberately avoid pipeline_bridge: it imports app.config and the worker's settings.
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools/pipeline"))
-from live import records
+from live import MAX_LINE, parse_line
 
 LOG = logging.getLogger(__name__)
 STATE = Path.home() / ".local/share/hexapod-bench"
@@ -40,7 +40,69 @@ STATE = Path.home() / ".local/share/hexapod-bench"
 
 def snapshot_name(name: str, cached: Collection[str]) -> bool:
     """Only immutable previews actually downloaded from the volume may be served."""
-    return bool(re.fullmatch(r"splat_[a-zA-Z0-9_-]+\.spz", name)) and name in cached
+    allowed = name == "seeds.bin" or bool(re.fullmatch(r"splat_[a-zA-Z0-9_-]+\.spz", name))
+    return allowed and name in cached
+
+
+def _metrics_record(line: str, following: Sequence[str]) -> tuple[str, dict[str, Any]] | None:
+    """Decode the quality branch's optional tag without importing that branch's code."""
+    _prefix, tag, text = line.partition("live-metrics: ")
+    if not tag:
+        return None
+    for extra in ("", *following):
+        text += extra
+        if len(text) > MAX_LINE:
+            return None
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            continue
+        if not isinstance(payload, dict):
+            return None
+        step = payload.get("step")
+        if step is not None and (not isinstance(step, int) or isinstance(step, bool) or step < 0):
+            return None
+        if any(
+            payload.get(key) is not None and not isinstance(payload[key], list)
+            for key in ("trainMemoryCurve", "valPsnrCurve")
+        ):
+            return None
+        return "metrics", payload
+    return None
+
+
+def bench_records(text: str) -> list[tuple[str, dict[str, Any]]]:
+    """Keep live.records order and split-line semantics, with a metrics-only fallback."""
+    lines = text.splitlines()
+    found = []
+    for index, line in enumerate(lines):
+        if "live-" not in line:
+            continue
+        following = lines[index + 1 : index + 8]
+        parsed = parse_line(line, following)
+        if parsed is None:
+            parsed = _metrics_record(line, following)
+        if parsed is not None:
+            found.append(parsed)
+    return found
+
+
+def bench_final(result: dict[str, Any] | None) -> dict[str, int | float] | None:
+    """Test scores from parse_result; corrected validation scores from its embedded report."""
+    if result is None:
+        return None
+    scores = result.get("test")
+    artifacts = result.get("artifacts")
+    metrics = artifacts.get("train_metrics.json") if isinstance(artifacts, dict) else None
+    corrected = metrics.get("colorCorrected") if isinstance(metrics, dict) else None
+    fields = (
+        {key: scores.get(key) for key in ("psnr", "ssim", "lpips")}
+        if isinstance(scores, dict)
+        else {}
+    )
+    if isinstance(corrected, dict):
+        fields.update({f"cc{key.title()}": corrected.get(key) for key in ("psnr", "ssim", "lpips")})
+    return final_metrics(fields)
 
 
 def state_from_log(
@@ -53,7 +115,7 @@ def state_from_log(
     plan: dict[str, Any] | None = None,
 ) -> LiveState:
     """Pure log-to-console projection, using exactly the worker's record/merge semantics."""
-    parsed = records(text)
+    parsed = bench_records(text)
     # A stage-plan UUID resets training history. Frozen cameras precede that line
     # and belong to the scene, so retain them just as the API retains a pose step.
     frozen = next((value for kind, value in reversed(parsed) if kind == "cameras"), None)
@@ -80,11 +142,15 @@ def state_from_log(
     if stage_plan.get("startedAt"):
         with contextlib.suppress(ValueError):
             started = datetime.fromisoformat(stage_plan["startedAt"])
+    final = bench_final(result)
     train = None
-    if value := merged.get("train"):
+    value = merged.get("train")
+    if value or final:
+        value = value or {}
         try:
             train = LiveTrain.model_validate({**value, "snapshots": merged.get("snapshots", [])})
             document = train.model_dump(by_alias=True)
+            document["final"] = final
             document["relocations"] = value.get("relocations", [])
             document["events"] = derive_events(document)
             train = LiveTrain.model_validate(document)
@@ -92,6 +158,10 @@ def state_from_log(
                 name_part = snapshot.key.rsplit("/", 1)[-1]
                 snapshot.url = (
                     f"/snapshots/{name_part}" if snapshot_name(name_part, cached) else None
+                )
+            if train.seeds is not None:
+                train.seeds.url = (
+                    "/snapshots/seeds.bin" if snapshot_name("seeds.bin", cached) else None
                 )
         except (ValidationError, ValueError, TypeError, KeyError, IndexError):
             train = None
@@ -196,7 +266,7 @@ class Watch:
                     continue
                 self.cache.mkdir(parents=True, exist_ok=True)
                 target = self.cache / name
-                partial_path = target.with_suffix(".spz.part")
+                partial_path = target.with_name(target.name + ".part")
                 try:
                     with partial_path.open("wb") as output:
                         for chunk in volume.read_file(f"{prefix}/live/{name}"):
@@ -259,6 +329,8 @@ class Handler(BaseHTTPRequestHandler):
             if state.splat and state.splat.url:
                 state.splat.url = origin + state.splat.url
             if state.train:
+                if state.train.seeds and state.train.seeds.url:
+                    state.train.seeds.url = origin + state.train.seeds.url
                 for snapshot in state.train.snapshots:
                     if snapshot.url:
                         snapshot.url = origin + snapshot.url
