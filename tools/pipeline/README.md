@@ -1408,6 +1408,45 @@ the decision rule for this Beach A/B experiment.
 
 ### Quality-stack bake-off
 
+**Measured on Beach, and not adopted** (L4, seed 42, 38 untouched test frames, same frozen frames and
+poses; headline scores the trained PLY with no quality gate). A is gsplat 1.5.3 from `c7fb90c8`.
+
+| run                                           | test PSNR             | SSIM  | LPIPS | splats | train min | peak GB | $    | verdict                |
+| --------------------------------------------- | --------------------- | ----- | ----- | ------ | --------- | ------- | ---- | ---------------------- |
+| A: `baseline-main`                            | 25.17                 | 0.753 | 0.301 | 3.46M  | 98        | 7.4     | 1.57 | what main ships        |
+| `upgraded-plain` (gsplat 512d366b only)       | 25.34                 | 0.755 | 0.295 | 3.46M  | 75        | 7.4     | 1.23 | adopted with the image |
+| `all-on-no-3dgut`, trained at 450x800         | 18.97                 | 0.492 | 0.383 | 3.46M  | 109       | 8.6     | 1.78 | stays off              |
+| same, with the fade gate                      | 17.88                 | 0.486 | 0.412 | 3.46M  | -         | -       | -    | stays off              |
+| `all-on-no-3dgut-native`, trained at 900x1600 | OOM at about step 17k |       |       |        | 35        | 20.3    | 0.57 | stays off              |
+| B: `all-on` (with 3DGUT)                      | crashed at 2 h        |       |       |        | 126       | 21.5    | 2.04 | stays off              |
+
+Which feature costs what, half schedule at 450x800, one removed at a time from `all-on-no-3dgut`
+(no-gate test PSNR / SSIM; not a controlled split, since the 18.97 reference is full schedule):
+without `pose_opt` 22.27 / 0.713, without PPISP 21.29 / 0.537, without priors and the anisotropy cap
+20.76 / 0.566, without the sphere 20.07 / 0.530. No single removal reaches A: their costs add up.
+Dense init was not removed in any run, so it has no measurement of its own.
+
+Three causes are measured:
+
+- **3DGUT does not ship.** A beach screen's export scored 5.45 dB under the trainer's eval with UT and
+  eval3d on (`d4a0e304`) and 0.00 dB with both off (`9ae10e24`). The bench test and our viewers use
+  classic rendering. UT without eval3d is refused, because its projection has no geometry gradients.
+- **PPISP's camera response does not ship.** Export was 9.42 dB under the trainer's eval (`fb7fa4f8`).
+  `ppisp_display_referred` freezes the response and vignette, and learns only per-frame exposure and
+  colour.
+- **Native-resolution OOM is runaway geometry, not splat count.** Splats reached a screen radius of
+  1,027,746 px and tile intersections 226M (about 4M before), on the same budget A fits in 7.4 GB.
+
+Limits of this measurement. `all-on` was never scored whole: it crashed before its log was captured,
+at 21.5 GB, so out-of-memory is likely rather than shown. Native-resolution training never finished, so
+the half-resolution runs carry an unmeasured handicap against A. One seed: `upgraded-plain`'s +0.17 dB is
+inside Spool's 0.22 dB seed spread, and its time saving is the clearer gain.
+
+A render of frame_0052 from the half-resolution run shows rock texture and pebbles A lost, yet it scores
+lower on every test frame (2.4 to 10 dB). That suggests pixel alignment or colour rather than lost detail,
+and pose optimisation has the largest measured effect. A later trial should start from `upgraded-plain` and
+add one feature at a time.
+
 `experiments/variants/quality-stack.yaml` now contains only `baseline-main` and `all-on`:
 two Beach runs with the same frozen frames, poses and test split, seed 42, full schedule,
 L4. A (`baseline-main`) runs from Phase 0 commit `c7fb90c8`, gsplat 1.5.3, with

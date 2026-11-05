@@ -1,7 +1,7 @@
 # Beach-only A/B, frozen frames/poses, full schedule, seed 42, L4.
 # A was measured from c7fb90c8 with gsplat 1.5.3; never relabel the new image as A.
 # Share --tag quality-stack --total-cap 30 and the existing ledger for all paid work.
-# Candidate weights are unmeasured. Production defaults wait for the A/B decision.
+# B lost on Beach (tools/pipeline/README.md, "Quality-stack bake-off"), so production defaults stay off.
 baseline-main: {}
 all-on:
   train:
