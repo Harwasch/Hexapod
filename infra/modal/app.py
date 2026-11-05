@@ -59,10 +59,11 @@ else:
 #: every stage, because `remote.execute` registers them all. Missing any one of these was
 #: an `ImportError` before the first byte moved; the first version of this file installed
 #: two of the six, and `tools/pipeline/tests/test_modal_image.py` now pins the list.
+#: NumPy/Pillow match the tested pipeline uv.lock; Python 3.10 trainer pins stay separate.
 IMAGE_PACKAGES: tuple[str, ...] = (
     "boto3==1.43.94",
-    "numpy==2.2.6",
-    "pillow==12.3.0",
+    "numpy==2.5.3",
+    "pillow==13.0.0",
     "pyyaml==6.0.3",
     "imageio-ffmpeg==0.6.0",
 )

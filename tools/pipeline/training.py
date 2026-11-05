@@ -6,6 +6,11 @@ this argv against the real trainer and check the convergence and block wrappers.
 Recipe parameters and defaults are unchanged; bilateral-grid flags follow upstream's
 rename and preserve its colour-corrected evaluation. Local tests cannot prove CUDA.
 
+Upstream 512d366b fixes DefaultStrategy's opacity reset: v1.5.3's
+`step % reset_every == 0 & step > 0` was always False. With `strategy: default`,
+opacity now resets every 3000 steps (before schedule scaling, during refinement).
+The production recipe uses `mcmc`, so this fix does not affect it.
+
 Reading the source corrected four things the first version of this file transcribed from
 memory, and each one would have cost a GPU run to discover:
 

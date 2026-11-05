@@ -15,6 +15,7 @@ import ast
 import runpy
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +43,7 @@ def _module_level_imports(path: Path) -> set[str]:
     return names
 
 
-def _image_packages() -> set[str]:
+def _image_specs() -> set[str]:
     tree = ast.parse(APP.read_text(encoding="utf-8"))
     for node in tree.body:
         if isinstance(node, ast.AnnAssign | ast.Assign):
@@ -50,7 +51,7 @@ def _image_packages() -> set[str]:
             if any(isinstance(t, ast.Name) and t.id == "IMAGE_PACKAGES" for t in targets):
                 assert node.value is not None
                 value = ast.literal_eval(node.value)
-                return {spec.split(">")[0].split("=")[0].split("<")[0] for spec in value}
+                return set(value)
     raise AssertionError("app.py defines no IMAGE_PACKAGES")
 
 
@@ -65,9 +66,18 @@ def test_the_image_installs_every_package_the_pipeline_imports() -> None:
                 continue
             third_party.add(DISTRIBUTIONS.get(name, name))
 
-    missing = sorted(third_party - _image_packages())
+    packages = {spec.split(">")[0].split("=")[0].split("<")[0] for spec in _image_specs()}
+    missing = sorted(third_party - packages)
 
     assert not missing, f"infra/modal/app.py IMAGE_PACKAGES lacks {missing}"
+
+
+@pytest.mark.parametrize("name", ["numpy", "pillow"])
+def test_pipeline_image_pins_match_the_tested_lock(name: str) -> None:
+    locked = tomllib.loads((PIPELINE / "uv.lock").read_text())
+    versions = {package["version"] for package in locked["package"] if package["name"] == name}
+    assert len(versions) == 1
+    assert f"{name}=={versions.pop()}" in _image_specs()
 
 
 def test_the_image_puts_captures_beside_the_pipeline() -> None:

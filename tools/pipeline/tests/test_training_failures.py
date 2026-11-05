@@ -52,3 +52,18 @@ def test_failed_command_keeps_last_forty_lines_and_full_stage_log(tmp_path: Path
     assert "output line 31\n" in message
     assert "output line 30\n" not in message
     assert "output line 0\n" in work.log_path("train").read_text()
+
+
+@pytest.mark.parametrize("as_bytes", [False, True])
+@pytest.mark.parametrize("line_length", [20, 200])
+def test_trainer_diagnostic_survives_worker_message_cut(as_bytes: bool, line_length: int) -> None:
+    argv = ["python", "trainer.py", "--data_dir", "/dataset/" + "x" * 2500]
+    diagnostic = "RuntimeError: CUDA out of memory: diagnostic sentinel"
+    output = "\n".join(["traceback context " + "x" * line_length] * 40 + [diagnostic])
+    cause = subprocess.CalledProcessError(1, argv, output=output.encode() if as_bytes else output)
+    message = str(StageFailedError("photo-reconstruct", "train", "gsplat", cause))
+    # apps/api/app/worker/child.py::_message keeps this prefix, including its ellipsis.
+    assert len(message) > 2000
+    worker_message = message[:1997] + "..."
+    assert diagnostic in worker_message
+    assert argv[-1] in message

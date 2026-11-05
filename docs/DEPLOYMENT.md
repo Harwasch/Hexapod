@@ -558,12 +558,20 @@ PSNR/SSIM/LPIPS, **98 min, $1.57**, versus upgraded plain **25.34/0.755/0.295**,
 **75 min, $1.23**. The +0.17 dB is within Spool's 0.22 dB seed spread; quality improvement
 is not established. This extraction excludes the experimental quality stack.
 
+One upstream behaviour change affects `strategy: default`: 512d366b fixes the opacity
+reset condition that was always false in 1.5.3. Opacity now resets every 3000 steps
+(before schedule scaling, during refinement). The production recipe uses `mcmc` and
+is unaffected.
+
 **Deploy time:** gsplat now compiles from source in a dedicated 16-core, 48 GB build
 step (two-hour timeout). The default Modal builder failed to finish within two hours;
 with sm_80 + sm_89 on 16 cores, one source alone took 68 minutes. The image therefore
 builds `CUDA_ARCHS="8.0"`: sm_80 runs on A100, A10, L4 and L40S by same-major
 compatibility. Other GPU architectures are not validated by this build. Unchanged
 layers are cached; allow a long first deploy, not the old wheel image's eight minutes.
+The header comments in `.github/workflows/modal.yml` still describe the 1.5.3 wheel
+and a 15–30 minute build. That job's 90-minute timeout may not cover the first source
+build; use the operator deploy below when the image is not already cached.
 
 Before replacing production, deploy this checkout under a **non-production app name**
 and run the production stage/transfer path against it. From the repository root, with

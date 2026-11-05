@@ -204,8 +204,11 @@ class StageFailedError(PipelineError):
             output = cause.output
             if isinstance(output, bytes):
                 output = output.decode("utf-8", errors="replace")
-            detail += "\nLast trainer/tool output (up to 40 lines):\n" + "\n".join(
-                str(output).splitlines()[-40:]
+            # The worker keeps only the first 2000 characters. Put the traceback end
+            # before the potentially long argv, with room for the stage context.
+            tail = "\n".join(str(output).splitlines()[-40:])[-1500:]
+            detail = (
+                "Last trainer/tool output (up to 40 lines, 1500 chars):\n" + tail + "\n" + detail
             )
         super().__init__(f"recipe {recipe!r}, stage {stage_id!r} (impl {impl!r}) failed: {detail}")
         self.recipe = recipe
