@@ -63,7 +63,6 @@ all-on-no-3dgut-native:
     with_ut: false
     with_eval3d: false
     budget_max: 3456214
-    step_max_side: 800
     antialiased: false
     pose_opt: true
     post_processing: ppisp
