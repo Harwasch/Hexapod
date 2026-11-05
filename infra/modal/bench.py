@@ -221,3 +221,42 @@ def matched_renders(plan: dict[str, Any]) -> dict[str, Any]:
     write_json(run / "result.json", {k: v for k, v in result.items() if k != "pngs"})
     volume.commit()
     return result
+
+
+@app.function(
+    image=image,
+    gpu=GPU_NAMES["l4"],
+    cpu=(shared.GPU_CPU_CORES, shared.GPU_CPU_CORES),
+    memory=(shared.GPU_MEMORY_MIB, shared.GPU_MEMORY_MIB),
+    timeout=TIMEOUTS["rescore"],
+    retries=0,
+    volumes={"/bench": volume},
+    max_containers=1,
+    startup_timeout=STARTUP_SECONDS,
+    single_use_containers=True,
+)
+def rescore(plan: dict[str, Any]) -> dict[str, Any]:
+    from experiments.bench.rescore import run_rescore
+    from experiments.bench.worker import RestartedError, claim
+
+    started, billed = _billed_since()
+    volume.reload()
+    run = Path("/bench/runs") / plan["runId"]
+    try:
+        claim(run, attempt_started=started)
+    except RestartedError as error:
+        return {
+            "runId": plan["runId"],
+            "scene": plan["scene"],
+            "status": "preempted",
+            "costUsd": None,
+            "error": str(error),
+        }
+    volume.commit()
+    result = run_rescore(Path("/bench"), run, plan, billed_since=started)
+    volume.commit()
+    result.update(wallSeconds=time.time() - started, billedFrom=billed)
+    result["costUsd"] = result["wallSeconds"] * hourly_rate("l4") / 3600
+    write_json(run / "rescore.json", {k: v for k, v in result.items() if k != "pngs"})
+    volume.commit()
+    return result

@@ -36,7 +36,19 @@ def synthetic_scene(root: Path, scene: str, commit: str) -> dict[str, Any]:
         handle.write(struct.pack("<Q", 8))
         for point in range(8):
             handle.write(
-                struct.pack("<Q3d3BdQ", point + 1, point / 10, 0, 0, 100, 100, 100, 0.1, len(names))
+                # Cube corners give the frozen-support overhead footprint real area.
+                struct.pack(
+                    "<Q3d3BdQ",
+                    point + 1,
+                    (point % 2) / 10,
+                    ((point // 2) % 2) / 10,
+                    (point // 4) / 10,
+                    100,
+                    100,
+                    100,
+                    0.1,
+                    len(names),
+                )
             )
             for index in range(len(names)):
                 handle.write(struct.pack("<II", index + 1, point))

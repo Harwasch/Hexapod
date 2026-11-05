@@ -71,6 +71,19 @@ def parser() -> argparse.ArgumentParser:
     matched.add_argument("--scene", choices=sorted(SCENES), required=True)
     matched.add_argument("--runs", nargs=2, required=True, metavar=("A", "B"))
     matched.add_argument("--frame", help="exact frozen test filename; default: median altitude")
+    rescore = commands.add_parser(
+        "rescore", help="one evaluation-only L4 call; common full/half yardstick"
+    )
+    rescore.add_argument("--scene", choices=sorted(SCENES), required=True)
+    rescore.add_argument("--runs", nargs="+", required=True)
+    rescore.add_argument(
+        "--ply", choices=("trained", "faded"), help="default: each available trained/faded PLY"
+    )
+    rescore_table = commands.add_parser("rescore-table")
+    rescore_table.add_argument("--runs", nargs="+", required=True)
+    rescore_table.add_argument(
+        "--output", type=Path, help="JSON table destination; default: state-dir/rescore-table.json"
+    )
     report = commands.add_parser("report")
     report.add_argument("--runs", nargs="*", help="local run IDs or paths to result.json")
     results = commands.add_parser("results", help="compact bake-off table and optional flip rule")
@@ -79,17 +92,18 @@ def parser() -> argparse.ArgumentParser:
     results.add_argument("--baseline", default="baseline-main")
     results.add_argument("--candidate", help="one candidate for the flip rule; default: all")
     spend = commands.add_parser("ledger")
-    for command in (freeze, run, matched, report, results, spend):
+    for command in (freeze, run, matched, rescore, rescore_table, report, results, spend):
         command.add_argument("--ledger", type=Path)
         command.add_argument("--state-dir", type=Path, default=STATE)
         command.add_argument("--dry-run", action="store_true")
         command.add_argument("--rehearse", action="store_true")
         command.add_argument("--tag", help="spend/report group in the shared ledger")
-    for command in (freeze, run, matched):
+    for command in (freeze, run, matched, rescore):
         command.add_argument("--cap", type=float, default=2.0)
         command.add_argument(
             "--total-cap", type=float, help="cumulative cap for --tag; --cap bounds each batch"
         )
+    rescore.set_defaults(tag="rescore", total_cap=5.0, cap=1.0)
     return root
 
 
@@ -102,6 +116,21 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
         "rehearsal": args.rehearse,
         "tag": args.tag,
     }
+    if args.command == "rescore":
+        if not 1 <= len(args.runs) <= 4 or len(set(args.runs)) != len(args.runs):
+            raise ValueError("rescore needs one to four distinct run IDs")
+        if any(not re.fullmatch(r"[a-f0-9]{8,32}", run) for run in args.runs):
+            raise ValueError("--runs needs bench run IDs or 8+ hex prefixes")
+        return [
+            {
+                **base,
+                "runId": "rescore-" + uuid.uuid4().hex,
+                "schedule": "rescore",
+                "tier": "l4",
+                "runs": args.runs,
+                "ply": [args.ply] if args.ply else None,
+            }
+        ]
     if args.command == "matched-renders":
         if any(not re.fullmatch(r"[a-f0-9]{8,32}", run) for run in args.runs):
             raise ValueError("--runs needs bench run IDs or 8+ hex prefixes")
@@ -188,6 +217,10 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
 
 def save_outcome(state: Path, book: Path, plan: dict[str, Any], result: dict[str, Any]) -> None:
     directory = state / "runs" / plan["runId"]
+    if plan["schedule"] == "rescore":
+        from .rescore import save_local
+
+        save_local(state, result)
     if plan["schedule"] == "matched":
         from .matched_gpu import PNG_NAMES
 
@@ -246,7 +279,7 @@ def save_outcome(state: Path, book: Path, plan: dict[str, Any], result: dict[str
 
 def lost_result(state: Path, plan: dict[str, Any], error: Exception) -> dict[str, Any]:
     message = f"Remote outcome unknown: {type(error).__name__}: {error}"
-    if plan["schedule"] in {"freeze", "matched"}:
+    if plan["schedule"] in {"freeze", "matched", "rescore"}:
         return {
             "runId": plan["runId"],
             "scene": plan["scene"],
@@ -297,6 +330,8 @@ def remote_batch(
                     if plan["schedule"] == "freeze"
                     else module.matched_renders
                     if plan["schedule"] == "matched"
+                    else module.rescore
+                    if plan["schedule"] == "rescore"
                     else module.FUNCTIONS[(plan["tier"], plan["schedule"])]
                 )
                 try:
@@ -351,6 +386,10 @@ def local_batch(
             from .matched import run_matched
 
             result = run_matched(state, state / "runs" / plan["runId"], plan)
+        elif plan["schedule"] == "rescore":
+            from .rescore import run_rescore
+
+            result = run_rescore(state, state / "runs" / plan["runId"], plan)
         else:
             result = run_training(scene, state / "runs" / plan["runId"], plan)
         save_outcome(state, book, plan, result)
@@ -365,9 +404,26 @@ def main(argv: list[str] | None = None) -> int:
         state /= "rehearsal"
     book = args.ledger.expanduser().resolve() if args.ledger else state / "ledger.jsonl"
     try:
-        if book.is_relative_to(REPO):
+        if book.is_relative_to(REPO) and not args.rehearse:
             raise ValueError("ledger must live outside the repository")
         entries = ledger.read(book)
+        if args.command == "rescore-table":
+            from .matched import source_run
+            from .rescore import table
+
+            paths = []
+            for run in args.runs:
+                path = Path(run)
+                if not path.is_file():
+                    folder = state / "runs" / run
+                    if not folder.exists():
+                        folder = source_run(state / "runs", run)
+                    path = folder / "rescore.json"
+                paths.append(path)
+            text, document = table([read_json(path) for path in paths])
+            write_json(args.output or state / "rescore-table.json", document)
+            sys.stdout.write(text)
+            return 0
         if args.command == "ledger":
             sys.stdout.write(json.dumps(ledger.summary(entries), indent=2) + "\n")
             return 0
@@ -384,7 +440,9 @@ def main(argv: list[str] | None = None) -> int:
             results = [
                 r
                 for r in results
-                if r.get("schemaVersion") == 1 and (not args.tag or r.get("tag") == args.tag)
+                if r.get("schemaVersion") == 1
+                and r.get("schedule") not in {"rescore", "matched"}
+                and (not args.tag or r.get("tag") == args.tag)
             ]
             if args.command == "report":
                 sys.stdout.write(markdown(results))

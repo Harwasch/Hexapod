@@ -29,6 +29,7 @@ TIMEOUTS = {
     "full": int(os.environ.get("HEXAPOD_BENCH_FULL_TIMEOUT", "3300")),
     "freeze": 600,
     "matched": 600,
+    "rescore": 2400,
 }
 # Startup/teardown allowance in the modelled reservation, not a measured invoice.
 STARTUP_SECONDS = 60
@@ -135,7 +136,7 @@ def estimate(entries: list[dict[str, Any]], scene: str, schedule: str, tier: str
     if schedule == "freeze":
         return 0.05
     return (
-        {"screen": 0.20, "full": 0.90, "matched": 0.05}[schedule]
+        {"screen": 0.20, "full": 0.90, "matched": 0.05, "rescore": 0.60}[schedule]
         * hourly_rate(tier)
         / hourly_rate("l4")
     )
