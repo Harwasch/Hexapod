@@ -76,11 +76,12 @@ GSPLAT_DIR = "/opt/gsplat"
 GSPLAT_TRAINER = f"{GSPLAT_DIR}/examples/simple_trainer.py"
 #: CUDA extensions pinned by the upstream examples, PPISP pinned to its v1.2.1 commit.
 FUSED_SSIM = "git+https://github.com/rahul-goel/fused-ssim@a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38"
-#: A100, A10, L4/L40S. fused-ssim's setup.py adds sm_75/80/89 of its own when
+#: A100, A10, L4/L40S all run sm_80. fused-ssim's setup.py adds sm_75/80/89 of its own when
 #: it sees no GPU; this list is what torch's extension builder adds on top.
-#: sm_80 runs on A100 and A10 by same-major compatibility; sm_89 is native on L4 and L40S. Five
-#: architectures did not finish compiling in 60 minutes of image build.
-CUDA_ARCHS = "8.0;8.9"
+#: sm_80 runs on A100, A10, L4 and L40S by same-major compatibility, as the old wheel did. Each
+#: extra architecture repeats gsplat's largest kernels: measured on 16 cores with sm_80 + sm_89,
+#: one source took 68 minutes alone.
+CUDA_ARCHS = "8.0"
 FUSED_BILAGRID = (
     "git+https://github.com/harry7557558/fused-bilagrid@49f0ef06c9f81810fb9b5dd9027cf1844950cc16"
 )
@@ -166,14 +167,14 @@ image = (
         f"&& git -C {GSPLAT_DIR} submodule update --init --recursive",
     )
     # Its own step, on its own cores: on Modal's default builder this compile did not finish
-    # in 2 hours, and on 16 cores it takes about 6 minutes.
+    # in over 2 hours; 16 cores run the small sources together, and the largest take most of it.
     .add_local_file(HERE / "gsplat_build.py", "/root/gsplat_build.py", copy=True)
     .run_function(
         compile_gsplat,
         args=(_PIP, GSPLAT_DIR, CUDA_ARCHS),
         cpu=(16, 16),
         memory=(48000, 48000),
-        timeout=3600,
+        timeout=7200,
     )
     .run_commands(
         # The LPIPS network the trainer builds in its constructor downloads AlexNet's
