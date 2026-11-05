@@ -12,8 +12,13 @@ out of `app.py` with `ast` too, so neither side needs `modal` installed.
 from __future__ import annotations
 
 import ast
+import runpy
+import subprocess
 import sys
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 import colmap4
 import global_sfm
@@ -173,3 +178,133 @@ def test_colmap_is_capped_to_the_cpu_box_s_reservation() -> None:
     assert sfm.default_threads({}) is None
     assert sfm.default_threads({sfm.THREADS_ENV: "lots"}) is None
     assert sfm.default_threads({sfm.THREADS_ENV: "0"}) is None
+
+
+def test_source_build_is_pinned_and_gets_dedicated_compile_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values = _constants("CUDA_BASE", "TORCH_INDEX", "GSPLAT_COMMIT", "CUDA_ARCHS")
+    assert values == {
+        "CUDA_BASE": "nvidia/cuda:12.8.1-devel-ubuntu22.04",
+        "TORCH_INDEX": "https://download.pytorch.org/whl/cu128",
+        "GSPLAT_COMMIT": "512d366b67073d77ca099ede742683c165dfc23b",
+        "CUDA_ARCHS": "8.0",
+    }
+    # Modal mounts app.py alone; both runtime images need its sibling import.
+    assert APP.read_text().count('.add_local_file(HERE / "gsplat_build.py"') == 2
+    tree = ast.parse(APP.read_text())
+    build = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "run_function"
+    )
+    resources = {
+        k.arg: ast.literal_eval(k.value)
+        for k in build.keywords
+        if k.arg in {"cpu", "memory", "timeout"}
+    }
+    assert resources == {"cpu": (16, 16), "memory": (48000, 48000), "timeout": 7200}
+    calls = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: calls.append((a, kw)))
+    compile_gsplat = runpy.run_path(str(APP.with_name("gsplat_build.py")))["compile_gsplat"]
+    compile_gsplat("/opt/trainer/bin/pip", "/opt/gsplat", "8.0")
+    args, kwargs = calls[0]
+    assert args[0] == [
+        "/opt/trainer/bin/pip",
+        "install",
+        "--no-deps",
+        "--no-build-isolation",
+        "/opt/gsplat",
+    ]
+    assert kwargs["check"] is True
+    assert {
+        k: kwargs["env"][k]
+        for k in ("TORCH_CUDA_ARCH_LIST", "CUDA_HOME", "MAX_JOBS", "BUILD_EXPERIMENTAL")
+    } == {
+        "TORCH_CUDA_ARCH_LIST": "8.0",
+        "CUDA_HOME": "/usr/local/cuda",
+        "MAX_JOBS": "16",
+        "BUILD_EXPERIMENTAL": "0",
+    }
+
+
+def test_smoke_targets_named_app_and_cleans_private_prefix_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Exercise main's wiring without rendering frames, contacting Modal or touching R2.
+    namespace = runpy.run_path(str(APP.with_name("smoke.py")))
+    main = namespace["main"]
+    deleted = []
+    apps = []
+
+    class Transfer:
+        def delete(self, key: str) -> None:
+            deleted.append(key)
+
+    def execute(recipe: Any, work: Any, runners: Any) -> None:
+        assert recipe.stages[0].gpu.tier == "cpu4"
+        assert recipe.stages[1].gpu.tier == "l4"
+        raise RuntimeError("trainer failure")
+
+    monkeypatch.setattr(
+        sys, "argv", ["smoke.py", "--app", "isolated-upgrade", "--work", str(tmp_path)]
+    )
+    monkeypatch.setattr(namespace["tree_frames"], "render_orbit", lambda *a, **kw: None)
+    monkeypatch.setitem(main.__globals__, "_s3_transfer", Transfer)
+    monkeypatch.setitem(main.__globals__, "ModalAdapter", lambda name: apps.append(name))
+    monkeypatch.setitem(main.__globals__, "execute", execute)
+    with pytest.raises(RuntimeError, match="trainer failure"):
+        main()
+    assert apps == ["isolated-upgrade"]
+    assert len(deleted) == 1 and deleted[0].startswith("runs/smoke-")
+
+
+@pytest.mark.parametrize("missing", [None, "packed", "test_every"])
+def test_holdout_build_check_rejects_incompatible_renderer_or_parser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: str | None
+) -> None:
+    import inspect
+    from types import SimpleNamespace
+
+    import holdout_error
+
+    def callable_with(names: str) -> Any:
+        def function() -> None:
+            pass
+
+        function.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+            [
+                inspect.Parameter(n, inspect.Parameter.KEYWORD_ONLY)
+                for n in names.split()
+                if n != missing
+            ]
+        )
+        return function
+
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(__version__="stand-in"))
+    monkeypatch.setitem(
+        sys.modules,
+        "gsplat",
+        SimpleNamespace(
+            rasterization=callable_with(
+                "means quats scales opacities colors viewmats Ks "
+                "width height sh_degree packed rasterize_mode"
+            )
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "datasets.colmap",
+        SimpleNamespace(
+            Dataset=object, Parser=callable_with("data_dir factor normalize test_every")
+        ),
+    )
+    args = ["--trainer", str(tmp_path / "simple_trainer.py"), "--self-check"]
+    if missing:
+        with pytest.raises(ValueError, match="signature changed"):
+            holdout_error.main(args)
+    else:
+        assert holdout_error.main(args) == 0

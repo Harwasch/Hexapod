@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -238,9 +239,15 @@ class StageContext:
         while it runs (`progress.py`).
         """
         self.log(f"$ {' '.join(argv)}")
-        code = progress.stream(argv, cwd=self.work_dir, log=self.log)
+        tail: deque[str] = deque(maxlen=40)
+
+        def log(line: str) -> None:
+            tail.append(line)
+            self.log(line)
+
+        code = progress.stream(argv, cwd=self.work_dir, log=log)
         if code != 0:
-            raise subprocess.CalledProcessError(code, list(argv))
+            raise subprocess.CalledProcessError(code, list(argv), output="\n".join(tail))
 
 
 @dataclass(frozen=True)

@@ -1,13 +1,10 @@
 """Dispatching a 3DGS training run: the dataset it needs, the argv, the PLY it writes.
 
-**No training run has been executed anywhere in this repository.** `gsplat` needs CUDA
-and there is no GPU on any machine this was written on. What is built here is the
-*dispatch*, and since 2026-09-23 it is checked against the trainer it dispatches rather
-than against a memory of it: gsplat **v1.5.3**'s `examples/simple_trainer.py`, read at
-that tag, and the argv below **parsed by that file's own `tyro` CLI** (tyro 1.0.16) in a
-CPU venv holding the exact wheel the training image installs
-(`gsplat-1.5.3+pt24cu124-cp310`), torch 2.4.1 and the example's pinned requirements.
-Parsing is all a CPU can do: `Runner` allocates CUDA tensors in its constructor.
+The image targets gsplat **v1.6.0**, source commit
+512d366b67073d77ca099ede742683c165dfc23b, with torch 2.9.1+cu128. Image-build checks parse
+this argv against the real trainer and check the convergence and block wrappers.
+Recipe parameters and defaults are unchanged; bilateral-grid flags follow upstream's
+rename and preserve its colour-corrected evaluation. Local tests cannot prove CUDA.
 
 Reading the source corrected four things the first version of this file transcribed from
 memory, and each one would have cost a GPU run to discover:
@@ -117,7 +114,7 @@ _STEP_RE = re.compile(r"(\d+)")
 #: `print("Step: ", step, stats)` at each save step, where `stats` is a dict holding
 #: `num_GS` -- read from the source, not from a run.
 _STDOUT_GS_RE = re.compile(r"Step:\s+(\d+)\s+\{[^}]*'num_GS':\s*(\d+)")
-#: `(?<!CC_)` because with `--use_bilateral_grid` the same line goes on with
+#: `(?<!CC_)` because with `--post_processing bilateral_grid` the same line goes on with
 #: `CC_PSNR: ..., CC_SSIM: ..., CC_LPIPS: ...` (the colour-corrected numbers), and without
 #: it the last match of each pattern would be the corrected one.
 _STDOUT_PSNR_RE = re.compile(r"(?<!CC_)PSNR:\s*([0-9.]+)")
@@ -126,7 +123,7 @@ _STDOUT_SSIM_RE = re.compile(r"(?<!CC_)PSNR:[^\n]*?(?<!CC_)SSIM:\s*([0-9.]+)")
 _STDOUT_LPIPS_RE = re.compile(r"(?<!CC_)PSNR:[^\n]*?(?<!CC_)LPIPS:\s*([0-9.]+)")
 
 #: The gsplat release every flag and file name here was read from.
-GSPLAT_VERSION = "1.5.3"
+GSPLAT_VERSION = "1.6.0"
 
 #: v1.5.3's `Config.test_every`, which this stage never overrides. The parser sorts the
 #: registered images by name and holds out every one whose index is a multiple of it
@@ -535,7 +532,7 @@ def gsplat_argv(
       `shN` is empty, so the export is degree 0 -- which is all `canonical.ply` carries
       anyway (`gaussians.CANONICAL_PROPERTIES`). Held-out frames render with the zero
       embedding.
-    * `--use_bilateral_grid` fits a 16x16x8 bilateral grid per training image (BilaRF's
+    * `--post_processing bilateral_grid` fits a 16x16x8 bilateral grid per training image (BilaRF's
       colour model, `examples/lib_bilagrid.py`: plain torch plus `tensorly`, both in the
       training image) to the render before the loss. Nothing of it reaches the PLY.
       `eval()` then reports the raw metrics *and* colour-corrected ones (`cc_psnr`, ...),
@@ -581,7 +578,7 @@ def gsplat_argv(
     `gaussian_budget.memory_ceiling` counts when given the batch.
     """
     if sparse_grad and not packed:
-        raise ValueError("sparse_grad requires packed=true (gsplat v1.5.3)")
+        raise ValueError("sparse_grad requires packed=true (gsplat v1.6.0)")
     steps = str(max_steps)
     argv = [
         python,
@@ -630,7 +627,15 @@ def gsplat_argv(
     if app_opt:
         argv.append("--app_opt")
     if bilateral_grid:
-        argv.append("--use_bilateral_grid")
+        # v1.5.3 always scored the grid with the iterative quadratic correction.
+        # Upstream now defaults to no corrected metrics and an affine correction.
+        argv += [
+            "--post_processing",
+            "bilateral_grid",
+            "--use_color_correction_metric",
+            "--color_correct_method",
+            "quadratic",
+        ]
     if packed:
         argv.append("--packed")
     if sparse_grad:
@@ -781,7 +786,7 @@ class TrainMetrics:
     source: str = "none"
     #: The held-out split psnr/ssim/lpips were measured on: (train, val) frame counts.
     split: tuple[int, int] | None = None
-    #: `eval()`'s colour-corrected numbers, written only with `--use_bilateral_grid`.
+    #: `eval()`'s colour-corrected numbers, written only with `--post_processing bilateral_grid`.
     cc_psnr: float | None = None
     cc_ssim: float | None = None
     cc_lpips: float | None = None

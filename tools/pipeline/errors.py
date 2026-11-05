@@ -197,7 +197,17 @@ class StageFailedError(PipelineError):
     """A stage implementation raised. The cause is chained, the location is here."""
 
     def __init__(self, recipe: str, stage_id: str, impl: str, cause: BaseException) -> None:
-        super().__init__(f"recipe {recipe!r}, stage {stage_id!r} (impl {impl!r}) failed: {cause}")
+        import subprocess
+
+        detail = str(cause)
+        if isinstance(cause, subprocess.CalledProcessError) and cause.output:
+            output = cause.output
+            if isinstance(output, bytes):
+                output = output.decode("utf-8", errors="replace")
+            detail += "\nLast trainer/tool output (up to 40 lines):\n" + "\n".join(
+                str(output).splitlines()[-40:]
+            )
+        super().__init__(f"recipe {recipe!r}, stage {stage_id!r} (impl {impl!r}) failed: {detail}")
         self.recipe = recipe
         self.stage_id = stage_id
         self.impl = impl

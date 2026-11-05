@@ -28,7 +28,7 @@ patches, each optional:
 
 `--ply-to-ckpt PLY CKPT --step N` is the other use: a merged block splat written as the
 trainer's own checkpoint (`{"step", "splats": {means, scales, quats, opacities, sh0,
-shN}}`, v1.5.3's `Runner.train` save), so `simple_trainer.py --ckpt CKPT` -- "run eval
+shN}}`, retained by 512d366b's `Runner.train` save), so `simple_trainer.py --ckpt CKPT` -- "run eval
 only" in its `main` -- scores it on the held-out frames exactly as a single run is scored.
 `gsplat.exporter.export_splats` writes `f_rest` as `shN.permute(0, 2, 1).reshape(N, -1)`
 (channel-major), which this inverts.
@@ -58,6 +58,8 @@ REQUIRED_SOURCE = (
     "render_colors, render_alphas, info = rasterization(",
     "means=means,",
     "colors=colors,",
+    # Stage.render still delegates to this bound method, so the global patch is used.
+    "self.stage.add_scene(self.scene, self.rasterize_splats)",
 )
 
 SH_C0 = 0.28209479177387814
@@ -128,7 +130,7 @@ def ring_rasterization(real: Any, ring: dict[str, Any]) -> Any:
 
 
 def ply_to_checkpoint(ply: Path, target: Path, step: int) -> int:
-    """Write `ply` as v1.5.3's checkpoint. Returns the gaussian count."""
+    """Write `ply` as the pinned trainer's checkpoint. Returns the gaussian count."""
     import numpy as np
     import torch
 

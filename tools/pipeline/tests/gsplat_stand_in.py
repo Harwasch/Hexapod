@@ -134,7 +134,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--depth_loss", action="store_true")
     parser.add_argument("--pose_opt", action="store_true")
     parser.add_argument("--app_opt", action="store_true")
-    parser.add_argument("--use_bilateral_grid", action="store_true")
+    parser.add_argument("--post_processing", choices=["bilateral_grid"])
+    parser.add_argument("--use_color_correction_metric", action="store_true")
+    parser.add_argument("--color_correct_method", choices=["affine", "quadratic"], default="affine")
     parser.add_argument("--packed", action="store_true")
     parser.add_argument("--sparse_grad", action="store_true")
     parser.add_argument("--visible_adam", action="store_true")
@@ -204,7 +206,9 @@ def main(argv: list[str] | None = None) -> int:
         "depth_loss": args.depth_loss,
         "pose_opt": args.pose_opt,
         "app_opt": args.app_opt,
-        "use_bilateral_grid": args.use_bilateral_grid,
+        "post_processing": args.post_processing,
+        "use_color_correction_metric": args.use_color_correction_metric,
+        "color_correct_method": args.color_correct_method,
         "packed": args.packed,
         "sparse_grad": args.sparse_grad,
         "visible_adam": args.visible_adam,
@@ -273,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
         "ellipse_time": 0.0123,
         "num_GS": args.gaussians,
     }
-    if args.use_bilateral_grid:
+    if args.use_color_correction_metric:
         # v1.5.3's eval() adds the colour-corrected three only with a bilateral grid.
         val.update(cc_psnr=28.25, cc_ssim=0.8801, cc_lpips=0.1402)
     (stats / f"val_step{step - 1:04d}.json").write_text(json.dumps(val), encoding="utf-8")

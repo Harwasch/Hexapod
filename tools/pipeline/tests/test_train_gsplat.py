@@ -92,7 +92,7 @@ def stand_in_params(**overrides: object) -> dict[str, object]:
 # --- argv and dataset, which need neither a trainer nor a GPU ------------------------
 
 
-def test_the_argv_is_gsplat_1_5_3s_and_carries_the_four_switches_it_cannot_do_without() -> None:
+def test_the_argv_is_gsplat_1_6_0s_and_carries_the_four_switches_it_cannot_do_without() -> None:
     """Each of these was learned by reading v1.5.3, and each one missing costs a GPU run:
 
     no `--disable_viewer` and the trainer sleeps for a million seconds after training; no
@@ -605,7 +605,13 @@ def test_the_phone_capture_switches_reach_the_trainer_and_the_settings(tmp_path:
     execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
 
     cfg = json.loads((workdir.work_dir("train") / "gsplat" / "cfg.yml").read_text())
-    assert (cfg["pose_opt"], cfg["app_opt"], cfg["use_bilateral_grid"]) == (True, True, True)
+    assert (cfg["pose_opt"], cfg["app_opt"], cfg["post_processing"]) == (
+        True,
+        True,
+        "bilateral_grid",
+    )
+    assert cfg["use_color_correction_metric"] is True
+    assert cfg["color_correct_method"] == "quadratic"
     document = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
     settings = document["settings"]
     assert (settings["poseOpt"], settings["appOpt"], settings["bilateralGrid"]) == (
@@ -645,7 +651,7 @@ def test_the_phone_capture_switches_are_absent_from_the_default_argv() -> None:
         "p", Path("t"), Path("d"), Path("r"), pose_opt=True, app_opt=True, bilateral_grid=True
     )
 
-    for switch in ("--pose_opt", "--app_opt", "--use_bilateral_grid"):
+    for switch in ("--pose_opt", "--app_opt", "--post_processing", "--use_color_correction_metric"):
         assert switch not in plain
         assert switch in tuned
 
