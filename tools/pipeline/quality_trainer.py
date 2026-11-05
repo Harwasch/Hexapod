@@ -29,6 +29,7 @@ ANCHORS = (
     "        self.stage = Stage()",
     'render_mode="RGB+ED" if cfg.depth_loss else "RGB",',
     "            loss.backward()",
+    "            renders, alphas, info = self.stage.render(",
 )
 
 
@@ -63,10 +64,21 @@ def patch_source(
     source = source.replace(
         ANCHORS[2], 'render_mode="RGB+ED" if cfg.depth_loss or _hex_settings["priors"] else "RGB",'
     )
+    # Assignment evaluates its RHS before releasing the old LHS. Upstream's info
+    # holds the previous frame's large intersection arrays until the new render
+    # has already allocated its own. Backward/strategy/eval are finished by here.
+    source = source.replace(
+        ANCHORS[4],
+        "            pixels, Ks, masks = _hex_quality.step_inputs(self, pixels, Ks, masks)\n"
+        "            height, width = pixels.shape[1:3]\n"
+        "            num_train_rays_per_step = pixels.shape[0] * height * width\n"
+        "            info = None\n" + ANCHORS[4],
+    )
     return source.replace(
         ANCHORS[3],
         "            loss = _hex_quality.loss(self, step, data, depths, alphas, Ks, loss)\n"
-        + ANCHORS[3],
+        + ANCHORS[3]
+        + "\n            _hex_quality.record_memory(self, step, info)",
     )
 
 
@@ -187,6 +199,87 @@ def prior(path: str) -> dict[str, Any]:
     return prior_cache.load(Path(path))
 
 
+def resize_image(value: Any, size: tuple[int, int], *, nearest: bool = False) -> Any:
+    """HWC/CHW-free interface for an HxW or HxWxC tensor, preserving autograd."""
+    if tuple(value.shape[:2]) == size:
+        return value
+    torch = importlib.import_module("torch")
+    channels = value.ndim == 3
+    image = value.permute(2, 0, 1)[None] if channels else value[None, None]
+    resized = torch.nn.functional.interpolate(
+        image.float(),
+        size=size,
+        mode="nearest-exact" if nearest else "bilinear",
+        **({} if nearest else {"align_corners": False, "antialias": True}),
+    )
+    return resized[0].permute(1, 2, 0) if channels else resized[0, 0]
+
+
+def resize_intrinsic(intrinsic: Any, sx: float, sy: float) -> Any:
+    scaled = intrinsic.clone()
+    scaled[..., 0, :] *= sx
+    scaled[..., 1, :] *= sy
+    return scaled
+
+
+def step_inputs(runner: Any, pixels: Any, intrinsic: Any, masks: Any) -> tuple[Any, Any, Any]:
+    """Bound only training steps: evaluation/export keep the frozen camera resolution.
+
+    This is an explicit quality/runtime tradeoff, not an automatic OOM retry. It
+    leaves the splat budget and schedule unchanged and does not crop the camera.
+    """
+    h, w = pixels.shape[1:3]
+    height, width, sx, sy = prior_maths.resize_geometry(
+        h, w, runner.hex_settings.get("step_max_side", 0)
+    )
+    if (h, w) == (height, width):
+        return pixels, intrinsic, masks
+    pixels = resize_image(pixels[0], (height, width))[None]
+    masks = (
+        None
+        if masks is None
+        else resize_image(masks[0], (height, width), nearest=True)[None].bool()
+    )
+    return pixels, resize_intrinsic(intrinsic, sx, sy), masks
+
+
+def record_memory(runner: Any, step: int, info: dict[str, Any]) -> None:
+    """After-backward snapshots every 1k completed steps; never retain a GPU tensor.
+
+    Peaks are cumulative (do not reset gsplat's own high-water counters). Current
+    allocated/reserved sizes distinguish live growth from allocator caching. The
+    atomic file and stdout survive an exception later in training.
+    """
+    if (step + 1) % 1000 and step + 1 != runner.cfg.max_steps:
+        return
+    torch = importlib.import_module("torch")
+    with torch.no_grad():
+        radii = info.get("radii")
+        sample = {
+            "step": step + 1,
+            "peakAllocatedGb": torch.cuda.max_memory_allocated() / 1e9,
+            "peakReservedGb": torch.cuda.max_memory_reserved() / 1e9,
+            "allocatedGb": torch.cuda.memory_allocated() / 1e9,
+            "reservedGb": torch.cuda.memory_reserved() / 1e9,
+            "splatCount": len(runner.splats["means"]) + runner.hex_settings.get("far_count", 0),
+            "width": info.get("width"),
+            "height": info.get("height"),
+            "tileIntersections": int(info["isect_ids"].numel()) if "isect_ids" in info else None,
+            "maxRadiusPx": float(radii.detach().max())
+            if radii is not None and radii.numel()
+            else None,
+        }
+    path = Path(runner.hex_settings["loss_report"]).with_name("train_memory.json")
+    document = json.loads(path.read_text()) if path.exists() else {"samples": []}
+    document["samples"].append(sample)
+    temporary = path.with_suffix(".tmp.json")
+    temporary.write_text(json.dumps(document))
+    temporary.replace(path)
+    if runner.hex_settings["emit_metrics"]:
+        sys.stdout.write("live-metrics: " + json.dumps({"trainMemoryCurve": [sample]}) + "\n")
+        sys.stdout.flush()
+
+
 def aligned_depth(prediction: Any, target: Any) -> tuple[Any, Any]:
     """Detached three-pass IRLS alignment; differentiable residual, no tall GPU solve."""
     torch = importlib.import_module("torch")
@@ -248,13 +341,27 @@ def loss(
         name = runner.parser.image_names[int(runner.trainset.indices[item])]
         cached = prior(str(Path(cfg["cache"]) / runner.hex_manifest[name]))
         prediction = depths[0, ..., 0]
-        target = torch.as_tensor(cached["depth"], device=prediction.device, dtype=prediction.dtype)
+        h, w, sx, sy = prior_maths.resize_geometry(
+            prediction.shape[0], prediction.shape[1], cfg.get("prior_max_side", 0)
+        )
+        size = (h, w)
+        prediction = resize_image(prediction, size)
+        intrinsic = resize_intrinsic(intrinsic, sx, sy)
+
+        def reference_tensor(key: str, *, nearest: bool = False) -> Any:
+            # Resize on CPU before transfer: the mmap cache never owns a CUDA tensor.
+            value = torch.as_tensor(cached[key])
+            return resize_image(value, size, nearest=nearest).to(
+                device=prediction.device, dtype=prediction.dtype
+            )
+
+        target = reference_tensor("depth")
         valid = (
-            torch.as_tensor(cached["mask"], device=prediction.device).bool()
+            reference_tensor("mask", nearest=True).bool()
             & torch.isfinite(target)
             & (target > 0)
             & torch.isfinite(prediction)
-            & (alphas[0, ..., 0] > 0.05)
+            & (resize_image(alphas[0, ..., 0], size, nearest=True) > 0.05)
         )
         if int(valid.sum()) >= 3:
             residual, scale = aligned_depth(prediction[valid], target[valid])
@@ -277,9 +384,7 @@ def loss(
                 # Normals derived from rendered depth work with MCMC and UT; they do
                 # not assume planar splats or modify the PLY representation.
                 normal = normals(prediction, intrinsic[0])
-                reference = torch.as_tensor(
-                    cached["normal"], device=prediction.device, dtype=prediction.dtype
-                )[1:-1, 1:-1]
+                reference = reference_tensor("normal")[1:-1, 1:-1]
                 interior = (
                     valid[1:-1, 1:-1]
                     & valid[:-2, 1:-1]
@@ -288,6 +393,8 @@ def loss(
                     & valid[1:-1, 2:]
                 )
                 interior &= torch.isfinite(reference).all(-1) & (reference.norm(dim=-1) > 0.5)
+                if tuple(cached["normal"].shape[:2]) != size:
+                    reference = torch.nn.functional.normalize(reference, dim=-1)
                 if interior.any():
                     terms["normal"] = (1 - (normal * reference).sum(-1).clamp(-1, 1))[
                         interior
@@ -365,6 +472,27 @@ def cpu_self_check() -> None:
         raise ValueError("rendered depth normals did not produce finite gradients")
     if not torch.allclose(normal[..., 2], torch.full((5, 7), -1.0)):
         raise ValueError("depth normals changed camera convention")
+    # The local venv has no torch; execute the actual resize/backward seam on the
+    # image's CPU as well as testing its camera geometry with NumPy locally.
+    pixels = torch.full((1, 90, 160, 3), 0.5, requires_grad=True)
+    intrinsic = torch.tensor([[[120.0, 0, 80], [0, 120.0, 45], [0, 0, 1.0]]])
+    masks = torch.ones((1, 90, 160), dtype=torch.bool)
+    small, scaled, mask = step_inputs(
+        types.SimpleNamespace(hex_settings={"step_max_side": 80}), pixels, intrinsic, masks
+    )
+    small.sum().backward()
+    if small.shape != (1, 45, 80, 3) or mask.shape != (1, 45, 80):
+        raise ValueError("training resize did not bound RGB/masks")
+    if pixels.grad is None or not torch.isfinite(pixels.grad).all():
+        raise ValueError("training resize lost its gradient")
+    if not torch.allclose(scaled[0, :2], intrinsic[0, :2] / 2):
+        raise ValueError("training resize changed camera rays")
+    depth = torch.full((45, 80), 5.0, requires_grad=True)
+    coarse = resize_image(depth, (22, 40))
+    coarse_k = resize_intrinsic(scaled, 40 / 80, 22 / 45)
+    normals(coarse, coarse_k[0]).sum().backward()
+    if depth.grad is None or not torch.isfinite(depth.grad).all():
+        raise ValueError("coarse normal comparison lost its gradient")
     export = importlib.import_module("gsplat").export_splats
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "plain.ply"

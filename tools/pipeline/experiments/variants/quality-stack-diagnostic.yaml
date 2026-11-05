@@ -34,6 +34,36 @@ all-on-no-3dgut:
     with_ut: false
     with_eval3d: false
     budget_max: 3456214
+    step_max_side: 800
+    antialiased: false
+    pose_opt: true
+    post_processing: ppisp
+    ppisp_use_controller: false
+    ppisp_display_referred: true
+    batch_size: 1
+    blocks: 1
+    init: sfm+dense
+    dense_chunk: 16
+    priors:
+      depth_weight: 0.05
+      normal_weight: 0.02
+      start_step: 1000
+      max_side: 400
+    aniso_cap:
+      ratio: 10
+      weight: 0.001
+    far_field: sphere
+    far_field_share: 0.1
+    far_field_count: 256
+  quality:
+    bar: fade
+    context_fade: 0.5
+all-on-no-3dgut-native:
+  train:
+    with_ut: false
+    with_eval3d: false
+    budget_max: 3456214
+    step_max_side: 800
     antialiased: false
     pose_opt: true
     post_processing: ppisp

@@ -608,6 +608,10 @@ def gsplat_argv(
         raise ValueError("rolling_shutter is unsupported by simple_trainer's COLMAP path")
     if with_eval3d and (not with_ut or strategy != "mcmc"):
         raise ValueError("with_eval3d requires with_ut and strategy=mcmc")
+    if with_ut and not with_eval3d:
+        # Rendering.cpp calls projection_ut_3dgs_fused under AutoGradMode(false).
+        # Eval3D differentiates the world-space response; the classic path cannot.
+        raise ValueError("UT-only projection has no geometry gradient; training requires eval3d")
     if bilateral_grid:
         if post_processing not in (None, "bilateral_grid"):
             raise ValueError("bilateral_grid and PPISP are mutually exclusive")

@@ -122,7 +122,8 @@ def test_diagnostic_differs_only_in_ppisp() -> None:
             if k not in {"post_processing", "ppisp_use_controller", "ppisp_display_referred"}
         },
     }
-    assert diagnostic == {"all-on-no-ppisp": expected}
+    assert diagnostic["all-on-no-ppisp"] == expected
+    assert set(diagnostic) == {"all-on-no-ppisp", "upgraded-plain", "all-on-no-3dgut"}
 
 
 def test_ppisp_setup_seam_is_after_module_construction() -> None:

@@ -1441,9 +1441,52 @@ image transform as per-Gaussian SH coefficients (which would not commute with al
 compositing). Controller mode is refused with this setting. The gap's exact attribution
 still needs measurement: UT/eval3d versus classic rendering remains a separate difference.
 
-`experiments/variants/quality-stack-diagnostic.yaml` contains only `all-on-no-ppisp`,
-identical to B except for PPISP. It is diagnostic only and does not extend the A/B plan.
-Run it with the same screen resolution/seed to isolate the remaining PPISP effect.
+`experiments/variants/quality-stack-diagnostic.yaml` contains `all-on-no-ppisp`
+(B without PPISP), `upgraded-plain` (recipe unchanged on the new image), and
+`all-on-no-3dgut`. These diagnostics do not extend the A/B plan. Completed Beach full
+runs scored 25.17/0.7529/0.3014 for A (`924f540e`) and 25.34/0.7546/0.2953 for
+upgraded-plain (`28deb3c9`), both 3.46M splats and 7.4 GB peak device memory. The latter's
+`elongationShare: 0.7624` means 76.24% have scale-axis ratio >10, not variance ratio >10;
+flat surface splats can meet this criterion. A's unmeasured fraction is not inferred.
+
+No-3DGUT full run `c500bb04` exited at about 2660 training seconds after device memory
+swung to 22,448 MiB. Its missing stderr prevents attributing the exit to OOM. The loss
+hooks keep no GPU history: metric terms are detached Python numbers, the eight-entry
+prior cache holds CPU mmaps, and the affine fit runs without autograd. Depth/normal
+and PPISP image work is bounded by pixel count and starts before this late rise;
+pose optimization also has no 20k activation milestone. Foreground overlap and
+densification can increase tile-intersection arrays substantially. Packed projection
+does not bound those arrays, and unpacking would not remove them. The 256 frozen sky
+splats contribute at most 1,459,200 intersections at 900×1600 with 16-pixel tiles, so
+they alone do not explain a 15 GB rise. Surface priors/anisotropy can change foreground
+coverage, but that attribution still needs measured intersections.
+
+The extension now drops the previous step's `info` before the next forward: upstream
+otherwise retains its intersection arrays until the new render returns. This fixes a
+real overlap of allocations, not an accumulating graph leak. The no-3DGUT diagnostic
+also explicitly uses `step_max_side: 800` and `priors.max_side: 400`: 450×800 RGB+ED
+steps and 225×400 prior comparisons, with the full schedule and 3,456,214 budget.
+Intrinsics and masks follow each resize. Full-resolution trainer eval, holdout and test
+stay at 900×1600; the frozen dataset and model-cache keys do not change. This costs fine
+RGB detail and fine normal/depth supervision. It bounds image workspace and reduces
+intersection coverage; it is **not** a proven whole-run 24 GB limit at the full count.
+Both controls default to zero/off; sparse `depth_loss` is refused with either resize.
+
+UT-only training is now refused before preprocessing. In the pinned `Rendering.cpp`,
+UT projection executes under `AutoGradMode(false)` and lacks a projection backward;
+eval3d supplies gradients through its world-space response. UT plus classic rasterization
+therefore cannot honestly train the full geometry in this pin. `ff6c47ca`'s timing file
+records 16 seconds inside training and one PLY export, so it was not simply an import
+failure; its exact exception is unrecoverable. Adding correct UT projection gradients
+would require upstream kernel work, not a flag adjustment.
+
+Trainer failures now include the last 40 merged stdout/stderr lines in the stage error
+and bench `result.json`. The full stage log (ordinary output plus progress redraws
+thinned to 15 seconds) is saved as `/bench/runs/<id>/trainer.log`, even on nonzero exit.
+`train_memory.json` is also preserved and returned locally on failure. Its samples every
+1000 completed steps contain cumulative allocated/reserved peaks, current allocation,
+image dimensions, splat count, intersection count and maximum projected radius. These
+distinguish changing live allocations from allocator caching on the next run.
 
 A has **no quality gate in the bench**. B's headline `test` scores **faded.ply**, after
 support-based opacity fading; `testTrained` scores **trained.ply** before the gate and
@@ -1633,6 +1676,7 @@ is explicitly labelled and its zero losses are not measurements.
 | `densePeakMemoryGb` | Dense-only peak allocated CUDA memory, decimal GB; null when not measured |
 | `densePeakReservedGb` | Dense-only peak reserved CUDA allocator memory, decimal GB; null when not measured |
 | `exportMismatchDb` | Trainer val PSNR minus final-PLY holdout PSNR in dB; null if either is unavailable; warning above 3 |
+| `trainMemoryCurve` | Every 1000 completed steps and final step: one-based `step`, cumulative `peakAllocatedGb`/`peakReservedGb`, current `allocatedGb`/`reservedGb` (decimal GB), `splatCount`, `width`/`height`, `tileIntersections`, `maxRadiusPx`; empty without measured hooks |
 
 The new image completed Beach training in smoke `fb7fa4f8`; its support stage failed
 before test evaluation. The percentile helper used a ufunc output sentinel unsupported

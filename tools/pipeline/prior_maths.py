@@ -16,6 +16,19 @@ F64 = npt.NDArray[np.float64]
 CACHE_FORMAT = "npy-mmap-v2"
 
 
+def resize_geometry(height: int, width: int, max_side: int) -> tuple[int, int, float, float]:
+    """Bound a training/loss image, returning exact row scales for its intrinsics.
+
+    Zero leaves it unchanged. Use realized dimensions, not the requested scale,
+    because rounding can differ between axes. Never upscale small source images.
+    """
+    if min(height, width) < 1 or max_side < 0:
+        raise ValueError("image dimensions must be positive and max_side nonnegative")
+    factor = min(1.0, max_side / max(height, width)) if max_side else 1.0
+    h, w = max(1, round(height * factor)), max(1, round(width * factor))
+    return h, w, w / width, h / height
+
+
 def cache_key(frame: Path, model_revision: str, geometry: Any) -> str:
     digest = hashlib.sha256(frame.read_bytes()).hexdigest()
     # Intrinsics/preprocessing affect the prediction too; frame bytes alone are insufficient.

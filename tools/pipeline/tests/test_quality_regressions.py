@@ -32,6 +32,8 @@ class Runner:
     def train(self):
         render_mode="RGB+ED" if cfg.depth_loss else "RGB",
         if True:
+            renders, alphas, info = self.stage.render(
+            )
             loss.backward()
 """
     patched = tmp_path / "patched.py"
@@ -64,6 +66,8 @@ def test_image_check_executes_patch_not_only_compile(
         "    def train(self):\n"
         '        render_mode="RGB+ED" if cfg.depth_loss else "RGB",\n'
         "        if True:\n"
+        "            renders, alphas, info = self.stage.render(\n"
+        "            )\n"
         "            loss.backward()\n"
     )
     settings = tmp_path / "settings.json"

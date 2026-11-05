@@ -24,6 +24,7 @@ METRIC_NAMES = (
     "densePeakMemoryGb",
     "densePeakReservedGb",
     "exportMismatchDb",
+    "trainMemoryCurve",
 )
 RENDER_KEYS = (
     "with_ut",
@@ -52,7 +53,14 @@ def options(params: Mapping[str, Any]) -> dict[str, Any]:
     aniso = params.get("aniso_cap") or {}
     if not isinstance(priors, dict) or not isinstance(aniso, dict):
         raise ValueError("priors and aniso_cap must be mappings")
-    if set(priors) - {"depth_weight", "normal_weight", "gradient_weight", "start_step", "model"}:
+    if set(priors) - {
+        "depth_weight",
+        "normal_weight",
+        "gradient_weight",
+        "start_step",
+        "model",
+        "max_side",
+    }:
         raise ValueError("unknown prior setting")
     if set(aniso) - {"ratio", "weight"}:
         raise ValueError("unknown anisotropy setting")
@@ -75,6 +83,8 @@ def options(params: Mapping[str, Any]) -> dict[str, Any]:
         "normal_weight": finite(priors.get("normal_weight", 0), "normal_weight", 0, 10),
         "gradient_weight": finite(priors.get("gradient_weight", 0), "gradient_weight", 0, 10),
         "start_step": finite(priors.get("start_step", 1000), "start_step", 0, 1_000_000),
+        "prior_max_side": finite(priors.get("max_side", 0), "priors.max_side", 0, 16384),
+        "step_max_side": finite(params.get("step_max_side", 0), "step_max_side", 0, 16384),
         "aniso_weight": finite(aniso.get("weight", 0), "aniso weight", 0, 10),
         "aniso_ratio": finite(aniso.get("ratio", 10), "aniso ratio", 1, 1000),
         "far_field": bool(far),
@@ -82,21 +92,31 @@ def options(params: Mapping[str, Any]) -> dict[str, Any]:
         "far_field_count": finite(params.get("far_field_count", 256), "far_field_count", 4, 4096),
         "dense_chunk": finite(params.get("dense_chunk", 4), "dense_chunk", 3, 32),
     }
-    for name in ("start_step", "far_field_count", "dense_chunk"):
+    for name in ("start_step", "far_field_count", "dense_chunk", "prior_max_side", "step_max_side"):
         if not result[name].is_integer():
             raise ValueError(f"{name} must be an integer")
         result[name] = int(result[name])
+    for name in ("prior_max_side", "step_max_side"):
+        if 0 < result[name] < 32:
+            raise ValueError(f"{name} must be zero (off) or at least 32")
     result["priors"] = any(
         result[k] > 0 for k in ("depth_weight", "normal_weight", "gradient_weight")
     )
     result["enabled"] = (
-        init != "sfm" or result["priors"] or result["aniso_weight"] > 0 or bool(far) or display
+        init != "sfm"
+        or result["priors"]
+        or result["aniso_weight"] > 0
+        or bool(far)
+        or display
+        or result["step_max_side"] > 0
     )
     if result["priors"] and params.get("depth_loss"):
         raise ValueError(
             "mono priors and depth_loss are incompatible: "
             "upstream replaces the depth image with sparse samples"
         )
+    if result["step_max_side"] and params.get("depth_loss"):
+        raise ValueError("step_max_side is incompatible with sparse depth_loss pixel coordinates")
     if result["enabled"]:
         if params.get("batch_size", 1) != 1:
             raise ValueError("quality-stack extensions require batch_size=1")
@@ -202,8 +222,12 @@ def metrics(columns: Any, curve: Any, workdir: Any, prepass: dict[str, Any]) -> 
     axes = np.stack([columns[f"scale_{i}"] for i in range(3)], 1)
     loss_path = workdir / "loss_terms.json"
     losses = json.loads(loss_path.read_text()).get("lossTerms", {}) if loss_path.exists() else {}
+    memory_path = workdir / "train_memory.json"
     return {
         "exportMismatchDb": None,
+        "trainMemoryCurve": json.loads(memory_path.read_text())["samples"]
+        if memory_path.exists()
+        else [],
         "densePeakMemoryGb": prepass.get("densePeakMemoryGb"),
         "densePeakReservedGb": prepass.get("densePeakReservedGb"),
         "splatCount": count,
@@ -235,6 +259,7 @@ def ply_metrics(path: Any) -> dict[str, Any]:
             distant += int((columns["far_field"] >= 0.5).sum())
     return {
         "exportMismatchDb": None,
+        "trainMemoryCurve": [],
         "densePeakMemoryGb": None,
         "densePeakReservedGb": None,
         "splatCount": count,

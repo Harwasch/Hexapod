@@ -26,6 +26,7 @@ ARTIFACTS = (
     "holdout.json",
     "converge.json",
     "trainer_timing.json",
+    "train_memory.json",
     "gpu_samples.json",
     "test-trained.json",
     "quality.json",
@@ -339,6 +340,10 @@ def run_training(
             error = f"{type(exc).__name__}: {exc}"
         finally:
             sampler.stop()
+            # Keep the full merged stdout/stderr even when training or gating fails.
+            # This lives on the bench volume; only the small error tail is returned.
+            if work.log_path("train").is_file():
+                shutil.copyfile(work.log_path("train"), destination / "trainer.log")
             write_json(destination / "gpu_samples.json", {"samples": sampler.samples})
             sources = [
                 work.out_dir("train"),

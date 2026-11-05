@@ -30,6 +30,7 @@ def test_metrics_are_a_versioned_public_vocabulary() -> None:
         "densePeakMemoryGb",
         "densePeakReservedGb",
         "exportMismatchDb",
+        "trainMemoryCurve",
     )
     payload = {"splatCount": 10, "farFieldShare": 0.1, "lossTerms": {"depth": 0.2}}
     import json
@@ -180,7 +181,7 @@ def test_new_post_processing_cli_and_controller_switches() -> None:
 
 
 @pytest.mark.parametrize(
-    "variants_file, count", [("quality-stack.yaml", 2), ("quality-stack-diagnostic.yaml", 1)]
+    "variants_file, count", [("quality-stack.yaml", 2), ("quality-stack-diagnostic.yaml", 3)]
 )
 def test_every_variant_rehearses_without_modal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variants_file: str, count: int
