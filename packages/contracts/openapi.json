@@ -14092,6 +14092,79 @@
         "title": "LiveProgress",
         "type": "object"
       },
+      "LiveQualitySeries": {
+        "properties": {
+          "elongationShare": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Elongationshare",
+            "type": "array"
+          },
+          "farFieldShare": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Farfieldshare",
+            "type": "array"
+          },
+          "loss": {
+            "additionalProperties": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "title": "Loss",
+            "type": "object"
+          },
+          "peakAllocatedGb": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Peakallocatedgb",
+            "type": "array"
+          },
+          "step": {
+            "items": {
+              "type": "integer"
+            },
+            "maxItems": 300,
+            "title": "Step",
+            "type": "array"
+          }
+        },
+        "title": "LiveQualitySeries",
+        "type": "object"
+      },
       "LiveSplat": {
         "additionalProperties": false,
         "description": "The newest intermediate splat, and where to fetch it.",
@@ -14379,6 +14452,16 @@
             "title": "Events",
             "type": "array"
           },
+          "final": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveTrainFinal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "plan": {
             "anyOf": [
               {
@@ -14420,6 +14503,16 @@
               }
             ],
             "title": "Run"
+          },
+          "seeds": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveTrainSeeds"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "series": {
             "$ref": "#/components/schemas/LiveTrainSeries"
@@ -14539,6 +14632,78 @@
         "title": "LiveTrainEvent",
         "type": "object"
       },
+      "LiveTrainFinal": {
+        "properties": {
+          "ccLpips": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cclpips"
+          },
+          "ccPsnr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ccpsnr"
+          },
+          "ccSsim": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ccssim"
+          },
+          "lpips": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lpips"
+          },
+          "psnr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Psnr"
+          },
+          "ssim": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ssim"
+          }
+        },
+        "title": "LiveTrainFinal",
+        "type": "object"
+      },
       "LiveTrainPlan": {
         "properties": {
           "blocks": {
@@ -14564,6 +14729,18 @@
               }
             ],
             "title": "Cap"
+          },
+          "capMax": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capmax"
           },
           "cardGb": {
             "anyOf": [
@@ -14758,6 +14935,42 @@
       },
       "LiveTrainQuality": {
         "properties": {
+          "denseInitAddedPoints": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Denseinitaddedpoints"
+          },
+          "denseInitPoints": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Denseinitpoints"
+          },
+          "denseInitSeconds": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Denseinitseconds"
+          },
           "elongationShare": {
             "anyOf": [
               {
@@ -14783,6 +14996,16 @@
               }
             ],
             "title": "Farfieldshare"
+          },
+          "series": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveQualitySeries"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "step": {
             "anyOf": [
@@ -14824,6 +15047,72 @@
           "minGainDb"
         ],
         "title": "LiveTrainRule",
+        "type": "object"
+      },
+      "LiveTrainSeeds": {
+        "properties": {
+          "bytes": {
+            "minimum": 0.0,
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "count": {
+            "maximum": 200000.0,
+            "minimum": 0.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "of": {
+            "minimum": 0.0,
+            "title": "Of",
+            "type": "integer"
+          },
+          "origin": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Origin",
+            "type": "array"
+          },
+          "scale": {
+            "exclusiveMinimum": 0.0,
+            "title": "Scale",
+            "type": "number"
+          },
+          "sources": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Sources",
+            "type": "object"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "key",
+          "count",
+          "of",
+          "origin",
+          "scale",
+          "bytes"
+        ],
+        "title": "LiveTrainSeeds",
         "type": "object"
       },
       "LiveTrainSeries": {

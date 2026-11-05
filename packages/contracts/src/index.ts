@@ -265,3 +265,7 @@ export type LiveTrainSeries = Schemas["LiveTrainSeries"];
 export type LiveTrainEval = Schemas["LiveTrainEval"];
 export type LiveTrainEvent = Schemas["LiveTrainEvent"];
 export type LiveTrainSnapshot = Schemas["LiveTrainSnapshot"];
+
+export type LiveTrainSeeds = Schemas["LiveTrainSeeds"];
+export type LiveTrainFinal = Schemas["LiveTrainFinal"];
+export type LiveQualitySeries = Schemas["LiveQualitySeries"];
