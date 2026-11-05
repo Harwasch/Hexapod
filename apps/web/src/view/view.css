@@ -533,8 +533,7 @@ a {
   border-top: 1px solid var(--glass-border);
   padding: 10px 12px;
 }
-.lc-timeline > div,
-.lc-gain-label {
+.lc-timeline > div {
   display: flex;
   justify-content: space-between;
   gap: 8px;
@@ -562,48 +561,6 @@ a {
   border: 1px solid var(--glass-border);
   padding: 8px;
   border-radius: 8px;
-}
-.lc-check {
-  display: grid;
-  grid-template-columns: 12px minmax(0, 1fr) auto;
-  gap: 8px;
-  margin-bottom: 6px;
-  font-size: 12px;
-}
-.lc-check i {
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--glass-border);
-  border-radius: 50%;
-  margin-top: 3px;
-}
-.lc-check[data-ok="true"] i {
-  background: var(--accent);
-  border-color: var(--accent);
-}
-.lc-check b {
-  font: 11px var(--font-mono);
-  color: var(--text-secondary);
-}
-.lc-gain {
-  position: relative;
-  height: 10px;
-  border-radius: 5px;
-  background: #1a1e15;
-}
-.lc-gain i {
-  position: absolute;
-  inset: 0 auto 0 0;
-  border-radius: 5px;
-  background: var(--accent);
-  transition: width 0.3s;
-}
-.lc-gain b {
-  position: absolute;
-  top: -3px;
-  bottom: -3px;
-  width: 2px;
-  background: #f0b254;
 }
 .lc dl {
   display: grid;
@@ -704,12 +661,70 @@ a {
   .lc-scene {
     aspect-ratio: 4 / 3;
   }
-  .lc-check {
-    font-size: 11px;
-  }
 }
-@media (prefers-reduced-motion: reduce) {
-  .lc-gain i {
-    transition: none;
-  }
+
+.lc-mini {
+  border: 0;
+  margin-top: 12px;
+}
+.lc-mini svg {
+  height: 100px;
+}
+.lc-mini .lc-chart-head {
+  padding: 4px 0;
+}
+.lc-mini [data-ok] {
+  font: 10px var(--font-mono);
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  padding: 2px 5px;
+}
+.lc-mini [data-ok="true"] {
+  color: var(--accent);
+}
+.lc-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 12px;
+  font: 10px var(--font-mono);
+}
+.lc-reference-label {
+  paint-order: stroke;
+  stroke: var(--ink);
+  stroke-width: 3px;
+}
+.lc-overlay {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.lc-chip {
+  border: 1px solid var(--glass-border);
+  border-radius: 5px;
+  padding: 2px 4px;
+  color: var(--text-secondary);
+}
+.lc-final-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px;
+  align-items: baseline;
+}
+.lc-final-row span {
+  font: 12px var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.lc-controls > button {
+  background: var(--ink);
+  color: var(--text-secondary);
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  font: inherit;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.lc-controls > button[aria-pressed="true"] {
+  color: var(--accent);
 }

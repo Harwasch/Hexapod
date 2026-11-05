@@ -2,6 +2,12 @@
 import type { LiveState } from "@twin/contracts";
 import {
   blockCountText,
+  effectiveCap,
+  lossLines,
+  snapshotLag,
+  scrubPosition,
+  seedsLabel,
+  finalReadouts,
   chartDomain,
   chartPoints,
   ceilingText,
@@ -30,19 +36,50 @@ const el = (id: string): HTMLElement => {
 const text = (id: string, value: string): void => {
   el(id).textContent = value;
 };
-const CHARTS: { id: ChartId; title: string; color: string; format: (v: number) => string }[] = [
+interface Chart {
+  id: ChartId;
+  title: string;
+  color: string;
+  format: (v: number) => string;
+  optional?: boolean;
+  mini?: boolean;
+}
+const CHARTS: Chart[] = [
   { id: "gs", title: "Gaussians", color: "#7fd8c0", format: compact },
   { id: "loss", title: "Training loss", color: "#d8c39a", format: (v) => v.toFixed(3) },
   { id: "psnr", title: "Held-out PSNR", color: "#b9a3f0", format: (v) => `${v.toFixed(2)} dB` },
   { id: "lr", title: "Position LR", color: "#7fd8c0", format: (v) => v.toExponential(1) },
   { id: "its", title: "Speed it/s", color: "#d8c39a", format: (v) => v.toFixed(1) },
+  {
+    id: "far",
+    title: "Far-field",
+    color: "#7fd8c0",
+    format: (v) => `${v.toFixed(1)}%`,
+    optional: true,
+  },
+  {
+    id: "elongation",
+    title: "Elongated",
+    color: "#b9a3f0",
+    format: (v) => `${v.toFixed(1)}%`,
+    optional: true,
+  },
   { id: "mem", title: "GPU memory", color: "#e06a5a", format: (v) => `${v.toFixed(1)} GB` },
 ];
+
+const TRENDS: Chart[] = [
+  { id: "refine", title: "Densify", color: "#7fd8c0", format: compact, mini: true },
+  { id: "gain", title: "Gain", color: "#d8c39a", format: (v) => `${v.toFixed(3)} dB`, mini: true },
+  { id: "ceiling", title: "Ceiling", color: "#b9a3f0", format: compact, mini: true },
+];
+const chartMarkup = (c: Chart): string =>
+  `<div class="lc-panel lc-chart${c.mini ? " lc-mini" : ""}"><div class="lc-chart-head"><h2>${c.title}</h2><span id="lc-now-${c.id}"></span></div><div id="lc-legend-${c.id}" class="lc-legend"></div><svg data-training-chart="${c.id}" id="lc-chart-${c.id}" viewBox="0 0 300 150" preserveAspectRatio="none" role="img" aria-label="${c.title} over steps"></svg></div>`;
 
 export function liveConsole(actions: {
   scrub: (step: number | null) => void;
   color: (distance: boolean) => void;
   view: (top: boolean) => void;
+  layers: (mode: "splat" | "seeds" | "both", cameras: boolean) => void;
 }): {
   update: (state: LiveState) => boolean;
   snapshot: (step: number) => void;
@@ -57,6 +94,8 @@ export function liveConsole(actions: {
     scrub: number | null = null,
     hover: number | null = null;
   let shown = -1;
+  let layerMode: "splat" | "seeds" | "both" = "splat",
+    camerasVisible = true;
   root.hidden = true;
   el("lc-kpis").innerHTML = ["Step", "Gaussians", "Held-out PSNR", "Phase", "Time", "GPU cost"]
     .map(
@@ -64,10 +103,10 @@ export function liveConsole(actions: {
         `<div class="lc-kpi"><span class="lc-label">${label}</span><span id="lc-kpi-${String(i)}" class="lc-value">–</span></div>`,
     )
     .join("");
-  el("lc-charts").innerHTML = CHARTS.map(
-    (c) =>
-      `<div class="lc-panel lc-chart"><div class="lc-chart-head"><h2>${c.title}</h2><span id="lc-now-${c.id}">–</span></div><svg id="lc-chart-${c.id}" viewBox="0 0 300 150" preserveAspectRatio="none" role="img" aria-label="${c.title} over steps"></svg></div>`,
-  ).join("");
+  el("lc-charts").innerHTML = CHARTS.filter((c) => !c.optional)
+    .map(chartMarkup)
+    .join("");
+  el("lc-stop-trends").innerHTML = TRENDS.map(chartMarkup).join("");
   const timeline = el("lc-timeline") as HTMLCanvasElement;
   const maxStep = (): number =>
     Math.max(
@@ -79,16 +118,38 @@ export function liveConsole(actions: {
   function drawCharts(): void {
     const train = state?.train,
       plan = train?.plan;
-    for (const chart of CHARTS) {
-      const svg = el(`lc-chart-${chart.id}`),
-        points = chartPoints(train, chart.id);
-      const reference = chart.id === "gs" ? plan?.cap : chart.id === "mem" ? plan?.cardGb : null;
+    for (const chart of [...CHARTS, ...TRENDS]) {
+      if (chart.mini && !plan?.rule) continue;
+      const points = chartPoints(train, chart.id);
+      let svg = document.getElementById(`lc-chart-${chart.id}`);
+      if (chart.optional && !points.length) {
+        svg?.parentElement?.remove();
+        continue;
+      }
+      if (!svg) {
+        el("lc-charts").insertAdjacentHTML("beforeend", chartMarkup(chart));
+        svg = el(`lc-chart-${chart.id}`);
+      }
+      const lines =
+        chart.id === "loss" ? lossLines(train) : [{ name: chart.id, color: chart.color, points }];
+      const reference =
+        chart.id === "gs"
+          ? effectiveCap(plan)
+          : chart.id === "mem"
+            ? plan?.cardGb
+            : chart.id === "refine"
+              ? plan?.refineStop
+              : chart.id === "gain"
+                ? plan?.rule?.minGainDb
+                : chart.id === "ceiling"
+                  ? plan?.stepsMax
+                  : null;
       const logarithmic = chart.id === "lr";
       const [lo, hi] = chartDomain(
-        points,
+        lines.flatMap((line) => line.points),
         logarithmic,
         reference,
-        chart.id === "gs" || chart.id === "mem",
+        chart.id === "gs" || chart.id === "mem" || chart.mini === true,
       );
       const y = (v: number): number =>
         8 + (1 - ((logarithmic ? Math.log10(v) : v) - lo) / (hi - lo)) * 124;
@@ -104,15 +165,34 @@ export function liveConsole(actions: {
         markup += `<line x1="36" x2="294" y1="${String(yy)}" y2="${String(yy)}" stroke="currentColor" opacity=".08"/><text x="32" y="${String(yy + 3)}" text-anchor="end">${label}</text>`;
         markup += `<text x="${String(x(maxStep() * fraction))}" y="146" text-anchor="${fraction === 0 ? "start" : fraction === 1 ? "end" : "middle"}">${compact(maxStep() * fraction)}</text>`;
       }
-      if (reference != null)
-        markup += `<line x1="36" x2="294" y1="${String(y(reference))}" y2="${String(y(reference))}" stroke="${chart.color}" stroke-dasharray="4 3"/><text x="294" y="${String(y(reference) - 3)}" text-anchor="end">${chart.id === "gs" ? "cap " : ""}${chart.format(reference)}</text>`;
-      if (points.length) {
-        const path = points
+      for (const line of lines) {
+        if (!line.points.length) continue;
+        const path = line.points
           .map((p, i) => `${i ? "L" : "M"}${x(p.step).toFixed(2)} ${y(p.value).toFixed(2)}`)
           .join("");
-        markup += `<path d="${path}" fill="none" stroke="${chart.color}" stroke-width="1.6"/>`;
-        for (const p of chart.id === "psnr" ? points : points.slice(-1))
-          markup += `<circle cx="${String(x(p.step))}" cy="${String(y(p.value))}" r="2" fill="${chart.color}"/>`;
+        markup += `<path data-series="${line.name}" d="${path}" fill="none" stroke="${line.color}" stroke-width="1.6"/>`;
+        for (const p of chart.id === "psnr" || chart.id === "gain"
+          ? line.points
+          : line.points.slice(-1))
+          markup += `<circle cx="${String(x(p.step))}" cy="${String(y(p.value))}" r="2" fill="${line.color}"/>`;
+      }
+      if (chart.id === "loss")
+        el("lc-legend-loss").innerHTML = lines
+          .map((line) => `<span style="color:${line.color}">${line.name}</span>`)
+          .join("");
+      // References go above the series, with an ink underlay so equality cannot hide the dashes.
+      if (reference != null) {
+        const label =
+          chart.id === "gs"
+            ? "cap"
+            : chart.id === "refine"
+              ? "refine_stop"
+              : chart.id === "gain"
+                ? `${String(reference)} dB stop`
+                : chart.id === "ceiling"
+                  ? "ceiling"
+                  : chart.format(reference);
+        markup += `<g data-reference="${chart.id === "gs" ? "cap" : chart.id}"><line x1="36" x2="294" y1="${String(y(reference))}" y2="${String(y(reference))}" stroke="#12170f" stroke-width="3"/><line x1="36" x2="294" y1="${String(y(reference))}" y2="${String(y(reference))}" stroke="#f2f6ef" stroke-dasharray="4 3"/><text class="lc-reference-label" x="292" y="${String(Math.max(16, Math.min(128, y(reference) - 4)))}" text-anchor="end">${label}</text></g>`;
       }
       if (train?.stop)
         markup += `<line x1="${String(x(train.stop.step))}" x2="${String(x(train.stop.step))}" y1="8" y2="132" stroke="#f0b254"/>`;
@@ -128,7 +208,25 @@ export function liveConsole(actions: {
             mark ?? lastStep(train),
           )
         ];
-      text(`lc-now-${chart.id}`, point ? chart.format(point.value) : "–");
+      if (chart.mini) {
+        const step = lastStep(train),
+          gain = train?.evals?.at(-1)?.gain;
+        const ok =
+          chart.id === "gain"
+            ? gain != null &&
+              reference != null &&
+              gain < reference &&
+              stopRule(train).checks[1]?.ok === true
+            : reference != null && step >= reference;
+        const value =
+          chart.id === "gain"
+            ? gain == null
+              ? "–"
+              : chart.format(gain)
+            : `${compact(step)} / ${compact(reference)}`;
+        text(`lc-now-${chart.id}`, `${ok ? "✓" : "…"} ${value}`);
+        el(`lc-now-${chart.id}`).dataset.ok = String(ok);
+      } else text(`lc-now-${chart.id}`, point ? chart.format(point.value) : "–");
     }
   }
   function drawTimeline(): void {
@@ -174,9 +272,9 @@ export function liveConsole(actions: {
     timeline.setAttribute("aria-valuenow", String(Math.round(scrub ?? lastStep(state?.train))));
     text("lc-follow", scrub == null ? "live" : `step ${count(scrub)}`);
   }
-  function select(step: number): void {
+  function select(step: number, release = false): void {
     const latest = lastStep(state?.train);
-    scrub = step >= latest ? null : Math.max(0, step);
+    scrub = scrubPosition(step, latest, maxStep(), timeline.getBoundingClientRect().width, release);
     actions.scrub(scrub);
     drawTimeline();
     drawCharts();
@@ -211,6 +309,7 @@ export function liveConsole(actions: {
   timeline.addEventListener(
     "pointerup",
     (event) => {
+      select(pointStep(event), true);
       if (timeline.hasPointerCapture(event.pointerId))
         timeline.releasePointerCapture(event.pointerId);
     },
@@ -244,10 +343,10 @@ export function liveConsole(actions: {
     },
     options,
   );
-  el("lc-charts").addEventListener(
+  root.addEventListener(
     "pointermove",
     (event) => {
-      const svg = (event.target as Element).closest("svg");
+      const svg = (event.target as Element).closest("svg[data-training-chart]");
       if (!svg) return;
       const rect = svg.getBoundingClientRect();
       hover = Math.max(
@@ -261,7 +360,7 @@ export function liveConsole(actions: {
     },
     options,
   );
-  el("lc-charts").addEventListener(
+  root.addEventListener(
     "pointerleave",
     () => {
       hover = null;
@@ -286,6 +385,37 @@ export function liveConsole(actions: {
       ),
     );
   }
+  function snapshotLabel(): void {
+    text("lc-snapshot", shown < 0 ? "splat" : `splat · step ${count(shown)}`);
+    const lag = snapshotLag(shown, lastStep(state?.train));
+    text("lc-lag", lag ?? "");
+    el("lc-lag").hidden = lag == null;
+  }
+  root.querySelectorAll<HTMLButtonElement>("[data-live-layer]").forEach((button) =>
+    button.addEventListener(
+      "click",
+      () => {
+        const mode = button.dataset.liveLayer;
+        if (mode !== "splat" && mode !== "seeds" && mode !== "both") return;
+        layerMode = mode;
+        root
+          .querySelectorAll("[data-live-layer]")
+          .forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
+        el("lc-seeds-count").hidden = mode === "splat" || !state?.train?.seeds;
+        actions.layers(mode, camerasVisible);
+      },
+      options,
+    ),
+  );
+  el("lc-cameras").addEventListener(
+    "click",
+    () => {
+      camerasVisible = !camerasVisible;
+      el("lc-cameras").setAttribute("aria-pressed", String(camerasVisible));
+      actions.layers(layerMode, camerasVisible);
+    },
+    options,
+  );
   function quality(): void {
     const snapshot = snapshotAt(state?.train?.snapshots ?? [], shown);
     const labels = qualityReadouts(snapshot, state?.train?.quality);
@@ -303,13 +433,20 @@ export function liveConsole(actions: {
       root.hidden = false;
       section.classList.add("training-console");
       if (retry) {
+        layerMode = "splat";
+        root
+          .querySelectorAll<HTMLElement>("[data-live-layer]")
+          .forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.liveLayer === "splat")));
+        actions.layers(layerMode, camerasVisible);
         scrub = null;
         shown = -1;
         actions.scrub(null);
       }
       text("lc-name", next.captureName);
       text("lc-pill", pillText(next));
-      el("lc-pill").dataset.done = String(!pillText(next).startsWith("Training"));
+      el("lc-pill").dataset.done = String(
+        pillText(next).startsWith("Finished") || pillText(next) === "Stopped",
+      );
       const link = el("lc-final") as HTMLAnchorElement;
       link.hidden = !next.siteId;
       if (next.siteId) link.href = `#${next.siteId}`;
@@ -322,7 +459,7 @@ export function liveConsole(actions: {
         count(train?.run ? lastStep(train) : lastStep(train) || next.stage?.progress?.done),
         compact(series?.gs?.at(-1)),
         psnr == null ? "–" : `${psnr.toFixed(2)} dB`,
-        phaseOf(lastStep(train), plan),
+        phaseOf(lastStep(train), plan, series?.gs?.at(-1)),
         timeText(t),
         money(cost(t, plan?.usdPerHour)),
       ];
@@ -330,34 +467,25 @@ export function liveConsole(actions: {
       const rule = stopRule(train);
       el("lc-stop").hidden = !plan?.rule;
       text("lc-rule", rule.line);
-      el("lc-checks").replaceChildren(
-        ...rule.checks.map((check) => {
-          const row = document.createElement("div");
-          row.className = "lc-check";
-          row.dataset.ok = String(check.ok);
-          const dot = document.createElement("i"),
-            label = document.createElement("span"),
-            value = document.createElement("b");
-          label.textContent = check.label;
-          value.textContent = check.value;
-          row.append(dot, label, value);
-          return row;
-        }),
-      );
-      text("lc-gain-value", rule.gain == null ? "–" : `${rule.gain.toFixed(3)} dB`);
-      el("lc-gain-fill").style.width = `${String(rule.fraction * 100)}%`;
-      el("lc-gain-threshold").style.left = `${String(rule.threshold * 100)}%`;
-      text("lc-threshold-label", String(plan?.rule?.minGainDb ?? "–"));
-      text(
-        "lc-gain-max",
-        plan?.rule ? `${String(Math.max(plan.rule.minGainDb * 5, 0.001))} dB` : "–",
-      );
       const entries = [
         ["Splat budget", compact(plan?.cap)],
         ["Step ceiling", `${count(plan?.stepsMax)} · ${ceilingText(plan)}`],
         ["Densify until", count(plan?.refineStop)],
         ["Chunking", blockCountText(plan?.blocks)],
       ];
+      const dense = train?.quality?.denseInitPoints ?? null,
+        added = train?.quality?.denseInitAddedPoints ?? null;
+      if (plan?.sparse != null || dense != null || added != null)
+        entries.push([
+          "Init",
+          [
+            plan?.sparse != null ? `${compact(plan.sparse)} SfM` : null,
+            dense != null ? `${compact(dense)} dense` : null,
+            added != null ? `+${compact(added)}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · "),
+        ]);
       el("lc-plan").replaceChildren(
         ...entries.flatMap(([label, value]) => {
           const dt = document.createElement("dt"),
@@ -383,6 +511,13 @@ export function liveConsole(actions: {
           return row;
         }),
       );
+      el("lc-layer-controls").hidden = !train?.seeds;
+      text("lc-seeds-count", seedsLabel(train?.seeds));
+      el("lc-seeds-count").hidden = !train?.seeds || layerMode === "splat";
+      const final = finalReadouts(train);
+      el("lc-final-row").hidden = !final.length;
+      text("lc-final-scores", final.join(" · "));
+      snapshotLabel();
       const distance = root.querySelector<HTMLButtonElement>('[data-live-color="distance"]');
       if (!distance) return true;
       distance.disabled = !plan?.metresPerUnit || !next.cameras?.final || !next.cameras.cameraCount;
@@ -395,7 +530,7 @@ export function liveConsole(actions: {
     },
     snapshot(step): void {
       shown = step;
-      text("lc-snapshot", `step ${count(step)}`);
+      snapshotLabel();
       quality();
     },
     stop(): void {
