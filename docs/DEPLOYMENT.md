@@ -600,6 +600,18 @@ error is reported on stderr and requires manual removal of that prefix. It never
 publishes to the public bucket or registers a capture. Local outputs remain under
 `--work`. This extracted image's deploy and GPU smoke have not been run locally.
 
+When storage credentials exist only in Modal, run from the repository root with a
+Modal-authenticated CLI: `modal run infra/modal/smoke_remote.py --app-name twin-pipeline-gsplat-upgrade-smoke --iterations 500 --tier l4`.
+This starts an ephemeral `twin-pipeline-smoke-runner` CPU app using `cpu_image` and the
+`twin-object-storage` secret; it neither deploys nor needs local storage credentials or
+COLMAP. It calls the same `smoke.py` main, assertions and cleanup: pose still goes to the
+target's `cpu4` with apt COLMAP 3.9.1, and train goes to its GPU. The supported pycolmap
+`colmap: "4.2"` path would change this smoke's pose engine, so it is not selected.
+The default target is the isolated upgrade app; `twin-pipeline` requires an explicit
+`--force-production`. R2 writes stay under the smoke's private `runs/smoke-<UTC timestamp>/`
+prefix, deleted on success or failure as above; container-local outputs are ephemeral
+and the summary is printed in Modal logs. This remote wrapper has not yet been run on Modal.
+
 `.github/workflows/modal.yml`, in one job:
 
 1. It checks that the secrets are present: `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`,
