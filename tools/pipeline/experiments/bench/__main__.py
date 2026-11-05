@@ -62,6 +62,7 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--schedule", choices=("screen", "full"), default="screen")
     run.add_argument("--tier", choices=("l4", "a10", "l40s", "a100"), default="l4")
     run.add_argument("--keep-splat", action="store_true")
+    run.add_argument("--live", action="store_true", help="publish live console telemetry")
     run.add_argument("--renders", type=int, default=0, help="save the first N test frames as PNGs")
     report = commands.add_parser("report")
     report.add_argument("--runs", nargs="*", help="local run IDs or paths to result.json")
@@ -122,6 +123,7 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "trainParams": params,
                     "keepSplat": args.keep_splat,
                     "renders": args.renders,
+                    **({"live": True} if args.live else {}),
                 }
             )
     return plans

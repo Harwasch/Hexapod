@@ -1356,6 +1356,22 @@ uv run python -m experiments.bench run --scene spool --seeds 42,43 --rehearse
 uv run python -m experiments.bench report --rehearse
 ```
 
+Add `--live` to `bench run` to publish telemetry and small SPZ previews about every
+60 seconds; it leaves trainer params and comparison identity unchanged. Watch from a
+second terminal (read-only volume access, no database):
+
+```bash
+# From the repository root: build a same-origin console bundle once.
+VITE_API_BASE_URL= pnpm --filter @twin/web build
+cd apps/api && uv run --with modal==1.6.2 python -m app.scripts.bench_live <runId> --web-dist ../web/dist
+```
+
+Open the printed `http://127.0.0.1:8791/view.html#live/<runId>` URL. The watcher polls
+every 15 seconds and caches previews under `~/.local/share/hexapod-bench/live/<runId>/`.
+Use `--host 0.0.0.0 --port 8791` to open the same bundle over Tailscale. Without
+`--web-dist`, use the live console from an existing bundle pointed at this server.
+Frozen bench scenes have no georeferencing, so Distance stays disabled.
+
 Use `--set '{"train": {"gaussian_density": 0.2}}'`, or `--variants file.yaml` containing
 `baseline: {}` and `dense: {train: {gaussian_density: 0.2}}`. Each variant/seed gets a
 unique run ID; at most four spawn concurrently. `--keep-splat` retains `trained.ply`
