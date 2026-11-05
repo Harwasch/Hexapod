@@ -11,6 +11,33 @@ from .topdown_maths import frame_camera
 
 MODES = ("raw", "aligned", "cc", "aligned+cc")
 RESOLUTIONS = ("full", "half")
+PROTOCOL = "rescore-v2"
+ALIGNMENT_STEPS = (200, 60)
+
+
+def scoring_geometry(height: int, width: int) -> dict[str, Any]:
+    """Dataset pixels are authoritative; trim only the odd right/bottom edge."""
+    height, width = int(height), int(width)
+    if min(height, width) < 2:
+        raise ValueError("scoring needs at least two pixels per axis")
+    return {
+        "undistortedAt": {"height": height, "width": width},
+        "scoredAt": {"height": height - height % 2, "width": width - width % 2},
+        "crop": {"right": width % 2, "bottom": height % 2},
+    }
+
+
+def scoring_frame(image: Any, intrinsic: Any, mask: Any = None) -> tuple[Any, Any, Any, Any]:
+    """Slice NumPy arrays or CPU Dataset tensors identically, without moving K."""
+    if image.ndim != 3 or image.shape[-1] != 3 or tuple(intrinsic.shape) != (3, 3):
+        raise ValueError("expected Dataset HWC RGB and 3x3 intrinsic")
+    geometry = scoring_geometry(*image.shape[:2])
+    h, w = geometry["scoredAt"]["height"], geometry["scoredAt"]["width"]
+    if mask is None:
+        mask = np.ones((h, w), dtype=bool)
+    elif tuple(mask.shape) != tuple(image.shape[:2]):
+        raise ValueError("Dataset mask dimensions differ from image")
+    return image[:h, :w], intrinsic, mask[:h, :w], geometry
 
 
 def affine_correct(prediction: npt.ArrayLike, target: npt.ArrayLike) -> tuple[Any, Any, Any]:
@@ -30,17 +57,17 @@ def affine_correct(prediction: npt.ArrayLike, target: npt.ArrayLike) -> tuple[An
 
 
 def half_image(image: npt.ArrayLike) -> Any:
-    """Exact 2x2 area average; fail rather than silently round odd frozen dimensions."""
+    """Exact 2x2 area average of the even scoring crop."""
     pixels = np.asarray(image, dtype=np.float64)
     h, w = pixels.shape[:2]
     if h % 2 or w % 2:
-        raise ValueError("full/half scoring requires even frozen image dimensions")
+        raise ValueError("full/half scoring requires even image dimensions after the scoring crop")
     return pixels.reshape(h // 2, 2, w // 2, 2, *pixels.shape[2:]).mean(axis=(1, 3))
 
 
 def half_camera(camera: dict[str, Any]) -> dict[str, Any]:
     if camera["height"] % 2 or camera["width"] % 2:
-        raise ValueError("full/half scoring requires even frozen camera dimensions")
+        raise ValueError("full/half scoring requires even camera dimensions after the scoring crop")
     intrinsic = np.array(camera["K"], dtype=float)
     intrinsic[:2] /= 2
     return {
@@ -203,28 +230,34 @@ def needle_scores(columns: dict[str, Any], extent: float) -> dict[str, Any]:
     }
 
 
-def trained_at(source: dict[str, Any], full: list[int]) -> dict[str, Any]:
+def trained_at(
+    source: dict[str, Any], frozen: list[int], undistorted: list[int] | None = None
+) -> dict[str, Any]:
     from prior_maths import resize_geometry
 
+    if source.get("trainingDimensions"):
+        return dict(source["trainingDimensions"])
     params = source["result"].get("trainParams", {})
-    h, w = full
+    h, w = frozen
     h, w, _, _ = resize_geometry(h, w, params.get("train_max_side") or 0)
     factor = int(params.get("data_factor", 1))
     h, w = h // factor, w // factor
+    provenance = "estimate from frozen size + resize params; historical undistortion unavailable"
+    if undistorted is not None and not params.get("train_max_side") and factor == 1:
+        h, w = undistorted
+        provenance = "inferred from current Dataset ROI + step_max_side; not a training measurement"
     h, w, _, _ = resize_geometry(h, w, params.get("step_max_side") or 0)
-    return {
-        "height": h,
-        "width": w,
-        "source": "frozen dimensions + recorded train_max_side/data_factor/step_max_side",
-    }
+    return {"height": int(h), "width": int(w), "source": provenance}
 
 
-def row_base(source: dict[str, Any], full: list[int]) -> dict[str, Any]:
+def row_base(
+    source: dict[str, Any], frozen: list[int], undistorted: list[int] | None = None
+) -> dict[str, Any]:
     return {
         "runId": source["runId"],
         "ply": source["plyKind"],
         "plyBytes": source["plyBytes"],
         "variant": source["result"].get("variant", {}).get("name", "unknown"),
-        "trainedAt": trained_at(source, full),
+        "trainedAt": trained_at(source, frozen, undistorted),
         "trainingLoss": "historical PLY; not modified or retrained by rescore",
     }

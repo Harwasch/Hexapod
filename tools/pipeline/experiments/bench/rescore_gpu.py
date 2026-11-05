@@ -21,10 +21,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from experiments.bench.evaluate import lookup_frames
 from experiments.bench.rescore_maths import (
     MODES,
+    PROTOCOL,
     footprint,
     needle_scores,
     pose_motion,
     row_base,
+    scoring_frame,
+    scoring_geometry,
 )
 from holdout_error import read_ply, sh_rest, shipped_sh
 
@@ -105,7 +108,7 @@ def optimise(
                 "fixed rescore alignment schedule exceeded its budget; no unequal-step comparison"
             )
         pose = delta_pose(rotation, translation, extent) @ original
-        prediction, _ = render(pose, intrinsic, target.shape[:2])
+        prediction = render(pose, intrinsic, target.shape[:2])[0]
         loss = photo_objective(prediction, target, mask)
         value = float(loss.detach())
         if not np.isfinite(value):
@@ -157,6 +160,8 @@ def make_renderer(splats: dict[str, Any], degree: int) -> Any:
             height=int(size[0]),
             width=int(size[1]),
             sh_degree=degree,
+            # Pinned C++ has a fused unpacked SH path for one camera. Packing
+            # gathers [visible, 16, 3] coefficients; neither bounds intersections.
             packed=False,
             rasterize_mode="classic",
             with_ut=False,
@@ -167,6 +172,46 @@ def make_renderer(splats: dict[str, Any], degree: int) -> Any:
         return rgb[0].clamp(0, 1), alpha[0, ..., 0]
 
     return render
+
+
+def check_camera_gradient() -> None:
+    """Tiny CUDA contract probe before loading the multi-million-splat exports."""
+    import torch
+
+    splats = {
+        "means": torch.tensor([[0.2, 0.1, 3.0]], device="cuda"),
+        "quats": torch.tensor([[1.0, 0, 0, 0]], device="cuda"),
+        "scales": torch.full((1, 3), 0.2, device="cuda"),
+        "opacities": torch.full((1,), 0.8, device="cuda"),
+        "colors": torch.zeros((1, 16, 3), device="cuda"),
+    }
+    view = torch.eye(4, device="cuda", requires_grad=True)
+    intrinsic = torch.tensor([[30.0, 0, 16], [0, 30.0, 16], [0, 0, 1]], device="cuda")
+    rgb, alpha = make_renderer(splats, 3)(view, intrinsic, (32, 32))
+    if rgb.shape != (32, 32, 3) or alpha.shape != (32, 32):
+        raise ValueError("classic rasterization output contract changed")
+    (rgb * torch.arange(32.0, device="cuda")[None, :, None]).sum().backward()
+    if view.grad is None or not torch.isfinite(view.grad).all() or not view.grad.abs().any():
+        raise ValueError("classic rasterization has no finite nonzero camera gradient")
+    if any(value.grad is not None for value in splats.values()):
+        raise ValueError("camera-only rescore unexpectedly differentiated a frozen splat")
+    sys.stdout.write("classic camera-gradient probe: OK\n")
+    sys.stdout.flush()
+
+
+def prepare_frame(data: dict[str, Any], device: Any) -> tuple[Any, Any, Any, Any, Any]:
+    import torch
+
+    image, intrinsic, mask, geometry = scoring_frame(data["image"], data["K"], data.get("mask"))
+    # Dataset returns CPU float32 K/camtoworld and either float32 or preloaded uint8
+    # RGB in 0..255. Explicit conversion also accepts NumPy and absent/None masks.
+    real = torch.as_tensor(image, device=device, dtype=torch.float32) / 255
+    intrinsic = torch.as_tensor(intrinsic, device=device, dtype=torch.float32)
+    original = torch.linalg.inv(
+        torch.as_tensor(data["camtoworld"], device=device, dtype=torch.float32)
+    )
+    mask = torch.as_tensor(mask, device=device, dtype=torch.bool)
+    return real, intrinsic, original, mask, geometry
 
 
 def score_all(settings: dict[str, Any], output: Path) -> None:
@@ -180,9 +225,16 @@ def score_all(settings: dict[str, Any], output: Path) -> None:
 
     torch.manual_seed(42)
     torch.set_num_threads(4)
+    check_camera_gradient()
     parser = Parser(data_dir=settings["data"], factor=1, normalize=False, test_every=1)
     dataset = Dataset(parser, split="val")
     lookup = lookup_frames(parser.image_names, dataset.indices, settings["names"])
+    first = dataset[lookup[settings["names"][0]]]
+    dataset_size = list(first["image"].shape[:2])
+    geometry = scoring_geometry(*dataset_size)
+    full_size = [geometry["scoredAt"][axis] for axis in ("height", "width")]
+    del first
+    write_json(output / "scoring-camera.json", geometry)
     metrics = {
         "psnr": PeakSignalNoiseRatio(data_range=1.0).cuda(),
         "ssim": StructuralSimilarityIndexMeasure(data_range=1.0).cuda(),
@@ -205,7 +257,8 @@ def score_all(settings: dict[str, Any], output: Path) -> None:
     extent = settings["cameras"]["extent"]
     for index, source in enumerate(settings["sources"]):
         columns = read_ply(Path(source["ply"]))
-        row = row_base(source, settings["fullSize"])
+        row = row_base(source, settings["frozenSize"], dataset_size)
+        row.update(undistortedAt=geometry["undistortedAt"], crop=geometry["crop"], timings=[])
         row.update(needle=needle_scores(columns, extent), resolutions={}, topdown={"perCamera": []})
         degree = int(source["result"].get("trainParams", {}).get("ship_sh_degree", 0))
         dc = np.stack([columns[f"f_dc_{i}"] for i in range(3)], axis=1)[:, None]
@@ -237,15 +290,11 @@ def score_all(settings: dict[str, Any], output: Path) -> None:
 
         frame_rows: dict[str, list[Any]] = {"full": [], "half": []}
         for frame_index, name in enumerate(settings["names"]):
+            frame_started = time.time()
             data = dataset[lookup[name]]
-            real = data["image"].cuda().float() / 255
-            if list(real.shape[:2]) != settings["fullSize"]:
-                raise ValueError(
-                    "undistorted dataset dimensions differ from frozen full-size contract"
-                )
-            intrinsic = data["K"].cuda()
-            original = torch.linalg.inv(data["camtoworld"].cuda())
-            mask = data.get("mask", torch.ones(real.shape[:2], dtype=torch.bool)).cuda().bool()
+            real, intrinsic, original, mask, frame_geometry = prepare_frame(data, "cuda")
+            if frame_geometry != geometry:
+                raise ValueError("test Dataset ROIs differ; cannot report one common scoredAt")
             half_real = functional.avg_pool2d(real.permute(2, 0, 1)[None], 2)[0].permute(1, 2, 0)
             half_mask = functional.avg_pool2d(mask.float()[None, None], 2)[0, 0] == 1
             half_k = intrinsic.clone()
@@ -298,6 +347,7 @@ def score_all(settings: dict[str, Any], output: Path) -> None:
                         {
                             "name": name,
                             "pose": pose,
+                            "K": camera_k.cpu().tolist(),
                             "metrics": {
                                 mode: scores(pred, reference) for mode, pred in predictions.items()
                             },
@@ -311,16 +361,21 @@ def score_all(settings: dict[str, Any], output: Path) -> None:
                                 prediction,
                                 preview=True,
                             )
+            timing = {
+                "name": name,
+                "seconds": time.time() - frame_started,
+                "peakAllocatedGb": torch.cuda.max_memory_allocated() / 1e9,
+                "allocatedGb": torch.cuda.memory_allocated() / 1e9,
+            }
+            row["timings"].append(timing)
             sys.stdout.write(
-                f"rescore row {index + 1}: frame {frame_index + 1}/{len(settings['names'])}\n"
+                f"rescore row {index + 1}: frame {frame_index + 1}/{len(settings['names'])} "
+                + json.dumps(timing, allow_nan=False)
+                + "\n"
             )
             sys.stdout.flush()
         for resolution, frames in frame_rows.items():
-            size = (
-                settings["fullSize"]
-                if resolution == "full"
-                else [v // 2 for v in settings["fullSize"]]
-            )
+            size = full_size if resolution == "full" else [v // 2 for v in full_size]
             row["resolutions"][resolution] = {
                 "scoredAt": {"height": size[0], "width": size[1]},
                 "perFrame": frames,
@@ -372,10 +427,13 @@ def score_all(settings: dict[str, Any], output: Path) -> None:
     write_json(
         output / "scores.json",
         {
-            "protocol": "rescore-v1",
+            "protocol": PROTOCOL,
+            "scoringCamera": geometry,
+            "frozenAt": {"height": settings["frozenSize"][0], "width": settings["frozenSize"][1]},
             "rows": rows,
             "pixels": (
-                "full image, invalid undistortion pixels black in both; fits use only valid pixels"
+                "Dataset undistorted ROI with odd right/bottom edges removed; "
+                "invalid pixels black in both; fits use only valid pixels"
             ),
             "lpipsNet": "alex",
             "photoPngs": (
@@ -387,10 +445,43 @@ def score_all(settings: dict[str, Any], output: Path) -> None:
 
 def cpu_self_check() -> None:
     """Run by the existing image CPU check, after cached compilation; no CUDA needed."""
+    from types import SimpleNamespace
+
     import torch
+    from datasets.colmap import Dataset
     from gsplat.color_correct import color_correct_affine
 
     from experiments.bench.rescore_maths import affine_correct, se3
+
+    # Execute the real pinned Dataset.__getitem__ and frame-preparation seam,
+    # including float/uint8 image paths and masks. No CUDA or model downloads.
+    parser = SimpleNamespace(
+        image_names=["test.png"],
+        test_every=1,
+        camera_ids=[1],
+        camera_indices=[0],
+        Ks_dict={1: np.array([[900.0, 0, 449.5], [0, 900.0, 799.5], [0, 0, 1]])},
+        camtoworlds=np.eye(4)[None],
+        mask_dict={1: None},
+        exposure_values=[None],
+    )
+    dataset = Dataset(parser, split="val")
+    image = np.full((1599, 899, 3), 128, dtype=np.uint8)
+    dataset._load_image = lambda item: image
+    for preload, masked in ((False, False), (True, True)):
+        dataset.images = [torch.from_numpy(image)] if preload else None
+        parser.mask_dict[1] = np.ones(image.shape[:2], dtype=bool) if masked else None
+        data = dataset[0]
+        real, intrinsic, _, valid, geometry = prepare_frame(data, "cpu")
+        if real.shape != (1598, 898, 3) or valid.shape != (1598, 898):
+            raise ValueError("Dataset odd-ROI scoring crop changed")
+        if geometry["crop"] != {"right": 1, "bottom": 1}:
+            raise ValueError("Dataset ROI crop provenance changed")
+        if not torch.equal(intrinsic, data["K"]) or real.dtype != torch.float32:
+            raise ValueError("Dataset camera or image conversion changed")
+        half = torch.nn.functional.avg_pool2d(real.permute(2, 0, 1)[None], 2)
+        if half.shape != (1, 3, 799, 449):
+            raise ValueError("Dataset half-resolution area average changed")
 
     rotation = torch.zeros(3, requires_grad=True)
     translation = torch.zeros(3, requires_grad=True)

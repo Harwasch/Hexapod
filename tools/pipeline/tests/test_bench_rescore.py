@@ -82,7 +82,7 @@ def test_rehearsal_rescores_four_kept_plys_and_reports_missing_without_training(
     assert report["unavailable"]
     entries = ledger.read(state / "ledger.jsonl")
     assert [e["event"] for e in entries] == ["planned", "finished"]
-    assert entries[0]["timeoutSeconds"] == 2400 and entries[0]["tag"] == "rescore"
+    assert entries[0]["timeoutSeconds"] == 7200 and entries[0]["tag"] == "rescore"
 
 
 def test_inventory_selects_exact_ply_and_refuses_mismatched_frames(tmp_path: Path) -> None:
@@ -107,12 +107,12 @@ def test_rescore_reservation_and_total_cap_fail_before_modal(
     monkeypatch.setattr(cli, "load_modal", lambda: pytest.fail("cap must precede Modal"))
     args = cli.parser().parse_args(["rescore", "--scene", "beach", "--runs", A, B])
     plan = cli.plans_for(args)
-    priced = ledger.price_plan([], plan, 1, 5)
+    priced = ledger.price_plan([], plan, 3, 5)
     assert priced
-    assert ledger.TIMEOUTS["rescore"] == 2400
+    assert ledger.TIMEOUTS["rescore"] == 7200
     assert (
         ledger.TIMEOUTS["rescore"] + ledger.OVERHEAD_SECONDS + ledger.RESTART_SECONDS
-    ) * ledger.hourly_rate("l4") / 3600 < 1
+    ) * ledger.hourly_rate("l4") / 3600 < 3
     assert (
         cli.main(
             [
@@ -166,3 +166,96 @@ def test_training_report_skips_rescore_batches(
     )
     assert cli.main(["report", "--rehearse", "--state-dir", str(tmp_path)]) == 0
     assert "Frozen-input bench" in capsys.readouterr().out
+
+
+def test_oversized_preview_payload_is_reported_before_returning_rpc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs(tmp_path)
+    monkeypatch.setattr(rescore, "MAX_PNG_BASE64_BYTES", 64, raising=False)
+    result = rescore.run_rescore(
+        tmp_path,
+        tmp_path / "runs" / ("rescore-" + C),
+        {
+            "runId": "rescore-" + C,
+            "scene": "beach",
+            "runs": [A, B],
+            "rehearsal": True,
+            "benchCommit": "test",
+            "timeoutSeconds": 7200,
+        },
+    )
+    assert result["status"] == "failed"
+    assert "PNG payload" in result["error"]
+    assert result["pngs"] == {}
+    assert (tmp_path / "runs" / ("rescore-" + C) / "scores.json").exists()
+
+
+def test_recorded_training_size_wins_over_frozen_size(tmp_path: Path) -> None:
+    from experiments.bench.rescore_maths import row_base
+
+    manifest = inputs(tmp_path)
+    write_json(
+        tmp_path / "runs" / B / "train_memory.json",
+        {"samples": [{"width": 450, "height": 800, "step": 50000}]},
+    )
+    sources, _ = rescore.inventory(
+        tmp_path / "runs",
+        {"scene": "beach", "runs": [B], "rehearsal": True, "ply": ["trained"]},
+        manifest,
+    )
+    row = row_base(sources[0], [1600, 900], [1599, 899])
+    assert row["trainedAt"] == {
+        "width": 450,
+        "height": 800,
+        "source": "train_memory.json: last recorded training step",
+    }
+
+
+def test_rehearsal_odd_roi_report_and_overheads_are_independent(tmp_path: Path) -> None:
+    from experiments.bench.rescore_maths import shared_cameras
+
+    manifest = inputs(tmp_path)
+    sources, _ = rescore.inventory(
+        tmp_path / "runs",
+        {"scene": "beach", "runs": [A], "rehearsal": True, "ply": ["trained"]},
+        manifest,
+    )
+    cameras = shared_cameras([[x, y, 0] for x in range(4) for y in range(4)], [], [0, 0, 1])
+    original = copy.deepcopy(cameras)
+    settings = {
+        "frozenSize": [1600, 900],
+        "datasetSize": [1599, 899],
+        "sources": sources,
+        "cameras": cameras,
+    }
+    rescore.synthetic(settings, tmp_path)
+    document = read_json(tmp_path / "scores.json")
+    document.update(status="complete", rehearsal=True)
+    full = document["rows"][0]["resolutions"]["full"]["scoredAt"]
+    half = document["rows"][0]["resolutions"]["half"]["scoredAt"]
+    assert full == {"height": 1598, "width": 898}
+    assert half == {"height": 799, "width": 449}
+    assert cameras == original and cameras["cameras"][0]["width"] == 384
+    markdown, report = rescore.table([document])
+    assert "1598x898" in markdown and "799x449" in markdown
+    assert report["tables"]["full"][0]["scoredAt"] == full
+    with pytest.raises(ValueError, match="protocol"):
+        rescore.table([document, {**document, "protocol": "rescore-v1"}])
+
+
+def test_worst_case_generated_pngs_fit_return_budget() -> None:
+    # Conservative PNG upper bound: raw RGB/gray scanlines + zlib expansion,
+    # 64KiB IDAT chunks with headers, and fixed IHDR/IEND. Covers incompressible
+    # 640-square photo previews; actual portrait previews are smaller.
+    def encoded(height: int, width: int, channels: int) -> int:
+        raw = height * (width * channels + 1)
+        zlib = raw + (raw >> 12) + (raw >> 14) + (raw >> 25) + 13
+        png = zlib + 12 * ((zlib + 65535) // 65536) + 100
+        return 4 * ((png + 2) // 3)
+
+    photos = 4 * 2 * 5 * encoded(640, 640, 3)
+    overheads = 4 * 3 * (2 * encoded(384, 384, 3) + encoded(384, 384, 1))
+    panels = 3 * encoded(429, 4 * 384, 3)
+    masks = 3 * encoded(384, 384, 1)
+    assert photos + overheads + panels + masks < rescore.MAX_PNG_BASE64_BYTES

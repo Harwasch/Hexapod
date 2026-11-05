@@ -20,8 +20,27 @@ from holdout_error import read_ply
 
 from .ledger import hourly_rate
 from .matched import source_run
-from .rescore_maths import MODES, RESOLUTIONS, footprint, needle_scores, row_base, shared_cameras
+from .rescore_maths import (
+    ALIGNMENT_STEPS,
+    MODES,
+    PROTOCOL,
+    RESOLUTIONS,
+    footprint,
+    needle_scores,
+    row_base,
+    scoring_geometry,
+    shared_cameras,
+)
 from .scene import read_json, verify, write_json
+
+MAX_PNG_BASE64_BYTES = 96_000_000
+
+
+def encode_pngs(directory: Path) -> dict[str, str]:
+    paths = sorted(directory.glob("*.png"))
+    if sum(4 * ((p.stat().st_size + 2) // 3) for p in paths) > MAX_PNG_BASE64_BYTES:
+        raise ValueError("rescore PNG payload exceeds 96 MB; images remain on volume")
+    return {p.name: base64.b64encode(p.read_bytes()).decode("ascii") for p in paths}
 
 
 def inventory(
@@ -46,6 +65,22 @@ def inventory(
         ):
             if result.get(key) != expected:
                 raise ValueError("rescore requires identical frozen frames, poses and split")
+        memory = run / "train_memory.json"
+        samples = read_json(memory).get("samples", []) if memory.is_file() else []
+        dimensions = [
+            s
+            for s in samples
+            if all(isinstance(s.get(axis), int) and s[axis] > 0 for axis in ("height", "width"))
+        ]
+        training_dimensions = (
+            {
+                "height": dimensions[-1]["height"],
+                "width": dimensions[-1]["width"],
+                "source": "train_memory.json: last recorded training step",
+            }
+            if dimensions
+            else None
+        )
         requested = plan.get("ply") or ["trained", "faded"]
         for kind in requested:
             ply = run / f"{kind}.ply"
@@ -69,6 +104,7 @@ def inventory(
                     "ply": str(ply),
                     "plyBytes": ply.stat().st_size,
                     "result": result,
+                    "trainingDimensions": training_dimensions,
                 }
             )
     if len(selected) > 4:
@@ -100,9 +136,13 @@ def comparisons(output: Path, rows: list[Any], cameras: dict[str, Any]) -> None:
 def synthetic(settings: dict[str, Any], output: Path) -> None:
     """Read stand-in PLYs; never label synthetic photo predictions as GPU measurements."""
     rows = []
-    full = settings["fullSize"]
+    # Stand-in scenes are PINHOLE. Tests may supply a simulated Dataset ROI.
+    dataset_size = settings.get("datasetSize", settings["frozenSize"])
+    geometry = scoring_geometry(*dataset_size)
+    full = [geometry["scoredAt"][axis] for axis in ("height", "width")]
     for i, source in enumerate(settings["sources"]):
-        row = row_base(source, full)
+        row = row_base(source, settings["frozenSize"], dataset_size)
+        row.update(undistortedAt=geometry["undistortedAt"], crop=geometry["crop"])
         row.update(
             rehearsal=True,
             needle=needle_scores(read_ply(Path(source["ply"])), settings["cameras"]["extent"]),
@@ -121,7 +161,15 @@ def synthetic(settings: dict[str, Any], output: Path) -> None:
             ImageDraw.Draw(image).text((8, 8), "SYNTHETIC REHEARSAL", fill="white")
             image.save(output / f"row-{i}-{camera['name']}.png")
         rows.append(row)
-    write_json(output / "scores.json", {"rows": rows})
+    write_json(
+        output / "scores.json",
+        {
+            "protocol": PROTOCOL,
+            "rows": rows,
+            "scoringCamera": geometry,
+            "frozenAt": {"height": settings["frozenSize"][0], "width": settings["frozenSize"][1]},
+        },
+    )
 
 
 def run_rescore(
@@ -145,6 +193,7 @@ def run_rescore(
         ),
     }
     destination.mkdir(parents=True, exist_ok=True)
+    pngs: dict[str, str] = {}
     try:
         scene = root / "scenes" / plan["scene"]
         manifest, split = verify(scene, plan.get("manifestDigest"))
@@ -174,16 +223,14 @@ def run_rescore(
                 )
             sizes = {Image.open(frozen / "frames" / name).size for name in split["test"]}
             if len(sizes) != 1:
-                raise ValueError("rescore requires one explicit full size across the test set")
+                raise ValueError("rescore requires one frozen image size across the test set")
             width, height = sizes.pop()
-            if width % 2 or height % 2:
-                raise ValueError("full/half scoring requires even frozen dimensions")
             settings = {
                 "sources": sources,
                 "cameras": cameras,
                 "names": split["test"],
-                "fullSize": [height, width],
-                "steps": [160, 40],
+                "frozenSize": [height, width],
+                "steps": list(ALIGNMENT_STEPS),
                 "maxTranslationPct": 2.0,
                 "maxRotationDeg": 3.0,
                 "deadline": started + plan["timeoutSeconds"] - 30,
@@ -217,6 +264,7 @@ def run_rescore(
                     )
             result.update(read_json(destination / "scores.json"))
             comparisons(destination, result["rows"], cameras)
+            pngs = encode_pngs(destination)
             result.update(status="complete", cameras=cameras)
     except Exception as error:
         from progress import tail
@@ -230,9 +278,7 @@ def run_rescore(
         costUsd=0.0 if plan.get("rehearsal") else elapsed * hourly_rate("l4") / 3600,
     )
     write_json(destination / "rescore.json", result)
-    result["pngs"] = {
-        p.name: base64.b64encode(p.read_bytes()).decode("ascii") for p in destination.glob("*.png")
-    }
+    result["pngs"] = pngs
     return result
 
 
@@ -243,7 +289,7 @@ def save_local(state: Path, result: dict[str, Any]) -> None:
     directory = state / "runs" / result["runId"]
     directory.mkdir(parents=True, exist_ok=True)
     pngs = result.pop("pngs", {})
-    if sum(len(value) for value in pngs.values()) > 96_000_000:
+    if sum(len(value) for value in pngs.values()) > MAX_PNG_BASE64_BYTES:
         raise ValueError("rescore PNG payload exceeds 96 MB")
     for name, encoded in pngs.items():
         if not re.fullmatch(
@@ -292,7 +338,10 @@ def table(documents: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
         raise ValueError("rescore table requires identical frozen scene and protocol")
     rows = [r for d in documents if d["status"] == "complete" for r in d.get("rows", [])]
     unique = {(r["runId"], r["ply"]): r for r in rows}
-    lines = ["Classic 3DGS. Aligned/CC fit the test frame itself and flatter all runs alike.\n"]
+    lines = [
+        "Classic 3DGS. Sizes are height x width. "
+        "Aligned/CC fit the test frame itself and flatter all runs alike.\n"
+    ]
     if any(d.get("rehearsal") for d in documents):
         lines.append(
             "SYNTHETIC REHEARSAL: photo/hole metrics are unavailable; not GPU measurements.\n"
@@ -348,6 +397,8 @@ def table(documents: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
                     "ply": row["ply"],
                     "variant": row["variant"],
                     "trainedAt": row["trainedAt"],
+                    "undistortedAt": row.get("undistortedAt"),
+                    "crop": row.get("crop"),
                     **scored,
                     "topdown": row["topdown"],
                     "needle": row["needle"],
@@ -369,7 +420,7 @@ def table(documents: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
     ]
     return "\n".join(lines) + "\n", {
         "renderer": "classic",
-        "protocol": "rescore-v1",
+        "protocol": documents[0].get("protocol", "rescore-v1") if documents else PROTOCOL,
         "manifestDigest": documents[0].get("manifestDigest") if documents else None,
         "splitDigest": documents[0].get("splitDigest") if documents else None,
         "rehearsal": any(d.get("rehearsal") for d in documents),

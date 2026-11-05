@@ -1423,16 +1423,24 @@ scoring; missing PLYs are reported, never reconstructed or replaced with old met
 The driver checked that the four earlier ablations (including `05c4b877`) were run
 without `--keep-splat` and have no PLY on the volume; they cannot be re-scored.
 
-Every row gets full 900×1600 and half 450×800 scores (height×width), with `trainedAt`
-inferred from the frozen dimensions and recorded training resize parameters beside
-explicit `scoredAt`. Half GT is an exact 2×2 area average and K is divided by two;
+Every row gets full and half scores derived from the **actual undistorted Dataset ROI**,
+as in bench evaluation, rather than assuming the frozen photo dimensions survive
+undistortion. Remove an odd right column and/or bottom row to make the full scoring
+crop even; K is unchanged by this crop. Beach's frozen **width 900, height 1600** becomes
+an undistorted **width 899, height 1599**, hence full **width 898, height 1598** and half
+**width 449, height 799**. JSON records named axes, the ROI and crop; table sizes are
+**height×width**. The 384×384 overhead cameras remain independent of photo dimensions.
+`trainedAt` uses `train_memory.json` dimensions when available, otherwise an explicitly
+labelled estimate from the recorded resize parameters and current ROI (historical
+undistortion may differ). It never applies the evaluator's even crop to training sizes.
+Half GT is an exact 2×2 area average of the full scoring crop and K is divided by two;
 there is no upscaled prediction. Invalid undistortion pixels are black in both images;
 fits use only valid pixels. PSNR/SSIM/LPIPS (AlexNet) are averaged per test frame.
 The four columns at each resolution mean:
 
 - `raw`: frozen camera and exported colours.
-- `aligned`: test-fitted SE(3) camera, frozen splat. Adam takes 160 half-resolution
-  steps, then 40 full-resolution steps initialized from the best half pose. Each
+- `aligned`: test-fitted SE(3) camera, frozen splat. Adam takes 200 half-resolution
+  steps, then 60 full-resolution steps initialized from the best half pose. Each
   resolution retains its own best pose, with raw always a candidate. The objective
   is valid-pixel L1 after a detached per-channel gain/offset fit (gain 0.5–2, offset
   −0.25–0.25), so a simple exposure difference does not pull the camera. Corrections
@@ -1449,6 +1457,14 @@ They diagnose pose/photometric mismatch; they are not untouched-test predictions
 All four PLYs use the same optimizer steps and bounds. A deadline fails the batch
 instead of quietly shortening later rows. Partial diagnostics and the full evaluator
 log stay on the volume; partial rows are not reported as a completed comparison.
+The crop and reduced schedule define `rescore-v2`; reports refuse to mix protocols.
+The real-image CPU self-check exercises Dataset's float/uint8 paths and the odd ROI.
+A tiny CUDA camera-gradient probe runs before loading any kept PLY. Classic mode
+supports view-matrix gradients in the pinned source. Rendering keeps `packed=False`:
+the single-camera unpacked SH path is fused; packing instead gathers visible SH
+coefficients and adds index buffers. Neither mode bounds tile intersections. Splats
+have no optimizer state or gradients, and graphs are released each step. Per-frame
+time and allocated-memory observations will expose the actual cost on the next run.
 
 Overhead views look down at 90°, 75° and 60°, at 384×384. Their cameras, up estimate,
 robust extent and footprint are derived once from frozen SfM points/camera poses,
@@ -1471,22 +1487,24 @@ PNGs. Photo PNGs preview the first frozen test frame at at most 640px; photo **s
 use the full named resolution. `rescore-table` prints one Markdown table per resolution
 and writes `~/.local/share/hexapod-bench/rescore-table.json`, retaining per-frame detail.
 It flags differing training/scoring sizes and refuses mixed frozen scenes or protocols.
+PNG transport is capped at 96 MB of base64 at both the worker and receiver; oversize
+results fail with their images retained on the volume. Previews and overhead panels
+fit this limit even at the four-row maximum; full-resolution photo PNGs are not returned.
 
-| Rescore JSON name                        | Definition                                                                                                  |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `rows[].resolutions.{full,half}.metrics` | `raw`, `aligned`, `cc`, `aligned+cc`, each with PSNR (dB), SSIM and LPIPS                                   |
-| `rows[].resolutions.*.perFrame[].pose`   | Corrected view matrix, `translationPct`, `rotationDeg`, `lossBefore`, `lossAfter`, objective and step count |
-| `rows[].resolutions.*.poseMoveMedian`    | Median translation % of extent and rotation degrees across test cameras                                     |
-| `rows[].topdown.holeMean`                | Mean foreground-only alpha < 0.5 fraction over three fixed cameras                                          |
-| `rows[].needle.elongation`               | Foreground scale-axis ratio > 10: count, share, opacity weight and opacity-weighted share                   |
-| `rows[].needle.oversized.{1,2,5}`        | Foreground largest scale > 1%, 2%, 5% of robust scene extent; same counts/shares                            |
-| `rows[].needle.farFieldCount`            | Number of marked rows excluded from hole and needle scores; plain PLYs have zero                            |
+| Rescore JSON name                        | Definition                                                                                                       |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `rows[].resolutions.{full,half}.metrics` | `raw`, `aligned`, `cc`, `aligned+cc`, each with PSNR (dB), SSIM and LPIPS                                        |
+| `rows[].resolutions.*.perFrame[].pose`   | Corrected view matrix, `translationPct`, `rotationDeg`, `lossBefore`, `lossAfter`, objective and step count      |
+| `rows[].resolutions.*.poseMoveMedian`    | Median translation % of extent and rotation degrees across test cameras                                          |
+| `rows[].topdown.holeMean`                | Mean foreground-only alpha < 0.5 fraction over three fixed cameras                                               |
+| `rows[].needle.elongation`               | Foreground scale-axis ratio > 10: count, share, opacity weight and opacity-weighted share                        |
+| `rows[].needle.oversized.{1,2,5}`        | Foreground largest scale > 1%, 2%, 5% of robust scene extent; same counts/shares                                 |
+| `rows[].needle.farFieldCount`            | Number of marked rows excluded from hole and needle scores; plain PLYs have zero                                 |
+| `scoringCamera`                          | Actual `undistortedAt`, even full `scoredAt`, and right/bottom `crop` in pixels; `frozenAt` is separate metadata |
+| `rows[].timings[]`                       | Per-frame wall `seconds`, current `allocatedGb`, cumulative CUDA `peakAllocatedGb` (decimal GB)                  |
 
-Use the same ledger with the new `rescore` tag. The forecast is $0.60; the 40-minute
-L4 timeout plus startup/refused-restart allowances reserves about $0.70 at the recorded
-GPU+CPU+RAM rate, well under the $5 tag cap. The 38 frames × four PLYs × 200 alignment
-steps are unmeasured on L4; the timeout is a bound, not a promised completion time.
-There is no automatic training/retry. From `tools/pipeline`, after committing these edits:
+Use the same ledger with the new `rescore` tag. The forecast is $1.50 and the timeout 120 minutes, which reserves about $2: 4 PLYs x 38 frames x 260 alignment steps is 39,520 updates. The timeout is a bound, not a measurement.
+There is no automatic training or retry. From `tools/pipeline`, after committing these edits:
 
 ```bash
 export TMPDIR="$PWD/.tmp"
@@ -1496,7 +1514,7 @@ bench rescore --scene beach --runs \
   924f540e243a4a09bc8fa32280f5e436 \
   28deb3c9bfba4b90afe272bb614dddf5 \
   4fe4848318d04eaba471f0e7ca8bb46d \
-  --tag rescore --total-cap 5 --cap 1 \
+  --tag rescore --total-cap 5 --cap 3 \
   --ledger "$HOME/.local/share/hexapod-bench/quality-stack.jsonl"
 bench rescore-table --runs 924f540e 28deb3c9 4fe48483
 ```

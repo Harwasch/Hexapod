@@ -95,3 +95,100 @@ def test_rescore_gpu_imports_nothing_that_needs_newer_python_than_the_trainer() 
     source = (Path(__file__).resolve().parents[1] / "experiments/bench/rescore_gpu.py").read_text()
     assert "experiments.bench.scene" not in source
     assert "experiments.bench.rescore import" not in source
+
+
+@pytest.mark.parametrize("size", [(1599, 899), (899, 1599), (1600, 900)])
+def test_score_frame_uses_undistorted_roi_and_crops_only_right_bottom(
+    size: tuple[int, int],
+) -> None:
+    from experiments.bench.rescore_maths import scoring_frame
+
+    h, w = size
+    image = np.arange(h * w * 3, dtype=np.float32).reshape(h, w, 3)
+    intrinsic = np.array([[900, 0, w / 2], [0, 900, h / 2], [0, 0, 1.0]])
+    real, k, mask, geometry = scoring_frame(image, intrinsic, None)
+    height, width = h - h % 2, w - w % 2
+    np.testing.assert_array_equal(real, image[:height, :width])
+    assert k is intrinsic
+    assert mask.shape == (height, width) and mask.all()
+    assert geometry == {
+        "undistortedAt": {"height": h, "width": w},
+        "scoredAt": {"height": height, "width": width},
+        "crop": {"right": w % 2, "bottom": h % 2},
+    }
+
+
+def test_score_frame_crops_mask_without_moving_intrinsics() -> None:
+    from experiments.bench.rescore_maths import scoring_frame
+
+    mask = np.ones((9, 7), dtype=bool)
+    mask[2, 3] = False
+    _, _, cropped, _ = scoring_frame(np.zeros((9, 7, 3)), np.eye(3), mask)
+    np.testing.assert_array_equal(cropped, mask[:8, :6])
+    with pytest.raises(ValueError, match="mask"):
+        scoring_frame(np.zeros((9, 7, 3)), np.eye(3), np.ones((7, 9)))
+
+
+@pytest.mark.parametrize("kind", ["absent", "none", "mask"])
+def test_actual_frame_preparation_handles_dataset_types_and_optional_mask(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    import sys
+    from types import SimpleNamespace
+
+    from experiments.bench import rescore_gpu
+
+    # Small NumPy backend exercises the actual preparation function without torch.
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(
+            as_tensor=lambda x, dtype, device: np.asarray(x, dtype=dtype),
+            float32=np.float32,
+            bool=np.bool_,
+            linalg=np.linalg,
+        ),
+    )
+    data = {
+        "image": np.full((9, 7, 3), 128, dtype=np.uint8),
+        "K": np.eye(3, dtype=np.float64),
+        "camtoworld": np.eye(4),
+    }
+    if kind != "absent":
+        data["mask"] = None if kind == "none" else np.ones((9, 7), dtype=bool)
+    real, k, original, mask, geometry = rescore_gpu.prepare_frame(data, "cpu")
+    assert real.shape == (8, 6, 3) and real.dtype == k.dtype == original.dtype == np.float32
+    np.testing.assert_array_equal(real, np.full((8, 6, 3), np.float32(128 / 255)))
+    assert mask.dtype == np.bool_ and mask.all()
+    assert geometry["scoredAt"] == {"height": 8, "width": 6}
+
+
+def test_renderer_preserves_classic_contract_and_alpha_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+    from types import SimpleNamespace
+
+    from experiments.bench.rescore_gpu import make_renderer
+
+    class Pixels(np.ndarray):
+        def clamp(self, low: float, high: float) -> np.ndarray:
+            return np.clip(self, low, high)
+
+    seen = {}
+
+    def rasterization(**kwargs: object) -> tuple[object, object, object]:
+        seen.update(kwargs)
+        pixels = np.full((1, 8, 6, 3), 1.5).view(Pixels)
+        return pixels, np.full((1, 8, 6, 1), 0.7), {"intersections": object()}
+
+    monkeypatch.setitem(sys.modules, "gsplat", SimpleNamespace(rasterization=rasterization))
+    rgb, alpha = make_renderer({"means": np.zeros((2, 3))}, 3)(np.eye(4), np.eye(3), (8, 6))
+    assert rgb.shape == (8, 6, 3) and alpha.shape == (8, 6)
+    assert (rgb == 1).all() and (alpha == 0.7).all()
+    assert seen["packed"] is False and seen["with_ut"] is False and seen["with_eval3d"] is False
+    assert seen["rasterize_mode"] == "classic" and seen["sh_degree"] == 3
+    assert (seen["width"], seen["height"]) == (6, 8)
+    viewmats, intrinsics = seen["viewmats"], seen["Ks"]
+    assert isinstance(viewmats, np.ndarray) and isinstance(intrinsics, np.ndarray)
+    assert viewmats.shape == (1, 4, 4) and intrinsics.shape == (1, 3, 3)
