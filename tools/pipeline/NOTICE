@@ -1,0 +1,35 @@
+Hexapod pipeline -- model and runtime provenance
+
+quality_prepass.py
+------------------
+The GPU image installs MapAnything code from facebookresearch/map-anything commit
+3d10cf7a3016fc0f9bb13a071ee66c47b10be0d9 (Apache-2.0). It loads only the approved
+facebook/map-anything-apache weights, Hugging Face revision
+00f9c245bbcb60522d1ed7f9e9d88462c6e3f38a (Apache-2.0).
+https://github.com/facebookresearch/map-anything
+https://huggingface.co/facebook/map-anything-apache
+
+MoGe code is microsoft/MoGe commit 74fbce054ebed49800de42d0ad0e83495065719a
+(MIT); its v2 module loads Ruicheng/moge-2-vitl-normal/model.pt, HF revision
+cb0e8bbd6b1e243589717c78e750b1ba4c093acf (MIT).
+https://github.com/microsoft/MoGe
+https://huggingface.co/Ruicheng/moge-2-vitl-normal
+The v2 geometry helper utils3d-moge uses upstream's exact code pin
+62f09d58509485564e24d5d9f6aac9ee9ebc0c37 (MIT). Model packages are installed without
+their optional viewers, training stacks or benchmark model dependencies.
+
+quality_trainer.py
+------------------
+Our scale/shift depth alignment, depth-derived normal consistency, gradient residual
+and axis-ratio hinge are independently implemented mathematics; no third-party loss
+implementation is included. NumPy reference functions live in prior_maths.py.
+The source-checked insertion seam operates on gsplat (Apache-2.0) commit
+512d366b67073d77ca099ede742683c165dfc23b, version 1.6.0.
+https://github.com/nerfstudio-project/gsplat
+
+The GPU image also installs PPISP v1.2.1 (Apache-2.0), commit
+df33809f7b3b20ac06de088dfc871b144b8fb54d:
+https://github.com/nv-tlabs/ppisp
+Fused-ssim and fused-bilagrid are pinned to the commits specified by that gsplat
+revision's examples/requirements.txt; their upstream licences travel in the installed
+packages. No upstream code is vendored into this directory.

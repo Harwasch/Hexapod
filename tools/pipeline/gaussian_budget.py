@@ -409,6 +409,7 @@ class Budget:
     train_size: tuple[int, int] | None = None
     pixel_scale: float | None = None
     gpu_memory_gb: float = DEFAULT_GPU_MEMORY_GB
+    memory_model: str = "classic-measured"
     reason: str = ""
 
     @property
@@ -435,6 +436,7 @@ class Budget:
             "trainImageSize": None if self.train_size is None else list(self.train_size),
             "pixelScale": _round(self.pixel_scale),
             "gpuMemoryGb": self.gpu_memory_gb,
+            "memoryModel": self.memory_model,
             "reason": self.reason or None,
         }
 
@@ -454,6 +456,8 @@ def plan(
     gpu_memory_gb: float = DEFAULT_GPU_MEMORY_GB,
     voxel_footprints: float = VOXEL_FOOTPRINTS,
     images_per_step: int = 1,
+    with_ut: bool = False,
+    with_eval3d: bool = False,
 ) -> Budget | None:
     """The cap for `requested` (`parse_cap`'s result): None for no cap at all.
 
@@ -469,10 +473,30 @@ def plan(
     once, so the image and raster terms of the memory model are that many frames' worth
     (`train_size` stays one frame's size in the budget's record).
     """
+    gut = with_ut or with_eval3d
+    note = (
+        "UT/eval3d memory is uncalibrated; explicit count bound is provisional, not a fit guarantee"
+        if gut
+        else ""
+    )
+    # Pinned Rendering.cpp refuses packed UT/eval3d; Rasterization.cpp also retains
+    # per-intersection batch state for eval3d backward. Its size depends on overlap,
+    # so the old measured 3DGS slope cannot honestly predict this renderer's ceiling.
+    if gut and (
+        requested is None or (requested == AUTO and (budget_max is None or budget_max <= 0))
+    ):
+        raise ValueError(
+            "UT/eval3d auto memory is uncalibrated: set a positive budget_max or explicit cap_max"
+        )
     if requested is None:
         return None
     pixels = 0 if train_size is None else train_size[0] * train_size[1]
-    ceiling = memory_ceiling(pixels * max(1, images_per_step), gpu_memory_gb) if pixels else None
+    ceiling = (
+        memory_ceiling(pixels * max(1, images_per_step), gpu_memory_gb)
+        if pixels and not gut
+        else None
+    )
+    fallback_cap = min(FALLBACK_CAP, budget_max) if gut and budget_max is not None else FALLBACK_CAP
     common: dict[str, Any] = {
         "floor": floor,
         "memory_ceiling": ceiling,
@@ -483,9 +507,10 @@ def plan(
         "train_size": train_size,
         "pixel_scale": pixel_scale,
         "gpu_memory_gb": gpu_memory_gb,
+        "memory_model": "ut-eval3d-uncalibrated" if gut else "classic-measured",
     }
     if isinstance(requested, int):
-        return Budget(mode="explicit", cap=requested, **common)
+        return Budget(mode="explicit", cap=requested, reason=note, **common)
     if not (density > 0 and density_scale > 0):
         raise ValueError(
             f"gaussian_density and density_scale must be positive, not {density!r} and "
@@ -494,7 +519,7 @@ def plan(
     if train_size is None or pixel_scale is None or not pixel_scale > 0:
         return Budget(
             mode="fallback",
-            cap=FALLBACK_CAP,
+            cap=fallback_cap,
             reason="the training frames' size is unknown, so no footprint can be measured",
             **common,
         )
@@ -503,7 +528,7 @@ def plan(
     except (OSError, ValueError, KeyError, IndexError, struct.error) as error:
         return Budget(
             mode="fallback",
-            cap=FALLBACK_CAP,
+            cap=fallback_cap,
             reason=f"the sparse model could not be read: {error}",
             **common,
         )
@@ -511,7 +536,7 @@ def plan(
     if not measured.any():
         return Budget(
             mode="fallback",
-            cap=FALLBACK_CAP,
+            cap=fallback_cap,
             reason="no sparse point is in front of a camera that sees it",
             **common,
         )
@@ -548,6 +573,7 @@ def plan(
         inside=inside,
         outside=outside,
         outside_weight=weight,
+        reason=note,
         **common,
     )
 
@@ -561,7 +587,9 @@ def _round(value: float | None) -> float | None:
 def describe(budget: Budget) -> str:
     """One log line: what was measured and what it came to."""
     if budget.mode == "explicit":
-        return f"cap_max {budget.cap} given; no budget computed"
+        return f"cap_max {budget.cap} given; no budget computed" + (
+            f"; {budget.reason}" if budget.reason else ""
+        )
     if budget.mode == "fallback":
         return f"cap_max auto -> {budget.cap} (fallback: {budget.reason})"
     surface_ = budget.inside
@@ -584,4 +612,15 @@ def describe(budget: Budget) -> str:
         )
     if budget.clamp is not None:
         parts.append(f"clamped to the {budget.clamp}")
+    if budget.reason:
+        parts.append(budget.reason)
     return "; ".join(parts)
+
+
+def far_allocation(cap: int | None, share: float, requested: int) -> tuple[int, int]:
+    if cap is None or cap < 4 or not 0 < share <= 0.15 or requested < 4:
+        raise ValueError("far field needs cap_max>=4 and 0<far_field_share<=0.15")
+    count = min(requested, int(cap * share))
+    if count < 4:
+        raise ValueError("far-field allocation cannot fit four background gaussians")
+    return cap - count, count

@@ -84,3 +84,30 @@ def test_failed_actual_is_charged_and_duplicate_outcome_refused(tmp_path: Path) 
     with pytest.raises(ValueError, match="duplicate outcome"):
         ledger.finish(path, "one", cost=0, failed=True)
     assert len([json.loads(line) for line in path.read_text().splitlines()]) == 2
+
+
+def test_total_cap_spans_batches_failures_and_freezes_but_not_other_tags(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    ledger.reserve(path, [plan("other", tag="other", scene="pumpkin")], 50)
+    ledger.finish(path, "other", cost=10, failed=False)
+    ledger.reserve(path, [plan("freeze", tag="quality", schedule="freeze", tier="cpu4")], 2, 1.1)
+    ledger.finish(path, "freeze", cost=0.1, failed=False)
+    ledger.reserve(path, [plan("one", tag="quality")], 2, 1.1)
+    ledger.finish(path, "one", cost=None, failed=True)
+    before = path.read_bytes()
+    # Cannot remove or increase the recorded cap. Unknown failures retain reservations.
+    for limit in (None, 30):
+        with pytest.raises(ValueError, match=r"total cap.*nothing launched"):
+            ledger.reserve(path, [plan("two", tag="quality")], 2, limit)
+        assert path.read_bytes() == before
+    assert ledger.summary(ledger.read(path))["byTag"]["quality"] > 0.1
+
+
+def test_total_cap_requires_tag_and_still_checks_batch_cap() -> None:
+    with pytest.raises(ValueError, match="requires --tag"):
+        ledger.price_plan([], [plan()], 2, 30)
+    with pytest.raises(ValueError, match="nothing launched"):
+        ledger.price_plan([], [plan(tag="quality")], 0.1, 30)
+    for bad in (float("nan"), float("inf"), -1):
+        with pytest.raises(ValueError, match="finite nonnegative"):
+            ledger.price_plan([], [plan(tag="quality")], 2, bad)

@@ -1,12 +1,15 @@
 """Run gsplat's `simple_trainer.py` unchanged, and end it once held-out quality is flat.
 
+The gsplat 1.6.0 source pin retains this seam; image-build checks validate it.
+GPU behaviour of the upgraded image still requires the driver's smoke.
+
 **Not executed on a GPU in this repository yet**, like everything that needs CUDA here.
 What is tested (`tests/test_convergence.py`) is the mechanism, against a stand-in trainer
 whose loop has v1.5.3's shape; the decision itself is `convergence.py`, shared with the
 stage and unit-tested. The image build runs `--self-check` against the real trainer.
 
 **Why a wrapper and not a patch.** The repository ships no fork of gsplat's examples:
-the image clones `examples/` at the v1.5.3 tag and the pipeline drives it by argv
+the image clones `examples/` at the pinned v1.6.0 source commit and the pipeline drives it by argv
 (`training.gsplat_argv`), with its own torch code beside it where it needs more
 (`holdout_error.py`). This follows suit. It runs the trainer as `python simple_trainer.py`
 would -- `runpy` with `__name__ == "__main__"` and the trainer's directory first on

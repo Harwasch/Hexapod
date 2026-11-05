@@ -10,21 +10,21 @@ which imports this project as a library.
 registration out. Since 2026-09-23 it **converts the file's up axis** rather than assuming
 z -- see [The up axis](#the-up-axis) -- which is what stopped uploads landing on their side.
 
-**Lane 2 is real up to the GPU, and the GPU half is built and checked but has never run.**
+**Lane 2 has historical GPU runs. The quality-stack image trained Beach on GPU; export fixes await the next smoke.**
 The state of each piece, in the three-state vocabulary of `docs/HANDOFF.md`:
 
-| Piece                                         | State        | Evidence                                                                                                                                                                                                                                                                                                     |
-| --------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| frames from an iPhone-shaped HEVC `.mov`      | verified     | portrait (display matrix -90), HEVC, `mdta` location: 100/100 frames upright, location read (`tests/test_normalize.py` and a real-frame check)                                                                                                                                                               |
-| poses (COLMAP 3.9.1, CPU)                     | verified     | rendered orbit 40/40 (CI, on a GitHub runner too); real photographs, 50/50 exhaustive; timing in [Where pose runs](#where-pose-runs). Matching is not deterministic, so a low registration is retried: other mapper seeds, then one fresh matching pass, keeping the best (`mapperAttempts` in `poses.json`) |
-| levelling by camera-up                        | verified     | real reconstruction: dominant plane 0.39 deg from up after levelling; rendered orbit within 5 deg (CI)                                                                                                                                                                                                       |
-| the EXIF similarity, applied (`place`)        | verified     | rendered orbit with synthetic GPS: sparse points 0.011 m from the scene placed, 0.41 m unplaced (CI)                                                                                                                                                                                                         |
-| a video with no location                      | verified     | falls back to the capture's `lat`/`lon`, recorded `manual`; with neither it refuses by name (CI)                                                                                                                                                                                                             |
-| `train` argv and output layout (gsplat 1.5.3) | verified     | parsed by v1.5.3's own `simple_trainer.py` CLI in a CPU replica of the image's venv (CI job `trainer`), then run for real on an L4 (below)                                                                                                                                                                   |
-| the Modal training image                      | verified     | built by Modal on 2026-09-23 (about 8 minutes, once); CUDA 12.4.1, torch 2.4.1, gsplat 1.5.3                                                                                                                                                                                                                 |
-| the GPU path end to end                       | verified     | `modal.yml` smoke, 2026-09-23: 500 steps on an L4, 68 s billed, $0.015, PSNR/SSIM read from gsplat's stats file, `trained.ply` placed and packaged to a tileset                                                                                                                                              |
-| `ModalAdapter` against a live workspace       | verified     | the same smoke: submit, poll to success, log tail, outputs back through R2. Its first two real runs found two bugs, both fixed and tested (below)                                                                                                                                                            |
-| a full-length training run on a real capture  | **unproven** | the smoke trained 500 steps; 30,000 steps on a real video has not run. Its cost is unmeasured -- scale from the smoke's billed seconds                                                                                                                                                                       |
+| Piece                                         | State            | Evidence                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| frames from an iPhone-shaped HEVC `.mov`      | verified         | portrait (display matrix -90), HEVC, `mdta` location: 100/100 frames upright, location read (`tests/test_normalize.py` and a real-frame check)                                                                                                                                                               |
+| poses (COLMAP 3.9.1, CPU)                     | verified         | rendered orbit 40/40 (CI, on a GitHub runner too); real photographs, 50/50 exhaustive; timing in [Where pose runs](#where-pose-runs). Matching is not deterministic, so a low registration is retried: other mapper seeds, then one fresh matching pass, keeping the best (`mapperAttempts` in `poses.json`) |
+| levelling by camera-up                        | verified         | real reconstruction: dominant plane 0.39 deg from up after levelling; rendered orbit within 5 deg (CI)                                                                                                                                                                                                       |
+| the EXIF similarity, applied (`place`)        | verified         | rendered orbit with synthetic GPS: sparse points 0.011 m from the scene placed, 0.41 m unplaced (CI)                                                                                                                                                                                                         |
+| a video with no location                      | verified         | falls back to the capture's `lat`/`lon`, recorded `manual`; with neither it refuses by name (CI)                                                                                                                                                                                                             |
+| `train` argv and output layout (gsplat 1.6.0) | unproven on GPU  | pinned-source seam checks and stand-in tests; real CLI/gradient/export checks run when the driver builds the image                                                                                                                                                                                           |
+| the Modal training image                      | unproven upgrade | CUDA 12.8.1, torch 2.9.1+cu128, gsplat source `512d366b`; previous 1.5.3 image was measured on 2026-09-23                                                                                                                                                                                                    |
+| the GPU path end to end                       | verified         | `modal.yml` smoke, 2026-09-23: 500 steps on an L4, 68 s billed, $0.015, PSNR/SSIM read from gsplat's stats file, `trained.ply` placed and packaged to a tileset                                                                                                                                              |
+| `ModalAdapter` against a live workspace       | verified         | the same smoke: submit, poll to success, log tail, outputs back through R2. Its first two real runs found two bugs, both fixed and tested (below)                                                                                                                                                            |
+| a full-length training run on a real capture  | **unproven**     | the smoke trained 500 steps; 30,000 steps on a real video has not run. Its cost is unmeasured -- scale from the smoke's billed seconds                                                                                                                                                                       |
 
 - `normalize` / `ffmpeg_frames` extracts and selects frames and scrapes the container's
   metadata. It runs here and in CI, on a generated clip.
@@ -794,7 +794,7 @@ to the serial one's, `test_blocks.py`):
 
 ### Batched steps (`batch_size`)
 
-`batch_size: B` (1-8, default 1) trains B images a step. gsplat v1.5.3 scales every
+`batch_size: B` (1-8, default 1) trains B images a step. gsplat v1.6.0 scales every
 learning rate by `sqrt(B)` and Adam's eps by `1/sqrt(B)` but does not shorten the
 schedule, so the stage divides `--steps_scaler` by B: the same images trained on, in B
 times fewer steps. The refine window, SH interval and evaluation steps are scaled by the
@@ -1273,7 +1273,23 @@ and ignored until A8 — wins over all of them.
 and results in its own `/bench` volume. Its CPU freeze function has a list/get-only R2
 wrapper; **it never writes to production storage**. GPU functions receive no storage
 secret and run only the local `train` stage. The editable registry names `spool`
-(private phone capture), `pumpkin`, and `nwm-d1` (public TU Wien capture c94ec4e6).
+(private phone capture), `pumpkin`, `nwm-d1` (public TU Wien capture c94ec4e6),
+`beach`, and `truck`.
+
+Beach is Harrison's `phone-capture-2026-11-03-23-04-utc`, job prefix `4dd02171`.
+For worker jobs, the job UUID **is** the run UUID: artifacts use `runs/<job UUID>/`
+(`apps/api/app/worker/outputs.py:run_prefix`), not the capture slug. Freeze resolves
+that prefix against R2 and refuses zero or multiple matches; the registry alone does
+not verify that the remote run exists or has completed poses.
+
+Truck uses a separate CPU freeze function **without R2 credentials or operations**.
+It downloads the public `tandt_db.zip` to the bench volume and reuses
+`experiments/benchmark.py`'s SHA256 pin
+`816e62f22a161abbfe841d2a6b10cdf036e297c9fa289b3bfeee9c6ec526d7e1`.
+Only `tandt/truck/images/` and the three `sparse/0` COLMAP binaries enter the frozen
+scene; the archive's URL and checksum are its source and generation. Cached archives
+are also verified. Its manifest, pool/test split and evaluation are the same bench
+protocol as the phone scenes, **not** the published paper's split or LPIPS network.
 
 Freeze records every downloaded file's bytes/hash, source generation and bench commit.
 An 8-hex run prefix must resolve uniquely; generation discovery requires exactly one
@@ -1308,7 +1324,7 @@ pool poses inside training; scoring always uses the frozen test cameras.
 
 `packed` remains on by default. Its experimental companions `sparse_grad` and
 `visible_adam` are opt-in train params for bench trials, both **off by default** (no argv
-change when off). `sparse_grad` requires `packed: true`, as gsplat v1.5.3 asserts; the
+change when off). `sparse_grad` requires `packed: true`, as gsplat v1.6.0 requires; the
 stage refuses an incompatible pair before invoking the trainer. These change optimiser
 updates, so only measurements can justify adopting them. They pass through the same
 argv in single-scene, convergence and block training. Fused SSIM is already used by
@@ -1371,6 +1387,487 @@ artifacts also land locally under
 `~/.local/share/hexapod-bench/runs/<run_id>/`; `report --runs ID ...` selects runs.
 The report includes a per-degree table and per-degree mean/min/max/spread over completed
 seeds. Summaries separate scenes, snapshots, schedules, tiers, overrides and bench commits.
+
+`--topdown` (off by default) adds one GPU render after test evaluation, using the shipped
+PLY. It looks straight down along the frozen COLMAP model's camera-up estimate, with
+the camera-plane normal as fallback; degeneracy leaves a warning. The view encloses
+the nearest 90% of Gaussian centres to their coordinate median, at a 5-degree FOV
+and a 5% framing margin. This is an overview, not a crop or a measured gravity claim.
+The camera and its up estimate are recorded in `topdown.camera` and
+`renders/topdown-camera.json`. The 512px PNG is saved as `renders/topdown.png` on the
+volume and returned to the local run's `topdown.png`. Rendering gets at most 60 seconds
+within the existing timeout; errors become `topdown.warning` without changing run
+status or metrics. Rehearsal records it as skipped.
+
+`results` prints the bake-off table: scene, variant, untouched-test PSNR/SSIM/LPIPS,
+splats, GPU minutes (billed container wall time including evaluation), dollars, and
+top-down links. It also prints separate trained-PLY and faded-PLY scores. Select the
+two full runs with `--runs A B`; screen and synthetic rows never justify a default change.
+The older `--flip-rule` helper implements the previous three-capture rule and is not
+the decision rule for this Beach A/B experiment.
+
+### Quality-stack bake-off
+
+**Common-yardstick rescore (evaluation only; no new training).** The historical scores below
+are retained as observations, not a resolution/pose/colour-controlled ranking. `rescore`
+uses the current image's **classic 3DGS renderer**, shipped SH degree, black background,
+no UT/eval3d, antialiasing or ISP, for every PLY—including A's plain gsplat 1.5.3 export.
+It freezes the splat and reads only the frozen test frames/cameras. No weights, recipes,
+training results or frozen inputs are changed.
+
+One L4 call handles A `924f540e243a4a09bc8fa32280f5e436`, upgraded-plain
+`28deb3c9bfba4b90afe272bb614dddf5`, and both `trained.ply` and `faded.ply` from
+`4fe4848318d04eaba471f0e7ca8bb46d` (`all-on-no-3dgut`, trained at 450×800): four rows.
+The worker checks the actual volume files and their run's frozen manifest/split before
+scoring; missing PLYs are reported, never reconstructed or replaced with old metrics.
+The driver checked that the four earlier ablations (including `05c4b877`) were run
+without `--keep-splat` and have no PLY on the volume; they cannot be re-scored.
+
+Every row gets full and half scores derived from the **actual undistorted Dataset ROI**,
+as in bench evaluation, rather than assuming the frozen photo dimensions survive
+undistortion. Remove an odd right column and/or bottom row to make the full scoring
+crop even; K is unchanged by this crop. Beach's frozen **width 900, height 1600** becomes
+an undistorted **width 899, height 1599**, hence full **width 898, height 1598** and half
+**width 449, height 799**. JSON records named axes, the ROI and crop; table sizes are
+**height×width**. The 384×384 overhead cameras remain independent of photo dimensions.
+`trainedAt` uses `train_memory.json` dimensions when available, otherwise an explicitly
+labelled estimate from the recorded resize parameters and current ROI (historical
+undistortion may differ). It never applies the evaluator's even crop to training sizes.
+Half GT is an exact 2×2 area average of the full scoring crop and K is divided by two;
+there is no upscaled prediction. Invalid undistortion pixels are black in both images;
+fits use only valid pixels. PSNR/SSIM/LPIPS (AlexNet) are averaged per test frame.
+The four columns at each resolution mean:
+
+- `raw`: frozen camera and exported colours.
+- `aligned`: test-fitted SE(3) camera, frozen splat. Adam takes 200 half-resolution
+  steps, then 60 full-resolution steps initialized from the best half pose. Each
+  resolution retains its own best pose, with raw always a candidate. The objective
+  is valid-pixel L1 after a detached per-channel gain/offset fit (gain 0.5–2, offset
+  −0.25–0.25), so a simple exposure difference does not pull the camera. Corrections
+  are bounded to 3° rotation and 2% of the robust scene extent in translation. JSON
+  records each corrected camera, translation %, rotation °, and loss before/after.
+  Selection cannot worsen this objective; individual PSNR/SSIM/LPIPS can still worsen.
+- `cc`: frozen camera, per-channel affine correction using pinned gsplat's affine
+  `cc_psnr` convention: fit render = a×GT+b, then invert and clamp. This also applies
+  before SSIM and LPIPS.
+- `aligned+cc`: best aligned camera followed by that same affine colour correction.
+
+**Aligned and CC scores fit the test frame itself: these flatter every run alike.**
+They diagnose pose/photometric mismatch; they are not untouched-test predictions.
+All four PLYs use the same optimizer steps and bounds. A deadline fails the batch
+instead of quietly shortening later rows. Partial diagnostics and the full evaluator
+log stay on the volume; partial rows are not reported as a completed comparison.
+The crop and reduced schedule define `rescore-v2`; reports refuse to mix protocols.
+The real-image CPU self-check exercises Dataset's float/uint8 paths and the odd ROI.
+A tiny CUDA camera-gradient probe runs before loading any kept PLY. Classic mode
+supports view-matrix gradients in the pinned source. Rendering keeps `packed=False`:
+the single-camera unpacked SH path is fused; packing instead gathers visible SH
+coefficients and adds index buffers. Neither mode bounds tile intersections. Splats
+have no optimizer state or gradients, and graphs are released each step. Per-frame
+time and allocated-memory observations will expose the actual cost on the next run.
+
+Overhead views look down at 90°, 75° and 60°, at 384×384. Their cameras, up estimate,
+robust extent and footprint are derived once from frozen SfM points/camera poses,
+independently of all PLYs, and saved in `cameras.json`. The extent is the diameter about
+the coordinate median enclosing the nearest 90% of SfM points. The footprint is the
+convex hull of those points projected onto the plane through that median perpendicular
+to up, rasterized by pixel-centre inclusion. This envelope can span real gaps in the
+scene; hole fraction is missing opacity inside this support envelope, not surface truth.
+Each view scores alpha < 0.5 inside that mask, **excluding marked `far_field` rows**.
+Foreground RGB/alpha, inclusive RGB, footprint masks and labelled side-by-side PNGs are
+saved. Photo scores include the sphere because it is in the kept PLY; placement/tiles
+still strip marked far-field rows. Needle statistics also exclude those rows and report
+how many were excluded. Axis ratios measure scales, not variances; flat surface splats
+can legitimately exceed 10.
+
+Results land on the volume under `runs/rescore-<batch-id>/` and locally under
+`~/.local/share/hexapod-bench/runs/rescore-<batch-id>/`. Each source run also receives
+`rescore.json` with its own row(s), a link to the batch path, and `rescore-renders/`
+PNGs. Photo PNGs preview the first frozen test frame at at most 640px; photo **scores**
+use the full named resolution. `rescore-table` prints one Markdown table per resolution
+and writes `~/.local/share/hexapod-bench/rescore-table.json`, retaining per-frame detail.
+It flags differing training/scoring sizes and refuses mixed frozen scenes or protocols.
+PNG transport is capped at 96 MB of base64 at both the worker and receiver; oversize
+results fail with their images retained on the volume. Previews and overhead panels
+fit this limit even at the four-row maximum; full-resolution photo PNGs are not returned.
+
+| Rescore JSON name                        | Definition                                                                                                       |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `rows[].resolutions.{full,half}.metrics` | `raw`, `aligned`, `cc`, `aligned+cc`, each with PSNR (dB), SSIM and LPIPS                                        |
+| `rows[].resolutions.*.perFrame[].pose`   | Corrected view matrix, `translationPct`, `rotationDeg`, `lossBefore`, `lossAfter`, objective and step count      |
+| `rows[].resolutions.*.poseMoveMedian`    | Median translation % of extent and rotation degrees across test cameras                                          |
+| `rows[].topdown.holeMean`                | Mean foreground-only alpha < 0.5 fraction over three fixed cameras                                               |
+| `rows[].needle.elongation`               | Foreground scale-axis ratio > 10: count, share, opacity weight and opacity-weighted share                        |
+| `rows[].needle.oversized.{1,2,5}`        | Foreground largest scale > 1%, 2%, 5% of robust scene extent; same counts/shares                                 |
+| `rows[].needle.farFieldCount`            | Number of marked rows excluded from hole and needle scores; plain PLYs have zero                                 |
+| `scoringCamera`                          | Actual `undistortedAt`, even full `scoredAt`, and right/bottom `crop` in pixels; `frozenAt` is separate metadata |
+| `rows[].timings[]`                       | Per-frame wall `seconds`, current `allocatedGb`, cumulative CUDA `peakAllocatedGb` (decimal GB)                  |
+
+Use the same ledger with the new `rescore` tag. The forecast is $1.50 and the timeout 120 minutes, which reserves about $2: 4 PLYs x 38 frames x 260 alignment steps is 39,520 updates. The timeout is a bound, not a measurement.
+There is no automatic training or retry. From `tools/pipeline`, after committing these edits:
+
+```bash
+export TMPDIR="$PWD/.tmp"
+mkdir -p "$TMPDIR"
+bench() { uv run --with modal==1.6.2 python -m experiments.bench "$@"; }
+bench rescore --scene beach --runs \
+  924f540e243a4a09bc8fa32280f5e436 \
+  28deb3c9bfba4b90afe272bb614dddf5 \
+  4fe4848318d04eaba471f0e7ca8bb46d \
+  --tag rescore --total-cap 5 --cap 3 \
+  --ledger "$HOME/.local/share/hexapod-bench/quality-stack.jsonl"
+bench rescore-table --runs 924f540e 28deb3c9 4fe48483
+```
+
+Omitting `--ply` selects each available trained/faded export, giving the four intended
+rows in this single call. `--ply trained` or `--ply faded` explicitly restricts it and
+reports missing requested exports. A call admits at most four PLY rows. `--rehearse`
+uses kept stand-in PLYs and a synthetic frozen scene, exercises geometry/transport/
+reporting, and leaves photo/hole metrics null rather than inventing GPU measurements.
+
+The anisotropy loss now uses `mean(relu(log(max_scale/min_scale) - log(ratio)))`;
+its scale gradient is bounded rather than exponential. With anisotropy enabled only,
+foreground log scales are projected after each MCMC/Adam update and before the first
+render to at most 5% of the original sparse-scene robust diameter
+(`aniso_cap.max_scale_share`, configurable). Projection preserves the Parameter, count
+and MCMC state; clipped Adam moments are zeroed to stop momentum pushing the boundary.
+The frozen sphere is separate and unchanged. This limits individual world-space axes,
+not tile intersections or total GPU memory. It can suppress legitimately large smooth
+surfaces. **Its training effect is unmeasured: all PLYs being re-scored were trained
+before this fix, with the OLD exponential anisotropy loss where enabled.** Anisotropy
+remains off by default, and no training defaults flip.
+
+**Rescored on a fair yardstick** (`bench rescore`, run `rescore-00a2b264`, no training). Same saved PLYs, classic renderer, 38 test frames. Cells are PSNR / SSIM / LPIPS. Aligned and colour-corrected scores fit each test frame, so they flatter the result. These PLYs were trained with the old anisotropy loss; the fixed loss is unit-tested and has not been trained.
+
+| run, half-size scoring (449x799) | trained at | raw               | aligned + colour  | holes | needles |
+| -------------------------------- | ---------- | ----------------- | ----------------- | ----- | ------- |
+| A: `baseline-main`               | 899x1599   | 25.07/0.786/0.245 | 25.12/0.786/0.246 | 19.2% | 74.0%   |
+| `upgraded-plain`                 | 899x1599   | 25.23/0.787/0.241 | 25.29/0.787/0.242 | 17.3% | 76.2%   |
+| `all-on-no-3dgut`                | 450x800    | 19.11/0.461/0.287 | 26.24/0.805/0.238 | 12.5% | 5.5%    |
+| same, with the fade gate         | 450x800    | 18.07/0.452/0.319 | 23.35/0.766/0.276 | 35.1% | 5.5%    |
+
+At full-size scoring (898x1598), aligned + colour gives A 24.97/0.751/0.300, `upgraded-plain` 25.13/0.754/0.294, `all-on-no-3dgut` 24.75/0.731/0.330 and with fade 22.15/0.696/0.366. Most of all-on's raw 6 dB loss comes from test cameras not sharing its moved poses (about 4 dB at half size, from a median move of 0.045% of the scene and 0.16 degrees) and a colour shift (about 2.8 dB). The colour shift is in the splat itself: on the one saved frame its mean brightness is 152, against 142 in the photo and 147 for A. The remove-one runs kept no PLYs, so they stay on the old yardstick, and the table below is the old yardstick too.
+
+**Measured on Beach, and not adopted** (L4, seed 42, 38 untouched test frames, same frozen frames and
+poses; headline scores the trained PLY with no quality gate). A is gsplat 1.5.3 from `c7fb90c8`.
+
+| run                                           | test PSNR             | SSIM  | LPIPS | splats | train min | peak GB | $    | verdict                |
+| --------------------------------------------- | --------------------- | ----- | ----- | ------ | --------- | ------- | ---- | ---------------------- |
+| A: `baseline-main`                            | 25.17                 | 0.753 | 0.301 | 3.46M  | 98        | 7.4     | 1.57 | what main ships        |
+| `upgraded-plain` (gsplat 512d366b only)       | 25.34                 | 0.755 | 0.295 | 3.46M  | 75        | 7.4     | 1.23 | adopted with the image |
+| `all-on-no-3dgut`, trained at 450x800         | 18.97                 | 0.492 | 0.383 | 3.46M  | 109       | 8.6     | 1.78 | stays off              |
+| same, with the fade gate                      | 17.88                 | 0.486 | 0.412 | 3.46M  | -         | -       | -    | stays off              |
+| `all-on-no-3dgut-native`, trained at 900x1600 | OOM at about step 17k |       |       |        | 35        | 20.3    | 0.57 | stays off              |
+| B: `all-on` (with 3DGUT)                      | crashed at 2 h        |       |       |        | 126       | 21.5    | 2.04 | stays off              |
+
+Which feature costs what, half schedule at 450x800, one removed at a time from `all-on-no-3dgut`
+(no-gate test PSNR / SSIM; not a controlled split, since the 18.97 reference is full schedule):
+without `pose_opt` 22.27 / 0.713, without PPISP 21.29 / 0.537, without priors and the anisotropy cap
+20.76 / 0.566, without the sphere 20.07 / 0.530. No single removal reaches A: their costs add up.
+Dense init was not removed in any run, so it has no measurement of its own.
+
+Three causes are measured:
+
+- **3DGUT does not ship.** A beach screen's export scored 5.45 dB under the trainer's eval with UT and
+  eval3d on (`d4a0e304`) and 0.00 dB with both off (`9ae10e24`). The bench test and our viewers use
+  classic rendering. UT without eval3d is refused, because its projection has no geometry gradients.
+- **PPISP's camera response does not ship.** Export was 9.42 dB under the trainer's eval (`fb7fa4f8`).
+  `ppisp_display_referred` freezes the response and vignette, and learns only per-frame exposure and
+  colour.
+- **Native-resolution OOM is runaway geometry, not splat count.** Splats reached a screen radius of
+  1,027,746 px and tile intersections 226M (about 4M before), on the same budget A fits in 7.4 GB.
+
+Limits of this measurement. `all-on` was never scored whole: it crashed before its log was captured,
+at 21.5 GB, so out-of-memory is likely rather than shown. Native-resolution training never finished, so
+the half-resolution runs carry an unmeasured handicap against A. One seed: `upgraded-plain`'s +0.17 dB is
+inside Spool's 0.22 dB seed spread, and its time saving is the clearer gain.
+
+A render of frame_0052 from the half-resolution run shows rock texture and pebbles A lost, yet it scores
+lower on every test frame (2.4 to 10 dB). That suggests pixel alignment or colour rather than lost detail,
+and pose optimisation has the largest measured effect. A later trial should start from `upgraded-plain` and
+add one feature at a time.
+
+`experiments/variants/quality-stack.yaml` now contains only `baseline-main` and `all-on`:
+two Beach runs with the same frozen frames, poses and test split, seed 42, full schedule,
+L4. A (`baseline-main`) runs from Phase 0 commit `c7fb90c8`, gsplat 1.5.3, with
+`--keep-splat`; paid runs of that label are refused on the new image. Reuse the existing
+Beach freeze. Both labels remain available in synthetic rehearsal.
+
+B enables 3DGUT (`with_ut` + `with_eval3d`), PPISP, pose optimization, dense init,
+depth/normal priors, anisotropy loss, the sky sphere and far-field cap, and the fade gate.
+**One requested pair is unsupported:** pinned gsplat explicitly rejects antialiased
+rasterization with UT/eval3d. B therefore keeps 3DGUT and explicitly sets
+`antialiased: false`; the CLI refuses an override enabling both before importing Modal.
+PPISP requires `batch_size: 1`. B sets `ppisp_use_controller: false`: upstream's
+controller distillation otherwise freezes Gaussians at step 25,000, spending the last
+5,000 full-schedule steps on a controller the shipped PLY renderer never uses.
+UT/eval3d also requires `packed: false`. Its overlap-dependent backward buffers have
+no calibrated memory model here, so auto budgets require an explicit `budget_max`;
+B now uses `budget_max: 3456214`, matching A's full budget. Smoke `fb7fa4f8` reached
+1.65M Gaussians at 450×800 with a whole-run peak reported as 8.3 GB (raw device sample:
+8,305 MiB); the trainer's allocated peak was 2.72 GB. The whole-run peak includes model
+preprocessing and cannot calibrate a per-Gaussian training-memory rate. A's full frames
+are 900×1600, four times as many pixels. A full-resolution screen must check the 24 GB
+fit before a full schedule. No production defaults change yet.
+
+That smoke scored trainer val PSNR 23.0982 versus plain-export holdout 13.6770: a
+9.4212 dB gap. Upstream PPISP applies learned camera CRF/vignetting during val, but the
+PLY renderer has neither. B now sets `ppisp_display_referred: true`, freezing CRF at
+identity and vignetting at zero; learned per-frame exposure/colour and their upstream
+mean regularizers remain. Novel views then get identity photometry. This keeps the
+trained SH colours in a display-reference space without approximating a nonlinear
+image transform as per-Gaussian SH coefficients (which would not commute with alpha
+compositing). Controller mode is refused with this setting. The gap's exact attribution
+still needs measurement: UT/eval3d versus classic rendering remains a separate difference.
+
+`experiments/variants/quality-stack-diagnostic.yaml` contains `all-on-no-ppisp`
+(B without PPISP), `upgraded-plain` (recipe unchanged on the new image), and
+`all-on-no-3dgut`. These diagnostics do not extend the A/B plan. Completed Beach full
+runs scored 25.17/0.7529/0.3014 for A (`924f540e`) and 25.34/0.7546/0.2953 for
+upgraded-plain (`28deb3c9`), both 3.46M splats and 7.4 GB peak device memory. The latter's
+`elongationShare: 0.7624` means 76.24% have scale-axis ratio >10, not variance ratio >10;
+flat surface splats can meet this criterion. A's unmeasured fraction is not inferred.
+
+No-3DGUT full run `c500bb04` exited at about 2660 training seconds after device memory
+swung to 22,448 MiB. Its missing stderr prevents attributing the exit to OOM. The loss
+hooks keep no GPU history: metric terms are detached Python numbers, the eight-entry
+prior cache holds CPU mmaps, and the affine fit runs without autograd. Depth/normal
+and PPISP image work is bounded by pixel count and starts before this late rise;
+pose optimization also has no 20k activation milestone. Foreground overlap and
+densification can increase tile-intersection arrays substantially. Packed projection
+does not bound those arrays, and unpacking would not remove them. The 256 frozen sky
+splats contribute at most 1,459,200 intersections at 900×1600 with 16-pixel tiles, so
+they alone do not explain a 15 GB rise. Surface priors/anisotropy can change foreground
+coverage, but that attribution still needs measured intersections.
+
+The extension now drops the previous step's `info` before the next forward: upstream
+otherwise retains its intersection arrays until the new render returns. This fixes a
+real overlap of allocations, not an accumulating graph leak. The no-3DGUT diagnostic
+also explicitly uses `step_max_side: 800` and `priors.max_side: 400`: 450×800 RGB+ED
+steps and 225×400 prior comparisons, with the full schedule and 3,456,214 budget.
+Intrinsics and masks follow each resize. Full-resolution trainer eval, holdout and test
+stay at 900×1600; the frozen dataset and model-cache keys do not change. This costs fine
+RGB detail and fine normal/depth supervision. It bounds image workspace and reduces
+intersection coverage; it is **not** a proven whole-run 24 GB limit at the full count.
+Both controls default to zero/off; sparse `depth_loss` is refused with either resize.
+
+UT-only training is now refused before preprocessing. In the pinned `Rendering.cpp`,
+UT projection executes under `AutoGradMode(false)` and lacks a projection backward;
+eval3d supplies gradients through its world-space response. UT plus classic rasterization
+therefore cannot honestly train the full geometry in this pin. `ff6c47ca`'s timing file
+records 16 seconds inside training and one PLY export, so it was not simply an import
+failure; its exact exception is unrecoverable. Adding correct UT projection gradients
+would require upstream kernel work, not a flag adjustment.
+
+Trainer failures now include the last 40 merged stdout/stderr lines in the stage error
+and bench `result.json`. The full stage log (ordinary output plus progress redraws
+thinned to 15 seconds) is saved as `/bench/runs/<id>/trainer.log`, even on nonzero exit.
+`train_memory.json` is also preserved and returned locally on failure. Its samples every
+1000 completed steps contain cumulative allocated/reserved peaks, current allocation,
+image dimensions, splat count, intersection count and maximum projected radius. These
+distinguish changing live allocations from allocator caching on the next run.
+
+A has **no quality gate in the bench**. B's headline `test` scores **faded.ply**, after
+support-based opacity fading; `testTrained` scores **trained.ply** before the gate and
+`testFaded` repeats the faded scores. Both use exactly the same untouched test cameras,
+resolution, black background, SH degree and scoring renderer. With `--keep-splat`, both
+B exports remain on the volume. `headlinePly`, `qualityGate` and `testRenderer` identify
+what was scored; the two reports are also saved as `test.json` and `test-trained.json`.
+The old A result's `test` is its trained-PLY score. Training exports already include the
+train stage's crop/SH/far-field processing; "trained" here means before the quality gate,
+not the raw upstream checkpoint. Neither score applies PPISP at inference or optimized
+camera poses: these measure the plain PLY that ships. Compare A against B's trained
+score to assess training, and B's trained against faded score to isolate the gate.
+Holdout now renders the exact final `trained.ply` after crop/far-field capping. The first
+smoke's `cropped: true` meant error rows were selected after rendering; all sphere rows
+were present in that render. Both plain-PLY evaluations retain the sphere, as do the
+matched renders. The support gate preserves its marker; `place` strips marked rows
+before bounds/tiles, so these are PLY scores, not a separate measurement of packaged
+foreground-only tiles. A still uses the same classic scoring renderer without a gate.
+`exportMismatchDb` records trainer-val minus exported-PLY holdout PSNR; above 3 dB it
+emits `exportWarning` in metrics, logs and bench reports. Missing scores produce null,
+not zero. The warning does not compare internal validation against untouched test frames.
+
+`matched-renders --scene beach --runs A B` loads both kept headline PLYs on **one L4**
+with the new image, the same plain-3DGS loader, classic renderer, black background and
+shipped SH degree. It refuses different frozen manifests/splits or SH degrees and
+missing exports. Full run IDs or unambiguous 8+ hex prefixes are accepted. It produces:
+
+- **Ground:** the lower median altitude test camera, projected along the COLMAP up
+  estimate (camera-plane normal fallback), with filename ties broken lexically.
+  `--frame EXACT_FILENAME` overrides this, but only with another frozen test frame.
+  The dataset supplies the frozen undistorted camera and GT, never optimized poses.
+- **Top-down:** one central-90% camera derived from A's Gaussian centres, reused for B.
+- **Close-up:** the same ground pose, central 25% of image area (half width and height),
+  narrower FOV, rendered afresh at native crop resolution. No prediction or GT upscale.
+  GT is the corresponding exact pixel crop.
+
+Individual `A-*.png`, `B-*.png`, `GT-ground.png`, `GT-closeup.png`, and labelled
+`comparison-{ground,topdown,closeup}.png` panels return to
+`~/.local/share/hexapod-bench/runs/matched-<A8>-<B8>/`, alongside `cameras.json` and
+`result.json`. The volume keeps the same artifacts under the comparison's own run ID.
+Rehearsal exercises cameras, cropping, panels and transport with explicitly labelled
+synthetic images; it makes no GPU-quality claim. The call has a 600-second timeout,
+uses the same reservation/total-cap ledger, and refuses preemption replay.
+
+The driver decides whether B wins using the held-out metrics and matched views before
+turning defaults on. This bundled A/B cannot identify which individual training feature
+caused a gain or loss. The trained-versus-faded measurements can isolate gate impact;
+other attribution requires a later ablation rather than a causal claim from these two runs.
+
+Use one ledger and one tag for the entire bake-off, including freeze, smoke, failures
+and full runs. `--total-cap 30 --tag quality-stack` enforces cumulative accounted spend
+plus this batch's worst-case reservation under the same file lock as reservation.
+With a total cap, `--cap` bounds the individual batch; without one it keeps its original
+ledger-wide cumulative meaning. The lowest recorded total cap for a tag persists even
+if later commands omit it or ask for a larger cap. Different ledger files cannot share
+a cap. Unresolved calls retain their reservations. As with the existing cap, builds and
+provider invoice differences need external reconciliation; leave room under $30 for
+those costs and reduce the tagged cap if needed.
+
+`HEXAPOD_BENCH_FULL_TIMEOUT` overrides the full-run timeout (default 3,300 seconds)
+for both the worker and its ledger reservation. Beach did not finish within 55 minutes
+on the old image; B adds inference and losses, so use an explicit 10,800-second ceiling
+for its preflight and full run. At current L4 rates that reserves about $2.94 including
+startup/restart allowances, requiring a $3 batch cap. This is a ceiling, not a runtime
+estimate; adjust it from the smoke's timing and memory measurements before launch.
+
+From `tools/pipeline`, with the driver's Modal environment:
+
+```bash
+bench() { uv run --with modal==1.6.2 python -m experiments.bench "$@"; }
+quality_bench() {
+  bench "$@" --tag quality-stack --total-cap 30 --cap 3 \
+    --ledger "$HOME/.local/share/hexapod-bench/quality-stack.jsonl"
+}
+# New image: Beach B smoke, then full after the driver checks the smoke.
+quality_bench run --scene beach --variants experiments/variants/quality-stack.yaml \
+  --variant all-on --schedule screen --tier l4 --seeds 42 --keep-splat
+HEXAPOD_BENCH_FULL_TIMEOUT=10800 quality_bench run --scene beach \
+  --variants experiments/variants/quality-stack.yaml --variant all-on --schedule full --tier l4 --seeds 42 --keep-splat
+# A and B are the FULL run IDs, not the smoke IDs; A is already running on c7fb90c8.
+quality_bench matched-renders --scene beach --runs "$A" "$B"
+bench results --runs "$A" "$B"
+bench ledger --ledger "$HOME/.local/share/hexapod-bench/quality-stack.jsonl"
+```
+
+Add `--dry-run` to any freeze/run/matched-renders command for the offline reservation
+plan. Beach counts come from its frozen model. No GPU quality result or matched raster
+has been verified locally.
+
+### Optional train settings and stable metrics
+
+The production recipe documents these as opt-in params; its version stays 15 because
+none of the quality defaults flips. Source and weights are recorded in
+[NOTICE](NOTICE). No new local dependency is required.
+
+- `with_ut`, `with_eval3d`: both off. Eval3d requires UT and MCMC; antialiased rendering
+  is incompatible. They require unpacked rendering; an omitted `packed` resolves to
+  false, and an explicit true is refused. The classic renderer's measured memory
+  ceiling does not apply: set `budget_max` with `cap_max: auto`, or an explicit cap.
+  Budgets report `memoryModel: ut-eval3d-uncalibrated` and no memory ceiling; the count
+  bound must be checked against GPU peak memory. `pose_opt` remains available. `rolling_shutter` is refused: upstream
+  `simple_trainer` has no COLMAP timing input; its AV trainer is a separate path.
+- `post_processing: ppisp`: batch size 1; controller and distillation default true,
+  activation step defaults 25000. That step is **not** scaled by upstream's schedule.
+  Set `ppisp_controller_activation_num_steps` below the actual steps on a short run,
+  or disable `ppisp_use_controller`, as B does to avoid freezing Gaussians for an
+  unshipped controller. `ppisp_display_referred` defaults false and is true in B:
+  freeze camera CRF/vignetting at identity, retain frame exposure/colour. It requires
+  controller off and the source-checked quality extension. `bilateral_grid: true` remains an alias for
+  `post_processing: bilateral_grid`, whose upstream argv changed. Color-corrected
+  evaluation is now a separate upstream option, so absent metrics remain absent.
+- `init: sfm+dense`: Apache MapAnything uses only staged train frames, four-view chunks
+  by default. B trials `dense_chunk: 16`, with one-view overlap, known intrinsics/poses,
+  confidence masks, robust Sim3 anchors and voxel deduplication. The pinned model's
+  memory-efficient mode minibatches its dense prediction head (one view at a time),
+  but multi-view aggregation still grows with view count. CUDA OOM retries smaller
+  overlapping chunks down to four; retry ranges and actual accepted chunk sizes are
+  recorded. Sixteen is a measured-next experiment, not a claimed safe 24 GB fit.
+  Reset allocator peak counters before dense model loading; record allocated and
+  reserved peaks separately from training and MoGe, even on failure. Accepted chunks need at least eight SfM correspondences, 60%
+  consensus within 5% of robust scene radius, and a finite positive fitted scale.
+  MapAnything's nonmetric inputs predict their own scale; each chunk is aligned to
+  SfM's arbitrary units, with no near-one scale gate. The consensus rules remain
+  uncalibrated. The first 4-view smoke skipped 8/76 chunks and accepted scales from
+  0.0626 to 0.4685; free chunk scales are expected, and the fit puts each back in SfM
+  units. Sixteen views offer more shared geometry, but require the next measured run.
+  A failed geometric fit is skipped and recorded; successful chunks survive.
+  Sparse points win duplicates; additions fit within cap/4 including sparse points.
+  Production can warn and fall back to SfM, but bench dense runs **fail on zero added
+  points**, before priors/training. `prepass.json` retains per-chunk fit/skip diagnostics
+  even on failure. No external init path or split override is admitted by the bench.
+- `priors: {depth_weight, normal_weight, gradient_weight, start_step, model}`: weights
+  default zero, start step 1000, sole model `moge-2-vitl-normal`. MoGe runs once per
+  training frame; cache identity includes frame SHA256, pinned model revision, K and
+  image dimensions, undistorted pixel/mask hashes, preprocessing and cache format
+  versions. Format `npy-mmap-v2` stores uncompressed float32 depth/normals and boolean
+  masks as separate `.npy` files, committed by a JSON marker. Training memory-maps
+  these arrays instead of repeatedly decompressing NPZ; old NPZ predictions are
+  recomputed once under new keys. `prior_cache` is an uploaded stage artifact and checkpoint data,
+  reused on retry/from-stage reruns. A caller can supply it as an optional input for a
+  new workdir. Bench caches live on its volume and never enter the frozen manifest.
+  Test and internal validation images are never inferred. Requested prior inference
+  failure fails the run; it cannot masquerade as a regularized measurement. Priors
+  cannot combine with upstream `depth_loss`, which replaces the rendered depth image
+  with sparse samples; this combination is refused before invoking the prepass.
+- Depth uses three robust scale/shift fits per image and normalized absolute residuals.
+  Each fit uses centered weighted reductions over the same pixels, avoiding tall
+  GPU least-squares factorizations and host readback for fit validity. NumPy checks
+  the algebra against least squares; GPU timing remains unmeasured;
+  optional adjacent-pixel residual differences penalize depth gradients. Normal loss
+  compares view-facing normals from expected rendered depth with MoGe's camera-frame
+  normals. This works with MCMC and UT without imposing a planar-splat representation.
+  `aniso_cap: {ratio: 10, weight: 0, max_scale_share: 0.05}` is a mean hinge on the
+  log of longest/shortest scale-axis ratio; enabled runs also project foreground axes
+  to this share of the original sparse robust diameter after MCMC/Adam updates.
+  These are our implementations of the maths, with NumPy reference tests.
+- `far_field: sphere` reserves at most `far_field_share` (default 0.1, maximum 0.15)
+  of `cap_max`, using up to `far_field_count` (256) frozen gaussians. Their constant
+  colour is the median sparse-point RGB; this first arm measures a simple environment
+  fill, not an inferred sky. They are rendered but never optimized or densified. The
+  sphere sits at ten robust radii; "far" is beyond five radii about the original sparse
+  median. Export bounds all geometrically far rows, including learned outliers, by the
+  surviving foreground count. Marked rows survive crop and quality. `place` streams
+  them out before estimating origin, bounds or tiles; trained/gated artifacts retain them.
+- Dense/priors/aniso/far currently require `blocks: 1`, batch size 1, MCMC, SH colours
+  and standard dense Adam. Preview seed, random image patches, appearance embeddings,
+  sparse gradients and visible Adam are refused with those extensions.
+- `quality.bar: fade` preserves rows and fades opacity by support tier: keep unchanged,
+  context times `context_fade` (0.5), unsupported times its square. `keep` continues to
+  count the high-support tier; `gaussians.out` includes every retained row.
+  `strict` remains the default. Background markers are preserved unchanged.
+
+`train_metrics.json` and `live-metrics: {JSON}` share the names below, exported in
+`quality_stack.METRIC_NAMES`. Live loss samples include a zero-based `step`, every 100
+steps; the final stage line includes the complete available val curve. Losses are raw
+unweighted terms, with weights recorded in `qualityStack.settings`. Synthetic rehearsal
+is explicitly labelled and its zero losses are not measurements.
+
+| Name                   | Value / units                                                                                                                                                                                                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `splatCount`           | Integer Gaussian count; final line is the exported PLY count                                                                                                                                                                                                  |
+| `farFieldShare`        | Fraction beyond five original sparse-scene radii; final line after cap                                                                                                                                                                                        |
+| `elongationShare`      | Fraction whose longest/shortest scale axis exceeds 10                                                                                                                                                                                                         |
+| `lossTerms`            | Object: `depth`, `normal`, `gradient`, `anisotropy`; empty when hooks are off                                                                                                                                                                                 |
+| `valPsnrCurve`         | List of available validation records with one-based `step`, `psnr` in dB                                                                                                                                                                                      |
+| `denseInitSeconds`     | Dense preprocessing wall seconds, including a failed attempt                                                                                                                                                                                                  |
+| `denseInitPoints`      | Initial point count after dense attempt                                                                                                                                                                                                                       |
+| `denseInitAddedPoints` | Accepted dense additions (zero on fallback)                                                                                                                                                                                                                   |
+| `densePeakMemoryGb`    | Dense-only peak allocated CUDA memory, decimal GB; null when not measured                                                                                                                                                                                     |
+| `densePeakReservedGb`  | Dense-only peak reserved CUDA allocator memory, decimal GB; null when not measured                                                                                                                                                                            |
+| `exportMismatchDb`     | Trainer val PSNR minus final-PLY holdout PSNR in dB; null if either is unavailable; warning above 3                                                                                                                                                           |
+| `trainMemoryCurve`     | Every 1000 completed steps and final step: one-based `step`, cumulative `peakAllocatedGb`/`peakReservedGb`, current `allocatedGb`/`reservedGb` (decimal GB), `splatCount`, `width`/`height`, `tileIntersections`, `maxRadiusPx`; empty without measured hooks |
+
+The new image completed Beach training in smoke `fb7fa4f8`; its support stage failed
+before test evaluation. The percentile helper used a ufunc output sentinel unsupported
+by image NumPy 2.2.6; it now uses an explicit zero-dimensional array with unchanged
+bitwise arithmetic. A separate streaming-reader fix preserves `far_field` through the
+gate. These fixes and display-reference PPISP await GPU confirmation. Build-time checks
+parse/import the real patched CLI, check photometric initialization order, exercise
+CPU depth/normal gradients and percentile compatibility, and round-trip a plain SH3 PLY. Stand-in rehearsals exercise dataset isolation, dispatch, artifacts,
+background export, fade and reporting; they do not validate CUDA kernels or model
+quality. The Beach A/B decision awaits complete full L4 measurements and matched views.
 
 Step 2 measurement commands, from `tools/pipeline`, after the Spool freeze exists. These
 use separate ledgers outside the checkout so earlier bench spend does not consume their

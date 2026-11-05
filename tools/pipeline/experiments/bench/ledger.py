@@ -22,7 +22,15 @@ from providers import provider
 
 # Full: Spool's production train stage took 2,197 s on an L4 (job ec644db5); 55 min leaves
 # room for evaluation while two full seeds still reserve under the default $2 cap.
-TIMEOUTS = {"screen": 1800, "full": 3300, "freeze": 600}
+# A capture far bigger than Spool outgrows 55 min (Beach did); HEXAPOD_BENCH_FULL_TIMEOUT raises it,
+# and the reservation below follows it, so the cap still holds.
+TIMEOUTS = {
+    "screen": 1800,
+    "full": int(os.environ.get("HEXAPOD_BENCH_FULL_TIMEOUT", "3300")),
+    "freeze": 600,
+    "matched": 600,
+    "rescore": 7200,
+}
 # Startup/teardown allowance in the modelled reservation, not a measured invoice.
 STARTUP_SECONDS = 60
 OVERHEAD_SECONDS = STARTUP_SECONDS + 60
@@ -78,6 +86,14 @@ def read(path: Path) -> list[dict[str, Any]]:
                 for key in ("scene", "schedule", "tier"):
                     if not isinstance(entry[key], str):
                         raise ValueError(f"invalid {key}")
+                if entry.get("tag") is not None and (
+                    not isinstance(entry["tag"], str) or not entry["tag"]
+                ):
+                    raise ValueError("invalid spend tag")
+                if "totalCapUsd" in entry:
+                    money(entry["totalCapUsd"])
+                    if not isinstance(entry.get("tag"), str) or not entry["tag"]:
+                        raise ValueError("total cap needs a tag")
             elif state in {"finished", "failed"}:
                 if run not in planned or run in ended:
                     raise ValueError("orphan or duplicate outcome")
@@ -119,13 +135,35 @@ def estimate(entries: list[dict[str, Any]], scene: str, schedule: str, tier: str
         return max(actuals)
     if schedule == "freeze":
         return 0.05
-    return {"screen": 0.20, "full": 0.90}[schedule] * hourly_rate(tier) / hourly_rate("l4")
+    return (
+        {"screen": 0.20, "full": 0.90, "matched": 0.05, "rescore": 1.50}[schedule]
+        * hourly_rate(tier)
+        / hourly_rate("l4")
+    )
 
 
 def price_plan(
-    entries: list[dict[str, Any]], plans: list[dict[str, Any]], cap: float
+    entries: list[dict[str, Any]],
+    plans: list[dict[str, Any]],
+    cap: float,
+    total_cap: float | None = None,
 ) -> dict[str, Any]:
     money(cap)
+    tags = {p.get("tag") for p in plans}
+    if len(tags) != 1:
+        raise ValueError("batch must have exactly one spend tag")
+    tag = next(iter(tags))
+    limits = [
+        money(e["totalCapUsd"])
+        for e in entries
+        if e["event"] == "planned" and e.get("tag") == tag and "totalCapUsd" in e
+    ]
+    if total_cap is not None:
+        if not isinstance(tag, str) or not tag:
+            raise ValueError("--total-cap requires --tag")
+        limits.append(money(total_cap))
+    # Once recorded, a tag's cap cannot be silently removed or raised by a later CLI.
+    limit = min(limits) if limits else None
     for plan in plans:
         forecast = estimate(entries, plan["scene"], plan["schedule"], plan["tier"])
         timeout = TIMEOUTS[plan["schedule"]]
@@ -139,12 +177,25 @@ def price_plan(
         )
         if plan.get("rehearsal"):
             plan.update(estimateUsd=0.0, worstCaseUsd=0.0, reservedUsd=0.0)
+        if limit is not None:
+            plan["totalCapUsd"] = limit
     spent = sum(accounted(entries).values())
     forecast_total = sum(p["estimateUsd"] for p in plans)
     reserved = sum(p["reservedUsd"] for p in plans)
-    if spent + forecast_total > cap or spent + reserved > cap:
+    charges = accounted(entries)
+    tagged = sum(
+        charges[e["runId"]] for e in entries if e["event"] == "planned" and e.get("tag") == tag
+    )
+    if limit is not None and tagged + reserved > limit:
         raise ValueError(
-            f"cap ${cap:.4f} exceeded: accounted ${spent:.4f} + "
+            f"total cap ${limit:.4f} for {tag!r} exceeded: accounted ${tagged:.4f} + "
+            f"timeout reservations ${reserved:.4f}; nothing launched"
+        )
+    # Preserve the original cumulative --cap unless a separate tag cap is active.
+    batch_spent = spent if limit is None else 0.0
+    if batch_spent + reserved > cap:
+        raise ValueError(
+            f"cap ${cap:.4f} exceeded: accounted ${batch_spent:.4f} + "
             f"estimates ${forecast_total:.4f}, timeout reservations ${reserved:.4f}; "
             "nothing launched"
         )
@@ -153,6 +204,9 @@ def price_plan(
         "estimateUsd": forecast_total,
         "reservedUsd": reserved,
         "capUsd": cap,
+        "tag": tag,
+        "tagAccountedUsd": tagged,
+        "totalCapUsd": limit,
         "plans": plans,
     }
 
@@ -174,10 +228,12 @@ def _append(handle: TextIO, entry: dict[str, Any]) -> None:
     os.fsync(handle.fileno())
 
 
-def reserve(path: Path, plans: list[dict[str, Any]], cap: float) -> None:
+def reserve(
+    path: Path, plans: list[dict[str, Any]], cap: float, total_cap: float | None = None
+) -> None:
     with locked(path) as handle:
         entries = read(path)
-        price_plan(entries, plans, cap)
+        price_plan(entries, plans, cap, total_cap)
         known = {e["runId"] for e in entries}
         if any(p["runId"] in known for p in plans) or len({p["runId"] for p in plans}) != len(
             plans
@@ -212,11 +268,14 @@ def finish(
 def summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
     charges = accounted(entries)
     groups: dict[str, float] = defaultdict(float)
+    tags: dict[str, float] = defaultdict(float)
     for e in entries:
         if e["event"] == "planned":
             groups[f"{e['scene']}/{e['schedule']}"] += charges[e["runId"]]
+            tags[e.get("tag") or "untagged"] += charges[e["runId"]]
     return {
         "bySceneSchedule": dict(groups),
+        "byTag": dict(tags),
         "totalUsd": sum(charges.values()),
         "note": "includes reservations for missing or unpriced outcomes",
     }

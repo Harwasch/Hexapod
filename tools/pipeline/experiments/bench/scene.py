@@ -10,11 +10,16 @@ from pathlib import Path
 from typing import Any
 
 import sfm
+from experiments import benchmark
 
+PUBLIC_SCENES = {"truck": benchmark.SCENES["truck"]}
 SCENES = {
     "spool": "ec644db5-ceaf-4c01-bf89-b261623327c2",
     "pumpkin": "71556411",
     "nwm-d1": "50bc26d9",
+    # Worker artifacts use runs/<job UUID>/; the prefix must resolve uniquely on freeze.
+    "beach": "4dd02171",  # phone-capture-2026-11-03-23-04-utc
+    "truck": PUBLIC_SCENES["truck"].archive_url,
 }
 RULE = "sha256(scene:frame_name), lowest max(1, floor(n/8 + 0.5)); lexical tie-break"
 

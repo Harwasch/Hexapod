@@ -1,38 +1,37 @@
-# The training box's Python 3.10 environment, pinned: gsplat v1.5.3's examples/
-# requirements.txt, resolved against the exact gsplat wheel below with torch 2.4.1 and
-# torchvision 0.19.1 held fixed (an unpinned torchmetrics[image] otherwise drags torch
-# forward to a CUDA 13 build the wheel was not compiled against).
-#
-# Resolved 2026-09-23 in a CPU venv (CPython 3.10.20), where simple_trainer.py at v1.5.3
-# imported with every one of these and parsed the pipeline's argv; see
-# tools/pipeline/training.py. torch and torchvision are installed separately, from
-# PyTorch's cu124 index, by infra/modal/app.py -- they are not in this file on purpose.
-#
-# fused-ssim is not here either: it is a CUDA extension built from source against the
-# installed torch (`--no-build-isolation`), after this file, by app.py.
-#
-# Nor is examples/requirements.txt's fused-bilagrid, deliberately: only
-# `--use_fused_bilagrid` imports it. The pipeline's `bilateral_grid` switch passes
-# `--use_bilateral_grid`, which imports examples/lib_bilagrid.py -- plain torch plus the
-# `tensorly` pinned below -- and check_trainer.py runs that grid on CPU at image build.
-
-# The prebuilt CUDA wheel, cp310 only (docs.gsplat.studio/whl), sha256 checked on
-# download against the file read here.
-gsplat @ https://github.com/nerfstudio-project/gsplat/releases/download/v1.5.3/gsplat-1.5.3%2Bpt24cu124-cp310-cp310-linux_x86_64.whl#sha256=01e1fd63dc69c9945e70158c818c3bb07fedf4aabcf020e6608d264cf27cc5dd
-
-# examples/requirements.txt at v1.5.3, with its git pins kept as the commits it names.
-pycolmap @ git+https://github.com/rmbrualla/pycolmap@cc7ea4b7301720ac29287dbe450952511b32125e
+# Python 3.10 inference/trainer dependencies for gsplat 512d366b (1.6.0).
+# torch/torchvision and CUDA extensions are pinned and built separately in app.py.
+# Model packages use --no-deps: exclude their viewers, benchmarks and training stacks.
+# No nvidia-ncore: simple_trainer's COLMAP path does not import it.
+pycolmap==4.2.0
+piexif==1.1.3
+nvtx==0.2.13
+huggingface-hub==0.36.0
+hf-xet==1.2.0
+filelock==3.20.0
+fsspec==2025.10.0
+hydra-core==1.3.2
+omegaconf==2.3.0
+antlr4-python3-runtime==4.9.3
+natsort==8.4.0
+orjson==3.11.4
+pillow-heif==1.1.1
+plyfile==1.1.3
+python-box==7.3.2
+safetensors==0.6.2
+uniception==0.1.7
+timm==1.0.22
+einops==0.8.1
 nerfview @ git+https://github.com/nerfstudio-project/nerfview@4538024fe0d15fd1a0e4d760f3695fc44ca72787
 viser==1.1.1
 imageio[ffmpeg]==2.37.4
 imageio-ffmpeg==0.6.0
-numpy==1.26.4
+numpy==2.2.6
 scikit-learn==1.7.2
 tqdm==4.70.1
-torchmetrics[image]==1.9.0
+torchmetrics[image]==1.8.2
 # opencv-python-headless rather than the example's opencv-python: the same cv2, without
 # the X11/GL libraries a headless container does not have.
-opencv-python-headless==4.11.0.86
+opencv-python-headless==4.10.0.84
 tyro==1.0.16
 pillow==12.3.0
 tensorboard==2.21.0
@@ -82,3 +81,9 @@ wadler-lindig==0.1.7
 websockets==16.1.1
 werkzeug==3.1.8
 zstandard==0.25.0
+# Pure-Python torch runtime dependencies (CUDA component versions come from torch's wheel).
+jinja2==3.1.6
+markupsafe==3.0.3
+mpmath==1.3.0
+networkx==3.4.2
+sympy==1.14.0

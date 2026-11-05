@@ -116,3 +116,59 @@ def test_freeze_copies_only_allowed_inputs_and_refuses_overwrite(tmp_path: Path)
     with pytest.raises(FileNotFoundError):
         freeze_scene(store, target, "spool", "ec644db5", "broken", refreeze=True)
     assert (target / "spool/manifest.json").read_bytes() == before
+
+
+def test_public_truck_freeze_download_pin_manifest_and_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dataclasses
+    import hashlib
+    import urllib.request
+    import zipfile
+
+    from experiments.bench import freeze
+    from experiments.bench.scene import PUBLIC_SCENES, SCENES
+
+    assert SCENES["beach"] == "4dd02171"
+    source = tmp_path / "source"
+    synthetic_scene(source, "truck", "test")
+    bundle = io.BytesIO()
+    with zipfile.ZipFile(bundle, "w") as archive:
+        for folder, prefix in (("frames", "images"), ("poses", "sparse/0")):
+            for file in (source / folder).glob("*"):
+                archive.writestr(f"tandt/truck/{prefix}/{file.name}", file.read_bytes())
+    payload = bundle.getvalue()
+    spec = dataclasses.replace(
+        PUBLIC_SCENES["truck"], archive_sha256=hashlib.sha256(payload).hexdigest(), images=16
+    )
+    monkeypatch.setitem(PUBLIC_SCENES, "truck", spec)
+    calls = []
+
+    def download(url: str, timeout: int) -> io.BytesIO:
+        assert url == spec.archive_url and timeout == 120
+        calls.append(url)
+        return io.BytesIO(payload)
+
+    monkeypatch.setattr(urllib.request, "urlopen", download)
+    scenes = tmp_path / "volume/scenes"
+    manifest = freeze.freeze_public_scene(scenes, "truck", "commit")
+    assert verify(scenes / "truck")[0] == manifest
+    assert manifest["sourcePrefix"] == spec.archive_url
+    assert manifest["generation"] == f"sha256:{spec.archive_sha256}"
+    assert len(manifest["files"]) == 19  # images + only the 3 COLMAP binaries
+    with pytest.raises(ValueError, match="already frozen"):
+        freeze.freeze_public_scene(scenes, "truck", "commit")
+    freeze.freeze_public_scene(scenes, "truck", "new", refreeze=True)
+    assert len(calls) == 1
+    before = (scenes / "truck/manifest.json").read_bytes()
+    cached = scenes.parent / f"archives/{spec.archive_sha256}.zip"
+    cached.write_bytes(b"corrupt")
+    with pytest.raises(ValueError, match="sha256"):
+        freeze.freeze_public_scene(scenes, "truck", "bad", refreeze=True)
+    assert (scenes / "truck/manifest.json").read_bytes() == before
+    cached.unlink()
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **kw: io.BytesIO(b"changed"))
+    with pytest.raises(ValueError, match="sha256"):
+        freeze.freeze_public_scene(scenes, "truck", "bad", refreeze=True)
+    assert not cached.exists()
+    assert (scenes / "truck/manifest.json").read_bytes() == before

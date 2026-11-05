@@ -540,7 +540,7 @@ worker.
 | ------------ | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Fly `worker` | `normalize` (ffmpeg), `georeference`, `place`, `confidence`, `package` and the rest | light CPU work; the worker already holds the upload                                                                   |
 | Modal `cpu4` | `pose` (COLMAP 3.9.1), `align`, `quality`                                           | more memory and sustained CPU than the 2 GB worker has ([below](#the-worker-image-carries-colmap)); billed per second |
-| Modal L4     | `train` (gsplat 1.5.3 `simple_trainer.py`)                                          | needs CUDA; billed per second only while it runs, so an idle deployment costs nothing for it                          |
+| Modal L4     | `train` (gsplat 1.6.0 `simple_trainer.py`, source pin `512d366b`)                   | needs CUDA; billed per second only while it runs, so an idle deployment costs nothing for it                          |
 
 `fly.toml` sets `WORKER_RUNNER=cloud` and `WORKER_CLOUD_PROVIDERS=modal`. The worker then
 calls `run_stage_<tier>` in the Modal app `twin-pipeline` (`WORKER_MODAL_APP`'s default),
@@ -574,6 +574,16 @@ carries a copy of the pipeline, and the `train` stage's own code runs inside it,
 those changes is a change to what the GPU box runs. Each such push costs a smoke. Once it is on
 `main` it can be dispatched from the Actions tab (smoke on or off, steps, tier).
 
+The quality-stack upgrade uses `nvidia/cuda:12.8.1-devel-ubuntu22.04`, torch
+`2.9.1+cu128`, torchvision `0.24.1+cu128`, and gsplat source at `512d366b`.
+`CUDA_HOME`, `TORCH_CUDA_ARCH_LIST` (including 8.6/8.9) and four build jobs let nvcc
+compile on a builder without a GPU; experimental inference kernels are excluded.
+PPISP, fused-ssim and fused-bilagrid have exact source pins. The COLMAP path does
+not import NCore. MapAnything Apache and MoGe-2 weights are baked by HF revision;
+see `tools/pipeline/NOTICE`. The driver must build and smoke this image before use;
+older image measurements do not validate the upgrade. No production deploy is part
+of the frozen-input bake-off.
+
 **Cost.**
 
 List prices: an L4 is $0.000222/s, $0.80 an hour (read 2026-09-22); `cpu4` is $0.2526 an
@@ -585,7 +595,7 @@ metrics (billed seconds and dollars per remote call), recipe `photo-reconstruct`
   `pose` on `cpu4`: 40.9 s, $0.0029. Held-out PSNR 21.9, SSIM 0.72, LPIPS 0.44; 5,966
   gaussians.
 - **The first deploy** also builds the image on Modal's builders, once: here, the deploy
-  in the same run as that smoke. It covers torch, the gsplat wheel, and fused-ssim
+  in the same run as that historical smoke. The new image builds gsplat from source, plus fused-ssim
   compiled with nvcc. Later deploys reuse every unchanged layer.
 - **Two real iPhone captures**, in production:
 
@@ -1875,9 +1885,9 @@ below is still true of this repository's evidence, whatever it now says about th
 
   What _is_ verified:
   - the App builds locally and in CI;
-  - gsplat v1.5.3's own `simple_trainer.py` CLI accepts the pipeline's argv, in a CPU
-    replica of the image's venv (CI's `trainer` job);
-  - every pinned artifact was resolved, and the gsplat wheel is pinned by sha256;
+  - the historical gsplat 1.5.3 CLI check passed; the new 1.6.0 source pin has build-time
+    CLI, gradient, PLY and wrapper-seam checks that must pass in the driver's image build;
+  - gsplat now pins source commit `512d366b67073d77ca099ede742683c165dfc23b`;
   - the whole smoke flow passes locally with `--rehearse`.
 
   Two things only the first build and run can prove: that the CUDA image compiles

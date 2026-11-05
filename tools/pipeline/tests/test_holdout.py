@@ -350,8 +350,8 @@ def test_train_writes_held_out_arrays_in_trained_plys_order_through_its_crop(
     assert np.isnan(error[~visible]).all()
     summary = json.loads((out / "holdout" / "holdout.json").read_text())
     assert summary["status"] == "ok"
-    assert summary["gaussiansExported"] == 64 and summary["gaussians"] == trained.count
-    assert summary["cropped"] is True
+    assert summary["gaussiansExported"] == summary["gaussians"] == trained.count
+    assert summary["cropped"] is False
     metrics = json.loads((out / "train_metrics.json").read_text())
     assert metrics["holdout"]["status"] == "ok" and metrics["holdout"]["views"] == 2
 

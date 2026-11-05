@@ -456,5 +456,5 @@ def test_the_benchmark_rehearses_end_to_end_with_the_stand_in(tmp_path: Path) ->
     assert result["settings"]["bilateralGrid"] is True
     assert result["valFrames"] == 2  # 9 frames: indices 0 and 8 held out
     log = (run / "stages" / "train" / "log.txt").read_text()
-    assert "--lpips_net vgg" in log and "--use_bilateral_grid" in log
+    assert "--lpips_net vgg" in log and "--post_processing bilateral_grid" in log
     assert "Rehearsal" in (run / "benchmark.md").read_text()
