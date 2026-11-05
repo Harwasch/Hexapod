@@ -123,7 +123,12 @@ def test_diagnostic_differs_only_in_ppisp() -> None:
         },
     }
     assert diagnostic["all-on-no-ppisp"] == expected
-    assert set(diagnostic) == {"all-on-no-ppisp", "upgraded-plain", "all-on-no-3dgut"}
+    assert set(diagnostic) == {
+        "all-on-no-ppisp",
+        "upgraded-plain",
+        "all-on-no-3dgut",
+        "all-on-no-3dgut-native",
+    }
 
 
 def test_ppisp_setup_seam_is_after_module_construction() -> None:
