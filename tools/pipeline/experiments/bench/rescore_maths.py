@@ -201,3 +201,30 @@ def needle_scores(columns: dict[str, Any], extent: float) -> dict[str, Any]:
             for percent in (1, 2, 5)
         },
     }
+
+
+def trained_at(source: dict[str, Any], full: list[int]) -> dict[str, Any]:
+    from prior_maths import resize_geometry
+
+    params = source["result"].get("trainParams", {})
+    h, w = full
+    h, w, _, _ = resize_geometry(h, w, params.get("train_max_side") or 0)
+    factor = int(params.get("data_factor", 1))
+    h, w = h // factor, w // factor
+    h, w, _, _ = resize_geometry(h, w, params.get("step_max_side") or 0)
+    return {
+        "height": h,
+        "width": w,
+        "source": "frozen dimensions + recorded train_max_side/data_factor/step_max_side",
+    }
+
+
+def row_base(source: dict[str, Any], full: list[int]) -> dict[str, Any]:
+    return {
+        "runId": source["runId"],
+        "ply": source["plyKind"],
+        "plyBytes": source["plyBytes"],
+        "variant": source["result"].get("variant", {}).get("name", "unknown"),
+        "trainedAt": trained_at(source, full),
+        "trainingLoss": "historical PLY; not modified or retrained by rescore",
+    }

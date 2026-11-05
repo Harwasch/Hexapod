@@ -20,7 +20,7 @@ from holdout_error import read_ply
 
 from .ledger import hourly_rate
 from .matched import source_run
-from .rescore_maths import MODES, RESOLUTIONS, footprint, needle_scores, shared_cameras
+from .rescore_maths import MODES, RESOLUTIONS, footprint, needle_scores, row_base, shared_cameras
 from .scene import read_json, verify, write_json
 
 
@@ -77,33 +77,6 @@ def inventory(
     if len(degrees) > 1:
         raise ValueError("rescore requires the same shipped SH degree")
     return selected, unavailable
-
-
-def trained_at(source: dict[str, Any], full: list[int]) -> dict[str, Any]:
-    from prior_maths import resize_geometry
-
-    params = source["result"].get("trainParams", {})
-    h, w = full
-    h, w, _, _ = resize_geometry(h, w, params.get("train_max_side") or 0)
-    factor = int(params.get("data_factor", 1))
-    h, w = h // factor, w // factor
-    h, w, _, _ = resize_geometry(h, w, params.get("step_max_side") or 0)
-    return {
-        "height": h,
-        "width": w,
-        "source": "frozen dimensions + recorded train_max_side/data_factor/step_max_side",
-    }
-
-
-def row_base(source: dict[str, Any], full: list[int]) -> dict[str, Any]:
-    return {
-        "runId": source["runId"],
-        "ply": source["plyKind"],
-        "plyBytes": source["plyBytes"],
-        "variant": source["result"].get("variant", {}).get("name", "unknown"),
-        "trainedAt": trained_at(source, full),
-        "trainingLoss": "historical PLY; not modified or retrained by rescore",
-    }
 
 
 def comparisons(output: Path, rows: list[Any], cameras: dict[str, Any]) -> None:

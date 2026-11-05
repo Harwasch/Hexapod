@@ -19,15 +19,20 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from experiments.bench.evaluate import lookup_frames
-from experiments.bench.rescore import row_base
 from experiments.bench.rescore_maths import (
     MODES,
     footprint,
     needle_scores,
     pose_motion,
+    row_base,
 )
-from experiments.bench.scene import write_json
 from holdout_error import read_ply, sh_rest, shipped_sh
+
+
+def write_json(path: Path, value: object) -> None:
+    # scene.py needs Python 3.11, and this script runs on the trainer's 3.10.
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
 
 
 def delta_pose(rotation: Any, translation: Any, extent: float) -> Any:

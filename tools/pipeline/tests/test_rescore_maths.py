@@ -1,5 +1,7 @@
 """A common, explicit evaluation yardstick; no CUDA required."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -86,3 +88,10 @@ def test_far_field_never_affects_needles_or_weighted_denominator() -> None:
     assert result["elongation"]["opacityWeightedShare"] == pytest.approx(0.75 / 1.25)
     assert result["oversized"]["2"]["count"] == 1
     assert result["oversized"]["5"]["count"] == 0
+
+
+def test_rescore_gpu_imports_nothing_that_needs_newer_python_than_the_trainer() -> None:
+    # The trainer's venv is Python 3.10; scene.py imports datetime.UTC (3.11).
+    source = (Path(__file__).resolve().parents[1] / "experiments/bench/rescore_gpu.py").read_text()
+    assert "experiments.bench.scene" not in source
+    assert "experiments.bench.rescore import" not in source
