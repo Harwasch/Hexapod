@@ -10,7 +10,7 @@ import pytest
 
 from app.schemas.live import LiveTrain
 from app.services.live import _train
-from app.services.live_train import derive_events, merge_live
+from app.services.live_train import derive_events, final_metrics, merge_live
 from app.storage import NullStorage
 
 
@@ -241,7 +241,7 @@ def test_quality_metrics_keep_only_numeric_readouts_and_reset() -> None:
             )
         ],
     )
-    assert merged["train"]["quality"] == {
+    assert {k: v for k, v in merged["train"]["quality"].items() if k != "series"} == {
         "step": 200,
         "farFieldShare": 0.2,
         "elongationShare": 0.03,
@@ -262,7 +262,7 @@ def test_quality_metrics_keep_only_numeric_readouts_and_reset() -> None:
             )
         ],
     )
-    assert invalid["train"]["quality"] == {}
+    assert invalid["train"]["quality"] == merged["train"]["quality"]
     restarted = merge_live(merged, [("plan", {"id": "new"})])
     assert "quality" not in restarted["train"]
 
@@ -298,3 +298,124 @@ def test_reporting_malformed_history_never_fails_training(
     assert step.metrics == before
     db.commit.assert_not_called()
     logger.warning.assert_called_once()
+
+
+def test_real_bench_metrics_and_both_caps_survive() -> None:
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[3] / "tools/pipeline/tests/fixtures/run6fb-train.log"
+    records = [
+        (line.split(": ", 1)[0][5:], json.loads(line.split(": ", 1)[1]))
+        for line in path.read_text().splitlines()
+    ]
+    live = merge_live({}, records)
+    assert path.stat().st_size < 40000
+    train = live["train"]
+    assert train["plan"]["cap"] == 3456214
+    assert train["plan"]["capMax"] == 3455958
+    assert train["series"]["gs"][-1] == 3456214
+    assert train["quality"]["series"]["peakAllocatedGb"][-1] == 5.9109
+    assert train["quality"]["series"]["loss"]["depth"][-1] == 0.0537
+    assert len(live["snapshots"]) == 2
+    assert merge_live(live, records) == live
+    assert _train(live, NullStorage()) is not None
+
+
+def test_quality_series_and_twenty_snapshots_stay_under_the_json_budget() -> None:
+    live: dict[str, Any] = {}
+    for step in range(0, 60001, 200):
+        records = [
+            sample(step),
+            (
+                "metrics",
+                {
+                    "step": step,
+                    "farFieldShare": 0.14,
+                    "elongationShare": 0.06,
+                    "lossTerms": {
+                        k: 0.1234567 for k in ("depth", "normal", "gradient", "anisotropy")
+                    },
+                    "trainMemoryCurve": [{"step": step, "peakAllocatedGb": 5.912345}],
+                    "valPsnrCurve": [{"step": step, "psnr": 25.123456}],
+                    "denseInitPoints": 800000,
+                    "denseInitAddedPoints": 160000,
+                },
+            ),
+        ]
+        if step and step % 3000 == 0:
+            records.append(snapshot(step))
+        live = merge_live(live, records)
+    assert len(live["snapshots"]) == 20
+    assert len(json.dumps(live)) < 48000
+    for series in (live["train"]["series"], live["train"]["quality"]["series"]):
+        assert len(series["step"]) <= 300
+        assert series["step"][0] == 0 and series["step"][-1] == 60000
+    assert live["train"]["quality"]["denseInitAddedPoints"] == 160000
+    assert len(live["train"]["evals"]) == 256
+    assert _train(live, NullStorage()) is not None
+
+
+def test_seeds_before_trainer_entry_are_signed_and_reset_only_on_retry() -> None:
+    from unittest.mock import Mock
+
+    from app.storage import ObjectStorage
+
+    seeds = {
+        "v": 1,
+        "key": "runs/r/train/checkpoint/live/seeds.bin",
+        "count": 2,
+        "of": 10,
+        "sources": {"sfm": 7, "dense": 0, "seed": 3},
+        "origin": [0, 0, 0],
+        "scale": 1,
+        "bytes": 20,
+    }
+    live = merge_live(
+        {}, [("plan", {"id": "a"}), ("seeds", seeds), ("train", {"k": "p", "run": "a"}), sample(0)]
+    )
+    assert live["train"]["seeds"] == seeds
+    storage = Mock(spec=ObjectStorage)
+    storage.head_object.return_value = object()
+    storage.presign_get.return_value = "https://bucket/seeds.bin"
+    parsed = _train(live, storage)
+    assert (
+        parsed is not None
+        and parsed.seeds is not None
+        and parsed.seeds.url == "https://bucket/seeds.bin"
+    )
+    storage.head_object.assert_called_once_with(seeds["key"])
+    storage.head_object.return_value = None
+    pending = _train(live, storage)
+    assert pending is not None and pending.seeds is not None and pending.seeds.url is None
+    assert "seeds" not in merge_live(live, [sample(0, "b")])["train"]
+    assert merge_live(live, [sample(0, "b", block="b1")])["train"]["seeds"] == seeds
+    live["train"]["seeds"]["key"] = "captures/private.bin"
+    parsed = _train(live, storage)
+    assert parsed is not None and parsed.seeds is None
+
+
+def test_final_scores_come_from_the_train_step_metrics() -> None:
+    final = final_metrics(
+        {
+            "psnr": 26.5,
+            "ssim": 0.9,
+            "lpips": 0.2,
+            "ccPsnr": 27,
+            "ccSsim": 0.92,
+            "ccLpips": 0.18,
+            "durationS": 100,
+        }
+    )
+    parsed = _train({}, NullStorage(), final=final)
+    assert parsed is not None and parsed.final is not None
+    assert parsed.final.cc_psnr == 27 and parsed.final.ssim == 0.9
+    assert final_metrics({"psnr": float("nan"), "ssim": True}) is None
+
+
+def test_cap_event_uses_the_lower_resolved_cap_and_includes_equality() -> None:
+    train = merge_live(
+        {},
+        [("plan", {"cap": 1200}), ("train", {"k": "p", "run": "a", "capMax": 1100}), sample(1000)],
+    )["train"]
+    event = next(event for event in derive_events(train) if event["kind"] == "cap")
+    assert event["step"] == 1000 and event["text"] == "Cap reached · 1,100"

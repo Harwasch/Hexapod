@@ -312,7 +312,7 @@ def test_the_splat_watch_waits_for_a_file_to_stop_growing(tmp_path: Path) -> Non
 
 
 def test_live_ply_steps_are_fractions_of_the_unscaled_schedule() -> None:
-    assert live.train_ply_steps(30_000) == [3_000, 7_500, 15_000, 22_500]
+    assert live.train_ply_steps(30_000) == list(range(1500, 30000, 1500))
     assert live.ply_indices([3_000, 7_500], 0.5) == {1_499, 3_749}
     argv = training.gsplat_argv(
         "python3", Path("/t.py"), Path("/d"), Path("/r"), max_steps=30_000, live_steps=[3_000]
@@ -356,15 +356,19 @@ def test_the_train_stage_snapshots_intermediate_splats_and_keeps_the_final_one(
 ) -> None:
     workdir = Workdir.create(tmp_path / "run")
     seed_inputs(workdir)
+    write_model(workdir.input_path("poses"), tree_frames.orbit(4))
 
     train(workdir)
 
     log = workdir.log_path("train").read_text()
-    assert "--ply_steps 300 30 75 150 225" in log
+    assert "--ply_steps 300 " + " ".join(map(str, range(15, 300, 15))) in log
+    seeds = live.latest(log)["seeds"]
+    assert seeds["sources"] == {"sfm": 50, "dense": 0, "seed": 0}
+    assert (workdir.checkpoint_dir("train") / "live" / "seeds.bin").stat().st_size == 500
     found = live.latest(log)["splat"]
     # Even a fast producer keeps every snapshot for timeline scrubbing.
-    assert found["step"] == 225
-    assert len(list((workdir.checkpoint_dir("train") / "live").glob("*.spz"))) == 4
+    assert found["step"] == 300
+    assert len(list((workdir.checkpoint_dir("train") / "live").glob("*.spz"))) == 20
     assert found["total"] == 300 and found["of"] == 64 and found["up"] == [0.0, -1.0, 0.0]
     assert found["key"].startswith("runs/run/train/checkpoint/live/splat_")
     snapshot = workdir.checkpoint_dir("train") / "live" / found["key"].rsplit("/", 1)[1]
@@ -428,3 +432,130 @@ def test_records_only_parses_live_lines(monkeypatch: pytest.MonkeyPatch) -> None
         ("train", {"v": 1, "k": "s", "step": 200})
     ]
     assert parser.call_count == 1
+
+
+def test_final_snapshot_is_packed_without_changing_the_final_ply(tmp_path: Path) -> None:
+    ply_dir = tmp_path / "ply"
+    final = ply_dir / "point_cloud_99.ply"
+    write_splat_ply(final, [1.0] * 8, [-2.0] * 8)
+    before = final.read_bytes()
+    lines: list[str] = []
+    with live.SplatWatch(
+        ply_dir,
+        tmp_path / "live",
+        lines.append,
+        indices={49},
+        total=100,
+        key_prefix="runs/r/train/checkpoint/live",
+        poll_s=1000,
+    ):
+        pass
+    assert final.read_bytes() == before
+    assert live.latest("\n".join(lines))["splat"]["step"] == 100
+
+
+def test_a_crashed_run_leaves_no_intermediate_ply_to_mistake_for_a_result(tmp_path: Path) -> None:
+    ply_dir = tmp_path / "ply"
+    # The trainer died after writing the step-50 intermediate and before any final PLY.
+    write_splat_ply(ply_dir / "point_cloud_49.ply", [1.0] * 8, [-2.0] * 8)
+    lines: list[str] = []
+    with live.SplatWatch(
+        ply_dir,
+        tmp_path / "live",
+        lines.append,
+        indices={49},
+        total=100,
+        key_prefix="runs/r/train/checkpoint/live",
+        poll_s=1000,
+    ):
+        pass
+    assert not list(ply_dir.glob("*.ply"))
+    assert live.latest("\n".join(lines))["splat"]["step"] == 50
+
+
+def test_seeds_are_bounded_deterministic_and_source_tagged(tmp_path: Path) -> None:
+    count = 250001
+    xyz = np.arange(count * 3, dtype=np.float64).reshape(-1, 3) / 10000
+    rgb = np.tile(np.array([10, 20, 30], dtype=np.uint8), (count, 1))
+    source = np.arange(count, dtype=np.uint32) % 3
+    lines: list[str] = []
+    state = np.random.get_state()
+    payload = live.write_seeds(
+        xyz, rgb, tmp_path, lines.append, key_prefix="runs/r/train/checkpoint/live", source=source
+    )
+    assert payload is not None and payload["count"] == 200000 and payload["of"] == count
+    assert payload["bytes"] == 2000000 and sum(payload["sources"].values()) == count
+    first = (tmp_path / "seeds.bin").read_bytes()
+    assert live.parse_line(lines[0]) == ("seeds", payload)
+    assert (
+        live.parse_line(
+            lines[0].replace("runs/r/train/checkpoint/live/seeds.bin", "captures/seeds.bin")
+        )
+        is None
+    )
+    live.write_seeds(
+        xyz, rgb, tmp_path, lines.append, key_prefix="runs/r/train/checkpoint/live", source=source
+    )
+    assert (tmp_path / "seeds.bin").read_bytes() == first
+    assert np.array_equal(state[1], np.random.get_state()[1])
+    packed = np.frombuffer(
+        first, dtype=[("xyz", "<i2", (3,)), ("rgb", "u1", (3,)), ("source", "u1")]
+    )
+    decoded = packed["xyz"] * payload["scale"] / 32767 + payload["origin"]
+    selected = np.linspace(0, count - 1, 200000, dtype=np.int64)
+    assert np.abs(decoded - xyz[selected]).max() <= payload["scale"] / 32767
+    assert np.array_equal(packed["rgb"], rgb[selected])
+    assert np.array_equal(packed["source"], source[selected])
+
+
+def test_seeds_failure_is_only_a_missing_observation(tmp_path: Path) -> None:
+    def broken(_line: str) -> None:
+        raise OSError("log unavailable")
+
+    assert (
+        live.write_seeds(
+            np.zeros((2, 3)),
+            np.zeros((2, 3)),
+            tmp_path,
+            broken,
+            key_prefix="runs/r/train/checkpoint/live",
+        )
+        is None
+    )
+    live.emit_seeds(
+        tmp_path / "missing", tmp_path, broken, key_prefix="runs/r/train/checkpoint/live"
+    )
+
+
+def test_dataset_seed_sources_include_the_appended_preview(tmp_path: Path) -> None:
+    model = tmp_path / "sparse"
+    write_model(model, tree_frames.orbit(3), points=10)
+    lines: list[str] = []
+    live.emit_seeds(
+        model, tmp_path / "live", lines.append, key_prefix="runs/r/train/checkpoint/live", seeded=3
+    )
+    assert live.latest("\n".join(lines))["seeds"]["sources"] == {"sfm": 7, "dense": 0, "seed": 3}
+
+
+def test_final_pack_failure_never_fails_training_or_removes_the_ply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    final = tmp_path / "ply" / "point_cloud_99.ply"
+    write_splat_ply(final, [1.0], [-2.0])
+    before = final.read_bytes()
+
+    def broken(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("packer unavailable")
+
+    monkeypatch.setattr(live, "snapshot_splat", broken)
+    with live.SplatWatch(
+        final.parent,
+        tmp_path / "live",
+        broken,
+        indices={49},
+        total=100,
+        key_prefix="runs/r/train/checkpoint/live",
+        poll_s=1000,
+    ):
+        pass
+    assert final.read_bytes() == before

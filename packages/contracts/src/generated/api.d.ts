@@ -8699,6 +8699,21 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** LiveQualitySeries */
+        LiveQualitySeries: {
+            /** Elongationshare */
+            elongationShare?: (number | null)[];
+            /** Farfieldshare */
+            farFieldShare?: (number | null)[];
+            /** Loss */
+            loss?: {
+                [key: string]: (number | null)[];
+            };
+            /** Peakallocatedgb */
+            peakAllocatedGb?: (number | null)[];
+            /** Step */
+            step?: number[];
+        };
         /**
          * LiveSplat
          * @description The newest intermediate splat, and where to fetch it.
@@ -8777,12 +8792,14 @@ export interface components {
             evals?: components["schemas"]["LiveTrainEval"][];
             /** Events */
             events?: components["schemas"]["LiveTrainEvent"][];
+            final?: components["schemas"]["LiveTrainFinal"] | null;
             plan?: components["schemas"]["LiveTrainPlan"] | null;
             /** Planid */
             planId?: string | null;
             quality?: components["schemas"]["LiveTrainQuality"] | null;
             /** Run */
             run?: string | null;
+            seeds?: components["schemas"]["LiveTrainSeeds"] | null;
             series?: components["schemas"]["LiveTrainSeries"];
             /** Snapshots */
             snapshots?: components["schemas"]["LiveTrainSnapshot"][];
@@ -8812,12 +8829,29 @@ export interface components {
             /** Usdsaved */
             usdSaved?: number | null;
         };
+        /** LiveTrainFinal */
+        LiveTrainFinal: {
+            /** Cclpips */
+            ccLpips?: number | null;
+            /** Ccpsnr */
+            ccPsnr?: number | null;
+            /** Ccssim */
+            ccSsim?: number | null;
+            /** Lpips */
+            lpips?: number | null;
+            /** Psnr */
+            psnr?: number | null;
+            /** Ssim */
+            ssim?: number | null;
+        };
         /** LiveTrainPlan */
         LiveTrainPlan: {
             /** Blocks */
             blocks?: number | null;
             /** Cap */
             cap?: number | null;
+            /** Capmax */
+            capMax?: number | null;
             /** Cardgb */
             cardGb?: number | null;
             /** Clamp */
@@ -8852,10 +8886,17 @@ export interface components {
         };
         /** LiveTrainQuality */
         LiveTrainQuality: {
+            /** Denseinitaddedpoints */
+            denseInitAddedPoints?: number | null;
+            /** Denseinitpoints */
+            denseInitPoints?: number | null;
+            /** Denseinitseconds */
+            denseInitSeconds?: number | null;
             /** Elongationshare */
             elongationShare?: number | null;
             /** Farfieldshare */
             farFieldShare?: number | null;
+            series?: components["schemas"]["LiveQualitySeries"] | null;
             /** Step */
             step?: number | null;
         };
@@ -8867,6 +8908,27 @@ export interface components {
             minGainDb: number;
             /** Window */
             window: number;
+        };
+        /** LiveTrainSeeds */
+        LiveTrainSeeds: {
+            /** Bytes */
+            bytes: number;
+            /** Count */
+            count: number;
+            /** Key */
+            key: string;
+            /** Of */
+            of: number;
+            /** Origin */
+            origin: number[];
+            /** Scale */
+            scale: number;
+            /** Sources */
+            sources?: {
+                [key: string]: number;
+            };
+            /** Url */
+            url?: string | null;
         };
         /** LiveTrainSeries */
         LiveTrainSeries: {
@@ -13182,15 +13244,18 @@ export type SchemaLineString = components['schemas']['LineString'];
 export type SchemaLiveCameras = components['schemas']['LiveCameras'];
 export type SchemaLivenessStatus = components['schemas']['LivenessStatus'];
 export type SchemaLiveProgress = components['schemas']['LiveProgress'];
+export type SchemaLiveQualitySeries = components['schemas']['LiveQualitySeries'];
 export type SchemaLiveSplat = components['schemas']['LiveSplat'];
 export type SchemaLiveStage = components['schemas']['LiveStage'];
 export type SchemaLiveState = components['schemas']['LiveState'];
 export type SchemaLiveTrain = components['schemas']['LiveTrain'];
 export type SchemaLiveTrainEval = components['schemas']['LiveTrainEval'];
 export type SchemaLiveTrainEvent = components['schemas']['LiveTrainEvent'];
+export type SchemaLiveTrainFinal = components['schemas']['LiveTrainFinal'];
 export type SchemaLiveTrainPlan = components['schemas']['LiveTrainPlan'];
 export type SchemaLiveTrainQuality = components['schemas']['LiveTrainQuality'];
 export type SchemaLiveTrainRule = components['schemas']['LiveTrainRule'];
+export type SchemaLiveTrainSeeds = components['schemas']['LiveTrainSeeds'];
 export type SchemaLiveTrainSeries = components['schemas']['LiveTrainSeries'];
 export type SchemaLiveTrainSnapshot = components['schemas']['LiveTrainSnapshot'];
 export type SchemaLiveTrainStop = components['schemas']['LiveTrainStop'];

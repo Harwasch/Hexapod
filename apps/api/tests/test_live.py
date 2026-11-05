@@ -327,7 +327,14 @@ def test_train_series_and_snapshots_persist_after_finish_and_bad_data_is_null(
             ("splat", splat_payload()),
         ],
     )
-    step.metrics = {**step.metrics, "live": live}
+    step.metrics = {
+        **step.metrics,
+        "live": live,
+        "psnr": 26.5,
+        "ssim": 0.9,
+        "lpips": 0.2,
+        "ccPsnr": 27.0,
+    }
     step.status = RunStatus.COMPLETE
     db.commit()
     # Neither snapshot has been uploaded. The newest remains HEAD-gated; older URLs
@@ -338,6 +345,8 @@ def test_train_series_and_snapshots_persist_after_finish_and_bad_data_is_null(
     assert older_key in body["train"]["snapshots"][0]["url"]
     assert body["train"]["snapshots"][0]["farFieldShare"] == 0.2
     assert body["train"]["events"][0]["kind"] == "setup"
+    assert body["train"]["final"]["psnr"] == 26.5
+    assert body["train"]["final"]["ccPsnr"] == 27.0
     step.metrics = {"live": {"train": {"series": "broken"}}}
     db.commit()
     assert client.get(f"/api/v1/captures/{capture.id}/live").json()["train"] is None

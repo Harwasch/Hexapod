@@ -25,12 +25,15 @@ halves, one on each side of the stage log:
   uses for the map, which Spark reads) into `checkpoint/live/`, and logs a `live-splat:`
   line naming the object key the checkpoint syncer will upload it under. The full
   intermediate PLY is deleted once it is packed: it is hundreds of megabytes and nothing
-  else reads it, and `training.latest_ply` then only ever sees the final step's.
+  else reads it. The final PLY is packed read-only on exit and left for the stage.
+  A full run keeps nineteen intermediates plus that final snapshot.
+* `emit_seeds` writes the initial SfM and preview-seed points as a bounded binary
+  point cloud. Its source codes also let dense initialization call the same writer.
 
 **In the worker**, `latest` reads the newest of each line back out of a stage log, which
 is how the supervisor copies them onto the running step (`metrics.live`) for the API.
 
-Both lines are single JSON objects on one line. Positions are quantised to int16 against an
+The records are single JSON objects on one line. Positions are quantised to int16 against an
 origin and a scale carried in the line and packed as base64, so the whole cameras line --
 400 cameras and 1,500 points at most -- is about 25 kB: small enough for a log line, and
 for a row in the database.
@@ -65,31 +68,36 @@ __all__ = [
     "MAX_CAMERAS",
     "MAX_GAUSSIANS",
     "MAX_POINTS",
+    "SEEDS_TAG",
     "SPLAT_TAG",
     "TRAIN_FRACTIONS",
     "MapperWatch",
     "SplatWatch",
     "decode_cameras",
     "emit_model",
+    "emit_seeds",
     "encode_model",
     "latest",
     "parse_line",
     "snapshot_every",
     "snapshot_splat",
     "train_ply_steps",
+    "write_seeds",
 ]
 
 CAMERAS_TAG = "live-cameras: "
 SPLAT_TAG = "live-splat: "
 TRAIN_TAG = "live-train: "
 PLAN_TAG = "live-plan: "
+SEEDS_TAG = "live-seeds: "
 #: The directory under a stage's `checkpoint/` that live snapshots are written into.
 LIVE_DIR = "live"
 MAX_CAMERAS = 400
 MAX_POINTS = 1_500
 MAX_GAUSSIANS = 100_000
-#: Where in the schedule an intermediate splat is written, as fractions of it.
-TRAIN_FRACTIONS: tuple[float, ...] = (0.1, 0.25, 0.5, 0.75)
+MAX_SEEDS = 200_000
+#: Nineteen intermediate exports; the trainer's final PLY supplies snapshot twenty.
+TRAIN_FRACTIONS: tuple[float, ...] = tuple(i / 20 for i in range(1, 20))
 #: A line the parser accepts is at most this long, whatever wrote it.
 MAX_LINE = 96_000
 #: SPZ v2 stores positions as 24-bit fixed point with 12 fractional bits: +/-2048.
@@ -442,10 +450,10 @@ class _Pending:
 class SplatWatch:
     """A thread that turns each intermediate PLY into a small SPZ in `checkpoint/live/`.
 
-    `indices` are the file indices to snapshot (`ply_indices`); any other PLY -- the
-    final one above all -- is never touched. A file is packed once its size has held
-    still between two polls (the trainer writes it in one go, but a reader can still
-    land in the middle), and a pack that fails because the file is short is retried.
+    `indices` are the intermediate file indices to snapshot (`ply_indices`). The final
+    PLY is also packed on exit, read-only, for the stage to consume afterward. A file
+    is packed once its size has held still between two polls (the trainer writes it in
+    one go, but a reader can still land in the middle). A short-file failure is retried.
     On exit whatever is still pending is packed, and every intermediate PLY is removed.
     """
 
@@ -477,6 +485,7 @@ class SplatWatch:
         self._now = now
         self._sizes: dict[int, int] = {}
         self._done: set[int] = set()
+        self._final_index: int | None = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -497,10 +506,20 @@ class SplatWatch:
             self._thread.join(timeout=120.0)
         if self._enabled:
             with contextlib.suppress(Exception):
+                remaining = self._intermediates()
+                # Only a file the trainer wrote beyond the live list is its final PLY. After
+                # a crash the newest file is an intermediate, which must still be removed so
+                # `training.latest_ply` never mistakes it for a result.
+                if remaining and remaining[-1][0] not in self._indices:
+                    self._final_index = remaining[-1][0]
                 self.poll(settled=True)
+                if self._final_index is not None and self._final_index not in self._done:
+                    index, path = remaining[-1]
+                    self._pack(_Pending(index, path, path.stat().st_size))
         for index, path in self._intermediates():
-            if index in self._indices:
-                path.unlink(missing_ok=True)
+            if index in self._indices and index != self._final_index:
+                with contextlib.suppress(OSError):
+                    path.unlink(missing_ok=True)
 
     def _run(self) -> None:
         while not self._stop.wait(self._poll_s):
@@ -554,7 +573,8 @@ class SplatWatch:
                 self._log(f"live: {pending.path.name} is not a splat this can pack: {error}")
             return False
         self._done.add(pending.index)
-        pending.path.unlink(missing_ok=True)
+        if pending.index != self._final_index:
+            pending.path.unlink(missing_ok=True)
         payload = {
             "v": 1,
             "step": step,
@@ -568,6 +588,88 @@ class SplatWatch:
         self._log(SPLAT_TAG + json.dumps(payload, separators=(",", ":")))
         self.emitted.append(payload)
         return True
+
+
+def write_seeds(
+    xyz: npt.NDArray[Any],
+    rgb: npt.NDArray[Any],
+    directory: Path,
+    log: Log,
+    *,
+    key_prefix: str,
+    source: npt.NDArray[Any] | None = None,
+) -> dict[str, Any] | None:
+    """Write a deterministic 10-byte point preview without touching the trainer's RNG.
+
+    Source codes are 0 SfM, 1 dense, 2 preview seed. Dense initialization can call this
+    same writer after adding its points. Counts describe the full input, not the sample.
+    This optional observation must never interrupt training, including a broken log sink.
+    """
+    try:
+        xyz = np.asarray(xyz, dtype=np.float64)
+        rgb = np.asarray(rgb, dtype=np.uint8)
+        codes = (
+            np.zeros(len(xyz), dtype=np.uint8)
+            if source is None
+            else np.asarray(source, dtype=np.uint8)
+        )
+        if xyz.shape != (len(xyz), 3) or rgb.shape != xyz.shape or codes.shape != (len(xyz),):
+            return None
+        valid = np.isfinite(xyz).all(axis=1) & (codes <= 2)
+        xyz, rgb, codes = xyz[valid], rgb[valid], codes[valid]
+        total = len(xyz)
+        if not total:
+            return None
+        counts = {
+            name: int(np.count_nonzero(codes == i))
+            for i, name in enumerate(("sfm", "dense", "seed"))
+        }
+        origin = (xyz.min(axis=0) + xyz.max(axis=0)) / 2
+        scale = max(float(np.abs(xyz - origin).max()), 1e-9)
+        chosen = np.linspace(0, total - 1, min(total, MAX_SEEDS), dtype=np.int64)
+        packed = np.empty(
+            len(chosen), dtype=[("xyz", "<i2", (3,)), ("rgb", "u1", (3,)), ("source", "u1")]
+        )
+        packed["xyz"] = np.rint((xyz[chosen] - origin) * _INT16 / scale).astype("<i2")
+        packed["rgb"], packed["source"] = rgb[chosen], codes[chosen]
+        directory.mkdir(parents=True, exist_ok=True)
+        partial = directory / "seeds.bin.part"
+        partial.write_bytes(packed.tobytes())
+        partial.replace(directory / "seeds.bin")
+        payload = {
+            "v": 1,
+            "key": f"{key_prefix.rstrip('/')}/seeds.bin",
+            "count": len(chosen),
+            "of": total,
+            "sources": counts,
+            "origin": origin.tolist(),
+            "scale": scale,
+            "bytes": packed.nbytes,
+        }
+        log(SEEDS_TAG + json.dumps(payload, separators=(",", ":"), allow_nan=False))
+        return payload
+    except Exception:
+        return None
+
+
+def emit_seeds(
+    sparse: Path,
+    directory: Path,
+    log: Log,
+    *,
+    key_prefix: str,
+    seeded: int = 0,
+    enabled: bool = True,
+) -> None:
+    """The dataset already contains init_seed's appended points; do not append them twice."""
+    if not enabled:
+        return
+    with contextlib.suppress(Exception):
+        points = sfm.read_points3d(sparse / "points3D.bin")
+        source = np.zeros(len(points), dtype=np.uint8)
+        if seeded:
+            source[-seeded:] = 2
+        write_seeds(points.xyz, points.rgb, directory, log, key_prefix=key_prefix, source=source)
 
 
 # --- reading the lines back ---------------------------------------------------------
@@ -617,6 +719,31 @@ def _valid_splat(payload: Mapping[str, Any]) -> bool:
         and _count(payload.get("count"))
         and (payload.get("total") is None or _count(payload.get("total")))
         and (payload.get("up") is None or _floats(payload.get("up"), 3))
+    )
+
+
+def _valid_seeds(payload: Mapping[str, Any]) -> bool:
+    key, sources = payload.get("key"), payload.get("sources")
+    return (
+        payload.get("v") == 1
+        and isinstance(key, str)
+        and len(key) <= 512
+        and key.startswith("runs/")
+        and f"/checkpoint/{LIVE_DIR}/" in key
+        and key.endswith("/seeds.bin")
+        and ".." not in key
+        and _count(payload.get("count"))
+        and payload["count"] <= MAX_SEEDS
+        and _count(payload.get("of"))
+        and payload["of"] >= payload["count"]
+        and payload.get("bytes") == payload["count"] * 10
+        and _floats(payload.get("origin"), 3)
+        and isinstance(payload.get("scale"), int | float)
+        and math.isfinite(payload["scale"])
+        and payload["scale"] > 0
+        and isinstance(sources, dict)
+        and all(_count(sources.get(k)) for k in ("sfm", "dense", "seed"))
+        and sum(sources[k] for k in ("sfm", "dense", "seed")) == payload["of"]
     )
 
 
@@ -708,6 +835,7 @@ def _valid_plan(payload: Mapping[str, Any]) -> bool:
 
 
 _TAGS: tuple[tuple[str, str, Callable[[Mapping[str, Any]], bool]], ...] = (
+    ("seeds", SEEDS_TAG, _valid_seeds),
     ("cameras", CAMERAS_TAG, _valid_cameras),
     ("splat", SPLAT_TAG, _valid_splat),
     ("train", TRAIN_TAG, _valid_train),

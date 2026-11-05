@@ -16,6 +16,7 @@ MAX_POINTS = 300
 MAX_EVALS = 256
 MAX_BYTES = 48_000
 COLUMNS = ("step", "t", "gs", "lr", "sh", "its", "mem")
+QUALITY_COLUMNS = ("step", "farFieldShare", "elongationShare", "peakAllocatedGb")
 
 
 def _number(value: Any, digits: int = 4) -> int | float | None:
@@ -30,24 +31,24 @@ def _spread(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     return [rows[round(i * (len(rows) - 1) / (limit - 1))] for i in range(limit)]
 
 
-def _rows(series: dict[str, Any]) -> list[dict[str, Any]]:
+def _rows(series: dict[str, Any], columns: tuple[str, ...] = COLUMNS) -> list[dict[str, Any]]:
     steps = series.get("step", [])
     loss = series.get("loss", {})
     return [
         {
-            **{key: series.get(key, [None] * len(steps))[i] for key in COLUMNS},
+            **{key: series.get(key, [None] * len(steps))[i] for key in columns},
             "loss": {key: values[i] for key, values in loss.items()},
         }
         for i in range(len(steps))
     ]
 
 
-def _columns(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _columns(rows: list[dict[str, Any]], columns: tuple[str, ...] = COLUMNS) -> dict[str, Any]:
     keys = sorted({key for row in rows for key in (row.get("loss") or {})})
     return {
         **{
             key: [_number(row.get(key), 10 if key == "lr" else 4) for row in rows]
-            for key in COLUMNS
+            for key in columns
         },
         "loss": {key: [_number((row.get("loss") or {}).get(key)) for row in rows] for key in keys},
     }
@@ -98,11 +99,14 @@ def merge_live(
             end["step"] < old_steps[-1] and (end.get("t") or 0) < (old_times[-1] or 0)
         )
     reset = retry or block_change
+    seeds = train.get("seeds")
     if reset:
         train = {
             "plan": {} if plan_reset else train.get("plan", {}),
             "planId": train.get("planId"),
         }
+    if reset and not retry and seeds is not None:
+        train["seeds"] = seeds
     if retry:
         result.pop("splat", None)
         result["snapshots"] = []
@@ -126,6 +130,8 @@ def merge_live(
     evals = {row["step"]: row for row in train.get("evals", [])}
     relocations = {row["step"]: row for row in train.get("relocations", [])}
     snapshots = {row["key"]: row for row in result.get("snapshots", [])}
+    quality = train.get("quality") or {}
+    quality_rows = {row["step"]: row for row in _rows(quality.get("series") or {}, QUALITY_COLUMNS)}
     plan = train.get("plan") or {}
     for index, (kind, value) in enumerate(records):
         if kind == "cameras":
@@ -136,17 +142,60 @@ def merge_live(
         elif kind == "splat" and (index >= boundary or (block_change and not retry)):
             snapshots[value["key"]] = value
             result["splat"] = value
+        elif kind == "seeds" and (
+            index >= boundary or plan_reset or not old_identity[0] or not retry
+        ):
+            train["seeds"] = value
         elif kind == "metrics" and index >= boundary:
-            train["quality"] = {
+            scalar = {
                 key: numeric
-                for key in ("step", "farFieldShare", "elongationShare")
-                if (numeric := _number(value.get(key))) is not None
-                and (
-                    isinstance(numeric, int) and numeric >= 0
-                    if key == "step"
-                    else 0 <= numeric <= 1
+                for key in (
+                    "step",
+                    "farFieldShare",
+                    "elongationShare",
+                    "denseInitPoints",
+                    "denseInitAddedPoints",
+                    "denseInitSeconds",
                 )
+                if (numeric := _number(value.get(key))) is not None
+                and numeric >= 0
+                and (numeric <= 1 if key.endswith("Share") else True)
             }
+            quality.update(scalar)
+            step = scalar.get("step")
+            if isinstance(step, int):
+                point = quality_rows.setdefault(step, {"step": step})
+                point.update({k: v for k, v in scalar.items() if k in QUALITY_COLUMNS})
+                losses = value.get("lossTerms")
+                if isinstance(losses, dict):
+                    point["loss"] = {
+                        k: _number(v)
+                        for k, v in losses.items()
+                        if isinstance(k, str) and len(k) <= 32
+                    }
+            for row in value.get("trainMemoryCurve") or []:
+                if (
+                    not isinstance(row, dict)
+                    or not isinstance(row.get("step"), int)
+                    or row["step"] < 0
+                ):
+                    continue
+                memory = _number(row.get("peakAllocatedGb"))
+                if memory is not None and memory >= 0:
+                    quality_rows.setdefault(row["step"], {"step": row["step"]})[
+                        "peakAllocatedGb"
+                    ] = memory
+            for row in value.get("valPsnrCurve") or []:
+                if (
+                    isinstance(row, dict)
+                    and isinstance(row.get("step"), int)
+                    and row["step"] >= 0
+                    and (psnr := _number(row.get("psnr"))) is not None
+                ):
+                    evals.setdefault(
+                        row["step"],
+                        {"step": row["step"], "psnr": psnr, "gain": None, "decision": None},
+                    )
         elif kind == "train":
             if index < boundary or (value.get("run"), value.get("block")) != identity:
                 continue
@@ -161,8 +210,6 @@ def merge_live(
                 )
                 if value.get("maxSteps") is not None:
                     plan["stepsMax"] = value["maxSteps"]
-                if value.get("capMax") is not None:
-                    plan["cap"] = value["capMax"]
             elif event == "s":
                 by_step[value["step"]] = value
             elif event == "e":
@@ -186,15 +233,22 @@ def merge_live(
     )
     train["relocations"] = _spread(sorted(relocations.values(), key=lambda row: row["step"]), 64)
     result["snapshots"] = list(snapshots.values())[-64:]
-    if incoming or plan or current.get("train") or "quality" in train:
+    qrows = _spread(sorted(quality_rows.values(), key=lambda row: row["step"]), MAX_POINTS)
+    if quality or qrows:
+        if qrows:
+            quality["series"] = _columns(qrows, QUALITY_COLUMNS)
+        train["quality"] = quality
+    if incoming or plan or current.get("train") or quality or "seeds" in train:
         result["train"] = train
         # Optional loss components can consume more space than the ordinary seven columns.
-        while (
-            len(json.dumps({"train": train, "snapshots": result["snapshots"]})) > MAX_BYTES
-            and len(rows) > 2
+        while len(json.dumps({"train": train, "snapshots": result["snapshots"]})) > MAX_BYTES and (
+            len(rows) > 2 or len(qrows) > 2
         ):
             rows = _spread(rows, max(2, len(rows) * 3 // 4))
             train["series"] = _columns(rows)
+            if qrows:
+                qrows = _spread(qrows, max(2, len(qrows) * 3 // 4))
+                quality["series"] = _columns(qrows, QUALITY_COLUMNS)
     return result
 
 
@@ -218,6 +272,8 @@ def derive_events(train: dict[str, Any]) -> list[dict[str, Any]]:
         ]
         add(0, "setup", " · ".join(counts) or "Setup")
     previous_sh = None
+    caps = [plan[key] for key in ("cap", "capMax") if isinstance(plan.get(key), int)]
+    cap = min(caps) if caps else None
     cap_seen = False
     for i, step in enumerate(steps):
         sh = series.get("sh", [None] * len(steps))[i]
@@ -225,8 +281,8 @@ def derive_events(train: dict[str, Any]) -> list[dict[str, Any]]:
             add(step, "sh", f"SH {sh}")
             previous_sh = sh
         gs = series.get("gs", [None] * len(steps))[i]
-        if not cap_seen and gs is not None and plan.get("cap") and gs >= plan["cap"]:
-            add(step, "cap", f"Cap reached · {plan['cap']:,}")
+        if not cap_seen and gs is not None and cap is not None and gs >= cap:
+            add(step, "cap", f"Cap reached · {cap:,}")
             cap_seen = True
     refine = plan.get("refineStop")
     if isinstance(refine, int) and last >= refine:
@@ -253,3 +309,13 @@ def derive_events(train: dict[str, Any]) -> list[dict[str, Any]]:
             usdSaved=usd,
         )
     return sorted(events, key=lambda event: event["step"])
+
+
+def final_metrics(metrics: dict[str, Any]) -> dict[str, int | float] | None:
+    """Only the train step's measured final scores, never an earlier live evaluation."""
+    values = {
+        key: number
+        for key in ("psnr", "ssim", "lpips", "ccPsnr", "ccSsim", "ccLpips")
+        if (number := _number(metrics.get(key))) is not None
+    }
+    return values or None

@@ -15,13 +15,19 @@ import { SparkRenderer, SplatFileType, SplatMesh } from "@sparkjsdev/spark";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
-import type { LiveCameras, LiveState } from "@twin/contracts";
+import type { LiveCameras, LiveState, LiveTrainSeeds } from "@twin/contracts";
 
 import { fetchApi } from "@/api/coldStart";
 import { deviceSplatBudget } from "@/lib/detail";
 
 import { liveConsole } from "./liveConsole";
-import { distanceColour, isNewAttempt, nearestCameraDistance, snapshotAt } from "./liveTrain";
+import {
+  decodeSeeds,
+  distanceColour,
+  isNewAttempt,
+  nearestCameraDistance,
+  snapshotAt,
+} from "./liveTrain";
 
 import {
   decodeCameras,
@@ -160,6 +166,23 @@ export function showLive(captureId: string): { stop: () => void } {
   let framed = false;
   let lastSeq = -1;
   let camerasFinal = false;
+  let layerMode: "splat" | "seeds" | "both" = "splat",
+    camerasVisible = true;
+  let seedPoints: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial> | null = null;
+  let seedName: string | null = null,
+    seedPending: string | null = null,
+    seedEpoch = 0;
+  const seedAbort = new AbortController();
+  const disposeSeeds = (): void => {
+    if (seedPoints) {
+      frame.remove(seedPoints);
+      seedPoints.geometry.dispose();
+      seedPoints.material.dispose();
+    }
+    seedPoints = null;
+    seedName = null;
+    section.dataset.seeds = "0";
+  };
 
   /**
    * A mid-solve snapshot is in the solve's frame of that moment; a splat is trained in the
@@ -168,8 +191,14 @@ export function showLive(captureId: string): { stop: () => void } {
    */
   const showOverlay = (): void => {
     const visible = splat === null || camerasFinal;
-    if (cameraLines) cameraLines.visible = visible;
-    if (cloud) cloud.visible = visible;
+    if (cameraLines) cameraLines.visible = visible && camerasVisible;
+    if (cloud) cloud.visible = visible && camerasVisible && layerMode === "splat";
+    if (seedPoints) seedPoints.visible = layerMode !== "splat";
+    if (splat) splat.mesh.visible = layerMode !== "seeds";
+    for (const fade of fades) fade.mesh.visible = layerMode !== "seeds";
+    section.dataset.layers = layerMode;
+    section.dataset.camerasVisible = String(camerasVisible);
+    section.dataset.seedsVisible = String(seedPoints?.visible ?? false);
   };
   let stopped = false;
   let timer = 0;
@@ -446,7 +475,41 @@ export function showLive(captureId: string): { stop: () => void } {
     up: camera.up.clone(),
   };
   let top = false;
+  async function loadSeeds(payload: LiveTrainSeeds): Promise<void> {
+    if (!payload.url || seedName === payload.key || seedPending) return;
+    const epoch = seedEpoch;
+    seedPending = payload.key;
+    try {
+      const response = await fetch(payload.url, { signal: seedAbort.signal });
+      if (!response.ok) throw new Error("Seeds not available");
+      const decoded = decodeSeeds(await response.arrayBuffer(), payload);
+      if (stopped || seedEpoch !== epoch || latestState?.train?.seeds?.key !== payload.key) return;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(decoded.positions, 3));
+      geometry.setAttribute("color", new THREE.BufferAttribute(srgbToLinear(decoded.colors), 3));
+      const material = new THREE.PointsMaterial({
+        size: 2,
+        sizeAttenuation: false,
+        vertexColors: true,
+      });
+      disposeSeeds();
+      seedPoints = new THREE.Points(geometry, material);
+      seedName = payload.key;
+      frame.add(seedPoints);
+      section.dataset.seeds = String(payload.count);
+      showOverlay();
+    } catch {
+      // A fresh URL on the next poll retries a checkpoint that has not synced yet.
+    } finally {
+      if (seedEpoch === epoch) seedPending = null;
+    }
+  }
   const consoleView = liveConsole({
+    layers: (mode, cameras) => {
+      layerMode = mode;
+      camerasVisible = cameras;
+      showOverlay();
+    },
     scrub: (step) => {
       scrubStep = step;
       if (latestState) selectSnapshot(latestState);
@@ -518,6 +581,9 @@ export function showLive(captureId: string): { stop: () => void } {
       drawCameras(state.cameras, splat !== null);
     }
     if (isNewAttempt(latestState?.train, state.train)) {
+      seedEpoch += 1;
+      seedPending = null;
+      disposeSeeds();
       loadGeneration += 1;
       colourGeneration += 1;
       loadingSplat = null;
@@ -541,12 +607,17 @@ export function showLive(captureId: string): { stop: () => void } {
       resize();
     }
     selectSnapshot(state);
+    if (state.train?.seeds) void loadSeeds(state.train.seeds);
     if (described.ended && state.siteId) {
       finalLink.href = `#${state.siteId}`;
       finalLink.hidden = false;
     }
     section.dataset.status = state.status;
-    return described.ended && (!state.splat || desiredSplat === splat?.name);
+    return (
+      described.ended &&
+      (!state.splat || desiredSplat === splat?.name) &&
+      (!state.train?.seeds || seedName === state.train.seeds.key)
+    );
   };
 
   const tick = async (): Promise<void> => {
@@ -578,6 +649,9 @@ export function showLive(captureId: string): { stop: () => void } {
   return {
     stop: () => {
       stopped = true;
+      seedAbort.abort();
+      seedEpoch += 1;
+      disposeSeeds();
       window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
       resizeObserver.disconnect();
