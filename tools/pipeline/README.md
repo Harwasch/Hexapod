@@ -1537,6 +1537,17 @@ surfaces. **Its training effect is unmeasured: all PLYs being re-scored were tra
 before this fix, with the OLD exponential anisotropy loss where enabled.** Anisotropy
 remains off by default, and no training defaults flip.
 
+**Rescored on a fair yardstick** (`bench rescore`, run `rescore-00a2b264`, no training). Same saved PLYs, classic renderer, 38 test frames. Cells are PSNR / SSIM / LPIPS. Aligned and colour-corrected scores fit each test frame, so they flatter the result. These PLYs were trained with the old anisotropy loss; the fixed loss is unit-tested and has not been trained.
+
+| run, half-size scoring (449x799) | trained at | raw               | aligned + colour  | holes | needles |
+| -------------------------------- | ---------- | ----------------- | ----------------- | ----- | ------- |
+| A: `baseline-main`               | 899x1599   | 25.07/0.786/0.245 | 25.12/0.786/0.246 | 19.2% | 74.0%   |
+| `upgraded-plain`                 | 899x1599   | 25.23/0.787/0.241 | 25.29/0.787/0.242 | 17.3% | 76.2%   |
+| `all-on-no-3dgut`                | 450x800    | 19.11/0.461/0.287 | 26.24/0.805/0.238 | 12.5% | 5.5%    |
+| same, with the fade gate         | 450x800    | 18.07/0.452/0.319 | 23.35/0.766/0.276 | 35.1% | 5.5%    |
+
+At full-size scoring (898x1598), aligned + colour gives A 24.97/0.751/0.300, `upgraded-plain` 25.13/0.754/0.294, `all-on-no-3dgut` 24.75/0.731/0.330 and with fade 22.15/0.696/0.366. Most of all-on's raw 6 dB loss comes from test cameras not sharing its moved poses (about 4 dB at half size, from a median move of 0.045% of the scene and 0.16 degrees) and a colour shift (about 2.8 dB). The colour shift is in the splat itself: on the one saved frame its mean brightness is 152, against 142 in the photo and 147 for A. The remove-one runs kept no PLYs, so they stay on the old yardstick, and the table below is the old yardstick too.
+
 **Measured on Beach, and not adopted** (L4, seed 42, 38 untouched test frames, same frozen frames and
 poses; headline scores the trained PLY with no quality gate). A is gsplat 1.5.3 from `c7fb90c8`.
 
