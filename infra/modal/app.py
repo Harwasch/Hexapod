@@ -42,6 +42,10 @@ CAPTURES_DIR = "/opt/captures"
 #: pipeline is the image's own copy, so that is what the tier table is read from; the
 #: local-file image steps below are only read when Modal builds the image.
 HERE = Path(__file__).resolve().parent
+
+# Next to this file locally, and at /root in every image built below.
+sys.path.insert(0, str(HERE))
+from gsplat_build import compile_gsplat  # noqa: E402
 if modal.is_local():
     REPO_ROOT = HERE.parents[1]
     LOCAL_PIPELINE = REPO_ROOT / "tools" / "pipeline"
@@ -126,24 +130,6 @@ THREAD_ENV: dict[str, str] = {
 
 _IGNORE = ["tests", ".venv", "__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache"]
 
-def _compile_gsplat() -> None:
-    """Build gsplat from the checkout, in the image; `run_function` gives this step its cores."""
-    import os
-    import subprocess
-
-    subprocess.run(  # noqa: S603
-        [f"{TRAINER_VENV}/bin/pip", "install", "--no-deps", "--no-build-isolation", GSPLAT_DIR],
-        check=True,
-        env={
-            **os.environ,
-            "TORCH_CUDA_ARCH_LIST": CUDA_ARCHS,
-            "CUDA_HOME": "/usr/local/cuda",
-            "MAX_JOBS": "16",
-            "BUILD_EXPERIMENTAL": "0",
-        },
-    )
-
-
 image = (
     modal.Image.from_registry(CUDA_BASE, add_python="3.12")
     .apt_install(
@@ -181,7 +167,14 @@ image = (
     )
     # Its own step, on its own cores: on Modal's default builder this compile did not finish
     # in 2 hours, and on 16 cores it takes about 6 minutes.
-    .run_function(_compile_gsplat, cpu=(16, 16), memory=(48000, 48000), timeout=3600)
+    .add_local_file(HERE / "gsplat_build.py", "/root/gsplat_build.py", copy=True)
+    .run_function(
+        compile_gsplat,
+        args=(_PIP, GSPLAT_DIR, CUDA_ARCHS),
+        cpu=(16, 16),
+        memory=(48000, 48000),
+        timeout=3600,
+    )
     .run_commands(
         # The LPIPS network the trainer builds in its constructor downloads AlexNet's
         # weights on first use; fetched here so a run does not depend on that host.
