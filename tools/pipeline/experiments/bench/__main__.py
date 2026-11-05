@@ -64,6 +64,7 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--tier", choices=("l4", "a10", "l40s", "a100"), default="l4")
     run.add_argument("--keep-splat", action="store_true")
     run.add_argument("--topdown", action="store_true", help="best-effort GPU overview PNG")
+    run.add_argument("--live", action="store_true", help="publish live console telemetry")
     run.add_argument("--renders", type=int, default=0, help="save the first N test frames as PNGs")
     matched = commands.add_parser(
         "matched-renders", help="same cameras for two kept PLYs, one L4 call"
@@ -210,6 +211,7 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "keepSplat": args.keep_splat,
                     "renders": args.renders,
                     "topdown": args.topdown,
+                    **({"live": True} if args.live else {}),
                 }
             )
     return plans

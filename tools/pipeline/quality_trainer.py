@@ -9,6 +9,7 @@ view-facing depth normals, and a scale-axis ratio penalty independently.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib
 import json
 import math
@@ -126,6 +127,13 @@ def import_patched_trainer(trainer: Path, settings: Path) -> types.ModuleType:
     sys.modules[module.__name__] = module
     exec(compile(source, str(trainer), "exec", dont_inherit=True), module.__dict__)  # noqa: S102
     assert_import_origins(trainer)
+    # Quality edits the source first; the CLI then installs convergence, timing and
+    # telemetry around that class. Verify the latter's anchors survive both forms.
+    import train_telemetry
+
+    for anchor in train_telemetry.REQUIRED_SOURCE:
+        if anchor not in source:
+            raise ValueError(f"telemetry seam moved after quality patch: {anchor!r}")
     return module
 
 
@@ -306,6 +314,60 @@ def record_memory(runner: Any, step: int, info: dict[str, Any]) -> None:
         sys.stdout.flush()
 
 
+def live_metrics(runner: Any, step: int) -> dict[str, Any]:
+    """Detached observations for either trainer, on the shared 200-step hook.
+
+    Step is one-based. Read current Parameters after MCMC replacements, never hold
+    tensors between samples. The fixed sparse frame also measures drift with the
+    quality stack off; missing geometry stays absent instead of reporting zero.
+    """
+    cfg = getattr(runner, "hex_settings", {})
+    if cfg.get("emit_metrics") is False:
+        return {}
+    torch = importlib.import_module("torch")
+    with torch.no_grad():
+        means = runner.splats["means"].detach()
+        scales = runner.splats["scales"].detach()
+        ring_count = cfg.get("far_count", 0)
+        count = len(means) + ring_count
+        payload: dict[str, Any] = {
+            "step": step,
+            "splatCount": count,
+            "elongationShare": int(
+                ((scales.max(-1).values - scales.min(-1).values) > math.log(10)).sum()
+            )
+            / max(1, count),
+            "lossTerms": getattr(runner, "hex_loss_terms", {}),
+        }
+        with contextlib.suppress(Exception):
+            if "center" in cfg and "radius" in cfg:
+                center, radius = cfg["center"], cfg["radius"]
+            else:
+                import far_field
+
+                if not hasattr(runner, "hex_metric_frame"):
+                    runner.hex_metric_frame = far_field.frame(runner.parser.points)
+                center, radius = runner.hex_metric_frame
+            distant = int(
+                (
+                    torch.linalg.vector_norm(means - means.new_tensor(center), dim=-1) > 5 * radius
+                ).sum()
+            )
+            payload["farFieldShare"] = (distant + ring_count) / max(1, count)
+        with contextlib.suppress(Exception):
+            payload["trainMemoryCurve"] = [
+                {
+                    "step": step,
+                    "splatCount": count,
+                    "peakAllocatedGb": torch.cuda.max_memory_allocated() / 1e9,
+                    "peakReservedGb": torch.cuda.max_memory_reserved() / 1e9,
+                    "allocatedGb": torch.cuda.memory_allocated() / 1e9,
+                    "reservedGb": torch.cuda.memory_reserved() / 1e9,
+                }
+            ]
+    return payload
+
+
 def aligned_depth(prediction: Any, target: Any) -> tuple[Any, Any]:
     """Detached three-pass IRLS alignment; differentiable residual, no tall GPU solve."""
     torch = importlib.import_module("torch")
@@ -426,33 +488,10 @@ def loss(
                         interior
                     ].mean()
                     total = total + cfg["normal_weight"] * terms["normal"]
-    if step % 100 == 0 or step + 1 == runner.cfg.max_steps:
-        with torch.no_grad():
-            scales = runner.splats["scales"]
-            count = len(scales)
-            far = cfg.get("far_count", 0)
-            if cfg["far_field"]:
-                center = scales.new_tensor(cfg["center"])
-                far += int(
-                    (
-                        torch.linalg.vector_norm(runner.splats["means"] - center, dim=-1)
-                        > 5 * cfg["radius"]
-                    ).sum()
-                )
-            payload = {
-                "farFieldShare": far / max(1, count + cfg.get("far_count", 0)),
-                "step": step,
-                "splatCount": count + cfg.get("far_count", 0),
-                "elongationShare": float(
-                    (torch.exp(scales.max(-1).values - scales.min(-1).values) > 10).sum()
-                )
-                / max(1, count + cfg.get("far_count", 0)),
-                "lossTerms": {k: float(v.detach()) for k, v in terms.items()},
-            }
-        Path(cfg["loss_report"]).write_text(json.dumps(payload))
-        if cfg["emit_metrics"]:
-            sys.stdout.write("live-metrics: " + json.dumps(payload) + "\n")
-            sys.stdout.flush()
+    # Keep only detached scalars for the telemetry hook; no graph survives a step.
+    if step == 0 or (step + 1) % 200 == 0 or step + 1 == runner.cfg.max_steps:
+        runner.hex_loss_terms = {k: float(v.detach()) for k, v in terms.items()}
+        Path(cfg["loss_report"]).write_text(json.dumps({"lossTerms": runner.hex_loss_terms}))
     return total
 
 
@@ -469,6 +508,23 @@ def cpu_self_check() -> None:
         raise ValueError("image NumPy percentile interpolation failed")
 
     torch = importlib.import_module("torch")
+    # Exercise real tensor reductions without CUDA, with and without quality settings.
+    for enabled in (False, True):
+        observed = types.SimpleNamespace(
+            splats={
+                "means": torch.tensor([[0.0, 0, 0], [100.0, 0, 0]]),
+                "scales": torch.tensor([[0.0, 0, 0], [1000.0, 0, -1000.0]]),
+            },
+            parser=types.SimpleNamespace(points=np.array([[-1, 0, 0], [0, 0, 0], [1, 0, 0]])),
+        )
+        if enabled:
+            observed.hex_settings = {"center": [0, 0, 0], "radius": 1, "far_count": 2}
+        rng = torch.random.get_rng_state()
+        sample = live_metrics(observed, 200)
+        expected = (4, 0.75, 0.25) if enabled else (2, 0.5, 0.5)
+        actual = tuple(sample[k] for k in ("splatCount", "farFieldShare", "elongationShare"))
+        if actual != expected or not torch.equal(rng, torch.random.get_rng_state()):
+            raise ValueError("live quality observations changed counts, fractions or RNG")
     camera = types.SimpleNamespace(
         crf_params=torch.nn.Parameter(torch.randn(2, 3, 4)),
         vignetting_params=torch.nn.Parameter(torch.randn(2, 3, 5)),

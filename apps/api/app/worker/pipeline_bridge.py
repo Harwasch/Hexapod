@@ -88,6 +88,7 @@ from errors import (  # noqa: E402
 from executor import RunResult, execute  # noqa: E402
 from harmonics import check_degree as check_sh_degree  # noqa: E402
 from live import latest as latest_live  # noqa: E402
+from live import records as live_records  # noqa: E402
 from modal_adapter import ModalAdapter  # noqa: E402
 from plan import Plan, PlannedStage, plan_recipe  # noqa: E402
 from progress import latest as latest_progress  # noqa: E402
@@ -142,6 +143,7 @@ __all__ = [
     "execute",
     "latest_live",
     "latest_progress",
+    "live_records",
     "load_recipe",
     "parse_quality_gate",
     "plan_recipe",

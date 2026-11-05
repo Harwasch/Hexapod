@@ -274,7 +274,7 @@ def test_the_result_directory_is_scratch_because_nothing_can_resume_from_it(
         "init-seed/seed.npz",
     ]
     live_files = [name for name in kept if name.startswith("live/")]
-    assert len(live_files) == 1 and live_files[0].endswith(".spz")
+    assert len(live_files) == 4 and all(name.endswith(".spz") for name in live_files)
 
 
 def test_a_trainer_that_writes_no_ply_is_a_failure_rather_than_an_empty_artifact(

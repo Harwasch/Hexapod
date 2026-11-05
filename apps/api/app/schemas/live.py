@@ -11,7 +11,10 @@ Everything is in the pose solve's own frame -- COLMAP's, not yet east/north/up -
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
+
+from pydantic import ConfigDict, Field, model_validator
 
 from app.models.enums import RunStatus
 from app.schemas.base import CamelModel
@@ -76,6 +79,116 @@ class LiveSplat(CamelModel):
     url: str | None
 
 
+class TrainModel(CamelModel):
+    model_config = ConfigDict(allow_inf_nan=False, extra="ignore")
+
+
+class LiveTrainRule(TrainModel):
+    every: int = Field(gt=0)
+    window: int = Field(gt=0)
+    min_gain_db: float = Field(ge=0)
+
+
+class LiveTrainPlan(TrainModel):
+    cap: int | None = Field(default=None, ge=0)
+    mode: str | None = None
+    clamp: str | None = None
+    steps_max: int | None = Field(default=None, gt=0)
+    schedule_factor: float | None = Field(default=None, gt=0)
+    refine_start: int | None = Field(default=None, ge=0)
+    refine_stop: int | None = Field(default=None, ge=0)
+    refine_every: int | None = Field(default=None, ge=0)
+    sh_degree: int | None = Field(default=None, ge=0)
+    sh_interval: int | None = Field(default=None, gt=0)
+    rule: LiveTrainRule | None = None
+    blocks: int | None = Field(default=None, ge=1)
+    gpu: str | None = None
+    card_gb: float | None = Field(default=None, gt=0)
+    usd_per_hour: float | None = Field(default=None, ge=0)
+    metres_per_unit: float | None = Field(default=None, gt=0)
+    frames: int | None = Field(default=None, ge=0)
+    sparse: int | None = Field(default=None, ge=0)
+
+
+class LiveTrainSeries(TrainModel):
+    step: list[int] = Field(default_factory=list, max_length=300)
+    t: list[float | None] = Field(default_factory=list)
+    gs: list[int | None] = Field(default_factory=list)
+    lr: list[float | None] = Field(default_factory=list)
+    sh: list[int | None] = Field(default_factory=list)
+    its: list[float | None] = Field(default_factory=list)
+    mem: list[float | None] = Field(default_factory=list)
+    loss: dict[str, list[float | None]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def aligned(self) -> LiveTrainSeries:
+        columns: list[Sequence[float | int | None]] = [
+            self.t,
+            self.gs,
+            self.lr,
+            self.sh,
+            self.its,
+            self.mem,
+            *self.loss.values(),
+        ]
+        if any(len(column) != len(self.step) for column in columns):
+            raise ValueError("training columns must align")
+        if any(step < 0 for step in self.step) or self.step != sorted(set(self.step)):
+            raise ValueError("training steps must increase")
+        return self
+
+
+class LiveTrainEval(TrainModel):
+    step: int = Field(ge=0)
+    psnr: float | None = None
+    gain: float | None = None
+    decision: str | None = None
+
+
+class LiveTrainStop(TrainModel):
+    step: int = Field(ge=0)
+    max_steps: int | None = None
+    gain: float | None = None
+
+
+class LiveTrainEvent(TrainModel):
+    step: int = Field(ge=0)
+    kind: str
+    text: str
+    steps_saved: int | None = None
+    usd_saved: float | None = None
+
+
+class LiveTrainQuality(TrainModel):
+    step: int | None = Field(default=None, ge=0)
+    far_field_share: float | None = Field(default=None, ge=0, le=1)
+    elongation_share: float | None = Field(default=None, ge=0, le=1)
+
+
+class LiveTrainSnapshot(TrainModel):
+    step: int = Field(ge=0)
+    key: str
+    count: int = Field(ge=0)
+    of: int | None = None
+    bytes: int | None = None
+    url: str | None = None
+    far_field_share: float | None = Field(default=None, ge=0, le=1)
+    elongation_share: float | None = Field(default=None, ge=0, le=1)
+
+
+class LiveTrain(TrainModel):
+    series: LiveTrainSeries = Field(default_factory=LiveTrainSeries)
+    evals: list[LiveTrainEval] = Field(default_factory=list, max_length=256)
+    plan: LiveTrainPlan | None = None
+    events: list[LiveTrainEvent] = Field(default_factory=list)
+    snapshots: list[LiveTrainSnapshot] = Field(default_factory=list, max_length=64)
+    stop: LiveTrainStop | None = None
+    block: str | None = None
+    run: str | None = None
+    plan_id: str | None = None
+    quality: LiveTrainQuality | None = None
+
+
 class LiveState(CamelModel):
     job_id: uuid.UUID
     capture_id: uuid.UUID
@@ -90,3 +203,4 @@ class LiveState(CamelModel):
     steps_started: int
     cameras: LiveCameras | None
     splat: LiveSplat | None
+    train: LiveTrain | None = None

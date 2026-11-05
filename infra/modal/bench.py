@@ -151,14 +151,24 @@ def _train(plan: dict[str, Any]) -> dict[str, Any]:
         return refused
     # Committed before training, so a restart on another container sees it.
     volume.commit()
-    result = run_training(Path("/bench/scenes") / plan["scene"], run, plan, billed_since=started)
-    volume.commit()
+    from experiments.bench.live_sync import CommitLock
+
+    live_commit = CommitLock(volume.commit) if plan.get("live") else None
+    commit = live_commit.final if live_commit else volume.commit
+    result = run_training(
+        Path("/bench/scenes") / plan["scene"],
+        run,
+        plan,
+        billed_since=started,
+        live_commit=live_commit,
+    )
+    commit()
     # Commit latency is part of the container bill, and is returned to the local ledger.
     result["wallSeconds"] = time.time() - started
     result["billedFrom"] = billed
     result["costUsd"] = result["wallSeconds"] * hourly_rate(plan["tier"]) / 3600
     write_json(run / "result.json", result)
-    volume.commit()
+    commit()
     return result
 
 

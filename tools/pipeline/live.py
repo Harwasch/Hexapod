@@ -81,6 +81,9 @@ __all__ = [
 
 CAMERAS_TAG = "live-cameras: "
 SPLAT_TAG = "live-splat: "
+METRICS_TAG = "live-metrics: "
+TRAIN_TAG = "live-train: "
+PLAN_TAG = "live-plan: "
 #: The directory under a stage's `checkpoint/` that live snapshots are written into.
 LIVE_DIR = "live"
 MAX_CAMERAS = 400
@@ -515,7 +518,7 @@ class SplatWatch:
         return sorted(found)
 
     def poll(self, *, settled: bool = False) -> bool:
-        """Pack the newest intermediate PLY that is ready. True when one was logged.
+        """Pack every ready intermediate PLY. True when at least one was logged.
 
         `settled` skips the size check: the trainer has exited, so nothing is still
         being written.
@@ -534,12 +537,8 @@ class SplatWatch:
                 self._sizes[index] = size
             if not ready:
                 return False
-            newest = ready[-1]
-            # An older one that was never shown is not worth showing now.
-            for skipped in ready[:-1]:
-                self._done.add(skipped.index)
-                skipped.path.unlink(missing_ok=True)
-            return self._pack(newest)
+            packed = [self._pack(pending) for pending in ready]
+            return any(packed)
 
     def _pack(self, pending: _Pending) -> bool:
         step = pending.index + 1
@@ -557,9 +556,6 @@ class SplatWatch:
             return False
         self._done.add(pending.index)
         pending.path.unlink(missing_ok=True)
-        for older in self._live_dir.glob("splat_*.spz"):
-            if older.name != name:
-                older.unlink(missing_ok=True)
         payload = {
             "v": 1,
             "step": step,
@@ -633,10 +629,99 @@ def _valid_metrics(payload: Mapping[str, Any]) -> bool:
     )
 
 
+def _finite_tree(value: Any) -> bool:
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, dict):
+        return all(_finite_tree(item) for item in value.values())
+    if isinstance(value, list):
+        return all(_finite_tree(item) for item in value)
+    return True
+
+
+def _optional_number(value: Any) -> bool:
+    return value is None or (
+        isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+    )
+
+
+def _valid_rule(value: Any) -> bool:
+    return value is None or (
+        isinstance(value, dict)
+        and _count(value.get("every"))
+        and value["every"] > 0
+        and _count(value.get("window"))
+        and value["window"] > 0
+        and _optional_number(value.get("minGainDb"))
+        and value.get("minGainDb") is not None
+        and value["minGainDb"] >= 0
+    )
+
+
+def _valid_train(payload: Mapping[str, Any]) -> bool:
+    kind = payload.get("k")
+    if payload.get("v") != 1 or kind not in ("s", "e", "p", "r", "x"):
+        return False
+    if kind != "p" and not _count(payload.get("step")):
+        return False
+    if any(
+        payload.get(key) is not None and not isinstance(payload[key], str)
+        for key in ("run", "block", "decision")
+    ):
+        return False
+    if kind == "s":
+        loss = payload.get("loss")
+        if loss is not None and (
+            not isinstance(loss, dict) or not all(_optional_number(v) for v in loss.values())
+        ):
+            return False
+    counts = (
+        "gs",
+        "sh",
+        "count",
+        "maxSteps",
+        "refineStart",
+        "refineStop",
+        "refineEvery",
+        "capMax",
+        "shDegree",
+        "shInterval",
+    )
+    return (
+        all(payload.get(key) is None or _count(payload[key]) for key in counts)
+        and all(
+            _optional_number(payload.get(key)) for key in ("t", "lr", "its", "mem", "psnr", "gain")
+        )
+        and _valid_rule(payload.get("rule"))
+        and len(json.dumps(payload)) < 1024
+        and _finite_tree(payload)
+    )
+
+
+def _valid_plan(payload: Mapping[str, Any]) -> bool:
+    return (
+        payload.get("v") == 1
+        and _count(payload.get("stepsMax"))
+        and all(
+            payload.get(key) is None or _count(payload[key])
+            for key in ("cap", "refineStop", "blocks", "frames", "sparse", "attempt")
+        )
+        and all(
+            _optional_number(payload.get(key))
+            for key in ("scheduleFactor", "cardGb", "usdPerHour", "metresPerUnit")
+        )
+        and _valid_rule(payload.get("rule"))
+        and len(json.dumps(payload)) < 2048
+        and _finite_tree(payload)
+    )
+
+
 _TAGS: tuple[tuple[str, str, Callable[[Mapping[str, Any]], bool]], ...] = (
     ("cameras", CAMERAS_TAG, _valid_cameras),
     ("splat", SPLAT_TAG, _valid_splat),
-    ("metrics", "live-metrics: ", _valid_metrics),
+    ("metrics", METRICS_TAG, _valid_metrics),
+    ("train", TRAIN_TAG, _valid_train),
+    ("plan", PLAN_TAG, _valid_plan),
 )
 
 
@@ -649,7 +734,7 @@ def _decode(text: str) -> dict[str, Any] | None:
 
 
 def parse_line(line: str, following: Sequence[str] = ()) -> tuple[str, dict[str, Any]] | None:
-    """(`cameras` or `splat`, payload) for a live line, or None.
+    """(kind, payload) for cameras, splats, training or a run plan; None if invalid.
 
     A provider's log service may split one long line across entries, which the tail
     turns into consecutive lines; when a tagged line does not parse by itself, the lines
@@ -698,3 +783,16 @@ def decode_cameras(
     origin = np.asarray(payload["origin"], dtype=np.float64)
     centres = origin + q / _INT16 * float(payload["scale"])
     return centres, d[:, :3], d[:, 3:]
+
+
+def records(text: str) -> list[tuple[str, dict[str, Any]]]:
+    """Every valid live record in log order, including all training and snapshot lines."""
+    lines = text.splitlines()
+    result = []
+    for index, line in enumerate(lines):
+        if "live-" not in line:
+            continue
+        parsed = parse_line(line, lines[index + 1 : index + 8])
+        if parsed is not None:
+            result.append(parsed)
+    return result

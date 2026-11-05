@@ -10,12 +10,14 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from . import rehearsal
 from .gpu import GpuSampler
 from .ledger import STARTUP_SECONDS
+from .live_sync import watching
 from .recipe import make_recipe, patch_seed
 from .results import METRICS, parse_result
 from .scene import prepare_pool, read_json, verify, write_json
@@ -177,7 +179,12 @@ def billed_from(
 
 
 def run_training(
-    scene: Path, destination: Path, plan: dict[str, Any], *, billed_since: float | None = None
+    scene: Path,
+    destination: Path,
+    plan: dict[str, Any],
+    *,
+    billed_since: float | None = None,
+    live_commit: Callable[[], object] | None = None,
 ) -> dict[str, Any]:
     entered = time.time() if billed_since is None else billed_since
     import stages  # noqa: F401 - register implementations, never execute a pose stage
@@ -239,7 +246,8 @@ def run_training(
             stage_start = time.monotonic()
             sampler.start()
             try:
-                execute(recipe, work, RunnerSet(cpu=LocalRunner(), gpu=LocalRunner()))
+                with watching(plan, work, scene, destination, live_commit):
+                    execute(recipe, work, RunnerSet(cpu=LocalRunner(), gpu=LocalRunner()))
             finally:
                 train_seconds = time.monotonic() - stage_start
                 sampler.stop()

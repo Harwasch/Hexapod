@@ -246,7 +246,7 @@ def main(argv: list[str] | None = None) -> int:
                     state.reason = "hooked"
             # The timing, and no eval renders (converge_trainer.py says why), whether or
             # not the rule is on: the merged splat's `--ckpt` evaluation comes here too.
-            converge_trainer.instrument(module, runner, timing)
+            converge_trainer.instrument(module, runner, timing, cfg, state)
             return real_cli(fn, cfg, verbose=verbose)
 
         distributed.cli = cli

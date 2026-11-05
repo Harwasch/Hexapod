@@ -153,7 +153,12 @@ def test_a_splat_line_is_merged_beside_the_progress(db: Session, tmp_path: Path)
     row = db.get(JobStep, step.id)
     assert row is not None
     assert row.metrics["progress"]["done"] == 3600
-    assert row.metrics["live"] == {"splat": splat_payload(3000)}
+    live = row.metrics["live"]
+    assert live["splat"] == splat_payload(3000)
+    assert live["snapshots"] == [splat_payload(3000)]
+    assert all(
+        item["key"] != "captures/c/original.mov" for item in [live["splat"], *live["snapshots"]]
+    )
 
 
 # --- the API -------------------------------------------------------------------------
@@ -286,3 +291,53 @@ def test_without_a_bucket_the_state_is_still_served(db: Session) -> None:
 
     assert body["cameras"]["registered"] == 2
     assert body["splat"]["url"] is None
+
+
+def test_train_series_and_snapshots_persist_after_finish_and_bad_data_is_null(
+    client: TestClient, db: Session, storage: S3Storage
+) -> None:
+    from sqlalchemy import select
+
+    from app.services.live_train import merge_live
+
+    capture, job = training_run(db, "live-train-console")
+    step = db.scalars(
+        select(JobStep).where(JobStep.job_id == job.id, JobStep.stage_id == "train")
+    ).one()
+    older_key = SPLAT_KEY.replace("003000", "001000")
+    payload = splat_payload(1000, older_key)
+    payload["farFieldShare"] = 0.2
+    live = merge_live(
+        step.metrics["live"],
+        [
+            ("plan", {"v": 1, "stepsMax": 30000, "frames": 40}),
+            (
+                "train",
+                {
+                    "v": 1,
+                    "k": "s",
+                    "run": "a",
+                    "step": 200,
+                    "t": 20,
+                    "gs": 4000,
+                    "loss": {"total": 0.1},
+                },
+            ),
+            ("splat", payload),
+            ("splat", splat_payload()),
+        ],
+    )
+    step.metrics = {**step.metrics, "live": live}
+    step.status = RunStatus.COMPLETE
+    db.commit()
+    # Neither snapshot has been uploaded. The newest remains HEAD-gated; older URLs
+    # are locally signed, so scrubbing does not cause a HEAD per snapshot per poll.
+    body = client.get(f"/api/v1/captures/{capture.id}/live").json()
+    assert body["splat"]["url"] is None
+    assert body["train"]["series"]["step"] == [200]
+    assert older_key in body["train"]["snapshots"][0]["url"]
+    assert body["train"]["snapshots"][0]["farFieldShare"] == 0.2
+    assert body["train"]["events"][0]["kind"] == "setup"
+    step.metrics = {"live": {"train": {"series": "broken"}}}
+    db.commit()
+    assert client.get(f"/api/v1/captures/{capture.id}/live").json()["train"] is None

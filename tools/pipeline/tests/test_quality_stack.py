@@ -261,6 +261,11 @@ def test_source_anchors_against_available_pinned_clone() -> None:
         for anchor in (*block_trainer.REQUIRED_SOURCE, *converge_trainer.REQUIRED_SOURCE)
     )
     patched = quality_trainer.patch_source(source, Path("settings.json"), clone)
+    import train_telemetry
+
+    for candidate in (source, patched):
+        assert all(anchor in candidate for anchor in train_telemetry.REQUIRED_SOURCE)
+        assert all(anchor in candidate for anchor in converge_trainer.REQUIRED_SOURCE)
     compile(patched, str(clone), "exec")
     assert patched.index("sys.path.insert") < patched.index("from datasets.colmap")
 

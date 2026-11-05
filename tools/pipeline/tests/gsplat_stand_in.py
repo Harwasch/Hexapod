@@ -163,6 +163,7 @@ def main(argv: list[str] | None = None) -> int:
     # names are transcribed from its repository, not observed here, so "the trainer
     # put its splat somewhere this project does not look" is a real possibility.
     parser.add_argument("--no-ply", action="store_true")
+    parser.add_argument("--emit-live", action="store_true", help="fabricated telemetry for tests")
     args, _unknown = parser.parse_known_args(argv)
     # What v1.5.3's `Config.adjust_steps` does to the one number this stand-in uses.
     args.use_bilateral_grid = args.use_bilateral_grid or args.post_processing == "bilateral_grid"
@@ -223,6 +224,8 @@ def main(argv: list[str] | None = None) -> int:
     # remember it was already killed once, or the retry would be killed too.
     died = args.die_marker or (args.result_dir / "died-once")
 
+    if args.emit_live:
+        sys.stdout.write('live-train: {"v":1,"k":"s","step":0,"t":0,"gs":64,"sh":0}\n')
     step = start
     while step < args.max_steps:
         step += 1

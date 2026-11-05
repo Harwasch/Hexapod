@@ -1372,6 +1372,22 @@ uv run python -m experiments.bench run --scene spool --seeds 42,43 --rehearse
 uv run python -m experiments.bench report --rehearse
 ```
 
+Add `--live` to `bench run` to publish telemetry and small SPZ previews about every
+60 seconds; it leaves trainer params and comparison identity unchanged. Watch from a
+second terminal (read-only volume access, no database):
+
+```bash
+# From the repository root: build a same-origin console bundle once.
+VITE_API_BASE_URL= pnpm --filter @twin/web build
+cd apps/api && uv run --with modal==1.6.2 python -m app.scripts.bench_live <runId> --web-dist ../web/dist
+```
+
+Open the printed `http://127.0.0.1:8791/view.html#live/<runId>` URL. The watcher polls
+every 15 seconds and caches previews under `~/.local/share/hexapod-bench/live/<runId>/`.
+Use `--host 0.0.0.0 --port 8791` to open the same bundle over Tailscale. Without
+`--web-dist`, use the live console from an existing bundle pointed at this server.
+Frozen bench scenes have no georeferencing, so Distance stays disabled.
+
 Use `--set '{"train": {"gaussian_density": 0.2}}'`, or `--variants file.yaml` containing
 `baseline: {}` and `dense: {train: {gaussian_density: 0.2}}`. Each variant/seed gets a
 unique run ID; at most four spawn concurrently. `--keep-splat` retains `trained.ply`
@@ -1838,9 +1854,24 @@ none of the quality defaults flips. Source and weights are recorded in
   count the high-support tier; `gaussians.out` includes every retained row.
   `strict` remains the default. Background markers are preserved unchanged.
 
+During training, the shared telemetry hook emits `live-metrics:` after the first
+means-optimizer step, every 200 steps, and at the final observed step, with the quality
+stack either on or off. Steps are one-based. These lines carry `splatCount`,
+`farFieldShare`, `elongationShare`, and a single-sample `trainMemoryCurve` (decimal GB).
+The unchanged `live-train:` stream supplies console count and memory history (its
+`mem` is GiB); `merge_live` consumes the two quality fractions from `live-metrics:`.
+Memory-only updates preserve those fractions. Quality sampling is best-effort and
+never changes gradients, RNG, optimizer returns, or training exceptions.
+
+Quality-specific `lossTerms` remain in logs/reports but are not charted by this console;
+they are not merged into `live-train.loss`. Detailed allocator/raster memory diagnostics,
+dense-init metrics and export mismatch are also not console readouts. With no usable
+sparse reference, the live far-field fraction is omitted. Frozen sphere rows count in
+both live count streams; final exported counts/fractions can differ after filtering.
+
 `train_metrics.json` and `live-metrics: {JSON}` share the names below, exported in
-`quality_stack.METRIC_NAMES`. Live loss samples include a zero-based `step`, every 100
-steps; the final stage line includes the complete available val curve. Losses are raw
+`quality_stack.METRIC_NAMES`. Live samples use the cadence above; the final stage line
+includes the complete available val curve. Losses are raw
 unweighted terms, with weights recorded in `qualityStack.settings`. Synthetic rehearsal
 is explicitly labelled and its zero losses are not measurements.
 

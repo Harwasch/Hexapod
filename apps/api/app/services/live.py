@@ -28,9 +28,10 @@ from sqlalchemy.orm import Session
 
 from app.models import Capture, Job, JobStep
 from app.models.enums import RunStatus
-from app.schemas.live import LiveCameras, LiveProgress, LiveSplat, LiveStage, LiveState
+from app.schemas.live import LiveCameras, LiveProgress, LiveSplat, LiveStage, LiveState, LiveTrain
 from app.services.errors import NotFoundError
 from app.services.jobs import get_job
+from app.services.live_train import derive_events
 from app.storage import ObjectStorage
 from app.storage.null import StorageUnavailableError
 
@@ -77,6 +78,7 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
     current = running[-1] if running else (steps[-1] if steps else None)
     cameras: LiveCameras | None = None
     splat: LiveSplat | None = None
+    train: LiveTrain | None = None
     # The newest of each, by position in the run: a re-run pose stage's cameras replace
     # the old ones, and a Refine's training replaces the preview's splat.
     for step in steps:
@@ -87,6 +89,7 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
         cameras = found_cameras or cameras
         found_splat = _splat(step, live.get("splat"), storage)
         splat = found_splat or splat
+        train = _train(live, storage) or train
     return LiveState(
         job_id=job.id,
         capture_id=capture.id,
@@ -100,6 +103,7 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
         steps_started=len(steps),
         cameras=cameras,
         splat=splat,
+        train=train,
     )
 
 
@@ -188,3 +192,43 @@ def _signed(storage: ObjectStorage, key: str) -> str | None:
         return storage.presign_get(key, expires_in=SIGNED_FOR_S)
     except StorageUnavailableError:
         return None
+
+
+def _train(live: dict[str, Any], storage: ObjectStorage) -> LiveTrain | None:
+    """Validate first, then derive and sign; malformed historical JSON is never fatal."""
+    value = live.get("train")
+    if not isinstance(value, dict):
+        return None
+    try:
+        parsed = LiveTrain.model_validate({**value, "snapshots": live.get("snapshots", [])})
+        document = parsed.model_dump(by_alias=True)
+        # Relocations are optional observations, bounded by the worker, not stored events.
+        relocations = value.get("relocations", [])
+        document["relocations"] = (
+            [
+                row
+                for row in relocations
+                if isinstance(row, dict) and isinstance(row.get("step"), int) and row["step"] >= 0
+            ]
+            if isinstance(relocations, list)
+            else []
+        )
+        document["events"] = derive_events(document)
+        parsed = LiveTrain.model_validate(document)
+    except (ValidationError, TypeError, ValueError, KeyError, IndexError):
+        return None
+    for snapshot in parsed.snapshots:
+        key = snapshot.key
+        if (
+            not key.startswith("runs/")
+            or _LIVE_SEGMENT not in key
+            or ".." in key
+            or not key.endswith(".spz")
+        ):
+            return None
+        # Presigning is local; HEAD only the newest splat through `_splat`.
+        try:
+            snapshot.url = storage.presign_get(key, expires_in=SIGNED_FOR_S)
+        except StorageUnavailableError:
+            snapshot.url = None
+    return parsed

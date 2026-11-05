@@ -105,6 +105,7 @@ import holdout
 import init_seed
 import live
 import sfm
+import train_plan
 import training
 from captures_bridge import read_ply
 from contracts import FANOUT_PARAM, FanOut, FanOutPart, MetricValue, StageContext
@@ -182,7 +183,16 @@ PART_ROWS = 131_072
 #: blocks train at once and which call of a fan-out this is, so that neither can make a
 #: finished block look like another plan's.
 RUNTIME_PARAMS = frozenset(
-    {"block_attempt_budget_s", "block_sync_wait_s", "live", "block_parallel", FANOUT_PARAM}
+    {
+        # Observability metadata must never invalidate a reusable trained block.
+        "_live_rate_tier",
+        "_live_usd_per_hour",
+        "block_attempt_budget_s",
+        "block_sync_wait_s",
+        "live",
+        "block_parallel",
+        FANOUT_PARAM,
+    }
 )
 
 #: Blocks trained at once when the runner fans out (`block_parallel`). Four L4s: the spool's
@@ -1420,6 +1430,19 @@ def _train_block(
     )
     phases.add("seed", time.monotonic() - seeding)
     began = time.monotonic()
+    train_plan.emit(
+        ctx,
+        budget=block_budget or settings.budget,
+        cap=cap,
+        steps=iterations,
+        factor=factor,
+        scaler=scaler,
+        strategy=settings.strategy,
+        rule=settings.rule if settings.converge else None,
+        blocks=plan.partition.count,
+        frames=len(names),
+        sparse=applied.seeded + applied.sfm_points,
+    )
     with live.SplatWatch(
         result / "ply",
         ctx.checkpoint_dir / live.LIVE_DIR,
