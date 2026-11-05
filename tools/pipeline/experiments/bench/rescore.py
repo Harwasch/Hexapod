@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw
 
 import sfm
 import training
+from experiments.distance import measure_ply, scene_geometry
 from holdout_error import read_ply
 
 from .ledger import hourly_rate
@@ -245,6 +246,19 @@ def run_rescore(
             result["alignment"] = {
                 key: settings[key] for key in ("steps", "maxTranslationPct", "maxRotationDeg")
             }
+            # Run CPU distance work before the timed renderer so it consumes the
+            # existing budget, rather than overrunning the post-render return margin.
+            # Geometry is shared by every row in the original COLMAP frame.
+            try:
+                distance_geometry = scene_geometry(frozen)
+            except ValueError as error:
+                distance_geometry = {
+                    "scene": str(frozen),
+                    "path": None,
+                    "scale": {"status": "unavailable", "reason": str(error)},
+                }
+            result["distanceGeometry"] = distance_geometry
+            distances = [measure_ply(Path(source["ply"]), distance_geometry) for source in sources]
             if plan.get("rehearsal"):
                 synthetic(settings, destination)
             else:
@@ -270,6 +284,8 @@ def run_rescore(
                         timeout=max(1, settings["deadline"] - time.time()),
                     )
             result.update(read_json(destination / "scores.json"))
+            for row, distance in zip(result["rows"], distances, strict=True):
+                row["distance"] = distance
             comparisons(destination, result["rows"], cameras)
             pngs = encode_pngs(destination)
             result.update(status="complete", cameras=cameras)
@@ -409,6 +425,7 @@ def table(documents: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
                     **scored,
                     "topdown": row["topdown"],
                     "needle": row["needle"],
+                    "distance": row.get("distance"),
                 }
             )
         lines += [

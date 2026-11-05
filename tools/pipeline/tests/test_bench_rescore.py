@@ -11,6 +11,7 @@ from test_bench_matched import A, B, pair
 from experiments.bench import __main__ as cli
 from experiments.bench import ledger, rescore
 from experiments.bench.scene import read_json, write_json
+from experiments.distance import measure_ply
 
 C, D = "c" * 32, "d" * 32
 
@@ -40,6 +41,25 @@ def test_rehearsal_rescores_four_kept_plys_and_reports_missing_without_training(
     monkeypatch.setattr(cli, "git_commit", lambda: "test")
     monkeypatch.setattr(cli, "load_modal", lambda: pytest.fail("rehearsal imported Modal"))
     monkeypatch.setattr(cli, "run_training", lambda *a, **kw: pytest.fail("rescore trained"))
+    distance_geometry = {
+        "path": {"centres": [[0, 0, 0], [1, 0, 0]]},
+        "scale": {"status": "estimated", "metresPerUnit": 2.0},
+    }
+    monkeypatch.setattr(rescore, "scene_geometry", lambda _: distance_geometry)
+    measured: list[Path] = []
+    synthetic = rescore.synthetic
+
+    def measure(path: Path, geometry: dict[str, Any]) -> dict[str, Any]:
+        measured.append(path)
+        return measure_ply(path, geometry)
+
+    def render_after_distances(settings: dict[str, Any], output: Path) -> None:
+        # CPU work must consume the renderer's remaining deadline, not its return margin.
+        assert len(measured) == len(settings["sources"])
+        synthetic(settings, output)
+
+    monkeypatch.setattr(rescore, "measure_ply", measure)
+    monkeypatch.setattr(rescore, "synthetic", render_after_distances)
     assert (
         cli.main(
             [
@@ -64,6 +84,10 @@ def test_rehearsal_rescores_four_kept_plys_and_reports_missing_without_training(
     document = read_json(batches[0])
     assert document["status"] == "complete" and document["costUsd"] == 0
     assert len(document["rows"]) == 4
+    assert document["distanceGeometry"] == distance_geometry
+    assert document["rows"][0]["distance"] == measure_ply(
+        state / "runs" / A / "trained.ply", distance_geometry
+    )
     assert document["unavailable"][0]["runId"] == D
     assert "classic" in document["renderer"]
     assert (batches[0].parent / "comparison-overhead-90.png").is_file()
@@ -79,6 +103,7 @@ def test_rehearsal_rescores_four_kept_plys_and_reports_missing_without_training(
     assert "(differs)" in output and "classic" in output.lower()
     report = read_json(state / "rescore-table.json")
     assert len(report["tables"]["full"]) == len(report["tables"]["half"]) == 4
+    assert report["tables"]["full"][0]["distance"] == document["rows"][0]["distance"]
     assert report["unavailable"]
     entries = ledger.read(state / "ledger.jsonl")
     assert [e["event"] for e in entries] == ["planned", "finished"]
@@ -259,3 +284,31 @@ def test_worst_case_generated_pngs_fit_return_budget() -> None:
     panels = 3 * encoded(429, 4 * 384, 3)
     masks = 3 * encoded(384, 384, 1)
     assert photos + overheads + panels + masks < rescore.MAX_PNG_BASE64_BYTES
+
+
+def test_unknown_camera_order_preserves_photo_scores_with_unavailable_distance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inputs(tmp_path)
+
+    def unordered(_: Path) -> dict[str, Any]:
+        raise ValueError("cannot establish capture order")
+
+    monkeypatch.setattr(rescore, "scene_geometry", unordered)
+    result = rescore.run_rescore(
+        tmp_path,
+        tmp_path / "runs" / ("rescore-" + C),
+        {
+            "runId": "rescore-" + C,
+            "scene": "beach",
+            "runs": [A],
+            "rehearsal": True,
+            "benchCommit": "test",
+            "timeoutSeconds": 7200,
+        },
+    )
+    assert result["status"] == "complete"
+    measured = result["rows"][0]["distance"]
+    assert measured["status"] == "unavailable"
+    assert measured["bands"] is None and "capture order" in measured["scale"]["reason"]
+    assert "resolutions" in result["rows"][0]

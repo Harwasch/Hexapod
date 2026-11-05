@@ -49,6 +49,11 @@ def load_modal() -> Any:
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description=__doc__)
     commands = root.add_subparsers(dest="command", required=True)
+    distance = commands.add_parser("distance", help="local CPU splat distance to camera path")
+    distance.add_argument("--scene-dir", type=Path, required=True)
+    distance.add_argument("--ply", type=Path, action="append", required=True)
+    distance.add_argument("--camera-height-m", type=float, default=1.4)
+    distance.add_argument("--output", type=Path, help="directory for distance.json and distance.md")
     freeze = commands.add_parser("freeze")
     freeze.add_argument("--scene", choices=sorted(SCENES), required=True)
     freeze.add_argument("--run", help="override the registry UUID or 8-hex run prefix")
@@ -411,6 +416,16 @@ def local_batch(
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command == "distance":
+        from experiments.distance import run as distance_run
+
+        try:
+            document = distance_run(args.scene_dir, args.ply, args.output, args.camera_height_m)
+            sys.stdout.write(json.dumps(document, indent=2, allow_nan=False) + "\n")
+            return 0 if all(row["status"] == "complete" for row in document["rows"]) else 1
+        except (ValueError, OSError) as error:
+            sys.stderr.write(f"bench distance: {error}\n")
+            return 2
     state = args.state_dir.expanduser().resolve()
     if args.rehearse:
         state /= "rehearsal"
