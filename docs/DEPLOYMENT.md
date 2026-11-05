@@ -540,7 +540,7 @@ worker.
 | ------------ | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Fly `worker` | `normalize` (ffmpeg), `georeference`, `place`, `confidence`, `package` and the rest | light CPU work; the worker already holds the upload                                                                   |
 | Modal `cpu4` | `pose` (COLMAP 3.9.1), `align`, `quality`                                           | more memory and sustained CPU than the 2 GB worker has ([below](#the-worker-image-carries-colmap)); billed per second |
-| Modal L4     | `train` (gsplat 1.6.0 `simple_trainer.py`, source pin `512d366b`)                                          | needs CUDA; billed per second only while it runs, so an idle deployment costs nothing for it                          |
+| Modal L4     | `train` (gsplat 1.6.0 `simple_trainer.py`, source pin `512d366b`)                   | needs CUDA; billed per second only while it runs, so an idle deployment costs nothing for it                          |
 
 `fly.toml` sets `WORKER_RUNNER=cloud` and `WORKER_CLOUD_PROVIDERS=modal`. The worker then
 calls `run_stage_<tier>` in the Modal app `twin-pipeline` (`WORKER_MODAL_APP`'s default),
