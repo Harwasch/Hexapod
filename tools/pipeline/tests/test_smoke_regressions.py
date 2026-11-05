@@ -128,6 +128,11 @@ def test_diagnostic_differs_only_in_ppisp() -> None:
         "upgraded-plain",
         "all-on-no-3dgut",
         "all-on-no-3dgut-native",
+        "crashfix",
+    }
+    assert diagnostic["crashfix"] == {
+        "train": diagnostic["all-on-no-3dgut-native"]["train"],
+        "bench": {"keep_splat": True},
     }
 
 

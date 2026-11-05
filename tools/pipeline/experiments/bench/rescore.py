@@ -153,6 +153,13 @@ def synthetic(settings: dict[str, Any], output: Path) -> None:
             row["resolutions"][name] = {
                 "scoredAt": {"height": size[0], "width": size[1]},
                 "metrics": {k: dict(psnr=None, ssim=None, lpips=None) for k in MODES},
+                "bottom": {
+                    k: dict(psnr=None, ssim=None, lpips=None, validPixels=None) for k in MODES
+                },
+                "brightness": {
+                    k: dict(renderMeanRgb=None, gtMeanRgb=None, delta=None, ratio=None)
+                    for k in ("raw", "aligned")
+                },
                 "perFrame": [],
                 "poseMoveMedian": {"translationPct": None, "rotationDeg": None},
             }
@@ -404,6 +411,31 @@ def table(documents: list[dict[str, Any]]) -> tuple[str, dict[str, Any]]:
                     "needle": row["needle"],
                 }
             )
+        lines += [
+            "\nBottom third (valid pixels; spatial SSIM/LPIPS). "
+            "Brightness is all-frame mean RGB 0-255.\n",
+            "| run | bottom raw P/S/L | aligned | cc | aligned+cc | "
+            "raw render / GT | aligned render / GT |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for row in unique.values():
+            scored = row["resolutions"][resolution]
+            cells = [f"{row['runId'][:8]}:{row['ply']}"]
+            cells += [
+                "/".join(
+                    number(scored.get("bottom", {}).get(mode, {}).get(k))
+                    for k in ("psnr", "ssim", "lpips")
+                )
+                for mode in MODES
+            ]
+            cells += [
+                " / ".join(
+                    number(scored.get("brightness", {}).get(mode, {}).get(k))
+                    for k in ("renderMeanRgb", "gtMeanRgb")
+                )
+                for mode in ("raw", "aligned")
+            ]
+            lines.append("| " + " | ".join(cells) + " |")
     unavailable = list(
         {
             (r["runId"], r.get("ply")): r for d in documents for r in d.get("unavailable", [])

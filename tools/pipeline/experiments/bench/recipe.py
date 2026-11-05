@@ -75,6 +75,28 @@ def train_params(schedule: str, overrides: dict[str, Any]) -> dict[str, Any]:
     return params
 
 
+def patch_photometry(trainer: Path) -> Path:
+    """Bench keeps PPISP state at the exact checkpoint/PLY seam, even without quality flags."""
+    source = trainer.read_text()
+    anchor = (
+        '                    data["post_processing"] = self.post_processing_module.state_dict()'
+    )
+    if source.count(anchor) != 1:
+        raise ValueError("bench PPISP checkpoint seam moved")
+    # Import only our stdlib-only helper, then restore upstream's import precedence.
+    injected = (
+        anchor + "\n"
+        "                    import sys as _bench_sys\n"
+        f"                    _bench_sys.path.insert(0, {str(PIPELINE)!r})\n"
+        "                    import photometry_state as _bench_photometry\n"
+        "                    _bench_sys.path.pop(0)\n"
+        "                    _bench_photometry.save(self, data)"
+    )
+    patched = trainer.with_name(f"{trainer.stem}_bench_photometry.py")
+    patched.write_text(source.replace(anchor, injected))
+    return patched
+
+
 def validate_renderer(params: dict[str, Any]) -> None:
     """Reject unsupported flag pairs before importing Modal or reserving paid work."""
     training.gsplat_argv(

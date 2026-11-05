@@ -62,7 +62,7 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--seeds", default="42")
     run.add_argument("--schedule", choices=("screen", "full"), default="screen")
     run.add_argument("--tier", choices=("l4", "a10", "l40s", "a100"), default="l4")
-    run.add_argument("--keep-splat", action="store_true")
+    run.add_argument("--keep-splat", action=argparse.BooleanOptionalAction, default=None)
     run.add_argument("--topdown", action="store_true", help="best-effort GPU overview PNG")
     run.add_argument("--live", action="store_true", help="publish live console telemetry")
     run.add_argument("--renders", type=int, default=0, help="save the first N test frames as PNGs")
@@ -192,6 +192,14 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
             raise ValueError(
                 f"variant {name!r} is pending implementation; overrides must be a mapping"
             )
+        bench = overrides.get("bench", {})
+        if (
+            not isinstance(bench, dict)
+            or set(bench) - {"keep_splat"}
+            or ("keep_splat" in bench and not isinstance(bench["keep_splat"], bool))
+        ):
+            raise ValueError("variant bench settings only accept keep_splat: true/false")
+        overrides = {k: v for k, v in overrides.items() if k != "bench"}
         train_params(args.schedule, overrides)
         merged = {"train": {**overrides.get("train", {}), **common.get("train", {})}}
         if "quality" in overrides or "quality" in common:
@@ -208,7 +216,9 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "schedule": args.schedule,
                     "tier": args.tier,
                     "trainParams": params,
-                    "keepSplat": args.keep_splat,
+                    "keepSplat": args.keep_splat
+                    if args.keep_splat is not None
+                    else bench.get("keep_splat", False),
                     "renders": args.renders,
                     "topdown": args.topdown,
                     **({"live": True} if args.live else {}),

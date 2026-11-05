@@ -183,7 +183,7 @@ def test_new_post_processing_cli_and_controller_switches() -> None:
 
 
 @pytest.mark.parametrize(
-    "variants_file, count", [("quality-stack.yaml", 2), ("quality-stack-diagnostic.yaml", 4)]
+    "variants_file, count", [("quality-stack.yaml", 2), ("quality-stack-diagnostic.yaml", 5)]
 )
 def test_every_variant_rehearses_without_modal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variants_file: str, count: int

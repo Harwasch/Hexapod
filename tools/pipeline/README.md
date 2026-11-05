@@ -1422,6 +1422,87 @@ two full runs with `--runs A B`; screen and synthetic rows never justify a defau
 The older `--flip-rule` helper implements the previous three-capture rule and is not
 the decision rule for this Beach A/B experiment.
 
+### Beach CPU diagnostics and Stage 2
+
+Run the read-only sparse diagnostic from `tools/pipeline`:
+
+```bash
+OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4 \
+  uv run python -m experiments.near_ground \
+  "$HOME/.cache/hexapod-scenes/beach" --output .tmp/stage2-diagnostics
+```
+
+It reads `split.json`, counts distinct **train-pool** tracks only, projects with the
+original COLMAP lens distortion, and compares the lower third with the upper image.
+JSON separates all projected points (possibly occluded) from those tracked in the
+held-out frame, and includes camera-depth tertiles, pool-only reprojection residuals,
+held-out residuals, and supporting-frame Laplacian variance using the keyframe metric.
+It does not label semantic ground or measure untracked sand.
+
+The frozen beach measurement (38 test / 262 pool frames) points most strongly to
+limited measured near-ground views: median support is **3 versus 5** views, and
+**69.5% versus 30.0%** of tracked points have fewer than four pool views. Pool residuals
+are **0.767 versus 0.889 px**, held-out residuals **0.706 versus 0.836 px**. Supporting
+frame sharpness is **458.5 versus 489.7**; it mixes texture and blur, so this is not
+proof of motion blur. These comparisons do not support worse near-ground pose error
+as the primary explanation. The pool includes the trainer's internal validation set,
+as required for this coverage diagnostic.
+
+Brightness remains unisolated. Metadata lumaMean is 135.88 for the pool, 135.86 for
+actual optimized frames, and 134.42 for test (about 1.1% difference, not a calibrated
+exposure estimate). The saved first-frame preview is 151.96 mean RGB for all-on versus
+140.75 GT and 145.73 A; aligned all-on remains 151.88. Only that frame's pixels were
+kept, so this is not an all-test-frame result. PPISP's regularizer centres **log2 exposure
+parameters**, not arithmetic mean RGB; the reference need not equal any one photograph
+or the test mean. Display-referred mode already freezes identity CRF and zero vignette.
+The sphere can show through incomplete opacity; priors can change geometry/opacity,
+but neither is isolated by these files. The 1.458% exported far-field share is below
+the 10% cap. There is no justified global brightness correction to apply yet.
+
+Bench now retains `post_processing.json` with the exact PPISP checkpoint state,
+tensor shapes/dtypes, zero-based step and optimized frame order, without the large
+splat/optimizer tensors. It is captured before the same step's PLY export and returned
+locally as a normal bench artifact. Inspect exposure/colour versus frame luma, compare
+training renders before/after their learned corrections, and render the same PLY with
+the frozen sphere disabled to distinguish reference exposure from background leakage.
+All marked `far_field` rows also include learned distant points, so removing them is
+a broader counterfactual. No new brightness/training-loss fix is claimed.
+
+`crashfix` in `experiments/variants/quality-stack-diagnostic.yaml` equals
+`all-on-no-3dgut-native` with the fade stage removed. It enables the existing corrected
+log-domain anisotropy loss and scale guard, budget 3,456,214, native training and prior
+comparison resolution (no `train_max_side`, `step_max_side` or `priors.max_side`), and
+keeps PLYs by default via `bench.keep_splat: true`. `--no-keep-splat` explicitly overrides
+that default. No prior memory cap is imposed; native peak GPU memory remains unmeasured.
+A CPU `--rehearse --live` verifies the variant, PLY retention, live log and SPZ snapshots;
+it does not verify GPU memory, CUDA math or Modal volume delivery.
+
+After committing, from `tools/pipeline`, the prepared Stage 2 command is:
+
+```bash
+export TMPDIR="$PWD/.tmp/stage2-tmp"
+mkdir -p "$TMPDIR"
+HEXAPOD_BENCH_FULL_TIMEOUT=10800 uv run --with modal==1.6.2 python -m experiments.bench run \
+  --scene beach --variants experiments/variants/quality-stack-diagnostic.yaml \
+  --variant crashfix --schedule full --tier l4 --seeds 42 --live \
+  --tag stage2-crashfix --cap 3 --total-cap 5 \
+  --ledger "$HOME/.local/share/hexapod-bench/quality-stack.jsonl"
+```
+
+This reserves about $2.94 at repository rates for a three-hour timeout plus overhead;
+it is a limit, not a prediction of completion. Add `--rehearse --state-dir .tmp/stage2-rehearsal`
+to exercise local synthetic execution for $0. The live view uses the **paid** run ID
+printed in the plan, not the rehearsal ID. In another terminal, from `apps/api`:
+
+```bash
+uv run --with modal==1.6.2 python -m app.scripts.bench_live RUN_ID \
+  --host "$(tailscale ip -4)" --port 8791 --web-dist ../web/dist
+```
+
+Use an existing web build containing `view.html`; the watcher needs neither PostGIS nor
+API settings. It polls the bench volume, so the view URL's hostname must be this machine's
+Tailscale address for remote viewing. No web files are changed by these diagnostics.
+
 ### Quality-stack bake-off
 
 **Common-yardstick rescore (evaluation only; no new training).** The historical scores below
@@ -1473,7 +1554,8 @@ They diagnose pose/photometric mismatch; they are not untouched-test predictions
 All four PLYs use the same optimizer steps and bounds. A deadline fails the batch
 instead of quietly shortening later rows. Partial diagnostics and the full evaluator
 log stay on the volume; partial rows are not reported as a completed comparison.
-The crop and reduced schedule define `rescore-v2`; reports refuse to mix protocols.
+The crop and reduced schedule defined `rescore-v2`; the bottom region and brightness
+measurements below define `rescore-v3`. Reports refuse to mix protocols.
 The real-image CPU self-check exercises Dataset's float/uint8 paths and the odd ROI.
 A tiny CUDA camera-gradient probe runs before loading any kept PLY. Classic mode
 supports view-matrix gradients in the pinned source. Rendering keeps `packed=False`:
@@ -1510,6 +1592,8 @@ fit this limit even at the four-row maximum; full-resolution photo PNGs are not 
 | Rescore JSON name                        | Definition                                                                                                       |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `rows[].resolutions.{full,half}.metrics` | `raw`, `aligned`, `cc`, `aligned+cc`, each with PSNR (dB), SSIM and LPIPS                                        |
+| `rows[].resolutions.*.bottom`            | Lower third, all four modes; same fields also appear per frame                                                   |
+| `rows[].resolutions.*.brightness`        | Raw/aligned mean RGB 0-255, GT mean, delta and ratio over all valid test pixels; per-frame values retained       |
 | `rows[].resolutions.*.perFrame[].pose`   | Corrected view matrix, `translationPct`, `rotationDeg`, `lossBefore`, `lossAfter`, objective and step count      |
 | `rows[].resolutions.*.poseMoveMedian`    | Median translation % of extent and rotation degrees across test cameras                                          |
 | `rows[].topdown.holeMean`                | Mean foreground-only alpha < 0.5 fraction over three fixed cameras                                               |
@@ -1518,6 +1602,16 @@ fit this limit even at the four-row maximum; full-resolution photo PNGs are not 
 | `rows[].needle.farFieldCount`            | Number of marked rows excluded from hole and needle scores; plain PLYs have zero                                 |
 | `scoringCamera`                          | Actual `undistortedAt`, even full `scoredAt`, and right/bottom `crop` in pixels; `frozenAt` is separate metadata |
 | `rows[].timings[]`                       | Per-frame wall `seconds`, current `allocatedGb`, cumulative CUDA `peakAllocatedGb` (decimal GB)                  |
+
+`bottom` starts at `floor(2*scoredHeight/3)` after the common scoring crop, separately
+at each resolution. PSNR uses valid RGB samples. SSIM and AlexNet LPIPS use spatial
+maps averaged only at valid centres in the lower-third crop; invalid neighbourhood
+pixels are zero in both inputs. This spatial LPIPS definition differs from averaging
+each feature layer before upsampling. Region scores average frames equally, like the
+full scores. An empty region has null scores and zero valid pixels; a perfect match
+has null PSNR with `psnrInfinite: true` per frame. Brightness is arithmetic mean RGB,
+not luminance: aggregate means weight frames by valid-pixel count and also record
+the equal-frame mean delta. The old one-frame PNGs cannot recover these all-frame values.
 
 Use the same ledger with the new `rescore` tag. The forecast is $1.50 and the timeout 120 minutes, which reserves about $2: 4 PLYs x 38 frames x 260 alignment steps is 39,520 updates. The timeout is a bound, not a measurement.
 There is no automatic training or retry. From `tools/pipeline`, after committing these edits:

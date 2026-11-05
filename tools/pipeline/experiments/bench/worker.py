@@ -18,7 +18,7 @@ from . import rehearsal
 from .gpu import GpuSampler
 from .ledger import STARTUP_SECONDS
 from .live_sync import watching
-from .recipe import make_recipe, patch_seed
+from .recipe import make_recipe, patch_photometry, patch_seed
 from .results import METRICS, parse_result
 from .scene import prepare_pool, read_json, verify, write_json
 
@@ -29,6 +29,7 @@ ARTIFACTS = (
     "converge.json",
     "trainer_timing.json",
     "train_memory.json",
+    "post_processing.json",
     "gpu_samples.json",
     "test-trained.json",
     "quality.json",
@@ -230,6 +231,8 @@ def run_training(
             else:
                 original = training.trainer_script(None)
                 trainer = patch_seed(original, plan["seed"])
+                if params.get("post_processing") == "ppisp":
+                    trainer = patch_photometry(trainer)
                 if trainer != original:
                     params["trainer"] = str(trainer)
                 smi = shutil.which("nvidia-smi")

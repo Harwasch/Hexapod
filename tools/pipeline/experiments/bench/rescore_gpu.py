@@ -22,6 +22,9 @@ from experiments.bench.evaluate import lookup_frames
 from experiments.bench.rescore_maths import (
     MODES,
     PROTOCOL,
+    aggregate_brightness,
+    bottom_start,
+    brightness,
     footprint,
     needle_scores,
     pose_motion,
@@ -214,6 +217,62 @@ def prepare_frame(data: dict[str, Any], device: Any) -> tuple[Any, Any, Any, Any
     return real, intrinsic, original, mask, geometry
 
 
+def bottom_scores(prediction: Any, target: Any, valid: Any, lpips: Any) -> dict[str, Any]:
+    """Valid-centre spatial metrics on a lower-third crop, with common zero context.
+
+    Unlike the legacy full-image score, invalid pixels do not enter denominators.
+    SSIM/LPIPS still use neighbourhoods: both inputs share zero at invalid pixels.
+    LPIPS is the AlexNet spatial-map variant, averaged only at valid centres.
+    """
+    import torch
+    from torchmetrics.functional.image import structural_similarity_index_measure
+
+    start = bottom_start(target.shape[0])
+    mask = valid[start:]
+    count = int(mask.sum())
+    if not count:
+        return {"psnr": None, "ssim": None, "lpips": None, "validPixels": 0}
+    p = torch.where(mask[..., None], prediction[start:], 0)
+    t = torch.where(mask[..., None], target[start:], 0)
+    mse = (p[mask] - t[mask]).square().mean()
+    p, t = p.permute(2, 0, 1)[None], t.permute(2, 0, 1)[None]
+    _, ssim_map = structural_similarity_index_measure(p, t, data_range=1.0, return_full_image=True)
+    spatial = lpips.net.spatial
+    try:
+        lpips.net.spatial = True
+        lpips_map = lpips.net(p, t, normalize=True)
+    finally:
+        lpips.net.spatial = spatial
+    if ssim_map.shape[-2:] != mask.shape or lpips_map.shape[-2:] != mask.shape:
+        raise ValueError("rescore spatial metric shape changed")
+    result: dict[str, Any] = {
+        "psnr": float(-10 * torch.log10(mse)) if float(mse) > 0 else None,
+        "psnrInfinite": float(mse) == 0,
+        "ssim": float(ssim_map[0, :, mask].mean()),
+        "lpips": float(lpips_map[0, 0, mask].mean()),
+        "validPixels": count,
+    }
+    if any(not np.isfinite(result[key]) for key in ("ssim", "lpips")):
+        raise ValueError("nonfinite bottom metric")
+    return result
+
+
+def aggregate_bottom(frames: list[Any]) -> dict[str, Any]:
+    """Equal-frame average, like full metrics; absent/perfect scores remain explicit."""
+    result = {}
+    for mode in MODES:
+        values = [r["bottom"][mode] for r in frames]
+        result[mode] = {
+            key: float(np.mean([v[key] for v in values]))
+            if all(v[key] is not None for v in values)
+            else None
+            for key in ("psnr", "ssim", "lpips")
+        }
+        result[mode]["frames"] = len(values)
+        result[mode]["validPixels"] = sum(v["validPixels"] for v in values)
+    return result
+
+
 def score_all(settings: dict[str, Any], output: Path) -> None:
     sys.path.insert(0, str(Path(settings["trainer"]).parent))
     import torch
@@ -351,6 +410,14 @@ def score_all(settings: dict[str, Any], output: Path) -> None:
                             "metrics": {
                                 mode: scores(pred, reference) for mode, pred in predictions.items()
                             },
+                            "bottom": {
+                                mode: bottom_scores(pred, reference, valid, metrics["lpips"])
+                                for mode, pred in predictions.items()
+                            },
+                            "brightness": {
+                                mode: brightness(predictions[mode], target, valid)
+                                for mode in ("raw", "aligned")
+                            },
                         }
                     )
                     if frame_index == 0:
@@ -379,6 +446,8 @@ def score_all(settings: dict[str, Any], output: Path) -> None:
             row["resolutions"][resolution] = {
                 "scoredAt": {"height": size[0], "width": size[1]},
                 "perFrame": frames,
+                "bottom": aggregate_bottom(frames),
+                "brightness": aggregate_brightness(frames),
                 "metrics": {
                     mode: {
                         metric: float(np.mean([r["metrics"][mode][metric] for r in frames]))
@@ -436,6 +505,15 @@ def score_all(settings: dict[str, Any], output: Path) -> None:
                 "invalid pixels black in both; fits use only valid pixels"
             ),
             "lpipsNet": "alex",
+            "bottomDefinition": (
+                "y >= floor(2*scoredHeight/3); PSNR over valid RGB samples; SSIM and AlexNet "
+                "LPIPS spatial maps averaged at valid centres in the cropped lower third; "
+                "invalid neighbourhood pixels are zero in both inputs; equal-frame aggregate"
+            ),
+            "brightnessDefinition": (
+                "0..255 arithmetic mean RGB over valid pixels, "
+                "pixel-weighted over every test frame; not luminance"
+            ),
             "photoPngs": (
                 "first frozen test frame; previews at max 640px, scores use recorded scoredAt"
             ),
@@ -450,8 +528,27 @@ def cpu_self_check() -> None:
     import torch
     from datasets.colmap import Dataset
     from gsplat.color_correct import color_correct_affine
+    from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
     from experiments.bench.rescore_maths import affine_correct, se3
+
+    # Real spatial SSIM/LPIPS path, with already cached AlexNet weights; CPU only.
+    lpips = LearnedPerceptualImagePatchSimilarity(net_type="alex", normalize=True).eval()
+    yy, xx = torch.meshgrid(torch.arange(192), torch.arange(96), indexing="ij")
+    target = ((xx + yy) % 17).float()[..., None].expand(-1, -1, 3) / 17
+    prediction = target * 0.9
+    valid = torch.ones((192, 96), dtype=torch.bool)
+    valid[:, :8] = False
+    with torch.no_grad():
+        measured = bottom_scores(prediction, target, valid, lpips)
+        prediction[:128] = 1  # Outside the requested region cannot influence its score.
+        prediction[:, :8] = 1  # Nor can masked pixels.
+        again = bottom_scores(prediction, target, valid, lpips)
+    if measured != again or measured["validPixels"] != 64 * 88 or lpips.net.spatial:
+        raise ValueError("bottom crop/mask or LPIPS state isolation changed")
+    expected = float(-10 * torch.log10((target[128:, 8:] * 0.1).square().mean()))
+    if abs(measured["psnr"] - expected) > 1e-4:
+        raise ValueError("bottom PSNR denominator includes invalid pixels")
 
     # Execute the real pinned Dataset.__getitem__ and frame-preparation seam,
     # including float/uint8 image paths and masks. No CUDA or model downloads.

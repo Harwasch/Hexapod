@@ -11,8 +11,53 @@ from .topdown_maths import frame_camera
 
 MODES = ("raw", "aligned", "cc", "aligned+cc")
 RESOLUTIONS = ("full", "half")
-PROTOCOL = "rescore-v2"
+PROTOCOL = "rescore-v3"
 ALIGNMENT_STEPS = (200, 60)
+
+
+def bottom_start(height: int) -> int:
+    """Lower third in the scored image (after the common even crop)."""
+    return 2 * height // 3
+
+
+def brightness(prediction: Any, target: Any, valid: Any) -> dict[str, Any]:
+    """Mean RGB, not luminance, in 0..255 on the same valid pixels; NumPy or torch."""
+    count = int(valid.sum())
+    if not count:
+        raise ValueError("brightness needs valid pixels")
+    render = float(prediction[valid].mean()) * 255
+    gt = float(target[valid].mean()) * 255
+    return {
+        "validPixels": count,
+        "renderMeanRgb": render,
+        "gtMeanRgb": gt,
+        "delta": render - gt,
+        "ratio": render / gt if gt else None,
+    }
+
+
+def aggregate_brightness(frames: list[dict[str, Any]]) -> dict[str, Any]:
+    """Pixel-weighted across every test frame, plus equal-frame means for auditing."""
+    result = {}
+    for mode in ("raw", "aligned"):
+        values = [row["brightness"][mode] for row in frames]
+        counts = np.array([v["validPixels"] for v in values])
+        if not len(values) or counts.sum() <= 0:
+            raise ValueError("brightness aggregation needs measured frames")
+        render, gt = [
+            float(np.average([v[key] for v in values], weights=counts))
+            for key in ("renderMeanRgb", "gtMeanRgb")
+        ]
+        result[mode] = {
+            "frames": len(values),
+            "validPixels": int(counts.sum()),
+            "renderMeanRgb": render,
+            "gtMeanRgb": gt,
+            "delta": render - gt,
+            "ratio": render / gt if gt else None,
+            "frameMeanDelta": float(np.mean([v["delta"] for v in values])),
+        }
+    return result
 
 
 def scoring_geometry(height: int, width: int) -> dict[str, Any]:
