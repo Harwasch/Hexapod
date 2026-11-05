@@ -1,0 +1,30 @@
+# Diagnosis only: identical to all-on except PPISP; not an A/B decision arm.
+all-on-no-ppisp:
+  train:
+    with_ut: true
+    with_eval3d: true
+    packed: false # required by the pinned UT/eval3d CUDA kernels
+    # fb7fa4f8: whole-run peak 8.3 GB at 1.65M, 800 px; trainer allocator peak 2.72 GB.
+    # Match A's full budget. At 1600 px there are 4x the pixels: still uncalibrated.
+    budget_max: 3456214
+    # The pinned renderer rejects antialiased + 3DGUT. B keeps 3DGUT explicitly;
+    # antialiased is the one unsupported member of the requested all-on combination.
+    antialiased: false
+    pose_opt: true
+    batch_size: 1
+    blocks: 1
+    init: sfm+dense
+    dense_chunk: 16 # measured next; memory-efficient heads, split/retry on CUDA OOM
+    priors:
+      depth_weight: 0.05
+      normal_weight: 0.02
+      start_step: 1000
+    aniso_cap:
+      ratio: 10
+      weight: 0.001
+    far_field: sphere
+    far_field_share: 0.1
+    far_field_count: 256
+  quality:
+    bar: fade
+    context_fade: 0.5

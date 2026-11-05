@@ -2293,9 +2293,11 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         python=training.trainer_python(ctx.param("python")),
         trainer=original_trainer,
         dataset=dataset,
-        ply=ply,
-        rows=trained_count,
-        keep=cropped_rows,
+        # Render the final export, including retained sphere rows. Cropping the
+        # error arrays after rendering a different PLY does not measure what ships.
+        ply=ctx.output(TRAINED_PLY.name),
+        rows=in_ply,
+        keep=None,
         data_factor=data_factor,
         test_every=training.TEST_EVERY,
         antialiased=antialiased,
@@ -2373,6 +2375,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         "curve": curve,
     }
     document.update(quality_stack.metrics(columns, curve, ctx.work_dir, prepass_report))
+    document.update(quality_stack.export_check(document.get("psnr"), held_out))
+    if document["exportWarning"]:
+        ctx.log(str(document["exportWarning"]))
     document["qualityStack"] = {
         "settings": stack,
         "prepass": prepass_report,

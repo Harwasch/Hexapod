@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import block_trainer
+import photometric_maths
 import prior_cache
 import prior_maths
 import quality_stack
@@ -31,10 +32,19 @@ ANCHORS = (
 )
 
 
-def patch_source(source: str, settings: Path, trainer: Path) -> str:
+def patch_source(
+    source: str, settings: Path, trainer: Path, *, display_referred: bool = False
+) -> str:
     for anchor in ANCHORS:
         if source.count(anchor) != 1:
             raise ValueError(f"quality trainer seam moved: expected one {anchor!r}")
+    if display_referred:
+        anchor = "        # Losses & Metrics."
+        if source.count(anchor) != 1:
+            raise ValueError("quality trainer PPISP initialization seam moved")
+        source = source.replace(
+            anchor, "        _hex_quality.configure_photometry(self)\n" + anchor
+        )
     bootstrap = (
         "import sys\n"
         f"sys.path.insert(0, {str(Path(__file__).parent)!r})\n"
@@ -90,7 +100,12 @@ def import_patched_trainer(trainer: Path, settings: Path) -> types.ModuleType:
     The image has all dependencies but no GPU. Import errors and module collisions
     must fail its build before a paid prepass can start.
     """
-    source = patch_source(trainer.read_text(), settings, trainer)
+    source = patch_source(
+        trainer.read_text(),
+        settings,
+        trainer,
+        display_referred=bool(read_settings(str(settings)).get("ppisp_display_referred")),
+    )
     module = types.ModuleType("_hexapod_quality_import_check")
     module.__file__ = str(trainer)
     sys.modules[module.__name__] = module
@@ -143,6 +158,28 @@ def prepare(runner: Any, namespace: dict[str, Any], settings: dict[str, Any]) ->
             return real_export(**kwargs)
 
         namespace["export_splats"] = export
+
+
+def freeze_display_reference(module: Any) -> None:
+    # Learned per-frame exposure/colour remain trainable with upstream's mean
+    # regularization. Camera-wide tone and vignette cannot be represented by a PLY.
+    module.crf_params.requires_grad_(False)
+    module.vignetting_params.requires_grad_(False)
+
+
+def configure_photometry(runner: Any) -> None:
+    if not runner.hex_settings.get("ppisp_display_referred"):
+        return
+    torch = importlib.import_module("torch")
+    module = runner.post_processing_module
+    if runner.cfg.post_processing != "ppisp" or runner.cfg.ppisp_use_controller:
+        raise ValueError("display-referred PPISP needs ppisp with no controller")
+    if module.crf_params.shape[1:] != (3, 4) or module.vignetting_params.shape[1:] != (3, 5):
+        raise ValueError("PPISP camera parameter schema moved")
+    with torch.no_grad():
+        module.crf_params.copy_(module.crf_params.new_tensor(photometric_maths.identity_crf()))
+        module.vignetting_params.zero_()
+    freeze_display_reference(module)
 
 
 @lru_cache(maxsize=8)
@@ -290,9 +327,30 @@ def cpu_self_check() -> None:
     """Build-time gradient and standard-PLY contract check, with the image's torch."""
     import tempfile
 
+    import numpy as np
+
     import gaussians
+    import outofcore
+
+    if outofcore._lerp(np.float32(1), np.float32(3), 0.75, np.dtype("float32")) != 2.5:
+        raise ValueError("image NumPy percentile interpolation failed")
 
     torch = importlib.import_module("torch")
+    camera = types.SimpleNamespace(
+        crf_params=torch.nn.Parameter(torch.randn(2, 3, 4)),
+        vignetting_params=torch.nn.Parameter(torch.randn(2, 3, 5)),
+    )
+    configure_photometry(
+        types.SimpleNamespace(
+            hex_settings={"ppisp_display_referred": True},
+            cfg=types.SimpleNamespace(post_processing="ppisp", ppisp_use_controller=False),
+            post_processing_module=camera,
+        )
+    )
+    if camera.crf_params.requires_grad or camera.vignetting_params.requires_grad:
+        raise ValueError("PPISP display reference did not freeze")
+    if torch.count_nonzero(camera.vignetting_params):
+        raise ValueError("PPISP vignetting is not identity")
     x = torch.arange(1.0, 31.0, requires_grad=True)
     target = 2 * x.detach() + 3
     target[10] += 0.1
@@ -337,7 +395,7 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as directory:
         settings = Path(directory) / "settings.json"
-        settings.write_text("{}")
+        settings.write_text(json.dumps({"ppisp_display_referred": True}))
         import_patched_trainer(args.trainer, settings)
     if args.cpu_maths:
         cpu_self_check()

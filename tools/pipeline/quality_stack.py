@@ -21,6 +21,9 @@ METRIC_NAMES = (
     "denseInitSeconds",
     "denseInitPoints",
     "denseInitAddedPoints",
+    "densePeakMemoryGb",
+    "densePeakReservedGb",
+    "exportMismatchDb",
 )
 RENDER_KEYS = (
     "with_ut",
@@ -58,7 +61,15 @@ def options(params: Mapping[str, Any]) -> dict[str, Any]:
     far = params.get("far_field", False)
     if not (isinstance(far, bool) or far == "sphere"):
         raise ValueError("far_field must be false or sphere")
+    display = params.get("ppisp_display_referred", False)
+    if not isinstance(display, bool):
+        raise ValueError("ppisp_display_referred must be boolean")
+    if display and (
+        params.get("post_processing") != "ppisp" or params.get("ppisp_use_controller", True)
+    ):
+        raise ValueError("display-referred PPISP requires ppisp and ppisp_use_controller=false")
     result = {
+        "ppisp_display_referred": display,
         "init": init,
         "depth_weight": finite(priors.get("depth_weight", 0), "depth_weight", 0, 10),
         "normal_weight": finite(priors.get("normal_weight", 0), "normal_weight", 0, 10),
@@ -69,7 +80,7 @@ def options(params: Mapping[str, Any]) -> dict[str, Any]:
         "far_field": bool(far),
         "far_field_share": finite(params.get("far_field_share", 0.1), "far_field_share", 0, 0.15),
         "far_field_count": finite(params.get("far_field_count", 256), "far_field_count", 4, 4096),
-        "dense_chunk": finite(params.get("dense_chunk", 4), "dense_chunk", 3, 8),
+        "dense_chunk": finite(params.get("dense_chunk", 4), "dense_chunk", 3, 32),
     }
     for name in ("start_step", "far_field_count", "dense_chunk"):
         if not result[name].is_integer():
@@ -78,7 +89,9 @@ def options(params: Mapping[str, Any]) -> dict[str, Any]:
     result["priors"] = any(
         result[k] > 0 for k in ("depth_weight", "normal_weight", "gradient_weight")
     )
-    result["enabled"] = init != "sfm" or result["priors"] or result["aniso_weight"] > 0 or bool(far)
+    result["enabled"] = (
+        init != "sfm" or result["priors"] or result["aniso_weight"] > 0 or bool(far) or display
+    )
     if result["priors"] and params.get("depth_loss"):
         raise ValueError(
             "mono priors and depth_loss are incompatible: "
@@ -172,7 +185,11 @@ def prepare(
         # are gradients or real model inference. It still exercises export and budgets.
         return trainer, foreground, report
     patched = ctx.work_dir / "quality_simple_trainer.py"
-    patched.write_text(quality_trainer.patch_source(trainer.read_text(), path, trainer))
+    patched.write_text(
+        quality_trainer.patch_source(
+            trainer.read_text(), path, trainer, display_referred=settings["ppisp_display_referred"]
+        )
+    )
     return patched, foreground, report
 
 
@@ -186,6 +203,9 @@ def metrics(columns: Any, curve: Any, workdir: Any, prepass: dict[str, Any]) -> 
     loss_path = workdir / "loss_terms.json"
     losses = json.loads(loss_path.read_text()).get("lossTerms", {}) if loss_path.exists() else {}
     return {
+        "exportMismatchDb": None,
+        "densePeakMemoryGb": prepass.get("densePeakMemoryGb"),
+        "densePeakReservedGb": prepass.get("densePeakReservedGb"),
         "splatCount": count,
         "farFieldShare": float(np.asarray(columns.get("far_field", np.zeros(count))).mean())
         if count
@@ -214,6 +234,9 @@ def ply_metrics(path: Any) -> dict[str, Any]:
         if "far_field" in columns:
             distant += int((columns["far_field"] >= 0.5).sum())
     return {
+        "exportMismatchDb": None,
+        "densePeakMemoryGb": None,
+        "densePeakReservedGb": None,
         "splatCount": count,
         "farFieldShare": distant / max(1, count),
         "elongationShare": elongated / max(1, count),
@@ -223,3 +246,24 @@ def ply_metrics(path: Any) -> dict[str, Any]:
         "denseInitPoints": 0,
         "denseInitAddedPoints": 0,
     }
+
+
+def export_check(psnr: Any, holdout: Mapping[str, Any]) -> dict[str, Any]:
+    """Compare validation scores, never an untouched test score against a val score.
+
+    The gap includes renderer/pose/export changes as well as photometry; it is an
+    alarm, not attribution. Three dB is an explicit warning threshold, not a fit tolerance.
+    """
+    shipped = holdout.get("meanPsnr")
+    valid = holdout.get("status") == "ok" and all(
+        isinstance(x, int | float) and not isinstance(x, bool) and math.isfinite(x)
+        for x in (psnr, shipped)
+    )
+    gap = float(psnr - shipped) if valid else None
+    warning = (
+        f"WARNING: export PSNR is {gap:.2f} dB below trainer eval (>3 dB); "
+        "inspect photometry, renderer, pose and export differences before trusting trainer quality"
+        if gap is not None and gap > 3.0
+        else None
+    )
+    return {"exportMismatchDb": gap, "exportWarning": warning}

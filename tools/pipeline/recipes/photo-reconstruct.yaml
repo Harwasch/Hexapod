@@ -324,7 +324,10 @@ stages:
       #   with_eval3d: true   -- evaluate the Gaussian in 3D (requires UT + MCMC).
       #     Both require classic rasterization and packed: false; antialiased is refused.
       #     Their memory model is uncalibrated: auto requires explicit budget_max.
-      #     B bounds it at 1M provisionally; GPU peak memory must verify the 24 GB fit.
+      #     B budget_max 3456214 matches A. Measured fb7fa4f8: 8.3 GB whole-run peak at
+      #     1.65M/800 px (raw 8305 MiB); trainer allocated peak 2.72 GB. The whole-run
+      #     peak includes preprocessing: not a training-memory slope. Full 900x1600
+      #     is 4x the pixels; verify with a full-resolution screen before trusting 24 GB.
       #     A plain SH3 3DGS PLY still ships; bench test scores use the shipping renderer.
       #   post_processing: ppisp -- camera/exposure correction, batch_size 1 only;
       #     ppisp_use_controller and ppisp_controller_distillation default true,
@@ -332,9 +335,19 @@ stages:
       #     B sets ppisp_use_controller: false: distillation otherwise freezes Gaussians
       #     at 25k to train a controller the shipped plain-PLY renderer never uses.
       #     If enabled elsewhere, screens must activate it before their final step.
+      #     B ppisp_display_referred: true freezes CRF identity and vignette zero,
+      #     retaining learned frame exposure/colour with mean regularization. Smoke
+      #     fb7fa4f8 scored 23.10 dB with ISP, 13.68 exported: no ISP ships in PLY/tiles.
+      #     Nonlinear per-Gaussian SH baking would not commute with alpha compositing.
+      #     exportMismatchDb warns above 3 dB versus final-PLY holdout; fix awaits smoke.
       #     Rolling shutter is refused: simple_trainer has no COLMAP timing path.
       #   init: sfm+dense     -- pinned Apache MapAnything, train-pool views in overlapping
-      #     chunks of four, confidence + robust Sim3 + voxel filtering, at most cap/4
+      #     chunks of four by default; B trials dense_chunk: 16 after 8/76 four-view
+      #     chunks failed (accepted scales 0.0626..0.4685). More shared views may help.
+      #     The dense head uses one-view minibatches; aggregation still needs memory.
+      #     CUDA OOM halves groups with overlap, down to four; no 16-view fit claimed.
+      #     densePeakMemoryGb/densePeakReservedGb measure the prepass, including failures.
+      #     Confidence + robust Sim3 + voxel filtering, at most cap/4
       #     initial points including SfM. Each fit handles arbitrary COLMAP units;
       #     no near-one scale gate. Failed chunks warn/skip; successful chunks survive.
       #     Bench refuses zero added points; production may warn and fall back to SfM.
@@ -350,7 +363,7 @@ stages:
       #     including learned outliers. Background survives crop/quality, is removed
       #     before place computes tile bounds. Depth/normal, dense and far require
       #     blocks: 1, batch_size: 1, MCMC, standard Adam and SH colours.
-      #   Candidate weights have no GPU measurements yet. quality-stack.yaml defines
+      #   One smoke trained; no test-quality win established. quality-stack.yaml defines
       #     Beach A/B; the driver decides defaults from test scores and matched views.
       #   roi: {center: [x, y, z], radius: r}  -- COLMAP frame; crops the initial points
       #     to the sphere and the trained splat to 1.5 radii.

@@ -14,6 +14,7 @@ import math
 import os
 import sys
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -124,27 +125,45 @@ def dense(dataset: Any, parser: Any, path: Path, settings: dict[str, Any]) -> di
     chunk = settings["dense_chunk"]
     all_xyz, all_rgb, fits = [], [], []
     skipped = []
-    # At most eight resident views; one shared view anchors adjacent chunks.
-    for start in range(0, len(dataset), chunk - 1):
-        items = [dataset[i] for i in range(start, min(start + chunk, len(dataset)))]
+    retries = []
+    torch = importlib.import_module("torch")
+    pending = deque(
+        (start, min(start + chunk, len(dataset))) for start in range(0, len(dataset), chunk - 1)
+    )
+    # The dense head is minibatched, but the multi-view aggregator still grows with
+    # view count. Retry smaller overlapping groups on OOM; never discard other fits.
+    while pending:
+        start, stop = pending.popleft()
+        items = [dataset[i] for i in range(start, stop)]
         if len(items) < 2:
             continue
         try:
             mapped, colors, fit = infer_dense_chunk(items, model, preprocess, sparse, radius)
         except Exception as error:
+            oom = isinstance(error, getattr(torch, "OutOfMemoryError", ()))
+            if oom and stop - start > 4:
+                middle = (start + stop) // 2
+                pending.extendleft(reversed([(start, middle + 1), (middle, stop)]))
+                retries.append({"start": start, "views": stop - start, "reason": "CUDA OOM"})
+                # The failed helper's traceback owns GPU tensors until this except
+                # ends. Clear it before releasing the allocator's unused cache.
+                error.__traceback__ = None
+                torch.cuda.empty_cache()
+                continue
             skipped.append(
                 {"start": start, "views": len(items), "reason": f"{type(error).__name__}: {error}"}
             )
             continue
         all_xyz.append(mapped)
         all_rgb.append(colors)
-        fits.append(fit)
+        fits.append({**fit, "start": start, "views": len(items)})
     if not all_xyz:
         return {
             "denseInitPoints": len(sparse),
             "denseInitAddedPoints": 0,
             "chunks": [],
             "skippedChunks": skipped,
+            "memoryRetries": retries,
         }
     xyz, rgb = np.concatenate(all_xyz), np.concatenate(all_rgb)
     # Joint voxel selection means existing sparse points win duplicate voxels.
@@ -160,6 +179,7 @@ def dense(dataset: Any, parser: Any, path: Path, settings: dict[str, Any]) -> di
         "denseInitAddedPoints": len(selected),
         "chunks": fits,
         "skippedChunks": skipped,
+        "memoryRetries": retries,
     }
 
 
@@ -172,6 +192,8 @@ def run(settings: dict[str, Any]) -> dict[str, Any]:
         "denseInitSeconds": 0.0,
         "denseInitPoints": len(sparse),
         "denseInitAddedPoints": 0,
+        "densePeakMemoryGb": None,
+        "densePeakReservedGb": None,
         "warnings": [],
         "center": center.tolist(),
         "radius": radius,
@@ -197,13 +219,25 @@ def run(settings: dict[str, Any]) -> dict[str, Any]:
     dataset = Dataset(parser, split="train")
     if settings["init"] == "sfm+dense":
         start = time.monotonic()
+        torch = importlib.import_module("torch")
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
         try:
             report.update(dense(dataset, parser, points_path, settings))
         except Exception as exc:
             report["warnings"].append(f"dense init fell back to SfM: {type(exc).__name__}: {exc}")
+        finally:
+            torch.cuda.synchronize()
+            report["densePeakMemoryGb"] = torch.cuda.max_memory_allocated() / 1e9
+            report["densePeakReservedGb"] = torch.cuda.max_memory_reserved() / 1e9
         report["warnings"].extend(
             f"dense chunk at {chunk['start']} skipped: {chunk['reason']}"
             for chunk in report.get("skippedChunks", [])
+        )
+        report["warnings"].extend(
+            f"dense chunk at {chunk['start']} ({chunk['views']} views) "
+            "retried smaller after CUDA OOM"
+            for chunk in report.get("memoryRetries", [])
         )
         report["denseInitSeconds"] = time.monotonic() - start
         if report["denseInitAddedPoints"] == 0:

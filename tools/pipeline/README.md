@@ -10,7 +10,7 @@ which imports this project as a library.
 registration out. Since 2026-09-23 it **converts the file's up axis** rather than assuming
 z -- see [The up axis](#the-up-axis) -- which is what stopped uploads landing on their side.
 
-**Lane 2 has historical GPU runs. The quality-stack image upgrade awaits its first GPU smoke.**
+**Lane 2 has historical GPU runs. The quality-stack image trained Beach on GPU; export fixes await the next smoke.**
 The state of each piece, in the three-state vocabulary of `docs/HANDOFF.md`:
 
 | Piece                                         | State        | Evidence                                                                                                                                                                                                                                                                                                     |
@@ -1424,9 +1424,26 @@ controller distillation otherwise freezes Gaussians at step 25,000, spending the
 5,000 full-schedule steps on a controller the shipped PLY renderer never uses.
 UT/eval3d also requires `packed: false`. Its overlap-dependent backward buffers have
 no calibrated memory model here, so auto budgets require an explicit `budget_max`;
-B uses a provisional one-million-splat bound. This does not guarantee a fit on 24 GB.
-The first smoke must measure memory before a full run. These settings and weights
-are hypotheses, not measured improvements. No production defaults change yet.
+B now uses `budget_max: 3456214`, matching A's full budget. Smoke `fb7fa4f8` reached
+1.65M Gaussians at 450×800 with a whole-run peak reported as 8.3 GB (raw device sample:
+8,305 MiB); the trainer's allocated peak was 2.72 GB. The whole-run peak includes model
+preprocessing and cannot calibrate a per-Gaussian training-memory rate. A's full frames
+are 900×1600, four times as many pixels. A full-resolution screen must check the 24 GB
+fit before a full schedule. No production defaults change yet.
+
+That smoke scored trainer val PSNR 23.0982 versus plain-export holdout 13.6770: a
+9.4212 dB gap. Upstream PPISP applies learned camera CRF/vignetting during val, but the
+PLY renderer has neither. B now sets `ppisp_display_referred: true`, freezing CRF at
+identity and vignetting at zero; learned per-frame exposure/colour and their upstream
+mean regularizers remain. Novel views then get identity photometry. This keeps the
+trained SH colours in a display-reference space without approximating a nonlinear
+image transform as per-Gaussian SH coefficients (which would not commute with alpha
+compositing). Controller mode is refused with this setting. The gap's exact attribution
+still needs measurement: UT/eval3d versus classic rendering remains a separate difference.
+
+`experiments/variants/quality-stack-diagnostic.yaml` contains only `all-on-no-ppisp`,
+identical to B except for PPISP. It is diagnostic only and does not extend the A/B plan.
+Run it with the same screen resolution/seed to isolate the remaining PPISP effect.
 
 A has **no quality gate in the bench**. B's headline `test` scores **faded.ply**, after
 support-based opacity fading; `testTrained` scores **trained.ply** before the gate and
@@ -1439,6 +1456,15 @@ train stage's crop/SH/far-field processing; "trained" here means before the qual
 not the raw upstream checkpoint. Neither score applies PPISP at inference or optimized
 camera poses: these measure the plain PLY that ships. Compare A against B's trained
 score to assess training, and B's trained against faded score to isolate the gate.
+Holdout now renders the exact final `trained.ply` after crop/far-field capping. The first
+smoke's `cropped: true` meant error rows were selected after rendering; all sphere rows
+were present in that render. Both plain-PLY evaluations retain the sphere, as do the
+matched renders. The support gate preserves its marker; `place` strips marked rows
+before bounds/tiles, so these are PLY scores, not a separate measurement of packaged
+foreground-only tiles. A still uses the same classic scoring renderer without a gate.
+`exportMismatchDb` records trainer-val minus exported-PLY holdout PSNR; above 3 dB it
+emits `exportWarning` in metrics, logs and bench reports. Missing scores produce null,
+not zero. The warning does not compare internal validation against untouched test frames.
 
 `matched-renders --scene beach --runs A B` loads both kept headline PLYs on **one L4**
 with the new image, the same plain-3DGS loader, classic renderer, black background and
@@ -1524,16 +1550,27 @@ none of the quality defaults flips. Source and weights are recorded in
   activation step defaults 25000. That step is **not** scaled by upstream's schedule.
   Set `ppisp_controller_activation_num_steps` below the actual steps on a short run,
   or disable `ppisp_use_controller`, as B does to avoid freezing Gaussians for an
-  unshipped controller. `bilateral_grid: true` remains an alias for
+  unshipped controller. `ppisp_display_referred` defaults false and is true in B:
+  freeze camera CRF/vignetting at identity, retain frame exposure/colour. It requires
+  controller off and the source-checked quality extension. `bilateral_grid: true` remains an alias for
   `post_processing: bilateral_grid`, whose upstream argv changed. Color-corrected
   evaluation is now a separate upstream option, so absent metrics remain absent.
 - `init: sfm+dense`: Apache MapAnything uses only staged train frames, four-view chunks
-  with one overlap, known intrinsics/poses, confidence masks, robust Sim3 anchors and
-  voxel deduplication. Accepted chunks need at least eight SfM correspondences, 60%
+  by default. B trials `dense_chunk: 16`, with one-view overlap, known intrinsics/poses,
+  confidence masks, robust Sim3 anchors and voxel deduplication. The pinned model's
+  memory-efficient mode minibatches its dense prediction head (one view at a time),
+  but multi-view aggregation still grows with view count. CUDA OOM retries smaller
+  overlapping chunks down to four; retry ranges and actual accepted chunk sizes are
+  recorded. Sixteen is a measured-next experiment, not a claimed safe 24 GB fit.
+  Reset allocator peak counters before dense model loading; record allocated and
+  reserved peaks separately from training and MoGe, even on failure. Accepted chunks need at least eight SfM correspondences, 60%
   consensus within 5% of robust scene radius, and a finite positive fitted scale.
   MapAnything's nonmetric inputs predict their own scale; each chunk is aligned to
   SfM's arbitrary units, with no near-one scale gate. The consensus rules remain
-  uncalibrated. A failed chunk is skipped and recorded; successful chunks survive.
+  uncalibrated. The first 4-view smoke skipped 8/76 chunks and accepted scales from
+  0.0626 to 0.4685; free chunk scales are expected, and the fit puts each back in SfM
+  units. Sixteen views offer more shared geometry, but require the next measured run.
+  A failed geometric fit is skipped and recorded; successful chunks survive.
   Sparse points win duplicates; additions fit within cap/4 including sparse points.
   Production can warn and fall back to SfM, but bench dense runs **fail on zero added
   points**, before priors/training. `prepass.json` retains per-chunk fit/skip diagnostics
@@ -1593,10 +1630,17 @@ is explicitly labelled and its zero losses are not measurements.
 | `denseInitSeconds` | Dense preprocessing wall seconds, including a failed attempt |
 | `denseInitPoints` | Initial point count after dense attempt |
 | `denseInitAddedPoints` | Accepted dense additions (zero on fallback) |
+| `densePeakMemoryGb` | Dense-only peak allocated CUDA memory, decimal GB; null when not measured |
+| `densePeakReservedGb` | Dense-only peak reserved CUDA allocator memory, decimal GB; null when not measured |
+| `exportMismatchDb` | Trainer val PSNR minus final-PLY holdout PSNR in dB; null if either is unavailable; warning above 3 |
 
-The new image remains unverified on GPU. Build-time checks parse the real upstream CLI,
-check the source insertion seam, exercise CPU depth/normal gradients, and round-trip a
-plain SH3 PLY. Stand-in rehearsals exercise dataset isolation, dispatch, artifacts,
+The new image completed Beach training in smoke `fb7fa4f8`; its support stage failed
+before test evaluation. The percentile helper used a ufunc output sentinel unsupported
+by image NumPy 2.2.6; it now uses an explicit zero-dimensional array with unchanged
+bitwise arithmetic. A separate streaming-reader fix preserves `far_field` through the
+gate. These fixes and display-reference PPISP await GPU confirmation. Build-time checks
+parse/import the real patched CLI, check photometric initialization order, exercise
+CPU depth/normal gradients and percentile compatibility, and round-trip a plain SH3 PLY. Stand-in rehearsals exercise dataset isolation, dispatch, artifacts,
 background export, fade and reporting; they do not validate CUDA kernels or model
 quality. The Beach A/B decision awaits complete full L4 measurements and matched views.
 

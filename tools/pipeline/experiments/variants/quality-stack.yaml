@@ -8,9 +8,9 @@ all-on:
     with_ut: true
     with_eval3d: true
     packed: false # required by the pinned UT/eval3d CUDA kernels
-    # UT/eval3d memory is not calibrated. Bound this experiment explicitly until
-    # the driver measures peak memory; this is a provisional limit, not a fit guarantee.
-    budget_max: 1000000
+    # fb7fa4f8: whole-run peak 8.3 GB at 1.65M, 800 px; trainer allocator peak 2.72 GB.
+    # Match A's full budget. At 1600 px there are 4x the pixels: still uncalibrated.
+    budget_max: 3456214
     # The pinned renderer rejects antialiased + 3DGUT. B keeps 3DGUT explicitly;
     # antialiased is the one unsupported member of the requested all-on combination.
     antialiased: false
@@ -18,9 +18,11 @@ all-on:
     post_processing: ppisp
     # The exported PLY never uses the controller; distillation freezes its Gaussians.
     ppisp_use_controller: false
+    ppisp_display_referred: true # fixed identity CRF/vignette; learn per-frame exposure/colour
     batch_size: 1
     blocks: 1
     init: sfm+dense
+    dense_chunk: 16 # measured next; memory-efficient heads, split/retry on CUDA OOM
     priors:
       depth_weight: 0.05
       normal_weight: 0.02

@@ -8,6 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+import quality_stack
 from holdout_error import read_ply
 
 from .gpu import summarise_samples
@@ -73,6 +74,7 @@ def parse_result(
             "shDegree": test.get("shDegree"),
             "byDegree": test.get("byDegree", {}),
         },
+        **quality_stack.export_check(metrics.get("psnr"), holdout),
         "val": {
             **{k: number(metrics.get(k)) for k in ("psnr", "ssim", "lpips")},
             "meanPsnrFullSh": number(holdout.get("meanPsnrFullSh")),
@@ -247,6 +249,9 @@ def markdown(results: list[dict[str, Any]]) -> str:
     for row in results:
         if row.get("error"):
             lines += ["", f"Failed `{row['runId']}`: {row['error']}"]
+    for row in results:
+        if row.get("exportWarning"):
+            lines += ["", f"**{row['runId']}: {row['exportWarning']}**"]
     return "\n".join(lines) + "\n"
 
 
@@ -306,6 +311,9 @@ def bakeoff_markdown(results: list[dict[str, Any]]) -> str:
                 ]
                 lines.append(f"| {row['runId']} | {name} | " + " | ".join(cells) + " |")
     lines.append("")
+    for row in results:
+        if row.get("exportWarning"):
+            lines += ["", f"**{row['runId']}: {row['exportWarning']}**"]
     return "\n".join(lines)
 
 

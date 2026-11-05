@@ -27,6 +27,9 @@ def test_metrics_are_a_versioned_public_vocabulary() -> None:
         "denseInitSeconds",
         "denseInitPoints",
         "denseInitAddedPoints",
+        "densePeakMemoryGb",
+        "densePeakReservedGb",
+        "exportMismatchDb",
     )
     payload = {"splatCount": 10, "farFieldShare": 0.1, "lossTerms": {"depth": 0.2}}
     import json
@@ -176,8 +179,11 @@ def test_new_post_processing_cli_and_controller_switches() -> None:
     assert "--with_ut" in argv and "--with_eval3d" in argv
 
 
+@pytest.mark.parametrize(
+    "variants_file, count", [("quality-stack.yaml", 2), ("quality-stack-diagnostic.yaml", 1)]
+)
 def test_every_variant_rehearses_without_modal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, variants_file: str, count: int
 ) -> None:
     from experiments.bench import __main__ as cli
     from experiments.bench.recipe import PIPELINE
@@ -198,7 +204,7 @@ def test_every_variant_rehearses_without_modal(
                 "beach",
                 "--rehearse",
                 "--variants",
-                str(PIPELINE / "experiments/variants/quality-stack.yaml"),
+                str(PIPELINE / "experiments/variants" / variants_file),
                 "--state-dir",
                 str(tmp_path),
                 "--keep-splat",
@@ -209,7 +215,7 @@ def test_every_variant_rehearses_without_modal(
         == 0
     )
     results = list((tmp_path / "rehearsal/runs").glob("*/result.json"))
-    assert len(results) == 2
+    assert len(results) == count
     for path in results:
         result = read_json(path)
         assert result["status"] == "complete", result["error"]
@@ -217,7 +223,7 @@ def test_every_variant_rehearses_without_modal(
         metrics = read_json(path.parent / "train_metrics.json")
         assert set(quality_stack.METRIC_NAMES) <= metrics.keys()
         assert metrics["farFieldShare"] <= 0.1
-        if result["variant"]["name"] == "all-on":
+        if result["variant"]["name"].startswith("all-on"):
             quality_report = read_json(path.parent / "quality.json")
             assert quality_report
             assert result["qualityGate"] == "fade"
