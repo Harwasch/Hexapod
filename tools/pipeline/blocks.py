@@ -1450,6 +1450,14 @@ def _train_block(
         key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
         up=settings.up,
     ):
+        live.emit_seeds(
+            dataset / "sparse" / "0",
+            ctx.checkpoint_dir / live.LIVE_DIR,
+            ctx.log,
+            key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
+            seeded=applied.seeded,
+            enabled=bool(live_steps),
+        )
         ctx.run(argv)
     seconds = time.monotonic() - began
     phases.add("train", seconds)

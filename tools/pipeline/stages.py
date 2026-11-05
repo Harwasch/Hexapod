@@ -2203,6 +2203,14 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
         up=_up_estimate(poses),
     ):
+        live.emit_seeds(
+            dataset / "sparse" / "0",
+            ctx.checkpoint_dir / live.LIVE_DIR,
+            ctx.log,
+            key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
+            seeded=0 if seeded is None else seeded.seeded,
+            enabled=bool(live_steps),
+        )
         ctx.run(argv)
     ply = training.latest_ply(result)
     if ply is None:
