@@ -190,6 +190,7 @@ def test_previous_intersections_are_released_before_the_next_forward(
     monkeypatch.setattr(quality_trainer, "step_inputs", lambda runner, p, k, m: (p, k, m))
     monkeypatch.setattr(quality_trainer, "loss", lambda *a: a[-1])
     monkeypatch.setattr(quality_trainer, "record_memory", lambda *a: None)
+    monkeypatch.setattr(quality_trainer, "guard_scales", lambda *a: None)
     path = tmp_path / "settings.json"
     path.write_text('{"priors": false}')
     source = """class Runner:
@@ -206,6 +207,7 @@ def test_previous_intersections_are_released_before_the_next_forward(
             )
             loss = total
             loss.backward()
+            # eval the full set
 """
     namespace: dict[str, Any] = {
         "Stage": Stage,

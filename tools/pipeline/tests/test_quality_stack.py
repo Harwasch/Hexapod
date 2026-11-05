@@ -67,7 +67,9 @@ def test_scale_shift_alignment_and_view_facing_normals() -> None:
     z = np.full((7, 9), 5.0)
     normal = prior_maths.depth_normals(z, [[50, 0, 4], [0, 50, 3], [0, 0, 1]])
     np.testing.assert_allclose(normal, np.broadcast_to([0, 0, -1], normal.shape), atol=1e-12)
-    assert prior_maths.aniso_penalty(np.log([[1, 2, 20], [1, 2, 3]])) == pytest.approx(5.0)
+    assert prior_maths.aniso_penalty(np.log([[1, 2, 20], [1, 2, 3]])) == pytest.approx(
+        np.log(2) / 2
+    )
     with pytest.raises(ValueError):
         prior_maths.scale_shift(np.ones(5), np.ones(5), np.ones(5, dtype=bool))
 

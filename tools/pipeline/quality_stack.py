@@ -62,7 +62,7 @@ def options(params: Mapping[str, Any]) -> dict[str, Any]:
         "max_side",
     }:
         raise ValueError("unknown prior setting")
-    if set(aniso) - {"ratio", "weight"}:
+    if set(aniso) - {"ratio", "weight", "max_scale_share"}:
         raise ValueError("unknown anisotropy setting")
     if priors.get("model", "moge-2-vitl-normal") != "moge-2-vitl-normal":
         raise ValueError("only pinned moge-2-vitl-normal priors are supported")
@@ -87,6 +87,9 @@ def options(params: Mapping[str, Any]) -> dict[str, Any]:
         "step_max_side": finite(params.get("step_max_side", 0), "step_max_side", 0, 16384),
         "aniso_weight": finite(aniso.get("weight", 0), "aniso weight", 0, 10),
         "aniso_ratio": finite(aniso.get("ratio", 10), "aniso ratio", 1, 1000),
+        "aniso_max_scale_share": finite(
+            aniso.get("max_scale_share", 0.05), "aniso max_scale_share", 0.001, 1
+        ),
         "far_field": bool(far),
         "far_field_share": finite(params.get("far_field_share", 0.1), "far_field_share", 0, 0.15),
         "far_field_count": finite(params.get("far_field_count", 256), "far_field_count", 4, 4096),

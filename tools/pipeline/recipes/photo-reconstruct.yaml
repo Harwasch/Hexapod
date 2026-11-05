@@ -366,7 +366,10 @@ stages:
       #     prior comparisons: less fine detail, full-count memory fit still unmeasured.
       #     trainMemoryCurve records allocator peaks/current bytes and intersections
       #     every 1000 completed steps; trainer.log + train_memory.json survive failure.
-      #   aniso_cap: {ratio: 10, weight: 0.001} -- hinge on longest/shortest axis ratio.
+      #   aniso_cap: {ratio: 10, weight: 0.001} -- hinge on log longest/shortest ratio.
+      #     Enabled only: max_scale_share (0.05) caps foreground axes at this share
+      #     of the original sparse robust diameter after Adam/MCMC, clearing clipped
+      #     moments. Effect unmeasured; existing Beach PLYs used the old exp loss.
       #   far_field: sphere   -- frozen background at ten robust sparse-scene radii;
       #     far_field_share: 0.1 and far_field_count: 256 reserve foreground budget.
       #     Geometrically far means beyond five radii; the final export caps that share,

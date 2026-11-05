@@ -1408,6 +1408,117 @@ the decision rule for this Beach A/B experiment.
 
 ### Quality-stack bake-off
 
+**Common-yardstick rescore (evaluation only; no new training).** The historical scores below
+are retained as observations, not a resolution/pose/colour-controlled ranking. `rescore`
+uses the current image's **classic 3DGS renderer**, shipped SH degree, black background,
+no UT/eval3d, antialiasing or ISP, for every PLY—including A's plain gsplat 1.5.3 export.
+It freezes the splat and reads only the frozen test frames/cameras. No weights, recipes,
+training results or frozen inputs are changed.
+
+One L4 call handles A `924f540e243a4a09bc8fa32280f5e436`, upgraded-plain
+`28deb3c9bfba4b90afe272bb614dddf5`, and both `trained.ply` and `faded.ply` from
+`4fe4848318d04eaba471f0e7ca8bb46d` (`all-on-no-3dgut`, trained at 450×800): four rows.
+The worker checks the actual volume files and their run's frozen manifest/split before
+scoring; missing PLYs are reported, never reconstructed or replaced with old metrics.
+The driver checked that the four earlier ablations (including `05c4b877`) were run
+without `--keep-splat` and have no PLY on the volume; they cannot be re-scored.
+
+Every row gets full 900×1600 and half 450×800 scores (height×width), with `trainedAt`
+inferred from the frozen dimensions and recorded training resize parameters beside
+explicit `scoredAt`. Half GT is an exact 2×2 area average and K is divided by two;
+there is no upscaled prediction. Invalid undistortion pixels are black in both images;
+fits use only valid pixels. PSNR/SSIM/LPIPS (AlexNet) are averaged per test frame.
+The four columns at each resolution mean:
+
+- `raw`: frozen camera and exported colours.
+- `aligned`: test-fitted SE(3) camera, frozen splat. Adam takes 160 half-resolution
+  steps, then 40 full-resolution steps initialized from the best half pose. Each
+  resolution retains its own best pose, with raw always a candidate. The objective
+  is valid-pixel L1 after a detached per-channel gain/offset fit (gain 0.5–2, offset
+  −0.25–0.25), so a simple exposure difference does not pull the camera. Corrections
+  are bounded to 3° rotation and 2% of the robust scene extent in translation. JSON
+  records each corrected camera, translation %, rotation °, and loss before/after.
+  Selection cannot worsen this objective; individual PSNR/SSIM/LPIPS can still worsen.
+- `cc`: frozen camera, per-channel affine correction using pinned gsplat's affine
+  `cc_psnr` convention: fit render = a×GT+b, then invert and clamp. This also applies
+  before SSIM and LPIPS.
+- `aligned+cc`: best aligned camera followed by that same affine colour correction.
+
+**Aligned and CC scores fit the test frame itself: these flatter every run alike.**
+They diagnose pose/photometric mismatch; they are not untouched-test predictions.
+All four PLYs use the same optimizer steps and bounds. A deadline fails the batch
+instead of quietly shortening later rows. Partial diagnostics and the full evaluator
+log stay on the volume; partial rows are not reported as a completed comparison.
+
+Overhead views look down at 90°, 75° and 60°, at 384×384. Their cameras, up estimate,
+robust extent and footprint are derived once from frozen SfM points/camera poses,
+independently of all PLYs, and saved in `cameras.json`. The extent is the diameter about
+the coordinate median enclosing the nearest 90% of SfM points. The footprint is the
+convex hull of those points projected onto the plane through that median perpendicular
+to up, rasterized by pixel-centre inclusion. This envelope can span real gaps in the
+scene; hole fraction is missing opacity inside this support envelope, not surface truth.
+Each view scores alpha < 0.5 inside that mask, **excluding marked `far_field` rows**.
+Foreground RGB/alpha, inclusive RGB, footprint masks and labelled side-by-side PNGs are
+saved. Photo scores include the sphere because it is in the kept PLY; placement/tiles
+still strip marked far-field rows. Needle statistics also exclude those rows and report
+how many were excluded. Axis ratios measure scales, not variances; flat surface splats
+can legitimately exceed 10.
+
+Results land on the volume under `runs/rescore-<batch-id>/` and locally under
+`~/.local/share/hexapod-bench/runs/rescore-<batch-id>/`. Each source run also receives
+`rescore.json` with its own row(s), a link to the batch path, and `rescore-renders/`
+PNGs. Photo PNGs preview the first frozen test frame at at most 640px; photo **scores**
+use the full named resolution. `rescore-table` prints one Markdown table per resolution
+and writes `~/.local/share/hexapod-bench/rescore-table.json`, retaining per-frame detail.
+It flags differing training/scoring sizes and refuses mixed frozen scenes or protocols.
+
+| Rescore JSON name                        | Definition                                                                                                  |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `rows[].resolutions.{full,half}.metrics` | `raw`, `aligned`, `cc`, `aligned+cc`, each with PSNR (dB), SSIM and LPIPS                                   |
+| `rows[].resolutions.*.perFrame[].pose`   | Corrected view matrix, `translationPct`, `rotationDeg`, `lossBefore`, `lossAfter`, objective and step count |
+| `rows[].resolutions.*.poseMoveMedian`    | Median translation % of extent and rotation degrees across test cameras                                     |
+| `rows[].topdown.holeMean`                | Mean foreground-only alpha < 0.5 fraction over three fixed cameras                                          |
+| `rows[].needle.elongation`               | Foreground scale-axis ratio > 10: count, share, opacity weight and opacity-weighted share                   |
+| `rows[].needle.oversized.{1,2,5}`        | Foreground largest scale > 1%, 2%, 5% of robust scene extent; same counts/shares                            |
+| `rows[].needle.farFieldCount`            | Number of marked rows excluded from hole and needle scores; plain PLYs have zero                            |
+
+Use the same ledger with the new `rescore` tag. The forecast is $0.60; the 40-minute
+L4 timeout plus startup/refused-restart allowances reserves about $0.70 at the recorded
+GPU+CPU+RAM rate, well under the $5 tag cap. The 38 frames × four PLYs × 200 alignment
+steps are unmeasured on L4; the timeout is a bound, not a promised completion time.
+There is no automatic training/retry. From `tools/pipeline`, after committing these edits:
+
+```bash
+export TMPDIR="$PWD/.tmp"
+mkdir -p "$TMPDIR"
+bench() { uv run --with modal==1.6.2 python -m experiments.bench "$@"; }
+bench rescore --scene beach --runs \
+  924f540e243a4a09bc8fa32280f5e436 \
+  28deb3c9bfba4b90afe272bb614dddf5 \
+  4fe4848318d04eaba471f0e7ca8bb46d \
+  --tag rescore --total-cap 5 --cap 1 \
+  --ledger "$HOME/.local/share/hexapod-bench/quality-stack.jsonl"
+bench rescore-table --runs 924f540e 28deb3c9 4fe48483
+```
+
+Omitting `--ply` selects each available trained/faded export, giving the four intended
+rows in this single call. `--ply trained` or `--ply faded` explicitly restricts it and
+reports missing requested exports. A call admits at most four PLY rows. `--rehearse`
+uses kept stand-in PLYs and a synthetic frozen scene, exercises geometry/transport/
+reporting, and leaves photo/hole metrics null rather than inventing GPU measurements.
+
+The anisotropy loss now uses `mean(relu(log(max_scale/min_scale) - log(ratio)))`;
+its scale gradient is bounded rather than exponential. With anisotropy enabled only,
+foreground log scales are projected after each MCMC/Adam update and before the first
+render to at most 5% of the original sparse-scene robust diameter
+(`aniso_cap.max_scale_share`, configurable). Projection preserves the Parameter, count
+and MCMC state; clipped Adam moments are zeroed to stop momentum pushing the boundary.
+The frozen sphere is separate and unchanged. This limits individual world-space axes,
+not tile intersections or total GPU memory. It can suppress legitimately large smooth
+surfaces. **Its training effect is unmeasured: all PLYs being re-scored were trained
+before this fix, with the OLD exponential anisotropy loss where enabled.** Anisotropy
+remains off by default, and no training defaults flip.
+
 **Measured on Beach, and not adopted** (L4, seed 42, 38 untouched test frames, same frozen frames and
 poses; headline scores the trained PLY with no quality gate). A is gsplat 1.5.3 from `c7fb90c8`.
 
@@ -1678,7 +1789,9 @@ none of the quality defaults flips. Source and weights are recorded in
   optional adjacent-pixel residual differences penalize depth gradients. Normal loss
   compares view-facing normals from expected rendered depth with MoGe's camera-frame
   normals. This works with MCMC and UT without imposing a planar-splat representation.
-  `aniso_cap: {ratio: 10, weight: 0}` is a mean hinge on longest/shortest axis ratio.
+  `aniso_cap: {ratio: 10, weight: 0, max_scale_share: 0.05}` is a mean hinge on the
+  log of longest/shortest scale-axis ratio; enabled runs also project foreground axes
+  to this share of the original sparse robust diameter after MCMC/Adam updates.
   These are our implementations of the maths, with NumPy reference tests.
 - `far_field: sphere` reserves at most `far_field_share` (default 0.1, maximum 0.15)
   of `cap_max`, using up to `far_field_count` (256) frozen gaussians. Their constant

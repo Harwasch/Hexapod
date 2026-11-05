@@ -88,7 +88,17 @@ def depth_normals(depth: npt.ArrayLike, intrinsic: npt.ArrayLike) -> F64:
 
 def aniso_penalty(log_scales: npt.ArrayLike, ratio: float = 10) -> float:
     scales = np.asarray(log_scales, dtype=float)
-    return float(np.maximum(0, np.exp(np.ptp(scales, axis=-1)) - ratio).mean())
+    return float(np.maximum(0, np.ptp(scales, axis=-1) - np.log(ratio)).mean())
+
+
+def scale_limit(extent: float, share: float) -> float:
+    if not np.isfinite(extent) or extent <= 0 or not 0 < share <= 1:
+        raise ValueError("scale guard requires positive extent and share in (0, 1]")
+    return float(np.log(extent * share))
+
+
+def guard_log_scales(log_scales: npt.ArrayLike, extent: float, share: float) -> Any:
+    return np.minimum(np.asarray(log_scales), scale_limit(extent, share))
 
 
 def aligned_chunk(

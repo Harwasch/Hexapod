@@ -35,6 +35,7 @@ class Runner:
             renders, alphas, info = self.stage.render(
             )
             loss.backward()
+            # eval the full set
 """
     patched = tmp_path / "patched.py"
     patched.write_text(
@@ -69,6 +70,7 @@ def test_image_check_executes_patch_not_only_compile(
         "            renders, alphas, info = self.stage.render(\n"
         "            )\n"
         "            loss.backward()\n"
+        "            # eval the full set\n"
     )
     settings = tmp_path / "settings.json"
     settings.write_text("{}")

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import math
 import re
 import sys
 import types
@@ -30,6 +31,7 @@ ANCHORS = (
     'render_mode="RGB+ED" if cfg.depth_loss else "RGB",',
     "            loss.backward()",
     "            renders, alphas, info = self.stage.render(",
+    "            # eval the full set",
 )
 
 
@@ -74,12 +76,13 @@ def patch_source(
         "            num_train_rays_per_step = pixels.shape[0] * height * width\n"
         "            info = None\n" + ANCHORS[4],
     )
-    return source.replace(
+    source = source.replace(
         ANCHORS[3],
         "            loss = _hex_quality.loss(self, step, data, depths, alphas, Ks, loss)\n"
         + ANCHORS[3]
         + "\n            _hex_quality.record_memory(self, step, info)",
     )
+    return source.replace(ANCHORS[5], "            _hex_quality.guard_scales(self)\n" + ANCHORS[5])
 
 
 def read_settings(path: str) -> dict[str, Any]:
@@ -228,6 +231,7 @@ def step_inputs(runner: Any, pixels: Any, intrinsic: Any, masks: Any) -> tuple[A
     This is an explicit quality/runtime tradeoff, not an automatic OOM retry. It
     leaves the splat budget and schedule unchanged and does not crop the camera.
     """
+    guard_scales(runner)
     h, w = pixels.shape[1:3]
     height, width, sx, sy = prior_maths.resize_geometry(
         h, w, runner.hex_settings.get("step_max_side", 0)
@@ -241,6 +245,28 @@ def step_inputs(runner: Any, pixels: Any, intrinsic: Any, masks: Any) -> tuple[A
         else resize_image(masks[0], (height, width), nearest=True)[None].bool()
     )
     return pixels, resize_intrinsic(intrinsic, sx, sy), masks
+
+
+def guard_scales(runner: Any) -> None:
+    """Project foreground scales after MCMC changes and before the first render.
+
+    Five percent of the original sparse diameter is an explicit, unmeasured cap,
+    enabled only with the anisotropy loss. Clear clipped Adam moments so momentum
+    cannot continually push against the bound. Frozen background rows are separate.
+    """
+    cfg = runner.hex_settings
+    if not cfg.get("aniso_weight"):
+        return
+    torch = importlib.import_module("torch")
+    bound = prior_maths.scale_limit(2 * cfg["radius"], cfg.get("aniso_max_scale_share", 0.05))
+    with torch.no_grad():
+        scales = runner.splats["scales"]
+        clipped = scales > bound
+        scales.clamp_(max=bound)
+        state = runner.optimizers["scales"].state.get(scales, {})
+        for key in ("exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
+            if key in state:
+                state[key].masked_fill_(clipped, 0)
 
 
 def record_memory(runner: Any, step: int, info: dict[str, Any]) -> None:
@@ -331,7 +357,7 @@ def loss(
     if cfg["aniso_weight"]:
         scales = runner.splats["scales"]
         terms["anisotropy"] = (
-            (torch.exp(scales.max(-1).values - scales.min(-1).values) - cfg["aniso_ratio"])
+            (scales.max(-1).values - scales.min(-1).values - math.log(cfg["aniso_ratio"]))
             .clamp_min(0)
             .mean()
         )
@@ -493,6 +519,51 @@ def cpu_self_check() -> None:
     normals(coarse, coarse_k[0]).sum().backward()
     if depth.grad is None or not torch.isfinite(depth.grad).all():
         raise ValueError("coarse normal comparison lost its gradient")
+    from experiments.bench.rescore_gpu import cpu_self_check as check_rescore
+
+    check_rescore()
+    axes = torch.tensor([[1000.0, 0, -1000.0]], requires_grad=True)
+    runner = types.SimpleNamespace(
+        hex_settings={
+            "aniso_weight": 1.0,
+            "aniso_ratio": 10,
+            "priors": False,
+            "radius": 10.0,
+            "aniso_max_scale_share": 0.05,
+        },
+        splats={"scales": axes},
+        cfg=types.SimpleNamespace(max_steps=10),
+    )
+    actual_loss = loss(runner, 1, None, None, None, None, axes.new_zeros(()))
+    actual_loss.backward()
+    if not torch.isfinite(actual_loss) or not torch.allclose(
+        actual_loss, axes.new_tensor(2000 - math.log(10))
+    ):
+        raise ValueError("log-anisotropy value changed")
+    if not torch.equal(axes.grad, torch.tensor([[1.0, 0, -1.0]])):
+        raise ValueError("log-anisotropy gradient changed")
+    runner.splats["scales"] = torch.nn.Parameter(torch.tensor([[-20.0, 1.0, 1000.0]]))
+    optimizer = torch.optim.Adam([runner.splats["scales"]])
+    runner.optimizers = {"scales": optimizer}
+    state = {key: torch.ones((1, 3)) for key in ("exp_avg", "exp_avg_sq")}
+    optimizer.state[runner.splats["scales"]] = state
+    guard_scales(runner)
+    if not torch.equal(runner.splats["scales"], torch.tensor([[-20.0, 0, 0]])):
+        raise ValueError("foreground scale projection changed")
+    if any(not torch.equal(value, torch.tensor([[1.0, 0, 0]])) for value in state.values()):
+        raise ValueError("scale projection must clear only clipped Adam moments")
+    # MCMC may replace its Parameter and optimizer state on every refinement.
+    replacement = torch.nn.Parameter(torch.ones((2, 3)))
+    runner.splats["scales"] = replacement
+    guard_scales(runner)
+    if torch.count_nonzero(replacement):
+        raise ValueError("scale guard used a stale pre-MCMC Parameter")
+    runner.hex_settings["aniso_weight"] = 0
+    with torch.no_grad():
+        replacement.fill_(10)
+    guard_scales(runner)
+    if not torch.equal(replacement, torch.full((2, 3), 10.0)):
+        raise ValueError("disabled anisotropy changed scales")
     export = importlib.import_module("gsplat").export_splats
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "plain.ply"
