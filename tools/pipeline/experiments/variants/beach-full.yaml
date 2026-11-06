@@ -1,9 +1,9 @@
-# One comparison; original frozen test cameras and +/-0.5 s exclusions in both arms.
+# One comparison; original frozen test cameras and +/-0.1 s exclusions in both arms (about 3 video frames: the near-identical neighbours; +/-0.5 s removed over half the clip).
 # Explicit upgrade renderer; no PPISP, priors, dense seeds, anisotropy or far-field.
 upgrade-excl:
   bench:
     keep_splat: true
-    test_exclusion_seconds: 0.5
+    test_exclusion_seconds: 0.1
   train: &upgrade
     test_every: 0
     converge: false
@@ -24,5 +24,5 @@ upgrade-excl:
 full-data:
   bench:
     keep_splat: true
-    test_exclusion_seconds: 0.5
+    test_exclusion_seconds: 0.1
   train: *upgrade

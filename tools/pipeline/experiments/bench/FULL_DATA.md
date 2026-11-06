@@ -8,7 +8,7 @@ identical. `upgrade-excl` uses the original 900×1600 images. `full-data` uses d
 
 ## Measured locally and estimated remotely
 
-The inclusive ±0.5 s exclusion removes **95 of 262** original pool frames, leaving
+The inclusive exclusion window is **±0.1 s** (about 3 video frames each side, the near-identical neighbours). It removes **7 of 262** original pool frames and about 11% of the full video. ±0.2 s would remove 31 of 262 (about 23% of the video) and ±0.5 s 95 of 262 (about 57%), so ±0.5 s would have tested a different, data-starved regime. The budget figures below were computed at ±0.5 s and leaving
 **167**. The original test images are never training inputs. The auto budget after
 cutting tracks to those 167 views is **2,519,371** splats. At native resolution the same
 tracks give a **2,863,388** proxy, below the **7,247,091** L4 memory ceiling (24 GB model).

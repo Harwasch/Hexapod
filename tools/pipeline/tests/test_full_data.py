@@ -172,7 +172,7 @@ def test_quality_mark_keeps_geometry_and_opacity_with_tiers() -> None:
 def test_full_freeze_is_cpu_and_spend_cap_covers_workflow(monkeypatch: pytest.MonkeyPatch) -> None:
     args = cli.parser().parse_args(["freeze-full", "--tag", "beach-full-data", "--total-cap", "8"])
     freeze = cli.plans_for(args)[0]
-    assert freeze["tier"] == "cpu4" and freeze["excludeTestSeconds"] == 0.5
+    assert freeze["tier"] == "cpu4" and freeze["excludeTestSeconds"] == 0.1
     assert freeze["schedule"] == "freeze-full"
     worst = ledger.hourly_rate("cpu4") * (7200 + 240) / 3600
     worst += ledger.hourly_rate("l4") * ((5400 + 240) + (16200 + 240) + (5400 + 240)) / 3600
@@ -198,7 +198,7 @@ def test_full_variants_have_no_quality_features_and_keep_outputs() -> None:
         )
         plan = cli.plans_for(args)[0]
         assert plan["live"] and plan["keepSplat"]
-        assert plan["testExclusionSeconds"] == 0.5
+        assert plan["testExclusionSeconds"] == 0.1
         assert plan["trainParams"]["test_every"] == 0
         assert plan["trainParams"]["cap_max"] == "auto"
         assert "_bench_quality" not in plan["trainParams"]

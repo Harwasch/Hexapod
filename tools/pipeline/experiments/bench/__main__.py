@@ -66,7 +66,7 @@ def parser() -> argparse.ArgumentParser:
     full.add_argument(
         "--source-key", help="original upload key if absent from source run artifacts"
     )
-    full.add_argument("--exclude-test-seconds", type=float, default=0.5)
+    full.add_argument("--exclude-test-seconds", type=float, default=0.1)
     full.add_argument("--blur-ratio", type=float, default=0.5)
     full.add_argument("--duplicate-mae", type=float, default=1.0)
     run = commands.add_parser("run")
