@@ -5,6 +5,7 @@ import type {
   LiveTrainPlan,
   LiveTrainQuality,
   LiveTrainSnapshot,
+  LiveTrainSeeds,
 } from "@twin/contracts";
 
 export const count = (n: number | null | undefined): string =>
@@ -49,7 +50,24 @@ export const compact = (n: number | null | undefined): string =>
       : n >= 1000
         ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`
         : count(n);
-export function phaseOf(step: number, plan?: LiveTrainPlan | null): string {
+export function effectiveCap(plan?: LiveTrainPlan | null): number | null {
+  const caps = [plan?.cap, plan?.capMax].filter((n): n is number => n != null);
+  return caps.length ? Math.min(...caps) : null;
+}
+export function phaseOf(
+  step: number,
+  plan?: LiveTrainPlan | null,
+  gaussians?: number | null,
+): string {
+  const cap = effectiveCap(plan);
+  if (
+    cap != null &&
+    gaussians != null &&
+    gaussians >= cap &&
+    plan?.refineStop != null &&
+    step < plan.refineStop
+  )
+    return "Relocating";
   if (plan?.refineStart == null) return "–";
   if (step < plan.refineStart) return "Warm-up";
   return plan.refineStop != null && step >= plan.refineStop ? "Settling" : "Densifying";
@@ -72,7 +90,8 @@ export function pillText(state: LiveState): string {
     (state.stage && state.stage.stageId !== "train" && train)
   )
     return "Finished";
-  const phase = phaseOf(lastStep(train), train?.plan);
+  const phase = phaseOf(lastStep(train), train?.plan, train?.series?.gs?.at(-1));
+  if (phase === "Relocating") return "Relocating · at cap";
   return phase === "–" ? "Training" : `Training · ${phase.toLowerCase()}`;
 }
 export function ceilingText(plan?: LiveTrainPlan | null): string {
@@ -163,12 +182,45 @@ export function snapshotAt(
       .at(-1) ?? null
   );
 }
-export type ChartId = "gs" | "loss" | "psnr" | "lr" | "its" | "mem";
+export type ChartId =
+  | "gs"
+  | "loss"
+  | "psnr"
+  | "lr"
+  | "its"
+  | "mem"
+  | "far"
+  | "elongation"
+  | "refine"
+  | "gain"
+  | "ceiling";
 export interface ChartPoint {
   step: number;
   value: number;
 }
 export function chartPoints(train: LiveTrain | null | undefined, id: ChartId): ChartPoint[] {
+  const quality = train?.quality?.series;
+  if (
+    id === "far" ||
+    id === "elongation" ||
+    (id === "mem" && quality?.peakAllocatedGb?.some((v) => v != null))
+  ) {
+    const values =
+      id === "far"
+        ? quality?.farFieldShare
+        : id === "elongation"
+          ? quality?.elongationShare
+          : quality?.peakAllocatedGb;
+    return (quality?.step ?? []).flatMap((step, i) =>
+      values?.[i] == null ? [] : [{ step, value: values[i] * (id === "mem" ? 1 : 100) }],
+    );
+  }
+  if (id === "refine" || id === "ceiling")
+    return (train?.series?.step ?? []).map((step) => ({ step, value: step }));
+  if (id === "gain")
+    return (train?.evals ?? []).flatMap((e) =>
+      e.gain == null ? [] : [{ step: e.step, value: e.gain }],
+    );
   if (id === "psnr")
     return (train?.evals ?? []).flatMap((e) =>
       e.psnr == null ? [] : [{ step: e.step, value: e.psnr }],
@@ -195,7 +247,9 @@ export function chartDomain(
   const lo = zero ? 0 : Math.min(...transformed),
     hi = Math.max(...transformed);
   const pad = (hi - lo || Math.abs(hi) || 1) * 0.08;
-  return [zero ? 0 : lo - pad, hi + pad];
+  // A quantity that is never negative (loss, speed, shares) never gets a negative axis.
+  const floor = !log && lo >= 0 ? 0 : -Infinity;
+  return [zero ? 0 : Math.max(floor, lo - pad), hi + pad];
 }
 export function nearestCameraDistance(
   x: number,
@@ -230,4 +284,89 @@ export function eventsDisplay(
   return [...(train?.events ?? [])]
     .reverse()
     .map((e) => ({ step: count(e.step), kind: e.kind, text: e.text }));
+}
+
+export function snapshotLag(shown: number, current: number): string | null {
+  return shown < 0 || shown >= current ? null : `−${compact(current - shown)}`;
+}
+export function scrubPosition(
+  step: number,
+  latest: number,
+  ceiling: number,
+  width: number,
+  release = false,
+): number | null {
+  const margin = release ? (ceiling * 6) / Math.max(1, width - 12) : 0;
+  return step >= latest - margin ? null : Math.max(0, step);
+}
+export function seedsLabel(seeds?: LiveTrainSeeds | null): string {
+  if (!seeds) return "";
+  return (
+    `${compact(seeds.of)} seeds · ${compact(seeds.sources?.sfm ?? 0)} SfM · ${compact(seeds.sources?.dense ?? 0)} dense` +
+    (seeds.sources?.seed ? ` · ${compact(seeds.sources.seed)} seed` : "")
+  );
+}
+export function decodeSeeds(
+  bytes: ArrayBuffer,
+  seeds: LiveTrainSeeds,
+): { positions: Float32Array; colors: Float32Array } {
+  if (bytes.byteLength !== seeds.count * 10 || seeds.origin.length !== 3 || seeds.scale <= 0)
+    throw new Error("Invalid seeds");
+  const view = new DataView(bytes),
+    positions = new Float32Array(seeds.count * 3),
+    colors = new Float32Array(seeds.count * 3);
+  const palette = [
+    [127, 216, 192],
+    [216, 195, 154],
+    [185, 163, 240],
+  ];
+  for (let i = 0; i < seeds.count; i++) {
+    const color = palette[view.getUint8(i * 10 + 9)] ?? palette[0];
+    for (let axis = 0; axis < 3; axis++) {
+      positions[i * 3 + axis] =
+        (view.getInt16(i * 10 + axis * 2, true) * seeds.scale) / 32767 + (seeds.origin[axis] ?? 0);
+      colors[i * 3 + axis] = (color?.[axis] ?? 0) / 255;
+    }
+  }
+  return { positions, colors };
+}
+export function lossLines(
+  train?: LiveTrain | null,
+): { name: string; color: string; points: ChartPoint[] }[] {
+  const lines = [{ name: "total", color: "#d8c39a", points: chartPoints(train, "loss") }];
+  const series = train?.quality?.series;
+  for (const [name, color] of [
+    ["depth", "#7fd8c0"],
+    ["normal", "#b9a3f0"],
+    ["anisotropy", "#e06a5a"],
+    ["gradient", "#f0b254"],
+  ]) {
+    if (!name || !color) continue;
+    const values = series?.loss?.[name];
+    if (!values?.some((v) => v != null && (name !== "gradient" || v !== 0))) continue;
+    lines.push({
+      name,
+      color,
+      points: (series?.step ?? []).flatMap((step, i) =>
+        values[i] == null ? [] : [{ step, value: values[i] }],
+      ),
+    });
+  }
+  return lines.filter((line) => line.points.length);
+}
+export function finalReadouts(train?: LiveTrain | null): string[] {
+  const final = train?.final;
+  if (!final) return [];
+  return (
+    [
+      ["PSNR", final.psnr],
+      ["SSIM", final.ssim],
+      ["LPIPS", final.lpips],
+      ["cc_PSNR", final.ccPsnr],
+      ["cc_SSIM", final.ccSsim],
+      ["cc_LPIPS", final.ccLpips],
+    ] as const
+  ).flatMap(([label, value]) =>
+    value == null ? [] : [`${label} ${value.toFixed(label.endsWith("PSNR") ? 2 : 3)}`],
+  );
 }

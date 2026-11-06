@@ -31,7 +31,7 @@ from app.models.enums import RunStatus
 from app.schemas.live import LiveCameras, LiveProgress, LiveSplat, LiveStage, LiveState, LiveTrain
 from app.services.errors import NotFoundError
 from app.services.jobs import get_job
-from app.services.live_train import derive_events
+from app.services.live_train import derive_events, final_metrics
 from app.storage import ObjectStorage
 from app.storage.null import StorageUnavailableError
 
@@ -84,12 +84,19 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
     for step in steps:
         live = (step.metrics or {}).get("live")
         if not isinstance(live, dict):
-            continue
+            if step.stage_id != "train" or step.status == RunStatus.IN_PROGRESS:
+                continue
+            live = {}
         found_cameras = _cameras(step, live.get("cameras"))
         cameras = found_cameras or cameras
         found_splat = _splat(step, live.get("splat"), storage)
         splat = found_splat or splat
-        train = _train(live, storage) or train
+        final = (
+            final_metrics(step.metrics or {})
+            if step.stage_id == "train" and step.status != RunStatus.IN_PROGRESS
+            else None
+        )
+        train = _train(live, storage, final=final) or train
     return LiveState(
         job_id=job.id,
         capture_id=capture.id,
@@ -194,13 +201,17 @@ def _signed(storage: ObjectStorage, key: str) -> str | None:
         return None
 
 
-def _train(live: dict[str, Any], storage: ObjectStorage) -> LiveTrain | None:
+def _train(
+    live: dict[str, Any], storage: ObjectStorage, *, final: dict[str, int | float] | None = None
+) -> LiveTrain | None:
     """Validate first, then derive and sign; malformed historical JSON is never fatal."""
-    value = live.get("train")
+    value = live.get("train", {} if final else None)
     if not isinstance(value, dict):
         return None
     try:
         parsed = LiveTrain.model_validate({**value, "snapshots": live.get("snapshots", [])})
+        if final is not None:
+            parsed = LiveTrain.model_validate({**parsed.model_dump(by_alias=True), "final": final})
         document = parsed.model_dump(by_alias=True)
         # Relocations are optional observations, bounded by the worker, not stored events.
         relocations = value.get("relocations", [])
@@ -217,6 +228,17 @@ def _train(live: dict[str, Any], storage: ObjectStorage) -> LiveTrain | None:
         parsed = LiveTrain.model_validate(document)
     except (ValidationError, TypeError, ValueError, KeyError, IndexError):
         return None
+    if parsed.seeds is not None:
+        key = parsed.seeds.key
+        if (
+            not key.startswith("runs/")
+            or _LIVE_SEGMENT not in key
+            or ".." in key
+            or not key.endswith("/seeds.bin")
+        ):
+            parsed.seeds = None
+        else:
+            parsed.seeds.url = _signed(storage, key)
     for snapshot in parsed.snapshots:
         key = snapshot.key
         if (

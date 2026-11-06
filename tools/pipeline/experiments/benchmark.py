@@ -128,7 +128,7 @@ CONFIGS: dict[str, dict[str, Any]] = {
         "iterations": 30_000,
         "strategy": "mcmc",
         "cap_max": "auto",
-        "converge": True,
+        "converge": False,
     },
     # The recipe before the budget: a fixed 500k and the full 30k. Measured 25.12 dB
     # against the paper's 25.19, so `recipe` against this is what the budget and the
@@ -145,7 +145,8 @@ def train_params(
     if config not in CONFIGS:
         raise ValueError(f"config {config!r} is not one of {sorted(CONFIGS)}")
     extra = dict(switches or {})
-    params: dict[str, Any] = {**scene.params, **CONFIGS[config], **extra}
+    # This legacy published-benchmark protocol explicitly needs an internal test split.
+    params: dict[str, Any] = {"test_every": 8, **scene.params, **CONFIGS[config], **extra}
     params["extra_args"] = [
         *scene.params.get("extra_args", []),
         *extra.get("extra_args", []),

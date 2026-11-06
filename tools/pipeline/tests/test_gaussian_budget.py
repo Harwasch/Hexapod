@@ -382,6 +382,7 @@ def test_a_support_mask_budgets_only_what_it_holds_in_full(tmp_path: Path) -> No
         budget_floor=1,
         gaussian_density=2.0,
         support_mask=mask.to_dict(),
+        restrict_preview_mask=True,
     )
     execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
 

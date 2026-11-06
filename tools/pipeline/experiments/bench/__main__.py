@@ -59,6 +59,16 @@ def parser() -> argparse.ArgumentParser:
     freeze.add_argument("--run", help="override the registry UUID or 8-hex run prefix")
     freeze.add_argument("--generation", help="root or p<16 hex>; required for ambiguity")
     freeze.add_argument("--refreeze", action="store_true")
+    full = commands.add_parser(
+        "freeze-full", help="native frames registered into frozen beach backbone (CPU only)"
+    )
+    full.add_argument("--scene", choices=("beach-full",), default="beach-full")
+    full.add_argument(
+        "--source-key", help="original upload key if absent from source run artifacts"
+    )
+    full.add_argument("--exclude-test-seconds", type=float, default=0.5)
+    full.add_argument("--blur-ratio", type=float, default=0.5)
+    full.add_argument("--duplicate-mae", type=float, default=1.0)
     run = commands.add_parser("run")
     run.add_argument("--scene", choices=sorted(SCENES), required=True)
     run.add_argument("--variant", help="one named variant; with --variants, select only this arm")
@@ -98,13 +108,13 @@ def parser() -> argparse.ArgumentParser:
     results.add_argument("--baseline", default="baseline-main")
     results.add_argument("--candidate", help="one candidate for the flip rule; default: all")
     spend = commands.add_parser("ledger")
-    for command in (freeze, run, matched, rescore, rescore_table, report, results, spend):
+    for command in (freeze, full, run, matched, rescore, rescore_table, report, results, spend):
         command.add_argument("--ledger", type=Path)
         command.add_argument("--state-dir", type=Path, default=STATE)
         command.add_argument("--dry-run", action="store_true")
         command.add_argument("--rehearse", action="store_true")
         command.add_argument("--tag", help="spend/report group in the shared ledger")
-    for command in (freeze, run, matched, rescore):
+    for command in (freeze, full, run, matched, rescore):
         command.add_argument("--cap", type=float, default=2.0)
         command.add_argument(
             "--total-cap", type=float, help="cumulative cap for --tag; --cap bounds each batch"
@@ -122,6 +132,26 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
         "rehearsal": args.rehearse,
         "tag": args.tag,
     }
+    if args.command == "freeze-full":
+        if not (
+            0 <= args.exclude_test_seconds < 68
+            and 0 <= args.blur_ratio < 1
+            and 0 <= args.duplicate_mae <= 255
+        ):
+            raise ValueError("invalid full-data selection thresholds")
+        return [
+            {
+                **base,
+                "runId": "freeze-full-" + uuid.uuid4().hex,
+                "schedule": "freeze-full",
+                "tier": "cpu4",
+                "sourceRun": "4dd02171-341d-4970-bad2-8e410fb8d233",
+                "sourceKey": args.source_key,
+                "excludeTestSeconds": args.exclude_test_seconds,
+                "blurRatio": args.blur_ratio,
+                "duplicateMae": args.duplicate_mae,
+            }
+        ]
     if args.command == "rescore":
         if not 1 <= len(args.runs) <= 4 or len(set(args.runs)) != len(args.runs):
             raise ValueError("rescore needs one to four distinct run IDs")
@@ -153,6 +183,8 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
             }
         ]
     if args.command == "freeze":
+        if args.scene == "beach-full":
+            raise ValueError("use freeze-full to preserve the beach test set")
         public = args.scene in PUBLIC_SCENES
         if public and (args.run or args.generation):
             raise ValueError("public scenes use their pinned archive, not --run/--generation")
@@ -200,10 +232,15 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
         bench = overrides.get("bench", {})
         if (
             not isinstance(bench, dict)
-            or set(bench) - {"keep_splat"}
+            or set(bench) - {"keep_splat", "test_exclusion_seconds"}
             or ("keep_splat" in bench and not isinstance(bench["keep_splat"], bool))
         ):
             raise ValueError("variant bench settings only accept keep_splat: true/false")
+        exclusion = bench.get("test_exclusion_seconds")
+        if exclusion is not None and (
+            not isinstance(exclusion, int | float) or not 0 <= exclusion < 68
+        ):
+            raise ValueError("test_exclusion_seconds must be in [0,68)")
         overrides = {k: v for k, v in overrides.items() if k != "bench"}
         train_params(args.schedule, overrides)
         merged = {"train": {**overrides.get("train", {}), **common.get("train", {})}}
@@ -224,6 +261,7 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "keepSplat": args.keep_splat
                     if args.keep_splat is not None
                     else bench.get("keep_splat", False),
+                    "testExclusionSeconds": bench.get("test_exclusion_seconds"),
                     "renders": args.renders,
                     "topdown": args.topdown,
                     **({"live": True} if args.live else {}),
@@ -296,7 +334,7 @@ def save_outcome(state: Path, book: Path, plan: dict[str, Any], result: dict[str
 
 def lost_result(state: Path, plan: dict[str, Any], error: Exception) -> dict[str, Any]:
     message = f"Remote outcome unknown: {type(error).__name__}: {error}"
-    if plan["schedule"] in {"freeze", "matched", "rescore"}:
+    if plan["schedule"] in {"freeze", "freeze-full", "matched", "rescore"}:
         return {
             "runId": plan["runId"],
             "scene": plan["scene"],
@@ -331,7 +369,7 @@ def remote_batch(
     module = load_modal()
     results = []
     with module.app.run():
-        if plans[0]["schedule"] != "freeze":
+        if plans[0]["schedule"] not in {"freeze", "freeze-full"}:
             # Volume API read: no CPU/GPU preflight function, no R2 credentials.
             manifest = json.loads(
                 b"".join(module.volume.read_file(f"scenes/{plans[0]['scene']}/manifest.json"))
@@ -343,7 +381,13 @@ def remote_batch(
             pending = []
             for plan in plans[offset : offset + 4]:
                 function = (
-                    (module.freeze_public if plan.get("sourceType") == "public" else module.freeze)
+                    module.freeze_full
+                    if plan["schedule"] == "freeze-full"
+                    else (
+                        module.freeze_public
+                        if plan.get("sourceType") == "public"
+                        else module.freeze
+                    )
                     if plan["schedule"] == "freeze"
                     else module.matched_renders
                     if plan["schedule"] == "matched"
@@ -374,6 +418,10 @@ def local_batch(
     cap: float,
     total_cap: float | None = None,
 ) -> list[dict[str, Any]]:
+    if plans[0]["schedule"] == "freeze-full":
+        raise ValueError(
+            "freeze-full requires the actual video and pycolmap; use --dry-run for its cost plan"
+        )
     scene = state / "scenes" / plans[0]["scene"]
     if plans[0]["schedule"] == "freeze" and scene.exists() and not plans[0]["refreeze"]:
         raise ValueError("synthetic scene exists; use --refreeze")

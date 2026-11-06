@@ -257,18 +257,12 @@ stages:
       cap_max: auto
       gaussian_density: 0.1
       budget_floor: 200000
-      # Stop when training has converged: after densification ends (25k of 30k, scaled
-      # with the schedule; never before it), held-out PSNR is measured every 500 steps,
-      # and a run whose best of the last 2,000 steps is under 0.05 dB above its best
-      # before them stops -- with the trainer's own save, so the PLY is where it always
-      # is. A budget over 1M may run a longer maximum (sqrt(budget / 1M), at most 2x),
-      # which this then ends early if it went flat. convergence.py has the reasoning.
-      converge: true
-      # After training, on the same GPU: render every held-out frame (every 8th, never
-      # trained on), compare it with the photo, and share each pixel's error out among
-      # the gaussians that painted it (holdout.py). Writes `holdout/`, which `quality`
-      # verifies keep with. Seconds of GPU; it cannot fail the stage.
-      holdout_error: true
+      # All registered frames train. Above 60 frames, grow the fixed schedule by
+      # sqrt(frames / 60); the bench experiment supplies its own paid-work ceiling.
+      schedule_growth: sqrt
+      test_every: 0 # Set >=2 to opt into an internal held-out split.
+      converge: false # Requires test_every >=2 for validation-based stopping.
+      holdout_error: false # Optional per-splat validation error, also requires a split.
       # The view-dependent colour that ships: spherical-harmonic bands above the DC term
       # (0-3). gsplat always fits degree 3 -- 45 of a gaussian's 59 trained floats -- and
       # this is how many of those bands trained.ply keeps, and so gated.ply, canonical.ply
@@ -415,11 +409,11 @@ stages:
   # The quality bar (quality.py). Per gaussian: how many frames saw it unoccluded, over
   # what spread of angles, at what ground sampling distance -- then keep / context / drop,
   # and `bar` decides what `place` gets: strict (keep only), balanced (keep, plus context
-  # faded to half its opacity) or everything (the splat as trained). Strict is the
-  # default: a region is shown only if the data supports it at high quality. It also
+  # faded to half its opacity) or everything (the splat as trained). The default mark
+  # retains every row and records quality_tier for later visibility decisions. It also
   # measures the extent of the well-supported (keep) splats, in COLMAP's frame, which is
-  # what a phone's Refine trains inside -- decided by the data, with no subject to pick
-  # -- and writes capture tips and a tier-coloured coverage.ply.
+  # available as an explicit Refine restriction; Refine can recover outside it by default.
+  # It writes capture tips and a tier-coloured coverage.ply.
   #
   # After `georeference`, not straight after `train`, only so that an EXIF-aligned
   # capture's metric scale is there to report its GSD in mm/px; the criterion itself is
@@ -433,8 +427,8 @@ stages:
       mode: refine
       # bar: fade keeps every row, scales context opacity by context_fade (0.5),
       # and unsupported opacity by its square. `keep` still counts the high-support
-      # tier, not all retained rows; strict remains the default pending the bake-off.
-      bar: strict
+      # tier, not all retained rows. mark retains the original opacities too.
+      bar: mark # Preserve geometry, attach quality_tier for later visibility decisions.
       keep_min_views: 8
       keep_min_spread_deg: 45
       keep_max_gsd_ratio: 2.0

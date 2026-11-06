@@ -28,8 +28,9 @@ TIMEOUTS = {
     "screen": 1800,
     "full": int(os.environ.get("HEXAPOD_BENCH_FULL_TIMEOUT", "3300")),
     "freeze": 600,
+    "freeze-full": 7200,
     "matched": 600,
-    "rescore": 7200,
+    "rescore": int(os.environ.get("HEXAPOD_BENCH_RESCORE_TIMEOUT", "7200")),
 }
 # Startup/teardown allowance in the modelled reservation, not a measured invoice.
 STARTUP_SECONDS = 60
@@ -118,7 +119,14 @@ def accounted(entries: list[dict[str, Any]]) -> dict[str, float]:
     return charges
 
 
-def estimate(entries: list[dict[str, Any]], scene: str, schedule: str, tier: str) -> float:
+def estimate(
+    entries: list[dict[str, Any]],
+    scene: str,
+    schedule: str,
+    tier: str,
+    *,
+    variant: str | None = None,
+) -> float:
     plans = {e["runId"]: e for e in entries if e["event"] == "planned"}
     actuals = [
         money(e["costUsd"])
@@ -126,6 +134,7 @@ def estimate(entries: list[dict[str, Any]], scene: str, schedule: str, tier: str
         if e["event"] != "planned"
         and e.get("costUsd") is not None
         and not plans[e["runId"]].get("rehearsal")
+        and (variant is None or plans[e["runId"]].get("variant", {}).get("name") == variant)
         and all(
             plans[e["runId"]][k] == v
             for k, v in (("scene", scene), ("schedule", schedule), ("tier", tier))
@@ -133,8 +142,8 @@ def estimate(entries: list[dict[str, Any]], scene: str, schedule: str, tier: str
     ]
     if actuals:
         return max(actuals)
-    if schedule == "freeze":
-        return 0.05
+    if schedule in {"freeze", "freeze-full"}:
+        return 0.05 if schedule == "freeze" else 0.5
     return (
         {"screen": 0.20, "full": 0.90, "matched": 0.05, "rescore": 1.50}[schedule]
         * hourly_rate(tier)
@@ -165,7 +174,14 @@ def price_plan(
     # Once recorded, a tag's cap cannot be silently removed or raised by a later CLI.
     limit = min(limits) if limits else None
     for plan in plans:
-        forecast = estimate(entries, plan["scene"], plan["schedule"], plan["tier"])
+        # A different recipe (e.g. PPISP/dense vs plain) is not a throughput estimate.
+        forecast = estimate(
+            entries,
+            plan["scene"],
+            plan["schedule"],
+            plan["tier"],
+            variant=plan.get("variant", {}).get("name"),
+        )
         timeout = TIMEOUTS[plan["schedule"]]
         seconds = timeout + OVERHEAD_SECONDS + RESTART_SECONDS
         maximum = hourly_rate(plan["tier"]) * seconds / 3600

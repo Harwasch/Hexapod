@@ -91,6 +91,7 @@ class LiveTrainRule(TrainModel):
 
 class LiveTrainPlan(TrainModel):
     cap: int | None = Field(default=None, ge=0)
+    cap_max: int | None = Field(default=None, ge=0)
     mode: str | None = None
     clamp: str | None = None
     steps_max: int | None = Field(default=None, gt=0)
@@ -159,10 +160,68 @@ class LiveTrainEvent(TrainModel):
     usd_saved: float | None = None
 
 
+class LiveQualitySeries(TrainModel):
+    step: list[int] = Field(default_factory=list, max_length=300)
+    far_field_share: list[float | None] = Field(default_factory=list)
+    elongation_share: list[float | None] = Field(default_factory=list)
+    peak_allocated_gb: list[float | None] = Field(default_factory=list)
+    loss: dict[str, list[float | None]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def aligned(self) -> LiveQualitySeries:
+        columns = [
+            self.far_field_share,
+            self.elongation_share,
+            self.peak_allocated_gb,
+            *self.loss.values(),
+        ]
+        if (
+            any(len(column) != len(self.step) for column in columns)
+            or self.step != sorted(set(self.step))
+            or any(s < 0 for s in self.step)
+        ):
+            raise ValueError("quality columns must align and steps must increase")
+        return self
+
+
 class LiveTrainQuality(TrainModel):
     step: int | None = Field(default=None, ge=0)
     far_field_share: float | None = Field(default=None, ge=0, le=1)
     elongation_share: float | None = Field(default=None, ge=0, le=1)
+    series: LiveQualitySeries | None = None
+    dense_init_points: int | None = Field(default=None, ge=0)
+    dense_init_added_points: int | None = Field(default=None, ge=0)
+    dense_init_seconds: float | None = Field(default=None, ge=0)
+
+
+class LiveTrainSeeds(TrainModel):
+    key: str
+    count: int = Field(ge=0, le=200000)
+    of: int = Field(ge=0)
+    sources: dict[str, int] = Field(default_factory=dict)
+    origin: list[float] = Field(min_length=3, max_length=3)
+    scale: float = Field(gt=0)
+    bytes: int = Field(ge=0)
+    url: str | None = None
+
+    @model_validator(mode="after")
+    def packed(self) -> LiveTrainSeeds:
+        if (
+            self.bytes != 10 * self.count
+            or self.of < self.count
+            or any(v < 0 for v in self.sources.values())
+        ):
+            raise ValueError("invalid seed counts")
+        return self
+
+
+class LiveTrainFinal(TrainModel):
+    psnr: float | None = None
+    ssim: float | None = None
+    lpips: float | None = None
+    cc_psnr: float | None = None
+    cc_ssim: float | None = None
+    cc_lpips: float | None = None
 
 
 class LiveTrainSnapshot(TrainModel):
@@ -187,6 +246,8 @@ class LiveTrain(TrainModel):
     run: str | None = None
     plan_id: str | None = None
     quality: LiveTrainQuality | None = None
+    seeds: LiveTrainSeeds | None = None
+    final: LiveTrainFinal | None = None
 
 
 class LiveState(CamelModel):

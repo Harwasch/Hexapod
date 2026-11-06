@@ -130,7 +130,7 @@ class CaptureFileRead(CamelModel):
 
 #: What `quality.mode` and `quality.bar` may be; tools/pipeline/quality.py's MODES and BARS.
 QUALITY_MODES: tuple[str, ...] = ("preview", "refine")
-QUALITY_BARS: tuple[str, ...] = ("strict", "balanced", "everything")
+QUALITY_BARS: tuple[str, ...] = ("strict", "balanced", "everything", "mark")
 
 
 class QualityRoi(CamelModel):

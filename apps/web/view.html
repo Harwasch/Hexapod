@@ -127,6 +127,12 @@
             <div class="lc-panel-head">
               <h2>Live splat</h2>
               <div class="lc-controls">
+                <div id="lc-layer-controls" class="lc-seg" role="group" aria-label="Layers" hidden>
+                  <button type="button" data-live-layer="splat" aria-pressed="true">Splat</button>
+                  <button type="button" data-live-layer="seeds" aria-pressed="false">Seeds</button>
+                  <button type="button" data-live-layer="both" aria-pressed="false">Both</button>
+                </div>
+                <button type="button" id="lc-cameras" aria-pressed="true">Cameras</button>
                 <div class="lc-seg" role="group" aria-label="Colour by">
                   <button type="button" data-live-color="photo" aria-pressed="true">Photo</button>
                   <button type="button" data-live-color="distance" aria-pressed="false" disabled>
@@ -140,7 +146,9 @@
               </div>
             </div>
             <div id="lc-scene" class="lc-scene">
-              <span id="lc-snapshot" class="lc-overlay"></span>
+              <div class="lc-overlay">
+                <span id="lc-snapshot"></span><span id="lc-lag" class="lc-chip" hidden></span>
+              </div>
               <div id="lc-distance" class="lc-distance" hidden>
                 <div></div>
                 <span>0</span><span>40</span><span>120 m+</span>
@@ -158,18 +166,14 @@
                 aria-valuenow="0"
               ></canvas>
             </div>
+            <div id="lc-seeds-count" class="lc-quality" hidden></div>
             <div id="lc-quality" class="lc-quality" hidden></div>
           </section>
           <aside class="lc-side">
             <section id="lc-stop" class="lc-panel lc-pad">
               <h2>Stop rule</h2>
               <div id="lc-rule" class="lc-rule"></div>
-              <div id="lc-checks"></div>
-              <div class="lc-gain-label"><span>Gain</span><span id="lc-gain-value"></span></div>
-              <div class="lc-gain"><i id="lc-gain-fill"></i><b id="lc-gain-threshold"></b></div>
-              <div class="lc-gain-label">
-                <span>0</span><span id="lc-threshold-label"></span><span id="lc-gain-max"></span>
-              </div>
+              <div id="lc-stop-trends"></div>
             </section>
             <section class="lc-panel lc-pad">
               <h2>Run size</h2>
@@ -177,6 +181,10 @@
             </section>
           </aside>
         </div>
+        <section id="lc-final-row" class="lc-panel lc-final-row" hidden>
+          <h2>Final</h2>
+          <span id="lc-final-scores"></span>
+        </section>
         <section id="lc-charts" class="lc-charts" aria-label="Training charts"></section>
         <section class="lc-panel">
           <div class="lc-panel-head"><h2>Events</h2></div>

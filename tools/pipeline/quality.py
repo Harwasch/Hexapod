@@ -200,7 +200,7 @@ SUPPORT_COLUMNS: tuple[tuple[str, str], ...] = (
 )
 
 #: What `bar` may be, loosest last. The fallback walks this order.
-BARS: tuple[str, ...] = ("strict", "balanced", "everything", "fade")
+BARS: tuple[str, ...] = ("strict", "balanced", "everything", "fade", "mark")
 #: What `mode` may be: a cheap preview that forecasts, or the full-quality refine.
 MODES: tuple[str, ...] = ("preview", "refine")
 
@@ -1119,6 +1119,14 @@ def gate(
         raise ValueError(f"bar must be one of {', '.join(BARS)}, not {bar!r}")
     if not 0 <= context_fade <= 1:
         raise ValueError("context_fade must be in [0, 1]")
+    if bar == "mark":
+        return {
+            **{
+                name: np.array(values, dtype=np.float32, copy=True)
+                for name, values in columns.items()
+            },
+            "quality_tier": tiers.astype(np.float32),
+        }
     if bar == "fade":
         out = {
             name: np.array(values, dtype=np.float32, copy=True) for name, values in columns.items()
@@ -1585,7 +1593,7 @@ def support_gate(ctx: StageContext) -> StageOutcome:
     mode = str(ctx.param("mode", "refine"))
     if mode not in MODES:
         raise ValueError(f"quality.mode must be one of {', '.join(MODES)}, not {mode!r}")
-    bar = str(ctx.param("bar", "balanced"))
+    bar = str(ctx.param("bar", "mark"))
     if bar not in BARS:
         raise ValueError(f"quality.bar must be one of {', '.join(BARS)}, not {bar!r}")
     thresholds = Thresholds.from_params(ctx.params)
@@ -1830,6 +1838,7 @@ def _grade(
         "balanced": tally.tiers[TIER_KEEP] + tally.tiers[TIER_CONTEXT],
         "everything": count,
         "fade": count,
+        "mark": count,
     }
     if "far_field" in source.properties:
         for start, read in source.chunks():
@@ -1844,7 +1853,11 @@ def _grade(
     kept_count = passing[applied]
     # `trained.ply`'s own schema: the fourteen, and the SH bands it carries.
     with splat_io.PlyWriter(
-        ctx.output(GATED_PLY.name), source.properties, count=kept_count
+        ctx.output(GATED_PLY.name),
+        tuple(dict.fromkeys((*source.properties, "quality_tier")))
+        if applied == "mark"
+        else source.properties,
+        count=kept_count,
     ) as writer:
         for start, read in source.chunks():
             tiers = columns.read("tiers", start, start + read["x"].shape[0])

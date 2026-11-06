@@ -361,7 +361,8 @@ def test_train_params_keep_the_scenes_lpips_net_under_any_switches() -> None:
         "iterations": 30_000,
         "strategy": "mcmc",
         "cap_max": "auto",
-        "converge": True,
+        "converge": False,
+        "test_every": 8,
         "pose_opt": True,
     }
     assert "schedule_full_at" not in params  # the full schedule, never scaled down

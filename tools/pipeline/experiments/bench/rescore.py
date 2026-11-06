@@ -19,6 +19,7 @@ import training
 from experiments.distance import measure_ply, scene_geometry
 from holdout_error import read_ply
 
+from .full_data import evaluation_identity
 from .ledger import hourly_rate
 from .matched import source_run
 from .rescore_maths import (
@@ -64,7 +65,10 @@ def inventory(
             ("manifestDigest", manifest["digest"]),
             ("splitDigest", manifest["splitDigest"]),
         ):
-            if result.get(key) != expected:
+            same_test = result.get("evaluationIdentity") is not None and result[
+                "evaluationIdentity"
+            ] == manifest.get("evaluationIdentity")
+            if not same_test and result.get(key) != expected:
                 raise ValueError("rescore requires identical frozen frames, poses and split")
         memory = run / "train_memory.json"
         samples = read_json(memory).get("samples", []) if memory.is_file() else []
@@ -205,6 +209,7 @@ def run_rescore(
     try:
         scene = root / "scenes" / plan["scene"]
         manifest, split = verify(scene, plan.get("manifestDigest"))
+        manifest = {**manifest, "evaluationIdentity": evaluation_identity(scene, split)}
         sources, unavailable = inventory(root / "runs", plan, manifest)
         result.update(
             unavailable=unavailable, manifestDigest=manifest["digest"], splitDigest=split["digest"]

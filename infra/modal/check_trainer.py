@@ -239,6 +239,24 @@ def main() -> int:
     if failed:
         raise SystemExit(f"simple_trainer.py parsed the pipeline's argv wrongly: {failed}")
     ran = _exercise_switches(namespace)
+    # Exercise the actual pinned Dataset's zero-holdout adapter, without a GPU or images.
+    import train_split
+
+    all_cfg = parse(
+        training.gsplat_argv(sys.executable, trainer, Path("/data"), Path("/result"), test_every=0)
+    )
+    dataset_module = {"Dataset": namespace["Dataset"]}
+
+    class NoGpuRunner:
+        def eval(self) -> None:
+            raise AssertionError("zero holdout must skip evaluation")
+
+    train_split.install(dataset_module, NoGpuRunner, all_cfg)
+    parser = types.SimpleNamespace(test_every=0, image_names=["a", "b", "c"])
+    assert list(dataset_module["Dataset"](parser, split="train").indices) == [0, 1, 2]
+    assert len(dataset_module["Dataset"](parser, split="val")) == 0
+    NoGpuRunner().eval()
+    ran.append("all-frame training split")
     sys.stdout.write(
         f"trainer ok: {trainer} accepts training.gsplat_argv (tyro {tyro.__version__}); "
         f"checked {', '.join(sorted(checks))}; ran {', '.join(ran)} on CPU\n"

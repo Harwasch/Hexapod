@@ -1910,9 +1910,15 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             f"stacks a batch with the default collate, which refuses tensors of different "
             f"lengths. Give one of them"
         )
+    test_every = int(ctx.param("test_every", 0))
+    training.held_out_split(1, test_every)
     # The region to train in: a support mask from a preview's quality stage (any shape the
     # well-supported data makes) wins over an ROI sphere; neither means the whole scene.
-    mask = support_mask.SupportMask.parse(ctx.param("support_mask"))
+    mask = (
+        support_mask.SupportMask.parse(ctx.param("support_mask"))
+        if ctx.param("restrict_preview_mask", False)
+        else None
+    )
     roi: training.Roi | support_mask.SupportMask | None = (
         mask if mask is not None else training.Roi.parse(ctx.param("roi"))
     )
@@ -1927,7 +1933,10 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     full_at = _optional_int(ctx.param("schedule_full_at"))
     computed = (
         training.schedule_scale(
-            images, full_at=full_at, floor=float(ctx.param("schedule_floor", 0.25))
+            images,
+            full_at=full_at,
+            floor=float(ctx.param("schedule_floor", 0.25)),
+            growth=str(ctx.param("schedule_growth", "sqrt")),
         )
         if full_at
         else 1.0
@@ -1936,6 +1945,11 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     steps_scaler = (
         computed if requested_scale is None else training.check_schedule_scale(requested_scale)
     )
+    schedule_limit = _optional_int(ctx.param("schedule_max_steps"))
+    if schedule_limit is not None:
+        if schedule_limit <= 0:
+            raise ValueError("schedule_max_steps must be positive")
+        steps_scaler = min(steps_scaler, schedule_limit / full_iterations)
     iterations = training.scaled_steps(full_iterations, steps_scaler)
     ctx.log(
         f"gsplat: {images} frames -> {steps_scaler:g} of the {full_iterations}-step schedule "
@@ -2050,7 +2064,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
                     "bilateral_grid": _optional_bool(ctx.param("bilateral_grid"), "bilateral_grid"),
                 },
                 extra=tuple(str(value) for value in (ctx.param("extra_args") or [])),
-                converge=_optional_bool(ctx.param("converge"), "converge"),
+                converge=bool(test_every and _optional_bool(ctx.param("converge"), "converge")),
                 rule=convergence.Rule(
                     every=int(ctx.param("converge_every", convergence.DEFAULT_EVERY)),
                     window=int(ctx.param("converge_window", convergence.DEFAULT_WINDOW)),
@@ -2094,7 +2108,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     )
     # Convergence: a held-out curve after densification, a stop when it is flat, and --
     # because the tail can now end early -- a longer maximum for a bigger budget.
-    converge = _optional_bool(ctx.param("converge"), "converge")
+    converge = bool(test_every and _optional_bool(ctx.param("converge"), "converge"))
     rule = convergence.Rule(
         every=int(ctx.param("converge_every", convergence.DEFAULT_EVERY)),
         window=int(ctx.param("converge_window", convergence.DEFAULT_WINDOW)),
@@ -2143,10 +2157,10 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             )
         )
     registered = _registered_count(poses, images)
-    train_frames, val_frames = training.held_out_split(registered)
+    train_frames, val_frames = training.held_out_split(registered, test_every)
     ctx.log(
         f"gsplat: {registered} posed frames -> {train_frames} train, {val_frames} held out "
-        f"(every {training.TEST_EVERY}th) for psnr/ssim/lpips"
+        f"(test_every={test_every}; zero means fixed schedule, no validation)"
     )
     # In work/, not checkpoint/: see the docstring. Nothing can resume from it.
     result = ctx.work_dir / "gsplat"
@@ -2206,6 +2220,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         bilateral_grid=bilateral_grid,
         **render_flags,
         live_steps=live_steps,
+        test_every=test_every,
         eval_steps=extra_evals,
         batch_size=batch_size,
         extra=[str(value) for value in (ctx.param("extra_args") or [])],
@@ -2247,6 +2262,14 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
         up=_up_estimate(poses),
     ):
+        live.emit_seeds(
+            dataset / "sparse" / "0",
+            ctx.checkpoint_dir / live.LIVE_DIR,
+            ctx.log,
+            key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
+            seeded=0 if seeded is None else seeded.seeded,
+            enabled=bool(live_steps),
+        )
         ctx.run(argv)
     ply = training.latest_ply(result)
     if ply is None:
@@ -2304,7 +2327,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     # is written, and unable to fail the stage: `holdout.measure` says why.
     held_out = holdout.measure(
         ctx,
-        enabled=_optional_bool(ctx.param("holdout_error"), "holdout_error"),
+        enabled=bool(test_every and _optional_bool(ctx.param("holdout_error"), "holdout_error")),
         python=training.trainer_python(ctx.param("python")),
         trainer=original_trainer,
         dataset=dataset,
@@ -2314,7 +2337,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         rows=in_ply,
         keep=None,
         data_factor=data_factor,
-        test_every=training.TEST_EVERY,
+        test_every=test_every,
         antialiased=antialiased,
         script=_optional_path(ctx.param("holdout_script")),
         budget_s=float(ctx.param("holdout_budget_s", holdout.DEFAULT_BUDGET_S)),
@@ -2332,6 +2355,46 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         registered=registered,
     )
     document = metrics_document.to_dict()
+    document["heldOut"] = {
+        "split": "val" if test_every else "none",
+        "testEvery": test_every,
+        "trainFrames": train_frames,
+        "valFrames": val_frames,
+        "note": "explicit internal holdout; the trainer never trains on these frames"
+        if test_every
+        else "all pool frames train; fixed schedule; no validation-based stop",
+    }
+    if not test_every:
+        for key in ("psnr", "ssim", "lpips", "ccPsnr", "ccSsim", "ccLpips"):
+            document[key] = None
+    document["limits"] = [
+        {
+            "name": "gaussians",
+            "value": cap_max,
+            "reason": "explicit recipe cap" if budget is None else budget.clamp or "surface budget",
+            "binding": bool(budget and in_ply >= budget.cap),
+        },
+        {
+            "name": "trainingSteps",
+            "value": iterations,
+            "reason": "fixed scaled schedule" if not converge else "convergence maximum",
+            "unboundedSteps": training.scaled_steps(full_iterations, computed),
+            "experimentCeiling": schedule_limit,
+            "binding": schedule_limit is not None and iterations >= schedule_limit,
+        },
+        {
+            "name": "internalHoldout",
+            "value": test_every,
+            "reason": "recipe opt-in" if test_every else "disabled by default",
+        },
+        {
+            "name": "previewMask",
+            "value": roi is not None,
+            "reason": "explicit restriction"
+            if roi is not None
+            else "Refine may recover beyond preview",
+        },
+    ]
     # Read off the PLY rather than trusted from the stats file: this is the count the
     # artifact actually has, and the two disagreeing is worth being able to see.
     document["gaussiansInPly"] = in_ply
@@ -2426,11 +2489,14 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     metrics: dict[str, MetricValue] = {
         "gaussians": in_ply,
         "trainedBytes": written,
+        "limitReasons": json.dumps(document["limits"], sort_keys=True),
         "requestedIterations": iterations,
         "scheduleScale": steps_scaler,
         "metricsSource": metrics_document.source,
         # Quality below is on the held-out split, never the training frames.
-        "metricsSplit": f"val: every {training.TEST_EVERY}th frame",
+        "metricsSplit": f"val: every {test_every}th frame"
+        if test_every
+        else "none: all frames train",
         "valFrames": val_frames,
         "trainFrames": train_frames,
         "initFrom": "sfm" if seeded is None else "preview",
@@ -2602,7 +2668,8 @@ def _train_in_blocks(
     run = blocks.train(ctx, settings, plan, ctx.output(TRAINED_PLY.name), phases=call)
     shipped = harmonics.degree_of(splat_io.read_layout(ctx.output(TRAINED_PLY.name)).properties)
     registered = _registered_count(settings.poses, images)
-    train_frames, val_frames = training.held_out_split(registered)
+    test_every = int(settings.params.get("test_every", 0))
+    train_frames, val_frames = training.held_out_split(registered, test_every)
     split = training.TrainMetrics(
         trainer=f"gsplat:{settings.trainer.name}", split=(train_frames, val_frames)
     ).to_dict()
@@ -2610,7 +2677,14 @@ def _train_in_blocks(
     # psnr/ssim/lpips: the merged splat on the run's own held-out frames, by gsplat's
     # eval() -- the numbers a single run reports, so the two are comparable.
     document: dict[str, Any] = dict(evaluated) if isinstance(evaluated, dict) else dict(split)
-    document["heldOut"] = split["heldOut"]
+    assert isinstance(split["heldOut"], dict)
+    document["heldOut"] = {
+        **split["heldOut"],
+        "testEvery": test_every,
+        "split": "val" if test_every else "none",
+    }
+    if not test_every:
+        document["heldOut"]["note"] = "all frames train; no validation-based stop"
     document["attempts"] = ctx.attempt
     document["gaussians"] = run.gaussians
     document["gaussiansInPly"] = run.gaussians
@@ -2661,6 +2735,28 @@ def _train_in_blocks(
     }
     document["roi"] = None
     document["blocks"] = record
+    document["limits"] = [
+        {
+            "name": "blockGaussians",
+            "value": caps,
+            "reason": "explicit recipe cap"
+            if settings.budget is None
+            else settings.budget.clamp or "surface budget partitioned across blocks",
+        },
+        {
+            "name": "trainingSteps",
+            "value": steps_max,
+            "experimentCeilingPerBlock": settings.params.get("schedule_max_steps"),
+            "reason": "sum of per-block fixed schedules"
+            if not settings.converge
+            else "sum of per-block convergence maxima",
+        },
+        {
+            "name": "internalHoldout",
+            "value": test_every,
+            "reason": "recipe opt-in" if test_every else "disabled by default",
+        },
+    ]
     document.update(quality_stack.ply_metrics(ctx.output(TRAINED_PLY.name)))
     if settings.live:
         ctx.log(
@@ -2675,12 +2771,15 @@ def _train_in_blocks(
     metrics: dict[str, MetricValue] = {
         "gaussians": run.gaussians,
         "trainedBytes": run.written,
+        "limitReasons": json.dumps(document["limits"], sort_keys=True),
         "requestedIterations": training.scaled_steps(
             settings.full_iterations, settings.steps_scaler
         ),
         "scheduleScale": settings.steps_scaler,
         "metricsSource": "merged-eval" if isinstance(evaluated, dict) else "none",
-        "metricsSplit": f"val: every {training.TEST_EVERY}th frame",
+        "metricsSplit": f"val: every {test_every}th frame"
+        if test_every
+        else "none: all frames train",
         "valFrames": val_frames,
         "trainFrames": train_frames,
         "initFrom": "prior",
@@ -4020,7 +4119,7 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
 
     Until the hierarchy this kept the `max_gaussians` most opaque (400k) in one tile and
     discarded the rest, so a trained scene of 500k+ lost detail at delivery and a bigger
-    one lost more. Now every gaussian past `opacity_min` and the floater radius is packed,
+    one lost more. Now every finite gaussian past `opacity_min` is packed,
     at most `tile_gaussians` to a tile, and how much of it is *drawn* is the viewer's
     budget (the phone's "Detail" choice, apps/web src/lib/detail.ts), not this stage's cut.
 
@@ -4127,6 +4226,8 @@ def splat_tiles(ctx: StageContext) -> StageOutcome:
     if "surface_level" in stats:
         ctx.log(f"shipped the surface grid (level {stats['surface_level']})")
     metrics: dict[str, MetricValue] = {key: value for key, value in stats.items()}
+    metrics["filterReason"] = "finite geometry and minimum opacity; radius cut disabled"
+    metrics["tileLimitReason"] = "per-tile subdivision only; no total count cut"
     return StageOutcome(metrics=metrics, summary=f"{stats['gaussians']} gaussians packaged")
 
 

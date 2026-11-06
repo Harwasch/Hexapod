@@ -163,7 +163,7 @@ def test_refine_resumes_the_preview_at_train_inside_its_region(
         json={
             "params": {
                 "normalize": {"max_side": 2400},
-                "train": {"cap_max": 1_000_000},
+                "train": {"cap_max": 1_000_000, "restrict_preview_mask": True},
                 "quality": {"bar": "strict", "mode": "preview"},
             }
         },
@@ -181,6 +181,7 @@ def test_refine_resumes_the_preview_at_train_inside_its_region(
         # training starts from the preview's own splat.
         "train": {
             "cap_max": 1_000_000,
+            "restrict_preview_mask": True,
             "roi": {"center": [0.1, -0.2, 3.5], "radius": 0.8},
             "init_from": "preview",
         },
@@ -199,17 +200,18 @@ def test_refine_resumes_the_preview_at_train_inside_its_region(
     assert stopped.json()["status"] == "cancelled"
     retried = client.post(f"/api/v1/phone/captures/{capture_id}/refine", json={}, headers=PHONE)
     assert retried.status_code == 202, retried.text
-    assert retried.json()["params"]["train"]["roi"] == {"center": [0.1, -0.2, 3.5], "radius": 0.8}
+    assert "roi" not in retried.json()["params"]["train"]  # default permits recovery
 
 
-def test_refine_defaults_to_the_strict_bar(client: TestClient, db: Session) -> None:
+def test_refine_defaults_to_marking_without_a_region_cut(client: TestClient, db: Session) -> None:
     capture_id = _process(client, db)
     _finish(db, capture_id)
 
     refined = client.post(f"/api/v1/phone/captures/{capture_id}/refine", json={}, headers=PHONE)
 
     assert refined.status_code == 202, refined.text
-    assert refined.json()["params"]["quality"] == {"bar": "strict", "mode": "refine"}
+    assert refined.json()["params"]["quality"] == {"bar": "mark", "mode": "refine"}
+    assert "roi" not in refined.json()["params"]["train"]
 
 
 def test_refine_is_refused_where_there_is_nothing_to_refine(
@@ -355,7 +357,7 @@ def test_a_region_is_only_passed_on_over_the_poses_it_was_measured_in() -> None:
     assert dropped == ["train"] and fresh == {"train": {"cap_max": 1}}
 
 
-def test_refine_trains_inside_the_previews_support_mask_when_it_has_one(
+def test_refine_retains_the_preview_mask_as_advisory_evidence(
     client: TestClient, db: Session, storage: S3Storage
 ) -> None:
     """The region is the voxels the preview's well-supported splats occupy -- any shape --
@@ -387,6 +389,7 @@ def test_refine_trains_inside_the_previews_support_mask_when_it_has_one(
     assert refined.status_code == 202, refined.text
     train = refined.json()["params"]["train"]
     assert train["support_mask"] == mask
+    assert not train.get("restrict_preview_mask", False)
     assert "roi" not in train
     assert train["init_from"] == "preview"
 

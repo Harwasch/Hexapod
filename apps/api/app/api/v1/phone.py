@@ -143,6 +143,7 @@ PHONE_OPTIONS: dict[str, dict[str, dict[str, Rule]]] = {
             # schedule divided by it (the same images seen); for measuring whether a batch
             # trains faster per image on the L4. Refused with depth_loss by the stage.
             "batch_size": (1, 8),
+            "restrict_preview_mask": FLAG,
         },
         # The quality bar: what is kept, and whether this run is a preview or a refine.
         "quality": {"bar": frozenset(QUALITY_BARS), "mode": frozenset(QUALITY_MODES)},
@@ -464,7 +465,7 @@ def refine_phone_capture(
     mask = _support_mask(storage, job.id)
     if mask is not None:
         train["support_mask"] = mask
-    elif verdict.roi is not None:
+    elif train.get("restrict_preview_mask", False) and verdict.roi is not None:
         train["roi"] = {"center": list(verdict.roi.center), "radius": verdict.roi.radius}
     # Start from the preview's own splat on a shorter schedule rather than from COLMAP's
     # sparse points on the whole one (tools/pipeline/init_seed.py). The train stage checks
@@ -472,7 +473,7 @@ def refine_phone_capture(
     train.setdefault("init_from", "preview")
     quality = params.setdefault("quality", {})
     quality["mode"] = "refine"
-    quality.setdefault("bar", "strict")
+    quality.setdefault("bar", "mark")
     recipe_service.check_overrides(job.recipe, params)
     job.params = params
     try:

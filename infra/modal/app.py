@@ -129,7 +129,7 @@ THREAD_ENV: dict[str, str] = {
     "OPENCV_FOR_THREADS_NUM": "4",
 }
 
-_IGNORE = ["tests", ".venv", "__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache"]
+_IGNORE = [".tmp", "tests", ".venv", "__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache"]
 
 image = (
     modal.Image.from_registry(CUDA_BASE, add_python="3.12")
@@ -312,6 +312,10 @@ cpu_image = (
         # And `colmap: "4.2"` can build every option it sets on this wheel, and finds its
         # faiss tree the way the stage will.
         f"cd {PIPELINE_DIR} && python colmap4.py self-check --vocab-tree {VOCAB_TREE_FAISS}",
+        f"cd {PIPELINE_DIR} && python -c 'import pycolmap as p; "
+        "from experiments.bench.full_register import options; options(p); "
+        "p.ImportedPairingOptions().match_list_path=str(); "
+        "assert callable(p.match_image_pairs); assert callable(p.Database.update_camera)'",
         f"cd {PIPELINE_DIR} && python -c 'import colmap4; assert colmap4.vocab_tree_path(), "
         f'"no faiss vocabulary tree at $COLMAP4_VOCAB_TREE"\'',
     )

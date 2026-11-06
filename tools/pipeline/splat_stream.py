@@ -121,7 +121,7 @@ class PlySource(SplatSource):
     def properties(self) -> tuple[str, ...]:
         # The quality gate must retain this marker so place can strip the sphere
         # before computing geographic bounds. It is not a spherical-harmonic band.
-        extra = ("far_field",) if "far_field" in self.properties_in else ()
+        extra = tuple(n for n in ("far_field", "quality_tier") if n in self.properties_in)
         return super().properties + extra
 
     def __init__(
@@ -151,13 +151,12 @@ class PlySource(SplatSource):
             else {}
         )
         carried = set(kept) | set(self._sh.values())
-        if "far_field" in self.properties_in:
-            carried.add("far_field")
+        carried.update(n for n in ("far_field", "quality_tier") if n in self.properties_in)
         self.dropped = tuple(name for name in self.properties_in if name not in carried)
         self._raw = tuple(
             name
             for name in self.properties_in
-            if name in CANONICAL or name in _ALIASES or name == "far_field"
+            if name in CANONICAL or name in _ALIASES or name in {"far_field", "quality_tier"}
         )
 
     def read(self, start: int, stop: int, *, with_sh: bool = True) -> Columns:
@@ -165,8 +164,7 @@ class PlySource(SplatSource):
         raw = self.reader.read(start, stop, (*self._raw, *sh.values()))
         columns = gaussians.normalise(self.source_name, raw)
         columns.update({out: raw[name] for out, name in sh.items()})
-        if "far_field" in raw:
-            columns["far_field"] = raw["far_field"]
+        columns.update({n: raw[n] for n in ("far_field", "quality_tier") if n in raw})
         return columns
 
     def checksum(self) -> str:

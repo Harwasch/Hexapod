@@ -817,7 +817,8 @@ def _plan(
         _region_points(settings, prior), up, settings.count, exact=settings.requested is not None
     )
     names = tuple(image.name for image in model.images)  # sorted, as gsplat's parser sorts
-    val = tuple(index % training.TEST_EVERY == 0 for index in range(len(names)))
+    every = int(settings.params.get("test_every", 0))
+    val = tuple(bool(every and index % every == 0) for index in range(len(names)))
     centres = model.centres()
     inside = block_maths.cameras_inside(part, centres)
     epsilon = _param_float(settings, "block_epsilon", block_maths.DEFAULT_EPSILON)
@@ -1322,7 +1323,11 @@ def _train_block(
     val_flags = dict(zip(plan.names, plan.val, strict=True))
     train_names = [n for n in names if not val_flags[n]]
     val_names = [n for n in names if val_flags[n]]
-    order, every = block_maths.val_order(train_names, val_names)
+    order, every = (
+        ([(n, False) for n in sorted(train_names)], 0)
+        if not int(settings.params.get("test_every", 0))
+        else block_maths.val_order(train_names, val_names)
+    )
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
@@ -1413,7 +1418,7 @@ def _train_block(
         # The block's own held-out frames (block_maths.val_order).
         extra=[*settings.extra, "--test_every", str(every)],
     )
-    if extra_evals or ring_path is not None:
+    if extra_evals or ring_path is not None or every == 0:
         argv = trainer_argv(
             argv,
             script=Path(settings.params.get("block_trainer_script") or BLOCK_TRAINER),
@@ -1452,6 +1457,14 @@ def _train_block(
         key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
         up=settings.up,
     ):
+        live.emit_seeds(
+            dataset / "sparse" / "0",
+            ctx.checkpoint_dir / live.LIVE_DIR,
+            ctx.log,
+            key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
+            seeded=applied.seeded,
+            enabled=bool(live_steps),
+        )
         ctx.run(argv)
     seconds = time.monotonic() - began
     phases.add("train", seconds)
@@ -1590,7 +1603,7 @@ def _merge_and_measure(
     holding = time.monotonic()
     held_out = holdout.measure(
         ctx,
-        enabled=settings.holdout_error,
+        enabled=bool(settings.params.get("test_every", 0) and settings.holdout_error),
         python=settings.python,
         trainer=settings.trainer,
         dataset=settings.dataset,
@@ -1598,7 +1611,7 @@ def _merge_and_measure(
         rows=count,
         keep=None,
         data_factor=settings.data_factor,
-        test_every=training.TEST_EVERY,
+        test_every=int(settings.params.get("test_every", 0)),
         antialiased=bool(settings.switches.get("antialiased")),
         script=settings.holdout_script,
         budget_s=settings.holdout_budget_s,
@@ -1703,6 +1716,8 @@ def _evaluate(
     a single run reports, on the same frames. `block_trainer.py --ply-to-ckpt` turns the PLY
     into the trainer's checkpoint format, and the trainer's `--ckpt` (v1.5.3: "run eval
     only") scores it. Cannot fail the stage."""
+    if not int(settings.params.get("test_every", 0)):
+        return None, {"status": "off", "reason": "all frames train; no internal holdout"}
     if not _param_bool(settings, "block_eval", True):
         return None, {"status": "off"}
     if work.exists():
@@ -1741,6 +1756,7 @@ def _evaluate(
             # The PLY is baked (degree-0 colour under a zero embedding), so it is scored
             # as the plain splat it is, never through an appearance module.
             bilateral_grid=bool(switches.get("bilateral_grid")),
+            test_every=int(settings.params.get("test_every", 0)),
             extra=[*settings.extra, "--ckpt", str(checkpoint)],
         )
         # Through the block wrapper with neither ring nor rule: the evaluation's renders

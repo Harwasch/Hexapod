@@ -4,7 +4,7 @@ Reads the PLY that OpenSplat (or any 3DGS trainer) writes, in a local east-north
 around a reference latitude/longitude/height, and writes a level-of-detail hierarchy of
 glTF tiles using the KHR_gaussian_splatting extension with SPZ (v2) compressed data, which
 is the form CesiumJS 1.145 loads, plus a tileset.json whose root transform places the local
-frame on the globe. Every gaussian that passes the opacity and floater filters is written
+frame on the globe. Every gaussian with finite coordinates and sufficient opacity is written
 exactly once, in a leaf: an adaptive octree splits wherever a tile would hold more than
 `TILE_GAUSSIANS`, each parent holds its subtree *merged* -- one gaussian per occupied cell,
 by moment matching (`splat_merge`) -- and refinement is REPLACE (see `convert` for why). A
@@ -1170,10 +1170,9 @@ class SortedStore:
 
 
 def _filter_rows(layout: PlyLayout, opacity_min: float) -> tuple[np.ndarray, np.ndarray]:
-    """Rows that are finite, at least `opacity_min` opaque and not floaters, and their centres.
+    """Rows with finite centres/opacity and at least `opacity_min` alpha, and their centres.
 
-    Floaters are dropped by a robust radius around the median centre -- the same arithmetic
-    on the same float32 values as when the packer held the whole PLY, so the same rows go.
+    No radius cut: distance from the bulk is not evidence that background geometry is bad.
     """
     keep = np.zeros(layout.count, dtype=bool)
     centres = np.empty((layout.count, 3), dtype=np.float32)
@@ -1193,13 +1192,8 @@ def _filter_rows(layout: PlyLayout, opacity_min: float) -> tuple[np.ndarray, np.
             f"so there is nothing to tile"
         )
     centres = centres[:held]
-    # Outliers far from the bulk (sky floaters) are dropped by a robust radius.
-    center = np.median(centres, axis=0)
-    radius = np.linalg.norm(centres - center, axis=1)
-    near = radius <= np.percentile(radius, 99.5) * 1.5
-    del radius
-    keep[np.flatnonzero(keep)[~near]] = False
-    return keep, centres[near]
+    # Distance from a median is not evidence of error: retain the real background.
+    return keep, centres
 
 
 def _sort_to_disk(
@@ -2146,7 +2140,7 @@ def convert(
 ) -> dict[str, float | int]:
     """Every gaussian that passes the filters, as a level-of-detail tileset.
 
-    There is no top-N cut. Nothing that passes `opacity_min` and the floater radius is
+    There is no top-N cut. Nothing that passes finite-value checks and `opacity_min` is
     dropped, and how much of it is *drawn* is the viewer's budget (CesiumJS:
     `maximumScreenSpaceError`, and a splat-count cap in SiteManager.ts; the Spark viewer:
     Spark's own LoD at the phone's Detail count) -- decided on the device that pays for it.
@@ -2366,6 +2360,10 @@ def convert(
         {
             "gaussians": count,
             "dropped": int(layout.count - count),
+            "radius_dropped": 0,
+            "radius_filter_enabled": 0,
+            "opacity_min": opacity_min,
+            "invalid_or_low_opacity_dropped": int(layout.count - count),
             "extent_m": float(max(pmax - pmin)),
             "tiles": len(tiles),
             "depth": max(len(tile.path) for tile in tiles),

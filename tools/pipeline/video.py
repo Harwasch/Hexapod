@@ -579,10 +579,11 @@ def extract_frames_argv(
     source: Path,
     pattern: Path,
     *,
-    fps: float,
+    fps: float | None,
     quality: int = 2,
     max_side: int | None = None,
     tonemap: str | None = None,
+    timestamps: bool = False,
 ) -> list[str]:
     """The argv that turns a clip into numbered JPEGs. Built here so a test can read it.
 
@@ -592,20 +593,28 @@ def extract_frames_argv(
     `tonemap` (`TONEMAP_FILTER` for an HDR clip) sits between the rate and the size, so
     only the frames kept are converted and they are scaled in 8-bit BT.709.
     """
-    chain = [f"fps={fps:g}"]
+    chain = [f"fps={fps:g}"] if fps is not None else []
     if tonemap:
         chain.append(tonemap)
     if max_side is not None:
         chain.append(scale_filter(max_side))
+    if timestamps:
+        chain.append("showinfo")
     return [
         ffmpeg_exe(),
         "-hide_banner",
         "-nostdin",
         "-y",
+        "-threads",
+        "4",
+        "-filter_threads",
+        "4",
         "-i",
         str(source),
-        "-vf",
-        ",".join(chain),
+        *(["-vf", ",".join(chain)] if chain else []),
+        *(["-fps_mode", "passthrough"] if fps is None else []),
+        "-threads",
+        "4",
         "-q:v",
         str(quality),
         "-start_number",

@@ -540,3 +540,18 @@ def test_coincident_gaussians_end_in_an_over_budget_leaf_not_a_loop() -> None:
 
 
 # ----------------------------------------------------------------------- the merge itself
+
+
+def test_distant_finite_geometry_is_not_deleted_by_a_radius_heuristic(tmp_path: Path) -> None:
+    columns = scene(1000)
+    columns["x"][-1] = 1000.0  # real distant cliff: far beyond 1.5 * p99.5
+    path = write_ply(tmp_path / "distant.ply", columns)
+    keep, centres = splat_tiles._filter_rows(splat_tiles.ply_layout(path), 0.02)
+    assert keep.all()
+    assert centres[:, 0].max() == 1000.0
+    columns["opacity"][0] = -20
+    columns["x"][1] = np.nan
+    path = write_ply(path, columns)
+    keep, _ = splat_tiles._filter_rows(splat_tiles.ply_layout(path), 0.02)
+    assert not keep[0] and not keep[1] and keep[-1]
+    assert int(keep.sum()) == 998

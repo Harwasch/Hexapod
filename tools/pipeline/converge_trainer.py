@@ -360,6 +360,9 @@ def instrument(
     give the module an `imageio` that skips the renders. Called with the trainer's
     `__main__` globals, after `install` when the rule is on, so the evaluations it times
     include the rule's reading of them. Whatever is missing is left alone."""
+    import train_split
+
+    train_split.install(module, runner, cfg)
     real_imageio = module.get("imageio")
     if real_imageio is not None and not isinstance(real_imageio, _NoRenders):
         module["imageio"] = _NoRenders(real_imageio, timing)

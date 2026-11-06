@@ -1,0 +1,28 @@
+# One comparison; original frozen test cameras and +/-0.5 s exclusions in both arms.
+# Explicit upgrade renderer; no PPISP, priors, dense seeds, anisotropy or far-field.
+upgrade-excl:
+  bench:
+    keep_splat: true
+    test_exclusion_seconds: 0.5
+  train: &upgrade
+    test_every: 0
+    converge: false
+    holdout_error: false
+    train_max_side: null
+    step_max_side: 0
+    cap_max: auto
+    budget_max: null
+    blocks: 1
+    init: sfm
+    pose_opt: false
+    post_processing: null
+    with_ut: false
+    with_eval3d: false
+    schedule_growth: sqrt
+    schedule_full_at: 60
+    schedule_max_steps: 60000
+full-data:
+  bench:
+    keep_splat: true
+    test_exclusion_seconds: 0.5
+  train: *upgrade

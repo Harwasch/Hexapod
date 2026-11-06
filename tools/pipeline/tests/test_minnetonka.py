@@ -338,7 +338,8 @@ def test_the_stages_run_photo_reconstructs_own_settings_unchanged() -> None:
     train = tree.train_params({"roi": {"center": [0, 0, 0], "radius": 5}})
     assert {k: v for k, v in train.items() if k != "roi"} == dict(recipe.params)
     assert train["iterations"] == 30_000
-    assert train["strategy"] == "mcmc" and train["cap_max"] == "auto" and train["converge"] is True
+    assert train["strategy"] == "mcmc" and train["cap_max"] == "auto" and train["converge"] is False
+    assert train["test_every"] == 0
     assert "blocks" not in train  # auto: past one GPU's memory, blocks
     assert "budget_max" not in train and "gpu_memory_gb" not in train
     assert train["roi"]["radius"] == 5

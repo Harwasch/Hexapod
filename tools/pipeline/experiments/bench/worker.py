@@ -200,6 +200,8 @@ def run_training(
     params = dict(plan["trainParams"])
     prior_cache = destination.parent.parent / "prior_cache" / str(plan["scene"])
     split_digest = manifest_digest = None
+    evaluation_id = None
+    selection = None
     train_seconds = None
     gpu_name = None
     error = None
@@ -220,6 +222,15 @@ def run_training(
             manifest, split = verify(snapshot, manifest["digest"])
             scene = snapshot
             split_digest, manifest_digest = split["digest"], manifest["digest"]
+            from .full_data import evaluation_identity, exclude_pool
+
+            evaluation_id = evaluation_identity(scene, split)
+            if plan.get("testExclusionSeconds") is not None:
+                split, selection = exclude_pool(scene, split, plan["testExclusionSeconds"])
+                frozen_selection = scene / "full_data.json"
+                if frozen_selection.is_file():
+                    selection["frozenSceneExclusion"] = read_json(frozen_selection)["exclusion"]
+                write_json(destination / "frame_selection.json", selection)
             prepare_pool(scene, work.inputs_dir, split)
             if plan.get("rehearsal"):
                 params.update(rehearsal.stand_in_params())
@@ -383,6 +394,8 @@ def run_training(
             for name in ARTIFACTS
             if (destination / name).is_file()
         }
+        result["evaluationIdentity"] = evaluation_id
+        result["frameSelection"] = selection
         result["topdown"] = topdown
         write_json(destination / "result.json", result)
         if not plan.get("keepSplat"):

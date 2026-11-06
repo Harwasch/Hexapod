@@ -133,7 +133,9 @@ def test_the_seed_is_cropped_to_the_support_mask_like_the_sfm_points(tmp_path: P
     assert mask is not None
     workdir = Workdir.create(tmp_path / "run")
 
-    document = preview_then(workdir, init_from="preview", support_mask=mask.to_dict())
+    document = preview_then(
+        workdir, init_from="preview", support_mask=mask.to_dict(), restrict_preview_mask=True
+    )
 
     init = document["init"]
     assert 0 < init["insideRegion"] < 400

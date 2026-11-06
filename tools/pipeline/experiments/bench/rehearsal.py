@@ -52,7 +52,13 @@ def synthetic_scene(root: Path, scene: str, commit: str) -> dict[str, Any]:
             )
             for index in range(len(names)):
                 handle.write(struct.pack("<II", index + 1, point))
-    write_json(root / "frames_meta.json", {"rehearsal": True, "frames": names})
+    write_json(
+        root / "frames_meta.json",
+        {
+            "rehearsal": True,
+            "frames": [{"name": n, "offsetS": float(i)} for i, n in enumerate(names)],
+        },
+    )
     return seal(root, scene, "synthetic://rehearsal", "root", commit)
 
 

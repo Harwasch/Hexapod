@@ -168,7 +168,7 @@ class Volume:
         return [self.files[path]]
 
     def listdir(self, path: str) -> list[SimpleNamespace]:
-        return [SimpleNamespace(path=f"{path}/{NAME}"), SimpleNamespace(path=f"{path}/result.json")]
+        return [SimpleNamespace(path=key) for key in self.files if key.rsplit("/", 1)[0] == path]
 
 
 def test_fake_volume_polls_downloads_once_and_finishes(tmp_path: Path) -> None:
@@ -345,3 +345,226 @@ def test_running_console_combines_train_and_quality_metrics() -> None:
     assert state.train.quality.far_field_share == 0.1
     assert state.train.quality.elongation_share == 0.2
     assert state.train.series.gs == [64]
+
+
+def seeds_line() -> str:
+    return "live-seeds: " + json.dumps(
+        {
+            "v": 1,
+            "key": f"runs/{RUN}/train/checkpoint/live/seeds.bin",
+            "count": 1,
+            "of": 1,
+            "sources": {"sfm": 1, "dense": 0, "seed": 0},
+            "origin": [0, 0, 0],
+            "scale": 1,
+            "bytes": 10,
+        }
+    )
+
+
+def test_seeds_cached_served_and_signed_for_the_watcher_origin(tmp_path: Path) -> None:
+    volume = Volume()
+    volume.files[f"runs/{RUN}/live/train.log"] += ("\n" + seeds_line()).encode()
+    volume.files[f"runs/{RUN}/live/seeds.bin"] = bytes(10)
+    volume.files[f"runs/{RUN}/live/other.bin"] = b"private"
+    watch = Watch(RUN, tmp_path)
+    watch.poll(volume)
+    watch.poll(volume)
+    assert watch.state.train is not None and watch.state.train.seeds is not None
+    assert watch.state.train.seeds.url == "/snapshots/seeds.bin"
+    assert volume.reads.count(f"runs/{RUN}/live/seeds.bin") == 1
+    headers, body = request(watch, "/snapshots/seeds.bin")
+    assert (
+        b"200 OK" in headers and b"Access-Control-Allow-Origin: *" in headers and body == bytes(10)
+    )
+    served = LiveState.model_validate_json(request(watch, f"/api/v1/captures/{RUN}/live")[1])
+    assert served.train is not None and served.train.seeds is not None
+    assert served.train.seeds.url == "http://bench.tail:8791/snapshots/seeds.bin"
+    assert not (tmp_path / "other.bin").exists() and not list(tmp_path.glob("*.part"))
+    pending = state_from_log(RUN, log_text() + "\n" + seeds_line(), None)
+    assert (
+        pending.train is not None
+        and pending.train.seeds is not None
+        and pending.train.seeds.url is None
+    )
+    for name in ("../seeds.bin", "seeds.bin.part", "seeds_other.bin", "seeds.bin/extra"):
+        assert not snapshot_name(name, {name})
+        assert b"404" in request(watch, "/snapshots/" + name)[0]
+    assert not snapshot_name("seeds.bin", set())
+    assert snapshot_name("seeds.bin", {"seeds.bin"})
+
+
+def test_all_twenty_snapshots_survive_finished_volume_poll(tmp_path: Path) -> None:
+    volume = Volume()
+    lines = [log_text()]
+    names = []
+    for step in range(1, 21):
+        name = f"splat_{step:06d}.spz"
+        names.append(name)
+        volume.files[f"runs/{RUN}/live/{name}"] = bytes([step])
+        lines.append(
+            "live-splat: "
+            + json.dumps(
+                {
+                    "v": 1,
+                    "step": step,
+                    "total": 20,
+                    "count": 1,
+                    "of": 1,
+                    "bytes": 1,
+                    "key": f"runs/{RUN}/train/checkpoint/live/{name}",
+                    "up": None,
+                }
+            )
+        )
+    # The ten-step fixture snapshot is replaced by its matching one in the twenty-step set.
+    volume.files[f"runs/{RUN}/live/train.log"] = "\n".join(lines).encode()
+    volume.files[f"runs/{RUN}/result.json"] = b'{"status":"complete"}'
+    watch = Watch(RUN, tmp_path)
+    for _ in range(3):
+        watch.poll(volume)
+    assert watch.state.status == "complete" and watch.state.train is not None
+    assert len(watch.state.train.snapshots) == 20
+    assert all(snapshot.url is not None for snapshot in watch.state.train.snapshots)
+    assert len(list(tmp_path.glob("splat_*.spz"))) == 20
+    assert all(volume.reads.count(f"runs/{RUN}/live/{name}") == 1 for name in names)
+
+
+def test_real_quality_metrics_fixture_lights_up_bench_charts(tmp_path: Path) -> None:
+    path = Path(__file__).resolve().parents[3] / "tools/pipeline/tests/fixtures/run6fb-train.log"
+    volume = Volume()
+    volume.files[f"runs/{RUN}/live/train.log"] = path.read_bytes()
+    watch = Watch(RUN, tmp_path)
+    watch.poll(volume)
+    state = watch.state
+    assert state.train is not None and state.train.quality is not None
+    quality = state.train.quality
+    assert quality.far_field_share == 0.1418 and quality.elongation_share == 0.0658
+    assert quality.series is not None
+    assert quality.series.peak_allocated_gb[-1] == 5.9109
+    assert quality.series.loss["depth"][-1] == 0.0537
+    assert len(state.train.snapshots) == 2
+    assert state.train.plan is not None and state.train.plan.cap_max == 3455958
+    assert LiveState.model_validate_json(state.model_dump_json(by_alias=True)) == state
+
+
+def test_final_test_scores_and_corrected_validation_scores_use_real_result_shape(
+    tmp_path: Path,
+) -> None:
+    training = importlib.import_module("training")
+    trainer = training.TrainMetrics(
+        trainer="stand-in",
+        psnr=18,
+        ssim=0.7,
+        lpips=0.3,
+        cc_psnr=28,
+        cc_ssim=0.95,
+        cc_lpips=0.05,
+    ).to_dict()
+    (tmp_path / "test.json").write_text(json.dumps({"psnr": 25, "ssim": 0.9, "lpips": 0.1}))
+    (tmp_path / "train_metrics.json").write_text(json.dumps(trainer))
+    parse_result = importlib.import_module("experiments.bench.results").parse_result
+    result = parse_result(
+        {
+            "runId": RUN,
+            "scene": "spool",
+            "variant": "baseline",
+            "seed": 42,
+            "schedule": "screen",
+            "tier": "l4",
+            "benchCommit": "test",
+            "timeoutSeconds": 1800,
+        },
+        tmp_path,
+        params={},
+        split_digest="split",
+        manifest_digest="manifest",
+        wall=5,
+        train_seconds=4,
+        gpu_name="stand-in",
+    )
+    # worker.run_training embeds its reports in result.json after parse_result.
+    result["artifacts"] = {"train_metrics.json": trainer}
+    volume = Volume()
+    volume.files[f"runs/{RUN}/result.json"] = json.dumps(result).encode()
+    watch = Watch(RUN, tmp_path / "cache")
+    watch.poll(volume)
+    assert watch.state.train is not None and watch.state.train.final is not None
+    assert watch.state.train.final.model_dump(by_alias=True) == {
+        "psnr": 25,
+        "ssim": 0.9,
+        "lpips": 0.1,
+        "ccPsnr": 28,
+        "ccSsim": 0.95,
+        "ccLpips": 0.05,
+    }
+    # A result alone still supplies final scores when telemetry is absent.
+    state = state_from_log(RUN, "", result)
+    assert state.train is not None and state.train.final == watch.state.train.final
+    running = state_from_log(RUN, log_text(), None)
+    assert running.train is not None and running.train.final is None
+
+
+def test_metrics_fallback_keeps_retry_order_and_split_line_semantics() -> None:
+    rows = [
+        'live-plan: {"v":1,"id":"old","stepsMax":100}',
+        'live-metrics: {"step":100,"farFieldShare":0.9}',
+        'live-plan: {"v":1,"id":"new","stepsMax":100}',
+        'live-train: {"v":1,"k":"p","run":"new"}',
+        '[provider] live-metrics: {"step":2,',
+        '"farFieldShare":0.1,"lossTerms":{"depth":0.2}}',
+        'live-train: {"v":1,"k":"s","run":"new","step":2}',
+    ]
+    state = state_from_log(RUN, "\n".join(rows), None)
+    assert state.train is not None and state.train.quality is not None
+    assert state.train.quality.series is not None
+    assert state.train.quality.series.step == [2]
+    assert state.train.quality.series.far_field_share == [0.1]
+    assert state.train.quality.series.loss["depth"] == [0.2]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "invalid",
+        "[]",
+        '{"step":-1}',
+        '{"step":true}',
+        '{"step":1,"trainMemoryCurve":3}',
+        '{"step":1,"valPsnrCurve":{}}',
+        '{"step":1,"lossTerms":{"depth":0.1},"padding":"' + "x" * 96000 + '"}',
+    ],
+)
+def test_malformed_metrics_cannot_stale_the_running_state(payload: str) -> None:
+    before = state_from_log(RUN, log_text(), None)
+    after = state_from_log(RUN, log_text() + "\nlive-metrics: " + payload, None)
+    assert after == before
+
+
+def test_upstream_metrics_parser_takes_precedence_without_duplicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = importlib.import_module("app.scripts.bench_live")
+    original = module.parse_line
+
+    def parse(line: str, following: Any = ()) -> Any:
+        if line.startswith("live-metrics: "):
+            return "metrics", {"step": 2, "farFieldShare": 0.8}
+        return original(line, following)
+
+    monkeypatch.setattr(module, "parse_line", parse)
+    records = module.bench_records('live-metrics: {"step":2,"farFieldShare":0.1}')
+    assert records == [("metrics", {"step": 2, "farFieldShare": 0.8})]
+
+
+def test_missing_or_nonfinite_final_scores_stay_unknown() -> None:
+    for result in (
+        {"status": "complete", "val": {"psnr": 30}},
+        {"status": "complete", "test": {"psnr": float("nan"), "ssim": True, "lpips": float("inf")}},
+    ):
+        state = state_from_log(RUN, log_text(), result)
+        assert state.train is not None and state.train.final is None
+        assert LiveState.model_validate_json(state.model_dump_json(by_alias=True)) == state
+    partial = state_from_log(RUN, "", {"status": "complete", "test": {"psnr": 25}})
+    assert partial.train is not None and partial.train.final is not None
+    assert partial.train.final.psnr == 25 and partial.train.final.cc_psnr is None

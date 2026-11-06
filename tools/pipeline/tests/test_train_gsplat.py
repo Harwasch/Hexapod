@@ -79,7 +79,9 @@ def train_recipe(params: dict[str, object], *, gpu: dict[str, object] | None = N
 
 
 def stand_in_params(**overrides: object) -> dict[str, object]:
+    # Legacy fixture explicitly exercises held-out evaluation; production defaults to zero.
     params: dict[str, object] = {
+        "test_every": 8,
         "iterations": 300,
         "trainer": str(STAND_IN),
         "python": sys.executable,
@@ -274,7 +276,7 @@ def test_the_result_directory_is_scratch_because_nothing_can_resume_from_it(
         "init-seed/seed.npz",
     ]
     live_files = [name for name in kept if name.startswith("live/")]
-    assert len(live_files) == 4 and all(name.endswith(".spz") for name in live_files)
+    assert len([name for name in live_files if name.endswith(".spz")]) == 20
 
 
 def test_a_trainer_that_writes_no_ply_is_a_failure_rather_than_an_empty_artifact(
@@ -876,6 +878,7 @@ def test_a_support_mask_crops_training_to_whatever_shape_the_data_has(tmp_path: 
     assert mask is not None
     params = stand_in_params(
         support_mask=mask.to_dict(),
+        restrict_preview_mask=True,
         # A mask wins over a sphere given alongside it.
         roi={"center": [0.0, 0.0, 0.0], "radius": 100.0},
     )

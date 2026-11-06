@@ -18,6 +18,7 @@ SCENES = {
     "pumpkin": "71556411",
     "nwm-d1": "50bc26d9",
     # Worker artifacts use runs/<job UUID>/; the prefix must resolve uniquely on freeze.
+    "beach-full": "4dd02171",
     "beach": "4dd02171",  # phone-capture-2026-11-03-23-04-utc
     "truck": PUBLIC_SCENES["truck"].archive_url,
 }
@@ -86,13 +87,22 @@ def inventory(root: Path) -> list[dict[str, Any]]:
     return files
 
 
-def seal(root: Path, scene: str, source: str, generation: str, commit: str) -> dict[str, Any]:
+def seal(
+    root: Path,
+    scene: str,
+    source: str,
+    generation: str,
+    commit: str,
+    *,
+    inherited_split: dict[str, Any] | None = None,
+    evaluation_identity: str | None = None,
+) -> dict[str, Any]:
     model = sfm.read_model(root / "poses")
     names = [safe_name(image.name) for image in model.images]
     for name in names:
         if not (root / "frames" / name).is_file():
             raise ValueError(f"registered frame missing: {name}")
-    split = split_frames(scene, names)
+    split = inherited_split if inherited_split is not None else split_frames(scene, names)
     manifest = {
         "schemaVersion": 1,
         "scene": scene,
@@ -103,6 +113,9 @@ def seal(root: Path, scene: str, source: str, generation: str, commit: str) -> d
         "benchCommit": commit,
         "splitDigest": split["digest"],
     }
+    if inherited_split is not None:
+        manifest["evaluationIdentity"] = evaluation_identity
+        manifest["parentManifestDigest"] = inherited_split["parentManifestDigest"]
     manifest["digest"] = digest(manifest)
     write_json(root / "split.json", split)
     write_json(root / "manifest.json", manifest)
@@ -119,6 +132,20 @@ def verify(root: Path, expected: str | None = None) -> tuple[dict[str, Any], dic
     actual = split_frames(
         manifest["scene"], [i.name for i in sfm.read_model(root / "poses").images]
     )
+    if manifest.get("parentManifestDigest"):
+        from .full_data import RULE, evaluation_identity
+
+        names = {i.name for i in sfm.read_model(root / "poses").images}
+        body = {k: v for k, v in split.items() if k != "digest"}
+        if (
+            split.get("rule") != RULE
+            or digest(body) != split["digest"]
+            or set(split["pool"]) & set(split["test"])
+            or not set(split["pool"] + split["test"]) <= names
+            or evaluation_identity(root, split) != manifest.get("evaluationIdentity")
+        ):
+            raise ValueError("inherited frozen test or split changed")
+        actual = split
     if split != actual or manifest["splitDigest"] != split["digest"]:
         raise ValueError("frozen split digest changed")
     return manifest, split

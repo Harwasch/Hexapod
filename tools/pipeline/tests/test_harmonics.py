@@ -443,6 +443,7 @@ def _seed(workdir: Workdir) -> None:
 
 def _lane(sh_degree: int | None, *, holdout_error: bool = True) -> list[dict[str, object]]:
     train: dict[str, object] = {
+        "test_every": 8,
         "iterations": 300,
         "trainer": str(STAND_IN),
         "python": sys.executable,

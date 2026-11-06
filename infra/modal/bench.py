@@ -25,7 +25,7 @@ spec.loader.exec_module(shared)
 sys.path.insert(0, str(shared.LOCAL_PIPELINE))
 
 from experiments.bench.ledger import STARTUP_SECONDS, TIMEOUTS, hourly_rate  # noqa: E402
-from experiments.bench.scene import write_json  # noqa: E402
+from experiments.bench.scene import read_json, write_json  # noqa: E402
 
 from modal_adapter import GPU_NAMES  # noqa: E402
 
@@ -127,6 +127,70 @@ def freeze(plan: dict[str, Any]) -> dict[str, Any]:
 )
 def freeze_public(plan: dict[str, Any]) -> dict[str, Any]:
     return _freeze(plan, public=True)
+
+
+@app.function(
+    image=shared.cpu_image.env(shared.THREAD_ENV).add_local_file(
+        SHARED_PATH, "/root/bench_training_app.py"
+    ),
+    cpu=(4, 4),
+    memory=(8192, 8192),
+    timeout=TIMEOUTS["freeze-full"],
+    retries=0,
+    volumes={"/bench": volume},
+    secrets=[modal.Secret.from_name("twin-object-storage")],
+    max_containers=1,
+    startup_timeout=STARTUP_SECONDS,
+    single_use_containers=True,
+)
+def freeze_full(plan: dict[str, Any]) -> dict[str, Any]:
+    from experiments.bench.freeze import ReadOnlyR2
+    from experiments.bench.full_data import freeze_full as expand
+
+    started, billed = _billed_since()
+    volume.reload()
+    from experiments.bench.worker import RestartedError, claim
+
+    try:
+        claim(Path("/bench/runs") / plan["runId"], attempt_started=started)
+    except RestartedError as error:
+        return {
+            "runId": plan["runId"],
+            "scene": plan["scene"],
+            "status": "preempted",
+            "costUsd": None,
+            "error": f"restart refused: {error}",
+        }
+    volume.commit()
+    try:
+        transfer = shared._transfer()
+        manifest = expand(
+            ReadOnlyR2(transfer._client, os.environ["OBJECT_STORAGE_BUCKET"]),
+            Path("/bench/scenes"),
+            plan,
+        )
+        result = {
+            "runId": plan["runId"],
+            "scene": plan["scene"],
+            "status": "complete",
+            "manifest": manifest,
+            "error": None,
+            "fullData": read_json(Path("/bench/scenes/beach-full/full_data.json")),
+        }
+    except Exception as error:
+        result = {
+            "runId": plan["runId"],
+            "scene": plan["scene"],
+            "status": "failed",
+            "error": f"{type(error).__name__}: {error}",
+        }
+    volume.commit()
+    result["wallSeconds"] = time.time() - started
+    result["billedFrom"] = billed
+    result["costUsd"] = result["wallSeconds"] * hourly_rate("cpu4") / 3600
+    write_json(Path("/bench/runs") / plan["runId"] / "result.json", result)
+    volume.commit()
+    return result
 
 
 def _train(plan: dict[str, Any]) -> dict[str, Any]:

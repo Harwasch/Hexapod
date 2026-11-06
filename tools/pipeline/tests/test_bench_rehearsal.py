@@ -37,7 +37,7 @@ def test_rehearsal_end_to_end_split_pool_recipe_execute_parse_ledger_report(
         assert row["test"]["frames"] == 2 and row["splats"] == 64
         assert row["trainParams"]["train_max_side"] == 800
         assert row["trainParams"]["cap_max"] == "auto"
-        assert row["val"]["psnr"] is not None
+        assert row["val"]["psnr"] is None  # all pool images train by default
         assert row["trainSeconds"] > 0
         assert not (state / "runs" / row["runId"] / "trained.ply").exists()
         assert (state / "runs" / row["runId"] / "train_metrics.json").is_file()

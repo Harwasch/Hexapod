@@ -275,6 +275,10 @@ def held_out_split(registered: int, test_every: int = TEST_EVERY) -> tuple[int, 
     """
     if registered <= 0:
         return 0, 0
+    if test_every == 0:
+        return registered, 0
+    if test_every < 2:
+        raise ValueError("test_every must be zero (all training) or at least two")
     val = -(-registered // test_every)
     return registered - val, val
 
@@ -452,6 +456,7 @@ def gsplat_argv(
     pose_opt: bool = False,
     app_opt: bool = False,
     bilateral_grid: bool = False,
+    test_every: int | None = None,
     live_steps: Sequence[int] = (),
     eval_steps: Sequence[int] = (),
     extra: Sequence[str] = (),
@@ -652,6 +657,9 @@ def gsplat_argv(
         steps,
         *(str(step) for step in eval_steps if 0 < step < max_steps),
     ]
+    if test_every is not None:
+        held_out_split(1, test_every)
+        argv += ["--test_every", str(test_every)]
     if steps_scaler != 1.0:
         argv += ["--steps_scaler", f"{steps_scaler:g}"]
     if batch_size != 1:
@@ -730,17 +738,23 @@ def converge_argv(
     ]
 
 
-def schedule_scale(images: int, *, full_at: int, floor: float) -> float:
+def schedule_scale(images: int, *, full_at: int, floor: float, growth: str = "capped") -> float:
     """How much of the full schedule a capture of `images` frames gets.
 
     Linear in the frame count up to `full_at`, never below `floor`. Every iteration
     renders one frame, so a 4-frame capture sees each frame 7,500 times over a 30k
-    schedule: past the point of learning anything new about the scene, and paid for by
-    the GPU-second. Rounded to hundredths so the argv, and the log, stay readable.
+    schedule with growth="capped". With growth="sqrt", larger pools receive a
+    square-root increase above full_at, rounded to four decimal places. A caller
+    may impose a separate experiment ceiling and must record it.
     """
+    if growth not in {"capped", "sqrt"}:
+        raise ValueError("schedule_growth must be capped or sqrt")
     if full_at <= 0:
         return 1.0
-    return round(min(1.0, max(floor, images / full_at)), 2)
+    ratio = images / full_at
+    if growth == "sqrt" and ratio > 1:
+        return round(math.sqrt(ratio), 4)
+    return round(min(1.0, max(floor, ratio)), 2)
 
 
 def check_schedule_scale(value: float) -> float:
