@@ -26,8 +26,8 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Capture, Job, JobStep
-from app.models.enums import RunStatus
+from app.models import Capture, Job, JobStep, Site
+from app.models.enums import Representation, RunStatus
 from app.schemas.live import (
     LiveCameras,
     LiveProgress,
@@ -36,7 +36,10 @@ from app.schemas.live import (
     LiveState,
     LiveTrain,
     LiveTrainEnded,
+    LiveTrainPlan,
+    LiveTrainTiles,
 )
+from app.services.epochs import current_asset_of
 from app.services.errors import NotFoundError
 from app.services.jobs import get_job
 from app.services.live_train import derive_events, end_reason, final_metrics
@@ -124,6 +127,46 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
                 step=max([0, *found_train.series.step, *[e.step for e in found_train.evals]]),
             )
         train = found_train or train
+    if train is not None:
+        params = (job.params or {}).get("train", {})
+        aa = params.get("antialiased") if isinstance(params, dict) else None
+        if isinstance(aa, bool):
+            train.plan = train.plan or LiveTrainPlan()
+            if train.plan.antialiased is None:
+                train.plan.antialiased = aa
+    if job.status == RunStatus.COMPLETE and capture.site_id:
+        site = db.get(Site, capture.site_id)
+        if site is not None:
+            # Resolve this run's epoch, not a newer capture now shown by the gallery.
+            epoch = next((e for e in site.epochs if e.job_id == job.id), None)
+            candidates = [
+                a
+                for a in site.assets
+                if a.representation == Representation.GAUSSIAN_SPLAT
+                and a.valid_to is None
+                and a.source_kind == "observed"
+            ]
+            asset = current_asset_of(epoch.id, candidates) if epoch else None
+            if not site.epochs and (site.metadata_ or {}).get("jobId") == str(job.id):
+                candidates.sort(key=lambda a: (a.created_at, str(a.id)), reverse=True)
+                asset = next(
+                    (a for a in candidates if a.default_visible), next(iter(candidates), None)
+                )
+            if asset and asset.source.get("type") == "3d-tiles-url":
+                train = train or LiveTrain()
+                train.tiles = LiveTrainTiles(
+                    url=asset.source["url"],
+                    step=max(
+                        [
+                            0,
+                            *train.series.step,
+                            *[s.step for s in train.snapshots],
+                            *[e.step for e in train.evals],
+                        ]
+                    ),
+                    final=True,
+                    frame="enu",
+                )
     return LiveState(
         job_id=job.id,
         capture_id=capture.id,
@@ -176,6 +219,7 @@ def _cameras(step: JobStep, value: Any) -> LiveCameras | None:
             "scale",
             "up",
             "aspect",
+            "fovY",
             "cameraCount",
             "cameras",
             "pointCount",

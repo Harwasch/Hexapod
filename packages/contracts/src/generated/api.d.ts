@@ -8657,6 +8657,8 @@ export interface components {
             cameras: string;
             /** Final */
             final: boolean;
+            /** Fovy */
+            fovY?: number | null;
             /** Frames */
             frames: number | null;
             /** Origin */
@@ -8807,6 +8809,7 @@ export interface components {
             /** Snapshots */
             snapshots?: components["schemas"]["LiveTrainSnapshot"][];
             stop?: components["schemas"]["LiveTrainStop"] | null;
+            tiles?: components["schemas"]["LiveTrainTiles"] | null;
         };
         /** LiveTrainEnded */
         LiveTrainEnded: {
@@ -8859,6 +8862,8 @@ export interface components {
         };
         /** LiveTrainPlan */
         LiveTrainPlan: {
+            /** Antialiased */
+            antialiased?: boolean | null;
             /** Blocks */
             blocks?: number | null;
             /** Cap */
@@ -8991,6 +8996,24 @@ export interface components {
             maxSteps?: number | null;
             /** Step */
             step: number;
+        };
+        /**
+         * LiveTrainTiles
+         * @description A full LOD tileset. Omitted frame means the producer's solve-local coordinates.
+         */
+        LiveTrainTiles: {
+            /** Final */
+            final: boolean;
+            /**
+             * Frame
+             * @default solve
+             * @enum {string}
+             */
+            frame?: "solve" | "enu";
+            /** Step */
+            step: number;
+            /** Url */
+            url: string;
         };
         /**
          * LonLatGrid
@@ -13273,6 +13296,7 @@ export type SchemaLiveTrainSeeds = components['schemas']['LiveTrainSeeds'];
 export type SchemaLiveTrainSeries = components['schemas']['LiveTrainSeries'];
 export type SchemaLiveTrainSnapshot = components['schemas']['LiveTrainSnapshot'];
 export type SchemaLiveTrainStop = components['schemas']['LiveTrainStop'];
+export type SchemaLiveTrainTiles = components['schemas']['LiveTrainTiles'];
 export type SchemaLonLatGrid = components['schemas']['LonLatGrid'];
 export type SchemaMapFeature = components['schemas']['MapFeature'];
 export type SchemaMapOutput = components['schemas']['MapOutput'];

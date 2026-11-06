@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { LiveState, LiveTrain, LiveTrainPlan } from "@twin/contracts";
 import {
+  tilesAt,
   blockCountText,
   effectiveCap,
   snapshotLag,
@@ -270,6 +271,7 @@ describe("real-run console", () => {
     const consoleView = liveConsole({
       scrub: vi.fn(),
       color: vi.fn(),
+      camera: vi.fn(),
       view: vi.fn(),
       layers: vi.fn(),
     });
@@ -347,7 +349,13 @@ describe("real-run console", () => {
       fillText: vi.fn(),
     } as unknown as CanvasRenderingContext2D);
     const scrub = vi.fn();
-    const consoleView = liveConsole({ scrub, color: vi.fn(), view: vi.fn(), layers: vi.fn() });
+    const consoleView = liveConsole({
+      camera: vi.fn(),
+      scrub,
+      color: vi.fn(),
+      view: vi.fn(),
+      layers: vi.fn(),
+    });
     try {
       const error = "Original <provider> error";
       consoleView.update(
@@ -397,5 +405,21 @@ describe("chartDomain floor", () => {
         { step: 1, value: 2 },
       ])[0],
     ).toBeLessThan(-1);
+  });
+});
+
+describe("tiles versus history thumbnails", () => {
+  const tiles = { url: "/bench/tileset.json", step: 50000, final: false };
+  const full = { ...train, tiles };
+  it("streams at live, at the tiles' step and at the latest chart step", () => {
+    expect(tilesAt(full, null)).toEqual(tiles);
+    expect(tilesAt(full, 50000)).toEqual(tiles);
+    expect(tilesAt(full, 54000)).toEqual(tiles);
+    expect(tilesAt(full, 52000)).toBeNull();
+    expect(tilesAt(full, 3000)).toBeNull();
+    expect(tilesAt(train, null)).toBeNull();
+  });
+  it("never pretends a published ENU scan is in the solve frame", () => {
+    expect(tilesAt({ ...full, tiles: { ...tiles, frame: "enu" } }, null)).toBeNull();
   });
 });

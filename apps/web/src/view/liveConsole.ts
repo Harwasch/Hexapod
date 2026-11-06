@@ -1,4 +1,6 @@
 /** DOM and plots for training; the renderer and snapshot lifecycle stay in live.ts. */
+import { liveFullscreen } from "./liveFullscreen";
+
 import type { LiveState } from "@twin/contracts";
 import {
   blockCountText,
@@ -78,6 +80,7 @@ const chartMarkup = (c: Chart): string =>
 export function liveConsole(actions: {
   scrub: (step: number | null) => void;
   color: (distance: boolean) => void;
+  camera: () => void;
   view: (top: boolean) => void;
   layers: (mode: "splat" | "seeds" | "both", cameras: boolean) => void;
 }): {
@@ -96,6 +99,17 @@ export function liveConsole(actions: {
   let shown = -1;
   let layerMode: "splat" | "seeds" | "both" = "splat",
     camerasVisible = true;
+  const stopFullscreen = liveFullscreen(el("lc-viewer-panel"), el("lc-fullscreen"), root);
+  el("lc-camera").addEventListener(
+    "click",
+    () => {
+      root
+        .querySelectorAll("[data-live-view]")
+        .forEach((b) => b.setAttribute("aria-pressed", "false"));
+      actions.camera();
+    },
+    options,
+  );
   root.hidden = true;
   el("lc-kpis").innerHTML = ["Step", "Gaussians", "Held-out PSNR", "Phase", "Time", "GPU cost"]
     .map(
@@ -335,6 +349,7 @@ export function liveConsole(actions: {
           0,
           ...(state?.train?.snapshots ?? []).map((s) => s.step),
           lastStep(state?.train),
+          ...(state?.train?.tiles ? [state.train.tiles.step] : []),
         ]),
       ]
         .filter((s) => s <= lastStep(state?.train))
@@ -461,6 +476,8 @@ export function liveConsole(actions: {
         if (hover != null) hover = Math.min(hover, lastStep(next.train));
         actions.scrub(scrub);
       }
+      (el("lc-camera") as HTMLButtonElement).disabled = !next.cameras?.cameraCount;
+      el("lc-tiles-note").hidden = next.train?.tiles?.frame !== "enu";
       text("lc-name", next.captureName);
       text("lc-pill", pillText(next));
       const replacement = el("lc-replacement") as HTMLAnchorElement;
@@ -553,7 +570,11 @@ export function liveConsole(actions: {
       snapshotLabel();
       const distance = root.querySelector<HTMLButtonElement>('[data-live-color="distance"]');
       if (!distance) return true;
-      distance.disabled = !plan?.metresPerUnit || !next.cameras?.final || !next.cameras.cameraCount;
+      distance.disabled =
+        (next.train?.tiles?.frame !== "enu" && next.train?.tiles != null) ||
+        !plan?.metresPerUnit ||
+        !next.cameras?.final ||
+        !next.cameras.cameraCount;
       if (distance.disabled && distance.getAttribute("aria-pressed") === "true")
         root.querySelector<HTMLButtonElement>('[data-live-color="photo"]')?.click();
       drawCharts();
@@ -567,6 +588,7 @@ export function liveConsole(actions: {
       quality();
     },
     stop(): void {
+      stopFullscreen();
       abort.abort();
       observer.disconnect();
       section.classList.remove("training-console");

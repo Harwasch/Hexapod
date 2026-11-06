@@ -13968,6 +13968,19 @@
             "title": "Final",
             "type": "boolean"
           },
+          "fovY": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 180.0,
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fovy"
+          },
           "frames": {
             "anyOf": [
               {
@@ -14555,6 +14568,16 @@
                 "type": "null"
               }
             ]
+          },
+          "tiles": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveTrainTiles"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "LiveTrain",
@@ -14751,6 +14774,17 @@
       },
       "LiveTrainPlan": {
         "properties": {
+          "antialiased": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Antialiased"
+          },
           "blocks": {
             "anyOf": [
               {
@@ -15393,6 +15427,40 @@
           "step"
         ],
         "title": "LiveTrainStop",
+        "type": "object"
+      },
+      "LiveTrainTiles": {
+        "description": "A full LOD tileset. Omitted frame means the producer's solve-local coordinates.",
+        "properties": {
+          "final": {
+            "title": "Final",
+            "type": "boolean"
+          },
+          "frame": {
+            "default": "solve",
+            "enum": [
+              "solve",
+              "enu"
+            ],
+            "title": "Frame",
+            "type": "string"
+          },
+          "step": {
+            "minimum": 0.0,
+            "title": "Step",
+            "type": "integer"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "step",
+          "final"
+        ],
+        "title": "LiveTrainTiles",
         "type": "object"
       },
       "LivenessStatus": {

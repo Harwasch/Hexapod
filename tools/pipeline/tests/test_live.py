@@ -78,6 +78,7 @@ def test_cameras_round_trip_through_the_line_to_within_quantisation(tmp_path: Pa
     assert parsed["registered"] == 12 and parsed["frames"] == 20 and parsed["final"] is True
     assert parsed["cameraCount"] == 12 and parsed["pointCount"] == 50
     assert parsed["aspect"] == pytest.approx(640 / 480, abs=1e-3)
+    assert parsed["fovY"] == pytest.approx(np.degrees(2 * np.arctan(480 / 1000)), abs=1e-3)
     centres, forward, up = live.decode_cameras(parsed)
     # In name order, which is capture order.
     truth = np.stack([pose.centre for pose in poses])
@@ -559,3 +560,53 @@ def test_final_pack_failure_never_fails_training_or_removes_the_ply(
     ):
         pass
     assert final.read_bytes() == before
+
+
+def test_thumbnail_keeps_fine_opaque_ground_over_huge_needles(tmp_path: Path) -> None:
+    path = tmp_path / "needles.ply"
+    write_splat_ply(path, [5.0] * 120, [float(np.log(0.02))] * 120)
+    raw = bytearray(path.read_bytes())
+    start = raw.index(b"end_header\n") + len(b"end_header\n")
+    for i in range(120):
+        # Interleave needles and ground in the same spatial cells.
+        struct.pack_into("<3f", raw, start + i * 56, (i % 10) * 0.1, (i // 10) * 0.1, 2.0)
+        if i % 6 == 0:
+            struct.pack_into(
+                "<3f", raw, start + i * 56 + 28, np.log(100), np.log(0.001), np.log(0.001)
+            )
+    path.write_bytes(raw)
+    target = tmp_path / "thumb.spz"
+    live.snapshot_splat(
+        path, target, max_gaussians=40, camera_centres=np.array([[0.0, 0.0, 0.0]]), focal_px=500.0
+    )
+    first = target.read_bytes()
+    live.snapshot_splat(
+        path, target, max_gaussians=40, camera_centres=np.array([[0.0, 0.0, 0.0]]), focal_px=500.0
+    )
+    assert first == target.read_bytes()
+    back = unpack_spz(first)
+    assert len(back["x"]) == 40
+    assert np.count_nonzero(back["scale_0"] < 0) >= 35
+    assert np.ptp(back["x"]) > 0.7 and np.ptp(back["y"]) > 0.8
+
+
+def test_camera_fov_uses_vertical_focal_and_stage_reads_training_centres(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    poses = tree_frames.orbit(4)
+    write_model(tmp_path / "model", poses)
+    model = sfm.read_model(tmp_path / "model")
+    camera = replace(
+        model.cameras[0],
+        model="PINHOLE",
+        params=(500.0, 800.0, 320.0, 240.0),
+        param_names=("fx", "fy", "cx", "cy"),
+    )
+    payload = live.encode_model(
+        replace(model, cameras=(camera,)), np.zeros((0, 3)), np.zeros((0, 3), dtype=np.uint8)
+    )
+    assert payload["fovY"] == pytest.approx(np.degrees(2 * np.arctan(480 / 1600)), abs=1e-3)
+    sampler = live.snapshot_cameras(tmp_path / "model")
+    assert sampler["focal_px"] == 500
+    np.testing.assert_allclose(sampler["camera_centres"], model.centres())
+    assert live.snapshot_cameras(tmp_path / "missing") == {}
