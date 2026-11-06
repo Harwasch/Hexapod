@@ -301,6 +301,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/captures/{capture_id}/live/tiles/{step}/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fetch a file from the newest run's live LOD tiles */
+        get: operations["capture_live_tile_api_v1_captures__capture_id__live_tiles__step___path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/captures/{capture_id}/process": {
         parameters: {
             query?: never;
@@ -531,6 +548,23 @@ export interface paths {
          * @description What a run looks like while it runs, for the live viewer: the pose stage's cameras and a sample of its sparse points as they are solved (quantised, base64; see the schema), and training's newest intermediate splat with a short-lived signed URL for its SPZ (null until the checkpoint syncer has uploaded it). Coordinates are the pose solve's own frame, not east/north/up. Open, like every read: poll it every few seconds.
          */
         get: operations["job_live_api_v1_jobs__job_id__live_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/live/tiles/{step}/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fetch a file from one run's live LOD tiles */
+        get: operations["job_live_tile_api_v1_jobs__job_id__live_tiles__step___path__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -14735,6 +14769,73 @@ export interface operations {
             };
         };
     };
+    capture_live_tile_api_v1_captures__capture_id__live_tiles__step___path__get: {
+        parameters: {
+            query?: {
+                resolve?: boolean;
+            };
+            header?: never;
+            path: {
+                capture_id: string;
+                path: string;
+                step: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description With resolve=true, the signed URL as JSON for cross-origin browsers. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Successful Response */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     process_capture_api_v1_captures__capture_id__process_post: {
         parameters: {
             query?: never;
@@ -15425,6 +15526,73 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LiveState"];
                 };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    job_live_tile_api_v1_jobs__job_id__live_tiles__step___path__get: {
+        parameters: {
+            query?: {
+                resolve?: boolean;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+                path: string;
+                step: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description With resolve=true, the signed URL as JSON for cross-origin browsers. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Successful Response */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Missing or wrong write token */
             401: {

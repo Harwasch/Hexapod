@@ -196,6 +196,21 @@ def test_long_run_is_bounded_and_keeps_endpoints_evals_and_components() -> None:
                 },
             )
         )
+        records.append(
+            (
+                "tiles",
+                {
+                    "v": 1,
+                    "key": f"runs/r/train/checkpoint/live/tiles/{end}/tileset.json",
+                    "step": end,
+                    "final": end == 60000,
+                    "gaussians": 7250000,
+                    "tiles": 151,
+                    "bytes": 133000000,
+                    "seconds": 41.0,
+                },
+            )
+        )
         live = merge_live(live, records)
     series = live["train"]["series"]
     assert len(series["step"]) <= 300

@@ -19,7 +19,9 @@ names the snapshot usually arrives first.
 
 from __future__ import annotations
 
+import re
 import uuid
+from pathlib import PurePosixPath
 from typing import Any
 
 from pydantic import ValidationError
@@ -112,6 +114,15 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
         if terminal_train and live.get("train") is None:
             live = {**live, "train": {}}
         found_train = _train(live, storage, final=final)
+        tiles = _tiles_record(step, job.id)
+        if tiles is not None and _signed(storage, tiles["key"]) is not None:
+            found_train = found_train or LiveTrain()
+            found_train.tiles = LiveTrainTiles(
+                url=f"/api/v1/captures/{capture.id}/live/tiles/{tiles['step']}/tileset.json",
+                step=tiles["step"],
+                final=tiles["final"],
+                frame="solve",
+            )
         if (
             terminal_train
             and step.status != RunStatus.COMPLETE
@@ -134,7 +145,7 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
             train.plan = train.plan or LiveTrainPlan()
             if train.plan.antialiased is None:
                 train.plan.antialiased = aa
-    if job.status == RunStatus.COMPLETE and capture.site_id:
+    if job.status == RunStatus.COMPLETE and capture.site_id and not (train and train.tiles):
         site = db.get(Site, capture.site_id)
         if site is not None:
             # Resolve this run's epoch, not a newer capture now shown by the gallery.
@@ -182,6 +193,100 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
         splat=splat,
         train=train,
     )
+
+
+def _tiles_record(step: JobStep, job_id: uuid.UUID) -> dict[str, Any] | None:
+    observation = (step.metrics or {}).get("live")
+    value = observation.get("tiles") if isinstance(observation, dict) else None
+    if not isinstance(value, dict) or value.get("v") != 1:
+        return None
+    key, number = value.get("key"), value.get("step")
+    if (
+        not isinstance(key, str)
+        or len(key) > 512
+        or not key.startswith(f"runs/{job_id}/")
+        or ".." in key
+        or "\\" in key
+        or "%" in key
+        or any(ord(c) < 32 for c in key)
+        or str(PurePosixPath(key)) != key
+        or not isinstance(number, int)
+        or isinstance(number, bool)
+        or number < 0
+        or not isinstance(value.get("final"), bool)
+    ):
+        return None
+    # A retry uses checkpoint-aN; fan-out pieces use stage/parts/<part>/checkpoint.
+    # checkpoint_key can still name the *previous* attempt until this one finishes.
+    attempt = step.attempt or 1
+    checkpoint = "checkpoint" if attempt == 1 else f"checkpoint-a{attempt}"
+    stage_root = re.escape(f"runs/{job_id}/{step.stage_id}")
+    live_tail = re.escape(
+        _LIVE_SEGMENT.removeprefix("/checkpoint") + f"tiles/{number}/tileset.json"
+    )
+    if re.fullmatch(rf"{stage_root}(?:/parts/[^/]+)?/{checkpoint}{live_tail}", key) is None:
+        return None
+    return value
+
+
+def _tile_path(path: str) -> None:
+    if (
+        not path
+        or path.startswith("/")
+        or ".." in path
+        or "\\" in path
+        or "%" in path
+        or any(ord(c) < 32 for c in path)
+        or str(PurePosixPath(path)) != path
+    ):
+        raise NotFoundError("live tile", path)
+
+
+def tile_for_capture(
+    db: Session, storage: ObjectStorage, capture_id: uuid.UUID, step: int, path: str
+) -> str:
+    """Sign one file of the newest run's advertised LOD, never an arbitrary object key.
+
+    Reject encoded separators too: Starlette has already URL-decoded once, and neither
+    a second decoding nor path normalization may change the key that is authorized.
+    """
+    _tile_path(path)
+    if db.get(Capture, capture_id) is None:
+        raise NotFoundError("capture", capture_id)
+    job = db.scalars(
+        select(Job)
+        .where(Job.capture_id == capture_id)
+        .order_by(Job.created_at.desc(), Job.id.desc())
+        .limit(1)
+    ).first()
+    if job is None:
+        raise NotFoundError("run for capture", capture_id)
+    return tile_for_job(db, storage, job.id, step, path)
+
+
+def tile_for_job(
+    db: Session, storage: ObjectStorage, job_id: uuid.UUID, step: int, path: str
+) -> str:
+    job = get_job(db, job_id)
+    _tile_path(path)
+    steps = sorted(
+        db.scalars(select(JobStep).where(JobStep.job_id == job.id)).all(),
+        key=lambda row: row.ordinal,
+        reverse=True,
+    )
+    for row in steps:
+        record = _tiles_record(row, job.id)
+        if record is None:
+            continue
+        # An old step's tiles must not masquerade as this run's current solve.
+        if record["step"] != step:
+            break
+        key = record["key"].removesuffix("tileset.json") + path
+        url = _signed(storage, key)
+        if url is not None:
+            return url
+        break
+    raise NotFoundError("live tile", path)
 
 
 def _stage(step: JobStep) -> LiveStage:

@@ -11,7 +11,7 @@
  * placed east/north/up: it is turned so the solve's up estimate faces the sky, and centred
  * on the points. When the run finishes, the status panel links to the final scan.
  */
-import { SparkRenderer, SplatFileType, SplatMesh } from "@sparkjsdev/spark";
+import { type SplatMesh } from "@sparkjsdev/spark";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
@@ -20,7 +20,15 @@ import type { LiveCameras, LiveState, LiveTrainSeeds } from "@twin/contracts";
 import { fetchApi } from "@/api/coldStart";
 import { deviceSplatBudget } from "@/lib/detail";
 
-import { medianHeightCamera, nextTrainingCamera, trainingFov } from "./liveCamera";
+import {
+  medianHeightCamera,
+  nextTrainingCamera,
+  trainingFov,
+  cameraSpacing,
+  frustumIndices,
+  overlayVisibility,
+} from "./liveCamera";
+import { consoleSpark, consoleSplat, sparkSettled } from "./liveSpark";
 import { openScanStream, splatAntialiasing } from "./sparkStream";
 import { liveConsole } from "./liveConsole";
 import {
@@ -99,25 +107,12 @@ function frustums(
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geometry.setIndex(new THREE.BufferAttribute(new Uint16Array(cameras.count * 16), 1));
   return geometry;
 }
 
 function srgbToLinear(values: Float32Array): Float32Array {
   return values.map((c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)));
-}
-
-/** Median spacing between consecutive cameras: how big a frustum should be. */
-function spacing(cameras: DecodedCameras, fallback: number): number {
-  const gaps: number[] = [];
-  for (let i = 1; i < cameras.count; i += 1) {
-    const dx = (cameras.centres[i * 3] ?? 0) - (cameras.centres[i * 3 - 3] ?? 0);
-    const dy = (cameras.centres[i * 3 + 1] ?? 0) - (cameras.centres[i * 3 - 2] ?? 0);
-    const dz = (cameras.centres[i * 3 + 2] ?? 0) - (cameras.centres[i * 3 - 1] ?? 0);
-    gaps.push(Math.hypot(dx, dy, dz));
-  }
-  gaps.sort((a, b) => a - b);
-  const median = gaps[Math.floor(gaps.length / 2)] ?? 0;
-  return median > 0 ? median : fallback;
 }
 
 export function showLive(captureId: string): { stop: () => void } {
@@ -155,12 +150,7 @@ export function showLive(captureId: string): { stop: () => void } {
   );
   // This device's splat budget is Spark's here too, and centres stay 32-bit (see main.ts).
   const budget = deviceSplatBudget();
-  const spark = new SparkRenderer({
-    renderer,
-    lodSplatCount: budget,
-    accumExtSplats: true,
-    ...splatAntialiasing(),
-  });
+  const spark = consoleSpark(renderer, budget);
   scene.add(spark);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
@@ -186,6 +176,8 @@ export function showLive(captureId: string): { stop: () => void } {
   let cameraRadius = 1;
   let cameraLines: THREE.LineSegments | null = null;
   let cloud: THREE.Points | null = null;
+  let frustumHideRadius = 0;
+  const localEye = new THREE.Vector3();
   let splat: { mesh: SplatMesh; name: string } | null = null;
   let loadingSplat: string | null = null;
   let framed = false;
@@ -215,10 +207,14 @@ export function showLive(captureId: string): { stop: () => void } {
    * show the scene twice, at two sizes. So once a splat is up, only finished cameras stay.
    */
   const showOverlay = (): void => {
-    const visible = (splat === null && tileStream === null) || camerasFinal;
+    const overlay = overlayVisibility(
+      splat !== null || tilesGroup.children.length > 0,
+      camerasFinal,
+      camerasVisible,
+    );
     tilesGroup.visible = layerMode !== "seeds";
-    if (cameraLines) cameraLines.visible = visible && camerasVisible;
-    if (cloud) cloud.visible = visible && camerasVisible && layerMode === "splat";
+    if (cameraLines) cameraLines.visible = overlay.cameras;
+    if (cloud) cloud.visible = overlay.points && layerMode === "splat";
     if (seedPoints) seedPoints.visible = layerMode !== "splat";
     if (splat) splat.mesh.visible = layerMode !== "seeds";
     for (const fade of fades) fade.mesh.visible = layerMode !== "seeds";
@@ -254,13 +250,24 @@ export function showLive(captureId: string): { stop: () => void } {
     }
     controls.update();
     tileStream?.frame();
+    if (cameraLines?.visible && trainingCameras) {
+      frame.updateMatrixWorld();
+      localEye.copy(camera.position);
+      frame.worldToLocal(localEye);
+      const index = cameraLines.geometry.getIndex();
+      if (index) {
+        const count = frustumIndices(
+          trainingCameras.centres,
+          localEye.toArray(),
+          frustumHideRadius,
+          index.array as Uint16Array,
+        );
+        index.needsUpdate = true;
+        cameraLines.geometry.setDrawRange(0, count);
+      }
+    }
     renderer.render(scene, camera);
-    section.dataset.settled = String(
-      !spark.sorting &&
-        !spark.sortDirty &&
-        spark.sortTimeoutId === -1 &&
-        spark.display === spark.current,
-    );
+    section.dataset.settled = String(sparkSettled(spark));
   });
 
   /** Turn the solve's frame so `up` faces the sky, centred on `centre`. */
@@ -335,7 +342,7 @@ export function showLive(captureId: string): { stop: () => void } {
     section.dataset.view = "camera";
   };
 
-  const drawCameras = (payload: LiveCameras, dimPoints: boolean): void => {
+  const drawCameras = (payload: LiveCameras): void => {
     const decoded = decodeCameras(payload);
     const points = decodePoints(payload);
     const centre = medianCentre(points.count ? points.positions : decoded.centres) ?? [
@@ -351,7 +358,9 @@ export function showLive(captureId: string): { stop: () => void } {
       (cameraLines.material as THREE.Material).dispose();
       frame.remove(cameraLines);
     }
-    const size = spacing(decoded, payload.scale * 0.05) * 0.6;
+    const gap = cameraSpacing(decoded, payload.scale * 0.05);
+    frustumHideRadius = gap * 1.5;
+    const size = gap * 0.6;
     cameraLines = new THREE.LineSegments(
       frustums(decoded, size, payload.aspect ?? 4 / 3, trainingFov(payload.fovY)),
       new THREE.LineBasicMaterial({ color: CAMERA_COLOUR, transparent: true, opacity: 0.9 }),
@@ -372,7 +381,7 @@ export function showLive(captureId: string): { stop: () => void } {
         sizeAttenuation: false,
         vertexColors: true,
         transparent: true,
-        opacity: dimPoints ? 0.25 : 0.95,
+        opacity: 0.95,
       }),
     );
     frame.add(cloud);
@@ -417,13 +426,7 @@ export function showLive(captureId: string): { stop: () => void } {
     if (stopped || desiredSplat !== name || generation !== loadGeneration) return;
     // A snapshot within the Detail budget is drawn whole, as it arrives; only a bigger one
     // waits for Spark to build its LoD tree (`lodAbove`), and is then drawn within it.
-    const mesh = new SplatMesh({
-      fileBytes: bytes,
-      fileType: SplatFileType.SPZ,
-      lod: true,
-      lodAbove: budget,
-      extSplats: true,
-    });
+    const mesh = consoleSplat(bytes, budget);
     try {
       await mesh.initialized;
     } catch (error) {
@@ -466,7 +469,6 @@ export function showLive(captureId: string): { stop: () => void } {
       });
     }
     splat = { mesh, name };
-    if (cloud) (cloud.material as THREE.PointsMaterial).opacity = 0.25;
     showOverlay();
     section.dataset.source = "spz";
     section.dataset.splat = name;
@@ -646,7 +648,6 @@ export function showLive(captureId: string): { stop: () => void } {
         },
       });
       tileStream = stream;
-      if (cloud) (cloud.material as THREE.PointsMaterial).opacity = 0.25;
       showOverlay();
       void stream.ready
         .then(({ tileset }) => {
@@ -657,6 +658,7 @@ export function showLive(captureId: string): { stop: () => void } {
             frameView(bounds.radius);
             section.dataset.view = "orbit";
           }
+          showOverlay();
           section.dataset.source = "tiles";
           section.dataset.splatStep = String(tiles.step);
           consoleView.snapshot(tiles.step);
@@ -664,6 +666,7 @@ export function showLive(captureId: string): { stop: () => void } {
         .catch(() => {
           if (stopped || tileStream !== stream) return;
           clearTiles();
+          showOverlay();
           section.dataset.source = "tiles-error";
           el("lc-snapshot").textContent = "Tiles unavailable";
         });
@@ -711,7 +714,7 @@ export function showLive(captureId: string): { stop: () => void } {
     track.setAttribute("aria-valuenow", String(Math.round((described.fraction ?? 0) * 100)));
     if (state.cameras && state.cameras.seq !== lastSeq) {
       lastSeq = state.cameras.seq;
-      drawCameras(state.cameras, splat !== null);
+      drawCameras(state.cameras);
     }
     if (isNewAttempt(latestState?.train, state.train)) {
       clearTiles();

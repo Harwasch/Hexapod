@@ -14,6 +14,7 @@
  * `(ix, iy, iz)` spans `origin + [i, i + 1) * cell`; its brick is `i >> 3`.
  */
 
+import { fetchSplatResource } from "@/lib/splatFetch";
 import { CLEARANCE_CELLS, VoxelSolids, type Vec3 } from "./occupancy";
 
 export interface CollisionMeta {
@@ -147,7 +148,7 @@ async function gunzip(bytes: ArrayBuffer): Promise<Uint8Array> {
  *  URL may be relative to the page, as a same-origin path is). */
 export async function loadCollision(tilesetUrl: string, meta: CollisionMeta): Promise<BrickGrid> {
   const base = new URL(tilesetUrl, globalThis.location?.href);
-  const response = await fetch(new URL(meta.uri, base).toString());
+  const response = await fetchSplatResource(new URL(meta.uri, base).toString());
   if (!response.ok) throw new Error(`collision answered ${String(response.status)}`);
   return parseCollision(await gunzip(await response.arrayBuffer()), meta);
 }

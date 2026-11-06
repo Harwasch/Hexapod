@@ -14,6 +14,7 @@ import struct
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -379,6 +380,9 @@ def test_the_train_stage_snapshots_intermediate_splats_and_keeps_the_final_one(
     assert plys == ["point_cloud_299.ply"]
     metrics = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
     assert metrics["gaussiansInPly"] == 64
+    tiles = live.latest(log)["tiles"]
+    assert tiles["step"] == 300 and tiles["final"] and tiles["gaussians"] > 0
+    assert (workdir.checkpoint_dir("train") / "live" / "tiles" / "300" / "tileset.json").is_file()
 
 
 def test_live_false_trains_exactly_as_before(tmp_path: Path) -> None:
@@ -419,6 +423,12 @@ def test_on_a_remote_box_the_snapshot_is_uploaded_under_the_key_its_line_names(
     execute(make_recipe([stage], inputs=["frames", "poses"]), workdir, RunnerSet.cloud(cloud))
 
     found = live.latest(workdir.log_path("train").read_text())["splat"]
+    tiles = live.latest(workdir.log_path("train").read_text())["tiles"]
+    assert bucket.exists(tiles["key"])
+    manifest = json.loads((bucket.root / tiles["key"]).read_text())
+    assert (
+        (bucket.root / tiles["key"]).parent.joinpath(manifest["root"]["content"]["uri"]).is_file()
+    )
     assert bucket.exists(found["key"])
     assert (bucket.root / found["key"]).read_bytes()[:2] == b"\x1f\x8b"  # gzip: an SPZ
 
@@ -610,3 +620,238 @@ def test_camera_fov_uses_vertical_focal_and_stage_reads_training_centres(tmp_pat
     assert sampler["focal_px"] == 500
     np.testing.assert_allclose(sampler["camera_centres"], model.centres())
     assert live.snapshot_cameras(tmp_path / "missing") == {}
+
+
+def test_live_lod_rotates_and_preserves_the_final_ply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "checkpoint" / "live"
+    ply = tmp_path / "work" / "ply"
+    lines: list[str] = []
+    counts: list[int] = []
+
+    def record(line: str) -> None:
+        lines.append(line)
+        if line.startswith(live.TILES_TAG):
+            counts.append(len(list((directory / "tiles").iterdir())))
+
+    # Fast tiny fixtures deliberately have no training interval to amortize startup.
+    monkeypatch.setattr(live.SplatWatch, "_tiles_budget", lambda *_: 10.0)
+    with live.SplatWatch(
+        ply,
+        directory,
+        record,
+        indices={9, 19},
+        total=30,
+        key_prefix="runs/r/train/checkpoint/live",
+        poll_s=1000,
+    ) as watch:
+        for index in (9, 19):
+            write_splat_ply(ply / f"point_cloud_{index}.ply", [2.0] * 16, [-2.0] * 16)
+            assert watch.poll(settled=True)
+            assert sorted(p.name for p in (directory / "tiles").iterdir()) == [str(index + 1)]
+        final = ply / "point_cloud_29.ply"
+        write_splat_ply(final, [2.0] * 16, [-2.0] * 16)
+        before = final.read_bytes()
+    assert final.read_bytes() == before
+    records = [v for k, v in live.records("\n".join(lines)) if k == "tiles"]
+    assert [r["step"] for r in records] == [10, 20, 30]
+    assert [r["final"] for r in records] == [False, False, True]
+    assert max(counts) <= 2
+    assert sorted(p.name for p in (directory / "tiles").iterdir()) == ["30"]
+    assert not list((tmp_path / "work").glob("live-tiles-*"))
+    last_record = records[-1]
+    assert (
+        last_record["gaussians"] == 16 and last_record["tiles"] == 1 and last_record["seconds"] > 0
+    )
+    assert last_record["bytes"] == sum(
+        p.stat().st_size for p in (directory / "tiles" / "30").iterdir()
+    )
+    manifest = json.loads((directory / "tiles" / "30" / "tileset.json").read_text())
+    # The neutral placement only changes the root. The console uses the solve frame.
+    assert manifest["root"]["transform"][12:15] == [6378137.0, 0.0, 0.0]
+
+
+def test_lod_timeout_and_failure_are_optional_observations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess
+
+    ply = tmp_path / "ply"
+    lines: list[str] = []
+    watch = live.SplatWatch(
+        ply,
+        tmp_path / "live",
+        lines.append,
+        indices={9, 19},
+        total=30,
+        key_prefix="runs/r/train/checkpoint/live",
+    )
+    monkeypatch.setattr(watch, "_tiles_budget", lambda *_: 0.000001)
+    for index in (9, 19):
+        write_splat_ply(ply / f"point_cloud_{index}.ply", [2.0] * 16, [-2.0] * 16)
+        assert watch.poll(settled=True)
+    assert len([line for line in lines if "LOD tiles skipped" in line]) == 1
+    assert "tiles" not in live.latest("\n".join(lines))
+    assert len(list((tmp_path / "live").glob("*.spz"))) == 2
+    assert not list(tmp_path.glob("live-tiles-*"))
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise subprocess.CalledProcessError(1, "splat_tiles")
+
+    monkeypatch.setattr(watch, "_convert_tiles", broken)
+    monkeypatch.setattr(watch, "_tiles_budget", lambda *_: 10.0)
+    final = ply / "point_cloud_29.ply"
+    write_splat_ply(final, [2.0] * 16, [-2.0] * 16)
+    before = final.read_bytes()
+    watch._finish()
+    assert final.read_bytes() == before
+    assert live.latest("\n".join(lines))["splat"]["step"] == 30
+
+
+def test_tiles_line_rejects_unbounded_or_unsafe_records() -> None:
+    valid: dict[str, Any] = {
+        "v": 1,
+        "key": "runs/r/train/checkpoint/live/tiles/30/tileset.json",
+        "step": 30,
+        "final": True,
+        "gaussians": 16,
+        "tiles": 1,
+        "bytes": 1024,
+        "seconds": 0.5,
+    }
+    assert live.parse_line(live.TILES_TAG + json.dumps(valid)) == ("tiles", valid)
+    retry = {**valid, "key": valid["key"].replace("/checkpoint/", "/checkpoint-a2/")}
+    assert live.parse_line(live.TILES_TAG + json.dumps(retry)) == ("tiles", retry)
+    for updates in (
+        {"key": "captures/tileset.json"},
+        {"step": 31},
+        {"step": "["},
+        {"seconds": float("nan")},
+        {"final": 1},
+        {"bytes": -1},
+        {"extra": "x" * 1024},
+        {"key": valid["key"].replace("/30/", "/../30/")},
+    ):
+        assert live.parse_line(live.TILES_TAG + json.dumps({**valid, **updates})) is None
+
+
+def test_tiles_packer_failure_does_not_fail_the_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("splat_tiles failed")
+
+    monkeypatch.setattr(live.SplatWatch, "_convert_tiles", broken)
+    workdir = Workdir.create(tmp_path / "run")
+    seed_inputs(workdir)
+    train(workdir)
+    log = workdir.log_path("train").read_text()
+    assert live.latest(log)["splat"]["step"] == 300
+    assert "tiles" not in live.latest(log)
+    assert log.count("LOD tiles skipped") == 1
+    assert (workdir.out_dir("train") / "trained.ply").is_file()
+
+
+def test_real_lod_filter_failure_keeps_thumbnail_and_read_only_final(tmp_path: Path) -> None:
+    final = tmp_path / "ply" / "point_cloud_99.ply"
+    # The thumbnail accepts finite gaussians; the full packer's opacity filter rejects all.
+    write_splat_ply(final, [-20.0] * 8, [-2.0] * 8)
+    before = final.read_bytes()
+    lines: list[str] = []
+    with live.SplatWatch(
+        final.parent,
+        tmp_path / "live",
+        lines.append,
+        indices={49},
+        total=100,
+        key_prefix="runs/r/train/checkpoint/live",
+        poll_s=1000,
+    ):
+        pass
+    assert final.read_bytes() == before
+    assert live.latest("\n".join(lines))["splat"]["step"] == 100
+    assert "tiles" not in live.latest("\n".join(lines))
+    assert sum("LOD tiles skipped" in line for line in lines) == 1
+    assert not (tmp_path / "live" / "tiles").exists()
+    assert not list(tmp_path.glob("live-tiles-*"))
+
+
+def test_estimated_pack_time_skips_a_short_snapshot_interval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from unittest.mock import Mock
+
+    monkeypatch.setattr(time, "monotonic", lambda: 100.0)
+    watch = live.SplatWatch(
+        tmp_path,
+        tmp_path / "live",
+        lambda _: None,
+        indices={9, 19},
+        total=30,
+        key_prefix="runs/r/train/checkpoint/live",
+    )
+    watch._started = 0.0
+    watch._tiles_seconds = 110.0
+    pending = live._Pending(9, tmp_path / "point_cloud_9.ply", 1)
+    assert watch._tiles_budget(pending) == 100.0
+    convert = Mock()
+    monkeypatch.setattr(watch, "_convert_tiles", convert)
+    watch._pack_tiles(pending)
+    convert.assert_not_called()
+
+
+def test_a_bad_intermediate_does_not_disable_the_final_lod(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ply = tmp_path / "ply"
+    directory = tmp_path / "live"
+    lines: list[str] = []
+    monkeypatch.setattr(live.SplatWatch, "_tiles_budget", lambda *_: 10.0)
+    with live.SplatWatch(
+        ply,
+        directory,
+        lines.append,
+        indices={9},
+        total=20,
+        key_prefix="runs/r/train/checkpoint/live",
+        poll_s=1000,
+    ) as watch:
+        write_splat_ply(ply / "point_cloud_9.ply", [-20.0] * 8, [-2.0] * 8)
+        assert watch.poll(settled=True)
+        write_splat_ply(ply / "point_cloud_19.ply", [2.0] * 8, [-2.0] * 8)
+    assert live.latest("\n".join(lines))["tiles"]["final"]
+    assert sorted(p.name for p in (directory / "tiles").iterdir()) == ["20"]
+    assert sum("LOD tiles skipped" in line for line in lines) == 1
+
+
+def test_lod_only_at_quarters_and_final_but_every_thumbnail_remains(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ply = tmp_path / "ply"
+    watch = live.SplatWatch(
+        ply,
+        tmp_path / "live",
+        lambda _: None,
+        indices=live.ply_indices(live.train_ply_steps(100), 1),
+        total=100,
+        key_prefix="runs/r/train/checkpoint/live",
+    )
+    packaged: list[int] = []
+
+    def convert(pending: live._Pending, staged: Path, budget: float) -> dict[str, int]:
+        packaged.append(pending.index + 1)
+        staged.mkdir()
+        (staged / "tileset.json").write_text("{}")
+        return {"gaussians": 16, "tiles": 1, "bytes": 2}
+
+    monkeypatch.setattr(watch, "_convert_tiles", convert)
+    monkeypatch.setattr(watch, "_tiles_budget", lambda *_: 10.0)
+    for step in range(5, 100, 5):
+        write_splat_ply(ply / f"point_cloud_{step - 1}.ply", [2.0] * 16, [-2.0] * 16)
+        watch.poll(settled=True)
+    write_splat_ply(ply / "point_cloud_99.ply", [2.0] * 16, [-2.0] * 16)
+    watch._finish()
+    assert packaged == [25, 50, 75, 100]
+    assert len(list((tmp_path / "live").glob("*.spz"))) == 20
+    assert [p.name for p in (tmp_path / "live/tiles").iterdir()] == ["100"]
