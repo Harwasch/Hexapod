@@ -8812,7 +8812,7 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "preempted" | "stopped";
+            reason: "preempted" | "oom" | "failed";
             /** Step */
             step: number;
         };

@@ -14554,7 +14554,8 @@
           "reason": {
             "enum": [
               "preempted",
-              "stopped"
+              "oom",
+              "failed"
             ],
             "title": "Reason",
             "type": "string"
