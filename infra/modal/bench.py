@@ -336,3 +336,42 @@ def rescore(plan: dict[str, Any]) -> dict[str, Any]:
     write_json(run / "rescore.json", {k: v for k, v in result.items() if k != "pngs"})
     volume.commit()
     return result
+
+
+@app.function(
+    image=image,
+    gpu=GPU_NAMES["l4"],
+    cpu=(shared.GPU_CPU_CORES, shared.GPU_CPU_CORES),
+    memory=(16384, 16384),
+    timeout=TIMEOUTS["console-check"],
+    retries=0,
+    volumes={"/bench": volume},
+    max_containers=1,
+    startup_timeout=STARTUP_SECONDS,
+    single_use_containers=True,
+)
+def console_check(plan: dict[str, Any]) -> dict[str, Any]:
+    from experiments.bench.console_check import run_console_check
+    from experiments.bench.worker import RestartedError, claim
+
+    started, billed = _billed_since()
+    volume.reload()
+    run = Path("/bench/runs") / plan["runId"]
+    try:
+        claim(run, attempt_started=started)
+    except RestartedError as error:
+        return {
+            "runId": plan["runId"],
+            "scene": plan["scene"],
+            "status": "preempted",
+            "costUsd": None,
+            "error": str(error),
+        }
+    volume.commit()
+    result = run_console_check(Path("/bench"), run, plan, billed_since=started)
+    volume.commit()
+    result.update(wallSeconds=time.time() - started, billedFrom=billed)
+    result["costUsd"] = result["wallSeconds"] * hourly_rate("l4", 16) / 3600
+    write_json(run / "result.json", {k: v for k, v in result.items() if k != "pngs"})
+    volume.commit()
+    return result

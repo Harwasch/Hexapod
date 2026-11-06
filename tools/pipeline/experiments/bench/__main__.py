@@ -90,6 +90,14 @@ def parser() -> argparse.ArgumentParser:
     matched.add_argument("--scene", choices=sorted(SCENES), required=True)
     matched.add_argument("--runs", nargs=2, required=True, metavar=("A", "B"))
     matched.add_argument("--frame", help="exact frozen test filename; default: median altitude")
+    console = commands.add_parser(
+        "console-check", help="full PLY versus last console SPZ; one L4 call"
+    )
+    console.add_argument("--scene", choices=sorted(SCENES), required=True)
+    console.add_argument("--run", required=True)
+    console.add_argument("--compare-run", default="ce19d9f1a7a54ee6b98930e757d94d84")
+    console.add_argument("--viewport-width", type=int, default=1600)
+    console.add_argument("--viewport-height", type=int, default=900)
     rescore = commands.add_parser(
         "rescore", help="one evaluation-only L4 call; common full/half yardstick"
     )
@@ -111,18 +119,30 @@ def parser() -> argparse.ArgumentParser:
     results.add_argument("--baseline", default="baseline-main")
     results.add_argument("--candidate", help="one candidate for the flip rule; default: all")
     spend = commands.add_parser("ledger")
-    for command in (freeze, full, run, matched, rescore, rescore_table, report, results, spend):
+    for command in (
+        freeze,
+        full,
+        run,
+        matched,
+        console,
+        rescore,
+        rescore_table,
+        report,
+        results,
+        spend,
+    ):
         command.add_argument("--ledger", type=Path)
         command.add_argument("--state-dir", type=Path, default=STATE)
         command.add_argument("--dry-run", action="store_true")
         command.add_argument("--rehearse", action="store_true")
         command.add_argument("--tag", help="spend/report group in the shared ledger")
-    for command in (freeze, full, run, matched, rescore):
+    for command in (freeze, full, run, matched, console, rescore):
         command.add_argument("--cap", type=float, default=2.0)
         command.add_argument(
             "--total-cap", type=float, help="cumulative cap for --tag; --cap bounds each batch"
         )
     rescore.set_defaults(tag="rescore", total_cap=5.0, cap=1.0)
+    console.set_defaults(tag="console-check", total_cap=0.49, cap=0.49)
     return root
 
 
@@ -135,6 +155,27 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
         "rehearsal": args.rehearse,
         "tag": args.tag,
     }
+    if args.command == "console-check":
+        if any(not re.fullmatch(r"[a-f0-9]{32}", run) for run in (args.run, args.compare_run)):
+            raise ValueError("console-check requires full 32-hex run IDs")
+        if args.run == args.compare_run:
+            raise ValueError("console-check requires distinct primary and baseline runs")
+        if not all(1 <= value <= 16384 for value in (args.viewport_width, args.viewport_height)):
+            raise ValueError("viewport dimensions must be between 1 and 16384")
+        if args.total_cap is None or not 0 < args.cap <= 0.5 or not 0 < args.total_cap <= 0.5:
+            raise ValueError("console-check requires batch and total caps of at most $0.50")
+        return [
+            {
+                **base,
+                "runId": "console-check-" + uuid.uuid4().hex,
+                "schedule": "console-check",
+                "tier": "l4",
+                "hostMemoryGiB": 16,
+                "run": args.run,
+                "compareRun": args.compare_run,
+                "viewport": [args.viewport_width, args.viewport_height],
+            }
+        ]
     if args.command == "freeze-full":
         if not (
             0 <= args.exclude_test_seconds < 68
@@ -282,6 +323,10 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
 
 def save_outcome(state: Path, book: Path, plan: dict[str, Any], result: dict[str, Any]) -> None:
     directory = state / "runs" / plan["runId"]
+    if plan["schedule"] == "console-check":
+        from .console_check import save_local
+
+        save_local(state, result)
     if plan["schedule"] == "rescore":
         from .rescore import save_local
 
@@ -344,7 +389,7 @@ def save_outcome(state: Path, book: Path, plan: dict[str, Any], result: dict[str
 
 def lost_result(state: Path, plan: dict[str, Any], error: Exception) -> dict[str, Any]:
     message = f"Remote outcome unknown: {type(error).__name__}: {error}"
-    if plan["schedule"] in {"freeze", "freeze-full", "matched", "rescore"}:
+    if plan["schedule"] in {"freeze", "freeze-full", "matched", "rescore", "console-check"}:
         return {
             "runId": plan["runId"],
             "scene": plan["scene"],
@@ -373,7 +418,7 @@ def train_options(plan: dict[str, Any]) -> dict[str, Any]:
         return {}
     if isinstance(gib, bool) or not isinstance(gib, int) or gib <= 0:
         raise ValueError("--host-memory-gib must be a positive integer")
-    if plan["schedule"] not in {"screen", "full"}:
+    if plan["schedule"] not in {"screen", "full", "console-check"}:
         raise ValueError("host memory override is only supported for train")
     return {"memory": (gib * 1024, gib * 1024)}
 
@@ -419,6 +464,13 @@ def remote_batch(
             )
             for plan in plans:
                 plan.update(manifestDigest=manifest["digest"], splitDigest=manifest["splitDigest"])
+                if plan["schedule"] == "console-check":
+                    for source in (plan["run"], plan["compareRun"]):
+                        entries = module.volume.iterdir(f"runs/{source}", recursive=False)
+                        if not any(Path(entry.path).name == "trained.ply" for entry in entries):
+                            raise ValueError(
+                                f"{source}: trained.ply missing on volume; nothing launched"
+                            )
         ledger.reserve(book, plans, cap, total_cap)
         for offset in range(0, len(plans), 4):
             pending = []
@@ -436,6 +488,8 @@ def remote_batch(
                     if plan["schedule"] == "matched"
                     else module.rescore
                     if plan["schedule"] == "rescore"
+                    else module.console_check
+                    if plan["schedule"] == "console-check"
                     else module.FUNCTIONS[(plan["tier"], plan["schedule"])]
                 )
                 try:
@@ -505,6 +559,10 @@ def local_batch(
                 "rehearsal": True,
                 "tag": plan.get("tag"),
             }
+        elif plan["schedule"] == "console-check":
+            from .console_check import run_console_check
+
+            result = run_console_check(state, state / "runs" / plan["runId"], plan)
         elif plan["schedule"] == "matched":
             from .matched import run_matched
 
@@ -574,7 +632,7 @@ def main(argv: list[str] | None = None) -> int:
                 r
                 for r in results
                 if r.get("schemaVersion") == 1
-                and r.get("schedule") not in {"rescore", "matched"}
+                and r.get("schedule") not in {"rescore", "matched", "console-check"}
                 and (not args.tag or r.get("tag") == args.tag)
             ]
             if args.command == "report":

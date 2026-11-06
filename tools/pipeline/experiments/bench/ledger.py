@@ -30,6 +30,7 @@ TIMEOUTS = {
     "freeze": 600,
     "freeze-full": 14400,
     "matched": 600,
+    "console-check": 1200,
     "rescore": int(os.environ.get("HEXAPOD_BENCH_RESCORE_TIMEOUT", "7200")),
 }
 # Startup/teardown allowance in the modelled reservation, not a measured invoice.
@@ -153,7 +154,9 @@ def estimate(
     if schedule in {"freeze", "freeze-full"}:
         return 0.05 if schedule == "freeze" else 0.5
     return (
-        {"screen": 0.20, "full": 0.90, "matched": 0.05, "rescore": 1.50}[schedule]
+        {"screen": 0.20, "full": 0.90, "matched": 0.05, "rescore": 1.50, "console-check": 0.10}[
+            schedule
+        ]
         * hourly_rate(tier, host_memory_gib)
         / hourly_rate("l4")
     )

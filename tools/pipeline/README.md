@@ -1452,6 +1452,18 @@ the decision rule for this Beach A/B experiment.
 
 ### Beach CPU diagnostics and Stage 2
 
+To distinguish a poor console preview from a poor retained model, use the
+[console-check diagnostic](experiments/bench/CONSOLE_CHECK.md). It renders the full PLY
+and last SPZ with gsplat classic at three training cameras and the console's initial
+orbit, plus the baseline PLY at that same world pose. One L4 call, a $0.49 ledger cap,
+and PNGs/cameras/counts/SH metadata returned locally; no console code changes.
+
+```bash
+uv run --with modal==1.6.2 python -m experiments.bench console-check \
+  --scene beach-full --run 4769ee65e33c44f2aacd87a45dfa3811 \
+  --compare-run ce19d9f1a7a54ee6b98930e757d94d84
+```
+
 Run the read-only sparse diagnostic from `tools/pipeline`:
 
 ```bash
