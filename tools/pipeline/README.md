@@ -1647,6 +1647,8 @@ surfaces. **Its training effect is unmeasured: all PLYs being re-scored were tra
 before this fix, with the OLD exponential anisotropy loss where enabled.** Anisotropy
 remains off by default, and no training defaults flip.
 
+**Full-resolution crash-fix run** (`crashfix`, run `6fb067c3`, rescore `rescore-8e60cef3`). Everything except 3DGUT and the fade gate, at native 899x1599, with the bounded anisotropy loss and scale guard. It trained all 55,800 steps with no runaway (8.6 GB peak, $1.96), so the crash is fixed. Quality is not: full-size scoring gives raw 17.52/0.485/0.504 and aligned + colour 21.16/0.662/0.463, against the upgrade's 25.35/0.755/0.294 and 25.13/0.754/0.294. Held-out PSNR during training went only from 16.4 dB at step 9,300 to 17.7 at the end, where A went from 21 to 25.6. Needles 19.2% (half resolution: 5.5%), top-down holes 19.5%. All-frame mean brightness is 136.0 against the photos' 134.3, about 1% for every run, so the earlier single-frame brightness shift doesn't hold. Bundling the features stops learning; the next trials go one feature at a time on top of `upgraded-plain`.
+
 **Rescored on a fair yardstick** (`bench rescore`, run `rescore-00a2b264`, no training). Same saved PLYs, classic renderer, 38 test frames. Cells are PSNR / SSIM / LPIPS. Aligned and colour-corrected scores fit each test frame, so they flatter the result. These PLYs were trained with the old anisotropy loss; the fixed loss is unit-tested and has not been trained.
 
 | run, half-size scoring (449x799) | trained at | raw               | aligned + colour  | holes | needles |
