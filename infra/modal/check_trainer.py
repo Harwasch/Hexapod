@@ -257,6 +257,29 @@ def main() -> int:
     assert len(dataset_module["Dataset"](parser, split="val")) == 0
     NoGpuRunner().eval()
     ran.append("all-frame training split")
+    # Same bytes/SH ordering and invalid-row filtering, with bounded host export memory.
+    import tempfile
+    import torch
+    import trainer_export
+
+    fields = {
+        "means": torch.zeros(5, 3),
+        "scales": torch.zeros(5, 3),
+        "quats": torch.ones(5, 4),
+        "opacities": torch.zeros(5),
+        "sh0": torch.zeros(5, 1, 3),
+        "shN": torch.arange(225.0).reshape(5, 15, 3),
+        "format": "ply",
+    }
+    fields["means"][2, 0] = float("nan")
+    expected = namespace["export_splats"](**fields).partition(b"end_header\n")[2]
+    with tempfile.TemporaryDirectory() as scratch:
+        output = Path(scratch) / "export.ply"
+        trainer_export.write(
+            namespace["export_splats"], {**fields, "save_to": str(output)}, chunk=2
+        )
+        assert output.read_bytes().partition(b"end_header\n")[2] == expected
+    ran.append("bounded PLY export")
     sys.stdout.write(
         f"trainer ok: {trainer} accepts training.gsplat_argv (tyro {tyro.__version__}); "
         f"checked {', '.join(sorted(checks))}; ran {', '.join(ran)} on CPU\n"

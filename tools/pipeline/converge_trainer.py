@@ -363,6 +363,8 @@ def instrument(
     import train_split
 
     train_split.install(module, runner, cfg)
+    if cfg is not None and getattr(cfg, "cache_images", False):
+        cfg.cache_images = False  # Native captures must not preload every decoded image.
     real_imageio = module.get("imageio")
     if real_imageio is not None and not isinstance(real_imageio, _NoRenders):
         module["imageio"] = _NoRenders(real_imageio, timing)
@@ -372,6 +374,10 @@ def instrument(
         def export_splats(*args: Any, **kwargs: Any) -> Any:
             began = time.monotonic()
             try:
+                if not args and kwargs.get("format", "ply") == "ply" and kwargs.get("save_to"):
+                    import trainer_export
+
+                    return trainer_export.write(real_export, kwargs)
                 return real_export(*args, **kwargs)
             finally:
                 timing.plys += 1

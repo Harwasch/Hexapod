@@ -9,10 +9,13 @@ import json
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+import host
 
 from . import rehearsal
 from .gpu import GpuSampler
@@ -31,6 +34,7 @@ ARTIFACTS = (
     "train_memory.json",
     "post_processing.json",
     "gpu_samples.json",
+    "host_samples.json",
     "test-trained.json",
     "quality.json",
     "test.json",
@@ -211,7 +215,18 @@ def run_training(
         else {"status": "off"}
     )
     sampler = GpuSampler(None if plan.get("rehearsal") else shutil.which("nvidia-smi"))
-    with tempfile.TemporaryDirectory(prefix="bench-work-") as temporary:
+    memory_rows: list[dict[str, Any]] = []
+    memory_lock = threading.Lock()
+
+    def record_memory(values: host.Sample) -> None:
+        with memory_lock:
+            memory_rows.append({"seconds": round(time.time() - entered, 3), **values})
+            partial = destination / "host_samples.json.part"
+            write_json(partial, {"summary": memory_watch.summary(), "samples": memory_rows})
+            partial.replace(destination / "host_samples.json")
+
+    memory_watch = host.HostWatch(5.0, probe=host.memory_sample, on_sample=record_memory)
+    with memory_watch, tempfile.TemporaryDirectory(prefix="bench-work-") as temporary:
         work = Workdir.create(Path(temporary) / plan["runId"])
         try:
             # Freeze may be explicitly replaced by another client while training runs.
@@ -377,6 +392,7 @@ def run_training(
                 source = next((s / name for s in sources if (s / name).is_file()), None)
                 if source is not None:
                     shutil.copyfile(source, destination / name)
+        memory_watch._take()  # Include the last export/evaluation before assembling the result.
         result = parse_result(
             plan,
             destination,

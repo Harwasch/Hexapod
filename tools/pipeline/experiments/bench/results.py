@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 import quality_stack
-from holdout_error import read_ply
+import splat_io
 
 from .gpu import summarise_samples
 from .ledger import hourly_rate
@@ -26,6 +27,20 @@ def number(value: Any) -> float | None:
 
 def optional(path: Path) -> dict[str, Any]:
     return read_json(path) if path.is_file() else {}
+
+
+def host_oom_line(text: str) -> str | None:
+    for line in text.splitlines():
+        lower = line.lower()
+        if "cuda" in lower or "gpu out of memory" in lower:
+            continue
+        if re.search(
+            r"(?:exit(?:ed)?(?: code| status)?|returncode|status)[\s:=]*137\b"
+            r"|oom[_ -]?kill|(?:host|container|runner).*out of memory",
+            lower,
+        ):
+            return line.strip()
+    return None
 
 
 def parse_result(
@@ -46,7 +61,11 @@ def parse_result(
     gate = optional(directory / "quality.json").get("bar")
     headline = "trained.ply" if gate is None else "faded.ply" if gate == "fade" else "gated.ply"
     ply = directory / headline
-    count = len(read_ply(ply)["x"]) if ply.is_file() else None
+    count = splat_io.read_layout(ply).count if ply.is_file() else None
+    memory = optional(directory / "host_samples.json").get("summary", {})
+    oom = host_oom_line(error or "")
+    if error and memory.get("hostOomKills", 0) > 0:
+        oom = oom or f"cgroup memory.events: oom_kill {memory['hostOomKills']:g}"
     iterations = number(metrics.get("iterations"))
     return {
         "schemaVersion": 1,
@@ -89,11 +108,18 @@ def parse_result(
             else None
         ),
         **summarise_samples(optional(directory / "gpu_samples.json").get("samples", [])),
+        **memory,
+        "hostMemoryGiB": plan.get("hostMemoryGiB", 8),
+        "hostMemoryLimitBinding": bool(oom),
+        "hostMemoryLimitReason": "Modal train host RAM request/limit; independent of GPU VRAM",
+        "hostOomLog": oom,
         "wallSeconds": wall,
         "gpu": {"name": gpu_name, "tier": plan["tier"]},
-        "costUsd": 0.0 if plan.get("rehearsal") else wall * hourly_rate(plan["tier"]) / 3600,
+        "costUsd": 0.0
+        if plan.get("rehearsal")
+        else wall * hourly_rate(plan["tier"], plan.get("hostMemoryGiB")) / 3600,
         "benchCommit": plan["benchCommit"],
-        "status": "failed" if error else "complete",
+        "status": "host-oom" if oom else "failed" if error else "complete",
         "error": error,
         "rehearsal": bool(plan.get("rehearsal")),
         "timeoutSeconds": plan["timeoutSeconds"],

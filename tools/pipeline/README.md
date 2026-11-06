@@ -1355,6 +1355,34 @@ table. Missing/failed probes leave nulls and never fail training. The sampler st
 before bench evaluation. `trainSecondsPer1kSteps` uses the actual `train_metrics.json`
 `iterations`, not the requested schedule; absent/zero iterations leave it null.
 
+`bench run --host-memory-gib 16` overrides only the training container's host RAM
+request **and hard limit**, using Modal `with_options(memory=(16384, 16384))`;
+the default remains 8 GiB and 2 CPU cores. The ledger reservation, actual wall-time
+charge and live `usdPerHour` include the override. L4 + 2 CPU + 16 GiB is
+**$1.021392/hour**, versus $0.957456/hour with 8 GiB. Host RAM is separate from GPU VRAM.
+
+`host_samples.json` samples all visible processes (including trainer/DataLoader children)
+every five seconds, through setup, training and evaluation. Results expose
+`hostRssPeakMiB` (sampled RSS sum; shared pages may be counted twice),
+`hostMemoryPeakMiB` (kernel cgroup peak, including page cache; can include earlier calls
+in a warm container), `hostMemorySampledPeakMiB`, `hostMemoryLimitMiB`, and
+`hostOomKills` (counter delta). Unsupported counters remain absent. The live volume
+commit preserves samples best-effort; a killed container can lose the latest interval.
+Failed-call logs with exit 137 or host-OOM evidence produce local status `host-oom`,
+`hostOomLog` containing the original line and `hostMemoryLimitBinding: true`, even when
+the returned remote result merely refused a restart. CUDA OOM remains distinct.
+Without evidence, the existing unknown/preempted status and cost reservation remain.
+
+The pinned gsplat Dataset normally decodes images on demand with four loader workers;
+the trainer hook also disables `cache_images`. Live preview selection now streams PLY
+rows, retaining only 100,000 candidates, and trainer PLY exports encode 65,536 rows at a
+time instead of making several full-model host copies. A local CPU synthetic SH-3 PLY
+test at 7,247,091 splats measured **3,304 → 85 MiB** peak process RSS for preview packing
+(5.98 → 1.34 s). That is an isolated preview measurement, not total training RSS.
+The pinned exporter CPU check verifies unchanged payload bytes and SH ordering.
+See the [full-data host-memory footgun audit](experiments/bench/FULL_DATA.md#footgun-audit-host-memory)
+for production limits and retry sizing.
+
 Run from `tools/pipeline` (Modal credentials and `twin-object-storage` must already
 exist). Every remote operation is one command; no separate deployment is needed:
 

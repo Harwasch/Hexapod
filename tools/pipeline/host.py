@@ -154,12 +154,47 @@ def _pressure() -> float | None:
     return None
 
 
+def memory_sample(
+    *, proc: Path = Path("/proc"), cgroup: Path = Path("/sys/fs/cgroup")
+) -> dict[str, float]:
+    """Container process RSS sum (shared pages may count twice), plus cgroup usage.
+
+    cgroup usage/peak include page cache and are the OOM accounting, not GPU memory.
+    Missing counters remain absent. All visible PIDs include trainer/DataLoader children.
+    """
+    out: dict[str, float] = {}
+    rss = []
+    for path in proc.glob("[0-9]*/status"):
+        with contextlib.suppress(OSError, ValueError):
+            for line in path.read_text().splitlines():
+                if line.startswith("VmRSS:"):
+                    rss.append(float(line.split()[1]) / 1024)
+    if rss:
+        out["hostRssMiB"] = sum(rss)
+    for key, v2, v1 in (
+        ("hostMemoryMiB", "memory.current", "memory.usage_in_bytes"),
+        ("hostMemoryPeakMiB", "memory.peak", "memory.max_usage_in_bytes"),
+        ("hostMemoryLimitMiB", "memory.max", "memory.limit_in_bytes"),
+    ):
+        for path in (cgroup / v2, cgroup / "memory" / v1):
+            with contextlib.suppress(OSError, ValueError):
+                value = int(path.read_text())
+                if 0 <= value < 2**60:
+                    out[key] = value / 1024**2
+                    break
+    with contextlib.suppress(OSError, ValueError):
+        events = dict(line.split() for line in (cgroup / "memory.events").read_text().splitlines())
+        out["hostOomKills"] = float(events.get("oom_kill", 0))
+    return out
+
+
 def sample() -> dict[str, float | str]:
     """One look at the machine. Every key is optional."""
     out: dict[str, float | str] = {}
     with contextlib.suppress(OSError):
         out["load"] = os.getloadavg()[0]
     out.update(_cgroup())
+    out.update(memory_sample())
     psi = _pressure()
     if psi is not None:
         out["psiCpu"] = psi
@@ -226,7 +261,9 @@ class HostWatch:
         probe: Callable[[], Sample] = sample,
         clock: Callable[[], float] = time.monotonic,
         cpu: Callable[[], float] = cpu_seconds,
+        on_sample: Callable[[Sample], None] | None = None,
     ) -> None:
+        self._on_sample = on_sample
         self._every_s = max(0.05, every_s)
         self._probe = probe
         self._clock = clock
@@ -276,6 +313,10 @@ class HostWatch:
                 elif isinstance(value, int | float) and not isinstance(value, bool):
                     self._series.setdefault(name, _Series()).add(float(value))
 
+        if self._on_sample is not None:
+            with contextlib.suppress(Exception):
+                self._on_sample(taken)
+
     @property
     def gpu(self) -> str:
         return self._gpu
@@ -302,6 +343,10 @@ class HostWatch:
             spent = series["cgroupCpuS"].last - series["cgroupCpuS"].first
             out["cgroupCores"] = max(0.0, spent) / wall
         for name, key, how in (
+            ("hostRssPeakMiB", "hostRssMiB", "max"),
+            ("hostMemoryPeakMiB", "hostMemoryPeakMiB", "max"),
+            ("hostMemorySampledPeakMiB", "hostMemoryMiB", "max"),
+            ("hostMemoryLimitMiB", "hostMemoryLimitMiB", "min"),
             ("psiCpu", "psiCpu", "mean"),
             ("load", "load", "mean"),
             ("loadMax", "load", "max"),
@@ -316,6 +361,10 @@ class HostWatch:
             if key in series:
                 one = series[key]
                 out[name] = one.mean if how == "mean" else one.low if how == "min" else one.high
+        if "hostOomKills" in series:
+            out["hostOomKills"] = max(
+                0.0, series["hostOomKills"].last - series["hostOomKills"].first
+            )
         if self._throttle:
             out["throttle"] = float(self._throttle)
         out["samples"] = float(max((s.count for s in series.values()), default=0))

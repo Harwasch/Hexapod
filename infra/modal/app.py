@@ -557,6 +557,7 @@ def _run(request: dict[str, Any]) -> dict[str, Any]:
         **started,
         "containerBootedAt": round(BOOTED_AT, 3),
         "containerCall": _CALLS[0],
+        "hostMemoryReservedGiB": GPU_MEMORY_MIB / 1024,
         "remoteEnteredAt": round(entered, 3),
         "remoteImportS": round(imported_s, 2),
         "remoteFinishedAt": round(time.time(), 3),

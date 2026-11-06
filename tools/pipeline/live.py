@@ -60,7 +60,7 @@ import numpy as np
 import numpy.typing as npt
 
 import sfm
-from captures_bridge import SplatFormatError, pack_spz, read_ply, sigmoid
+from captures_bridge import SplatFormatError, pack_spz, sigmoid
 
 __all__ = [
     "CAMERAS_TAG",
@@ -398,44 +398,75 @@ def ply_indices(live_steps: Iterable[int], steps_scaler: float) -> set[int]:
     return {int(step * steps_scaler) - 1 for step in live_steps if int(step * steps_scaler) > 0}
 
 
+PREVIEW_CHUNK = 65536
+
+
 def snapshot_splat(
     ply: Path, target: Path, *, max_gaussians: int = MAX_GAUSSIANS
 ) -> tuple[int, int, int]:
-    """Pack the `max_gaussians` most opaque-and-largest gaussians of `ply` as SPZ.
+    """Select top opacity*volume rows with bounded scratch; never load unused SH.
 
-    Returns (kept, of, bytes). Degree-0 colour only: a preview does not need the view-
-    dependent terms, and they are most of an SPZ. Raises `SplatFormatError` on a PLY the
-    trainer has not finished writing.
+    Memory is O(chunk + preview count), independent of the full PLY's row count.
+    Equal scores prefer the earlier row. Publish the SPZ only after packing succeeds.
     """
-    data = read_ply(ply)
-    xyz = np.stack([data["x"], data["y"], data["z"]], axis=1)
-    log_scales = np.stack([data["scale_0"], data["scale_1"], data["scale_2"]], axis=1)
-    alpha = sigmoid(data["opacity"])
-    score = alpha * np.exp(np.clip(log_scales.sum(axis=1), -60.0, 60.0))
-    good = (
-        np.isfinite(xyz).all(axis=1)
-        & np.isfinite(score)
-        & np.isfinite(log_scales).all(axis=1)
-        & (np.abs(xyz) < _SPZ_LIMIT).all(axis=1)
+    import splat_io
+
+    if max_gaussians < 1:
+        raise ValueError("max_gaussians must be positive")
+    names = (
+        "x",
+        "y",
+        "z",
+        "scale_0",
+        "scale_1",
+        "scale_2",
+        "opacity",
+        "f_dc_0",
+        "f_dc_1",
+        "f_dc_2",
+        "rot_0",
+        "rot_1",
+        "rot_2",
+        "rot_3",
     )
-    candidates = np.flatnonzero(good)
-    if candidates.size > max_gaussians:
-        top = np.argpartition(-score[candidates], max_gaussians - 1)[:max_gaussians]
-        candidates = np.sort(candidates[top])
-    sh0 = np.stack([data["f_dc_0"], data["f_dc_1"], data["f_dc_2"]], axis=1)[candidates]
-    quat = np.stack([data["rot_1"], data["rot_2"], data["rot_3"], data["rot_0"]], axis=1)
+    reader = splat_io.SplatReader(ply, chunk=PREVIEW_CHUNK)
+    best = {name: np.empty(0, np.float32) for name in names}
+    scores = np.empty(0, np.float32)
+    indices = np.empty(0, np.int64)
+    for start, data in reader.chunks(names):
+        xyz = np.stack([data[k] for k in ("x", "y", "z")], axis=1)
+        scales = np.stack([data[f"scale_{i}"] for i in range(3)], axis=1)
+        score = sigmoid(data["opacity"]) * np.exp(np.clip(scales.sum(axis=1), -60.0, 60.0))
+        good = (
+            np.isfinite(xyz).all(axis=1)
+            & np.isfinite(score)
+            & np.isfinite(scales).all(axis=1)
+            & (np.abs(xyz) < _SPZ_LIMIT).all(axis=1)
+        )
+        scores = np.concatenate((scores, score[good]))
+        indices = np.concatenate((indices, start + np.flatnonzero(good)))
+        best = {name: np.concatenate((best[name], data[name][good])) for name in names}
+        if len(scores) > max_gaussians:
+            chosen = np.lexsort((indices, -scores))[:max_gaussians]
+            scores, indices = scores[chosen], indices[chosen]
+            best = {name: values[chosen] for name, values in best.items()}
+    order = np.argsort(indices)
+
+    def columns(keys: tuple[str, ...]) -> np.ndarray:
+        return np.stack([best[k][order] for k in keys], axis=1)
+
     blob = pack_spz(
-        xyz[candidates],
-        sh0,
-        data["opacity"][candidates],
-        log_scales[candidates],
-        quat[candidates],
+        columns(("x", "y", "z")),
+        columns(("f_dc_0", "f_dc_1", "f_dc_2")),
+        best["opacity"][order],
+        columns(("scale_0", "scale_1", "scale_2")),
+        columns(("rot_1", "rot_2", "rot_3", "rot_0")),
     )
     target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_name(target.name + ".part")
     partial.write_bytes(blob)
     partial.replace(target)
-    return int(candidates.size), int(xyz.shape[0]), len(blob)
+    return len(indices), reader.count, len(blob)
 
 
 _PLY_STEP = re.compile(r"point_cloud_(\d+)\.ply$")

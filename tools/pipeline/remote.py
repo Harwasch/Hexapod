@@ -245,6 +245,9 @@ def _execute(
         # The machine the stage ran on (`host.HostWatch`), and what the call left behind
         # before it was cleaned up: both counts are zero on a clean call.
         "remoteHost": flat(machine),
+        **{k: v for k, v in machine.items() if k.startswith("host")},
+        "hostMemoryLimitBinding": machine.get("hostOomKills", 0) > 0,
+        "hostMemoryLimitReason": "container cgroup limit; host RAM is independent of GPU VRAM",
         "remoteReaped": killed,
         "remoteLeftoverThreads": threads,
     }

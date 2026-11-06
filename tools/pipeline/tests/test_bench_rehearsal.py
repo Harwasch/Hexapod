@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+import host
 import sfm
 from experiments.bench import __main__ as cli
 from experiments.bench import ledger
@@ -133,6 +134,11 @@ def test_keep_splat_retains_raw_full_sh_beside_shipped(
     from holdout_error import read_ply
 
     monkeypatch.setattr(cli, "git_commit", lambda: "test")
+    monkeypatch.setattr(
+        host,
+        "memory_sample",
+        lambda: {"hostRssMiB": 1024.0, "hostMemoryPeakMiB": 2048.0, "hostOomKills": 0.0},
+    )
     # Shipping degree 0 (not the recipe's 3), so the shipped PLY lacks the bands the
     # kept full-SH export has.
     args = cli.parser().parse_args(
@@ -156,6 +162,10 @@ def test_keep_splat_retains_raw_full_sh_beside_shipped(
     assert result["status"] == "complete", result["error"]
     assert result["gpuUtilMean"] is None
     assert (run / "gpu_samples.json").is_file()
+    assert (run / "host_samples.json").is_file()
+    assert result["hostRssPeakMiB"] == 1024
+    assert result["hostMemoryPeakMiB"] == 2048
+    assert result["hostMemoryGiB"] == 8 and not result["hostMemoryLimitBinding"]
     assert (run / "trained.ply").exists() == keep
     assert (run / "full_sh.ply").exists() == keep
     if keep:

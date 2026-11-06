@@ -230,7 +230,9 @@ def _train(plan: dict[str, Any]) -> dict[str, Any]:
     # Commit latency is part of the container bill, and is returned to the local ledger.
     result["wallSeconds"] = time.time() - started
     result["billedFrom"] = billed
-    result["costUsd"] = result["wallSeconds"] * hourly_rate(plan["tier"]) / 3600
+    result["costUsd"] = (
+        result["wallSeconds"] * hourly_rate(plan["tier"], plan.get("hostMemoryGiB")) / 3600
+    )
     write_json(run / "result.json", result)
     commit()
     return result

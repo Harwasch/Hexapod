@@ -175,7 +175,9 @@ class LiveSync:
                         payload = json.loads(line[len(live.PLAN_TAG) :])
                         # Display metadata only: results.py compares the original params.
                         payload.update(
-                            usdPerHour=hourly_rate(self.plan["tier"]),
+                            usdPerHour=hourly_rate(
+                                self.plan["tier"], self.plan.get("hostMemoryGiB")
+                            ),
                             benchScene=self.plan["scene"],
                             benchVariant=self.plan["variant"]["name"],
                             startedAt=self.started_at,

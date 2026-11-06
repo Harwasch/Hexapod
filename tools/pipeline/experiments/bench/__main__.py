@@ -77,6 +77,9 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--seeds", default="42")
     run.add_argument("--schedule", choices=("screen", "full"), default="screen")
     run.add_argument("--tier", choices=("l4", "a10", "l40s", "a100"), default="l4")
+    run.add_argument(
+        "--host-memory-gib", type=int, help="train host RAM request and limit; default 8 GiB"
+    )
     run.add_argument("--keep-splat", action=argparse.BooleanOptionalAction, default=None)
     run.add_argument("--topdown", action="store_true", help="best-effort GPU overview PNG")
     run.add_argument("--live", action="store_true", help="publish live console telemetry")
@@ -202,6 +205,8 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
         ]
     if args.renders < 0:
         raise ValueError("--renders must be nonnegative")
+    if args.host_memory_gib is not None and args.host_memory_gib <= 0:
+        raise ValueError("--host-memory-gib must be a positive integer")
     common = json.loads(args.overrides)
     variants = (
         yaml.safe_load(args.variants.read_text())
@@ -258,6 +263,11 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "schedule": args.schedule,
                     "tier": args.tier,
                     "trainParams": params,
+                    **(
+                        {"hostMemoryGiB": args.host_memory_gib}
+                        if args.host_memory_gib is not None
+                        else {}
+                    ),
                     "keepSplat": args.keep_splat
                     if args.keep_splat is not None
                     else bench.get("keep_splat", False),
@@ -357,6 +367,39 @@ def lost_result(state: Path, plan: dict[str, Any], error: Exception) -> dict[str
     return result
 
 
+def train_options(plan: dict[str, Any]) -> dict[str, Any]:
+    gib = plan.get("hostMemoryGiB")
+    if gib is None:
+        return {}
+    if isinstance(gib, bool) or not isinstance(gib, int) or gib <= 0:
+        raise ValueError("--host-memory-gib must be a positive integer")
+    if plan["schedule"] not in {"screen", "full"}:
+        raise ValueError("host memory override is only supported for train")
+    return {"memory": (gib * 1024, gib * 1024)}
+
+
+def diagnose_failure(result: dict[str, Any], call: Any) -> None:
+    """A refused restart does not identify why the previous container died."""
+    from .results import host_oom_line
+
+    if result.get("status") == "complete":
+        return
+    evidence = host_oom_line(str(result.get("error", "")))
+    try:
+        for entry in call.logs.fetch():
+            evidence = host_oom_line(str(getattr(entry, "message", entry))) or evidence
+    except Exception:  # noqa: S110 - best-effort diagnostics
+        pass  # Provider logs unavailable: preserve the existing unknown outcome.
+    if evidence:
+        result.update(
+            status="host-oom",
+            hostOomLog=evidence,
+            hostMemoryLimitBinding=True,
+            hostMemoryLimitReason="Modal train host RAM request/limit; independent of GPU VRAM",
+            error=f"Host OOM: {evidence}; {result.get('error', '')}",
+        )
+
+
 def remote_batch(
     plans: list[dict[str, Any]],
     state: Path,
@@ -396,6 +439,9 @@ def remote_batch(
                     else module.FUNCTIONS[(plan["tier"], plan["schedule"])]
                 )
                 try:
+                    options = train_options(plan)
+                    if options:
+                        function = function.with_options(**options)
                     pending.append((plan, function.spawn(plan)))
                 except Exception as error:
                     result = lost_result(state, plan, error)
@@ -406,6 +452,18 @@ def remote_batch(
                     result = call.get()
                 except Exception as error:
                     result = lost_result(state, plan, error)
+                diagnose_failure(result, call)
+                result.setdefault("hostMemoryGiB", plan.get("hostMemoryGiB", 8))
+                if result.get("status") != "complete":
+                    try:
+                        memory = json.loads(
+                            b"".join(
+                                module.volume.read_file(f"runs/{plan['runId']}/host_samples.json")
+                            )
+                        )
+                        result.update(memory.get("summary", {}))
+                    except Exception:  # noqa: S110 - optional crash telemetry
+                        pass  # A dead container may not have committed its last sample.
                 save_outcome(state, book, plan, result)
                 results.append(result)
     return results

@@ -149,3 +149,65 @@ Packaging removes nonfinite positions/opacities and alpha below `opacity_min` (s
 0.02 by default). Its 1.5×p99.5 radius deletion is gone. Counts and reasons are reported,
 as are the auto budget/memory clamp, schedule ceiling, holdout and preview restriction.
 The training image also checks the real pinned Dataset's all-frame adapter on CPU.
+
+## Footgun audit: host memory
+
+The full-data run reached 1,818 native frames and 7,247,091 splats, then twice died near
+step 17,700 / 1,690 s with Modal exit 137 / out-of-memory evidence, while GPU usage was
+about 9.9 GB of 24 GB. The 24 GB auto splat clamp sizes **GPU** memory; it does not
+protect the **8 GiB host** reservation shared by production GPU functions and bench.
+Production declares a reservation (which may burst); bench declares an equal request
+and hard limit. Neither means that full-data training has been proven to fit 8 GiB.
+
+Code inspection found no default decoded-image cache: the pinned Parser holds SfM
+geometry/metadata and Dataset loads each requested image. Four persistent DataLoader
+workers retain bounded prefetched batches; forcing `cache_images: false` prevents a
+future accidental all-image preload. Native RGB for 1,818 frames alone would be about
+10.5 GiB as uint8. Dataset copies in the worker are filesystem copies, with reclaimable
+page-cache pressure. `live_sync` tails log offsets and streams files; it does not retain
+all decoded previews. Its preview packer did read the entire PLY and unused SH arrays.
+The trainer exporter also constructed several full-size host buffers (about 1.59 GiB
+per SH-3 payload at this budget). Export/preview peaks are the leading explanation;
+the old runs did not measure host RSS, so attribution is not proven.
+
+Both paths now stream bounded chunks and publish complete files atomically. Local CPU
+measurements, one process per preview and no GPU, using synthetic SH-3 files:
+
+| Splats    | Old peak RSS (MiB) | New peak RSS (MiB) |
+| --------- | -----------------: | -----------------: |
+| 500,000   |                264 |                 77 |
+| 2,000,000 |                940 |                 84 |
+| 7,247,091 |              3,304 |                 85 |
+
+Evidence and scripts: `tools/pipeline/.tmp/host-memory/`. The real pinned exporter also
+passed a CPU payload byte-identity check including SH-3 and invalid-row filtering.
+The image build repeats that check. No GPU job was launched to validate whole-run RSS.
+
+Recommend **16 GiB** for the next measured retry, keeping 2 CPU cores and the existing
+training recipe. It adds $0.063936/hour: L4 total **$1.021392/hour** at the documented
+[Modal rates](https://modal.com/pricing). A 16,200-second timeout plus startup/restart
+allowances reserves **$4.6643568** (`--cap 4.67`). This is headroom based on the 8 GiB
+failure and measured preview growth, not a claim that the full run needs exactly 16 GiB.
+Use `hostRssPeakMiB` and the cgroup peak/limit from the retry to size production captures.
+Production defaults remain unchanged; job metrics now include `hostMemoryReservedGiB`,
+available host peak/limit counters, `hostMemoryLimitBinding` when an OOM kill is observed,
+and `hostMemoryLimitReason`. A killed whole container cannot return its final job metrics;
+the bench client separately classifies provider log evidence as `host-oom` and preserves
+the line in `hostOomLog`. Unknown costs still hold their reservation.
+
+After committing and pushing, from the repository root:
+
+```bash
+export TMPDIR="$PWD/tools/pipeline/.tmp"
+mkdir -p "$TMPDIR"
+cd tools/pipeline
+HEXAPOD_BENCH_FULL_TIMEOUT=16200 uv run --with modal==1.6.2 python -m experiments.bench run \
+  --scene beach-full --variants experiments/variants/beach-full.yaml \
+  --variant full-data --schedule full --tier l4 --seeds 42 --live \
+  --host-memory-gib 16 --tag beach-full-data --total-cap 8 --cap 4.67
+```
+
+The original tag currently holds unknown-cost reservations from earlier failures, so
+this command's budget preflight will refuse the retry until actual charges are reconciled
+or the budget is explicitly revised. Do not reset the ledger or use a new tag to hide
+those charges. The command preserves the existing $8 total cap.

@@ -363,6 +363,9 @@ def test_the_machine_the_stage_ran_on_is_reported(tmp_path: Path) -> None:
             "load": 6.0,
             "throttledS": 10.0 + n,
             "throttle": 0x4 if n == 1 else 0,
+            "hostRssMiB": 1024.0 + n,
+            "hostMemoryLimitMiB": 8192.0,
+            "hostOomKills": float(n),
         }
 
     outcome = remote.execute(
@@ -382,6 +385,10 @@ def test_the_machine_the_stage_ran_on_is_reported(tmp_path: Path) -> None:
     assert machine["throttledS"] == pytest.approx(1.0)
     assert machine["throttle"] == 4.0
     assert machine["cpuS"] >= 0 and "cores" in machine
+    assert outcome.metrics["hostRssPeakMiB"] == 1025
+    assert outcome.metrics["hostMemoryLimitMiB"] == 8192
+    assert outcome.metrics["hostMemoryLimitBinding"] is True
+    assert "cgroup limit" in outcome.metrics["hostMemoryLimitReason"]
 
 
 def test_a_probe_that_throws_is_not_a_stage_that_fails(tmp_path: Path) -> None:

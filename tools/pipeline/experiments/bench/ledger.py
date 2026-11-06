@@ -17,8 +17,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, TextIO
 
-from modal_adapter import GPU_NAMES, reservation_rate
-from providers import provider
+from modal_adapter import GPU_NAMES, GPU_RESERVATION, reservation_rate
+from providers import MODAL_GIB_HOUR_USD, provider
 
 # Full: Spool's production train stage took 2,197 s on an L4 (job ec644db5); 55 min leaves
 # room for evaluation while two full seeds still reserve under the default $2 cap.
@@ -42,13 +42,18 @@ OVERHEAD_SECONDS = STARTUP_SECONDS + 60
 RESTART_SECONDS = STARTUP_SECONDS + 60
 
 
-def hourly_rate(tier: str) -> float:
+def hourly_rate(tier: str, host_memory_gib: float | None = None) -> float:
     modal = provider("modal")
     rate = None if modal is None else modal.rate(tier)
     if rate is None or tier not in {*GPU_NAMES, "cpu4"}:
         raise ValueError(f"unpriced/unsupported Modal tier: {tier}")
+    extra = 0.0
+    if host_memory_gib is not None:
+        if tier not in GPU_NAMES or money(host_memory_gib) <= 0:
+            raise ValueError("host memory must be positive and is only supported for GPU train")
+        extra = (host_memory_gib - GPU_RESERVATION[1] / 1024) * MODAL_GIB_HOUR_USD
     reservation = reservation_rate(tier)
-    return rate.usd_per_hour + (0 if reservation is None else reservation.usd_per_hour)
+    return rate.usd_per_hour + (0 if reservation is None else reservation.usd_per_hour) + extra
 
 
 def money(value: Any) -> float:
@@ -126,10 +131,13 @@ def estimate(
     tier: str,
     *,
     variant: str | None = None,
+    host_memory_gib: float | None = None,
 ) -> float:
     plans = {e["runId"]: e for e in entries if e["event"] == "planned"}
     actuals = [
         money(e["costUsd"])
+        * hourly_rate(tier, host_memory_gib)
+        / hourly_rate(tier, plans[e["runId"]].get("hostMemoryGiB"))
         for e in entries
         if e["event"] != "planned"
         and e.get("costUsd") is not None
@@ -146,7 +154,7 @@ def estimate(
         return 0.05 if schedule == "freeze" else 0.5
     return (
         {"screen": 0.20, "full": 0.90, "matched": 0.05, "rescore": 1.50}[schedule]
-        * hourly_rate(tier)
+        * hourly_rate(tier, host_memory_gib)
         / hourly_rate("l4")
     )
 
@@ -181,10 +189,12 @@ def price_plan(
             plan["schedule"],
             plan["tier"],
             variant=plan.get("variant", {}).get("name"),
+            host_memory_gib=plan.get("hostMemoryGiB"),
         )
+        chosen_rate = hourly_rate(plan["tier"], plan.get("hostMemoryGiB"))
         timeout = TIMEOUTS[plan["schedule"]]
         seconds = timeout + OVERHEAD_SECONDS + RESTART_SECONDS
-        maximum = hourly_rate(plan["tier"]) * seconds / 3600
+        maximum = chosen_rate * seconds / 3600
         plan.update(
             estimateUsd=forecast,
             timeoutSeconds=timeout,

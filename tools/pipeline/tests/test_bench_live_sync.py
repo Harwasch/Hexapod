@@ -230,7 +230,7 @@ def test_modal_boundary_commits_marker_first_and_keeps_default_commit_count(
         "volume": Volume(),
         "_billed_since": lambda: (0, "test"),
         "time": __import__("time"),
-        "hourly_rate": lambda _: 1,
+        "hourly_rate": lambda _, memory=None: 1,
         "write_json": lambda *_: None,
     }
     monkeypatch.setattr(worker, "run_training", train)
