@@ -14503,6 +14503,17 @@
               }
             ]
           },
+          "replacedBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replacedby"
+          },
           "run": {
             "anyOf": [
               {

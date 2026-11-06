@@ -249,6 +249,7 @@ class LiveTrain(TrainModel):
     snapshots: list[LiveTrainSnapshot] = Field(default_factory=list, max_length=64)
     stop: LiveTrainStop | None = None
     ended: LiveTrainEnded | None = None
+    replaced_by: str | None = None
     block: str | None = None
     run: str | None = None
     plan_id: str | None = None

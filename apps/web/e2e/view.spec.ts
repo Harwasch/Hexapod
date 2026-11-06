@@ -912,6 +912,7 @@ test("preempted training freezes the bench console and stops polling", async ({ 
   const spz = Buffer.from(spzFromGlb(toArrayBuffer(readFileSync(resolve(TILES, "splat.glb")))));
   const train = benchTrain(BUCKET);
   train.ended = { reason: "preempted", step: 15600 };
+  train.replacedBy = "fa4f62cf183e45e89358cae2b4627e41";
   const snapshot = train.snapshots?.at(-1);
   if (!snapshot) throw new Error("Bench fixture needs a snapshot");
   let polls = 0;
@@ -942,6 +943,11 @@ test("preempted training freezes the bench console and stops polling", async ({ 
   );
   await page.goto("/view.html#live/c1");
   await expect(page.locator("#lc-pill")).toHaveText("Pre-empted · step 15,600");
+  await expect(page.locator("#lc-replacement")).toHaveText("→ fa4f62cf");
+  await expect(page.locator("#lc-replacement")).toHaveAttribute(
+    "href",
+    "view.html#live/fa4f62cf183e45e89358cae2b4627e41",
+  );
   await expect(page.locator("#lc-error")).toHaveText("GPU reclaimed");
   await expect(page.locator("#lc-kpi-0")).toHaveText("15,600");
   await expect(page.locator("#lc-kpi-3")).toHaveText("Pre-empted");

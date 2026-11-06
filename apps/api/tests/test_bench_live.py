@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from app.schemas.live import LiveState
-from app.scripts.bench_live import Handler, Watch, snapshot_name, state_from_log
+from app.scripts.bench_live import Handler, Watch, Watches, snapshot_name, state_from_log
 
 RUN = "0123456789abcdef0123456789abcdef"
 NAME = "splat_000010.spz"
@@ -99,7 +99,7 @@ def test_state_validates_and_keeps_events_snapshots_and_no_georef(
     assert state.stage.started_at == STARTED and state.stage.stage_id == "train"
     assert state.train.plan.metres_per_unit is None
     assert state.cameras.camera_count == 1
-    assert state.splat.url == f"/snapshots/{NAME}"
+    assert state.splat.url == f"/snapshots/{RUN}/{NAME}"
     assert state.train.snapshots[0].url == state.splat.url
     assert {event.kind for event in state.train.events} >= {"setup", "sh", "eval", "densify"}
     assert state.steps_done == int(status == "complete")
@@ -178,7 +178,7 @@ def test_fake_volume_polls_downloads_once_and_finishes(tmp_path: Path) -> None:
     assert watch.state.status == "in-progress"
     assert (tmp_path / NAME).read_bytes() == b"preview"
     assert watch.state.train is not None
-    assert watch.state.train.snapshots[0].url == f"/snapshots/{NAME}"
+    assert watch.state.train.snapshots[0].url == f"/snapshots/{RUN}/{NAME}"
     assert not list(tmp_path.glob("*.part"))
     volume.files[f"runs/{RUN}/result.json"] = b'{"status":"complete"}'
     watch.poll(volume)
@@ -186,10 +186,10 @@ def test_fake_volume_polls_downloads_once_and_finishes(tmp_path: Path) -> None:
     assert volume.reads.count(f"runs/{RUN}/live/{NAME}") == 1
 
 
-def request(watch: Watch, path: str, web_dist: Path | None = None) -> tuple[bytes, bytes]:
+def request(watch: Watch | Watches, path: str, web_dist: Path | None = None) -> tuple[bytes, bytes]:
     # Exercise real header/body output without opening a listening socket.
     handler = object.__new__(Handler)
-    handler.watch = watch
+    handler.watches = watch if isinstance(watch, Watches) else Watches(watch)
     handler.web_dist = web_dist
     handler.path = path
     handler.request_version = "HTTP/1.1"
@@ -211,11 +211,11 @@ def test_handler_routes_cors_and_traversal_without_sockets(tmp_path: Path) -> No
     state = LiveState.model_validate_json(body)
     assert state.status == watch.state.status
     assert state.splat is not None and state.train is not None
-    assert state.splat.url == f"http://bench.tail:8791/snapshots/{NAME}"
+    assert state.splat.url == f"http://bench.tail:8791/snapshots/{RUN}/{NAME}"
     assert state.train.snapshots[0].url == state.splat.url
     assert watch.state.splat is not None
-    assert watch.state.splat.url == f"/snapshots/{NAME}"
-    assert request(watch, f"/snapshots/{NAME}")[1] == b"preview"
+    assert watch.state.splat.url == f"/snapshots/{RUN}/{NAME}"
+    assert request(watch, f"/snapshots/{RUN}/{NAME}")[1] == b"preview"
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "view.html").write_text("console")
@@ -248,7 +248,9 @@ def test_http_server_on_loopback(tmp_path: Path) -> None:
 
     watch = Watch(RUN, tmp_path)
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", 0), partial(Handler, watch=watch, web_dist=None))
+        server = ThreadingHTTPServer(
+            ("127.0.0.1", 0), partial(Handler, watches=Watches(watch), web_dist=None)
+        )
     except PermissionError:
         pytest.skip("sandbox refuses localhost sockets")
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -348,7 +350,7 @@ def test_seeds_cached_served_and_signed_for_the_watcher_origin(tmp_path: Path) -
     watch.poll(volume)
     watch.poll(volume)
     assert watch.state.train is not None and watch.state.train.seeds is not None
-    assert watch.state.train.seeds.url == "/snapshots/seeds.bin"
+    assert watch.state.train.seeds.url == f"/snapshots/{RUN}/seeds.bin"
     assert volume.reads.count(f"runs/{RUN}/live/seeds.bin") == 1
     headers, body = request(watch, "/snapshots/seeds.bin")
     assert (
@@ -356,7 +358,7 @@ def test_seeds_cached_served_and_signed_for_the_watcher_origin(tmp_path: Path) -
     )
     served = LiveState.model_validate_json(request(watch, f"/api/v1/captures/{RUN}/live")[1])
     assert served.train is not None and served.train.seeds is not None
-    assert served.train.seeds.url == "http://bench.tail:8791/snapshots/seeds.bin"
+    assert served.train.seeds.url == f"http://bench.tail:8791/snapshots/{RUN}/seeds.bin"
     assert not (tmp_path / "other.bin").exists() and not list(tmp_path.glob("*.part"))
     pending = state_from_log(RUN, log_text() + "\n" + seeds_line(), None)
     assert (
@@ -545,3 +547,264 @@ def test_missing_or_nonfinite_final_scores_stay_unknown() -> None:
     partial = state_from_log(RUN, "", {"status": "complete", "test": {"psnr": 25}})
     assert partial.train is not None and partial.train.final is not None
     assert partial.train.final.psnr == 25 and partial.train.final.cc_psnr is None
+
+
+@pytest.mark.parametrize(
+    "error,reason",
+    [
+        ("Preempted; restart refused, no second attempt: run already started", "preempted"),
+        ("Remote outcome unknown: FunctionTimeoutError: timed out", "stopped"),
+        ("trainer stopped", "stopped"),
+    ],
+)
+@pytest.mark.parametrize("source", ["volume", "ledger"])
+def test_failed_bench_freezes_at_last_telemetry(error: str, reason: str, source: str) -> None:
+    failure = {"event": "failed", "runId": RUN, "error": error}
+    result = {"status": "failed", "error": error} if source == "volume" else None
+    text = log_text() + '\nlive-train: {"v":1,"k":"e","step":12,"psnr":21}'
+    state = state_from_log(RUN, text, result, failure=failure if source == "ledger" else None)
+    assert state.status == "error" and state.error == error
+    assert state.train is not None and state.train.ended is not None
+    assert state.train.ended.model_dump() == {"reason": reason, "step": 12}
+
+
+def test_failure_without_telemetry_ends_at_zero_and_complete_result_wins() -> None:
+    failure = {"event": "failed", "runId": RUN, "error": "Preempted; restart refused"}
+    state = state_from_log(RUN, "", None, failure=failure)
+    assert state.train is not None and state.train.ended is not None
+    assert state.train.ended.step == 0
+    complete = state_from_log(RUN, log_text(), {"status": "complete"}, failure=failure)
+    assert complete.status == "complete"
+    assert complete.train is not None and complete.train.ended is None
+
+
+def replacement_rows() -> list[dict[str, Any]]:
+    fixture = Path(__file__).parent / "fixtures/bench-replacement.jsonl"
+    return [json.loads(line) for line in fixture.read_text().splitlines()]
+
+
+def test_real_ledger_failure_replacement_and_reread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.scripts import bench_live
+
+    monkeypatch.setattr(bench_live, "STATE", tmp_path)
+    old, failure, new = replacement_rows()
+    book = tmp_path / "custom.jsonl"
+    book.write_text(json.dumps(old) + "\n")
+    volume = Volume()
+    watch = Watch(old["runId"], tmp_path / "cache")
+    watch.poll(volume)
+    assert watch.state.status == "in-progress"
+    with book.open("a") as output:
+        output.write(json.dumps(failure) + "\n" + json.dumps(new) + "\n")
+    watch.poll(volume)
+    assert watch.state.error == failure["error"]
+    assert watch.state.train is not None and watch.state.train.ended is not None
+    assert watch.state.train.ended.reason == "preempted"
+    assert watch.state.train.replaced_by == new["runId"]
+    assert watch.state.capture_name == "beach-full · full-data"
+
+
+def test_finished_volume_still_rereads_ledgers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.scripts import bench_live
+
+    monkeypatch.setattr(bench_live, "STATE", tmp_path)
+    old, _, new = replacement_rows()
+    book = tmp_path / "custom.jsonl"
+    book.write_text(json.dumps(old) + "\n")
+    watch = Watch(old["runId"], tmp_path / "cache")
+    volume = Volume()
+    volume.files[f"runs/{old['runId']}/result.json"] = b'{"status":"complete"}'
+    watch.poll(volume)
+    watch.poll(volume)
+    with book.open("a") as output:
+        output.write(json.dumps(new) + "\n")
+    watch.poll(volume)
+    assert watch.state.train is not None and watch.state.train.replaced_by == new["runId"]
+    assert watch.state.train.ended is None
+
+
+def test_replacement_across_files_ignores_tags_and_respects_variant_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.scripts import bench_live
+
+    monkeypatch.setattr(bench_live, "STATE", tmp_path)
+    old, _, new = replacement_rows()
+    first = tmp_path / "z-first.jsonl"
+    first.write_text(json.dumps(old) + "\n")
+    second = tmp_path / "a-second.jsonl"
+    others = [
+        {**new, "runId": f"{i:032x}", key: value}
+        for i, (key, value) in enumerate(
+            [
+                ("scene", "other"),
+                ("variant", {"name": "other"}),
+                ("seed", 43),
+                ("schedule", "screen"),
+            ]
+        )
+    ]
+    second.write_text("\n".join(json.dumps(row) for row in [*others, new]) + "\n")
+    os.utime(first, ns=(1, 1))
+    os.utime(second, ns=(2, 2))
+    ledger = bench_live.LocalLedger.read()
+    assert ledger.replacement(old["runId"]) == new["runId"]
+    assert ledger.replacement(new["runId"]) is None
+    # A timestamp overrides cross-file mtime; line order within one file remains authoritative.
+    first.write_text(json.dumps({**old, "timestamp": "2026-11-06T02:00:00Z"}) + "\n")
+    second.write_text(json.dumps({**new, "timestamp": "2026-11-06T01:00:00Z"}) + "\n")
+    assert bench_live.LocalLedger.read().replacement(old["runId"]) is None
+
+
+def test_multi_run_routes_cap_and_idle_eviction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.scripts import bench_live
+
+    monkeypatch.setattr(bench_live, "STATE", tmp_path)
+    started: list[Watch] = []
+    monkeypatch.setattr(Watches, "start", lambda self, watch: started.append(watch))
+    old, _, new = replacement_rows()
+    extras = [{**new, "runId": f"{i:032x}"} for i in range(10)]
+    rows = [old, new, *extras]
+    (tmp_path / "custom.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    primary = Watch(old["runId"], tmp_path / "primary")
+    watches = Watches(primary)
+    with watches.acquire(old["runId"]) as pinned:
+        assert pinned is primary
+        for row in rows[1:]:
+            headers, body = request(watches, f"/api/v1/captures/{row['runId']}/live")
+            assert b"200 OK" in headers
+            assert LiveState.model_validate_json(body).capture_id.hex == row["runId"]
+            assert len(watches.watches) <= 8
+        assert not primary.stop.is_set()
+        assert started[0].stop.is_set()  # oldest idle watch, not the pinned primary
+    assert len(watches.watches) == 8
+    assert b"404" in request(watches, f"/api/v1/captures/{RUN}/live")[0]
+    assert b"404" in request(watches, "/api/v1/captures/../live")[0]
+    # Requesting a recently added ledger id works without restarting the server.
+    replacement = new["runId"]
+    assert b"200 OK" in request(watches, f"/api/v1/captures/{replacement}/live")[0]
+    current = watches.watches[replacement]
+    current.cache.mkdir(parents=True)
+    (current.cache / NAME).write_bytes(b"replacement")
+    current.cached = frozenset({NAME})
+    assert request(watches, f"/snapshots/{replacement}/{NAME}")[1] == b"replacement"
+    primary.cache.mkdir(parents=True)
+    (primary.cache / NAME).write_bytes(b"primary")
+    primary.cached = frozenset({NAME})
+    assert request(watches, f"/snapshots/{NAME}")[1] == b"primary"
+    for path in (
+        f"/snapshots/{replacement}/../{NAME}",
+        f"/snapshots/{replacement}/%2e%2e/{NAME}",
+        f"/snapshots/%2e%2e/{NAME}",
+        f"/snapshots/{RUN}/{NAME}",
+        f"/snapshots/{replacement}/seeds.bin.part",
+    ):
+        assert b"404" in request(watches, path)[0]
+    watches.close()
+    assert all(watch.stop.is_set() for watch in started)
+
+
+def test_all_busy_watches_are_kept_and_new_known_run_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from contextlib import ExitStack
+
+    from app.scripts import bench_live
+
+    monkeypatch.setattr(bench_live, "STATE", tmp_path)
+    monkeypatch.setattr(Watches, "start", lambda self, watch: None)
+    old, _, new = replacement_rows()
+    rows = [old, *[{**new, "runId": f"{i:032x}"} for i in range(8)]]
+    (tmp_path / "custom.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    watches = Watches(Watch(old["runId"], tmp_path / "primary"))
+    with ExitStack() as stack:
+        for row in rows[:-1]:
+            assert stack.enter_context(watches.acquire(row["runId"])) is not None
+        assert b"503" in request(watches, f"/api/v1/captures/{rows[-1]['runId']}/live")[0]
+        assert len(watches.watches) == 8
+    assert b"200 OK" in request(watches, f"/api/v1/captures/{rows[-1]['runId']}/live")[0]
+    watches.close()
+
+
+def test_ledger_failure_waits_for_first_volume_poll(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.scripts import bench_live
+
+    monkeypatch.setattr(bench_live, "STATE", tmp_path)
+    old, failure, _ = replacement_rows()
+    (tmp_path / "custom.jsonl").write_text(json.dumps(old) + "\n" + json.dumps(failure) + "\n")
+    watch = Watch(old["runId"], tmp_path / "cache")
+    assert watch.state.train is None and watch.state.status == "in-progress"
+    volume = Volume()
+    volume.files[f"runs/{old['runId']}/live/train.log"] = log_text().encode()
+    watch.poll(volume)
+    assert watch.state.train is not None and watch.state.train.ended is not None
+    assert watch.state.train.ended.step == 10
+
+
+@pytest.mark.parametrize("saved", ["stop", "final"])
+def test_saved_training_has_no_ended_if_result_reports_failure(saved: str) -> None:
+    text = log_text()
+    result: dict[str, Any] = {"status": "failed", "error": "later report failed"}
+    if saved == "stop":
+        text += '\nlive-train: {"v":1,"k":"x","step":10}'
+    else:
+        result["test"] = {"psnr": 25}
+    state = state_from_log(RUN, text, result)
+    assert state.train is not None and state.train.ended is None
+
+
+def test_partial_or_invalid_ledger_row_does_not_hide_other_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.scripts import bench_live
+
+    monkeypatch.setattr(bench_live, "STATE", tmp_path)
+    old, failure, new = replacement_rows()
+    (tmp_path / "custom.jsonl").write_text(
+        json.dumps(old) + "\n" + json.dumps(failure) + '\n{"runId":'
+    )
+    (tmp_path / "second.jsonl").write_text(
+        "\n".join(
+            [
+                "null",
+                "[]",
+                json.dumps({"runId": "../bad", "event": "planned"}),
+                json.dumps(new),
+            ]
+        )
+        + "\n"
+    )
+    ledger = bench_live.LocalLedger.read()
+    assert ledger.failures[old["runId"]] == failure
+    assert ledger.replacement(old["runId"]) == new["runId"]
+    assert "../bad" not in ledger.ids
+
+
+def test_polling_watch_is_not_evicted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.scripts import bench_live
+
+    monkeypatch.setattr(bench_live, "STATE", tmp_path)
+    monkeypatch.setattr(Watches, "start", lambda self, watch: None)
+    old, _, new = replacement_rows()
+    rows = [old, *[{**new, "runId": f"{i:032x}"} for i in range(8)]]
+    (tmp_path / "custom.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    primary = Watch(old["runId"], tmp_path / "primary")
+    watches = Watches(primary)
+    for row in rows[1:-1]:
+        with watches.acquire(row["runId"]):
+            pass
+    with primary.poll_lock:
+        with watches.acquire(rows[-1]["runId"]) as watch:
+            assert watch is not None
+        assert not primary.stop.is_set()
+        assert old["runId"] in watches.watches
+        assert rows[1]["runId"] not in watches.watches
+    watches.close()

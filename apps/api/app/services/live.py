@@ -234,7 +234,7 @@ def _train(
         return None
     try:
         parsed = LiveTrain.model_validate(
-            {**value, "ended": None, "snapshots": live.get("snapshots", [])}
+            {**value, "ended": None, "replacedBy": None, "snapshots": live.get("snapshots", [])}
         )
         if final is not None:
             parsed = LiveTrain.model_validate({**parsed.model_dump(by_alias=True), "final": final})

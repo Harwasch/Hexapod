@@ -16,18 +16,20 @@ import shutil
 import sys
 import threading
 import uuid
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterator, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from time import monotonic
 from typing import Any, cast
 from urllib.parse import unquote, urlsplit
 
 from pydantic import ValidationError
 
 from app.models.enums import RunStatus
-from app.schemas.live import LiveCameras, LiveSplat, LiveStage, LiveState, LiveTrain
+from app.schemas.live import LiveCameras, LiveSplat, LiveStage, LiveState, LiveTrain, LiveTrainEnded
 from app.services.live_train import derive_events, final_metrics, merge_live
 
 # Deliberately avoid pipeline_bridge: it imports app.config and the worker's settings.
@@ -113,6 +115,8 @@ def state_from_log(
     cached: Collection[str] = (),
     started_at: datetime | None = None,
     plan: dict[str, Any] | None = None,
+    failure: dict[str, Any] | None = None,
+    replaced_by: str | None = None,
 ) -> LiveState:
     """Pure log-to-console projection, using exactly the worker's record/merge semantics."""
     parsed = bench_records(text)
@@ -131,11 +135,13 @@ def state_from_log(
     name = f"{scene} · {variant}" if scene and variant else run_id
     if metadata.get("rehearsal", metadata.get("benchRehearsal")):
         name += " (Simulated rehearsal)"
+    outcome = result if result is not None else failure
+    error = (outcome or {}).get("error") or "Bench run failed"
     status = (
         RunStatus.IN_PROGRESS
-        if result is None
+        if outcome is None
         else RunStatus.COMPLETE
-        if result.get("status") == "complete"
+        if (outcome or {}).get("status") == "complete"
         else RunStatus.ERROR
     )
     started = started_at or datetime.now(UTC)
@@ -145,7 +151,7 @@ def state_from_log(
     final = bench_final(result)
     train = None
     value = merged.get("train")
-    if value or final:
+    if value or final or status == RunStatus.ERROR or replaced_by:
         value = value or {}
         try:
             train = LiveTrain.model_validate({**value, "snapshots": merged.get("snapshots", [])})
@@ -154,14 +160,20 @@ def state_from_log(
             document["relocations"] = value.get("relocations", [])
             document["events"] = derive_events(document)
             train = LiveTrain.model_validate(document)
+            train.replaced_by = replaced_by
+            if status == RunStatus.ERROR and train.stop is None and train.final is None:
+                train.ended = LiveTrainEnded(
+                    reason="preempted" if error.startswith("Preempted") else "stopped",
+                    step=max([0, *train.series.step, *[e.step for e in train.evals]]),
+                )
             for snapshot in train.snapshots:
                 name_part = snapshot.key.rsplit("/", 1)[-1]
                 snapshot.url = (
-                    f"/snapshots/{name_part}" if snapshot_name(name_part, cached) else None
+                    f"/snapshots/{run_id}/{name_part}" if snapshot_name(name_part, cached) else None
                 )
             if train.seeds is not None:
                 train.seeds.url = (
-                    "/snapshots/seeds.bin" if snapshot_name("seeds.bin", cached) else None
+                    f"/snapshots/{run_id}/seeds.bin" if snapshot_name("seeds.bin", cached) else None
                 )
         except (ValidationError, ValueError, TypeError, KeyError, IndexError):
             train = None
@@ -191,7 +203,9 @@ def state_from_log(
                     },
                     "stageId": "train",
                     "name": name_part,
-                    "url": f"/snapshots/{name_part}" if snapshot_name(name_part, cached) else None,
+                    "url": f"/snapshots/{run_id}/{name_part}"
+                    if snapshot_name(name_part, cached)
+                    else None,
                 }
             )
     return LiveState(
@@ -200,9 +214,7 @@ def state_from_log(
         capture_name=name,
         recipe="frozen-bench",
         status=status,
-        error=(result or {}).get("error") or "Bench run failed"
-        if status == RunStatus.ERROR
-        else None,
+        error=error if status == RunStatus.ERROR else None,
         site_id=None,
         stage=LiveStage(
             stage_id="train",
@@ -232,7 +244,11 @@ class Watch:
         self.result: dict[str, Any] | None = None
         self.finished = False
         self.cached: frozenset[str] = frozenset()
-        self.state = state_from_log(run_id, "", None, started_at=self.started_at, plan=plan)
+        # Do not expose a ledger failure before the first volume read: an ended
+        # console stops polling, so that would strand it at step zero without its log.
+        self.plan = plan or local_plan(run_id)
+        self.state = state_from_log(run_id, "", None, started_at=self.started_at, plan=self.plan)
+        self.poll_lock = threading.Lock()
         self.stop = threading.Event()
         self.errors: set[str] = set()
 
@@ -243,6 +259,7 @@ class Watch:
         prefix = f"runs/{self.run_id}"
         # `result.json` is the run's last write, so nothing changes after the pass that saw it.
         if self.finished:
+            self.refresh()
             return
         self.finished = self.result is not None
         for filename in ("live/train.log", "result.json"):
@@ -281,6 +298,11 @@ class Watch:
             # Modal's `listdir` on a missing folder: expected until the first sync lands.
             if type(error).__name__ != "NotFoundError":
                 self._warn("snapshots", error)
+        self.refresh()
+
+    def refresh(self) -> None:
+        ledger = LocalLedger.read()
+        self.plan = ledger.plans.get(self.run_id, self.plan)
         self.state = state_from_log(
             self.run_id,
             self.text,
@@ -288,6 +310,8 @@ class Watch:
             cached=self.cached,
             started_at=self.started_at,
             plan=self.plan,
+            failure=ledger.failures.get(self.run_id),
+            replaced_by=ledger.replacement(self.run_id),
         )
 
     def _warn(self, kind: str, error: Exception) -> None:
@@ -301,7 +325,10 @@ class Watch:
             volume = importlib.import_module("modal").Volume.from_name("hexapod-bench")
             while not self.stop.is_set():
                 try:
-                    self.poll(volume)
+                    with self.poll_lock:
+                        if self.stop.is_set():
+                            break
+                        self.poll(volume)
                 except Exception as error:
                     self._warn("poll", error)
                 self.stop.wait(15)
@@ -309,38 +336,102 @@ class Watch:
             self._warn("Modal", error)
 
 
+class Watches:
+    """At most eight retained pollers. Active HTTP readers pin their watch; idle
+    entries are evicted in least-recently-used order, including the primary run.
+    """
+
+    def __init__(self, primary: Watch) -> None:
+        self.primary = primary.run_id
+        self.watches = {primary.run_id: primary}
+        self.users = {primary.run_id: 0}
+        self.used = {primary.run_id: monotonic()}
+        self.threads: dict[str, threading.Thread] = {}
+        self.lock = threading.Lock()
+
+    def start(self, watch: Watch) -> None:
+        thread = threading.Thread(target=watch.run, daemon=True, name=f"bench-watch-{watch.run_id}")
+        self.threads[watch.run_id] = thread
+        thread.start()
+
+    @contextlib.contextmanager
+    def acquire(self, run_id: str) -> Iterator[Watch | None]:
+        with self.lock:
+            watch = self.watches.get(run_id)
+            if watch is None:
+                ledger = LocalLedger.read()
+                if run_id == self.primary or run_id in ledger.ids:
+                    if len(self.watches) >= 8:
+                        for oldest in sorted(self.watches, key=self.used.__getitem__):
+                            idle = self.watches[oldest]
+                            if self.users[oldest] or not idle.poll_lock.acquire(blocking=False):
+                                continue
+                            try:
+                                idle.stop.set()
+                                self.watches.pop(oldest)
+                                self.users.pop(oldest)
+                                self.used.pop(oldest)
+                                self.threads.pop(oldest, None)
+                            finally:
+                                idle.poll_lock.release()
+                            break
+                    if len(self.watches) < 8:
+                        watch = Watch(run_id, STATE / "live" / run_id, ledger.plans.get(run_id))
+                        self.watches[run_id] = watch
+                        self.users[run_id] = 0
+                        self.start(watch)
+            if watch is not None:
+                self.users[run_id] += 1
+                self.used[run_id] = monotonic()
+        try:
+            yield watch
+        finally:
+            if watch is not None:
+                with self.lock:
+                    self.users[run_id] -= 1
+                    self.used[run_id] = monotonic()
+
+    def close(self) -> None:
+        for watch in self.watches.values():
+            watch.stop.set()
+        for thread in self.threads.values():
+            thread.join(timeout=2)
+
+
 class Handler(BaseHTTPRequestHandler):
-    def __init__(self, *args: Any, watch: Watch, web_dist: Path | None, **kwargs: Any) -> None:
-        self.watch = watch
+    def __init__(self, *args: Any, watches: Watches, web_dist: Path | None, **kwargs: Any) -> None:
+        self.watches = watches
         self.web_dist = web_dist.resolve() if web_dist else None
         super().__init__(*args, **kwargs)
 
     def do_GET(self) -> None:
         path = unquote(urlsplit(self.path).path)
-        if path == f"/api/v1/captures/{self.watch.run_id}/live":
-            state = self.watch.state.model_copy(deep=True)
-            # Host is the address the browser used for this API, including over Tailscale.
-            # Absolute URLs also work when a separately hosted bundle polls this origin.
-            host = self.headers.get("Host")
-            if not host:
-                server = cast(ThreadingHTTPServer, self.server)
-                host = f"{server.server_name}:{server.server_port}"
-            origin = "http://" + host
-            if state.splat and state.splat.url:
-                state.splat.url = origin + state.splat.url
-            if state.train:
-                if state.train.seeds and state.train.seeds.url:
-                    state.train.seeds.url = origin + state.train.seeds.url
-                for snapshot in state.train.snapshots:
-                    if snapshot.url:
-                        snapshot.url = origin + snapshot.url
-            self._reply(200, state.model_dump_json(by_alias=True).encode(), "application/json")
+        if match := re.fullmatch(r"/api/v1/captures/([^/]+)/live", path):
+            run_id = match[1]
+            with self.watches.acquire(run_id) as watch:
+                if watch is not None:
+                    self._state(watch)
+                else:
+                    status = (
+                        503
+                        if run_id in LocalLedger.read().ids or run_id == self.watches.primary
+                        else 404
+                    )
+                    self._reply(status, b"Watch unavailable", "text/plain")
             return
         if path.startswith("/snapshots/"):
-            name = path.removeprefix("/snapshots/")
-            if snapshot_name(name, self.watch.cached):
-                self._file(self.watch.cache / name, "application/octet-stream")
-                return
+            parts = path.removeprefix("/snapshots/").split("/")
+            run_id, name = (
+                (self.watches.primary, parts[0])
+                if len(parts) == 1
+                else (parts if len(parts) == 2 else ("", ""))
+            )
+            # Reject malformed names before looking up or starting any poller.
+            if snapshot_name(name, {name}):
+                with self.watches.acquire(run_id) as watch:
+                    if watch is not None and snapshot_name(name, watch.cached):
+                        self._file(watch.cache / name, "application/octet-stream")
+                        return
         elif self.web_dist and not path.startswith("/api/"):
             candidate = (
                 self.web_dist / ("view.html" if path == "/" else path.lstrip("/"))
@@ -351,6 +442,24 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
         self._reply(404, b"Not found", "text/plain")
+
+    def _state(self, watch: Watch) -> None:
+        state = watch.state.model_copy(deep=True)
+        # Absolute URLs also work when a separately hosted bundle polls this origin.
+        host = self.headers.get("Host")
+        if not host:
+            server = cast(ThreadingHTTPServer, self.server)
+            host = f"{server.server_name}:{server.server_port}"
+        origin = "http://" + host
+        if state.splat and state.splat.url:
+            state.splat.url = origin + state.splat.url
+        if state.train:
+            if state.train.seeds and state.train.seeds.url:
+                state.train.seeds.url = origin + state.train.seeds.url
+            for snapshot in state.train.snapshots:
+                if snapshot.url:
+                    snapshot.url = origin + snapshot.url
+        self._reply(200, state.model_dump_json(by_alias=True).encode(), "application/json")
 
     def _file(self, path: Path, content_type: str) -> None:
         try:
@@ -378,16 +487,94 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+@dataclass(frozen=True)
+class LedgerRow:
+    value: dict[str, Any]
+    file: Path
+    line: int
+
+    @property
+    def timestamp(self) -> datetime | None:
+        for key in ("timestamp", "createdAt"):
+            value = self.value.get(key)
+            if isinstance(value, str):
+                with contextlib.suppress(ValueError):
+                    stamp = datetime.fromisoformat(value)
+                    return stamp.replace(tzinfo=UTC) if stamp.tzinfo is None else stamp
+        return None
+
+
+class LocalLedger:
+    """Read-only ledger view. Existing writers have no timestamps: across files use
+    mtime/name order, within each file always use line order. Never infer from tags.
+    A partial append is ignored until the next poll, without hiding other files/rows.
+    """
+
+    def __init__(self, rows: list[LedgerRow]) -> None:
+        self.rows = rows
+        self.ids = {r.value["runId"] for r in rows}
+        self.plans = {r.value["runId"]: r.value for r in rows if r.value.get("event") == "planned"}
+        self.failures = {
+            r.value["runId"]: r.value for r in rows if r.value.get("event") == "failed"
+        }
+
+    @classmethod
+    def read(cls) -> LocalLedger:
+        files = []
+        for path in STATE.glob("*.jsonl"):
+            with contextlib.suppress(OSError):
+                files.append((path.stat().st_mtime_ns, path.name, path))
+        rows = []
+        for _, _, path in sorted(files):
+            try:
+                lines = path.read_text().splitlines()
+            except OSError:
+                continue
+            for index, line in enumerate(lines):
+                try:
+                    row = json.loads(line)
+                    if not isinstance(row, dict) or not isinstance(row.get("runId"), str):
+                        continue
+                    # Ledger ids become cache directories and URL path components.
+                    run_id = row["runId"]
+                    if not re.fullmatch(r"[a-fA-F0-9-]{32,36}", run_id):
+                        continue
+                    uuid.UUID(run_id)
+                    rows.append(LedgerRow(row, path, index))
+                except (ValueError, TypeError):
+                    continue
+        return cls(rows)
+
+    @staticmethod
+    def variant(row: dict[str, Any]) -> tuple[Any, ...] | None:
+        variant = row.get("variant")
+        name = variant.get("name") if isinstance(variant, dict) else variant
+        identity = (row.get("scene"), name, row.get("seed"), row.get("schedule"))
+        return identity if all(value is not None for value in identity) else None
+
+    def replacement(self, run_id: str) -> str | None:
+        plans = [r for r in self.rows if r.value.get("event") == "planned"]
+        source = next((r for r in plans if r.value["runId"] == run_id), None)
+        if source is None or self.variant(source.value) is None:
+            return None
+        for candidate in plans:
+            if candidate.value["runId"] == run_id:
+                continue
+            if self.variant(candidate.value) != self.variant(source.value):
+                continue
+            if source.file == candidate.file:
+                later = candidate.line > source.line
+            elif source.timestamp is not None and candidate.timestamp is not None:
+                later = candidate.timestamp > source.timestamp
+            else:
+                later = plans.index(candidate) > plans.index(source)
+            if later:
+                return str(candidate.value["runId"])
+        return None
+
+
 def local_plan(run_id: str) -> dict[str, Any] | None:
-    """The default ledger is optional; a custom ledger's name comes from the synced plan."""
-    try:
-        for line in (STATE / "ledger.jsonl").read_text().splitlines():
-            row = json.loads(line)
-            if row.get("runId") == run_id and row.get("event") == "planned":
-                return dict(row)
-    except (OSError, ValueError, TypeError, AttributeError):
-        pass
-    return None
+    return LocalLedger.read().plans.get(run_id)
 
 
 def main() -> None:
@@ -407,10 +594,10 @@ def main() -> None:
         parser.error("--web-dist must contain view.html; build apps/web first")
     logging.basicConfig(level=logging.INFO)
     watch = Watch(args.run_id, STATE / "live" / args.run_id, local_plan(args.run_id))
-    handler = partial(Handler, watch=watch, web_dist=args.web_dist)
+    watches = Watches(watch)
+    handler = partial(Handler, watches=watches, web_dist=args.web_dist)
     server = ThreadingHTTPServer((args.host, args.port), handler)
-    thread = threading.Thread(target=watch.run, daemon=True, name="bench-volume-watch")
-    thread.start()
+    watches.start(watch)
     host = args.host if args.host not in ("0.0.0.0", "::") else "<this-machine>"  # noqa: S104
     sys.stdout.write(f"Open http://{host}:{server.server_port}/view.html#live/{args.run_id}\n")
     sys.stdout.flush()
@@ -419,9 +606,8 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        watch.stop.set()
         server.server_close()
-        thread.join(timeout=2)
+        watches.close()
 
 
 if __name__ == "__main__":

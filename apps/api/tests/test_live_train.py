@@ -419,3 +419,8 @@ def test_cap_event_uses_the_lower_resolved_cap_and_includes_equality() -> None:
     )["train"]
     event = next(event for event in derive_events(train) if event["kind"] == "cap")
     assert event["step"] == 1000 and event["text"] == "Cap reached · 1,100"
+
+
+def test_job_training_never_claims_a_bench_replacement() -> None:
+    parsed = _train({"train": {"replacedBy": "fa4f62cf183e45e89358cae2b4627e41"}}, NullStorage())
+    assert parsed is not None and parsed.replaced_by is None
