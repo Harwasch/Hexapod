@@ -472,7 +472,7 @@ export function liveConsole(actions: {
       el("lc-pill").dataset.done = String(
         next.train?.ended != null ||
           pillText(next).startsWith("Finished") ||
-          pillText(next) === "Stopped",
+          pillText(next) === "Failed",
       );
       text("lc-error", next.status === "error" ? (next.error ?? "") : "");
       el("lc-error").hidden = next.status !== "error" || !next.error;

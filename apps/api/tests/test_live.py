@@ -272,8 +272,8 @@ def test_a_finished_run_names_the_site_its_scan_is_on(client: TestClient, db: Se
     ("status", "preempted", "reason"),
     [
         (RunStatus.ERROR, True, "preempted"),
-        (RunStatus.CANCELLED, False, "stopped"),
-        (RunStatus.ERROR, False, "stopped"),
+        (RunStatus.CANCELLED, False, "failed"),
+        (RunStatus.ERROR, False, "failed"),
     ],
 )
 def test_unfinished_training_reports_how_and_where_it_ended(
@@ -345,7 +345,7 @@ def test_cancellation_before_telemetry_stops_at_zero(client: TestClient, db: Ses
 
     body = client.get(f"/api/v1/captures/{capture.id}/live").json()
 
-    assert body["train"]["ended"] == {"reason": "stopped", "step": 0}
+    assert body["train"]["ended"] == {"reason": "failed", "step": 0}
 
 
 def test_a_capture_with_no_run_is_a_404(client: TestClient, db: Session) -> None:

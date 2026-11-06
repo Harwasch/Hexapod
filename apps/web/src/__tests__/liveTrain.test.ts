@@ -70,16 +70,16 @@ const state = (overrides: Partial<LiveState> = {}): LiveState => ({
 });
 
 describe("live training presentation", () => {
-  it.each(["preempted", "stopped"] as const)("freezes a run that ended: %s", (reason) => {
+  it.each([
+    ["preempted", "Pre-empted"],
+    ["oom", "Out of memory"],
+    ["failed", "Failed"],
+  ] as const)("freezes a run that ended: %s", (reason, label) => {
     const ended = { reason, step: 50000 };
     const frozen = { ...train, ended };
-    expect(pillText(state({ status: "error", train: frozen }))).toBe(
-      `${reason === "preempted" ? "Pre-empted" : "Stopped"} · step 50,000`,
-    );
+    expect(pillText(state({ status: "error", train: frozen }))).toBe(`${label} · step 50,000`);
     expect(lastStep(frozen)).toBe(50000);
-    expect(phaseOf(lastStep(frozen), plan, 100, ended)).toBe(
-      reason === "preempted" ? "Pre-empted" : "Stopped",
-    );
+    expect(phaseOf(lastStep(frozen), plan, 100, ended)).toBe(label);
     expect(scrubPosition(60000, lastStep(frozen), 60000, 600, true, true)).toBe(50000);
     expect(scrubPosition(40000, lastStep(frozen), 60000, 600, false, true)).toBe(40000);
     expect(chartPoints(frozen, "gs").at(-1)?.step).toBe(50000);
@@ -96,7 +96,7 @@ describe("live training presentation", () => {
       pillText(state({ train: { ...train, stop: { step: 54001, maxSteps: 60000, gain: 0.02 } } })),
     ).toBe("Finished · converged");
     expect(pillText(state({ status: "complete" }))).toBe("Finished");
-    expect(pillText(state({ status: "error" }))).toBe("Stopped");
+    expect(pillText(state({ status: "error" }))).toBe("Failed");
     const rule = stopRule(train);
     expect(rule.line).toBe("stop if Δ best PSNR (last 4k steps) < 0.05 dB");
     expect(rule.checks.every((c) => c.ok)).toBe(true);

@@ -154,7 +154,7 @@ class LiveTrainStop(TrainModel):
 
 
 class LiveTrainEnded(TrainModel):
-    reason: Literal["preempted", "stopped"]
+    reason: Literal["preempted", "oom", "failed"]
     step: int = Field(ge=0)
 
 

@@ -4,14 +4,111 @@ from __future__ import annotations
 
 import copy
 import json
+import uuid
+from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
+from sqlalchemy.orm import Session
 
+from app.models import Capture, Job, JobStep
+from app.models.enums import RunStatus
 from app.schemas.live import LiveTrain
-from app.services.live import _train
-from app.services.live_train import derive_events, final_metrics, merge_live
+from app.services.live import _state, _train
+from app.services.live_train import derive_events, end_reason, final_metrics, merge_live
 from app.storage import NullStorage
+
+
+@pytest.mark.parametrize(
+    ("errors", "preempted", "expected"),
+    [
+        (
+            [
+                "InternalFailure: Runner killed (SIGKILL), exit code: 137. Most often this "
+                "happens when the process runs out of memory."
+            ],
+            True,
+            "oom",
+        ),
+        (["torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB"], False, "oom"),
+        (["CUDA error: out of memory"], True, "oom"),
+        (["exit code: 137"], False, "oom"),
+        (["exit code 137"], True, "oom"),
+        (["SIGKILL: exceeded host memory limit"], True, "oom"),
+        (["OOMKilled"], False, "oom"),
+        (["OUT OF MEMORY"], False, "oom"),
+        (["OutOfMemoryError"], False, "oom"),
+        (
+            ["the process running the recipe exited with code 137 without reporting a result"],
+            False,
+            "oom",
+        ),
+        (
+            [
+                "recipe 'photo-reconstruct', stage 'train' (impl 'gsplat') failed on "
+                "'modal': part b0 preempted on 'modal': InternalFailure: exit code: 137"
+            ],
+            True,
+            "oom",
+        ),
+        ([None, "GPU reclaimed"], True, "preempted"),
+        (["ValueError: invalid training input"], False, "failed"),
+        (["SIGKILL"], False, "failed"),
+        (
+            ["the process running the recipe exited with code -9 without reporting a result"],
+            False,
+            "failed",
+        ),
+        (["memory usage: 32 GB"], False, "failed"),
+        (["exit code 1370"], False, "failed"),
+        ([None, ""], False, "failed"),
+        ([], True, "preempted"),
+        (["plain job error", "OutOfMemoryError"], True, "oom"),
+        (["exit code 137", "plain step error"], False, "oom"),
+    ],
+)
+def test_end_reason_reads_oom_before_preemption(
+    errors: list[str | None], preempted: bool, expected: str
+) -> None:
+    assert end_reason(errors, preempted) == expected
+
+
+@pytest.mark.parametrize(
+    ("job_error", "step_error", "preempted", "reason"),
+    [
+        ("InternalFailure: exit code: 137", None, True, "oom"),
+        ("plain job error", "torch.cuda.OutOfMemoryError", True, "oom"),
+        ("GPU reclaimed", None, True, "preempted"),
+        ("plain error", None, False, "failed"),
+        ("GPU reclaimed", None, False, "failed"),
+    ],
+)
+def test_live_state_uses_recorded_errors_and_preemption(
+    job_error: str, step_error: str | None, preempted: bool, reason: str
+) -> None:
+    capture = Capture(id=uuid.uuid4(), name="Bench tree")
+    job = Job(id=uuid.uuid4(), status=RunStatus.ERROR, recipe="photo-reconstruct", error=job_error)
+    step = JobStep(
+        stage_id="train",
+        impl="gsplat",
+        ordinal=1,
+        status=RunStatus.ERROR,
+        preempted_at=datetime.now(UTC) if preempted else None,
+        metrics={
+            "error": step_error,
+            "live": merge_live({}, [sample(15400), ("train", {"k": "e", "step": 15600})]),
+        },
+    )
+    db = Mock(spec=Session)
+    db.scalars.return_value.all.return_value = [step]
+
+    state = _state(db, NullStorage(), job, capture)
+
+    assert state.train is not None and state.train.ended is not None
+    assert state.train.ended.reason == reason
+    assert state.train.ended.step == 15600
+    assert state.error == job_error
 
 
 def sample(step: int, run: str | None = "a", **fields: Any) -> tuple[str, dict[str, Any]]:

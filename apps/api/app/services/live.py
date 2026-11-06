@@ -39,7 +39,7 @@ from app.schemas.live import (
 )
 from app.services.errors import NotFoundError
 from app.services.jobs import get_job
-from app.services.live_train import derive_events, final_metrics
+from app.services.live_train import derive_events, end_reason, final_metrics
 from app.storage import ObjectStorage
 from app.storage.null import StorageUnavailableError
 
@@ -117,7 +117,10 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
             and found_train.final is None
         ):
             found_train.ended = LiveTrainEnded(
-                reason="preempted" if step.preempted_at is not None else "stopped",
+                reason=end_reason(
+                    [job.error, (step.metrics or {}).get("error")],
+                    preempted=step.preempted_at is not None,
+                ),
                 step=max([0, *found_train.series.step, *[e.step for e in found_train.evals]]),
             )
         train = found_train or train

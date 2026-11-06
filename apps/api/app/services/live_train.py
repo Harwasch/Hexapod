@@ -10,13 +10,39 @@ from __future__ import annotations
 import copy
 import json
 import math
-from typing import Any
+import re
+from collections.abc import Iterable
+from typing import Any, Literal
 
 MAX_POINTS = 300
 MAX_EVALS = 256
 MAX_BYTES = 48_000
 COLUMNS = ("step", "t", "gs", "lr", "sh", "its", "mem")
 QUALITY_COLUMNS = ("step", "farFieldShare", "elongationShare", "peakAllocatedGb")
+
+
+def end_reason(
+    error_texts: Iterable[str | None], preempted: bool
+) -> Literal["preempted", "oom", "failed"]:
+    """Read recorded OOM evidence before the provider's broader preemption signal.
+
+    Modal wraps a container death as `InternalFailure: Runner killed (SIGKILL),
+    exit code: 137. Most often this happens when the process runs out of memory.`
+    CloudRunner's RemoteStageError and fan-out detail preserve that text. The worker
+    also reports `the process running the recipe exited with code 137 without
+    reporting a result`. A bare SIGKILL (or return code -9) alone gives no cause.
+    """
+    for text in error_texts:
+        if not text:
+            continue
+        text = text.lower()
+        if (
+            any(marker in text for marker in ("out of memory", "outofmemoryerror", "oomkilled"))
+            or re.search(r"\b(?:exit code|exited with code)\s*:?\s*137\b", text)
+            or ("sigkill" in text and "memory" in text)
+        ):
+            return "oom"
+    return "preempted" if preempted else "failed"
 
 
 def _number(value: Any, digits: int = 4) -> int | float | None:

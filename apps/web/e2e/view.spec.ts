@@ -908,10 +908,10 @@ test("training console charts, scrubbing and controls keep snapshots and fit a p
   expect(errors).toEqual([]);
 });
 
-test("preempted training freezes the bench console and stops polling", async ({ page }) => {
+test("OOM training freezes the bench console and stops polling", async ({ page }) => {
   const spz = Buffer.from(spzFromGlb(toArrayBuffer(readFileSync(resolve(TILES, "splat.glb")))));
   const train = benchTrain(BUCKET);
-  train.ended = { reason: "preempted", step: 15600 };
+  train.ended = { reason: "oom", step: 15600 };
   train.replacedBy = "fa4f62cf183e45e89358cae2b4627e41";
   const snapshot = train.snapshots?.at(-1);
   if (!snapshot) throw new Error("Bench fixture needs a snapshot");
@@ -925,7 +925,8 @@ test("preempted training freezes the bench console and stops polling", async ({ 
         json: {
           ...liveBase,
           status: "error",
-          error: "GPU reclaimed",
+          error:
+            "Runner killed (SIGKILL), exit code: 137. Most often this happens when the process runs out of memory.",
           stage: { ...training(15600), status: "error", progress: null },
           cameras: liveCameras(12),
           splat: {
@@ -942,15 +943,17 @@ test("preempted training freezes the bench console and stops polling", async ({ 
     route.fulfill({ body: spz, headers: { "access-control-allow-origin": "*" } }),
   );
   await page.goto("/view.html#live/c1");
-  await expect(page.locator("#lc-pill")).toHaveText("Pre-empted · step 15,600");
+  await expect(page.locator("#lc-pill")).toHaveText("Out of memory · step 15,600");
   await expect(page.locator("#lc-replacement")).toHaveText("→ fa4f62cf");
   await expect(page.locator("#lc-replacement")).toHaveAttribute(
     "href",
     "view.html#live/fa4f62cf183e45e89358cae2b4627e41",
   );
-  await expect(page.locator("#lc-error")).toHaveText("GPU reclaimed");
+  await expect(page.locator("#lc-error")).toHaveText(
+    "Runner killed (SIGKILL), exit code: 137. Most often this happens when the process runs out of memory.",
+  );
   await expect(page.locator("#lc-kpi-0")).toHaveText("15,600");
-  await expect(page.locator("#lc-kpi-3")).toHaveText("Pre-empted");
+  await expect(page.locator("#lc-kpi-3")).toHaveText("Out of memory");
   await expect(page.locator("#lc-follow")).toHaveText("step 15,600");
   const timeline = page.locator("#lc-timeline");
   await expect(timeline).toHaveAttribute("aria-valuemax", "15600");

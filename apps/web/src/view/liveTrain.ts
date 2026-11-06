@@ -54,13 +54,18 @@ export function effectiveCap(plan?: LiveTrainPlan | null): number | null {
   const caps = [plan?.cap, plan?.capMax].filter((n): n is number => n != null);
   return caps.length ? Math.min(...caps) : null;
 }
+const endLabels = {
+  preempted: "Pre-empted",
+  oom: "Out of memory",
+  failed: "Failed",
+} as const;
 export function phaseOf(
   step: number,
   plan?: LiveTrainPlan | null,
   gaussians?: number | null,
   ended?: LiveTrain["ended"],
 ): string {
-  if (ended) return ended.reason === "preempted" ? "Pre-empted" : "Stopped";
+  if (ended) return endLabels[ended.reason];
   const cap = effectiveCap(plan);
   if (
     cap != null &&
@@ -84,10 +89,9 @@ export function lastStep(train?: LiveTrain | null): number {
 }
 export function pillText(state: LiveState): string {
   const train = state.train;
-  if (train?.ended)
-    return `${train.ended.reason === "preempted" ? "Pre-empted" : "Stopped"} · step ${count(lastStep(train))}`;
+  if (train?.ended) return `${endLabels[train.ended.reason]} · step ${count(lastStep(train))}`;
   if (train?.stop) return "Finished · converged";
-  if (state.status === "error" || state.status === "cancelled") return "Stopped";
+  if (state.status === "error" || state.status === "cancelled") return "Failed";
   const ceiling = train?.plan?.stepsMax;
   if (
     state.status === "complete" ||
