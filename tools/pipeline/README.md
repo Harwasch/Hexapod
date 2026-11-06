@@ -10,7 +10,16 @@ which imports this project as a library.
 registration out. Since 2026-09-23 it **converts the file's up axis** rather than assuming
 z -- see [The up axis](#the-up-axis) -- which is what stopped uploads landing on their side.
 
-**Lane 2 is real up to the GPU, and the GPU half is built and checked but has never run.**
+The current training image builds **gsplat 1.6.0 at `512d366b`**, with torch 2.9.1+cu128
+and CUDA 12.8.1. Recipe version and defaults are unchanged. PR #116's one-seed Beach
+comparison measured A (1.5.3) at **25.17/0.753/0.301 PSNR/SSIM/LPIPS, 98 min, $1.57**,
+and the upgraded plain trainer at **25.34/0.755/0.295, 75 min, $1.23**. The +0.17 dB
+is within Spool's 0.22 dB seed spread; it does not establish a quality gain. The extracted
+image still needs a production-path smoke under a non-production Modal app name.
+The first deploy now compiles gsplat on 16 cores with sm_80 only and can take much
+longer than the old wheel build; see [deploy and smoke commands](../../docs/DEPLOYMENT.md#deploying-it-and-proving-it).
+
+The table below records the original 1.5.3 validation, not validation of this extraction.
 The state of each piece, in the three-state vocabulary of `docs/HANDOFF.md`:
 
 | Piece                                         | State        | Evidence                                                                                                                                                                                                                                                                                                     |
@@ -24,7 +33,7 @@ The state of each piece, in the three-state vocabulary of `docs/HANDOFF.md`:
 | the Modal training image                      | verified     | built by Modal on 2026-09-23 (about 8 minutes, once); CUDA 12.4.1, torch 2.4.1, gsplat 1.5.3                                                                                                                                                                                                                 |
 | the GPU path end to end                       | verified     | `modal.yml` smoke, 2026-09-23: 500 steps on an L4, 68 s billed, $0.015, PSNR/SSIM read from gsplat's stats file, `trained.ply` placed and packaged to a tileset                                                                                                                                              |
 | `ModalAdapter` against a live workspace       | verified     | the same smoke: submit, poll to success, log tail, outputs back through R2. Its first two real runs found two bugs, both fixed and tested (below)                                                                                                                                                            |
-| a full-length training run on a real capture  | **unproven** | the smoke trained 500 steps; 30,000 steps on a real video has not run. Its cost is unmeasured -- scale from the smoke's billed seconds                                                                                                                                                                       |
+| a full-length training run on a real capture  | **verified** | production phone captures are recorded in docs/DEPLOYMENT.md; the Beach upgrade comparison is above                                                                                                                                                                                                          |
 
 - `normalize` / `ffmpeg_frames` extracts and selects frames and scrapes the container's
   metadata. It runs here and in CI, on a generated clip.
@@ -42,9 +51,9 @@ The state of each piece, in the three-state vocabulary of `docs/HANDOFF.md`:
   rotation error, 0.092% of scene extent in translation. CI installs `colmap` so this
   runs there too, and the test file fails rather than skipping if that install goes away.
 - `train` / `gsplat` **dispatches** a training run: the dataset, the argv, the metrics,
-  the PLY. **No training run has been executed in this repository** — `gsplat` needs CUDA
-  and there is no GPU here — so its tests drive a stand-in trainer and say so in their
-  names. Since 2026-09-23 the argv and file names are checked against gsplat v1.5.3's own
+  the PLY. Local tests drive a stand-in trainer and do not validate CUDA; GPU
+  measurements are recorded above and in the deployment guide. The original argv and file
+  names were checked against gsplat v1.5.3's own
   `simple_trainer.py`, which corrected four transcription errors, each of which would have
   cost a GPU run: `--ckpt` means _evaluate_, not resume (so a preempted attempt now
   restarts, and says so); there is no PLY without `--save_ply`; world normalisation is on

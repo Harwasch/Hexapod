@@ -540,7 +540,7 @@ worker.
 | ------------ | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Fly `worker` | `normalize` (ffmpeg), `georeference`, `place`, `confidence`, `package` and the rest | light CPU work; the worker already holds the upload                                                                   |
 | Modal `cpu4` | `pose` (COLMAP 3.9.1), `align`, `quality`                                           | more memory and sustained CPU than the 2 GB worker has ([below](#the-worker-image-carries-colmap)); billed per second |
-| Modal L4     | `train` (gsplat 1.5.3 `simple_trainer.py`)                                          | needs CUDA; billed per second only while it runs, so an idle deployment costs nothing for it                          |
+| Modal L4     | `train` (gsplat 1.6.0, source `512d366b`)                                           | needs CUDA; billed per second only while it runs, so an idle deployment costs nothing for it                          |
 
 `fly.toml` sets `WORKER_RUNNER=cloud` and `WORKER_CLOUD_PROVIDERS=modal`. The worker then
 calls `run_stage_<tier>` in the Modal app `twin-pipeline` (`WORKER_MODAL_APP`'s default),
@@ -550,6 +550,67 @@ bytes through the **private** bucket under `runs/<run id>/`, using the Modal sec
 first remote stage, on the function lookup (not observed). Lane 1 is unaffected either way.
 
 ### Deploying it, and proving it
+
+The image uses gsplat source commit `512d366b67073d77ca099ede742683c165dfc23b`,
+torch 2.9.1+cu128 and CUDA 12.8.1, with the existing recipe version and defaults.
+PR #116 measured Beach on one seed: baseline A (1.5.3) **25.17/0.753/0.301**
+PSNR/SSIM/LPIPS, **98 min, $1.57**, versus upgraded plain **25.34/0.755/0.295**,
+**75 min, $1.23**. The +0.17 dB is within Spool's 0.22 dB seed spread; quality improvement
+is not established. This extraction excludes the experimental quality stack.
+
+One upstream behaviour change affects `strategy: default`: 512d366b fixes the opacity
+reset condition that was always false in 1.5.3. Opacity now resets every 3000 steps
+(before schedule scaling, during refinement). The production recipe uses `mcmc` and
+is unaffected.
+
+**Deploy time:** gsplat now compiles from source in a dedicated 16-core, 48 GB build
+step (two-hour timeout). The default Modal builder failed to finish within two hours;
+with sm_80 + sm_89 on 16 cores, one source alone took 68 minutes. The image therefore
+builds `CUDA_ARCHS="8.0"`: sm_80 runs on A100, A10, L4 and L40S by same-major
+compatibility. Other GPU architectures are not validated by this build. Unchanged
+layers are cached; allow a long first deploy, not the old wheel image's eight minutes.
+The header comments in `.github/workflows/modal.yml` still describe the 1.5.3 wheel
+and a 15–30 minute build. That job's 90-minute timeout may not cover the first source
+build; use the operator deploy below when the image is not already cached.
+
+Before replacing production, deploy this checkout under a **non-production app name**
+and run the production stage/transfer path against it. From the repository root, with
+Modal 1.5.5 and boto3 available to the pipeline interpreter, Modal credentials configured,
+and local `OBJECT_STORAGE_*` matching the existing `twin-object-storage` private-bucket
+secret (endpoint URL, access key, secret key, bucket, optional region):
+
+```bash
+# Once, in a network-enabled operator shell (not part of the offline checks):
+uv pip install --python tools/pipeline/.venv/bin/python modal==1.5.5 boto3
+export PATH="$PWD/tools/pipeline/.venv/bin:$PATH"
+export TMPDIR="$PWD/tools/pipeline/.tmp"
+modal deploy infra/modal/app.py --name twin-pipeline-gsplat-upgrade-smoke
+tools/pipeline/.venv/bin/python infra/modal/smoke.py \
+  --app twin-pipeline-gsplat-upgrade-smoke --iterations 500 --tier l4 \
+  --work tools/pipeline/.tmp/gsplat-smoke
+```
+
+`modal deploy --name` overrides `modal.App("twin-pipeline")`; `smoke.py --app` passes
+that name to `ModalAdapter`. Neither changes the worker's production app setting.
+The smoke renders synthetic frames locally, runs COLMAP on the named app's `cpu4`
+function and trains on its L4. It writes frames, poses, transfer checksums, checkpoints
+(including live previews) and outputs under **`runs/smoke-<UTC timestamp>/`** in the
+private R2 bucket. It deletes that prefix in `finally`, on success or failure; a cleanup
+error is reported on stderr and requires manual removal of that prefix. It never
+publishes to the public bucket or registers a capture. Local outputs remain under
+`--work`. This extracted image's deploy and GPU smoke have not been run locally.
+
+When storage credentials exist only in Modal, run from the repository root with a
+Modal-authenticated CLI: `modal run infra/modal/smoke_remote.py --app-name twin-pipeline-gsplat-upgrade-smoke --iterations 500 --tier l4`.
+This starts an ephemeral `twin-pipeline-smoke-runner` CPU app using `cpu_image` and the
+`twin-object-storage` secret; it neither deploys nor needs local storage credentials or
+COLMAP. It calls the same `smoke.py` main, assertions and cleanup: pose still goes to the
+target's `cpu4` with apt COLMAP 3.9.1, and train goes to its GPU. The supported pycolmap
+`colmap: "4.2"` path would change this smoke's pose engine, so it is not selected.
+The default target is the isolated upgrade app; `twin-pipeline` requires an explicit
+`--force-production`. R2 writes stay under the smoke's private `runs/smoke-<UTC timestamp>/`
+prefix, deleted on success or failure as above; container-local outputs are ephemeral
+and the summary is printed in Modal logs. This remote wrapper has not yet been run on Modal.
 
 `.github/workflows/modal.yml`, in one job:
 
@@ -585,8 +646,8 @@ metrics (billed seconds and dollars per remote call), recipe `photo-reconstruct`
   `pose` on `cpu4`: 40.9 s, $0.0029. Held-out PSNR 21.9, SSIM 0.72, LPIPS 0.44; 5,966
   gaussians.
 - **The first deploy** also builds the image on Modal's builders, once: here, the deploy
-  in the same run as that smoke. It covers torch, the gsplat wheel, and fused-ssim
-  compiled with nvcc. Later deploys reuse every unchanged layer.
+  in the same run as that smoke. That historical build used a gsplat wheel; the source build above now
+  compiles gsplat as well as fused-ssim with nvcc. Later deploys reuse every unchanged layer.
 - **Two real iPhone captures**, in production:
 
   |                              | Pumpkin (`IMG_3081.mov`)                                  | Spool                                         |
@@ -1867,17 +1928,18 @@ Undersold on purpose. Most of this list was written before production existed. T
 operator has since deployed it, but nothing here has observed that deployment. So each item
 below is still true of this repository's evidence, whatever it now says about the world:
 
-- **The GPU path has never run.** Everything below is unproven until
-  `.github/workflows/modal.yml` passes once:
+- **Historical pre-deployment checklist (superseded by the GPU measurements above).**
+  At the original handover these were unproven:
   - the Modal image has never been built by Modal;
   - `ModalAdapter` has never spoken to a live workspace;
   - no gsplat training run has happened.
 
   What _is_ verified:
   - the App builds locally and in CI;
-  - gsplat v1.5.3's own `simple_trainer.py` CLI accepts the pipeline's argv, in a CPU
-    replica of the image's venv (CI's `trainer` job);
-  - every pinned artifact was resolved, and the gsplat wheel is pinned by sha256;
+  - the original gsplat v1.5.3 CLI accepted the pipeline argv in a CPU replica;
+    the current source image runs `check_trainer.py` during its own build;
+  - the original wheel was pinned by sha256; the current library and examples share
+    the source commit documented above;
   - the whole smoke flow passes locally with `--rehearse`.
 
   Two things only the first build and run can prove: that the CUDA image compiles
