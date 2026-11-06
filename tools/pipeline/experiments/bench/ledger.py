@@ -28,7 +28,7 @@ TIMEOUTS = {
     "screen": 1800,
     "full": int(os.environ.get("HEXAPOD_BENCH_FULL_TIMEOUT", "3300")),
     "freeze": 600,
-    "freeze-full": 7200,
+    "freeze-full": 14400,
     "matched": 600,
     "rescore": int(os.environ.get("HEXAPOD_BENCH_RESCORE_TIMEOUT", "7200")),
 }
