@@ -52,6 +52,7 @@ class LiveCameras(CamelModel):
     origin: list[float]
     scale: float
     up: list[float] | None
+    fov_y: float | None = Field(default=None, gt=0, lt=180, alias="fovY")
     aspect: float | None
     camera_count: int
     #: base64: 12 bytes per camera, little-endian int16 x, y, z; int8 forward; int8 up.
@@ -91,6 +92,7 @@ class LiveTrainRule(TrainModel):
 
 
 class LiveTrainPlan(TrainModel):
+    antialiased: bool | None = None
     cap: int | None = Field(default=None, ge=0)
     cap_max: int | None = Field(default=None, ge=0)
     mode: str | None = None
@@ -241,7 +243,17 @@ class LiveTrainSnapshot(TrainModel):
     elongation_share: float | None = Field(default=None, ge=0, le=1)
 
 
+class LiveTrainTiles(TrainModel):
+    """A full LOD tileset. Omitted frame means the producer's solve-local coordinates."""
+
+    url: str
+    step: int = Field(ge=0)
+    final: bool
+    frame: Literal["solve", "enu"] = "solve"
+
+
 class LiveTrain(TrainModel):
+    tiles: LiveTrainTiles | None = None
     series: LiveTrainSeries = Field(default_factory=LiveTrainSeries)
     evals: list[LiveTrainEval] = Field(default_factory=list, max_length=256)
     plan: LiveTrainPlan | None = None

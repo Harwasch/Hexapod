@@ -1449,6 +1449,7 @@ def _train_block(
         total=iterations,
         key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
         up=settings.up,
+        **live.snapshot_cameras(dataset / "sparse" / "0"),
     ):
         live.emit_seeds(
             dataset / "sparse" / "0",

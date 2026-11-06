@@ -84,5 +84,6 @@ def emit(
             "metresPerUnit": metres,
             "frames": frames,
             "sparse": sparse,
+            "antialiased": ctx.param("antialiased"),
         }
         ctx.log("live-plan: " + json.dumps(payload, separators=(",", ":")))

@@ -24,7 +24,6 @@ import { fetchApi } from "@/api/coldStart";
 import { deviceSplatBudget } from "@/lib/detail";
 import { epochDateLabel } from "@/lib/epochs";
 import { siteFramePositions } from "@/lib/spzPositions";
-import { tileUrl } from "@/lib/tileProxy";
 import { productHeader } from "@/shared/product";
 
 import { parseCoverage } from "./coverage";
@@ -32,15 +31,8 @@ import { datesNotice, shownScan, type ShownCoverage, type ShownScan } from "./sh
 import { showLive } from "./live";
 import { ScanNavigation } from "./navigate";
 import { spzPoints, type SpzPoints } from "./spz";
-import { loadSplatTile, streamWithView } from "./sparkStream";
-import {
-  LOAD_FACTOR,
-  countTiles,
-  parseTileset,
-  planAdditive,
-  type TileNode,
-  type TileTree,
-} from "./tiles";
+import { fetchSplatTileset, loadSplatTile, openScanStream, splatAntialiasing } from "./sparkStream";
+import { countTiles, type TileNode, type TileTree } from "./tiles";
 import "./view.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -149,15 +141,18 @@ let active: { stop: () => void } | null = null;
 async function splatTileset(shown: ShownScan): Promise<{ url: string; tree: TileTree }> {
   const source = shown.asset?.source;
   if (source?.type !== "3d-tiles-url") throw new Error("This site has no splat scan to show.");
-  const url = await tileUrl(source.url);
-  return { url, tree: parseTileset(await json<unknown>(url)) };
+  return fetchSplatTileset(source.url);
 }
 
 /** One tile as a Spark mesh (sparkStream.ts), with its splat centres for the collision grid
  *  (navigate.ts) when the scan brings no grid of its own: in the scan's frame, so a tile the
  *  packer gave a frame of its own (`TileNode.offset`) is a surface where it is drawn. */
-async function tileMesh(tilesetUrl: string, tile: TileNode): Promise<SplatMesh> {
-  const { mesh, bytes } = await loadSplatTile(tilesetUrl, tile);
+async function tileMesh(
+  tilesetUrl: string,
+  tile: TileNode,
+  signal?: AbortSignal,
+): Promise<SplatMesh> {
+  const { mesh, bytes } = await loadSplatTile(tilesetUrl, tile, { signal });
   // A tile whose centres cannot be read is still drawn, it just is not a surface.
   const points = readPoints ? await spzPoints(bytes).catch(() => undefined) : undefined;
   if (points) {
@@ -241,7 +236,12 @@ async function showScan(siteId: string): Promise<void> {
   // origin -- and the renderer's accumulated splats. A half-float accumulator keeps them
   // relative to the eye (Spark 2.2 `SplatAccumulator`), so its steps are a few millimetres at
   // the distances anything is looked at from; 32-bit keeps them in the world's frame.
-  const spark = new SparkRenderer({ renderer, lodSplatCount: budget, accumExtSplats: true });
+  const spark = new SparkRenderer({
+    renderer,
+    lodSplatCount: budget,
+    accumExtSplats: true,
+    ...splatAntialiasing(),
+  });
   scene.add(spark);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
@@ -259,7 +259,7 @@ async function showScan(siteId: string): Promise<void> {
   };
   window.addEventListener("resize", resize);
   // Tiles keep arriving after the first one is on screen; leaving the scan stops them.
-  let streaming: ReturnType<typeof streamWithView> | null = null;
+  let streaming: ReturnType<typeof openScanStream> | null = null;
   let navigation: ScanNavigation | null = null;
   renderer.setAnimationLoop(() => {
     controls.update();
@@ -276,6 +276,7 @@ async function showScan(siteId: string): Promise<void> {
       window.removeEventListener("resize", resize);
       renderer.setAnimationLoop(null);
       controls.dispose();
+      spark.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     },
@@ -313,10 +314,31 @@ async function showScan(siteId: string): Promise<void> {
     scan.rotation.x = -Math.PI / 2;
     scene.add(scan);
     const root = tileset.tree.root;
-    const mesh = await tileMesh(tileset.url, root);
-    scan.add(mesh);
-    // Every tile put on screen so far, for the page's tests (`__viewer.drawn`).
-    const drawnMeshes = new Map<string, SplatMesh>([[root.uri, mesh]]);
+    if (!alive) return;
+    const whole = countTiles(tileset.tree).gaussians;
+    const drawnMeshes = new Map<string, SplatMesh>();
+    let rootMesh: SplatMesh | null = null;
+    streaming = openScanStream(tileset, scan, camera, renderer, spark, {
+      load: tileMesh,
+      show: (tile, more) => {
+        if (rootMesh) more.opacity = rootMesh.opacity;
+        drawnMeshes.set(tile.uri, more);
+        navigation?.show(tile, pointsOf.get(more));
+      },
+      hide: (tile) => navigation?.hide(tile),
+      report: (drawn) => {
+        section.dataset.tiles = drawn.tiles.map((tile) => tile.uri).join(" ");
+        section.dataset.gaussians = String(drawn.gaussians);
+        el("scan-date").textContent =
+          drawn.gaussians < whole
+            ? `${shownDate} · ${drawn.gaussians.toLocaleString("en-US")} of ` +
+              `${whole.toLocaleString("en-US")} splats · finer where you look`
+            : shownDate;
+      },
+    });
+    const { mesh } = await streaming.ready;
+    if (!alive) return;
+    rootMesh = mesh;
     scan.updateMatrixWorld(true);
     section.dataset.tiles = root.uri;
 
@@ -419,61 +441,8 @@ async function showScan(siteId: string): Promise<void> {
     window.setTimeout(() => {
       status.hidden = true;
     }, 4_000);
-
-    const whole = countTiles(tileset.tree).gaussians;
-    const show = (tile: TileNode, more: SplatMesh): void => {
-      // Tiles arriving while Coverage is on come in faded like the rest.
-      more.opacity = mesh.opacity;
-      scan.add(more);
-      drawnMeshes.set(tile.uri, more);
-      navigation?.show(tile, pointsOf.get(more));
-    };
-    const hide = (tile: TileNode, gone: SplatMesh): void => {
-      scan.remove(gone);
-      navigation?.hide(tile);
-    };
-    if (tileset.tree.refine === "REPLACE") {
-      if (!alive) return;
-      streaming = streamWithView(
-        tileset,
-        scan,
-        camera,
-        renderer,
-        budget,
-        { root, mesh },
-        { show, hide },
-        (drawn) => {
-          // What is on screen, for the page's tests: a REPLACE parent is gone once its
-          // children are up.
-          section.dataset.tiles = drawn.tiles.map((tile) => tile.uri).join(" ");
-          section.dataset.gaussians = String(drawn.gaussians);
-          el("scan-date").textContent =
-            drawn.gaussians < whole
-              ? `${shownDate} · ${drawn.gaussians.toLocaleString("en-US")} of ` +
-                `${whole.toLocaleString("en-US")} splats · finer where you look`
-              : shownDate;
-        },
-      );
-      return;
-    }
-
-    // ADD: one tile at a time, root first, then coarsest region first (tiles.ts).
-    const [, ...rest] = planAdditive(tileset.tree, budget * LOAD_FACTOR);
-    const shown = new Map<TileNode, SplatMesh>([[root, mesh]]);
-    for (const step of rest) {
-      for (const tile of step.add) {
-        if (!alive) return;
-        const more = await tileMesh(tileset.url, tile);
-        if (!alive) {
-          more.dispose();
-          return;
-        }
-        show(tile, more);
-        shown.set(tile, more);
-      }
-      section.dataset.tiles = [...shown.keys()].map((tile) => tile.uri).join(" ");
-    }
   } catch (error) {
+    if (!alive) return;
     // Also after the first tile is up: a later one failing leaves what arrived on screen.
     status.hidden = false;
     status.textContent = error instanceof Error ? error.message : "The scan could not be shown.";

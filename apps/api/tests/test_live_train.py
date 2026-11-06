@@ -516,3 +516,91 @@ def test_cap_event_uses_the_lower_resolved_cap_and_includes_equality() -> None:
     )["train"]
     event = next(event for event in derive_events(train) if event["kind"] == "cap")
     assert event["step"] == 1000 and event["text"] == "Cap reached · 1,100"
+
+
+def test_tiles_are_optional_and_pass_through_without_signing() -> None:
+    tiles = {"url": "https://tiles.example/bench/tileset.json", "step": 15000, "final": False}
+    parsed = _train({"train": {"tiles": tiles, "plan": {"antialiased": True}}}, NullStorage())
+    assert parsed is not None and parsed.tiles is not None
+    assert parsed.tiles.model_dump(by_alias=True) == {**tiles, "frame": "solve"}
+    assert parsed.plan is not None and parsed.plan.antialiased is True
+    assert LiveTrain().tiles is None
+
+
+def test_finished_job_resolves_its_own_published_epoch_and_marks_enu() -> None:
+    from app.models import Asset, Epoch, Site
+    from app.models.enums import Representation
+
+    job = Job(
+        id=uuid.uuid4(),
+        recipe="photo-reconstruct",
+        status=RunStatus.COMPLETE,
+        params={"train": {"antialiased": True}},
+    )
+    capture = Capture(id=uuid.uuid4(), name="Bench", site_id=uuid.uuid4())
+    epoch = Epoch(id=uuid.uuid4(), job_id=job.id, ordinal=1)
+    asset = Asset(
+        id=uuid.uuid4(),
+        epoch_id=epoch.id,
+        representation=Representation.GAUSSIAN_SPLAT,
+        source={"type": "3d-tiles-url", "url": "https://tiles.example/final.json"},
+        source_kind="observed",
+        created_at=datetime.now(UTC),
+    )
+    mesh = Asset(
+        id=uuid.uuid4(),
+        epoch_id=epoch.id,
+        representation=Representation.MESH,
+        source={"type": "3d-tiles-url", "url": "https://tiles.example/mesh.json"},
+        source_kind="observed",
+        created_at=datetime.now(UTC),
+    )
+    site = Site(id=capture.site_id, assets=[asset, mesh], epochs=[epoch])
+    step = JobStep(
+        stage_id="train",
+        impl="gsplat",
+        ordinal=1,
+        status=RunStatus.COMPLETE,
+        metrics={"live": {"train": {"tiles": None}, "snapshots": []}, "psnr": 25},
+    )
+    db = Mock(spec=Session)
+    db.scalars.return_value.all.return_value = [step]
+    db.get.return_value = site
+    state = _state(db, NullStorage(), job, capture)
+    assert state.train is not None and state.train.tiles is not None
+    assert state.train.tiles.url == asset.source["url"]
+    assert state.train.tiles.frame == "enu" and state.train.tiles.final
+    assert state.train.plan is not None and state.train.plan.antialiased is True
+    assert state.site_id == capture.site_id
+    db.scalars.return_value.all.return_value = []
+    legacy = _state(db, NullStorage(), job, capture)
+    assert legacy.train is not None and legacy.train.tiles is not None
+    db.scalars.return_value.all.return_value = [step]
+    epoch.job_id = uuid.uuid4()
+    other = _state(db, NullStorage(), job, capture)
+    assert other.train is not None and other.train.tiles is None
+
+
+def test_camera_fov_passes_through_and_old_payloads_remain_valid() -> None:
+    from app.services.live import _cameras
+
+    payload = dict(
+        seq=1,
+        final=True,
+        registered=0,
+        frames=0,
+        origin=[0, 0, 0],
+        scale=1,
+        up=[0, 0, 1],
+        aspect=1.33,
+        cameraCount=0,
+        cameras="",
+        pointCount=0,
+        pointsTotal=0,
+        points="",
+    )
+    step = JobStep(stage_id="pose")
+    old = _cameras(step, payload)
+    assert old is not None and old.fov_y is None
+    new = _cameras(step, {**payload, "fovY": 63.2})
+    assert new is not None and new.model_dump(by_alias=True)["fovY"] == 63.2

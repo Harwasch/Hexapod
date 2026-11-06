@@ -728,3 +728,28 @@ a {
 .lc-controls > button[aria-pressed="true"] {
   color: var(--accent);
 }
+
+#lc-viewer-panel.lc-expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  background: var(--ink);
+  display: flex;
+  flex-direction: column;
+}
+.lc-expanded .lc-scene {
+  flex: 1;
+  min-height: 0;
+  aspect-ratio: auto;
+}
+.lc-expanded .lc-panel-head,
+.lc-expanded .lc-timeline {
+  flex-shrink: 0;
+}
+.lc-fullscreen #lc-charts,
+.lc-fullscreen #lc-stop {
+  display: none;
+}

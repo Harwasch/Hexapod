@@ -82,6 +82,8 @@ export function phaseOf(
 export function lastStep(train?: LiveTrain | null): number {
   if (train?.ended) return train.ended.step;
   return Math.max(
+    train?.tiles?.step ?? 0,
+    train?.snapshots?.at(-1)?.step ?? 0,
     train?.series?.step?.at(-1) ?? 0,
     train?.evals?.at(-1)?.step ?? 0,
     train?.stop?.step ?? 0,
@@ -387,4 +389,14 @@ export function finalReadouts(train?: LiveTrain | null): string[] {
   ).flatMap(([label, value]) =>
     value == null ? [] : [`${label} ${value.toFixed(label.endsWith("PSNR") ? 2 : 3)}`],
   );
+}
+
+/** A published ENU scan cannot be overlaid on solve-local cameras without placement. */
+export function tilesAt(
+  train: LiveTrain | null | undefined,
+  step: number | null,
+): LiveTrain["tiles"] {
+  const tiles = train?.tiles;
+  if (!tiles || tiles.frame === "enu") return null;
+  return step == null || step >= lastStep(train) || step === tiles.step ? tiles : null;
 }

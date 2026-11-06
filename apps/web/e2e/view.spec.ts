@@ -989,3 +989,90 @@ test("training without telemetry has empty charts and disables unscaled Distance
   await expect(page.getByRole("button", { name: "Distance", exact: true })).toBeDisabled();
   expect(errors).toEqual([]);
 });
+
+for (const { native, cameraCount } of [
+  { native: true, cameraCount: 12 },
+  { native: false, cameraCount: 12 },
+  { native: false, cameraCount: 0 },
+]) {
+  test(`training console streams full tiles, steps cameras and toggles ${native ? "native" : "fallback"} fullscreen (${String(cameraCount)} cameras)`, async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    if (!native)
+      await page.addInitScript(() => {
+        Object.defineProperty(HTMLElement.prototype, "requestFullscreen", { value: undefined });
+      });
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const spz = spzFromGlb(toArrayBuffer(readFileSync(resolve(TILES, "splat.glb"))));
+    const train = benchTrain(BUCKET);
+    const latest = train.series?.step?.at(-1) ?? 15000;
+    train.tiles = { url: TILESET, step: latest, final: true };
+    await page.route(
+      (url) => url.pathname === "/api/v1/captures/c1/live",
+      (route) =>
+        route.fulfill({
+          json: {
+            ...liveBase,
+            status: "complete",
+            stage: training(latest),
+            cameras: cameraCount ? { ...liveCameras(cameraCount), fovY: 55 } : null,
+            train,
+          },
+        }),
+    );
+    await page.route(`${BUCKET}/**`, (route) =>
+      route.fulfill({ body: Buffer.from(spz), headers: { "access-control-allow-origin": "*" } }),
+    );
+    await page.goto("/view.html#live/c1");
+    const live = page.locator("#live");
+    await expect(live).toHaveAttribute("data-source", "tiles", { timeout: 30_000 });
+    await expect(live).toHaveAttribute("data-tiles", "splat.glb");
+    // Wait on Spark's actual sort/display state, continuously settled for a second.
+    await page.waitForFunction(
+      () => {
+        const host = document.getElementById("live");
+        if (!host) return false;
+        if (host.dataset.settled !== "true") {
+          delete host.dataset.settledSince;
+          return false;
+        }
+        host.dataset.settledSince ??= String(performance.now());
+        return performance.now() - Number(host.dataset.settledSince) > 1000;
+      },
+      undefined,
+      { timeout: 30_000 },
+    );
+    if (cameraCount) {
+      await expect(live).toHaveAttribute("data-camera", "6");
+      await page.getByRole("button", { name: "Next training camera" }).click();
+      await expect(live).toHaveAttribute("data-camera", "7");
+    } else {
+      await expect(live).toHaveAttribute("data-view", "orbit");
+      await expect(page.getByRole("button", { name: "Next training camera" })).toBeDisabled();
+    }
+    const charts = page.locator("#lc-charts");
+    await page.getByRole("button", { name: "Enter fullscreen" }).click();
+    await expect(charts).toBeHidden();
+    await expect(page.locator("#lc-viewer-panel")).toHaveClass(/lc-expanded/);
+    if (native)
+      await expect
+        .poll(() => page.evaluate(() => document.fullscreenElement?.id))
+        .toBe("lc-viewer-panel");
+    await page.getByRole("button", { name: "Exit fullscreen" }).click();
+    await expect(charts).toBeVisible();
+    await page.getByRole("button", { name: "Enter fullscreen" }).click();
+    await page.keyboard.press("Escape");
+    await expect(charts).toBeVisible();
+    const timeline = page.getByRole("slider", { name: "Snapshot step" });
+    await timeline.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(live).toHaveAttribute("data-source", "spz", { timeout: 30_000 });
+    await page.keyboard.press("End");
+    await expect(live).toHaveAttribute("data-source", "tiles", { timeout: 30_000 });
+    await page.goto("/view.html");
+    expect(errors).toEqual([]);
+  });
+}

@@ -21,8 +21,9 @@ halves, one on each side of the stage log:
 * `SplatWatch` watches gsplat's `ply/` directory for the intermediate splats asked for by
   `--ply_steps` (v1.5.3 writes `point_cloud_<i>.ply` at step `i` for every listed step,
   scaled by `--steps_scaler`, as well as the final one), keeps the `max_gaussians` with
-  the highest opacity x volume, packs them as SPZ (the packer `splat_tiles.py` already
-  uses for the map, which Spark reads) into `checkpoint/live/`, and logs a `live-splat:`
+  camera-weighted screen contribution, stratified over space, packs them as SPZ (the
+  packer `splat_tiles.py` already uses for the map, which Spark reads) into
+  `checkpoint/live/`, and logs a `live-splat:`
   line naming the object key the checkpoint syncer will upload it under. The full
   intermediate PLY is deleted once it is packed: it is hundreds of megabytes and nothing
   else reads it. The final PLY is packed read-only on exit and left for the stage.
@@ -213,6 +214,11 @@ def encode_model(
     pt_bytes = np.hstack([q_pts.view(np.uint8).reshape(-1, 6), colours.astype(np.uint8)])
     camera = model.cameras[0] if model.cameras else None
     estimate = sfm.camera_up(model)
+    fy = (
+        dict(zip(camera.param_names, camera.params, strict=False)).get("fy", camera.focal_px)
+        if camera
+        else 0.0
+    )
     return {
         "v": 1,
         "seq": next(_SEQ),
@@ -225,6 +231,9 @@ def encode_model(
         "aspect": (
             round(camera.width / camera.height, 4) if camera and camera.height > 0 else None
         ),
+        "fovY": round(math.degrees(2 * math.atan(camera.height / (2 * fy))), 4)
+        if camera and camera.height > 0 and fy > 0
+        else None,
         "cameraCount": len(images),
         "cameras": _b64(cam_bytes.reshape(-1)),
         "pointCount": int(points.shape[0]),
@@ -397,10 +406,31 @@ def ply_indices(live_steps: Iterable[int], steps_scaler: float) -> set[int]:
     return {int(step * steps_scaler) - 1 for step in live_steps if int(step * steps_scaler) > 0}
 
 
+def snapshot_cameras(sparse: Path) -> dict[str, Any]:
+    """Read training centres/focal once; old or hand-made datasets may lack a model."""
+    try:
+        model = sfm.read_model(sparse)
+        return {
+            "camera_centres": np.array(
+                [image.centre for image in model.images], dtype=np.float64
+            ).reshape(-1, 3),
+            "focal_px": float(np.median([camera.focal_px for camera in model.cameras]))
+            if model.cameras
+            else 1.0,
+        }
+    except (OSError, ValueError, struct.error):
+        return {}
+
+
 def snapshot_splat(
-    ply: Path, target: Path, *, max_gaussians: int = MAX_GAUSSIANS
+    ply: Path,
+    target: Path,
+    *,
+    max_gaussians: int = MAX_GAUSSIANS,
+    camera_centres: npt.NDArray[np.float64] | None = None,
+    focal_px: float = 1.0,
 ) -> tuple[int, int, int]:
-    """Pack the `max_gaussians` most opaque-and-largest gaussians of `ply` as SPZ.
+    """Pack a spatially stratified screen-contribution thumbnail of `ply` as SPZ.
 
     Returns (kept, of, bytes). Degree-0 colour only: a preview does not need the view-
     dependent terms, and they are most of an SPZ. Raises `SplatFormatError` on a PLY the
@@ -410,7 +440,23 @@ def snapshot_splat(
     xyz = np.stack([data["x"], data["y"], data["z"]], axis=1)
     log_scales = np.stack([data["scale_0"], data["scale_1"], data["scale_2"]], axis=1)
     alpha = sigmoid(data["opacity"])
-    score = alpha * np.exp(np.clip(log_scales.sum(axis=1), -60.0, 60.0))
+    # Upper bound on projected ellipse area: the two largest axes, with the long
+    # axis capped at 10x the middle one. A needle cannot buy priority with length.
+    axes = np.sort(np.exp(np.clip(log_scales, -30.0, 30.0)), axis=1)
+    area = axes[:, 1] * np.minimum(axes[:, 2], 10.0 * axes[:, 1])
+    distance = np.ones(len(xyz))
+    if camera_centres is not None and len(camera_centres):
+        centres = camera_centres[np.isfinite(camera_centres).all(axis=1)]
+        if len(centres):
+            # Bounded chunks: no full N-splats by N-cameras temporary and no RNG.
+            camera_norms = np.sum(centres**2, axis=1)
+            for start in range(0, len(xyz), 4096):
+                points = xyz[start : start + 4096].astype(np.float64)
+                squared = np.sum(points**2, axis=1)[:, None] + camera_norms
+                squared -= 2 * (points @ centres.T)
+                distance[start : start + len(points)] = np.sqrt(np.maximum(squared.min(axis=1), 0))
+    # Cap angular area at one steradian, including splats at the camera centre.
+    score = alpha * focal_px**2 * np.minimum(area / np.maximum(distance**2, 1e-12), 1.0)
     good = (
         np.isfinite(xyz).all(axis=1)
         & np.isfinite(score)
@@ -419,8 +465,24 @@ def snapshot_splat(
     )
     candidates = np.flatnonzero(good)
     if candidates.size > max_gaussians:
-        top = np.argpartition(-score[candidates], max_gaussians - 1)[:max_gaussians]
-        candidates = np.sort(candidates[top])
+        positions = xyz[candidates].astype(np.float64)
+        span = float(np.max(np.ptp(positions, axis=0)))
+        width = max(span / max(1.0, (max_gaussians / 4) ** (1 / 3)), 1e-9)
+        cells = np.minimum(
+            np.floor((positions - positions.min(axis=0)) / width),
+            max(0, math.ceil(span / width) - 1),
+        ).astype(np.int64)
+        _, cell = np.unique(cells, axis=0, return_inverse=True)
+        # Within each voxel order by contribution, ties by original index. Take the
+        # first from every voxel before its second, then fill the remaining budget.
+        order = np.lexsort((candidates, -score[candidates], cell))
+        ordered_cells = cell[order]
+        starts = np.maximum.accumulate(
+            np.where(np.r_[True, ordered_cells[1:] != ordered_cells[:-1]], np.arange(len(order)), 0)
+        )
+        rank = np.arange(len(order)) - starts
+        take = np.lexsort((candidates[order], -score[candidates[order]], rank))[:max_gaussians]
+        candidates = np.sort(candidates[order[take]])
     sh0 = np.stack([data["f_dc_0"], data["f_dc_1"], data["f_dc_2"]], axis=1)[candidates]
     quat = np.stack([data["rot_1"], data["rot_2"], data["rot_3"], data["rot_0"]], axis=1)
     blob = pack_spz(
@@ -467,6 +529,8 @@ class SplatWatch:
         total: int,
         key_prefix: str,
         up: Sequence[float] | None = None,
+        camera_centres: npt.NDArray[np.float64] | None = None,
+        focal_px: float = 1.0,
         max_gaussians: int = MAX_GAUSSIANS,
         poll_s: float = 2.0,
         enabled: bool = True,
@@ -480,6 +544,8 @@ class SplatWatch:
         self._key_prefix = key_prefix.rstrip("/")
         self._up = None if up is None else [round(float(v), 5) for v in up]
         self._max_gaussians = max_gaussians
+        self._camera_centres = camera_centres
+        self._focal_px = focal_px
         self._poll_s = poll_s
         self._enabled = enabled and bool(self._indices)
         self._now = now
@@ -563,7 +629,11 @@ class SplatWatch:
         name = f"splat_{step:06d}_{int(self._now())}.spz"
         try:
             kept, of, size = snapshot_splat(
-                pending.path, self._live_dir / name, max_gaussians=self._max_gaussians
+                pending.path,
+                self._live_dir / name,
+                max_gaussians=self._max_gaussians,
+                camera_centres=self._camera_centres,
+                focal_px=self._focal_px,
             )
         except (SplatFormatError, OSError, ValueError, KeyError) as error:
             self._sizes.pop(pending.index, None)

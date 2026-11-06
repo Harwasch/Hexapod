@@ -2202,6 +2202,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         total=iterations,
         key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
         up=_up_estimate(poses),
+        **live.snapshot_cameras(dataset / "sparse" / "0"),
     ):
         live.emit_seeds(
             dataset / "sparse" / "0",
