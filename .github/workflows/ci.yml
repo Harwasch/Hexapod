@@ -336,6 +336,8 @@ jobs:
           sudo ln -sfn "$PWD" /opt/pipeline
           sudo ln -sfn "$PWD/../captures" /opt/captures
           sudo cp ../../infra/modal/app.py /root-sim/app.py
+          # The image ships it next to app.py at /root, and app.py imports it from its own folder.
+          sudo cp ../../infra/modal/gsplat_build.py /root-sim/gsplat_build.py
           uv run --with modal python - <<'PY'
           import importlib.util
           from modal._runtime.task_lifecycle_manager import _TaskLifecycleManager
