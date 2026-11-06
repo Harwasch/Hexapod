@@ -5,12 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from datetime import UTC, datetime
+from datetime import datetime, timezone
+
 from pathlib import Path
 from typing import Any
 
 import sfm
 from experiments import benchmark
+
+# Not datetime.UTC: GPU-side bench scripts import this module on the trainer's Python 3.10.
+UTC = timezone.utc  # noqa: UP017
 
 PUBLIC_SCENES = {"truck": benchmark.SCENES["truck"]}
 SCENES = {
