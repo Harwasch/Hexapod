@@ -2100,6 +2100,7 @@ class _FanOutLog:
     context: StageContext
     done_share: dict[str, float] = field(default_factory=dict)
     live_share: dict[str, float] = field(default_factory=dict)
+    live_part: str | None = None
     train_part: str | None = None
     plan_seen: bool = False
 
@@ -2132,6 +2133,14 @@ class _FanOutLog:
                     f"{payload.get('total')} is not shown; another block is further along"
                 )
                 return
+            self.live_part = part
+        if (
+            parsed is not None
+            and parsed[0] == "tiles"
+            and self.live_part is not None
+            and part != self.live_part
+        ):
+            return
         self.context.log(tagged)
 
     def finished(self, part: str) -> None:

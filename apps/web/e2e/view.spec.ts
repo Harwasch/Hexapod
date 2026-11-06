@@ -1082,3 +1082,156 @@ for (const { native, cameraCount } of [
     expect(errors).toEqual([]);
   });
 }
+
+/** Dev-only console probe: positions and picks use the same camera and collision as the draw. */
+interface ConsoleProbe {
+  pose(): { position: number[]; target: number[]; quaternion: number[]; clearance: number };
+  lookAt(eye: number[], target: number[], up: number[]): void;
+  hitAt(x: number, y: number): number[] | null;
+}
+async function navigationConsole(page: Page): Promise<void> {
+  const train = benchTrain(BUCKET);
+  const latest = train.series?.step?.at(-1) ?? 15000;
+  train.tiles = { url: TILESET, step: latest, final: true };
+  await page.route(
+    (url) => url.pathname === "/api/v1/captures/c1/live",
+    (route) =>
+      route.fulfill({
+        json: { ...liveBase, status: "complete", stage: training(latest), cameras: null, train },
+      }),
+  );
+  await page.goto("/view.html#live/c1");
+  await expect(page.locator("#live")).toHaveAttribute("data-navigation", "packaged", {
+    timeout: 30_000,
+  });
+  await expect(page.locator("#live")).toHaveAttribute("data-tiles", "splat.glb");
+  await page.evaluate(() => {
+    (window as unknown as { __liveViewer: ConsoleProbe }).__liveViewer.lookAt(
+      [0, -8, 3.3],
+      [0, 0, 3.3],
+      [0, 0, 1],
+    );
+  });
+  // Spark continues sorting after the tiles arrive. Require a stable draw before interacting.
+  await page.waitForFunction(
+    () => {
+      const host = document.getElementById("live")!;
+      if (host.dataset.settled !== "true") {
+        delete host.dataset.settledSince;
+        return false;
+      }
+      host.dataset.settledSince ??= String(performance.now());
+      return performance.now() - Number(host.dataset.settledSince) > 1000;
+    },
+    undefined,
+    { timeout: 30_000 },
+  );
+}
+async function consolePose(page: Page) {
+  return page.evaluate(() =>
+    (window as unknown as { __liveViewer: ConsoleProbe }).__liveViewer.pose(),
+  );
+}
+async function consoleSurface(page: Page) {
+  return page.evaluate(() => {
+    const probe = (window as unknown as { __liveViewer: ConsoleProbe }).__liveViewer;
+    const rect = document.querySelector("#lc-scene canvas")!.getBoundingClientRect();
+    // Pick an actual off-centre occupied voxel, rather than assuming a pixel hits the tree.
+    for (const dx of [0.08, -0.08, 0.16, -0.16, 0]) {
+      for (const dy of [0, 0.08, -0.08, 0.16, -0.16]) {
+        // Chromium's native dblclick uses integer CSS pixels. Pick the same ray we click;
+        // the old fractional probe differed by 0.0051 solve units in the recorded trace.
+        const x = Math.round(rect.left + rect.width * (0.5 + dx));
+        const y = Math.round(rect.top + rect.height * (0.5 + dy));
+        const hit = probe.hitAt(x, y);
+        if (hit) return { x, y, hit };
+      }
+    }
+    throw new Error("No synthetic-tree surface under console camera");
+  });
+}
+const distance3 = (a: number[], b: number[]): number =>
+  Math.hypot(...a.map((value, i) => value - b[i]!));
+
+test("console surface navigation recentres, zooms close and flies with viewer focus", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await navigationConsole(page);
+  const surface = await consoleSurface(page);
+  const before = await consolePose(page);
+  await page.mouse.dblclick(surface.x, surface.y);
+  await expect
+    .poll(async () => distance3((await consolePose(page)).target, surface.hit))
+    .toBeLessThan(1e-5);
+  const centred = await consolePose(page);
+  expect(distance3(centred.target, before.target)).toBeGreaterThan(0.01);
+  expect(distance3(centred.position, before.position)).toBeLessThan(1e-5);
+  const zoomSurface = await consoleSurface(page);
+  const distance = distance3(centred.position, zoomSurface.hit);
+  await page.mouse.move(zoomSurface.x, zoomSurface.y);
+  await page.mouse.wheel(0, -100);
+  await expect
+    .poll(async () => distance3((await consolePose(page)).position, zoomSurface.hit))
+    .toBeLessThan(distance * 0.9);
+  const zoomed = await consolePose(page);
+  await page.locator("#lc-scene canvas").focus();
+  await page.keyboard.down("KeyD");
+  try {
+    await expect
+      .poll(async () => distance3((await consolePose(page)).position, zoomed.position))
+      .toBeGreaterThan(0.01);
+  } finally {
+    await page.keyboard.up("KeyD");
+  }
+  // Scrubbing switches to the thumbnail's runtime occupancy, then restores packaged collision.
+  const timeline = page.getByRole("slider", { name: "Snapshot step" });
+  const spz = spzFromGlb(toArrayBuffer(readFileSync(resolve(TILES, "splat.glb"))));
+  await page.route(`${BUCKET}/**`, (route) =>
+    route.fulfill({ body: Buffer.from(spz), headers: { "access-control-allow-origin": "*" } }),
+  );
+  await timeline.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.locator("#live")).toHaveAttribute("data-source", "spz", { timeout: 30_000 });
+  await expect(page.locator("#live")).toHaveAttribute("data-navigation", "runtime");
+  await page.keyboard.press("End");
+  await expect(page.locator("#live")).toHaveAttribute("data-navigation", "packaged", {
+    timeout: 30_000,
+  });
+  expect(errors).toEqual([]);
+});
+
+test("console touch pinch zooms toward its centre on a phone", async ({ page }) => {
+  test.setTimeout(90_000);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await navigationConsole(page);
+  const surface = await consoleSurface(page);
+  const before = await consolePose(page);
+  const session = await page.context().newCDPSession(page);
+  const fingers = (span: number) => [
+    { x: surface.x - span / 2, y: surface.y, id: 1 },
+    { x: surface.x + span / 2, y: surface.y, id: 2 },
+  ];
+  try {
+    await session.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: fingers(40),
+    });
+    for (const span of [50, 60, 70, 80])
+      await session.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: fingers(span),
+      });
+    await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await expect
+      .poll(async () => distance3((await consolePose(page)).position, surface.hit))
+      .toBeLessThan(distance3(before.position, surface.hit) * 0.9);
+  } finally {
+    await session.detach();
+  }
+  expect(errors).toEqual([]);
+});

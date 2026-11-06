@@ -364,6 +364,13 @@ export class TileStreamer<M> {
     return this.inFlight.size;
   }
 
+  /** Every tile wanted by the last plan is displayed, with no fetch still pending. */
+  get settled(): boolean {
+    return (
+      !this.busy && this.desired.size > 0 && [...this.desired].every((tile) => this.shown.has(tile))
+    );
+  }
+
   /** Gaussians loaded, drawn or kept for later. */
   get loadedGaussians(): number {
     let total = 0;

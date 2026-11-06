@@ -163,3 +163,18 @@ describe("sizing cells to the splats", () => {
     expect(occupancy.sweep([0, 0, 1], [20, 0, 1]).position[0]).toBeLessThan(8);
   });
 });
+
+it("lets console runtime occupancy override clearance without changing the scan default", () => {
+  const solids = new SplatOccupancy();
+  const points = wall(5);
+  solids.add("wall", points, 0, points.length / 3, opaque);
+  const from: Vec3 = [0, 0, 1],
+    to: Vec3 = [10, 0, 1];
+  const legacy = solids.sweep(from, to);
+  const close = solids.sweep(from, to, 0.01);
+  expect(legacy.blocked).toBe(true);
+  expect(close.blocked).toBe(true);
+  expect(close.position[0]).toBeGreaterThan(legacy.position[0]);
+  expect(close.position[0]).toBeLessThan(5);
+  expect(solids.sweep(from, to)).toEqual(legacy);
+});

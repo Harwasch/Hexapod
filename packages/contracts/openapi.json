@@ -28509,6 +28509,103 @@
         ]
       }
     },
+    "/api/v1/captures/{capture_id}/live/tiles/{step}/{path}": {
+      "get": {
+        "operationId": "capture_live_tile_api_v1_captures__capture_id__live_tiles__step___path__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "step",
+            "required": true,
+            "schema": {
+              "title": "Step",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolve",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Resolve",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "With resolve=true, the signed URL as JSON for cross-origin browsers."
+          },
+          "302": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Fetch a file from the newest run's live LOD tiles",
+        "tags": [
+          "live"
+        ]
+      }
+    },
     "/api/v1/captures/{capture_id}/process": {
       "post": {
         "description": "Inserts a `not-started` job and returns it. Nothing runs here: the worker claims the row with a lease and executes the recipe.",
@@ -29533,6 +29630,103 @@
           }
         },
         "summary": "The live state of one run",
+        "tags": [
+          "live"
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}/live/tiles/{step}/{path}": {
+      "get": {
+        "operationId": "job_live_tile_api_v1_jobs__job_id__live_tiles__step___path__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "step",
+            "required": true,
+            "schema": {
+              "title": "Step",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolve",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Resolve",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "With resolve=true, the signed URL as JSON for cross-origin browsers."
+          },
+          "302": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Fetch a file from one run's live LOD tiles",
         "tags": [
           "live"
         ]

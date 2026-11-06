@@ -47,9 +47,13 @@ import contextlib
 import itertools
 import json
 import math
+import os
 import re
 import shutil
 import struct
+import subprocess
+import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -61,7 +65,8 @@ import numpy as np
 import numpy.typing as npt
 
 import sfm
-from captures_bridge import SplatFormatError, pack_spz, read_ply, sigmoid
+from captures_bridge import SplatFormatError
+from live_sample import snapshot_splat
 
 __all__ = [
     "CAMERAS_TAG",
@@ -88,6 +93,9 @@ __all__ = [
 
 CAMERAS_TAG = "live-cameras: "
 SPLAT_TAG = "live-splat: "
+TILES_TAG = "live-tiles: "
+# Includes interpreter startup. Final packaging has no next-snapshot deadline.
+TILES_TIMEOUT_S = 120.0
 TRAIN_TAG = "live-train: "
 PLAN_TAG = "live-plan: "
 SEEDS_TAG = "live-seeds: "
@@ -101,8 +109,6 @@ MAX_SEEDS = 200_000
 TRAIN_FRACTIONS: tuple[float, ...] = tuple(i / 20 for i in range(1, 20))
 #: A line the parser accepts is at most this long, whatever wrote it.
 MAX_LINE = 96_000
-#: SPZ v2 stores positions as 24-bit fixed point with 12 fractional bits: +/-2048.
-_SPZ_LIMIT = 2_000.0
 _INT16 = 32_767.0
 
 Log = Callable[[str], None]
@@ -422,83 +428,6 @@ def snapshot_cameras(sparse: Path) -> dict[str, Any]:
         return {}
 
 
-def snapshot_splat(
-    ply: Path,
-    target: Path,
-    *,
-    max_gaussians: int = MAX_GAUSSIANS,
-    camera_centres: npt.NDArray[np.float64] | None = None,
-    focal_px: float = 1.0,
-) -> tuple[int, int, int]:
-    """Pack a spatially stratified screen-contribution thumbnail of `ply` as SPZ.
-
-    Returns (kept, of, bytes). Degree-0 colour only: a preview does not need the view-
-    dependent terms, and they are most of an SPZ. Raises `SplatFormatError` on a PLY the
-    trainer has not finished writing.
-    """
-    data = read_ply(ply)
-    xyz = np.stack([data["x"], data["y"], data["z"]], axis=1)
-    log_scales = np.stack([data["scale_0"], data["scale_1"], data["scale_2"]], axis=1)
-    alpha = sigmoid(data["opacity"])
-    # Upper bound on projected ellipse area: the two largest axes, with the long
-    # axis capped at 10x the middle one. A needle cannot buy priority with length.
-    axes = np.sort(np.exp(np.clip(log_scales, -30.0, 30.0)), axis=1)
-    area = axes[:, 1] * np.minimum(axes[:, 2], 10.0 * axes[:, 1])
-    distance = np.ones(len(xyz))
-    if camera_centres is not None and len(camera_centres):
-        centres = camera_centres[np.isfinite(camera_centres).all(axis=1)]
-        if len(centres):
-            # Bounded chunks: no full N-splats by N-cameras temporary and no RNG.
-            camera_norms = np.sum(centres**2, axis=1)
-            for start in range(0, len(xyz), 4096):
-                points = xyz[start : start + 4096].astype(np.float64)
-                squared = np.sum(points**2, axis=1)[:, None] + camera_norms
-                squared -= 2 * (points @ centres.T)
-                distance[start : start + len(points)] = np.sqrt(np.maximum(squared.min(axis=1), 0))
-    # Cap angular area at one steradian, including splats at the camera centre.
-    score = alpha * focal_px**2 * np.minimum(area / np.maximum(distance**2, 1e-12), 1.0)
-    good = (
-        np.isfinite(xyz).all(axis=1)
-        & np.isfinite(score)
-        & np.isfinite(log_scales).all(axis=1)
-        & (np.abs(xyz) < _SPZ_LIMIT).all(axis=1)
-    )
-    candidates = np.flatnonzero(good)
-    if candidates.size > max_gaussians:
-        positions = xyz[candidates].astype(np.float64)
-        span = float(np.max(np.ptp(positions, axis=0)))
-        width = max(span / max(1.0, (max_gaussians / 4) ** (1 / 3)), 1e-9)
-        cells = np.minimum(
-            np.floor((positions - positions.min(axis=0)) / width),
-            max(0, math.ceil(span / width) - 1),
-        ).astype(np.int64)
-        _, cell = np.unique(cells, axis=0, return_inverse=True)
-        # Within each voxel order by contribution, ties by original index. Take the
-        # first from every voxel before its second, then fill the remaining budget.
-        order = np.lexsort((candidates, -score[candidates], cell))
-        ordered_cells = cell[order]
-        starts = np.maximum.accumulate(
-            np.where(np.r_[True, ordered_cells[1:] != ordered_cells[:-1]], np.arange(len(order)), 0)
-        )
-        rank = np.arange(len(order)) - starts
-        take = np.lexsort((candidates[order], -score[candidates[order]], rank))[:max_gaussians]
-        candidates = np.sort(candidates[order[take]])
-    sh0 = np.stack([data["f_dc_0"], data["f_dc_1"], data["f_dc_2"]], axis=1)[candidates]
-    quat = np.stack([data["rot_1"], data["rot_2"], data["rot_3"], data["rot_0"]], axis=1)
-    blob = pack_spz(
-        xyz[candidates],
-        sh0,
-        data["opacity"][candidates],
-        log_scales[candidates],
-        quat[candidates],
-    )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    partial = target.with_name(target.name + ".part")
-    partial.write_bytes(blob)
-    partial.replace(target)
-    return int(candidates.size), int(xyz.shape[0]), len(blob)
-
-
 _PLY_STEP = re.compile(r"point_cloud_(\d+)\.ply$")
 
 
@@ -517,6 +446,12 @@ class SplatWatch:
     is packed once its size has held still between two polls (the trainer writes it in
     one go, but a reader can still land in the middle). A short-file failure is retried.
     On exit whatever is still pending is packed, and every intermediate PLY is removed.
+
+    Full SH/LOD tiles are optional: after the thumbnail at 25%, 50%, 75% and final,
+    package only the newest PLY into a staged directory, then rotate `live/tiles/<step>`.
+    A one-thread CPU child uses the existing scan packer and can be killed at the next
+    snapshot deadline.
+    The final read-only pack runs on this watcher too, with a 120-second ceiling.
     """
 
     def __init__(
@@ -541,6 +476,13 @@ class SplatWatch:
         self._log = log
         self._indices = set(indices)
         self._total = total
+        # The trainer floors both unscaled steps and steps_scaler. Choose the existing
+        # export nearest each quarter, avoiding a second rounding scheme here.
+        self._tile_indices = {
+            min(self._indices, key=lambda i: (abs(i + 1 - total * fraction), i))
+            for fraction in (0.25, 0.5, 0.75)
+            if self._indices
+        }
         self._key_prefix = key_prefix.rstrip("/")
         self._up = None if up is None else [round(float(v), 5) for v in up]
         self._max_gaussians = max_gaussians
@@ -555,6 +497,9 @@ class SplatWatch:
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        self._started = time.monotonic()
+        self._tiles_seconds = 0.0
+        self._tiles_warned = False
         self.emitted: list[dict[str, Any]] = []
 
     def __enter__(self) -> SplatWatch:
@@ -569,19 +514,20 @@ class SplatWatch:
     def __exit__(self, *_exc: object) -> None:
         if self._thread is not None:
             self._stop.set()
-            self._thread.join(timeout=120.0)
-        if self._enabled:
-            with contextlib.suppress(Exception):
-                remaining = self._intermediates()
-                # Only a file the trainer wrote beyond the live list is its final PLY. After
-                # a crash the newest file is an intermediate, which must still be removed so
-                # `training.latest_ply` never mistakes it for a result.
-                if remaining and remaining[-1][0] not in self._indices:
-                    self._final_index = remaining[-1][0]
-                self.poll(settled=True)
-                if self._final_index is not None and self._final_index not in self._done:
-                    index, path = remaining[-1]
-                    self._pack(_Pending(index, path, path.stat().st_size))
+            # The final read-only pack also runs on the watcher, after training exits.
+            # Each child has a hard timeout; no unbounded packer can hold this join.
+            self._thread.join()
+
+    def _finish(self) -> None:
+        with contextlib.suppress(Exception):
+            remaining = self._intermediates()
+            # After a crash the newest file is an intermediate, never a final result.
+            if remaining and remaining[-1][0] not in self._indices:
+                self._final_index = remaining[-1][0]
+            self.poll(settled=True)
+            if self._final_index is not None and self._final_index not in self._done:
+                index, path = remaining[-1]
+                self._pack(_Pending(index, path, path.stat().st_size))
         for index, path in self._intermediates():
             if index in self._indices and index != self._final_index:
                 with contextlib.suppress(OSError):
@@ -591,6 +537,7 @@ class SplatWatch:
         while not self._stop.wait(self._poll_s):
             with contextlib.suppress(Exception):  # watching must never fail the stage
                 self.poll()
+        self._finish()
 
     def _intermediates(self) -> list[tuple[int, Path]]:
         found: list[tuple[int, Path]] = []
@@ -643,8 +590,6 @@ class SplatWatch:
                 self._log(f"live: {pending.path.name} is not a splat this can pack: {error}")
             return False
         self._done.add(pending.index)
-        if pending.index != self._final_index:
-            pending.path.unlink(missing_ok=True)
         payload = {
             "v": 1,
             "step": step,
@@ -657,7 +602,111 @@ class SplatWatch:
         }
         self._log(SPLAT_TAG + json.dumps(payload, separators=(",", ":")))
         self.emitted.append(payload)
+        self._pack_tiles(pending)
+        if pending.index != self._final_index:
+            pending.path.unlink(missing_ok=True)
         return True
+
+    def _tiles_skip(self, reason: str) -> None:
+        if not self._tiles_warned:
+            self._tiles_warned = True
+            with contextlib.suppress(Exception):
+                self._log(f"live: LOD tiles skipped: {reason}")
+
+    def _tiles_budget(self, pending: _Pending) -> float:
+        if pending.index == self._final_index:
+            return TILES_TIMEOUT_S
+        # Never package a backlog. Keep all small thumbnails, but spend the LOD budget
+        # only on the newest PLY while the trainer is still running.
+        if self._stop.is_set() or any(i > pending.index for i, _ in self._intermediates()):
+            return 0.0
+        elapsed = time.monotonic() - self._started
+        next_index = min((i for i in self._indices if i > pending.index), default=self._total - 1)
+        interval = elapsed * (next_index - pending.index) / (pending.index + 1)
+        return min(TILES_TIMEOUT_S, interval)
+
+    def _convert_tiles(self, pending: _Pending, staged: Path, budget: float) -> dict[str, Any]:
+        command = [
+            sys.executable,
+            str(Path(__file__).with_name("live_tiles.py")),
+            str(pending.path),
+            str(staged),
+        ]
+        deadline = time.monotonic() + budget
+        with subprocess.Popen(  # noqa: S603 - fixed local helper, no shell
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={
+                **os.environ,
+                "OMP_NUM_THREADS": "1",
+                "OPENBLAS_NUM_THREADS": "1",
+                "MKL_NUM_THREADS": "1",
+            },
+        ) as child:
+            try:
+                while True:
+                    remaining = deadline - time.monotonic()
+                    superseded = pending.index != self._final_index and (
+                        self._stop.is_set()
+                        or any(i > pending.index for i, _ in self._intermediates())
+                    )
+                    if remaining <= 0 or superseded:
+                        raise subprocess.TimeoutExpired(command, budget)
+                    try:
+                        stdout, stderr = child.communicate(timeout=min(0.25, remaining))
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
+                if child.returncode:
+                    raise subprocess.CalledProcessError(child.returncode, command, stderr=stderr)
+                stats: dict[str, Any] = json.loads(stdout)
+                return stats
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                child.communicate()
+
+    def _pack_tiles(self, pending: _Pending) -> None:
+        if pending.index != self._final_index and pending.index not in self._tile_indices:
+            return
+        budget = self._tiles_budget(pending)
+        if budget <= 0 or (pending.index != self._final_index and budget <= self._tiles_seconds):
+            self._tiles_skip("pack time exceeds the next snapshot interval")
+            return
+        started = time.monotonic()
+        try:
+            # Beside the PLY, outside checkpoint/: the syncer must never see partial
+            # GLBs or the packer's scratch files. Killing the child cleans both here.
+            with tempfile.TemporaryDirectory(prefix="live-tiles-", dir=self._ply_dir.parent) as tmp:
+                staged = Path(tmp) / "tiles"
+                stats = self._convert_tiles(pending, staged, budget)
+                seconds = time.monotonic() - started
+                step = pending.index + 1
+                payload = {
+                    "v": 1,
+                    "key": f"{self._key_prefix}/tiles/{step}/tileset.json",
+                    "step": step,
+                    "final": pending.index == self._final_index,
+                    **stats,
+                    "seconds": round(seconds, 3),
+                }
+                if not _valid_tiles(payload):
+                    raise ValueError("invalid packer stats")
+                root = self._live_dir / "tiles"
+                root.mkdir(parents=True, exist_ok=True)
+                staged.replace(root / str(step))
+                self._tiles_seconds = seconds
+                for previous in root.iterdir():
+                    if previous.name != str(step) and previous.is_dir():
+                        shutil.rmtree(previous)
+                self._log(TILES_TAG + json.dumps(payload, separators=(",", ":")))
+        except subprocess.TimeoutExpired:
+            self._tiles_seconds = max(self._tiles_seconds, budget)
+            self._tiles_skip("pack time exceeds the next snapshot interval")
+        except Exception as error:
+            self._tiles_skip(type(error).__name__)
 
 
 def write_seeds(
@@ -792,6 +841,33 @@ def _valid_splat(payload: Mapping[str, Any]) -> bool:
     )
 
 
+def _valid_tiles(payload: Mapping[str, Any]) -> bool:
+    key = payload.get("key")
+    return (
+        payload.get("v") == 1
+        and isinstance(key, str)
+        and len(key) <= 512
+        and key.startswith("runs/")
+        and _count(payload.get("step"))
+        and re.search(
+            rf"/checkpoint(?:-a[1-9][0-9]*)?/{LIVE_DIR}/tiles/{payload.get('step')}/tileset\.json$",
+            key,
+        )
+        is not None
+        and ".." not in key
+        and "\\" not in key
+        and "%" not in key
+        and "//" not in key
+        and isinstance(payload.get("final"), bool)
+        and all(_count(payload.get(k)) for k in ("step", "gaussians", "tiles", "bytes"))
+        and _optional_number(payload.get("seconds"))
+        and payload.get("seconds") is not None
+        and payload["seconds"] >= 0
+        and len(json.dumps(payload)) < 1024
+        and _finite_tree(payload)
+    )
+
+
 def _valid_seeds(payload: Mapping[str, Any]) -> bool:
     key, sources = payload.get("key"), payload.get("sources")
     return (
@@ -908,6 +984,7 @@ _TAGS: tuple[tuple[str, str, Callable[[Mapping[str, Any]], bool]], ...] = (
     ("seeds", SEEDS_TAG, _valid_seeds),
     ("cameras", CAMERAS_TAG, _valid_cameras),
     ("splat", SPLAT_TAG, _valid_splat),
+    ("tiles", TILES_TAG, _valid_tiles),
     ("train", TRAIN_TAG, _valid_train),
     ("plan", PLAN_TAG, _valid_plan),
 )

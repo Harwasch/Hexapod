@@ -135,6 +135,7 @@ def merge_live(
         train["seeds"] = seeds
     if retry:
         result.pop("splat", None)
+        result.pop("tiles", None)
         result["snapshots"] = []
     if plan_id is not None:
         train["planId"] = plan_id
@@ -165,6 +166,11 @@ def merge_live(
         elif kind == "plan":
             # Resolved trainer fields win over repeated stage-plan lines.
             plan = {**value, **plan} if not reset else {**plan, **value}
+        elif kind == "tiles" and index >= boundary:
+            result["tiles"] = {
+                key: value.get(key)
+                for key in ("v", "key", "step", "final", "gaussians", "tiles", "bytes", "seconds")
+            }
         elif kind == "splat" and (index >= boundary or (block_change and not retry)):
             snapshots[value["key"]] = value
             result["splat"] = value
@@ -267,9 +273,11 @@ def merge_live(
     if incoming or plan or current.get("train") or quality or "seeds" in train:
         result["train"] = train
         # Optional loss components can consume more space than the ordinary seven columns.
-        while len(json.dumps({"train": train, "snapshots": result["snapshots"]})) > MAX_BYTES and (
-            len(rows) > 2 or len(qrows) > 2
-        ):
+        while len(
+            json.dumps(
+                {"train": train, "snapshots": result["snapshots"], "tiles": result.get("tiles")}
+            )
+        ) > MAX_BYTES and (len(rows) > 2 or len(qrows) > 2):
             rows = _spread(rows, max(2, len(rows) * 3 // 4))
             train["series"] = _columns(rows)
             if qrows:

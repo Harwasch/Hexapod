@@ -18,6 +18,7 @@ import {
   openScanStream,
   splatAntialiasing,
 } from "@/view/sparkStream";
+import { loadCollision } from "@/lib/collision";
 import type { TileNode } from "@/view/tiles";
 
 const made = vi.hoisted(() => [] as { options: Record<string, unknown> }[]);
@@ -26,6 +27,9 @@ vi.mock("@sparkjsdev/spark", async () => {
   const three = await vi.importActual<typeof THREE>("three");
   class SplatMesh extends three.Object3D {
     readonly initialized: Promise<SplatMesh>;
+    override dispose(): void {
+      /* Test mesh owns no GPU resources. */
+    }
     constructor(readonly options: Record<string, unknown>) {
       super();
       this.initialized = Promise.resolve(this);
@@ -180,4 +184,173 @@ it("removes the lat=lon=height=0 globe placement while retaining tile-local offs
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+it("keeps relative GLB and collision requests on the API after a signed tileset redirect", async () => {
+  const base = `${location.origin}/api/v1/captures/c/live/tiles/30/`;
+  const manifest: unknown = JSON.parse(readFileSync(resolve(FAR, "tileset.json"), "utf8"));
+  const fetched: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      fetched.push(url);
+      const name = url.slice(base.length);
+      const response =
+        name === "tileset.json"
+          ? new Response(JSON.stringify(manifest))
+          : new Response(new Uint8Array(readFileSync(resolve(FAR, name))));
+      // fetch has followed the API's 302 to a private bucket. Relative files must use
+      // the original API URL so that each receives its own short-lived signature.
+      Object.defineProperty(response, "url", { value: `https://private.example/${name}?signed=1` });
+      Object.defineProperty(response, "redirected", { value: true });
+      return Promise.resolve(response);
+    }),
+  );
+  try {
+    const { url, tree } = await fetchSplatTileset(`${base}tileset.json`);
+    expect(url).toBe(`${base}tileset.json`);
+    await loadSplatTile(url, tree.root);
+    expect(tree.collision).toBeTruthy();
+    if (tree.collision) await loadCollision(url, tree.collision);
+    expect(fetched).toEqual([
+      `${base}tileset.json`,
+      new URL(tree.root.uri, base).href,
+      `${base}collision.bin`,
+    ]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+describe("full-resolution diagnostic stream", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+  it("loads every leaf, even beyond the normal cap and below the screen-error target", async () => {
+    vi.useFakeTimers();
+    serve("splat.glb");
+    const root = {
+      ...tile("splat.glb"),
+      children: [
+        { ...tile("left.glb"), gaussians: 7_000_000 },
+        { ...tile("right.glb"), gaussians: 7_000_000 },
+      ],
+    };
+    const group = new THREE.Group();
+    const stream = openScanStream(
+      { url: "/tileset.json", tree: { root, refine: "REPLACE" } },
+      group,
+      new THREE.PerspectiveCamera(),
+      { domElement: { clientHeight: 100 } } as THREE.WebGLRenderer,
+      { lodSplatCount: 1 } as SparkRenderer,
+      { fullResolution: true },
+    );
+    await stream.ready;
+    expect(stream.settled).toBe(false);
+    for (let i = 0; i < 8; i++) {
+      await vi.advanceTimersByTimeAsync(160);
+      stream.frame();
+    }
+    expect(stream.settled).toBe(true);
+    expect(group.children).toHaveLength(2);
+    expect(made.slice(-3).map((mesh) => mesh.options.lod)).toEqual([false, false, false]);
+    stream.stop();
+    expect(group.children).toHaveLength(0);
+  });
+});
+
+describe("scan viewer default tile selection", () => {
+  afterEach(() => vi.useRealTimers());
+  it.each([false, true])(
+    "uses the legacy FOV unless matrix intrinsics are explicitly requested (%s)",
+    async (projectionFromMatrix) => {
+      vi.useFakeTimers();
+      const at = (
+        x: number,
+        half: number,
+        uri: string,
+        count: number,
+        error: number,
+        children: TileNode[] = [],
+      ): TileNode => ({
+        uri,
+        gaussians: count,
+        geometricError: error,
+        children,
+        bounds: { center: [x, 0, 0], radius: Math.hypot(half, half, 4) },
+        box: [x, 0, 0, half, 0, 0, 0, half, 0, 0, 0, 4],
+      });
+      const root = at(
+        0,
+        45,
+        "splat.glb",
+        20_000,
+        4,
+        [-30, 30].map((x, i) =>
+          at(
+            x,
+            12,
+            `splat_${i}.glb`,
+            40_000,
+            0.5,
+            [-6, 6].map((dx, j) => at(x + dx, 6, `splat_${i}-${j}.glb`, 300_000, 0)),
+          ),
+        ),
+      );
+      const camera = new THREE.PerspectiveCamera(50, 390 / 844, 0.01, 5000);
+      const group = new THREE.Group();
+      group.rotation.x = -Math.PI / 2;
+      group.updateMatrixWorld(true);
+      let drawn: string[] = [];
+      const stream = openScanStream(
+        { url: "/tileset.json", tree: { root, refine: "REPLACE" } },
+        group,
+        camera,
+        { domElement: { clientHeight: 844 } } as THREE.WebGLRenderer,
+        { lodSplatCount: 200_000 } as SparkRenderer,
+        {
+          ...(projectionFromMatrix ? { projectionFromMatrix: true } : {}),
+          load: () =>
+            Promise.resolve(
+              Object.assign(new THREE.Object3D(), { dispose: vi.fn() }) as unknown as SplatMesh,
+            ),
+          report: ({ tiles }) => {
+            drawn = tiles.map((t) => t.uri);
+          },
+        },
+      );
+      await stream.ready;
+      const look = async (x: number, distance: number) => {
+        const target = new THREE.Vector3(x, 0, 0).applyMatrix4(group.matrixWorld);
+        camera.position
+          .copy(target)
+          .add(new THREE.Vector3(0, 0.45, 1).normalize().multiplyScalar(distance));
+        camera.lookAt(target);
+        camera.updateMatrixWorld(true);
+        for (let i = 0; i < 8; i++) {
+          await vi.advanceTimersByTimeAsync(160);
+          stream.frame();
+        }
+      };
+      await look(0, 400);
+      expect(drawn).toEqual(["splat_0.glb", "splat_1.glb"]);
+      // Projection overrides belong to rendering/diagnostics, not the default LOD policy.
+      camera.zoom = 8;
+      camera.updateProjectionMatrix();
+      await look(0, 401); // Move too: the streamer replans on pose changes, not projection alone.
+      expect(drawn.sort()).toEqual(
+        projectionFromMatrix
+          ? ["splat_0-0.glb", "splat_0-1.glb", "splat_1.glb"]
+          : ["splat_0.glb", "splat_1.glb"],
+      );
+      camera.zoom = 1;
+      camera.updateProjectionMatrix();
+      await look(-30, 8);
+      expect(drawn.sort()).toEqual(["splat_0-0.glb", "splat_0-1.glb", "splat_1.glb"]);
+      await look(30, 8);
+      expect(drawn.sort()).toEqual(["splat_0.glb", "splat_1-0.glb", "splat_1-1.glb"]);
+      stream.stop();
+    },
+  );
 });
