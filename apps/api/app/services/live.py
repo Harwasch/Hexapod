@@ -28,7 +28,15 @@ from sqlalchemy.orm import Session
 
 from app.models import Capture, Job, JobStep
 from app.models.enums import RunStatus
-from app.schemas.live import LiveCameras, LiveProgress, LiveSplat, LiveStage, LiveState, LiveTrain
+from app.schemas.live import (
+    LiveCameras,
+    LiveProgress,
+    LiveSplat,
+    LiveStage,
+    LiveState,
+    LiveTrain,
+    LiveTrainEnded,
+)
 from app.services.errors import NotFoundError
 from app.services.jobs import get_job
 from app.services.live_train import derive_events, final_metrics
@@ -79,12 +87,13 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
     cameras: LiveCameras | None = None
     splat: LiveSplat | None = None
     train: LiveTrain | None = None
+    terminal = job.status in (RunStatus.ERROR, RunStatus.CANCELLED)
     # The newest of each, by position in the run: a re-run pose stage's cameras replace
     # the old ones, and a Refine's training replaces the preview's splat.
     for step in steps:
         live = (step.metrics or {}).get("live")
         if not isinstance(live, dict):
-            if step.stage_id != "train" or step.status == RunStatus.IN_PROGRESS:
+            if step.stage_id != "train" or (step.status == RunStatus.IN_PROGRESS and not terminal):
                 continue
             live = {}
         found_cameras = _cameras(step, live.get("cameras"))
@@ -93,10 +102,25 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
         splat = found_splat or splat
         final = (
             final_metrics(step.metrics or {})
-            if step.stage_id == "train" and step.status != RunStatus.IN_PROGRESS
+            if step.stage_id == "train" and (step.status != RunStatus.IN_PROGRESS or terminal)
             else None
         )
-        train = _train(live, storage, final=final) or train
+        terminal_train = step.stage_id == "train" and terminal
+        if terminal_train and live.get("train") is None:
+            live = {**live, "train": {}}
+        found_train = _train(live, storage, final=final)
+        if (
+            terminal_train
+            and step.status != RunStatus.COMPLETE
+            and found_train is not None
+            and found_train.stop is None
+            and found_train.final is None
+        ):
+            found_train.ended = LiveTrainEnded(
+                reason="preempted" if step.preempted_at is not None else "stopped",
+                step=max([0, *found_train.series.step, *[e.step for e in found_train.evals]]),
+            )
+        train = found_train or train
     return LiveState(
         job_id=job.id,
         capture_id=capture.id,
@@ -209,7 +233,9 @@ def _train(
     if not isinstance(value, dict):
         return None
     try:
-        parsed = LiveTrain.model_validate({**value, "snapshots": live.get("snapshots", [])})
+        parsed = LiveTrain.model_validate(
+            {**value, "ended": None, "snapshots": live.get("snapshots", [])}
+        )
         if final is not None:
             parsed = LiveTrain.model_validate({**parsed.model_dump(by_alias=True), "final": final})
         document = parsed.model_dump(by_alias=True)

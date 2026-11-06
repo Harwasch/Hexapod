@@ -908,6 +908,58 @@ test("training console charts, scrubbing and controls keep snapshots and fit a p
   expect(errors).toEqual([]);
 });
 
+test("preempted training freezes the bench console and stops polling", async ({ page }) => {
+  const spz = Buffer.from(spzFromGlb(toArrayBuffer(readFileSync(resolve(TILES, "splat.glb")))));
+  const train = benchTrain(BUCKET);
+  train.ended = { reason: "preempted", step: 15600 };
+  const snapshot = train.snapshots?.at(-1);
+  if (!snapshot) throw new Error("Bench fixture needs a snapshot");
+  let polls = 0;
+  await page.clock.install();
+  await page.route(
+    (url) => url.pathname === "/api/v1/captures/c1/live",
+    (route) => {
+      polls += 1;
+      return route.fulfill({
+        json: {
+          ...liveBase,
+          status: "error",
+          error: "GPU reclaimed",
+          stage: { ...training(15600), status: "error", progress: null },
+          cameras: liveCameras(12),
+          splat: {
+            ...liveSplat(snapshot.step, spz.length),
+            name: snapshot.key.split("/").at(-1),
+            url: snapshot.url,
+          },
+          train,
+        },
+      });
+    },
+  );
+  await page.route(`${BUCKET}/**`, (route) =>
+    route.fulfill({ body: spz, headers: { "access-control-allow-origin": "*" } }),
+  );
+  await page.goto("/view.html#live/c1");
+  await expect(page.locator("#lc-pill")).toHaveText("Pre-empted · step 15,600");
+  await expect(page.locator("#lc-error")).toHaveText("GPU reclaimed");
+  await expect(page.locator("#lc-kpi-0")).toHaveText("15,600");
+  await expect(page.locator("#lc-kpi-3")).toHaveText("Pre-empted");
+  await expect(page.locator("#lc-follow")).toHaveText("step 15,600");
+  const timeline = page.locator("#lc-timeline");
+  await expect(timeline).toHaveAttribute("aria-valuemax", "15600");
+  await timeline.focus();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("End");
+  await expect(timeline).toHaveAttribute("aria-valuenow", "15600");
+  await expect(page.locator("#lc-follow")).toHaveText("step 15,600");
+  await expect(page.locator("#lc-chart-gs [data-stop]")).toHaveAttribute("data-stop", "15600");
+  await expect(page.locator("#live")).toHaveAttribute("data-splat-step", String(snapshot.step));
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await page.clock.fastForward(12000);
+  expect(polls).toBe(1);
+});
+
 test("training without telemetry has empty charts and disables unscaled Distance", async ({
   page,
 }) => {

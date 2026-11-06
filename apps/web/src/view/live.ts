@@ -25,6 +25,7 @@ import {
   decodeSeeds,
   distanceColour,
   isNewAttempt,
+  lastStep,
   nearestCameraDistance,
   snapshotAt,
 } from "./liveTrain";
@@ -543,9 +544,12 @@ export function showLive(captureId: string): { stop: () => void } {
   });
   function selectSnapshot(state: LiveState): void {
     const snapshots = state.train?.snapshots ?? [];
-    const chosen = scrubStep == null ? null : snapshotAt(snapshots, scrubStep);
+    const step = state.train?.ended
+      ? Math.min(scrubStep ?? Infinity, lastStep(state.train))
+      : scrubStep;
+    const chosen = step == null ? null : snapshotAt(snapshots, step);
     // Before the first snapshot there is nothing to scrub to; retain the current view.
-    if (scrubStep != null && !chosen) return;
+    if (step != null && !chosen) return;
     const newest = snapshots.find((snapshot) =>
       snapshot.key.endsWith(`/${state.splat?.name ?? ""}`),
     );
@@ -559,7 +563,8 @@ export function showLive(captureId: string): { stop: () => void } {
       void showSplat(next.name, next.step, next.url, upOf(state))
         .catch(() => {
           // Also retry a failed scrub after the run has ended and ordinary polling stopped.
-          if (!stopped) timer = window.setTimeout(() => void tick(), POLL_MS);
+          if (!stopped && !latestState?.train?.ended)
+            timer = window.setTimeout(() => void tick(), POLL_MS);
         })
         .finally(() => {
           if (loadingSplat === next.name) loadingSplat = null;
@@ -614,15 +619,16 @@ export function showLive(captureId: string): { stop: () => void } {
     }
     section.dataset.status = state.status;
     return (
-      described.ended &&
-      (!state.splat || desiredSplat === splat?.name) &&
-      (!state.train?.seeds || seedName === state.train.seeds.key)
+      state.train?.ended != null ||
+      (described.ended &&
+        (!state.splat || desiredSplat === splat?.name) &&
+        (!state.train?.seeds || seedName === state.train.seeds.key))
     );
   };
 
   const tick = async (): Promise<void> => {
     window.clearTimeout(timer);
-    if (stopped) return;
+    if (stopped || latestState?.train?.ended) return;
     let ended = false;
     try {
       const response = await fetchApi(
@@ -638,7 +644,8 @@ export function showLive(captureId: string): { stop: () => void } {
     } catch {
       // A dropped request on a phone is normal; the next tick asks again.
     }
-    if (!stopped && !ended) timer = window.setTimeout(() => void tick(), POLL_MS);
+    if (ended) window.clearTimeout(timer);
+    else if (!stopped) timer = window.setTimeout(() => void tick(), POLL_MS);
   };
   const onVisible = (): void => {
     if (document.visibilityState === "visible") void tick();
