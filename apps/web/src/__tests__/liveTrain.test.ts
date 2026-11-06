@@ -303,6 +303,41 @@ describe("real-run console", () => {
       document.body.innerHTML = "";
     }
   });
+  it("links the replacement run and clears the chip when no replacement is set", async () => {
+    const { liveConsole } = await import("@/view/liveConsole");
+    const markup = await import("../../view.html?raw");
+    document.body.innerHTML = markup.default;
+    const context = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    const consoleView = liveConsole({
+      scrub: vi.fn(),
+      color: vi.fn(),
+      view: vi.fn(),
+      layers: vi.fn(),
+    });
+    try {
+      const replacement = document.getElementById("lc-replacement") as HTMLAnchorElement;
+      consoleView.update(state());
+      expect(replacement.hidden).toBe(true);
+      const replacedBy = "4769ee65e33c44f2aacd87a45dfa3811";
+      consoleView.update(
+        state({
+          status: "error",
+          train: { ...train, ended: { reason: "failed", step: 50000 }, replacedBy },
+        }),
+      );
+      expect(replacement.hidden).toBe(false);
+      expect(replacement.textContent).toBe("→ 4769ee65");
+      expect(replacement.getAttribute("href")).toBe(`view.html#live/${replacedBy}`);
+      consoleView.update(state());
+      expect(replacement.hidden).toBe(true);
+      expect(replacement.hasAttribute("href")).toBe(false);
+      expect(replacement.textContent).toBe("");
+    } finally {
+      consoleView.stop();
+      context.mockRestore();
+      document.body.innerHTML = "";
+    }
+  });
   it("pins an ended console and its scrubber without showing pending work", async () => {
     const { liveConsole } = await import("@/view/liveConsole");
     const markup = await import("../../view.html?raw");

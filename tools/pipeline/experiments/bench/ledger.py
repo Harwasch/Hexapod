@@ -188,7 +188,13 @@ def reserve(path: Path, plans: list[dict[str, Any]], cap: float) -> None:
 
 
 def finish(
-    path: Path, run: str, *, cost: float | None, failed: bool, error: str | None = None
+    path: Path,
+    run: str,
+    *,
+    cost: float | None,
+    failed: bool,
+    error: str | None = None,
+    app_id: str | None = None,
 ) -> None:
     if cost is not None:
         money(cost)
@@ -205,6 +211,7 @@ def finish(
                 "event": "failed" if failed else "finished",
                 "costUsd": cost,
                 "error": error,
+                **({"appId": app_id} if app_id is not None else {}),
             },
         )
 

@@ -533,6 +533,11 @@ def test_cap_event_uses_the_lower_resolved_cap_and_includes_equality() -> None:
     assert event["step"] == 1000 and event["text"] == "Cap reached · 1,100"
 
 
+def test_job_training_never_claims_a_bench_replacement() -> None:
+    parsed = _train({"train": {"replacedBy": "fa4f62cf183e45e89358cae2b4627e41"}}, NullStorage())
+    assert parsed is not None and parsed.replaced_by is None
+
+
 def test_tiles_are_optional_and_pass_through_without_signing() -> None:
     tiles = {"url": "https://tiles.example/bench/tileset.json", "step": 15000, "final": False}
     parsed = _train({"train": {"tiles": tiles, "plan": {"antialiased": True}}}, NullStorage())

@@ -93,7 +93,7 @@ def test_remote_batch_spawns_at_most_four_before_waiting_and_pins_manifest(
             return Call(plan)
 
     module = SimpleNamespace(
-        app=SimpleNamespace(run=contextlib.nullcontext),
+        app=SimpleNamespace(run=contextlib.nullcontext, app_id="ap-test"),
         volume=SimpleNamespace(read_file=lambda _: [b'{"digest":"frozen","splitDigest":"split"}']),
         FUNCTIONS={("l4", "screen"): Function()},
     )
@@ -104,6 +104,9 @@ def test_remote_batch_spawns_at_most_four_before_waiting_and_pins_manifest(
     results = cli.remote_batch(plans, tmp_path, tmp_path / "ledger.jsonl", 10)
     assert len(results) == 7 and peak == 4 and active == 0
     assert seen == [str(i) for i in range(7)]
+    entries = ledger.read(tmp_path / "ledger.jsonl")
+    assert all("appId" not in e for e in entries if e["event"] == "planned")
+    assert all(e["appId"] == "ap-test" for e in entries if e["event"] == "finished")
     assert ledger.summary(ledger.read(tmp_path / "ledger.jsonl"))["totalUsd"] == pytest.approx(0.07)
 
 
@@ -166,3 +169,58 @@ def test_negative_renders_refused_before_any_launch() -> None:
     args = cli.parser().parse_args(["run", "--scene", "spool", "--renders", "-1"])
     with pytest.raises(ValueError, match="nonnegative"):
         cli.plans_for(args)
+
+
+@pytest.mark.parametrize("failure", ["spawn", "get", "result"])
+def test_remote_failure_records_app_id_available_only_inside_app_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    class App:
+        active = False
+
+        @contextlib.contextmanager
+        def run(self) -> Any:
+            self.active = True
+            try:
+                yield
+            finally:
+                self.active = False
+
+        @property
+        def app_id(self) -> str:
+            assert self.active
+            return "ap-test"
+
+    class Call:
+        def get(self) -> dict[str, Any]:
+            if failure == "get":
+                raise RuntimeError("outcome unknown")
+            return {"status": "failed", "error": "restart refused", "costUsd": None}
+
+    class Function:
+        def spawn(self, plan: dict[str, Any]) -> Call:
+            if failure == "spawn":
+                raise RuntimeError("spawn failed")
+            return Call()
+
+    module = SimpleNamespace(
+        app=App(),
+        volume=SimpleNamespace(read_file=lambda _: [b'{"digest":"frozen","splitDigest":"split"}']),
+        FUNCTIONS={("l4", "screen"): Function()},
+    )
+    monkeypatch.setattr(cli, "load_modal", lambda: module)
+    plan = {
+        "runId": "one",
+        "scene": "spool",
+        "schedule": "screen",
+        "tier": "l4",
+        "trainParams": {},
+        "variant": "baseline",
+        "seed": 42,
+        "benchCommit": "test",
+    }
+    results = cli.remote_batch([plan], tmp_path, tmp_path / "ledger.jsonl", 2)
+    assert len(results) == 1 and results[0]["status"] != "complete"
+    entries = ledger.read(tmp_path / "ledger.jsonl")
+    assert "appId" not in entries[0] and "appId" not in plan
+    assert entries[1]["event"] == "failed" and entries[1]["appId"] == "ap-test"
