@@ -277,6 +277,8 @@ COLMAP_THREADS = "8"
 #: `sfm.vocab_tree_path` finds it.
 cpu_image = (
     modal.Image.from_registry("ubuntu:24.04", add_python="3.12")
+    # The remote app module imports this helper even when it serves a CPU stage.
+    .add_local_file(HERE / "gsplat_build.py", "/root/gsplat_build.py", copy=True)
     .apt_install("colmap", "curl", "ca-certificates")
     .run_commands(
         f"mkdir -p {Path(VOCAB_TREE).parent}",
