@@ -8788,6 +8788,7 @@ export interface components {
         LiveTrain: {
             /** Block */
             block?: string | null;
+            ended?: components["schemas"]["LiveTrainEnded"] | null;
             /** Evals */
             evals?: components["schemas"]["LiveTrainEval"][];
             /** Events */
@@ -8804,6 +8805,16 @@ export interface components {
             /** Snapshots */
             snapshots?: components["schemas"]["LiveTrainSnapshot"][];
             stop?: components["schemas"]["LiveTrainStop"] | null;
+        };
+        /** LiveTrainEnded */
+        LiveTrainEnded: {
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "preempted" | "stopped";
+            /** Step */
+            step: number;
         };
         /** LiveTrainEval */
         LiveTrainEval: {
@@ -13249,6 +13260,7 @@ export type SchemaLiveSplat = components['schemas']['LiveSplat'];
 export type SchemaLiveStage = components['schemas']['LiveStage'];
 export type SchemaLiveState = components['schemas']['LiveState'];
 export type SchemaLiveTrain = components['schemas']['LiveTrain'];
+export type SchemaLiveTrainEnded = components['schemas']['LiveTrainEnded'];
 export type SchemaLiveTrainEval = components['schemas']['LiveTrainEval'];
 export type SchemaLiveTrainEvent = components['schemas']['LiveTrainEvent'];
 export type SchemaLiveTrainFinal = components['schemas']['LiveTrainFinal'];

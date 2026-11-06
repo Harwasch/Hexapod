@@ -194,11 +194,12 @@ export function liveConsole(actions: {
                   : chart.format(reference);
         markup += `<g data-reference="${chart.id === "gs" ? "cap" : chart.id}"><line x1="36" x2="294" y1="${String(y(reference))}" y2="${String(y(reference))}" stroke="#12170f" stroke-width="3"/><line x1="36" x2="294" y1="${String(y(reference))}" y2="${String(y(reference))}" stroke="#f2f6ef" stroke-dasharray="4 3"/><text class="lc-reference-label" x="292" y="${String(Math.max(16, Math.min(128, y(reference) - 4)))}" text-anchor="end">${label}</text></g>`;
       }
-      if (train?.stop)
-        markup += `<line x1="${String(x(train.stop.step))}" x2="${String(x(train.stop.step))}" y1="8" y2="132" stroke="#f0b254"/>`;
       const mark = hover ?? scrub;
       if (mark != null)
         markup += `<line class="lc-crosshair" x1="${String(x(mark))}" x2="${String(x(mark))}" y1="8" y2="132" stroke="#f2f6ef" opacity=".6"/>`;
+      const stop = train?.ended ?? train?.stop;
+      if (stop)
+        markup += `<line data-stop="${String(stop.step)}" x1="${String(x(stop.step))}" x2="${String(x(stop.step))}" y1="8" y2="132" stroke="#f0b254"/>`;
       svg.innerHTML = markup;
       svg.dataset.crosshair = mark == null ? "" : String(Math.round(mark));
       const point =
@@ -210,7 +211,7 @@ export function liveConsole(actions: {
         ];
       if (chart.mini) {
         const step = lastStep(train),
-          gain = train?.evals?.at(-1)?.gain;
+          gain = train?.evals?.findLast((e) => e.step <= step)?.gain;
         const ok =
           chart.id === "gain"
             ? gain != null &&
@@ -224,7 +225,7 @@ export function liveConsole(actions: {
               ? "–"
               : chart.format(gain)
             : `${compact(step)} / ${compact(reference)}`;
-        text(`lc-now-${chart.id}`, `${ok ? "✓" : "…"} ${value}`);
+        text(`lc-now-${chart.id}`, `${ok ? "✓ " : train?.ended ? "" : "… "}${value}`);
         el(`lc-now-${chart.id}`).dataset.ok = String(ok);
       } else text(`lc-now-${chart.id}`, point ? chart.format(point.value) : "–");
     }
@@ -255,26 +256,37 @@ export function liveConsole(actions: {
       if (X(band.b) - X(band.a) > 64) ctx.fillText(band.label, X(band.a) + 3, 13);
     }
     ctx.fillStyle = "#b9a3f0";
-    for (const e of state?.train?.evals ?? []) ctx.fillRect(X(e.step), 35, 1.5, 6);
+    const latest = lastStep(state?.train);
+    for (const e of state?.train?.evals ?? [])
+      if (!state?.train?.ended || e.step <= latest) ctx.fillRect(X(e.step), 35, 1.5, 6);
     ctx.fillStyle = "#f2f6ef";
     for (const s of state?.train?.snapshots ?? []) {
+      if (state?.train?.ended && s.step > latest) continue;
       ctx.beginPath();
       ctx.arc(X(s.step), 26, 2.5, 0, Math.PI * 2);
       ctx.fill();
     }
-    if (state?.train?.stop) {
-      ctx.fillStyle = "#f0b254";
-      ctx.fillRect(X(state.train.stop.step) - 1, 16, 2, 22);
-    }
     ctx.fillStyle = "#f2f6ef";
     ctx.fillRect(X(scrub ?? lastStep(state?.train)) - 1, 15, 2, 24);
+    const stop = state?.train?.ended ?? state?.train?.stop;
+    if (stop) {
+      ctx.fillStyle = "#f0b254";
+      ctx.fillRect(X(stop.step) - 1, 16, 2, 22);
+    }
     timeline.setAttribute("aria-valuemax", String(lastStep(state?.train)));
     timeline.setAttribute("aria-valuenow", String(Math.round(scrub ?? lastStep(state?.train))));
     text("lc-follow", scrub == null ? "live" : `step ${count(scrub)}`);
   }
   function select(step: number, release = false): void {
     const latest = lastStep(state?.train);
-    scrub = scrubPosition(step, latest, maxStep(), timeline.getBoundingClientRect().width, release);
+    scrub = scrubPosition(
+      step,
+      latest,
+      maxStep(),
+      timeline.getBoundingClientRect().width,
+      release,
+      state?.train?.ended != null,
+    );
     actions.scrub(scrub);
     drawTimeline();
     drawCharts();
@@ -324,7 +336,9 @@ export function liveConsole(actions: {
           ...(state?.train?.snapshots ?? []).map((s) => s.step),
           lastStep(state?.train),
         ]),
-      ].sort((a, b) => a - b);
+      ]
+        .filter((s) => s <= lastStep(state?.train))
+        .sort((a, b) => a - b);
       const at = scrub ?? lastStep(state?.train);
       const next =
         event.key === "ArrowLeft"
@@ -352,7 +366,7 @@ export function liveConsole(actions: {
       hover = Math.max(
         0,
         Math.min(
-          maxStep(),
+          state?.train?.ended ? lastStep(state.train) : maxStep(),
           ((((event.clientX - rect.left) / rect.width) * 300 - 36) / 258) * maxStep(),
         ),
       );
@@ -442,24 +456,37 @@ export function liveConsole(actions: {
         shown = -1;
         actions.scrub(null);
       }
+      if (next.train?.ended) {
+        scrub = Math.min(scrub ?? lastStep(next.train), lastStep(next.train));
+        if (hover != null) hover = Math.min(hover, lastStep(next.train));
+        actions.scrub(scrub);
+      }
       text("lc-name", next.captureName);
       text("lc-pill", pillText(next));
       el("lc-pill").dataset.done = String(
-        pillText(next).startsWith("Finished") || pillText(next) === "Stopped",
+        next.train?.ended != null ||
+          pillText(next).startsWith("Finished") ||
+          pillText(next) === "Stopped",
       );
+      text("lc-error", next.status === "error" ? (next.error ?? "") : "");
+      el("lc-error").hidden = next.status !== "error" || !next.error;
+      text("lc-scene-title", next.train?.ended ? "Splat" : "Live splat");
       const link = el("lc-final") as HTMLAnchorElement;
       link.hidden = !next.siteId;
       if (next.siteId) link.href = `#${next.siteId}`;
       const train = next.train,
         series = train?.series,
         plan = train?.plan;
-      const t = series?.t?.at(-1),
-        psnr = train?.evals?.at(-1)?.psnr;
+      const step = lastStep(train),
+        index = series?.step?.findLastIndex((s) => s <= step) ?? -1,
+        t = index < 0 ? null : series?.t?.[index],
+        gaussians = index < 0 ? null : series?.gs?.[index],
+        psnr = train?.evals?.findLast((e) => e.step <= step)?.psnr;
       const values = [
-        count(train?.run ? lastStep(train) : lastStep(train) || next.stage?.progress?.done),
-        compact(series?.gs?.at(-1)),
+        count(train?.ended || train?.run ? step : step || next.stage?.progress?.done),
+        compact(gaussians),
         psnr == null ? "–" : `${psnr.toFixed(2)} dB`,
-        phaseOf(lastStep(train), plan, series?.gs?.at(-1)),
+        phaseOf(step, plan, gaussians, train?.ended),
         timeText(t),
         money(cost(t, plan?.usdPerHour)),
       ];

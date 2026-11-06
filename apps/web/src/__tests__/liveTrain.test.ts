@@ -70,6 +70,23 @@ const state = (overrides: Partial<LiveState> = {}): LiveState => ({
 });
 
 describe("live training presentation", () => {
+  it.each(["preempted", "stopped"] as const)("freezes a run that ended: %s", (reason) => {
+    const ended = { reason, step: 50000 };
+    const frozen = { ...train, ended };
+    expect(pillText(state({ status: "error", train: frozen }))).toBe(
+      `${reason === "preempted" ? "Pre-empted" : "Stopped"} · step 50,000`,
+    );
+    expect(lastStep(frozen)).toBe(50000);
+    expect(phaseOf(lastStep(frozen), plan, 100, ended)).toBe(
+      reason === "preempted" ? "Pre-empted" : "Stopped",
+    );
+    expect(scrubPosition(60000, lastStep(frozen), 60000, 600, true, true)).toBe(50000);
+    expect(scrubPosition(40000, lastStep(frozen), 60000, 600, false, true)).toBe(40000);
+    expect(chartPoints(frozen, "gs").at(-1)?.step).toBe(50000);
+    expect(chartPoints(frozen, "psnr").at(-1)?.step).toBe(50000);
+    expect(stopRule(frozen).gain).toBeNull();
+  });
+
   it("uses the resolved schedule and rule", () => {
     expect(phaseOf(999, plan)).toBe("Warm-up");
     expect(phaseOf(1000, plan)).toBe("Densifying");
@@ -278,6 +295,52 @@ describe("real-run console", () => {
       expect(document.querySelector("#lc-chart-gain [data-reference] text")?.textContent).toBe(
         "0.05 dB stop",
       );
+    } finally {
+      consoleView.stop();
+      context.mockRestore();
+      document.body.innerHTML = "";
+    }
+  });
+  it("pins an ended console and its scrubber without showing pending work", async () => {
+    const { liveConsole } = await import("@/view/liveConsole");
+    const markup = await import("../../view.html?raw");
+    document.body.innerHTML = markup.default;
+    const fillRect = vi.fn();
+    const context = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      setTransform: vi.fn(),
+      fillRect,
+      fillText: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    const scrub = vi.fn();
+    const consoleView = liveConsole({ scrub, color: vi.fn(), view: vi.fn(), layers: vi.fn() });
+    try {
+      const error = "Original <provider> error";
+      consoleView.update(
+        state({
+          status: "error",
+          error,
+          train: { ...train, ended: { reason: "preempted", step: 50000 } },
+        }),
+      );
+      const timeline = document.getElementById("lc-timeline");
+      expect(document.getElementById("lc-pill")?.textContent).toBe("Pre-empted · step 50,000");
+      expect(document.getElementById("lc-kpi-0")?.textContent).toBe("50,000");
+      expect(document.getElementById("lc-kpi-2")?.textContent).toBe("25.00 dB");
+      expect(document.getElementById("lc-kpi-3")?.textContent).toBe("Pre-empted");
+      expect(document.getElementById("lc-kpi-4")?.textContent).toBe("7 min");
+      expect(document.getElementById("lc-follow")?.textContent).toBe("step 50,000");
+      expect(document.getElementById("lc-error")?.textContent).toBe(error);
+      expect(document.getElementById("lc-error")?.hidden).toBe(false);
+      expect(document.getElementById("lc-now-gain")?.textContent).toBe("–");
+      expect(document.getElementById("lc-now-ceiling")?.textContent).not.toContain("…");
+      expect(timeline?.getAttribute("aria-valuemax")).toBe("50000");
+      expect(timeline?.getAttribute("aria-valuenow")).toBe("50000");
+      expect(document.querySelectorAll('[data-stop="50000"]')).toHaveLength(9);
+      expect(fillRect).toHaveBeenLastCalledWith(expect.any(Number), 16, 2, 22);
+      timeline?.dispatchEvent(new KeyboardEvent("keydown", { key: "Home" }));
+      expect(scrub).toHaveBeenLastCalledWith(0);
+      timeline?.dispatchEvent(new KeyboardEvent("keydown", { key: "End" }));
+      expect(scrub).toHaveBeenLastCalledWith(50000);
     } finally {
       consoleView.stop();
       context.mockRestore();

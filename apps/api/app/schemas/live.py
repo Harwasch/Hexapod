@@ -13,6 +13,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
+from typing import Literal
 
 from pydantic import ConfigDict, Field, model_validator
 
@@ -152,6 +153,11 @@ class LiveTrainStop(TrainModel):
     gain: float | None = None
 
 
+class LiveTrainEnded(TrainModel):
+    reason: Literal["preempted", "stopped"]
+    step: int = Field(ge=0)
+
+
 class LiveTrainEvent(TrainModel):
     step: int = Field(ge=0)
     kind: str
@@ -242,6 +248,7 @@ class LiveTrain(TrainModel):
     events: list[LiveTrainEvent] = Field(default_factory=list)
     snapshots: list[LiveTrainSnapshot] = Field(default_factory=list, max_length=64)
     stop: LiveTrainStop | None = None
+    ended: LiveTrainEnded | None = None
     block: str | None = None
     run: str | None = None
     plan_id: str | None = None

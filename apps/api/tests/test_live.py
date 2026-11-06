@@ -25,6 +25,7 @@ from app.main import create_app
 from app.models import Capture, Job, JobStep
 from app.models.enums import CaptureKind, RunStatus
 from app.schemas.job import JobRead
+from app.services.live_train import merge_live
 from app.storage import NullStorage, S3Storage, get_storage
 from app.worker import steps as step_service
 from app.worker.pipeline_bridge import Workdir
@@ -265,6 +266,86 @@ def test_a_finished_run_names_the_site_its_scan_is_on(client: TestClient, db: Se
     body = client.get(f"/api/v1/captures/{capture.id}/live").json()
 
     assert body["status"] == "complete" and body["siteId"] == str(site_id)
+
+
+@pytest.mark.parametrize(
+    ("status", "preempted", "reason"),
+    [
+        (RunStatus.ERROR, True, "preempted"),
+        (RunStatus.CANCELLED, False, "stopped"),
+        (RunStatus.ERROR, False, "stopped"),
+    ],
+)
+def test_unfinished_training_reports_how_and_where_it_ended(
+    client: TestClient, db: Session, status: RunStatus, preempted: bool, reason: str
+) -> None:
+    capture, job = training_run(db, "live-ended")
+    step = step_service.steps_of(db, job.id)["train"]
+    step.metrics = {
+        "live": merge_live(
+            step.metrics["live"],
+            [
+                ("train", {"k": "s", "run": "a", "step": 15400}),
+                ("train", {"k": "e", "run": "a", "step": 15600, "psnr": 25}),
+            ],
+        )
+    }
+    step_service.fail_step(db, step, log_key=None, preempted=preempted)
+    step.status = status
+    job.status = status
+    job.error = "The provider reclaimed the GPU" if preempted else "Original error text"
+    db.commit()
+
+    body = client.get(f"/api/v1/captures/{capture.id}/live").json()
+
+    assert body["train"]["ended"] == {"reason": reason, "step": 15600}
+    assert body["error"] == job.error
+
+
+@pytest.mark.parametrize("saved", ["complete", "stop", "final"])
+def test_saved_training_has_no_ended_even_if_a_later_stage_fails(
+    client: TestClient, db: Session, saved: str
+) -> None:
+    capture, job = training_run(db, "live-saved")
+    step = step_service.steps_of(db, job.id)["train"]
+    step.status = RunStatus.COMPLETE if saved == "complete" else RunStatus.ERROR
+    step.metrics = {
+        "live": {"train": {"stop": {"step": 15600}} if saved == "stop" else {}},
+        **({"psnr": 25.0} if saved == "final" else {}),
+    }
+    step.preempted_at = step_service.utcnow()
+    job.status = RunStatus.ERROR
+    db.commit()
+
+    assert client.get(f"/api/v1/captures/{capture.id}/live").json()["train"]["ended"] is None
+    job.status = RunStatus.COMPLETE
+    db.commit()
+    assert client.get(f"/api/v1/captures/{capture.id}/live").json()["train"]["ended"] is None
+
+
+def test_restarted_preempted_training_is_running_again(client: TestClient, db: Session) -> None:
+    capture, job = training_run(db, "live-restarted")
+    step = step_service.steps_of(db, job.id)["train"]
+    step_service.fail_step(db, step, log_key=None, preempted=True)
+    step_service.start_step(db, job.id, stage_id="train", ordinal=3, impl="gsplat", attempt=2)
+    step_service.report_live(db, step, {"train": {"plan": {"stepsMax": 30000}}})
+
+    body = client.get(f"/api/v1/captures/{capture.id}/live").json()
+
+    assert body["stage"]["status"] == "in-progress"
+    assert body["train"]["ended"] is None
+
+
+def test_cancellation_before_telemetry_stops_at_zero(client: TestClient, db: Session) -> None:
+    capture, job = training_run(db, "live-cancelled-before-telemetry")
+    step = step_service.steps_of(db, job.id)["train"]
+    step.metrics = {}
+    job.status = RunStatus.CANCELLED
+    db.commit()
+
+    body = client.get(f"/api/v1/captures/{capture.id}/live").json()
+
+    assert body["train"]["ended"] == {"reason": "stopped", "step": 0}
 
 
 def test_a_capture_with_no_run_is_a_404(client: TestClient, db: Session) -> None:

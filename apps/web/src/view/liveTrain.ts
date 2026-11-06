@@ -58,7 +58,9 @@ export function phaseOf(
   step: number,
   plan?: LiveTrainPlan | null,
   gaussians?: number | null,
+  ended?: LiveTrain["ended"],
 ): string {
+  if (ended) return ended.reason === "preempted" ? "Pre-empted" : "Stopped";
   const cap = effectiveCap(plan);
   if (
     cap != null &&
@@ -73,6 +75,7 @@ export function phaseOf(
   return plan.refineStop != null && step >= plan.refineStop ? "Settling" : "Densifying";
 }
 export function lastStep(train?: LiveTrain | null): number {
+  if (train?.ended) return train.ended.step;
   return Math.max(
     train?.series?.step?.at(-1) ?? 0,
     train?.evals?.at(-1)?.step ?? 0,
@@ -81,6 +84,8 @@ export function lastStep(train?: LiveTrain | null): number {
 }
 export function pillText(state: LiveState): string {
   const train = state.train;
+  if (train?.ended)
+    return `${train.ended.reason === "preempted" ? "Pre-empted" : "Stopped"} · step ${count(lastStep(train))}`;
   if (train?.stop) return "Finished · converged";
   if (state.status === "error" || state.status === "cancelled") return "Stopped";
   const ceiling = train?.plan?.stepsMax;
@@ -126,7 +131,7 @@ export function stopRule(train?: LiveTrain | null): {
     rule = plan?.rule;
   const step = lastStep(train),
     stop = plan?.refineStop;
-  const evaluation = train?.evals?.at(-1);
+  const evaluation = train?.evals?.findLast((e) => e.step <= step);
   const gain = evaluation?.gain ?? null;
   const threshold = rule?.minGainDb ?? 0;
   const full = evaluation?.decision === "improving" || evaluation?.decision === "converged";
@@ -200,6 +205,7 @@ export interface ChartPoint {
 }
 export function chartPoints(train: LiveTrain | null | undefined, id: ChartId): ChartPoint[] {
   const quality = train?.quality?.series;
+  const end = train?.ended?.step ?? Infinity;
   if (
     id === "far" ||
     id === "elongation" ||
@@ -212,24 +218,28 @@ export function chartPoints(train: LiveTrain | null | undefined, id: ChartId): C
           ? quality?.elongationShare
           : quality?.peakAllocatedGb;
     return (quality?.step ?? []).flatMap((step, i) =>
-      values?.[i] == null ? [] : [{ step, value: values[i] * (id === "mem" ? 1 : 100) }],
+      step > end || values?.[i] == null
+        ? []
+        : [{ step, value: values[i] * (id === "mem" ? 1 : 100) }],
     );
   }
   if (id === "refine" || id === "ceiling")
-    return (train?.series?.step ?? []).map((step) => ({ step, value: step }));
+    return (train?.series?.step ?? [])
+      .filter((step) => step <= end)
+      .map((step) => ({ step, value: step }));
   if (id === "gain")
     return (train?.evals ?? []).flatMap((e) =>
-      e.gain == null ? [] : [{ step: e.step, value: e.gain }],
+      e.step > end || e.gain == null ? [] : [{ step: e.step, value: e.gain }],
     );
   if (id === "psnr")
     return (train?.evals ?? []).flatMap((e) =>
-      e.psnr == null ? [] : [{ step: e.step, value: e.psnr }],
+      e.step > end || e.psnr == null ? [] : [{ step: e.step, value: e.psnr }],
     );
   const series = train?.series;
   const values = id === "loss" ? series?.loss?.total : series?.[id];
   return (series?.step ?? []).flatMap((step, i) => {
     const value = values?.[i];
-    return value == null || !Number.isFinite(value) || (id === "lr" && value <= 0)
+    return step > end || value == null || !Number.isFinite(value) || (id === "lr" && value <= 0)
       ? []
       : [{ step, value }];
   });
@@ -295,7 +305,9 @@ export function scrubPosition(
   ceiling: number,
   width: number,
   release = false,
+  ended = false,
 ): number | null {
+  if (ended) return Math.max(0, Math.min(latest, step));
   const margin = release ? (ceiling * 6) / Math.max(1, width - 12) : 0;
   return step >= latest - margin ? null : Math.max(0, step);
 }
@@ -348,7 +360,9 @@ export function lossLines(
       name,
       color,
       points: (series?.step ?? []).flatMap((step, i) =>
-        values[i] == null ? [] : [{ step, value: values[i] }],
+        step > (train?.ended?.step ?? Infinity) || values[i] == null
+          ? []
+          : [{ step, value: values[i] }],
       ),
     });
   }
