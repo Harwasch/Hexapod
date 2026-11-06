@@ -28,8 +28,12 @@ import {
   frustumIndices,
   overlayVisibility,
 } from "./liveCamera";
-import { consoleSpark, consoleSplat, sparkSettled } from "./liveSpark";
-import { openScanStream, splatAntialiasing } from "./sparkStream";
+import { consoleSpark, consoleSplat, sparkSettled, quiesceSpark } from "./liveSpark";
+import { loadCollision } from "@/lib/collision";
+import { siteFramePositions } from "@/lib/spzPositions";
+import { ScanNavigation, consoleClearance } from "./navigate";
+import { spzPoints, type SpzPoints } from "./spz";
+import { loadSplatTile, openScanStream, splatAntialiasing } from "./sparkStream";
 import { liveConsole } from "./liveConsole";
 import {
   decodeSeeds,
@@ -139,6 +143,8 @@ export function showLive(captureId: string): { stop: () => void } {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setClearColor(0x0b0c0a);
+  renderer.domElement.tabIndex = 0;
+  renderer.domElement.setAttribute("aria-label", "Training viewer");
   section.prepend(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -154,14 +160,16 @@ export function showLive(captureId: string): { stop: () => void } {
   scene.add(spark);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
+  controls.zoomToCursor = true;
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   controls.autoRotate = false;
   controls.autoRotateSpeed = 0.6;
   let touched = false;
-  controls.addEventListener("start", () => {
+  const onControlStart = (): void => {
     controls.autoRotate = false;
     touched = true;
-  });
+  };
+  controls.addEventListener("start", onControlStart);
 
   // The solve's frame, turned so its up is three.js's +y and centred on the points.
   const frame = new THREE.Group();
@@ -190,6 +198,67 @@ export function showLive(captureId: string): { stop: () => void } {
     seedPending: string | null = null,
     seedEpoch = 0;
   const seedAbort = new AbortController();
+  const pollAbort = new AbortController();
+  let navigation: ScanNavigation | null = null;
+  let navigationSource: "tiles" | "spz" | null = null;
+  let navigationAbort: AbortController | null = null;
+  const clearNavigationSource = (): void => {
+    navigationAbort?.abort();
+    navigation?.clear();
+    navigationSource = null;
+    section.dataset.navigation = "";
+  };
+  const clearNavigation = (): void => {
+    clearNavigationSource();
+    navigation?.dispose();
+    navigation = null;
+  };
+  const activateNavigation = (source: "tiles" | "spz"): ScanNavigation => {
+    clearNavigationSource();
+    navigationAbort = new AbortController();
+    navigationSource = source;
+    const clearance = (): number =>
+      consoleClearance(latestState?.train?.plan?.metresPerUnit, cameraRadius);
+    navigation ??= new ScanNavigation(frame, camera, controls, renderer.domElement, {
+      cursorNavigation: true,
+      clearance,
+      flySpeed: () => Math.max(cameraRadius * 0.5, 1e-3),
+      onInteraction: () => {
+        touched = true;
+      },
+    });
+    camera.near = Math.min(camera.near, clearance() * 0.1);
+    camera.updateProjectionMatrix();
+    section.dataset.navigation = "runtime";
+    return navigation;
+  };
+  if (import.meta.env.DEV) {
+    // Dev observability: lookAt takes solve coordinates; pose/picks are display-world coordinates.
+    (window as unknown as { __liveViewer?: unknown }).__liveViewer = {
+      pose: () => ({
+        position: camera.position.toArray(),
+        target: controls.target.toArray(),
+        quaternion: camera.quaternion.toArray(),
+        clearance: navigation?.clearance,
+      }),
+      lookAt: (
+        eye: [number, number, number],
+        target: [number, number, number],
+        up: [number, number, number],
+      ) => {
+        touched = true;
+        frame.updateMatrixWorld(true);
+        navigation?.jumped();
+        camera.position.set(...eye).applyMatrix4(frame.matrixWorld);
+        camera.up.set(...up).transformDirection(frame.matrixWorld);
+        controls.target.set(...target).applyMatrix4(frame.matrixWorld);
+        camera.lookAt(controls.target);
+        controls.update();
+      },
+      hitAt: (clientX: number, clientY: number) =>
+        navigation?.hitAt({ clientX, clientY })?.toArray() ?? null,
+    };
+  }
   const disposeSeeds = (): void => {
     if (seedPoints) {
       frame.remove(seedPoints);
@@ -229,6 +298,7 @@ export function showLive(captureId: string): { stop: () => void } {
 
   let renderHost: HTMLElement = section;
   const resize = (): void => {
+    if (stopped) return;
     const width = Math.max(1, renderHost.clientWidth),
       height = Math.max(1, renderHost.clientHeight);
     camera.aspect = width / height;
@@ -238,6 +308,7 @@ export function showLive(captureId: string): { stop: () => void } {
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(section);
   renderer.setAnimationLoop((time: number) => {
+    if (stopped) return;
     for (let i = fades.length - 1; i >= 0; i -= 1) {
       const fade = fades[i];
       if (!fade) continue;
@@ -249,6 +320,7 @@ export function showLive(captureId: string): { stop: () => void } {
       }
     }
     controls.update();
+    navigation?.frame(time);
     tileStream?.frame();
     if (cameraLines?.visible && trainingCameras) {
       frame.updateMatrixWorld();
@@ -289,6 +361,7 @@ export function showLive(captureId: string): { stop: () => void } {
     framed = true;
     framedRadius = radius;
     const size = Math.max(radius, 1e-3);
+    cameraRadius = size;
     const halfV = THREE.MathUtils.degToRad(camera.fov / 2);
     const halfH = Math.atan(Math.tan(halfV) * camera.aspect);
     const distance = (size / Math.tan(Math.min(halfV, halfH))) * 1.1;
@@ -299,6 +372,8 @@ export function showLive(captureId: string): { stop: () => void } {
     camera.updateProjectionMatrix();
     controls.minDistance = size * 0.02;
     controls.maxDistance = distance * 6;
+    camera.lookAt(controls.target);
+    navigation?.jumped();
   };
 
   /** The 90th-percentile distance of these points from `centre`: robust to strays. */
@@ -334,6 +409,7 @@ export function showLive(captureId: string): { stop: () => void } {
     camera.far = Math.max(cameraRadius * 200, 10);
     camera.updateProjectionMatrix();
     camera.lookAt(controls.target);
+    navigation?.jumped();
     controls.autoRotate = false;
     controls.update();
     framed = true;
@@ -434,6 +510,7 @@ export function showLive(captureId: string): { stop: () => void } {
       byteCache.delete(cacheKey);
       throw error;
     }
+    const points = await spzPoints(bytes).catch(() => undefined);
     if (stopped || desiredSplat !== name || generation !== loadGeneration) {
       mesh.dispose();
       return;
@@ -469,6 +546,7 @@ export function showLive(captureId: string): { stop: () => void } {
       });
     }
     splat = { mesh, name };
+    activateNavigation("spz").show(name, points);
     showOverlay();
     section.dataset.source = "spz";
     section.dataset.splat = name;
@@ -539,6 +617,7 @@ export function showLive(captureId: string): { stop: () => void } {
     position: camera.position.clone(),
     target: controls.target.clone(),
     up: camera.up.clone(),
+    quaternion: camera.quaternion.clone(),
   };
   let top = false;
   async function loadSeeds(payload: LiveTrainSeeds): Promise<void> {
@@ -597,6 +676,7 @@ export function showLive(captureId: string): { stop: () => void } {
         orbit.position.copy(camera.position);
         orbit.target.copy(controls.target);
         orbit.up.copy(camera.up);
+        orbit.quaternion.copy(camera.quaternion);
         const distance = camera.position.distanceTo(controls.target);
         camera.position.copy(controls.target).add(new THREE.Vector3(0, distance, 0));
         camera.up.set(0, 0, -1);
@@ -606,12 +686,15 @@ export function showLive(captureId: string): { stop: () => void } {
         camera.up.copy(orbit.up);
       }
       top = next;
-      camera.lookAt(controls.target);
+      if (next) camera.lookAt(controls.target);
+      else camera.quaternion.copy(orbit.quaternion);
+      navigation?.jumped(!next);
       controls.update();
       section.dataset.view = next ? "top" : "orbit";
     },
   });
   function clearSnapshots(): void {
+    if (navigationSource === "spz") clearNavigationSource();
     loadGeneration += 1;
     colourGeneration += 1;
     loadingSplat = null;
@@ -626,6 +709,7 @@ export function showLive(captureId: string): { stop: () => void } {
     splat = null;
   }
   function clearTiles(): void {
+    if (navigationSource === "tiles") clearNavigationSource();
     tileStream?.stop();
     tileStream = null;
     tilesKey = null;
@@ -641,8 +725,27 @@ export function showLive(captureId: string): { stop: () => void } {
       clearSnapshots();
       tilesKey = key;
       section.dataset.source = "loading-tiles";
+      const nav = activateNavigation("tiles");
+      const signal = navigationAbort?.signal;
+      const pointsOf = new WeakMap<SplatMesh, SpzPoints>();
+      let packaged = false;
       const stream = openScanStream(tiles.url, tilesGroup, camera, renderer, spark, {
+        load: async (url, tile, signal) => {
+          const { mesh, bytes } = await loadSplatTile(url, tile, { signal });
+          const points = packaged ? undefined : await spzPoints(bytes).catch(() => undefined);
+          if (points)
+            pointsOf.set(mesh, {
+              ...points,
+              positions: siteFramePositions(points.positions, tile.offset),
+            });
+          return mesh;
+        },
+        show: (tile, mesh) => {
+          if (!stopped) nav.show(tile, pointsOf.get(mesh));
+        },
+        hide: (tile) => nav.hide(tile),
         report: (drawn) => {
+          if (stopped) return;
           section.dataset.tiles = drawn.tiles.map((tile) => tile.uri).join(" ");
           section.dataset.gaussians = String(drawn.gaussians);
         },
@@ -652,6 +755,18 @@ export function showLive(captureId: string): { stop: () => void } {
       void stream.ready
         .then(({ tileset }) => {
           if (stopped || tileStream !== stream) return;
+          const collision = tileset.tree.collision;
+          if (collision)
+            void loadCollision(tileset.url, collision, signal)
+              .then((grid) => {
+                if (stopped || navigation !== nav || tileStream !== stream) return;
+                nav.usePackaged(grid);
+                packaged = true;
+                section.dataset.navigation = "packaged";
+              })
+              .catch(() => {
+                /* Runtime splats remain the fallback if the file is unavailable. */
+              });
           const bounds = tileset.tree.root.bounds;
           if (!trainingCameras?.count && !framed && !touched && bounds) {
             orient(upOf(state), bounds.center);
@@ -718,6 +833,7 @@ export function showLive(captureId: string): { stop: () => void } {
     }
     if (isNewAttempt(latestState?.train, state.train)) {
       clearTiles();
+      clearNavigation();
       seedEpoch += 1;
       seedPending = null;
       disposeSeeds();
@@ -767,13 +883,16 @@ export function showLive(captureId: string): { stop: () => void } {
     try {
       const response = await fetchApi(
         `${API_BASE}/api/v1/captures/${encodeURIComponent(captureId)}/live`,
-        { cache: "no-store" },
+        { cache: "no-store", signal: pollAbort.signal },
       );
+      if (stopped) return;
       if (response.status === 404) {
         status.textContent = "Nothing to watch yet";
         detail.textContent = "This capture has no run. Start one from the phone page.";
       } else if (response.ok) {
-        ended = render((await response.json()) as LiveState);
+        const state = (await response.json()) as LiveState;
+        if (stopped) return;
+        ended = render(state);
       }
     } catch {
       // A dropped request on a phone is normal; the next tick asks again.
@@ -789,34 +908,57 @@ export function showLive(captureId: string): { stop: () => void } {
 
   return {
     stop: () => {
+      if (stopped) return;
       stopped = true;
-      clearTiles();
+      renderer.setAnimationLoop(null);
+      // Detach UI and requests immediately; GPU resources outlive any in-flight readback.
+      const quiet = quiesceSpark(spark);
+      clearNavigation();
+      if (import.meta.env.DEV)
+        delete (window as unknown as { __liveViewer?: unknown }).__liveViewer;
+      pollAbort.abort();
       seedAbort.abort();
       seedEpoch += 1;
-      disposeSeeds();
+      loadGeneration += 1;
+      colourGeneration += 1;
       window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
       resizeObserver.disconnect();
       consoleView.stop();
-      colourGeneration += 1;
-      byteCache.clear();
-      for (const mesh of new Set(fades.map((fade) => fade.mesh))) {
-        if (mesh !== splat?.mesh) {
-          frame.remove(mesh);
-          mesh.dispose();
-        }
-      }
-      cameraLines?.geometry.dispose();
-      if (cameraLines) (cameraLines.material as THREE.Material).dispose();
-      cloud?.geometry.dispose();
-      if (cloud) (cloud.material as THREE.Material).dispose();
-      renderer.setAnimationLoop(null);
+      controls.removeEventListener("start", onControlStart);
       controls.dispose();
-      splat?.mesh.dispose();
-      spark.dispose();
-      renderer.dispose();
       renderer.domElement.remove();
       section.hidden = true;
+      byteCache.clear();
+      // Capture resources now; deferred teardown must never change a newer session's DOM.
+      const stream = tileStream;
+      tileStream = null;
+      const seeds = seedPoints;
+      seedPoints = null;
+      const meshes = new Set(fades.map((fade) => fade.mesh));
+      if (splat) meshes.add(splat.mesh);
+      splat = null;
+      fades.length = 0;
+      void quiet
+        .then(() => {
+          stream?.stop();
+          if (seeds) {
+            frame.remove(seeds);
+            seeds.geometry.dispose();
+            seeds.material.dispose();
+          }
+          for (const mesh of meshes) {
+            frame.remove(mesh);
+            mesh.dispose();
+          }
+          cameraLines?.geometry.dispose();
+          if (cameraLines) (cameraLines.material as THREE.Material).dispose();
+          cloud?.geometry.dispose();
+          if (cloud) (cloud.material as THREE.Material).dispose();
+          spark.dispose();
+          renderer.dispose();
+        })
+        .catch((error: unknown) => console.error("Live renderer cleanup failed", error));
     },
   };
 }

@@ -15,6 +15,7 @@ const { values } = parseArgs({
     source: { type: "string" },
     out: { type: "string" },
     budget: { type: "string" },
+    "timeout-seconds": { type: "string", default: "900" },
     antialiased: { type: "boolean", default: false },
   },
 });
@@ -31,6 +32,9 @@ const budget =
 if (budget !== undefined && budget !== "full" && !(Number.isSafeInteger(budget) && budget > 0)) {
   throw new Error("--budget must be full or a positive integer");
 }
+const timeoutMs = Number(values["timeout-seconds"]) * 1000;
+if (!(Number.isFinite(timeoutMs) && timeoutMs > 0))
+  throw new Error("--timeout-seconds must be positive");
 const web = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const source = await realpath(values.source);
 const tiles = (await stat(source)).isDirectory();
@@ -105,7 +109,10 @@ try {
   const address = server.httpServer.address();
   if (!address || typeof address === "string") throw new Error("No local server address");
   const origin = `http://127.0.0.1:${address.port}`;
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({
+    headless: true,
+    args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
+  });
   const page = await browser.newPage({ deviceScaleFactor: 1 });
   // The check only consumes local files. A tile accidentally naming a remote URI fails.
   await page.route("**/*", (route) => {
@@ -115,6 +122,9 @@ try {
       : route.abort();
   });
   const errors = [];
+  page.on("console", (message) => {
+    if (message.text().startsWith("console-check progress")) console.info(message.text());
+  });
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(`${origin}/console-check.html`);
   await page.waitForFunction(() => typeof window.consoleCheck === "function");
@@ -124,24 +134,43 @@ try {
     cameras: resolve(values.cameras),
     referenceDirectory: references,
     antialiased: values.antialiased,
+    timeoutSeconds: timeoutMs / 1000,
+    renderer: "SwiftShader",
     metric: "PSNR over all PNG RGB samples / 255; null = identical (+infinity)",
     renders: {},
   };
   for (const [name, camera] of cameras) {
     await page.setViewportSize({ width: camera.width, height: camera.height });
-    const result = await page.evaluate((input) => window.consoleCheck(input), {
-      camera,
-      source: tiles ? "/__console-check/tiles/tileset.json" : "/__console-check/source.spz",
-      tiles,
-      reference: `/__console-check/trained-${name}.png`,
-      budget,
-      antialiased: values.antialiased,
-    });
-    if (errors.length) throw new Error(errors.join("\n"));
+    let result;
+    try {
+      result = await page.evaluate((input) => window.consoleCheck(input), {
+        camera,
+        source: tiles ? "/__console-check/tiles/tileset.json" : "/__console-check/source.spz",
+        tiles,
+        reference: `/__console-check/trained-${name}.png`,
+        budget,
+        timeoutMs,
+        antialiased: values.antialiased,
+      });
+      if (errors.length) throw new Error(errors.join("\n"));
+    } catch (error) {
+      const progress = await page
+        .evaluate(() => window.consoleCheckProgress ?? null)
+        .catch(() => null);
+      report.renders[name] = {
+        error: String(error),
+        width: camera.width,
+        height: camera.height,
+        ...progress,
+      };
+      await writeFile(resolve(output, "scores.json"), JSON.stringify(report, null, 2) + "\n");
+      throw error;
+    }
     const { png, ...score } = result;
     const file = `console-${name}.png`;
     await writeFile(resolve(output, file), Buffer.from(png.split(",")[1], "base64"));
     report.renders[name] = { file, width: camera.width, height: camera.height, ...score };
+    await writeFile(resolve(output, "scores.json"), JSON.stringify(report, null, 2) + "\n");
     console.info(`${name}: ${score.psnr ?? "infinity"} dB (${score.drawnSplats} splats)`);
   }
   await writeFile(resolve(output, "scores.json"), JSON.stringify(report, null, 2) + "\n");

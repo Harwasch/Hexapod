@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { ConsoleCheckSettle, type CheckProgress } from "@/dev/consoleCheckSettle";
 import { Matrix4, Vector3 } from "three";
 import { describe, expect, it } from "vitest";
 import { psnr, referenceCamera, rgbFloats, type ReferenceCamera } from "@/dev/consoleCheck";
@@ -82,5 +83,52 @@ describe("console check PSNR", () => {
     expect(config).not.toContain("console-check.html");
     expect(existsSync(resolve("console-check.html"))).toBe(true);
     expect(existsSync(resolve("public/console-check.html"))).toBe(false);
+  });
+});
+
+describe("console check tile settling", () => {
+  const progress = (): CheckProgress => ({
+    stage: "settling",
+    tiles: ["splat.glb"],
+    tileGaussians: 12000,
+    drawnSplats: 12000,
+    activeSplats: 10000,
+    sortSettled: true,
+    lodSettled: true,
+    version: 1,
+    mappingVersion: 1,
+  });
+  it("requires the complete cut, nonempty draw and finished LOD even if the sort is idle", () => {
+    const gate = new ConsoleCheckSettle();
+    const p = progress();
+    for (const pending of [
+      { stage: "loading-source" as const },
+      { stage: "loading-tiles" as const },
+      { drawnSplats: 0 },
+      { lodSettled: false },
+      { sortSettled: false },
+    ]) {
+      expect(gate.observe(0, { ...p, ...pending })).toBe(false);
+      expect(gate.observe(10_000, { ...p, ...pending })).toBe(false);
+    }
+    expect(gate.observe(10_001, p)).toBe(false);
+    expect(gate.observe(11_001, p)).toBe(true);
+  });
+  it("resets stability when tiles, a LOD mapping or the displayed generation changes", () => {
+    const gate = new ConsoleCheckSettle();
+    const p = progress();
+    expect(gate.observe(0, p)).toBe(false);
+    expect(gate.observe(1000, p)).toBe(true);
+    for (const change of [
+      { tiles: ["splat_0.glb", "splat_1.glb"] },
+      { mappingVersion: 2 },
+      { version: 2 },
+      { drawnSplats: 9000 },
+      { activeSplats: 8000 },
+    ]) {
+      const next = { ...p, ...change };
+      expect(gate.observe(2000, next)).toBe(false);
+      expect(gate.observe(3000, next)).toBe(true);
+    }
   });
 });

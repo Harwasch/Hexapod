@@ -259,3 +259,98 @@ describe("full-resolution diagnostic stream", () => {
     expect(group.children).toHaveLength(0);
   });
 });
+
+describe("scan viewer default tile selection", () => {
+  afterEach(() => vi.useRealTimers());
+  it.each([false, true])(
+    "uses the legacy FOV unless matrix intrinsics are explicitly requested (%s)",
+    async (projectionFromMatrix) => {
+      vi.useFakeTimers();
+      const at = (
+        x: number,
+        half: number,
+        uri: string,
+        count: number,
+        error: number,
+        children: TileNode[] = [],
+      ): TileNode => ({
+        uri,
+        gaussians: count,
+        geometricError: error,
+        children,
+        bounds: { center: [x, 0, 0], radius: Math.hypot(half, half, 4) },
+        box: [x, 0, 0, half, 0, 0, 0, half, 0, 0, 0, 4],
+      });
+      const root = at(
+        0,
+        45,
+        "splat.glb",
+        20_000,
+        4,
+        [-30, 30].map((x, i) =>
+          at(
+            x,
+            12,
+            `splat_${i}.glb`,
+            40_000,
+            0.5,
+            [-6, 6].map((dx, j) => at(x + dx, 6, `splat_${i}-${j}.glb`, 300_000, 0)),
+          ),
+        ),
+      );
+      const camera = new THREE.PerspectiveCamera(50, 390 / 844, 0.01, 5000);
+      const group = new THREE.Group();
+      group.rotation.x = -Math.PI / 2;
+      group.updateMatrixWorld(true);
+      let drawn: string[] = [];
+      const stream = openScanStream(
+        { url: "/tileset.json", tree: { root, refine: "REPLACE" } },
+        group,
+        camera,
+        { domElement: { clientHeight: 844 } } as THREE.WebGLRenderer,
+        { lodSplatCount: 200_000 } as SparkRenderer,
+        {
+          ...(projectionFromMatrix ? { projectionFromMatrix: true } : {}),
+          load: () =>
+            Promise.resolve(
+              Object.assign(new THREE.Object3D(), { dispose: vi.fn() }) as unknown as SplatMesh,
+            ),
+          report: ({ tiles }) => {
+            drawn = tiles.map((t) => t.uri);
+          },
+        },
+      );
+      await stream.ready;
+      const look = async (x: number, distance: number) => {
+        const target = new THREE.Vector3(x, 0, 0).applyMatrix4(group.matrixWorld);
+        camera.position
+          .copy(target)
+          .add(new THREE.Vector3(0, 0.45, 1).normalize().multiplyScalar(distance));
+        camera.lookAt(target);
+        camera.updateMatrixWorld(true);
+        for (let i = 0; i < 8; i++) {
+          await vi.advanceTimersByTimeAsync(160);
+          stream.frame();
+        }
+      };
+      await look(0, 400);
+      expect(drawn).toEqual(["splat_0.glb", "splat_1.glb"]);
+      // Projection overrides belong to rendering/diagnostics, not the default LOD policy.
+      camera.zoom = 8;
+      camera.updateProjectionMatrix();
+      await look(0, 401); // Move too: the streamer replans on pose changes, not projection alone.
+      expect(drawn.sort()).toEqual(
+        projectionFromMatrix
+          ? ["splat_0-0.glb", "splat_0-1.glb", "splat_1.glb"]
+          : ["splat_0.glb", "splat_1.glb"],
+      );
+      camera.zoom = 1;
+      camera.updateProjectionMatrix();
+      await look(-30, 8);
+      expect(drawn.sort()).toEqual(["splat_0-0.glb", "splat_0-1.glb", "splat_1.glb"]);
+      await look(30, 8);
+      expect(drawn.sort()).toEqual(["splat_0.glb", "splat_1-0.glb", "splat_1-1.glb"]);
+      stream.stop();
+    },
+  );
+});

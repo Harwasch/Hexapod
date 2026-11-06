@@ -19,11 +19,17 @@ Spark setup and tiles streaming, black background and no overlays. Classic filte
 default for the existing references; use `--antialiased` for an antialiased training run.
 Omitting `--budget` uses the device budget; a number sets it; `full` loads every leaf and
 disables Spark LOD and the streaming cap. Both tile loading and Spark's `settled` state
-must finish before capture; a timeout fails the check instead of scoring a partial view.
+must finish before capture. The fixed camera's tile cut loads before drawing; intermediate
+ancestors are not rendered. Capture waits for stable LOD mappings and the sorted display,
+then freezes updates. SwiftShader runs locally, with a 15-minute per-camera deadline
+(`--timeout-seconds 900` to override) covering loading and rendering. Progress is logged
+every five seconds; a timeout includes the tile list, counts and pending state instead of
+scoring a partial view. Pending GPU/worker work drains before resources are disposed.
 
 Each `console-train-*.png` and `scores.json` goes in `--out`, which must be separate from
 inputs. PSNR uses **all pixels**, RGB bytes divided by 255, without gamma conversion,
 masking, alignment or colour fitting (`null` means identical, infinite PSNR). These PNG
 scores can differ slightly from the reference generator's pre-quantization float scores.
-The report records the budget, filtering, drawn splat count and tile names. This is a
+The report is saved after each camera and records the budget, filtering, accumulated and
+active splat counts, source tile gaussian count, tile names and elapsed seconds. This is a
 local browser check; it does not launch GPU training or use Modal.

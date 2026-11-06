@@ -146,9 +146,13 @@ async function gunzip(bytes: ArrayBuffer): Promise<Uint8Array> {
 
 /** Fetches and parses a scan's collision file, `meta.uri` relative to its tileset (whose own
  *  URL may be relative to the page, as a same-origin path is). */
-export async function loadCollision(tilesetUrl: string, meta: CollisionMeta): Promise<BrickGrid> {
+export async function loadCollision(
+  tilesetUrl: string,
+  meta: CollisionMeta,
+  signal?: AbortSignal,
+): Promise<BrickGrid> {
   const base = new URL(tilesetUrl, globalThis.location?.href);
-  const response = await fetchSplatResource(new URL(meta.uri, base).toString());
+  const response = await fetchSplatResource(new URL(meta.uri, base).toString(), { signal });
   if (!response.ok) throw new Error(`collision answered ${String(response.status)}`);
   return parseCollision(await gunzip(await response.arrayBuffer()), meta);
 }
@@ -156,7 +160,7 @@ export async function loadCollision(tilesetUrl: string, meta: CollisionMeta): Pr
 /** What navigation asks of the solids, precomputed or built from splats. */
 export interface Solids {
   raycast(origin: Vec3, direction: Vec3, maxDistance: number): number | null;
-  sweep(from: Vec3, to: Vec3): { position: Vec3; blocked: boolean };
+  sweep(from: Vec3, to: Vec3, clearance?: number): { position: Vec3; blocked: boolean };
   distance(point: Vec3, radius: number): number | null;
   /** How close the camera may come to a surface (metres). */
   readonly clearance: number;
@@ -185,8 +189,8 @@ export class PrecomputedSolids implements Solids {
     return this.grid.raycast(origin, direction, maxDistance);
   }
 
-  sweep(from: Vec3, to: Vec3): { position: Vec3; blocked: boolean } {
-    return this.grid.sweep(from, to, this.clearance);
+  sweep(from: Vec3, to: Vec3, clearance = this.clearance): { position: Vec3; blocked: boolean } {
+    return this.grid.sweep(from, to, clearance);
   }
 
   distance(point: Vec3, radius: number): number | null {

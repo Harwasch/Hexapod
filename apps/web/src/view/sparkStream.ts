@@ -104,6 +104,7 @@ export function streamWithView(
   /** How a tile becomes a mesh, when the page wants more than the mesh (its splat centres). */
   loadMesh?: (tile: TileNode) => Promise<SplatMesh>,
   fullResolution = false,
+  projectionFromMatrix = false,
 ): Streaming {
   const streamer = new TileStreamer<SplatMesh>(
     tileset.tree,
@@ -117,7 +118,7 @@ export function streamWithView(
     },
     {
       budget: fullResolution ? Infinity : Math.min(budget * LOAD_FACTOR, MAX_STREAMED),
-      targetErrorPx: fullResolution ? -Infinity : undefined,
+      ...(fullResolution ? { targetErrorPx: -Infinity } : {}),
       cacheBudget: fullResolution
         ? Infinity
         : Math.min(budget * LOAD_FACTOR, MAX_STREAMED) * CACHE_FACTOR,
@@ -147,7 +148,9 @@ export function streamWithView(
     const height = renderer.domElement.clientHeight || window.innerHeight;
     return {
       eye: [eye.x, eye.y, eye.z],
-      projection: (height * (camera.projectionMatrix.elements[5] ?? 1)) / 2,
+      projection: projectionFromMatrix
+        ? (height * (camera.projectionMatrix.elements[5] ?? 1)) / 2
+        : height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))),
       visible: (bounds) => {
         sphere.center.set(...bounds.center).applyMatrix4(scan.matrixWorld);
         sphere.radius = bounds.radius;
@@ -209,6 +212,8 @@ export function openScanStream(
   display: {
     /** Diagnostic only: all leaves, no tile budget or per-mesh LOD. */
     fullResolution?: boolean;
+    /** Exact diagnostic intrinsics; ordinary scans retain their FOV-based LOD policy. */
+    projectionFromMatrix?: boolean;
     show?: (tile: TileNode, mesh: SplatMesh) => void;
     hide?: (tile: TileNode, mesh: SplatMesh) => void;
     report?: (drawn: { tiles: TileNode[]; gaussians: number }) => void;
@@ -273,6 +278,7 @@ export function openScanStream(
         (drawn) => display.report?.(drawn),
         load,
         display.fullResolution,
+        display.projectionFromMatrix,
       );
     } else {
       additive.set(root, mesh);
