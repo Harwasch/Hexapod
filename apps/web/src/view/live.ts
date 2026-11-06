@@ -15,10 +15,23 @@ import { SparkRenderer, SplatFileType, SplatMesh } from "@sparkjsdev/spark";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
-import type { LiveCameras, LiveState } from "@twin/contracts";
+import type { LiveCameras, LiveState, LiveTrainSeeds } from "@twin/contracts";
 
 import { fetchApi } from "@/api/coldStart";
 import { deviceSplatBudget } from "@/lib/detail";
+
+import { medianHeightCamera, nextTrainingCamera, trainingFov } from "./liveCamera";
+import { openScanStream, splatAntialiasing } from "./sparkStream";
+import { liveConsole } from "./liveConsole";
+import {
+  decodeSeeds,
+  distanceColour,
+  isNewAttempt,
+  lastStep,
+  nearestCameraDistance,
+  snapshotAt,
+  tilesAt,
+} from "./liveTrain";
 
 import {
   decodeCameras,
@@ -41,10 +54,15 @@ function el(id: string): HTMLElement {
 }
 
 /** Frustum lines for every camera: apex to the four corners, and the far rectangle. */
-function frustums(cameras: DecodedCameras, size: number, aspect: number): THREE.BufferGeometry {
+function frustums(
+  cameras: DecodedCameras,
+  size: number,
+  aspect: number,
+  fovY: number,
+): THREE.BufferGeometry {
   const positions = new Float32Array(cameras.count * 16 * 3);
   const depth = size;
-  const halfH = size * 0.35;
+  const halfH = size * Math.tan(THREE.MathUtils.degToRad(fovY / 2));
   const halfW = halfH * (aspect > 0 ? aspect : 4 / 3);
   const c = new THREE.Vector3();
   const f = new THREE.Vector3();
@@ -109,6 +127,8 @@ export function showLive(captureId: string): { stop: () => void } {
   section.hidden = false;
   section.dataset.cameras = "0";
   section.dataset.splatStep = "";
+  section.dataset.source = "";
+  section.dataset.tiles = "";
   const status = el("live-status");
   const detail = el("live-detail");
   const bar = el("live-bar");
@@ -135,10 +155,17 @@ export function showLive(captureId: string): { stop: () => void } {
   );
   // This device's splat budget is Spark's here too, and centres stay 32-bit (see main.ts).
   const budget = deviceSplatBudget();
-  scene.add(new SparkRenderer({ renderer, lodSplatCount: budget, accumExtSplats: true }));
+  const spark = new SparkRenderer({
+    renderer,
+    lodSplatCount: budget,
+    accumExtSplats: true,
+    ...splatAntialiasing(),
+  });
+  scene.add(spark);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
-  controls.autoRotate = true;
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  controls.autoRotate = false;
   controls.autoRotateSpeed = 0.6;
   let touched = false;
   controls.addEventListener("start", () => {
@@ -149,6 +176,14 @@ export function showLive(captureId: string): { stop: () => void } {
   // The solve's frame, turned so its up is three.js's +y and centred on the points.
   const frame = new THREE.Group();
   scene.add(frame);
+  const tilesGroup = new THREE.Group();
+  frame.add(tilesGroup);
+  let tileStream: ReturnType<typeof openScanStream> | null = null;
+  let tilesKey: string | null = null;
+  let trainingCameras: DecodedCameras | null = null;
+  let cameraIndex: number | null = null;
+  let cameraFov = 50;
+  let cameraRadius = 1;
   let cameraLines: THREE.LineSegments | null = null;
   let cloud: THREE.Points | null = null;
   let splat: { mesh: SplatMesh; name: string } | null = null;
@@ -156,6 +191,23 @@ export function showLive(captureId: string): { stop: () => void } {
   let framed = false;
   let lastSeq = -1;
   let camerasFinal = false;
+  let layerMode: "splat" | "seeds" | "both" = "splat",
+    camerasVisible = true;
+  let seedPoints: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial> | null = null;
+  let seedName: string | null = null,
+    seedPending: string | null = null,
+    seedEpoch = 0;
+  const seedAbort = new AbortController();
+  const disposeSeeds = (): void => {
+    if (seedPoints) {
+      frame.remove(seedPoints);
+      seedPoints.geometry.dispose();
+      seedPoints.material.dispose();
+    }
+    seedPoints = null;
+    seedName = null;
+    section.dataset.seeds = "0";
+  };
 
   /**
    * A mid-solve snapshot is in the solve's frame of that moment; a splat is trained in the
@@ -163,26 +215,37 @@ export function showLive(captureId: string): { stop: () => void } {
    * show the scene twice, at two sizes. So once a splat is up, only finished cameras stay.
    */
   const showOverlay = (): void => {
-    const visible = splat === null || camerasFinal;
-    if (cameraLines) cameraLines.visible = visible;
-    if (cloud) cloud.visible = visible;
+    const visible = (splat === null && tileStream === null) || camerasFinal;
+    tilesGroup.visible = layerMode !== "seeds";
+    if (cameraLines) cameraLines.visible = visible && camerasVisible;
+    if (cloud) cloud.visible = visible && camerasVisible && layerMode === "splat";
+    if (seedPoints) seedPoints.visible = layerMode !== "splat";
+    if (splat) splat.mesh.visible = layerMode !== "seeds";
+    for (const fade of fades) fade.mesh.visible = layerMode !== "seeds";
+    section.dataset.layers = layerMode;
+    section.dataset.camerasVisible = String(camerasVisible);
+    section.dataset.seedsVisible = String(seedPoints?.visible ?? false);
   };
   let stopped = false;
   let timer = 0;
   const fades: { mesh: SplatMesh; from: number; to: number; start: number; done?: () => void }[] =
     [];
 
+  let renderHost: HTMLElement = section;
   const resize = (): void => {
-    camera.aspect = window.innerWidth / window.innerHeight;
+    const width = Math.max(1, renderHost.clientWidth),
+      height = Math.max(1, renderHost.clientHeight);
+    camera.aspect = width / height;
     camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setSize(width, height);
   };
-  window.addEventListener("resize", resize);
+  const resizeObserver = new ResizeObserver(resize);
+  resizeObserver.observe(section);
   renderer.setAnimationLoop((time: number) => {
     for (let i = fades.length - 1; i >= 0; i -= 1) {
       const fade = fades[i];
       if (!fade) continue;
-      const t = Math.min(1, (time - fade.start) / FADE_MS);
+      const t = reducedMotion ? 1 : Math.min(1, (time - fade.start) / FADE_MS);
       fade.mesh.opacity = fade.from + (fade.to - fade.from) * t;
       if (t >= 1) {
         fades.splice(i, 1);
@@ -190,7 +253,14 @@ export function showLive(captureId: string): { stop: () => void } {
       }
     }
     controls.update();
+    tileStream?.frame();
     renderer.render(scene, camera);
+    section.dataset.settled = String(
+      !spark.sorting &&
+        !spark.sortDirty &&
+        spark.sortTimeoutId === -1 &&
+        spark.display === spark.current,
+    );
   });
 
   /** Turn the solve's frame so `up` faces the sky, centred on `centre`. */
@@ -240,6 +310,31 @@ export function showLive(captureId: string): { stop: () => void } {
     return distances[Math.floor(distances.length * 0.9)] ?? null;
   };
 
+  const useTrainingCamera = (index: number | null): void => {
+    if (!trainingCameras || index == null) return;
+    cameraIndex = index;
+    frame.updateMatrixWorld(true);
+    camera.position.fromArray(trainingCameras.centres, index * 3).applyMatrix4(frame.matrixWorld);
+    const forward = new THREE.Vector3()
+      .fromArray(trainingCameras.forward, index * 3)
+      .transformDirection(frame.matrixWorld);
+    camera.up.fromArray(trainingCameras.up, index * 3).transformDirection(frame.matrixWorld);
+    controls.target
+      .copy(camera.position)
+      .addScaledVector(forward, Math.max(cameraRadius * 0.15, 1e-3));
+    camera.fov = cameraFov;
+    camera.near = Math.max(cameraRadius / 20_000, 1e-5);
+    camera.far = Math.max(cameraRadius * 200, 10);
+    camera.updateProjectionMatrix();
+    camera.lookAt(controls.target);
+    controls.autoRotate = false;
+    controls.update();
+    framed = true;
+    top = false;
+    section.dataset.camera = String(index);
+    section.dataset.view = "camera";
+  };
+
   const drawCameras = (payload: LiveCameras, dimPoints: boolean): void => {
     const decoded = decodeCameras(payload);
     const points = decodePoints(payload);
@@ -250,17 +345,23 @@ export function showLive(captureId: string): { stop: () => void } {
     ];
     // Until a splat is on screen the frame follows the solve, which re-normalises itself
     // as it grows; once one is, the frame holds still so the splat does not jump.
-    if (!splat) orient(upOf({ cameras: payload, splat: null }), centre);
+    if (!splat && !tileStream && !touched) orient(upOf({ cameras: payload, splat: null }), centre);
     cameraLines?.geometry.dispose();
-    if (cameraLines) frame.remove(cameraLines);
+    if (cameraLines) {
+      (cameraLines.material as THREE.Material).dispose();
+      frame.remove(cameraLines);
+    }
     const size = spacing(decoded, payload.scale * 0.05) * 0.6;
     cameraLines = new THREE.LineSegments(
-      frustums(decoded, size, payload.aspect ?? 4 / 3),
+      frustums(decoded, size, payload.aspect ?? 4 / 3, trainingFov(payload.fovY)),
       new THREE.LineBasicMaterial({ color: CAMERA_COLOUR, transparent: true, opacity: 0.9 }),
     );
     frame.add(cameraLines);
     cloud?.geometry.dispose();
-    if (cloud) frame.remove(cloud);
+    if (cloud) {
+      (cloud.material as THREE.Material).dispose();
+      frame.remove(cloud);
+    }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(points.positions, 3));
     geometry.setAttribute("color", new THREE.BufferAttribute(srgbToLinear(points.colors), 3));
@@ -279,8 +380,14 @@ export function showLive(captureId: string): { stop: () => void } {
     section.dataset.cameras = String(decoded.count);
     section.dataset.points = String(points.count);
     // The solve's own spread, not `payload.scale` (the quantisation range, far larger).
-    frameView(spreadRadius([points.positions, decoded.centres], centre) ?? payload.scale * 0.8);
+    cameraRadius = spreadRadius([points.positions, decoded.centres], centre) ?? payload.scale * 0.8;
+    trainingCameras = decoded;
+    cameraFov = trainingFov(payload.fovY);
+    if (!touched && decoded.count) {
+      useTrainingCamera(medianHeightCamera(decoded, upOf({ cameras: payload, splat: null })));
+    } else if (!decoded.count) frameView(cameraRadius);
     camerasFinal = payload.final;
+    finalCentres = payload.final ? decoded.centres : null;
     showOverlay();
   };
 
@@ -290,10 +397,24 @@ export function showLive(captureId: string): { stop: () => void } {
     url: string,
     up: [number, number, number],
   ): Promise<void> => {
+    const generation = ++loadGeneration;
     loadingSplat = name;
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`The splat answered ${String(response.status)}.`);
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const cacheKey = new URL(url, window.location.href).pathname;
+    let request = byteCache.get(cacheKey);
+    if (!request) {
+      request = fetch(url, { signal: seedAbort.signal })
+        .then(async (response) => {
+          if (!response.ok) throw new Error(`The splat answered ${String(response.status)}.`);
+          return new Uint8Array(await response.arrayBuffer());
+        })
+        .catch((error: unknown) => {
+          byteCache.delete(cacheKey);
+          throw error;
+        });
+      byteCache.set(cacheKey, request);
+    }
+    const bytes = await request;
+    if (stopped || desiredSplat !== name || generation !== loadGeneration) return;
     // A snapshot within the Detail budget is drawn whole, as it arrives; only a bigger one
     // waits for Spark to build its LoD tree (`lodAbove`), and is then drawn within it.
     const mesh = new SplatMesh({
@@ -303,12 +424,18 @@ export function showLive(captureId: string): { stop: () => void } {
       lodAbove: budget,
       extSplats: true,
     });
-    await mesh.initialized;
-    if (stopped) {
+    try {
+      await mesh.initialized;
+    } catch (error) {
+      mesh.dispose();
+      byteCache.delete(cacheKey);
+      throw error;
+    }
+    if (stopped || desiredSplat !== name || generation !== loadGeneration) {
       mesh.dispose();
       return;
     }
-    if (!cameraLines) {
+    if (!cameraLines && !framed && !touched) {
       // No cameras to take the frame from: the splat's own centre and the pose up. A LoD
       // mesh keeps only its LoD tree, so the box is that tree's (its leaves are the splats).
       const lodSplats = mesh.packedSplats?.lodSplats ?? mesh.extSplats?.lodSplats;
@@ -324,6 +451,9 @@ export function showLive(captureId: string): { stop: () => void } {
     fades.push({ mesh, from: 0, to: 1, start: now });
     const previous = splat;
     if (previous) {
+      for (let i = fades.length - 1; i >= 0; i -= 1) {
+        if (fades[i]?.mesh === previous.mesh) fades.splice(i, 1);
+      }
       fades.push({
         mesh: previous.mesh,
         from: previous.mesh.opacity,
@@ -338,9 +468,237 @@ export function showLive(captureId: string): { stop: () => void } {
     splat = { mesh, name };
     if (cloud) (cloud.material as THREE.PointsMaterial).opacity = 0.25;
     showOverlay();
+    section.dataset.source = "spz";
     section.dataset.splat = name;
     section.dataset.splatStep = String(step);
+    consoleView.snapshot(step);
+    void colourSplat();
   };
+
+  const byteCache = new Map<string, Promise<Uint8Array>>();
+  let desiredSplat: string | null = null;
+  let loadGeneration = 0;
+  let latestState: LiveState | null = null;
+  let scrubStep: number | null = null;
+  let finalCentres: Float32Array | null = null;
+  let distanceMode = false;
+  let colourGeneration = 0;
+  const originals = new WeakMap<SplatMesh, [Uint32Array, Uint32Array]>();
+  /** Spark 2.2.0 ExtSplats.getSplat/setSplat edit the backing texture arrays. Work in
+   * short chunks; all final camera centres (already capped at 400) stay in solve space. */
+  async function colourSplat(): Promise<void> {
+    const generation = ++colourGeneration;
+    const mesh = splat?.mesh,
+      source = mesh?.extSplats;
+    if (!mesh || !source) return;
+    let original = originals.get(mesh);
+    if (!original) {
+      original = [source.extArrays[0].slice(), source.extArrays[1].slice()];
+      originals.set(mesh, original);
+    }
+    source.extArrays[0].set(original[0]);
+    source.extArrays[1].set(original[1]);
+    const scale = latestState?.train?.plan?.metresPerUnit;
+    const centres = finalCentres;
+    mesh.maxSh = distanceMode ? 0 : 3;
+    if (distanceMode && scale && centres) {
+      for (let start = 0; start < source.numSplats; start += 256) {
+        if (stopped || generation !== colourGeneration || mesh !== splat?.mesh) return;
+        const end = Math.min(source.numSplats, start + 256);
+        for (let i = start; i < end; i += 1) {
+          const value = source.getSplat(i);
+          const distance = nearestCameraDistance(
+            value.center.x,
+            value.center.y,
+            value.center.z,
+            centres,
+          );
+          if (distance != null) {
+            value.color.setRGB(...distanceColour(distance * scale));
+            source.setSplat(
+              i,
+              value.center,
+              value.scales,
+              value.quaternion,
+              value.opacity,
+              value.color,
+            );
+          }
+        }
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      }
+    }
+    if (stopped || generation !== colourGeneration || mesh !== splat?.mesh) return;
+    for (const texture of source.textures) texture.needsUpdate = true;
+    mesh.updateGenerator();
+    mesh.updateVersion();
+  }
+  const orbit = {
+    position: camera.position.clone(),
+    target: controls.target.clone(),
+    up: camera.up.clone(),
+  };
+  let top = false;
+  async function loadSeeds(payload: LiveTrainSeeds): Promise<void> {
+    if (!payload.url || seedName === payload.key || seedPending) return;
+    const epoch = seedEpoch;
+    seedPending = payload.key;
+    try {
+      const response = await fetch(payload.url, { signal: seedAbort.signal });
+      if (!response.ok) throw new Error("Seeds not available");
+      const decoded = decodeSeeds(await response.arrayBuffer(), payload);
+      if (stopped || seedEpoch !== epoch || latestState?.train?.seeds?.key !== payload.key) return;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(decoded.positions, 3));
+      geometry.setAttribute("color", new THREE.BufferAttribute(srgbToLinear(decoded.colors), 3));
+      const material = new THREE.PointsMaterial({
+        size: 2,
+        sizeAttenuation: false,
+        vertexColors: true,
+      });
+      disposeSeeds();
+      seedPoints = new THREE.Points(geometry, material);
+      seedName = payload.key;
+      frame.add(seedPoints);
+      section.dataset.seeds = String(payload.count);
+      showOverlay();
+    } catch {
+      // A fresh URL on the next poll retries a checkpoint that has not synced yet.
+    } finally {
+      if (seedEpoch === epoch) seedPending = null;
+    }
+  }
+  const consoleView = liveConsole({
+    camera: () => {
+      touched = true;
+      useTrainingCamera(nextTrainingCamera(cameraIndex, trainingCameras?.count ?? 0));
+    },
+    layers: (mode, cameras) => {
+      layerMode = mode;
+      camerasVisible = cameras;
+      showOverlay();
+    },
+    scrub: (step) => {
+      scrubStep = step;
+      if (latestState) selectSnapshot(latestState);
+    },
+    color: (distance) => {
+      distanceMode = distance;
+      section.dataset.color = distance ? "distance" : "photo";
+      void colourSplat();
+    },
+    view: (next) => {
+      if (next === top) return;
+      touched = true;
+      controls.autoRotate = false;
+      if (next) {
+        orbit.position.copy(camera.position);
+        orbit.target.copy(controls.target);
+        orbit.up.copy(camera.up);
+        const distance = camera.position.distanceTo(controls.target);
+        camera.position.copy(controls.target).add(new THREE.Vector3(0, distance, 0));
+        camera.up.set(0, 0, -1);
+      } else {
+        camera.position.copy(orbit.position);
+        controls.target.copy(orbit.target);
+        camera.up.copy(orbit.up);
+      }
+      top = next;
+      camera.lookAt(controls.target);
+      controls.update();
+      section.dataset.view = next ? "top" : "orbit";
+    },
+  });
+  function clearSnapshots(): void {
+    loadGeneration += 1;
+    colourGeneration += 1;
+    loadingSplat = null;
+    desiredSplat = null;
+    const meshes = new Set(fades.map((fade) => fade.mesh));
+    if (splat) meshes.add(splat.mesh);
+    fades.length = 0;
+    for (const mesh of meshes) {
+      frame.remove(mesh);
+      mesh.dispose();
+    }
+    splat = null;
+  }
+  function clearTiles(): void {
+    tileStream?.stop();
+    tileStream = null;
+    tilesKey = null;
+    section.dataset.tiles = "";
+  }
+  function selectSnapshot(state: LiveState): void {
+    Object.assign(spark, splatAntialiasing(state.train?.plan?.antialiased));
+    const tiles = tilesAt(state.train, scrubStep);
+    if (tiles) {
+      const key = `${tiles.url}#${String(tiles.step)}`;
+      if (key === tilesKey) return;
+      clearTiles();
+      clearSnapshots();
+      tilesKey = key;
+      section.dataset.source = "loading-tiles";
+      const stream = openScanStream(tiles.url, tilesGroup, camera, renderer, spark, {
+        report: (drawn) => {
+          section.dataset.tiles = drawn.tiles.map((tile) => tile.uri).join(" ");
+          section.dataset.gaussians = String(drawn.gaussians);
+        },
+      });
+      tileStream = stream;
+      if (cloud) (cloud.material as THREE.PointsMaterial).opacity = 0.25;
+      showOverlay();
+      void stream.ready
+        .then(({ tileset }) => {
+          if (stopped || tileStream !== stream) return;
+          const bounds = tileset.tree.root.bounds;
+          if (!trainingCameras?.count && !framed && !touched && bounds) {
+            orient(upOf(state), bounds.center);
+            frameView(bounds.radius);
+            section.dataset.view = "orbit";
+          }
+          section.dataset.source = "tiles";
+          section.dataset.splatStep = String(tiles.step);
+          consoleView.snapshot(tiles.step);
+        })
+        .catch(() => {
+          if (stopped || tileStream !== stream) return;
+          clearTiles();
+          section.dataset.source = "tiles-error";
+          el("lc-snapshot").textContent = "Tiles unavailable";
+        });
+      return;
+    }
+
+    const snapshots = state.train?.snapshots ?? [];
+    const step = state.train?.ended
+      ? Math.min(scrubStep ?? Infinity, lastStep(state.train))
+      : scrubStep;
+    const chosen = step == null ? null : snapshotAt(snapshots, step);
+    // Before the first snapshot there is nothing to scrub to; retain the current view.
+    if (step != null && !chosen) return;
+    const newest = snapshots.find((snapshot) =>
+      snapshot.key.endsWith(`/${state.splat?.name ?? ""}`),
+    );
+    const next = chosen
+      ? { name: chosen.key, step: chosen.step, url: chosen.url }
+      : state.splat
+        ? { ...state.splat, name: newest?.key ?? state.splat.name }
+        : null;
+    clearTiles();
+    desiredSplat = next?.name ?? null;
+    if (next?.url && next.name !== splat?.name && next.name !== loadingSplat) {
+      void showSplat(next.name, next.step, next.url, upOf(state))
+        .catch(() => {
+          // Also retry a failed scrub after the run has ended and ordinary polling stopped.
+          if (!stopped && !latestState?.train?.ended)
+            timer = window.setTimeout(() => void tick(), POLL_MS);
+        })
+        .finally(() => {
+          if (loadingSplat === next.name) loadingSplat = null;
+        });
+    }
+  }
 
   const render = (state: LiveState): boolean => {
     el("live-name").textContent = state.captureName;
@@ -355,24 +713,53 @@ export function showLive(captureId: string): { stop: () => void } {
       lastSeq = state.cameras.seq;
       drawCameras(state.cameras, splat !== null);
     }
-    const next = state.splat;
-    if (next?.url && next.name !== splat?.name && next.name !== loadingSplat) {
-      void showSplat(next.name, next.step, next.url, upOf(state)).catch(() => {
-        // The next poll signs a fresh URL and tries again.
-        loadingSplat = null;
-      });
+    if (isNewAttempt(latestState?.train, state.train)) {
+      clearTiles();
+      seedEpoch += 1;
+      seedPending = null;
+      disposeSeeds();
+      loadGeneration += 1;
+      colourGeneration += 1;
+      loadingSplat = null;
+      byteCache.clear();
+      const oldMeshes = new Set(fades.map((fade) => fade.mesh));
+      if (splat) oldMeshes.add(splat.mesh);
+      for (const mesh of oldMeshes) {
+        frame.remove(mesh);
+        mesh.dispose();
+      }
+      fades.length = 0;
+      splat = null;
+      section.dataset.splatStep = "";
     }
+    latestState = state;
+    if (consoleView.update(state) && renderHost === section) {
+      renderHost = el("lc-scene");
+      renderHost.prepend(renderer.domElement);
+      resizeObserver.unobserve(section);
+      resizeObserver.observe(renderHost);
+      resize();
+    }
+    selectSnapshot(state);
+    if (state.train?.seeds) void loadSeeds(state.train.seeds);
     if (described.ended && state.siteId) {
       finalLink.href = `#${state.siteId}`;
       finalLink.hidden = false;
     }
     section.dataset.status = state.status;
-    return described.ended;
+    return (
+      state.train?.ended != null ||
+      (described.ended &&
+        ((tilesAt(state.train, scrubStep) != null && section.dataset.source === "tiles") ||
+          !state.splat ||
+          desiredSplat === splat?.name) &&
+        (!state.train?.seeds || seedName === state.train.seeds.key))
+    );
   };
 
   const tick = async (): Promise<void> => {
     window.clearTimeout(timer);
-    if (stopped) return;
+    if (stopped || latestState?.train?.ended) return;
     let ended = false;
     try {
       const response = await fetchApi(
@@ -388,7 +775,8 @@ export function showLive(captureId: string): { stop: () => void } {
     } catch {
       // A dropped request on a phone is normal; the next tick asks again.
     }
-    if (!stopped && !ended) timer = window.setTimeout(() => void tick(), POLL_MS);
+    if (ended) window.clearTimeout(timer);
+    else if (!stopped) timer = window.setTimeout(() => void tick(), POLL_MS);
   };
   const onVisible = (): void => {
     if (document.visibilityState === "visible") void tick();
@@ -399,12 +787,30 @@ export function showLive(captureId: string): { stop: () => void } {
   return {
     stop: () => {
       stopped = true;
+      clearTiles();
+      seedAbort.abort();
+      seedEpoch += 1;
+      disposeSeeds();
       window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("resize", resize);
+      resizeObserver.disconnect();
+      consoleView.stop();
+      colourGeneration += 1;
+      byteCache.clear();
+      for (const mesh of new Set(fades.map((fade) => fade.mesh))) {
+        if (mesh !== splat?.mesh) {
+          frame.remove(mesh);
+          mesh.dispose();
+        }
+      }
+      cameraLines?.geometry.dispose();
+      if (cameraLines) (cameraLines.material as THREE.Material).dispose();
+      cloud?.geometry.dispose();
+      if (cloud) (cloud.material as THREE.Material).dispose();
       renderer.setAnimationLoop(null);
       controls.dispose();
       splat?.mesh.dispose();
+      spark.dispose();
       renderer.dispose();
       renderer.domElement.remove();
       section.hidden = true;

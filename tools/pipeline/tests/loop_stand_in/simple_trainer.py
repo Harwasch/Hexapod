@@ -77,6 +77,9 @@ class Config:
     plateau_at: float = 2.0
     gaussians: int = 64
     val_frames: int = 3
+    # v1.5.3 simple_trainer.py:99-101; used by the loop at :636.
+    sh_degree: int = 3
+    sh_degree_interval: int = 1000
 
     def adjust_steps(self, factor: float) -> None:
         self.eval_steps = [int(i * factor) for i in self.eval_steps]
@@ -86,6 +89,35 @@ class Config:
         self.strategy.refine_start_iter = int(self.strategy.refine_start_iter * factor)
         self.strategy.refine_stop_iter = int(self.strategy.refine_stop_iter * factor)
         self.strategy.refine_every = int(self.strategy.refine_every * factor)
+
+
+class Writer:
+    """Mirrors v1.5.3 simple_trainer.py:739-747, including optional component names."""
+
+    def add_scalar(self, tag: str, value: float, step: int) -> None:
+        pass
+
+
+class Splats:
+    """v1.5.3 :352 uses torch.nn.ParameterDict: indexed, with no dict.get method."""
+
+    def __init__(self, count: int) -> None:
+        self.means = [None] * count
+
+    def __getitem__(self, key: str) -> list[None]:
+        if key != "means":
+            raise KeyError(key)
+        return self.means
+
+
+class Optimizer:
+    """Means LR at :562 and step at :843-847; no tensor arithmetic or RNG here."""
+
+    def __init__(self) -> None:
+        self.param_groups = [{"lr": 0.00016}]
+
+    def step(self) -> None:
+        self.param_groups[0]["lr"] *= 0.999
 
 
 class Runner:
@@ -98,12 +130,21 @@ class Runner:
         for directory in (self.stats_dir, self.render_dir, self.ply_dir):
             Path(directory).mkdir(parents=True, exist_ok=True)
         self.lpips = Lpips()
+        # v1.5.3 :352 (splats/optimizers), :331 (writer), :636 (SH schedule).
+        self.splats = Splats(cfg.gaussians)
+        self.optimizers = {"means": Optimizer()}
+        self.writer = Writer()
 
     def train(self) -> None:
         cfg = self.cfg
         max_steps = cfg.max_steps
         for step in range(0, max_steps):
             count = min(cfg.gaussians, cfg.strategy.cap_max)
+            if step % 100 == 0:
+                self.writer.add_scalar("train/loss", 0.1, step)
+                self.writer.add_scalar("train/l1loss", 0.07, step)
+                self.writer.add_scalar("train/ssimloss", 0.03, step)
+                self.writer.add_scalar("train/depthloss", 0.01, step)
             if step in [i - 1 for i in cfg.save_steps] or step == max_steps - 1:
                 stats = {"mem": 0.1, "ellipse_time": 1.0 + step, "num_GS": count}
                 print("Step: ", step, stats)  # noqa: T201 - the trainer's own line
@@ -111,6 +152,7 @@ class Runner:
                 path.write_text(json.dumps(stats), encoding="utf-8")
             if (step in [i - 1 for i in cfg.ply_steps] or step == max_steps - 1) and cfg.save_ply:
                 export_splats(f"{self.ply_dir}/point_cloud_{step}.ply", count, step)
+            self.optimizers["means"].step()
             if step in [i - 1 for i in cfg.eval_steps]:
                 self.eval(step)
 

@@ -78,6 +78,7 @@ def test_cameras_round_trip_through_the_line_to_within_quantisation(tmp_path: Pa
     assert parsed["registered"] == 12 and parsed["frames"] == 20 and parsed["final"] is True
     assert parsed["cameraCount"] == 12 and parsed["pointCount"] == 50
     assert parsed["aspect"] == pytest.approx(640 / 480, abs=1e-3)
+    assert parsed["fovY"] == pytest.approx(np.degrees(2 * np.arctan(480 / 1000)), abs=1e-3)
     centres, forward, up = live.decode_cameras(parsed)
     # In name order, which is capture order.
     truth = np.stack([pose.centre for pose in poses])
@@ -175,7 +176,11 @@ def test_the_watch_thread_runs_beside_the_tool_and_cleans_up(tmp_path: Path) -> 
     assert not snapshots.exists()
 
 
-def test_the_mapper_argv_asks_for_snapshots_only_when_told_to() -> None:
+def test_the_mapper_argv_asks_for_snapshots_only_when_told_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # This checks argv, not an installed COLMAP or a running mapper.
+    monkeypatch.setattr(sfm, "colmap_exe", lambda: "/stand-in/colmap")
     plain = sfm.mapper_argv(Path("/db"), Path("/i"), Path("/o"))
     assert "--Mapper.snapshot_path" not in plain
     argv = sfm.mapper_argv(
@@ -308,7 +313,7 @@ def test_the_splat_watch_waits_for_a_file_to_stop_growing(tmp_path: Path) -> Non
 
 
 def test_live_ply_steps_are_fractions_of_the_unscaled_schedule() -> None:
-    assert live.train_ply_steps(30_000) == [3_000, 7_500, 15_000, 22_500]
+    assert live.train_ply_steps(30_000) == list(range(1500, 30000, 1500))
     assert live.ply_indices([3_000, 7_500], 0.5) == {1_499, 3_749}
     argv = training.gsplat_argv(
         "python3", Path("/t.py"), Path("/d"), Path("/r"), max_steps=30_000, live_steps=[3_000]
@@ -352,15 +357,19 @@ def test_the_train_stage_snapshots_intermediate_splats_and_keeps_the_final_one(
 ) -> None:
     workdir = Workdir.create(tmp_path / "run")
     seed_inputs(workdir)
+    write_model(workdir.input_path("poses"), tree_frames.orbit(4))
 
     train(workdir)
 
     log = workdir.log_path("train").read_text()
-    assert "--ply_steps 300 30 75 150 225" in log
+    assert "--ply_steps 300 " + " ".join(map(str, range(15, 300, 15))) in log
+    seeds = live.latest(log)["seeds"]
+    assert seeds["sources"] == {"sfm": 50, "dense": 0, "seed": 0}
+    assert (workdir.checkpoint_dir("train") / "live" / "seeds.bin").stat().st_size == 500
     found = live.latest(log)["splat"]
-    # The stand-in is faster than the watcher's poll, so the stage packs the newest
-    # intermediate when the trainer exits: the 75% one, never the final.
-    assert found["step"] in {30, 75, 150, 225}
+    # Even a fast producer keeps every snapshot for timeline scrubbing.
+    assert found["step"] == 300
+    assert len(list((workdir.checkpoint_dir("train") / "live").glob("*.spz"))) == 20
     assert found["total"] == 300 and found["of"] == 64 and found["up"] == [0.0, -1.0, 0.0]
     assert found["key"].startswith("runs/run/train/checkpoint/live/splat_")
     snapshot = workdir.checkpoint_dir("train") / "live" / found["key"].rsplit("/", 1)[1]
@@ -380,7 +389,7 @@ def test_live_false_trains_exactly_as_before(tmp_path: Path) -> None:
 
     log = workdir.log_path("train").read_text()
     assert "--ply_steps 300 --save_steps" in log
-    assert live.latest(log) == {}
+    assert set(live.latest(log)) == {"plan"}
     assert not any(workdir.checkpoint_dir("train").rglob("*.spz"))
 
 
@@ -412,3 +421,192 @@ def test_on_a_remote_box_the_snapshot_is_uploaded_under_the_key_its_line_names(
     found = live.latest(workdir.log_path("train").read_text())["splat"]
     assert bucket.exists(found["key"])
     assert (bucket.root / found["key"]).read_bytes()[:2] == b"\x1f\x8b"  # gzip: an SPZ
+
+
+def test_records_only_parses_live_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import Mock
+
+    parser = Mock(wraps=live.parse_line)
+    monkeypatch.setattr(live, "parse_line", parser)
+    line = 'live-train: {"v":1,"k":"s","step":200}'
+    assert live.records("ordinary output\n" * 1000 + line + "\nmore output") == [
+        ("train", {"v": 1, "k": "s", "step": 200})
+    ]
+    assert parser.call_count == 1
+
+
+def test_final_snapshot_is_packed_without_changing_the_final_ply(tmp_path: Path) -> None:
+    ply_dir = tmp_path / "ply"
+    final = ply_dir / "point_cloud_99.ply"
+    write_splat_ply(final, [1.0] * 8, [-2.0] * 8)
+    before = final.read_bytes()
+    lines: list[str] = []
+    with live.SplatWatch(
+        ply_dir,
+        tmp_path / "live",
+        lines.append,
+        indices={49},
+        total=100,
+        key_prefix="runs/r/train/checkpoint/live",
+        poll_s=1000,
+    ):
+        pass
+    assert final.read_bytes() == before
+    assert live.latest("\n".join(lines))["splat"]["step"] == 100
+
+
+def test_a_crashed_run_leaves_no_intermediate_ply_to_mistake_for_a_result(tmp_path: Path) -> None:
+    ply_dir = tmp_path / "ply"
+    # The trainer died after writing the step-50 intermediate and before any final PLY.
+    write_splat_ply(ply_dir / "point_cloud_49.ply", [1.0] * 8, [-2.0] * 8)
+    lines: list[str] = []
+    with live.SplatWatch(
+        ply_dir,
+        tmp_path / "live",
+        lines.append,
+        indices={49},
+        total=100,
+        key_prefix="runs/r/train/checkpoint/live",
+        poll_s=1000,
+    ):
+        pass
+    assert not list(ply_dir.glob("*.ply"))
+    assert live.latest("\n".join(lines))["splat"]["step"] == 50
+
+
+def test_seeds_are_bounded_deterministic_and_source_tagged(tmp_path: Path) -> None:
+    count = 250001
+    xyz = np.arange(count * 3, dtype=np.float64).reshape(-1, 3) / 10000
+    rgb = np.tile(np.array([10, 20, 30], dtype=np.uint8), (count, 1))
+    source = np.arange(count, dtype=np.uint32) % 3
+    lines: list[str] = []
+    state = np.random.get_state()
+    payload = live.write_seeds(
+        xyz, rgb, tmp_path, lines.append, key_prefix="runs/r/train/checkpoint/live", source=source
+    )
+    assert payload is not None and payload["count"] == 200000 and payload["of"] == count
+    assert payload["bytes"] == 2000000 and sum(payload["sources"].values()) == count
+    first = (tmp_path / "seeds.bin").read_bytes()
+    assert live.parse_line(lines[0]) == ("seeds", payload)
+    assert (
+        live.parse_line(
+            lines[0].replace("runs/r/train/checkpoint/live/seeds.bin", "captures/seeds.bin")
+        )
+        is None
+    )
+    live.write_seeds(
+        xyz, rgb, tmp_path, lines.append, key_prefix="runs/r/train/checkpoint/live", source=source
+    )
+    assert (tmp_path / "seeds.bin").read_bytes() == first
+    assert np.array_equal(state[1], np.random.get_state()[1])
+    packed = np.frombuffer(
+        first, dtype=[("xyz", "<i2", (3,)), ("rgb", "u1", (3,)), ("source", "u1")]
+    )
+    decoded = packed["xyz"] * payload["scale"] / 32767 + payload["origin"]
+    selected = np.linspace(0, count - 1, 200000, dtype=np.int64)
+    assert np.abs(decoded - xyz[selected]).max() <= payload["scale"] / 32767
+    assert np.array_equal(packed["rgb"], rgb[selected])
+    assert np.array_equal(packed["source"], source[selected])
+
+
+def test_seeds_failure_is_only_a_missing_observation(tmp_path: Path) -> None:
+    def broken(_line: str) -> None:
+        raise OSError("log unavailable")
+
+    assert (
+        live.write_seeds(
+            np.zeros((2, 3)),
+            np.zeros((2, 3)),
+            tmp_path,
+            broken,
+            key_prefix="runs/r/train/checkpoint/live",
+        )
+        is None
+    )
+    live.emit_seeds(
+        tmp_path / "missing", tmp_path, broken, key_prefix="runs/r/train/checkpoint/live"
+    )
+
+
+def test_dataset_seed_sources_include_the_appended_preview(tmp_path: Path) -> None:
+    model = tmp_path / "sparse"
+    write_model(model, tree_frames.orbit(3), points=10)
+    lines: list[str] = []
+    live.emit_seeds(
+        model, tmp_path / "live", lines.append, key_prefix="runs/r/train/checkpoint/live", seeded=3
+    )
+    assert live.latest("\n".join(lines))["seeds"]["sources"] == {"sfm": 7, "dense": 0, "seed": 3}
+
+
+def test_final_pack_failure_never_fails_training_or_removes_the_ply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    final = tmp_path / "ply" / "point_cloud_99.ply"
+    write_splat_ply(final, [1.0], [-2.0])
+    before = final.read_bytes()
+
+    def broken(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("packer unavailable")
+
+    monkeypatch.setattr(live, "snapshot_splat", broken)
+    with live.SplatWatch(
+        final.parent,
+        tmp_path / "live",
+        broken,
+        indices={49},
+        total=100,
+        key_prefix="runs/r/train/checkpoint/live",
+        poll_s=1000,
+    ):
+        pass
+    assert final.read_bytes() == before
+
+
+def test_thumbnail_keeps_fine_opaque_ground_over_huge_needles(tmp_path: Path) -> None:
+    path = tmp_path / "needles.ply"
+    write_splat_ply(path, [5.0] * 120, [float(np.log(0.02))] * 120)
+    raw = bytearray(path.read_bytes())
+    start = raw.index(b"end_header\n") + len(b"end_header\n")
+    for i in range(120):
+        # Interleave needles and ground in the same spatial cells.
+        struct.pack_into("<3f", raw, start + i * 56, (i % 10) * 0.1, (i // 10) * 0.1, 2.0)
+        if i % 6 == 0:
+            struct.pack_into(
+                "<3f", raw, start + i * 56 + 28, np.log(100), np.log(0.001), np.log(0.001)
+            )
+    path.write_bytes(raw)
+    target = tmp_path / "thumb.spz"
+    live.snapshot_splat(
+        path, target, max_gaussians=40, camera_centres=np.array([[0.0, 0.0, 0.0]]), focal_px=500.0
+    )
+    first = target.read_bytes()
+    live.snapshot_splat(
+        path, target, max_gaussians=40, camera_centres=np.array([[0.0, 0.0, 0.0]]), focal_px=500.0
+    )
+    assert first == target.read_bytes()
+    back = unpack_spz(first)
+    assert len(back["x"]) == 40
+    assert np.count_nonzero(back["scale_0"] < 0) >= 35
+    assert np.ptp(back["x"]) > 0.7 and np.ptp(back["y"]) > 0.8
+
+
+def test_camera_fov_uses_vertical_focal_and_stage_reads_training_centres(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    poses = tree_frames.orbit(4)
+    write_model(tmp_path / "model", poses)
+    model = sfm.read_model(tmp_path / "model")
+    camera = replace(
+        model.cameras[0],
+        model="PINHOLE",
+        params=(500.0, 800.0, 320.0, 240.0),
+        param_names=("fx", "fy", "cx", "cy"),
+    )
+    payload = live.encode_model(
+        replace(model, cameras=(camera,)), np.zeros((0, 3)), np.zeros((0, 3), dtype=np.uint8)
+    )
+    assert payload["fovY"] == pytest.approx(np.degrees(2 * np.arctan(480 / 1600)), abs=1e-3)
+    sampler = live.snapshot_cameras(tmp_path / "model")
+    assert sampler["focal_px"] == 500
+    np.testing.assert_allclose(sampler["camera_centres"], model.centres())
+    assert live.snapshot_cameras(tmp_path / "missing") == {}

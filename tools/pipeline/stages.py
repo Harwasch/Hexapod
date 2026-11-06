@@ -68,6 +68,7 @@ import splat_io
 import splat_stream
 import support_mask
 import surface
+import train_plan
 import training
 import video
 from artifacts import ArtifactDecl
@@ -1758,7 +1759,7 @@ def robust(ctx: StageContext) -> StageOutcome:
 @stage_impl(
     "gsplat",
     consumes=("frames", "poses"),
-    optional_consumes=("masks",),
+    optional_consumes=("masks", "georef.json"),
     produces=(TRAINED_PLY, TRAIN_METRICS, holdout.HOLDOUT),
     summary="gsplat 3DGS training; consumes masks when a mask stage produced any",
 )
@@ -2182,6 +2183,17 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             window=rule.window,
             min_gain_db=rule.min_gain_db,
         )
+    train_plan.emit(
+        ctx,
+        budget=budget,
+        cap=cap_max,
+        steps=iterations,
+        factor=schedule_factor,
+        scaler=steps_scaler,
+        strategy=strategy,
+        rule=rule if converge else None,
+        frames=registered,
+    )
     with live.SplatWatch(
         result / "ply",
         ctx.checkpoint_dir / live.LIVE_DIR,
@@ -2190,7 +2202,16 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         total=iterations,
         key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
         up=_up_estimate(poses),
+        **live.snapshot_cameras(dataset / "sparse" / "0"),
     ):
+        live.emit_seeds(
+            dataset / "sparse" / "0",
+            ctx.checkpoint_dir / live.LIVE_DIR,
+            ctx.log,
+            key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
+            seeded=0 if seeded is None else seeded.seeded,
+            enabled=bool(live_steps),
+        )
         ctx.run(argv)
     ply = training.latest_ply(result)
     if ply is None:

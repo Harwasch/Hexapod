@@ -9,6 +9,8 @@ import { resolve } from "node:path";
 
 import { expect, test, type Page } from "@playwright/test";
 
+import { benchTrain } from "./liveTrainFixture";
+
 import { spzFromGlb } from "../src/view/glb";
 
 const SITE = "d446c3d1-40c6-4659-991f-c80aedf6d706";
@@ -730,3 +732,347 @@ test("live mode does not scroll sideways on a narrow phone", async ({ page }) =>
   );
   expect(overflow).toBeLessThanOrEqual(0);
 });
+
+test("training console charts, scrubbing and controls keep snapshots and fit a phone", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const spz = Buffer.from(spzFromGlb(toArrayBuffer(readFileSync(resolve(TILES, "splat.glb")))));
+  const telemetry = benchTrain(BUCKET);
+  const snapshots = telemetry.snapshots ?? [];
+  const first = snapshots[0],
+    latest = snapshots[1];
+  if (!first || !latest) throw new Error("Bench fixture needs both snapshots");
+  const seedBytes = Buffer.alloc(30);
+  for (let i = 0; i < 3; i++) seedBytes.writeInt16LE(i * 2000, i * 10 + 4);
+  telemetry.seeds = {
+    key: "runs/r/train/checkpoint/live/seeds.bin",
+    url: `${BUCKET}/seeds.bin`,
+    count: 3,
+    of: 640150,
+    bytes: 30,
+    origin: [0, 0, 0],
+    scale: 6,
+    sources: { sfm: 640150, dense: 0, seed: 0 },
+  };
+  // Supplemental states exercise following and final scores beyond this partial real log.
+  const advanced = structuredClone(telemetry);
+  if (advanced.series) {
+    advanced.series.step?.push(18000);
+    for (const key of ["t", "gs", "lr", "sh", "its", "mem"] as const)
+      advanced.series[key]?.push(advanced.series[key]?.at(-1) ?? null);
+    for (const values of Object.values(advanced.series.loss ?? {}))
+      values.push(values.at(-1) ?? null);
+  }
+  advanced.plan = { ...advanced.plan, metresPerUnit: 2 };
+  const next = {
+    ...latest,
+    step: 17000,
+    key: "runs/r/train/checkpoint/live/splat_017000_test.spz",
+    url: `${BUCKET}/splat_017000_test.spz`,
+  };
+  advanced.snapshots = [...snapshots, next];
+  let phase = "pose";
+  await page.route(
+    (url) => url.pathname === "/api/v1/captures/c1/live",
+    (route) => {
+      const active = phase === "advance" || phase === "done" ? advanced : telemetry;
+      const snapshot = active.snapshots?.at(-1) ?? latest;
+      return route.fulfill({
+        json: {
+          ...liveBase,
+          status: phase === "done" ? "complete" : "in-progress",
+          siteId: phase === "done" ? SITE : null,
+          stage: phase === "pose" ? posing : training(active.series?.step?.at(-1) ?? 0),
+          cameras: liveCameras(12),
+          splat:
+            phase === "pose"
+              ? null
+              : {
+                  ...liveSplat(snapshot.step, spz.length),
+                  name: snapshot.key.split("/").at(-1),
+                  url: snapshot.url,
+                },
+          train:
+            phase === "pose"
+              ? null
+              : {
+                  ...active,
+                  final:
+                    phase === "done" ? { psnr: 26.5, ssim: 0.9, lpips: 0.2, ccPsnr: 27 } : null,
+                },
+        },
+      });
+    },
+  );
+  const fetched: string[] = [];
+  await page.route(`${BUCKET}/**`, async (route) => {
+    const name = new URL(route.request().url()).pathname.split("/").pop() ?? "";
+    fetched.push(name);
+    await route.fulfill({
+      body: name === "seeds.bin" ? seedBytes : spz,
+      headers: { "access-control-allow-origin": "*" },
+    });
+  });
+  await page.goto("/view.html#live/c1");
+  await expect(page.locator("#live-status")).toHaveText("Solving camera positions…");
+  await expect(page.locator("#live-console")).toBeHidden();
+  phase = "train";
+  await expect(page.locator("#live-console")).toBeVisible();
+  await expect(page.locator("#lc-pill")).toHaveText("Relocating · at cap");
+  await expect(page.locator("#lc-kpi-0")).toHaveText("15,600");
+  await expect(page.locator("#lc-kpi-1")).toHaveText("3.46M");
+  await expect(page.locator("#lc-kpi-3")).toHaveText("Relocating");
+  await expect(page.locator("#lc-rule")).toHaveText(
+    "stop if Δ best PSNR (last 3.7k steps) < 0.05 dB",
+  );
+  await expect(page.locator("#lc-charts svg")).toHaveCount(8);
+  await expect(page.locator("#lc-stop-trends svg")).toHaveCount(3);
+  await expect(page.locator('#lc-chart-gs [data-reference="cap"]')).toBeVisible();
+  await expect(page.locator("#lc-chart-gain [data-reference] text")).toHaveText("0.05 dB stop");
+  await expect(page.locator("#lc-legend-loss")).toHaveText("totaldepthnormalanisotropy");
+  await page.locator("#lc-chart-loss").hover();
+  await expect(page.locator(".lc-crosshair")).toHaveCount(11);
+  const crosshairs = await page
+    .locator("[data-training-chart]")
+    .evaluateAll((nodes) => nodes.map((n) => n.getAttribute("data-crosshair")));
+  expect(new Set(crosshairs).size).toBe(1);
+  await page.locator("#lc-chart-gain").hover();
+  await expect(page.locator(".lc-crosshair")).toHaveCount(11);
+  await expect(page.locator("#live")).toHaveAttribute("data-splat-step", "13950", {
+    timeout: 30000,
+  });
+  await expect(page.locator("#lc-snapshot")).toHaveText("splat · step 13,950");
+  await expect(page.locator("#lc-lag")).toHaveText("−1.6k");
+  await expect(page.locator("#live")).toHaveAttribute("data-seeds", "3");
+  await page.getByRole("button", { name: "Seeds", exact: true }).click();
+  await expect(page.locator("#live")).toHaveAttribute("data-seeds-visible", "true");
+  await expect(page.locator("#lc-seeds-count")).toHaveText("640.1k seeds · 640.1k SfM · 0 dense");
+  await page.getByRole("button", { name: "Both", exact: true }).click();
+  await expect(page.locator("#live")).toHaveAttribute("data-layers", "both");
+  await page.getByRole("button", { name: "Cameras", exact: true }).click();
+  await expect(page.locator("#live")).toHaveAttribute("data-cameras-visible", "false");
+  await page.getByRole("button", { name: "Cameras", exact: true }).click();
+  await page.getByRole("button", { name: "Splat", exact: true }).click();
+  await expect(page.locator("#lc-seeds-count")).toBeHidden();
+  const timeline = page.locator("#lc-timeline");
+  await timeline.scrollIntoViewIfNeeded();
+  const rect = await timeline.boundingBox();
+  if (!rect) throw new Error("timeline not laid out");
+  const x = (step: number): number => rect.x + 6 + ((rect.width - 12) * step) / 55800;
+  await page.mouse.move(x(15600), rect.y + 26);
+  await page.mouse.down();
+  await page.mouse.move(x(6000), rect.y + 26, { steps: 4 });
+  await page.mouse.up();
+  await expect(page.locator("#live")).toHaveAttribute("data-splat-step", "5580", {
+    timeout: 30000,
+  });
+  await page.mouse.move(x(6000), rect.y + 26);
+  await page.mouse.down();
+  await page.mouse.move(x(15600) - 2, rect.y + 26, { steps: 4 });
+  await page.mouse.up();
+  await expect(page.locator("#lc-follow")).toHaveText("live");
+  await expect(page.locator("#live")).toHaveAttribute("data-splat-step", "13950", {
+    timeout: 30000,
+  });
+  await expect(page.getByRole("button", { name: "Distance", exact: true })).toBeDisabled();
+  phase = "advance";
+  await expect(page.locator("#live")).toHaveAttribute("data-splat-step", "17000", {
+    timeout: 30000,
+  });
+  await page.getByRole("button", { name: "Distance", exact: true }).click();
+  await expect(page.locator("#live")).toHaveAttribute("data-color", "distance");
+  await page.getByRole("button", { name: "Top down", exact: true }).click();
+  await expect(page.locator("#live")).toHaveAttribute("data-view", "top");
+  await page.getByRole("button", { name: "Orbit", exact: true }).click();
+  await expect(page.locator("#live")).toHaveAttribute("data-view", "orbit");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  phase = "done";
+  await expect(page.locator("#lc-pill")).toHaveText("Finished");
+  await expect(page.locator("#lc-final-row")).toBeVisible();
+  await expect(page.locator("#lc-final-scores")).toHaveText(
+    "PSNR 26.50 · SSIM 0.900 · LPIPS 0.200 · cc_PSNR 27.00",
+  );
+  expect(fetched.sort()).toEqual(
+    [
+      first.key.split("/").at(-1),
+      latest.key.split("/").at(-1),
+      "splat_017000_test.spz",
+      "seeds.bin",
+    ].sort(),
+  );
+  expect(errors).toEqual([]);
+});
+
+test("OOM training freezes the bench console and stops polling", async ({ page }) => {
+  const spz = Buffer.from(spzFromGlb(toArrayBuffer(readFileSync(resolve(TILES, "splat.glb")))));
+  const train = benchTrain(BUCKET);
+  train.ended = { reason: "oom", step: 15600 };
+  const snapshot = train.snapshots?.at(-1);
+  if (!snapshot) throw new Error("Bench fixture needs a snapshot");
+  let polls = 0;
+  await page.clock.install();
+  await page.route(
+    (url) => url.pathname === "/api/v1/captures/c1/live",
+    (route) => {
+      polls += 1;
+      return route.fulfill({
+        json: {
+          ...liveBase,
+          status: "error",
+          error:
+            "Runner killed (SIGKILL), exit code: 137. Most often this happens when the process runs out of memory.",
+          stage: { ...training(15600), status: "error", progress: null },
+          cameras: liveCameras(12),
+          splat: {
+            ...liveSplat(snapshot.step, spz.length),
+            name: snapshot.key.split("/").at(-1),
+            url: snapshot.url,
+          },
+          train,
+        },
+      });
+    },
+  );
+  await page.route(`${BUCKET}/**`, (route) =>
+    route.fulfill({ body: spz, headers: { "access-control-allow-origin": "*" } }),
+  );
+  await page.goto("/view.html#live/c1");
+  await expect(page.locator("#lc-pill")).toHaveText("Out of memory · step 15,600");
+  await expect(page.locator("#lc-error")).toHaveText(
+    "Runner killed (SIGKILL), exit code: 137. Most often this happens when the process runs out of memory.",
+  );
+  await expect(page.locator("#lc-kpi-0")).toHaveText("15,600");
+  await expect(page.locator("#lc-kpi-3")).toHaveText("Out of memory");
+  await expect(page.locator("#lc-follow")).toHaveText("step 15,600");
+  const timeline = page.locator("#lc-timeline");
+  await expect(timeline).toHaveAttribute("aria-valuemax", "15600");
+  await timeline.focus();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("End");
+  await expect(timeline).toHaveAttribute("aria-valuenow", "15600");
+  await expect(page.locator("#lc-follow")).toHaveText("step 15,600");
+  await expect(page.locator("#lc-chart-gs [data-stop]")).toHaveAttribute("data-stop", "15600");
+  await expect(page.locator("#live")).toHaveAttribute("data-splat-step", String(snapshot.step));
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await page.clock.fastForward(12000);
+  expect(polls).toBe(1);
+});
+
+test("training without telemetry has empty charts and disables unscaled Distance", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.route(
+    (url) => url.pathname === "/api/v1/captures/c1/live",
+    (route) =>
+      route.fulfill({
+        json: {
+          ...liveBase,
+          status: "in-progress",
+          stage: training(100),
+          cameras: liveCameras(12),
+        },
+      }),
+  );
+  await page.goto("/view.html#live/c1");
+  await expect(page.locator("#live-console")).toBeVisible();
+  await expect(page.locator("#lc-kpi-0")).toHaveText("100");
+  await expect(page.locator("#lc-charts svg")).toHaveCount(6);
+  await expect(page.locator("#lc-charts path")).toHaveCount(0);
+  await expect(page.locator("#lc-stop")).toBeHidden();
+  await expect(page.getByRole("button", { name: "Distance", exact: true })).toBeDisabled();
+  expect(errors).toEqual([]);
+});
+
+for (const { native, cameraCount } of [
+  { native: true, cameraCount: 12 },
+  { native: false, cameraCount: 12 },
+  { native: false, cameraCount: 0 },
+]) {
+  test(`training console streams full tiles, steps cameras and toggles ${native ? "native" : "fallback"} fullscreen (${String(cameraCount)} cameras)`, async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    if (!native)
+      await page.addInitScript(() => {
+        Object.defineProperty(HTMLElement.prototype, "requestFullscreen", { value: undefined });
+      });
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const spz = spzFromGlb(toArrayBuffer(readFileSync(resolve(TILES, "splat.glb"))));
+    const train = benchTrain(BUCKET);
+    const latest = train.series?.step?.at(-1) ?? 15000;
+    train.tiles = { url: TILESET, step: latest, final: true };
+    await page.route(
+      (url) => url.pathname === "/api/v1/captures/c1/live",
+      (route) =>
+        route.fulfill({
+          json: {
+            ...liveBase,
+            status: "complete",
+            stage: training(latest),
+            cameras: cameraCount ? { ...liveCameras(cameraCount), fovY: 55 } : null,
+            train,
+          },
+        }),
+    );
+    await page.route(`${BUCKET}/**`, (route) =>
+      route.fulfill({ body: Buffer.from(spz), headers: { "access-control-allow-origin": "*" } }),
+    );
+    await page.goto("/view.html#live/c1");
+    const live = page.locator("#live");
+    await expect(live).toHaveAttribute("data-source", "tiles", { timeout: 30_000 });
+    await expect(live).toHaveAttribute("data-tiles", "splat.glb");
+    // Wait on Spark's actual sort/display state, continuously settled for a second.
+    await page.waitForFunction(
+      () => {
+        const host = document.getElementById("live");
+        if (!host) return false;
+        if (host.dataset.settled !== "true") {
+          delete host.dataset.settledSince;
+          return false;
+        }
+        host.dataset.settledSince ??= String(performance.now());
+        return performance.now() - Number(host.dataset.settledSince) > 1000;
+      },
+      undefined,
+      { timeout: 30_000 },
+    );
+    if (cameraCount) {
+      await expect(live).toHaveAttribute("data-camera", "6");
+      await page.getByRole("button", { name: "Next training camera" }).click();
+      await expect(live).toHaveAttribute("data-camera", "7");
+    } else {
+      await expect(live).toHaveAttribute("data-view", "orbit");
+      await expect(page.getByRole("button", { name: "Next training camera" })).toBeDisabled();
+    }
+    const charts = page.locator("#lc-charts");
+    await page.getByRole("button", { name: "Enter fullscreen" }).click();
+    await expect(charts).toBeHidden();
+    await expect(page.locator("#lc-viewer-panel")).toHaveClass(/lc-expanded/);
+    if (native)
+      await expect
+        .poll(() => page.evaluate(() => document.fullscreenElement?.id))
+        .toBe("lc-viewer-panel");
+    await page.getByRole("button", { name: "Exit fullscreen" }).click();
+    await expect(charts).toBeVisible();
+    await page.getByRole("button", { name: "Enter fullscreen" }).click();
+    await page.keyboard.press("Escape");
+    await expect(charts).toBeVisible();
+    const timeline = page.getByRole("slider", { name: "Snapshot step" });
+    await timeline.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(live).toHaveAttribute("data-source", "spz", { timeout: 30_000 });
+    await page.keyboard.press("End");
+    await expect(live).toHaveAttribute("data-source", "tiles", { timeout: 30_000 });
+    await page.goto("/view.html");
+    expect(errors).toEqual([]);
+  });
+}

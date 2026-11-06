@@ -26,11 +26,23 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Capture, Job, JobStep
-from app.models.enums import RunStatus
-from app.schemas.live import LiveCameras, LiveProgress, LiveSplat, LiveStage, LiveState
+from app.models import Capture, Job, JobStep, Site
+from app.models.enums import Representation, RunStatus
+from app.schemas.live import (
+    LiveCameras,
+    LiveProgress,
+    LiveSplat,
+    LiveStage,
+    LiveState,
+    LiveTrain,
+    LiveTrainEnded,
+    LiveTrainPlan,
+    LiveTrainTiles,
+)
+from app.services.epochs import current_asset_of
 from app.services.errors import NotFoundError
 from app.services.jobs import get_job
+from app.services.live_train import derive_events, end_reason, final_metrics
 from app.storage import ObjectStorage
 from app.storage.null import StorageUnavailableError
 
@@ -77,16 +89,84 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
     current = running[-1] if running else (steps[-1] if steps else None)
     cameras: LiveCameras | None = None
     splat: LiveSplat | None = None
+    train: LiveTrain | None = None
+    terminal = job.status in (RunStatus.ERROR, RunStatus.CANCELLED)
     # The newest of each, by position in the run: a re-run pose stage's cameras replace
     # the old ones, and a Refine's training replaces the preview's splat.
     for step in steps:
         live = (step.metrics or {}).get("live")
         if not isinstance(live, dict):
-            continue
+            if step.stage_id != "train" or (step.status == RunStatus.IN_PROGRESS and not terminal):
+                continue
+            live = {}
         found_cameras = _cameras(step, live.get("cameras"))
         cameras = found_cameras or cameras
         found_splat = _splat(step, live.get("splat"), storage)
         splat = found_splat or splat
+        final = (
+            final_metrics(step.metrics or {})
+            if step.stage_id == "train" and (step.status != RunStatus.IN_PROGRESS or terminal)
+            else None
+        )
+        terminal_train = step.stage_id == "train" and terminal
+        if terminal_train and live.get("train") is None:
+            live = {**live, "train": {}}
+        found_train = _train(live, storage, final=final)
+        if (
+            terminal_train
+            and step.status != RunStatus.COMPLETE
+            and found_train is not None
+            and found_train.stop is None
+            and found_train.final is None
+        ):
+            found_train.ended = LiveTrainEnded(
+                reason=end_reason(
+                    [job.error, (step.metrics or {}).get("error")],
+                    preempted=step.preempted_at is not None,
+                ),
+                step=max([0, *found_train.series.step, *[e.step for e in found_train.evals]]),
+            )
+        train = found_train or train
+    if train is not None:
+        params = (job.params or {}).get("train", {})
+        aa = params.get("antialiased") if isinstance(params, dict) else None
+        if isinstance(aa, bool):
+            train.plan = train.plan or LiveTrainPlan()
+            if train.plan.antialiased is None:
+                train.plan.antialiased = aa
+    if job.status == RunStatus.COMPLETE and capture.site_id:
+        site = db.get(Site, capture.site_id)
+        if site is not None:
+            # Resolve this run's epoch, not a newer capture now shown by the gallery.
+            epoch = next((e for e in site.epochs if e.job_id == job.id), None)
+            candidates = [
+                a
+                for a in site.assets
+                if a.representation == Representation.GAUSSIAN_SPLAT
+                and a.valid_to is None
+                and a.source_kind == "observed"
+            ]
+            asset = current_asset_of(epoch.id, candidates) if epoch else None
+            if not site.epochs and (site.metadata_ or {}).get("jobId") == str(job.id):
+                candidates.sort(key=lambda a: (a.created_at, str(a.id)), reverse=True)
+                asset = next(
+                    (a for a in candidates if a.default_visible), next(iter(candidates), None)
+                )
+            if asset and asset.source.get("type") == "3d-tiles-url":
+                train = train or LiveTrain()
+                train.tiles = LiveTrainTiles(
+                    url=asset.source["url"],
+                    step=max(
+                        [
+                            0,
+                            *train.series.step,
+                            *[s.step for s in train.snapshots],
+                            *[e.step for e in train.evals],
+                        ]
+                    ),
+                    final=True,
+                    frame="enu",
+                )
     return LiveState(
         job_id=job.id,
         capture_id=capture.id,
@@ -100,6 +180,7 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
         steps_started=len(steps),
         cameras=cameras,
         splat=splat,
+        train=train,
     )
 
 
@@ -138,6 +219,7 @@ def _cameras(step: JobStep, value: Any) -> LiveCameras | None:
             "scale",
             "up",
             "aspect",
+            "fovY",
             "cameraCount",
             "cameras",
             "pointCount",
@@ -188,3 +270,60 @@ def _signed(storage: ObjectStorage, key: str) -> str | None:
         return storage.presign_get(key, expires_in=SIGNED_FOR_S)
     except StorageUnavailableError:
         return None
+
+
+def _train(
+    live: dict[str, Any], storage: ObjectStorage, *, final: dict[str, int | float] | None = None
+) -> LiveTrain | None:
+    """Validate first, then derive and sign; malformed historical JSON is never fatal."""
+    value = live.get("train", {} if final else None)
+    if not isinstance(value, dict):
+        return None
+    try:
+        parsed = LiveTrain.model_validate(
+            {**value, "ended": None, "snapshots": live.get("snapshots", [])}
+        )
+        if final is not None:
+            parsed = LiveTrain.model_validate({**parsed.model_dump(by_alias=True), "final": final})
+        document = parsed.model_dump(by_alias=True)
+        # Relocations are optional observations, bounded by the worker, not stored events.
+        relocations = value.get("relocations", [])
+        document["relocations"] = (
+            [
+                row
+                for row in relocations
+                if isinstance(row, dict) and isinstance(row.get("step"), int) and row["step"] >= 0
+            ]
+            if isinstance(relocations, list)
+            else []
+        )
+        document["events"] = derive_events(document)
+        parsed = LiveTrain.model_validate(document)
+    except (ValidationError, TypeError, ValueError, KeyError, IndexError):
+        return None
+    if parsed.seeds is not None:
+        key = parsed.seeds.key
+        if (
+            not key.startswith("runs/")
+            or _LIVE_SEGMENT not in key
+            or ".." in key
+            or not key.endswith("/seeds.bin")
+        ):
+            parsed.seeds = None
+        else:
+            parsed.seeds.url = _signed(storage, key)
+    for snapshot in parsed.snapshots:
+        key = snapshot.key
+        if (
+            not key.startswith("runs/")
+            or _LIVE_SEGMENT not in key
+            or ".." in key
+            or not key.endswith(".spz")
+        ):
+            return None
+        # Presigning is local; HEAD only the newest splat through `_splat`.
+        try:
+            snapshot.url = storage.presign_get(key, expires_in=SIGNED_FOR_S)
+        except StorageUnavailableError:
+            snapshot.url = None
+    return parsed

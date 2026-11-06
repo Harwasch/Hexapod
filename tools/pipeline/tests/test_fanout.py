@@ -589,3 +589,19 @@ def test_on_the_container_s_clock_the_queue_is_beside_the_bill_not_in_it() -> No
     additive = {k: v for k, v in phases.items() if k not in ("queue", "bgSync", "collect", "cold")}
     assert sum(additive.values()) == pytest.approx(1_700.0)
     assert phases["rest"] == pytest.approx(1_700.0 - 10 - 2 - 18 - 1_650 - 4.5)
+
+
+def test_telemetry_pins_one_block_until_finished_and_plan_passes_once() -> None:
+    sink = Lines()
+    tail = _FanOutLog(cast("StageContext", sink))
+    plan = 'live-plan: {"v":1,"stepsMax":30000}'
+    point = 'live-train: {"v":1,"k":"s","step":200,"loss":{}}'
+    tail.line("b0", plan)
+    tail.line("b1", plan)
+    tail.line("b0", point)
+    tail.line("b1", point)
+    tail.finished("b0")
+    tail.line("b1", point)
+    assert len(sink.lines) == 3
+    points = [json.loads(line.split("live-train: ")[1]) for line in sink.lines[1:]]
+    assert [p["block"] for p in points] == ["b0", "b1"]
