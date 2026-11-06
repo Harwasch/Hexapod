@@ -312,3 +312,17 @@ def test_unknown_camera_order_preserves_photo_scores_with_unavailable_distance(
     assert measured["status"] == "unavailable"
     assert measured["bands"] is None and "capture order" in measured["scale"]["reason"]
     assert "resolutions" in result["rows"][0]
+
+
+def test_rescore_accepts_runs_whose_only_failure_was_bench_evaluation() -> None:
+    evaluate_timeout = {
+        "status": "failed",
+        "iterations": 60000.0,
+        "error": "TimeoutExpired: ['python', '/opt/pipeline/experiments/bench/evaluate.py']",
+    }
+    assert rescore.trained_to_completion({"status": "complete"})
+    assert rescore.trained_to_completion(evaluate_timeout)
+    assert not rescore.trained_to_completion({**evaluate_timeout, "iterations": None})
+    assert not rescore.trained_to_completion(
+        {"status": "failed", "iterations": 100.0, "error": "CUDA out of memory"}
+    )

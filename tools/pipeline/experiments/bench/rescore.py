@@ -45,6 +45,21 @@ def encode_pngs(directory: Path) -> dict[str, str]:
     return {p.name: base64.b64encode(p.read_bytes()).decode("ascii") for p in paths}
 
 
+def trained_to_completion(result: dict[str, Any]) -> bool:
+    """Complete, or failed only in the bench's own scoring after training finished.
+
+    The trained PLY is kept either way; rescore scores it with its own yardstick.
+    """
+    if result.get("status") == "complete":
+        return True
+    error = str(result.get("error") or "")
+    return (
+        result.get("status") == "failed"
+        and bool(result.get("iterations"))
+        and "experiments/bench/evaluate.py" in error
+    )
+
+
 def inventory(
     root: Path, plan: dict[str, Any], manifest: dict[str, Any]
 ) -> tuple[list[Any], list[Any]]:
@@ -56,7 +71,7 @@ def inventory(
             raise ValueError("rescore needs distinct resolved run IDs")
         resolved.add(run.name)
         result = read_json(run / "result.json")
-        if result.get("status") != "complete" or result.get("rehearsal", False) != plan.get(
+        if not trained_to_completion(result) or result.get("rehearsal", False) != plan.get(
             "rehearsal", False
         ):
             raise ValueError("rescore needs completed runs in the same rehearsal namespace")
