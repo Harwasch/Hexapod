@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Simulated weather wind · lab and bench</title>
+    <style>
+      body {
+        margin: 0;
+        font: 15px system-ui;
+        background: #152330;
+        color: #eef3f8;
+      }
+      #viewer {
+        width: 1920px;
+        height: 1080px;
+        position: relative;
+      }
+      #viewer .cesium-widget {
+        width: 100%;
+        height: 100%;
+      }
+      #viewer canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      .cesium-widget-credits {
+        display: none !important;
+      }
+      main {
+        padding: 16px;
+        max-width: 1100px;
+      }
+      button,
+      select {
+        padding: 8px;
+        margin: 6px;
+      }
+      label {
+        display: inline-block;
+        margin: 6px;
+      }
+      pre {
+        white-space: pre-wrap;
+      }
+      table {
+        border-collapse: collapse;
+      }
+      td,
+      th {
+        padding: 8px;
+        border: 1px solid #678;
+      }
+      #field {
+        position: absolute;
+        right: 16px;
+        top: 16px;
+        width: 224px !important;
+        height: 248px !important;
+        background: #142333;
+        z-index: 5;
+      }
+      #caption {
+        position: absolute;
+        bottom: 14px;
+        left: 18px;
+        right: 18px;
+        color: white;
+        background: #142333df;
+        padding: 10px;
+        z-index: 5;
+        font-size: 17px;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Simulated from weather · Minnetonka</h1>
+      <p>
+        Open-Meteo hourly reanalysis drives a shared travelling field. Plant response is simulated,
+        with trunk and ground pinned. Archive samples use a leaf-on scan in every season. The
+        80-copy grove uses 2,400,000 DC-colour splats and 960 branch nodes.
+      </p>
+      <p>
+        <a href="/?living-forest=1&autobench=1"
+          ><button>Run forest benchmark next (80 trees)</button></a
+        >
+        ·
+        <a href="/">Single-tree lab</a>
+      </p>
+      <p>
+        8 randomized rounds, 32 samples/block; differences pair each arm with surrounding off
+        blocks. Spread is p10–p90 across rounds. Off drift above 30% makes the result inconclusive.
+      </p>
+      <p>
+        Forest views: <a href="/?living-forest=1&view=oblique">Oblique</a> ·
+        <a href="/?living-forest=1&view=edge">2 m eye height</a> ·
+        <a href="/?living-forest=1&view=overhead">Overhead + wind field</a>
+      </p>
+      <button id="run" disabled>Run interleaved benchmark</button
+      ><button id="download" disabled>Download JSON</button>
+      <label
+        >Weather hour
+        <select id="preset">
+          <option>calm</option>
+          <option>light</option>
+          <option>fresh</option>
+          <option>storm</option>
+          <option>off</option>
+        </select></label
+      >
+      <label
+        >Mode
+        <select id="source">
+          <option value="manual">Manual / recorded hour</option>
+          <option value="live">Live weather</option>
+        </select></label
+      >
+      <label>Map time (UTC) <input id="date" type="datetime-local" /></label>
+      <label
+        >Mean 10 m (m/s) <input id="mean" type="range" min="0" max="25" step="0.1" /><output
+          id="mean-value"
+        ></output
+      ></label>
+      <label
+        >Gust 10 m (m/s) <input id="gust" type="range" min="0" max="40" step="0.1" /><output
+          id="gust-value"
+        ></output
+      ></label>
+      <label
+        >Wind FROM (°) <input id="direction" type="range" min="0" max="360" step="1" /><output
+          id="direction-value"
+        ></output
+      ></label>
+      <label><input type="checkbox" id="captured" /> As captured</label>
+      <p id="status">Loading…</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Arm</th>
+            <th>Median ms</th>
+            <th>p95 ms</th>
+            <th>Paired added ms [p10, p90]</th>
+            <th>Ratio</th>
+          </tr>
+        </thead>
+        <tbody id="results"></tbody>
+      </table>
+      <pre id="info"></pre>
+    </main>
+    <div id="viewer">
+      <canvas id="field" width="224" height="248"></canvas>
+      <div id="caption">Simulated</div>
+    </div>
+    <script type="module" src="/src/dev/livingBreezeBench.ts"></script>
+  </body>
+</html>

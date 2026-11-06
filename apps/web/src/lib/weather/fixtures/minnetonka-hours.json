@@ -1,0 +1,25 @@
+{
+  "latitude": 44.956062,
+  "longitude": -93.48837,
+  "elevation": 281.0,
+  "utc_offset_seconds": 0,
+  "timezone": "GMT",
+  "hourly_units": {
+    "time": "iso8601",
+    "wind_speed_10m": "m/s",
+    "wind_gusts_10m": "m/s",
+    "wind_direction_10m": "\u00b0"
+  },
+  "hourly": {
+    "time": ["2024-05-02T03:00", "2024-07-31T12:00", "2024-11-19T04:00", "2024-12-04T21:00"],
+    "wind_speed_10m": [0.4, 2.46, 8.51, 11.49],
+    "wind_gusts_10m": [1.1, 4.0, 15.4, 22.9],
+    "wind_direction_10m": [360, 117, 97, 316]
+  },
+  "requestedPosition": {
+    "latitude": 44.944403,
+    "longitude": -93.425903
+  },
+  "source": "https://archive-api.open-meteo.com/v1/archive?latitude=44.944403&longitude=-93.425903&start_date=2024-01-01&end_date=2024-12-31&hourly=wind_speed_10m,wind_gusts_10m,wind_direction_10m&wind_speed_unit=ms&timezone=UTC",
+  "labels": ["calm", "light", "fresh", "storm"]
+}
