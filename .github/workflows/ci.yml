@@ -352,13 +352,13 @@ jobs:
           PY
 
   trainer:
-    name: Trainer · gsplat v1.5.3 accepts the pipeline's argv (CPU replica)
+    name: Trainer · gsplat 512d366b accepts the pipeline's argv (CPU replica)
     runs-on: ubuntu-24.04
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.trainer != 'false' }}
     # The training image's Python 3.10 environment, minus CUDA: CPU torch at the version
-    # the gsplat wheel was built for, the committed trainer-requirements.txt, and the
-    # committed check the image build itself runs last. It imports gsplat v1.5.3's own
+    # the image builds gsplat against, the committed trainer-requirements.txt, and the
+    # committed check the image build itself runs last. It imports gsplat 512d366b's own
     # simple_trainer.py and parses training.gsplat_argv with that file's own CLI, so a
     # renamed flag, a requirement that no longer resolves or an argv the trainer would
     # refuse fails here rather than on a GPU. What it cannot check is anything CUDA: the
@@ -366,15 +366,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      - name: gsplat v1.5.3's examples
-        run: git clone --depth 1 --branch v1.5.3 https://github.com/nerfstudio-project/gsplat "$RUNNER_TEMP/gsplat"
+      # The commit infra/modal/app.py pins as GSPLAT_COMMIT.
+      - name: gsplat 512d366b's examples
+        run: |
+          git init "$RUNNER_TEMP/gsplat"
+          git -C "$RUNNER_TEMP/gsplat" fetch --depth 1 https://github.com/nerfstudio-project/gsplat 512d366b67073d77ca099ede742683c165dfc23b
+          git -C "$RUNNER_TEMP/gsplat" checkout --detach FETCH_HEAD
       - name: The training venv, minus CUDA
         run: |
           uv venv -p 3.10 "$RUNNER_TEMP/trainer"
           export VIRTUAL_ENV="$RUNNER_TEMP/trainer"
-          uv pip install --index-url https://download.pytorch.org/whl/cpu torch==2.4.1 torchvision==0.19.1
-          printf 'torch==2.4.1\ntorchvision==0.19.1\n' > "$RUNNER_TEMP/constraints.txt"
+          uv pip install --index-url https://download.pytorch.org/whl/cpu torch==2.9.1 torchvision==0.24.1
+          printf 'torch==2.9.1\ntorchvision==0.24.1\n' > "$RUNNER_TEMP/constraints.txt"
           uv pip install -c "$RUNNER_TEMP/constraints.txt" -r infra/modal/trainer-requirements.txt
+          # gsplat from that source, as the image does, but without compiling CUDA.
+          BUILD_NO_CUDA=1 uv pip install -c "$RUNNER_TEMP/constraints.txt" --no-build-isolation --no-deps "$RUNNER_TEMP/gsplat"
       - name: simple_trainer.py parses training.gsplat_argv
         run: |
           "$RUNNER_TEMP/trainer/bin/python" infra/modal/check_trainer.py \
