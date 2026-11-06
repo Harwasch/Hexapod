@@ -30,7 +30,15 @@ from urllib.parse import unquote, urlsplit
 from pydantic import ValidationError
 
 from app.models.enums import RunStatus
-from app.schemas.live import LiveCameras, LiveSplat, LiveStage, LiveState, LiveTrain, LiveTrainEnded
+from app.schemas.live import (
+    LiveCameras,
+    LiveSplat,
+    LiveStage,
+    LiveState,
+    LiveTrain,
+    LiveTrainEnded,
+    LiveTrainTiles,
+)
 from app.services.live_train import derive_events, end_reason, final_metrics, merge_live
 
 # Deliberately avoid pipeline_bridge: it imports app.config and the worker's settings.
@@ -463,9 +471,18 @@ class Watches:
 
 
 class Handler(BaseHTTPRequestHandler):
-    def __init__(self, *args: Any, watches: Watches, web_dist: Path | None, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *args: Any,
+        watches: Watches,
+        web_dist: Path | None,
+        tiles: Path | None = None,
+        **kwargs: Any,
+    ) -> None:
         self.watches = watches
         self.web_dist = web_dist.resolve() if web_dist else None
+        # A locally packaged solve-local tileset of the primary run's final splat.
+        self.tiles = tiles.resolve() if tiles else None
         super().__init__(*args, **kwargs)
 
     def do_GET(self) -> None:
@@ -483,7 +500,13 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     self._reply(status, b"Watch unavailable", "text/plain")
             return
-        if path.startswith("/snapshots/"):
+        if self.tiles and path.startswith("/tiles/"):
+            candidate = (self.tiles / path.removeprefix("/tiles/")).resolve()
+            if candidate.is_relative_to(self.tiles) and candidate.is_file():
+                kind = "application/json" if candidate.suffix == ".json" else "model/gltf-binary"
+                self._file(candidate, kind)
+                return
+        elif path.startswith("/snapshots/"):
             parts = path.removeprefix("/snapshots/").split("/")
             run_id, name = (
                 (self.watches.primary, parts[0])
@@ -523,6 +546,11 @@ class Handler(BaseHTTPRequestHandler):
             for snapshot in state.train.snapshots:
                 if snapshot.url:
                     snapshot.url = origin + snapshot.url
+            if self.tiles and watch.run_id == self.watches.primary:
+                step = state.train.series.step[-1] if state.train.series.step else 0
+                state.train.tiles = LiveTrainTiles(
+                    url=origin + "/tiles/tileset.json", step=step, final=True
+                )
         self._reply(200, state.model_dump_json(by_alias=True).encode(), "application/json")
 
     def _file(self, path: Path, content_type: str) -> None:
@@ -664,6 +692,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8791)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--web-dist", type=Path)
+    parser.add_argument("--tiles", type=Path, help="tileset directory of the run's final splat")
     args = parser.parse_args()
     if not re.fullmatch(r"[a-fA-F0-9-]{32,36}", args.run_id):
         parser.error("run_id must be a bench UUID")
@@ -676,7 +705,9 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     watch = Watch(args.run_id, STATE / "live" / args.run_id, local_plan(args.run_id))
     watches = Watches(watch)
-    handler = partial(Handler, watches=watches, web_dist=args.web_dist)
+    if args.tiles and not (args.tiles / "tileset.json").is_file():
+        parser.error("--tiles must contain tileset.json")
+    handler = partial(Handler, watches=watches, web_dist=args.web_dist, tiles=args.tiles)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     watches.start(watch)
     host = args.host if args.host not in ("0.0.0.0", "::") else "<this-machine>"  # noqa: S104
