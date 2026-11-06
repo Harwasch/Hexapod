@@ -13,6 +13,7 @@ import logging
 import mimetypes
 import re
 import shutil
+import subprocess
 import sys
 import threading
 import uuid
@@ -30,7 +31,7 @@ from pydantic import ValidationError
 
 from app.models.enums import RunStatus
 from app.schemas.live import LiveCameras, LiveSplat, LiveStage, LiveState, LiveTrain, LiveTrainEnded
-from app.services.live_train import derive_events, final_metrics, merge_live
+from app.services.live_train import derive_events, end_reason, final_metrics, merge_live
 
 # Deliberately avoid pipeline_bridge: it imports app.config and the worker's settings.
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tools/pipeline"))
@@ -117,6 +118,7 @@ def state_from_log(
     plan: dict[str, Any] | None = None,
     failure: dict[str, Any] | None = None,
     replaced_by: str | None = None,
+    error_texts: Sequence[str] = (),
 ) -> LiveState:
     """Pure log-to-console projection, using exactly the worker's record/merge semantics."""
     parsed = bench_records(text)
@@ -163,7 +165,10 @@ def state_from_log(
             train.replaced_by = replaced_by
             if status == RunStatus.ERROR and train.stop is None and train.final is None:
                 train.ended = LiveTrainEnded(
-                    reason="preempted" if error.startswith("Preempted") else "stopped",
+                    reason=end_reason(
+                        [(result or {}).get("error"), (failure or {}).get("error"), *error_texts],
+                        preempted=False,
+                    ),
                     step=max([0, *train.series.step, *[e.step for e in train.evals]]),
                 )
             for snapshot in train.snapshots:
@@ -232,13 +237,51 @@ def state_from_log(
     )
 
 
+def app_oom_lines(app_id: str) -> tuple[str, ...]:
+    """Read the app's stdout for at most 20 seconds; never retain unrelated logs.
+
+    `modal app logs` can follow indefinitely. TimeoutExpired carries the stdout
+    collected before subprocess.run kills and reaps the CLI. Stderr is discarded.
+    Use the shared classifier itself to recognize its exact OOM markers.
+    """
+    output: str | bytes
+    try:
+        output = subprocess.run(  # noqa: S603
+            ["modal", "app", "logs", app_id],  # noqa: S607
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        ).stdout
+    except subprocess.TimeoutExpired as error:
+        output = error.stdout or ""
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", errors="replace")
+    return tuple(
+        line for line in output.splitlines() if end_reason([line], preempted=False) == "oom"
+    )
+
+
 class Watch:
     """One poller owns Modal I/O; request handlers only read an immutable state snapshot."""
 
-    def __init__(self, run_id: str, cache: Path, plan: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        run_id: str,
+        cache: Path,
+        plan: dict[str, Any] | None = None,
+        *,
+        app_log_causes: dict[str, tuple[str, ...]] | None = None,
+    ) -> None:
         self.run_id = run_id
         self.cache = cache
         self.plan = plan
+        self.app_log_causes = app_log_causes if app_log_causes is not None else {}
         self.started_at = datetime.now(UTC)
         self.text = ""
         self.result: dict[str, Any] | None = None
@@ -303,6 +346,20 @@ class Watch:
     def refresh(self) -> None:
         ledger = LocalLedger.read()
         self.plan = ledger.plans.get(self.run_id, self.plan)
+        failure = ledger.failures.get(self.run_id)
+        outcome = self.result if self.result is not None else failure
+        failed = outcome is not None and outcome.get("status") != "complete"
+        app_id = (failure or {}).get("appId")
+        if (
+            failed
+            and isinstance(app_id, str)
+            and re.fullmatch(r"ap-[a-zA-Z0-9]+", app_id)
+            and ledger.app_runs.get(app_id) == {self.run_id}
+            and self.run_id not in self.app_log_causes
+        ):
+            # refresh runs only in the poller. Cache even unavailable/empty logs,
+            # including across idle-watch eviction, so failures never retry in a loop.
+            self.app_log_causes[self.run_id] = app_oom_lines(app_id)
         self.state = state_from_log(
             self.run_id,
             self.text,
@@ -310,8 +367,9 @@ class Watch:
             cached=self.cached,
             started_at=self.started_at,
             plan=self.plan,
-            failure=ledger.failures.get(self.run_id),
+            failure=failure,
             replaced_by=ledger.replacement(self.run_id),
+            error_texts=self.app_log_causes.get(self.run_id, ()),
         )
 
     def _warn(self, kind: str, error: Exception) -> None:
@@ -343,6 +401,7 @@ class Watches:
 
     def __init__(self, primary: Watch) -> None:
         self.primary = primary.run_id
+        self.app_log_causes = primary.app_log_causes
         self.watches = {primary.run_id: primary}
         self.users = {primary.run_id: 0}
         self.used = {primary.run_id: monotonic()}
@@ -376,7 +435,12 @@ class Watches:
                                 idle.poll_lock.release()
                             break
                     if len(self.watches) < 8:
-                        watch = Watch(run_id, STATE / "live" / run_id, ledger.plans.get(run_id))
+                        watch = Watch(
+                            run_id,
+                            STATE / "live" / run_id,
+                            ledger.plans.get(run_id),
+                            app_log_causes=self.app_log_causes,
+                        )
                         self.watches[run_id] = watch
                         self.users[run_id] = 0
                         self.start(watch)
@@ -517,6 +581,13 @@ class LocalLedger:
         self.failures = {
             r.value["runId"]: r.value for r in rows if r.value.get("event") == "failed"
         }
+        #: Runs per Modal app. One `bench run` batch shares an app, and its log does not say
+        #: which run a line came from, so an OOM line is only evidence for an app's only run.
+        self.app_runs: dict[str, set[str]] = {}
+        for r in rows:
+            app = r.value.get("appId")
+            if isinstance(app, str):
+                self.app_runs.setdefault(app, set()).add(r.value["runId"])
 
     @classmethod
     def read(cls) -> LocalLedger:
@@ -553,6 +624,16 @@ class LocalLedger:
         return identity if all(value is not None for value in identity) else None
 
     def replacement(self, run_id: str) -> str | None:
+        current = run_id
+        seen = {run_id}
+        while (next_run := self._successor(current)) is not None:
+            if next_run in seen:
+                return None
+            seen.add(next_run)
+            current = next_run
+        return current if current != run_id else None
+
+    def _successor(self, run_id: str) -> str | None:
         plans = [r for r in self.rows if r.value.get("event") == "planned"]
         source = next((r for r in plans if r.value["runId"] == run_id), None)
         if source is None or self.variant(source.value) is None:

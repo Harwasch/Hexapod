@@ -129,7 +129,14 @@ def plans_for(args: argparse.Namespace) -> list[dict[str, Any]]:
     return plans
 
 
-def save_outcome(state: Path, book: Path, plan: dict[str, Any], result: dict[str, Any]) -> None:
+def save_outcome(
+    state: Path,
+    book: Path,
+    plan: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    app_id: str | None = None,
+) -> None:
     directory = state / "runs" / plan["runId"]
     write_json(directory / "result.json", result)
     for name, value in result.get("artifacts", {}).items():
@@ -144,6 +151,7 @@ def save_outcome(state: Path, book: Path, plan: dict[str, Any], result: dict[str
         cost=result.get("costUsd"),
         failed=result["status"] != "complete",
         error=result.get("error"),
+        app_id=app_id,
     )
 
 
@@ -180,6 +188,7 @@ def remote_batch(
     module = load_modal()
     results = []
     with module.app.run():
+        app_id = module.app.app_id
         if plans[0]["schedule"] != "freeze":
             # Volume API read: no CPU/GPU preflight function, no R2 credentials.
             manifest = json.loads(
@@ -200,14 +209,14 @@ def remote_batch(
                     pending.append((plan, function.spawn(plan)))
                 except Exception as error:
                     result = lost_result(state, plan, error)
-                    save_outcome(state, book, plan, result)
+                    save_outcome(state, book, plan, result, app_id=app_id)
                     results.append(result)
             for plan, call in pending:
                 try:
                     result = call.get()
                 except Exception as error:
                     result = lost_result(state, plan, error)
-                save_outcome(state, book, plan, result)
+                save_outcome(state, book, plan, result, app_id=app_id)
                 results.append(result)
     return results
 

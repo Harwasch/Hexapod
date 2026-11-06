@@ -4,6 +4,7 @@ import importlib
 import io
 import json
 import os
+import subprocess
 import threading
 from datetime import UTC, datetime
 from http.client import HTTPConnection, HTTPMessage
@@ -20,6 +21,14 @@ from app.scripts.bench_live import Handler, Watch, Watches, snapshot_name, state
 RUN = "0123456789abcdef0123456789abcdef"
 NAME = "splat_000010.spz"
 STARTED = datetime(2026, 11, 5, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def no_real_modal_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("bench tests must fake the Modal subprocess")
+
+    monkeypatch.setattr("app.scripts.bench_live.subprocess.run", refuse)
 
 
 def log_text() -> str:
@@ -552,9 +561,11 @@ def test_missing_or_nonfinite_final_scores_stay_unknown() -> None:
 @pytest.mark.parametrize(
     "error,reason",
     [
-        ("Preempted; restart refused, no second attempt: run already started", "preempted"),
-        ("Remote outcome unknown: FunctionTimeoutError: timed out", "stopped"),
-        ("trainer stopped", "stopped"),
+        ("Preempted; restart refused, no second attempt: run already started", "failed"),
+        ("Remote outcome unknown: FunctionTimeoutError: timed out", "failed"),
+        ("trainer stopped", "failed"),
+        ("Runner killed (SIGKILL), exit code: 137", "oom"),
+        ("torch.OutOfMemoryError: CUDA out of memory", "oom"),
     ],
 )
 @pytest.mark.parametrize("source", ["volume", "ledger"])
@@ -589,7 +600,7 @@ def test_real_ledger_failure_replacement_and_reread(
     from app.scripts import bench_live
 
     monkeypatch.setattr(bench_live, "STATE", tmp_path)
-    old, failure, new = replacement_rows()
+    old, failure, new, *_ = replacement_rows()
     book = tmp_path / "custom.jsonl"
     book.write_text(json.dumps(old) + "\n")
     volume = Volume()
@@ -601,7 +612,7 @@ def test_real_ledger_failure_replacement_and_reread(
     watch.poll(volume)
     assert watch.state.error == failure["error"]
     assert watch.state.train is not None and watch.state.train.ended is not None
-    assert watch.state.train.ended.reason == "preempted"
+    assert watch.state.train.ended.reason == "failed"
     assert watch.state.train.replaced_by == new["runId"]
     assert watch.state.capture_name == "beach-full · full-data"
 
@@ -612,7 +623,7 @@ def test_finished_volume_still_rereads_ledgers(
     from app.scripts import bench_live
 
     monkeypatch.setattr(bench_live, "STATE", tmp_path)
-    old, _, new = replacement_rows()
+    old, _, new, *_ = replacement_rows()
     book = tmp_path / "custom.jsonl"
     book.write_text(json.dumps(old) + "\n")
     watch = Watch(old["runId"], tmp_path / "cache")
@@ -633,7 +644,7 @@ def test_replacement_across_files_ignores_tags_and_respects_variant_identity(
     from app.scripts import bench_live
 
     monkeypatch.setattr(bench_live, "STATE", tmp_path)
-    old, _, new = replacement_rows()
+    old, _, new, *_ = replacement_rows()
     first = tmp_path / "z-first.jsonl"
     first.write_text(json.dumps(old) + "\n")
     second = tmp_path / "a-second.jsonl"
@@ -668,7 +679,7 @@ def test_multi_run_routes_cap_and_idle_eviction(
     monkeypatch.setattr(bench_live, "STATE", tmp_path)
     started: list[Watch] = []
     monkeypatch.setattr(Watches, "start", lambda self, watch: started.append(watch))
-    old, _, new = replacement_rows()
+    old, _, new, *_ = replacement_rows()
     extras = [{**new, "runId": f"{i:032x}"} for i in range(10)]
     rows = [old, new, *extras]
     (tmp_path / "custom.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
@@ -719,7 +730,7 @@ def test_all_busy_watches_are_kept_and_new_known_run_is_unavailable(
 
     monkeypatch.setattr(bench_live, "STATE", tmp_path)
     monkeypatch.setattr(Watches, "start", lambda self, watch: None)
-    old, _, new = replacement_rows()
+    old, _, new, *_ = replacement_rows()
     rows = [old, *[{**new, "runId": f"{i:032x}"} for i in range(8)]]
     (tmp_path / "custom.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     watches = Watches(Watch(old["runId"], tmp_path / "primary"))
@@ -738,7 +749,7 @@ def test_ledger_failure_waits_for_first_volume_poll(
     from app.scripts import bench_live
 
     monkeypatch.setattr(bench_live, "STATE", tmp_path)
-    old, failure, _ = replacement_rows()
+    old, failure, *_ = replacement_rows()
     (tmp_path / "custom.jsonl").write_text(json.dumps(old) + "\n" + json.dumps(failure) + "\n")
     watch = Watch(old["runId"], tmp_path / "cache")
     assert watch.state.train is None and watch.state.status == "in-progress"
@@ -767,7 +778,7 @@ def test_partial_or_invalid_ledger_row_does_not_hide_other_files(
     from app.scripts import bench_live
 
     monkeypatch.setattr(bench_live, "STATE", tmp_path)
-    old, failure, new = replacement_rows()
+    old, failure, new, *_ = replacement_rows()
     (tmp_path / "custom.jsonl").write_text(
         json.dumps(old) + "\n" + json.dumps(failure) + '\n{"runId":'
     )
@@ -793,7 +804,7 @@ def test_polling_watch_is_not_evicted(tmp_path: Path, monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(bench_live, "STATE", tmp_path)
     monkeypatch.setattr(Watches, "start", lambda self, watch: None)
-    old, _, new = replacement_rows()
+    old, _, new, *_ = replacement_rows()
     rows = [old, *[{**new, "runId": f"{i:032x}"} for i in range(8)]]
     (tmp_path / "custom.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     primary = Watch(old["runId"], tmp_path / "primary")
@@ -808,3 +819,184 @@ def test_polling_watch_is_not_evicted(tmp_path: Path, monkeypatch: pytest.Monkey
         assert old["runId"] in watches.watches
         assert rows[1]["runId"] not in watches.watches
     watches.close()
+
+
+OOM = "Runner killed (SIGKILL), exit code: 137. Most often this happens when the process runs out of memory."
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_app_log_reader_keeps_only_oom_stdout(
+    monkeypatch: pytest.MonkeyPatch, timeout: bool
+) -> None:
+    from app.scripts import bench_live
+
+    def run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        assert args == ["modal", "app", "logs", "ap-test"]
+        assert kwargs["timeout"] == 20
+        assert kwargs["stdout"] == subprocess.PIPE and kwargs["stderr"] == subprocess.DEVNULL
+        text = f"unrelated log\n{OOM}\nnormal memory usage: 10 GB\nCUDA out of memory\n"
+        if timeout:
+            raise subprocess.TimeoutExpired(args, 20, output=text.encode(), stderr=b"ignored")
+        return subprocess.CompletedProcess(args, 0, stdout=text)
+
+    monkeypatch.setattr("app.scripts.bench_live.subprocess.run", run)
+    assert bench_live.app_oom_lines("ap-test") == (OOM, "CUDA out of memory")
+
+
+@pytest.mark.parametrize("outcome", ["oom", "timeout-oom", "timeout", "unavailable", "quiet"])
+def test_failed_watch_reads_app_cause_once_outside_requests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    from app.scripts import bench_live
+
+    monkeypatch.setattr(bench_live, "STATE", tmp_path)
+    old, failure, *_ = replacement_rows()
+    failure = {**failure, "appId": "ap-test"}
+    (tmp_path / "custom.jsonl").write_text(json.dumps(old) + "\n" + json.dumps(failure) + "\n")
+    calls = []
+
+    def run(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        if outcome == "unavailable":
+            raise FileNotFoundError("no modal CLI")
+        if outcome.startswith("timeout"):
+            raise subprocess.TimeoutExpired(
+                args, 20, output=OOM.encode() if outcome == "timeout-oom" else b""
+            )
+        return subprocess.CompletedProcess(
+            args, 0, stdout=OOM if outcome == "oom" else "ordinary log"
+        )
+
+    monkeypatch.setattr("app.scripts.bench_live.subprocess.run", run)
+    watch = Watch(old["runId"], tmp_path / "cache")
+    request(watch, f"/api/v1/captures/{old['runId']}/live")
+    assert not calls  # Neither constructing a watch nor serving HTTP runs the CLI.
+    for _ in range(3):
+        watch.poll(Volume())
+    assert len(calls) == 1
+    assert watch.state.train is not None and watch.state.train.ended is not None
+    assert watch.state.train.ended.reason == (
+        "oom" if outcome in {"oom", "timeout-oom"} else "failed"
+    )
+    assert watch.state.error == failure["error"]
+    # The cache belongs to the server, so a recreated watch does not retry either.
+    watches = Watches(watch)
+    monkeypatch.setattr(Watches, "start", lambda self, watch: None)
+    book = tmp_path / "custom.jsonl"
+    replacements = [{**old, "runId": f"{i:032x}"} for i in range(8)]
+    with book.open("a") as output:
+        output.write("\n".join(json.dumps(row) for row in replacements) + "\n")
+    for row in replacements:
+        request(watches, f"/api/v1/captures/{row['runId']}/live")
+    assert watch.stop.is_set()
+    with watches.acquire(watch.run_id) as reopened:
+        assert reopened is not None
+        reopened.poll(Volume())
+        assert reopened.state.train is not None and reopened.state.train.ended is not None
+        assert reopened.state.train.ended.reason == watch.state.train.ended.reason
+    assert len(calls) == 1
+    watches.close()
+
+
+def test_complete_watch_does_not_read_app_logs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.scripts import bench_live
+
+    monkeypatch.setattr(bench_live, "STATE", tmp_path)
+    old, failure, *_ = replacement_rows()
+    failure = {**failure, "appId": "ap-test"}
+    (tmp_path / "custom.jsonl").write_text(json.dumps(old) + "\n" + json.dumps(failure) + "\n")
+    monkeypatch.setattr(
+        "app.scripts.bench_live.subprocess.run", lambda *a, **kw: pytest.fail("no log lookup")
+    )
+    volume = Volume()
+    volume.files[f"runs/{old['runId']}/result.json"] = b'{"status":"complete"}'
+    watch = Watch(old["runId"], tmp_path / "cache")
+    for _ in range(3):
+        watch.poll(volume)
+    assert watch.state.status == "complete"
+
+
+def test_volume_and_ledger_error_texts_both_reach_shared_end_reason() -> None:
+    state = state_from_log(
+        RUN,
+        log_text(),
+        {"status": "failed", "error": "restart refused"},
+        failure={"event": "failed", "error": OOM},
+    )
+    assert state.train is not None and state.train.ended is not None
+    assert state.train.ended.reason == "oom"
+
+
+def test_real_replacement_chain_links_both_old_runs_to_newest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.scripts import bench_live
+
+    monkeypatch.setattr(bench_live, "STATE", tmp_path)
+    old, failure, middle, newest = replacement_rows()
+    first = tmp_path / "first.jsonl"
+    first.write_text("\n".join(json.dumps(r) for r in (old, failure, middle)) + "\n")
+    second = tmp_path / "second.jsonl"
+    second.write_text(json.dumps(newest) + "\n")
+    os.utime(first, ns=(1, 1))
+    os.utime(second, ns=(2, 2))
+    ledger = bench_live.LocalLedger.read()
+    for source in (old, middle):
+        assert ledger.replacement(source["runId"]) == newest["runId"]
+        watch = Watch(source["runId"], tmp_path / source["runId"])
+        watch.poll(Volume())
+        assert watch.state.train is not None
+        assert watch.state.train.replaced_by == newest["runId"]
+    assert ledger.replacement(newest["runId"]) is None
+
+
+def test_replacement_cycle_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.scripts import bench_live
+
+    monkeypatch.setattr(bench_live, "STATE", tmp_path)
+    old, _, middle, newest = replacement_rows()
+    # Same-file line order and cross-file timestamps can contradict one another:
+    # old -> middle -> newest -> old. Never return a self-link or loop forever.
+    rows = [
+        {**old, "timestamp": "2026-11-06T03:00:00Z"},
+        {**middle, "timestamp": "2026-11-06T01:00:00Z"},
+    ]
+    (tmp_path / "first.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    (tmp_path / "second.jsonl").write_text(
+        json.dumps({**newest, "timestamp": "2026-11-06T02:00:00Z"}) + "\n"
+    )
+    ledger = bench_live.LocalLedger.read()
+    assert all(ledger.replacement(row["runId"]) is None for row in (old, middle, newest))
+
+
+@pytest.mark.parametrize("app_id", [None, "--not-an-app", 123])
+def test_missing_or_invalid_app_id_is_failed_without_a_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, app_id: Any
+) -> None:
+    from app.scripts import bench_live
+
+    monkeypatch.setattr(bench_live, "STATE", tmp_path)
+    old, failure, *_ = replacement_rows()
+    failure = {**failure, "appId": app_id}
+    (tmp_path / "custom.jsonl").write_text(json.dumps(old) + "\n" + json.dumps(failure) + "\n")
+    watch = Watch(old["runId"], tmp_path / "cache")
+    watch.poll(Volume())
+    assert watch.state.train is not None and watch.state.train.ended is not None
+    assert watch.state.train.ended.reason == "failed"
+
+
+def test_an_app_shared_by_several_runs_is_never_read_for_one_runs_cause() -> None:
+    from app.scripts.bench_live import LedgerRow, LocalLedger
+
+    rows = [
+        LedgerRow(
+            {"runId": run, "event": "failed", "appId": "ap-shared", "error": "x"}, Path("l"), i
+        )
+        for i, run in enumerate(("a" * 32, "b" * 32))
+    ]
+    rows.append(LedgerRow({"runId": "c" * 32, "event": "failed", "appId": "ap-own"}, Path("l"), 2))
+    ledger = LocalLedger(rows)
+    assert ledger.app_runs["ap-shared"] == {"a" * 32, "b" * 32}
+    assert ledger.app_runs["ap-own"] == {"c" * 32}

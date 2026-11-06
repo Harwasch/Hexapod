@@ -316,15 +316,15 @@ describe("real-run console", () => {
       const replacement = document.getElementById("lc-replacement") as HTMLAnchorElement;
       consoleView.update(state());
       expect(replacement.hidden).toBe(true);
-      const replacedBy = "fa4f62cf183e45e89358cae2b4627e41";
+      const replacedBy = "4769ee65e33c44f2aacd87a45dfa3811";
       consoleView.update(
         state({
           status: "error",
-          train: { ...train, ended: { reason: "preempted", step: 50000 }, replacedBy },
+          train: { ...train, ended: { reason: "failed", step: 50000 }, replacedBy },
         }),
       );
       expect(replacement.hidden).toBe(false);
-      expect(replacement.textContent).toBe("→ fa4f62cf");
+      expect(replacement.textContent).toBe("→ 4769ee65");
       expect(replacement.getAttribute("href")).toBe(`view.html#live/${replacedBy}`);
       consoleView.update(state());
       expect(replacement.hidden).toBe(true);
