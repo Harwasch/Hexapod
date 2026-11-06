@@ -409,3 +409,64 @@ def test_seeds_and_twenty_snapshots_sync_once_atomically_with_quality_lines(
     assert len(renamed) == 22 and renamed.count("seeds.bin") == 1
     assert not list(sync.directory.glob("*.part")) and not (sync.directory / "other.bin").exists()
     assert commits == [True]
+
+
+def test_complete_tiles_only_manifest_last_and_volume_rotation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sync = setup_sync(tmp_path)
+    root = sync.work.checkpoint_dir("train") / "live/tiles"
+    first = root / "5"
+    first.mkdir(parents=True)
+    (first / "splat.glb").write_bytes(b"tile")
+    write_log(sync, 'live-tiles: {"step":5}\n')
+    sync.poll()
+    assert not (sync.directory / "tiles/5").exists()
+    assert 'live-tiles: {"step":5}' in (sync.directory / "train.log").read_text()
+    (first / "tileset.json").write_text('{"root":{}}')
+    original = live_sync.atomic_copy
+    copied = []
+
+    def copy(source: Path, target: Path) -> None:
+        copied.append(source.name)
+        original(source, target)
+
+    monkeypatch.setattr(live_sync, "atomic_copy", copy)
+    sync.poll()
+    assert copied == ["splat.glb", "tileset.json"]
+    assert (sync.directory / "tiles/5/splat.glb").read_bytes() == b"tile"
+    sync.poll()
+    assert len(copied) == 2  # Immutable tilesets are copied once.
+    second = root / "10"
+    shutil.copytree(first, second)
+    sync.poll()
+    assert {p.name for p in (sync.directory / "tiles").iterdir()} == {"5", "10"}
+    shutil.rmtree(first)
+    sync.poll()
+    assert {p.name for p in (sync.directory / "tiles").iterdir()} == {"10"}
+    shutil.rmtree(second)
+    sync.poll()
+    assert not list((sync.directory / "tiles").iterdir())
+
+
+def test_failed_tiles_copy_is_unpublished_and_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sync = setup_sync(tmp_path)
+    source = sync.work.checkpoint_dir("train") / "live/tiles/5"
+    source.mkdir(parents=True)
+    (source / "splat.glb").write_bytes(b"tile")
+    (source / "tileset.json").write_text('{"root":{}}')
+    original = live_sync.atomic_copy
+
+    def fail(source: Path, target: Path) -> None:
+        if source.name == "tileset.json":
+            raise OSError("rotated during copy")
+        original(source, target)
+
+    monkeypatch.setattr(live_sync, "atomic_copy", fail)
+    sync.poll()
+    assert not (sync.directory / "tiles/5").exists()
+    monkeypatch.setattr(live_sync, "atomic_copy", original)
+    sync.poll()
+    assert (sync.directory / "tiles/5/tileset.json").is_file()

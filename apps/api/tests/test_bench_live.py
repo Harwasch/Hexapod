@@ -5,6 +5,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import threading
 from datetime import UTC, datetime
 from http.client import HTTPConnection, HTTPMessage
@@ -195,11 +196,16 @@ def test_fake_volume_polls_downloads_once_and_finishes(tmp_path: Path) -> None:
     assert volume.reads.count(f"runs/{RUN}/live/{NAME}") == 1
 
 
-def request(watch: Watch | Watches, path: str, web_dist: Path | None = None) -> tuple[bytes, bytes]:
+def request(
+    watch: Watch | Watches, path: str, web_dist: Path | None = None, tiles: Path | None = None
+) -> tuple[bytes, bytes]:
     # Exercise real header/body output without opening a listening socket.
     handler = object.__new__(Handler)
     handler.watches = watch if isinstance(watch, Watches) else Watches(watch)
     handler.web_dist = web_dist
+    from app.scripts.bench_live import cached_tiles
+
+    handler.tiles = cached_tiles(tiles, 0, final=True) if tiles else None
     handler.path = path
     handler.request_version = "HTTP/1.1"
     handler.requestline = f"GET {path} HTTP/1.1"
@@ -1000,3 +1006,323 @@ def test_an_app_shared_by_several_runs_is_never_read_for_one_runs_cause() -> Non
     ledger = LocalLedger(rows)
     assert ledger.app_runs["ap-shared"] == {"a" * 32, "b" * 32}
     assert ledger.app_runs["ap-own"] == {"c" * 32}
+
+
+def tiles_record(step: int, *, final: bool = False) -> str:
+    return "live-tiles: " + json.dumps(
+        {
+            "v": 1,
+            "key": f"runs/{RUN}/train/checkpoint/live/tiles/{step}/tileset.json",
+            "step": step,
+            "final": final,
+            "gaussians": 1,
+            "tiles": 1,
+            "bytes": 4,
+            "seconds": 0.1,
+        }
+    )
+
+
+def manifest(uri: str = "nested/splat.glb") -> bytes:
+    return json.dumps({"root": {"content": {"uri": uri}}}).encode()
+
+
+def add_tiles(volume: Volume, step: int, *, final: bool = False) -> None:
+    volume.files[f"runs/{RUN}/live/train.log"] += ("\n" + tiles_record(step, final=final)).encode()
+    prefix = f"runs/{RUN}/live/tiles/{step}"
+    volume.files[f"{prefix}/tileset.json"] = manifest()
+    volume.files[f"{prefix}/nested/splat.glb"] = b"tile"
+    volume.files[f"{prefix}/private.txt"] = b"secret"
+
+
+def test_newest_complete_tiles_atomic_download_allowlist_and_cache_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    volume = Volume()
+    add_tiles(volume, 5)
+    add_tiles(volume, 10)
+    watch = Watch(RUN, tmp_path)
+    published = []
+    original = Path.replace
+
+    def replace(source: Path, target: Any) -> Path:
+        if source.is_dir():
+            assert not Path(target).exists()
+            assert (source / "tileset.json").is_file()
+            assert (source / "nested/splat.glb").read_bytes() == b"tile"
+            published.append(Path(target).name)
+        return original(source, target)
+
+    monkeypatch.setattr(Path, "replace", replace)
+    watch.poll(volume)
+    assert published == ["10"]  # No downloads for older log entries.
+    assert not any("/tiles/5/" in path for path in volume.reads)
+    assert watch.state.train is not None and watch.state.train.tiles is not None
+    assert watch.state.train.tiles.step == 10 and not watch.state.train.tiles.final
+    assert watch.state.train.tiles.frame == "solve"
+    assert not (tmp_path / "tiles/10/private.txt").exists()
+    # Even an unrelated file placed in the cache cannot be served.
+    (tmp_path / "tiles/10/private.txt").write_bytes(b"secret")
+    assert request(watch, f"/tiles/{RUN}/10/nested/splat.glb")[1] == b"tile"
+    for name in ("private.txt", "../train.log", "%2e%2e/train.log", "nested/../nested/splat.glb"):
+        assert b"404" in request(watch, f"/tiles/{RUN}/10/{name}")[0]
+    (tmp_path / "secret").write_bytes(b"secret")
+    tile = tmp_path / "tiles/10/nested/splat.glb"
+    tile.unlink()
+    tile.symlink_to(tmp_path / "secret")
+    assert b"404" in request(watch, f"/tiles/{RUN}/10/nested/splat.glb")[0]
+    tile.unlink()
+    tile.write_bytes(b"tile")
+    reads = len(volume.reads)
+    request(watch, f"/api/v1/captures/{RUN}/live")
+    request(watch, f"/tiles/{RUN}/10/tileset.json")
+    assert len(volume.reads) == reads  # Request handlers never download.
+    for step in (15, 20):
+        add_tiles(volume, step, final=step == 20)
+        watch.poll(volume)
+    assert {p.name for p in (tmp_path / "tiles").iterdir()} == {"15", "20"}
+    assert set(watch.tiles) == {15, 20}
+    state = LiveState.model_validate_json(request(watch, f"/api/v1/captures/{RUN}/live")[1])
+    assert state.train is not None and state.train.tiles is not None
+    assert state.train.tiles.final and state.train.tiles.step == 20
+    assert state.train.tiles.url == f"http://bench.tail:8791/tiles/{RUN}/20/tileset.json"
+    reopened = Watch(RUN, tmp_path)
+    reopened.poll(volume)
+    assert set(reopened.tiles) == {15, 20}
+    assert published == ["10", "15", "20"]
+    assert request(reopened, f"/tiles/{RUN}/15/nested/splat.glb")[1] == b"tile"
+
+
+def test_incomplete_newest_tiles_retry_after_finish_without_exposure(tmp_path: Path) -> None:
+    volume = Volume()
+    add_tiles(volume, 5)
+    add_tiles(volume, 10, final=True)
+    prefix = f"runs/{RUN}/live/tiles/10"
+    del volume.files[f"{prefix}/nested/splat.glb"]
+    volume.files[f"runs/{RUN}/result.json"] = b'{"status":"complete"}'
+    watch = Watch(RUN, tmp_path)
+    watch.poll(volume)
+    assert set(watch.tiles) == {5} and not (tmp_path / "tiles/10").exists()
+    assert not list((tmp_path / "tiles").glob(".download-*"))
+    watch.poll(volume)
+    volume.files[f"{prefix}/nested/splat.glb"] = b"complete"
+    watch.poll(volume)  # Already finished, but the last tileset can still arrive.
+    assert set(watch.tiles) == {5, 10}
+    assert request(watch, f"/tiles/{RUN}/10/nested/splat.glb")[1] == b"complete"
+
+
+@pytest.mark.parametrize(
+    "uri", ["../secret", "/secret", "https://other/tile.glb", "a//b", "a/./b", "a%2fb", "a\\b"]
+)
+def test_unsafe_manifest_references_never_download_or_publish(tmp_path: Path, uri: str) -> None:
+    volume = Volume()
+    add_tiles(volume, 5)
+    volume.files[f"runs/{RUN}/live/tiles/5/tileset.json"] = manifest(uri)
+    watch = Watch(RUN, tmp_path)
+    watch.poll(volume)
+    assert not watch.tiles
+    assert not any(path.endswith("splat.glb") for path in volume.reads)
+    assert b"404" in request(watch, f"/tiles/{RUN}/5/tileset.json")[0]
+
+
+def test_manual_tiles_still_override_primary_and_use_allowlist(tmp_path: Path) -> None:
+    local = tmp_path / "local"
+    local.mkdir()
+    (local / "tileset.json").write_bytes(manifest("splat.glb"))
+    (local / "splat.glb").write_bytes(b"manual")
+    (local / "private.txt").write_text("secret")
+    watch = Watch(RUN, tmp_path / "cache")
+    volume = Volume()
+    add_tiles(volume, 5)
+    watch.poll(volume)
+    state = LiveState.model_validate_json(
+        request(watch, f"/api/v1/captures/{RUN}/live", tiles=local)[1]
+    )
+    assert state.train is not None and state.train.tiles is not None
+    assert state.train.tiles.final and state.train.tiles.step == 10
+    assert state.train.tiles.url == "http://bench.tail:8791/tiles/tileset.json"
+    assert request(watch, "/tiles/splat.glb", tiles=local)[1] == b"manual"
+    assert request(watch, f"/tiles/{RUN}/5/nested/splat.glb", tiles=local)[1] == b"tile"
+    for name in ("private.txt", "../secret", "%2e%2e/secret"):
+        assert b"404" in request(watch, "/tiles/" + name, tiles=local)[0]
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_package_final_opt_in_once_and_cached_across_restarts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    from app.scripts import bench_live
+
+    volume = Volume()
+    volume.files = {
+        f"runs/{RUN}/result.json": b'{"status":"complete","iterations":20}',
+        f"runs/{RUN}/trained.ply": b"ply",
+    }
+    calls = []
+
+    def package(ply: Path, directory: Path) -> None:
+        assert ply.read_bytes() == b"ply"
+        assert directory.parent.name.startswith(".package-")
+        calls.append(ply)
+        directory.mkdir()
+        (directory / "tileset.json").write_bytes(manifest("splat.glb"))
+        (directory / "splat.glb").write_bytes(b"final")
+
+    monkeypatch.setattr(bench_live, "package_tiles", package)
+    for _ in range(2):
+        watch = Watch(RUN, tmp_path, package_final=enabled)
+        for _ in range(3):
+            watch.poll(volume)
+        state = LiveState.model_validate_json(request(watch, f"/api/v1/captures/{RUN}/live")[1])
+        if enabled:
+            assert state.train is not None and state.train.tiles is not None
+            assert state.train.tiles.step == 20 and state.train.tiles.final
+            assert request(watch, f"/tiles/{RUN}/20/splat.glb")[1] == b"final"
+        else:
+            assert state.train is None
+    assert len(calls) == int(enabled)
+    assert volume.reads.count(f"runs/{RUN}/trained.ply") == int(enabled)
+    assert not list(tmp_path.rglob("*.part"))
+
+
+@pytest.mark.parametrize("failure", ["download", "package"])
+def test_package_final_failure_is_not_retried_or_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    from app.scripts import bench_live
+
+    volume = Volume()
+    volume.files = {f"runs/{RUN}/result.json": b'{"status":"complete"}'}
+    if failure == "package":
+        volume.files[f"runs/{RUN}/trained.ply"] = b"ply"
+    calls = []
+
+    def fail(ply: Path, directory: Path) -> None:
+        calls.append(True)
+        directory.mkdir()
+        (directory / "splat.glb").write_bytes(b"partial")
+        raise RuntimeError("packager failed")
+
+    monkeypatch.setattr(bench_live, "package_tiles", fail)
+    for _ in range(2):
+        watch = Watch(RUN, tmp_path, package_final=True)
+        watch.poll(volume)
+        watch.poll(volume)
+        assert not watch.tiles
+    assert volume.reads.count(f"runs/{RUN}/trained.ply") == 1
+    assert len(calls) == int(failure == "package")
+    assert not list(tmp_path.rglob("*.part"))
+    assert not list(tmp_path.rglob(".package-*"))
+
+
+def test_live_tiles_and_unfinished_or_failed_runs_skip_final_packaging(tmp_path: Path) -> None:
+    for index, status in enumerate((None, "failed", "complete")):
+        volume = Volume()
+        if status:
+            volume.files[f"runs/{RUN}/result.json"] = json.dumps({"status": status}).encode()
+        if status == "complete":
+            add_tiles(volume, 20, final=True)
+        watch = Watch(RUN, tmp_path / str(index), package_final=True)
+        watch.poll(volume)
+        assert not (watch.cache / "package-final.json").exists()
+        assert not any(path.endswith("trained.ply") for path in volume.reads)
+
+
+@pytest.mark.parametrize("heavy", [None, "/bin/heavy"])
+def test_final_packager_command_uses_solve_frame_and_heavy_when_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, heavy: str | None
+) -> None:
+    from app.scripts import bench_live
+
+    commands = []
+    monkeypatch.setattr("app.scripts.bench_live.shutil.which", lambda name: heavy)
+    monkeypatch.setattr(
+        "app.scripts.bench_live.subprocess.run",
+        lambda command, **kw: commands.append((command, kw)),
+    )
+    bench_live.package_tiles(tmp_path / "trained.ply", tmp_path / "tiles")
+    command, options = commands[0]
+    assert command[-6:] == ["--lat", "0", "--lon", "0", "--height", "0"]
+    if heavy:
+        assert command.pop(0) == heavy
+    assert command[0] == sys.executable
+    assert command[1].endswith("tools/captures/splat_tiles.py")
+    assert options == {"check": True, "timeout": 3600}
+
+
+def test_tiles_download_declared_sidecars_and_repair_incomplete_cache(tmp_path: Path) -> None:
+    volume = Volume()
+    add_tiles(volume, 20, final=True)
+    document = json.loads(manifest())
+    document["root"]["extras"] = {"collision": {"uri": "collision.bin"}}
+    prefix = f"runs/{RUN}/live/tiles/20"
+    volume.files[f"{prefix}/tileset.json"] = json.dumps(document).encode()
+    volume.files[f"{prefix}/collision.bin"] = b"collision"
+    old = tmp_path / "tiles/20"
+    old.mkdir(parents=True)
+    (old / "tileset.json").write_bytes(manifest())
+    watch = Watch(RUN, tmp_path)
+    watch.poll(volume)
+    assert request(watch, f"/tiles/{RUN}/20/collision.bin")[1] == b"collision"
+    assert set(watch.tiles) == {20}
+
+
+def test_manual_tiles_with_no_telemetry_still_advertised(tmp_path: Path) -> None:
+    (tmp_path / "tileset.json").write_bytes(manifest("splat.glb"))
+    (tmp_path / "splat.glb").write_bytes(b"manual")
+    watch = Watch(RUN, tmp_path / "cache")
+    state = LiveState.model_validate_json(
+        request(watch, f"/api/v1/captures/{RUN}/live", tiles=tmp_path)[1]
+    )
+    assert state.train is not None and state.train.tiles is not None
+    assert state.train.tiles.step == 0 and state.train.tiles.final
+    assert b"404" in request(watch, "/tiles/%00", tiles=tmp_path)[0]
+
+
+@pytest.mark.parametrize("manual", [False, True])
+def test_cli_tiles_and_package_final_propagate_to_run_watches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, manual: bool
+) -> None:
+    from app.scripts import bench_live
+
+    local = tmp_path / "local"
+    local.mkdir()
+    (local / "tileset.json").write_bytes(manifest("splat.glb"))
+    (local / "splat.glb").write_bytes(b"manual")
+    started = []
+    monkeypatch.setattr(bench_live, "STATE", tmp_path)
+    monkeypatch.setattr(Watches, "start", lambda self, watch: started.append((self, watch)))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["bench_live", RUN, "--package-final", *(["--tiles", str(local)] if manual else [])],
+    )
+
+    class Server:
+        server_port = 0
+
+        def __init__(self, address: Any, handler: Any) -> None:
+            assert handler.keywords["tiles"] == (local if manual else None)
+
+        def serve_forever(self) -> None:
+            pass
+
+        def server_close(self) -> None:
+            pass
+
+    monkeypatch.setattr(bench_live, "ThreadingHTTPServer", Server)
+    bench_live.main()
+    watches, primary = started[0]
+    assert primary.package_final == (not manual)
+    assert watches.package_final
+    second = "f" * 32
+    (tmp_path / "runs.jsonl").write_text(json.dumps({"runId": second}) + "\n")
+    with watches.acquire(second) as watch:
+        assert watch is not None and watch.package_final
+    # Reopening an evicted primary preserves the manual package override.
+    watches.watches.pop(RUN)
+    watches.users.pop(RUN)
+    watches.used.pop(RUN)
+    with watches.acquire(RUN) as reopened:
+        assert reopened is not None and reopened.package_final == (not manual)
+    watches.close()

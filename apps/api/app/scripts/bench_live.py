@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import uuid
 from collections.abc import Collection, Iterator, Sequence
@@ -47,6 +48,80 @@ from live import MAX_LINE, parse_line
 
 LOG = logging.getLogger(__name__)
 STATE = Path.home() / ".local/share/hexapod-bench"
+REPO = Path(__file__).resolve().parents[4]
+
+
+def tile_names(raw: bytes) -> frozenset[str]:
+    """Only local, canonical file references from the packer's single manifest."""
+    document = json.loads(raw)
+    if not isinstance(document, dict) or not isinstance(document.get("root"), dict):
+        raise ValueError("tileset must have a root")
+    names = {"tileset.json"}
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if key == "uri":
+                    if (
+                        not isinstance(child, str)
+                        or not re.fullmatch(r"[a-zA-Z0-9_./-]+", child)
+                        or any(part in ("", ".", "..") for part in child.split("/"))
+                    ):
+                        raise ValueError("tileset references must stay within their directory")
+                    names.add(child)
+                else:
+                    visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(document)
+    return frozenset(names)
+
+
+@dataclass(frozen=True)
+class CachedTiles:
+    directory: Path
+    step: int
+    final: bool
+    files: frozenset[str]
+
+    def file(self, name: str) -> Path | None:
+        if name not in self.files:
+            return None
+        candidate = (self.directory / name).resolve()
+        return (
+            candidate
+            if candidate.is_relative_to(self.directory.resolve()) and candidate.is_file()
+            else None
+        )
+
+
+def cached_tiles(directory: Path, step: int, *, final: bool) -> CachedTiles:
+    tiles = CachedTiles(
+        directory, step, final, tile_names((directory / "tileset.json").read_bytes())
+    )
+    if any(tiles.file(name) is None for name in tiles.files):
+        raise ValueError("incomplete tileset")
+    return tiles
+
+
+def package_tiles(ply: Path, directory: Path) -> None:
+    command = [
+        sys.executable,
+        str(REPO / "tools/captures/splat_tiles.py"),
+        str(ply),
+        str(directory),
+        "--lat",
+        "0",
+        "--lon",
+        "0",
+        "--height",
+        "0",
+    ]
+    if heavy := shutil.which("heavy"):
+        command.insert(0, heavy)
+    subprocess.run(command, check=True, timeout=3600)  # noqa: S603
 
 
 def snapshot_name(name: str, cached: Collection[str]) -> bool:
@@ -285,6 +360,7 @@ class Watch:
         plan: dict[str, Any] | None = None,
         *,
         app_log_causes: dict[str, tuple[str, ...]] | None = None,
+        package_final: bool = False,
     ) -> None:
         self.run_id = run_id
         self.cache = cache
@@ -295,6 +371,8 @@ class Watch:
         self.result: dict[str, Any] | None = None
         self.finished = False
         self.cached: frozenset[str] = frozenset()
+        self.tiles: dict[int, CachedTiles] = {}
+        self.package_final = package_final
         # Do not expose a ledger failure before the first volume read: an ended
         # console stops polling, so that would strand it at step zero without its log.
         self.plan = plan or local_plan(run_id)
@@ -306,10 +384,123 @@ class Watch:
     def _read(self, volume: Any, path: str) -> bytes:
         return b"".join(volume.read_file(path))
 
+    def _download(self, volume: Any, path: str, target: Path) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        partial_path = target.with_name(target.name + ".part")
+        try:
+            with partial_path.open("wb") as output:
+                for chunk in volume.read_file(path):
+                    output.write(chunk)
+            partial_path.replace(target)
+        finally:
+            partial_path.unlink(missing_ok=True)
+
+    def _remember_tiles(self, tiles: CachedTiles) -> None:
+        current = {**self.tiles, tiles.step: tiles}
+        root = self.cache / "tiles"
+        directories = sorted(
+            (p for p in root.iterdir() if p.is_dir() and p.name.isdecimal()),
+            key=lambda p: int(p.name),
+            reverse=True,
+        )
+        for previous in directories[2:]:
+            current.pop(int(previous.name), None)
+            shutil.rmtree(previous)
+        self.tiles = current
+
+    def _fetch_tiles(self, volume: Any, step: int, *, final: bool) -> CachedTiles:
+        root = self.cache / "tiles"
+        target = root / str(step)
+        if target.is_dir():
+            with contextlib.suppress(OSError, ValueError):
+                return cached_tiles(target, step, final=final)
+        prefix = f"runs/{self.run_id}/live/tiles/{step}"
+        raw = self._read(volume, f"{prefix}/tileset.json")
+        names = tile_names(raw)
+        root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".download-", dir=root) as tmp:
+            staged = Path(tmp) / str(step)
+            staged.mkdir()
+            for name in sorted(names - {"tileset.json"}):
+                self._download(volume, f"{prefix}/{name}", staged / name)
+            (staged / "tileset.json").write_bytes(raw)
+            cached_tiles(staged, step, final=final)
+            if target.is_dir():
+                shutil.rmtree(target)  # Replace an incomplete/corrupt cache only after download.
+            staged.replace(target)
+        return cached_tiles(target, step, final=final)
+
+    def _sync_tiles(self, volume: Any) -> None:
+        records = {
+            value["step"]: value
+            for kind, value in bench_records(self.text)
+            if kind == "tiles" and value["key"].startswith(f"runs/{self.run_id}/")
+        }
+        # Reload both retained tilesets after a watcher is evicted or the server restarts.
+        for step, record in records.items():
+            if step not in self.tiles and (self.cache / "tiles" / str(step)).is_dir():
+                with contextlib.suppress(OSError, ValueError):
+                    self._remember_tiles(
+                        cached_tiles(self.cache / "tiles" / str(step), step, final=record["final"])
+                    )
+        for step in sorted(records, reverse=True):
+            if step in self.tiles:
+                break
+            try:
+                self._remember_tiles(self._fetch_tiles(volume, step, final=records[step]["final"]))
+                break
+            except Exception as error:
+                # Rotation can remove an older log entry; incomplete newest copies
+                # are retried on the next poll, even after result.json arrives.
+                if not isinstance(error, FileNotFoundError):
+                    self._warn("tiles", error)
+        if not records and self.package_final and (self.result or {}).get("status") == "complete":
+            self._package_final(volume)
+
+    def _package_final(self, volume: Any) -> None:
+        marker = self.cache / "package-final.json"
+        try:
+            if marker.is_file():
+                saved = json.loads(marker.read_bytes())
+                if saved.get("status") == "complete":
+                    step = saved["step"]
+                    if step not in self.tiles:
+                        self._remember_tiles(
+                            cached_tiles(self.cache / "tiles" / str(step), step, final=True)
+                        )
+                return
+            steps = [
+                value["step"]
+                for kind, value in bench_records(self.text)
+                if kind == "train" and isinstance(value.get("step"), int)
+            ]
+            iterations = (self.result or {}).get("iterations")
+            step = int(iterations) if isinstance(iterations, (int, float)) else max([0, *steps])
+            step = max(0, step)
+            self.cache.mkdir(parents=True, exist_ok=True)
+            # Persist before expensive work: failure or a restart must not trigger
+            # another 1.7 GB download or another packaging attempt for this run.
+            marker.write_text(json.dumps({"status": "attempted", "step": step}))
+            ply = self.cache / "trained.ply"
+            if not ply.is_file():
+                self._download(volume, f"runs/{self.run_id}/trained.ply", ply)
+            root = self.cache / "tiles"
+            root.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix=".package-", dir=root) as tmp:
+                staged = Path(tmp) / str(step)
+                package_tiles(ply, staged)
+                cached_tiles(staged, step, final=True)
+                staged.replace(root / str(step))
+            self._remember_tiles(cached_tiles(root / str(step), step, final=True))
+            marker.write_text(json.dumps({"status": "complete", "step": step}))
+        except Exception as error:
+            self._warn("package-final", error)
+
     def poll(self, volume: Any) -> None:
         prefix = f"runs/{self.run_id}"
-        # `result.json` is the run's last write, so nothing changes after the pass that saw it.
+        # result.json is the last write. Pending tiles can still need a download retry.
         if self.finished:
+            self._sync_tiles(volume)
             self.refresh()
             return
         self.finished = self.result is not None
@@ -349,6 +540,7 @@ class Watch:
             # Modal's `listdir` on a missing folder: expected until the first sync lands.
             if type(error).__name__ != "NotFoundError":
                 self._warn("snapshots", error)
+        self._sync_tiles(volume)
         self.refresh()
 
     def refresh(self) -> None:
@@ -368,7 +560,7 @@ class Watch:
             # refresh runs only in the poller. Cache even unavailable/empty logs,
             # including across idle-watch eviction, so failures never retry in a loop.
             self.app_log_causes[self.run_id] = app_oom_lines(app_id)
-        self.state = state_from_log(
+        state = state_from_log(
             self.run_id,
             self.text,
             self.result,
@@ -379,6 +571,16 @@ class Watch:
             replaced_by=ledger.replacement(self.run_id),
             error_texts=self.app_log_causes.get(self.run_id, ()),
         )
+        if self.tiles:
+            newest = self.tiles[max(self.tiles)]
+            if state.train is None:
+                state.train = LiveTrain()
+            state.train.tiles = LiveTrainTiles(
+                url=f"/tiles/{self.run_id}/{newest.step}/tileset.json",
+                step=newest.step,
+                final=newest.final,
+            )
+        self.state = state
 
     def _warn(self, kind: str, error: Exception) -> None:
         if kind not in self.errors:
@@ -407,9 +609,11 @@ class Watches:
     entries are evicted in least-recently-used order, including the primary run.
     """
 
-    def __init__(self, primary: Watch) -> None:
+    def __init__(self, primary: Watch, *, package_final: bool | None = None) -> None:
         self.primary = primary.run_id
+        self.primary_package_final = primary.package_final
         self.app_log_causes = primary.app_log_causes
+        self.package_final = primary.package_final if package_final is None else package_final
         self.watches = {primary.run_id: primary}
         self.users = {primary.run_id: 0}
         self.used = {primary.run_id: monotonic()}
@@ -448,6 +652,9 @@ class Watches:
                             STATE / "live" / run_id,
                             ledger.plans.get(run_id),
                             app_log_causes=self.app_log_causes,
+                            package_final=self.primary_package_final
+                            if run_id == self.primary
+                            else self.package_final,
                         )
                         self.watches[run_id] = watch
                         self.users[run_id] = 0
@@ -482,7 +689,7 @@ class Handler(BaseHTTPRequestHandler):
         self.watches = watches
         self.web_dist = web_dist.resolve() if web_dist else None
         # A locally packaged solve-local tileset of the primary run's final splat.
-        self.tiles = tiles.resolve() if tiles else None
+        self.tiles = cached_tiles(tiles.resolve(), 0, final=True) if tiles else None
         super().__init__(*args, **kwargs)
 
     def do_GET(self) -> None:
@@ -500,12 +707,26 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     self._reply(status, b"Watch unavailable", "text/plain")
             return
-        if self.tiles and path.startswith("/tiles/"):
-            candidate = (self.tiles / path.removeprefix("/tiles/")).resolve()
-            if candidate.is_relative_to(self.tiles) and candidate.is_file():
-                kind = "application/json" if candidate.suffix == ".json" else "model/gltf-binary"
-                self._file(candidate, kind)
-                return
+        if path.startswith("/tiles/"):
+            candidate = None
+            if match := re.fullmatch(
+                r"/tiles/([a-fA-F0-9-]{32,36})/(0|[1-9][0-9]{0,15})/(.+)", path
+            ):
+                run_id, step, name = match.groups()
+                if re.fullmatch(r"[a-zA-Z0-9_./-]+", name) and all(
+                    part not in ("", ".", "..") for part in name.split("/")
+                ):
+                    with self.watches.acquire(run_id) as watch:
+                        tileset = watch.tiles.get(int(step)) if watch else None
+                        candidate = tileset.file(name) if tileset else None
+                        if candidate is not None:
+                            self._file(candidate, self._tile_type(candidate))
+                            return
+            elif self.tiles:
+                candidate = self.tiles.file(path.removeprefix("/tiles/"))
+                if candidate is not None:
+                    self._file(candidate, self._tile_type(candidate))
+                    return
         elif path.startswith("/snapshots/"):
             parts = path.removeprefix("/snapshots/").split("/")
             run_id, name = (
@@ -540,7 +761,11 @@ class Handler(BaseHTTPRequestHandler):
         origin = "http://" + host
         if state.splat and state.splat.url:
             state.splat.url = origin + state.splat.url
+        if self.tiles and watch.run_id == self.watches.primary and state.train is None:
+            state.train = LiveTrain()
         if state.train:
+            if state.train.tiles:
+                state.train.tiles.url = origin + state.train.tiles.url
             if state.train.seeds and state.train.seeds.url:
                 state.train.seeds.url = origin + state.train.seeds.url
             for snapshot in state.train.snapshots:
@@ -552,6 +777,13 @@ class Handler(BaseHTTPRequestHandler):
                     url=origin + "/tiles/tileset.json", step=step, final=True
                 )
         self._reply(200, state.model_dump_json(by_alias=True).encode(), "application/json")
+
+    @staticmethod
+    def _tile_type(path: Path) -> str:
+        return {
+            ".json": "application/json",
+            ".glb": "model/gltf-binary",
+        }.get(path.suffix, "application/octet-stream")
 
     def _file(self, path: Path, content_type: str) -> None:
         try:
@@ -693,6 +925,12 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--web-dist", type=Path)
     parser.add_argument("--tiles", type=Path, help="tileset directory of the run's final splat")
+    parser.add_argument(
+        "--package-final",
+        action="store_true",
+        help="for completed runs without live tiles, download trained.ply (~1.7 GB per run) "
+        "and package solve-local tiles once; cached, uses heavy when available",
+    )
     args = parser.parse_args()
     if not re.fullmatch(r"[a-fA-F0-9-]{32,36}", args.run_id):
         parser.error("run_id must be a bench UUID")
@@ -703,10 +941,18 @@ def main() -> None:
     if args.web_dist and not (args.web_dist / "view.html").is_file():
         parser.error("--web-dist must contain view.html; build apps/web first")
     logging.basicConfig(level=logging.INFO)
-    watch = Watch(args.run_id, STATE / "live" / args.run_id, local_plan(args.run_id))
-    watches = Watches(watch)
-    if args.tiles and not (args.tiles / "tileset.json").is_file():
-        parser.error("--tiles must contain tileset.json")
+    if args.tiles:
+        try:
+            cached_tiles(args.tiles, 0, final=True)
+        except (OSError, ValueError) as error:
+            parser.error(f"--tiles must contain a complete local tileset: {error}")
+    watch = Watch(
+        args.run_id,
+        STATE / "live" / args.run_id,
+        local_plan(args.run_id),
+        package_final=args.package_final and not args.tiles,
+    )
+    watches = Watches(watch, package_final=args.package_final)
     handler = partial(Handler, watches=watches, web_dist=args.web_dist, tiles=args.tiles)
     server = ThreadingHTTPServer((args.host, args.port), handler)
     watches.start(watch)

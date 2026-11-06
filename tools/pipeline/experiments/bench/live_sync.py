@@ -24,6 +24,7 @@ TAGS = (
     live.TRAIN_TAG,
     live.PLAN_TAG,
     live.SEEDS_TAG,
+    live.TILES_TAG,
     "live-metrics: ",  # The quality branch owns this tag; keep this path independent of it.
 )
 
@@ -201,9 +202,42 @@ class LiveSync:
             atomic_copy(source, target)
             self.dirty = True
 
+    def _tiles(self) -> None:
+        root = self.work.checkpoint_dir("train") / live.LIVE_DIR / "tiles"
+        destination = self.directory / "tiles"
+        # The packer writes the manifest last, then SplatWatch publishes by rename.
+        # Include incomplete directories in `present`: only local rotation deletes
+        # an already shipped tileset, never an in-progress conversion.
+        present = {p.name for p in root.iterdir() if p.is_dir()} if root.is_dir() else set()
+        for step in sorted(present):
+            if not step.isdecimal():
+                continue
+            source, target = root / step, destination / step
+            if not (source / "tileset.json").is_file() or (target / "tileset.json").is_file():
+                continue
+            target.mkdir(parents=True, exist_ok=True)
+            try:
+                for path in sorted(source.rglob("*")):
+                    if path.is_file() and path.name != "tileset.json":
+                        output = target / path.relative_to(source)
+                        output.parent.mkdir(parents=True, exist_ok=True)
+                        atomic_copy(path, output)
+                # May disappear during rotation: in that case do not publish it.
+                atomic_copy(source / "tileset.json", target / "tileset.json")
+                self.dirty = True
+            except Exception:
+                shutil.rmtree(target)
+                raise
+        if destination.is_dir():
+            for previous in destination.iterdir():
+                if previous.is_dir() and previous.name.isdecimal() and previous.name not in present:
+                    shutil.rmtree(previous)
+                    self.dirty = True
+
     def poll(self) -> None:
         self._guard("logs", self._logs)
         self._guard("snapshots", self._snapshots)
+        self._guard("tiles", self._tiles)
         if self.dirty:
 
             def flush() -> None:

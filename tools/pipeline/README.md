@@ -1372,6 +1372,17 @@ Use `--host 0.0.0.0 --port 8791` to open the same bundle over Tailscale. Without
 `--web-dist`, use the live console from an existing bundle pointed at this server.
 Frozen bench scenes have no georeferencing, so Distance stays disabled.
 
+With `--live`, complete LOD tilesets also sync automatically; the console downloads
+the newest available one in its poller and retains at most two under
+`~/.local/share/hexapod-bench/live/<runId>/tiles/<step>/`. Volume tiles follow the
+run's local rotation. A local package can still be served with `bench_live --tiles DIR`.
+For a completed older run without live tiles, add `bench_live --package-final`: this
+downloads `trained.ply` (about 1.7 GB per run, requires the run's `--keep-splat`) and
+packages solve-local tiles with `splat_tiles.py`, using `heavy` when available.
+This is off by default and attempts packaging once per run, including failures,
+across server restarts. The PLY, tiles and `package-final.json` attempt marker stay
+in the run's cache; remove that marker explicitly to retry a failed attempt.
+
 Use `--set '{"train": {"gaussian_density": 0.2}}'`, or `--variants file.yaml` containing
 `baseline: {}` and `dense: {train: {gaussian_density: 0.2}}`. Each variant/seed gets a
 unique run ID; at most four spawn concurrently. `--keep-splat` retains `trained.ply`
