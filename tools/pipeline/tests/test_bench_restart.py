@@ -28,7 +28,7 @@ def test_a_restarted_attempt_is_recorded_as_preempted_with_unknown_cost() -> Non
 
 def test_reservation_covers_one_attempt_plus_a_refused_restart() -> None:
     plans = [{"runId": r, "scene": "spool", "schedule": "full", "tier": "l4"} for r in ("a", "b")]
-    ledger.price_plan([], plans, 2)
+    ledger.price_plan([], plans, 2.1)
     seconds = 3300 + ledger.OVERHEAD_SECONDS + ledger.RESTART_SECONDS
     assert plans[0]["worstCaseUsd"] == pytest.approx(ledger.hourly_rate("l4") * seconds / 3600)
     assert ledger.RESTART_SECONDS >= ledger.STARTUP_SECONDS

@@ -108,13 +108,13 @@ RETRIES = 0
 #: `remoteHost` (tools/pipeline/host.py) now says which it was on the next run: the cores
 #: a call got, the cgroup's throttling and pressure, the GPU's utilisation and clock.
 #: Modal bills CPU and memory at max(reserved, used), so reserving them costs at most:
-#: 2 x $0.0472 + 8 GiB x $0.0080 = $0.158 an hour when the trainer uses less, nothing
+#: 2 x $0.0472 + 16 GiB x $0.0080 = $0.222 an hour when the trainer uses less, nothing
 #: extra when it uses more (the L4 itself is $0.80). The limit stays soft: a quiet host
 #: still lets the call burst above it. That reservation is priced into every GPU call's
 #: `costUsd` (`modal_adapter.GPU_RESERVATION`, which `tests/test_modal_image.py` holds
 #: to these two: change one and change the other).
 GPU_CPU_CORES = 2.0
-GPU_MEMORY_MIB = 8192
+GPU_MEMORY_MIB = 16384
 
 #: Thread pools sized to that reservation rather than to `os.cpu_count()`, which in a
 #: container is the *host's* cores (dozens): OpenMP, MKL, OpenBLAS and OpenCV would
@@ -195,6 +195,8 @@ image = (
     .add_local_dir(LOCAL_PIPELINE, PIPELINE_DIR, ignore=_IGNORE, copy=True)
     .add_local_file(HERE / "check_trainer.py", "/opt/twin/check_trainer.py", copy=True)
     .run_commands(
+        # Guarded full-state resume seam, only against the pinned trainer. No GPU.
+        f"{TRAINER_PYTHON} {PIPELINE_DIR}/resume_trainer.py {GSPLAT_TRAINER}",
         # The last word before the image is accepted: does this trainer take this argv?
         f"{TRAINER_PYTHON} /opt/twin/check_trainer.py {GSPLAT_TRAINER} {PIPELINE_DIR}",
         # And does the held-out error pass import torch, gsplat and the trainer's own
@@ -516,6 +518,7 @@ def _run(request: dict[str, Any]) -> dict[str, Any]:
     import remote
     import stages  # noqa: F401 - registers every shipped implementation
     from cloud import StageRequest
+    from modal_adapter import CPU_TIERS
 
     imported_s = time.monotonic() - importing
     parsed = StageRequest.from_dict(request)
@@ -537,6 +540,7 @@ def _run(request: dict[str, Any]) -> dict[str, Any]:
         **started,
         "containerBootedAt": round(BOOTED_AT, 3),
         "containerCall": _CALLS[0],
+        "hostMemoryReservedGiB": CPU_TIERS.get(parsed.tier, (GPU_CPU_CORES, GPU_MEMORY_MIB))[1] / 1024,
         "remoteEnteredAt": round(entered, 3),
         "remoteImportS": round(imported_s, 2),
         "remoteFinishedAt": round(time.time(), 3),

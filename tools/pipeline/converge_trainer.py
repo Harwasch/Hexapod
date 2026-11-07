@@ -118,6 +118,7 @@ class _State:
         self.started = time.time()
         #: Intermediate evaluations scored without LPIPS (the docstring says why).
         self.lpips_skipped = 0
+        self.min_steps = 0
 
     def report(self) -> dict[str, object]:
         return {
@@ -194,7 +195,7 @@ def install(runner: Any, cfg: Any, state: _State) -> None:
         state.last = decision.reason
         state.gain_db = decision.gain_db
         # Room for one more step, which is the one the trainer saves on.
-        if decision.stop and step + 2 < max_steps:
+        if decision.stop and step + 2 < max_steps and step + 2 >= state.min_steps:
             state.decided_at = step
             for name in ("ply_steps", "save_steps", "eval_steps"):
                 getattr(cfg, name).append(step + 2)
@@ -206,6 +207,7 @@ def install(runner: Any, cfg: Any, state: _State) -> None:
             sys.stdout.flush()
 
     def train(self: Any) -> None:
+        self._hex_converge = state
         try:
             original_train(self)
         except _ConvergedError:
@@ -349,11 +351,16 @@ class _NoRenders:
         return getattr(self._real, name)
 
 
-def instrument(module: dict[str, Any], runner: Any, timing: Timing) -> None:
+def instrument(module: dict[str, Any], runner: Any, timing: Timing, cfg: Any = None) -> None:
     """Time `runner` (a class)'s `train` and `eval` and the module's `export_splats`, and
     give the module an `imageio` that skips the renders. Called with the trainer's
     `__main__` globals, after `install` when the rule is on, so the evaluations it times
     include the rule's reading of them. Whatever is missing is left alone."""
+    import train_split
+
+    train_split.install(module, runner, cfg)
+    if cfg is not None and getattr(cfg, "cache_images", False):
+        cfg.cache_images = False
     real_imageio = module.get("imageio")
     if real_imageio is not None and not isinstance(real_imageio, _NoRenders):
         module["imageio"] = _NoRenders(real_imageio, timing)
@@ -363,6 +370,15 @@ def instrument(module: dict[str, Any], runner: Any, timing: Timing) -> None:
         def export_splats(*args: Any, **kwargs: Any) -> Any:
             began = time.monotonic()
             try:
+                if (
+                    not args
+                    and kwargs.get("format", "ply") == "ply"
+                    and kwargs.get("save_to")
+                    and getattr(cfg, "streaming_export", True)
+                ):
+                    import trainer_export
+
+                    return trainer_export.write(real_export, kwargs)
                 return real_export(*args, **kwargs)
             finally:
                 timing.plys += 1
@@ -433,6 +449,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--min-gain-db", dest="min_gain_db", type=float, default=convergence.DEFAULT_MIN_GAIN_DB
     )
+    parser.add_argument("--no-converge", action="store_true")
+    parser.add_argument("--min-steps", type=int, default=0)
     parser.add_argument("--self-check", dest="self_check", action="store_true")
     options = parser.parse_args(own)
     trainer = options.trainer or (
@@ -451,6 +469,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
         _result_dir(rest),
     )
+    state.min_steps = options.min_steps
     timing = Timing(_result_dir(rest))
     try:
         distributed: Any = importlib.import_module("gsplat.distributed")
@@ -473,12 +492,13 @@ def main(argv: list[str] | None = None) -> int:
                     f"{devices} GPUs: gsplat spawns a process each, which a patch here "
                     f"does not reach; trained the full schedule"
                 )
-            else:
+            elif not options.no_converge and getattr(cfg, "test_every", 8) != 0:
                 install(runner, cfg, state)
                 state.hooked = True
                 state.reason = "hooked"
             if devices <= 1:
-                instrument(module, runner, timing)
+                cfg.streaming_export = "--no-streaming-export" not in rest
+                instrument(module, runner, timing, cfg)
             return real_cli(fn, cfg, verbose=verbose)
 
         distributed.cli = cli

@@ -69,11 +69,11 @@ def test_timeout_reservation_catches_cheap_forecast_and_includes_cpu_memory() ->
     # The forecasts ($1.80) fit a $1.81 cap; the two 55-min timeouts do not.
     with pytest.raises(ValueError, match="timeout reservations"):
         ledger.price_plan([], plans, 1.81)
-    priced = ledger.price_plan([], plans, 2)
+    priced = ledger.price_plan([], plans, 2.1)
     assert priced["estimateUsd"] == 1.8
     assert plans[0]["timeoutSeconds"] == 3300
     assert plans[0]["worstCaseUsd"] == pytest.approx(ledger.hourly_rate("l4") * 3540 / 3600)
-    assert ledger.hourly_rate("l4") == pytest.approx(0.7992 + 2 * 0.04716 + 8 * 0.007992)
+    assert ledger.hourly_rate("l4") == pytest.approx(0.7992 + 2 * 0.04716 + 16 * 0.007992)
 
 
 def test_failed_actual_is_charged_and_duplicate_outcome_refused(tmp_path: Path) -> None:

@@ -235,11 +235,54 @@ def main() -> int:
     if failed:
         raise SystemExit(f"simple_trainer.py parsed the pipeline's argv wrongly: {failed}")
     ran = _exercise_switches(namespace)
+    ran.extend(_exercise_full_data(namespace, parse, trainer))
     sys.stdout.write(
         f"trainer ok: {trainer} accepts training.gsplat_argv (tyro {tyro.__version__}); "
         f"checked {', '.join(sorted(checks))}; ran {', '.join(ran)} on CPU\n"
     )
     return 0
+
+
+def _exercise_full_data(namespace: dict[str, Any], parse: Any, trainer: Path) -> list[str]:
+    import tempfile
+    from types import SimpleNamespace
+
+    import torch
+
+    import train_split
+    import trainer_export
+    import training
+
+    cfg = parse(training.gsplat_argv(
+        sys.executable, trainer, Path("/data"), Path("/result"),
+        extra=training.train_extra({}, Path("/checkpoint/resume")),
+    ))
+    assert cfg.test_every == 0 and cfg.checkpoint_every == 5000
+    assert cfg.resume == "latest" and cfg.ckpt is None and cfg.checkpoint_final is False
+    module = dict(namespace)
+    runner = type("Runner", (), {"eval": lambda *args: None})
+    train_split.install(module, runner, cfg)
+    parser = SimpleNamespace(
+        test_every=0, image_names=[str(i) for i in range(12)],
+        points=None, point_indices=None,
+    )
+    # The pinned Dataset constructor needs only parser and split for no depth loss.
+    data = module["Dataset"](parser, split="train")
+    assert data.indices.tolist() == list(range(12))
+    assert len(module["Dataset"](parser, split="val").indices) == 0
+    fields = {
+        "means": torch.zeros(5, 3), "scales": torch.zeros(5, 3),
+        "quats": torch.ones(5, 4), "opacities": torch.zeros(5),
+        "sh0": torch.zeros(5, 1, 3), "shN": torch.arange(225.0).reshape(5, 15, 3),
+        "format": "ply",
+    }
+    fields["means"][2, 0] = float("nan")
+    expected = namespace["export_splats"](**fields).partition(b"end_header\n")[2]
+    with tempfile.TemporaryDirectory() as scratch:
+        output = Path(scratch) / "export.ply"
+        trainer_export.write(namespace["export_splats"], {**fields, "save_to": str(output)}, chunk=2)
+        assert output.read_bytes().partition(b"end_header\n")[2] == expected
+    return ["all-frame Dataset", "plain-state checkpoint CLI", "bounded PLY export"]
 
 
 def _exercise_switches(namespace: dict[str, Any]) -> list[str]:
