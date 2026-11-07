@@ -10,8 +10,8 @@
  *
  * Photos and video go through two passes, Scaniverse-style: a cheap **preview** that
  * trains briefly and forecasts how much of the scan the capture can support, then --
- * when the forecast is worth it -- **Refine**, the full-quality pass over the same frames
- * and camera positions, trained only inside the region the cameras were pointed at. The
+ * when the forecast is worth it -- **Refine**, the full-quality pass with the requested
+ * frames and pixels. If extraction changes, it rebuilds camera positions. The
  * quality bar decides what of the result is kept (apps/api `quality` stage).
  *
  * The choices are remembered on this phone (a convenience; losing them loses nothing).
@@ -40,7 +40,7 @@ const QUALITY = [
   {
     value: "standard",
     label: "Standard",
-    hint: "Refine using all captured detail, with longer training for larger scans.",
+    hint: "Refine at native detail, with longer training for larger scans.",
   },
   {
     value: "best",
@@ -206,13 +206,25 @@ export function paramsFor(recipe: Recipe, options: Options): StageParams {
 
 /**
  * The params a new capture is first processed with: the preview. The frames and the
- * camera positions it makes are the ones Refine keeps, so the photo size and frame rate
- * are the phone's choices here; the training is the preview's own.
+ * camera positions are a small forecast. Refine applies the phone's full-data choices
+ * and rebuilds the poses when extraction changes.
  */
 export function previewParamsFor(recipe: Recipe, options: Options): StageParams {
   const params = paramsFor(recipe, options);
   if (recipe === "splat-ingest") return params;
-  return { ...params, train: { ...PREVIEW_TRAIN }, quality: { mode: "preview", bar: options.bar } };
+  return {
+    ...params,
+    normalize: {
+      max_side: 1600,
+      fps: 4,
+      keep: 100,
+      keep_video: 180,
+      max_candidates: 1200,
+      select: "viewpoint",
+    },
+    train: { ...PREVIEW_TRAIN },
+    quality: { mode: "preview", bar: options.bar },
+  };
 }
 
 /**
@@ -442,7 +454,7 @@ export function mountOptions(root: HTMLDetailsElement): OptionsPanel {
       recipe === "splat-ingest"
         ? "A splat file (.ply or .spz, e.g. from Scaniverse or Polycam) is placed on the map as it is. No GPU training."
         : recipe === "photo-reconstruct"
-          ? "Photos or a video are turned into a 3D model: camera positions on a CPU, then Gaussian-splat training on a cloud GPU."
+          ? "Up to 200 photos, or all usable video frames, become a 3D model: camera positions on a CPU, then training on a cloud GPU. Preview uses fewer, smaller frames for a quick forecast."
           : "Photos or a video become a 3D model on a cloud GPU; a splat file (.ply, .spz) is placed as it is. The route is chosen from the files you pick.";
   };
   showFor(null);

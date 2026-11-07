@@ -1030,7 +1030,7 @@ def test_the_recipe_selects_all_usable_frames_at_native_size() -> None:
     params = next(stage for stage in recipe.stages if stage.id == "normalize").params
     assert params["select"] == "usable"
     assert params["max_side"] is None
-    assert params["keep_video"] is None and params["keep"] is None
+    assert params["keep_video"] == 0 and params["keep"] == 200
 
 
 # --- max_side: auto -- frame size from measured detail (#6) --------------------------

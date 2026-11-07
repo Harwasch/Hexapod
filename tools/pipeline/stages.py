@@ -2091,6 +2091,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             variant=variant,
         )
         if in_blocks is not None:
+            _finish_training(ctx)
             return in_blocks
     elif requested_blocks is None and budget is not None and budget.mode == "auto":
         ctx.log(f"gsplat: one block: {block_reason}")
@@ -2423,7 +2424,18 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     metrics["shDegree"] = splat.sh_degree
     if batch_size > 1:
         metrics["batchSize"] = batch_size
+    _finish_training(ctx)
     return StageOutcome(metrics=metrics, summary=f"{in_ply} gaussians trained")
+
+
+def _finish_training(ctx: StageContext) -> None:
+    # The PLY/seed/prior are durable. Optimizer state only serves unfinished training.
+    if (ctx.checkpoint_dir / "resume").is_dir():
+        shutil.rmtree(ctx.checkpoint_dir / "resume")
+    if not any(ctx.checkpoint_dir.iterdir()):
+        # Sync intentionally skips empty checkpoints to protect interrupted attempts.
+        # A successful train with no seed/live splat must still mirror its deletions.
+        _write_json(ctx.checkpoint_dir / "training-complete.json", {"resume": "cleared"})
 
 
 def _trained_sh_degree(properties: Sequence[str]) -> int | None:

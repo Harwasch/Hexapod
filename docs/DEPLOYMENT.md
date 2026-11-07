@@ -751,8 +751,8 @@ would mean moving `georeference` to Modal too, or reimplementing the alignment.
 A Lane 2 run in flight holds several things on the worker's volume at once:
 
 - the upload (a phone video is 0.1–2 GB a minute);
-- every candidate frame ffmpeg extracted before selection (`fps: 4` over the whole clip,
-  as JPEG);
+- native decoded video frames (Preview alone samples/caps candidates), plus normalized
+  frame outputs while the run is in flight;
 - COLMAP's database;
 - the trained PLY coming back from Modal (hundreds of MB);
 - the packaged tiles.
@@ -760,14 +760,22 @@ A Lane 2 run in flight holds several things on the worker's volume at once:
 When a run ends — finished, failed or cancelled — the worker deletes `inputs/` and every
 stage's `work/` (`WorkerConfig.tidy_finished_runs`, on by default). That leaves `out/`,
 `step.json` and `checkpoint/`, which is everything "retry from this stage" reads: a few
-hundred MB per legacy Lane 2 run. **The old 20 GB / 8 GB-upload sizing is superseded
-for full-data runs:** native extracted frames, PLYs and two full-state checkpoints can
-consume most of that volume for one scan. Near the native L4 cap, the checkpoint pair
-alone can occupy roughly 10 GB. Account for uploads, extracted frames, checkpoints and
-retained completed runs before the approved rollout; extend the worker volume if needed
-(`fly volumes extend`, no redeploy). The existing 5 GB claim-time guard is not a forecast
-of in-flight peak disk use. Checkpoint transfers stream to disk on the worker; they do
-not load whole multi-GB state into its 2 GB RAM.
+hundred MB per legacy Lane 2 run. Successful training deletes `checkpoint/resume/`
+**before the final mirrored sync**, so the worker receives no optimizer state for a
+finished train; completed coarse/block passes release their own lanes. Failed or pre-empted
+passes retain it for retry. Small live snapshots, seeds, priors and block records remain.
+
+**The committed `fly.toml` still provisions 20 GB; full-data runs need a larger budget.**
+Near the native L4 cap, two recovery checkpoints alone can occupy roughly 10 GB. A failed
+attempt can bring them back to the worker. For an 8 GB upload, upload + recovery pair +
+the desired 5 GB free margin is already **8 + 10 + 5 = 23 GB**, before native frames,
+COLMAP outputs, PLYs, packaged tiles, retained runs or the concurrent CPU-only ingest.
+Deleting finished resume state prevents ~10 GB accumulating per completed train, but does
+not make 20 GB adequate for that in-flight case. Size the volume for the actual upload,
+frames and output estimate plus retry state before rollout; extend it with
+`fly volumes extend` (no redeploy). The 5 GB claim-time guard checks current free space,
+not future peak use. Checkpoint transfers stream to disk rather than loading multi-GB
+state into the worker's 2 GB RAM.
 
 The worker also checks before it claims. Below `WORKER_MIN_FREE_GB` (5) free it evicts
 the workdirs of runs that ended more than `WORKER_EVICT_AFTER_DAYS` (7) ago, oldest

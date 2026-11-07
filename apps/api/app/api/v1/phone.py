@@ -74,16 +74,16 @@ Rule = tuple[float, float] | frozenset[str] | RangeOr | Literal["flag", "roi"]
 #: by name, like any other option a phone may not set.
 PHONE_OPTIONS: dict[str, dict[str, dict[str, Rule]]] = {
     "photo-reconstruct": {
-        # The long side frames are kept at: a number, or `auto` (the recipe's default:
-        # 1600 unless the capture measurably holds detail above it); the most candidate
-        # frames a second taken from a video (keyframes are then chosen by camera
-        # motion); and how many photos are kept (the recipe keeps 100; pose matches a
-        # photo set exhaustively, quadratic in it). `select` is for comparing the motion
+        # Full runs inherit native pixels and all usable video frames; unordered photos
+        # are capped at 200 until scalable photo matching is validated. Preview supplies
+        # its own frame, size and candidate limits. `select` compares the motion
         # rule with the time-windowed one it replaced (experiments/run_variants.py).
         "normalize": {
             "max_side": RangeOr(800, 4000, frozenset({"auto"})),
             "fps": (1, 30),
             "keep": (20, 200),
+            "keep_video": (20, 180),
+            "max_candidates": (100, 1200),
             "select": frozenset({"viewpoint", "sharpness-windowed"}),
         },
         # Which mapper solves the cameras: COLMAP's incremental one (the recipe's
@@ -167,6 +167,7 @@ def _checked_options(recipe: str, params: dict[str, object]) -> dict[str, dict[s
         stage_allowed = allowed.get(stage)
         if stage_allowed is None or not isinstance(values, dict):
             raise ConflictError(f"A phone cannot set options on {stage!r} for {recipe}.")
+        checked[stage] = {}
         for name, value in values.items():
             rule = stage_allowed.get(name)
             if rule is None:
@@ -395,11 +396,18 @@ def process_phone_capture(
 REFINE_FROM = "train"
 
 
+def _refine_from(previous: dict[str, Any], requested: dict[str, Any]) -> str:
+    """An explicit extraction choice (including {}) invalidates the old poses."""
+    if "normalize" in requested and requested["normalize"] != previous.get("normalize", {}):
+        return "normalize"
+    return REFINE_FROM
+
+
 class PhoneRefine(CamelModel):
     """The phone's options for the full-quality pass (the same whitelist as `process`).
 
-    `normalize` options are accepted and ignored: a Refine keeps the preview's frames and
-    poses, which is the whole point -- the region of interest is only meaningful in them.
+    Changed `normalize` options rebuild frames and poses without the old region or seed.
+    Omit `normalize` to reuse the previous extraction and its coordinate frame.
     """
 
     params: dict[str, Any] = Field(default_factory=dict)
@@ -417,9 +425,9 @@ class PhoneRefine(CamelModel):
         "preview's well-supported splats occupy (any shape), `train.init_from` = `preview` "
         "(start from the preview's splat on a shorter schedule; the phone may send `sfm`), "
         "and `quality.mode` = `refine`. "
-        "The frames and poses are kept, so the mask is in the frame it was measured in. If the "
-        "worker no longer has them, the run starts over and trains uncropped rather than "
-        "applying the region to a different reconstruction."
+        "Changed normalization parameters restart extraction and camera solving, using SfM "
+        "initialization without the preview's mask. Omit normalization to reuse the frames "
+        "and poses. If the worker no longer has them, it starts over uncropped."
     ),
 )
 def refine_phone_capture(
@@ -453,30 +461,46 @@ def refine_phone_capture(
         stage: dict(values) for stage, values in requested.items() if stage != "normalize"
     }
     previous = job.params if isinstance(job.params, dict) else {}
-    if isinstance(previous.get("normalize"), dict):
-        # What the kept frames were made with, recorded rather than silently changed.
+    from_stage = _refine_from(previous, requested)
+    if "normalize" in requested:
+        params["normalize"] = dict(requested["normalize"])
+    elif isinstance(previous.get("normalize"), dict):
         params["normalize"] = dict(previous["normalize"])
     train = params.setdefault("train", {})
     # The region to train in is the preview's support mask: the voxels its well-supported
     # splats occupy, in whatever shape they make. It is too large for the capture's summary,
     # so it is read from the preview's own quality.json. The sphere is only a fallback for
     # a verdict written before masks existed.
-    mask = _support_mask(storage, job.id)
-    if mask is not None:
-        train["support_mask"] = mask
-    elif verdict.roi is not None:
-        train["roi"] = {"center": list(verdict.roi.center), "radius": verdict.roi.radius}
-    # Start from the preview's own splat on a shorter schedule rather than from COLMAP's
-    # sparse points on the whole one (tools/pipeline/init_seed.py). The train stage checks
-    # that the seed is in these poses, and trains from scratch, saying so, if it is not.
-    train.setdefault("init_from", "preview")
+    previous_train = previous.get("train", {})
+    previous_quality = previous.get("quality", {})
+    # A Refine interrupted after rebuilding poses still has the old Preview verdict.
+    # Do not reintroduce its mask on a second Refine, even if extraction now matches.
+    rebuilt = (
+        isinstance(previous_train, dict)
+        and isinstance(previous_quality, dict)
+        and previous_quality.get("mode") == "refine"
+        and verdict.mode == "preview"
+        and previous_train.get("init_from") == "sfm"
+        and not any(key in previous_train for key in ("roi", "support_mask"))
+    )
+    if from_stage == REFINE_FROM and not rebuilt:
+        mask = _support_mask(storage, job.id)
+        if mask is not None:
+            train["support_mask"] = mask
+        elif verdict.roi is not None:
+            train["roi"] = {"center": list(verdict.roi.center), "radius": verdict.roi.radius}
+        train.setdefault("init_from", "preview")
+    else:
+        train.pop("support_mask", None)
+        train.pop("roi", None)
+        train["init_from"] = "sfm"
     quality = params.setdefault("quality", {})
     quality["mode"] = "refine"
     quality.setdefault("bar", "strict")
     recipe_service.check_overrides(job.recipe, params)
     job.params = params
     try:
-        refined = job_service.retry_job(db, job.id, from_stage=REFINE_FROM)
+        refined = job_service.retry_job(db, job.id, from_stage=from_stage)
     except ValueError as error:
         db.rollback()
         raise ConflictError(f"That run cannot be refined: {error}") from error

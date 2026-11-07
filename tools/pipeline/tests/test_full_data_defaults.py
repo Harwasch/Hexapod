@@ -34,7 +34,8 @@ def test_recipe_preserves_all_native_data_and_recovers_training() -> None:
     stages = {s.id: s.params for s in load_recipe("photo-reconstruct").stages}
     normalize, train = stages["normalize"], stages["train"]
     assert normalize["select"] == "usable"
-    assert normalize["keep"] is normalize["keep_video"] is normalize["max_side"] is None
+    assert normalize["keep"] == 200
+    assert normalize["keep_video"] == 0 and normalize["max_side"] is None
     assert normalize["max_candidates"] == 0
     assert train["test_every"] == 0
     assert train["checkpoint_every"] == 5000 and train["streaming_export"] is True
@@ -119,10 +120,13 @@ def test_no_holdout_dispatch_reports_unavailable_scores(tmp_path: Path) -> None:
     document = json.loads((work.out_dir("train") / "train_metrics.json").read_text())
     assert document["heldOut"]["trainFrames"] == 4 and document["heldOut"]["valFrames"] == 0
     assert all(document[k] is None for k in ("psnr", "ssim", "lpips"))
-    assert resume_trainer.newest(work.checkpoint_dir("train") / "resume") is not None
+    assert not (work.checkpoint_dir("train") / "resume").exists()
 
 
-def test_cloud_preemption_resumes_the_synced_optimizer_checkpoint(tmp_path: Path) -> None:
+@pytest.mark.parametrize("changed_plan", [False, True])
+def test_cloud_preemption_resumes_the_synced_optimizer_checkpoint(
+    tmp_path: Path, changed_plan: bool
+) -> None:
     transfer = LocalTransfer(tmp_path / "bucket")
     adapter = SubprocessAdapter(transfer, tmp_path / "sandbox")
     runner = CloudRunner(
@@ -150,9 +154,20 @@ def test_cloud_preemption_resumes_the_synced_optimizer_checkpoint(tmp_path: Path
     recipe = train_recipe(params, gpu={"tier": "l4", "preemptible": True})
     with pytest.raises(PreemptedError):
         execute(recipe, work, RunnerSet.cloud(runner), attempts={"train": 1})
+    assert list((work.checkpoint_dir("train") / "resume").rglob("*.pt"))
+    if changed_plan:
+        params["density_scale"] = 2
+        recipe = train_recipe(params, gpu={"tier": "l4", "preemptible": True})
     execute(recipe, work, RunnerSet.cloud(runner), attempts={"train": 2})
+    assert not (work.checkpoint_dir("train") / "resume").exists()
+    final_checkpoint = tmp_path / "bucket" / "runs" / "run" / "train" / "checkpoint-a2"
+    assert final_checkpoint.is_dir()
+    assert not list(final_checkpoint.rglob("*.pt"))
     doc = json.loads((work.out_dir("train") / "train_metrics.json").read_text())
-    assert doc["resumedFromStep"] == 5 and doc["iterations"] == 19
+    assert doc["resumedFromStep"] == (None if changed_plan else 5)
+    assert doc["iterations"] == 19
+    if changed_plan:
+        assert "starting at step 0" in work.log_path("train").read_text()
     assert doc["psnr"] is None
 
 
@@ -188,6 +203,7 @@ def test_blocks_train_every_assigned_camera_without_a_hidden_val_frame(tmp_path:
     doc = run_blocks(work, block_params(test_every=0, checkpoint_every=5, iterations=19))
     assert doc["heldOut"]["valFrames"] == 0 and doc["psnr"] is None
     assert doc["blocks"]["evaluation"]["status"] == "off"
+    assert not (work.checkpoint_dir("train") / "resume").exists()
     for block in doc["blocks"]["blocks"]:
         assert block["cameras"]["val"] == 0 and block["cameras"]["testEvery"] == 0
 
@@ -273,3 +289,117 @@ def test_native_memory_budget_covers_the_largest_registered_view(
     size, scale = stages._training_frame(tmp_path, factor)
     assert size == (128 // factor, 96 // factor)
     assert scale == 1 / factor  # Intrinsics still follow the pinned parser's reference image.
+
+
+def test_photo_matching_cap_can_be_raised_without_capping_video(tmp_path: Path) -> None:
+    from test_normalize import run_normalize
+
+    params = dict(load_recipe("photo-reconstruct").stages[0].params)
+    photos = tmp_path / "photos"
+    photos.mkdir()
+    for i in range(203):
+        Image.new("RGB", (12, 8), (i, 255 - i, 0)).save(photos / f"p{i:03d}.png")
+    for cap in (200, 203):
+        if cap != 200:
+            params["keep"] = cap
+        work = run_normalize(tmp_path / str(cap), params, photos)
+        meta = json.loads((work.out_dir("normalize") / "source_meta.json").read_text())
+        assert meta["frames"]["kept"] == cap
+        assert meta["frames"]["selectionCounts"]["capped"] == 203 - cap
+    assert params["keep_video"] == 0
+
+
+def test_checkpoint_identity_reads_metadata_and_survives_dataset_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    frames, poses = tmp_path / "frames", tmp_path / "poses"
+    frames.mkdir()
+    poses.mkdir()
+    image = frames / "a.png"
+    Image.new("RGB", (32, 24)).save(image)
+    (poses / "cameras.bin").write_bytes(b"poses")
+    dataset = training.build_dataset(frames, poses, tmp_path / "dataset", max_side=16)
+    params = {"train_max_side": 16, "density_scale": 1}
+    first = training.checkpoint_token(params, dataset)
+    training.build_dataset(frames, poses, dataset, max_side=16)
+    assert training.checkpoint_token(params, dataset) == first
+
+    def no_read(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("checkpoint identity must not read dataset bytes")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", no_read)
+        assert training.checkpoint_token(params, dataset) == first
+        assert training.checkpoint_token({**params, "density_scale": 2}, dataset) != first
+        target = dataset / "images" / "a.png"
+        stat = target.stat()
+        os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1000000))
+        assert training.checkpoint_token(params, dataset) != first
+    target.rename(target.with_name("b.png"))
+    renamed = training.checkpoint_token(params, dataset)
+    assert renamed != first
+    target.with_name("b.png").write_bytes(b"changed size")
+    assert training.checkpoint_token(params, dataset) != renamed
+
+
+def test_completed_block_lane_is_removed_while_failed_block_retains_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from test_blocks import block_params, run_blocks, seed_prior, seed_walk
+
+    from contracts import StageContext
+    from errors import StageFailedError
+
+    work = Workdir.create(tmp_path / "run")
+    seed_walk(work)
+    seed_prior(work, tmp_path / "scratch")
+    original = StageContext.run
+    seen: list[Path] = []
+
+    def run(ctx: StageContext, argv: Any) -> None:
+        args = list(argv)
+        if "--result_dir" in args:
+            result = Path(args[args.index("--result_dir") + 1])
+            if "/blocks/b" in str(result):
+                seen.append(result)
+                if len(seen) == 2:
+                    lane = resume_trainer.checkpoint_lane(ctx.checkpoint_dir / "resume", seen[0])
+                    assert not lane.exists()
+                    args += ["--die-at", "8", "--sync-grace-s", "0"]
+        original(ctx, args)
+
+    monkeypatch.setattr(StageContext, "run", run)
+    with pytest.raises(StageFailedError):
+        run_blocks(work, block_params(test_every=0, checkpoint_every=5, iterations=19))
+    assert len(seen) == 2
+    unfinished = resume_trainer.checkpoint_lane(work.checkpoint_dir("train") / "resume", seen[1])
+    assert resume_trainer.newest(unfinished) is not None
+
+
+def test_finished_train_mirrors_resume_deletion_even_without_a_seed_or_live_splat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import stages
+
+    work = Workdir.create(tmp_path / "run")
+    seed_inputs(work)
+    checkpoint = work.checkpoint_dir("train")
+    (checkpoint / "resume").mkdir(parents=True)
+    (checkpoint / "resume" / "old-state.pt").write_bytes(b"old recovery state")
+    transfer = LocalTransfer(tmp_path / "bucket")
+    request = request_for("gsplat", produces=())
+    transfer.put(request.checkpoint_key, checkpoint)
+    # Saving a Refine seed is deliberately non-fatal. A run may finish without one.
+    monkeypatch.setattr(stages, "_save_seed", lambda *args, **kwargs: None)
+    execute(
+        train_recipe(stand_in_params(test_every=0, checkpoint_every=5, iterations=19, live=False)),
+        work,
+        RunnerSet.local(),
+    )
+    assert (work.out_dir("train") / "trained.ply").is_file()
+    remote._sync(request, transfer, checkpoint)
+    fetched = tmp_path / "restored"
+    transfer.get(request.checkpoint_key, fetched)
+    assert not list(fetched.rglob("*.pt"))

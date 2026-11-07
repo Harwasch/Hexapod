@@ -109,7 +109,7 @@ import training
 from captures_bridge import read_ply
 from contracts import FANOUT_PARAM, FanOut, FanOutPart, MetricValue, StageContext
 from phases import Phases, flat, ordered
-from resume_trainer import resume_step
+from resume_trainer import finished_lane, resume_step
 from support_mask import SupportMask
 
 __all__ = [
@@ -1034,6 +1034,7 @@ def _coarse_prior(ctx: StageContext, settings: Settings, work: Path) -> Prior:
     prior, why = load_prior(ctx.checkpoint_dir, settings.poses)
     if prior is None:
         raise ValueError(f"the coarse prior could not be read back: {why}")
+    finished_lane(list(settings.extra), result)
     return prior
 
 
@@ -1533,6 +1534,7 @@ def _train_block(
     # After the splat is in place: a block with a splat and no record is trained again,
     # never merged half-written.
     _write_json_atomic(_record_path(_state_dir(ctx), index), record, work)
+    finished_lane(list(settings.extra), result)
     return record
 
 

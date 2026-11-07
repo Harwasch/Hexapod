@@ -96,7 +96,15 @@ stage the coordinate the operator dropped the capture at.
 
 ## Full data by default (recipe v16)
 
-Production keeps every usable source frame/photo at native resolution. `normalize.select:
+Production keeps every usable video frame at native resolution. Unordered photo sets
+have a temporary **200-photo cap** (`normalize.keep: 200`); `keep_video: 0` leaves video
+uncapped. Raise `normalize.keep` in a recipe or an admin per-run override to admit more
+photos. Photo matching is still exhaustive: 200 photos mean 19,900 pairs and 300 mean
+44,850. At the recorded ~8 min per 1,275 pairs (`experiments/minnetonka.py`), 300 photos
+would take ~4.7 h per matching pass, or ~9.4 h with the default one rematch, before
+extraction and mapping: beyond the six-hour call budget. The existing vocabulary trees serve sequential video loop
+closure; unordered-photo retrieval is not yet validated across both pinned COLMAP versions.
+This cap is an explicit exception to using all captured data, pending that validation. `normalize.select:
 usable` decodes video without an fps filter, candidate ceiling or frame ceiling. Consecutive
 retained video thumbnails (at most 160 px, RGB) are deduplicated only at MAE <= 1 eight-bit
 level (`dedupe_mae`). Unordered photos are deduplicated by identical file bytes only.
@@ -109,8 +117,12 @@ so variable-rate timestamps remain approximate. `keep` / `keep_video` can restor
 available; SIFT's separate 1600 px feature cap does not shrink training images. The phone
 now inherits native size (its saved `auto` value sends no side override); a numeric size
 remains an explicit cap. Its default frame choice is All usable; numeric rates explicitly
-opt into viewpoint selection. Cheap previews still train at 800 px and reuse native frames
-for the later Refine.
+opt into viewpoint selection. Phone Preview uses its own 1600 px extraction, at most
+100 photos or 180 video frames, and at most 1200 candidates at 4 fps with viewpoint
+selection; its training reads 800 px images. Refine sends the full run's extraction
+choices. When those differ, it restarts normalization and poses, dropping the Preview's
+mask and seed rather than applying them in a changed coordinate frame. Omit normalization
+on the API to keep an existing frame set and refine inside its measured region.
 
 `train.test_every: 0` trains **all registered frames**, including index zero and every
 block's assigned cameras. Production makes no test split. PSNR/SSIM/LPIPS and colour-corrected
@@ -149,9 +161,18 @@ splats, Adam moments, strategy accumulators, schedulers, enabled modules, conver
 RNG and consumed data-loader cursor. Four workers use deterministic sample keys. Only
 plain data/tensors are serialized, loaded with `weights_only=True`; no runtime methods,
 strategy instances or config objects are pickled. The image build guards the pinned source
-patch. Dataset bytes and settings fingerprint the plan. Save failures log `CHECKPOINT ERROR`
-and training continues; two complete recovery points are retained. Production skips the
-final full-state save: a failure during final packaging may replay up to 5k steps.
+patch. File names, sizes, stable modification times and settings fingerprint the plan,
+without rereading the native dataset. Dataset assembly preserves those times; S3 downloads
+use each object's LastModified time. Inputs are immutable during an attempt. A changed
+identity/version logs a warning, deletes that lane's stale checkpoints and starts at step 0;
+sibling block lanes are kept. Save failures log `CHECKPOINT ERROR` and training continues;
+two complete recovery points are retained **while training is unfinished**. Once the PLY
+and durable outputs are written, a successful train removes `checkpoint/resume/` before the
+final mirrored sync; each completed coarse/block pass also removes its own lane. If no
+seed/live state remains, a tiny completion marker forces the mirror to remove remote
+resume files even though ordinary empty checkpoint syncs are skipped. Failed or
+pre-empted passes retain recovery state. Production skips the final full-state save: a
+failure during final packaging may replay up to 5k steps.
 
 The existing background sync uploads immutable filesystem snapshots, excludes partial writes,
 and restores checkpoints before single-call retries. A size receipt rejects missing/truncated
@@ -182,7 +203,7 @@ Cost per scan is the frame pool **and** sampled training steps: 255 x 30k versus
 at native beach pixels (1.44x the pixels of 1600 px). Training samples one image a step,
 so this is not a 16x GPU-work claim: 2x steps x 1.44x pixels is a rough **2.88x render-work**
 proxy at unchanged Gaussian count, before setup, memory caps, block passes and checkpoints.
-Photo matching remains quadratic and is now uncapped; video matching/mapping, extraction,
+Photo matching remains quadratic with the temporary 200-photo default cap; video matching/mapping, extraction,
 transfer and disk use grow with the retained data. At the existing surveyed rates the GPU
 reservation adds **$0.063936/hour**, making L4 + 2 cores + 16 GiB **$1.021392/hour**. The
 measured 157-minute run is evidence for one scene, not a per-scan quote. Checkpoints add

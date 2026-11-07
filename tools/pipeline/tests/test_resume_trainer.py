@@ -424,3 +424,53 @@ def test_convergence_history_and_pending_stop_survive_checkpoint(
         resume_trainer.converge_state(first.runner), resume_trainer.converge_state(continued.runner)
     )
     assert cfg.ply_steps == cfg.save_steps == cfg.eval_steps == [5]
+
+
+@pytest.mark.parametrize("changed", ["token", "version", "schedule"])
+def test_stale_plan_discards_only_its_lane_and_restarts_at_zero(
+    tmp_path: Path, monkeypatch: Any, capsys: Any, changed: str
+) -> None:
+    from argparse import Namespace
+
+    from resume_maths_stand_in import Model
+
+    monkeypatch.setitem(sys.modules, "torch", sys.modules.get("torch"))
+    args = Namespace(
+        max_steps=20,
+        checkpoint_every=5,
+        checkpoint_dir=tmp_path / "resume",
+        checkpoint_token="old-quality-token",
+        resume="latest",
+        strategy="mcmc",
+        result_dir=tmp_path / "work" / "blocks" / "block_000" / "gsplat",
+    )
+    first = Model(args)
+    first.tick(1)
+    checkpoint = first.save(5)
+    first.save(10)
+    lane = Path(first.runner.cfg.checkpoint_dir)
+    other = lane.parent / "other-lane"
+    other.mkdir()
+    (other / "resume_000000005.pt").write_bytes(b"another block")
+    if changed == "token":
+        args.checkpoint_token = "new-quality-token"
+    elif changed == "schedule":
+        args.max_steps = 30
+    else:
+        saved = first.torch.load(checkpoint)
+        saved["version"] = -1
+        # Change both committed files so configure still selects a stale checkpoint.
+        for path in resume_trainer.checkpoints(lane):
+            with path.open("wb") as handle:
+                first.torch.save(saved, handle)
+            path.with_suffix(".committed").write_text(json.dumps({"bytes": path.stat().st_size}))
+    fresh = Model(args)
+    assert fresh.start == 0 and fresh.runner.cfg.resume is None
+    assert fresh.runner._hex_resume_step == 0
+    assert not resume_trainer.checkpoints(lane)
+    assert not list(lane.glob("*.committed"))
+    assert (other / "resume_000000005.pt").exists()
+    assert "incompatible resume checkpoint" in capsys.readouterr().err
+    # A new compatible checkpoint can be selected on the very next retry.
+    fresh.save(5)
+    assert Model(args).start == 5

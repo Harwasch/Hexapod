@@ -22,13 +22,19 @@ stages:
   - id: normalize
     impl: ffmpeg_frames
     params:
-      # Full data: every decoded source frame/photo, native pixels. Only near-identical
+      # Native pixels and all usable video frames. Photos have a temporary 200-image
+      # cap: unordered photos still use exhaustive matching (19,900 pairs at 200;
+      # 44,850 at 300). At the recorded ~8 min/1,275 pairs, one 300-photo pass is
+      # ~4.7 h (~9.4 h with the default rematch), beyond the 6 h call budget. Raise `keep`
+      # explicitly after budgeting that work. Vocab-tree photo retrieval is not yet
+      # validated across the pinned 3.9.1/4.2 paths; sequential order is unsafe here.
+      # Only near-identical
       # consecutive video frames (thumbnail MAE <= 1/255) and byte-identical photos
       # are deduplicated. No blur pruning: the beach blur screen did not establish a win.
       select: usable
       dedupe_mae: 1.0
-      keep: null
-      keep_video: null
+      keep: 200
+      keep_video: 0 # unlimited video; independent of the photo cap
       max_candidates: 0
       max_side: null
       # Opt-in reductions: keep/keep_video, max_side: 1600, or select: viewpoint
@@ -296,8 +302,8 @@ stages:
       #     half the steps so the images trained on are the same. Unmeasured on the L4;
       #     not with depth_loss.
       #
-      # psnr, ssim and lpips in train_metrics.json are on gsplat's held-out split: every
-      # 8th registered frame, never trained on (`heldOut` there says how many).
+      # With test_every: 0 every registered frame trains; psnr, ssim and lpips are
+      # unavailable. Opt into test_every: 8 for held-out evaluation (every 8th frame).
       #
       # `trainer` and `python` are deliberately absent: gsplat v1.5.3's
       # examples/simple_trainer.py and the CPython 3.10 it needs live in the training

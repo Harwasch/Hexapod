@@ -117,12 +117,27 @@ def configure(runner: Any) -> None:
     if cfg.resume and not cfg.checkpoint_every:
         cfg.checkpoint_every = DEFAULT_EVERY
     if cfg.resume == "latest":
-        suffix = str(cfg.result_dir).rsplit("/work/", 1)[-1]
-        if suffix != "gsplat":
-            lane = hashlib.sha256(suffix.encode()).hexdigest()[:16]
-            cfg.checkpoint_dir = str(Path(cfg.checkpoint_dir) / lane)
+        cfg.checkpoint_dir = str(checkpoint_lane(Path(cfg.checkpoint_dir), Path(cfg.result_dir)))
         latest = newest(Path(cfg.checkpoint_dir))
         cfg.resume = None if latest is None else str(latest)
+
+
+def checkpoint_lane(directory: Path, result: Path) -> Path:
+    suffix = str(result).rsplit("/work/", 1)[-1]
+    return (
+        directory
+        if suffix == "gsplat"
+        else directory / hashlib.sha256(suffix.encode()).hexdigest()[:16]
+    )
+
+
+def finished_lane(extra: list[Any], result: Path) -> None:
+    """Release only a completed coarse/block trainer's optimizer state."""
+    if "--checkpoint-dir" in extra:
+        directory = Path(extra[extra.index("--checkpoint-dir") + 1])
+        lane = checkpoint_lane(directory, result)
+        if lane.is_dir():
+            shutil.rmtree(lane)
 
 
 def resume_step(extra: list[Any], result: Path) -> int | None:
@@ -131,13 +146,20 @@ def resume_step(extra: list[Any], result: Path) -> int | None:
     value = extra[extra.index("--resume") + 1]
     if value == "latest":
         directory = Path(extra[extra.index("--checkpoint-dir") + 1])
-        suffix = str(result).rsplit("/work/", 1)[-1]
-        if suffix != "gsplat":
-            directory /= hashlib.sha256(suffix.encode()).hexdigest()[:16]
-        path = newest(directory)
+        path = newest(checkpoint_lane(directory, result))
     else:
         path = Path(value)
-    return None if path is None else int(path.stem.split("_")[-1])
+    if path is None:
+        return None
+    if "--checkpoint-token" in extra:
+        token = extra[extra.index("--checkpoint-token") + 1]
+        try:
+            receipt = json.loads(path.with_suffix(".committed").read_text())
+        except (OSError, ValueError):
+            return None
+        if receipt.get("token") != token:
+            return None  # The trainer will discard stale state; do not report a resume.
+    return int(path.stem.split("_")[-1])
 
 
 def newest(directory: Path) -> Path | None:
@@ -392,8 +414,22 @@ def restore(runner: Any, schedulers: list[Any], loader: Any) -> int:
     # No strategy, cfg, module or callable is deserialized. All runtime objects and
     # method patches come from this trainer; only their data state is restored.
     state = torch.load(cfg.resume, map_location="cpu", weights_only=True, mmap=True)
-    if state.get("version") != VERSION or state.get("identity") != _identity(runner):
-        raise ValueError("incompatible resume checkpoint or changed plan")
+    identity = _identity(runner)
+    if state.get("version") != VERSION or state.get("identity") != identity:
+        sys.stderr.write(
+            f"WARNING: incompatible resume checkpoint or changed plan: {cfg.resume}; "
+            f"saved identity={state.get('identity')!r}, current identity={identity!r}. "
+            "Discarding this lane's checkpoints and starting at step 0.\n"
+        )
+        # Do not delete sibling block lanes, including when this is the root lane.
+        directory = Path(cfg.resume).parent
+        for path in directory.iterdir():
+            if path.is_file() and re.fullmatch(
+                r"\.?resume_\d{9}\.(pt|committed|part)(\.part)?", path.name
+            ):
+                path.unlink(missing_ok=True)
+        cfg.resume = None
+        return restore(runner, schedulers, loader)
     step = int(state["step"])
     if not 0 <= step <= cfg.max_steps:
         raise ValueError("resume step outside schedule")
@@ -579,7 +615,9 @@ def _save(runner: Any, schedulers: list[Any], loader: Any, step: int) -> Path | 
             temporary.unlink(missing_ok=True)
     receipt = target.with_suffix(".committed")
     partial_receipt = receipt.with_suffix(".part")
-    partial_receipt.write_text(json.dumps({"bytes": target.stat().st_size}))
+    partial_receipt.write_text(
+        json.dumps({"bytes": target.stat().st_size, "token": cfg.checkpoint_token})
+    )
     partial_receipt.replace(receipt)
     rotate(directory)
     runner._hex_checkpoint_step = step

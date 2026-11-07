@@ -356,6 +356,7 @@ class S3Transfer:
         self._bucket = bucket
         #: Object key -> (size, mtime_ns) of the file this instance last uploaded there.
         self._sent: dict[str, tuple[int, int]] = {}
+        self._modified: dict[str, float] = {}
 
     def put(self, key: str, source: Path) -> int:
         """A directory is *mirrored*: members unchanged since this instance uploaded them
@@ -405,18 +406,29 @@ class S3Transfer:
         self._forget(key)
         if self._head(key) is not None:
             target.parent.mkdir(parents=True, exist_ok=True)
-            self._client.download_file(self._bucket, key, str(target))
+            self._download(key, target)
             return target.stat().st_size
 
         def one(member: str) -> int:
             destination = target / member[len(key) + 1 :]
             destination.parent.mkdir(parents=True, exist_ok=True)
-            self._client.download_file(self._bucket, member, str(destination))
+            self._download(member, destination)
             signature = _signature(destination)
             self._sent[member] = signature
             return signature[0]
 
         return sum(_parallel(one, self._listing(f"{key}/")))
+
+    def _download(self, key: str, destination: Path) -> None:
+        import os
+
+        self._client.download_file(self._bucket, key, str(destination))
+        # Retry identity uses file metadata, not another read of every native image.
+        # Download time changes on every attempt; the object's modification time does
+        # not. Populated by HEAD (a file) or the paginated listing (a directory).
+        if key in self._modified:
+            stamp = self._modified[key]
+            os.utime(destination, (stamp, stamp))
 
     def exists(self, key: str) -> bool:
         return self._head(key) is not None or bool(self._listing(f"{key}/", limit=1))
@@ -431,7 +443,10 @@ class S3Transfer:
 
     def _head(self, key: str) -> dict[str, Any] | None:
         try:
-            return dict(self._client.head_object(Bucket=self._bucket, Key=key))
+            metadata = dict(self._client.head_object(Bucket=self._bucket, Key=key))
+            if metadata.get("LastModified") is not None:
+                self._modified[key] = metadata["LastModified"].timestamp()
+            return metadata
         except Exception:
             # A 404 is the common case and not an error: `get` asks "is this one object
             # or a directory of them?" and this is how it finds out.
@@ -448,7 +463,10 @@ class S3Transfer:
         while True:
             extra = {"ContinuationToken": token} if token else {}
             page = self._client.list_objects_v2(Bucket=self._bucket, Prefix=prefix, **extra)
-            keys.extend(entry["Key"] for entry in page.get("Contents", []))
+            for entry in page.get("Contents", []):
+                keys.append(entry["Key"])
+                if entry.get("LastModified") is not None:
+                    self._modified[entry["Key"]] = entry["LastModified"].timestamp()
             if limit is not None and keys:
                 return keys[:limit]
             token = page.get("NextContinuationToken") if page.get("IsTruncated") else None

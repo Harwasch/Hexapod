@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,10 +44,12 @@ class Bucket:
         self.objects: dict[str, bytes] = {}
         self.uploads: list[str] = []
         self.deletes: list[str] = []
+        self.modified: dict[str, datetime] = {}
 
     def upload_file(self, filename: str, bucket: str, key: str) -> None:
         self.objects[key] = Path(filename).read_bytes()
         self.uploads.append(key)
+        self.modified[key] = datetime(2026, 11, 7, 0, 0, len(self.uploads) % 60, tzinfo=UTC)
 
     def download_file(self, bucket: str, key: str, filename: str) -> None:
         Path(filename).write_bytes(self.objects[key])
@@ -54,11 +57,14 @@ class Bucket:
     def head_object(self, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
         if Key not in self.objects:
             raise KeyError(Key)
-        return {"ContentLength": len(self.objects[Key])}
+        return {"ContentLength": len(self.objects[Key]), "LastModified": self.modified[Key]}
 
     def list_objects_v2(self, Bucket: str, Prefix: str, **_: Any) -> dict[str, Any]:  # noqa: N803
         keys = sorted(k for k in self.objects if k.startswith(Prefix))
-        return {"Contents": [{"Key": k} for k in keys], "IsTruncated": False}
+        return {
+            "Contents": [{"Key": k, "LastModified": self.modified.get(k)} for k in keys],
+            "IsTruncated": False,
+        }
 
     def delete_object(self, Bucket: str, Key: str) -> None:  # noqa: N803
         self.objects.pop(Key, None)
@@ -124,3 +130,22 @@ def test_a_single_object_round_trips(tmp_path: Path) -> None:
     assert transfer.put("k/one", source) == 10
     assert transfer.get("k/one", tmp_path / "back" / "one.bin") == 10
     assert (tmp_path / "back" / "one.bin").read_bytes() == b"x" * 10
+
+
+def test_input_mtimes_are_stable_across_downloads_for_resume_identity(tmp_path: Path) -> None:
+    bucket = Bucket()
+    transfer = s3_transfer()(bucket, "b")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "a.jpg").write_bytes(b"image")
+    transfer.put("frames", source)
+    transfer.put("poses.bin", source / "a.jpg")
+    for name in ("first", "retry"):
+        transfer.get("frames", tmp_path / name / "frames")
+        transfer.get("poses.bin", tmp_path / name / "poses.bin")
+    for suffix in ("frames/a.jpg", "poses.bin"):
+        left, right = (tmp_path / name / suffix for name in ("first", "retry"))
+        assert left.stat().st_mtime_ns == right.stat().st_mtime_ns
+    assert (tmp_path / "first/frames/a.jpg").stat().st_mtime == bucket.modified[
+        "frames/a.jpg"
+    ].timestamp()

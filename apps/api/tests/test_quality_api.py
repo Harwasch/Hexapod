@@ -162,7 +162,7 @@ def test_refine_resumes_the_preview_at_train_inside_its_region(
         f"/api/v1/phone/captures/{capture_id}/refine",
         json={
             "params": {
-                "normalize": {"max_side": 2400},
+                "normalize": PREVIEW["normalize"],
                 "train": {"cap_max": 1_000_000},
                 "quality": {"bar": "strict", "mode": "preview"},
             }
@@ -175,7 +175,7 @@ def test_refine_resumes_the_preview_at_train_inside_its_region(
     assert body["id"] == str(job.id)  # the same run: its frames and poses are kept
     assert body["status"] == "not-started"
     assert body["params"] == {
-        # What the kept frames were made with, not what was asked for now.
+        # Extraction is unchanged, so these frames and poses can be reused.
         "normalize": PREVIEW["normalize"],
         # The preview's short-schedule knobs are gone; the region is the preview's, and
         # training starts from the preview's own splat.
@@ -415,3 +415,27 @@ def test_a_refine_may_ask_to_train_from_scratch(client: TestClient, db: Session)
         headers=PHONE,
     )
     assert bad.status_code == 409
+
+
+def test_refine_with_full_data_settings_restarts_poses_without_preview_coordinates(
+    client: TestClient, db: Session
+) -> None:
+    capture_id = _process(client, db)
+    _finish(db, capture_id)
+    refined = client.post(
+        f"/api/v1/phone/captures/{capture_id}/refine",
+        json={"params": {"normalize": {}, "train": {"init_from": "preview"}}},
+        headers=PHONE,
+    )
+    assert refined.status_code == 202, refined.text
+    body = refined.json()
+    assert body["params"]["normalize"] == {}
+    assert body["params"]["train"] == {"init_from": "sfm"}
+    assert {step["status"] for step in body["steps"]} == {"not-started"}
+
+    # A stopped Refine still carries the old Preview verdict. Repeating Refine must
+    # not attach its region to the newly requested coordinate frame.
+    client.post(f"/api/v1/phone/captures/{capture_id}/stop", headers=PHONE)
+    again = client.post(f"/api/v1/phone/captures/{capture_id}/refine", json={}, headers=PHONE)
+    assert again.status_code == 202, again.text
+    assert again.json()["params"]["train"] == {"init_from": "sfm"}

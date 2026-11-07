@@ -241,8 +241,12 @@ def build_dataset(frames: Path, poses: Path, root: Path, *, max_side: int | None
     for frame in sorted(p for p in frames.iterdir() if p.is_file()):
         if max_side is None or not _shrink(frame, images / frame.name, max_side):
             link_or_copy(frame, images / frame.name)
+        else:
+            # The derived pixels are deterministic for max_side; keep source metadata
+            # stable when assembling the dataset again for a resumed attempt.
+            shutil.copystat(frame, images / frame.name)
     for entry in sorted(p for p in poses.iterdir() if p.is_file()):
-        shutil.copyfile(entry, sparse / entry.name)
+        shutil.copy2(entry, sparse / entry.name)
     return root
 
 
@@ -771,12 +775,20 @@ def evaluation_extra(extra: Sequence[str]) -> list[str]:
 
 
 def checkpoint_token(params: Mapping[str, Any], dataset: Path) -> str:
+    """Identity of the immutable inputs and plan, without rereading native image bytes.
+
+    Dataset assembly preserves input mtimes, including resized images and copied poses;
+    S3 downloads use the object's stable LastModified time. A changed input's name,
+    size or mtime invalidates resume, as do all training parameters.
+    """
     digest = hashlib.sha256(json.dumps(dict(params), sort_keys=True).encode())
     for path in sorted(p for p in dataset.rglob("*") if p.is_file()):
-        digest.update(str(path.relative_to(dataset)).encode())
-        with path.open("rb") as handle:
-            while data := handle.read(1024 * 1024):
-                digest.update(data)
+        stat = path.stat()
+        digest.update(
+            json.dumps(
+                [path.relative_to(dataset).as_posix(), stat.st_size, stat.st_mtime_ns]
+            ).encode()
+        )
     return digest.hexdigest()
 
 

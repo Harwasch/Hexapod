@@ -229,10 +229,11 @@ kill_timeout = "30s"
   # raising it later costs nothing but the command -- which is the reason this was the
   # cheap way out of the block rather than a compromise.
   #
-  # 20 GB is enough for one capture in flight because the worker drops each finished
-  # run's `inputs/` and stages' `work/` (WorkerConfig.tidy_finished_runs): what stays per
-  # Lane 2 run is its outputs, a few hundred MB, while a run in flight briefly holds the
-  # video, its candidate frames and COLMAP's database as well. That is also why there is
+  # 20 GB is the legacy starting size, not a full-data peak estimate. A failed train
+  # can return ~10 GB of recovery state: 8 GB upload + 10 GB checkpoints + 5 GB free
+  # margin already needs 23 GB before frames/outputs. See docs/DEPLOYMENT.md Disk.
+  # Successful training removes resume state before sync; tidy_finished_runs drops
+  # inputs/work but retains outputs and failed-stage checkpoints. That is also why there is
   # one general slot (WORKER_CONCURRENCY): a second video in flight is a second of those.
   # The CPU-only slot's splat-ingest beside it holds the uploaded splat, its normalized
   # copy, the packer's sorted working file (about the splat's size) and the tiles: a few
