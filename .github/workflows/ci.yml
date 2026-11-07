@@ -383,6 +383,11 @@ jobs:
           uv pip install -c "$RUNNER_TEMP/constraints.txt" -r infra/modal/trainer-requirements.txt
           # gsplat from that source, as the image does, but without compiling CUDA.
           BUILD_NO_CUDA=1 uv pip install -c "$RUNNER_TEMP/constraints.txt" --no-build-isolation --no-deps "$RUNNER_TEMP/gsplat"
+      # The image patches the pinned trainer in place before its own check (infra/modal/app.py).
+      - name: The image's resume patch, applied to the pinned trainer
+        run: |
+          "$RUNNER_TEMP/trainer/bin/python" tools/pipeline/resume_trainer.py \
+            "$RUNNER_TEMP/gsplat/examples/simple_trainer.py"
       - name: simple_trainer.py parses training.gsplat_argv
         run: |
           "$RUNNER_TEMP/trainer/bin/python" infra/modal/check_trainer.py \

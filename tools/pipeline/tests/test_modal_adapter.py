@@ -620,16 +620,16 @@ def test_outrunning_the_function_s_limit_is_marked_as_a_timeout() -> None:
 
 
 def test_a_gpu_hour_is_priced_with_the_cpu_and_memory_its_function_reserves() -> None:
-    """2 cores and 8 GiB reserved beside every GPU, billed at Modal's list prices: +$0.158
+    """2 cores and 16 GiB reserved beside every GPU, billed at Modal's list prices: +$0.222
     an hour on top of the L4's $0.80 -- a fifth of the bill that `costUsd` left out."""
-    assert GPU_RESERVATION == (2.0, 8192)
+    assert GPU_RESERVATION == (2.0, 16384)
     reserved = reservation_rate("l4")
     assert reserved is not None
-    assert reserved.usd_per_hour == pytest.approx(2 * 0.04716 + 8 * 0.007992)
+    assert reserved.usd_per_hour == pytest.approx(2 * 0.04716 + 16 * 0.007992)
     adapter = ModalAdapter("twin")
     l4 = adapter.rate("l4")
     assert l4 is not None
-    assert l4.usd_per_hour == pytest.approx(0.7992 + 0.158256)
+    assert l4.usd_per_hour == pytest.approx(0.7992 + 0.222192)
     assert "reserved" in l4.source
     # The CPU box's rate already *is* its cores and memory; nothing is added to it.
     cpu = adapter.rate("cpu4")
@@ -637,6 +637,6 @@ def test_a_gpu_hour_is_priced_with_the_cpu_and_memory_its_function_reserves() ->
     assert reservation_rate("cpu4") is None
     # A deployment's own GPU price gets the reservation too: Modal bills it either way.
     own = ModalAdapter("twin", rates={"l4": Rate(0.50, "PIPELINE_GPU_RATES")}).rate("l4")
-    assert own is not None and own.usd_per_hour == pytest.approx(0.50 + 0.158256)
+    assert own is not None and own.usd_per_hour == pytest.approx(0.50 + 0.222192)
     # And an unpriced GPU stays unpriced, rather than priced at its reservation alone.
     assert ModalAdapter("twin").rate("t4") is None

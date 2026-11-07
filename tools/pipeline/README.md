@@ -55,8 +55,7 @@ The state of each piece, in the three-state vocabulary of `docs/HANDOFF.md`:
   measurements are recorded above and in the deployment guide. The original argv and file
   names were checked against gsplat v1.5.3's own
   `simple_trainer.py`, which corrected four transcription errors, each of which would have
-  cost a GPU run: `--ckpt` means _evaluate_, not resume (so a preempted attempt now
-  restarts, and says so); there is no PLY without `--save_ply`; world normalisation is on
+  cost a GPU run: `--ckpt` means _evaluate_, not resume (the production resume extension uses a separate full-state checkpoint); there is no PLY without `--save_ply`; world normalisation is on
   by default and would have exported the splat in a rotated, rescaled frame; and the
   stats and PLY names are zero-based (`val_step29999.json`, `point_cloud_29999.ply`).
 
@@ -94,6 +93,124 @@ CI does): a plain `uv run` syncs the environment and removes it.
 The recipe's placement parameters are the deployment's defaults; a run overrides them per
 capture (see [Parameters per run](#parameters-per-run)), which is how the worker hands a
 stage the coordinate the operator dropped the capture at.
+
+## Full data by default (recipe v16)
+
+Production keeps every usable video frame at native resolution. Unordered photo sets
+have a temporary **200-photo cap** (`normalize.keep: 200`); `keep_video: 0` leaves video
+uncapped. Raise `normalize.keep` in a recipe or an admin per-run override to admit more
+photos. Photo matching is still exhaustive: 200 photos mean 19,900 pairs and 300 mean
+44,850. At the recorded ~8 min per 1,275 pairs (`experiments/minnetonka.py`), 300 photos
+would take ~4.7 h per matching pass, or ~9.4 h with the default one rematch, before
+extraction and mapping: beyond the six-hour call budget. The existing vocabulary trees serve sequential video loop
+closure; unordered-photo retrieval is not yet validated across both pinned COLMAP versions.
+This cap is an explicit exception to using all captured data, pending that validation. `normalize.select:
+usable` decodes video without an fps filter, candidate ceiling or frame ceiling. Consecutive
+retained video thumbnails (at most 160 px, RGB) are deduplicated only at MAE <= 1 eight-bit
+level (`dedupe_mae`). Unordered photos are deduplicated by identical file bytes only.
+Unreadable images are counted; there is no blur ranking or blur rejection. `source_meta.json`
+records candidates, kept frames and duplicate/unreadable/capped counts. `frames_meta.json`
+retains source metadata for every kept frame; native video's offsets use its nominal FPS,
+so variable-rate timestamps remain approximate. `keep` / `keep_video` can restore a cap;
+`select: viewpoint` plus `fps` / `max_candidates` restores the motion-window path. Null
+`max_side` and absent `train_max_side` preserve native pixels. A numeric side cap remains
+available; SIFT's separate 1600 px feature cap does not shrink training images. The phone
+now inherits native size (its saved `auto` value sends no side override); a numeric size
+remains an explicit cap. Its default frame choice is All usable; numeric rates explicitly
+opt into viewpoint selection. Phone Preview uses its own 1600 px extraction, at most
+100 photos or 180 video frames, and at most 1200 candidates at 4 fps with viewpoint
+selection; its training reads 800 px images. Refine sends the full run's extraction
+choices. When those differ, it restarts normalization and poses, dropping the Preview's
+mask and seed rather than applying them in a changed coordinate frame. Omit normalization
+on the API to keep an existing frame set and refine inside its measured region.
+
+`train.test_every: 0` trains **all registered frames**, including index zero and every
+block's assigned cameras. Production makes no test split. PSNR/SSIM/LPIPS and colour-corrected
+scores are null, and `heldOut` explains why. No training-fit number substitutes for them.
+The upload page already omits null PSNR and shows the percentage meeting the geometric
+support bar, coverage and capture advice; the gallery omits the accuracy percentage when
+held-out verification is absent. These describe support, not measured unseen-view accuracy.
+`holdout_error` and held-out convergence are off. They require an explicit positive
+`test_every >= 2` for bench work; frozen bench test images remain outside production.
+Requesting convergence with `test_every: 0` cannot stop the run early.
+
+The schedule is 30,000 steps times `max(0.25, frames / 60)` below 60 registered frames,
+and `min(2, sqrt(frames / 60))` above it (`schedule_growth: sqrt`, `schedule_full_at: 60`,
+`schedule_max_scale: 2`). Thus 240 or more frames get 60k steps. At 2,036 or more frames,
+`schedule_min_large_steps: 60000` / `schedule_large_frames: 2036` additionally enforce a
+60k equivalent image-update floor, including seeded Refines, blocks and convergence stops.
+With batch > 1, steps divide by batch, so steps times batch retain that floor. Explicit
+`schedule_scale < 1` (Preview's 0.1) is the intentional cheap opt-out. Refine's 1.0
+still keeps the large-scan floor; a fixed shorter bench schedule can explicitly set
+`schedule_min_large_steps: 0`.
+`schedule_growth: off` restores the old growth rule; the large-scan floor is a separate setting.
+
+The auto Gaussian ceiling includes steady allocated memory (~1,440 B/Gaussian at native
+1080x1920), per-view intersection sorting bursts and allocator fragmentation. The failed
+10M L4 view requested 2.34 GiB for one buffer; gsplat's keys/IDs and sorted copies need
+three such buffers. Memory admission uses the largest registered render view, while
+footprints retain the pinned parser's reference intrinsics ratio. The model scales the
+envelope with count and pixels, reserves at
+least 2.5 GiB fragmentation and retains the old one-third headroom and ceiling. Native
+ceilings are about **6.72M L4 / 14.0M L40S / 23.7M A100-80**. These are conservative
+admission limits, not universal peak measurements. An explicit `cap_max` still overrides
+auto admission and records a warning. Auto blocks can consequently run more GPU passes.
+
+`checkpoint_every: 5000` saves full training state into the stage's `checkpoint/resume/`:
+splats, Adam moments, strategy accumulators, schedulers, enabled modules, convergence history,
+RNG and consumed data-loader cursor. Four workers use deterministic sample keys. Only
+plain data/tensors are serialized, loaded with `weights_only=True`; no runtime methods,
+strategy instances or config objects are pickled. The image build guards the pinned source
+patch. File names, sizes, stable modification times and settings fingerprint the plan,
+without rereading the native dataset. Dataset assembly preserves those times; S3 downloads
+use each object's LastModified time. Inputs are immutable during an attempt. A changed
+identity/version logs a warning, deletes that lane's stale checkpoints and starts at step 0;
+sibling block lanes are kept. Save failures log `CHECKPOINT ERROR` and training continues;
+two complete recovery points are retained **while training is unfinished**. Once the PLY
+and durable outputs are written, a successful train removes `checkpoint/resume/` before the
+final mirrored sync; each completed coarse/block pass also removes its own lane. If no
+seed/live state remains, a tiny completion marker forces the mirror to remove remote
+resume files even though ordinary empty checkpoint syncs are skipped. Failed or
+pre-empted passes retain recovery state. Production skips the final full-state save: a
+failure during final packaging may replay up to 5k steps.
+
+The existing background sync uploads immutable filesystem snapshots, excludes partial writes,
+and restores checkpoints before single-call retries. A size receipt rejects missing/truncated
+checkpoint files even if uploads complete out of order. Coarse/block checkpoints use stable
+namespaces across sandbox paths. Immediate failed-part resubmissions recover that part's last
+synced trainer state. **Remaining boundary:** when an entire fan-out stage attempt restarts,
+completed blocks are reused but unfinished blocks' trainer states from the previous attempt
+are not collected. Function timeouts still follow the existing six-hour terminal policy;
+this PR adds no automatic timeout relaunch or spending allowance. Storage outages can lose
+unsynced work; they do not terminate successful training.
+
+GPU containers reserve **16 GiB host RAM and 2 cores**. PLY export and live preview selection
+stream 65,536 rows at a time and publish atomically; decoded-image caching stays off. This
+bounds export scratch independently of the full model (the live preview also keeps its fixed
+preview budget). Host RSS/cgroup peak/limit and OOM counter deltas join remote telemetry.
+
+The evidence is the quality campaign, not a new production GPU run: beach full-data gained
+about **1.1 dB** against the leakage-matched 255-frame, 1600 px baseline on 38 frozen tests;
+60k versus 30k gained **0.57 dB**, LPIPS **0.352 -> 0.301**. The video decoded 2,039 frames,
+deduplicated three and registered 2,036. The bench additionally excluded test neighbours
+(218 frames) from training; production has no such exclusion. The successful 7.25M run took
+157 minutes / $2.73, with 12.7 GiB peak GPU reserved memory. The failed 8 GiB host runs exited
+137; streaming plus 16 GiB completed. Source: `codex/feat-quality-campaign`, README Full-data
+run / Detail screen / Budget test and `experiments/bench/FULL_DATA.md`; only measured
+mechanisms were ported, not the experimental quality stack or unproven blur screen.
+
+Cost per scan is the frame pool **and** sampled training steps: 255 x 30k versus 2,036 x 60k
+at native beach pixels (1.44x the pixels of 1600 px). Training samples one image a step,
+so this is not a 16x GPU-work claim: 2x steps x 1.44x pixels is a rough **2.88x render-work**
+proxy at unchanged Gaussian count, before setup, memory caps, block passes and checkpoints.
+Photo matching remains quadratic with the temporary 200-photo default cap; video matching/mapping, extraction,
+transfer and disk use grow with the retained data. At the existing surveyed rates the GPU
+reservation adds **$0.063936/hour**, making L4 + 2 cores + 16 GiB **$1.021392/hour**. The
+measured 157-minute run is evidence for one scene, not a per-scan quote. Checkpoints add
+multi-GB disk/object-storage writes every 5k steps; two recovery points alone can use roughly
+10 GB near the native L4 cap. The old 20 GB worker-volume / 8 GB upload allowance no longer
+holds for all full-data scans; see deployment sizing. No cloud run or deployment was made
+for this port. Harrison must approve deployment and Claude reviews before merge.
 
 ## A recipe is an ordered list of stages, not a DAG
 
@@ -397,11 +514,11 @@ measured**. A tier with no rate records its billed seconds and no cost; it does 
 an invented number, because a plausible price in a cost column is a price that will be
 believed. A deployment supplies its own through `PIPELINE_GPU_RATES`.
 
-On Modal a GPU hour is the GPU **and** the 2 cores and 8 GiB every GPU function reserves
+On Modal a GPU hour is the GPU **and** the 2 cores and 16 GiB every GPU function reserves
 (`modal_adapter.GPU_RESERVATION`, billed at max(reserved, used)): `ModalAdapter.rate`
-adds $0.158 an hour, from Modal's per-core and per-GiB list prices
+adds $0.222192 an hour, from Modal's per-core and per-GiB list prices
 (`providers.MODAL_CORE_HOUR_USD`, `MODAL_GIB_HOUR_USD`), to every GPU tier's rate,
-operator-supplied ones included — an L4 hour is $0.958, not $0.80. Still not in
+operator-supplied ones included — an L4 hour is $1.021392 before any usage above the reservation. Still not in
 `costUsd`: a container's idle scale-down window after its last call (Modal's default, a
 minute; `infra/modal/app.py` sets none), which Modal bills and no call owns.
 
@@ -512,7 +629,7 @@ numbers are upper bounds:
 | sequential + loop (vocab tree) | 100    | 4096 / 1600         | 182 s   | 535 s | 128 s | 845 s     | 76/100     |
 | sequential + loop, overlap 5   | 100    | 4096 / 1600         | 154 s   | 319 s | 144 s | 616 s     | 51/100     |
 
-What this decided, in `recipes/photo-reconstruct.yaml`:
+Historical pose-time choices (frame limits superseded by recipe v16 above):
 
 - **`exhaustive`, still.** It is the only matcher that registered every frame. Sequential
   matching is linear rather than quadratic, but it lost a quarter to a half of the orbit
@@ -611,8 +728,8 @@ counted in its own finest-view pixels -- per sparse point, depth / focal for the
 that saw it largest, at the size training reads the frames; voxels of 32 of those
 footprints, one face each -- times `gaussian_density` 0.1. A Refine counts its support
 mask in full and the rest at a tenth. Clamped to the preview's 200k and to the L4's
-memory at that frame size (gsplat's own 1M/2M/3M MCMC measurements: ~8.7M at 1600 px,
-~5.4M at 2400; training rasterizes `--packed`, whose saving the model does not yet count).
+memory at that frame size using the burst-aware model above; packed rasterization savings
+are retained as headroom rather than discounted again.
 The 2M `budget_max` the recipe used to set is gone: it was what `place`/`package` could
 load whole on the 2 GB worker, and the stages after training now read the splat a chunk
 at a time (see "Stages after training, a chunk at a time"); `budget_max` remains an
@@ -621,7 +738,8 @@ footprints^2; the calibration point); four local phone/photo models at 1600 px, 
 An integer `cap_max` is an override (the preview's 200k); a phone tier multiplies the
 budget (`density_scale`: Quick 0.5, Best 2).
 
-`converge: true` (`convergence.py`, `converge_trainer.py`) runs the trainer through a
+For bench work with a positive `test_every`, opt-in `converge: true`
+(`convergence.py`, `converge_trainer.py`) runs the trainer through a
 wrapper that, after MCMC's densification ends (25k of 30k, scaled), evaluates the held-out
 split every 500 steps and stops once the best PSNR of the last 2,000 steps is under
 0.05 dB above the best before them -- by adding the next step to the trainer's own save,
@@ -738,8 +856,8 @@ JPEG a step, a Python loop launching each step's kernels), with thread pools siz
 _host's_ `os.cpu_count()`. So, ranked: a CPU-starved container (most likely); a slow or
 throttled GPU; different work (least: same code, cameras and schedule). Changed:
 
-- **Every GPU function reserves 2 cores and 8 GiB** (`infra/modal/app.py`, `GPU_CPU_CORES`,
-  `GPU_MEMORY_MIB`; Modal bills max(reserved, used), so at most +$0.16/h over an L4's
+- **Every GPU function reserves 2 cores and 16 GiB** (`infra/modal/app.py`, `GPU_CPU_CORES`,
+  `GPU_MEMORY_MIB`; Modal bills max(reserved, used), so at most +$0.222192/h over an L4's
   $0.80), and the image caps OpenMP/MKL/OpenBLAS/OpenCV pools at 4 threads.
 - **The machine is measured**: `remoteHost` (per call; `headHost`, and `fanOutHosts` per
   part) from `host.HostWatch` -- `cores` (CPU seconds over wall: what the call actually

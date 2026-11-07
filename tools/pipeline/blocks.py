@@ -109,6 +109,7 @@ import training
 from captures_bridge import read_ply
 from contracts import FANOUT_PARAM, FanOut, FanOutPart, MetricValue, StageContext
 from phases import Phases, flat, ordered
+from resume_trainer import finished_lane, resume_step
 from support_mask import SupportMask
 
 __all__ = [
@@ -807,7 +808,8 @@ def _plan(
         _region_points(settings, prior), up, settings.count, exact=settings.requested is not None
     )
     names = tuple(image.name for image in model.images)  # sorted, as gsplat's parser sorts
-    val = tuple(index % training.TEST_EVERY == 0 for index in range(len(names)))
+    test_every = int(settings.params.get("test_every", 0))
+    val = tuple(bool(test_every and index % test_every == 0) for index in range(len(names)))
     centres = model.centres()
     inside = block_maths.cameras_inside(part, centres)
     epsilon = _param_float(settings, "block_epsilon", block_maths.DEFAULT_EPSILON)
@@ -1021,7 +1023,7 @@ def _coarse_prior(ctx: StageContext, settings: Settings, work: Path) -> Prior:
         f"blocks: coarse pass: {training.scaled_steps(settings.full_iterations, scaler)} steps "
         f"at {max_side} px, at most {cap} gaussians"
     )
-    ctx.run(argv)
+    ctx.run(trainer_argv(argv, script=BLOCK_TRAINER, rule=None, ring=None))
     ply = training.latest_ply(result)
     if ply is None:
         raise ValueError(f"the coarse pass wrote no .ply under {result}")
@@ -1032,6 +1034,7 @@ def _coarse_prior(ctx: StageContext, settings: Settings, work: Path) -> Prior:
     prior, why = load_prior(ctx.checkpoint_dir, settings.poses)
     if prior is None:
         raise ValueError(f"the coarse prior could not be read back: {why}")
+    finished_lane(list(settings.extra), result)
     return prior
 
 
@@ -1222,7 +1225,11 @@ def block_schedule(settings: Settings, frames: int, of: int) -> tuple[float, str
     in the whole run -- and is opt-in until a GPU run has measured its quality.
     """
     mode = settings.block_schedule
-    run = settings.steps_scaler
+    run = max(
+        settings.steps_scaler,
+        training.large_scan_floor(max(frames, settings.images), settings.params)
+        / settings.full_iterations,
+    )
     if mode == "full" or of <= 0 or frames >= of:
         return run, "the run's (the block sees every frame)" if frames >= of else "the run's"
     if mode == "frames":
@@ -1230,23 +1237,27 @@ def block_schedule(settings: Settings, frames: int, of: int) -> tuple[float, str
         if settings.schedule_requested or not full_at:
             given = "schedule_scale given" if settings.schedule_requested else "no schedule_full_at"
             return run, f"the run's ({given})"
-        floor = settings.schedule_floor
-        mine = training.schedule_scale(frames, full_at=full_at, floor=floor)
-        whole = training.schedule_scale(max(settings.images, of), full_at=full_at, floor=floor)
+        mine = training.frame_schedule(frames, settings.params)
+        whole = training.frame_schedule(max(settings.images, of), settings.params)
         ratio = mine / whole if whole > 0 else 1.0
         rule = f"{frames} frames against the full schedule at {full_at}"
     else:
         ratio = frames / of
         rule = f"{frames} of the run's {of} frames"
-    scale = max(round(run * ratio, 4), min(run, settings.schedule_floor))
+    scale = max(
+        round(run * ratio, 4),
+        min(run, settings.schedule_floor),
+        training.large_scan_floor(max(frames, settings.images), settings.params)
+        / settings.full_iterations,
+    )
     return scale, rule
 
 
 def write_parts(directory: Path, columns: Mapping[str, Any], names: Sequence[str]) -> int:
     """A block's splat as PLYs of at most `PART_ROWS` rows each (at least one, maybe
     empty), so no file in the checkpoint is bigger than a few tens of megabytes: the
-    worker's transfer reads each file whole into its 2 GB (`apps/api/app/worker/cloud.py`)
-    when it carries a resumed run's checkpoint back to the GPU. Returns the rows written."""
+    worker also streams transfers to disk (`apps/api/app/worker/cloud.py`).
+    Returns the rows written."""
     if directory.exists():
         shutil.rmtree(directory)
     directory.mkdir(parents=True)
@@ -1310,7 +1321,11 @@ def _train_block(
     val_flags = dict(zip(plan.names, plan.val, strict=True))
     train_names = [n for n in names if not val_flags[n]]
     val_names = [n for n in names if val_flags[n]]
-    order, every = block_maths.val_order(train_names, val_names)
+    order, every = (
+        ([(n, False) for n in train_names], 0)
+        if not settings.params.get("test_every", 0)
+        else block_maths.val_order(train_names, val_names)
+    )
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
@@ -1399,15 +1414,32 @@ def _train_block(
         eval_steps=extra_evals,
         batch_size=settings.batch_size,
         # The block's own held-out frames (block_maths.val_order).
-        extra=[*settings.extra, "--test_every", str(every)],
+        extra=[
+            *(
+                v
+                for i, v in enumerate(settings.extra)
+                if v != "--test_every" and (i == 0 or settings.extra[i - 1] != "--test_every")
+            ),
+            "--test_every",
+            str(every),
+        ],
     )
-    if extra_evals or ring_path is not None:
-        argv = trainer_argv(
-            argv,
-            script=Path(settings.params.get("block_trainer_script") or BLOCK_TRAINER),
-            rule=settings.rule if extra_evals else None,
-            ring=ring_path,
-        )
+    argv = trainer_argv(
+        argv,
+        script=Path(settings.params.get("block_trainer_script") or BLOCK_TRAINER),
+        rule=settings.rule if extra_evals else None,
+        ring=ring_path,
+    )
+    boundary = argv.index("--")
+    argv[boundary:boundary] = [
+        "--min-steps",
+        str(
+            math.ceil(
+                training.large_scan_floor(max(len(names), settings.images), settings.params)
+                / settings.batch_size
+            )
+        ),
+    ]
     ctx.log(
         f"blocks: block {index + 1} of {total}: {len(train_names)} training frames "
         f"({int(plan.inside[:, index].sum())} standing in it), {len(val_names)} held out "
@@ -1417,6 +1449,7 @@ def _train_block(
         + ("" if settings.batch_size == 1 else f" of {settings.batch_size} images")
     )
     phases.add("seed", time.monotonic() - seeding)
+    resumed_from = resume_step(list(settings.extra), result)
     began = time.monotonic()
     with live.SplatWatch(
         result / "ply",
@@ -1460,6 +1493,7 @@ def _train_block(
     phases.add("post", time.monotonic() - finishing)
     record: dict[str, Any] = {
         "fingerprint": plan.fingerprint,
+        "resumedFromStep": resumed_from,
         "index": index,
         "cells": list(part.blocks[index]),
         "rect": list(part.rect(index)),
@@ -1500,6 +1534,7 @@ def _train_block(
     # After the splat is in place: a block with a splat and no record is trained again,
     # never merged half-written.
     _write_json_atomic(_record_path(_state_dir(ctx), index), record, work)
+    finished_lane(list(settings.extra), result)
     return record
 
 
@@ -1565,7 +1600,7 @@ def _merge_and_measure(
     holding = time.monotonic()
     held_out = holdout.measure(
         ctx,
-        enabled=settings.holdout_error,
+        enabled=bool(settings.params.get("test_every", 0)) and settings.holdout_error,
         python=settings.python,
         trainer=settings.trainer,
         dataset=settings.dataset,
@@ -1573,7 +1608,7 @@ def _merge_and_measure(
         rows=count,
         keep=None,
         data_factor=settings.data_factor,
-        test_every=training.TEST_EVERY,
+        test_every=int(settings.params.get("test_every", 0)),
         antialiased=bool(settings.switches.get("antialiased")),
         script=settings.holdout_script,
         budget_s=settings.holdout_budget_s,
@@ -1678,6 +1713,8 @@ def _evaluate(
     a single run reports, on the same frames. `block_trainer.py --ply-to-ckpt` turns the PLY
     into the trainer's checkpoint format, and the trainer's `--ckpt` (v1.5.3: "run eval
     only") scores it. Cannot fail the stage."""
+    if not settings.params.get("test_every", 0):
+        return None, {"status": "off", "reason": "all frames trained; no held-out score"}
     if not _param_bool(settings, "block_eval", True):
         return None, {"status": "off"}
     if work.exists():
@@ -1716,7 +1753,7 @@ def _evaluate(
             # The PLY is baked (degree-0 colour under a zero embedding), so it is scored
             # as the plain splat it is, never through an appearance module.
             bilateral_grid=bool(switches.get("bilateral_grid")),
-            extra=[*settings.extra, "--ckpt", str(checkpoint)],
+            extra=[*training.evaluation_extra(settings.extra), "--ckpt", str(checkpoint)],
         )
         # Through the block wrapper with neither ring nor rule: the evaluation's renders
         # are not written (22 full-size PNGs nothing reads; converge_trainer.py).

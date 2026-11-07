@@ -81,6 +81,11 @@ def train_recipe(params: dict[str, object], *, gpu: dict[str, object] | None = N
 def stand_in_params(**overrides: object) -> dict[str, object]:
     params: dict[str, object] = {
         "iterations": 300,
+        "test_every": 8,
+        "checkpoint_every": 0,
+        "schedule_growth": "off",
+        "schedule_full_at": 1,
+        "streaming_export": False,
         "trainer": str(STAND_IN),
         "python": sys.executable,
         "extra_args": ["--ckpt-every", "100", "--gaussians", "64"],
@@ -361,7 +366,7 @@ def test_a_killed_training_attempt_starts_over_and_says_so(tmp_path: Path) -> No
     assert [entry.state for entry in ledger.entries] == ["preempted", "succeeded"]
     assert ledger.usd is not None and ledger.usd > 0
     log = workdir.log_path("train").read_text()
-    assert "restarts from step 0" in log
+    assert "resume from step 0" in log
     assert "starting at step 0" in log
 
 
@@ -566,6 +571,8 @@ def test_the_quality_switches_reach_the_trainer_with_the_presets_semantics(
     assert cfg["depth_loss"] is True
     document = json.loads((workdir.out_dir("train") / "train_metrics.json").read_text())
     assert document["settings"] == {
+        "checkpointEvery": 0,
+        "testEvery": 8,
         "strategy": "mcmc",
         "capMax": 48,
         "capMaxRequested": 48,

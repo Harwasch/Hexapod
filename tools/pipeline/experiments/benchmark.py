@@ -115,12 +115,12 @@ SCENES: dict[str, Scene] = {
 }
 
 #: What each config trains with, over the scene's own params. The full schedule both
-#: times: `schedule_full_at` is absent, so no capture-size scaling applies.
+#: times: explicit schedule_scale and no large-scan floor preserve published comparisons.
 CONFIGS: dict[str, dict[str, Any]] = {
     # gsplat's 3DGS reproduction, as `examples/benchmarks/basic.sh` runs it: the
     # `default` strategy, 30k steps. The one the published numbers are comparable to.
     "gsplat-default": {"iterations": 30_000, "strategy": "default"},
-    # photo-reconstruct's Standard train stage (recipes/photo-reconstruct.yaml): MCMC
+    # Historical photo-reconstruct Standard before full-data defaults: MCMC
     # under a budget measured from the scene (gaussian_budget.py puts Truck at 1.52M at
     # its 979 px) and stopped when held-out PSNR goes flat (convergence.py). The budget's
     # floor, density and ceilings are the stage's defaults, which the recipe restates.
@@ -145,7 +145,14 @@ def train_params(
     if config not in CONFIGS:
         raise ValueError(f"config {config!r} is not one of {sorted(CONFIGS)}")
     extra = dict(switches or {})
-    params: dict[str, Any] = {**scene.params, **CONFIGS[config], **extra}
+    params: dict[str, Any] = {
+        "test_every": 8,
+        "schedule_scale": 1.0,
+        "schedule_min_large_steps": 0,
+        **scene.params,
+        **CONFIGS[config],
+        **extra,
+    }
     params["extra_args"] = [
         *scene.params.get("extra_args", []),
         *extra.get("extra_args", []),

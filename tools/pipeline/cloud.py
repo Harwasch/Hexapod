@@ -1405,6 +1405,8 @@ class CloudRunner(BaseRunner):
         for member in spec.share:
             _copy_member(context.checkpoint_dir / member, bundle / member)
         checkpoint = keys.part_checkpoint(part.id)
+        if call > 1:
+            self._transfer.get(f"{checkpoint}/resume", bundle / "resume")
         self._transfer.delete(checkpoint)
         if any(bundle.iterdir()):
             self._transfer.put(checkpoint, bundle)
@@ -1422,6 +1424,7 @@ class CloudRunner(BaseRunner):
         adapter = self._placement.adapter_for(AttemptLedger.read(context.attempts_path).preemptions)
         self._within_cap(context, f"part {part.id}")
         handle, submitted = self._submit(adapter, request, context, tier, book, part.id)
+        shutil.rmtree(bundle, ignore_errors=True)
         context.log(
             f"cloud: part {part.id} submitted to {adapter.name!r} (call {call}) as {handle.id}"
         )

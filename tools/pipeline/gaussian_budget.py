@@ -78,31 +78,11 @@ fewer gaussians than the preview that forecast it), and at most the GPU's ceilin
 or `budget_max`, when a run sets one and it is lower -- recorded when it is the one
 that applied:
 
-* **GPU memory**, `memory_ceiling`: gsplat's own measurement of MCMC at 1M, 2M and 3M
-  gaussians (docs/source/tests/eval.rst at v1.5.3, "Feature Ablation", A100, Mip-NeRF 360
-  averaged over 7 scenes): peak `max_memory_allocated` 1.98, 3.43 and 4.99 GiB. A straight
-  line through them is 1,616 bytes a gaussian plus 0.475 GiB. 944 of those bytes are the
-  59 parameters of a degree-3 gaussian in float32 with their gradient and Adam's two
-  moments (59 x 4 x 4), which do not depend on the image size; the other 672 are
-  projection, SH evaluation and tile-intersection buffers, which grow with how many tiles
-  a gaussian covers -- all of them are scaled with the training frame's pixel count here
-  (the benchmark's frames average ~1.38 MP: three outdoor scenes at factor 4, four indoor
-  at factor 2), which overstates them, the safe direction for a ceiling. The intercept is
-  ~370 bytes a pixel (the image, the render, its alpha, their gradients, the fused SSIM's
-  maps). The card's memory less 1.5 GiB (CUDA context and library workspaces, which
-  `max_memory_allocated` does not see) is then shared out at two thirds, leaving a third
-  for the caching allocator's fragmentation under MCMC's repeated `torch.cat` growth.
-  On the L4 (24 GB): ~8.7M gaussians at 1600x900, ~5.4M at 2400x1350, ~12M at 979x546.
-  **Packed rasterization** (`--packed`, on since `training.gsplat_argv` passes it) is not
-  counted yet. gsplat's profile of the rasterizer alone (docs/source/tests/profile.rst:
-  forward + backward, TITAN RTX) measured it 0.48 -> 0.35 GB on a small scene at batch 1
-  (27% less) and 5.67 -> 3.08 GB at 49M gaussians (46% less), numerically unchanged;
-  applied to `RASTER_BYTES` at the small-scene 27% -- the least it saved, and the case a
-  phone orbit is, every frame seeing most of the scene -- that would be ~9.9M at 1600 px
-  and ~6.6M at 2400. Those bytes were fitted to whole training runs, not to the
-  rasterizer alone, so the saving stays headroom under the dense model until an L4 run
-  with packed on measures `max_memory_allocated` against it (train_metrics.json's
-  per-step memory; the plan's pass criterion is within 15% of the model).
+* **GPU memory**, `memory_ceiling`: steady allocated memory plus a per-view tile
+  intersection burst and allocator fragmentation. See the constants and helpers below
+  for the beach SH3 evidence and pinned gsplat buffer accounting. Admission retains
+  the historical ceiling and one-third headroom, so this correction cannot increase
+  an auto cap. Packed mode's savings are not an extra discount.
 * **`budget_max`**, an optional override: a run or recipe may cap the count below the
   GPU's ceiling. It used to be the binding one -- 2M, because `quality`, `place`,
   `thumbnail` and `package` each loaded the whole splat, measured at ~0.75 GB a million
@@ -225,6 +205,53 @@ RESERVED_BYTES = int(1.5 * GIB)
 #: The share of the rest the modelled peak may use; the remainder is for fragmentation.
 USABLE_FRACTION = 2.0 / 3.0
 
+#: Beach 4769ee65 SH3 allocated fit: 1440 B/N + 0.18 decimal GB at native pixels.
+BURST_REFERENCE_PIXELS = 1080 * 1920
+STEADY_RASTER_BYTES = 1440 - PARAMETER_BYTES
+STEADY_PIXEL_BYTES = 0.18e9 / BURST_REFERENCE_PIXELS
+#: 7ba40224 failed requesting 2.34 GiB at 10M/native. Conservatively treat that
+#: as one int64 intersection key buffer. At gsplat 512d366b, Intersect.cpp's
+#: intersect_tile allocates int64 keys + int32 IDs and empty_like sorted copies:
+#: 2 * (8 + 4) = 24 B/intersection, three times that one 8 B key allocation.
+#: IntersectTile.cu uses CUB DoubleBuffer; its cudaMallocAsync scratch is outside
+#: torch's allocated peak. The context reserve/headroom cover unmeasured scratch.
+#: Tile coverage (fixed 16px tiles) grows with projected area: N * frame pixels
+#: for unchanged views/geometry. Visibility, radii and clipping vary by view, so
+#: this is a conservative envelope, not a measured universal intersection rate.
+BURST_REFERENCE_COUNT = 10_000_000
+BURST_REFERENCE_BYTES = 3 * 2.34 * GIB
+#: Reserved minus allocated was 2.46 GiB at OOM. Keep at least 2.5 GiB, or the
+#: existing one-third headroom if larger; do not add both fragmentation reserves.
+FRAGMENTATION_BYTES = 2.5 * GIB
+
+
+def view_burst_bytes(count: int, pixels: int) -> float:
+    """Full intersection sorting buffers, scaled from the failed native view."""
+    return BURST_REFERENCE_BYTES * count / BURST_REFERENCE_COUNT * pixels / BURST_REFERENCE_PIXELS
+
+
+def steady_memory_bytes(count: int, pixels: int) -> float:
+    """Beach SH3 allocated fit; parameters stay fixed as resolution changes."""
+    slope = PARAMETER_BYTES + STEADY_RASTER_BYTES * pixels / BURST_REFERENCE_PIXELS
+    return count * slope + pixels * STEADY_PIXEL_BYTES
+
+
+def peak_memory_bytes(count: int, pixels: int) -> float:
+    """Physical peak envelope, including observed allocator fragmentation, in bytes.
+
+    Excludes CUDA context/workspaces (RESERVED_BYTES); unlike admission this does
+    not add the historical one-third policy margin. It deliberately overestimates
+    the successful 7.25M run's observed <=12.7 GiB reserved peak.
+    """
+    return (
+        steady_memory_bytes(count, pixels) + view_burst_bytes(count, pixels) + FRAGMENTATION_BYTES
+    )
+
+
+def memory_fits(count: int, pixels: int, gpu_memory_gb: float = DEFAULT_GPU_MEMORY_GB) -> bool:
+    """Admission under the shared burst model and retained historical safety policy."""
+    return count <= memory_ceiling(pixels, gpu_memory_gb)
+
 
 def parse_cap(value: object) -> int | str | None:
     """`cap_max` as given: None (no cap), `"auto"`, or a positive integer override."""
@@ -246,9 +273,17 @@ def parse_cap(value: object) -> int | str | None:
 def memory_ceiling(pixels: int, gpu_memory_gb: float = DEFAULT_GPU_MEMORY_GB) -> int:
     """The most gaussians gsplat can train in `gpu_memory_gb` (decimal GB, as a card is
     sold) on frames of `pixels` pixels, by the model in the module docstring."""
-    usable = (gpu_memory_gb * 1e9 - RESERVED_BYTES) * USABLE_FRACTION - pixels * PIXEL_BYTES
-    per_gaussian = PARAMETER_BYTES + RASTER_BYTES * pixels / REFERENCE_PIXELS
-    return max(0, int(usable // per_gaussian))
+    available = gpu_memory_gb * 1e9 - RESERVED_BYTES
+    slope = PARAMETER_BYTES + STEADY_RASTER_BYTES * pixels / BURST_REFERENCE_PIXELS
+    slope += view_burst_bytes(1, pixels)
+    intercept = pixels * STEADY_PIXEL_BYTES
+    # The larger of measured fragmentation and the historical one-third margin.
+    usable = min(available - FRAGMENTATION_BYTES, available * USABLE_FRACTION)
+    burst_cap = max(0, int((usable - intercept) // slope))
+    # Never loosen the pre-burst auto model at any tier/resolution.
+    legacy_slope = PARAMETER_BYTES + RASTER_BYTES * pixels / REFERENCE_PIXELS
+    legacy_cap = max(0, int((available * USABLE_FRACTION - pixels * PIXEL_BYTES) // legacy_slope))
+    return min(burst_cap, legacy_cap)
 
 
 def schedule_factor(cap: int) -> float:

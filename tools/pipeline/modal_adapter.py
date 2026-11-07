@@ -214,7 +214,7 @@ CPU_TIERS: Mapping[str, tuple[float, int]] = {
 #: `tests/test_modal_image.py` holds the two to each other), and says why they are
 #: reserved: the trainer is CPU-fed, and a GPU function that reserves nothing gets 0.125
 #: of a core. Here because the reservation is billed, and `rate` prices it.
-GPU_RESERVATION: tuple[float, int] = (2.0, 8192)
+GPU_RESERVATION: tuple[float, int] = (2.0, 16384)
 
 
 def reservation_rate(tier: str) -> Rate | None:

@@ -108,13 +108,13 @@ RETRIES = 0
 #: `remoteHost` (tools/pipeline/host.py) now says which it was on the next run: the cores
 #: a call got, the cgroup's throttling and pressure, the GPU's utilisation and clock.
 #: Modal bills CPU and memory at max(reserved, used), so reserving them costs at most:
-#: 2 x $0.0472 + 8 GiB x $0.0080 = $0.158 an hour when the trainer uses less, nothing
+#: 2 x $0.0472 + 16 GiB x $0.0080 = $0.222 an hour when the trainer uses less, nothing
 #: extra when it uses more (the L4 itself is $0.80). The limit stays soft: a quiet host
 #: still lets the call burst above it. That reservation is priced into every GPU call's
 #: `costUsd` (`modal_adapter.GPU_RESERVATION`, which `tests/test_modal_image.py` holds
 #: to these two: change one and change the other).
 GPU_CPU_CORES = 2.0
-GPU_MEMORY_MIB = 8192
+GPU_MEMORY_MIB = 16384
 
 #: Thread pools sized to that reservation rather than to `os.cpu_count()`, which in a
 #: container is the *host's* cores (dozens): OpenMP, MKL, OpenBLAS and OpenCV would
@@ -195,6 +195,8 @@ image = (
     .add_local_dir(LOCAL_PIPELINE, PIPELINE_DIR, ignore=_IGNORE, copy=True)
     .add_local_file(HERE / "check_trainer.py", "/opt/twin/check_trainer.py", copy=True)
     .run_commands(
+        # Guarded full-state resume seam, only against the pinned trainer. No GPU.
+        f"{TRAINER_PYTHON} {PIPELINE_DIR}/resume_trainer.py {GSPLAT_TRAINER}",
         # The last word before the image is accepted: does this trainer take this argv?
         f"{TRAINER_PYTHON} /opt/twin/check_trainer.py {GSPLAT_TRAINER} {PIPELINE_DIR}",
         # And does the held-out error pass import torch, gsplat and the trainer's own
@@ -354,6 +356,7 @@ class S3Transfer:
         self._bucket = bucket
         #: Object key -> (size, mtime_ns) of the file this instance last uploaded there.
         self._sent: dict[str, tuple[int, int]] = {}
+        self._modified: dict[str, float] = {}
 
     def put(self, key: str, source: Path) -> int:
         """A directory is *mirrored*: members unchanged since this instance uploaded them
@@ -403,18 +406,29 @@ class S3Transfer:
         self._forget(key)
         if self._head(key) is not None:
             target.parent.mkdir(parents=True, exist_ok=True)
-            self._client.download_file(self._bucket, key, str(target))
+            self._download(key, target)
             return target.stat().st_size
 
         def one(member: str) -> int:
             destination = target / member[len(key) + 1 :]
             destination.parent.mkdir(parents=True, exist_ok=True)
-            self._client.download_file(self._bucket, member, str(destination))
+            self._download(member, destination)
             signature = _signature(destination)
             self._sent[member] = signature
             return signature[0]
 
         return sum(_parallel(one, self._listing(f"{key}/")))
+
+    def _download(self, key: str, destination: Path) -> None:
+        import os
+
+        self._client.download_file(self._bucket, key, str(destination))
+        # Retry identity uses file metadata, not another read of every native image.
+        # Download time changes on every attempt; the object's modification time does
+        # not. Populated by HEAD (a file) or the paginated listing (a directory).
+        if key in self._modified:
+            stamp = self._modified[key]
+            os.utime(destination, (stamp, stamp))
 
     def exists(self, key: str) -> bool:
         return self._head(key) is not None or bool(self._listing(f"{key}/", limit=1))
@@ -429,7 +443,10 @@ class S3Transfer:
 
     def _head(self, key: str) -> dict[str, Any] | None:
         try:
-            return dict(self._client.head_object(Bucket=self._bucket, Key=key))
+            metadata = dict(self._client.head_object(Bucket=self._bucket, Key=key))
+            if metadata.get("LastModified") is not None:
+                self._modified[key] = metadata["LastModified"].timestamp()
+            return metadata
         except Exception:
             # A 404 is the common case and not an error: `get` asks "is this one object
             # or a directory of them?" and this is how it finds out.
@@ -446,7 +463,10 @@ class S3Transfer:
         while True:
             extra = {"ContinuationToken": token} if token else {}
             page = self._client.list_objects_v2(Bucket=self._bucket, Prefix=prefix, **extra)
-            keys.extend(entry["Key"] for entry in page.get("Contents", []))
+            for entry in page.get("Contents", []):
+                keys.append(entry["Key"])
+                if entry.get("LastModified") is not None:
+                    self._modified[entry["Key"]] = entry["LastModified"].timestamp()
             if limit is not None and keys:
                 return keys[:limit]
             token = page.get("NextContinuationToken") if page.get("IsTruncated") else None
@@ -516,6 +536,7 @@ def _run(request: dict[str, Any]) -> dict[str, Any]:
     import remote
     import stages  # noqa: F401 - registers every shipped implementation
     from cloud import StageRequest
+    from modal_adapter import CPU_TIERS
 
     imported_s = time.monotonic() - importing
     parsed = StageRequest.from_dict(request)
@@ -537,6 +558,7 @@ def _run(request: dict[str, Any]) -> dict[str, Any]:
         **started,
         "containerBootedAt": round(BOOTED_AT, 3),
         "containerCall": _CALLS[0],
+        "hostMemoryReservedGiB": CPU_TIERS.get(parsed.tier, (GPU_CPU_CORES, GPU_MEMORY_MIB))[1] / 1024,
         "remoteEnteredAt": round(entered, 3),
         "remoteImportS": round(imported_s, 2),
         "remoteFinishedAt": round(time.time(), 3),

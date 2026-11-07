@@ -589,3 +589,28 @@ def test_on_the_container_s_clock_the_queue_is_beside_the_bill_not_in_it() -> No
     additive = {k: v for k, v in phases.items() if k not in ("queue", "bgSync", "collect", "cold")}
     assert sum(additive.values()) == pytest.approx(1_700.0)
     assert phases["rest"] == pytest.approx(1_700.0 - 10 - 2 - 18 - 1_650 - 4.5)
+
+
+def test_failed_part_retry_fetches_its_synced_trainer_state_before_replacing_the_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workdir, adapter, runner = setup(tmp_path, ["p0"], parallel=1, preempt=["p0"])
+    original = adapter.submit
+    submitted = 0
+
+    def submit(request: StageRequest) -> RemoteHandle:
+        nonlocal submitted
+        role, _ = fanout_role(request.params)
+        if role == "part":
+            path = tmp_path / "bucket" / request.checkpoint_key / "resume" / "lane" / "state.pt"
+            if submitted == 0:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"synced optimizer state")
+            else:
+                assert path.read_bytes() == b"synced optimizer state"
+            submitted += 1
+        return original(request)
+
+    monkeypatch.setattr(adapter, "submit", submit)
+    run(workdir, runner)
+    assert submitted == 2
