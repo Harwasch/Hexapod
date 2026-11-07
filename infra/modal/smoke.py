@@ -102,7 +102,17 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "id": "train",
                     "impl": "gsplat",
-                    "params": {"iterations": args.iterations},
+                    # Exercise held-out eval and an exact step count independently of
+                    # production's all-frame, frame-scaled schedule (recipe v16).
+                    "params": {
+                        "iterations": args.iterations,
+                        "test_every": 8,
+                        "schedule_full_at": 0,
+                        "schedule_growth": "off",
+                        "schedule_min_large_steps": 0,
+                        "converge": False,
+                        "batch_size": 1,
+                    },
                     "gpu": {"tier": args.tier, "preemptible": False},
                 },
                 {
@@ -154,6 +164,7 @@ def main(argv: list[str] | None = None) -> int:
     trained = gaussians.read_splat(workdir.out_dir("train") / "trained.ply")
     ledger = AttemptLedger.read(workdir.attempts_path("train"))
     tileset = workdir.out_dir("package") / "splat" / "tileset.json"
+    resume_checkpoints = sorted(workdir.checkpoint_dir("train").rglob("*.pt"))
     summary = {
         "runId": run_id,
         "tier": args.tier,
@@ -163,6 +174,8 @@ def main(argv: list[str] | None = None) -> int:
         "psnr": metrics.get("psnr"),
         "ssim": metrics.get("ssim"),
         "metricsSource": metrics.get("source"),
+        "gsplatVersion": metrics.get("gsplatVersion"),
+        "resumeCheckpoints": [workdir.relative(path) for path in resume_checkpoints],
         "attempts": [entry.to_dict() for entry in ledger.entries],
         "billedSeconds": round(ledger.billed_s, 1),
         "usd": ledger.usd,
@@ -186,6 +199,12 @@ def main(argv: list[str] | None = None) -> int:
         problems.append(f"no PSNR read from gsplat's stats file: {metrics}")
     if metrics.get("iterations") != args.iterations:
         problems.append(f"trained {metrics.get('iterations')} of {args.iterations} steps")
+    if metrics.get("gsplatVersion") != "1.6.0":
+        problems.append(f"expected gsplat 1.6.0, got {metrics.get('gsplatVersion')!r}")
+    if resume_checkpoints:
+        problems.append(
+            f"resume checkpoints remain after successful training: {resume_checkpoints}"
+        )
     if not tileset.is_file():
         problems.append("the placed splat did not package")
     for problem in problems:
