@@ -649,8 +649,13 @@ and the summary is printed in Modal logs. This remote wrapper has not yet been r
 4. It runs a smoke (`infra/modal/smoke.py`). Forty 640×480 renders of the committed
    synthetic tree go through COLMAP on Modal's `cpu4`, then 500 gsplat steps on a Modal L4
    through `CloudRunner` → `ModalAdapter` → R2, then georeference, placement and
-   packaging. It asserts that gaussians came back, that PSNR was read from gsplat's own
-   stats file, that every step ran, and that a tileset was written. It deletes its
+   packaging. Smoke-only parameters hold out every eighth frame for evaluation and disable
+   frame-based schedule scaling, growth and convergence so `--iterations` is the exact
+   step count; production still trains on every frame with its frame-scaled schedule.
+   It asserts that gaussians came back, that PSNR was read from gsplat's own stats file,
+   that every step ran, that `gsplatVersion` is `1.6.0`, that no `.pt` resume state remains
+   in the train stage's checkpoint directory after success, and that a tileset was written.
+   The remote coordinator uses these same parameters and assertions. It deletes its
    `runs/<run id>/` keys afterwards.
 
 It runs on a push to `living-models` that touches `infra/modal/**`, the
