@@ -357,6 +357,9 @@ def test_train_params_keep_the_scenes_lpips_net_under_any_switches() -> None:
     params = benchmark.train_params(truck, "recipe", {"pose_opt": True})
     assert params == {
         "data_factor": 1,
+        "test_every": 8,
+        "schedule_scale": 1.0,
+        "schedule_min_large_steps": 0,
         "extra_args": ["--lpips_net", "vgg"],
         "iterations": 30_000,
         "strategy": "mcmc",
@@ -369,11 +372,11 @@ def test_train_params_keep_the_scenes_lpips_net_under_any_switches() -> None:
     assert benchmark.train_params(truck, "recipe-500k")["cap_max"] == 500_000
 
 
-def test_the_recipes_budget_and_stopping_rule_are_what_the_recipe_file_says() -> None:
-    """`recipe` stands for photo-reconstruct's train stage; it must not drift from it."""
+def test_the_historical_benchmark_retains_the_recipes_capacity_settings() -> None:
+    """The historical benchmark keeps its own holdout and schedule for comparison."""
     train = next(s for s in load_recipe("photo-reconstruct").stages if s.id == "train").params
     config = benchmark.CONFIGS["recipe"]
-    for key in ("iterations", "strategy", "cap_max", "budget_max", "converge"):
+    for key in ("iterations", "strategy", "cap_max", "budget_max"):
         assert config.get(key) == train.get(key), key
 
 

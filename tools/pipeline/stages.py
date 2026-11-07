@@ -379,8 +379,8 @@ def ingest_splat(ctx: StageContext) -> StageOutcome:
     )
 
 
-#: `select:` values this stage accepts. There is deliberately no threshold among them.
-SELECT_MODES: tuple[str, ...] = ("viewpoint", "sharpness", "sharpness-windowed", "all")
+#: Selection modes. Only `usable` applies a near-duplicate similarity threshold.
+SELECT_MODES: tuple[str, ...] = ("usable", "viewpoint", "sharpness", "sharpness-windowed", "all")
 
 
 @stage_impl(
@@ -407,7 +407,8 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
 
     Which frames, by `select`:
 
-    * `viewpoint` (the recipe's, for a video): candidates at `fps` (bounded by
+    * `usable` (the production default): native source frames, duplicate removal only.
+    * `viewpoint` (opt-in, for a video): candidates at `fps` (bounded by
       `max_candidates` over the clip, and by the clip's own rate), cut into windows of
       equal camera motion -- `overlap` of the view, `parallax` of the long side -- and
       the sharpest candidate of each kept (`keyframes.py` has the method and the
@@ -437,8 +438,9 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     upload = ctx.input("upload")
     source = video.pick_source(upload)
     fps = float(ctx.param("fps", 4))
-    keep = int(ctx.param("keep", 400))
-    select = str(ctx.param("select", "sharpness"))
+    keep_limit = _optional_int(ctx.param("keep"))
+    keep = keep_limit or 0
+    select = str(ctx.param("select", "usable"))
     # A video's frames are matched sequentially (linear in frames), a photo set's
     # exhaustively (quadratic), so a video can afford more of them: `keep_video`, when
     # set, is a video's cap -- under `viewpoint`, its ceiling -- and `keep` stays the
@@ -492,7 +494,13 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
                 ctx, source.path, meta, base=base, ceiling=size_ceiling, tonemap=tonemap
             )
         max_side = size.max_side if size is not None else _fixed_side(size_rule)
-        rate = _candidate_rate(ctx, fps, meta) if applied == "viewpoint" else fps
+        rate = (
+            None
+            if applied == "usable"
+            else _candidate_rate(ctx, fps, meta)
+            if applied == "viewpoint"
+            else fps
+        )
         extracted = ctx.work_dir / "extracted"
         extracted.mkdir(parents=True, exist_ok=True)
         ctx.run(
@@ -518,9 +526,21 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     if size is not None:
         ctx.log(f"frame size: {size.max_side} px -- {size.reason}")
 
+    # Zero/absent is unlimited, including the legacy selection modes.
+    keep = keep or len(candidates)
+    chosen: Sequence[int]
+    selection_counts: dict[str, int] = {}
     viewpoint: dict[str, object] | None = None
     segmentation: keyframes.Segmentation | None = None
-    if applied == "viewpoint":
+    if applied == "usable":
+        chosen, selection_counts = video.usable_frames(
+            candidates,
+            dedupe=float(ctx.param("dedupe_mae", 1.0)),
+            ordered=source.is_video,
+            cap=keep,
+        )
+        scores = []
+    elif applied == "viewpoint":
         overlap = float(ctx.param("overlap", 0.9))
         parallax = float(ctx.param("parallax", 0.005))
         if not 0.0 < overlap < 1.0 or parallax <= 0.0:
@@ -558,6 +578,8 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         max_side=max_side,
     )
 
+    if applied == "usable" and source.is_video:
+        rate = meta.fps  # Native decode has no fps filter; offsets are nominal source time.
     records = _frame_records(source, upload, candidates, chosen, written, meta, rate)
     records, linear = _measure_exposure(records, written)
     thresholds = _exposure_thresholds(ctx)
@@ -613,14 +635,15 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
         "checksum": _checksum_of_source(source),
         "frames": {
             "candidates": len(candidates),
+            "selectionCounts": selection_counts,
             "kept": len(written),
             # The rate candidates were taken at: `fps`, or less when `max_candidates`
             # over the clip's length (or the clip's own rate) bounded it.
             "fps": rate,
-            "fpsRequested": fps if source.is_video else None,
+            "fpsRequested": fps if source.is_video and applied != "usable" else None,
             "select": applied,
             "selectRequested": select,
-            "keep": keep,
+            "keep": keep_limit if not source.is_video else keep_video or keep_limit,
             "width": first[0],
             "height": first[1],
             "maxSide": max_side,
@@ -1774,11 +1797,11 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     lists the four things that check corrected. `tests/test_train_gsplat.py` drives the
     stage with a stand-in trainer and says so in its name.
 
-    **A second attempt starts over.** v1.5.3's trainer cannot resume -- its `--ckpt`
-    means "evaluate this checkpoint and do not train" -- so nothing here pretends to: the
-    result directory is in `work/`, which the executor clears between attempts, and the
-    log says the restart out loud. That makes a preemption cost the attempt, which on
-    Modal is rare: its client retries a reclaimed input eight times below this seam.
+    Full-state checkpoints in checkpoint/resume/ survive retry/pre-emption. The pinned
+    trainer is extended at image build (resume_trainer.py), and --resume restores plain
+    tensor/data state; upstream --ckpt remains evaluation-only. Scratch exports stay in
+    work/ and are rebuilt. Object-storage synchronization is outside the training loop;
+    failed checkpoint writes log the error and do not fail training.
 
     The output is `trained.ply`, **in COLMAP's frame** (`--no-normalize-world-space`), not
     `canonical.ply`: turning it into east/north/up needs the georeference, which comes
@@ -1856,8 +1879,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
       at this degree (`holdout_error.py --sh-degree`), so `quality` gates what ships. 0 is
       every capture before this existed: the DC colour only.
 
-    `psnr`, `ssim` and `lpips` are all measured on gsplat's held-out `val` split -- every
-    8th registered frame -- and `train_metrics.json` says so and how many frames that is.
+    With `test_every: 0` (default), every registered frame trains and validation scores
+    are unavailable. Positive test_every is a bench opt-in for held-out measurements.
     """
     variant = str(ctx.param("variant", "3dgs"))
     if variant != "3dgs":
@@ -1905,17 +1928,19 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     # recipe leaves `schedule_full_at` out, which keeps the full one -- or unless the run
     # names its own `schedule_scale`, which wins over both.
     images = sum(1 for path in (dataset / "images").iterdir() if path.is_file())
-    full_at = _optional_int(ctx.param("schedule_full_at"))
-    computed = (
-        training.schedule_scale(
-            images, full_at=full_at, floor=float(ctx.param("schedule_floor", 0.25))
-        )
-        if full_at
-        else 1.0
+    images = _registered_count(poses, images)
+    full_at = int(ctx.param("schedule_full_at", 60) or 0)
+    computed = training.frame_schedule(
+        images, {k: v for k, v in ctx.params.items() if k != "schedule_scale"}
     )
     requested_scale = _optional_float(ctx.param("schedule_scale"))
     steps_scaler = (
-        computed if requested_scale is None else training.check_schedule_scale(requested_scale)
+        computed
+        if requested_scale is None
+        else max(
+            training.check_schedule_scale(requested_scale),
+            training.large_scan_floor(images, ctx.params) / full_iterations,
+        )
     )
     iterations = training.scaled_steps(full_iterations, steps_scaler)
     ctx.log(
@@ -1927,6 +1952,12 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             else f" (schedule_scale given; the capture's own would be {computed:g})"
         )
     )
+    test_every = int(ctx.param("test_every", 0))
+    production_extra = training.train_extra(ctx.params, ctx.checkpoint_dir / "resume")
+    if int(ctx.param("checkpoint_every", 5000)):
+        production_extra += ["--checkpoint-token", training.checkpoint_token(ctx.params, dataset)]
+    if not ctx.param("streaming_export", True):
+        production_extra.append("--no-streaming-export")
     train_size: tuple[int, int] | None = None
     if max_side is not None:
         first = min(p for p in (dataset / "images").iterdir() if p.is_file())
@@ -1941,6 +1972,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     # trainer will really read its frames; an integer is used as given.
     requested_cap = gaussian_budget.parse_cap(ctx.param("cap_max"))
     frame_size, pixel_scale = _training_frame(dataset, data_factor)
+    if frame_size is not None:
+        train_size = frame_size
     budgeting = time.monotonic()
     budget = gaussian_budget.plan(
         requested_cap,
@@ -2022,8 +2055,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
                     "app_opt": _optional_bool(ctx.param("app_opt"), "app_opt"),
                     "bilateral_grid": _optional_bool(ctx.param("bilateral_grid"), "bilateral_grid"),
                 },
-                extra=tuple(str(value) for value in (ctx.param("extra_args") or [])),
-                converge=_optional_bool(ctx.param("converge"), "converge"),
+                extra=tuple(production_extra + [str(v) for v in (ctx.param("extra_args") or [])]),
+                converge=test_every > 0 and _optional_bool(ctx.param("converge"), "converge"),
                 rule=convergence.Rule(
                     every=int(ctx.param("converge_every", convergence.DEFAULT_EVERY)),
                     window=int(ctx.param("converge_window", convergence.DEFAULT_WINDOW)),
@@ -2065,9 +2098,16 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     seeded, steps_scaler, iterations = _seed_from_preview(
         ctx, poses, dataset, roi, steps_scaler, full_iterations, cap_max
     )
+    floor_scale = training.large_scan_floor(images, ctx.params) / full_iterations
+    steps_scaler = max(steps_scaler, floor_scale)
+    iterations = training.scaled_steps(full_iterations, steps_scaler)
     # Convergence: a held-out curve after densification, a stop when it is flat, and --
     # because the tail can now end early -- a longer maximum for a bigger budget.
-    converge = _optional_bool(ctx.param("converge"), "converge")
+    converge = test_every > 0 and _optional_bool(ctx.param("converge"), "converge")
+    if test_every == 0 and ctx.param("converge"):
+        ctx.log(
+            "gsplat: no held-out convergence with all frames training; running the full schedule"
+        )
     rule = convergence.Rule(
         every=int(ctx.param("converge_every", convergence.DEFAULT_EVERY)),
         window=int(ctx.param("converge_window", convergence.DEFAULT_WINDOW)),
@@ -2116,22 +2156,20 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             )
         )
     registered = _registered_count(poses, images)
-    train_frames, val_frames = training.held_out_split(registered)
+    train_frames, val_frames = training.held_out_split(registered, test_every)
     ctx.log(
         f"gsplat: {registered} posed frames -> {train_frames} train, {val_frames} held out "
-        f"(every {training.TEST_EVERY}th) for psnr/ssim/lpips"
+        f"(test_every {test_every}); held-out scores unavailable when zero"
     )
-    # In work/, not checkpoint/: see the docstring. Nothing can resume from it.
+    # Scratch exports stay in work/; full-state recovery points live in checkpoint/resume/.
     result = ctx.work_dir / "gsplat"
     if result.exists():
         shutil.rmtree(result)
     result.mkdir(parents=True)
-    if ctx.attempt > 1:
-        ctx.log(
-            f"attempt {ctx.attempt}: training restarts from step 0 -- gsplat "
-            f"{training.GSPLAT_VERSION}'s simple_trainer.py has no resume (its --ckpt "
-            f"evaluates a checkpoint instead of continuing one)"
-        )
+    import resume_trainer
+
+    resumed_step = resume_trainer.resume_step(production_extra, result)
+    ctx.log(f"gsplat: resume from step {resumed_step or 0}; checkpoints in stage storage")
     if ctx.has_input(MASKS.name):
         ctx.log(
             "masks were produced by an earlier stage and this trainer has no mask input; "
@@ -2172,15 +2210,17 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         live_steps=live_steps,
         eval_steps=extra_evals,
         batch_size=batch_size,
-        extra=[str(value) for value in (ctx.param("extra_args") or [])],
+        extra=production_extra + [str(value) for value in (ctx.param("extra_args") or [])],
     )
-    if extra_evals:
+    if extra_evals or test_every == 0 or ctx.param("streaming_export", True):
         argv = training.converge_argv(
             argv,
             script=_optional_path(ctx.param("converge_script")) or CONVERGE_SCRIPT,
             every=rule.every,
             window=rule.window,
             min_gain_db=rule.min_gain_db,
+            enabled=bool(extra_evals),
+            min_steps=math.ceil(training.large_scan_floor(images, ctx.params) / batch_size),
         )
     with live.SplatWatch(
         result / "ply",
@@ -2225,7 +2265,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     # is written, and unable to fail the stage: `holdout.measure` says why.
     held_out = holdout.measure(
         ctx,
-        enabled=_optional_bool(ctx.param("holdout_error"), "holdout_error"),
+        enabled=test_every > 0 and _optional_bool(ctx.param("holdout_error"), "holdout_error"),
         python=training.trainer_python(ctx.param("python")),
         trainer=trainer,
         dataset=dataset,
@@ -2233,7 +2273,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         rows=trained_count,
         keep=cropped_rows,
         data_factor=data_factor,
-        test_every=training.TEST_EVERY,
+        test_every=test_every,
         antialiased=antialiased,
         script=_optional_path(ctx.param("holdout_script")),
         budget_s=float(ctx.param("holdout_budget_s", holdout.DEFAULT_BUDGET_S)),
@@ -2246,11 +2286,13 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         ctx.log_path.read_text(encoding="utf-8", errors="replace"),
         trainer=f"gsplat:{trainer.name}",
         requested_iterations=iterations,
-        resumed_from_step=None,
+        resumed_from_step=resumed_step,
         attempts=ctx.attempt,
         registered=registered,
     )
     document = metrics_document.to_dict()
+    if test_every == 0:
+        training.all_frame_metrics(document, registered)
     # Read off the PLY rather than trusted from the stats file: this is the count the
     # artifact actually has, and the two disagreeing is worth being able to see.
     document["gaussiansInPly"] = in_ply
@@ -2260,6 +2302,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     # capture can be compared without reading their recipes.
     document["settings"] = {
         "strategy": strategy,
+        "testEvery": test_every,
+        "checkpointEvery": int(ctx.param("checkpoint_every", 5000)),
         "capMax": cap_max,
         "capMaxRequested": requested_cap,
         "scheduleScale": steps_scaler,
@@ -2335,7 +2379,9 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         "scheduleScale": steps_scaler,
         "metricsSource": metrics_document.source,
         # Quality below is on the held-out split, never the training frames.
-        "metricsSplit": f"val: every {training.TEST_EVERY}th frame",
+        "metricsSplit": f"val: every {test_every}th frame"
+        if test_every
+        else "unavailable: all frames trained",
         "valFrames": val_frames,
         "trainFrames": train_frames,
         "initFrom": "sfm" if seeded is None else "preview",
@@ -2367,7 +2413,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         ("ccSsim", metrics_document.cc_ssim),
         ("ccLpips", metrics_document.cc_lpips),
     ):
-        if value is not None:
+        if value is not None and (test_every or name == "trainSeconds"):
             metrics[name] = value
     if max_side is not None:
         metrics["trainMaxSide"] = max_side
@@ -2415,8 +2461,13 @@ def _block_schedule(ctx: StageContext, steps_scaler: float) -> float:
     preview's seed, so `init_from: preview` gives it the same `init_schedule_scale`
     (init_seed.py) the one-block Refine it is compared with gets."""
     if str(ctx.param("init_from", "sfm")) == "preview":
-        return training.check_schedule_scale(
+        seeded_scale = training.check_schedule_scale(
             init_seed.schedule_for(_optional_float(ctx.param("init_schedule_scale")))
+        )
+        return (
+            max(seeded_scale, steps_scaler)
+            if ctx.param("init_schedule_scale") is None
+            else seeded_scale
         )
     return steps_scaler
 
@@ -2507,7 +2558,8 @@ def _train_in_blocks(
     run = blocks.train(ctx, settings, plan, ctx.output(TRAINED_PLY.name), phases=call)
     shipped = harmonics.degree_of(splat_io.read_layout(ctx.output(TRAINED_PLY.name)).properties)
     registered = _registered_count(settings.poses, images)
-    train_frames, val_frames = training.held_out_split(registered)
+    test_every = int(ctx.param("test_every", 0))
+    train_frames, val_frames = training.held_out_split(registered, test_every)
     split = training.TrainMetrics(
         trainer=f"gsplat:{settings.trainer.name}", split=(train_frames, val_frames)
     ).to_dict()
@@ -2516,6 +2568,8 @@ def _train_in_blocks(
     # eval() -- the numbers a single run reports, so the two are comparable.
     document: dict[str, Any] = dict(evaluated) if isinstance(evaluated, dict) else dict(split)
     document["heldOut"] = split["heldOut"]
+    if test_every == 0:
+        training.all_frame_metrics(document, registered)
     document["attempts"] = ctx.attempt
     document["gaussians"] = run.gaussians
     document["gaussiansInPly"] = run.gaussians
@@ -2579,7 +2633,9 @@ def _train_in_blocks(
         ),
         "scheduleScale": settings.steps_scaler,
         "metricsSource": "merged-eval" if isinstance(evaluated, dict) else "none",
-        "metricsSplit": f"val: every {training.TEST_EVERY}th frame",
+        "metricsSplit": f"val: every {test_every}th frame"
+        if test_every
+        else "unavailable: all frames trained",
         "valFrames": val_frames,
         "trainFrames": train_frames,
         "initFrom": "prior",
@@ -2616,7 +2672,8 @@ def _training_frame(dataset: Path, data_factor: int) -> tuple[tuple[int, int] | 
 
     As v1.5.3's parser decides it: the first registered image by name against its own
     COLMAP camera, one ratio for every camera, and `data_factor` dividing it (the parser
-    reads `images_<factor>/`). So frames normalize kept at 2,400 px, or shrank to the
+    reads `images_<factor>/`). Memory uses the largest registered camera at that ratio;
+    footprint scaling retains the reference ratio. So frames kept at 2,400 px, or shrank to the
     preview's 800, are budgeted -- and their memory ceiling modelled -- at that size.
     (None, None) when either side cannot be read, a hand-made or a test's placeholder
     dataset, which the budget reports as a fallback.
@@ -2631,7 +2688,16 @@ def _training_frame(dataset: Path, data_factor: int) -> tuple[tuple[int, int] | 
                 width, height = _image_size(path)
                 factor = max(1, data_factor)
                 size = (max(1, round(width / factor)), max(1, round(height / factor)))
-                return size, size[0] / camera.width
+                pixel_scale = size[0] / camera.width
+                used = {view.camera_id for view in model.images}
+                # Preserve the parser's one intrinsics ratio, but admit memory for the
+                # largest registered view. Native photo sets need not share a resolution.
+                sizes = [size] + [
+                    (max(1, round(c.width * pixel_scale)), max(1, round(c.height * pixel_scale)))
+                    for c in model.cameras
+                    if c.id in used and c.width > 0 and c.height > 0
+                ]
+                return max(sizes, key=lambda value: value[0] * value[1]), pixel_scale
     except (OSError, ValueError, KeyError, IndexError, struct.error):
         return None, None
     return None, None
@@ -2727,6 +2793,8 @@ def _seed_from_preview(
     scaler = training.check_schedule_scale(
         init_seed.schedule_for(_optional_float(ctx.param("init_schedule_scale")))
     )
+    if ctx.param("init_schedule_scale") is None:
+        scaler = max(scaler, steps_scaler)
     iterations = training.scaled_steps(full_iterations, scaler)
     ctx.log(
         f"gsplat: init_from=preview: {applied.seeded} of the preview's {seed.count} visible "

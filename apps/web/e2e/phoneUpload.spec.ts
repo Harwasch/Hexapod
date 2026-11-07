@@ -827,7 +827,7 @@ test.describe("the phone upload page", () => {
     // (the preview's, in the preview's own camera frame) and the mode.
     expect(refined[0]?.body).toEqual({
       params: {
-        normalize: { max_side: "auto" },
+        normalize: {},
         train: { schedule_floor: 1, density_scale: 2 },
         quality: { bar: "strict" },
       },

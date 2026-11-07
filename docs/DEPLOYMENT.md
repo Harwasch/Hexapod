@@ -551,8 +551,32 @@ first remote stage, on the function lookup (not observed). Lane 1 is unaffected 
 
 ### Deploying it, and proving it
 
+**Full-data release requires Harrison's OK before deployment.** Deploy neither Modal nor
+Fly from this edit-only port. Claude reviews and opens the draft PR. Release the
+pipeline worker/recipe, the phone web bundle (native size by default), and the Modal image:
+the latter adds the guarded resume source
+extension, no-holdout Dataset adapter, streamed PLY export and 16 GiB GPU host reservation.
+The image's CPU acceptance check parses the checkpoint CLI and verifies all-frame Dataset
+indices and byte-identical streamed SH3 payloads. These local checks do not prove CUDA,
+provider pre-emption or object-storage throughput; use the existing non-production smoke
+path below after approval. Keep the source-compile cache: a changed pipeline layer still
+runs acceptance checks, while a cold CUDA rebuild can take over an hour (details below).
+A worker with new default checkpoint flags requires this new training image.
+
+At surveyed rates, 2 cores + 16 GiB adds $0.222192/hour beside a GPU; L4 total is
+$1.021392/hour, $0.063936/hour above the old 8 GiB reservation. A beach-sized scan uses
+all 2,036 registered native frames and at least 60k equivalent steps; auto block splitting
+can add passes under the new ~6.72M native L4 ceiling. The campaign's single-GPU full-data
+run measured 157 minutes / $2.73; it is not a quote for the new block/cap/checkpoint path.
+The six-hour function timeout and existing retry limits remain in force. Single-call
+pre-emption and immediate block-call retries resume from the last synced 5k checkpoint.
+Recovery of unfinished blocks across whole-stage retries and automatic timeout relaunch
+remain deferred; completed blocks already survive.
+
 The image uses gsplat source commit `512d366b67073d77ca099ede742683c165dfc23b`,
-torch 2.9.1+cu128 and CUDA 12.8.1, with the existing recipe version and defaults.
+torch 2.9.1+cu128 and CUDA 12.8.1. Recipe v16 changes production data defaults;
+[full data by default](../tools/pipeline/README.md#full-data-by-default-recipe-v16) records
+the measured basis, settings, cost effects and recovery boundaries.
 PR #116 measured Beach on one seed: baseline A (1.5.3) **25.17/0.753/0.301**
 PSNR/SSIM/LPIPS, **98 min, $1.57**, versus upgraded plain **25.34/0.755/0.295**,
 **75 min, $1.23**. The +0.17 dB is within Spool's 0.22 dB seed spread; quality improvement
@@ -736,9 +760,14 @@ A Lane 2 run in flight holds several things on the worker's volume at once:
 When a run ends — finished, failed or cancelled — the worker deletes `inputs/` and every
 stage's `work/` (`WorkerConfig.tidy_finished_runs`, on by default). That leaves `out/`,
 `step.json` and `checkpoint/`, which is everything "retry from this stage" reads: a few
-hundred MB per Lane 2 run. **20 GB is therefore enough for one capture of up to about 8 GB
-in flight, with room for dozens of finished runs.** Past that, run `fly volumes extend`,
-which needs no redeploy.
+hundred MB per legacy Lane 2 run. **The old 20 GB / 8 GB-upload sizing is superseded
+for full-data runs:** native extracted frames, PLYs and two full-state checkpoints can
+consume most of that volume for one scan. Near the native L4 cap, the checkpoint pair
+alone can occupy roughly 10 GB. Account for uploads, extracted frames, checkpoints and
+retained completed runs before the approved rollout; extend the worker volume if needed
+(`fly volumes extend`, no redeploy). The existing 5 GB claim-time guard is not a forecast
+of in-flight peak disk use. Checkpoint transfers stream to disk on the worker; they do
+not load whole multi-GB state into its 2 GB RAM.
 
 The worker also checks before it claims. Below `WORKER_MIN_FREE_GB` (5) free it evicts
 the workdirs of runs that ended more than `WORKER_EVICT_AFTER_DAYS` (7) ago, oldest
@@ -1741,8 +1770,8 @@ errors logged and dropped). `fly.toml`'s `[[restart]]` restarts a worker that di
 **What a job may cost.** `WORKER_JOB_COST_CAP_USD` (default 20, 0 turns it off) is a
 ceiling on one job's `costUsd`, across stages and attempts: no GPU call starts past it, a
 running one is cancelled when its cost would go over it, and the job is dead-lettered
-saying so. `costUsd` on Modal includes the 2 cores and 8 GiB each GPU function reserves
-(+$0.158/h on an L4); it does not include a container's idle minute after its last call.
+saying so. `costUsd` on Modal includes the 2 cores and 16 GiB each GPU function reserves
+(+$0.222192/h on an L4); it does not include a container's idle minute after its last call.
 
 ## Handover
 

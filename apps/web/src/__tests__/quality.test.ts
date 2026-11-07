@@ -159,15 +159,22 @@ describe("whether Refine is the next step", () => {
 });
 
 describe("preview and refine parameters", () => {
+  it("inherits native size and all usable frames for a default full-quality run", () => {
+    expect(paramsFor("photo-reconstruct", DEFAULTS)).toEqual({
+      normalize: {},
+      quality: { bar: "strict" },
+    });
+  });
+
   it("a preview trains briefly and keeps the phone's frames and bar", () => {
     const options = { ...DEFAULTS, quality: "best" as const, bar: "strict" as const };
     expect(previewParamsFor("photo-reconstruct", options)).toEqual({
-      normalize: { max_side: "auto" },
+      normalize: {},
       train: { schedule_scale: 0.1, cap_max: 200000, train_max_side: 800 },
       quality: { mode: "preview", bar: "strict" },
     });
     expect(paramsFor("photo-reconstruct", options)).toEqual({
-      normalize: { max_side: "auto" },
+      normalize: {},
       train: { schedule_floor: 1, density_scale: 2 },
       quality: { bar: "strict" },
     });
@@ -175,7 +182,11 @@ describe("preview and refine parameters", () => {
 
   it("an explicit photo size and frame rate are sent as numbers", () => {
     const options = { ...DEFAULTS, photoSize: "2400" as const, videoFps: "4" as const };
-    expect(paramsFor("photo-reconstruct", options).normalize).toEqual({ max_side: 2400, fps: 4 });
+    expect(paramsFor("photo-reconstruct", options).normalize).toEqual({
+      max_side: 2400,
+      fps: 4,
+      select: "viewpoint",
+    });
   });
 
   it("sends nothing for packaging: Detail is this phone's viewing budget, not a cut", () => {

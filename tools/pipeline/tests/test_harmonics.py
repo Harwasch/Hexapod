@@ -444,6 +444,9 @@ def _seed(workdir: Workdir) -> None:
 def _lane(sh_degree: int | None, *, holdout_error: bool = True) -> list[dict[str, object]]:
     train: dict[str, object] = {
         "iterations": 300,
+        "test_every": 8,
+        "checkpoint_every": 0,
+        "schedule_scale": 1.0,
         "trainer": str(STAND_IN),
         "python": sys.executable,
         # gsplat's own flag: the stand-in exports degree 3, as the real trainer always does.

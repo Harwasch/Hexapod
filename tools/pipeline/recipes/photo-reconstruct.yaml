@@ -9,7 +9,7 @@
 # `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
 # run `none` would be billing a GPU to do nothing.
 name: photo-reconstruct
-version: 15
+version: 16
 description: Reconstruct a splat from a raw capture, then package and register it.
 
 # `site_context` is what the worker knows about the site before the run: its reference
@@ -22,56 +22,17 @@ stages:
   - id: normalize
     impl: ffmpeg_frames
     params:
-      # A video's keyframes follow how far the camera moved, not how long the clip ran
-      # (`keyframes.py`). Frames were the one lever that beat run-to-run noise on the
-      # spool capture (experiments/run_variants.py, 2026-09-27): 87 -> 173 frames gave
-      # LPIPS 0.174 -> 0.148 and kept 41% against 38%, where no training switch
-      # (antialiased, depth loss, bilateral grid, pose opt, opacity reg) did. By time,
-      # a two-minute walk was thinned to ~1.5 frames a second and a slow close-up kept
-      # near-duplicates; by motion, each gets what it covered.
-      select: viewpoint
-      # Under `viewpoint`, the rate *candidates* are taken at -- the densest keyframes
-      # can ever be -- and each motion window keeps its sharpest candidate, so it is
-      # above the 8 fps that measured best. Bounded by the clip's own rate and by
-      # `max_candidates` over its length (1200: two minutes at 10 fps; every candidate
-      # is decoded, scored and tracked on the worker, ~50 ms each).
-      fps: 15
-      max_candidates: 1200
-      # One window's budget of motion; each window keeps one frame, and neighbouring
-      # keyframes are typically one window apart and at most two.
-      #   overlap 0.9: a window closes when 10% of the view has changed, so neighbours
-      #     share ~90% of it and never less than ~80% -- what SfM asks of sequential
-      #     neighbours, met in the worst case, with the typical case denser for training.
-      #   parallax 0.005: of the long side, ~1 deg of change of viewpoint round a subject
-      #     whose depth is +/-0.4 of the distance to it (checked on Tanks and Temples'
-      #     truck: 251 frames round it, 1.43 deg apart, measured 0.73% each) -- ~360
-      #     keyframes a full orbit, the density the spool's better 8 fps run had.
-      overlap: 0.9
-      parallax: 0.005
-      # A photo set's cap, and what `viewpoint` falls back to for one: it has no order to
-      # measure motion along, so photos keep top-K by sharpness, windowed. 100, not 400,
-      # because a photo set is matched exhaustively, quadratic in frames: measured on 4
-      # cores (README, "Where pose runs"), 50 frames 653 s; 400 would be ~64x the
-      # matching, most of a day.
-      keep: 100
-      # A video's ceiling on keyframes -- for pose time only, not the usual limit. A
-      # video is matched sequentially, ~linear in frames: 173 frames posed in 12 min on
-      # 4 cores (~4 s a frame), so 300 is ~21 min. It binds on a long steady walk (past
-      # ~1.5 min at a walking pace); then every window is widened by the same factor,
-      # which spreads the 300 evenly by motion rather than by time. The tail it guards
-      # against is pose's exhaustive fallback (sequential registering under 80%): at the
-      # backhoe's 0.15 s a pair, 300 frames' 45k pairs would be ~2 h rather than 20 min.
-      keep_video: 300
-      # Long side, in pixels. `auto`: 1600 -- where a phone's frames hold what a splat
-      # can use, and what pose extracts at (max_image_size below) -- unless the sharpest
-      # of 8 sampled frames measurably carry detail above it over a quarter of the
-      # picture; then the source's size, at most `auto_ceiling` (`resolution.py`). 2400
-      # is ~2.25x the pixels and about twice the GPU time, so the rule is conservative
-      # and source_meta.json records its measurement. A number here, or the phone's
-      # "Photo size", overrides it.
-      max_side: auto
-      auto_base: 1600
-      auto_ceiling: 2400
+      # Full data: every decoded source frame/photo, native pixels. Only near-identical
+      # consecutive video frames (thumbnail MAE <= 1/255) and byte-identical photos
+      # are deduplicated. No blur pruning: the beach blur screen did not establish a win.
+      select: usable
+      dedupe_mae: 1.0
+      keep: null
+      keep_video: null
+      max_candidates: 0
+      max_side: null
+      # Opt-in reductions: keep/keep_video, max_side: 1600, or select: viewpoint
+      # with fps: 15 and max_candidates: 1200 restore the previous bounded path.
       # An HLG or PQ clip (an iPhone's "HDR" video) is tonemapped to 8-bit BT.709 before
       # frames are taken -- the zimg recipe in `video.TONEMAP_FILTER`; `npl=100` is not
       # tuned on any capture. Frames taken straight from HLG are washed out and flat.
@@ -104,7 +65,7 @@ stages:
       matcher: auto
       min_registered_fraction: 0.8
       # Half the stage's defaults (8192 / 2400): the same 50/50 registered, in 62% of
-      # the time. Training reads the normalized 1600 px frames.
+      # the time. Training reads native frames; only SIFT features use this cap.
       max_features: &max_features 4096
       max_image_size: &max_image_size 1600
       # SIFT from the frame's own resolution rather than COLMAP's -1 (doubled first):
@@ -226,14 +187,18 @@ stages:
   - id: train
     impl: gsplat # | opensplat | deformable3dgs
     params:
-      # The full schedule. A capture with fewer than `schedule_full_at` frames runs a
-      # proportionally shorter one -- all of it, decay and densification included, via
-      # gsplat's own `--steps_scaler` -- and never less than `schedule_floor` of it. A
-      # 4-photo capture ran the full 30k for 50 min and $0.66 and learned nothing the
-      # 7.5k it now gets would not have.
+      # 30k at 60 frames; grow by sqrt(frames/60), capped at 60k. At >= 2036
+      # registered frames, never below 60k equivalent image updates (batch 1).
       iterations: 30000
       schedule_full_at: 60
       schedule_floor: 0.25
+      schedule_growth: sqrt
+      schedule_max_scale: 2.0
+      schedule_min_large_steps: 60000
+      schedule_large_frames: 2036
+      test_every: 0
+      checkpoint_every: 5000
+      streaming_export: true
       # MCMC densification with a ceiling on the gaussian count, so time and cost are
       # bounded by the cap rather than by how enthusiastically a capture densifies (the
       # same 4 photos grew 894k gaussians; `package` keeps 400k of any of them).
@@ -247,7 +212,7 @@ stages:
       # there and 3x the 500k that already matched its PSNR. Clamped to `budget_floor`
       # (the preview's 200k) and to the memory of the GPU the stage was placed on
       # (`gaussian_budget.GPU_MEMORY_GB` by tier, at the real frame size -- on the L4:
-      # ~8.7M at 1600 px, ~5.4M at 2400; `gpu_memory_gb: N` here or in a run's params
+      # ~6.72M at native 1080x1920, with the measured rasterization burst; `gpu_memory_gb: N` here or in a run's params
       # overrides the tier's). There is no longer a ceiling below that
       # for the stages after training: the 2M `budget_max` this set was what `place` and
       # `package` could load whole on the 2 GB worker (0.75 GB a million, measured), and
@@ -257,18 +222,11 @@ stages:
       cap_max: auto
       gaussian_density: 0.1
       budget_floor: 200000
-      # Stop when training has converged: after densification ends (25k of 30k, scaled
-      # with the schedule; never before it), held-out PSNR is measured every 500 steps,
-      # and a run whose best of the last 2,000 steps is under 0.05 dB above its best
-      # before them stops -- with the trainer's own save, so the PLY is where it always
-      # is. A budget over 1M may run a longer maximum (sqrt(budget / 1M), at most 2x),
-      # which this then ends early if it went flat. convergence.py has the reasoning.
-      converge: true
-      # After training, on the same GPU: render every held-out frame (every 8th, never
-      # trained on), compare it with the photo, and share each pixel's error out among
-      # the gaussians that painted it (holdout.py). Writes `holdout/`, which `quality`
-      # verifies keep with. Seconds of GPU; it cannot fail the stage.
-      holdout_error: true
+      # No frame is withheld. PSNR/SSIM/LPIPS and held-out error are unavailable;
+      # the app shows geometric support/coverage instead. Bench can explicitly opt
+      # into test_every >= 2 and convergence; it cannot stop below the large-scan floor.
+      converge: false
+      holdout_error: false
       # The view-dependent colour that ships: spherical-harmonic bands above the DC term
       # (0-3). gsplat always fits degree 3 -- 45 of a gaussian's 59 trained floats -- and
       # this is how many of those bands trained.ply keeps, and so gated.ply, canonical.ply

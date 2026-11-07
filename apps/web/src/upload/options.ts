@@ -35,12 +35,12 @@ const QUALITY = [
   {
     value: "quick",
     label: "Quick",
-    hint: "Refine with a short training run and half the splats the scan's detail calls for.",
+    hint: "A faster Refine with half the splats the scan's detail calls for.",
   },
   {
     value: "standard",
     label: "Standard",
-    hint: "Refine with as many splats as the scan's detail calls for, trained until it stops improving.",
+    hint: "Refine using all captured detail, with longer training for larger scans.",
   },
   {
     value: "best",
@@ -68,32 +68,24 @@ const BAR = [
   },
 ] as const satisfies readonly Choice<string>[];
 
-/**
- * `auto` is tools/pipeline/resolution.py: 1600 px unless a sample of the scan's sharpest
- * frames measurably holds detail above it (4K video of something far away, full-size
- * photos), then up to 2400. A number overrides the measurement.
- */
+/** The saved `auto` value now inherits the recipe's native resolution. Numeric caps opt out. */
 const PHOTO_SIZE = [
   {
     value: "auto",
-    label: "Auto",
-    hint: "The default. 1600 px, or up to 2400 when the scan measurably holds finer detail.",
+    label: "Native",
+    hint: "The default. Keep every pixel the camera captured; larger scans take longer.",
   },
   { value: "1200", label: "1200 px", hint: "Faster; softer detail." },
-  { value: "1600", label: "1600 px", hint: "The balance most scans want." },
-  { value: "2400", label: "2400 px", hint: "Sharper; about twice the GPU time." },
+  { value: "1600", label: "1600 px", hint: "Reduce image size for a faster run." },
+  { value: "2400", label: "2400 px", hint: "Cap the long side at 2400 pixels." },
 ] as const satisfies readonly Choice<string>[];
 
-/**
- * A video's frames are chosen by how far the camera moved (tools/pipeline/keyframes.py):
- * a slow close-up keeps few, a long walk many. A number here caps how many a second can
- * be considered; "" sends nothing, which is the recipe's own rate (15 a second).
- */
+/** The default keeps every usable source frame. A rate opts into motion-window selection. */
 const VIDEO_FPS = [
   {
     value: "",
-    label: "By motion",
-    hint: "The default. More frames where the camera moved, fewer where it barely did.",
+    label: "All usable",
+    hint: "The default. Keep all frames except near-identical duplicates.",
   },
   {
     value: "4",
@@ -197,10 +189,12 @@ export function paramsFor(recipe: Recipe, options: Options): StageParams {
     if (place) params.georeference = place;
     return params;
   }
-  const normalize: Record<string, number | string> = {
-    max_side: options.photoSize === "auto" ? "auto" : Number(options.photoSize),
-  };
-  if (options.videoFps !== "") normalize.fps = Number(options.videoFps);
+  const normalize: Record<string, number | string> = {};
+  if (options.photoSize !== "auto") normalize.max_side = Number(options.photoSize);
+  if (options.videoFps !== "") {
+    normalize.fps = Number(options.videoFps);
+    normalize.select = "viewpoint";
+  }
   const params: StageParams = {
     normalize,
     quality: { bar: options.bar },
@@ -243,7 +237,7 @@ export function summarise(options: Options): string {
     choices.find((choice) => choice.value === value)?.label ?? value;
   return [
     label(QUALITY, options.quality),
-    options.photoSize === "auto" ? "Auto size" : label(PHOTO_SIZE, options.photoSize),
+    label(PHOTO_SIZE, options.photoSize),
     `${label(DETAIL, options.detail)} detail`,
     `${label(BAR, options.bar)} bar`,
   ].join(" · ");

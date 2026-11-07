@@ -342,6 +342,9 @@ def train(workdir: Workdir, **params: object) -> None:
         "impl": "gsplat",
         "params": {
             "iterations": 300,
+            "schedule_scale": 1.0,
+            "checkpoint_every": 0,
+            "test_every": 8,
             "trainer": str(STAND_IN),
             "python": sys.executable,
             "extra_args": ["--ckpt-every", "100", "--gaussians", "64"],
@@ -405,6 +408,9 @@ def test_on_a_remote_box_the_snapshot_is_uploaded_under_the_key_its_line_names(
         "gpu": {"tier": "l4"},
         "params": {
             "iterations": 300,
+            "schedule_scale": 1.0,
+            "checkpoint_every": 0,
+            "test_every": 8,
             "trainer": str(STAND_IN),
             "python": sys.executable,
             "extra_args": ["--ckpt-every", "100", "--gaussians", "64"],

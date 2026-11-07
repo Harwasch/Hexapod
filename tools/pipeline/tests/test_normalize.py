@@ -1023,16 +1023,14 @@ def test_a_photo_set_keeps_todays_rule_under_viewpoint(tmp_path: Path) -> None:
     assert meta["viewpoint"] is None
 
 
-def test_the_recipe_selects_by_viewpoint_and_sizes_automatically() -> None:
+def test_the_recipe_selects_all_usable_frames_at_native_size() -> None:
     from recipe import load_recipe
 
     recipe = load_recipe(PIPELINE / "recipes" / "photo-reconstruct.yaml")
     params = next(stage for stage in recipe.stages if stage.id == "normalize").params
-    assert params["select"] == "viewpoint"
-    assert params["max_side"] == "auto"
-    # The ceiling is well above the spool's 173 frames, so it is not the usual limit.
-    assert params["keep_video"] >= 250
-    assert params["fps"] > 8
+    assert params["select"] == "usable"
+    assert params["max_side"] is None
+    assert params["keep_video"] is None and params["keep"] is None
 
 
 # --- max_side: auto -- frame size from measured detail (#6) --------------------------

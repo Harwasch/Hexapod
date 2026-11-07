@@ -1098,6 +1098,7 @@ def settings_for(images: int, **overrides: Any) -> blocks.Settings:
         "count": 2,
         "reason": "given",
         "images": images,
+        "params": {"schedule_growth": "off"},
         "schedule_full_at": 60,
         "schedule_floor": 0.25,
     }

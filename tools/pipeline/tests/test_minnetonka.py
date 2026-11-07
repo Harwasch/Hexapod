@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+import resolution
 import sfm
 from experiments import minnetonka as tree
 from recipe import load_recipe
@@ -338,7 +339,7 @@ def test_the_stages_run_photo_reconstructs_own_settings_unchanged() -> None:
     train = tree.train_params({"roi": {"center": [0, 0, 0], "radius": 5}})
     assert {k: v for k, v in train.items() if k != "roi"} == dict(recipe.params)
     assert train["iterations"] == 30_000
-    assert train["strategy"] == "mcmc" and train["cap_max"] == "auto" and train["converge"] is True
+    assert train["strategy"] == "mcmc" and train["cap_max"] == "auto" and train["converge"] is False
     assert "blocks" not in train  # auto: past one GPU's memory, blocks
     assert "budget_max" not in train and "gpu_memory_gb" not in train
     assert train["roi"]["radius"] == 5
@@ -346,8 +347,8 @@ def test_the_stages_run_photo_reconstructs_own_settings_unchanged() -> None:
     assert recipe.gpu is not None and tree.train_tier() == recipe.gpu.tier
     normalize = next(s for s in load_recipe("photo-reconstruct").stages if s.id == "normalize")
     assert tree.frame_size_params() == (
-        normalize.params["auto_base"],
-        normalize.params["auto_ceiling"],
+        normalize.params.get("auto_base", resolution.BASE),
+        normalize.params.get("auto_ceiling", resolution.CEILING),
     )
     pose = tree.pose_params()
     assert pose["matcher"] == "sequential" and pose["colmap"] == "4.2"
