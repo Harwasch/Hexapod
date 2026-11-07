@@ -151,7 +151,13 @@ def test_remote_smoke_preserves_real_main_dispatch_and_failure_cleanup(
         ("resume", "resume checkpoints remain"),
     ],
 )
-def test_smoke_checks_training_contract(monkeypatch, tmp_path, capsys, change, failure):
+def test_smoke_checks_training_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    change: str,
+    failure: str,
+) -> None:
     import json
 
     from gsplat_stand_in import write_ply
@@ -159,7 +165,7 @@ def test_smoke_checks_training_contract(monkeypatch, tmp_path, capsys, change, f
     smoke = runpy.run_path(str(REPO / "infra/modal/smoke.py"))
     main = smoke["main"]
 
-    def completed(recipe, work, runners):
+    def completed(recipe: Any, work: Any, runners: Any) -> None:
         work.prepare_stage("train")
         work.prepare_stage("package")
         metrics = {"iterations": 500, "psnr": 27.5, "source": "stats", "gsplatVersion": "1.6.0"}
