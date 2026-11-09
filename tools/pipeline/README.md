@@ -212,6 +212,59 @@ multi-GB disk/object-storage writes every 5k steps; two recovery points alone ca
 holds for all full-data scans; see deployment sizing. No cloud run or deployment was made
 for this port. Harrison must approve deployment and Claude reviews before merge.
 
+## Opacity and GPU capacity (recipe v17)
+
+Every photo-reconstruct MCMC run now sets `opacity_reg: 0.002` in the recipe,
+including Preview, which shares the recipe and keeps its own fixed 200k cap, 800 px
+training and short schedule. An explicit run override still wins. The full-data beach
+bench (30k steps, `codex/feat-quality-campaign` README Budget test) found that the MCMC
+preset's 0.01 left 45% of 10M splats dead and test PSNR 22.10. At 7.25M, changing to
+0.002 improved PSNR/SSIM/LPIPS from 25.40/0.756/0.352 to 25.93/0.765/0.303.
+At 0.002, 10M repeats scored 26.00 and 25.81 dB; 14M and 20M both scored 25.93 dB.
+PSNR was flat within the measured 0.19 dB repeat spread, while LPIPS improved from
+0.303 at 7.25M through 0.294/0.287/0.279 at 10M/14M/20M. These are beach measurements,
+not evidence that every scan benefits equally.
+
+The default stays `budget_mode: density`, `gaussian_density: 0.1`, with a 200k floor.
+`train_admission.py` measures the target before the worker submits any GPU call, then
+chooses the smallest allowed tier holding it: **L4 → L40S → A100-80**, bounded by
+`max_gpu_tier: l40s`. The native 1080x1920 ceilings remain about **6.72M / 14.0M / 23.7M**;
+the burst model and its safety margins are unchanged. Only a target above the maximum
+requires automatic blocks; explicit `blocks` and the existing per-pass `budget_max`
+can still force partitioning. `gpu_memory_gb` may restrict capacity but cannot grant a
+card more physical memory. Batch size and the largest registered render view affect
+admission. Unreadable geometry retains the recipe tier and the existing 500k fallback.
+
+Under these defaults, the beach's **8.05M density target gets one L40S**, instead of
+blocks sized for an L4. More detail can explicitly opt into `budget_mode: gpu-max`:
+this targets the maximum tier's memory ceiling, independent of surface density and
+`density_scale` (about 14.0M with the default maximum). `budget_max` can lower that
+target. `max_gpu_tier: a100` permits 20M on one A100-80 and targets about 23.7M in
+gpu-max mode; a 30M density target still splits. An integer `cap_max`, including
+Preview's, retains its fixed count; an unsafe explicit remote cap is refused before
+submission rather than sent to an undersized card.
+
+Tier selection reaches every head, part and join request. A container or fixed-GPU
+`LocalRunner` (including bench jobs) retains its allocated tier's ceiling; it cannot
+promote itself after allocation. L4's existing Modal fallback
+list is filtered against the planned per-call cap, pixels, batch size and maximum tier.
+Since Modal functions have static GPU lists, a filtered subset uses a single-tier
+function. A 14M plan cannot use the `l4_fallback` function with its 24 GB L4/A10 options.
+Promoted L40S/A100 calls use their existing dedicated functions. `train_metrics.json`
+records `budget.gpuTier`, `recipeGpuTier`, `maxGpuTier`, `tierReason` and `budgetMode`;
+the attempt ledger prices the selected tier, or the reported actual fallback GPU.
+The running-cost estimate and dollar cap use that same tier's rate.
+
+Cost is the reason L40S is the default maximum and A100 requires a setting. At the
+repository's surveyed rates, GPU-only L4/L40S/A100-80 cost **$0.7992 / $1.9512 / $2.50 per
+hour**; with the shared 2-core, 16 GiB reservation the totals are **$1.021392 / $2.173392 /
+$2.722192 per hour**. L40S is 2.44x the L4 GPU rate (2.13x including reservation);
+A100 is another 25% per hour including reservation. Higher counts can cost more even
+when avoiding block setup. The campaign's improving LPIPS motivates the gpu-max option,
+but does not justify making every small scan fill a larger GPU. No new network,
+Modal or GPU run validates this orchestration change; local tests cover admission,
+requests, fallbacks, block boundaries and ledger pricing.
+
 ## A recipe is an ordered list of stages, not a DAG
 
 ```yaml
@@ -588,7 +641,7 @@ path: the worker runs these stages in that environment. Nothing under `app/api` 
 ground_samples → manifest → register`. Every stage is real.
 - **`photo-reconstruct`** (v15) — Lane 2: `normalize → pose → georeference → align → mask →
 train → compensate → quality → place → confidence → surface → package → thumbnail →
-ground_samples → manifest → register`, with inputs `upload` and `site_context`. `train` runs on an L4; `pose`, `align` and `quality` on Modal's CPU box (`cpu4`); `compensate` gains a
+ground_samples → manifest → register`, with inputs `upload` and `site_context`. `train` starts at L4 and can promote up to its configured maximum; `pose`, `align` and `quality` on Modal's CPU box (`cpu4`); `compensate` gains a
   `gpu:` block when its impl becomes `imc` (B3), since asking for an L4 to run `none` would be
   billing a GPU to do nothing. `align` registers each epoch to its site's reference epoch and
   writes its verdict (`epoch_alignment.json`; ADR 0015). `confidence` bins the quality
@@ -727,8 +780,8 @@ sfm` restores the old behaviour.
 counted in its own finest-view pixels -- per sparse point, depth / focal for the camera
 that saw it largest, at the size training reads the frames; voxels of 32 of those
 footprints, one face each -- times `gaussian_density` 0.1. A Refine counts its support
-mask in full and the rest at a tenth. Clamped to the preview's 200k and to the L4's
-memory at that frame size using the burst-aware model above; packed rasterization savings
+mask in full and the rest at a tenth. Clamped to the preview's 200k and admitted on the
+smallest allowed GPU up to `max_gpu_tier` using the burst-aware model above; packed rasterization savings
 are retained as headroom rather than discounted again.
 The 2M `budget_max` the recipe used to set is gone: it was what `place`/`package` could
 load whole on the 2 GB worker, and the stages after training now read the splat a chunk
@@ -758,7 +811,7 @@ the rule, is what binds; and `[benchmark:recipe]` against `[benchmark:recipe-500
 
 ## Blocks, one GPU each
 
-A budget more than one GPU trains (`blocks: auto`), or `blocks: <n>`, trains the scene as
+A budget beyond the allowed maximum GPU (`blocks: auto`), or `blocks: <n>`, trains the scene as
 blocks and merges them into one `trained.ply` (`blocks.py` has the recipe and its sources).
 Measured on the L4 with the spool forced to 2 blocks: quality matched the whole run
 (26.42 dB / LPIPS 0.1056 merged, 26.39 / 0.1088 whole), but one call trained the blocks in
@@ -886,7 +939,7 @@ either: a container's idle scale-down window after its last call, which Modal bi
 no call owns. (The reserved CPU and memory used not to be priced either; since the
 2026-10 audit `ModalAdapter.rate` adds them -- "What a run cost" above.)
 
-**Any call may start on an L40S or A10** (`modal_adapter.GPU_FALLBACKS`:
+**A call admitted on L4 may start on an L40S or A10** (`modal_adapter.GPU_FALLBACKS`:
 `l4 -> (l4, l40s, a10)`, deployed as `run_stage_l4_fallback` with
 `gpu=["L4", "L40S", "A10"]`, Modal's ranked list: the first type free wins). Single runs,
 heads and joins use the same list as parts: production L4 `train` calls have not started
@@ -895,8 +948,9 @@ and trained ~2.3x faster on our benchmark, so a block costs ~17% more by that be
 (+6% on training seconds at list prices), and ends in under half the time instead of
 waiting half an hour. The A10 ($1.10/h, 1.38x) is last because it is the only other tier
 proven free on 2026-11-03 (a smoke started in about 2 s); its gsplat speed per dollar is
-unmeasured. The gaussian memory ceiling stays sized for the requested L4's 24 GB (also
-A10's capacity), even on a 48 GB L40S. The container reports its GPU, and the call is
+unmeasured. For calls admitted on L4 the budget stays sized for its 24 GB, even on a
+48 GB fallback L40S. Recipe v17 first promotes targets exceeding L4 capacity; promoted
+L40S/A100 calls use their dedicated functions and their own memory ceilings. The container reports its GPU, and the call is
 priced and ledgered at that tier (`fanOutTiers` records parts); a deployment without the
 fallback function runs the call on its own tier; `ModalAdapter(part_fallback=False)`
 turns fallback off for every call.

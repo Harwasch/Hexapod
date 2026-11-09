@@ -13,3 +13,8 @@ def test_the_fallback_versions_are_the_recipe_files_versions() -> None:
     for name, version in recipes.SHIPPED_RECIPE_VERSIONS.items():
         assert recipes.version_of(name) == version, name
     assert sorted(recipes.SHIPPED_RECIPE_VERSIONS) == recipes.known_names()
+
+
+def test_production_opacity_and_capacity_policy_version() -> None:
+    assert recipes.SHIPPED_RECIPE_VERSIONS["photo-reconstruct"] == "17"
+    assert recipes.version_of("photo-reconstruct") == "17"

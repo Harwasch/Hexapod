@@ -781,7 +781,10 @@ def checkpoint_token(params: Mapping[str, Any], dataset: Path) -> str:
     S3 downloads use the object's stable LastModified time. A changed input's name,
     size or mtime invalidates resume, as do all training parameters.
     """
-    digest = hashlib.sha256(json.dumps(dict(params), sort_keys=True).encode())
+    # Worker annotations are not training settings; adding them when moving a local
+    # run to the cloud must not discard recoverable training. Policy params remain.
+    settings = {key: value for key, value in params.items() if key != "_train_admission"}
+    digest = hashlib.sha256(json.dumps(settings, sort_keys=True).encode())
     for path in sorted(p for p in dataset.rglob("*") if p.is_file()):
         stat = path.stat()
         digest.update(

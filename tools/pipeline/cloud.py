@@ -859,6 +859,38 @@ class CloudRunner(BaseRunner):
         #: to, in order. Reset by `_invoke`; `_record` adds to it.
         self._made: list[Attempt] = []
 
+    def _context(self, stage: PlannedStage, workdir: Workdir, attempt: int) -> StageContext:
+        context = super()._context(stage, workdir, attempt)
+        if stage.impl.name != "gsplat":
+            return context
+        # Read headers and sparse geometry locally, before any GPU call or transfer.
+        import train_admission
+
+        params = context.params
+        size, scale = train_admission.frame_geometry(
+            context.input("frames"),
+            context.input("poses"),
+            int(params.get("data_factor", 1)),
+            None if params.get("train_max_side") is None else int(params["train_max_side"]),
+        )
+        budget = train_admission.plan(params, context.gpu_tier, context.input("poses"), size, scale)
+        if budget is None:
+            return context
+        context.log(f"admission: {budget.gpu_tier}: {budget.tier_reason}")
+        record = {
+            "recipeTier": context.gpu_tier,
+            "tier": budget.gpu_tier,
+            "cap": budget.cap,
+            "pixels": 0 if size is None else size[0] * size[1],
+            "batchSize": int(params.get("batch_size", 1)),
+            "reason": budget.tier_reason,
+        }
+        return replace(
+            context,
+            gpu_tier=budget.gpu_tier,
+            params={**params, train_admission.PLAN_PARAM: record},
+        )
+
     def _invoke(self, stage: PlannedStage, context: StageContext) -> StageOutcome:
         self._made = []
         ledger = AttemptLedger.read(context.attempts_path)

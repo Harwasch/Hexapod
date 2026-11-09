@@ -183,7 +183,14 @@ PART_ROWS = 131_072
 #: blocks train at once and which call of a fan-out this is, so that neither can make a
 #: finished block look like another plan's.
 RUNTIME_PARAMS = frozenset(
-    {"block_attempt_budget_s", "block_sync_wait_s", "live", "block_parallel", FANOUT_PARAM}
+    {
+        "block_attempt_budget_s",
+        "block_sync_wait_s",
+        "live",
+        "block_parallel",
+        FANOUT_PARAM,
+        "_train_admission",
+    }
 )
 
 #: Blocks trained at once when the runner fans out (`block_parallel`). Four L4s: the spool's
@@ -714,6 +721,12 @@ def _fingerprint(settings: Settings, prior: Prior) -> str:
     digest = hashlib.sha256()
     params = {k: v for k, v in settings.params.items() if k not in RUNTIME_PARAMS}
     digest.update(json.dumps(params, sort_keys=True, default=str).encode())
+    # Admission annotations may appear only on a remote retry. The derived capacity
+    # is material to the partition, even when the recipe's base GPU tier alone changed.
+    capacity = (
+        None if settings.budget is None else (settings.budget.cap, settings.budget.memory_ceiling)
+    )
+    digest.update(json.dumps(capacity).encode())
     digest.update(init_seed.poses_fingerprint(settings.poses).encode())
     digest.update(str(prior.meta.get("digest")).encode())
     return digest.hexdigest()
@@ -1012,6 +1025,7 @@ def _coarse_prior(ctx: StageContext, settings: Settings, work: Path) -> Prior:
         max_steps=settings.full_iterations,
         steps_scaler=scaler,
         cap_max=cap,
+        opacity_reg=settings.switches.get("opacity_reg"),
         antialiased=bool(settings.switches.get("antialiased")),
         packed=bool(settings.switches.get("packed", True)),
         sparse_grad=bool(settings.switches.get("sparse_grad")),

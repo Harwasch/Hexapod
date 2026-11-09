@@ -445,6 +445,11 @@ class Budget:
     pixel_scale: float | None = None
     gpu_memory_gb: float = DEFAULT_GPU_MEMORY_GB
     reason: str = ""
+    budget_mode: str = "density"
+    gpu_tier: str | None = None
+    recipe_gpu_tier: str | None = None
+    max_gpu_tier: str | None = None
+    tier_reason: str = ""
 
     @property
     def footprints(self) -> float:
@@ -454,6 +459,11 @@ class Budget:
     def to_dict(self) -> dict[str, object]:
         return {
             "mode": self.mode,
+            "budgetMode": self.budget_mode,
+            "gpuTier": self.gpu_tier,
+            "recipeGpuTier": self.recipe_gpu_tier,
+            "maxGpuTier": self.max_gpu_tier,
+            "tierReason": self.tier_reason,
             "capMax": self.cap,
             "raw": self.raw,
             "clamp": self.clamp,
@@ -489,6 +499,7 @@ def plan(
     gpu_memory_gb: float = DEFAULT_GPU_MEMORY_GB,
     voxel_footprints: float = VOXEL_FOOTPRINTS,
     images_per_step: int = 1,
+    budget_mode: str = "density",
 ) -> Budget | None:
     """The cap for `requested` (`parse_cap`'s result): None for no cap at all.
 
@@ -509,6 +520,7 @@ def plan(
     pixels = 0 if train_size is None else train_size[0] * train_size[1]
     ceiling = memory_ceiling(pixels * max(1, images_per_step), gpu_memory_gb) if pixels else None
     common: dict[str, Any] = {
+        "budget_mode": budget_mode,
         "floor": floor,
         "memory_ceiling": ceiling,
         "budget_max": budget_max,
@@ -521,6 +533,11 @@ def plan(
     }
     if isinstance(requested, int):
         return Budget(mode="explicit", cap=requested, **common)
+    if budget_mode not in ("density", "gpu-max"):
+        raise ValueError(f"unknown budget_mode {budget_mode!r}")
+    if budget_mode == "gpu-max" and ceiling is not None:
+        target = min(ceiling, budget_max) if budget_max is not None else ceiling
+        return Budget(mode="auto", cap=target, raw=target, **common)
     if not (density > 0 and density_scale > 0):
         raise ValueError(
             f"gaussian_density and density_scale must be positive, not {density!r} and "
@@ -599,6 +616,8 @@ def describe(budget: Budget) -> str:
         return f"cap_max {budget.cap} given; no budget computed"
     if budget.mode == "fallback":
         return f"cap_max auto -> {budget.cap} (fallback: {budget.reason})"
+    if budget.budget_mode == "gpu-max":
+        return f"cap_max auto -> {budget.cap} (gpu-max; {budget.tier_reason or 'memory ceiling'})"
     surface_ = budget.inside
     parts = [
         f"cap_max auto -> {budget.cap}",

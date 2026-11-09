@@ -19,7 +19,7 @@ here.
 | API (`app` process)             | Fly.io                       | `fly.toml`                                             |
 | Worker (`worker` process)       | Fly.io, same image           | `fly.toml` (`[processes]`, `[[mounts]]`)               |
 | Captures, tiles, `catalog.json` | Cloudflare R2                | `infra/cors/production.json`, `infra/cors/apply-r2.sh` |
-| Lane 2 remote stages            | Modal: `cpu4`, and one L4    | `infra/modal/app.py`, `.github/workflows/modal.yml`    |
+| Lane 2 remote stages            | Modal: `cpu4`, L4 up to L40S | `infra/modal/app.py`, `.github/workflows/modal.yml`    |
 | Database                        | Neon (Postgres 16 + PostGIS) | `.github/workflows/provision.yml`                      |
 | Provisioning                    | GitHub Actions, on demand    | `.github/workflows/provision.yml`                      |
 | Deploys                         | GitHub Actions, on demand    | `.github/workflows/deploy.yml`                         |
@@ -540,7 +540,7 @@ worker.
 | ------------ | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Fly `worker` | `normalize` (ffmpeg), `georeference`, `place`, `confidence`, `package` and the rest | light CPU work; the worker already holds the upload                                                                   |
 | Modal `cpu4` | `pose` (COLMAP 3.9.1), `align`, `quality`                                           | more memory and sustained CPU than the 2 GB worker has ([below](#the-worker-image-carries-colmap)); billed per second |
-| Modal L4     | `train` (gsplat 1.6.0, source `512d366b`)                                           | needs CUDA; billed per second only while it runs, so an idle deployment costs nothing for it                          |
+| Modal GPU    | `train` (gsplat 1.6.0, source `512d366b`)                                           | needs CUDA; billed per second only while it runs, so an idle deployment costs nothing for it                          |
 
 `fly.toml` sets `WORKER_RUNNER=cloud` and `WORKER_CLOUD_PROVIDERS=modal`. The worker then
 calls `run_stage_<tier>` in the Modal app `twin-pipeline` (`WORKER_MODAL_APP`'s default),
@@ -565,13 +565,39 @@ A worker with new default checkpoint flags requires this new training image.
 
 At surveyed rates, 2 cores + 16 GiB adds $0.222192/hour beside a GPU; L4 total is
 $1.021392/hour, $0.063936/hour above the old 8 GiB reservation. A beach-sized scan uses
-all 2,036 registered native frames and at least 60k equivalent steps; auto block splitting
-can add passes under the new ~6.72M native L4 ceiling. The campaign's single-GPU full-data
+all 2,036 registered native frames and at least 60k equivalent steps. Recipe v17
+promotes its 8.05M density target to one L40S before considering blocks. The campaign's single-GPU full-data
 run measured 157 minutes / $2.73; it is not a quote for the new block/cap/checkpoint path.
 The six-hour function timeout and existing retry limits remain in force. Single-call
 pre-emption and immediate block-call retries resume from the last synced 5k checkpoint.
 Recovery of unfinished blocks across whole-stage retries and automatic timeout relaunch
 remain deferred; completed blocks already survive.
+
+**Recipe v17 capacity and spending.** `photo-reconstruct` now sets MCMC
+`opacity_reg: 0.002` for every scan, including the shared-recipe Preview; Preview keeps
+its fixed cap, image size and schedule. The default `budget_mode: density` stays at
+0.1 Gaussians per finest-view surface pixel, with no L4-only clamp. Before submitting
+training, the worker chooses the smallest fitting tier from L4 → L40S → A100-80, up to
+`max_gpu_tier: l40s`. Auto blocks are needed beyond that maximum (or an explicit
+per-pass limit); the burst-aware native 1080x1920 ceilings remain about 6.72M / 14.0M /
+23.7M. `budget_mode: gpu-max` explicitly targets the configured maximum's ceiling;
+`max_gpu_tier: a100` permits the 80 GB tier. The beach therefore gets about **8.05M on
+one L40S by default**, or about 14.0M with gpu-max at the default maximum.
+
+Using the repository's surveyed price table, L40S is **$1.9512/h GPU-only versus L4's
+$0.7992/h**, or **$2.173392/h versus $1.021392/h** with the same 2 cores and 16 GiB.
+A100-80 is **$2.722192/h** including reservation, another 25% per hour over L40S.
+L40S is the default maximum to bound spend; A100 is an explicit override. Neither
+avoiding blocks nor the beach's improving LPIPS establishes a cheaper per-scan price
+at higher counts. Existing dollar caps, retries and timeouts still apply; the running
+cost estimate and attempt ledger use the chosen tier's rate and reprice an actual
+fallback from the reported GPU. Fallbacks are capacity-filtered before submission;
+a 14M call cannot land on an L4/A10. Promoted calls use the existing dedicated
+`run_stage_l40s` / `run_stage_a100` functions, without requiring new Modal function names.
+Deploy the worker and its matching pipeline image together so both use the shared
+admission policy. This change has local stand-in coverage only, with no network or GPU
+run. [Opacity and capacity evidence](../tools/pipeline/README.md#opacity-and-gpu-capacity-recipe-v17)
+records the measurements, Preview choice and settings.
 
 The image uses gsplat source commit `512d366b67073d77ca099ede742683c165dfc23b`,
 torch 2.9.1+cu128 and CUDA 12.8.1. Recipe v16 changes production data defaults;
