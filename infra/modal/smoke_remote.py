@@ -1,9 +1,10 @@
-"""Run the unchanged production-path smoke with Modal's storage secret; never deploy.
+"""Run the production-path smoke with Modal's storage secret; never deploy.
 
     modal run infra/modal/smoke_remote.py --app-name twin-pipeline-gsplat-upgrade-smoke
 
 Only this CPU coordinator belongs to the ephemeral app. Pose and train still call the
 target deployment through CloudRunner/ModalAdapter; pose uses its apt COLMAP 3.9.1.
+The shared smoke pins held-out evaluation and an exact training step count.
 """
 
 from __future__ import annotations
