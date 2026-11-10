@@ -578,20 +578,19 @@ remain deferred; completed blocks already survive.
 its fixed cap, image size and schedule. The default `budget_mode: auto` measures a
 density target at 0.1 Gaussians per finest-view surface pixel, chooses the smallest
 fitting tier from L4 → L40S → A100-80 up to `max_gpu_tier: l40s`, then budgets
-by **rule B**: retain the density target on the recipe's base tier (L4), or fill
-the chosen tier's ceiling after promotion. At native 1080x1920 the ceilings remain
+by **B'**: **min(tier ceiling, 2.5 × density target)** with default
+`budget_headroom: 2.5`. At native 1080x1920 the ceilings remain
 about **6.72M / 14.0M / 23.7M**. The beach's 8.05M target therefore plans **about
-14.0M on one L40S**. Targets of **0.5M, 5M and 6.72M keep those counts on L4**.
-A 50M target splits into four L40S blocks, each filling about **14.0M**.
+14.0M on one L40S**. **0.5M → 1.25M** and **5M → about 6.72M on L4**.
+A 50M target splits into four L40S blocks, each capped at about **14.0M**.
 Each block applies the same rule to its own target and allocated tier. With
 `max_gpu_tier: a100`, bigger GPUs are considered before blocks.
 
-`budget_headroom` is optional and off by default (null/absent). When set, budget =
-**min(tier ceiling, headroom × target)** on every tier. Setting 2.5 gives
-**0.5M → 1.25M on L4** and **8.05M → about 14.0M on L40S**. The beach's LPIPS
-improved through 20M (2.5x its target) with flat PSNR at opacity_reg 0.002;
-there is no evidence beyond that. `budget_mode: density` opts out of filling
-promoted tiers and forces headroom 1.0 (8.05M on L40S for the beach);
+Set `budget_headroom: null` to opt out with rule B (also used when absent): retain
+the density target on the recipe's base tier and fill promoted tiers' ceilings.
+The beach's LPIPS improved through 20M (2.5x its target) with flat PSNR at
+opacity_reg 0.002; there is no evidence beyond that. `budget_mode: density`
+forces headroom 1.0 (8.05M on L40S for the beach);
 `budget_headroom: 1.0` also keeps density-sized caps. `budget_mode: gpu-max`
 explicitly targets the configured maximum's ceiling. `budget_max` remains a lower
 per-pass cap and integer `cap_max` remains a fixed override. Explicit per-pass
@@ -606,7 +605,7 @@ A100-80 is **$2.722192/h** including reservation, another 25% per hour over L40S
 L40S is the default maximum to bound spend; A100 is an explicit override. Neither
 avoiding blocks nor the beach's improving LPIPS establishes a cheaper per-scan price
 at higher counts. More gaussians mean slower steps and can increase time and per-scan
-cost on promoted tiers or with optional headroom; `budget_mode: density` keeps
+cost with headroom; `budget_mode: density` keeps
 density-sized counts. Existing dollar caps, retries and timeouts still apply; the running
 cost estimate and attempt ledger use the chosen tier's rate and reprice an actual
 fallback from the reported GPU. Fallbacks are capacity-filtered before submission;
@@ -616,8 +615,8 @@ An admitted L40S/A100 head gets at most five minutes pending (or the configured
 shorter pending limit). A capacity error or that bounded wait records the failed
 call and excludes its tier for this run, including worker retries/deploys. Admission
 tries A100 only when allowed; otherwise it recalculates an L4 budget and splits into
-blocks. Rule B keeps each L4 block's density target; optional headroom instead
-applies min(L4 ceiling, headroom × block density target). Each unavailable tier is tried once; ordinary
+blocks. The default applies min(L4 ceiling, 2.5 × block density target); rule B
+with null headroom keeps each L4 block's density target. Each unavailable tier is tried once; ordinary
 training failures do not trigger re-planning. Reasons and exclusions are in the log,
 call requests, attempt ledger and successful step's `trainAdmission` metric. Jobs
 without `max_gpu_tier` retain their recipe tier (including saved v16 jobs); v17 opts

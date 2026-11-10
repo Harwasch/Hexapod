@@ -144,7 +144,9 @@ def test_promoted_head_waits_for_cold_start_before_replanning(
     ],
 )
 def test_choose_capacity_before_blocks(maximum: str, count: int, tier: str, parts: int) -> None:
-    budget = gb.Budget(mode="auto", cap=count, raw=count, train_size=(1080, 1920))
+    budget = gb.Budget(
+        mode="auto", cap=count, raw=count, train_size=(1080, 1920), budget_headroom=None
+    )
     admitted = train_admission.admit(budget, "l4", maximum)
     assert admitted.gpu_tier == tier
     assert admitted.tier_reason
@@ -154,10 +156,55 @@ def test_choose_capacity_before_blocks(maximum: str, count: int, tier: str, part
     assert admitted.cap == (count if tier == "l4" else admitted.memory_ceiling)
 
 
-def test_auto_default_density_opt_out_and_gpu_max_are_distinct(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "count,tier,parts",
+    [
+        (500_000, "l4", 1),
+        (5_000_000, "l4", 1),
+        (8_050_000, "l40s", 1),
+        (50_000_000, "l40s", 4),
+    ],
+)
+def test_shipped_recipe_headroom_budget(tmp_path: Path, count: int, tier: str, parts: int) -> None:
+    from test_blocks import settings_for
+
+    import block_maths
+
     workdir = Workdir.create(tmp_path / "run")
     seed_measurable(workdir, size=(1080, 1920))
-    params = {"cap_max": "auto", "budget_floor": 1, "max_gpu_tier": "l40s"}
+    poses = workdir.input_path("poses")
+    measured = gb.plan("auto", model=poses, train_size=(1080, 1920), pixel_scale=1.0)
+    assert measured is not None
+    shipped = next(s for s in load_recipe("photo-reconstruct").stages if s.id == "train")
+    params = {**shipped.params, "gaussian_density": count / measured.footprints}
+    budget = train_admission.plan(params, "l4", poses, (1080, 1920), 1.0)
+    assert budget is not None and budget.raw == count
+    assert budget.budget_headroom == 2.5
+    assert budget.gpu_tier == tier
+    ceiling = gb.memory_ceiling(PIXELS, gb.GPU_MEMORY_GB[tier])
+    assert budget.cap == min(ceiling, round(2.5 * count))
+    assert blocks.block_count(None, budget)[0] == parts
+    if parts == 1:
+        return
+    settings = settings_for(
+        parts, poses=poses, budget=budget, frame_size=(1080, 1920), pixel_scale=1.0
+    )
+    xyz, _ = gb.finest_footprints(poses)
+    partition = block_maths.partition(xyz, [0.0, 0.0, 1.0], parts, exact=True)
+    for index in range(parts):
+        cap, part = blocks._block_cap(
+            settings, blocks.BlockRegion(partition, index, 0.0), 1 / parts
+        )
+        assert part is not None and part.raw is not None
+        assert part.gpu_tier == tier and part.budget_headroom == 2.5
+        assert cap == min(ceiling, max(part.floor, round(2.5 * part.raw)))
+        assert cap <= ceiling
+
+
+def test_rule_b_density_opt_out_and_gpu_max_are_distinct(tmp_path: Path) -> None:
+    workdir = Workdir.create(tmp_path / "run")
+    seed_measurable(workdir, size=(1080, 1920))
+    params = {"cap_max": "auto", "budget_floor": 1, "max_gpu_tier": "l40s", "budget_headroom": None}
     automatic = train_admission.plan(params, "l4", workdir.input_path("poses"), (1080, 1920), 1.0)
     density = train_admission.plan(
         {**params, "budget_mode": "density"}, "l4", workdir.input_path("poses"), (1080, 1920), 1.0
@@ -201,7 +248,7 @@ def test_explicit_preview_cap_stays_fixed_and_inherits_opacity(tmp_path: Path) -
     seed_measurable(workdir)
     shipped = next(s for s in load_recipe("photo-reconstruct").stages if s.id == "train")
     assert shipped.params["budget_mode"] == "auto"
-    assert shipped.params.get("budget_headroom") is None
+    assert shipped.params["budget_headroom"] == 2.5
     assert shipped.params["max_gpu_tier"] == "l40s"
     params = stand_in_params(**{**shipped.params, "cap_max": 200_000, "schedule_scale": 0.1})
     execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
@@ -290,6 +337,7 @@ def test_promoted_call_and_container_agree_on_budget(tmp_path: Path) -> None:
         strategy="mcmc",
         cap_max="auto",
         gaussian_density=10_000_000 / measured.footprints,
+        budget_headroom=None,
         opacity_reg=0.002,
         max_gpu_tier="l40s",
     )

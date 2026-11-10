@@ -75,9 +75,9 @@ It is a recipe parameter (`gaussian_density`), and a phone's quality tier multip
 
 **The default, `budget_mode: auto`.** `train_admission.py` uses this density target
 (with the floor and optional lower `budget_max`) to select the smallest allowed GPU,
-then applies rule B: the recipe's base tier keeps the target; a promoted tier fills
-its ceiling. Optional `budget_headroom` is off by default (None); when set it budgets
-min(ceiling, headroom x target) on every tier. The beach's LPIPS improved through
+then budgets min(ceiling, headroom x target) on every tier. The photo recipe defaults
+to `budget_headroom: 2.5` (B'). Null/absent headroom retains rule B: the recipe's
+base tier keeps the target; a promoted tier fills its ceiling. The beach's LPIPS improved through
 20M (2.5x its 8.05M target) with flat PSNR at opacity_reg 0.002; there is no evidence
 beyond that. Targets beyond the maximum split into blocks, each applying the same
 rule to its own density target and allocated tier. `budget_mode: density` forces

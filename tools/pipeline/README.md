@@ -225,16 +225,16 @@ PSNR was flat within the measured 0.19 dB repeat spread, while LPIPS improved fr
 0.303 at 7.25M through 0.294/0.287/0.279 at 10M/14M/20M. These are beach measurements,
 not evidence that every scan benefits equally.
 
-The default is `budget_mode: auto`, `budget_headroom: null`, `gaussian_density: 0.1`,
+The default is `budget_mode: auto`, `budget_headroom: 2.5`, `gaussian_density: 0.1`,
 with a 200k floor. `train_admission.py` measures the density target before the worker
 submits any GPU call and chooses the smallest allowed tier holding it
-(**L4 → L40S → A100-80**, bounded by `max_gpu_tier: l40s`). Rule B keeps the
-density target when the chosen tier is the recipe's base tier; a promoted tier
-fills its ceiling. The floor and `budget_max` still bound the cap. Native
+(**L4 → L40S → A100-80**, bounded by `max_gpu_tier: l40s`). B' budgets
+**min(tier ceiling, 2.5 × density target)** on every tier. The floor and `budget_max`
+still bound the cap. Native
 1080x1920 ceilings remain about **6.72M / 14.0M / 23.7M**; the memory model
 and safety margins are unchanged.
 
-At that resolution, **0.5M → L4, 0.5M**; **5M → L4, 5M**;
+At that resolution, **0.5M → L4, 1.25M**; **5M → L4, about 6.72M**;
 **6.72M → L4, 6.72M**; **8.05M → L40S, about 14.0M**.
 Only a target above the maximum requires automatic blocks. A **50M** target at the
 default maximum requires four L40S blocks, each filling about **14.0M**.
@@ -245,10 +245,10 @@ still force partitioning. `gpu_memory_gb` may restrict capacity but cannot grant
 card more physical memory. Batch size and the largest registered render view affect
 admission. Unreadable geometry keeps the existing 500k fallback.
 
-Optional `budget_headroom` is off by default (null/absent). When set, every tier
-budgets **min(tier ceiling, headroom × density target)**: 2.5 gives **0.5M → 1.25M**
-on L4 and **8.05M → about 14.0M** on L40S. The beach's improving LPIPS through
-20M motivates the optional 2.5x multiplier; there is no evidence beyond that.
+Set `budget_headroom: null` to opt out with rule B (also used when absent):
+the recipe's base tier keeps the density target; promoted tiers fill their ceilings.
+The beach's improving LPIPS through 20M motivates the default 2.5x multiplier;
+there is no evidence beyond that.
 `budget_headroom: 1.0` reproduces the density rule; `budget_mode: density` forces
 headroom 1.0 regardless of the recipe setting. `density_scale` scales the target
 and therefore tier choice. The explicit `budget_mode: gpu-max` targets the
@@ -274,8 +274,8 @@ repository's surveyed rates, GPU-only L4/L40S/A100-80 cost **$0.7992 / $1.9512 /
 hour**; with the shared 2-core, 16 GiB reservation the totals are **$1.021392 / $2.173392 /
 $2.722192 per hour**. L40S is 2.44x the L4 GPU rate (2.13x including reservation);
 A100 is another 25% per hour including reservation. Headroom means more gaussians and
-slower steps; time and per-scan cost can rise on promoted tiers or with optional
-headroom. Use `budget_mode: density` to keep density-sized counts. The improving
+slower steps; time and per-scan cost can rise with headroom. Use `budget_mode: density`
+to keep density-sized counts. The improving
 beach LPIPS motivates filling promoted tiers. No new network,
 Modal or GPU run validates this orchestration change; local tests cover admission,
 requests, fallbacks, block boundaries and ledger pricing.
@@ -289,8 +289,9 @@ Provider refusals are classified by exception type/RPC status, not error-message
 A call observed running never re-plans, including after re-attachment; a failed poll
 (including CUDA OOM) surfaces as a training failure regardless of its wording.
 Re-planning tries A100 when allowed, otherwise L4 with blocks and
-a recalculated per-block cap: rule B keeps each L4 block's density target; optional
-headroom instead applies min(L4 ceiling, headroom × block density target). A tier is excluded for the rest of this run, including
+a recalculated per-block cap: the default applies min(L4 ceiling, 2.5 × block density
+target); rule B with null headroom keeps each L4 block's density target. A tier is
+excluded for the rest of this run, including
 retries/deploys; it cannot repeat the same unavailable L40S request indefinitely.
 The successful step's `trainAdmission` metric retains exclusions and reasons alongside
 the attempt ledger. Ordinary training errors do not re-plan. Missing `max_gpu_tier`
