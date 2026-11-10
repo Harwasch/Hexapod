@@ -1842,8 +1842,10 @@ def gsplat(ctx: StageContext) -> StageOutcome:
       finest-view pixels, from the pose stage's sparse model, times `gaussian_density`
       (x `density_scale`, a phone's quality tier). This density target has `budget_floor`
       as a minimum and selects the smallest fitting GPU up to `max_gpu_tier`. Default
-      `budget_mode: auto` budgets min(ceiling, `budget_headroom` x density target),
-      with headroom 2.5; `density` forces headroom 1.0 and keeps the old density cap.
+      `budget_mode: auto` keeps the density target on the base tier and fills the
+      ceiling after promotion. Optional `budget_headroom` is off by default (None);
+      when set, auto budgets min(ceiling, headroom x density target) on every tier.
+      `density` forces headroom 1.0 and keeps the old density cap.
       `gpu_memory_gb` can restrict capacity and `budget_max` caps each pass.
       An integer is an override, used as given. `gaussian_budget.py` has the
       formula, the calibration and the memory model; `train_metrics.json`'s `budget` has

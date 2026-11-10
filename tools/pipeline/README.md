@@ -280,9 +280,15 @@ beach LPIPS motivates filling promoted tiers. No new network,
 Modal or GPU run validates this orchestration change; local tests cover admission,
 requests, fallbacks, block boundaries and ledger pricing.
 
-If an admitted L40S/A100 head is pending for five minutes (or the configured shorter
-limit), or the provider reports no capacity, the runner records that tier as unavailable
-and re-plans before training. It tries A100 when allowed, otherwise L4 with blocks and
+If an admitted L40S/A100 head never starts and remains pending for fifteen minutes
+(`CloudRunner.replan_pending_s`, default 900 seconds, bounded by `max_pending_s`
+when shorter), or submission raises a provider resource-exhaustion/quota exception,
+the runner records that tier as unavailable and re-plans before training.
+The longer pending window allows for a slow cold start of the large training image.
+Provider refusals are classified by exception type/RPC status, not error-message text.
+A call observed running never re-plans, including after re-attachment; a failed poll
+(including CUDA OOM) surfaces as a training failure regardless of its wording.
+Re-planning tries A100 when allowed, otherwise L4 with blocks and
 a recalculated per-block cap: rule B keeps each L4 block's density target; optional
 headroom instead applies min(L4 ceiling, headroom × block density target). A tier is excluded for the rest of this run, including
 retries/deploys; it cannot repeat the same unavailable L40S request indefinitely.

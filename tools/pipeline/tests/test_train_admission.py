@@ -15,7 +15,114 @@ from runners import LocalRunner, RunnerSet
 from test_train_gsplat import stand_in_params, train_recipe
 from workdir import Workdir
 
+# Match the SDK class identity without importing or contacting Modal.
+ResourceExhaustedError = type(
+    "ResourceExhaustedError", (Exception,), {"__module__": "modal.exception"}
+)
+
 PIXELS = 1080 * 1920
+
+
+@pytest.mark.parametrize("running_first", [False, True])
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "CUDA out of memory. Tried to allocate 2.34 GiB. GPU 0 has a total capacity "
+        "of 44.40 GiB of which 0 bytes is free",
+        "no L40S capacity: insufficient capacity available",
+        "capacity unavailable: no L40S capacity",
+    ],
+)
+def test_failed_head_never_replans_from_error_text(
+    tmp_path: Path, running_first: bool, detail: str
+) -> None:
+    from adapters import FakeAdapter, LocalTransfer
+    from cloud import AttemptLedger, CloudRunner, Placement, Poll, RemoteHandle
+    from errors import RemoteStageError
+
+    class FailedHead(FakeAdapter):
+        polls = 0
+
+        def poll(self, handle: RemoteHandle) -> Poll:
+            self.polls += 1
+            if running_first and self.polls == 1:
+                return Poll(state="running")
+            return Poll(state="failed", detail=detail)
+
+    workdir = Workdir.create(tmp_path / "run")
+    seed_measurable(workdir, size=(1080, 1920))
+    measured = gb.plan(
+        "auto", model=workdir.input_path("poses"), train_size=(1080, 1920), pixel_scale=1.0
+    )
+    assert measured is not None
+    transfer = LocalTransfer(tmp_path / "bucket")
+    adapter = FailedHead(transfer, tmp_path / "remote")
+    runner = CloudRunner(Placement((adapter,)), transfer, poll_interval_s=0, sleep=lambda _: None)
+    recipe = train_recipe(
+        {
+            "cap_max": "auto",
+            "max_gpu_tier": "l40s",
+            "gaussian_density": 10_000_000 / measured.footprints,
+        },
+        gpu={"tier": "l4"},
+    )
+    with pytest.raises(RemoteStageError) as caught:
+        execute(recipe, workdir, RunnerSet(cpu=LocalRunner(), gpu=runner))
+    assert detail in str(caught.value)
+    assert [request.tier for request in adapter.submitted] == ["l40s"]
+    entries = AttemptLedger.read(workdir.attempts_path("train")).entries
+    assert len(entries) == 1 and entries[0].detail == detail
+    assert not entries[0].capacity_unavailable
+    from plan import plan_recipe
+
+    # Even a message mimicking the old internal prefix cannot exclude this tier later.
+    context = runner._context(plan_recipe(recipe).stages[0], workdir, 2)
+    assert context.gpu_tier == "l40s"
+    assert context.params[train_admission.PLAN_PARAM]["unavailableTiers"] == []
+
+
+@pytest.mark.parametrize("timeout", [None, 1200.0])
+def test_promoted_head_waits_for_cold_start_before_replanning(
+    tmp_path: Path, timeout: float | None
+) -> None:
+    from adapters import FakeAdapter, LocalTransfer
+    from cloud import CloudRunner, Placement, Poll, RemoteHandle
+
+    now = 0.0
+    waited = []
+
+    class ColdHead(FakeAdapter):
+        def poll(self, handle: RemoteHandle) -> Poll:
+            if handle.tier == "l40s":
+                waited.append(now)
+                return Poll(state="pending")
+            return super().poll(handle)
+
+    def sleep(_: float) -> None:
+        nonlocal now
+        now += 60
+
+    workdir = Workdir.create(tmp_path / "run")
+    seed_measurable(workdir, size=(1080, 1920))
+    measured = gb.plan(
+        "auto", model=workdir.input_path("poses"), train_size=(1080, 1920), pixel_scale=1.0
+    )
+    assert measured is not None
+    transfer = LocalTransfer(tmp_path / "bucket")
+    adapter = ColdHead(transfer, tmp_path / "remote")
+    options: dict[str, Any] = {} if timeout is None else {"replan_pending_s": timeout}
+    runner = CloudRunner(Placement((adapter,)), transfer, clock=lambda: now, sleep=sleep, **options)
+    recipe = train_recipe(
+        {
+            "cap_max": "auto",
+            "max_gpu_tier": "l40s",
+            "gaussian_density": 10_000_000 / measured.footprints,
+        },
+        gpu={"tier": "l4"},
+    )
+    execute(recipe, workdir, RunnerSet(cpu=LocalRunner(), gpu=runner))
+    assert waited[-1] == (900 if timeout is None else timeout)
+    assert [request.tier for request in adapter.submitted] == ["l40s", "l4"]
 
 
 @pytest.mark.parametrize(
@@ -374,7 +481,7 @@ def test_omitted_maximum_never_promotes_old_jobs(tmp_path: Path, tier: str) -> N
 
 
 @pytest.mark.parametrize("maximum,expected", [("l40s", "l4"), ("a100", "a100"), ("a100", "l4")])
-@pytest.mark.parametrize("failure", ["pending", "poll-capacity", "submit-capacity"])
+@pytest.mark.parametrize("failure", ["pending", "submit-capacity"])
 def test_unavailable_l40s_replans_without_unsafe_budgets(
     tmp_path: Path, maximum: str, expected: str, failure: str
 ) -> None:
@@ -387,13 +494,11 @@ def test_unavailable_l40s_replans_without_unsafe_budgets(
         def submit(self, request: StageRequest) -> RemoteHandle:
             if request.tier in unavailable and failure == "submit-capacity":
                 self.submitted.append(request)
-                raise RuntimeError("ResourceExhaustedError: no GPU capacity")
+                raise ResourceExhaustedError("workspace GPU quota exceeded")
             return super().submit(request)
 
         def poll(self, handle: RemoteHandle) -> Poll:
             if handle.tier in unavailable:
-                if failure == "poll-capacity":
-                    return Poll(state="failed", detail=f"no {handle.tier} capacity")
                 return Poll(state="pending")
             return super().poll(handle)
 
@@ -453,7 +558,7 @@ def test_capacity_downgrade_executes_and_merges_l4_blocks(tmp_path: Path) -> Non
     class NoL40S(SubprocessAdapter):
         def submit(self, request: StageRequest) -> RemoteHandle:
             if request.tier == "l40s":
-                raise RuntimeError("no L40S capacity")
+                raise ResourceExhaustedError("workspace GPU quota exceeded")
             return super().submit(request)
 
     workdir = Workdir.create(tmp_path / "run")
@@ -575,3 +680,84 @@ def test_density_opt_out_on_promoted_tier() -> None:
     admitted = train_admission.admit(budget, "l4", "l40s")
     assert admitted.gpu_tier == "l40s"
     assert admitted.cap == 8_050_000
+
+
+@pytest.mark.parametrize("detach", [False, True])
+def test_running_head_cannot_replan_if_it_later_polls_pending(tmp_path: Path, detach: bool) -> None:
+    from test_cloud_stops import Provider
+
+    from adapters import LocalTransfer
+    from cloud import HEAD, AttemptLedger, CallBook, CloudRunner, Placement, Poll, RemoteHandle
+    from errors import DetachRequested, RemoteStageError
+
+    class Head(Provider):
+        polls = 0
+
+        def poll(self, handle: RemoteHandle) -> Poll:
+            self.polls += 1
+            if self.polls == 1:
+                return Poll(state="running")
+            if self.polls == 2:
+                return Poll(state="pending")
+            return Poll(state="failed", detail="CUDA out of memory: no GPU capacity left")
+
+    now = 0.0
+
+    def sleep(_: float) -> None:
+        nonlocal now
+        now += 1000
+        if detach and now == 1000:
+            raise DetachRequested()
+
+    workdir = Workdir.create(tmp_path / "run")
+    seed_measurable(workdir, size=(1080, 1920))
+    measured = gb.plan(
+        "auto", model=workdir.input_path("poses"), train_size=(1080, 1920), pixel_scale=1.0
+    )
+    assert measured is not None
+    transfer = LocalTransfer(tmp_path / "bucket")
+    adapter = Head(transfer, tmp_path / "remote")
+    recipe = train_recipe(
+        {
+            "cap_max": "auto",
+            "max_gpu_tier": "l40s",
+            "gaussian_density": 10_000_000 / measured.footprints,
+        },
+        gpu={"tier": "l4"},
+    )
+
+    def runner() -> CloudRunner:
+        return CloudRunner(
+            Placement((adapter,)), transfer, clock=lambda: now, wall=lambda: now, sleep=sleep
+        )
+
+    if detach:
+        with pytest.raises(DetachRequested):
+            execute(recipe, workdir, RunnerSet(cpu=LocalRunner(), gpu=runner()))
+        book = CallBook.read(CallBook.beside(workdir.attempts_path("train")))
+        assert book.calls[HEAD].started
+    with pytest.raises(RemoteStageError, match="CUDA out of memory"):
+        execute(recipe, workdir, RunnerSet(cpu=LocalRunner(), gpu=runner()))
+    assert [request.tier for request in adapter.submitted] == ["l40s"]
+    assert adapter.cancelled == []
+    entries = AttemptLedger.read(workdir.attempts_path("train")).entries
+    assert len(entries) == 1 and entries[0].state == "failed"
+
+
+@pytest.mark.parametrize("status,expected", [("RESOURCE_EXHAUSTED", True), ("INTERNAL", False)])
+def test_submission_capacity_uses_rpc_status(status: str, expected: bool) -> None:
+    from enum import Enum
+
+    from cloud import _capacity_error
+
+    statuses = Enum("statuses", ["RESOURCE_EXHAUSTED", "INTERNAL"])
+    grpc_error = type(
+        "GRPCError",
+        (Exception,),
+        {
+            "__module__": "grpclib.exceptions",
+            "status": statuses[status],
+        },
+    )
+    assert _capacity_error(grpc_error("quota exceeded")) is expected
+    assert not _capacity_error(RuntimeError("ResourceExhaustedError: no GPU capacity"))
