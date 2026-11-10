@@ -483,6 +483,26 @@ def select_per_window(scores: Sequence[float], windows: Iterable[Window]) -> tup
     return tuple(max(range(w.start, w.end + 1), key=lambda i: (scores[i], -i)) for w in windows)
 
 
+def coverage_backbone(analysis: Analysis) -> tuple[int, ...]:
+    """Pose anchors at ~85% content overlap / 2% parallax, without a count ceiling.
+
+    This is sparser than training's 90% / 0.5% windows. Budgets are halved because
+    sharpest-in-window neighbours can be two windows apart. Endpoints anchor both
+    tails. Unknown motion keeps candidates; it never licenses thinning. These are
+    conservative starting budgets, not a measurement of an optimal beach backbone.
+    """
+    windows = segment_within(
+        analysis.pairs, frame_size=analysis.frame_size, overlap=0.925, parallax=0.01
+    )
+    chosen = set(select_per_window(analysis.scores, windows))
+    if analysis.scores:
+        chosen.update((0, len(analysis.scores) - 1))
+    # A held frame has no measured viewpoint of its own. Keep it too: otherwise a
+    # long sequence of unmeasurable photos could be thinned by accident.
+    chosen.update(i for i, pair in enumerate(analysis.pairs) if pair is None or not pair.measured)
+    return tuple(sorted(chosen))
+
+
 def neighbour_motion(
     pairs: Sequence[PairMotion | None],
     chosen: Sequence[int],

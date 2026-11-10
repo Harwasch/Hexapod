@@ -57,6 +57,7 @@ import init_seed
 import keyframes
 import live
 import placement
+import pose_backbone
 import priors
 import quality
 import resolution
@@ -1215,6 +1216,31 @@ def colmap(ctx: StageContext) -> StageOutcome:
     if not images:
         raise ValueError(f"the frames artifact at {frames} is empty")
     source_format = _source_format(ctx)
+    backbone_mode = str(ctx.param("backbone", "auto"))
+    use_backbone = pose_backbone.enabled(backbone_mode, len(images), source_format)
+    all_frames, all_images = frames, images
+    selection_s = 0.0
+    if use_backbone:
+        began = time.monotonic()
+        selected = keyframes.coverage_backbone(keyframes.analyse(images))
+        selection_s = time.monotonic() - began
+        frames = ctx.work_dir / "backbone-frames"
+        if frames.exists():
+            shutil.rmtree(frames)
+        frames.mkdir()
+        for index in selected:
+            # A link keeps frame bytes and filenames identical; extraction and the
+            # all-frame extension must address exactly the same feature indices.
+            (frames / images[index].name).symlink_to(images[index].resolve())
+        images = [all_images[index] for index in selected]
+        ctx.log(f"colmap: coverage backbone {len(images)}/{len(all_images)} frames")
+    time_plan = pose_backbone.estimate_seconds(
+        len(all_images), len(images), ordered=source_format == "video", engine=engine
+    )
+    ctx.log(
+        f"colmap: pose estimate {time_plan['backboneS' if use_backbone else 'incrementalS']:.0f} s "
+        "(cpu4 extrapolation, excludes transfers/retries)"
+    )
     colmap_version = colmap4.version(interpreter) if four else None
     if four and colmap_version is None:
         raise ValueError(
@@ -1427,6 +1453,37 @@ def colmap(ctx: StageContext) -> StageOutcome:
     matcher = "+".join(dict.fromkeys(step.matcher for step in plan[: round_of[model_dir] + 1]))
     fell_back = plan[0].matcher == "sequential" and len(passes_run) > 1
     mapper_used = "global" if model_dir.parent.name.endswith("-global") else "incremental"
+    registration: dict[str, object] | None = None
+    backbone_size = len(images)
+    if use_backbone:
+        # Extend the SAME database. Existing backbone keypoints, IDs, and verified
+        # pairs are reused; re-extraction of solved frames would invalidate tracks.
+        cameras = sfm.read_model(model_dir).cameras
+        if len(cameras) != 1:
+            raise ValueError("backbone extension requires the pose stage's single camera")
+        extraction["existing_camera_id"] = cameras[0].id
+        timed(
+            "extract",
+            colmap4.extract_argv(interpreter, database, all_frames, **extraction)
+            if four
+            else sfm.feature_extractor_argv(database, all_frames, **extraction),
+        )
+        registered_dir = ctx.work_dir / "backbone-registered"
+        if registered_dir.exists():
+            shutil.rmtree(registered_dir)
+        registration = pose_backbone.register(
+            ctx,
+            database,
+            all_frames,
+            model_dir,
+            registered_dir,
+            four=four,
+            interpreter=interpreter,
+            threads=threads,
+            ordered=source_format == "video",
+        )
+        model_dir = registered_dir
+        images, frames = all_images, all_frames
     for entry in sorted(model_dir.iterdir()):
         if entry.is_file():
             shutil.copyfile(entry, out / entry.name)
@@ -1479,6 +1536,16 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "registeredFraction": round(model.registered / len(images) if images else 0.0, 4),
         # Every mapping tried, so a retry is visible rather than silently lucky.
         "mapperAttempts": tries,
+        "backbone": {
+            "requested": backbone_mode,
+            "used": use_backbone,
+            "size": backbone_size,
+            "selectionS": round(selection_s, 3),
+            "targetOverlap": 0.85,
+            "maxParallaxFraction": 0.02,
+            "registration": registration,
+            "timeEstimate": time_plan,
+        },
         "points3D": model.points3d,
         "meanTrackLength": round(model.mean_track_length, 3),
         # The mean of the points' own errors, as COLMAP's model_analyzer reports it.
@@ -1547,6 +1614,18 @@ def colmap(ctx: StageContext) -> StageOutcome:
         "upEstimate": None if (up := sfm.camera_up(model)) is None else up.to_dict(),
     }
     gates, gate_failure = _pose_gates(ctx, model, len(images))
+    if use_backbone:
+        # The existing 0.8 retry target becomes a final coverage floor for this path;
+        # a run may choose a stricter fail_below_registered_fraction as well.
+        coverage_gate, coverage_failure = evaluate_gate(
+            "backbone_coverage",
+            model.registered / len(images),
+            target,
+            fail_when="below",
+            reason="backbone registration coverage below min_registered_fraction",
+        )
+        gates.append(coverage_gate)
+        gate_failure = gate_failure or coverage_failure
     document["gates"] = gates
     _write_json(out / "poses.json", document)
     if gate_failure is not None:
@@ -1581,6 +1660,18 @@ def colmap(ctx: StageContext) -> StageOutcome:
     }
     if "global" in seconds:
         metrics["globalMapS"] = round(seconds["global"], 1)
+    metrics["backboneUsed"] = use_backbone
+    metrics["backboneSize"] = backbone_size
+    metrics["backboneSelectS"] = round(selection_s, 3)
+    metrics["poseEstimatedS"] = round(time_plan["backboneS" if use_backbone else "incrementalS"], 1)
+    if registration is not None:
+        metrics["registrationAttempted"] = int(str(registration["attempted"]))
+        metrics["registrationRegistered"] = int(str(registration["registered"]))
+        metrics["registrationFailed"] = int(str(registration["failed"]))
+        timings = registration["timings"]
+        if isinstance(timings, dict):
+            for phase, duration in timings.items():
+                metrics[f"{phase}S"] = round(float(duration), 3)
     return StageOutcome(
         metrics=metrics, summary=f"{model.registered}/{len(images)} frames registered"
     )
