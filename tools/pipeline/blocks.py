@@ -89,7 +89,7 @@ import struct
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -1289,9 +1289,11 @@ def block_parts(directory: Path) -> list[Path]:
 def _block_cap(
     settings: Settings, region: BlockRegion, share: float
 ) -> tuple[int | None, gaussian_budget.Budget | None]:
-    """The block's gaussian budget: the capture's density over the block's own surface
-    when the run's budget is `auto` (clamped by the same GPU ceilings), otherwise the run's
-    cap shared by the prior's gaussians in the block."""
+    """Measure each block's density and apply the run's budget mode on its allocated GPU.
+
+    Auto applies rule B or optional headroom; density keeps the measured count.
+    Explicit caps are shared by the prior's gaussians in the block.
+    """
     budget = settings.budget
     if budget is None:
         return None, None
@@ -1310,7 +1312,29 @@ def _block_cap(
         budget_max=budget.budget_max,
         gpu_memory_gb=budget.gpu_memory_gb,
         images_per_step=settings.batch_size,
+        budget_mode=budget.budget_mode,
+        budget_headroom=budget.budget_headroom,
     )
+    if block_budget is not None:
+        block_budget = gaussian_budget.apply_tier_policy(
+            block_budget, promoted=budget.gpu_tier != budget.recipe_gpu_tier
+        )
+        policy = (
+            "rule B" if budget.budget_headroom is None else f"headroom x {budget.budget_headroom:g}"
+        )
+        block_budget = replace(
+            block_budget,
+            gpu_tier=budget.gpu_tier,
+            recipe_gpu_tier=budget.recipe_gpu_tier,
+            max_gpu_tier=budget.max_gpu_tier,
+            tier_reason=(
+                f"block on {budget.gpu_tier}, ceiling {block_budget.memory_ceiling}, "
+                f"{policy}; "
+                f"final cap {block_budget.cap} ({budget.budget_mode})"
+                if budget.budget_mode == "auto"
+                else f"block uses {budget.budget_mode}; final cap {block_budget.cap}"
+            ),
+        )
     return (None if block_budget is None else block_budget.cap), block_budget
 
 

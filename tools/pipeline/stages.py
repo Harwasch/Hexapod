@@ -1840,10 +1840,12 @@ def gsplat(ctx: StageContext) -> StageOutcome:
       `init_seed.py` has the reasoning.
     * `cap_max: auto` sizes MCMC's gaussian cap to the capture: its supported surface in
       finest-view pixels, from the pose stage's sparse model, times `gaussian_density`
-      (x `density_scale`, a phone's quality tier), clamped to `budget_floor` and to the
-      smaller of the GPU's memory (the placed tier's, `gaussian_budget.GPU_MEMORY_GB`, or
-      `gpu_memory_gb` when a run gives one; at the training frames' real size) and
-      `budget_max`. An integer is an override, used as given. `gaussian_budget.py` has the
+      (x `density_scale`, a phone's quality tier). This density target has `budget_floor`
+      as a minimum and selects the smallest fitting GPU up to `max_gpu_tier`. Default
+      `budget_mode: auto` budgets min(ceiling, `budget_headroom` x density target),
+      with headroom 2.5; `density` forces headroom 1.0 and keeps the old density cap.
+      `gpu_memory_gb` can restrict capacity and `budget_max` caps each pass.
+      An integer is an override, used as given. `gaussian_budget.py` has the
       formula, the calibration and the memory model; `train_metrics.json`'s `budget` has
       every input.
     * `converge` ends training when held-out PSNR has stopped improving after

@@ -769,6 +769,22 @@ class Placement:
 # --- the runner --------------------------------------------------------------------
 
 
+# A capacity failure is recorded before this internal control-flow exception is raised.
+_CAPACITY = "capacity unavailable: "
+
+
+def _capacity_error(detail: str) -> bool:
+    lower = detail.lower()
+    return "resourceexhausted" in lower or (
+        "capacity" in lower
+        and any(word in lower for word in ("no ", "insufficient", "unavailable"))
+    )
+
+
+class _CapacityUnavailableError(Exception):
+    pass
+
+
 class CloudRunner(BaseRunner):
     """A GPU stage, run on somebody else's machine.
 
@@ -860,8 +876,10 @@ class CloudRunner(BaseRunner):
         self._made: list[Attempt] = []
 
     def _context(self, stage: PlannedStage, workdir: Workdir, attempt: int) -> StageContext:
-        context = super()._context(stage, workdir, attempt)
-        if stage.impl.name != "gsplat":
+        return self._admission(super()._context(stage, workdir, attempt))
+
+    def _admission(self, context: StageContext) -> StageContext:
+        if context.impl != "gsplat":
             return context
         # Read headers and sparse geometry locally, before any GPU call or transfer.
         import train_admission
@@ -873,17 +891,37 @@ class CloudRunner(BaseRunner):
             int(params.get("data_factor", 1)),
             None if params.get("train_max_side") is None else int(params["train_max_side"]),
         )
-        budget = train_admission.plan(params, context.gpu_tier, context.input("poses"), size, scale)
+        failures = [
+            entry
+            for entry in AttemptLedger.read(context.attempts_path).entries
+            if entry.detail.startswith(_CAPACITY)
+        ]
+        unavailable = list(dict.fromkeys(entry.tier for entry in failures))
+        budget = train_admission.plan(
+            params,
+            context.gpu_tier,
+            context.input("poses"),
+            size,
+            scale,
+            unavailable=unavailable,
+        )
         if budget is None:
             return context
+        if unavailable and budget.memory_ceiling is not None and budget.cap > budget.memory_ceiling:
+            raise NoRunnerError(
+                f"no available tier can hold the explicit cap {budget.cap}; "
+                f"{budget.gpu_tier} ceiling is {budget.memory_ceiling}"
+            )
         context.log(f"admission: {budget.gpu_tier}: {budget.tier_reason}")
         record = {
-            "recipeTier": context.gpu_tier,
+            "recipeTier": budget.recipe_gpu_tier,
             "tier": budget.gpu_tier,
             "cap": budget.cap,
             "pixels": 0 if size is None else size[0] * size[1],
             "batchSize": int(params.get("batch_size", 1)),
             "reason": budget.tier_reason,
+            "unavailableTiers": unavailable,
+            "replanReason": "; ".join(entry.detail for entry in failures),
         }
         return replace(
             context,
@@ -903,7 +941,18 @@ class CloudRunner(BaseRunner):
             f"{adapter.name!r} ({tier}); {ledger.preemptions} preemption(s) so far"
         )
         try:
-            return self._run(stage, context, keys, tier, book)
+            while True:
+                try:
+                    return self._run(stage, context, keys, tier, book)
+                except _CapacityUnavailableError:
+                    # Only a head that never acquired capacity can re-plan. Its call
+                    # has ended and is in the ledger; no parts or joins are in flight.
+                    context = self._admission(context)
+                    tier = context.gpu_tier or "cpu"
+                    context.log(
+                        f"cloud: re-plan after capacity failure -> {tier}; "
+                        f"{context.params['_train_admission']}"
+                    )
         except DetachRequested:
             # The calls are left in the book for the next process; so is the fan-out.
             raise
@@ -1003,6 +1052,9 @@ class CloudRunner(BaseRunner):
         ledger = AttemptLedger.read(context.attempts_path)
         metrics = self._metrics(self._made, ledger, called.poll)
         metrics.update(fanned)
+        admission = context.params.get("_train_admission")
+        if admission:
+            metrics["trainAdmission"] = json.dumps(admission, sort_keys=True)
         # The last call's billed seconds, phase by phase (`call_phases`): the one call, or
         # the join. A fan-out's head and parts are `headPhases` and `fanOutPhases`.
         metrics["remotePhases"] = flat(call_phases(called.submitted_at, called.poll))
@@ -1077,7 +1129,20 @@ class CloudRunner(BaseRunner):
                 produces=stage.impl.produces,
             )
             self._within_cap(context, f"call {part or 'for the stage'}")
-            handle, submitted = self._submit(adapter, request, context, tier, book, part)
+            try:
+                handle, submitted = self._submit(adapter, request, context, tier, book, part)
+            except Exception as error:
+                if not self._can_replan(context, part, tier) or not _capacity_error(str(error)):
+                    raise
+                self._record(
+                    adapter,
+                    context,
+                    tier,
+                    Poll(state="failed", detail=_CAPACITY + str(error)),
+                    ledger,
+                    part=part,
+                )
+                raise _CapacityUnavailableError from error
             context.log(f"cloud: submitted to {adapter.name!r} as call {handle.id}")
             started = self._clock()
         else:
@@ -1087,9 +1152,18 @@ class CloudRunner(BaseRunner):
         # Whatever the remote last synced comes home before anything else is decided, so
         # the next attempt resumes from it. Disable this and a preempted stage restarts.
         self._restore_checkpoint(context, request.checkpoint_key)
+        capacity = (
+            poll.state == "failed"
+            and self._can_replan(context, part, request.tier)
+            and (poll.detail.startswith(_CAPACITY) or _capacity_error(poll.detail))
+        )
+        if capacity and not poll.detail.startswith(_CAPACITY):
+            poll = replace(poll, detail=_CAPACITY + poll.detail)
         entry = self._record(adapter, context, tier, poll, ledger, part=part, call=handle.id)
         if poll.state != "succeeded":
             book.drop(part)
+        if capacity:
+            raise _CapacityUnavailableError
         if poll.state == "preempted":
             raise PreemptedError(
                 context.recipe, context.stage_id, context.attempt, adapter.name, entry.billed_s
@@ -1098,6 +1172,15 @@ class CloudRunner(BaseRunner):
             failure = RemoteTimeoutError if poll.timed_out else RemoteStageError
             raise failure(context.recipe, context.stage_id, context.impl, adapter.name, poll.detail)
         return _Called(adapter=adapter, poll=poll, submitted_at=submitted, request=request)
+
+    @staticmethod
+    def _can_replan(context: StageContext, slot: str, tier: str) -> bool:
+        return (
+            context.impl == "gsplat"
+            and slot == HEAD
+            and tier in ("l40s", "a100")
+            and "_train_admission" in context.params
+        )
 
     def _submit(
         self,
@@ -1720,7 +1803,15 @@ class CloudRunner(BaseRunner):
                     # log after its verdict did. The worker reads them to decide on a retry.
                     self._tail(adapter, handle, context, cursor, deadline)
                     return poll
-                poll = self._overdue(adapter, handle, poll, self._clock() - started)
+                poll = self._overdue(
+                    adapter,
+                    handle,
+                    poll,
+                    self._clock() - started,
+                    pending_s=min(self._max_pending_s, 300.0)
+                    if self._can_replan(context, slot, handle.tier)
+                    else None,
+                )
                 if poll.state in TERMINAL:
                     return poll
                 poll = self._past_deadline(adapter, handle, poll, deadline)
@@ -1806,17 +1897,25 @@ class CloudRunner(BaseRunner):
         return entry
 
     def _overdue(
-        self, adapter: ProviderAdapter, handle: RemoteHandle, poll: Poll, waited: float
+        self,
+        adapter: ProviderAdapter,
+        handle: RemoteHandle,
+        poll: Poll,
+        waited: float,
+        *,
+        pending_s: float | None = None,
     ) -> Poll:
         """`poll`, or a cancelled failure when the call has pended or run too long."""
-        if poll.state == "pending" and waited >= self._max_pending_s:
+        limit = self._max_pending_s if pending_s is None else pending_s
+        if poll.state == "pending" and waited >= limit:
             adapter.cancel(handle)
             return replace(
                 poll,
                 state="failed",
-                detail=(
+                detail=(_CAPACITY if pending_s is not None else "")
+                + (
                     f"the stage never started on {adapter.name!r}: still pending "
-                    f"after {self._max_pending_s:.0f}s, so it was cancelled. "
+                    f"after {limit:.0f}s, so it was cancelled. "
                     f"A container that crashes on start (check the provider's "
                     f"logs for this app) or no {handle.tier} capacity"
                 ),

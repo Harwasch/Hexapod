@@ -134,6 +134,21 @@ cd apps/api && uv run ruff check . && uv run mypy .
 After changing a Pydantic schema: `uv run python -m app.scripts.export_openapi ../../packages/contracts/openapi.json`
 then `pnpm contracts:generate`. CI fails if the committed contract is stale.
 
+Photo reconstruction uses `budget_mode: auto`: measure the density target, choose the
+smallest GPU that holds it (L4 → L40S → A100, up to `max_gpu_tier: l40s` by default),
+then apply rule B: keep the density target on the recipe's base tier (L4), and fill
+the chosen tier's ceiling after promotion. At 1080x1920, the beach's 8.05M target
+plans about 14.0M on L40S; 0.5M, 5M and 6.72M targets keep those counts on L4.
+Targets beyond the maximum split into blocks, each applying the same rule to its
+own target and allocated tier. Optional `budget_headroom` is off by default
+(null/absent); setting 2.5 budgets `min(tier ceiling, 2.5 × density target)` on
+every tier (0.5M → 1.25M, beach → 14.0M). `budget_mode: density` keeps
+density-sized caps; `budget_max`, integer `cap_max`, and Preview's fixed cap retain
+their overrides. The survey streams all observations in bounded chunks on the
+Fly worker, with no sampling. More gaussians
+can increase training time and cost. See [pipeline budget policy](tools/pipeline/README.md#opacity-and-gpu-capacity-recipe-v17)
+and [deployment costs and survey memory](docs/DEPLOYMENT.md) for evidence and limits.
+
 ## Sample objects for close-range testing
 
 `pnpm samples` (with the API and dev server running) downloads two CC0 photoscanned objects,

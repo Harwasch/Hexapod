@@ -86,6 +86,7 @@ def auto(directory: Path, **overrides: Any) -> gaussian_budget.Budget:
         "train_size": (1600, 1200),
         "pixel_scale": 1.0,
         "floor": 1,
+        "budget_mode": "density",
     }
     kwargs.update(overrides)
     budget = gaussian_budget.plan("auto", **kwargs)
@@ -329,7 +330,9 @@ def test_auto_measures_the_capture_and_hands_the_trainer_the_cap(tmp_path: Path)
     workdir = Workdir.create(tmp_path / "run")
     seed_measurable(workdir)
 
-    params = stand_in_params(strategy="mcmc", cap_max="auto", budget_floor=1, gaussian_density=2.0)
+    params = stand_in_params(
+        strategy="mcmc", cap_max="auto", budget_mode="density", budget_floor=1, gaussian_density=2.0
+    )
     execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
 
     document = train_metrics(workdir)
@@ -355,7 +358,12 @@ def test_auto_reads_the_frames_at_the_size_training_will(tmp_path: Path) -> None
     seed_measurable(workdir, size=(64, 48))
 
     params = stand_in_params(
-        strategy="mcmc", cap_max="auto", budget_floor=1, gaussian_density=2.0, train_max_side=32
+        strategy="mcmc",
+        cap_max="auto",
+        budget_mode="density",
+        budget_floor=1,
+        gaussian_density=2.0,
+        train_max_side=32,
     )
     execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
 
@@ -423,6 +431,7 @@ def test_a_phones_density_scale_multiplies_the_measured_budget(tmp_path: Path) -
             budget_floor=1,
             gaussian_density=2.0,
             density_scale=scale,
+            budget_mode="density",
         )
         execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
         runs[scale] = train_metrics(workdir)["budget"]

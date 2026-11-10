@@ -673,3 +673,22 @@ def test_fallback_respects_the_recipe_maximum_tier() -> None:
     adapter = ModalAdapter("unused")
     req = replace(request(), params={"max_gpu_tier": "l4"})
     assert adapter._chain(req) == ("l4", "a10")
+
+
+def test_replanned_call_never_revisits_an_unavailable_tier() -> None:
+    looked_up: list[str] = []
+    adapter = ModalAdapter("unused")
+    adapter._function = lambda tier: looked_up.append(tier) or FakeFunction(FakeCall())  # type: ignore[method-assign,func-returns-value]
+    req = replace(
+        request(),
+        params={
+            "_train_admission": {
+                "cap": 6_000_000,
+                "pixels": 1080 * 1920,
+                "unavailableTiers": ["l40s"],
+            }
+        },
+    )
+    assert adapter._chain(req) == ("l4", "a10")
+    adapter.submit(req)
+    assert looked_up == ["l4"]

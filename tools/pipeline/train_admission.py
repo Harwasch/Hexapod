@@ -8,7 +8,7 @@ reference intrinsics ratio and largest registered render view.
 from __future__ import annotations
 
 import struct
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -19,7 +19,6 @@ import support_mask
 import training
 
 TIERS = ("l4", "l40s", "a100")
-DEFAULT_MAX_TIER = "l40s"
 PLAN_PARAM = "_train_admission"
 
 
@@ -76,15 +75,19 @@ def admit(
     *,
     images_per_step: int = 1,
     memory_override: object = None,
+    unavailable: Sequence[str] = (),
+    recipe_base: str | None = None,
 ) -> gb.Budget:
-    """Keep the density target; clamp only per-call capacity for blocks at the max tier."""
-    tiers = allowed_tiers(base, maximum)
+    """Choose capacity from density, then apply rule B or optional headroom."""
+    tiers = tuple(t for t in allowed_tiers(base, maximum) if t not in unavailable)
+    if not tiers:
+        raise ValueError("no allowed training GPU tiers remain available")
     pixels = 0 if budget.train_size is None else budget.train_size[0] * budget.train_size[1]
     target = budget.raw if budget.raw is not None else budget.cap
     target = max(budget.floor, target) if budget.mode == "auto" else target
     if budget.budget_max is not None and budget.mode == "auto":
         target = min(target, budget.budget_max)
-    chosen = base
+    chosen = tiers[0]
     reason = "training image size unknown; retaining recipe tier"
     ceiling = budget.memory_ceiling
     if pixels:
@@ -101,17 +104,16 @@ def admit(
     memory = gb.gpu_memory_for(chosen)
     if memory_override is not None:
         memory = min(memory, float(str(memory_override)))
-    cap, clamp = budget.cap, budget.clamp
+    budget = gb.apply_tier_policy(
+        replace(budget, memory_ceiling=ceiling), promoted=chosen != (recipe_base or base)
+    )
     if budget.mode == "auto":
-        cap, clamp = target, "budget-max" if target < (budget.raw or 0) else None
-        if target == budget.floor and target > (budget.raw or 0):
-            clamp = "floor"
-        if ceiling is not None and cap > ceiling:
-            cap, clamp = max(1, ceiling), "gpu-memory"
+        policy = (
+            "rule B" if budget.budget_headroom is None else f"headroom x {budget.budget_headroom:g}"
+        )
+        reason += f"; {policy}; final cap {budget.cap} ({budget.budget_mode})"
     return replace(
         budget,
-        cap=cap,
-        clamp=clamp,
         memory_ceiling=ceiling,
         gpu_memory_gb=memory,
         gpu_tier=chosen,
@@ -129,21 +131,25 @@ def plan(
     pixel_scale: float | None,
     *,
     fixed_tier: bool = False,
+    unavailable: Sequence[str] = (),
 ) -> gb.Budget | None:
     """One policy used before submission and before building the trainer's argv."""
     placed = base or "l4"
     original = params.get(PLAN_PARAM, {})
     base = str(original.get("recipeTier", placed))
-    maximum = str(params.get("max_gpu_tier", DEFAULT_MAX_TIER if base in TIERS[:2] else base))
-    tiers = allowed_tiers(base, maximum)
-    # Only the worker can acquire a bigger card. A container or LocalRunner is
-    # already placed (bench runs use LocalRunner inside a fixed-tier GPU function).
-    effective_max = placed if fixed_tier else maximum
-    if fixed_tier:
-        tiers = allowed_tiers(base, effective_max)
-    mode = str(params.get("budget_mode", "density"))
-    if mode not in ("density", "gpu-max"):
-        raise ValueError(f"budget_mode must be density or gpu-max, not {mode!r}")
+    maximum = str(params.get("max_gpu_tier", base))
+    # A bench may already occupy a card above the recipe maximum. Validate against
+    # that allocation before checking the recipe range; a container cannot promote.
+    if fixed_tier and maximum in TIERS and placed in TIERS:
+        maximum = TIERS[max(TIERS.index(maximum), TIERS.index(placed))]
+    allowed_tiers(base, maximum)
+    effective_base, effective_max = (placed, placed) if fixed_tier else (base, maximum)
+    tiers = tuple(t for t in allowed_tiers(effective_base, effective_max) if t not in unavailable)
+    if not tiers:
+        raise ValueError("no allowed training GPU tiers remain available")
+    mode = str(params.get("budget_mode", "auto"))
+    if mode not in ("auto", "density", "gpu-max"):
+        raise ValueError(f"budget_mode must be auto, density or gpu-max, not {mode!r}")
     mask = support_mask.SupportMask.parse(params.get("support_mask"))
     region = mask if mask is not None else training.Roi.parse(params.get("roi"))
     batch = training.check_batch_size(params.get("batch_size", 1))
@@ -165,8 +171,19 @@ def plan(
         gpu_memory_gb=memory,
         images_per_step=batch,
         budget_mode=mode,
+        budget_headroom=(
+            None if params.get("budget_headroom") is None else float(params["budget_headroom"])
+        ),
     )
     if budget is None:
         return None
-    admitted = admit(budget, base, effective_max, images_per_step=batch, memory_override=override)
-    return replace(admitted, max_gpu_tier=maximum)
+    admitted = admit(
+        budget,
+        effective_base,
+        effective_max,
+        images_per_step=batch,
+        memory_override=override,
+        unavailable=unavailable,
+        recipe_base=base,
+    )
+    return replace(admitted, recipe_gpu_tier=base, max_gpu_tier=maximum)

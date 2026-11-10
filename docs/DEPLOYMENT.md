@@ -566,7 +566,7 @@ A worker with new default checkpoint flags requires this new training image.
 At surveyed rates, 2 cores + 16 GiB adds $0.222192/hour beside a GPU; L4 total is
 $1.021392/hour, $0.063936/hour above the old 8 GiB reservation. A beach-sized scan uses
 all 2,036 registered native frames and at least 60k equivalent steps. Recipe v17
-promotes its 8.05M density target to one L40S before considering blocks. The campaign's single-GPU full-data
+promotes its 8.05M density target to one L40S and fills its roughly 14.0M ceiling before considering blocks. The campaign's single-GPU full-data
 run measured 157 minutes / $2.73; it is not a quote for the new block/cap/checkpoint path.
 The six-hour function timeout and existing retry limits remain in force. Single-call
 pre-emption and immediate block-call retries resume from the last synced 5k checkpoint.
@@ -575,25 +575,83 @@ remain deferred; completed blocks already survive.
 
 **Recipe v17 capacity and spending.** `photo-reconstruct` now sets MCMC
 `opacity_reg: 0.002` for every scan, including the shared-recipe Preview; Preview keeps
-its fixed cap, image size and schedule. The default `budget_mode: density` stays at
-0.1 Gaussians per finest-view surface pixel, with no L4-only clamp. Before submitting
-training, the worker chooses the smallest fitting tier from L4 → L40S → A100-80, up to
-`max_gpu_tier: l40s`. Auto blocks are needed beyond that maximum (or an explicit
-per-pass limit); the burst-aware native 1080x1920 ceilings remain about 6.72M / 14.0M /
-23.7M. `budget_mode: gpu-max` explicitly targets the configured maximum's ceiling;
-`max_gpu_tier: a100` permits the 80 GB tier. The beach therefore gets about **8.05M on
-one L40S by default**, or about 14.0M with gpu-max at the default maximum.
+its fixed cap, image size and schedule. The default `budget_mode: auto` measures a
+density target at 0.1 Gaussians per finest-view surface pixel, chooses the smallest
+fitting tier from L4 → L40S → A100-80 up to `max_gpu_tier: l40s`, then budgets
+by **rule B**: retain the density target on the recipe's base tier (L4), or fill
+the chosen tier's ceiling after promotion. At native 1080x1920 the ceilings remain
+about **6.72M / 14.0M / 23.7M**. The beach's 8.05M target therefore plans **about
+14.0M on one L40S**. Targets of **0.5M, 5M and 6.72M keep those counts on L4**.
+A 50M target splits into four L40S blocks, each filling about **14.0M**.
+Each block applies the same rule to its own target and allocated tier. With
+`max_gpu_tier: a100`, bigger GPUs are considered before blocks.
+
+`budget_headroom` is optional and off by default (null/absent). When set, budget =
+**min(tier ceiling, headroom × target)** on every tier. Setting 2.5 gives
+**0.5M → 1.25M on L4** and **8.05M → about 14.0M on L40S**. The beach's LPIPS
+improved through 20M (2.5x its target) with flat PSNR at opacity_reg 0.002;
+there is no evidence beyond that. `budget_mode: density` opts out of filling
+promoted tiers and forces headroom 1.0 (8.05M on L40S for the beach);
+`budget_headroom: 1.0` also keeps density-sized caps. `budget_mode: gpu-max`
+explicitly targets the configured maximum's ceiling. `budget_max` remains a lower
+per-pass cap and integer `cap_max` remains a fixed override. Explicit per-pass
+limits can still force blocks. Train metrics record the density target
+(`budget.densityTarget`, also `raw`), chosen tier (`gpuTier`), tier ceiling
+(`memoryCeiling`), final cap (`capMax`), reason (`tierReason`) and headroom
+(`budgetHeadroom`: null for rule B, 1.0 for density).
 
 Using the repository's surveyed price table, L40S is **$1.9512/h GPU-only versus L4's
 $0.7992/h**, or **$2.173392/h versus $1.021392/h** with the same 2 cores and 16 GiB.
 A100-80 is **$2.722192/h** including reservation, another 25% per hour over L40S.
 L40S is the default maximum to bound spend; A100 is an explicit override. Neither
 avoiding blocks nor the beach's improving LPIPS establishes a cheaper per-scan price
-at higher counts. Existing dollar caps, retries and timeouts still apply; the running
+at higher counts. More gaussians mean slower steps and can increase time and per-scan
+cost on promoted tiers or with optional headroom; `budget_mode: density` keeps
+density-sized counts. Existing dollar caps, retries and timeouts still apply; the running
 cost estimate and attempt ledger use the chosen tier's rate and reprice an actual
 fallback from the reported GPU. Fallbacks are capacity-filtered before submission;
 a 14M call cannot land on an L4/A10. Promoted calls use the existing dedicated
 `run_stage_l40s` / `run_stage_a100` functions, without requiring new Modal function names.
+An admitted L40S/A100 head gets at most five minutes pending (or the configured
+shorter pending limit). A capacity error or that bounded wait records the failed
+call and excludes its tier for this run, including worker retries/deploys. Admission
+tries A100 only when allowed; otherwise it recalculates an L4 budget and splits into
+blocks. Rule B keeps each L4 block's density target; optional headroom instead
+applies min(L4 ceiling, headroom × block density target). Each unavailable tier is tried once; ordinary
+training failures do not trigger re-planning. Reasons and exclusions are in the log,
+call requests, attempt ledger and successful step's `trainAdmission` metric. Jobs
+without `max_gpu_tier` retain their recipe tier (including saved v16 jobs); v17 opts
+in explicitly. A fixed A100 bench allocation accepts a lower recipe maximum.
+
+**Offline checks for this policy (2026-11-09).** At the supplied measured beach rate
+of about 9.7 steps/s at 10M, 60k steps take 1.72 h ($3.73 with L40S reservation).
+Assuming time per step scales linearly with count, 14M projects about 6.93 steps/s,
+2.41 h and **$5.23 training**, before startup, transfers, exports and other stages.
+That is below the $25 job cap; the cap buys about 11.5 L40S hours in total. This is
+an extrapolation, not a measured 14M rate or a whole-job price guarantee.
+
+The density survey now streams all observations in chunks of at most **65,536**,
+including a single long point track; image metadata counts also stream. It retains
+only point positions/finest footprints (32 bytes per point), compact camera lookup
+arrays and fixed chunk buffers before the surface calculation. Memory scales with
+points and images, not the total observations; there is no subsampling or estimation
+error. Small fixtures match the previous whole-array footprints and surface results
+exactly across chunk boundaries. The former survey peaked at **1,687 MiB for 1M
+points/20M observations** and **2,449 MiB for 1M/30M**, unsafe on the 2 GB Fly worker.
+The new full surveys peaked at **255.09 MiB RSS / 220.41 MiB traced allocations**
+for 1M/20M and **255.08 MiB RSS / 220.41 MiB traced allocations** for 1M/30M
+(including surface aggregation, under the 600 MiB target). Reproduction is in the
+[pipeline README](../tools/pipeline/README.md#density-survey-memory).
+
+The survey stays on the CPU worker because admission must choose the tier before
+submitting a GPU call; moving it into a GPU container would allocate a card before
+knowing which one fits and require another dispatch to change tiers. Containers
+repeat the same bounded survey on their assembled dataset. The memory measurements
+cover the survey process, not the worker's full resident set or models with more than
+1M points. A v16 block checkpoint is isolated in its own lane; even if copied into
+the v17 whole-scene lane, the changed checkpoint identity discards it and restarts at
+step zero (offline stand-in test), without restoring incompatible optimizer state.
+
 Deploy the worker and its matching pipeline image together so both use the shared
 admission policy. This change has local stand-in coverage only, with no network or GPU
 run. [Opacity and capacity evidence](../tools/pipeline/README.md#opacity-and-gpu-capacity-recipe-v17)

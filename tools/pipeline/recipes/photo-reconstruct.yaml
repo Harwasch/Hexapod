@@ -223,12 +223,22 @@ stages:
       # target beyond that maximum splits automatically. At native 1080x1920 the
       # burst-aware ceilings are ~6.72M / 14.0M / 23.7M. A lower gpu_memory_gb
       # override restricts admission; it cannot grant a card more physical memory.
-      # budget_mode: gpu-max targets the max tier's ceiling instead of surface density.
+      # auto (rule B): base tier keeps its density target; promoted tiers fill
+      # their ceiling. Blocks apply the same rule using their allocated tier.
+      # At 1080x1920: 0.5M/5M/6.72M stay unchanged on L4; beach 8.05M -> ~14M L40S.
+      # Optional budget_headroom is OFF (null/absent). Set 2.5 to budget
+      # min(tier ceiling, 2.5 x target) on every tier: 0.5M -> 1.25M.
+      # Beach LPIPS improved through 20M (2.5x) at opacity_reg 0.002, flat PSNR;
+      # no evidence beyond. density forces headroom 1.0 regardless of this setting.
+      # The worker survey streams all observations in 65,536-row chunks, with
+      # O(points + images + chunk) memory and no sampling (density_memory_probe.py).
+      # gpu-max targets the max tier's ceiling instead of surface density.
       # L40S is the default max to bound hourly spend; A100-80 is an explicit opt-in.
       # budget_max still limits each pass; an integer cap_max is passed as given.
       cap_max: auto
       gaussian_density: 0.1
-      budget_mode: density
+      budget_mode: auto
+      budget_headroom: null
       max_gpu_tier: l40s
       budget_floor: 200000
       # No frame is withheld. PSNR/SSIM/LPIPS and held-out error are unavailable;

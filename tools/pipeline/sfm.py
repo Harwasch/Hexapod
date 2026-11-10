@@ -776,8 +776,12 @@ def _read_images(path: Path) -> tuple[Image, ...]:
             image_id, *pose, camera_id = struct.unpack("<IdddddddI", handle.read(64))
             name = _read_cstring(handle)
             count = _u64(handle)
-            raw = handle.read(24 * count)
-            ids = np.frombuffer(raw, dtype="<u8").reshape(-1, 3)[:, 2] if count else np.zeros(0)
+            # Count matches without materialising an image's full observation array.
+            matched = 0
+            for start in range(0, count, 65_536):
+                raw = handle.read(24 * min(65_536, count - start))
+                ids = np.frombuffer(raw, dtype="<u8").reshape(-1, 3)[:, 2]
+                matched += int(np.count_nonzero(ids != np.uint64(0xFFFFFFFFFFFFFFFF)))
             out.append(
                 Image(
                     id=image_id,
@@ -787,7 +791,7 @@ def _read_images(path: Path) -> tuple[Image, ...]:
                     camera_id=camera_id,
                     points2d=count,
                     # 2**64-1 is COLMAP's "this observation has no 3D point".
-                    points3d=int(np.count_nonzero(ids != np.uint64(0xFFFFFFFFFFFFFFFF))),
+                    points3d=matched,
                 )
             )
     return tuple(sorted(out, key=lambda image: image.name))
@@ -1087,7 +1091,7 @@ def _read_points3d(path: Path) -> tuple[int, int, float]:
             record = handle.read(43)  # id, xyz, rgb, error
             errors += struct.unpack_from("<d", record, 35)[0]
             length = _u64(handle)
-            handle.read(8 * length)
+            handle.seek(8 * length, 1)
             points += 1
             tracks += length
     return points, tracks, errors

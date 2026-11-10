@@ -427,6 +427,8 @@ class ModalAdapter:
         if request.impl != "gsplat":
             return chain
         admission = request.params.get("_train_admission", {})
+        unavailable = admission.get("unavailableTiers", ())
+        chain = tuple(tier for tier in chain if tier not in unavailable)
         pixels = int(admission.get("pixels", 0)) * int(admission.get("batchSize", 1))
         cap = admission.get("cap", gaussian_budget.parse_cap(request.params.get("cap_max")))
         maximum = request.params.get("max_gpu_tier")
