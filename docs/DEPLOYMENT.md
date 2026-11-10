@@ -536,6 +536,18 @@ the worker.** In `tools/pipeline/recipes/photo-reconstruct.yaml` that is four st
 Production confirmed the split on 2026-10-22: those four ran on Modal, the rest on the
 worker.
 
+Large captures now default to `pose.backbone: auto` (200+ pose-input frames): solve a backbone
+selected by viewpoint coverage, then register the remaining frames and run bounded
+bundle adjustment. `backbone: off` keeps the previous path. Job ecbcdda1 on 2026-11-09
+registered 954/2,037 beach frames in 1 h 43 min with incremental mapping still growing.
+The new cpu4 time model plans the same frame count with 300 anchors at about 64 minutes
+on COLMAP 4.2, versus about eight hours incrementally. This is an extrapolation,
+excluding transfers and retries, not a production runtime measurement. Backbone size
+grows with coverage; unordered photos can retain every frame. The six-hour pose stage
+limit stays unchanged. Inspect `poses.json.backbone`, registration counts, reprojection
+error and phase timings on the first approved production run; see
+[the pose method and limits](../tools/pipeline/README.md#coverage-backbone-then-registration).
+
 | Where        | What runs                                                                           | Why there                                                                                                             |
 | ------------ | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Fly `worker` | `normalize` (ffmpeg), `georeference`, `place`, `confidence`, `package` and the rest | light CPU work; the worker already holds the upload                                                                   |

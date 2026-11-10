@@ -607,6 +607,75 @@ untouched by them, and `StubRunner` fabricates the new artifacts with no edit of
 
 ## Where pose runs
 
+### Coverage backbone, then registration
+
+`pose.backbone: auto` is the default. Captures with fewer than 200 frames keep the
+existing pose path; `backbone: off` selects that path at any size. Larger videos and
+photo sets first solve a **coverage backbone**, then register every other frame into
+that model. Training still receives every successfully registered native frame.
+This introduces no fixed 300-frame cap: a long walk needs more anchors than a short
+orbit, even at the same frame count.
+The threshold applies to pose-input frames, including photo sets at normalize's
+existing `keep: 200` cap; this change does not lift that photo cap.
+
+The selector reuses `keyframes.py`'s phase-correlated homographies and residual
+parallax. It chooses the sharpest frame in each motion window, aiming for about
+85% content overlap and at most 2% of the image long side in residual parallax
+between neighbours. Window budgets are half those gaps, because selected frames can
+sit at opposite ends of adjacent windows. Both endpoints and every frame whose motion
+cannot be measured are retained. These are conservative initial budgets, not a tuned
+optimum; an unordered or untextured photo set can retain every frame and get no
+mapping speedup. No count ceiling weakens coverage to meet a time estimate.
+
+The existing matcher, mapper, retries, focal seed and optional GNSS priors solve only
+the backbone. Extraction then extends the same database with the other frames, reusing
+backbone feature indices and the same camera ID. For video, each unposed frame matches
+up to four solved backbone neighbours on each side (the bench's registration rule).
+Photos match every solved anchor: filenames do not establish overlap. This costs
+O(N × B) matching for N photos and B anchors, rather than an all-photo remapping pass.
+
+On pycolmap 4.2, two bounded registration passes use absolute pose estimation and
+triangulate each new view, followed by **one** global adjustment capped at 10 iterations
+and 120 solver seconds. Backbone poses and camera calibration remain fixed, preserving
+their gauge and GNSS constraints. COLMAP 3.9.1 uses `image_registrator`,
+`point_triangulator` (one refinement, at most 10 iterations), and `bundle_adjuster`
+(10 iterations); calibration stays fixed, while poses may refine. The CLI has no
+solver-time cap here. Failure to register individual frames records their names and
+reason and drops them from the pose model. The backbone path fails if final coverage
+is below `min_registered_fraction` (default 0.8); `fail_below_registered_fraction` and
+the reprojection gate can impose stricter limits. Registration command failures still
+fail the stage.
+
+`poses.json.backbone` records the selected and solved counts, attempted/registered/failed
+registration counts, per-frame failures, phase timings, BA limits and both time estimates.
+Stage metrics include `backboneSize`, `backboneSelectS`, `registrationAttempted`,
+`registrationRegistered`, `registrationFailed`, registration/triangulation/BA seconds,
+`meanReprojectionErrorPx` and `poseEstimatedS`. Existing `mapS` covers backbone mapping;
+`extractS` includes both extraction passes. `poses.json` is written before a coverage
+gate failure so the dropped frames remain inspectable.
+
+`pose_backbone.estimate_seconds(N, B)` fits quadratic incremental mapping to production
+job **ecbcdda1**, 2026-11-09: 954 of 2,037 native 1080×1920 frames after 6,180 s, with
+mapping slowing as the model grew. Matching uses the 179-frame production timings below
+(49 s on 4.2, 266 s on 3.9); extraction uses 3.7 s / 87 frames, analysis 60 ms/frame,
+and registration reserves 1.5 s/frame against the bench CPU smoke's 5.76 s / 4 new
+frames. The bench's full registration reached about 0.85 px on the beach, but its
+full-size wall time is not recorded in this branch. With **300 coverage anchors**,
+2,037 frames plan at about **64 minutes on 4.2**, versus **8 hours** for incremental
+mapping. This is a cpu4 extrapolation at 4096 features / 1600 px / octave 0, excluding
+transfers, queue/startup and retries; it is not a measured production runtime or a
+guarantee that every 2,037-frame path fits 90 minutes. More coverage increases B and
+the estimate; all-anchor photo matching is included separately. The six-hour stage
+limit is unchanged.
+
+Validation: synthetic motion tests compare a short orbit and a longer walk, preserve
+coverage under denser sampling, and check a beach-sized proxy's anchor range and
+90-minute budget. A local CPU test with cached pycolmap 4.2 and a freely refined EXIF
+focal seed solves 40 rendered orbit views, registers all 40 held-out views and drops one
+unrelated frame. CLI routing is
+tested with stand-ins; the new 3.9.1 commands and the full beach production runtime
+remain unverified locally. No Modal or GPU run is part of this change.
+
 `pose` runs on the **worker's CPU**, not the GPU box. The GPU is billed by the second and
 only `train` needs one. COLMAP's CPU path is the one every finding in `sfm.py` was measured
 on. And shipping frames to Modal for SfM and back would add a round trip the stage does
