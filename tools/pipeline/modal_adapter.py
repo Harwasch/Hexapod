@@ -105,6 +105,7 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
+import gaussian_budget
 from cloud import (
     BILLING_CONTAINER,
     BILLING_PROXY,
@@ -362,6 +363,11 @@ class ModalAdapter:
         supervisor that created it.
         """
         chain = self._chain(request)
+        # Fallback functions have static gpu lists. A filtered subset must use a
+        # single-tier function, never the original list with a smaller unsafe card.
+        registered = GPU_FALLBACKS.get(request.tier, (request.tier,))
+        if chain != registered:
+            chain = (chain[0],)
         submitted_at = time.time()
         if len(chain) > 1:
             try:
@@ -374,8 +380,8 @@ class ModalAdapter:
                 chain = (request.tier,)
                 call = self._function(request.tier).spawn(request.to_dict())
         else:
-            call = self._function(request.tier).spawn(request.to_dict())
-        handle = RemoteHandle(id=str(call.object_id), provider=self.name, tier=request.tier)
+            call = self._function(chain[0]).spawn(request.to_dict())
+        handle = RemoteHandle(id=str(call.object_id), provider=self.name, tier=chain[0])
         self._calls[handle.id] = _Call(
             request=request,
             call=call,
@@ -404,14 +410,47 @@ class ModalAdapter:
             call=call,
             started_at=time.monotonic() - elapsed,
             submitted_at=submitted_at,
-            chain=self._chain(request) if request is not None else (handle.tier,),
+            chain=(
+                self._chain(request)
+                if request is not None and handle.tier == request.tier
+                else (handle.tier,)
+            ),
         )
 
     def _chain(self, request: StageRequest) -> tuple[str, ...]:
         """The tiers this call may run on: its fallback list, or its own tier."""
-        if self._part_fallback and request.tier in GPU_FALLBACKS:
-            return GPU_FALLBACKS[request.tier]
-        return (request.tier,)
+        chain = (
+            GPU_FALLBACKS.get(request.tier, (request.tier,))
+            if self._part_fallback
+            else (request.tier,)
+        )
+        if request.impl != "gsplat":
+            return chain
+        admission = request.params.get("_train_admission", {})
+        unavailable = admission.get("unavailableTiers", ())
+        chain = tuple(tier for tier in chain if tier not in unavailable)
+        pixels = int(admission.get("pixels", 0)) * int(admission.get("batchSize", 1))
+        cap = admission.get("cap", gaussian_budget.parse_cap(request.params.get("cap_max")))
+        maximum = request.params.get("max_gpu_tier")
+        if isinstance(maximum, str) and maximum in gaussian_budget.GPU_MEMORY_GB:
+            chain = tuple(
+                t
+                for t in chain
+                if gaussian_budget.gpu_memory_for(t) <= gaussian_budget.gpu_memory_for(maximum)
+            )
+        if pixels and isinstance(cap, int):
+            chain = tuple(
+                tier
+                for tier in chain
+                if gaussian_budget.memory_fits(cap, pixels, gaussian_budget.gpu_memory_for(tier))
+            )
+        else:
+            # Without readable geometry never fall below the requested capacity.
+            memory = gaussian_budget.gpu_memory_for(request.tier)
+            chain = tuple(t for t in chain if gaussian_budget.gpu_memory_for(t) >= memory)
+        if not chain:
+            raise ValueError(f"no safe GPU fallback for {cap} gaussians at {pixels} pixels")
+        return chain
 
     def poll(self, handle: RemoteHandle) -> Poll:
         run = self._calls[handle.id]
@@ -447,7 +486,9 @@ class ModalAdapter:
         which case the GPU the container reported (`remoteGpu`). One it cannot place is
         priced at the dearest of the list, so a cost is never understated."""
         if len(run.chain) <= 1:
-            return ""
+            return (
+                run.chain[0] if run.request is not None and run.chain[0] != run.request.tier else ""
+            )
         gpu = run.metrics.get("remoteGpu")
         found = tier_of_gpu(gpu, run.chain) if isinstance(gpu, str) else None
         if found is not None:

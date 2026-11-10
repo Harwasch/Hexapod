@@ -474,3 +474,43 @@ def test_stale_plan_discards_only_its_lane_and_restarts_at_zero(
     # A new compatible checkpoint can be selected on the very next retry.
     fresh.save(5)
     assert Model(args).start == 5
+
+
+def test_v16_block_checkpoint_cannot_resume_v17_whole_scene(
+    tmp_path: Path, monkeypatch: Any, capsys: Any
+) -> None:
+    import shutil
+    from argparse import Namespace
+
+    from resume_maths_stand_in import Model
+
+    import training
+
+    monkeypatch.setitem(sys.modules, "torch", sys.modules.get("torch"))
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    old = {"cap_max": "auto", "strategy": "mcmc"}
+    new = {**old, "budget_mode": "auto", "max_gpu_tier": "l40s", "opacity_reg": 0.002}
+    args = Namespace(
+        max_steps=20,
+        checkpoint_every=5,
+        checkpoint_dir=tmp_path / "resume",
+        checkpoint_token=training.checkpoint_token(old, dataset),
+        resume="latest",
+        strategy="mcmc",
+        result_dir=tmp_path / "work/blocks/block_000/gsplat",
+    )
+    first = Model(args)
+    first.tick(1)
+    checkpoint = first.save(5)
+    args.checkpoint_token = training.checkpoint_token(new, dataset)
+    args.result_dir = tmp_path / "work/gsplat"
+    # Normal layout isolates the block lane from whole-scene recovery.
+    assert Model(args).start == 0
+    # Even an old block checkpoint copied into the root lane fails identity safely.
+    for source in (checkpoint, checkpoint.with_suffix(".committed")):
+        shutil.copy2(source, args.checkpoint_dir / source.name)
+    fresh = Model(args)
+    assert fresh.start == 0 and fresh.runner.cfg.resume is None
+    assert "incompatible resume checkpoint" in capsys.readouterr().err
+    assert checkpoint.exists()

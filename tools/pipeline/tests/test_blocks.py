@@ -768,7 +768,7 @@ def test_with_no_prior_a_coarse_pass_is_trained_first_and_kept(tmp_path: Path) -
     workdir = Workdir.create(tmp_path / "run")
     seed_walk(workdir)
 
-    document = run_blocks(workdir, block_params(coarse_cap=64))
+    document = run_blocks(workdir, block_params(coarse_cap=64, opacity_reg=0.002))
 
     assert document["blocks"]["prior"]["source"] == "coarse"
     log = workdir.log_path("train").read_text()
@@ -776,6 +776,11 @@ def test_with_no_prior_a_coarse_pass_is_trained_first_and_kept(tmp_path: Path) -
     assert "--steps_scaler 0.25" in log and "--strategy.cap-max 64" in log
     prior, _ = blocks.load_prior(workdir.checkpoint_dir("train"), workdir.input_path("poses"))
     assert prior is not None and prior.meta["source"] == "coarse"
+
+    coarse = workdir.work_dir("train") / "blocks" / "coarse" / "gsplat" / "cfg.yml"
+    assert json.loads(coarse.read_text())["opacity_reg"] == 0.002
+    for config in (workdir.work_dir("train") / "blocks").glob("b*/gsplat/cfg.yml"):
+        assert json.loads(config.read_text())["opacity_reg"] == 0.002
 
 
 def test_without_a_gpu_render_the_camera_test_falls_back_to_visibility(tmp_path: Path) -> None:

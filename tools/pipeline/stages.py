@@ -69,6 +69,7 @@ import splat_io
 import splat_stream
 import support_mask
 import surface
+import train_admission
 import training
 import video
 from artifacts import ArtifactDecl
@@ -1930,10 +1931,14 @@ def gsplat(ctx: StageContext) -> StageOutcome:
       `init_seed.py` has the reasoning.
     * `cap_max: auto` sizes MCMC's gaussian cap to the capture: its supported surface in
       finest-view pixels, from the pose stage's sparse model, times `gaussian_density`
-      (x `density_scale`, a phone's quality tier), clamped to `budget_floor` and to the
-      smaller of the GPU's memory (the placed tier's, `gaussian_budget.GPU_MEMORY_GB`, or
-      `gpu_memory_gb` when a run gives one; at the training frames' real size) and
-      `budget_max`. An integer is an override, used as given. `gaussian_budget.py` has the
+      (x `density_scale`, a phone's quality tier). This density target has `budget_floor`
+      as a minimum and selects the smallest fitting GPU up to `max_gpu_tier`. Default
+      `budget_mode: auto` keeps the density target on the base tier and fills the
+      ceiling after promotion. Optional `budget_headroom` is off by default (None);
+      when set, auto budgets min(ceiling, headroom x density target) on every tier.
+      `density` forces headroom 1.0 and keeps the old density cap.
+      `gpu_memory_gb` can restrict capacity and `budget_max` caps each pass.
+      An integer is an override, used as given. `gaussian_budget.py` has the
       formula, the calibration and the memory model; `train_metrics.json`'s `budget` has
       every input.
     * `converge` ends training when held-out PSNR has stopped improving after
@@ -2066,19 +2071,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     if frame_size is not None:
         train_size = frame_size
     budgeting = time.monotonic()
-    budget = gaussian_budget.plan(
-        requested_cap,
-        model=poses,
-        train_size=frame_size,
-        pixel_scale=pixel_scale,
-        region_contains=_region_test(roi),
-        outside_weight=1.0 / training.ROI_OUTSIDE_EVERY,
-        density=float(ctx.param("gaussian_density", gaussian_budget.DEFAULT_DENSITY)),
-        density_scale=float(ctx.param("density_scale", 1.0)),
-        floor=int(ctx.param("budget_floor", gaussian_budget.DEFAULT_FLOOR)),
-        budget_max=_optional_int(ctx.param("budget_max")),
-        gpu_memory_gb=gaussian_budget.gpu_memory_for(ctx.gpu_tier, ctx.param("gpu_memory_gb")),
-        images_per_step=batch_size,
+    budget = train_admission.plan(
+        ctx.params, ctx.gpu_tier, poses, frame_size, pixel_scale, fixed_tier=True
     )
     preamble.add("budget", time.monotonic() - budgeting)
     cap_max = None if budget is None else budget.cap
@@ -2781,38 +2775,7 @@ def _training_frame(dataset: Path, data_factor: int) -> tuple[tuple[int, int] | 
     (None, None) when either side cannot be read, a hand-made or a test's placeholder
     dataset, which the budget reports as a fallback.
     """
-    try:
-        model = sfm.read_model(dataset / "sparse" / "0")
-        cameras = {camera.id: camera for camera in model.cameras}
-        for image in model.images:  # sorted by name, as the parser sorts them
-            path = dataset / "images" / image.name
-            camera = cameras.get(image.camera_id)
-            if path.is_file() and camera is not None and camera.width > 0:
-                width, height = _image_size(path)
-                factor = max(1, data_factor)
-                size = (max(1, round(width / factor)), max(1, round(height / factor)))
-                pixel_scale = size[0] / camera.width
-                used = {view.camera_id for view in model.images}
-                # Preserve the parser's one intrinsics ratio, but admit memory for the
-                # largest registered view. Native photo sets need not share a resolution.
-                sizes = [size] + [
-                    (max(1, round(c.width * pixel_scale)), max(1, round(c.height * pixel_scale)))
-                    for c in model.cameras
-                    if c.id in used and c.width > 0 and c.height > 0
-                ]
-                return max(sizes, key=lambda value: value[0] * value[1]), pixel_scale
-    except (OSError, ValueError, KeyError, IndexError, struct.error):
-        return None, None
-    return None, None
-
-
-def _region_test(
-    region: training.Roi | support_mask.SupportMask | None,
-) -> Callable[[Any], Any] | None:
-    """A Refine's region as the budget's membership test over (n, 3) points."""
-    if region is None:
-        return None
-    return lambda xyz: training.in_region(region, xyz)
+    return train_admission.frame_geometry(dataset / "images", dataset / "sparse" / "0", data_factor)
 
 
 def _converge_status(

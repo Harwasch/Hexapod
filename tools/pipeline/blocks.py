@@ -89,7 +89,7 @@ import struct
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -183,7 +183,14 @@ PART_ROWS = 131_072
 #: blocks train at once and which call of a fan-out this is, so that neither can make a
 #: finished block look like another plan's.
 RUNTIME_PARAMS = frozenset(
-    {"block_attempt_budget_s", "block_sync_wait_s", "live", "block_parallel", FANOUT_PARAM}
+    {
+        "block_attempt_budget_s",
+        "block_sync_wait_s",
+        "live",
+        "block_parallel",
+        FANOUT_PARAM,
+        "_train_admission",
+    }
 )
 
 #: Blocks trained at once when the runner fans out (`block_parallel`). Four L4s: the spool's
@@ -714,6 +721,12 @@ def _fingerprint(settings: Settings, prior: Prior) -> str:
     digest = hashlib.sha256()
     params = {k: v for k, v in settings.params.items() if k not in RUNTIME_PARAMS}
     digest.update(json.dumps(params, sort_keys=True, default=str).encode())
+    # Admission annotations may appear only on a remote retry. The derived capacity
+    # is material to the partition, even when the recipe's base GPU tier alone changed.
+    capacity = (
+        None if settings.budget is None else (settings.budget.cap, settings.budget.memory_ceiling)
+    )
+    digest.update(json.dumps(capacity).encode())
     digest.update(init_seed.poses_fingerprint(settings.poses).encode())
     digest.update(str(prior.meta.get("digest")).encode())
     return digest.hexdigest()
@@ -1012,6 +1025,7 @@ def _coarse_prior(ctx: StageContext, settings: Settings, work: Path) -> Prior:
         max_steps=settings.full_iterations,
         steps_scaler=scaler,
         cap_max=cap,
+        opacity_reg=settings.switches.get("opacity_reg"),
         antialiased=bool(settings.switches.get("antialiased")),
         packed=bool(settings.switches.get("packed", True)),
         sparse_grad=bool(settings.switches.get("sparse_grad")),
@@ -1275,9 +1289,11 @@ def block_parts(directory: Path) -> list[Path]:
 def _block_cap(
     settings: Settings, region: BlockRegion, share: float
 ) -> tuple[int | None, gaussian_budget.Budget | None]:
-    """The block's gaussian budget: the capture's density over the block's own surface
-    when the run's budget is `auto` (clamped by the same GPU ceilings), otherwise the run's
-    cap shared by the prior's gaussians in the block."""
+    """Measure each block's density and apply the run's budget mode on its allocated GPU.
+
+    Auto applies rule B or optional headroom; density keeps the measured count.
+    Explicit caps are shared by the prior's gaussians in the block.
+    """
     budget = settings.budget
     if budget is None:
         return None, None
@@ -1296,7 +1312,29 @@ def _block_cap(
         budget_max=budget.budget_max,
         gpu_memory_gb=budget.gpu_memory_gb,
         images_per_step=settings.batch_size,
+        budget_mode=budget.budget_mode,
+        budget_headroom=budget.budget_headroom,
     )
+    if block_budget is not None:
+        block_budget = gaussian_budget.apply_tier_policy(
+            block_budget, promoted=budget.gpu_tier != budget.recipe_gpu_tier
+        )
+        policy = (
+            "rule B" if budget.budget_headroom is None else f"headroom x {budget.budget_headroom:g}"
+        )
+        block_budget = replace(
+            block_budget,
+            gpu_tier=budget.gpu_tier,
+            recipe_gpu_tier=budget.recipe_gpu_tier,
+            max_gpu_tier=budget.max_gpu_tier,
+            tier_reason=(
+                f"block on {budget.gpu_tier}, ceiling {block_budget.memory_ceiling}, "
+                f"{policy}; "
+                f"final cap {block_budget.cap} ({budget.budget_mode})"
+                if budget.budget_mode == "auto"
+                else f"block uses {budget.budget_mode}; final cap {block_budget.cap}"
+            ),
+        )
     return (None if block_budget is None else block_budget.cap), block_budget
 
 

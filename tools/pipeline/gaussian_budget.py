@@ -12,7 +12,7 @@ A 2 m table filmed from 1 m at 1,160 px focal has a footprint near 0.9 mm and ab
 2.5 million footprints of table top; the same table filmed from 4 m has a sixteenth of
 that, and training cannot recover detail no frame recorded. So:
 
-    budget = density x sum over the supported surface of (area / footprint^2)
+    density target = density x sum over the supported surface of (area / footprint^2)
 
 `density` is the one constant, calibrated below. Everything else comes from the pose
 stage's sparse model:
@@ -73,7 +73,20 @@ frames trained at 979x546): this module measures 15.2 million footprints^2 there
 It is a recipe parameter (`gaussian_density`), and a phone's quality tier multiplies it
 (`density_scale`): Quick 0.5, Best 2.
 
-**The clamp.** At least `DEFAULT_FLOOR` (the preview's own cap: a full run never gets
+**The default, `budget_mode: auto`.** `train_admission.py` uses this density target
+(with the floor and optional lower `budget_max`) to select the smallest allowed GPU,
+then budgets min(ceiling, headroom x target) on every tier. The photo recipe defaults
+to `budget_headroom: 2.5` (B'). Null/absent headroom retains rule B: the recipe's
+base tier keeps the target; a promoted tier fills its ceiling. The beach's LPIPS improved through
+20M (2.5x its 8.05M target) with flat PSNR at opacity_reg 0.002; there is no evidence
+beyond that. Targets beyond the maximum split into blocks, each applying the same
+rule to its own density target and allocated tier. `budget_mode: density` forces
+headroom 1.0 and keeps the density-sized cap. `raw`
+always preserves the measured density target in these two modes. The floor and
+`budget_max` still bound the final cap. The survey streams all observations without
+sampling: O(points + images + chunk) memory, not O(observations).
+
+**The density clamp.** At least `DEFAULT_FLOOR` (the preview's own cap: a full run never gets
 fewer gaussians than the preview that forecast it), and at most the GPU's ceiling --
 or `budget_max`, when a run sets one and it is lower -- recorded when it is the one
 that applied:
@@ -105,7 +118,7 @@ from __future__ import annotations
 import math
 import struct
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -141,6 +154,12 @@ AUTO = "auto"
 
 #: Gaussians per footprint^2 of supported surface. See the module docstring.
 DEFAULT_DENSITY = 0.1
+
+#: Beach LPIPS improved through 20M / 8.05M density target; no evidence beyond 2.5x.
+DEFAULT_HEADROOM: float | None = None
+
+#: Maximum observations evaluated together, independent of total track count/length.
+OBSERVATION_CHUNK = 65_536
 
 #: The voxel edge, in the footprints of the points it holds. See the module docstring.
 VOXEL_FOOTPRINTS = 32.0
@@ -310,36 +329,67 @@ def finest_footprints(model: Path, *, pixel_scale: float = 1.0) -> tuple[F64, F6
     size over the posed frames' (focal lengths scale with it). A point no camera sees in
     front of itself gets an infinite footprint, which `surface` leaves out.
 
+    Observations stream in chunks of at most `OBSERVATION_CHUNK`, including within
+    a single long track. All observations are retained; results match the whole-array
+    calculation exactly. Memory is O(points + images + chunk), not O(observations).
+
     The focal length is the geometric mean of fx and fy where a model has both, so a
     footprint is the side of a square pixel of the same area.
     """
     colmap = sfm.read_model(model)
     cameras = {camera.id: camera for camera in colmap.cameras}
     images = colmap.images
-    points = sfm.read_points3d(model / "points3D.bin")
-    if not images or len(points) == 0:
+    if not images or colmap.points3d == 0:
         return np.zeros((0, 3), dtype=np.float64), np.zeros(0, dtype=np.float64)
-    size = max(image.id for image in images) + 1
-    axis = np.zeros((size, 3), dtype=np.float64)
-    offset = np.zeros(size, dtype=np.float64)
-    focal = np.full(size, np.nan, dtype=np.float64)
-    for image in images:
-        axis[image.id] = image.rotation[2]
-        offset[image.id] = image.tvec[2]
-        camera = cameras.get(image.camera_id)
-        if camera is not None:
-            focal[image.id] = _focal(camera) * pixel_scale
-    lengths = np.diff(points.track_offsets)
-    rows = np.repeat(np.arange(len(points)), lengths)
-    ids = points.track[:, 0].astype(np.int64) if len(points.track) else np.zeros(0, np.int64)
-    known = ids < size
-    ids = np.where(known, ids, 0)
-    depth = np.einsum("ij,ij->i", axis[ids], points.xyz[rows]) + offset[ids]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        each = np.where(known & (depth > 0) & (focal[ids] > 0), depth / focal[ids], np.inf)
-    finest = np.full(len(points), np.inf, dtype=np.float64)
-    np.minimum.at(finest, rows, each)
-    return points.xyz, finest
+    # Compact lookup also bounds memory when COLMAP image IDs have large gaps.
+    images = tuple(sorted(images, key=lambda image: image.id))
+    image_ids = np.asarray([image.id for image in images], dtype=np.uint32)
+    axis = np.asarray([image.rotation[2] for image in images])
+    offset = np.asarray([image.tvec[2] for image in images])
+    focal = np.asarray(
+        [
+            _focal(cameras[image.camera_id]) * pixel_scale if image.camera_id in cameras else np.nan
+            for image in images
+        ]
+    )
+    # Keep only the output (32 bytes/point) plus fixed observation buffers. A single
+    # arbitrarily long track is split too; no sampling or change to the arithmetic.
+    xyz = np.empty((colmap.points3d, 3), dtype=np.float64)
+    finest = np.full(colmap.points3d, np.inf, dtype=np.float64)
+    rows = np.empty(OBSERVATION_CHUNK, dtype=np.int64)
+    ids = np.empty(OBSERVATION_CHUNK, dtype=np.uint32)
+
+    def reduce_chunk(count: int) -> None:
+        slots = np.searchsorted(image_ids, ids[:count])
+        np.minimum(slots, len(image_ids) - 1, out=slots)
+        known = image_ids[slots] == ids[:count]
+        depth = np.einsum("ij,ij->i", axis[slots], xyz[rows[:count]]) + offset[slots]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            each = np.where(known & (depth > 0) & (focal[slots] > 0), depth / focal[slots], np.inf)
+        np.minimum.at(finest, rows[:count], each)
+
+    filled = 0
+    with (model / "points3D.bin").open("rb") as handle:
+        count = struct.unpack("<Q", handle.read(8))[0]
+        if count != colmap.points3d:
+            raise ValueError("sparse point count changed during density survey")
+        for row in range(count):
+            record = handle.read(51)  # id, xyz, rgb, error, track length
+            xyz[row] = struct.unpack_from("<ddd", record, 8)
+            remaining = struct.unpack_from("<Q", record, 43)[0]
+            while remaining:
+                take = min(remaining, OBSERVATION_CHUNK - filled)
+                track = np.frombuffer(handle.read(8 * take), dtype="<u4").reshape(take, 2)
+                ids[filled : filled + take] = track[:, 0]
+                rows[filled : filled + take] = row
+                remaining -= take
+                filled += take
+                if filled == OBSERVATION_CHUNK:
+                    reduce_chunk(filled)
+                    filled = 0
+        if filled:
+            reduce_chunk(filled)
+    return xyz, finest
 
 
 def _focal(camera: sfm.Camera) -> float:
@@ -445,6 +495,12 @@ class Budget:
     pixel_scale: float | None = None
     gpu_memory_gb: float = DEFAULT_GPU_MEMORY_GB
     reason: str = ""
+    budget_mode: str = "auto"
+    budget_headroom: float | None = DEFAULT_HEADROOM
+    gpu_tier: str | None = None
+    recipe_gpu_tier: str | None = None
+    max_gpu_tier: str | None = None
+    tier_reason: str = ""
 
     @property
     def footprints(self) -> float:
@@ -454,8 +510,15 @@ class Budget:
     def to_dict(self) -> dict[str, object]:
         return {
             "mode": self.mode,
+            "budgetMode": self.budget_mode,
+            "budgetHeadroom": 1.0 if self.budget_mode == "density" else self.budget_headroom,
+            "gpuTier": self.gpu_tier,
+            "recipeGpuTier": self.recipe_gpu_tier,
+            "maxGpuTier": self.max_gpu_tier,
+            "tierReason": self.tier_reason,
             "capMax": self.cap,
             "raw": self.raw,
+            "densityTarget": self.raw if self.budget_mode != "gpu-max" else None,
             "clamp": self.clamp,
             "floor": self.floor,
             "memoryCeiling": self.memory_ceiling,
@@ -489,6 +552,8 @@ def plan(
     gpu_memory_gb: float = DEFAULT_GPU_MEMORY_GB,
     voxel_footprints: float = VOXEL_FOOTPRINTS,
     images_per_step: int = 1,
+    budget_mode: str = "auto",
+    budget_headroom: float | None = DEFAULT_HEADROOM,
 ) -> Budget | None:
     """The cap for `requested` (`parse_cap`'s result): None for no cap at all.
 
@@ -508,7 +573,14 @@ def plan(
         return None
     pixels = 0 if train_size is None else train_size[0] * train_size[1]
     ceiling = memory_ceiling(pixels * max(1, images_per_step), gpu_memory_gb) if pixels else None
+    if budget_headroom is not None and (
+        not math.isfinite(budget_headroom) or budget_headroom < 1.0
+    ):
+        raise ValueError("budget_headroom must be finite and at least 1.0")
+    headroom = 1.0 if budget_mode == "density" else budget_headroom
     common: dict[str, Any] = {
+        "budget_headroom": headroom,
+        "budget_mode": budget_mode,
         "floor": floor,
         "memory_ceiling": ceiling,
         "budget_max": budget_max,
@@ -521,6 +593,11 @@ def plan(
     }
     if isinstance(requested, int):
         return Budget(mode="explicit", cap=requested, **common)
+    if budget_mode not in ("auto", "density", "gpu-max"):
+        raise ValueError(f"unknown budget_mode {budget_mode!r}")
+    if budget_mode == "gpu-max" and ceiling is not None:
+        target = min(ceiling, budget_max) if budget_max is not None else ceiling
+        return Budget(mode="auto", cap=target, raw=target, **common)
     if not (density > 0 and density_scale > 0):
         raise ValueError(
             f"gaussian_density and density_scale must be positive, not {density!r} and "
@@ -561,30 +638,39 @@ def plan(
         mode="auto", cap=0, inside=inside, outside=outside, outside_weight=weight, **common
     )
     raw = round(density * density_scale * budget.footprints)
-    cap, clamp = raw, None
-    if cap < floor:
-        cap, clamp = floor, "floor"
-    # The ceilings after the floor, so they win over it: a floor the GPU cannot hold is a
-    # run that runs out of memory, which is worse than a thin one.
+    return apply_tier_policy(replace(budget, raw=raw))
+
+
+def apply_tier_policy(budget: Budget, *, promoted: bool = False) -> Budget:
+    """Apply rule B or explicit headroom within the tier and recipe limits."""
+    if budget.mode != "auto":
+        return budget
+    raw = budget.raw or 0
+    headroom = 1.0 if budget.budget_mode == "density" else budget.budget_headroom
+    fill = budget.budget_mode == "auto" and headroom is None and promoted
+    cap = (
+        budget.memory_ceiling
+        if fill and budget.memory_ceiling is not None
+        else round(raw * (headroom if headroom is not None else 1.0))
+    )
+    clamp = None
+    if budget.budget_mode == "gpu-max":
+        cap = raw
+    elif cap < budget.floor:
+        cap, clamp = budget.floor, "floor"
     upper = [
         (bound, name)
-        for bound, name in ((ceiling, "gpu-memory"), (budget_max, "budget-max"))
+        for bound, name in (
+            (budget.memory_ceiling, "gpu-memory"),
+            (budget.budget_max, "budget-max"),
+        )
         if bound is not None
     ]
     if upper:
         bound, name = min(upper)
         if cap > bound:
             cap, clamp = max(1, bound), name
-    return Budget(
-        mode="auto",
-        cap=cap,
-        raw=raw,
-        clamp=clamp,
-        inside=inside,
-        outside=outside,
-        outside_weight=weight,
-        **common,
-    )
+    return replace(budget, cap=cap, clamp=clamp)
 
 
 def _round(value: float | None) -> float | None:
@@ -599,6 +685,8 @@ def describe(budget: Budget) -> str:
         return f"cap_max {budget.cap} given; no budget computed"
     if budget.mode == "fallback":
         return f"cap_max auto -> {budget.cap} (fallback: {budget.reason})"
+    if budget.budget_mode == "gpu-max":
+        return f"cap_max auto -> {budget.cap} (gpu-max; {budget.tier_reason or 'memory ceiling'})"
     surface_ = budget.inside
     parts = [
         f"cap_max auto -> {budget.cap}",
@@ -617,6 +705,12 @@ def describe(budget: Budget) -> str:
             f"region {budget.inside.footprints / 1e6:.2f}M + outside "
             f"{budget.outside.footprints / 1e6:.2f}M x {budget.outside_weight:g}"
         )
+    if budget.budget_mode == "auto":
+        parts.append(
+            "rule B" if budget.budget_headroom is None else f"headroom x {budget.budget_headroom:g}"
+        )
+    if budget.tier_reason:
+        parts.append(budget.tier_reason)
     if budget.clamp is not None:
         parts.append(f"clamped to the {budget.clamp}")
     return "; ".join(parts)

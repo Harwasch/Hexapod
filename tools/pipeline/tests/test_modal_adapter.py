@@ -640,3 +640,55 @@ def test_a_gpu_hour_is_priced_with_the_cpu_and_memory_its_function_reserves() ->
     assert own is not None and own.usd_per_hour == pytest.approx(0.50 + 0.222192)
     # And an unpriced GPU stays unpriced, rather than priced at its reservation alone.
     assert ModalAdapter("twin").rate("t4") is None
+
+
+@pytest.mark.parametrize("role", [None, "head", "join", "part"])
+def test_large_budget_never_uses_the_24gb_fallback_function(role: str | None) -> None:
+    looked_up: list[str] = []
+    adapter = ModalAdapter("twin")
+    adapter._function = lambda tier: looked_up.append(tier) or FakeFunction(FakeCall())  # type: ignore[method-assign,func-returns-value]
+    params = {
+        "cap_max": 14_000_000,
+        "_train_admission": {"cap": 14_000_000, "pixels": 1080 * 1920, "batchSize": 1},
+        **({} if role is None else {FANOUT_PARAM: {"role": role}}),
+    }
+    req = replace(request(), params=params)
+    assert adapter._chain(req) == ("l40s",)
+    handle = adapter.submit(req)
+    assert looked_up == ["l40s"]
+    assert handle.tier == "l40s"
+    assert adapter.poll(handle).tier == "l40s"
+
+
+def test_an_unsafe_single_tier_is_refused_before_submission() -> None:
+    adapter = ModalAdapter("twin", part_fallback=False)
+    req = replace(
+        request(), params={"_train_admission": {"cap": 14_000_000, "pixels": 1080 * 1920}}
+    )
+    with pytest.raises(ValueError, match="no safe GPU fallback"):
+        adapter.submit(req)
+
+
+def test_fallback_respects_the_recipe_maximum_tier() -> None:
+    adapter = ModalAdapter("unused")
+    req = replace(request(), params={"max_gpu_tier": "l4"})
+    assert adapter._chain(req) == ("l4", "a10")
+
+
+def test_replanned_call_never_revisits_an_unavailable_tier() -> None:
+    looked_up: list[str] = []
+    adapter = ModalAdapter("unused")
+    adapter._function = lambda tier: looked_up.append(tier) or FakeFunction(FakeCall())  # type: ignore[method-assign,func-returns-value]
+    req = replace(
+        request(),
+        params={
+            "_train_admission": {
+                "cap": 6_000_000,
+                "pixels": 1080 * 1920,
+                "unavailableTiers": ["l40s"],
+            }
+        },
+    )
+    assert adapter._chain(req) == ("l4", "a10")
+    adapter.submit(req)
+    assert looked_up == ["l4"]
