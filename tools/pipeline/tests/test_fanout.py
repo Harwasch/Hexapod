@@ -614,3 +614,45 @@ def test_failed_part_retry_fetches_its_synced_trainer_state_before_replacing_the
     monkeypatch.setattr(adapter, "submit", submit)
     run(workdir, runner)
     assert submitted == 2
+
+
+def test_telemetry_pins_one_block_until_finished_and_plan_passes_once() -> None:
+    sink = Lines()
+    tail = _FanOutLog(cast("StageContext", sink))
+    plan = 'live-plan: {"v":1,"stepsMax":30000}'
+    point = 'live-train: {"v":1,"k":"s","step":200,"loss":{}}'
+    tail.line("b0", plan)
+    tail.line("b1", plan)
+    tail.line("b0", point)
+    tail.line("b1", point)
+    tail.finished("b0")
+    tail.line("b1", point)
+    assert len(sink.lines) == 3
+    points = [json.loads(line.split("live-train: ")[1]) for line in sink.lines[1:]]
+    assert [p["block"] for p in points] == ["b0", "b1"]
+
+
+def test_live_tiles_follow_the_block_whose_snapshot_is_shown() -> None:
+    sink = Lines()
+    tail = _FanOutLog(cast("StageContext", sink))
+    tail.line("b0", splat_line(500, 1000))
+    tail.line("b1", splat_line(250, 1000))
+    for part, step in (("b1", 250), ("b0", 500)):
+        tail.line(
+            part,
+            "live-tiles: "
+            + json.dumps(
+                {
+                    "v": 1,
+                    "key": f"runs/r/train/parts/{part}/checkpoint/live/tiles/{step}/tileset.json",
+                    "step": step,
+                    "final": False,
+                    "gaussians": 100,
+                    "tiles": 1,
+                    "bytes": 1000,
+                    "seconds": 1.0,
+                }
+            ),
+        )
+    tiles = [line for line in sink.lines if "live-tiles:" in line]
+    assert len(tiles) == 1 and tiles[0].startswith("[b0]")

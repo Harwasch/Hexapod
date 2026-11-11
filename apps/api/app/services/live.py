@@ -19,18 +19,32 @@ names the snapshot usually arrives first.
 
 from __future__ import annotations
 
+import re
 import uuid
+from pathlib import PurePosixPath
 from typing import Any
 
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Capture, Job, JobStep
-from app.models.enums import RunStatus
-from app.schemas.live import LiveCameras, LiveProgress, LiveSplat, LiveStage, LiveState
+from app.models import Capture, Job, JobStep, Site
+from app.models.enums import Representation, RunStatus
+from app.schemas.live import (
+    LiveCameras,
+    LiveProgress,
+    LiveSplat,
+    LiveStage,
+    LiveState,
+    LiveTrain,
+    LiveTrainEnded,
+    LiveTrainPlan,
+    LiveTrainTiles,
+)
+from app.services.epochs import current_asset_of
 from app.services.errors import NotFoundError
 from app.services.jobs import get_job
+from app.services.live_train import derive_events, end_reason, final_metrics
 from app.storage import ObjectStorage
 from app.storage.null import StorageUnavailableError
 
@@ -40,7 +54,7 @@ SIGNED_FOR_S = 10 * 60
 
 #: The only keys this signs: the live snapshots the pipeline writes, nothing else in the
 #: private bucket, whatever a log line claimed.
-_LIVE_SEGMENT = "/checkpoint/live/"
+_LIVE_SEGMENT = "/live/"
 
 
 def live_for_capture(db: Session, storage: ObjectStorage, capture_id: uuid.UUID) -> LiveState:
@@ -77,16 +91,93 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
     current = running[-1] if running else (steps[-1] if steps else None)
     cameras: LiveCameras | None = None
     splat: LiveSplat | None = None
+    train: LiveTrain | None = None
+    terminal = job.status in (RunStatus.ERROR, RunStatus.CANCELLED)
     # The newest of each, by position in the run: a re-run pose stage's cameras replace
     # the old ones, and a Refine's training replaces the preview's splat.
     for step in steps:
         live = (step.metrics or {}).get("live")
         if not isinstance(live, dict):
-            continue
+            if step.stage_id != "train" or (step.status == RunStatus.IN_PROGRESS and not terminal):
+                continue
+            live = {}
         found_cameras = _cameras(step, live.get("cameras"))
         cameras = found_cameras or cameras
         found_splat = _splat(step, live.get("splat"), storage)
         splat = found_splat or splat
+        final = (
+            final_metrics(step.metrics or {})
+            if step.stage_id == "train" and (step.status != RunStatus.IN_PROGRESS or terminal)
+            else None
+        )
+        terminal_train = step.stage_id == "train" and terminal
+        if terminal_train and live.get("train") is None:
+            live = {**live, "train": {}}
+        found_train = _train(live, storage, final=final, step=step)
+        tiles = _tiles_record(step, job.id)
+        if tiles is not None and _signed(storage, tiles["key"]) is not None:
+            found_train = found_train or LiveTrain()
+            found_train.tiles = LiveTrainTiles(
+                url=f"/api/v1/captures/{capture.id}/live/tiles/{tiles['step']}/tileset.json",
+                step=tiles["step"],
+                final=tiles["final"],
+                frame="solve",
+            )
+        if (
+            terminal_train
+            and step.status != RunStatus.COMPLETE
+            and found_train is not None
+            and found_train.stop is None
+            and found_train.final is None
+        ):
+            found_train.ended = LiveTrainEnded(
+                reason=end_reason(
+                    [job.error, (step.metrics or {}).get("error")],
+                    preempted=step.preempted_at is not None,
+                ),
+                step=max([0, *found_train.series.step, *[e.step for e in found_train.evals]]),
+            )
+        train = found_train or train
+    if train is not None:
+        params = (job.params or {}).get("train", {})
+        aa = params.get("antialiased") if isinstance(params, dict) else None
+        if isinstance(aa, bool):
+            train.plan = train.plan or LiveTrainPlan()
+            if train.plan.antialiased is None:
+                train.plan.antialiased = aa
+    if job.status == RunStatus.COMPLETE and capture.site_id:
+        site = db.get(Site, capture.site_id)
+        if site is not None:
+            # Resolve this run's epoch, not a newer capture now shown by the gallery.
+            epoch = next((e for e in site.epochs if e.job_id == job.id), None)
+            candidates = [
+                a
+                for a in site.assets
+                if a.representation == Representation.GAUSSIAN_SPLAT
+                and a.valid_to is None
+                and a.source_kind == "observed"
+            ]
+            asset = current_asset_of(epoch.id, candidates) if epoch else None
+            if not site.epochs and (site.metadata_ or {}).get("jobId") == str(job.id):
+                candidates.sort(key=lambda a: (a.created_at, str(a.id)), reverse=True)
+                asset = next(
+                    (a for a in candidates if a.default_visible), next(iter(candidates), None)
+                )
+            if asset and asset.source.get("type") == "3d-tiles-url":
+                train = train or LiveTrain()
+                train.tiles = LiveTrainTiles(
+                    url=asset.source["url"],
+                    step=max(
+                        [
+                            0,
+                            *train.series.step,
+                            *[s.step for s in train.snapshots],
+                            *[e.step for e in train.evals],
+                        ]
+                    ),
+                    final=True,
+                    frame="enu",
+                )
     return LiveState(
         job_id=job.id,
         capture_id=capture.id,
@@ -100,7 +191,100 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
         steps_started=len(steps),
         cameras=cameras,
         splat=splat,
+        train=train,
     )
+
+
+def _tiles_record(step: JobStep, job_id: uuid.UUID) -> dict[str, Any] | None:
+    observation = (step.metrics or {}).get("live")
+    value = observation.get("tiles") if isinstance(observation, dict) else None
+    if not isinstance(value, dict) or value.get("v") != 1:
+        return None
+    key, number = value.get("key"), value.get("step")
+    if (
+        not isinstance(key, str)
+        or len(key) > 512
+        or not key.startswith(f"runs/{job_id}/")
+        or ".." in key
+        or "\\" in key
+        or "%" in key
+        or any(ord(c) < 32 for c in key)
+        or str(PurePosixPath(key)) != key
+        or not isinstance(number, int)
+        or isinstance(number, bool)
+        or number < 0
+        or not isinstance(value.get("final"), bool)
+    ):
+        return None
+    # A retry uses checkpoint-aN; fan-out pieces use stage/parts/<part>/checkpoint.
+    # checkpoint_key can still name the *previous* attempt until this one finishes.
+    attempt = step.attempt or 1
+    checkpoint = "checkpoint" if attempt == 1 else f"checkpoint-a{attempt}"
+    stage_root = re.escape(f"runs/{job_id}/{step.stage_id}")
+    live_tail = re.escape(_LIVE_SEGMENT + f"tiles/{number}/tileset.json")
+    if re.fullmatch(rf"{stage_root}(?:/parts/[^/]+)?/{checkpoint}{live_tail}", key) is None:
+        return None
+    return value
+
+
+def _tile_path(path: str) -> None:
+    if (
+        not path
+        or path.startswith("/")
+        or ".." in path
+        or "\\" in path
+        or "%" in path
+        or any(ord(c) < 32 for c in path)
+        or str(PurePosixPath(path)) != path
+    ):
+        raise NotFoundError("live tile", path)
+
+
+def tile_for_capture(
+    db: Session, storage: ObjectStorage, capture_id: uuid.UUID, step: int, path: str
+) -> str:
+    """Sign one file of the newest run's advertised LOD, never an arbitrary object key.
+
+    Reject encoded separators too: Starlette has already URL-decoded once, and neither
+    a second decoding nor path normalization may change the key that is authorized.
+    """
+    _tile_path(path)
+    if db.get(Capture, capture_id) is None:
+        raise NotFoundError("capture", capture_id)
+    job = db.scalars(
+        select(Job)
+        .where(Job.capture_id == capture_id)
+        .order_by(Job.created_at.desc(), Job.id.desc())
+        .limit(1)
+    ).first()
+    if job is None:
+        raise NotFoundError("run for capture", capture_id)
+    return tile_for_job(db, storage, job.id, step, path)
+
+
+def tile_for_job(
+    db: Session, storage: ObjectStorage, job_id: uuid.UUID, step: int, path: str
+) -> str:
+    job = get_job(db, job_id)
+    _tile_path(path)
+    steps = sorted(
+        db.scalars(select(JobStep).where(JobStep.job_id == job.id)).all(),
+        key=lambda row: row.ordinal,
+        reverse=True,
+    )
+    for row in steps:
+        record = _tiles_record(row, job.id)
+        if record is None:
+            continue
+        # An old step's tiles must not masquerade as this run's current solve.
+        if record["step"] != step:
+            break
+        key = record["key"].removesuffix("tileset.json") + path
+        url = _signed(storage, key)
+        if url is not None:
+            return url
+        break
+    raise NotFoundError("live tile", path)
 
 
 def _stage(step: JobStep) -> LiveStage:
@@ -138,6 +322,7 @@ def _cameras(step: JobStep, value: Any) -> LiveCameras | None:
             "scale",
             "up",
             "aspect",
+            "fovY",
             "cameraCount",
             "cameras",
             "pointCount",
@@ -160,6 +345,7 @@ def _splat(step: JobStep, value: Any, storage: ObjectStorage) -> LiveSplat | Non
         or not key.startswith("runs/")
         or _LIVE_SEGMENT not in key
         or ".." in key
+        or not _snapshot_key(key, step)
     ):
         return None
     try:
@@ -188,3 +374,73 @@ def _signed(storage: ObjectStorage, key: str) -> str | None:
         return storage.presign_get(key, expires_in=SIGNED_FOR_S)
     except StorageUnavailableError:
         return None
+
+
+def _train(
+    live: dict[str, Any],
+    storage: ObjectStorage,
+    *,
+    final: dict[str, int | float] | None = None,
+    step: JobStep | None = None,
+) -> LiveTrain | None:
+    """Validate first, then derive and sign; malformed historical JSON is never fatal."""
+    value = live.get("train", {} if final else None)
+    if not isinstance(value, dict):
+        return None
+    try:
+        parsed = LiveTrain.model_validate(
+            {**value, "ended": None, "replacedBy": None, "snapshots": live.get("snapshots", [])}
+        )
+        if final is not None:
+            parsed = LiveTrain.model_validate({**parsed.model_dump(by_alias=True), "final": final})
+        document = parsed.model_dump(by_alias=True)
+        # Relocations are optional observations, bounded by the worker, not stored events.
+        relocations = value.get("relocations", [])
+        document["relocations"] = (
+            [
+                row
+                for row in relocations
+                if isinstance(row, dict) and isinstance(row.get("step"), int) and row["step"] >= 0
+            ]
+            if isinstance(relocations, list)
+            else []
+        )
+        document["events"] = derive_events(document)
+        parsed = LiveTrain.model_validate(document)
+    except (ValidationError, TypeError, ValueError, KeyError, IndexError):
+        return None
+    if parsed.seeds is not None:
+        key = parsed.seeds.key
+        if (
+            not key.startswith("runs/")
+            or _LIVE_SEGMENT not in key
+            or ".." in key
+            or not key.endswith("/seeds.bin")
+            or not _snapshot_key(key, step)
+        ):
+            parsed.seeds = None
+        else:
+            parsed.seeds.url = _signed(storage, key)
+    for snapshot in parsed.snapshots:
+        key = snapshot.key
+        if (
+            not key.startswith("runs/")
+            or _LIVE_SEGMENT not in key
+            or ".." in key
+            or not key.endswith(".spz")
+            or not _snapshot_key(key, step)
+        ):
+            return None
+        snapshot.url = _signed(storage, key)
+    return parsed
+
+
+def _snapshot_key(key: str, step: JobStep | None) -> bool:
+    """Only this stage/attempt's previews, including fan-out parts, may be signed."""
+    if any(c in key for c in ("..", "\\", "%")) or str(PurePosixPath(key)) != key:
+        return False
+    if step is None:
+        return True  # schema-only callers (bench serves its own local files)
+    checkpoint = "checkpoint" if (step.attempt or 1) == 1 else f"checkpoint-a{step.attempt}"
+    root = re.escape(f"runs/{step.job_id}/{step.stage_id}")
+    return re.fullmatch(rf"{root}(?:/parts/[^/]+)?/{checkpoint}/live/[^/]+", key) is not None

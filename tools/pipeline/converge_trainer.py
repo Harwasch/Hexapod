@@ -81,6 +81,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import convergence
+import train_telemetry
 
 #: What `--self-check` requires of the trainer's source: the call this file replaces, the
 #: method it wraps, and the loop re-reading the three step lists it appends to.
@@ -351,7 +352,9 @@ class _NoRenders:
         return getattr(self._real, name)
 
 
-def instrument(module: dict[str, Any], runner: Any, timing: Timing, cfg: Any = None) -> None:
+def instrument(
+    module: dict[str, Any], runner: Any, timing: Timing, cfg: Any = None, state: Any = None
+) -> None:
     """Time `runner` (a class)'s `train` and `eval` and the module's `export_splats`, and
     give the module an `imageio` that skips the renders. Called with the trainer's
     `__main__` globals, after `install` when the rule is on, so the evaluations it times
@@ -411,6 +414,8 @@ def instrument(module: dict[str, Any], runner: Any, timing: Timing, cfg: Any = N
     runner.eval = eval
     runner.train = train
     timing.hooked = True
+    if getattr(cfg, "live_enabled", True):
+        train_telemetry.install(runner, cfg, timing, state)
 
 
 def _result_dir(argv: list[str]) -> Path | None:
@@ -450,6 +455,7 @@ def main(argv: list[str] | None = None) -> int:
         "--min-gain-db", dest="min_gain_db", type=float, default=convergence.DEFAULT_MIN_GAIN_DB
     )
     parser.add_argument("--no-converge", action="store_true")
+    parser.add_argument("--no-live", action="store_true")
     parser.add_argument("--min-steps", type=int, default=0)
     parser.add_argument("--self-check", dest="self_check", action="store_true")
     options = parser.parse_args(own)
@@ -497,8 +503,9 @@ def main(argv: list[str] | None = None) -> int:
                 state.hooked = True
                 state.reason = "hooked"
             if devices <= 1:
+                cfg.live_enabled = not options.no_live
                 cfg.streaming_export = "--no-streaming-export" not in rest
-                instrument(module, runner, timing, cfg)
+                instrument(module, runner, timing, cfg, state)
             return real_cli(fn, cfg, verbose=verbose)
 
         distributed.cli = cli

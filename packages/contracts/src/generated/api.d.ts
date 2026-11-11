@@ -301,6 +301,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/captures/{capture_id}/live/tiles/{step}/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fetch a file from the newest run's live LOD tiles */
+        get: operations["capture_live_tile_api_v1_captures__capture_id__live_tiles__step___path__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/captures/{capture_id}/process": {
         parameters: {
             query?: never;
@@ -531,6 +548,23 @@ export interface paths {
          * @description What a run looks like while it runs, for the live viewer: the pose stage's cameras and a sample of its sparse points as they are solved (quantised, base64; see the schema), and training's newest intermediate splat with a short-lived signed URL for its SPZ (null until the checkpoint syncer has uploaded it). Coordinates are the pose solve's own frame, not east/north/up. Open, like every read: poll it every few seconds.
          */
         get: operations["job_live_api_v1_jobs__job_id__live_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/live/tiles/{step}/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fetch a file from one run's live LOD tiles */
+        get: operations["job_live_tile_api_v1_jobs__job_id__live_tiles__step___path__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8657,6 +8691,8 @@ export interface components {
             cameras: string;
             /** Final */
             final: boolean;
+            /** Fovy */
+            fovY?: number | null;
             /** Frames */
             frames: number | null;
             /** Origin */
@@ -8698,6 +8734,21 @@ export interface components {
             remainingS: number | null;
             /** Total */
             total: number;
+        };
+        /** LiveQualitySeries */
+        LiveQualitySeries: {
+            /** Elongationshare */
+            elongationShare?: (number | null)[];
+            /** Farfieldshare */
+            farFieldShare?: (number | null)[];
+            /** Loss */
+            loss?: {
+                [key: string]: (number | null)[];
+            };
+            /** Peakallocatedgb */
+            peakAllocatedGb?: (number | null)[];
+            /** Step */
+            step?: number[];
         };
         /**
          * LiveSplat
@@ -8767,6 +8818,242 @@ export interface components {
             stepsDone: number;
             /** Stepsstarted */
             stepsStarted: number;
+            train?: components["schemas"]["LiveTrain"] | null;
+        };
+        /** LiveTrain */
+        LiveTrain: {
+            /** Block */
+            block?: string | null;
+            ended?: components["schemas"]["LiveTrainEnded"] | null;
+            /** Evals */
+            evals?: components["schemas"]["LiveTrainEval"][];
+            /** Events */
+            events?: components["schemas"]["LiveTrainEvent"][];
+            final?: components["schemas"]["LiveTrainFinal"] | null;
+            plan?: components["schemas"]["LiveTrainPlan"] | null;
+            /** Planid */
+            planId?: string | null;
+            quality?: components["schemas"]["LiveTrainQuality"] | null;
+            /** Replacedby */
+            replacedBy?: string | null;
+            /** Run */
+            run?: string | null;
+            seeds?: components["schemas"]["LiveTrainSeeds"] | null;
+            series?: components["schemas"]["LiveTrainSeries"];
+            /** Snapshots */
+            snapshots?: components["schemas"]["LiveTrainSnapshot"][];
+            stop?: components["schemas"]["LiveTrainStop"] | null;
+            tiles?: components["schemas"]["LiveTrainTiles"] | null;
+        };
+        /** LiveTrainEnded */
+        LiveTrainEnded: {
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "preempted" | "oom" | "failed";
+            /** Step */
+            step: number;
+        };
+        /** LiveTrainEval */
+        LiveTrainEval: {
+            /** Decision */
+            decision?: string | null;
+            /** Gain */
+            gain?: number | null;
+            /** Psnr */
+            psnr?: number | null;
+            /**
+             * Split
+             * @default val
+             * @enum {string}
+             */
+            split?: "val" | "train";
+            /** Step */
+            step: number;
+        };
+        /** LiveTrainEvent */
+        LiveTrainEvent: {
+            /** Kind */
+            kind: string;
+            /** Step */
+            step: number;
+            /** Stepssaved */
+            stepsSaved?: number | null;
+            /** Text */
+            text: string;
+            /** Usdsaved */
+            usdSaved?: number | null;
+        };
+        /** LiveTrainFinal */
+        LiveTrainFinal: {
+            /** Cclpips */
+            ccLpips?: number | null;
+            /** Ccpsnr */
+            ccPsnr?: number | null;
+            /** Ccssim */
+            ccSsim?: number | null;
+            /** Lpips */
+            lpips?: number | null;
+            /** Psnr */
+            psnr?: number | null;
+            /** Ssim */
+            ssim?: number | null;
+        };
+        /** LiveTrainPlan */
+        LiveTrainPlan: {
+            /** Antialiased */
+            antialiased?: boolean | null;
+            /** Blocks */
+            blocks?: number | null;
+            /** Cap */
+            cap?: number | null;
+            /** Capmax */
+            capMax?: number | null;
+            /** Cardgb */
+            cardGb?: number | null;
+            /** Clamp */
+            clamp?: string | null;
+            /** Frames */
+            frames?: number | null;
+            /** Gpu */
+            gpu?: string | null;
+            /** Metresperunit */
+            metresPerUnit?: number | null;
+            /** Mode */
+            mode?: string | null;
+            /** Refineevery */
+            refineEvery?: number | null;
+            /** Refinestart */
+            refineStart?: number | null;
+            /** Refinestop */
+            refineStop?: number | null;
+            rule?: components["schemas"]["LiveTrainRule"] | null;
+            /** Schedulefactor */
+            scheduleFactor?: number | null;
+            /** Shdegree */
+            shDegree?: number | null;
+            /** Shinterval */
+            shInterval?: number | null;
+            /** Sparse */
+            sparse?: number | null;
+            /** Stepsmax */
+            stepsMax?: number | null;
+            /** Usdperhour */
+            usdPerHour?: number | null;
+        };
+        /** LiveTrainQuality */
+        LiveTrainQuality: {
+            /** Denseinitaddedpoints */
+            denseInitAddedPoints?: number | null;
+            /** Denseinitpoints */
+            denseInitPoints?: number | null;
+            /** Denseinitseconds */
+            denseInitSeconds?: number | null;
+            /** Elongationshare */
+            elongationShare?: number | null;
+            /** Farfieldshare */
+            farFieldShare?: number | null;
+            series?: components["schemas"]["LiveQualitySeries"] | null;
+            /** Step */
+            step?: number | null;
+        };
+        /** LiveTrainRule */
+        LiveTrainRule: {
+            /** Every */
+            every: number;
+            /** Mingaindb */
+            minGainDb: number;
+            /** Window */
+            window: number;
+        };
+        /** LiveTrainSeeds */
+        LiveTrainSeeds: {
+            /** Bytes */
+            bytes: number;
+            /** Count */
+            count: number;
+            /** Key */
+            key: string;
+            /** Of */
+            of: number;
+            /** Origin */
+            origin: number[];
+            /** Scale */
+            scale: number;
+            /** Sources */
+            sources?: {
+                [key: string]: number;
+            };
+            /** Url */
+            url?: string | null;
+        };
+        /** LiveTrainSeries */
+        LiveTrainSeries: {
+            /** Gs */
+            gs?: (number | null)[];
+            /** Its */
+            its?: (number | null)[];
+            /** Loss */
+            loss?: {
+                [key: string]: (number | null)[];
+            };
+            /** Lr */
+            lr?: (number | null)[];
+            /** Mem */
+            mem?: (number | null)[];
+            /** Sh */
+            sh?: (number | null)[];
+            /** Step */
+            step?: number[];
+            /** T */
+            t?: (number | null)[];
+        };
+        /** LiveTrainSnapshot */
+        LiveTrainSnapshot: {
+            /** Bytes */
+            bytes?: number | null;
+            /** Count */
+            count: number;
+            /** Elongationshare */
+            elongationShare?: number | null;
+            /** Farfieldshare */
+            farFieldShare?: number | null;
+            /** Key */
+            key: string;
+            /** Of */
+            of?: number | null;
+            /** Step */
+            step: number;
+            /** Url */
+            url?: string | null;
+        };
+        /** LiveTrainStop */
+        LiveTrainStop: {
+            /** Gain */
+            gain?: number | null;
+            /** Maxsteps */
+            maxSteps?: number | null;
+            /** Step */
+            step: number;
+        };
+        /**
+         * LiveTrainTiles
+         * @description A full LOD tileset. Omitted frame means the producer's solve-local coordinates.
+         */
+        LiveTrainTiles: {
+            /** Final */
+            final: boolean;
+            /**
+             * Frame
+             * @default solve
+             * @enum {string}
+             */
+            frame?: "solve" | "enu";
+            /** Step */
+            step: number;
+            /** Url */
+            url: string;
         };
         /**
          * LonLatGrid
@@ -13033,9 +13320,23 @@ export type SchemaLineString = components['schemas']['LineString'];
 export type SchemaLiveCameras = components['schemas']['LiveCameras'];
 export type SchemaLivenessStatus = components['schemas']['LivenessStatus'];
 export type SchemaLiveProgress = components['schemas']['LiveProgress'];
+export type SchemaLiveQualitySeries = components['schemas']['LiveQualitySeries'];
 export type SchemaLiveSplat = components['schemas']['LiveSplat'];
 export type SchemaLiveStage = components['schemas']['LiveStage'];
 export type SchemaLiveState = components['schemas']['LiveState'];
+export type SchemaLiveTrain = components['schemas']['LiveTrain'];
+export type SchemaLiveTrainEnded = components['schemas']['LiveTrainEnded'];
+export type SchemaLiveTrainEval = components['schemas']['LiveTrainEval'];
+export type SchemaLiveTrainEvent = components['schemas']['LiveTrainEvent'];
+export type SchemaLiveTrainFinal = components['schemas']['LiveTrainFinal'];
+export type SchemaLiveTrainPlan = components['schemas']['LiveTrainPlan'];
+export type SchemaLiveTrainQuality = components['schemas']['LiveTrainQuality'];
+export type SchemaLiveTrainRule = components['schemas']['LiveTrainRule'];
+export type SchemaLiveTrainSeeds = components['schemas']['LiveTrainSeeds'];
+export type SchemaLiveTrainSeries = components['schemas']['LiveTrainSeries'];
+export type SchemaLiveTrainSnapshot = components['schemas']['LiveTrainSnapshot'];
+export type SchemaLiveTrainStop = components['schemas']['LiveTrainStop'];
+export type SchemaLiveTrainTiles = components['schemas']['LiveTrainTiles'];
 export type SchemaLonLatGrid = components['schemas']['LonLatGrid'];
 export type SchemaMapFeature = components['schemas']['MapFeature'];
 export type SchemaMapOutput = components['schemas']['MapOutput'];
@@ -14476,6 +14777,73 @@ export interface operations {
             };
         };
     };
+    capture_live_tile_api_v1_captures__capture_id__live_tiles__step___path__get: {
+        parameters: {
+            query?: {
+                resolve?: boolean;
+            };
+            header?: never;
+            path: {
+                capture_id: string;
+                path: string;
+                step: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description With resolve=true, the signed URL as JSON for cross-origin browsers. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Successful Response */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     process_capture_api_v1_captures__capture_id__process_post: {
         parameters: {
             query?: never;
@@ -15166,6 +15534,73 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LiveState"];
                 };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    job_live_tile_api_v1_jobs__job_id__live_tiles__step___path__get: {
+        parameters: {
+            query?: {
+                resolve?: boolean;
+            };
+            header?: never;
+            path: {
+                job_id: string;
+                path: string;
+                step: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description With resolve=true, the signed URL as JSON for cross-origin browsers. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Successful Response */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Missing or wrong write token */
             401: {

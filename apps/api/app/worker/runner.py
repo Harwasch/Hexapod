@@ -104,6 +104,7 @@ from app.worker.config import WorkerConfig
 from app.worker.events import Event
 from app.worker.pipeline_bridge import (
     CALL_BOOK,
+    LIVE_PAYLOAD_NAME,
     PIPELINE_DIR,
     SITE_CONTEXT,
     ArtifactRef,
@@ -116,9 +117,10 @@ from app.worker.pipeline_bridge import (
     StepResult,
     Workdir,
     checksum_of,
-    latest_live,
     latest_progress,
+    live_records,
     plan_recipe,
+    read_live_payload,
     run_cost,
     tail_of,
 )
@@ -648,6 +650,7 @@ class JobSupervisor:
                 # The failed attempt's calls are struck from the book by now (cancelled,
                 # or ended); a copy left on the row would be cancelled again by id.
                 self._report_calls(db, current, workdir_root)
+                self._report_progress(db, current, workdir_root)
                 steps.fail_step(
                     db,
                     current,
@@ -695,7 +698,7 @@ class JobSupervisor:
                 )
             )
         ]
-        # The final live-cameras line lands just before the stage ends; read it now,
+        # Final cameras, evaluation and stop lines land as the stage ends; read them now,
         # before a heartbeat could, so the finished step keeps it for the viewer.
         self._report_progress(db, step, workdir_root)
         steps.finish_step(
@@ -1145,9 +1148,18 @@ class JobSupervisor:
             steps.report_progress(db, step, found.to_dict())
         # What the live viewer draws: the newest cameras and intermediate splat the stage
         # has logged (`tools/pipeline/live.py`), under `metrics.live`.
-        live = latest_live(text)
-        if live:
-            steps.report_live(db, step, live)
+        records = read_live_payload(
+            Workdir(workdir_root).work_dir(step.stage_id) / LIVE_PAYLOAD_NAME
+        )
+        if not records:
+            # Local training writes the same journal under checkpoint/live.
+            records = read_live_payload(
+                Workdir(workdir_root).checkpoint_dir(step.stage_id) / "live" / "telemetry.json"
+            )
+        if not records:
+            records = live_records(text)
+        if records:
+            steps.report_live(db, step, {}, records=records)
 
     def _upload_log(self, job_id: uuid.UUID, workdir_root: Path, stage_id: str) -> str | None:
         return outputs.upload_log(self._storage, workdir_root, job_id, stage_id)

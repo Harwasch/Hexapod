@@ -13968,6 +13968,19 @@
             "title": "Final",
             "type": "boolean"
           },
+          "fovY": {
+            "anyOf": [
+              {
+                "exclusiveMaximum": 180.0,
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fovy"
+          },
           "frames": {
             "anyOf": [
               {
@@ -14090,6 +14103,79 @@
           "remainingS"
         ],
         "title": "LiveProgress",
+        "type": "object"
+      },
+      "LiveQualitySeries": {
+        "properties": {
+          "elongationShare": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Elongationshare",
+            "type": "array"
+          },
+          "farFieldShare": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Farfieldshare",
+            "type": "array"
+          },
+          "loss": {
+            "additionalProperties": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "title": "Loss",
+            "type": "object"
+          },
+          "peakAllocatedGb": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Peakallocatedgb",
+            "type": "array"
+          },
+          "step": {
+            "items": {
+              "type": "integer"
+            },
+            "maxItems": 300,
+            "title": "Step",
+            "type": "array"
+          }
+        },
+        "title": "LiveQualitySeries",
         "type": "object"
       },
       "LiveSplat": {
@@ -14322,6 +14408,16 @@
           "stepsStarted": {
             "title": "Stepsstarted",
             "type": "integer"
+          },
+          "train": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveTrain"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -14339,6 +14435,1041 @@
           "splat"
         ],
         "title": "LiveState",
+        "type": "object"
+      },
+      "LiveTrain": {
+        "properties": {
+          "block": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block"
+          },
+          "ended": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveTrainEnded"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evals": {
+            "items": {
+              "$ref": "#/components/schemas/LiveTrainEval"
+            },
+            "maxItems": 256,
+            "title": "Evals",
+            "type": "array"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/LiveTrainEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "final": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveTrainFinal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveTrainPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "planId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Planid"
+          },
+          "quality": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveTrainQuality"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "replacedBy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replacedby"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run"
+          },
+          "seeds": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveTrainSeeds"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "series": {
+            "$ref": "#/components/schemas/LiveTrainSeries"
+          },
+          "snapshots": {
+            "items": {
+              "$ref": "#/components/schemas/LiveTrainSnapshot"
+            },
+            "maxItems": 64,
+            "title": "Snapshots",
+            "type": "array"
+          },
+          "stop": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveTrainStop"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tiles": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveTrainTiles"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "LiveTrain",
+        "type": "object"
+      },
+      "LiveTrainEnded": {
+        "properties": {
+          "reason": {
+            "enum": [
+              "preempted",
+              "oom",
+              "failed"
+            ],
+            "title": "Reason",
+            "type": "string"
+          },
+          "step": {
+            "minimum": 0.0,
+            "title": "Step",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "reason",
+          "step"
+        ],
+        "title": "LiveTrainEnded",
+        "type": "object"
+      },
+      "LiveTrainEval": {
+        "properties": {
+          "decision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision"
+          },
+          "gain": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gain"
+          },
+          "psnr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Psnr"
+          },
+          "split": {
+            "default": "val",
+            "enum": [
+              "val",
+              "train"
+            ],
+            "title": "Split",
+            "type": "string"
+          },
+          "step": {
+            "minimum": 0.0,
+            "title": "Step",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "step"
+        ],
+        "title": "LiveTrainEval",
+        "type": "object"
+      },
+      "LiveTrainEvent": {
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "step": {
+            "minimum": 0.0,
+            "title": "Step",
+            "type": "integer"
+          },
+          "stepsSaved": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stepssaved"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "usdSaved": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usdsaved"
+          }
+        },
+        "required": [
+          "step",
+          "kind",
+          "text"
+        ],
+        "title": "LiveTrainEvent",
+        "type": "object"
+      },
+      "LiveTrainFinal": {
+        "properties": {
+          "ccLpips": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cclpips"
+          },
+          "ccPsnr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ccpsnr"
+          },
+          "ccSsim": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ccssim"
+          },
+          "lpips": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lpips"
+          },
+          "psnr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Psnr"
+          },
+          "ssim": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ssim"
+          }
+        },
+        "title": "LiveTrainFinal",
+        "type": "object"
+      },
+      "LiveTrainPlan": {
+        "properties": {
+          "antialiased": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Antialiased"
+          },
+          "blocks": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocks"
+          },
+          "cap": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cap"
+          },
+          "capMax": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capmax"
+          },
+          "cardGb": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cardgb"
+          },
+          "clamp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clamp"
+          },
+          "frames": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frames"
+          },
+          "gpu": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu"
+          },
+          "metresPerUnit": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metresperunit"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "refineEvery": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refineevery"
+          },
+          "refineStart": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refinestart"
+          },
+          "refineStop": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refinestop"
+          },
+          "rule": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveTrainRule"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scheduleFactor": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedulefactor"
+          },
+          "shDegree": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shdegree"
+          },
+          "shInterval": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shinterval"
+          },
+          "sparse": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sparse"
+          },
+          "stepsMax": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stepsmax"
+          },
+          "usdPerHour": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usdperhour"
+          }
+        },
+        "title": "LiveTrainPlan",
+        "type": "object"
+      },
+      "LiveTrainQuality": {
+        "properties": {
+          "denseInitAddedPoints": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Denseinitaddedpoints"
+          },
+          "denseInitPoints": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Denseinitpoints"
+          },
+          "denseInitSeconds": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Denseinitseconds"
+          },
+          "elongationShare": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elongationshare"
+          },
+          "farFieldShare": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Farfieldshare"
+          },
+          "series": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LiveQualitySeries"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "step": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          }
+        },
+        "title": "LiveTrainQuality",
+        "type": "object"
+      },
+      "LiveTrainRule": {
+        "properties": {
+          "every": {
+            "exclusiveMinimum": 0.0,
+            "title": "Every",
+            "type": "integer"
+          },
+          "minGainDb": {
+            "minimum": 0.0,
+            "title": "Mingaindb",
+            "type": "number"
+          },
+          "window": {
+            "exclusiveMinimum": 0.0,
+            "title": "Window",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "every",
+          "window",
+          "minGainDb"
+        ],
+        "title": "LiveTrainRule",
+        "type": "object"
+      },
+      "LiveTrainSeeds": {
+        "properties": {
+          "bytes": {
+            "minimum": 0.0,
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "count": {
+            "maximum": 200000.0,
+            "minimum": 0.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "of": {
+            "minimum": 0.0,
+            "title": "Of",
+            "type": "integer"
+          },
+          "origin": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Origin",
+            "type": "array"
+          },
+          "scale": {
+            "exclusiveMinimum": 0.0,
+            "title": "Scale",
+            "type": "number"
+          },
+          "sources": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Sources",
+            "type": "object"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "key",
+          "count",
+          "of",
+          "origin",
+          "scale",
+          "bytes"
+        ],
+        "title": "LiveTrainSeeds",
+        "type": "object"
+      },
+      "LiveTrainSeries": {
+        "properties": {
+          "gs": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Gs",
+            "type": "array"
+          },
+          "its": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Its",
+            "type": "array"
+          },
+          "loss": {
+            "additionalProperties": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "title": "Loss",
+            "type": "object"
+          },
+          "lr": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Lr",
+            "type": "array"
+          },
+          "mem": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Mem",
+            "type": "array"
+          },
+          "sh": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Sh",
+            "type": "array"
+          },
+          "step": {
+            "items": {
+              "type": "integer"
+            },
+            "maxItems": 300,
+            "title": "Step",
+            "type": "array"
+          },
+          "t": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "T",
+            "type": "array"
+          }
+        },
+        "title": "LiveTrainSeries",
+        "type": "object"
+      },
+      "LiveTrainSnapshot": {
+        "properties": {
+          "bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bytes"
+          },
+          "count": {
+            "minimum": 0.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "elongationShare": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elongationshare"
+          },
+          "farFieldShare": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Farfieldshare"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "of": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Of"
+          },
+          "step": {
+            "minimum": 0.0,
+            "title": "Step",
+            "type": "integer"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "step",
+          "key",
+          "count"
+        ],
+        "title": "LiveTrainSnapshot",
+        "type": "object"
+      },
+      "LiveTrainStop": {
+        "properties": {
+          "gain": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gain"
+          },
+          "maxSteps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maxsteps"
+          },
+          "step": {
+            "minimum": 0.0,
+            "title": "Step",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "step"
+        ],
+        "title": "LiveTrainStop",
+        "type": "object"
+      },
+      "LiveTrainTiles": {
+        "description": "A full LOD tileset. Omitted frame means the producer's solve-local coordinates.",
+        "properties": {
+          "final": {
+            "title": "Final",
+            "type": "boolean"
+          },
+          "frame": {
+            "default": "solve",
+            "enum": [
+              "solve",
+              "enu"
+            ],
+            "title": "Frame",
+            "type": "string"
+          },
+          "step": {
+            "minimum": 0.0,
+            "title": "Step",
+            "type": "integer"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "step",
+          "final"
+        ],
+        "title": "LiveTrainTiles",
         "type": "object"
       },
       "LivenessStatus": {
@@ -27387,6 +28518,103 @@
         ]
       }
     },
+    "/api/v1/captures/{capture_id}/live/tiles/{step}/{path}": {
+      "get": {
+        "operationId": "capture_live_tile_api_v1_captures__capture_id__live_tiles__step___path__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "step",
+            "required": true,
+            "schema": {
+              "title": "Step",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolve",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Resolve",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "With resolve=true, the signed URL as JSON for cross-origin browsers."
+          },
+          "302": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Fetch a file from the newest run's live LOD tiles",
+        "tags": [
+          "live"
+        ]
+      }
+    },
     "/api/v1/captures/{capture_id}/process": {
       "post": {
         "description": "Inserts a `not-started` job and returns it. Nothing runs here: the worker claims the row with a lease and executes the recipe.",
@@ -28411,6 +29639,103 @@
           }
         },
         "summary": "The live state of one run",
+        "tags": [
+          "live"
+        ]
+      }
+    },
+    "/api/v1/jobs/{job_id}/live/tiles/{step}/{path}": {
+      "get": {
+        "operationId": "job_live_tile_api_v1_jobs__job_id__live_tiles__step___path__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "step",
+            "required": true,
+            "schema": {
+              "title": "Step",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolve",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Resolve",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "With resolve=true, the signed URL as JSON for cross-origin browsers."
+          },
+          "302": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Fetch a file from one run's live LOD tiles",
         "tags": [
           "live"
         ]

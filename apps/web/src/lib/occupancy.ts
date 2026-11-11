@@ -522,12 +522,12 @@ export class SplatOccupancy {
     return best;
   }
 
-  sweep(from: Vec3, to: Vec3): { position: Vec3; blocked: boolean } {
+  sweep(from: Vec3, to: Vec3, clearance?: number): { position: Vec3; blocked: boolean } {
     let position: Vec3 = [...to];
     let blocked = false;
     for (const [cell, level] of this.levels) {
       if (level.size === 0) continue;
-      const swept = level.sweep(from, position, clearanceOf(cell));
+      const swept = level.sweep(from, position, clearance ?? clearanceOf(cell));
       if (swept.blocked) {
         blocked = true;
         position = swept.position;

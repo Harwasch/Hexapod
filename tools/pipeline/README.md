@@ -1202,7 +1202,7 @@ including degree 2. The dedicated renderers intentionally keep only SH 0-1 on ha
 | Spark globe overlay                          | 0-3 desktop; 0-1 handheld                                         | `apps/web/src/cesium/scanView/sparkBackend.ts:705`, same `quality.ts` cap                                                                       |
 | Spark gallery (`view.html`)                  | 0-3, no app SH cap                                                | `apps/web/src/view/sparkStream.ts:38` passes SPZ to `SplatMesh`, including its LOD path                                                         |
 | Spark local Worlds PLY/SPZ viewer            | 0-3 for Gaussian splats; ordinary point clouds use vertex colours | `apps/web/src/worlds/reconstruction/LocalSplatViewer.tsx:78`                                                                                    |
-| Spark live training preview                  | Renderer supports 0-3, but snapshots carry only 0                 | `apps/web/src/view/live.ts:299`, `tools/pipeline/live.py:390` deliberately strips SH for previews                                               |
+| Spark live training console                  | Full LOD keeps the PLY's 0-3; history thumbnails carry only 0     | `tools/pipeline/live.py` rotates newest/final tiles via `live_tiles.py`; `apps/web/src/view/sparkStream.ts` streams them                        |
 | CesiumJS                                     | 0-3                                                               | `apps/web/src/cesium/spzDecode.worker.ts:16`, `apps/web/src/lib/splatLayout.ts:41`                                                              |
 | Packer, including parent tiles               | 0-3                                                               | `tools/captures/splat_tiles.py:377` (channel-major conversion), `:658` (3/8/15 glTF attributes)                                                 |
 | Placement rotation                           | 0-3                                                               | `tools/pipeline/harmonics.py` `rotate`; `tests/test_harmonics.py:185` tests degrees 1, 2 and 3 against the colour-preserving definition         |
@@ -1677,6 +1677,33 @@ uv run python -m experiments.bench run --scene spool --seeds 42,43 --rehearse
 uv run python -m experiments.bench report --rehearse
 ```
 
+Add `--live` to `bench run` to publish telemetry and small SPZ previews about every
+60 seconds; it leaves trainer params and comparison identity unchanged. Watch from a
+second terminal (read-only volume access, no database):
+
+```bash
+# From the repository root: build a same-origin console bundle once.
+VITE_API_BASE_URL= pnpm --filter @twin/web build
+cd apps/api && uv run --with modal==1.6.2 python -m app.scripts.bench_live <runId> --web-dist ../web/dist
+```
+
+Open the printed `http://127.0.0.1:8791/view.html#live/<runId>` URL. The watcher polls
+every 15 seconds and caches previews under `~/.local/share/hexapod-bench/live/<runId>/`.
+Use `--host 0.0.0.0 --port 8791` to open the same bundle over Tailscale. Without
+`--web-dist`, use the live console from an existing bundle pointed at this server.
+Frozen bench scenes have no georeferencing, so Distance stays disabled.
+
+With `--live`, complete LOD tilesets also sync automatically; the console downloads
+the newest available one in its poller and retains at most two under
+`~/.local/share/hexapod-bench/live/<runId>/tiles/<step>/`. Volume tiles follow the
+run's local rotation. A local package can still be served with `bench_live --tiles DIR`.
+For a completed older run without live tiles, add `bench_live --package-final`: this
+downloads `trained.ply` (about 1.7 GB per run, requires the run's `--keep-splat`) and
+packages solve-local tiles with `splat_tiles.py`, using `heavy` when available.
+This is off by default and attempts packaging once per run, including failures,
+across server restarts. The PLY, tiles and `package-final.json` attempt marker stay
+in the run's cache; remove that marker explicitly to retry a failed attempt.
+
 Use `--set '{"train": {"gaussian_density": 0.2}}'`, or `--variants file.yaml` containing
 `baseline: {}` and `dense: {train: {gaussian_density: 0.2}}`. Each variant/seed gets a
 unique run ID; at most four spawn concurrently. `--keep-splat` retains `trained.ply`
@@ -1753,3 +1780,43 @@ rendering must be validated in the coordinator's screen smoke run.
 ```bash
 uv run ruff check . && uv run ruff format --check . && uv run mypy . && uv run pytest -q
 ```
+
+Live training keeps the 5% SH-0 thumbnails, selected in bounded PLY row windows with the
+same voxel-rank, contribution-score and input-index ordering. Full SH/LOD is packaged only
+at 25%, 50% and 75% of the training ceiling, plus the final PLY. Each successful tileset
+replaces the previous newest one; the final PLY remains read-only. At 133 MB per set,
+that is approximately **532 MB of tile uploads per run**, plus thumbnails, assuming every
+scheduled set finishes and syncs once. A slow or failed optional pack is skipped; checkpoint
+retries or repeated transfer of unchanged files can add traffic. Local retention is bounded
+separately from cumulative upload traffic.
+
+### Production live training transport
+
+`gsplat` observes training by default, including Refine and Preview. Set the train
+stage's `live: false` to skip plans, seeds, telemetry and intermediate snapshots;
+this leaves training, evaluation and recovery checkpoints unchanged. Convergence
+being disabled does not disable observability.
+
+The shared bench/production hook reports loss, splat count, step, learning rate,
+SH degree and timing every 200 steps. With a holdout it reports existing validation
+scores. With `test_every: 0`, it reports **Sampled train PSNR**: CPU arithmetic on
+at most 1,024 pixels from one already-rendered training view every 200 steps. That
+small detached view is copied to CPU; no extra render, backward pass, validation
+split or RNG call is introduced. Missing trainer locals omit this diagnostic.
+This is neither a held-out score nor a final quality score.
+
+Production writes validated records atomically to
+`runs/<job>/<stage>/checkpoint[-aN]/live/telemetry.json`, beside the bench-sized
+SPZ previews (100,000 splats, at 5% schedule intervals). The existing checkpoint
+sync uploads these every 60 seconds by default. The cloud runner GETs only this
+file once per checkpoint interval, plus at completion, and the worker heartbeat
+merges it into `JobStep.metrics.live`. Provider logs remain a fallback. The wire
+payload is capped at 256 kB and 300 step samples; the API reducer retains its
+48 kB training budget. Fan-out records identify the displayed block. The API
+signs only this job/stage/attempt's uploaded snapshots, including retry keys.
+
+The training console uses the completed run's published epoch asset
+(`3d-tiles-url`, ENU frame) once available, replacing the solve-local live LOD.
+Updating the Modal image is necessary: an already-running container cannot acquire
+the new observer. Deploy the API and web reader first, then rebuild/deploy Modal,
+then deploy the worker. No database migration is needed.

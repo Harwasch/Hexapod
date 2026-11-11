@@ -56,6 +56,7 @@ import holdout
 import init_seed
 import keyframes
 import live
+import live_payload
 import placement
 import pose_backbone
 import priors
@@ -70,6 +71,7 @@ import splat_stream
 import support_mask
 import surface
 import train_admission
+import train_plan
 import training
 import video
 from artifacts import ArtifactDecl
@@ -1873,7 +1875,7 @@ def robust(ctx: StageContext) -> StageOutcome:
 @stage_impl(
     "gsplat",
     consumes=("frames", "poses"),
-    optional_consumes=("masks",),
+    optional_consumes=("masks", "georef.json"),
     produces=(TRAINED_PLY, TRAIN_METRICS, holdout.HOLDOUT),
     summary="gsplat 3DGS training; consumes masks when a mask stage produced any",
 )
@@ -1978,6 +1980,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     With `test_every: 0` (default), every registered frame trains and validation scores
     are unavailable. Positive test_every is a bench opt-in for held-out measurements.
     """
+    ctx = live_payload.observe(ctx)
     variant = str(ctx.param("variant", "3dgs"))
     if variant != "3dgs":
         raise ValueError(
@@ -2298,7 +2301,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         batch_size=batch_size,
         extra=production_extra + [str(value) for value in (ctx.param("extra_args") or [])],
     )
-    if extra_evals or test_every == 0 or ctx.param("streaming_export", True):
+    if live_steps or extra_evals or test_every == 0 or ctx.param("streaming_export", True):
         argv = training.converge_argv(
             argv,
             script=_optional_path(ctx.param("converge_script")) or CONVERGE_SCRIPT,
@@ -2307,7 +2310,19 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             min_gain_db=rule.min_gain_db,
             enabled=bool(extra_evals),
             min_steps=math.ceil(training.large_scan_floor(images, ctx.params) / batch_size),
+            live=bool(live_steps),
         )
+    train_plan.emit(
+        ctx,
+        budget=budget,
+        cap=cap_max,
+        steps=iterations,
+        factor=schedule_factor,
+        scaler=steps_scaler,
+        strategy=strategy,
+        rule=rule if converge else None,
+        frames=registered,
+    )
     with live.SplatWatch(
         result / "ply",
         ctx.checkpoint_dir / live.LIVE_DIR,
@@ -2316,7 +2331,16 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         total=iterations,
         key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
         up=_up_estimate(poses),
+        **live.snapshot_cameras(dataset / "sparse" / "0"),
     ):
+        live.emit_seeds(
+            dataset / "sparse" / "0",
+            ctx.checkpoint_dir / live.LIVE_DIR,
+            ctx.log,
+            key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
+            seeded=0 if seeded is None else seeded.seeded,
+            enabled=bool(live_steps),
+        )
         ctx.run(argv)
     ply = training.latest_ply(result)
     if ply is None:

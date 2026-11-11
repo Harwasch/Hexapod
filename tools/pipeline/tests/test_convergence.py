@@ -299,13 +299,14 @@ def test_without_gsplat_the_wrapper_runs_the_trainer_whole_and_says_why(tmp_path
     assert "gsplat.distributed does not import" in str(convergence_["reason"])
 
 
-def test_a_schedule_shorter_than_densification_is_not_wrapped(tmp_path: Path) -> None:
+def test_live_short_schedule_is_observed_without_enabling_convergence(tmp_path: Path) -> None:
     workdir, document = run(tmp_path, stand_in_params(strategy="mcmc", cap_max=64, converge=True))
 
     convergence_ = document["convergence"]
     assert str(convergence_["status"]).startswith("not applied: densification runs to step")
     assert convergence_["hook"] is None
-    assert "converge_trainer.py" not in workdir.log_path("train").read_text()
+    assert "converge_trainer.py" in workdir.log_path("train").read_text()
+    assert "--no-converge" in workdir.log_path("train").read_text()
 
 
 def test_convergence_is_off_unless_asked_for(tmp_path: Path) -> None:

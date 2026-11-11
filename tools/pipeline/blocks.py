@@ -105,6 +105,7 @@ import holdout
 import init_seed
 import live
 import sfm
+import train_plan
 import training
 from captures_bridge import read_ply
 from contracts import FANOUT_PARAM, FanOut, FanOutPart, MetricValue, StageContext
@@ -184,6 +185,9 @@ PART_ROWS = 131_072
 #: finished block look like another plan's.
 RUNTIME_PARAMS = frozenset(
     {
+        # Observability metadata must never invalidate a reusable trained block.
+        "_live_rate_tier",
+        "_live_usd_per_hour",
         "block_attempt_budget_s",
         "block_sync_wait_s",
         "live",
@@ -1467,6 +1471,7 @@ def _train_block(
         script=Path(settings.params.get("block_trainer_script") or BLOCK_TRAINER),
         rule=settings.rule if extra_evals else None,
         ring=ring_path,
+        live=settings.live,
     )
     boundary = argv.index("--")
     argv[boundary:boundary] = [
@@ -1489,6 +1494,19 @@ def _train_block(
     phases.add("seed", time.monotonic() - seeding)
     resumed_from = resume_step(list(settings.extra), result)
     began = time.monotonic()
+    train_plan.emit(
+        ctx,
+        budget=block_budget or settings.budget,
+        cap=cap,
+        steps=iterations,
+        factor=factor,
+        scaler=scaler,
+        strategy=settings.strategy,
+        rule=settings.rule if settings.converge else None,
+        blocks=plan.partition.count,
+        frames=len(names),
+        sparse=applied.seeded + applied.sfm_points,
+    )
     with live.SplatWatch(
         result / "ply",
         ctx.checkpoint_dir / live.LIVE_DIR,
@@ -1497,7 +1515,16 @@ def _train_block(
         total=iterations,
         key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
         up=settings.up,
+        **live.snapshot_cameras(dataset / "sparse" / "0"),
     ):
+        live.emit_seeds(
+            dataset / "sparse" / "0",
+            ctx.checkpoint_dir / live.LIVE_DIR,
+            ctx.log,
+            key_prefix=f"{ctx.checkpoint_key}/{live.LIVE_DIR}",
+            seeded=applied.seeded,
+            enabled=bool(live_steps),
+        )
         ctx.run(argv)
     seconds = time.monotonic() - began
     phases.add("train", seconds)
@@ -1582,12 +1609,15 @@ def trainer_argv(
     script: Path,
     rule: convergence.Rule | None,
     ring: Path | None,
+    live: bool = True,
 ) -> list[str]:
     """`gsplat_argv`'s command run through `block_trainer.py`, as `training.converge_argv`
     runs it through `converge_trainer.py`: the wrapper's own options, `--`, then the
     trainer's argv unchanged."""
     python, trainer, *rest = argv
     own = [python, str(script), "--trainer", trainer]
+    if not live:
+        own.append("--no-live")
     if rule is not None:
         own += [
             "--converge",
