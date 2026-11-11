@@ -1,0 +1,55 @@
+name: Worker disk report
+
+# Read-only: how full the worker's /data volume is, and which training checkpoints and
+# resume files are still on it. Nothing is deleted or written. If the worker machine is
+# stopped (it stops itself when idle), this starts it; with nothing queued it stops again
+# after WORKER_IDLE_EXIT_S (fly.toml), exactly as when a job wakes it.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Install flyctl
+        run: |
+          curl -L https://fly.io/install.sh | sh
+          echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
+      - name: Report
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          app=twin-api
+          machine=$(flyctl machines list --app "$app" --json \
+            | jq -r '[.[] | select(.config.metadata.fly_process_group == "worker")][0].id')
+          state=$(flyctl machines list --app "$app" --json \
+            | jq -r --arg m "$machine" '.[] | select(.id == $m) | .state')
+          echo "worker machine $machine is $state"
+          if [ "$state" != "started" ]; then
+            flyctl machine start "$machine" --app "$app"
+            sleep 20
+          fi
+          cat > report.sh <<'SH'
+          df -h /data
+          echo
+          echo "== largest run directories =="
+          du -sh /data/worker/* 2>/dev/null | sort -rh | head -20
+          echo
+          echo "== checkpoint and resume files (MB, modified, path) =="
+          find /data -type f \( -name '*.pt' -o -name '*.ckpt' -o -path '*checkpoint*' -o -path '*resume*' \) \
+            -printf '%s\t%TY-%Tm-%Td %TH:%TM\t%p\n' 2>/dev/null | sort -rn \
+            | awk -F'\t' '{ printf "%8.1f\t%s\t%s\n", $1/1048576, $2, $3; t += $1 } END { printf "total %.2f GB\n", t/1073741824 }'
+          echo
+          echo "== beach jobs 0bb8dd45 and ecbcdda1 =="
+          find /data -maxdepth 4 \( -name '*0bb8dd45*' -o -name '*ecbcdda1*' \) -exec du -sh {} \; 2>/dev/null
+          SH
+          # Sent base64-encoded so no quoting survives a second shell.
+          encoded=$(base64 -w0 report.sh)
+          flyctl ssh console --app "$app" --machine "$machine" -C "sh -c 'echo $encoded | base64 -d | sh'" | tee report.txt
+          { echo '```'; cat report.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
