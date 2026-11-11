@@ -16286,7 +16286,7 @@
       },
       "PhoneRefine": {
         "additionalProperties": false,
-        "description": "The phone's options for the full-quality pass (the same whitelist as `process`).\n\n`normalize` options are accepted and ignored: a Refine keeps the preview's frames and\nposes, which is the whole point -- the region of interest is only meaningful in them.",
+        "description": "The phone's options for the full-quality pass (the same whitelist as `process`).\n\nChanged `normalize` options rebuild frames and poses without the old region or seed.\nOmit `normalize` to reuse the previous extraction and its coordinate frame.",
         "properties": {
           "params": {
             "additionalProperties": true,
@@ -40073,7 +40073,7 @@
     },
     "/api/v1/phone/captures/{capture_id}/refine": {
       "post": {
-        "description": "Resumes the capture's latest finished photo-reconstruct run at `train` with new parameters: the phone's quality options, `train.support_mask` set to the voxels the preview's well-supported splats occupy (any shape), `train.init_from` = `preview` (start from the preview's splat on a shorter schedule; the phone may send `sfm`), and `quality.mode` = `refine`. The frames and poses are kept, so the mask is in the frame it was measured in. If the worker no longer has them, the run starts over and trains uncropped rather than applying the region to a different reconstruction.",
+        "description": "Resumes the capture's latest finished photo-reconstruct run at `train` with new parameters: the phone's quality options, `train.support_mask` set to the voxels the preview's well-supported splats occupy (any shape), `train.init_from` = `preview` (start from the preview's splat on a shorter schedule; the phone may send `sfm`), and `quality.mode` = `refine`. Changed normalization parameters restart extraction and camera solving, using SfM initialization without the preview's mask. Omit normalization to reuse the frames and poses. If the worker no longer has them, it starts over uncropped.",
         "operationId": "refine_phone_capture_api_v1_phone_captures__capture_id__refine_post",
         "parameters": [
           {

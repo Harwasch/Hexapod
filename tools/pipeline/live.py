@@ -19,7 +19,7 @@ halves, one on each side of the stage log:
   another rather than drifting. `emit_model` is the same line for any finished model, so a
   global mapper (GLOMAP) can call it too.
 * `SplatWatch` watches gsplat's `ply/` directory for the intermediate splats asked for by
-  `--ply_steps` (v1.5.3 writes `point_cloud_<i>.ply` at step `i` for every listed step,
+  `--ply_steps` (512d366b retains `point_cloud_<i>.ply` at step `i` for every listed step,
   scaled by `--steps_scaler`, as well as the final one), keeps the `max_gaussians` with
   camera-weighted screen contribution, stratified over space, packs them as SPZ (the
   packer `splat_tiles.py` already uses for the map, which Spark reads) into

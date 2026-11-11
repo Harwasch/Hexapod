@@ -61,7 +61,7 @@ def test_photo_reconstruct_sends_pose_align_train_and_quality_off_the_worker() -
     recipe = load_recipe("photo-reconstruct")
     plan = plan_recipe(recipe)
 
-    assert recipe.version == 15
+    assert recipe.version == 17
     assert plan.gpu_stages == ("pose", "align", "train", "quality")
     tiers = {stage.id: stage.gpu.tier for stage in plan.stages if stage.gpu is not None}
     assert tiers == {"pose": "cpu4", "align": "cpu4", "train": "l4", "quality": "cpu4"}
@@ -184,7 +184,7 @@ def test_photo_reconstruct_describes_every_frame_and_seeds_pose_from_it() -> Non
     plan = plan_recipe(load_recipe("photo-reconstruct"))
     by_id = {stage.id: stage for stage in plan.stages}
 
-    assert plan.recipe.version == 15
+    assert plan.recipe.version == 17
     assert plan.origins["frames_meta.json"] == "normalize"
     assert by_id["pose"].inputs["frames_meta.json"] == "stages/normalize/out/frames_meta.json"
     assert by_id["pose"].params["focal_from"] == "exif"

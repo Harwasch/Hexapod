@@ -19,7 +19,7 @@ here.
 | API (`app` process)             | Fly.io                       | `fly.toml`                                             |
 | Worker (`worker` process)       | Fly.io, same image           | `fly.toml` (`[processes]`, `[[mounts]]`)               |
 | Captures, tiles, `catalog.json` | Cloudflare R2                | `infra/cors/production.json`, `infra/cors/apply-r2.sh` |
-| Lane 2 remote stages            | Modal: `cpu4`, and one L4    | `infra/modal/app.py`, `.github/workflows/modal.yml`    |
+| Lane 2 remote stages            | Modal: `cpu4`, L4 up to L40S | `infra/modal/app.py`, `.github/workflows/modal.yml`    |
 | Database                        | Neon (Postgres 16 + PostGIS) | `.github/workflows/provision.yml`                      |
 | Provisioning                    | GitHub Actions, on demand    | `.github/workflows/provision.yml`                      |
 | Deploys                         | GitHub Actions, on demand    | `.github/workflows/deploy.yml`                         |
@@ -536,11 +536,23 @@ the worker.** In `tools/pipeline/recipes/photo-reconstruct.yaml` that is four st
 Production confirmed the split on 2026-10-22: those four ran on Modal, the rest on the
 worker.
 
+Large captures now default to `pose.backbone: auto` (200+ pose-input frames): solve a backbone
+selected by viewpoint coverage, then register the remaining frames and run bounded
+bundle adjustment. `backbone: off` keeps the previous path. Job ecbcdda1 on 2026-11-09
+registered 954/2,037 beach frames in 1 h 43 min with incremental mapping still growing.
+The new cpu4 time model plans the same frame count with 300 anchors at about 64 minutes
+on COLMAP 4.2, versus about eight hours incrementally. This is an extrapolation,
+excluding transfers and retries, not a production runtime measurement. Backbone size
+grows with coverage; unordered photos can retain every frame. The six-hour pose stage
+limit stays unchanged. Inspect `poses.json.backbone`, registration counts, reprojection
+error and phase timings on the first approved production run; see
+[the pose method and limits](../tools/pipeline/README.md#coverage-backbone-then-registration).
+
 | Where        | What runs                                                                           | Why there                                                                                                             |
 | ------------ | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Fly `worker` | `normalize` (ffmpeg), `georeference`, `place`, `confidence`, `package` and the rest | light CPU work; the worker already holds the upload                                                                   |
 | Modal `cpu4` | `pose` (COLMAP 3.9.1), `align`, `quality`                                           | more memory and sustained CPU than the 2 GB worker has ([below](#the-worker-image-carries-colmap)); billed per second |
-| Modal L4     | `train` (gsplat 1.5.3 `simple_trainer.py`)                                          | needs CUDA; billed per second only while it runs, so an idle deployment costs nothing for it                          |
+| Modal GPU    | `train` (gsplat 1.6.0, source `512d366b`)                                           | needs CUDA; billed per second only while it runs, so an idle deployment costs nothing for it                          |
 
 `fly.toml` sets `WORKER_RUNNER=cloud` and `WORKER_CLOUD_PROVIDERS=modal`. The worker then
 calls `run_stage_<tier>` in the Modal app `twin-pipeline` (`WORKER_MODAL_APP`'s default),
@@ -550,6 +562,174 @@ bytes through the **private** bucket under `runs/<run id>/`, using the Modal sec
 first remote stage, on the function lookup (not observed). Lane 1 is unaffected either way.
 
 ### Deploying it, and proving it
+
+**Full-data release requires Harrison's OK before deployment.** Deploy neither Modal nor
+Fly from this edit-only port. Claude reviews and opens the draft PR. Release the
+pipeline worker/recipe, the phone web bundle (native size by default), and the Modal image:
+the latter adds the guarded resume source
+extension, no-holdout Dataset adapter, streamed PLY export and 16 GiB GPU host reservation.
+The image's CPU acceptance check parses the checkpoint CLI and verifies all-frame Dataset
+indices and byte-identical streamed SH3 payloads. These local checks do not prove CUDA,
+provider pre-emption or object-storage throughput; use the existing non-production smoke
+path below after approval. Keep the source-compile cache: a changed pipeline layer still
+runs acceptance checks, while a cold CUDA rebuild can take over an hour (details below).
+A worker with new default checkpoint flags requires this new training image.
+
+At surveyed rates, 2 cores + 16 GiB adds $0.222192/hour beside a GPU; L4 total is
+$1.021392/hour, $0.063936/hour above the old 8 GiB reservation. A beach-sized scan uses
+all 2,036 registered native frames and at least 60k equivalent steps. Recipe v17
+promotes its 8.05M density target to one L40S and fills its roughly 14.0M ceiling before considering blocks. The campaign's single-GPU full-data
+run measured 157 minutes / $2.73; it is not a quote for the new block/cap/checkpoint path.
+The six-hour function timeout and existing retry limits remain in force. Single-call
+pre-emption and immediate block-call retries resume from the last synced 5k checkpoint.
+Recovery of unfinished blocks across whole-stage retries and automatic timeout relaunch
+remain deferred; completed blocks already survive.
+
+**Recipe v17 capacity and spending.** `photo-reconstruct` now sets MCMC
+`opacity_reg: 0.002` for every scan, including the shared-recipe Preview; Preview keeps
+its fixed cap, image size and schedule. The default `budget_mode: auto` measures a
+density target at 0.1 Gaussians per finest-view surface pixel, chooses the smallest
+fitting tier from L4 → L40S → A100-80 up to `max_gpu_tier: l40s`, then budgets
+by **B'**: **min(tier ceiling, 2.5 × density target)** with default
+`budget_headroom: 2.5`. At native 1080x1920 the ceilings remain
+about **6.72M / 14.0M / 23.7M**. The beach's 8.05M target therefore plans **about
+14.0M on one L40S**. **0.5M → 1.25M** and **5M → about 6.72M on L4**.
+A 50M target splits into four L40S blocks, each capped at about **14.0M**.
+Each block applies the same rule to its own target and allocated tier. With
+`max_gpu_tier: a100`, bigger GPUs are considered before blocks.
+
+Set `budget_headroom: null` to opt out with rule B (also used when absent): retain
+the density target on the recipe's base tier and fill promoted tiers' ceilings.
+The beach's LPIPS improved through 20M (2.5x its target) with flat PSNR at
+opacity_reg 0.002; there is no evidence beyond that. `budget_mode: density`
+forces headroom 1.0 (8.05M on L40S for the beach);
+`budget_headroom: 1.0` also keeps density-sized caps. `budget_mode: gpu-max`
+explicitly targets the configured maximum's ceiling. `budget_max` remains a lower
+per-pass cap and integer `cap_max` remains a fixed override. Explicit per-pass
+limits can still force blocks. Train metrics record the density target
+(`budget.densityTarget`, also `raw`), chosen tier (`gpuTier`), tier ceiling
+(`memoryCeiling`), final cap (`capMax`), reason (`tierReason`) and headroom
+(`budgetHeadroom`: null for rule B, 1.0 for density).
+
+Using the repository's surveyed price table, L40S is **$1.9512/h GPU-only versus L4's
+$0.7992/h**, or **$2.173392/h versus $1.021392/h** with the same 2 cores and 16 GiB.
+A100-80 is **$2.722192/h** including reservation, another 25% per hour over L40S.
+L40S is the default maximum to bound spend; A100 is an explicit override. Neither
+avoiding blocks nor the beach's improving LPIPS establishes a cheaper per-scan price
+at higher counts. More gaussians mean slower steps and can increase time and per-scan
+cost with headroom; `budget_mode: density` keeps
+density-sized counts. Existing dollar caps, retries and timeouts still apply; the running
+cost estimate and attempt ledger use the chosen tier's rate and reprice an actual
+fallback from the reported GPU. Fallbacks are capacity-filtered before submission;
+a 14M call cannot land on an L4/A10. Promoted calls use the existing dedicated
+`run_stage_l40s` / `run_stage_a100` functions, without requiring new Modal function names.
+An admitted L40S/A100 head gets at most five minutes pending (or the configured
+shorter pending limit). A capacity error or that bounded wait records the failed
+call and excludes its tier for this run, including worker retries/deploys. Admission
+tries A100 only when allowed; otherwise it recalculates an L4 budget and splits into
+blocks. The default applies min(L4 ceiling, 2.5 × block density target); rule B
+with null headroom keeps each L4 block's density target. Each unavailable tier is tried once; ordinary
+training failures do not trigger re-planning. Reasons and exclusions are in the log,
+call requests, attempt ledger and successful step's `trainAdmission` metric. Jobs
+without `max_gpu_tier` retain their recipe tier (including saved v16 jobs); v17 opts
+in explicitly. A fixed A100 bench allocation accepts a lower recipe maximum.
+
+**Offline checks for this policy (2026-11-09).** At the supplied measured beach rate
+of about 9.7 steps/s at 10M, 60k steps take 1.72 h ($3.73 with L40S reservation).
+Assuming time per step scales linearly with count, 14M projects about 6.93 steps/s,
+2.41 h and **$5.23 training**, before startup, transfers, exports and other stages.
+That is below the $25 job cap; the cap buys about 11.5 L40S hours in total. This is
+an extrapolation, not a measured 14M rate or a whole-job price guarantee.
+
+The density survey now streams all observations in chunks of at most **65,536**,
+including a single long point track; image metadata counts also stream. It retains
+only point positions/finest footprints (32 bytes per point), compact camera lookup
+arrays and fixed chunk buffers before the surface calculation. Memory scales with
+points and images, not the total observations; there is no subsampling or estimation
+error. Small fixtures match the previous whole-array footprints and surface results
+exactly across chunk boundaries. The former survey peaked at **1,687 MiB for 1M
+points/20M observations** and **2,449 MiB for 1M/30M**, unsafe on the 2 GB Fly worker.
+The new full surveys peaked at **255.09 MiB RSS / 220.41 MiB traced allocations**
+for 1M/20M and **255.08 MiB RSS / 220.41 MiB traced allocations** for 1M/30M
+(including surface aggregation, under the 600 MiB target). Reproduction is in the
+[pipeline README](../tools/pipeline/README.md#density-survey-memory).
+
+The survey stays on the CPU worker because admission must choose the tier before
+submitting a GPU call; moving it into a GPU container would allocate a card before
+knowing which one fits and require another dispatch to change tiers. Containers
+repeat the same bounded survey on their assembled dataset. The memory measurements
+cover the survey process, not the worker's full resident set or models with more than
+1M points. A v16 block checkpoint is isolated in its own lane; even if copied into
+the v17 whole-scene lane, the changed checkpoint identity discards it and restarts at
+step zero (offline stand-in test), without restoring incompatible optimizer state.
+
+Deploy the worker and its matching pipeline image together so both use the shared
+admission policy. This change has local stand-in coverage only, with no network or GPU
+run. [Opacity and capacity evidence](../tools/pipeline/README.md#opacity-and-gpu-capacity-recipe-v17)
+records the measurements, Preview choice and settings.
+
+The image uses gsplat source commit `512d366b67073d77ca099ede742683c165dfc23b`,
+torch 2.9.1+cu128 and CUDA 12.8.1. Recipe v16 changes production data defaults;
+[full data by default](../tools/pipeline/README.md#full-data-by-default-recipe-v16) records
+the measured basis, settings, cost effects and recovery boundaries.
+PR #116 measured Beach on one seed: baseline A (1.5.3) **25.17/0.753/0.301**
+PSNR/SSIM/LPIPS, **98 min, $1.57**, versus upgraded plain **25.34/0.755/0.295**,
+**75 min, $1.23**. The +0.17 dB is within Spool's 0.22 dB seed spread; quality improvement
+is not established. This extraction excludes the experimental quality stack.
+
+One upstream behaviour change affects `strategy: default`: 512d366b fixes the opacity
+reset condition that was always false in 1.5.3. Opacity now resets every 3000 steps
+(before schedule scaling, during refinement). The production recipe uses `mcmc` and
+is unaffected.
+
+**Deploy time:** gsplat now compiles from source in a dedicated 16-core, 48 GB build
+step (two-hour timeout). The default Modal builder failed to finish within two hours;
+with sm_80 + sm_89 on 16 cores, one source alone took 68 minutes. The image therefore
+builds `CUDA_ARCHS="8.0"`: sm_80 runs on A100, A10, L4 and L40S by same-major
+compatibility. Other GPU architectures are not validated by this build. Unchanged
+layers are cached; allow a long first deploy, not the old wheel image's eight minutes.
+The header comments in `.github/workflows/modal.yml` still describe the 1.5.3 wheel
+and a 15–30 minute build. That job's 90-minute timeout may not cover the first source
+build; use the operator deploy below when the image is not already cached.
+
+Before replacing production, deploy this checkout under a **non-production app name**
+and run the production stage/transfer path against it. From the repository root, with
+Modal 1.5.5 and boto3 available to the pipeline interpreter, Modal credentials configured,
+and local `OBJECT_STORAGE_*` matching the existing `twin-object-storage` private-bucket
+secret (endpoint URL, access key, secret key, bucket, optional region):
+
+```bash
+# Once, in a network-enabled operator shell (not part of the offline checks):
+uv pip install --python tools/pipeline/.venv/bin/python modal==1.5.5 boto3
+export PATH="$PWD/tools/pipeline/.venv/bin:$PATH"
+export TMPDIR="$PWD/tools/pipeline/.tmp"
+modal deploy infra/modal/app.py --name twin-pipeline-gsplat-upgrade-smoke
+tools/pipeline/.venv/bin/python infra/modal/smoke.py \
+  --app twin-pipeline-gsplat-upgrade-smoke --iterations 500 --tier l4 \
+  --work tools/pipeline/.tmp/gsplat-smoke
+```
+
+`modal deploy --name` overrides `modal.App("twin-pipeline")`; `smoke.py --app` passes
+that name to `ModalAdapter`. Neither changes the worker's production app setting.
+The smoke renders synthetic frames locally, runs COLMAP on the named app's `cpu4`
+function and trains on its L4. It writes frames, poses, transfer checksums, checkpoints
+(including live previews) and outputs under **`runs/smoke-<UTC timestamp>/`** in the
+private R2 bucket. It deletes that prefix in `finally`, on success or failure; a cleanup
+error is reported on stderr and requires manual removal of that prefix. It never
+publishes to the public bucket or registers a capture. Local outputs remain under
+`--work`. This extracted image's deploy and GPU smoke have not been run locally.
+
+When storage credentials exist only in Modal, run from the repository root with a
+Modal-authenticated CLI: `modal run infra/modal/smoke_remote.py --app-name twin-pipeline-gsplat-upgrade-smoke --iterations 500 --tier l4`.
+This starts an ephemeral `twin-pipeline-smoke-runner` CPU app using `cpu_image` and the
+`twin-object-storage` secret; it neither deploys nor needs local storage credentials or
+COLMAP. It calls the same `smoke.py` main, assertions and cleanup: pose still goes to the
+target's `cpu4` with apt COLMAP 3.9.1, and train goes to its GPU. The supported pycolmap
+`colmap: "4.2"` path would change this smoke's pose engine, so it is not selected.
+The default target is the isolated upgrade app; `twin-pipeline` requires an explicit
+`--force-production`. R2 writes stay under the smoke's private `runs/smoke-<UTC timestamp>/`
+prefix, deleted on success or failure as above; container-local outputs are ephemeral
+and the summary is printed in Modal logs. This remote wrapper has not yet been run on Modal.
 
 `.github/workflows/modal.yml`, in one job:
 
@@ -564,8 +744,13 @@ first remote stage, on the function lookup (not observed). Lane 1 is unaffected 
 4. It runs a smoke (`infra/modal/smoke.py`). Forty 640×480 renders of the committed
    synthetic tree go through COLMAP on Modal's `cpu4`, then 500 gsplat steps on a Modal L4
    through `CloudRunner` → `ModalAdapter` → R2, then georeference, placement and
-   packaging. It asserts that gaussians came back, that PSNR was read from gsplat's own
-   stats file, that every step ran, and that a tileset was written. It deletes its
+   packaging. Smoke-only parameters hold out every eighth frame for evaluation and disable
+   frame-based schedule scaling, growth and convergence so `--iterations` is the exact
+   step count; production still trains on every frame with its frame-scaled schedule.
+   It asserts that gaussians came back, that PSNR was read from gsplat's own stats file,
+   that every step ran, that `gsplatVersion` is `1.6.0`, that no `.pt` resume state remains
+   in the train stage's checkpoint directory after success, and that a tileset was written.
+   The remote coordinator uses these same parameters and assertions. It deletes its
    `runs/<run id>/` keys afterwards.
 
 It runs on a push to `living-models` that touches `infra/modal/**`, the
@@ -585,8 +770,8 @@ metrics (billed seconds and dollars per remote call), recipe `photo-reconstruct`
   `pose` on `cpu4`: 40.9 s, $0.0029. Held-out PSNR 21.9, SSIM 0.72, LPIPS 0.44; 5,966
   gaussians.
 - **The first deploy** also builds the image on Modal's builders, once: here, the deploy
-  in the same run as that smoke. It covers torch, the gsplat wheel, and fused-ssim
-  compiled with nvcc. Later deploys reuse every unchanged layer.
+  in the same run as that smoke. That historical build used a gsplat wheel; the source build above now
+  compiles gsplat as well as fused-ssim with nvcc. Later deploys reuse every unchanged layer.
 - **Two real iPhone captures**, in production:
 
   |                              | Pumpkin (`IMG_3081.mov`)                                  | Spool                                         |
@@ -666,8 +851,8 @@ would mean moving `georeference` to Modal too, or reimplementing the alignment.
 A Lane 2 run in flight holds several things on the worker's volume at once:
 
 - the upload (a phone video is 0.1–2 GB a minute);
-- every candidate frame ffmpeg extracted before selection (`fps: 4` over the whole clip,
-  as JPEG);
+- native decoded video frames (Preview alone samples/caps candidates), plus normalized
+  frame outputs while the run is in flight;
 - COLMAP's database;
 - the trained PLY coming back from Modal (hundreds of MB);
 - the packaged tiles.
@@ -675,9 +860,22 @@ A Lane 2 run in flight holds several things on the worker's volume at once:
 When a run ends — finished, failed or cancelled — the worker deletes `inputs/` and every
 stage's `work/` (`WorkerConfig.tidy_finished_runs`, on by default). That leaves `out/`,
 `step.json` and `checkpoint/`, which is everything "retry from this stage" reads: a few
-hundred MB per Lane 2 run. **20 GB is therefore enough for one capture of up to about 8 GB
-in flight, with room for dozens of finished runs.** Past that, run `fly volumes extend`,
-which needs no redeploy.
+hundred MB per legacy Lane 2 run. Successful training deletes `checkpoint/resume/`
+**before the final mirrored sync**, so the worker receives no optimizer state for a
+finished train; completed coarse/block passes release their own lanes. Failed or pre-empted
+passes retain it for retry. Small live snapshots, seeds, priors and block records remain.
+
+**The committed `fly.toml` still provisions 20 GB; full-data runs need a larger budget.**
+Near the native L4 cap, two recovery checkpoints alone can occupy roughly 10 GB. A failed
+attempt can bring them back to the worker. For an 8 GB upload, upload + recovery pair +
+the desired 5 GB free margin is already **8 + 10 + 5 = 23 GB**, before native frames,
+COLMAP outputs, PLYs, packaged tiles, retained runs or the concurrent CPU-only ingest.
+Deleting finished resume state prevents ~10 GB accumulating per completed train, but does
+not make 20 GB adequate for that in-flight case. Size the volume for the actual upload,
+frames and output estimate plus retry state before rollout; extend it with
+`fly volumes extend` (no redeploy). The 5 GB claim-time guard checks current free space,
+not future peak use. Checkpoint transfers stream to disk rather than loading multi-GB
+state into the worker's 2 GB RAM.
 
 The worker also checks before it claims. Below `WORKER_MIN_FREE_GB` (5) free it evicts
 the workdirs of runs that ended more than `WORKER_EVICT_AFTER_DAYS` (7) ago, oldest
@@ -1680,8 +1878,8 @@ errors logged and dropped). `fly.toml`'s `[[restart]]` restarts a worker that di
 **What a job may cost.** `WORKER_JOB_COST_CAP_USD` (default 20, 0 turns it off) is a
 ceiling on one job's `costUsd`, across stages and attempts: no GPU call starts past it, a
 running one is cancelled when its cost would go over it, and the job is dead-lettered
-saying so. `costUsd` on Modal includes the 2 cores and 8 GiB each GPU function reserves
-(+$0.158/h on an L4); it does not include a container's idle minute after its last call.
+saying so. `costUsd` on Modal includes the 2 cores and 16 GiB each GPU function reserves
+(+$0.222192/h on an L4); it does not include a container's idle minute after its last call.
 
 ## Handover
 
@@ -1867,17 +2065,18 @@ Undersold on purpose. Most of this list was written before production existed. T
 operator has since deployed it, but nothing here has observed that deployment. So each item
 below is still true of this repository's evidence, whatever it now says about the world:
 
-- **The GPU path has never run.** Everything below is unproven until
-  `.github/workflows/modal.yml` passes once:
+- **Historical pre-deployment checklist (superseded by the GPU measurements above).**
+  At the original handover these were unproven:
   - the Modal image has never been built by Modal;
   - `ModalAdapter` has never spoken to a live workspace;
   - no gsplat training run has happened.
 
   What _is_ verified:
   - the App builds locally and in CI;
-  - gsplat v1.5.3's own `simple_trainer.py` CLI accepts the pipeline's argv, in a CPU
-    replica of the image's venv (CI's `trainer` job);
-  - every pinned artifact was resolved, and the gsplat wheel is pinned by sha256;
+  - the original gsplat v1.5.3 CLI accepted the pipeline argv in a CPU replica;
+    the current source image runs `check_trainer.py` during its own build;
+  - the original wheel was pinned by sha256; the current library and examples share
+    the source commit documented above;
   - the whole smoke flow passes locally with `--rehearse`.
 
   Two things only the first build and run can prove: that the CUDA image compiles

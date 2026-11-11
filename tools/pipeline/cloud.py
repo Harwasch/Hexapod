@@ -319,6 +319,8 @@ class Poll:
     #: rather than failing at something. `CloudRunner` raises `RemoteTimeoutError` for it,
     #: which the worker does not retry: the next attempt would outrun the same limit.
     timed_out: bool = False
+    #: Set by the runner only when it cancels a call that never started.
+    pending_timed_out: bool = False
 
 
 @runtime_checkable
@@ -439,6 +441,8 @@ class Attempt:
     #: the `CallBook` leaves the next process to re-attach to a call that is already paid
     #: for, and it must not be paid for twice.
     call: str = ""
+    #: A submission refusal or never-started timeout, safe to exclude on later attempts.
+    capacity_unavailable: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         document: dict[str, Any] = {
@@ -459,6 +463,8 @@ class Attempt:
             document["queueS"] = round(self.queue_s, 3)
         if self.call:
             document["call"] = self.call
+        if self.capacity_unavailable:
+            document["capacityUnavailable"] = True
         return document
 
     @staticmethod
@@ -478,6 +484,7 @@ class Attempt:
             billing=str(document.get("billing", "")),
             queue_s=None if document.get("queueS") is None else float(document["queueS"]),
             call=str(document.get("call", "")),
+            capacity_unavailable=bool(document.get("capacityUnavailable", False)),
         )
 
 
@@ -606,6 +613,8 @@ class CallRecord:
     #: re-attaches to it must read back from rather than its own. None for a call known
     #: only by id (`CallBook.orphaned`), which can be cancelled and nothing else.
     request: StageRequest | None = None
+    #: Persisted so re-attaching cannot treat a previously running call as unstarted.
+    started: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -615,6 +624,7 @@ class CallRecord:
             "submittedAt": round(self.submitted_at, 3),
             "attempt": self.attempt,
             "request": None if self.request is None else self.request.to_dict(),
+            "started": self.started,
         }
 
     @staticmethod
@@ -629,6 +639,7 @@ class CallRecord:
             submitted_at=float(document.get("submittedAt", 0.0)),
             attempt=int(document.get("attempt", 1)),
             request=StageRequest.from_dict(request) if isinstance(request, Mapping) else None,
+            started=bool(document.get("started", False)),
         )
 
 
@@ -769,6 +780,28 @@ class Placement:
 # --- the runner --------------------------------------------------------------------
 
 
+# A capacity failure is recorded before this internal control-flow exception is raised.
+_CAPACITY = "capacity unavailable: "
+
+
+def _capacity_error(error: Exception) -> bool:
+    """Recognize submission refusals by SDK type/status, never trainer error text.
+
+    Qualified names keep the optional Modal SDK out of this module's imports, as in
+    modal_adapter's outcome classifier. grpclib exposes the RPC status structurally.
+    """
+    kind = type(error)
+    qualified = f"{kind.__module__}.{kind.__qualname__}"
+    return qualified == "modal.exception.ResourceExhaustedError" or (
+        qualified == "grpclib.exceptions.GRPCError"
+        and getattr(getattr(error, "status", None), "name", None) == "RESOURCE_EXHAUSTED"
+    )
+
+
+class _CapacityUnavailableError(Exception):
+    pass
+
+
 class CloudRunner(BaseRunner):
     """A GPU stage, run on somebody else's machine.
 
@@ -798,6 +831,9 @@ class CloudRunner(BaseRunner):
         #: day on it. Thirty minutes covers a cold pull of the ~10 GB training image and
         #: a GPU queue; past that, a person should be told rather than kept waiting.
         max_pending_s: float = 30 * 60.0,
+        #: Promoted heads may re-plan only if they never started. Allow fifteen minutes
+        #: for the large image's cold start, bounded by max_pending_s when shorter.
+        replan_pending_s: float = 15 * 60.0,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         #: The wall clock, for comparing a call's submit time with the remote's own
@@ -845,6 +881,7 @@ class CloudRunner(BaseRunner):
         self._checkpoint_every_s = checkpoint_every_s
         self._max_wait_s = max_wait_s
         self._max_pending_s = max_pending_s
+        self._replan_pending_s = replan_pending_s
         self._clock = clock
         self._sleep = sleep
         self._wall = wall
@@ -859,6 +896,60 @@ class CloudRunner(BaseRunner):
         #: to, in order. Reset by `_invoke`; `_record` adds to it.
         self._made: list[Attempt] = []
 
+    def _context(self, stage: PlannedStage, workdir: Workdir, attempt: int) -> StageContext:
+        return self._admission(super()._context(stage, workdir, attempt))
+
+    def _admission(self, context: StageContext) -> StageContext:
+        if context.impl != "gsplat":
+            return context
+        # Read headers and sparse geometry locally, before any GPU call or transfer.
+        import train_admission
+
+        params = context.params
+        size, scale = train_admission.frame_geometry(
+            context.input("frames"),
+            context.input("poses"),
+            int(params.get("data_factor", 1)),
+            None if params.get("train_max_side") is None else int(params["train_max_side"]),
+        )
+        failures = [
+            entry
+            for entry in AttemptLedger.read(context.attempts_path).entries
+            if entry.capacity_unavailable
+        ]
+        unavailable = list(dict.fromkeys(entry.tier for entry in failures))
+        budget = train_admission.plan(
+            params,
+            context.gpu_tier,
+            context.input("poses"),
+            size,
+            scale,
+            unavailable=unavailable,
+        )
+        if budget is None:
+            return context
+        if unavailable and budget.memory_ceiling is not None and budget.cap > budget.memory_ceiling:
+            raise NoRunnerError(
+                f"no available tier can hold the explicit cap {budget.cap}; "
+                f"{budget.gpu_tier} ceiling is {budget.memory_ceiling}"
+            )
+        context.log(f"admission: {budget.gpu_tier}: {budget.tier_reason}")
+        record = {
+            "recipeTier": budget.recipe_gpu_tier,
+            "tier": budget.gpu_tier,
+            "cap": budget.cap,
+            "pixels": 0 if size is None else size[0] * size[1],
+            "batchSize": int(params.get("batch_size", 1)),
+            "reason": budget.tier_reason,
+            "unavailableTiers": unavailable,
+            "replanReason": "; ".join(entry.detail for entry in failures),
+        }
+        return replace(
+            context,
+            gpu_tier=budget.gpu_tier,
+            params={**params, train_admission.PLAN_PARAM: record},
+        )
+
     def _invoke(self, stage: PlannedStage, context: StageContext) -> StageOutcome:
         self._made = []
         ledger = AttemptLedger.read(context.attempts_path)
@@ -871,7 +962,18 @@ class CloudRunner(BaseRunner):
             f"{adapter.name!r} ({tier}); {ledger.preemptions} preemption(s) so far"
         )
         try:
-            return self._run(stage, context, keys, tier, book)
+            while True:
+                try:
+                    return self._run(stage, context, keys, tier, book)
+                except _CapacityUnavailableError:
+                    # Only a head that never acquired capacity can re-plan. Its call
+                    # has ended and is in the ledger; no parts or joins are in flight.
+                    context = self._admission(context)
+                    tier = context.gpu_tier or "cpu"
+                    context.log(
+                        f"cloud: re-plan after capacity failure -> {tier}; "
+                        f"{context.params['_train_admission']}"
+                    )
         except DetachRequested:
             # The calls are left in the book for the next process; so is the fan-out.
             raise
@@ -971,6 +1073,9 @@ class CloudRunner(BaseRunner):
         ledger = AttemptLedger.read(context.attempts_path)
         metrics = self._metrics(self._made, ledger, called.poll)
         metrics.update(fanned)
+        admission = context.params.get("_train_admission")
+        if admission:
+            metrics["trainAdmission"] = json.dumps(admission, sort_keys=True)
         # The last call's billed seconds, phase by phase (`call_phases`): the one call, or
         # the join. A fan-out's head and parts are `headPhases` and `fanOutPhases`.
         metrics["remotePhases"] = flat(call_phases(called.submitted_at, called.poll))
@@ -1051,7 +1156,21 @@ class CloudRunner(BaseRunner):
                 produces=stage.impl.produces,
             )
             self._within_cap(context, f"call {part or 'for the stage'}")
-            handle, submitted = self._submit(adapter, request, context, tier, book, part)
+            try:
+                handle, submitted = self._submit(adapter, request, context, tier, book, part)
+            except Exception as error:
+                if not self._can_replan(context, part, tier) or not _capacity_error(error):
+                    raise
+                self._record(
+                    adapter,
+                    context,
+                    tier,
+                    Poll(state="failed", detail=_CAPACITY + str(error)),
+                    ledger,
+                    part=part,
+                    capacity_unavailable=True,
+                )
+                raise _CapacityUnavailableError from error
             context.log(f"cloud: submitted to {adapter.name!r} as call {handle.id}")
             started = self._clock()
         else:
@@ -1061,9 +1180,25 @@ class CloudRunner(BaseRunner):
         # Whatever the remote last synced comes home before anything else is decided, so
         # the next attempt resumes from it. Disable this and a preempted stage restarts.
         self._restore_checkpoint(context, request.checkpoint_key)
-        entry = self._record(adapter, context, tier, poll, ledger, part=part, call=handle.id)
+        capacity = (
+            poll.state == "failed"
+            and self._can_replan(context, part, request.tier)
+            and poll.pending_timed_out
+        )
+        entry = self._record(
+            adapter,
+            context,
+            tier,
+            poll,
+            ledger,
+            part=part,
+            call=handle.id,
+            capacity_unavailable=capacity,
+        )
         if poll.state != "succeeded":
             book.drop(part)
+        if capacity:
+            raise _CapacityUnavailableError
         if poll.state == "preempted":
             raise PreemptedError(
                 context.recipe, context.stage_id, context.attempt, adapter.name, entry.billed_s
@@ -1072,6 +1207,15 @@ class CloudRunner(BaseRunner):
             failure = RemoteTimeoutError if poll.timed_out else RemoteStageError
             raise failure(context.recipe, context.stage_id, context.impl, adapter.name, poll.detail)
         return _Called(adapter=adapter, poll=poll, submitted_at=submitted, request=request)
+
+    @staticmethod
+    def _can_replan(context: StageContext, slot: str, tier: str) -> bool:
+        return (
+            context.impl == "gsplat"
+            and slot == HEAD
+            and tier in ("l40s", "a100")
+            and "_train_admission" in context.params
+        )
 
     def _submit(
         self,
@@ -1411,6 +1555,8 @@ class CloudRunner(BaseRunner):
         for member in spec.share:
             _copy_member(context.checkpoint_dir / member, bundle / member)
         checkpoint = keys.part_checkpoint(part.id)
+        if call > 1:
+            self._transfer.get(f"{checkpoint}/resume", bundle / "resume")
         self._transfer.delete(checkpoint)
         if any(bundle.iterdir()):
             self._transfer.put(checkpoint, bundle)
@@ -1434,6 +1580,7 @@ class CloudRunner(BaseRunner):
         )
         self._within_cap(context, f"part {part.id}")
         handle, submitted = self._submit(adapter, request, context, tier, book, part.id)
+        shutil.rmtree(bundle, ignore_errors=True)
         context.log(
             f"cloud: part {part.id} submitted to {adapter.name!r} (call {call}) as {handle.id}"
         )
@@ -1686,10 +1833,17 @@ class CloudRunner(BaseRunner):
         """
         cursor = 0
         poll = Poll(state="pending")
+        record = book.calls.get(slot)
+        ever_running = record.started if record is not None else False
         deadline = _Deadline(self._deadline_factor, self._deadline_slack_s)
         try:
             while True:
                 poll = adapter.poll(handle)
+                if poll.state == "running" and not ever_running:
+                    ever_running = True
+                    if record is not None:
+                        record = replace(record, started=True)
+                        book.put(slot, record)
                 cursor = self._tail(adapter, handle, context, cursor, deadline)
                 if poll.state in TERMINAL:
                     # Once more: the lines that say why a call failed -- a traceback, CUDA
@@ -1697,7 +1851,16 @@ class CloudRunner(BaseRunner):
                     # log after its verdict did. The worker reads them to decide on a retry.
                     self._tail(adapter, handle, context, cursor, deadline)
                     return poll
-                poll = self._overdue(adapter, handle, poll, self._clock() - started)
+                poll = self._overdue(
+                    adapter,
+                    handle,
+                    poll,
+                    self._clock() - started,
+                    pending_s=min(self._max_pending_s, self._replan_pending_s)
+                    if self._can_replan(context, slot, handle.tier)
+                    else None,
+                    ever_running=ever_running,
+                )
                 if poll.state in TERMINAL:
                     return poll
                 poll = self._past_deadline(adapter, handle, poll, deadline)
@@ -1783,17 +1946,27 @@ class CloudRunner(BaseRunner):
         return entry
 
     def _overdue(
-        self, adapter: ProviderAdapter, handle: RemoteHandle, poll: Poll, waited: float
+        self,
+        adapter: ProviderAdapter,
+        handle: RemoteHandle,
+        poll: Poll,
+        waited: float,
+        *,
+        pending_s: float | None = None,
+        ever_running: bool = False,
     ) -> Poll:
         """`poll`, or a cancelled failure when the call has pended or run too long."""
-        if poll.state == "pending" and waited >= self._max_pending_s:
+        limit = self._max_pending_s if pending_s is None else pending_s
+        if poll.state == "pending" and not ever_running and waited >= limit:
             adapter.cancel(handle)
             return replace(
                 poll,
                 state="failed",
-                detail=(
+                pending_timed_out=True,
+                detail=(_CAPACITY if pending_s is not None else "")
+                + (
                     f"the stage never started on {adapter.name!r}: still pending "
-                    f"after {self._max_pending_s:.0f}s, so it was cancelled. "
+                    f"after {limit:.0f}s, so it was cancelled. "
                     f"A container that crashes on start (check the provider's "
                     f"logs for this app) or no {handle.tier} capacity"
                 ),
@@ -1909,6 +2082,7 @@ class CloudRunner(BaseRunner):
         *,
         part: str = "",
         call: str = "",
+        capacity_unavailable: bool = False,
     ) -> Attempt:
         """Price this call and write it down, whatever state it ended in. At the tier it
         ran on, which a GPU fallback list can make other than the one asked for.
@@ -1936,6 +2110,7 @@ class CloudRunner(BaseRunner):
             billing=poll.billing,
             queue_s=poll.queue_s,
             call=call,
+            capacity_unavailable=capacity_unavailable,
         )
         ledger.append(entry).write(context.attempts_path)
         self._made.append(entry)

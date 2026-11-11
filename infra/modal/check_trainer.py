@@ -6,15 +6,15 @@ renamed flag, a missing dependency, a gsplat that is not the one the pipeline wa
 written against -- fails to *build*, rather than failing a GPU run an hour later.
 
 It is the same check that was run by hand on a CPU venv while this was written, now
-repeated against the real image: import gsplat v1.5.3's `examples/simple_trainer.py` up to
+repeated against the real image: import gsplat v1.6.0's `examples/simple_trainer.py` up to
 (not including) its `__main__` block, build the same `configs` it builds, and parse the
 pipeline's own argv with the same `tyro.extras.overridable_config_cli`. Then the fields
 the pipeline depends on are asserted. Nothing here needs a GPU: `Runner`, which is the
 part that does, is never constructed.
 
 Three switches go further than parsing, because what they need is only imported once the
-trainer is running: `--use_bilateral_grid` imports `lib_bilagrid` (and through it
-`tensorly`) in `__main__`, after the CLI has accepted the flag; `--app_opt` reaches into
+trainer is running: `--post_processing bilateral_grid` imports `lib_bilagrid` (and through it
+`tensorly`) in `main`, after the CLI has accepted the flag; `--app_opt` reaches into
 `gsplat.cuda._torch_impl` on its first forward; `--pose_opt` builds `CameraOptModule`.
 Each is constructed here and run one forward and backward pass on CPU tensors, with the
 shapes and arguments `simple_trainer.py` uses, so an image in which one of them cannot
@@ -34,8 +34,8 @@ from typing import Any
 def main() -> int:
     trainer = Path(sys.argv[1]).resolve()
     pipeline = Path(sys.argv[2]).resolve()
-    sys.path.insert(0, str(trainer.parent))
     sys.path.insert(0, str(pipeline))
+    sys.path.insert(0, str(trainer.parent))
 
     import convergence  # the stopping rule's schedule; plain Python, 3.10-compatible
     import training  # the pipeline's own argv builder; plain Python, 3.10-compatible
@@ -172,7 +172,17 @@ def main() -> int:
         )
     )
 
+    unpacked: Any = parse(
+        training.gsplat_argv(sys.executable, trainer, Path("/data"), Path("/result"), packed=False)
+    )
+    import gsplat
+
     checks = {
+        "version": gsplat.__version__ == training.GSPLAT_VERSION,
+        "plain renderer": not cfg.with_ut and not cfg.with_eval3d,
+        "unpacked": unpacked.packed is False,
+        "COLMAP backend": cfg.data_type == "colmap" and cfg.backend == "cuda",
+
         "block test_every": block.test_every == 7 and cfg.test_every == 8,
         "block eval ckpt": list(evaluating.ckpt or []) == ["/result/merged.pt"],
         "mcmc strategy": type(tuned.strategy).__name__ == "MCMCStrategy",
@@ -187,11 +197,14 @@ def main() -> int:
         "pose_opt": tuned.pose_opt is True and cfg.pose_opt is False,
         "app_opt": tuned.app_opt is True and cfg.app_opt is False,
         "use_bilateral_grid": (
-            tuned.use_bilateral_grid is True
-            and cfg.use_bilateral_grid is False
+            tuned.post_processing == "bilateral_grid"
+            and tuned.use_color_correction_metric is True
+            and tuned.color_correct_method == "quadratic"
+            and cfg.post_processing is None
+            and cfg.use_color_correction_metric is False
             # The fused CUDA grid is a different package the image does not install; the
             # flag the pipeline passes must select the plain-torch one.
-            and tuned.use_fused_bilagrid is False
+            and tuned.bilateral_grid_fused is False
         ),
         "benchmark": (
             bench.lpips_net == "vgg"
@@ -213,8 +226,7 @@ def main() -> int:
             list(converging.eval_steps) == [int(i * 0.5) for i in [30_000, *evals]]
         ),
         "refine_stop_iter": (
-            converging.strategy.refine_stop_iter
-            == int(convergence.REFINE_STOP_ITER["mcmc"] * 0.5)
+            converging.strategy.refine_stop_iter == int(convergence.REFINE_STOP_ITER["mcmc"] * 0.5)
             and cfg.strategy.refine_stop_iter == convergence.REFINE_STOP_ITER["default"]
         ),
         "ckpt": cfg.ckpt is None,
@@ -223,6 +235,7 @@ def main() -> int:
     if failed:
         raise SystemExit(f"simple_trainer.py parsed the pipeline's argv wrongly: {failed}")
     ran = _exercise_switches(namespace)
+    ran.extend(_exercise_full_data(namespace, parse, trainer))
     sys.stdout.write(
         f"trainer ok: {trainer} accepts training.gsplat_argv (tyro {tyro.__version__}); "
         f"checked {', '.join(sorted(checks))}; ran {', '.join(ran)} on CPU\n"
@@ -230,15 +243,58 @@ def main() -> int:
     return 0
 
 
-def _exercise_switches(namespace: dict[str, Any]) -> list[str]:
-    """One forward and backward pass of what `--use_bilateral_grid`, `--app_opt` and
-    `--pose_opt` build, on CPU tensors, called the way v1.5.3's `Runner` calls them.
+def _exercise_full_data(namespace: dict[str, Any], parse: Any, trainer: Path) -> list[str]:
+    import tempfile
+    from types import SimpleNamespace
 
-    `lib_bilagrid` is imported from beside the trainer, as its `__main__` imports it; the
+    import torch
+
+    import train_split
+    import trainer_export
+    import training
+
+    cfg = parse(training.gsplat_argv(
+        sys.executable, trainer, Path("/data"), Path("/result"),
+        extra=training.train_extra({}, Path("/checkpoint/resume")),
+    ))
+    assert cfg.test_every == 0 and cfg.checkpoint_every == 5000
+    assert cfg.resume == "latest" and cfg.ckpt is None and cfg.checkpoint_final is False
+    module = dict(namespace)
+    runner = type("Runner", (), {"eval": lambda *args: None})
+    train_split.install(module, runner, cfg)
+    parser = SimpleNamespace(
+        test_every=0, image_names=[str(i) for i in range(12)],
+        points=None, point_indices=None,
+    )
+    # The pinned Dataset constructor needs only parser and split for no depth loss.
+    data = module["Dataset"](parser, split="train")
+    assert data.indices.tolist() == list(range(12))
+    assert len(module["Dataset"](parser, split="val").indices) == 0
+    fields = {
+        "means": torch.zeros(5, 3), "scales": torch.zeros(5, 3),
+        "quats": torch.ones(5, 4), "opacities": torch.zeros(5),
+        "sh0": torch.zeros(5, 1, 3), "shN": torch.arange(225.0).reshape(5, 15, 3),
+        "format": "ply",
+    }
+    fields["means"][2, 0] = float("nan")
+    expected = namespace["export_splats"](**fields).partition(b"end_header\n")[2]
+    with tempfile.TemporaryDirectory() as scratch:
+        output = Path(scratch) / "export.ply"
+        trainer_export.write(namespace["export_splats"], {**fields, "save_to": str(output)}, chunk=2)
+        assert output.read_bytes().partition(b"end_header\n")[2] == expected
+    return ["all-frame Dataset", "plain-state checkpoint CLI", "bounded PLY export"]
+
+
+def _exercise_switches(namespace: dict[str, Any]) -> list[str]:
+    """One forward and backward pass of what `--post_processing bilateral_grid`, `--app_opt` and
+    `--pose_opt` build, on CPU tensors, called the way v1.6.0's `Runner` calls them.
+
+    `lib_bilagrid` is imported from beside the trainer, as its `main` imports it; the
     other two are the classes the trainer module itself imported from `utils`.
     """
     import torch
-    from lib_bilagrid import BilateralGrid, color_correct, slice, total_variation_loss
+    from lib_bilagrid import BilateralGrid, slice, total_variation_loss
+    from gsplat.color_correct import color_correct_quadratic
 
     ran: list[str] = []
     height, width = 12, 16
@@ -254,7 +310,7 @@ def _exercise_switches(namespace: dict[str, Any]) -> list[str]:
     image_ids = torch.tensor([1])
     out = slice(grids, grid_xy.expand(1, -1, -1, -1), colors, image_ids.unsqueeze(-1))["rgb"]
     (out.mean() + 10 * total_variation_loss(grids.grids)).backward()
-    corrected = color_correct(out.detach(), torch.rand(1, height, width, 3))
+    corrected = color_correct_quadratic(out.detach(), torch.rand(1, height, width, 3))
     if grids.grids.grad is None or tuple(corrected.shape) != (1, height, width, 3):
         raise SystemExit("lib_bilagrid ran but produced no gradient or the wrong shape")
     ran.append("bilateral grid")

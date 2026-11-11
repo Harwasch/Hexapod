@@ -159,15 +159,29 @@ describe("whether Refine is the next step", () => {
 });
 
 describe("preview and refine parameters", () => {
-  it("a preview trains briefly and keeps the phone's frames and bar", () => {
+  it("inherits native size and all usable frames for a default full-quality run", () => {
+    expect(paramsFor("photo-reconstruct", DEFAULTS)).toEqual({
+      normalize: {},
+      quality: { bar: "strict" },
+    });
+  });
+
+  it("a preview bounds its own extraction and training, leaving Refine native", () => {
     const options = { ...DEFAULTS, quality: "best" as const, bar: "strict" as const };
     expect(previewParamsFor("photo-reconstruct", options)).toEqual({
-      normalize: { max_side: "auto" },
+      normalize: {
+        max_side: 1600,
+        fps: 4,
+        keep: 100,
+        keep_video: 180,
+        max_candidates: 1200,
+        select: "viewpoint",
+      },
       train: { schedule_scale: 0.1, cap_max: 200000, train_max_side: 800 },
       quality: { mode: "preview", bar: "strict" },
     });
     expect(paramsFor("photo-reconstruct", options)).toEqual({
-      normalize: { max_side: "auto" },
+      normalize: {},
       train: { schedule_floor: 1, density_scale: 2 },
       quality: { bar: "strict" },
     });
@@ -175,7 +189,11 @@ describe("preview and refine parameters", () => {
 
   it("an explicit photo size and frame rate are sent as numbers", () => {
     const options = { ...DEFAULTS, photoSize: "2400" as const, videoFps: "4" as const };
-    expect(paramsFor("photo-reconstruct", options).normalize).toEqual({ max_side: 2400, fps: 4 });
+    expect(paramsFor("photo-reconstruct", options).normalize).toEqual({
+      max_side: 2400,
+      fps: 4,
+      select: "viewpoint",
+    });
   });
 
   it("sends nothing for packaging: Detail is this phone's viewing budget, not a cut", () => {
@@ -210,5 +228,23 @@ describe("preview and refine parameters", () => {
     const params = previewParamsFor("splat-ingest", DEFAULTS);
     expect(params).toEqual(paramsFor("splat-ingest", DEFAULTS));
     expect(params.quality).toBeUndefined();
+  });
+});
+
+it("Preview stays small even when full-quality options ask for more data", () => {
+  const options = { ...DEFAULTS, photoSize: "2400" as const, videoFps: "8" as const };
+  const preview = previewParamsFor("photo-reconstruct", options);
+  expect(preview.normalize).toEqual({
+    max_side: 1600,
+    fps: 4,
+    keep: 100,
+    keep_video: 180,
+    max_candidates: 1200,
+    select: "viewpoint",
+  });
+  expect(paramsFor("photo-reconstruct", options).normalize).toEqual({
+    max_side: 2400,
+    fps: 8,
+    select: "viewpoint",
   });
 });

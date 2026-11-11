@@ -134,10 +134,15 @@ run, sync the checkpoint on an interval, upload — and it takes a `Transfer`, s
 `tests/test_remote.py` drives all of it here. `infra/modal/app.py` is the Modal wrapper:
 an image, a GPU, a secret and one call, deploying a `run_stage_<tier>` per tier. CI builds
 that App on every run, which caught two deploy-time path bugs and cannot catch a wrong
-`gpu=` string. Since 2026-09-23 the image is filled: CUDA 12.4, torch 2.4.1+cu124, and the gsplat 1.5.3
-wheel pinned by sha256. Every pin was resolved rather than recalled. It deploys as
-`twin-pipeline` through `.github/workflows/modal.yml`, which then runs a small real
-training run. See §2a.
+`gpu=` string. The training image now builds gsplat 1.6.0 from source commit
+`512d366b67073d77ca099ede742683c165dfc23b`, with CUDA 12.8.1 and torch 2.9.1+cu128.
+Recipe version and defaults stay unchanged. PR #116's one-seed Beach comparison measured
+A (1.5.3): PSNR/SSIM/LPIPS **25.17/0.753/0.301**, **98 min, $1.57**; upgraded plain:
+**25.34/0.755/0.295**, **75 min, $1.23**. The +0.17 dB is within Spool's 0.22 dB seed
+spread, so this is evidence of lower time/cost, not a demonstrated quality gain.
+The extracted image still needs its own production-path smoke before deployment to
+`twin-pipeline`. Source compilation makes the first deploy substantially slower than the
+old wheel build; see [deployment and isolated smoke](DEPLOYMENT.md#deploying-it-and-proving-it).
 
 ## 4. Setting up, now that the network allows it
 

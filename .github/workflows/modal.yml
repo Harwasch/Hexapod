@@ -70,7 +70,8 @@ jobs:
     name: Deploy the Modal app, and prove the GPU path
     # ubuntu-latest is now 26.04, whose apt colmap 3.12.6 fails on a missing libPoseLib.so.
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    # A first gsplat source build measured 112 min on 2026-11-06 (#118 smoke); 150 leaves headroom.
+    timeout-minutes: 150
     env:
       MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
       MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}

@@ -579,7 +579,7 @@ def extract_frames_argv(
     source: Path,
     pattern: Path,
     *,
-    fps: float,
+    fps: float | None,
     quality: int = 2,
     max_side: int | None = None,
     tonemap: str | None = None,
@@ -592,7 +592,7 @@ def extract_frames_argv(
     `tonemap` (`TONEMAP_FILTER` for an HDR clip) sits between the rate and the size, so
     only the frames kept are converted and they are scaled in 8-bit BT.709.
     """
-    chain = [f"fps={fps:g}"]
+    chain = [] if fps is None else [f"fps={fps:g}"]
     if tonemap:
         chain.append(tonemap)
     if max_side is not None:
@@ -604,8 +604,8 @@ def extract_frames_argv(
         "-y",
         "-i",
         str(source),
-        "-vf",
-        ",".join(chain),
+        *(["-vf", ",".join(chain)] if chain else []),
+        *(["-vsync", "0"] if fps is None else []),
         "-q:v",
         str(quality),
         "-start_number",
@@ -647,8 +647,7 @@ def grab_frame_argv(
         str(source),
         "-frames:v",
         "1",
-        "-vf",
-        ",".join(chain),
+        *(["-vf", ",".join(chain)] if chain else []),
         str(target),
     ]
 
@@ -810,3 +809,57 @@ def summarise(values: Sequence[float]) -> dict[str, float | None]:
 
 def _round(value: float) -> float:
     return round(value, 4) if math.isfinite(value) else 0.0
+
+
+def usable_frames(
+    paths: Sequence[Path], *, dedupe: float = 1.0, ordered: bool = True, cap: int | None = None
+) -> tuple[list[int], dict[str, int]]:
+    """Keep usable data, with only conservative duplicate removal and an optional cap.
+
+    Video compares consecutive retained <=160px RGB thumbnails (MAE in 8-bit levels).
+    Unordered photos are deduplicated only by identical file bytes: similar viewpoints
+    may carry different detail. No absolute or relative blur cutoff is established.
+    """
+    import hashlib
+
+    import numpy as np
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    if not math.isfinite(dedupe) or dedupe < 0 or (cap is not None and cap < 1):
+        raise ValueError("dedupe_mae must be nonnegative and keep must be positive or null")
+    selected: list[int] = []
+    counts = {"duplicates": 0, "unreadable": 0, "capped": 0}
+    previous: Any = None
+    seen: set[bytes] = set()
+    for index, path in enumerate(paths):
+        try:
+            with Image.open(path) as original:
+                image = ImageOps.exif_transpose(original).convert("RGB")
+                image.thumbnail((160, 160))
+                thumbnail = np.asarray(image, dtype=np.float32)
+        except (OSError, UnidentifiedImageError):
+            counts["unreadable"] += 1
+            continue
+        duplicate = False
+        if ordered:
+            duplicate = (
+                previous is not None
+                and thumbnail.shape == previous.shape
+                and float(np.abs(thumbnail - previous).mean()) <= dedupe
+            )
+        else:
+            with path.open("rb") as handle:
+                digest = hashlib.file_digest(handle, "sha256").digest()
+            duplicate = digest in seen
+            seen.add(digest)
+        if duplicate:
+            counts["duplicates"] += 1
+            continue
+        previous = thumbnail
+        selected.append(index)
+    if cap is not None and len(selected) > cap:
+        counts["capped"] = len(selected) - cap
+        selected = [selected[i] for i in evenly_spaced(len(selected), cap)]
+    if not selected:
+        raise ValueError("no readable frames in this capture")
+    return selected, counts

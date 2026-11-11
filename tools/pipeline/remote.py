@@ -35,7 +35,9 @@ Three things are worth stating about the order, because each of them is a decisi
 from __future__ import annotations
 
 import json
+import os
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -245,6 +247,8 @@ def _execute(
         # The machine the stage ran on (`host.HostWatch`), and what the call left behind
         # before it was cleaned up: both counts are zero on a clean call.
         "remoteHost": flat(machine),
+        **{k: v for k, v in machine.items() if k.startswith("host")},
+        "hostMemoryLimitBinding": machine.get("hostOomKills", 0) > 0,
         "remoteReaped": killed,
         "remoteLeftoverThreads": threads,
     }
@@ -303,7 +307,19 @@ def _sync(request: StageRequest, transfer: Transfer, checkpoint: Path) -> int:
     """
     if not checkpoint.is_dir() or not any(checkpoint.iterdir()):
         return 0
-    return transfer.put(request.checkpoint_key, checkpoint)
+    with tempfile.TemporaryDirectory(prefix="checkpoint-sync-", dir=checkpoint.parent) as scratch:
+        snapshot = Path(scratch)
+        for member in checkpoint.rglob("*"):
+            if not member.is_file() or member.name.endswith((".part", ".partial")):
+                continue
+            target = snapshot / member.relative_to(checkpoint)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(member, target)
+            except FileNotFoundError:
+                # Rotation raced the listing; its receipt cannot validate absent data.
+                continue
+        return transfer.put(request.checkpoint_key, snapshot)
 
 
 def _sync_forever(

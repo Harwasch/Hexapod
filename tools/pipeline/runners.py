@@ -106,7 +106,11 @@ class BaseRunner(Runner, ABC):
             metrics=dict(outcome.metrics),
             log_path=workdir.relative(workdir.log_path(stage.id)),
             checkpoint_key=context.checkpoint_key if checkpointed else None,
-            gpu_tier=stage.gpu.tier if stage.gpu else None,
+            gpu_tier=(
+                str(outcome.metrics["tier"])
+                if self.name == "cloud" and outcome.metrics.get("tier")
+                else context.gpu_tier
+            ),
             summary=outcome.summary or stage.impl.summary,
         )
         result.write(workdir.step_path(stage.id))

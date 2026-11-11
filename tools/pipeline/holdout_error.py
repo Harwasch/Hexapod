@@ -186,6 +186,28 @@ def main(argv: list[str] | None = None) -> int:
     from gsplat import rasterization
 
     if args.self_check:
+        import inspect
+
+        required = {
+            "means",
+            "quats",
+            "scales",
+            "opacities",
+            "colors",
+            "viewmats",
+            "Ks",
+            "width",
+            "height",
+            "sh_degree",
+            "packed",
+            "rasterize_mode",
+        }
+        if not required <= set(inspect.signature(rasterization).parameters):
+            raise ValueError("gsplat rasterization signature changed")
+        if not {"data_dir", "factor", "normalize", "test_every"} <= set(
+            inspect.signature(Parser).parameters
+        ):
+            raise ValueError("gsplat COLMAP parser signature changed")
         sys.stdout.write(f"holdout: torch {torch.__version__}, rasterization and datasets ok\n")
         return 0
     for name in ("data_dir", "ply", "out"):

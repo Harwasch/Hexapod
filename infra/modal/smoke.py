@@ -4,7 +4,7 @@ Everything here is the production code path except the input. The frames are 40 
 of the committed synthetic tree (`tools/pipeline/tests/tree_frames.py`, 640x480) -- no
 dataset to download, no licence to check, and a scene whose answer is known. Then:
 
-    pose        COLMAP, on this machine (the CI runner), exactly as the worker runs it
+    pose        COLMAP on the target app's cpu4, exactly as the worker dispatches it
     train       gsplat on a Modal GPU: CloudRunner -> ModalAdapter.submit -> the deployed
                 run_stage_<tier> -> remote.execute in the training image, the bytes moving
                 through the private R2 bucket exactly as a worker's would
@@ -16,8 +16,9 @@ The transfer keys live under `runs/<run id>/` in the private bucket and are dele
 the end, pass or fail.
 
 Needs: MODAL_TOKEN_ID / MODAL_TOKEN_SECRET (read by the Modal SDK), the
-OBJECT_STORAGE_* variables the Modal secret `twin-object-storage` holds, `colmap` on PATH,
-and `modal` and `boto3` importable. `.github/workflows/modal.yml` provides all of them.
+OBJECT_STORAGE_* variables the Modal secret `twin-object-storage` holds, and `modal`
+and `boto3` importable. COLMAP is on the target app's cpu4 (local only for --rehearse).
+`smoke_remote.py` runs this coordinator inside Modal when storage credentials are remote.
 
     uv run --project tools/pipeline --with modal==1.5.5 --with boto3 \\
         python infra/modal/smoke.py --iterations 500 --tier l4
@@ -61,7 +62,7 @@ def _s3_transfer() -> object:
     return module._transfer()
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--iterations", type=int, default=500)
     parser.add_argument("--tier", default="l4")
@@ -77,7 +78,7 @@ def main() -> int:
             "Proves the recipe, the transfer keys and the placement -- not training"
         ),
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     run_id = f"smoke-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
     workdir = Workdir.create(args.work.resolve() / run_id)
@@ -101,7 +102,17 @@ def main() -> int:
                 {
                     "id": "train",
                     "impl": "gsplat",
-                    "params": {"iterations": args.iterations},
+                    # Exercise held-out eval and an exact step count independently of
+                    # production's all-frame, frame-scaled schedule (recipe v16).
+                    "params": {
+                        "iterations": args.iterations,
+                        "test_every": 8,
+                        "schedule_full_at": 0,
+                        "schedule_growth": "off",
+                        "schedule_min_large_steps": 0,
+                        "converge": False,
+                        "batch_size": 1,
+                    },
                     "gpu": {"tier": args.tier, "preemptible": False},
                 },
                 {
@@ -153,6 +164,7 @@ def main() -> int:
     trained = gaussians.read_splat(workdir.out_dir("train") / "trained.ply")
     ledger = AttemptLedger.read(workdir.attempts_path("train"))
     tileset = workdir.out_dir("package") / "splat" / "tileset.json"
+    resume_checkpoints = sorted(workdir.checkpoint_dir("train").rglob("*.pt"))
     summary = {
         "runId": run_id,
         "tier": args.tier,
@@ -162,6 +174,8 @@ def main() -> int:
         "psnr": metrics.get("psnr"),
         "ssim": metrics.get("ssim"),
         "metricsSource": metrics.get("source"),
+        "gsplatVersion": metrics.get("gsplatVersion"),
+        "resumeCheckpoints": [workdir.relative(path) for path in resume_checkpoints],
         "attempts": [entry.to_dict() for entry in ledger.entries],
         "billedSeconds": round(ledger.billed_s, 1),
         "usd": ledger.usd,
@@ -185,6 +199,12 @@ def main() -> int:
         problems.append(f"no PSNR read from gsplat's stats file: {metrics}")
     if metrics.get("iterations") != args.iterations:
         problems.append(f"trained {metrics.get('iterations')} of {args.iterations} steps")
+    if metrics.get("gsplatVersion") != "1.6.0":
+        problems.append(f"expected gsplat 1.6.0, got {metrics.get('gsplatVersion')!r}")
+    if resume_checkpoints:
+        problems.append(
+            f"resume checkpoints remain after successful training: {resume_checkpoints}"
+        )
     if not tileset.is_file():
         problems.append("the placed splat did not package")
     for problem in problems:

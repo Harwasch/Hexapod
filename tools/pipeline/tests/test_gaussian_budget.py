@@ -86,6 +86,7 @@ def auto(directory: Path, **overrides: Any) -> gaussian_budget.Budget:
         "train_size": (1600, 1200),
         "pixel_scale": 1.0,
         "floor": 1,
+        "budget_mode": "density",
     }
     kwargs.update(overrides)
     budget = gaussian_budget.plan("auto", **kwargs)
@@ -187,7 +188,9 @@ def test_the_floor_and_both_ceilings_say_which_one_applied(tmp_path: Path) -> No
     raw = auto(directory, density=1.0)
     floored = auto(directory, density=1.0, floor=10 * (raw.raw or 0))
     capped = auto(directory, density=1.0, budget_max=1_000)
-    tiny_gpu = auto(directory, density=1.0, gpu_memory_gb=3.0)  # ~115k at 1600x1200
+    tiny_gpu = auto(
+        directory, density=1.0, gpu_memory_gb=4.5
+    )  # fragmentation floor leaves ~100k at 1600x1200
 
     assert (raw.clamp, raw.cap) == (None, raw.raw)
     assert (floored.clamp, floored.cap) == ("floor", floored.floor)
@@ -196,13 +199,12 @@ def test_the_floor_and_both_ceilings_say_which_one_applied(tmp_path: Path) -> No
 
 
 def test_the_memory_ceiling_falls_with_frame_size_and_rises_with_the_card() -> None:
-    """The model in `gaussian_budget.py`: on the L4's 24 GB, ~8.7M at 1600x900, ~5.4M at
-    2400x1350, and 1616 bytes a gaussian at gsplat's own benchmark resolution."""
+    """Burst admission stays at or below the original model at each resolution."""
     at_1600 = gaussian_budget.memory_ceiling(1600 * 900)
     at_2400 = gaussian_budget.memory_ceiling(2400 * 1350)
 
-    assert 8_000_000 < at_1600 < 9_500_000
-    assert 5_000_000 < at_2400 < 6_000_000
+    assert 8_000_000 < at_1600 < 8_700_000
+    assert 4_500_000 < at_2400 < 5_400_000
     assert gaussian_budget.memory_ceiling(1600 * 900, 48.0) > 2 * at_1600
     assert (
         gaussian_budget.PARAMETER_BYTES + gaussian_budget.RASTER_BYTES == 1616
@@ -328,7 +330,9 @@ def test_auto_measures_the_capture_and_hands_the_trainer_the_cap(tmp_path: Path)
     workdir = Workdir.create(tmp_path / "run")
     seed_measurable(workdir)
 
-    params = stand_in_params(strategy="mcmc", cap_max="auto", budget_floor=1, gaussian_density=2.0)
+    params = stand_in_params(
+        strategy="mcmc", cap_max="auto", budget_mode="density", budget_floor=1, gaussian_density=2.0
+    )
     execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
 
     document = train_metrics(workdir)
@@ -354,7 +358,12 @@ def test_auto_reads_the_frames_at_the_size_training_will(tmp_path: Path) -> None
     seed_measurable(workdir, size=(64, 48))
 
     params = stand_in_params(
-        strategy="mcmc", cap_max="auto", budget_floor=1, gaussian_density=2.0, train_max_side=32
+        strategy="mcmc",
+        cap_max="auto",
+        budget_mode="density",
+        budget_floor=1,
+        gaussian_density=2.0,
+        train_max_side=32,
     )
     execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
 
@@ -382,6 +391,7 @@ def test_a_support_mask_budgets_only_what_it_holds_in_full(tmp_path: Path) -> No
         budget_floor=1,
         gaussian_density=2.0,
         support_mask=mask.to_dict(),
+        restrict_preview_mask=True,
     )
     execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
 
@@ -421,9 +431,45 @@ def test_a_phones_density_scale_multiplies_the_measured_budget(tmp_path: Path) -
             budget_floor=1,
             gaussian_density=2.0,
             density_scale=scale,
+            budget_mode="density",
         )
         execute(train_recipe(params), workdir, RunnerSet(cpu=LocalRunner()))
         runs[scale] = train_metrics(workdir)["budget"]
 
     assert runs[2.0]["densityScale"] == 2.0
     assert runs[2.0]["capMax"] == pytest.approx(2 * runs[1.0]["capMax"], abs=1)
+
+
+def test_native_burst_and_fragmentation_admission() -> None:
+    pixels = 1080 * 1920
+    # The successful 7.25M run has physical room even under this upper envelope;
+    # admission additionally keeps the existing one-third allocator safety margin.
+    assert gaussian_budget.peak_memory_bytes(7_250_000, pixels) < 22.06 * 1024**3
+    assert gaussian_budget.peak_memory_bytes(10_000_000, pixels) > 22.06 * 1024**3
+    cap = gaussian_budget.memory_ceiling(pixels)
+    assert 0 < cap < 7_247_091
+    assert gaussian_budget.peak_memory_bytes(cap, pixels) <= 24e9 - gaussian_budget.RESERVED_BYTES
+    for pixels in (1080 * 1920, 900 * 1600):
+        for card in (24, 48, 80):
+            cap = gaussian_budget.memory_ceiling(pixels, card)
+            assert gaussian_budget.memory_fits(cap, pixels, card)
+            assert not gaussian_budget.memory_fits(cap + 1, pixels, card)
+
+
+def test_view_burst_scales_with_count_and_pixels() -> None:
+    burst = gaussian_budget.view_burst_bytes
+    assert burst(10_000_000, 1080 * 1920) == pytest.approx(3 * 2.34 * 1024**3)
+    assert burst(5_000_000, 1080 * 1920) == pytest.approx(burst(10_000_000, 1080 * 1920) / 2)
+    assert burst(10_000_000, 900 * 1600) == pytest.approx(burst(10_000_000, 1080 * 1920) / 1.44)
+
+
+@pytest.mark.parametrize("pixels", [640 * 480, 900 * 1600, 1080 * 1920, 2400 * 1350, 3840 * 2160])
+@pytest.mark.parametrize("card", [16, 24, 48, 80, 180])
+def test_burst_correction_never_increases_previous_auto_ceiling(pixels: int, card: int) -> None:
+    available = (card * 1e9 - gaussian_budget.RESERVED_BYTES) * gaussian_budget.USABLE_FRACTION
+    slope = (
+        gaussian_budget.PARAMETER_BYTES
+        + gaussian_budget.RASTER_BYTES * pixels / gaussian_budget.REFERENCE_PIXELS
+    )
+    old = max(0, int((available - pixels * gaussian_budget.PIXEL_BYTES) // slope))
+    assert gaussian_budget.memory_ceiling(pixels, card) <= old

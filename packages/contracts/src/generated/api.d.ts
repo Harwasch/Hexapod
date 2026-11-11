@@ -1864,7 +1864,7 @@ export interface paths {
         put?: never;
         /**
          * Refine a finished preview: train it again at full quality, inside its region
-         * @description Resumes the capture's latest finished photo-reconstruct run at `train` with new parameters: the phone's quality options, `train.support_mask` set to the voxels the preview's well-supported splats occupy (any shape), `train.init_from` = `preview` (start from the preview's splat on a shorter schedule; the phone may send `sfm`), and `quality.mode` = `refine`. The frames and poses are kept, so the mask is in the frame it was measured in. If the worker no longer has them, the run starts over and trains uncropped rather than applying the region to a different reconstruction.
+         * @description Resumes the capture's latest finished photo-reconstruct run at `train` with new parameters: the phone's quality options, `train.support_mask` set to the voxels the preview's well-supported splats occupy (any shape), `train.init_from` = `preview` (start from the preview's splat on a shorter schedule; the phone may send `sfm`), and `quality.mode` = `refine`. Changed normalization parameters restart extraction and camera solving, using SfM initialization without the preview's mask. Omit normalization to reuse the frames and poses. If the worker no longer has them, it starts over uncropped.
          */
         post: operations["refine_phone_capture_api_v1_phone_captures__capture_id__refine_post"];
         delete?: never;
@@ -9366,8 +9366,8 @@ export interface components {
          * PhoneRefine
          * @description The phone's options for the full-quality pass (the same whitelist as `process`).
          *
-         *     `normalize` options are accepted and ignored: a Refine keeps the preview's frames and
-         *     poses, which is the whole point -- the region of interest is only meaningful in them.
+         *     Changed `normalize` options rebuild frames and poses without the old region or seed.
+         *     Omit `normalize` to reuse the previous extraction and its coordinate frame.
          */
         PhoneRefine: {
             /** Params */
