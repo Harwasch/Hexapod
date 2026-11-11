@@ -311,6 +311,7 @@ describe("real-run console", () => {
     const consoleView = liveConsole({
       scrub: vi.fn(),
       color: vi.fn(),
+      camera: vi.fn(),
       view: vi.fn(),
       layers: vi.fn(),
     });
