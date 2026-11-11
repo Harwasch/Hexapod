@@ -1,54 +1,14 @@
-"""The Modal function `ModalAdapter` spawns. **Built and checked; never run on a GPU.**
+"""Pinned gsplat 1.6.0 source training image (512d366b), using the existing recipe.
 
-This is the remote half: an image, a GPU, a secret, an S3 `Transfer`, and one call to
-`remote.execute`. Everything that could be got wrong about what a container *does* --
-fetch the inputs, run the stage, sync `checkpoint/`, upload `out/`, report back -- lives
-in `tools/pipeline/remote.py` and is covered by `tools/pipeline/tests/test_remote.py`.
+The pipeline runs in Modal's Python 3.12; the trainer retains its isolated Python 3.10
+venv. CUDA 12.8 devel supplies nvcc without a GPU at image-build time. Explicit CUDA_HOME,
+TORCH_CUDA_ARCH_LIST and MAX_JOBS avoid device discovery and bound compilation. gsplat's
+experimental inference extension is not used by simple_trainer and is not built.
 
-What this file adds is the training image, and it is worth being exact about what has and
-has not been checked about it:
-
-* **Every artifact it names exists, and was read, on 2026-09-23.** The base
-  `nvidia/cuda:12.4.1-devel-ubuntu22.04` (resolved on Docker Hub, amd64 manifest present);
-  torch `2.4.1+cu124` and torchvision `0.19.1+cu124` for cp310 on PyTorch's cu124 index;
-  gsplat's prebuilt `1.5.3+pt24cu124` cp310 wheel, downloaded and pinned by sha256 (its
-  CUDA kernels carry SASS for sm_70/75/80/86/90, which covers T4, A100, A10, H100 and --
-  by same-major compatibility -- the L4's sm_89); the v1.5.3 tag of the gsplat repository
-  for `examples/`; and the example's git pins, fetched at the commits it names.
-* **The trainer environment resolves and the trainer accepts the pipeline's argv.** The
-  same `trainer-requirements.txt`, installed into a CPU replica (CPython 3.10, CPU torch
-  2.4.1), imports `simple_trainer.py` and parses `training.gsplat_argv` with its own CLI.
-  `check_trainer.py` repeats that check as the last step of building this image, so an
-  image whose trainer would refuse the argv fails to build rather than failing a run.
-* **What has not been checked: anything that needs the GPU.** No image has been built by
-  Modal from this file and no training step has run. The first `modal deploy` is where
-  the build is proven (fused-ssim compiles against nvcc there, and nowhere here), and the
-  smoke run in `.github/workflows/modal.yml` is where training is.
-
-Two decisions that shape the image, both forced rather than chosen:
-
-* **Two Pythons.** gsplat publishes its CUDA wheels for CPython 3.10 only, and this
-  project is 3.12. The pipeline and `remote.execute` run under Modal's 3.12
-  (`add_python`); the trainer runs under Ubuntu 22.04's own 3.10 in `/opt/trainer`, which
-  `training.trainer_python` finds through `$GSPLAT_PYTHON`.
-* **A CUDA *devel* base.** gsplat's example imports `fused_ssim`, a CUDA extension
-  distributed only as source, so nvcc has to be in the image to build it. It is built for
-  the architectures in `CUDA_ARCHS` because there is no GPU at build time to detect one.
-
-Why one function per tier: Modal fixes a function's GPU at decoration time, so a single
-`run_stage` cannot serve an L4 request and an A100 request. `FUNCTIONS` is built from the
-tiers `providers.py` offers for Modal, and each one is named `run_stage_<tier>` -- which
-is the name `ModalAdapter` looks up.
-
-Deploy, and prove it, with `.github/workflows/modal.yml`: it creates the
-`twin-object-storage` secret from the R2 private-bucket credentials and runs
-
-    modal deploy infra/modal/app.py
-
-The secret is the private bucket, not the public one. A stage reads raw uploads and
-writes run outputs, and neither belongs in the bucket the world can read -- see
-`apps/api/app/worker/publish.py` for which of a run's outputs are published afterwards,
-and by whom.
+The CPU build checks validate imports, argv and the existing trainer wrappers.
+The image build, CUDA gradients, memory use and training quality still require the
+production-path Modal smoke runs; source inspection and local stand-ins do not prove them.
+No nvidia-ncore: only the optional NCore dataset path imports it; we use COLMAP.
 """
 
 from __future__ import annotations
@@ -82,6 +42,11 @@ CAPTURES_DIR = "/opt/captures"
 #: pipeline is the image's own copy, so that is what the tier table is read from; the
 #: local-file image steps below are only read when Modal builds the image.
 HERE = Path(__file__).resolve().parent
+
+# Next to this file locally, and at /root in every image built below.
+sys.path.insert(0, str(HERE))
+from gsplat_build import compile_gsplat  # noqa: E402
+
 if modal.is_local():
     REPO_ROOT = HERE.parents[1]
     LOCAL_PIPELINE = REPO_ROOT / "tools" / "pipeline"
@@ -94,29 +59,31 @@ else:
 #: every stage, because `remote.execute` registers them all. Missing any one of these was
 #: an `ImportError` before the first byte moved; the first version of this file installed
 #: two of the six, and `tools/pipeline/tests/test_modal_image.py` now pins the list.
+#: NumPy/Pillow match the tested pipeline uv.lock; Python 3.10 trainer pins stay separate.
 IMAGE_PACKAGES: tuple[str, ...] = (
-    "boto3>=1.34",
-    "numpy>=1.26",
-    "pillow>=10",
-    "pyyaml>=6.0",
-    "imageio-ffmpeg>=0.5",
+    "boto3==1.43.94",
+    "numpy==2.5.3",
+    "pillow==13.0.0",
+    "pyyaml==6.0.3",
+    "imageio-ffmpeg==0.6.0",
 )
 
-#: The base image. Ubuntu 22.04 because its system Python is the 3.10 gsplat's wheels are
-#: built for; CUDA 12.4 because that is the toolkit the torch and gsplat wheels are.
-CUDA_BASE = "nvidia/cuda:12.4.1-devel-ubuntu22.04"
-TORCH_INDEX = "https://download.pytorch.org/whl/cu124"
-TORCH_PACKAGES: tuple[str, ...] = ("torch==2.4.1+cu124", "torchvision==0.19.1+cu124")
-#: gsplat's `examples/` -- `simple_trainer.py` and its `datasets/` -- at the release the
-#: wheel is, since neither is in the wheel.
-GSPLAT_TAG = "v1.5.3"
+#: CUDA devel and torch agree at 12.8; retain the isolated Python 3.10 trainer venv.
+CUDA_BASE = "nvidia/cuda:12.8.1-devel-ubuntu22.04"
+TORCH_INDEX = "https://download.pytorch.org/whl/cu128"
+TORCH_PACKAGES: tuple[str, ...] = ("torch==2.9.1+cu128", "torchvision==0.24.1+cu128")
+#: The library and examples come from exactly the same source commit.
+GSPLAT_COMMIT = "512d366b67073d77ca099ede742683c165dfc23b"
 GSPLAT_DIR = "/opt/gsplat"
 GSPLAT_TRAINER = f"{GSPLAT_DIR}/examples/simple_trainer.py"
-#: `examples/requirements.txt` at v1.5.3 pins this commit.
-FUSED_SSIM = "git+https://github.com/rahul-goel/fused-ssim@328dc9836f513d00c4b5bc38fe30478b4435cbb5"
-#: T4, A100, A10, L4/L40S, H100. fused-ssim's setup.py adds sm_75/80/89 of its own when
+#: CUDA extension pinned by the upstream examples.
+FUSED_SSIM = "git+https://github.com/rahul-goel/fused-ssim@a7c48d6dd7ac6dc39a7958c7c4452e0b10418f38"
+#: A100, A10, L4/L40S all run sm_80. fused-ssim's setup.py adds sm_75/80/89 of its own when
 #: it sees no GPU; this list is what torch's extension builder adds on top.
-CUDA_ARCHS = "7.5;8.0;8.6;8.9;9.0"
+#: sm_80 runs on A100, A10, L4 and L40S by same-major compatibility, as the old wheel did. Each
+#: extra architecture repeats gsplat's largest kernels: measured on 16 cores with sm_80 + sm_89,
+#: one source took 68 minutes alone.
+CUDA_ARCHS = "8.0"
 TRAINER_VENV = "/opt/trainer"
 TRAINER_PYTHON = f"{TRAINER_VENV}/bin/python"
 _PIP = f"{TRAINER_VENV}/bin/pip"
@@ -141,13 +108,13 @@ RETRIES = 0
 #: `remoteHost` (tools/pipeline/host.py) now says which it was on the next run: the cores
 #: a call got, the cgroup's throttling and pressure, the GPU's utilisation and clock.
 #: Modal bills CPU and memory at max(reserved, used), so reserving them costs at most:
-#: 2 x $0.0472 + 8 GiB x $0.0080 = $0.158 an hour when the trainer uses less, nothing
+#: 2 x $0.0472 + 16 GiB x $0.0080 = $0.222 an hour when the trainer uses less, nothing
 #: extra when it uses more (the L4 itself is $0.80). The limit stays soft: a quiet host
 #: still lets the call burst above it. That reservation is priced into every GPU call's
 #: `costUsd` (`modal_adapter.GPU_RESERVATION`, which `tests/test_modal_image.py` holds
 #: to these two: change one and change the other).
 GPU_CPU_CORES = 2.0
-GPU_MEMORY_MIB = 8192
+GPU_MEMORY_MIB = 16384
 
 #: Thread pools sized to that reservation rather than to `os.cpu_count()`, which in a
 #: container is the *host's* cores (dozens): OpenMP, MKL, OpenBLAS and OpenCV would
@@ -160,7 +127,7 @@ THREAD_ENV: dict[str, str] = {
     "OPENCV_FOR_THREADS_NUM": "4",
 }
 
-_IGNORE = ["tests", ".venv", "__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache"]
+_IGNORE = ["tests", ".venv", ".tmp", "__pycache__", ".mypy_cache", ".ruff_cache", ".pytest_cache"]
 
 image = (
     modal.Image.from_registry(CUDA_BASE, add_python="3.12")
@@ -179,7 +146,7 @@ image = (
         # setuptools and wheel too: fused-ssim is built with --no-build-isolation, so it
         # builds with whatever this venv has, and Ubuntu 22.04's bundled setuptools is
         # older than the one that can build a wheel without the `wheel` package.
-        f"{_PIP} install --upgrade pip setuptools wheel",
+        f"{_PIP} install pip==25.3 setuptools==80.9.0 wheel==0.45.1",
         f"{_PIP} install {' '.join(TORCH_PACKAGES)} --index-url {TORCH_INDEX}",
     )
     .add_local_file(
@@ -188,17 +155,32 @@ image = (
     .run_commands(
         # torch pinned by constraint as well as by being installed first: without it an
         # unpinned transitive requirement is free to "upgrade" torch to a CUDA build the
-        # gsplat wheel was not compiled against.
+        # source extensions were not compiled against.
         f"printf '%s\\n' {' '.join(TORCH_PACKAGES)} > /opt/twin/constraints.txt",
         f"{_PIP} install -c /opt/twin/constraints.txt -r /opt/twin/trainer-requirements.txt",
         f"{_PIP} install -c /opt/twin/constraints.txt --no-build-isolation {FUSED_SSIM}",
-        f"git clone --depth 1 --branch {GSPLAT_TAG} "
-        f"https://github.com/nerfstudio-project/gsplat {GSPLAT_DIR}",
+        f"git init {GSPLAT_DIR} && git -C {GSPLAT_DIR} remote add origin https://github.com/nerfstudio-project/gsplat "
+        f"&& git -C {GSPLAT_DIR} fetch --depth 1 origin {GSPLAT_COMMIT} "
+        f"&& git -C {GSPLAT_DIR} checkout --detach FETCH_HEAD "
+        f"&& git -C {GSPLAT_DIR} submodule update --init --recursive",
+        env={"TORCH_CUDA_ARCH_LIST": CUDA_ARCHS, "CUDA_HOME": "/usr/local/cuda", "MAX_JOBS": "16"},
+    )
+    # Its own step, on its own cores: on Modal's default builder this compile did not finish
+    # in over 2 hours; 16 cores run the small sources together, and the largest take most of it.
+    .add_local_file(HERE / "gsplat_build.py", "/root/gsplat_build.py", copy=True)
+    .run_function(
+        compile_gsplat,
+        args=(_PIP, GSPLAT_DIR, CUDA_ARCHS),
+        cpu=(16, 16),
+        memory=(48000, 48000),
+        timeout=7200,
+    )
+    .run_commands(
         # The LPIPS network the trainer builds in its constructor downloads AlexNet's
         # weights on first use; fetched here so a run does not depend on that host.
         f"{TRAINER_PYTHON} -c 'from torchmetrics.image.lpip import "
         f'LearnedPerceptualImagePatchSimilarity as L; L(net_type="alex", normalize=True)\'',
-        env={"TORCH_CUDA_ARCH_LIST": CUDA_ARCHS},
+        env={"TORCH_CUDA_ARCH_LIST": CUDA_ARCHS, "CUDA_HOME": "/usr/local/cuda"},
     )
     .pip_install(*IMAGE_PACKAGES)
     .env(
@@ -213,6 +195,8 @@ image = (
     .add_local_dir(LOCAL_PIPELINE, PIPELINE_DIR, ignore=_IGNORE, copy=True)
     .add_local_file(HERE / "check_trainer.py", "/opt/twin/check_trainer.py", copy=True)
     .run_commands(
+        # Guarded full-state resume seam, only against the pinned trainer. No GPU.
+        f"{TRAINER_PYTHON} {PIPELINE_DIR}/resume_trainer.py {GSPLAT_TRAINER}",
         # The last word before the image is accepted: does this trainer take this argv?
         f"{TRAINER_PYTHON} /opt/twin/check_trainer.py {GSPLAT_TRAINER} {PIPELINE_DIR}",
         # And does the held-out error pass import torch, gsplat and the trainer's own
@@ -281,6 +265,8 @@ COLMAP_THREADS = "8"
 #: `sfm.vocab_tree_path` finds it.
 cpu_image = (
     modal.Image.from_registry("ubuntu:24.04", add_python="3.12")
+    # The remote app module imports this helper even when it serves a CPU stage.
+    .add_local_file(HERE / "gsplat_build.py", "/root/gsplat_build.py", copy=True)
     .apt_install("colmap", "curl", "ca-certificates")
     .run_commands(
         f"mkdir -p {Path(VOCAB_TREE).parent}",
@@ -370,6 +356,7 @@ class S3Transfer:
         self._bucket = bucket
         #: Object key -> (size, mtime_ns) of the file this instance last uploaded there.
         self._sent: dict[str, tuple[int, int]] = {}
+        self._modified: dict[str, float] = {}
 
     def put(self, key: str, source: Path) -> int:
         """A directory is *mirrored*: members unchanged since this instance uploaded them
@@ -419,18 +406,29 @@ class S3Transfer:
         self._forget(key)
         if self._head(key) is not None:
             target.parent.mkdir(parents=True, exist_ok=True)
-            self._client.download_file(self._bucket, key, str(target))
+            self._download(key, target)
             return target.stat().st_size
 
         def one(member: str) -> int:
             destination = target / member[len(key) + 1 :]
             destination.parent.mkdir(parents=True, exist_ok=True)
-            self._client.download_file(self._bucket, member, str(destination))
+            self._download(member, destination)
             signature = _signature(destination)
             self._sent[member] = signature
             return signature[0]
 
         return sum(_parallel(one, self._listing(f"{key}/")))
+
+    def _download(self, key: str, destination: Path) -> None:
+        import os
+
+        self._client.download_file(self._bucket, key, str(destination))
+        # Retry identity uses file metadata, not another read of every native image.
+        # Download time changes on every attempt; the object's modification time does
+        # not. Populated by HEAD (a file) or the paginated listing (a directory).
+        if key in self._modified:
+            stamp = self._modified[key]
+            os.utime(destination, (stamp, stamp))
 
     def exists(self, key: str) -> bool:
         return self._head(key) is not None or bool(self._listing(f"{key}/", limit=1))
@@ -445,7 +443,10 @@ class S3Transfer:
 
     def _head(self, key: str) -> dict[str, Any] | None:
         try:
-            return dict(self._client.head_object(Bucket=self._bucket, Key=key))
+            metadata = dict(self._client.head_object(Bucket=self._bucket, Key=key))
+            if metadata.get("LastModified") is not None:
+                self._modified[key] = metadata["LastModified"].timestamp()
+            return metadata
         except Exception:
             # A 404 is the common case and not an error: `get` asks "is this one object
             # or a directory of them?" and this is how it finds out.
@@ -462,7 +463,10 @@ class S3Transfer:
         while True:
             extra = {"ContinuationToken": token} if token else {}
             page = self._client.list_objects_v2(Bucket=self._bucket, Prefix=prefix, **extra)
-            keys.extend(entry["Key"] for entry in page.get("Contents", []))
+            for entry in page.get("Contents", []):
+                keys.append(entry["Key"])
+                if entry.get("LastModified") is not None:
+                    self._modified[entry["Key"]] = entry["LastModified"].timestamp()
             if limit is not None and keys:
                 return keys[:limit]
             token = page.get("NextContinuationToken") if page.get("IsTruncated") else None
@@ -532,6 +536,7 @@ def _run(request: dict[str, Any]) -> dict[str, Any]:
     import remote
     import stages  # noqa: F401 - registers every shipped implementation
     from cloud import StageRequest
+    from modal_adapter import CPU_TIERS
 
     imported_s = time.monotonic() - importing
     parsed = StageRequest.from_dict(request)
@@ -553,6 +558,7 @@ def _run(request: dict[str, Any]) -> dict[str, Any]:
         **started,
         "containerBootedAt": round(BOOTED_AT, 3),
         "containerCall": _CALLS[0],
+        "hostMemoryReservedGiB": CPU_TIERS.get(parsed.tier, (GPU_CPU_CORES, GPU_MEMORY_MIB))[1] / 1024,
         "remoteEnteredAt": round(entered, 3),
         "remoteImportS": round(imported_s, 2),
         "remoteFinishedAt": round(time.time(), 3),

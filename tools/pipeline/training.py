@@ -1,13 +1,16 @@
 """Dispatching a 3DGS training run: the dataset it needs, the argv, the PLY it writes.
 
-**No training run has been executed anywhere in this repository.** `gsplat` needs CUDA
-and there is no GPU on any machine this was written on. What is built here is the
-*dispatch*, and since 2026-09-23 it is checked against the trainer it dispatches rather
-than against a memory of it: gsplat **v1.5.3**'s `examples/simple_trainer.py`, read at
-that tag, and the argv below **parsed by that file's own `tyro` CLI** (tyro 1.0.16) in a
-CPU venv holding the exact wheel the training image installs
-(`gsplat-1.5.3+pt24cu124-cp310`), torch 2.4.1 and the example's pinned requirements.
-Parsing is all a CPU can do: `Runner` allocates CUDA tensors in its constructor.
+The image targets gsplat **v1.6.0**, source commit
+512d366b67073d77ca099ede742683c165dfc23b, with torch 2.9.1+cu128. Image-build checks parse
+this argv against the real trainer and check the convergence and block wrappers.
+The library upgrade alone preserved recipe defaults and colour-corrected evaluation.
+Production recipe v16 now opts into all-frame training and full-state recovery below.
+Local tests cannot prove CUDA.
+
+Upstream 512d366b fixes DefaultStrategy's opacity reset: v1.5.3's
+`step % reset_every == 0 & step > 0` was always False. With `strategy: default`,
+opacity now resets every 3000 steps (before schedule scaling, during refinement).
+The production recipe uses `mcmc`, so this fix does not affect it.
 
 Reading the source corrected four things the first version of this file transcribed from
 memory, and each one would have cost a GPU run to discover:
@@ -15,9 +18,9 @@ memory, and each one would have cost a GPU run to discover:
 * **`--ckpt` is evaluation, not resume.** `main()` in v1.5.3: "if cfg.ckpt is not None:
   # run eval only". The old argv passed the last checkpoint on a second attempt, so a
   preempted run would have evaluated the stale checkpoint, written no PLY, and failed.
-  There is no resume in `simple_trainer.py` at all (`init_step = 0`), so a second
-  attempt now **restarts from zero** and says so; nothing is passed that pretends
-  otherwise.
+  Upstream has no resume (`init_step = 0`). Production uses the guarded
+  `resume_trainer.py` extension and separate completed-step checkpoints with
+  optimizer/strategy/RNG state and `--resume`, never `--ckpt`.
 * **No PLY without `--save_ply`.** It defaults to False. Without it the stage would have
   trained for half an hour and then failed on "wrote no .ply".
 * **`normalize_world_space` defaults to True**, which rotates, recentres and rescales
@@ -73,6 +76,7 @@ nothing downstream could honestly read.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -117,7 +121,7 @@ _STEP_RE = re.compile(r"(\d+)")
 #: `print("Step: ", step, stats)` at each save step, where `stats` is a dict holding
 #: `num_GS` -- read from the source, not from a run.
 _STDOUT_GS_RE = re.compile(r"Step:\s+(\d+)\s+\{[^}]*'num_GS':\s*(\d+)")
-#: `(?<!CC_)` because with `--use_bilateral_grid` the same line goes on with
+#: `(?<!CC_)` because with `--post_processing bilateral_grid` the same line goes on with
 #: `CC_PSNR: ..., CC_SSIM: ..., CC_LPIPS: ...` (the colour-corrected numbers), and without
 #: it the last match of each pattern would be the corrected one.
 _STDOUT_PSNR_RE = re.compile(r"(?<!CC_)PSNR:\s*([0-9.]+)")
@@ -126,7 +130,7 @@ _STDOUT_SSIM_RE = re.compile(r"(?<!CC_)PSNR:[^\n]*?(?<!CC_)SSIM:\s*([0-9.]+)")
 _STDOUT_LPIPS_RE = re.compile(r"(?<!CC_)PSNR:[^\n]*?(?<!CC_)LPIPS:\s*([0-9.]+)")
 
 #: The gsplat release every flag and file name here was read from.
-GSPLAT_VERSION = "1.5.3"
+GSPLAT_VERSION = "1.6.0"
 
 #: v1.5.3's `Config.test_every`, which this stage never overrides. The parser sorts the
 #: registered images by name and holds out every one whose index is a multiple of it
@@ -237,8 +241,12 @@ def build_dataset(frames: Path, poses: Path, root: Path, *, max_side: int | None
     for frame in sorted(p for p in frames.iterdir() if p.is_file()):
         if max_side is None or not _shrink(frame, images / frame.name, max_side):
             link_or_copy(frame, images / frame.name)
+        else:
+            # The derived pixels are deterministic for max_side; keep source metadata
+            # stable when assembling the dataset again for a resumed attempt.
+            shutil.copystat(frame, images / frame.name)
     for entry in sorted(p for p in poses.iterdir() if p.is_file()):
-        shutil.copyfile(entry, sparse / entry.name)
+        shutil.copy2(entry, sparse / entry.name)
     return root
 
 
@@ -275,6 +283,10 @@ def held_out_split(registered: int, test_every: int = TEST_EVERY) -> tuple[int, 
     Indices `0, test_every, 2 * test_every, ...` are `val`, so there are
     `ceil(registered / test_every)` of them -- one of 4, 11 of 87.
     """
+    if test_every == 0:
+        return max(0, registered), 0
+    if test_every < 2:
+        raise ValueError("test_every must be 0 (all training) or at least 2")
     if registered <= 0:
         return 0, 0
     val = -(-registered // test_every)
@@ -535,7 +547,7 @@ def gsplat_argv(
       `shN` is empty, so the export is degree 0 -- which is all `canonical.ply` carries
       anyway (`gaussians.CANONICAL_PROPERTIES`). Held-out frames render with the zero
       embedding.
-    * `--use_bilateral_grid` fits a 16x16x8 bilateral grid per training image (BilaRF's
+    * `--post_processing bilateral_grid` fits a 16x16x8 bilateral grid per training image (BilaRF's
       colour model, `examples/lib_bilagrid.py`: plain torch plus `tensorly`, both in the
       training image) to the render before the loss. Nothing of it reaches the PLY.
       `eval()` then reports the raw metrics *and* colour-corrected ones (`cc_psnr`, ...),
@@ -581,7 +593,7 @@ def gsplat_argv(
     `gaussian_budget.memory_ceiling` counts when given the batch.
     """
     if sparse_grad and not packed:
-        raise ValueError("sparse_grad requires packed=true (gsplat v1.5.3)")
+        raise ValueError("sparse_grad requires packed=true (gsplat v1.6.0)")
     steps = str(max_steps)
     argv = [
         python,
@@ -630,7 +642,15 @@ def gsplat_argv(
     if app_opt:
         argv.append("--app_opt")
     if bilateral_grid:
-        argv.append("--use_bilateral_grid")
+        # v1.5.3 always scored the grid with the iterative quadratic correction.
+        # Upstream now defaults to no corrected metrics and an affine correction.
+        argv += [
+            "--post_processing",
+            "bilateral_grid",
+            "--use_color_correction_metric",
+            "--color_correct_method",
+            "quadratic",
+        ]
     if packed:
         argv.append("--packed")
     if sparse_grad:
@@ -648,6 +668,8 @@ def converge_argv(
     every: int,
     window: int,
     min_gain_db: float,
+    enabled: bool = True,
+    min_steps: int = 0,
 ) -> list[str]:
     """`gsplat_argv`'s command, run through `converge_trainer.py` instead of directly.
 
@@ -667,6 +689,9 @@ def converge_argv(
         str(window),
         "--min-gain-db",
         f"{min_gain_db:g}",
+        *([] if enabled else ["--no-converge"]),
+        "--min-steps",
+        str(min_steps),
         "--",
         *rest,
     ]
@@ -683,6 +708,105 @@ def schedule_scale(images: int, *, full_at: int, floor: float) -> float:
     if full_at <= 0:
         return 1.0
     return round(min(1.0, max(floor, images / full_at)), 2)
+
+
+def frame_schedule(images: int, params: Mapping[str, Any]) -> float:
+    """Frame-driven schedule; explicit preview scales are an intentional opt-out."""
+    requested = params.get("schedule_scale")
+    if requested is not None:
+        return max(
+            check_schedule_scale(float(requested)),
+            large_scan_floor(images, params) / int(params.get("iterations", 30000)),
+        )
+    full_at = int(params.get("schedule_full_at", 60) or 0)
+    floor = float(params.get("schedule_floor", 0.25))
+    growth = str(params.get("schedule_growth", "sqrt"))
+    ceiling = float(params.get("schedule_max_scale", 2.0))
+    if full_at < 0 or not 0 < floor <= 1 or ceiling < 1 or growth not in ("sqrt", "off"):
+        raise ValueError("invalid frame schedule settings")
+    scale = schedule_scale(images, full_at=full_at, floor=floor)
+    if growth == "sqrt" and full_at > 0 and images > full_at:
+        scale = min(ceiling, math.sqrt(images / full_at))
+    return max(scale, large_scan_floor(images, params) / int(params.get("iterations", 30000)))
+
+
+def large_scan_floor(images: int, params: Mapping[str, Any]) -> int:
+    requested = params.get("schedule_scale")
+    if requested is not None and float(requested) < 1.0:
+        return 0  # Explicit previews are deliberately cheap; Refine's 1.0 keeps the floor.
+    threshold = int(params.get("schedule_large_frames", 2036))
+    steps = int(params.get("schedule_min_large_steps", 60000))
+    if threshold < 1 or steps < 0:
+        raise ValueError("invalid large-scan schedule floor")
+    return steps if images >= threshold else 0
+
+
+def train_extra(params: Mapping[str, Any], checkpoint: Path) -> list[str]:
+    every = int(params.get("checkpoint_every", 5000))
+    test_every = int(params.get("test_every", 0))
+    held_out_split(1, test_every)  # Validate before training.
+    if every < 0:
+        raise ValueError("checkpoint_every must be nonnegative")
+    extra = ["--test_every", str(test_every)]
+    if every:
+        extra += [
+            "--checkpoint-every",
+            str(every),
+            "--checkpoint-dir",
+            str(checkpoint),
+            "--resume",
+            "latest",
+            "--no-checkpoint-final",
+        ]
+    return extra
+
+
+def evaluation_extra(extra: Sequence[str]) -> list[str]:
+    """Evaluation retains metric/render options, without any training resume request."""
+    valued = {"--checkpoint-every", "--checkpoint-dir", "--checkpoint-token", "--resume"}
+    result = []
+    arguments = iter(extra)
+    for value in arguments:
+        if value in valued:
+            next(arguments, None)
+        elif value != "--no-checkpoint-final":
+            result.append(value)
+    return result
+
+
+def checkpoint_token(params: Mapping[str, Any], dataset: Path) -> str:
+    """Identity of the immutable inputs and plan, without rereading native image bytes.
+
+    Dataset assembly preserves input mtimes, including resized images and copied poses;
+    S3 downloads use the object's stable LastModified time. A changed input's name,
+    size or mtime invalidates resume, as do all training parameters.
+    """
+    # Worker annotations are not training settings; adding them when moving a local
+    # run to the cloud must not discard recoverable training. Policy params remain.
+    settings = {key: value for key, value in params.items() if key != "_train_admission"}
+    digest = hashlib.sha256(json.dumps(settings, sort_keys=True).encode())
+    for path in sorted(p for p in dataset.rglob("*") if p.is_file()):
+        stat = path.stat()
+        digest.update(
+            json.dumps(
+                [path.relative_to(dataset).as_posix(), stat.st_size, stat.st_mtime_ns]
+            ).encode()
+        )
+    return digest.hexdigest()
+
+
+def all_frame_metrics(document: dict[str, Any], registered: int) -> None:
+    """No validation number may survive a no-holdout run (even a stale stdout line)."""
+    for key in ("psnr", "ssim", "lpips", "colorCorrected"):
+        document[key] = None
+    document["heldOut"] = {
+        "split": None,
+        "testEvery": 0,
+        "valFrames": 0,
+        "trainFrames": registered,
+        "note": "All registered frames trained; held-out quality was not measured. "
+        "The app shows geometric support and coverage, not a PSNR estimate.",
+    }
 
 
 def check_schedule_scale(value: float) -> float:
@@ -781,7 +905,7 @@ class TrainMetrics:
     source: str = "none"
     #: The held-out split psnr/ssim/lpips were measured on: (train, val) frame counts.
     split: tuple[int, int] | None = None
-    #: `eval()`'s colour-corrected numbers, written only with `--use_bilateral_grid`.
+    #: `eval()`'s colour-corrected numbers, written only with `--post_processing bilateral_grid`.
     cc_psnr: float | None = None
     cc_ssim: float | None = None
     cc_lpips: float | None = None

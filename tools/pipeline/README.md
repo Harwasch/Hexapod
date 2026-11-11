@@ -10,7 +10,16 @@ which imports this project as a library.
 registration out. Since 2026-09-23 it **converts the file's up axis** rather than assuming
 z -- see [The up axis](#the-up-axis) -- which is what stopped uploads landing on their side.
 
-**Lane 2 is real up to the GPU, and the GPU half is built and checked but has never run.**
+The current training image builds **gsplat 1.6.0 at `512d366b`**, with torch 2.9.1+cu128
+and CUDA 12.8.1. Recipe version and defaults are unchanged. PR #116's one-seed Beach
+comparison measured A (1.5.3) at **25.17/0.753/0.301 PSNR/SSIM/LPIPS, 98 min, $1.57**,
+and the upgraded plain trainer at **25.34/0.755/0.295, 75 min, $1.23**. The +0.17 dB
+is within Spool's 0.22 dB seed spread; it does not establish a quality gain. The extracted
+image still needs a production-path smoke under a non-production Modal app name.
+The first deploy now compiles gsplat on 16 cores with sm_80 only and can take much
+longer than the old wheel build; see [deploy and smoke commands](../../docs/DEPLOYMENT.md#deploying-it-and-proving-it).
+
+The table below records the original 1.5.3 validation, not validation of this extraction.
 The state of each piece, in the three-state vocabulary of `docs/HANDOFF.md`:
 
 | Piece                                         | State        | Evidence                                                                                                                                                                                                                                                                                                     |
@@ -24,7 +33,7 @@ The state of each piece, in the three-state vocabulary of `docs/HANDOFF.md`:
 | the Modal training image                      | verified     | built by Modal on 2026-09-23 (about 8 minutes, once); CUDA 12.4.1, torch 2.4.1, gsplat 1.5.3                                                                                                                                                                                                                 |
 | the GPU path end to end                       | verified     | `modal.yml` smoke, 2026-09-23: 500 steps on an L4, 68 s billed, $0.015, PSNR/SSIM read from gsplat's stats file, `trained.ply` placed and packaged to a tileset                                                                                                                                              |
 | `ModalAdapter` against a live workspace       | verified     | the same smoke: submit, poll to success, log tail, outputs back through R2. Its first two real runs found two bugs, both fixed and tested (below)                                                                                                                                                            |
-| a full-length training run on a real capture  | **unproven** | the smoke trained 500 steps; 30,000 steps on a real video has not run. Its cost is unmeasured -- scale from the smoke's billed seconds                                                                                                                                                                       |
+| a full-length training run on a real capture  | **verified** | production phone captures are recorded in docs/DEPLOYMENT.md; the Beach upgrade comparison is above                                                                                                                                                                                                          |
 
 - `normalize` / `ffmpeg_frames` extracts and selects frames and scrapes the container's
   metadata. It runs here and in CI, on a generated clip.
@@ -42,12 +51,11 @@ The state of each piece, in the three-state vocabulary of `docs/HANDOFF.md`:
   rotation error, 0.092% of scene extent in translation. CI installs `colmap` so this
   runs there too, and the test file fails rather than skipping if that install goes away.
 - `train` / `gsplat` **dispatches** a training run: the dataset, the argv, the metrics,
-  the PLY. **No training run has been executed in this repository** — `gsplat` needs CUDA
-  and there is no GPU here — so its tests drive a stand-in trainer and say so in their
-  names. Since 2026-09-23 the argv and file names are checked against gsplat v1.5.3's own
+  the PLY. Local tests drive a stand-in trainer and do not validate CUDA; GPU
+  measurements are recorded above and in the deployment guide. The original argv and file
+  names were checked against gsplat v1.5.3's own
   `simple_trainer.py`, which corrected four transcription errors, each of which would have
-  cost a GPU run: `--ckpt` means _evaluate_, not resume (so a preempted attempt now
-  restarts, and says so); there is no PLY without `--save_ply`; world normalisation is on
+  cost a GPU run: `--ckpt` means _evaluate_, not resume (the production resume extension uses a separate full-state checkpoint); there is no PLY without `--save_ply`; world normalisation is on
   by default and would have exported the splat in a rotated, rescaled frame; and the
   stats and PLY names are zero-based (`val_step29999.json`, `point_cloud_29999.ply`).
 
@@ -85,6 +93,247 @@ CI does): a plain `uv run` syncs the environment and removes it.
 The recipe's placement parameters are the deployment's defaults; a run overrides them per
 capture (see [Parameters per run](#parameters-per-run)), which is how the worker hands a
 stage the coordinate the operator dropped the capture at.
+
+## Full data by default (recipe v16)
+
+Production keeps every usable video frame at native resolution. Unordered photo sets
+have a temporary **200-photo cap** (`normalize.keep: 200`); `keep_video: 0` leaves video
+uncapped. Raise `normalize.keep` in a recipe or an admin per-run override to admit more
+photos. Photo matching is still exhaustive: 200 photos mean 19,900 pairs and 300 mean
+44,850. At the recorded ~8 min per 1,275 pairs (`experiments/minnetonka.py`), 300 photos
+would take ~4.7 h per matching pass, or ~9.4 h with the default one rematch, before
+extraction and mapping: beyond the six-hour call budget. The existing vocabulary trees serve sequential video loop
+closure; unordered-photo retrieval is not yet validated across both pinned COLMAP versions.
+This cap is an explicit exception to using all captured data, pending that validation. `normalize.select:
+usable` decodes video without an fps filter, candidate ceiling or frame ceiling. Consecutive
+retained video thumbnails (at most 160 px, RGB) are deduplicated only at MAE <= 1 eight-bit
+level (`dedupe_mae`). Unordered photos are deduplicated by identical file bytes only.
+Unreadable images are counted; there is no blur ranking or blur rejection. `source_meta.json`
+records candidates, kept frames and duplicate/unreadable/capped counts. `frames_meta.json`
+retains source metadata for every kept frame; native video's offsets use its nominal FPS,
+so variable-rate timestamps remain approximate. `keep` / `keep_video` can restore a cap;
+`select: viewpoint` plus `fps` / `max_candidates` restores the motion-window path. Null
+`max_side` and absent `train_max_side` preserve native pixels. A numeric side cap remains
+available; SIFT's separate 1600 px feature cap does not shrink training images. The phone
+now inherits native size (its saved `auto` value sends no side override); a numeric size
+remains an explicit cap. Its default frame choice is All usable; numeric rates explicitly
+opt into viewpoint selection. Phone Preview uses its own 1600 px extraction, at most
+100 photos or 180 video frames, and at most 1200 candidates at 4 fps with viewpoint
+selection; its training reads 800 px images. Refine sends the full run's extraction
+choices. When those differ, it restarts normalization and poses, dropping the Preview's
+mask and seed rather than applying them in a changed coordinate frame. Omit normalization
+on the API to keep an existing frame set and refine inside its measured region.
+
+`train.test_every: 0` trains **all registered frames**, including index zero and every
+block's assigned cameras. Production makes no test split. PSNR/SSIM/LPIPS and colour-corrected
+scores are null, and `heldOut` explains why. No training-fit number substitutes for them.
+The upload page already omits null PSNR and shows the percentage meeting the geometric
+support bar, coverage and capture advice; the gallery omits the accuracy percentage when
+held-out verification is absent. These describe support, not measured unseen-view accuracy.
+`holdout_error` and held-out convergence are off. They require an explicit positive
+`test_every >= 2` for bench work; frozen bench test images remain outside production.
+Requesting convergence with `test_every: 0` cannot stop the run early.
+
+The schedule is 30,000 steps times `max(0.25, frames / 60)` below 60 registered frames,
+and `min(2, sqrt(frames / 60))` above it (`schedule_growth: sqrt`, `schedule_full_at: 60`,
+`schedule_max_scale: 2`). Thus 240 or more frames get 60k steps. At 2,036 or more frames,
+`schedule_min_large_steps: 60000` / `schedule_large_frames: 2036` additionally enforce a
+60k equivalent image-update floor, including seeded Refines, blocks and convergence stops.
+With batch > 1, steps divide by batch, so steps times batch retain that floor. Explicit
+`schedule_scale < 1` (Preview's 0.1) is the intentional cheap opt-out. Refine's 1.0
+still keeps the large-scan floor; a fixed shorter bench schedule can explicitly set
+`schedule_min_large_steps: 0`.
+`schedule_growth: off` restores the old growth rule; the large-scan floor is a separate setting.
+
+The auto Gaussian ceiling includes steady allocated memory (~1,440 B/Gaussian at native
+1080x1920), per-view intersection sorting bursts and allocator fragmentation. The failed
+10M L4 view requested 2.34 GiB for one buffer; gsplat's keys/IDs and sorted copies need
+three such buffers. Memory admission uses the largest registered render view, while
+footprints retain the pinned parser's reference intrinsics ratio. The model scales the
+envelope with count and pixels, reserves at
+least 2.5 GiB fragmentation and retains the old one-third headroom and ceiling. Native
+ceilings are about **6.72M L4 / 14.0M L40S / 23.7M A100-80**. These are conservative
+admission limits, not universal peak measurements. An explicit `cap_max` still overrides
+auto admission and records a warning. Auto blocks can consequently run more GPU passes.
+
+`checkpoint_every: 5000` saves full training state into the stage's `checkpoint/resume/`:
+splats, Adam moments, strategy accumulators, schedulers, enabled modules, convergence history,
+RNG and consumed data-loader cursor. Four workers use deterministic sample keys. Only
+plain data/tensors are serialized, loaded with `weights_only=True`; no runtime methods,
+strategy instances or config objects are pickled. The image build guards the pinned source
+patch. File names, sizes, stable modification times and settings fingerprint the plan,
+without rereading the native dataset. Dataset assembly preserves those times; S3 downloads
+use each object's LastModified time. Inputs are immutable during an attempt. A changed
+identity/version logs a warning, deletes that lane's stale checkpoints and starts at step 0;
+sibling block lanes are kept. Save failures log `CHECKPOINT ERROR` and training continues;
+two complete recovery points are retained **while training is unfinished**. Once the PLY
+and durable outputs are written, a successful train removes `checkpoint/resume/` before the
+final mirrored sync; each completed coarse/block pass also removes its own lane. If no
+seed/live state remains, a tiny completion marker forces the mirror to remove remote
+resume files even though ordinary empty checkpoint syncs are skipped. Failed or
+pre-empted passes retain recovery state. Production skips the final full-state save: a
+failure during final packaging may replay up to 5k steps.
+
+The existing background sync uploads immutable filesystem snapshots, excludes partial writes,
+and restores checkpoints before single-call retries. A size receipt rejects missing/truncated
+checkpoint files even if uploads complete out of order. Coarse/block checkpoints use stable
+namespaces across sandbox paths. Immediate failed-part resubmissions recover that part's last
+synced trainer state. **Remaining boundary:** when an entire fan-out stage attempt restarts,
+completed blocks are reused but unfinished blocks' trainer states from the previous attempt
+are not collected. Function timeouts still follow the existing six-hour terminal policy;
+this PR adds no automatic timeout relaunch or spending allowance. Storage outages can lose
+unsynced work; they do not terminate successful training.
+
+GPU containers reserve **16 GiB host RAM and 2 cores**. PLY export and live preview selection
+stream 65,536 rows at a time and publish atomically; decoded-image caching stays off. This
+bounds export scratch independently of the full model (the live preview also keeps its fixed
+preview budget). Host RSS/cgroup peak/limit and OOM counter deltas join remote telemetry.
+
+The evidence is the quality campaign, not a new production GPU run: beach full-data gained
+about **1.1 dB** against the leakage-matched 255-frame, 1600 px baseline on 38 frozen tests;
+60k versus 30k gained **0.57 dB**, LPIPS **0.352 -> 0.301**. The video decoded 2,039 frames,
+deduplicated three and registered 2,036. The bench additionally excluded test neighbours
+(218 frames) from training; production has no such exclusion. The successful 7.25M run took
+157 minutes / $2.73, with 12.7 GiB peak GPU reserved memory. The failed 8 GiB host runs exited
+137; streaming plus 16 GiB completed. Source: `codex/feat-quality-campaign`, README Full-data
+run / Detail screen / Budget test and `experiments/bench/FULL_DATA.md`; only measured
+mechanisms were ported, not the experimental quality stack or unproven blur screen.
+
+Cost per scan is the frame pool **and** sampled training steps: 255 x 30k versus 2,036 x 60k
+at native beach pixels (1.44x the pixels of 1600 px). Training samples one image a step,
+so this is not a 16x GPU-work claim: 2x steps x 1.44x pixels is a rough **2.88x render-work**
+proxy at unchanged Gaussian count, before setup, memory caps, block passes and checkpoints.
+Photo matching remains quadratic with the temporary 200-photo default cap; video matching/mapping, extraction,
+transfer and disk use grow with the retained data. At the existing surveyed rates the GPU
+reservation adds **$0.063936/hour**, making L4 + 2 cores + 16 GiB **$1.021392/hour**. The
+measured 157-minute run is evidence for one scene, not a per-scan quote. Checkpoints add
+multi-GB disk/object-storage writes every 5k steps; two recovery points alone can use roughly
+10 GB near the native L4 cap. The old 20 GB worker-volume / 8 GB upload allowance no longer
+holds for all full-data scans; see deployment sizing. No cloud run or deployment was made
+for this port. Harrison must approve deployment and Claude reviews before merge.
+
+## Opacity and GPU capacity (recipe v17)
+
+Every photo-reconstruct MCMC run now sets `opacity_reg: 0.002` in the recipe,
+including Preview, which shares the recipe and keeps its own fixed 200k cap, 800 px
+training and short schedule. An explicit run override still wins. The full-data beach
+bench (30k steps, `codex/feat-quality-campaign` README Budget test) found that the MCMC
+preset's 0.01 left 45% of 10M splats dead and test PSNR 22.10. At 7.25M, changing to
+0.002 improved PSNR/SSIM/LPIPS from 25.40/0.756/0.352 to 25.93/0.765/0.303.
+At 0.002, 10M repeats scored 26.00 and 25.81 dB; 14M and 20M both scored 25.93 dB.
+PSNR was flat within the measured 0.19 dB repeat spread, while LPIPS improved from
+0.303 at 7.25M through 0.294/0.287/0.279 at 10M/14M/20M. These are beach measurements,
+not evidence that every scan benefits equally.
+
+The default is `budget_mode: auto`, `budget_headroom: 2.5`, `gaussian_density: 0.1`,
+with a 200k floor. `train_admission.py` measures the density target before the worker
+submits any GPU call and chooses the smallest allowed tier holding it
+(**L4 → L40S → A100-80**, bounded by `max_gpu_tier: l40s`). B' budgets
+**min(tier ceiling, 2.5 × density target)** on every tier. The floor and `budget_max`
+still bound the cap. Native
+1080x1920 ceilings remain about **6.72M / 14.0M / 23.7M**; the memory model
+and safety margins are unchanged.
+
+At that resolution, **0.5M → L4, 1.25M**; **5M → L4, about 6.72M**;
+**6.72M → L4, 6.72M**; **8.05M → L40S, about 14.0M**.
+Only a target above the maximum requires automatic blocks. A **50M** target at the
+default maximum requires four L40S blocks, each filling about **14.0M**.
+Each block applies the same rule to its own target and allocated tier, including
+its weighted outside surface and existing per-block floor. `max_gpu_tier: a100`
+allows larger GPUs before blocks. Explicit `blocks` and per-pass `budget_max` can
+still force partitioning. `gpu_memory_gb` may restrict capacity but cannot grant a
+card more physical memory. Batch size and the largest registered render view affect
+admission. Unreadable geometry keeps the existing 500k fallback.
+
+Set `budget_headroom: null` to opt out with rule B (also used when absent):
+the recipe's base tier keeps the density target; promoted tiers fill their ceilings.
+The beach's improving LPIPS through 20M motivates the default 2.5x multiplier;
+there is no evidence beyond that.
+`budget_headroom: 1.0` reproduces the density rule; `budget_mode: density` forces
+headroom 1.0 regardless of the recipe setting. `density_scale` scales the target
+and therefore tier choice. The explicit `budget_mode: gpu-max` targets the
+configured maximum tier's ceiling, independent of density. `budget_max` remains
+a lower cap in every computed mode. An integer `cap_max`, including Preview's,
+retains its fixed count; an unsafe explicit remote cap is refused before submission.
+
+Tier selection reaches every head, part and join request. A container or fixed-GPU
+`LocalRunner` (including bench jobs) retains its allocated tier's ceiling; it cannot
+promote itself after allocation. L4's existing Modal fallback
+list is filtered against the planned per-call cap, pixels, batch size and maximum tier.
+Since Modal functions have static GPU lists, a filtered subset uses a single-tier
+function. A 14M plan cannot use the `l4_fallback` function with its 24 GB L4/A10 options.
+Promoted L40S/A100 calls use their existing dedicated functions. `train_metrics.json`
+records the density target (`budget.densityTarget`, also `raw`), chosen tier
+(`gpuTier`), tier ceiling (`memoryCeiling`), final cap (`capMax`), reason (`tierReason`),
+`recipeGpuTier`, `maxGpuTier`, `budgetMode` and effective `budgetHeadroom`;
+the attempt ledger prices the selected tier, or the reported actual fallback GPU.
+The running-cost estimate and dollar cap use that same tier's rate.
+
+Cost is the reason L40S is the default maximum and A100 requires a setting. At the
+repository's surveyed rates, GPU-only L4/L40S/A100-80 cost **$0.7992 / $1.9512 / $2.50 per
+hour**; with the shared 2-core, 16 GiB reservation the totals are **$1.021392 / $2.173392 /
+$2.722192 per hour**. L40S is 2.44x the L4 GPU rate (2.13x including reservation);
+A100 is another 25% per hour including reservation. Headroom means more gaussians and
+slower steps; time and per-scan cost can rise with headroom. Use `budget_mode: density`
+to keep density-sized counts. The improving
+beach LPIPS motivates filling promoted tiers. No new network,
+Modal or GPU run validates this orchestration change; local tests cover admission,
+requests, fallbacks, block boundaries and ledger pricing.
+
+If an admitted L40S/A100 head never starts and remains pending for fifteen minutes
+(`CloudRunner.replan_pending_s`, default 900 seconds, bounded by `max_pending_s`
+when shorter), or submission raises a provider resource-exhaustion/quota exception,
+the runner records that tier as unavailable and re-plans before training.
+The longer pending window allows for a slow cold start of the large training image.
+Provider refusals are classified by exception type/RPC status, not error-message text.
+A call observed running never re-plans, including after re-attachment; a failed poll
+(including CUDA OOM) surfaces as a training failure regardless of its wording.
+Re-planning tries A100 when allowed, otherwise L4 with blocks and
+a recalculated per-block cap: the default applies min(L4 ceiling, 2.5 × block density
+target); rule B with null headroom keeps each L4 block's density target. A tier is
+excluded for the rest of this run, including
+retries/deploys; it cannot repeat the same unavailable L40S request indefinitely.
+The successful step's `trainAdmission` metric retains exclusions and reasons alongside
+the attempt ledger. Ordinary training errors do not re-plan. Missing `max_gpu_tier`
+keeps the recipe's tier, so v16 jobs do not silently opt into promotion. Fixed-tier
+bench runs can use an already allocated A100 above the recipe maximum.
+
+### Density survey memory
+
+The worker surveys before GPU submission, so it must fit on the 2 GB Fly worker.
+`finest_footprints` streams **all** track observations in chunks of **65,536**, even
+within a long track, retaining 32 bytes per point (XYZ plus finest footprint) and
+compact image/camera arrays. `sfm.read_model` also chunks each image's observation
+counts and skips point tracks when reading summary statistics. No observations are
+sampled; small fixtures match the former whole-array footprint and surface results
+**exactly**, including tilted cameras, invalid views, empty tracks and chunk boundaries.
+The always-on allocation test measured the old path at 59.5 MiB for 25k points/750k
+observations and now enforces a 16 MiB bound on that fixture.
+
+Fresh-process **full budget survey** measurements, including surface aggregation,
+2026-11-09, synthetic plane with 1M points and real image observation records:
+
+| Points | Observations | Peak RSS       | Tracemalloc peak | Time with tracing |
+| ------ | ------------ | -------------- | ---------------- | ----------------- |
+| 1M     | 20M          | **255.09 MiB** | **220.41 MiB**   | **27.04 s**       |
+| 1M     | 30M          | **255.08 MiB** | **220.41 MiB**   | **26.97 s**       |
+
+Baseline RSS was 34.57 / 35.64 MiB respectively. The previous round's whole-array surveys reached
+1,687 MiB at 1M/20M and 2,449 MiB at 1M/30M. The new probe asserts **RSS < 600 MiB**;
+these numbers cover the survey process, not the worker's full RSS or larger point
+counts. Surface aggregation still scales with point count. Reproduce offline:
+
+```bash
+cd tools/pipeline
+TMPDIR=~/.cache/hexapod-tmp UV_CACHE_DIR=~/.cache/hexapod-tmp/uv UV_OFFLINE=1 \
+  heavy uv run python tests/density_memory_probe.py --points 1000000 --observations 30 --trace
+```
+
+Generation streams to a temporary model outside the measured child process and deletes
+it afterwards. The survey stays on the worker so admission can select a tier before
+allocating a GPU; moving it into the GPU container would first allocate an unplanned
+tier and need another dispatch to change it. The allocated container repeats the
+same bounded survey for its assembled dataset.
 
 ## A recipe is an ordered list of stages, not a DAG
 
@@ -388,11 +637,11 @@ measured**. A tier with no rate records its billed seconds and no cost; it does 
 an invented number, because a plausible price in a cost column is a price that will be
 believed. A deployment supplies its own through `PIPELINE_GPU_RATES`.
 
-On Modal a GPU hour is the GPU **and** the 2 cores and 8 GiB every GPU function reserves
+On Modal a GPU hour is the GPU **and** the 2 cores and 16 GiB every GPU function reserves
 (`modal_adapter.GPU_RESERVATION`, billed at max(reserved, used)): `ModalAdapter.rate`
-adds $0.158 an hour, from Modal's per-core and per-GiB list prices
+adds $0.222192 an hour, from Modal's per-core and per-GiB list prices
 (`providers.MODAL_CORE_HOUR_USD`, `MODAL_GIB_HOUR_USD`), to every GPU tier's rate,
-operator-supplied ones included — an L4 hour is $0.958, not $0.80. Still not in
+operator-supplied ones included — an L4 hour is $1.021392 before any usage above the reservation. Still not in
 `costUsd`: a container's idle scale-down window after its last call (Modal's default, a
 minute; `infra/modal/app.py` sets none), which Modal bills and no call owns.
 
@@ -462,7 +711,7 @@ path: the worker runs these stages in that environment. Nothing under `app/api` 
 ground_samples → manifest → register`. Every stage is real.
 - **`photo-reconstruct`** (v15) — Lane 2: `normalize → pose → georeference → align → mask →
 train → compensate → quality → place → confidence → surface → package → thumbnail →
-ground_samples → manifest → register`, with inputs `upload` and `site_context`. `train` runs on an L4; `pose`, `align` and `quality` on Modal's CPU box (`cpu4`); `compensate` gains a
+ground_samples → manifest → register`, with inputs `upload` and `site_context`. `train` starts at L4 and can promote up to its configured maximum; `pose`, `align` and `quality` on Modal's CPU box (`cpu4`); `compensate` gains a
   `gpu:` block when its impl becomes `imc` (B3), since asking for an L4 to run `none` would be
   billing a GPU to do nothing. `align` registers each epoch to its site's reference epoch and
   writes its verdict (`epoch_alignment.json`; ADR 0015). `confidence` bins the quality
@@ -480,6 +729,75 @@ untouched by them, and `StubRunner` fabricates the new artifacts with no edit of
 `tests/test_lane1.py` asserts that rather than leaving it as a claim.
 
 ## Where pose runs
+
+### Coverage backbone, then registration
+
+`pose.backbone: auto` is the default. Captures with fewer than 200 frames keep the
+existing pose path; `backbone: off` selects that path at any size. Larger videos and
+photo sets first solve a **coverage backbone**, then register every other frame into
+that model. Training still receives every successfully registered native frame.
+This introduces no fixed 300-frame cap: a long walk needs more anchors than a short
+orbit, even at the same frame count.
+The threshold applies to pose-input frames, including photo sets at normalize's
+existing `keep: 200` cap; this change does not lift that photo cap.
+
+The selector reuses `keyframes.py`'s phase-correlated homographies and residual
+parallax. It chooses the sharpest frame in each motion window, aiming for about
+85% content overlap and at most 2% of the image long side in residual parallax
+between neighbours. Window budgets are half those gaps, because selected frames can
+sit at opposite ends of adjacent windows. Both endpoints and every frame whose motion
+cannot be measured are retained. These are conservative initial budgets, not a tuned
+optimum; an unordered or untextured photo set can retain every frame and get no
+mapping speedup. No count ceiling weakens coverage to meet a time estimate.
+
+The existing matcher, mapper, retries, focal seed and optional GNSS priors solve only
+the backbone. Extraction then extends the same database with the other frames, reusing
+backbone feature indices and the same camera ID. For video, each unposed frame matches
+up to four solved backbone neighbours on each side (the bench's registration rule).
+Photos match every solved anchor: filenames do not establish overlap. This costs
+O(N × B) matching for N photos and B anchors, rather than an all-photo remapping pass.
+
+On pycolmap 4.2, two bounded registration passes use absolute pose estimation and
+triangulate each new view, followed by **one** global adjustment capped at 10 iterations
+and 120 solver seconds. Backbone poses and camera calibration remain fixed, preserving
+their gauge and GNSS constraints. COLMAP 3.9.1 uses `image_registrator`,
+`point_triangulator` (one refinement, at most 10 iterations), and `bundle_adjuster`
+(10 iterations); calibration stays fixed, while poses may refine. The CLI has no
+solver-time cap here. Failure to register individual frames records their names and
+reason and drops them from the pose model. The backbone path fails if final coverage
+is below `min_registered_fraction` (default 0.8); `fail_below_registered_fraction` and
+the reprojection gate can impose stricter limits. Registration command failures still
+fail the stage.
+
+`poses.json.backbone` records the selected and solved counts, attempted/registered/failed
+registration counts, per-frame failures, phase timings, BA limits and both time estimates.
+Stage metrics include `backboneSize`, `backboneSelectS`, `registrationAttempted`,
+`registrationRegistered`, `registrationFailed`, registration/triangulation/BA seconds,
+`meanReprojectionErrorPx` and `poseEstimatedS`. Existing `mapS` covers backbone mapping;
+`extractS` includes both extraction passes. `poses.json` is written before a coverage
+gate failure so the dropped frames remain inspectable.
+
+`pose_backbone.estimate_seconds(N, B)` fits quadratic incremental mapping to production
+job **ecbcdda1**, 2026-11-09: 954 of 2,037 native 1080×1920 frames after 6,180 s, with
+mapping slowing as the model grew. Matching uses the 179-frame production timings below
+(49 s on 4.2, 266 s on 3.9); extraction uses 3.7 s / 87 frames, analysis 60 ms/frame,
+and registration reserves 1.5 s/frame against the bench CPU smoke's 5.76 s / 4 new
+frames. The bench's full registration reached about 0.85 px on the beach, but its
+full-size wall time is not recorded in this branch. With **300 coverage anchors**,
+2,037 frames plan at about **64 minutes on 4.2**, versus **8 hours** for incremental
+mapping. This is a cpu4 extrapolation at 4096 features / 1600 px / octave 0, excluding
+transfers, queue/startup and retries; it is not a measured production runtime or a
+guarantee that every 2,037-frame path fits 90 minutes. More coverage increases B and
+the estimate; all-anchor photo matching is included separately. The six-hour stage
+limit is unchanged.
+
+Validation: synthetic motion tests compare a short orbit and a longer walk, preserve
+coverage under denser sampling, and check a beach-sized proxy's anchor range and
+90-minute budget. A local CPU test with cached pycolmap 4.2 and a freely refined EXIF
+focal seed solves 40 rendered orbit views, registers all 40 held-out views and drops one
+unrelated frame. CLI routing is
+tested with stand-ins; the new 3.9.1 commands and the full beach production runtime
+remain unverified locally. No Modal or GPU run is part of this change.
 
 `pose` runs on the **worker's CPU**, not the GPU box. The GPU is billed by the second and
 only `train` needs one. COLMAP's CPU path is the one every finding in `sfm.py` was measured
@@ -503,7 +821,7 @@ numbers are upper bounds:
 | sequential + loop (vocab tree) | 100    | 4096 / 1600         | 182 s   | 535 s | 128 s | 845 s     | 76/100     |
 | sequential + loop, overlap 5   | 100    | 4096 / 1600         | 154 s   | 319 s | 144 s | 616 s     | 51/100     |
 
-What this decided, in `recipes/photo-reconstruct.yaml`:
+Historical pose-time choices (frame limits superseded by recipe v16 above):
 
 - **`exhaustive`, still.** It is the only matcher that registered every frame. Sequential
   matching is linear rather than quadratic, but it lost a quarter to a half of the orbit
@@ -601,18 +919,20 @@ sfm` restores the old behaviour.
 counted in its own finest-view pixels -- per sparse point, depth / focal for the camera
 that saw it largest, at the size training reads the frames; voxels of 32 of those
 footprints, one face each -- times `gaussian_density` 0.1. A Refine counts its support
-mask in full and the rest at a tenth. Clamped to the preview's 200k and to the L4's
-memory at that frame size (gsplat's own 1M/2M/3M MCMC measurements: ~8.7M at 1600 px,
-~5.4M at 2400; training rasterizes `--packed`, whose saving the model does not yet count).
+mask in full and the rest at a tenth. This density target has a 200k floor and selects
+the smallest allowed GPU up to `max_gpu_tier`; default `budget_mode: auto` keeps the density target on the base tier and fills promoted tiers,
+while `budget_mode: density` keeps the density-sized cap. Packed
+rasterization savings remain headroom.
 The 2M `budget_max` the recipe used to set is gone: it was what `place`/`package` could
 load whole on the 2 GB worker, and the stages after training now read the splat a chunk
 at a time (see "Stages after training, a chunk at a time"); `budget_max` remains an
-override. Measured offline, 2026-09-27: 3DGS's Truck model at its 979 px, **1.52M** (15.2M
+override. Density targets measured offline, 2026-09-27: 3DGS's Truck model at its 979 px, **1.52M** (15.2M
 footprints^2; the calibration point); four local phone/photo models at 1600 px, 0.42M-0.81M.
 An integer `cap_max` is an override (the preview's 200k); a phone tier multiplies the
-budget (`density_scale`: Quick 0.5, Best 2).
+density target (`density_scale`: Quick 0.5, Best 2).
 
-`converge: true` (`convergence.py`, `converge_trainer.py`) runs the trainer through a
+For bench work with a positive `test_every`, opt-in `converge: true`
+(`convergence.py`, `converge_trainer.py`) runs the trainer through a
 wrapper that, after MCMC's densification ends (25k of 30k, scaled), evaluates the held-out
 split every 500 steps and stops once the best PSNR of the last 2,000 steps is under
 0.05 dB above the best before them -- by adding the next step to the trainer's own save,
@@ -631,7 +951,7 @@ the rule, is what binds; and `[benchmark:recipe]` against `[benchmark:recipe-500
 
 ## Blocks, one GPU each
 
-A budget more than one GPU trains (`blocks: auto`), or `blocks: <n>`, trains the scene as
+A budget beyond the allowed maximum GPU (`blocks: auto`), or `blocks: <n>`, trains the scene as
 blocks and merges them into one `trained.ply` (`blocks.py` has the recipe and its sources).
 Measured on the L4 with the spool forced to 2 blocks: quality matched the whole run
 (26.42 dB / LPIPS 0.1056 merged, 26.39 / 0.1088 whole), but one call trained the blocks in
@@ -729,8 +1049,8 @@ JPEG a step, a Python loop launching each step's kernels), with thread pools siz
 _host's_ `os.cpu_count()`. So, ranked: a CPU-starved container (most likely); a slow or
 throttled GPU; different work (least: same code, cameras and schedule). Changed:
 
-- **Every GPU function reserves 2 cores and 8 GiB** (`infra/modal/app.py`, `GPU_CPU_CORES`,
-  `GPU_MEMORY_MIB`; Modal bills max(reserved, used), so at most +$0.16/h over an L4's
+- **Every GPU function reserves 2 cores and 16 GiB** (`infra/modal/app.py`, `GPU_CPU_CORES`,
+  `GPU_MEMORY_MIB`; Modal bills max(reserved, used), so at most +$0.222192/h over an L4's
   $0.80), and the image caps OpenMP/MKL/OpenBLAS/OpenCV pools at 4 threads.
 - **The machine is measured**: `remoteHost` (per call; `headHost`, and `fanOutHosts` per
   part) from `host.HostWatch` -- `cores` (CPU seconds over wall: what the call actually
@@ -759,7 +1079,7 @@ either: a container's idle scale-down window after its last call, which Modal bi
 no call owns. (The reserved CPU and memory used not to be priced either; since the
 2026-10 audit `ModalAdapter.rate` adds them -- "What a run cost" above.)
 
-**Any call may start on an L40S or A10** (`modal_adapter.GPU_FALLBACKS`:
+**A call admitted on L4 may start on an L40S or A10** (`modal_adapter.GPU_FALLBACKS`:
 `l4 -> (l4, l40s, a10)`, deployed as `run_stage_l4_fallback` with
 `gpu=["L4", "L40S", "A10"]`, Modal's ranked list: the first type free wins). Single runs,
 heads and joins use the same list as parts: production L4 `train` calls have not started
@@ -768,8 +1088,9 @@ and trained ~2.3x faster on our benchmark, so a block costs ~17% more by that be
 (+6% on training seconds at list prices), and ends in under half the time instead of
 waiting half an hour. The A10 ($1.10/h, 1.38x) is last because it is the only other tier
 proven free on 2026-11-03 (a smoke started in about 2 s); its gsplat speed per dollar is
-unmeasured. The gaussian memory ceiling stays sized for the requested L4's 24 GB (also
-A10's capacity), even on a 48 GB L40S. The container reports its GPU, and the call is
+unmeasured. For calls admitted on L4 the budget stays sized for its 24 GB, even on a
+48 GB fallback L40S. Recipe v17 first promotes targets exceeding L4 capacity; promoted
+L40S/A100 calls use their dedicated functions and their own memory ceilings. The container reports its GPU, and the call is
 priced and ledgered at that tier (`fanOutTiers` records parts); a deployment without the
 fallback function runs the call on its own tier; `ModalAdapter(part_fallback=False)`
 turns fallback off for every call.

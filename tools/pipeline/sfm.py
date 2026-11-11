@@ -229,6 +229,7 @@ def feature_extractor_argv(
     first_octave: int | None = None,
     num_threads: int | None = None,
     use_gpu: bool = False,
+    existing_camera_id: int | None = None,
 ) -> list[str]:
     """SIFT over every frame, into one database.
 
@@ -260,6 +261,8 @@ def feature_extractor_argv(
     ]
     if camera_params is not None:
         argv += ["--ImageReader.camera_params", ",".join(f"{v:.10g}" for v in camera_params)]
+    if existing_camera_id is not None:
+        argv += ["--ImageReader.existing_camera_id", str(existing_camera_id)]
     if first_octave is not None:
         argv += ["--SiftExtraction.first_octave", str(first_octave)]
     if num_threads is not None:
@@ -508,6 +511,102 @@ def clear_matches(database: Path) -> None:
     with sqlite3.connect(database) as connection:
         connection.execute("DELETE FROM matches")
         connection.execute("DELETE FROM two_view_geometries")
+
+
+def registration_matcher_argv(database: Path, pairs: Path, threads: int | None) -> list[str]:
+    """Match a sparse list of actual image pairs, without importing precomputed matches."""
+    argv = [
+        colmap_exe(),
+        "matches_importer",
+        "--database_path",
+        str(database),
+        "--match_list_path",
+        str(pairs),
+        "--match_type",
+        "pairs",
+        "--SiftMatching.use_gpu",
+        "0",
+    ]
+    if threads is not None:
+        argv += ["--SiftMatching.num_threads", str(threads)]
+    return argv
+
+
+def image_registrator_argv(
+    database: Path, model: Path, output: Path, threads: int | None
+) -> list[str]:
+    """PnP registration on existing points; no incremental all-frame mapper or BA."""
+    argv = [
+        colmap_exe(),
+        "image_registrator",
+        "--database_path",
+        str(database),
+        "--input_path",
+        str(model),
+        "--output_path",
+        str(output),
+        "--Mapper.abs_pose_refine_focal_length",
+        "0",
+        "--Mapper.abs_pose_refine_extra_params",
+        "0",
+    ]
+    if threads is not None:
+        argv += ["--Mapper.num_threads", str(threads)]
+    return argv
+
+
+def point_triangulator_argv(
+    database: Path, images: Path, model: Path, output: Path, threads: int | None
+) -> list[str]:
+    """Extend tracks at registered poses, holding the solved camera calibration."""
+    argv = [
+        colmap_exe(),
+        "point_triangulator",
+        "--database_path",
+        str(database),
+        "--image_path",
+        str(images),
+        "--input_path",
+        str(model),
+        "--output_path",
+        str(output),
+        "--Mapper.ba_refine_focal_length",
+        "0",
+        "--Mapper.ba_refine_principal_point",
+        "0",
+        "--Mapper.ba_refine_extra_params",
+        "0",
+        "--Mapper.ba_global_max_num_iterations",
+        "10",
+        "--Mapper.ba_global_max_refinements",
+        "1",
+    ]
+    if threads is not None:
+        argv += ["--Mapper.num_threads", str(threads)]
+    return argv
+
+
+def bundle_adjuster_argv(model: Path, output: Path, threads: int | None) -> list[str]:
+    """One final adjustment capped at ten iterations, with calibration held."""
+    argv = [
+        colmap_exe(),
+        "bundle_adjuster",
+        "--input_path",
+        str(model),
+        "--output_path",
+        str(output),
+        "--BundleAdjustment.max_num_iterations",
+        "10",
+        "--BundleAdjustment.refine_focal_length",
+        "0",
+        "--BundleAdjustment.refine_principal_point",
+        "0",
+        "--BundleAdjustment.refine_extra_params",
+        "0",
+    ]
+    if threads is not None:
+        argv += ["--BundleAdjustment.num_threads", str(threads)]
+    return argv
 
 
 def model_aligner_argv(
@@ -776,8 +875,12 @@ def _read_images(path: Path) -> tuple[Image, ...]:
             image_id, *pose, camera_id = struct.unpack("<IdddddddI", handle.read(64))
             name = _read_cstring(handle)
             count = _u64(handle)
-            raw = handle.read(24 * count)
-            ids = np.frombuffer(raw, dtype="<u8").reshape(-1, 3)[:, 2] if count else np.zeros(0)
+            # Count matches without materialising an image's full observation array.
+            matched = 0
+            for start in range(0, count, 65_536):
+                raw = handle.read(24 * min(65_536, count - start))
+                ids = np.frombuffer(raw, dtype="<u8").reshape(-1, 3)[:, 2]
+                matched += int(np.count_nonzero(ids != np.uint64(0xFFFFFFFFFFFFFFFF)))
             out.append(
                 Image(
                     id=image_id,
@@ -787,7 +890,7 @@ def _read_images(path: Path) -> tuple[Image, ...]:
                     camera_id=camera_id,
                     points2d=count,
                     # 2**64-1 is COLMAP's "this observation has no 3D point".
-                    points3d=int(np.count_nonzero(ids != np.uint64(0xFFFFFFFFFFFFFFFF))),
+                    points3d=matched,
                 )
             )
     return tuple(sorted(out, key=lambda image: image.name))
@@ -1087,7 +1190,7 @@ def _read_points3d(path: Path) -> tuple[int, int, float]:
             record = handle.read(43)  # id, xyz, rgb, error
             errors += struct.unpack_from("<d", record, 35)[0]
             length = _u64(handle)
-            handle.read(8 * length)
+            handle.seek(8 * length, 1)
             points += 1
             tracks += length
     return points, tracks, errors

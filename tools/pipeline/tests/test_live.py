@@ -180,8 +180,8 @@ def test_the_watch_thread_runs_beside_the_tool_and_cleans_up(tmp_path: Path) -> 
 def test_the_mapper_argv_asks_for_snapshots_only_when_told_to(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # This checks argv, not an installed COLMAP or a running mapper.
-    monkeypatch.setattr(sfm, "colmap_exe", lambda: "/stand-in/colmap")
+    # This checks argv only; no COLMAP process is launched.
+    monkeypatch.setattr(sfm, "colmap_exe", lambda: "/usr/bin/colmap")
     plain = sfm.mapper_argv(Path("/db"), Path("/i"), Path("/o"))
     assert "--Mapper.snapshot_path" not in plain
     argv = sfm.mapper_argv(
@@ -344,6 +344,9 @@ def train(workdir: Workdir, **params: object) -> None:
         "impl": "gsplat",
         "params": {
             "iterations": 300,
+            "schedule_scale": 1.0,
+            "checkpoint_every": 0,
+            "test_every": 8,
             "trainer": str(STAND_IN),
             "python": sys.executable,
             "extra_args": ["--ckpt-every", "100", "--gaussians", "64"],
@@ -414,6 +417,9 @@ def test_on_a_remote_box_the_snapshot_is_uploaded_under_the_key_its_line_names(
         "gpu": {"tier": "l4"},
         "params": {
             "iterations": 300,
+            "schedule_scale": 1.0,
+            "checkpoint_every": 0,
+            "test_every": 8,
             "trainer": str(STAND_IN),
             "python": sys.executable,
             "extra_args": ["--ckpt-every", "100", "--gaussians", "64"],

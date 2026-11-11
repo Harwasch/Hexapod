@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Any
 
 import numpy as np
 import pytest
@@ -148,3 +149,15 @@ def test_group_counts_cover_every_key_once(budget: int) -> None:
     np.testing.assert_array_equal(got_keys[order], expected)
     np.testing.assert_array_equal(got_counts[order], counts)
     np.testing.assert_array_equal(got_sums[order], np.bincount(inverse, weights=weights))
+
+
+def test_percentile_interpolation_accepts_numpy_22_outputs(monkeypatch: pytest.MonkeyPatch) -> None:
+    add = np.add
+
+    def old_add(*args: Any, **kwargs: Any) -> Any:
+        if kwargs.get("out") is Ellipsis:
+            raise TypeError("return arrays must be of ArrayType")
+        return add(*args, **kwargs)
+
+    monkeypatch.setattr(np, "add", old_add)
+    assert outofcore._lerp(np.float32(1), np.float32(3), 0.75, np.dtype("float32")) == 2.5

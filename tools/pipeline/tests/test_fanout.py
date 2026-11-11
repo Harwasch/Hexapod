@@ -631,3 +631,28 @@ def test_live_tiles_follow_the_block_whose_snapshot_is_shown() -> None:
         )
     tiles = [line for line in sink.lines if "live-tiles:" in line]
     assert len(tiles) == 1 and tiles[0].startswith("[b0]")
+
+
+def test_failed_part_retry_fetches_its_synced_trainer_state_before_replacing_the_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workdir, adapter, runner = setup(tmp_path, ["p0"], parallel=1, preempt=["p0"])
+    original = adapter.submit
+    submitted = 0
+
+    def submit(request: StageRequest) -> RemoteHandle:
+        nonlocal submitted
+        role, _ = fanout_role(request.params)
+        if role == "part":
+            path = tmp_path / "bucket" / request.checkpoint_key / "resume" / "lane" / "state.pt"
+            if submitted == 0:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"synced optimizer state")
+            else:
+                assert path.read_bytes() == b"synced optimizer state"
+            submitted += 1
+        return original(request)
+
+    monkeypatch.setattr(adapter, "submit", submit)
+    run(workdir, runner)
+    assert submitted == 2

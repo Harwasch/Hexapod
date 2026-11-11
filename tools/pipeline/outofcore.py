@@ -40,7 +40,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -386,11 +386,12 @@ def _lerp(a: np.generic, b: np.generic, t: float, dtype: np.dtype[Any]) -> np.ge
     left = np.asarray(a, dtype=dtype)
     right = np.asarray(b, dtype=dtype)
     diff = right - left
-    out = np.add(left, diff * t, out=...)
+    # NumPy 2.2 (the GPU image) requires an actual array; out=... arrived later.
+    out = np.asarray(np.add(left, diff * t))
     np.subtract(
         right, diff * (1 - t), out=out, where=t >= 0.5, casting="unsafe", dtype=type(out.dtype)
     )
-    return out[()]  # type: ignore[no-any-return]
+    return cast("np.generic", out[()])
 
 
 def grouped_percentile(

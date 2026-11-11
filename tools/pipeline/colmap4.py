@@ -150,6 +150,7 @@ def extract_argv(
     max_features: int = 8192,
     first_octave: int | None = None,
     num_threads: int | None = None,
+    existing_camera_id: int | None = None,
 ) -> list[str]:
     """`sfm.feature_extractor_argv`, on 4.2: one camera for the clip, SIFT on the CPU."""
     argv = [
@@ -167,6 +168,8 @@ def extract_argv(
     ]
     if camera_params is not None:
         argv += ["--camera-params", ",".join(f"{v:.10g}" for v in camera_params)]
+    if existing_camera_id is not None:
+        argv += ["--existing-camera-id", str(existing_camera_id)]
     if first_octave is not None:
         argv += ["--first-octave", str(first_octave)]
     if num_threads is not None:
@@ -559,6 +562,8 @@ def _write_priors(pycolmap: Any, parsed: argparse.Namespace) -> int:
 
 def _extraction(pycolmap: Any, parsed: argparse.Namespace) -> tuple[Any, Any]:
     reader = pycolmap.ImageReaderOptions()
+    if getattr(parsed, "existing_camera_id", None) is not None:
+        reader.existing_camera_id = parsed.existing_camera_id
     reader.camera_model = parsed.camera_model
     if parsed.camera_params:
         reader.camera_params = parsed.camera_params
@@ -637,6 +642,7 @@ def _parser() -> argparse.ArgumentParser:
     extract.add_argument("--max-features", type=int, default=8192)
     extract.add_argument("--first-octave", type=int, default=None)
     extract.add_argument("--threads", type=int, default=-1)
+    extract.add_argument("--existing-camera-id", type=int, default=None)
     match = commands.add_parser("match")
     match.add_argument("--database", type=Path, required=True)
     match.add_argument("--matcher", choices=("exhaustive", "sequential", "spatial"))
