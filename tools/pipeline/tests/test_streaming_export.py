@@ -39,17 +39,20 @@ def test_snapshot_reads_bounded_chunks_without_unused_sh(
 
     path = tmp_path / "in.ply"
     write_splat_ply(path, opacity=[float(i) for i in range(9)], log_scale=[0.0] * 9)
+    import live_sample
+
     reads = []
-    original = splat_io.SplatReader.read
+    original = live_sample.iter_ply_rows  # type: ignore[attr-defined]
 
-    def bounded(self: Any, start: int, stop: int, names: Any = None) -> Any:
-        assert stop - start <= 2
-        assert names is not None and not any(n.startswith("f_rest") for n in names)
-        reads.append((start, stop))
-        return original(self, start, stop, names)
+    def bounded(layout: Any, names: Any, chunk_bytes: int) -> Any:
+        assert chunk_bytes <= 2 * layout.dtype.itemsize
+        assert not any(n.startswith("f_rest") for n in names)
+        for start, data in original(layout, names, chunk_bytes):
+            reads.append(start)
+            yield start, data
 
-    monkeypatch.setattr(live, "PREVIEW_CHUNK", 2, raising=False)
-    monkeypatch.setattr(splat_io.SplatReader, "read", bounded)
+    monkeypatch.setattr(live_sample, "WINDOW_ROWS", 2)
+    monkeypatch.setattr(live_sample, "iter_ply_rows", bounded)
     assert live.snapshot_splat(path, tmp_path / "out.spz", max_gaussians=3)[:2] == (3, 9)
     assert len(reads) >= 5
 

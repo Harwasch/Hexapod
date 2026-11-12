@@ -1202,7 +1202,7 @@ including degree 2. The dedicated renderers intentionally keep only SH 0-1 on ha
 | Spark globe overlay                          | 0-3 desktop; 0-1 handheld                                         | `apps/web/src/cesium/scanView/sparkBackend.ts:705`, same `quality.ts` cap                                                                       |
 | Spark gallery (`view.html`)                  | 0-3, no app SH cap                                                | `apps/web/src/view/sparkStream.ts:38` passes SPZ to `SplatMesh`, including its LOD path                                                         |
 | Spark local Worlds PLY/SPZ viewer            | 0-3 for Gaussian splats; ordinary point clouds use vertex colours | `apps/web/src/worlds/reconstruction/LocalSplatViewer.tsx:78`                                                                                    |
-| Spark live training preview                  | Renderer supports 0-3, but snapshots carry only 0                 | `apps/web/src/view/live.ts:299`, `tools/pipeline/live.py:390` deliberately strips SH for previews                                               |
+| Spark live training console                  | Full LOD keeps the PLY's 0-3; history thumbnails carry only 0     | `tools/pipeline/live.py` rotates newest/final tiles via `live_tiles.py`; `apps/web/src/view/sparkStream.ts` streams them                        |
 | CesiumJS                                     | 0-3                                                               | `apps/web/src/cesium/spzDecode.worker.ts:16`, `apps/web/src/lib/splatLayout.ts:41`                                                              |
 | Packer, including parent tiles               | 0-3                                                               | `tools/captures/splat_tiles.py:377` (channel-major conversion), `:658` (3/8/15 glTF attributes)                                                 |
 | Placement rotation                           | 0-3                                                               | `tools/pipeline/harmonics.py` `rotate`; `tests/test_harmonics.py:185` tests degrees 1, 2 and 3 against the colour-preserving definition         |
@@ -1753,3 +1753,12 @@ rendering must be validated in the coordinator's screen smoke run.
 ```bash
 uv run ruff check . && uv run ruff format --check . && uv run mypy . && uv run pytest -q
 ```
+
+Live training keeps the 5% SH-0 thumbnails, selected in bounded PLY row windows with the
+same voxel-rank, contribution-score and input-index ordering. Full SH/LOD is packaged only
+at 25%, 50% and 75% of the training ceiling, plus the final PLY. Each successful tileset
+replaces the previous newest one; the final PLY remains read-only. At 133 MB per set,
+that is approximately **532 MB of tile uploads per run**, plus thumbnails, assuming every
+scheduled set finishes and syncs once. A slow or failed optional pack is skipped; checkpoint
+retries or repeated transfer of unchanged files can add traffic. Local retention is bounded
+separately from cumulative upload traffic.

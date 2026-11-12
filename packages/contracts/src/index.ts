@@ -257,3 +257,15 @@ export type WorkableLeftOut = Schemas["WorkableLeftOut"];
 
 /** A search query embedded with the model scan objects were described with (search by meaning). */
 export type TextEmbedding = Schemas["TextEmbedding"];
+
+export type LiveTrain = Schemas["LiveTrain"];
+export type LiveTrainQuality = Schemas["LiveTrainQuality"];
+export type LiveTrainPlan = Schemas["LiveTrainPlan"];
+export type LiveTrainSeries = Schemas["LiveTrainSeries"];
+export type LiveTrainEval = Schemas["LiveTrainEval"];
+export type LiveTrainEvent = Schemas["LiveTrainEvent"];
+export type LiveTrainSnapshot = Schemas["LiveTrainSnapshot"];
+
+export type LiveTrainSeeds = Schemas["LiveTrainSeeds"];
+export type LiveTrainFinal = Schemas["LiveTrainFinal"];
+export type LiveQualitySeries = Schemas["LiveQualitySeries"];

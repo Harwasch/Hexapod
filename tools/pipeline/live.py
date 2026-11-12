@@ -21,16 +21,20 @@ halves, one on each side of the stage log:
 * `SplatWatch` watches gsplat's `ply/` directory for the intermediate splats asked for by
   `--ply_steps` (512d366b retains `point_cloud_<i>.ply` at step `i` for every listed step,
   scaled by `--steps_scaler`, as well as the final one), keeps the `max_gaussians` with
-  the highest opacity x volume, packs them as SPZ (the packer `splat_tiles.py` already
-  uses for the map, which Spark reads) into `checkpoint/live/`, and logs a `live-splat:`
+  camera-weighted screen contribution, stratified over space, packs them as SPZ (the
+  packer `splat_tiles.py` already uses for the map, which Spark reads) into
+  `checkpoint/live/`, and logs a `live-splat:`
   line naming the object key the checkpoint syncer will upload it under. The full
   intermediate PLY is deleted once it is packed: it is hundreds of megabytes and nothing
-  else reads it, and `training.latest_ply` then only ever sees the final step's.
+  else reads it. The final PLY is packed read-only on exit and left for the stage.
+  A full run keeps nineteen intermediates plus that final snapshot.
+* `emit_seeds` writes the initial SfM and preview-seed points as a bounded binary
+  point cloud. Its source codes also let dense initialization call the same writer.
 
 **In the worker**, `latest` reads the newest of each line back out of a stage log, which
 is how the supervisor copies them onto the running step (`metrics.live`) for the API.
 
-Both lines are single JSON objects on one line. Positions are quantised to int16 against an
+The records are single JSON objects on one line. Positions are quantised to int16 against an
 origin and a scale carried in the line and packed as base64, so the whole cameras line --
 400 cameras and 1,500 points at most -- is about 25 kB: small enough for a log line, and
 for a row in the database.
@@ -43,9 +47,13 @@ import contextlib
 import itertools
 import json
 import math
+import os
 import re
 import shutil
 import struct
+import subprocess
+import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -57,7 +65,8 @@ import numpy as np
 import numpy.typing as npt
 
 import sfm
-from captures_bridge import SplatFormatError, pack_spz, sigmoid
+from captures_bridge import SplatFormatError
+from live_sample import snapshot_splat
 
 __all__ = [
     "CAMERAS_TAG",
@@ -65,33 +74,41 @@ __all__ = [
     "MAX_CAMERAS",
     "MAX_GAUSSIANS",
     "MAX_POINTS",
+    "SEEDS_TAG",
     "SPLAT_TAG",
     "TRAIN_FRACTIONS",
     "MapperWatch",
     "SplatWatch",
     "decode_cameras",
     "emit_model",
+    "emit_seeds",
     "encode_model",
     "latest",
     "parse_line",
     "snapshot_every",
     "snapshot_splat",
     "train_ply_steps",
+    "write_seeds",
 ]
 
 CAMERAS_TAG = "live-cameras: "
 SPLAT_TAG = "live-splat: "
+TILES_TAG = "live-tiles: "
+# Includes interpreter startup. Final packaging has no next-snapshot deadline.
+TILES_TIMEOUT_S = 120.0
+TRAIN_TAG = "live-train: "
+PLAN_TAG = "live-plan: "
+SEEDS_TAG = "live-seeds: "
 #: The directory under a stage's `checkpoint/` that live snapshots are written into.
 LIVE_DIR = "live"
 MAX_CAMERAS = 400
 MAX_POINTS = 1_500
 MAX_GAUSSIANS = 100_000
-#: Where in the schedule an intermediate splat is written, as fractions of it.
-TRAIN_FRACTIONS: tuple[float, ...] = (0.1, 0.25, 0.5, 0.75)
+MAX_SEEDS = 200_000
+#: Nineteen intermediate exports; the trainer's final PLY supplies snapshot twenty.
+TRAIN_FRACTIONS: tuple[float, ...] = tuple(i / 20 for i in range(1, 20))
 #: A line the parser accepts is at most this long, whatever wrote it.
 MAX_LINE = 96_000
-#: SPZ v2 stores positions as 24-bit fixed point with 12 fractional bits: +/-2048.
-_SPZ_LIMIT = 2_000.0
 _INT16 = 32_767.0
 
 Log = Callable[[str], None]
@@ -203,6 +220,11 @@ def encode_model(
     pt_bytes = np.hstack([q_pts.view(np.uint8).reshape(-1, 6), colours.astype(np.uint8)])
     camera = model.cameras[0] if model.cameras else None
     estimate = sfm.camera_up(model)
+    fy = (
+        dict(zip(camera.param_names, camera.params, strict=False)).get("fy", camera.focal_px)
+        if camera
+        else 0.0
+    )
     return {
         "v": 1,
         "seq": next(_SEQ),
@@ -215,6 +237,9 @@ def encode_model(
         "aspect": (
             round(camera.width / camera.height, 4) if camera and camera.height > 0 else None
         ),
+        "fovY": round(math.degrees(2 * math.atan(camera.height / (2 * fy))), 4)
+        if camera and camera.height > 0 and fy > 0
+        else None,
         "cameraCount": len(images),
         "cameras": _b64(cam_bytes.reshape(-1)),
         "pointCount": int(points.shape[0]),
@@ -387,75 +412,20 @@ def ply_indices(live_steps: Iterable[int], steps_scaler: float) -> set[int]:
     return {int(step * steps_scaler) - 1 for step in live_steps if int(step * steps_scaler) > 0}
 
 
-PREVIEW_CHUNK = 65536
-
-
-def snapshot_splat(
-    ply: Path, target: Path, *, max_gaussians: int = MAX_GAUSSIANS
-) -> tuple[int, int, int]:
-    """Select top opacity*volume rows with bounded scratch; never load unused SH.
-
-    Memory is O(chunk + preview count), independent of the full PLY's row count.
-    Equal scores prefer the earlier row. Publish the SPZ only after packing succeeds.
-    """
-    import splat_io
-
-    if max_gaussians < 1:
-        raise ValueError("max_gaussians must be positive")
-    names = (
-        "x",
-        "y",
-        "z",
-        "scale_0",
-        "scale_1",
-        "scale_2",
-        "opacity",
-        "f_dc_0",
-        "f_dc_1",
-        "f_dc_2",
-        "rot_0",
-        "rot_1",
-        "rot_2",
-        "rot_3",
-    )
-    reader = splat_io.SplatReader(ply, chunk=PREVIEW_CHUNK)
-    best = {name: np.empty(0, np.float32) for name in names}
-    scores = np.empty(0, np.float32)
-    indices = np.empty(0, np.int64)
-    for start, data in reader.chunks(names):
-        xyz = np.stack([data[k] for k in ("x", "y", "z")], axis=1)
-        scales = np.stack([data[f"scale_{i}"] for i in range(3)], axis=1)
-        score = sigmoid(data["opacity"]) * np.exp(np.clip(scales.sum(axis=1), -60.0, 60.0))
-        good = (
-            np.isfinite(xyz).all(axis=1)
-            & np.isfinite(score)
-            & np.isfinite(scales).all(axis=1)
-            & (np.abs(xyz) < _SPZ_LIMIT).all(axis=1)
-        )
-        scores = np.concatenate((scores, score[good]))
-        indices = np.concatenate((indices, start + np.flatnonzero(good)))
-        best = {name: np.concatenate((best[name], data[name][good])) for name in names}
-        if len(scores) > max_gaussians:
-            chosen = np.lexsort((indices, -scores))[:max_gaussians]
-            scores, indices = scores[chosen], indices[chosen]
-            best = {name: values[chosen] for name, values in best.items()}
-    order = np.argsort(indices)
-
-    def columns(keys: tuple[str, ...]) -> np.ndarray:
-        return np.stack([best[k][order] for k in keys], axis=1)
-
-    blob = pack_spz(
-        columns(("x", "y", "z")),
-        columns(("f_dc_0", "f_dc_1", "f_dc_2")),
-        best["opacity"][order],
-        columns(("scale_0", "scale_1", "scale_2")),
-        columns(("rot_1", "rot_2", "rot_3", "rot_0")),
-    )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    partial = target.with_name(target.name + ".part")
-    partial.write_bytes(blob)
-    partial.replace(target)
-    return len(indices), reader.count, len(blob)
+def snapshot_cameras(sparse: Path) -> dict[str, Any]:
+    """Read training centres/focal once; old or hand-made datasets may lack a model."""
+    try:
+        model = sfm.read_model(sparse)
+        return {
+            "camera_centres": np.array(
+                [image.centre for image in model.images], dtype=np.float64
+            ).reshape(-1, 3),
+            "focal_px": float(np.median([camera.focal_px for camera in model.cameras]))
+            if model.cameras
+            else 1.0,
+        }
+    except (OSError, ValueError, struct.error):
+        return {}
 
 
 _PLY_STEP = re.compile(r"point_cloud_(\d+)\.ply$")
@@ -471,11 +441,17 @@ class _Pending:
 class SplatWatch:
     """A thread that turns each intermediate PLY into a small SPZ in `checkpoint/live/`.
 
-    `indices` are the file indices to snapshot (`ply_indices`); any other PLY -- the
-    final one above all -- is never touched. A file is packed once its size has held
-    still between two polls (the trainer writes it in one go, but a reader can still
-    land in the middle), and a pack that fails because the file is short is retried.
+    `indices` are the intermediate file indices to snapshot (`ply_indices`). The final
+    PLY is also packed on exit, read-only, for the stage to consume afterward. A file
+    is packed once its size has held still between two polls (the trainer writes it in
+    one go, but a reader can still land in the middle). A short-file failure is retried.
     On exit whatever is still pending is packed, and every intermediate PLY is removed.
+
+    Full SH/LOD tiles are optional: after the thumbnail at 25%, 50%, 75% and final,
+    package only the newest PLY into a staged directory, then rotate `live/tiles/<step>`.
+    A one-thread CPU child uses the existing scan packer and can be killed at the next
+    snapshot deadline.
+    The final read-only pack runs on this watcher too, with a 120-second ceiling.
     """
 
     def __init__(
@@ -488,6 +464,8 @@ class SplatWatch:
         total: int,
         key_prefix: str,
         up: Sequence[float] | None = None,
+        camera_centres: npt.NDArray[np.float64] | None = None,
+        focal_px: float = 1.0,
         max_gaussians: int = MAX_GAUSSIANS,
         poll_s: float = 2.0,
         enabled: bool = True,
@@ -498,17 +476,30 @@ class SplatWatch:
         self._log = log
         self._indices = set(indices)
         self._total = total
+        # The trainer floors both unscaled steps and steps_scaler. Choose the existing
+        # export nearest each quarter, avoiding a second rounding scheme here.
+        self._tile_indices = {
+            min(self._indices, key=lambda i: (abs(i + 1 - total * fraction), i))
+            for fraction in (0.25, 0.5, 0.75)
+            if self._indices
+        }
         self._key_prefix = key_prefix.rstrip("/")
         self._up = None if up is None else [round(float(v), 5) for v in up]
         self._max_gaussians = max_gaussians
+        self._camera_centres = camera_centres
+        self._focal_px = focal_px
         self._poll_s = poll_s
         self._enabled = enabled and bool(self._indices)
         self._now = now
         self._sizes: dict[int, int] = {}
         self._done: set[int] = set()
+        self._final_index: int | None = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        self._started = time.monotonic()
+        self._tiles_seconds = 0.0
+        self._tiles_warned = False
         self.emitted: list[dict[str, Any]] = []
 
     def __enter__(self) -> SplatWatch:
@@ -523,18 +514,30 @@ class SplatWatch:
     def __exit__(self, *_exc: object) -> None:
         if self._thread is not None:
             self._stop.set()
-            self._thread.join(timeout=120.0)
-        if self._enabled:
-            with contextlib.suppress(Exception):
-                self.poll(settled=True)
+            # The final read-only pack also runs on the watcher, after training exits.
+            # Each child has a hard timeout; no unbounded packer can hold this join.
+            self._thread.join()
+
+    def _finish(self) -> None:
+        with contextlib.suppress(Exception):
+            remaining = self._intermediates()
+            # After a crash the newest file is an intermediate, never a final result.
+            if remaining and remaining[-1][0] not in self._indices:
+                self._final_index = remaining[-1][0]
+            self.poll(settled=True)
+            if self._final_index is not None and self._final_index not in self._done:
+                index, path = remaining[-1]
+                self._pack(_Pending(index, path, path.stat().st_size))
         for index, path in self._intermediates():
-            if index in self._indices:
-                path.unlink(missing_ok=True)
+            if index in self._indices and index != self._final_index:
+                with contextlib.suppress(OSError):
+                    path.unlink(missing_ok=True)
 
     def _run(self) -> None:
         while not self._stop.wait(self._poll_s):
             with contextlib.suppress(Exception):  # watching must never fail the stage
                 self.poll()
+        self._finish()
 
     def _intermediates(self) -> list[tuple[int, Path]]:
         found: list[tuple[int, Path]] = []
@@ -546,7 +549,7 @@ class SplatWatch:
         return sorted(found)
 
     def poll(self, *, settled: bool = False) -> bool:
-        """Pack the newest intermediate PLY that is ready. True when one was logged.
+        """Pack every ready intermediate PLY. True when at least one was logged.
 
         `settled` skips the size check: the trainer has exited, so nothing is still
         being written.
@@ -565,19 +568,19 @@ class SplatWatch:
                 self._sizes[index] = size
             if not ready:
                 return False
-            newest = ready[-1]
-            # An older one that was never shown is not worth showing now.
-            for skipped in ready[:-1]:
-                self._done.add(skipped.index)
-                skipped.path.unlink(missing_ok=True)
-            return self._pack(newest)
+            packed = [self._pack(pending) for pending in ready]
+            return any(packed)
 
     def _pack(self, pending: _Pending) -> bool:
         step = pending.index + 1
         name = f"splat_{step:06d}_{int(self._now())}.spz"
         try:
             kept, of, size = snapshot_splat(
-                pending.path, self._live_dir / name, max_gaussians=self._max_gaussians
+                pending.path,
+                self._live_dir / name,
+                max_gaussians=self._max_gaussians,
+                camera_centres=self._camera_centres,
+                focal_px=self._focal_px,
             )
         except (SplatFormatError, OSError, ValueError, KeyError) as error:
             self._sizes.pop(pending.index, None)
@@ -587,10 +590,6 @@ class SplatWatch:
                 self._log(f"live: {pending.path.name} is not a splat this can pack: {error}")
             return False
         self._done.add(pending.index)
-        pending.path.unlink(missing_ok=True)
-        for older in self._live_dir.glob("splat_*.spz"):
-            if older.name != name:
-                older.unlink(missing_ok=True)
         payload = {
             "v": 1,
             "step": step,
@@ -603,7 +602,193 @@ class SplatWatch:
         }
         self._log(SPLAT_TAG + json.dumps(payload, separators=(",", ":")))
         self.emitted.append(payload)
+        self._pack_tiles(pending)
+        if pending.index != self._final_index:
+            pending.path.unlink(missing_ok=True)
         return True
+
+    def _tiles_skip(self, reason: str) -> None:
+        if not self._tiles_warned:
+            self._tiles_warned = True
+            with contextlib.suppress(Exception):
+                self._log(f"live: LOD tiles skipped: {reason}")
+
+    def _tiles_budget(self, pending: _Pending) -> float:
+        if pending.index == self._final_index:
+            return TILES_TIMEOUT_S
+        # Never package a backlog. Keep all small thumbnails, but spend the LOD budget
+        # only on the newest PLY while the trainer is still running.
+        if self._stop.is_set() or any(i > pending.index for i, _ in self._intermediates()):
+            return 0.0
+        elapsed = time.monotonic() - self._started
+        next_index = min((i for i in self._indices if i > pending.index), default=self._total - 1)
+        interval = elapsed * (next_index - pending.index) / (pending.index + 1)
+        return min(TILES_TIMEOUT_S, interval)
+
+    def _convert_tiles(self, pending: _Pending, staged: Path, budget: float) -> dict[str, Any]:
+        command = [
+            sys.executable,
+            str(Path(__file__).with_name("live_tiles.py")),
+            str(pending.path),
+            str(staged),
+        ]
+        deadline = time.monotonic() + budget
+        with subprocess.Popen(  # noqa: S603 - fixed local helper, no shell
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={
+                **os.environ,
+                "OMP_NUM_THREADS": "1",
+                "OPENBLAS_NUM_THREADS": "1",
+                "MKL_NUM_THREADS": "1",
+            },
+        ) as child:
+            try:
+                while True:
+                    remaining = deadline - time.monotonic()
+                    superseded = pending.index != self._final_index and (
+                        self._stop.is_set()
+                        or any(i > pending.index for i, _ in self._intermediates())
+                    )
+                    if remaining <= 0 or superseded:
+                        raise subprocess.TimeoutExpired(command, budget)
+                    try:
+                        stdout, stderr = child.communicate(timeout=min(0.25, remaining))
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
+                if child.returncode:
+                    raise subprocess.CalledProcessError(child.returncode, command, stderr=stderr)
+                stats: dict[str, Any] = json.loads(stdout)
+                return stats
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                child.communicate()
+
+    def _pack_tiles(self, pending: _Pending) -> None:
+        if pending.index != self._final_index and pending.index not in self._tile_indices:
+            return
+        budget = self._tiles_budget(pending)
+        if budget <= 0 or (pending.index != self._final_index and budget <= self._tiles_seconds):
+            self._tiles_skip("pack time exceeds the next snapshot interval")
+            return
+        started = time.monotonic()
+        try:
+            # Beside the PLY, outside checkpoint/: the syncer must never see partial
+            # GLBs or the packer's scratch files. Killing the child cleans both here.
+            with tempfile.TemporaryDirectory(prefix="live-tiles-", dir=self._ply_dir.parent) as tmp:
+                staged = Path(tmp) / "tiles"
+                stats = self._convert_tiles(pending, staged, budget)
+                seconds = time.monotonic() - started
+                step = pending.index + 1
+                payload = {
+                    "v": 1,
+                    "key": f"{self._key_prefix}/tiles/{step}/tileset.json",
+                    "step": step,
+                    "final": pending.index == self._final_index,
+                    **stats,
+                    "seconds": round(seconds, 3),
+                }
+                if not _valid_tiles(payload):
+                    raise ValueError("invalid packer stats")
+                root = self._live_dir / "tiles"
+                root.mkdir(parents=True, exist_ok=True)
+                staged.replace(root / str(step))
+                self._tiles_seconds = seconds
+                for previous in root.iterdir():
+                    if previous.name != str(step) and previous.is_dir():
+                        shutil.rmtree(previous)
+                self._log(TILES_TAG + json.dumps(payload, separators=(",", ":")))
+        except subprocess.TimeoutExpired:
+            self._tiles_seconds = max(self._tiles_seconds, budget)
+            self._tiles_skip("pack time exceeds the next snapshot interval")
+        except Exception as error:
+            self._tiles_skip(type(error).__name__)
+
+
+def write_seeds(
+    xyz: npt.NDArray[Any],
+    rgb: npt.NDArray[Any],
+    directory: Path,
+    log: Log,
+    *,
+    key_prefix: str,
+    source: npt.NDArray[Any] | None = None,
+) -> dict[str, Any] | None:
+    """Write a deterministic 10-byte point preview without touching the trainer's RNG.
+
+    Source codes are 0 SfM, 1 dense, 2 preview seed. Dense initialization can call this
+    same writer after adding its points. Counts describe the full input, not the sample.
+    This optional observation must never interrupt training, including a broken log sink.
+    """
+    try:
+        xyz = np.asarray(xyz, dtype=np.float64)
+        rgb = np.asarray(rgb, dtype=np.uint8)
+        codes = (
+            np.zeros(len(xyz), dtype=np.uint8)
+            if source is None
+            else np.asarray(source, dtype=np.uint8)
+        )
+        if xyz.shape != (len(xyz), 3) or rgb.shape != xyz.shape or codes.shape != (len(xyz),):
+            return None
+        valid = np.isfinite(xyz).all(axis=1) & (codes <= 2)
+        xyz, rgb, codes = xyz[valid], rgb[valid], codes[valid]
+        total = len(xyz)
+        if not total:
+            return None
+        counts = {
+            name: int(np.count_nonzero(codes == i))
+            for i, name in enumerate(("sfm", "dense", "seed"))
+        }
+        origin = (xyz.min(axis=0) + xyz.max(axis=0)) / 2
+        scale = max(float(np.abs(xyz - origin).max()), 1e-9)
+        chosen = np.linspace(0, total - 1, min(total, MAX_SEEDS), dtype=np.int64)
+        packed = np.empty(
+            len(chosen), dtype=[("xyz", "<i2", (3,)), ("rgb", "u1", (3,)), ("source", "u1")]
+        )
+        packed["xyz"] = np.rint((xyz[chosen] - origin) * _INT16 / scale).astype("<i2")
+        packed["rgb"], packed["source"] = rgb[chosen], codes[chosen]
+        directory.mkdir(parents=True, exist_ok=True)
+        partial = directory / "seeds.bin.part"
+        partial.write_bytes(packed.tobytes())
+        partial.replace(directory / "seeds.bin")
+        payload = {
+            "v": 1,
+            "key": f"{key_prefix.rstrip('/')}/seeds.bin",
+            "count": len(chosen),
+            "of": total,
+            "sources": counts,
+            "origin": origin.tolist(),
+            "scale": scale,
+            "bytes": packed.nbytes,
+        }
+        log(SEEDS_TAG + json.dumps(payload, separators=(",", ":"), allow_nan=False))
+        return payload
+    except Exception:
+        return None
+
+
+def emit_seeds(
+    sparse: Path,
+    directory: Path,
+    log: Log,
+    *,
+    key_prefix: str,
+    seeded: int = 0,
+    enabled: bool = True,
+) -> None:
+    """The dataset already contains init_seed's appended points; do not append them twice."""
+    if not enabled:
+        return
+    with contextlib.suppress(Exception):
+        points = sfm.read_points3d(sparse / "points3D.bin")
+        source = np.zeros(len(points), dtype=np.uint8)
+        if seeded:
+            source[-seeded:] = 2
+        write_seeds(points.xyz, points.rgb, directory, log, key_prefix=key_prefix, source=source)
 
 
 # --- reading the lines back ---------------------------------------------------------
@@ -656,9 +841,152 @@ def _valid_splat(payload: Mapping[str, Any]) -> bool:
     )
 
 
+def _valid_tiles(payload: Mapping[str, Any]) -> bool:
+    key = payload.get("key")
+    return (
+        payload.get("v") == 1
+        and isinstance(key, str)
+        and len(key) <= 512
+        and key.startswith("runs/")
+        and _count(payload.get("step"))
+        and re.search(
+            rf"/checkpoint(?:-a[1-9][0-9]*)?/{LIVE_DIR}/tiles/{payload.get('step')}/tileset\.json$",
+            key,
+        )
+        is not None
+        and ".." not in key
+        and "\\" not in key
+        and "%" not in key
+        and "//" not in key
+        and isinstance(payload.get("final"), bool)
+        and all(_count(payload.get(k)) for k in ("step", "gaussians", "tiles", "bytes"))
+        and _optional_number(payload.get("seconds"))
+        and payload.get("seconds") is not None
+        and payload["seconds"] >= 0
+        and len(json.dumps(payload)) < 1024
+        and _finite_tree(payload)
+    )
+
+
+def _valid_seeds(payload: Mapping[str, Any]) -> bool:
+    key, sources = payload.get("key"), payload.get("sources")
+    return (
+        payload.get("v") == 1
+        and isinstance(key, str)
+        and len(key) <= 512
+        and key.startswith("runs/")
+        and f"/checkpoint/{LIVE_DIR}/" in key
+        and key.endswith("/seeds.bin")
+        and ".." not in key
+        and _count(payload.get("count"))
+        and payload["count"] <= MAX_SEEDS
+        and _count(payload.get("of"))
+        and payload["of"] >= payload["count"]
+        and payload.get("bytes") == payload["count"] * 10
+        and _floats(payload.get("origin"), 3)
+        and isinstance(payload.get("scale"), int | float)
+        and math.isfinite(payload["scale"])
+        and payload["scale"] > 0
+        and isinstance(sources, dict)
+        and all(_count(sources.get(k)) for k in ("sfm", "dense", "seed"))
+        and sum(sources[k] for k in ("sfm", "dense", "seed")) == payload["of"]
+    )
+
+
+def _finite_tree(value: Any) -> bool:
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, dict):
+        return all(_finite_tree(item) for item in value.values())
+    if isinstance(value, list):
+        return all(_finite_tree(item) for item in value)
+    return True
+
+
+def _optional_number(value: Any) -> bool:
+    return value is None or (
+        isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+    )
+
+
+def _valid_rule(value: Any) -> bool:
+    return value is None or (
+        isinstance(value, dict)
+        and _count(value.get("every"))
+        and value["every"] > 0
+        and _count(value.get("window"))
+        and value["window"] > 0
+        and _optional_number(value.get("minGainDb"))
+        and value.get("minGainDb") is not None
+        and value["minGainDb"] >= 0
+    )
+
+
+def _valid_train(payload: Mapping[str, Any]) -> bool:
+    kind = payload.get("k")
+    if payload.get("v") != 1 or kind not in ("s", "e", "p", "r", "x"):
+        return False
+    if kind != "p" and not _count(payload.get("step")):
+        return False
+    if any(
+        payload.get(key) is not None and not isinstance(payload[key], str)
+        for key in ("run", "block", "decision")
+    ):
+        return False
+    if kind == "s":
+        loss = payload.get("loss")
+        if loss is not None and (
+            not isinstance(loss, dict) or not all(_optional_number(v) for v in loss.values())
+        ):
+            return False
+    counts = (
+        "gs",
+        "sh",
+        "count",
+        "maxSteps",
+        "refineStart",
+        "refineStop",
+        "refineEvery",
+        "capMax",
+        "shDegree",
+        "shInterval",
+    )
+    return (
+        all(payload.get(key) is None or _count(payload[key]) for key in counts)
+        and all(
+            _optional_number(payload.get(key)) for key in ("t", "lr", "its", "mem", "psnr", "gain")
+        )
+        and _valid_rule(payload.get("rule"))
+        and len(json.dumps(payload)) < 1024
+        and _finite_tree(payload)
+    )
+
+
+def _valid_plan(payload: Mapping[str, Any]) -> bool:
+    return (
+        payload.get("v") == 1
+        and _count(payload.get("stepsMax"))
+        and all(
+            payload.get(key) is None or _count(payload[key])
+            for key in ("cap", "refineStop", "blocks", "frames", "sparse", "attempt")
+        )
+        and all(
+            _optional_number(payload.get(key))
+            for key in ("scheduleFactor", "cardGb", "usdPerHour", "metresPerUnit")
+        )
+        and _valid_rule(payload.get("rule"))
+        and len(json.dumps(payload)) < 2048
+        and _finite_tree(payload)
+    )
+
+
 _TAGS: tuple[tuple[str, str, Callable[[Mapping[str, Any]], bool]], ...] = (
+    ("seeds", SEEDS_TAG, _valid_seeds),
     ("cameras", CAMERAS_TAG, _valid_cameras),
     ("splat", SPLAT_TAG, _valid_splat),
+    ("tiles", TILES_TAG, _valid_tiles),
+    ("train", TRAIN_TAG, _valid_train),
+    ("plan", PLAN_TAG, _valid_plan),
 )
 
 
@@ -671,7 +999,7 @@ def _decode(text: str) -> dict[str, Any] | None:
 
 
 def parse_line(line: str, following: Sequence[str] = ()) -> tuple[str, dict[str, Any]] | None:
-    """(`cameras` or `splat`, payload) for a live line, or None.
+    """(kind, payload) for cameras, splats, training or a run plan; None if invalid.
 
     A provider's log service may split one long line across entries, which the tail
     turns into consecutive lines; when a tagged line does not parse by itself, the lines
@@ -720,3 +1048,16 @@ def decode_cameras(
     origin = np.asarray(payload["origin"], dtype=np.float64)
     centres = origin + q / _INT16 * float(payload["scale"])
     return centres, d[:, :3], d[:, 3:]
+
+
+def records(text: str) -> list[tuple[str, dict[str, Any]]]:
+    """Every valid live record in log order, including all training and snapshot lines."""
+    lines = text.splitlines()
+    result = []
+    for index, line in enumerate(lines):
+        if "live-" not in line:
+            continue
+        parsed = parse_line(line, lines[index + 1 : index + 8])
+        if parsed is not None:
+            result.append(parsed)
+    return result

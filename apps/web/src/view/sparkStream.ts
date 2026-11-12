@@ -4,15 +4,17 @@
  * tileset the same way.
  */
 
-import { SplatFileType, SplatMesh } from "@sparkjsdev/spark";
+import { fetchSplatResource } from "@/lib/splatFetch";
+import { type SparkRenderer, SplatFileType, SplatMesh } from "@sparkjsdev/spark";
 import * as THREE from "three";
 
-import { isHandheld } from "@/lib/detail";
+import { tileUrl } from "@/lib/tileProxy";
+import { deviceSplatBudget, isHandheld } from "@/lib/detail";
 import { maxShDegree } from "@/lib/shDegree";
 
 import { spzFromGlb } from "./glb";
 import { TileStreamer, type View } from "./stream";
-import { LOAD_FACTOR, type TileNode, type TileTree } from "./tiles";
+import { LOAD_FACTOR, parseTileset, planAdditive, type TileNode, type TileTree } from "./tiles";
 
 /**
  * One tile as a Spark mesh: the SPZ inside the tile's GLB, handed over as it is, with Spark's
@@ -33,9 +35,12 @@ export async function loadSplatTile(
   tile: TileNode,
   options: { lod?: boolean; extSplats?: boolean; signal?: AbortSignal } = {},
 ): Promise<{ mesh: SplatMesh; bytes: Uint8Array }> {
-  const response = await fetch(new URL(tile.uri, new URL(tilesetUrl, location.href)).toString(), {
-    signal: options.signal,
-  });
+  const response = await fetchSplatResource(
+    new URL(tile.uri, new URL(tilesetUrl, location.href)).toString(),
+    {
+      signal: options.signal,
+    },
+  );
   if (!response.ok) throw new Error(`The scan's data answered ${String(response.status)}.`);
   const bytes = spzFromGlb(await response.arrayBuffer());
   const mesh = new SplatMesh({
@@ -44,7 +49,12 @@ export async function loadSplatTile(
     lod: options.lod ?? true,
     extSplats: options.extSplats ?? true,
   });
-  await mesh.initialized;
+  try {
+    await mesh.initialized;
+  } catch (error) {
+    mesh.dispose();
+    throw error;
+  }
   const cap = maxShDegree(isHandheld());
   if (mesh.maxSh > cap) {
     mesh.maxSh = cap;
@@ -55,6 +65,7 @@ export async function loadSplatTile(
 }
 
 export interface Streaming {
+  readonly settled: boolean;
   /** Once a frame, before rendering: re-plans when the camera moved or a tile arrived. */
   frame(): void;
   stop(): void;
@@ -92,6 +103,8 @@ export function streamWithView(
   report: (drawn: { tiles: TileNode[]; gaussians: number }) => void,
   /** How a tile becomes a mesh, when the page wants more than the mesh (its splat centres). */
   loadMesh?: (tile: TileNode) => Promise<SplatMesh>,
+  fullResolution = false,
+  projectionFromMatrix = false,
 ): Streaming {
   const streamer = new TileStreamer<SplatMesh>(
     tileset.tree,
@@ -104,8 +117,11 @@ export function streamWithView(
       failed: (tile) => console.warn(`Tile ${tile.uri} did not load; its parent stays.`),
     },
     {
-      budget: Math.min(budget * LOAD_FACTOR, MAX_STREAMED),
-      cacheBudget: Math.min(budget * LOAD_FACTOR, MAX_STREAMED) * CACHE_FACTOR,
+      budget: fullResolution ? Infinity : Math.min(budget * LOAD_FACTOR, MAX_STREAMED),
+      ...(fullResolution ? { targetErrorPx: -Infinity } : {}),
+      cacheBudget: fullResolution
+        ? Infinity
+        : Math.min(budget * LOAD_FACTOR, MAX_STREAMED) * CACHE_FACTOR,
       concurrency: FETCHES_AT_ONCE,
     },
   );
@@ -132,7 +148,9 @@ export function streamWithView(
     const height = renderer.domElement.clientHeight || window.innerHeight;
     return {
       eye: [eye.x, eye.y, eye.z],
-      projection: height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))),
+      projection: projectionFromMatrix
+        ? (height * (camera.projectionMatrix.elements[5] ?? 1)) / 2
+        : height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))),
       visible: (bounds) => {
         sphere.center.set(...bounds.center).applyMatrix4(scan.matrixWorld);
         sphere.radius = bounds.radius;
@@ -141,6 +159,9 @@ export function streamWithView(
     };
   };
   return {
+    get settled() {
+      return !arrived && streamer.settled;
+    },
     frame: () => {
       const now = performance.now();
       const moved = !lastPose.equals(camera.matrixWorld);
@@ -153,5 +174,150 @@ export function streamWithView(
       }
     },
     stop: () => streamer.stop(),
+  };
+}
+
+/** Explicit Spark defaults, shared with training runs that use gsplat's AA filter. */
+export function splatAntialiasing(antialiased?: boolean | null): {
+  preBlurAmount: number;
+  blurAmount: number;
+} {
+  return antialiased === false
+    ? { preBlurAmount: 0.3, blurAmount: 0 }
+    : { preBlurAmount: 0, blurAmount: 0.3 };
+}
+
+export async function fetchSplatTileset(
+  source: string,
+  signal?: AbortSignal,
+): Promise<{ url: string; tree: TileTree }> {
+  const url = await tileUrl(source);
+  const response = await fetchSplatResource(url, { signal });
+  if (!response.ok) throw new Error(`The tileset answered ${String(response.status)}.`);
+  return { url, tree: parseTileset(await response.json()) };
+}
+
+/**
+ * One scan's loading lifecycle, shared by the gallery and training console. The parent
+ * group owns the coordinate frame. parseTileset deliberately removes the root's ECEF
+ * placement; decoded SPZ positions retain the input PLY frame, plus child offsets.
+ * The gallery turns ENU z-up to y-up; a solve-local caller attaches directly to its frame.
+ */
+export function openScanStream(
+  source: string | { url: string; tree: TileTree },
+  scan: THREE.Group,
+  camera: THREE.PerspectiveCamera,
+  renderer: THREE.WebGLRenderer,
+  spark: SparkRenderer,
+  display: {
+    /** Diagnostic only: all leaves, no tile budget or per-mesh LOD. */
+    fullResolution?: boolean;
+    /** Exact diagnostic intrinsics; ordinary scans retain their FOV-based LOD policy. */
+    projectionFromMatrix?: boolean;
+    show?: (tile: TileNode, mesh: SplatMesh) => void;
+    hide?: (tile: TileNode, mesh: SplatMesh) => void;
+    report?: (drawn: { tiles: TileNode[]; gaussians: number }) => void;
+    load?: (url: string, tile: TileNode, signal: AbortSignal) => Promise<SplatMesh>;
+  } = {},
+): Streaming & {
+  ready: Promise<{ tileset: { url: string; tree: TileTree }; mesh: SplatMesh }>;
+} {
+  const abort = new AbortController();
+  const budget = spark.lodSplatCount ?? deviceSplatBudget();
+  let stopped = false;
+  let complete = false;
+  let streaming: Streaming | null = null;
+  const additive = new Map<TileNode, SplatMesh>();
+  const show = (tile: TileNode, mesh: SplatMesh): void => {
+    scan.add(mesh);
+    display.show?.(tile, mesh);
+  };
+  const hide = (tile: TileNode, mesh: SplatMesh): void => {
+    scan.remove(mesh);
+    display.hide?.(tile, mesh);
+  };
+  const report = (tiles: TileNode[]): void =>
+    display.report?.({
+      tiles,
+      gaussians: tiles.reduce(
+        (sum, tile) => sum + (Number.isFinite(tile.gaussians) ? tile.gaussians : 0),
+        0,
+      ),
+    });
+  const ready = (async () => {
+    const tileset =
+      typeof source === "string" ? await fetchSplatTileset(source, abort.signal) : source;
+    const load = async (tile: TileNode): Promise<SplatMesh> => {
+      const mesh = display.load
+        ? await display.load(tileset.url, tile, abort.signal)
+        : (
+            await loadSplatTile(tileset.url, tile, {
+              signal: abort.signal,
+              lod: !display.fullResolution,
+            })
+          ).mesh;
+      if (stopped) {
+        mesh.dispose();
+        throw new DOMException("Scan closed", "AbortError");
+      }
+      return mesh;
+    };
+    const root = tileset.tree.root;
+    const mesh = await load(root);
+    show(root, mesh);
+    report([root]);
+    if (tileset.tree.refine === "REPLACE") {
+      streaming = streamWithView(
+        tileset,
+        scan,
+        camera,
+        renderer,
+        budget,
+        { root, mesh },
+        { show, hide },
+        (drawn) => display.report?.(drawn),
+        load,
+        display.fullResolution,
+        display.projectionFromMatrix,
+      );
+    } else {
+      additive.set(root, mesh);
+      const [, ...rest] = planAdditive(
+        tileset.tree,
+        display.fullResolution ? Infinity : budget * LOAD_FACTOR,
+      );
+      void (async () => {
+        for (const step of rest) {
+          for (const tile of step.add) {
+            if (stopped) return;
+            const more = await load(tile);
+            additive.set(tile, more);
+            show(tile, more);
+          }
+          report([...additive.keys()]);
+        }
+        complete = true;
+      })().catch(() => {
+        /* Keep the loaded overview if a later ADD tile fails. */
+      });
+    }
+    return { tileset, mesh };
+  })();
+  return {
+    get settled() {
+      return streaming?.settled ?? complete;
+    },
+    ready,
+    frame: () => streaming?.frame(),
+    stop: () => {
+      stopped = true;
+      abort.abort();
+      streaming?.stop();
+      for (const [tile, mesh] of additive) {
+        hide(tile, mesh);
+        mesh.dispose();
+      }
+      additive.clear();
+    },
   };
 }

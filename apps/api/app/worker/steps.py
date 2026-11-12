@@ -10,6 +10,7 @@ run for hours.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -19,7 +20,10 @@ from sqlalchemy.orm import Session
 
 from app.models import Artifact, JobStep
 from app.models.enums import RunStatus
+from app.services.live_train import merge_live
 from app.worker.outputs import UploadedArtifact
+
+logger = logging.getLogger(__name__)
 
 #: The step metric that says a stage was interrupted by its worker shutting down, so the
 #: next worker resumes it at the same attempt (`JobSupervisor._attempts`). `start_step`
@@ -126,7 +130,13 @@ def report_progress(db: Session, step: JobStep, progress: dict[str, Any]) -> boo
 MAX_LIVE_BYTES = 96_000
 
 
-def report_live(db: Session, step: JobStep, live: dict[str, Any]) -> bool:
+def report_live(
+    db: Session,
+    step: JobStep,
+    live: dict[str, Any],
+    *,
+    records: list[tuple[str, dict[str, Any]]] | None = None,
+) -> bool:
     """Record the newest live-viewer state a running stage has logged. True when it changed.
 
     `live` holds `cameras` (registered cameras and a point sample, from the pose stage)
@@ -140,9 +150,21 @@ def report_live(db: Session, step: JobStep, live: dict[str, Any]) -> bool:
     cameras = live.get("cameras")
     if cameras is not None and len(json.dumps(cameras)) > MAX_LIVE_BYTES:
         live = {key: value for key, value in live.items() if key != "cameras"}
+    if records is not None:
+        records = [
+            (kind, payload)
+            for kind, payload in records
+            if kind != "cameras" or len(json.dumps(payload)) <= MAX_LIVE_BYTES
+        ]
     current = (step.metrics or {}).get("live") or {}
-    merged = {**current, **live}
-    if not live or merged == current:
+    try:
+        merged = merge_live(current, records) if records is not None else {**current, **live}
+    except Exception:
+        logger.warning(
+            "Could not merge live observations for stage %s", step.stage_id, exc_info=True
+        )
+        return False
+    if merged == current:
         return False
     step.metrics = {**(step.metrics or {}), "live": merged}
     db.commit()
