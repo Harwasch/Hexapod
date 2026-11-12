@@ -1,9 +1,11 @@
 """Best-effort observations of the trainer, isolated from its numerical work.
 
-CPython 3.10, stdlib only. The means optimizer supplies a tick without replacing the
-loop; its original call and return are preserved. The writer supplies the loop-local
-losses (v1.5.3 simple_trainer.py:739-747). No tensors are sampled, no RNG is touched,
-and every observation is guarded independently of the training call it surrounds.
+CPython 3.10; optional NumPy only for the sampled CPU PSNR. The means optimizer
+supplies a tick without replacing the loop; its original call and return are preserved.
+The writer supplies the loop-local
+losses (v1.5.3 simple_trainer.py:739-747). No RNG is touched. With no holdout,
+a bounded view of the existing render supplies a sampled CPU PSNR; it never
+retains tensors or adds a render. Every observation is independently guarded.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import json
 import math
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -137,6 +140,14 @@ def _install(runner: Any, cfg: Any, timing: Any, state: Any) -> None:
                 def add_scalar(tag: str, value: Any, *a: Any, **kw: Any) -> Any:
                     result = scalar(tag, value, *a, **kw)
                     with contextlib.suppress(Exception):
+                        if (
+                            tag == "train/loss"
+                            and getattr(cfg, "test_every", 8) == 0
+                            and step % EVERY == 0
+                        ):
+                            psnr = sampled_train_psnr(sys._getframe(1).f_locals)
+                            if psnr is not None:
+                                send("e", step=step + 1, psnr=psnr, split="train")
                         if tag.startswith("train/") and "loss" in tag:
                             key = tag[6:].replace("loss", "") or "total"
                             # Bounded by the transport, while preserving component names.
@@ -187,7 +198,7 @@ def _install(runner: Any, cfg: Any, timing: Any, state: Any) -> None:
             return original_eval(self, index, stage)
         finally:
             with contextlib.suppress(Exception):
-                if stage == "val":
+                if stage == "val" and getattr(cfg, "test_every", 8) != 0:
                     psnr = None
                     with contextlib.suppress(Exception):
                         path = Path(getattr(self, "stats_dir", "")) / f"val_step{index:04d}.json"
@@ -208,3 +219,34 @@ def _install(runner: Any, cfg: Any, timing: Any, state: Any) -> None:
     runner.train = train
     if callable(original_eval):
         runner.eval = evaluate
+
+
+def sampled_train_psnr(local: dict[str, Any]) -> float | None:
+    """CPU PSNR on <=1024 pixels of the already-rendered training batch.
+
+    No extra render, evaluation, backward pass, or RNG. Strided tensor views are
+    copied to CPU before arithmetic; never retain the loop's tensors. This is a
+    sampled training diagnostic, not a held-out or whole-image quality score.
+    Missing loop locals on another trainer version simply omit the observation.
+    """
+    try:
+        import numpy as np
+
+        colors, pixels = local["colors"], local["pixels"]
+        if colors.shape != pixels.shape or len(colors.shape) != 4 or colors.shape[-1] != 3:
+            return None
+        # Bound the batch too: one existing view supplies the diagnostic.
+        height, width = colors.shape[1:3]
+        stride_y, stride_x = max(1, math.ceil(height / 32)), max(1, math.ceil(width / 32))
+
+        def cpu(value: Any) -> Any:
+            value = value[:1, ::stride_y, ::stride_x, :]
+            if hasattr(value, "detach"):
+                value = value.detach().cpu().numpy()
+            return np.asarray(value, dtype=np.float64)
+
+        a, b = cpu(colors), cpu(pixels)
+        mse = float(np.mean((a - b) ** 2))
+        return number(-10 * math.log10(mse)) if mse > 0 else None
+    except Exception:
+        return None

@@ -19,7 +19,7 @@ import train_telemetry
 
 
 def test_loop_records_scaled_plan_samples_evaluations_and_stop(tmp_path: Path) -> None:
-    workdir, _ = run(tmp_path, converge_params(extra_args=["--plateau-at", "0.84"]))
+    workdir, _ = run(tmp_path, converge_params(live=True, extra_args=["--plateau-at", "0.84"]))
     text = workdir.log_path("train").read_text()
     records = live.records(text)
     points = [p for kind, p in records if kind == "train"]
@@ -189,3 +189,35 @@ def test_plan_metric_scale_and_adapter_rate_are_explicit(tmp_path: Path) -> None
         ctx, budget=None, cap=None, steps=300, factor=1, scaler=0.01, strategy="mcmc", rule=None
     )
     assert live.latest(lines[-1])["plan"]["metresPerUnit"] is None
+
+
+def test_all_frame_training_reports_sampled_train_psnr_without_evaluation(tmp_path: Path) -> None:
+    work, _ = run(tmp_path, converge_params(live=True, test_every=0))
+    records = live.records(work.log_path("train").read_text())
+    evaluated = [v for k, v in records if k == "train" and v["k"] == "e"]
+    assert evaluated and all(v["split"] == "train" for v in evaluated)
+    assert all(v["psnr"] == pytest.approx(20) for v in evaluated)
+    assert not list((work.work_dir("train") / "gsplat" / "stats").glob("val_*.json"))
+
+
+def test_sampled_psnr_bounds_pixels_and_omits_missing_or_nonfinite_data() -> None:
+    import numpy as np
+
+    class CPUView:
+        def __init__(self, shape: tuple[int, ...]) -> None:
+            self.shape = shape
+
+        def __getitem__(self, slices: tuple[slice, ...]) -> np.ndarray:
+            rows = [len(range(*s.indices(n))) for s, n in zip(slices, self.shape, strict=True)]
+            assert rows[0] == 1 and rows[1] * rows[2] <= 1024
+            return np.ones(rows)
+
+    view = CPUView((4, 1920, 1080, 3))
+    assert train_telemetry.sampled_train_psnr({"colors": view, "pixels": view}) is None
+    assert train_telemetry.sampled_train_psnr({}) is None
+    assert (
+        train_telemetry.sampled_train_psnr(
+            {"colors": np.full((1, 1, 1, 3), np.nan), "pixels": np.zeros((1, 1, 1, 3))}
+        )
+        is None
+    )

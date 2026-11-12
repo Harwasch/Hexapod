@@ -12,6 +12,7 @@ import {
   finalReadouts,
   isNewAttempt,
   qualityReadouts,
+  psnrLabel,
   chartDomain,
   chartPoints,
   ceilingText,
@@ -423,4 +424,14 @@ describe("tiles versus history thumbnails", () => {
   it("never pretends a published ENU scan is in the solve frame", () => {
     expect(tilesAt({ ...full, tiles: { ...tiles, frame: "enu" } }, null)).toBeNull();
   });
+});
+
+it("labels sampled train PSNR separately from held-out measurements", () => {
+  expect(psnrLabel(null)).toBe("Held-out PSNR");
+  expect(psnrLabel({ ...train, evals: [{ step: 1, psnr: 20, split: "train" }] })).toBe(
+    "Sampled train PSNR",
+  );
+  expect(psnrLabel({ ...train, evals: [{ step: 1, psnr: 25, split: "val" }] })).toBe(
+    "Held-out PSNR",
+  );
 });

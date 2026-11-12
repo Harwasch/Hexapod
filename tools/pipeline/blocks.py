@@ -1471,6 +1471,7 @@ def _train_block(
         script=Path(settings.params.get("block_trainer_script") or BLOCK_TRAINER),
         rule=settings.rule if extra_evals else None,
         ring=ring_path,
+        live=settings.live,
     )
     boundary = argv.index("--")
     argv[boundary:boundary] = [
@@ -1608,12 +1609,15 @@ def trainer_argv(
     script: Path,
     rule: convergence.Rule | None,
     ring: Path | None,
+    live: bool = True,
 ) -> list[str]:
     """`gsplat_argv`'s command run through `block_trainer.py`, as `training.converge_argv`
     runs it through `converge_trainer.py`: the wrapper's own options, `--`, then the
     trainer's argv unchanged."""
     python, trainer, *rest = argv
     own = [python, str(script), "--trainer", trainer]
+    if not live:
+        own.append("--no-live")
     if rule is not None:
         own += [
             "--converge",

@@ -178,6 +178,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--trainer", type=Path, default=None)
     parser.add_argument("--converge", action="store_true")
+    parser.add_argument("--no-live", action="store_true")
     parser.add_argument("--min-steps", type=int, default=0)
     parser.add_argument("--every", type=int, default=convergence.DEFAULT_EVERY)
     parser.add_argument("--window", type=int, default=convergence.DEFAULT_WINDOW)
@@ -247,6 +248,7 @@ def main(argv: list[str] | None = None) -> int:
                     state.reason = "hooked"
             # The timing, and no eval renders (converge_trainer.py says why), whether or
             # not the rule is on: the merged splat's `--ckpt` evaluation comes here too.
+            cfg.live_enabled = not options.no_live
             converge_trainer.instrument(module, runner, timing, cfg, state)
             return real_cli(fn, cfg, verbose=verbose)
 

@@ -831,7 +831,7 @@ def _valid_splat(payload: Mapping[str, Any]) -> bool:
         and isinstance(key, str)
         and len(key) <= 512
         and key.startswith("runs/")
-        and f"/checkpoint/{LIVE_DIR}/" in key
+        and re.search(rf"/checkpoint(?:-a[1-9][0-9]*)?/{LIVE_DIR}/", key) is not None
         and key.endswith(".spz")
         and ".." not in key
         and _count(payload.get("step"))
@@ -875,7 +875,7 @@ def _valid_seeds(payload: Mapping[str, Any]) -> bool:
         and isinstance(key, str)
         and len(key) <= 512
         and key.startswith("runs/")
-        and f"/checkpoint/{LIVE_DIR}/" in key
+        and re.search(rf"/checkpoint(?:-a[1-9][0-9]*)?/{LIVE_DIR}/", key) is not None
         and key.endswith("/seeds.bin")
         and ".." not in key
         and _count(payload.get("count"))
@@ -925,6 +925,8 @@ def _valid_rule(value: Any) -> bool:
 def _valid_train(payload: Mapping[str, Any]) -> bool:
     kind = payload.get("k")
     if payload.get("v") != 1 or kind not in ("s", "e", "p", "r", "x"):
+        return False
+    if payload.get("split") not in (None, "val", "train"):
         return False
     if kind != "p" and not _count(payload.get("step")):
         return False

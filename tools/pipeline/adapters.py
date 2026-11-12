@@ -523,8 +523,11 @@ class SubprocessAdapter:
             self._sync(request, checkpoint)
 
     def _sync(self, request: StageRequest, checkpoint: Path) -> None:
-        if checkpoint.is_dir() and any(checkpoint.iterdir()):
-            self._transfer.put(request.checkpoint_key, checkpoint)
+        # Share the container sync: ignore .part files and pin atomically replaced
+        # telemetry/snapshots before walking them. A watcher can rotate during a copy.
+        from remote import _sync_quietly
+
+        _sync_quietly(request, self._transfer, checkpoint)
 
     def _result(self, run: _Process) -> Poll:
         metrics: Mapping[str, MetricValue] | None = None

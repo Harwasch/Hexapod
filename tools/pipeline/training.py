@@ -670,6 +670,7 @@ def converge_argv(
     min_gain_db: float,
     enabled: bool = True,
     min_steps: int = 0,
+    live: bool = True,
 ) -> list[str]:
     """`gsplat_argv`'s command, run through `converge_trainer.py` instead of directly.
 
@@ -690,6 +691,7 @@ def converge_argv(
         "--min-gain-db",
         f"{min_gain_db:g}",
         *([] if enabled else ["--no-converge"]),
+        *([] if live else ["--no-live"]),
         "--min-steps",
         str(min_steps),
         "--",

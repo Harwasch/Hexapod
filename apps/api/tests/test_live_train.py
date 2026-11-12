@@ -592,6 +592,15 @@ def test_finished_job_resolves_its_own_published_epoch_and_marks_enu() -> None:
     assert state.train.tiles.frame == "enu" and state.train.tiles.final
     assert state.train.plan is not None and state.train.plan.antialiased is True
     assert state.site_id == capture.site_id
+    step.metrics["live"]["train"]["tiles"] = {
+        "url": "https://tiles.example/intermediate.json",
+        "step": 100,
+        "final": False,
+    }
+    completed = _state(db, NullStorage(), job, capture)
+    assert completed.train is not None and completed.train.tiles is not None
+    assert completed.train.tiles.url == asset.source["url"]
+    step.metrics["live"]["train"]["tiles"] = None
     db.scalars.return_value.all.return_value = []
     legacy = _state(db, NullStorage(), job, capture)
     assert legacy.train is not None and legacy.train.tiles is not None

@@ -12,7 +12,7 @@ import json
 import subprocess
 import sys
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -169,6 +169,7 @@ class StageContext:
     #: Also write each log line to stdout. Set on a remote machine, where stdout is what
     #: the provider's log tail reads, so a line reaches the worker while the stage runs.
     echo: bool = False
+    _observe_log: Callable[[str], None] | None = field(default=None, repr=False, compare=False)
 
     @property
     def inputs(self) -> Mapping[str, Path]:
@@ -226,6 +227,8 @@ class StageContext:
         line = message.rstrip("\n") + "\n"
         with self.log_path.open("a", encoding="utf-8") as handle:
             handle.write(line)
+        if self._observe_log is not None:
+            self._observe_log(message)
         if self.echo:
             sys.stdout.write(line)
             sys.stdout.flush()

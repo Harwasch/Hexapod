@@ -104,6 +104,7 @@ from app.worker.config import WorkerConfig
 from app.worker.events import Event
 from app.worker.pipeline_bridge import (
     CALL_BOOK,
+    LIVE_PAYLOAD_NAME,
     PIPELINE_DIR,
     SITE_CONTEXT,
     ArtifactRef,
@@ -119,6 +120,7 @@ from app.worker.pipeline_bridge import (
     latest_progress,
     live_records,
     plan_recipe,
+    read_live_payload,
     run_cost,
     tail_of,
 )
@@ -1146,7 +1148,16 @@ class JobSupervisor:
             steps.report_progress(db, step, found.to_dict())
         # What the live viewer draws: the newest cameras and intermediate splat the stage
         # has logged (`tools/pipeline/live.py`), under `metrics.live`.
-        records = live_records(text)
+        records = read_live_payload(
+            Workdir(workdir_root).work_dir(step.stage_id) / LIVE_PAYLOAD_NAME
+        )
+        if not records:
+            # Local training writes the same journal under checkpoint/live.
+            records = read_live_payload(
+                Workdir(workdir_root).checkpoint_dir(step.stage_id) / "live" / "telemetry.json"
+            )
+        if not records:
+            records = live_records(text)
         if records:
             steps.report_live(db, step, {}, records=records)
 

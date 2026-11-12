@@ -89,6 +89,8 @@ from executor import RunResult, execute  # noqa: E402
 from harmonics import check_degree as check_sh_degree  # noqa: E402
 from live import latest as latest_live  # noqa: E402
 from live import records as live_records  # noqa: E402
+from live_payload import LOCAL_NAME as LIVE_PAYLOAD_NAME  # noqa: E402
+from live_payload import read as read_live_payload  # noqa: E402
 from modal_adapter import ModalAdapter  # noqa: E402
 from plan import Plan, PlannedStage, plan_recipe  # noqa: E402
 from progress import latest as latest_progress  # noqa: E402
@@ -101,6 +103,7 @@ from workdir import Workdir  # noqa: E402
 __all__ = [
     "BAD_INPUT_ERRORS",
     "CALL_BOOK",
+    "LIVE_PAYLOAD_NAME",
     "PIPELINE_DIR",
     "PLATFORM_WORDS",
     "PROVIDERS",
@@ -148,6 +151,7 @@ __all__ = [
     "parse_quality_gate",
     "plan_recipe",
     "rates_from_env",
+    "read_live_payload",
     "recipe_dir",
     "run_cost",
     "tail_of",

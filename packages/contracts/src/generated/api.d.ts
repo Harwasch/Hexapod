@@ -8863,6 +8863,12 @@ export interface components {
             gain?: number | null;
             /** Psnr */
             psnr?: number | null;
+            /**
+             * Split
+             * @default val
+             * @enum {string}
+             */
+            split?: "val" | "train";
             /** Step */
             step: number;
         };

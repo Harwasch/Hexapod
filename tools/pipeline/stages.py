@@ -56,6 +56,7 @@ import holdout
 import init_seed
 import keyframes
 import live
+import live_payload
 import placement
 import pose_backbone
 import priors
@@ -1979,6 +1980,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     With `test_every: 0` (default), every registered frame trains and validation scores
     are unavailable. Positive test_every is a bench opt-in for held-out measurements.
     """
+    ctx = live_payload.observe(ctx)
     variant = str(ctx.param("variant", "3dgs"))
     if variant != "3dgs":
         raise ValueError(
@@ -2299,7 +2301,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         batch_size=batch_size,
         extra=production_extra + [str(value) for value in (ctx.param("extra_args") or [])],
     )
-    if extra_evals or test_every == 0 or ctx.param("streaming_export", True):
+    if live_steps or extra_evals or test_every == 0 or ctx.param("streaming_export", True):
         argv = training.converge_argv(
             argv,
             script=_optional_path(ctx.param("converge_script")) or CONVERGE_SCRIPT,
@@ -2308,6 +2310,7 @@ def gsplat(ctx: StageContext) -> StageOutcome:
             min_gain_db=rule.min_gain_db,
             enabled=bool(extra_evals),
             min_steps=math.ceil(training.large_scan_floor(images, ctx.params) / batch_size),
+            live=bool(live_steps),
         )
     train_plan.emit(
         ctx,

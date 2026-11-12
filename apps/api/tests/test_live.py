@@ -211,7 +211,9 @@ def training_run(db: Session, slug: str) -> tuple[Capture, Job]:
     step_service.report_progress(
         db, step, {"done": 3600, "total": 30000, "elapsedS": 600, "remainingS": 4200}
     )
-    step_service.report_live(db, step, {"splat": splat_payload()})
+    step_service.report_live(
+        db, step, {"splat": splat_payload(key=SPLAT_KEY.replace("run-1", str(job.id)))}
+    )
     return capture, job
 
 
@@ -219,7 +221,9 @@ def test_live_state_puts_trainings_splat_among_the_poses_cameras(
     client: TestClient, db: Session, storage: S3Storage
 ) -> None:
     capture, job = training_run(db, "live-api")
-    storage.put_object(SPLAT_KEY, b"spz bytes", "application/octet-stream")
+    storage.put_object(
+        SPLAT_KEY.replace("run-1", str(job.id)), b"spz bytes", "application/octet-stream"
+    )
 
     response = client.get(f"/api/v1/captures/{capture.id}/live")
 
@@ -241,7 +245,7 @@ def test_live_state_puts_trainings_splat_among_the_poses_cameras(
     splat = body["splat"]
     assert splat["step"] == 3000 and splat["count"] == 100000
     assert splat["name"] == "splat_003000_1700000000.spz"
-    assert SPLAT_KEY in splat["url"] and "Signature" in splat["url"]
+    assert SPLAT_KEY.replace("run-1", str(job.id)) in splat["url"] and "Signature" in splat["url"]
     # The same thing by job.
     assert client.get(f"/api/v1/jobs/{job.id}/live").json()["splat"]["step"] == 3000
 

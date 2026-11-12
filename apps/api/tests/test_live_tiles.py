@@ -51,7 +51,9 @@ def live_tiles() -> LiveTiles:
         },
     )
     db = Mock(spec=Session)
-    db.get.side_effect = lambda model, _id: job if model is Job else capture
+    db.get.side_effect = lambda model, _id: (
+        job if model is Job else capture if model is Capture else None
+    )
     db.scalars.return_value.first.return_value = job
     db.scalars.return_value.all.return_value = [step]
     storage = Mock(spec=ObjectStorage)
@@ -151,7 +153,7 @@ def test_live_tiles_url_uses_api_origin_and_waits_for_upload(live_tiles: LiveTil
         "final": False,
         "frame": "solve",
     }
-    # A published scan must not replace aligned final tiles with placed ENU coordinates.
+    # Until a matching epoch is published, retain the solve-local tiles.
     job.status = RunStatus.COMPLETE
     capture.site_id = uuid.uuid4()
     step.metrics["live"]["tiles"]["final"] = True

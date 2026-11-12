@@ -14642,6 +14642,15 @@
             ],
             "title": "Psnr"
           },
+          "split": {
+            "default": "val",
+            "enum": [
+              "val",
+              "train"
+            ],
+            "title": "Split",
+            "type": "string"
+          },
           "step": {
             "minimum": 0.0,
             "title": "Step",

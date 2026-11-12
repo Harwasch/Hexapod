@@ -143,6 +143,7 @@ class LiveTrainSeries(TrainModel):
 
 
 class LiveTrainEval(TrainModel):
+    split: Literal["val", "train"] = "val"
     step: int = Field(ge=0)
     psnr: float | None = None
     gain: float | None = None

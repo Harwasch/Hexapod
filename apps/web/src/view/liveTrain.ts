@@ -400,3 +400,7 @@ export function tilesAt(
   if (!tiles || tiles.frame === "enu") return null;
   return step == null || step >= lastStep(train) || step === tiles.step ? tiles : null;
 }
+
+export function psnrLabel(train?: LiveTrain | null): string {
+  return train?.evals?.at(-1)?.split === "train" ? "Sampled train PSNR" : "Held-out PSNR";
+}
