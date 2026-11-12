@@ -255,7 +255,10 @@ class Settings(BaseSettings):
     # in its log, and evicts finished runs' workdirs older than `worker_evict_after_days`
     # to make room. 0 turns the check off.
     worker_min_free_gb: float = 5.0
-    worker_evict_after_days: float = 7.0
+    # 2, not 7: a finished beach run keeps ~7.7 GB of outputs on the 20 GB volume, so a
+    # week of them blocked the next full-data scan (2026-11-11). Retry-from-stage still
+    # works for two days; after that a retry starts over from the upload.
+    worker_evict_after_days: float = 2.0
     # Pause between attempts at the same stage.
     worker_retry_backoff_s: float = 2.0
     # Jobs one worker process supervises at once, each in its own slot with its own claim,

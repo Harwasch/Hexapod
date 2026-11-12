@@ -36,6 +36,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.config import Settings
 from app.models import Job
 from app.models.enums import RunStatus
 from app.services import jobs as job_service
@@ -723,6 +724,29 @@ def test_short_of_room_the_worker_tidies_and_evicts_old_finished_runs_and_nothin
     busy = root / str(running.id)
     assert (busy / "inputs" / "upload" / "video.mov").is_file(), "a live run is never touched"
     assert (busy / "stages" / "one" / "work" / "x.bin").is_file()
+
+
+def test_by_default_a_run_that_ended_three_days_ago_is_evicted_when_short_of_room(
+    db: Session, sessions: sessionmaker[Session], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A finished full-data run keeps ~7.7 GB of outputs on the 20 GB volume; a week of
+    # them blocked the next scan, so finished runs go after two days (2026-11-11).
+    assert Settings.model_fields["worker_evict_after_days"].default == 2.0
+    root = tmp_path / "runs"
+    now = datetime.now(tz=UTC)
+    stale = finished_job(db, RunStatus.COMPLETE, now - timedelta(days=3))
+    fresh = finished_job(db, RunStatus.COMPLETE, now - timedelta(hours=12))
+    for job in (stale, fresh):
+        workdir_with_scratch(root, job.id)
+    guard = DiskGuard(
+        sessions, root, min_free_gb=5, evict_after_days=config(tmp_path).evict_after_days
+    )
+    monkeypatch.setattr(guard, "free_bytes", lambda: GB)
+
+    assert not guard.room_to_claim()
+
+    assert not (root / str(stale.id)).exists(), "ended three days ago: evicted"
+    assert (root / str(fresh.id) / "stages" / "one" / "out" / "x.bin").is_file()
 
 
 def test_measuring_room_creates_nothing_and_reads_the_nearest_existing_parent(
