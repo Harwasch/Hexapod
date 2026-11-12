@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from pathlib import Path
 from typing import Any
 from unittest.mock import Mock
 
@@ -77,6 +78,79 @@ def live_tiles() -> LiveTiles:
     return request, db, storage, capture, job, step
 
 
+@pytest.mark.parametrize("part", ["", "/parts/b0"])
+def test_reattached_call_previews_keep_the_calls_scope_after_its_book_is_gone(
+    live_tiles: LiveTiles,
+    tmp_path: Path,
+    part: str,
+) -> None:
+    import live_payload
+
+    from app.worker.pipeline_bridge import LIVE_PAYLOAD_NAME, Workdir
+    from app.worker.runner import JobSupervisor
+
+    _request, db, storage, capture, job, step = live_tiles
+    step.attempt = 2
+    step.metrics = {}
+    # The old checkpoint_key column alone must not grant access. The runner stamps
+    # the adopted request's key beside the validated journal, even if its call ends
+    # and leaves calls.json before the next worker heartbeat.
+    root = f"runs/{job.id}/train{part}/checkpoint"
+    snapshot = splat_payload(key=f"{root}/live/splat.spz")
+    tiles = {
+        "v": 1,
+        "key": f"{root}/live/tiles/30/tileset.json",
+        "step": 30,
+        "final": False,
+        "gaussians": 100,
+        "tiles": 1,
+        "bytes": 1000,
+        "seconds": 1.0,
+    }
+    seeds = {
+        "v": 1,
+        "key": f"{root}/live/seeds.bin",
+        "count": 2,
+        "of": 10,
+        "sources": {"sfm": 7, "dense": 0, "seed": 3},
+        "origin": [0, 0, 0],
+        "scale": 1,
+        "bytes": 20,
+    }
+    records = [
+        ("seeds", seeds),
+        ("splat", snapshot),
+        ("tiles", tiles),
+        ("train", {"v": 1, "k": "s", "step": 30}),
+    ]
+    work = Workdir.create(tmp_path / str(job.id))
+    journal = work.work_dir("train") / LIVE_PAYLOAD_NAME
+    live_payload.write(journal, records)
+    assert live_payload.read(journal) == records
+    JobSupervisor._report_progress(db, step, work.root)
+    assert _state(db, storage, job, capture).splat is None
+    live_payload.write(journal, records, checkpoint_key=root, stage_attempt=step.attempt - 1)
+    JobSupervisor._report_progress(db, step, work.root)
+    assert _state(db, storage, job, capture).splat is None, (
+        "stale journal from the last stage attempt"
+    )
+    live_payload.write(journal, records, checkpoint_key=root, stage_attempt=step.attempt)
+    JobSupervisor._report_progress(db, step, work.root)
+    state = _state(db, storage, job, capture)
+    assert state.splat is not None and state.splat.url
+    assert state.train is not None and state.train.snapshots[0].url
+    assert state.train.seeds is not None and state.train.seeds.url
+    assert state.train.tiles is not None
+    assert capture_live_tile(capture.id, 30, "splat.glb", db, storage).status_code == 302
+    assert step.metrics["live"]["checkpointKeys"] == [root]
+    # Even a stamped scope cannot escape the current job/stage or permit traversal.
+    for bad in (root.replace(str(job.id), "other"), root.replace("/train", "/other"), root + "/.."):
+        step.metrics = {"live": {"checkpointKeys": [bad]}}
+        live_payload.write(journal, records)
+        JobSupervisor._report_progress(db, step, work.root)
+        assert _state(db, storage, job, capture).splat is None
+
+
 @pytest.mark.parametrize("path", ["tileset.json", "splat_0.glb", "collision.bin", "sub/tile.glb"])
 def test_tile_redirect_signs_only_this_runs_live_directory(
     live_tiles: LiveTiles, path: str
@@ -88,6 +162,46 @@ def test_tile_redirect_signs_only_this_runs_live_directory(
     storage.presign_get.assert_called_once_with(
         f"{step.checkpoint_key}/live/tiles/30/{path}", expires_in=600
     )
+
+
+def test_reattached_call_logs_use_the_recorded_request_before_the_first_journal(
+    live_tiles: LiveTiles,
+    tmp_path: Path,
+) -> None:
+    from cloud import RemoteHandle, StageRequest
+
+    from app.worker.pipeline_bridge import CALL_BOOK, CallBook, CallRecord, Workdir
+    from app.worker.runner import JobSupervisor
+
+    _request, db, storage, capture, job, step = live_tiles
+    step.attempt = 3
+    step.metrics = {}
+    root = f"runs/{job.id}/train/parts/b0/checkpoint-a2"
+    request = StageRequest(
+        recipe="photo-reconstruct",
+        run_id=str(job.id),
+        stage_id="train",
+        impl="gsplat",
+        attempt=2,
+        tier="l4",
+        preemptible=False,
+        params={},
+        inputs={},
+        produces=(),
+        checkpoint_key=root,
+        outputs_key=f"runs/{job.id}/train/parts/b0/out-a2",
+    )
+    work = Workdir.create(tmp_path / str(job.id))
+    work.prepare_stage("train")
+    book = CallBook(work.stage_dir("train") / CALL_BOOK)
+    book.put("b0", CallRecord(RemoteHandle("old-call", "fake", "l4"), 0, 2, request))
+    work.log_path("train").write_text(
+        "live-splat: " + json.dumps(splat_payload(key=f"{root}/live/a.spz"))
+    )
+    JobSupervisor._report_progress(db, step, work.root)
+    state = _state(db, storage, job, capture)
+    assert state.splat is not None and state.splat.url
+    assert step.metrics["live"]["checkpointKeys"] == [root]
 
 
 @pytest.mark.parametrize(

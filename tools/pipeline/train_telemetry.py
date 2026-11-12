@@ -4,7 +4,7 @@ CPython 3.10; optional NumPy only for the sampled CPU PSNR. The means optimizer
 supplies a tick without replacing the loop; its original call and return are preserved.
 The writer supplies the loop-local
 losses (v1.5.3 simple_trainer.py:739-747). No RNG is touched. With no holdout,
-a bounded view of the existing render supplies a sampled CPU PSNR; it never
+a bounded view of the existing L1 inputs supplies a sampled CPU PSNR; it never
 retains tensors or adds a render. Every observation is independently guarded.
 """
 
@@ -13,7 +13,6 @@ from __future__ import annotations
 import contextlib
 import json
 import math
-import sys
 import time
 import uuid
 from pathlib import Path
@@ -47,13 +46,15 @@ def emit(payload: dict[str, Any]) -> None:
             print(line, flush=True)  # noqa: T201 - the worker's telemetry transport
 
 
-def install(runner: Any, cfg: Any, timing: Any, state: Any = None) -> None:
+def install(
+    runner: Any, cfg: Any, timing: Any, state: Any = None, module: dict[str, Any] | None = None
+) -> None:
     """Install through `instrument`, after convergence and timing, including rule-off runs."""
     with contextlib.suppress(Exception):
-        _install(runner, cfg, timing, state)
+        _install(runner, cfg, timing, state, module)
 
 
-def _install(runner: Any, cfg: Any, timing: Any, state: Any) -> None:
+def _install(runner: Any, cfg: Any, timing: Any, state: Any, module: dict[str, Any] | None) -> None:
     original_train = getattr(runner, "train", None)
     original_eval: Any = getattr(runner, "eval", None)
     if not callable(original_train):
@@ -107,6 +108,21 @@ def _install(runner: Any, cfg: Any, timing: Any, state: Any) -> None:
     def train(self: Any, *args: Any, **kwargs: Any) -> Any:
         nonlocal step, last_step, last_time, attempt
         restore: list[tuple[Any, str, Any]] = []
+        original_loss = None if module is None else module.get("l1_loss")
+        if module is not None and callable(original_loss) and getattr(cfg, "test_every", 8) == 0:
+
+            def l1_loss(colors: Any, pixels: Any, *a: Any, **kw: Any) -> Any:
+                result = original_loss(colors, pixels, *a, **kw)
+                with contextlib.suppress(Exception):
+                    if step % EVERY == 0:
+                        psnr = sampled_train_psnr(colors, pixels)
+                        if psnr is not None:
+                            send("e", step=step + 1, psnr=psnr, split="train")
+                return result
+
+            # This is the trainer module's loss callable, not torch's global API.
+            # Never inspect a frame: CPython caches f_locals, retaining GPU tensors.
+            module["l1_loss"] = l1_loss
         with contextlib.suppress(Exception):
             attempt = uuid.uuid4().hex[:12]
             losses.clear()
@@ -140,14 +156,6 @@ def _install(runner: Any, cfg: Any, timing: Any, state: Any) -> None:
                 def add_scalar(tag: str, value: Any, *a: Any, **kw: Any) -> Any:
                     result = scalar(tag, value, *a, **kw)
                     with contextlib.suppress(Exception):
-                        if (
-                            tag == "train/loss"
-                            and getattr(cfg, "test_every", 8) == 0
-                            and step % EVERY == 0
-                        ):
-                            psnr = sampled_train_psnr(sys._getframe(1).f_locals)
-                            if psnr is not None:
-                                send("e", step=step + 1, psnr=psnr, split="train")
                         if tag.startswith("train/") and "loss" in tag:
                             key = tag[6:].replace("loss", "") or "total"
                             # Bounded by the transport, while preserving component names.
@@ -178,6 +186,8 @@ def _install(runner: Any, cfg: Any, timing: Any, state: Any) -> None:
         try:
             return original_train(self, *args, **kwargs)
         finally:
+            if module is not None and callable(original_loss):
+                module["l1_loss"] = original_loss
             if step != last_step:
                 sample(self)
             with contextlib.suppress(Exception):
@@ -221,18 +231,17 @@ def _install(runner: Any, cfg: Any, timing: Any, state: Any) -> None:
         runner.eval = evaluate
 
 
-def sampled_train_psnr(local: dict[str, Any]) -> float | None:
+def sampled_train_psnr(colors: Any, pixels: Any) -> float | None:
     """CPU PSNR on <=1024 pixels of the already-rendered training batch.
 
     No extra render, evaluation, backward pass, or RNG. Strided tensor views are
     copied to CPU before arithmetic; never retain the loop's tensors. This is a
     sampled training diagnostic, not a held-out or whole-image quality score.
-    Missing loop locals on another trainer version simply omit the observation.
+    Missing or masked (non-image) inputs simply omit the observation.
     """
     try:
         import numpy as np
 
-        colors, pixels = local["colors"], local["pixels"]
         if colors.shape != pixels.shape or len(colors.shape) != 4 or colors.shape[-1] != 3:
             return None
         # Bound the batch too: one existing view supplies the diagnostic.

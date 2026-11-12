@@ -415,7 +415,7 @@ def instrument(
     runner.train = train
     timing.hooked = True
     if getattr(cfg, "live_enabled", True):
-        train_telemetry.install(runner, cfg, timing, state)
+        train_telemetry.install(runner, cfg, timing, state, module)
 
 
 def _result_dir(argv: list[str]) -> Path | None:

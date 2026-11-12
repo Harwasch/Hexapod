@@ -216,13 +216,7 @@ def _tiles_record(step: JobStep, job_id: uuid.UUID) -> dict[str, Any] | None:
         or not isinstance(value.get("final"), bool)
     ):
         return None
-    # A retry uses checkpoint-aN; fan-out pieces use stage/parts/<part>/checkpoint.
-    # checkpoint_key can still name the *previous* attempt until this one finishes.
-    attempt = step.attempt or 1
-    checkpoint = "checkpoint" if attempt == 1 else f"checkpoint-a{attempt}"
-    stage_root = re.escape(f"runs/{job_id}/{step.stage_id}")
-    live_tail = re.escape(_LIVE_SEGMENT + f"tiles/{number}/tileset.json")
-    if re.fullmatch(rf"{stage_root}(?:/parts/[^/]+)?/{checkpoint}{live_tail}", key) is None:
+    if not _preview_key(key, step, f"tiles/{number}/tileset.json"):
         return None
     return value
 
@@ -446,6 +440,27 @@ def _snapshot_key(key: str, step: JobStep | None) -> bool:
         return False
     if step is None:
         return True  # schema-only callers (bench serves its own local files)
-    checkpoint = "checkpoint" if (step.attempt or 1) == 1 else f"checkpoint-a{step.attempt}"
+    return _preview_key(key, step, r"[^/]+", regex_tail=True)
+
+
+def _preview_key(key: str, step: JobStep, tail: str, *, regex_tail: bool = False) -> bool:
+    """Current attempt, or an exact checkpoint recorded from an adopted call's request.
+
+    The checkpoint_key column can be stale on a retry and is never authority. The
+    worker retains runner-stamped scopes with live state after calls.json is cleared.
+    """
     root = re.escape(f"runs/{step.job_id}/{step.stage_id}")
-    return re.fullmatch(rf"{root}(?:/parts/[^/]+)?/{checkpoint}/live/[^/]+", key) is not None
+    checkpoint = "checkpoint" if (step.attempt or 1) == 1 else f"checkpoint-a{step.attempt}"
+    suffix = tail if regex_tail else re.escape(tail)
+    if re.fullmatch(rf"{root}(?:/parts/[^/]+)?/{checkpoint}/live/{suffix}", key):
+        return True
+    scopes = ((step.metrics or {}).get("live") or {}).get("checkpointKeys", [])
+    if not isinstance(scopes, list):
+        return False
+    return any(
+        isinstance(scope, str)
+        and not any(c in scope for c in ("..", "\\", "%"))
+        and re.fullmatch(rf"{root}(?:/parts/[^/]+)?/checkpoint(?:-a[1-9]\d*)?", scope)
+        and re.fullmatch(rf"{re.escape(scope)}/live/{suffix}", key)
+        for scope in scopes[:64]
+    )

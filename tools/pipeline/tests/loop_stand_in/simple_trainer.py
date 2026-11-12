@@ -127,6 +127,10 @@ class Dataset:
     pass
 
 
+def l1_loss(colors: Any, pixels: Any) -> float:
+    return 0.07
+
+
 class Runner:
     def __init__(self, local_rank: int, world_rank: int, world_size: int, cfg: Config) -> None:
         self.cfg = cfg
@@ -153,7 +157,8 @@ class Runner:
                 import numpy as np
 
                 colors = np.full((1, 32, 32, 3), 0.1)
-                pixels = np.zeros_like(colors)  # noqa: F841 - telemetry observes these loop locals
+                pixels = np.zeros_like(colors)
+                l1_loss(colors, pixels)
                 self.writer.add_scalar("train/loss", 0.1, step)
                 self.writer.add_scalar("train/l1loss", 0.07, step)
                 self.writer.add_scalar("train/ssimloss", 0.03, step)

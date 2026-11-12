@@ -90,6 +90,7 @@ from harmonics import check_degree as check_sh_degree  # noqa: E402
 from live import latest as latest_live  # noqa: E402
 from live import records as live_records  # noqa: E402
 from live_payload import LOCAL_NAME as LIVE_PAYLOAD_NAME  # noqa: E402
+from live_payload import checkpoint_keys as live_checkpoint_keys  # noqa: E402
 from live_payload import read as read_live_payload  # noqa: E402
 from modal_adapter import ModalAdapter  # noqa: E402
 from plan import Plan, PlannedStage, plan_recipe  # noqa: E402
@@ -146,6 +147,7 @@ __all__ = [
     "execute",
     "latest_live",
     "latest_progress",
+    "live_checkpoint_keys",
     "live_records",
     "load_recipe",
     "parse_quality_gate",

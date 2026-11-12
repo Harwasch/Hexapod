@@ -422,7 +422,8 @@ def test_the_bar_follows_the_slowest_part_and_the_viewer_the_furthest() -> None:
         "[b1] loss=0.1| : 20%|#| 200/1000 [00:02<00:08, 99.00it/s]",
     ]
     live = [line for line in shown if "live-splat: " in line]
-    assert [json.loads(line.split("live-splat: ")[1])["step"] for line in live] == [250, 500, 500]
+    # Keep the selected block on ties, so repeated journals cannot alternate views.
+    assert [json.loads(line.split("live-splat: ")[1])["step"] for line in live] == [250, 500]
     assert "[b1] live: a snapshot at step 400 of 1000 is not shown" in shown[-2]
     assert shown[-1] == "[b0] an ordinary line"
 
@@ -631,6 +632,69 @@ def test_live_tiles_follow_the_block_whose_snapshot_is_shown() -> None:
         )
     tiles = [line for line in sink.lines if "live-tiles:" in line]
     assert len(tiles) == 1 and tiles[0].startswith("[b0]")
+    tail.finished("b0")
+    tail.line("b1", 'live-train: {"v":1,"k":"s","step":250,"loss":{}}')
+    assert not any("live-train:" in line for line in sink.lines)
+
+
+def test_journals_show_the_most_advanced_block_with_matching_telemetry(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import live_payload
+    from cloud import _PartRun
+
+    context = SimpleNamespace(attempt=1, work_dir=tmp_path, log=lambda line: None)
+    tail = _FanOutLog(cast("StageContext", context))
+    adapter = Mock()
+    adapter.poll.return_value = Poll("running")
+    adapter.logs.return_value = []
+    transfer = Mock()
+    snapshots = {"b0": 200, "b1": 700}
+
+    def get(key: str, target: Path) -> int:
+        part = key.split("/parts/")[1].split("/")[0]
+        step = snapshots[part]
+        snapshot = json.loads(splat_line(step, 1000).split("live-splat: ")[1])
+        snapshot["key"] = key.rsplit("/", 1)[0] + f"/splat_{step:06d}.spz"
+        live_payload.write(
+            target,
+            [
+                ("splat", snapshot),
+                ("train", {"v": 1, "k": "s", "run": part, "step": step}),
+            ],
+        )
+        return target.stat().st_size
+
+    transfer.get.side_effect = get
+    runner = CloudRunner(Placement((adapter,)), transfer, max_wait_s=0)
+    runs = {}
+    for part in ("b0", "b1"):
+        runs[part] = _PartRun(
+            FanOutPart(part, ()),
+            adapter,
+            RemoteHandle(part, "fake", "l4"),
+            0,
+            request=cast(
+                "StageRequest",
+                SimpleNamespace(
+                    impl="gsplat",
+                    params={},
+                    checkpoint_every_s=0,
+                    checkpoint_key=f"runs/r/train/parts/{part}/checkpoint",
+                ),
+            ),
+        )
+        runner._poll_part(runs[part], cast("StageContext", context), tail)
+    document = live_payload.read(tmp_path / live_payload.LOCAL_NAME)
+    assert next(v for k, v in document if k == "splat")["step"] == 700
+    assert next(v for k, v in document if k == "train")["block"] == "b1"
+    snapshots["b0"] = 800
+    runs["b0"].telemetry.last = float("-inf")
+    runner._poll_part(runs["b0"], cast("StageContext", context), tail)
+    document = live_payload.read(tmp_path / live_payload.LOCAL_NAME)
+    assert next(v for k, v in document if k == "splat")["step"] == 800
+    assert next(v for k, v in document if k == "train")["block"] == "b0"
 
 
 def test_failed_part_retry_fetches_its_synced_trainer_state_before_replacing_the_key(

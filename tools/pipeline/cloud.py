@@ -1669,14 +1669,22 @@ class CloudRunner(BaseRunner):
             final=poll.state in TERMINAL,
         )
         if records:
-            if tail.train_part is None:
+            snapshots = [value for kind, value in records if kind == "splat"]
+            show = tail.train_part in (None, run.part.id)
+            if snapshots:
+                show = tail.select_snapshot(run.part.id, snapshots[-1])
+            if show:
                 tail.train_part = run.part.id
-            if tail.train_part == run.part.id:
                 records = [
                     (kind, {**value, "block": run.part.id} if kind == "train" else value)
                     for kind, value in records
                 ]
-                live_payload.write(context.work_dir / live_payload.LOCAL_NAME, records)
+                live_payload.write(
+                    context.work_dir / live_payload.LOCAL_NAME,
+                    records,
+                    checkpoint_key=run.request.checkpoint_key if run.request else None,
+                    stage_attempt=context.attempt,
+                )
         lines = run.adapter.logs(run.handle, since=run.cursor)
         run.cursor += len(lines)
         for line in lines:
@@ -1875,7 +1883,14 @@ class CloudRunner(BaseRunner):
                     final=poll.state in TERMINAL,
                 )
                 if records:
-                    live_payload.write(context.work_dir / live_payload.LOCAL_NAME, records)
+                    live_payload.write(
+                        context.work_dir / live_payload.LOCAL_NAME,
+                        records,
+                        checkpoint_key=record.request.checkpoint_key
+                        if record and record.request
+                        else None,
+                        stage_attempt=context.attempt,
+                    )
                 cursor = self._tail(adapter, handle, context, cursor, deadline)
                 if poll.state in TERMINAL:
                     # Once more: the lines that say why a call failed -- a traceback, CUDA
@@ -2291,8 +2306,8 @@ def _append_log(path: Path, line: str) -> None:
 class _FanOutLog:
     """The pieces' logs, interleaved into the stage's, each line tagged with its piece.
 
-    Telemetry pins to the first seen block until it finishes, carrying `block` so
-    series never interleave. Run-plan lines pass once for the whole fan-out.
+    Telemetry follows the most advanced snapshot, carrying `block` so series never
+    interleave. Run-plan lines pass once for the whole fan-out.
 
     Two kinds of line are read by the worker off the stage log, newest first, and N pieces
     printing them at once would make each flicker between pieces. So:
@@ -2311,6 +2326,15 @@ class _FanOutLog:
     live_part: str | None = None
     train_part: str | None = None
     plan_seen: bool = False
+
+    def select_snapshot(self, part: str, payload: dict[str, Any]) -> bool:
+        share = float(payload.get("step") or 0) / max(1.0, float(payload.get("total") or 1))
+        best = max(self.live_share.values(), default=0.0)
+        self.live_share[part] = max(share, self.live_share.get(part, 0.0))
+        if share < best or (share == best and self.live_part not in (None, part)):
+            return False
+        self.live_part = self.train_part = part
+        return True
 
     def line(self, part: str, line: str) -> None:
         tagged = f"[{part}] {line}"
@@ -2332,16 +2356,12 @@ class _FanOutLog:
             tagged = f"[{part}] " + live.TRAIN_TAG + json.dumps({**parsed[1], "block": part})
         if parsed is not None and parsed[0] == "splat":
             payload = parsed[1]
-            share = float(payload.get("step") or 0) / max(1.0, float(payload.get("total") or 1))
-            best = max(self.live_share.values(), default=0.0)
-            self.live_share[part] = share
-            if share < best:
+            if not self.select_snapshot(part, payload):
                 self.context.log(
                     f"[{part}] live: a snapshot at step {payload.get('step')} of "
                     f"{payload.get('total')} is not shown; another block is further along"
                 )
                 return
-            self.live_part = part
         if (
             parsed is not None
             and parsed[0] == "tiles"
@@ -2353,7 +2373,9 @@ class _FanOutLog:
 
     def finished(self, part: str) -> None:
         self.done_share.pop(part, None)
-        if self.train_part == part:
+        # A finished block can still own the most advanced preview. Keep its
+        # telemetry selected until another snapshot overtakes it.
+        if self.train_part == part and self.live_part is None:
             self.train_part = None
 
 

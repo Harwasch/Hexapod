@@ -118,6 +118,7 @@ from app.worker.pipeline_bridge import (
     Workdir,
     checksum_of,
     latest_progress,
+    live_checkpoint_keys,
     live_records,
     plan_recipe,
     read_live_payload,
@@ -1148,8 +1149,15 @@ class JobSupervisor:
             steps.report_progress(db, step, found.to_dict())
         # What the live viewer draws: the newest cameras and intermediate splat the stage
         # has logged (`tools/pipeline/live.py`), under `metrics.live`.
-        records = read_live_payload(
-            Workdir(workdir_root).work_dir(step.stage_id) / LIVE_PAYLOAD_NAME
+        journal = Workdir(workdir_root).work_dir(step.stage_id) / LIVE_PAYLOAD_NAME
+        records = read_live_payload(journal)
+        scopes = live_checkpoint_keys(journal, stage_attempt=step.attempt or 1) if records else []
+        # Logs can arrive before the first checkpoint sync (or with no journal).
+        # The persisted request, not the row's incremented counter, owns these keys.
+        scopes.extend(
+            record.request.checkpoint_key
+            for record in JobSupervisor._book(workdir_root, step.stage_id).calls.values()
+            if record.request is not None
         )
         if not records:
             # Local training writes the same journal under checkpoint/live.
@@ -1159,7 +1167,14 @@ class JobSupervisor:
         if not records:
             records = live_records(text)
         if records:
-            steps.report_live(db, step, {}, records=records)
+            previous = ((step.metrics or {}).get("live") or {}).get("checkpointKeys", [])
+            previous = (
+                [key for key in previous if isinstance(key, str) and len(key) <= 512]
+                if isinstance(previous, list)
+                else []
+            )
+            keys = list(dict.fromkeys([*previous, *scopes]))[-64:]
+            steps.report_live(db, step, {"checkpointKeys": keys}, records=records)
 
     def _upload_log(self, job_id: uuid.UUID, workdir_root: Path, stage_id: str) -> str | None:
         return outputs.upload_log(self._storage, workdir_root, job_id, stage_id)

@@ -12,6 +12,7 @@ import contextlib
 import json
 import math
 import shutil
+import tempfile
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -26,6 +27,7 @@ NAME = "telemetry.json"
 LOCAL_NAME = "live-telemetry.json"
 MAX_BYTES = 256_000
 MAX_SAMPLES = 300
+GET_TIMEOUT_S = 1.0
 Record = tuple[str, dict[str, Any]]
 
 
@@ -59,10 +61,44 @@ def read(path: Path) -> list[Record]:
         return []
 
 
-def write(path: Path, records: list[Record]) -> None:
+def checkpoint_keys(path: Path, *, stage_attempt: int | None = None) -> list[str]:
+    """Runner-owned scope, stamped from CallRecord.request, never a remote journal."""
+    try:
+        with path.open("rb") as source:
+            raw = source.read(MAX_BYTES + 1)
+        value = json.loads(raw) if len(raw) <= MAX_BYTES else {}
+        if stage_attempt is not None and value.get("stageAttempt") != stage_attempt:
+            return []
+        keys = value.get("checkpointKeys", [])
+        if isinstance(keys, list) and len(keys) <= 64:
+            return [key for key in keys if isinstance(key, str) and len(key) <= 512]
+    except (OSError, ValueError, TypeError, AttributeError, RecursionError):
+        pass
+    return []
+
+
+def write(
+    path: Path,
+    records: list[Record],
+    *,
+    checkpoint_key: str | None = None,
+    stage_attempt: int | None = None,
+) -> None:
     """Telemetry persistence must never turn a running GPU call into a failure."""
     with contextlib.suppress(Exception):
-        _write(path, records)
+        keys = (
+            list(
+                dict.fromkeys(
+                    [
+                        *checkpoint_keys(path, stage_attempt=stage_attempt),
+                        checkpoint_key,
+                    ]
+                )
+            )[-64:]
+            if checkpoint_key is not None
+            else []
+        )
+        _write(path, records, keys, stage_attempt)
 
 
 def clear(path: Path) -> None:
@@ -70,8 +106,12 @@ def clear(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
-def _write(path: Path, records: list[Record]) -> None:
-    raw = json.dumps({"v": 1, "records": records}, separators=(",", ":"), allow_nan=False)
+def _write(path: Path, records: list[Record], keys: list[str], stage_attempt: int | None) -> None:
+    raw = json.dumps(
+        {"v": 1, "records": records, "checkpointKeys": keys, "stageAttempt": stage_attempt},
+        separators=(",", ":"),
+        allow_nan=False,
+    )
     if len(raw.encode()) > MAX_BYTES:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -141,6 +181,7 @@ class Poller:
 
     def __init__(self) -> None:
         self.last = float("-inf")
+        self._pending: threading.Thread | None = None
 
     def poll(
         self, request: Any, transfer: Any, work: Path, now: float, *, final: bool = False
@@ -149,11 +190,27 @@ class Poller:
             return []
         if not final and now - self.last < max(0.05, request.checkpoint_every_s):
             return []
+        if self._pending is not None and self._pending.is_alive():
+            return []  # One stuck GET cannot accumulate threads or late observations.
         self.last = now
-        incoming = work / "incoming-live.json"
+        records: list[Record] = []
+
+        def fetch() -> None:
+            with contextlib.suppress(Exception):
+                work.mkdir(parents=True, exist_ok=True)
+                # Each call owns its file: a late GET cannot overwrite a newer poll
+                # or another block's journal. Cleanup belongs to the fetch thread.
+                with tempfile.TemporaryDirectory(prefix="live-get-", dir=work) as directory:
+                    incoming = Path(directory) / NAME
+                    key = f"{request.checkpoint_key}/{live.LIVE_DIR}/{NAME}"
+                    if transfer.get(key, incoming):
+                        records.extend(read(incoming))
+
         with contextlib.suppress(Exception):
-            incoming.unlink(missing_ok=True)
-            key = f"{request.checkpoint_key}/{live.LIVE_DIR}/{NAME}"
-            if transfer.get(key, incoming):
-                return read(incoming)
+            # A daemon, not a pool: shutdown must not wait forever on a broken bucket.
+            self._pending = threading.Thread(target=fetch, daemon=True)
+            self._pending.start()
+            self._pending.join(GET_TIMEOUT_S)
+            if not self._pending.is_alive():
+                return records
         return []
