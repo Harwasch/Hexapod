@@ -83,7 +83,7 @@ class WorkerConfig:
     min_free_gb: float = 0.0
     #: Finished, failed or cancelled runs' workdirs older than this may be evicted when
     #: the volume is short of `min_free_gb`.
-    evict_after_days: float = 7.0
+    evict_after_days: float = 2.0
     #: Drop `inputs/` and every stage's `work/` once a run has finished successfully (see
     #: `JobSupervisor._tidy`). On by default; off only for tests that read scratch files.
     tidy_finished_runs: bool = True
