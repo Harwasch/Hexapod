@@ -278,7 +278,7 @@ never fails a job.
 
 Before it claims, the worker looks at the free space on `WORKER_WORKDIR`'s volume
 (`disk.py`). Below `WORKER_MIN_FREE_GB` (5) it tidies every run that has ended, then
-evicts whole workdirs of runs that ended more than `WORKER_EVICT_AFTER_DAYS` (7) ago,
+evicts whole workdirs of runs that ended more than `WORKER_EVICT_AFTER_DAYS` (2) ago,
 oldest first, until there is room; a retry of one of those starts over from the upload.
 If there is still no room it does not claim, and logs `NOT CLAIMING` at error level once
 a minute: the job stays queued rather than failing on a full disk after its download.
@@ -416,7 +416,7 @@ if it found one still up -- the worker may have been exiting at that moment
 `IDLE_EXIT_S`, `MAX_ATTEMPTS`, `RETRY_BACKOFF_S`, `CONCURRENCY` (general slots, 1-8,
 default 1), `CPU_ONLY_SLOTS` (0-4, default 0), `JOB_COST_CAP_USD` (20; 0 off),
 `DEADLINE_FACTOR` (2; 0 off), `HEARTBEAT_URL` (unset: no pings), `MIN_FREE_GB` (5; 0
-off), `EVICT_AFTER_DAYS` (7). And `QUEUE_CHECK_URL`, unprefixed because the API reads it
+off), `EVICT_AFTER_DAYS` (2). And `QUEUE_CHECK_URL`, unprefixed because the API reads it
 too.
 
 ## Verify

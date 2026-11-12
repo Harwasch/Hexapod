@@ -878,7 +878,7 @@ not future peak use. Checkpoint transfers stream to disk rather than loading mul
 state into the worker's 2 GB RAM.
 
 The worker also checks before it claims. Below `WORKER_MIN_FREE_GB` (5) free it evicts
-the workdirs of runs that ended more than `WORKER_EVICT_AFTER_DAYS` (7) ago, oldest
+the workdirs of runs that ended more than `WORKER_EVICT_AFTER_DAYS` (2) ago, oldest
 first; if that is not enough it does **not** claim, and logs `NOT CLAIMING` at error
 level once a minute — the job stays queued (and alerts, with `QUEUE_CHECK_URL`) instead of
 failing on a full disk after its download. A run whose workdir was evicted still retries;

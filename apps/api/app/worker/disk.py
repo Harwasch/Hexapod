@@ -17,7 +17,7 @@ So before a claim, `DiskGuard.room_to_claim` looks at the free space. Below
    run, for the runs that ended before it did that;
 2. **evict** whole workdirs of runs that ended more than `evict_after_days` ago, oldest
    first, until there is room. A retry of one of those starts over from the upload,
-   which is the honest answer for a run nobody has touched in a week.
+   which is the honest answer for a run nobody has touched in two days.
 
 If that is still not enough it does not claim, and says so at error level -- once a
 minute, not once a poll -- so the job stays queued (and `QUEUE_CHECK_URL`, if set,
