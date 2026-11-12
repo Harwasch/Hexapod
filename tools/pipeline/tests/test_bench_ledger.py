@@ -84,3 +84,27 @@ def test_failed_actual_is_charged_and_duplicate_outcome_refused(tmp_path: Path) 
     with pytest.raises(ValueError, match="duplicate outcome"):
         ledger.finish(path, "one", cost=0, failed=True)
     assert len([json.loads(line) for line in path.read_text().splitlines()]) == 2
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_app_id_is_only_recorded_on_outcome_and_preserves_accounting(
+    tmp_path: Path, failed: bool
+) -> None:
+    path = tmp_path / "ledger.jsonl"
+    ledger.reserve(path, [plan()], 2)
+    before = ledger.summary(ledger.read(path))["totalUsd"]
+    ledger.finish(path, "one", cost=None, failed=failed, error="unknown", app_id="ap-test")
+    entries = ledger.read(path)
+    assert "appId" not in entries[0]
+    assert entries[1]["appId"] == "ap-test"
+    assert entries[1]["event"] == ("failed" if failed else "finished")
+    assert ledger.summary(entries)["totalUsd"] == before
+    with pytest.raises(ValueError, match="duplicate outcome"):
+        ledger.finish(path, "one", cost=0, failed=failed, app_id="ap-test")
+
+
+def test_legacy_outcome_without_app_id_is_unchanged(tmp_path: Path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    ledger.reserve(path, [plan()], 2)
+    ledger.finish(path, "one", cost=0.1, failed=False)
+    assert "appId" not in ledger.read(path)[1]

@@ -912,6 +912,7 @@ test("OOM training freezes the bench console and stops polling", async ({ page }
   const spz = Buffer.from(spzFromGlb(toArrayBuffer(readFileSync(resolve(TILES, "splat.glb")))));
   const train = benchTrain(BUCKET);
   train.ended = { reason: "oom", step: 15600 };
+  train.replacedBy = "4769ee65e33c44f2aacd87a45dfa3811";
   const snapshot = train.snapshots?.at(-1);
   if (!snapshot) throw new Error("Bench fixture needs a snapshot");
   let polls = 0;
@@ -943,6 +944,11 @@ test("OOM training freezes the bench console and stops polling", async ({ page }
   );
   await page.goto("/view.html#live/c1");
   await expect(page.locator("#lc-pill")).toHaveText("Out of memory · step 15,600");
+  await expect(page.locator("#lc-replacement")).toHaveText("→ 4769ee65");
+  await expect(page.locator("#lc-replacement")).toHaveAttribute(
+    "href",
+    "view.html#live/4769ee65e33c44f2aacd87a45dfa3811",
+  );
   await expect(page.locator("#lc-error")).toHaveText(
     "Runner killed (SIGKILL), exit code: 137. Most often this happens when the process runs out of memory.",
   );

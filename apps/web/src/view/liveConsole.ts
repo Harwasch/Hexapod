@@ -480,6 +480,12 @@ export function liveConsole(actions: {
       el("lc-tiles-note").hidden = next.train?.tiles?.frame !== "enu";
       text("lc-name", next.captureName);
       text("lc-pill", pillText(next));
+      const replacement = el("lc-replacement") as HTMLAnchorElement;
+      const replacedBy = next.train?.replacedBy;
+      replacement.hidden = !replacedBy;
+      replacement.textContent = replacedBy ? `→ ${replacedBy.replaceAll("-", "").slice(0, 8)}` : "";
+      if (replacedBy) replacement.href = `view.html#live/${encodeURIComponent(replacedBy)}`;
+      else replacement.removeAttribute("href");
       el("lc-pill").dataset.done = String(
         next.train?.ended != null ||
           pillText(next).startsWith("Finished") ||

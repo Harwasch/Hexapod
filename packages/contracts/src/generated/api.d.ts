@@ -8834,6 +8834,8 @@ export interface components {
             /** Planid */
             planId?: string | null;
             quality?: components["schemas"]["LiveTrainQuality"] | null;
+            /** Replacedby */
+            replacedBy?: string | null;
             /** Run */
             run?: string | null;
             seeds?: components["schemas"]["LiveTrainSeeds"] | null;
