@@ -54,7 +54,7 @@ SIGNED_FOR_S = 10 * 60
 
 #: The only keys this signs: the live snapshots the pipeline writes, nothing else in the
 #: private bucket, whatever a log line claimed.
-_LIVE_SEGMENT = "/checkpoint/live/"
+_LIVE_SEGMENT = "/live/"
 
 
 def live_for_capture(db: Session, storage: ObjectStorage, capture_id: uuid.UUID) -> LiveState:
@@ -113,7 +113,7 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
         terminal_train = step.stage_id == "train" and terminal
         if terminal_train and live.get("train") is None:
             live = {**live, "train": {}}
-        found_train = _train(live, storage, final=final)
+        found_train = _train(live, storage, final=final, step=step)
         tiles = _tiles_record(step, job.id)
         if tiles is not None and _signed(storage, tiles["key"]) is not None:
             found_train = found_train or LiveTrain()
@@ -145,7 +145,7 @@ def _state(db: Session, storage: ObjectStorage, job: Job, capture: Capture) -> L
             train.plan = train.plan or LiveTrainPlan()
             if train.plan.antialiased is None:
                 train.plan.antialiased = aa
-    if job.status == RunStatus.COMPLETE and capture.site_id and not (train and train.tiles):
+    if job.status == RunStatus.COMPLETE and capture.site_id:
         site = db.get(Site, capture.site_id)
         if site is not None:
             # Resolve this run's epoch, not a newer capture now shown by the gallery.
@@ -216,15 +216,7 @@ def _tiles_record(step: JobStep, job_id: uuid.UUID) -> dict[str, Any] | None:
         or not isinstance(value.get("final"), bool)
     ):
         return None
-    # A retry uses checkpoint-aN; fan-out pieces use stage/parts/<part>/checkpoint.
-    # checkpoint_key can still name the *previous* attempt until this one finishes.
-    attempt = step.attempt or 1
-    checkpoint = "checkpoint" if attempt == 1 else f"checkpoint-a{attempt}"
-    stage_root = re.escape(f"runs/{job_id}/{step.stage_id}")
-    live_tail = re.escape(
-        _LIVE_SEGMENT.removeprefix("/checkpoint") + f"tiles/{number}/tileset.json"
-    )
-    if re.fullmatch(rf"{stage_root}(?:/parts/[^/]+)?/{checkpoint}{live_tail}", key) is None:
+    if not _preview_key(key, step, f"tiles/{number}/tileset.json"):
         return None
     return value
 
@@ -347,6 +339,7 @@ def _splat(step: JobStep, value: Any, storage: ObjectStorage) -> LiveSplat | Non
         or not key.startswith("runs/")
         or _LIVE_SEGMENT not in key
         or ".." in key
+        or not _snapshot_key(key, step)
     ):
         return None
     try:
@@ -378,7 +371,11 @@ def _signed(storage: ObjectStorage, key: str) -> str | None:
 
 
 def _train(
-    live: dict[str, Any], storage: ObjectStorage, *, final: dict[str, int | float] | None = None
+    live: dict[str, Any],
+    storage: ObjectStorage,
+    *,
+    final: dict[str, int | float] | None = None,
+    step: JobStep | None = None,
 ) -> LiveTrain | None:
     """Validate first, then derive and sign; malformed historical JSON is never fatal."""
     value = live.get("train", {} if final else None)
@@ -413,6 +410,7 @@ def _train(
             or _LIVE_SEGMENT not in key
             or ".." in key
             or not key.endswith("/seeds.bin")
+            or not _snapshot_key(key, step)
         ):
             parsed.seeds = None
         else:
@@ -424,11 +422,45 @@ def _train(
             or _LIVE_SEGMENT not in key
             or ".." in key
             or not key.endswith(".spz")
+            or not _snapshot_key(key, step)
         ):
             return None
-        # Presigning is local; HEAD only the newest splat through `_splat`.
+        # History is signed locally: scrubbing must not HEAD every snapshot on
+        # every poll. The newest preview in _splat remains upload-gated.
         try:
             snapshot.url = storage.presign_get(key, expires_in=SIGNED_FOR_S)
         except StorageUnavailableError:
             snapshot.url = None
     return parsed
+
+
+def _snapshot_key(key: str, step: JobStep | None) -> bool:
+    """Only this stage/attempt's previews, including fan-out parts, may be signed."""
+    if any(c in key for c in ("..", "\\", "%")) or str(PurePosixPath(key)) != key:
+        return False
+    if step is None:
+        return True  # schema-only callers (bench serves its own local files)
+    return _preview_key(key, step, r"[^/]+", regex_tail=True)
+
+
+def _preview_key(key: str, step: JobStep, tail: str, *, regex_tail: bool = False) -> bool:
+    """Current attempt, or an exact checkpoint recorded from an adopted call's request.
+
+    The checkpoint_key column can be stale on a retry and is never authority. The
+    worker retains runner-stamped scopes with live state after calls.json is cleared.
+    """
+    root = re.escape(f"runs/{step.job_id}/{step.stage_id}")
+    checkpoint = "checkpoint" if (step.attempt or 1) == 1 else f"checkpoint-a{step.attempt}"
+    suffix = tail if regex_tail else re.escape(tail)
+    if re.fullmatch(rf"{root}(?:/parts/[^/]+)?/{checkpoint}/live/{suffix}", key):
+        return True
+    scopes = ((step.metrics or {}).get("live") or {}).get("checkpointKeys", [])
+    if not isinstance(scopes, list):
+        return False
+    return any(
+        isinstance(scope, str)
+        and not any(c in scope for c in ("..", "\\", "%"))
+        and re.fullmatch(rf"{root}(?:/parts/[^/]+)?/checkpoint(?:-a[1-9]\d*)?", scope)
+        and re.fullmatch(rf"{re.escape(scope)}/live/{suffix}", key)
+        for scope in scopes[:64]
+    )

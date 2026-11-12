@@ -1789,3 +1789,34 @@ that is approximately **532 MB of tile uploads per run**, plus thumbnails, assum
 scheduled set finishes and syncs once. A slow or failed optional pack is skipped; checkpoint
 retries or repeated transfer of unchanged files can add traffic. Local retention is bounded
 separately from cumulative upload traffic.
+
+### Production live training transport
+
+`gsplat` observes training by default, including Refine and Preview. Set the train
+stage's `live: false` to skip plans, seeds, telemetry and intermediate snapshots;
+this leaves training, evaluation and recovery checkpoints unchanged. Convergence
+being disabled does not disable observability.
+
+The shared bench/production hook reports loss, splat count, step, learning rate,
+SH degree and timing every 200 steps. With a holdout it reports existing validation
+scores. With `test_every: 0`, it reports **Sampled train PSNR**: CPU arithmetic on
+at most 1,024 pixels from one already-rendered training view every 200 steps. That
+small detached view is copied to CPU; no extra render, backward pass, validation
+split or RNG call is introduced. Missing trainer locals omit this diagnostic.
+This is neither a held-out score nor a final quality score.
+
+Production writes validated records atomically to
+`runs/<job>/<stage>/checkpoint[-aN]/live/telemetry.json`, beside the bench-sized
+SPZ previews (100,000 splats, at 5% schedule intervals). The existing checkpoint
+sync uploads these every 60 seconds by default. The cloud runner GETs only this
+file once per checkpoint interval, plus at completion, and the worker heartbeat
+merges it into `JobStep.metrics.live`. Provider logs remain a fallback. The wire
+payload is capped at 256 kB and 300 step samples; the API reducer retains its
+48 kB training budget. Fan-out records identify the displayed block. The API
+signs only this job/stage/attempt's uploaded snapshots, including retry keys.
+
+The training console uses the completed run's published epoch asset
+(`3d-tiles-url`, ENU frame) once available, replacing the solve-local live LOD.
+Updating the Modal image is necessary: an already-running container cannot acquire
+the new observer. Deploy the API and web reader first, then rebuild/deploy Modal,
+then deploy the worker. No database migration is needed.

@@ -24,6 +24,7 @@ import {
   phaseOf,
   pillText,
   qualityReadouts,
+  psnrLabel,
   snapshotAt,
   stopRule,
   timeText,
@@ -144,6 +145,11 @@ export function liveConsole(actions: {
         el("lc-charts").insertAdjacentHTML("beforeend", chartMarkup(chart));
         svg = el(`lc-chart-${chart.id}`);
       }
+      if (chart.id === "psnr") {
+        const heading = svg.parentElement?.querySelector("h2");
+        if (heading) heading.textContent = psnrLabel(train);
+        svg.setAttribute("aria-label", `${psnrLabel(train)} over steps`);
+      }
       const lines =
         chart.id === "loss" ? lossLines(train) : [{ name: chart.id, color: chart.color, points }];
       const reference =
@@ -224,6 +230,8 @@ export function liveConsole(actions: {
           )
         ];
       if (chart.mini) {
+        const psnrHeading = el("lc-kpi-2").parentElement?.querySelector(".lc-label");
+        if (psnrHeading) psnrHeading.textContent = psnrLabel(train);
         const step = lastStep(train),
           gain = train?.evals?.findLast((e) => e.step <= step)?.gain;
         const ok =
@@ -500,6 +508,8 @@ export function liveConsole(actions: {
       const train = next.train,
         series = train?.series,
         plan = train?.plan;
+      const psnrHeading = el("lc-kpi-2").parentElement?.querySelector(".lc-label");
+      if (psnrHeading) psnrHeading.textContent = psnrLabel(train);
       const step = lastStep(train),
         index = series?.step?.findLastIndex((s) => s <= step) ?? -1,
         t = index < 0 ? null : series?.t?.[index],

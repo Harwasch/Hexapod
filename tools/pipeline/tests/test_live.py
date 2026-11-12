@@ -180,8 +180,8 @@ def test_the_watch_thread_runs_beside_the_tool_and_cleans_up(tmp_path: Path) -> 
 def test_the_mapper_argv_asks_for_snapshots_only_when_told_to(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # This checks argv only; no COLMAP process is launched.
-    monkeypatch.setattr(sfm, "colmap_exe", lambda: "/usr/bin/colmap")
+    # This checks argv, not an installed COLMAP or a running mapper.
+    monkeypatch.setattr(sfm, "colmap_exe", lambda: "/stand-in/colmap")
     plain = sfm.mapper_argv(Path("/db"), Path("/i"), Path("/o"))
     assert "--Mapper.snapshot_path" not in plain
     argv = sfm.mapper_argv(
@@ -396,7 +396,7 @@ def test_live_false_trains_exactly_as_before(tmp_path: Path) -> None:
 
     log = workdir.log_path("train").read_text()
     assert "--ply_steps 300 --save_steps" in log
-    assert set(live.latest(log)) == {"plan"}
+    assert live.latest(log) == {}
     assert not any(workdir.checkpoint_dir("train").rglob("*.spz"))
 
 

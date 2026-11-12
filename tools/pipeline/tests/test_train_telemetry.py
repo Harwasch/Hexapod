@@ -6,6 +6,7 @@ import json
 import random
 import sys
 import time
+import weakref
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -18,8 +19,58 @@ import live
 import train_telemetry
 
 
+def test_no_loop_local_survives_a_sample_or_a_broken_sampler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import numpy as np
+
+    class Sentinel:
+        pass
+
+    calls = []
+    result = object()
+
+    def l1_loss(colors: Any, pixels: Any) -> Any:
+        calls.append(True)
+        return result
+
+    module: dict[str, Any] = {"l1_loss": l1_loss, "Dataset": object}
+
+    class Runner:
+        writer = SimpleNamespace(add_scalar=lambda *a: None)
+
+        def train(self) -> None:
+            # Check while this frame is still executing: CPython 3.10-3.12 caches
+            # f_locals on the frame even when the observer drops its own references.
+            info = Sentinel()
+            ref = weakref.ref(info)
+            colors = np.full((1, 32, 32, 3), 0.1)
+            pixels = np.zeros_like(colors)
+            color_ref, pixel_ref = weakref.ref(colors), weakref.ref(pixels)
+            assert module["l1_loss"](colors, pixels) is result
+            self.writer.add_scalar("train/loss", 0.1, 0)
+            del info, colors, pixels
+            assert ref() is None
+            assert color_ref() is None and pixel_ref() is None
+
+    converge_trainer.instrument(
+        module, Runner, converge_trainer.Timing(None), SimpleNamespace(test_every=0)
+    )
+    Runner().train()
+    assert module["l1_loss"] is l1_loss
+    assert calls == [True]
+
+    def broken(*args: Any) -> None:
+        raise RuntimeError("sampling failed")
+
+    monkeypatch.setattr(train_telemetry, "sampled_train_psnr", broken)
+    Runner().train()
+    assert module["l1_loss"] is l1_loss
+    assert calls == [True, True]
+
+
 def test_loop_records_scaled_plan_samples_evaluations_and_stop(tmp_path: Path) -> None:
-    workdir, _ = run(tmp_path, converge_params(extra_args=["--plateau-at", "0.84"]))
+    workdir, _ = run(tmp_path, converge_params(live=True, extra_args=["--plateau-at", "0.84"]))
     text = workdir.log_path("train").read_text()
     records = live.records(text)
     points = [p for kind, p in records if kind == "train"]
@@ -189,3 +240,84 @@ def test_plan_metric_scale_and_adapter_rate_are_explicit(tmp_path: Path) -> None
         ctx, budget=None, cap=None, steps=300, factor=1, scaler=0.01, strategy="mcmc", rule=None
     )
     assert live.latest(lines[-1])["plan"]["metresPerUnit"] is None
+
+
+def test_all_frame_training_reports_sampled_train_psnr_without_evaluation(tmp_path: Path) -> None:
+    work, _ = run(tmp_path, converge_params(live=True, test_every=0))
+    records = live.records(work.log_path("train").read_text())
+    evaluated = [v for k, v in records if k == "train" and v["k"] == "e"]
+    assert evaluated and all(v["split"] == "train" for v in evaluated)
+    assert all(v["psnr"] == pytest.approx(20) for v in evaluated)
+    assert not list((work.work_dir("train") / "gsplat" / "stats").glob("val_*.json"))
+
+
+def test_sampled_psnr_bounds_pixels_and_omits_missing_or_nonfinite_data() -> None:
+    import numpy as np
+
+    copied = []
+
+    class CPUView:
+        def __init__(self, shape: tuple[int, ...]) -> None:
+            self.shape = shape
+
+        def __getitem__(self, slices: tuple[slice, ...]) -> Any:
+            rows = [len(range(*s.indices(n))) for s, n in zip(slices, self.shape, strict=True)]
+            assert rows[0] == 1 and rows[1] * rows[2] <= 1024
+
+            class Sample:
+                def detach(self) -> Any:
+                    return self
+
+                def cpu(self) -> Any:
+                    copied.append(rows[0] * rows[1] * rows[2])
+                    return self
+
+                def numpy(self) -> np.ndarray:
+                    return np.ones(rows)
+
+            return Sample()
+
+    view = CPUView((4, 1920, 1080, 3))
+    assert train_telemetry.sampled_train_psnr(view, view) is None
+    assert len(copied) == 2 and max(copied) <= 1024
+    assert train_telemetry.sampled_train_psnr(None, None) is None
+    assert (
+        train_telemetry.sampled_train_psnr(np.full((1, 1, 1, 3), np.nan), np.zeros((1, 1, 1, 3)))
+        is None
+    )
+
+
+def test_live_default_matches_explicit_on_and_false_is_the_only_opt_out(tmp_path: Path) -> None:
+    import training
+
+    params = converge_params()
+    params.pop("live")
+    default, _ = run(tmp_path / "default", params)
+    enabled, _ = run(tmp_path / "enabled", {**params, "live": True})
+
+    def stable(text: str) -> list[tuple[str, dict[str, Any]]]:
+        # UUIDs, timestamps and measured throughput naturally differ between runs.
+        return [
+            (kind, {k: v for k, v in row.items() if k not in {"run", "id", "t", "its"}})
+            for kind, row in live.records(text)
+            if kind in {"train", "plan"}
+        ]
+
+    default_log = default.log_path("train").read_text()
+    enabled_log = enabled.log_path("train").read_text()
+    assert stable(default_log) == stable(enabled_log)
+    assert {kind for kind, _ in live.records(default_log)} >= {"train", "plan", "splat"}
+    argv = ["python", "trainer.py", "mcmc"]
+    options: dict[str, Any] = {
+        "script": Path("wrapper.py"),
+        "every": 200,
+        "window": 1000,
+        "min_gain_db": 0.1,
+    }
+    assert training.converge_argv(argv, **options) == training.converge_argv(
+        argv, **options, live=True
+    )
+    assert "--no-live" not in training.converge_argv(argv, **options)
+    assert "--no-live" in training.converge_argv(argv, **options, live=False)
+    disabled, _ = run(tmp_path / "disabled", {**params, "live": False})
+    assert live.records(disabled.log_path("train").read_text()) == []

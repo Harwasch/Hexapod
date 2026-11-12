@@ -158,7 +158,9 @@ def report_live(
         ]
     current = (step.metrics or {}).get("live") or {}
     try:
-        merged = merge_live(current, records) if records is not None else {**current, **live}
+        merged = (
+            {**merge_live(current, records), **live} if records is not None else {**current, **live}
+        )
     except Exception:
         logger.warning(
             "Could not merge live observations for stage %s", step.stage_id, exc_info=True

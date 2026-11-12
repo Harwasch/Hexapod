@@ -414,7 +414,8 @@ def instrument(
     runner.eval = eval
     runner.train = train
     timing.hooked = True
-    train_telemetry.install(runner, cfg, timing, state)
+    if getattr(cfg, "live_enabled", True):
+        train_telemetry.install(runner, cfg, timing, state, module)
 
 
 def _result_dir(argv: list[str]) -> Path | None:
@@ -454,6 +455,7 @@ def main(argv: list[str] | None = None) -> int:
         "--min-gain-db", dest="min_gain_db", type=float, default=convergence.DEFAULT_MIN_GAIN_DB
     )
     parser.add_argument("--no-converge", action="store_true")
+    parser.add_argument("--no-live", action="store_true")
     parser.add_argument("--min-steps", type=int, default=0)
     parser.add_argument("--self-check", dest="self_check", action="store_true")
     options = parser.parse_args(own)
@@ -501,6 +503,7 @@ def main(argv: list[str] | None = None) -> int:
                 state.hooked = True
                 state.reason = "hooked"
             if devices <= 1:
+                cfg.live_enabled = not options.no_live
                 cfg.streaming_export = "--no-streaming-export" not in rest
                 instrument(module, runner, timing, cfg, state)
             return real_cli(fn, cfg, verbose=verbose)

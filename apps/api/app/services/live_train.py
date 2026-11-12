@@ -246,8 +246,14 @@ def merge_live(
                 by_step[value["step"]] = value
             elif event == "e":
                 evals[value["step"]] = {
-                    key: (_number(value.get(key)) if key in ("psnr", "gain") else value.get(key))
-                    for key in ("step", "psnr", "gain", "decision")
+                    key: (
+                        _number(value.get(key))
+                        if key in ("psnr", "gain")
+                        else (value.get(key) or "val")
+                        if key == "split"
+                        else value.get(key)
+                    )
+                    for key in ("step", "psnr", "gain", "decision", "split")
                 }
             elif event == "x":
                 train["stop"] = {key: value.get(key) for key in ("step", "maxSteps", "gain")}
@@ -328,7 +334,11 @@ def derive_events(train: dict[str, Any]) -> list[dict[str, Any]]:
         if row.get("psnr") is not None:
             gain = row.get("gain")
             suffix = "" if gain is None else f" · gain {gain:.3f} dB"
-            add(row["step"], "eval", f"PSNR {row['psnr']:.2f} dB{suffix}")
+            add(
+                row["step"],
+                "eval",
+                f"{'Sampled train PSNR' if row.get('split') == 'train' else 'PSNR'} {row['psnr']:.2f} dB{suffix}",
+            )
     if stop:
         saved = max(0, (stop.get("maxSteps") or plan.get("stepsMax") or last) - stop["step"])
         speed = next((v for v in reversed(series.get("its", [])) if v is not None and v > 0), None)

@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,8 @@ class Config:
     strategy: MCMCStrategy = field(default_factory=MCMCStrategy)
     plateau_at: float = 2.0
     gaussians: int = 64
+    test_every: int = 8
+    step_delay: float = 0
     val_frames: int = 3
     # v1.5.3 simple_trainer.py:99-101; used by the loop at :636.
     sh_degree: int = 3
@@ -120,6 +123,14 @@ class Optimizer:
         self.param_groups[0]["lr"] *= 0.999
 
 
+class Dataset:
+    pass
+
+
+def l1_loss(colors: Any, pixels: Any) -> float:
+    return 0.07
+
+
 class Runner:
     def __init__(self, local_rank: int, world_rank: int, world_size: int, cfg: Config) -> None:
         self.cfg = cfg
@@ -139,8 +150,15 @@ class Runner:
         cfg = self.cfg
         max_steps = cfg.max_steps
         for step in range(0, max_steps):
+            if cfg.step_delay:
+                time.sleep(cfg.step_delay)
             count = min(cfg.gaussians, cfg.strategy.cap_max)
             if step % 100 == 0:
+                import numpy as np
+
+                colors = np.full((1, 32, 32, 3), 0.1)
+                pixels = np.zeros_like(colors)
+                l1_loss(colors, pixels)
                 self.writer.add_scalar("train/loss", 0.1, step)
                 self.writer.add_scalar("train/l1loss", 0.07, step)
                 self.writer.add_scalar("train/ssimloss", 0.03, step)
@@ -181,6 +199,8 @@ def _parse(argv: list[str]) -> Config:
     parser.add_argument("strategy")
     parser.add_argument("--data_dir", required=True)
     parser.add_argument("--result_dir", required=True)
+    parser.add_argument("--test_every", type=int, default=8)
+    parser.add_argument("--step-delay", type=float, default=0)
     parser.add_argument("--max_steps", type=int, default=30_000)
     parser.add_argument("--steps_scaler", type=float, default=1.0)
     parser.add_argument("--save_ply", action="store_true")
@@ -191,6 +211,8 @@ def _parse(argv: list[str]) -> Config:
     parser.add_argument("--gaussians", type=int, default=64)
     args, _unknown = parser.parse_known_args(argv)
     return Config(
+        test_every=args.test_every,
+        step_delay=args.step_delay,
         data_dir=args.data_dir,
         result_dir=args.result_dir,
         max_steps=args.max_steps,

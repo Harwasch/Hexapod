@@ -29,6 +29,8 @@ def emit(
     sparse: int | None = None,
 ) -> None:
     """Only resolved scale is metric; a placement with unresolved scale is not evidence."""
+    if ctx.param("live") is False:
+        return
     with contextlib.suppress(Exception):
         metres = None
         if ctx.has_input("georef.json"):
