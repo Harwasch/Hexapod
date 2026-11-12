@@ -389,7 +389,8 @@ def test_train_series_and_snapshots_persist_after_finish_and_bad_data_is_null(
     step = db.scalars(
         select(JobStep).where(JobStep.job_id == job.id, JobStep.stage_id == "train")
     ).one()
-    older_key = SPLAT_KEY.replace("003000", "001000")
+    newest_key = SPLAT_KEY.replace("run-1", str(job.id))
+    older_key = newest_key.replace("003000", "001000")
     payload = splat_payload(1000, older_key)
     payload["farFieldShare"] = 0.2
     live = merge_live(
@@ -409,7 +410,7 @@ def test_train_series_and_snapshots_persist_after_finish_and_bad_data_is_null(
                 },
             ),
             ("splat", payload),
-            ("splat", splat_payload()),
+            ("splat", splat_payload(key=newest_key)),
         ],
     )
     step.metrics = {

@@ -18,6 +18,8 @@ from app.services.errors import NotFoundError
 from app.services.live import _state
 from app.services.live_train import merge_live
 from app.storage import ObjectStorage
+from app.storage.null import StorageUnavailableError
+from tests.test_live import splat_payload
 
 LiveTiles = tuple[Request, Mock, Mock, Capture, Job, JobStep]
 
@@ -230,3 +232,62 @@ def test_retry_tiles_use_this_attempt_and_allow_its_fanout_part(
     step.metrics["live"]["tiles"]["key"] = key.replace("checkpoint-a2", "checkpoint")
     with pytest.raises(NotFoundError):
         capture_live_tile(capture.id, 30, "tileset.json", db, storage)
+
+
+@pytest.mark.parametrize("attempt", [1, 2])
+@pytest.mark.parametrize("part", ["", "/parts/b0"])
+def test_in_scope_snapshots_keep_metadata_and_sign_history_before_upload(
+    live_tiles: LiveTiles, attempt: int, part: str
+) -> None:
+    _request, db, storage, capture, job, step = live_tiles
+    step.attempt = attempt
+    step.status = RunStatus.COMPLETE
+    checkpoint = "checkpoint" if attempt == 1 else f"checkpoint-a{attempt}"
+    root = f"runs/{job.id}/train{part}/{checkpoint}/live"
+    newest = splat_payload(key=f"{root}/splat_003000_1700000000.spz")
+    older = splat_payload(1000, key=f"{root}/splat_001000_1700000000.spz")
+    step.metrics = {"live": {"splat": newest, "train": {}, "snapshots": [older, newest]}}
+    storage.head_object.return_value = None
+
+    state = _state(db, storage, job, capture)
+
+    assert state.splat is not None and state.splat.step == 3000 and state.splat.url is None
+    assert state.train is not None
+    assert [snapshot.step for snapshot in state.train.snapshots] == [1000, 3000]
+    assert all(s.url == storage.presign_get.return_value for s in state.train.snapshots)
+    storage.head_object.assert_called_once_with(newest["key"])
+    assert [call.args[0] for call in storage.presign_get.call_args_list] == [
+        older["key"],
+        newest["key"],
+    ]
+
+    storage.presign_get.side_effect = StorageUnavailableError("No bucket")
+    state = _state(db, storage, job, capture)
+    assert state.splat is not None and state.splat.url is None
+    assert state.train is not None
+    assert all(s.url is None for s in state.train.snapshots)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "runs/other/train/checkpoint-a2/live/splat.spz",
+        "runs/{job}/other/checkpoint-a2/live/splat.spz",
+        "runs/{job}/train/checkpoint/live/splat.spz",
+        "runs/{job}/train/parts/b0/checkpoint/live/splat.spz",
+        "runs/{job}/train/checkpoint-a3/live/splat.spz",
+    ],
+)
+def test_foreign_preview_keys_are_dropped_without_storage_access(
+    live_tiles: LiveTiles, key: str
+) -> None:
+    _request, db, storage, capture, job, step = live_tiles
+    step.attempt = 2
+    snapshot = splat_payload(key=key.format(job=job.id))
+    step.metrics = {"live": {"splat": snapshot, "train": {}, "snapshots": [snapshot]}}
+
+    state = _state(db, storage, job, capture)
+
+    assert state.splat is None and state.train is None
+    storage.head_object.assert_not_called()
+    storage.presign_get.assert_not_called()

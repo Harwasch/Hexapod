@@ -431,7 +431,12 @@ def _train(
             or not _snapshot_key(key, step)
         ):
             return None
-        snapshot.url = _signed(storage, key)
+        # History is signed locally: scrubbing must not HEAD every snapshot on
+        # every poll. The newest preview in _splat remains upload-gated.
+        try:
+            snapshot.url = storage.presign_get(key, expires_in=SIGNED_FOR_S)
+        except StorageUnavailableError:
+            snapshot.url = None
     return parsed
 
 

@@ -194,21 +194,19 @@ def test_production_live_mid_run_and_published_tiles(
         }
 
 
-def test_snapshot_signing_is_scoped_and_waits_for_upload() -> None:
+def test_snapshot_signing_is_scoped() -> None:
+    # As main's console: snapshot history is signed locally, without a HEAD per
+    # snapshot per poll; only the newest splat waits for its upload.
     job_id = uuid.uuid4()
     step = JobStep(job_id=job_id, stage_id="train", attempt=2)
     key = f"runs/{job_id}/train/parts/p0/checkpoint-a2/live/splat.spz"
     snapshot = {"step": 200, "count": 10, "key": key}
     storage = Mock(spec=ObjectStorage)
-    storage.head_object.return_value = None
-    value = {"train": {}, "snapshots": [snapshot]}
-    pending = _train(value, storage, step=step)
-    assert pending is not None and pending.snapshots[0].url is None
-    storage.presign_get.assert_not_called()
-    storage.head_object.return_value = True
     storage.presign_get.return_value = "https://signed.example/snapshot"
-    ready = _train(value, storage, step=step)
-    assert ready is not None and ready.snapshots[0].url
+    value = {"train": {}, "snapshots": [snapshot]}
+    signed = _train(value, storage, step=step)
+    assert signed is not None and signed.snapshots[0].url
+    storage.head_object.assert_not_called()
     for forbidden in [
         key.replace(str(job_id), str(uuid.uuid4())),
         key.replace("/train/", "/other/"),
