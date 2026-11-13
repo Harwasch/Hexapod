@@ -25,6 +25,7 @@ declare global {
     readonly VITE_ENABLE_DEV_TOOLS?: string;
     readonly VITE_SPLAT_GPU_MOTION?: string;
     readonly VITE_ENABLE_DRONE_EXPORT?: string;
+    readonly VITE_LIVING_WEATHER?: string;
   }
 }
 

@@ -51,6 +51,12 @@ export interface AppEnv {
    * docs/DRONES.md before turning it on (`VITE_ENABLE_DRONE_EXPORT=true`).
    */
   droneExportEnabled: boolean;
+  /**
+   * Weather wind (docs/LIVING_WEATHER_WIND.md): Settings › Living survey gets a switch that
+   * moves a scan's plants with the hour's wind (Open-Meteo), labelled Simulated. Off by
+   * default: without `VITE_LIVING_WEATHER=1` the switch is not shown and no weather is fetched.
+   */
+  livingWeather: boolean;
   isDev: boolean;
 }
 
@@ -71,6 +77,7 @@ export function readEnv(source: ImportMetaEnv = import.meta.env): AppEnv {
     landOidcAudience: optionalString(source.VITE_LAND_OIDC_AUDIENCE),
     splatGpuMotion: flag(source.VITE_SPLAT_GPU_MOTION, true),
     droneExportEnabled: flag(source.VITE_ENABLE_DRONE_EXPORT),
+    livingWeather: flag(source.VITE_LIVING_WEATHER),
     isDev: source.DEV,
   };
 }
