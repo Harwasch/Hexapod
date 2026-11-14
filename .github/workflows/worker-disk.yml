@@ -1,12 +1,19 @@
 name: Worker disk report
 
-# Read-only: how full the worker's /data volume is, and which training checkpoints and
-# resume files are still on it. Nothing is deleted or written. If the worker machine is
+# How full the worker's /data volume is, and which training checkpoints and resume files
+# are still on it. Read-only unless `remove_run` names one run's workdir to delete: a job id
+# (a UUID, nothing else), removed only when its folder exists and has not been written to
+# in the last 24 hours, so a run in progress is never touched. The report runs after it. If the worker machine is
 # stopped (it stops itself when idle), this starts it; with nothing queued it stops again
 # after WORKER_IDLE_EXIT_S (fly.toml), exactly as when a job wakes it.
 
 on:
   workflow_dispatch:
+    inputs:
+      remove_run:
+        description: Job id whose /data/worker folder to delete (blank = report only)
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -23,6 +30,7 @@ jobs:
       - name: Report
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          REMOVE_RUN: ${{ inputs.remove_run }}
         run: |
           set -euo pipefail
           app=twin-api
@@ -34,6 +42,22 @@ jobs:
           if [ "$state" != "started" ]; then
             flyctl machine start "$machine" --app "$app"
             sleep 20
+          fi
+          if [ -n "$REMOVE_RUN" ]; then
+            if ! printf '%s' "$REMOVE_RUN" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+              echo "::error::remove_run must be a full job id (UUID)"
+              exit 1
+            fi
+            cat > remove.sh <<SH
+          dir=/data/worker/$REMOVE_RUN
+          [ -d "\$dir" ] || { echo "no such run folder: \$dir"; exit 1; }
+          recent=\$(find "\$dir" -newermt '24 hours ago' -print -quit)
+          [ -z "\$recent" ] || { echo "refusing: \$dir was written to in the last 24 hours"; exit 1; }
+          du -sh "\$dir"
+          rm -rf "\$dir" && echo "removed \$dir"
+          SH
+            flyctl ssh console --app "$app" --machine "$machine" \
+              -C "sh -c 'echo $(base64 -w0 remove.sh) | base64 -d | sh'"
           fi
           cat > report.sh <<'SH'
           df -h /data
