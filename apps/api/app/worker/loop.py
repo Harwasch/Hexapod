@@ -60,12 +60,13 @@ from app.config import Settings, get_settings
 from app.db import get_session_factory
 from app.storage import ObjectStorage, build_storage
 from app.storage.factory import build_publish_storage
-from app.worker.child import resolve_recipe
+from app.worker import steps
+from app.worker.child import load_impl_modules, resolve_recipe
 from app.worker.claim import anything_claimable, claim_next
 from app.worker.cloud import check_dispatchable
 from app.worker.config import WorkerConfig
 from app.worker.disk import DiskGuard
-from app.worker.pipeline_bridge import recipe_dir
+from app.worker.pipeline_bridge import plan_recipe, recipe_dir
 from app.worker.reaper import Reaper
 from app.worker.runner import JobSupervisor, Terminal
 
@@ -240,6 +241,21 @@ class Worker:
             )
             if job is None:
                 return None
+            try:
+                load_impl_modules(resolved.impl_modules)
+                plan = plan_recipe(
+                    resolve_recipe(
+                        job.recipe, str(resolved.recipe_dir) if resolved.recipe_dir else None
+                    )
+                )
+                if plan.stages:
+                    first = plan.stages[0]
+                    steps.prepare_step(
+                        db, job.id, stage_id=first.id, ordinal=first.index, impl=first.impl.name
+                    )
+            except Exception:
+                # The supervisor records an invalid recipe as a terminal job error.
+                db.rollback()
             if only is not None:
                 log.warning(
                     "worker %s: short of room, claiming only detached run %s, whose "

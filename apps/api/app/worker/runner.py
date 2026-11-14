@@ -104,6 +104,7 @@ from app.worker.config import WorkerConfig
 from app.worker.events import Event
 from app.worker.pipeline_bridge import (
     CALL_BOOK,
+    DEFAULT_ALIGN_MAX_FRAMES,
     LIVE_PAYLOAD_NAME,
     PIPELINE_DIR,
     SITE_CONTEXT,
@@ -279,6 +280,12 @@ class JobSupervisor:
             load_impl_modules(self._config.impl_modules)
             recipe = resolve_recipe(job.recipe, self._recipe_dir())
             plan = plan_recipe(recipe)
+            preparation = None
+            if plan.stages:
+                first = plan.stages[0]
+                preparation = steps.prepare_step(
+                    db, job.id, stage_id=first.id, ordinal=first.index, impl=first.impl.name
+                )
             stage_params = self._stage_params(db, job, plan)
         except (PipelineError, ValueError) as error:
             # A recipe that will not resolve will not resolve on the next attempt either,
@@ -287,7 +294,15 @@ class JobSupervisor:
             return self._dead_letter(db, job, f"recipe {job.recipe!r} did not resolve: {error}")
         workdir_root = self._config.workdir_for(job_id)
         try:
-            self._seed(db, job, recipe.inputs, workdir_root, plan=plan)
+            self._seed(
+                db,
+                job,
+                recipe.inputs,
+                workdir_root,
+                plan=plan,
+                stage_params=stage_params,
+                preparation=preparation,
+            )
         except StorageUnavailableError as error:
             return self._dead_letter(db, job, f"could not fetch the capture's files: {error}")
         try:
@@ -1147,6 +1162,24 @@ class JobSupervisor:
         found = latest_progress(text)
         if found is not None:
             steps.report_progress(db, step, found.to_dict())
+        elif step.impl == params.FFMPEG_FRAMES:
+            scratch = Workdir(workdir_root).work_dir(step.stage_id)
+            try:
+                total = int(json.loads((scratch / "extraction.json").read_text())["total"])
+            except (OSError, ValueError, KeyError, TypeError):
+                total = 0
+            if total > 0:
+                done = sum(1 for _ in (scratch / "extracted").glob("frame_*.jpg"))
+                steps.report_progress(
+                    db,
+                    step,
+                    {
+                        "done": min(done, total),
+                        "total": total,
+                        "elapsedS": None,
+                        "remainingS": None,
+                    },
+                )
         # What the live viewer draws: the newest cameras and intermediate splat the stage
         # has logged (`tools/pipeline/live.py`), under `metrics.live`.
         journal = Workdir(workdir_root).work_dir(step.stage_id) / LIVE_PAYLOAD_NAME
@@ -1203,6 +1236,8 @@ class JobSupervisor:
         workdir_root: Path,
         *,
         plan: Plan | None = None,
+        stage_params: dict[str, dict[str, Any]] | None = None,
+        preparation: JobStep | None = None,
     ) -> None:
         """Put the capture's uploaded bytes where the recipe says its inputs live.
 
@@ -1233,25 +1268,68 @@ class JobSupervisor:
             if source.status is UploadStatus.COMPLETE
         ]
         _end_transaction(db)
+        began = time.monotonic()
+        last_report = float("-inf")
+
+        def progress(done: int, total: int) -> None:
+            nonlocal last_report
+            now = time.monotonic()
+            if preparation is not None and (done == total or now - last_report >= 1):
+                steps.report_progress(
+                    db,
+                    preparation,
+                    {
+                        "done": done,
+                        "total": total,
+                        "elapsedS": int(now - began),
+                        "remainingS": None,
+                    },
+                )
+                last_report = now
+
+        # Match the aligner's exact registered-image sample, not every JPEG from the
+        # reference's native capture. Overrides (including unlimited) stay authoritative.
+        reference_limit = None
+        if plan is not None:
+            for stage in plan.stages:
+                if stage.impl.name == params.ALIGN_EPOCH:
+                    configured = {**stage.params, **(stage_params or {}).get(stage.id, {})}
+                    reference_limit = int(configured.get("max_frames", DEFAULT_ALIGN_MAX_FRAMES))
+                    break
         for name in inputs:
             if name == SITE_CONTEXT:
                 site_context.seed_site_context(
-                    db, self._storage, capture, work.input_path(name), located=located
+                    db,
+                    self._storage,
+                    capture,
+                    work.input_path(name),
+                    located=located,
+                    reference_frame_limit=reference_limit,
+                    progress=progress,
                 )
                 continue
             if name != "upload" or capture is None:
                 continue
             target = work.input_path(name)
             target.mkdir(parents=True, exist_ok=True)
-            for key, filename in wanted:
+            log.info("worker: job %s preparing %d uploaded files", job.id, len(wanted))
+            progress(0, len(wanted))
+            for downloaded, (key, filename) in enumerate(wanted, 1):
                 # File by file, not "the directory has something in it": a worker that
                 # stopped between two files, or mid-file (`download_file` writes beside
                 # the target and renames), left a directory that is not empty and not
                 # complete, and a resume that skipped it ran the recipe on half a capture.
                 path = target / filename
-                if path.is_file():
-                    continue
-                self._storage.download_file(key, path)
+                if not path.is_file():
+                    self._storage.download_file(key, path)
+                progress(downloaded, len(wanted))
+            log.info(
+                "worker: job %s upload ready (%d files, %d bytes), preparation %.1f s",
+                job.id,
+                len(wanted),
+                sum((target / filename).stat().st_size for _, filename in wanted),
+                time.monotonic() - began,
+            )
 
     def _completed_stages(self, db: Session, job_id: uuid.UUID, workdir_root: Path) -> set[str]:
         """Stages that may be skipped: complete in the database **and** still on disk."""
@@ -1282,7 +1360,9 @@ class JobSupervisor:
             row = rows.get(stage.id)
             if row is None:
                 attempts[stage.id] = 1
-            elif row.status is RunStatus.IN_PROGRESS and (row.metrics or {}).get(DETACHED):
+            elif row.status is RunStatus.IN_PROGRESS and (
+                (row.metrics or {}).get(DETACHED) or (row.metrics or {}).get(steps.PREPARING)
+            ):
                 attempts[stage.id] = row.attempt
             else:
                 attempts[stage.id] = row.attempt + 1

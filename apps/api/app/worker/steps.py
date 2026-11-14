@@ -35,6 +35,7 @@ REMOTE_CALLS = "remoteCalls"
 #: Calls of a run that was over, cancelled by id after nobody was left to watch them
 #: (`app.worker.reaper`): id -> when, and how ("cancelled", or "expired" unasked).
 REAPED_CALLS = "reapedCalls"
+PREPARING = "preparing"
 
 
 def utcnow() -> datetime:
@@ -46,6 +47,32 @@ def steps_of(db: Session, job_id: uuid.UUID) -> dict[str, JobStep]:
     position, so a retried stage updates its row rather than adding a second one."""
     rows = db.scalars(select(JobStep).where(JobStep.job_id == job_id)).all()
     return {row.stage_id: row for row in rows}
+
+
+def prepare_step(
+    db: Session, job_id: uuid.UUID, *, stage_id: str, ordinal: int, impl: str
+) -> JobStep | None:
+    """Expose a fresh claim before metadata reads, downloads or reference seeding.
+
+    This is the first recipe step, so existing API and phone status mappings work.
+    Preparation does not spend a stage attempt or reset a resumed stage's evidence.
+    """
+    row = db.scalar(select(JobStep).where(JobStep.job_id == job_id, JobStep.ordinal == ordinal))
+    if row is not None:
+        return row if (row.metrics or {}).get(PREPARING) else None
+    row = JobStep(
+        job_id=job_id,
+        stage_id=stage_id,
+        ordinal=ordinal,
+        impl=impl,
+        attempt=1,
+        status=RunStatus.IN_PROGRESS,
+        started_at=utcnow(),
+        metrics={PREPARING: True},
+    )
+    db.add(row)
+    db.commit()
+    return row
 
 
 def start_step(
@@ -66,11 +93,16 @@ def start_step(
     if step is None:
         step = JobStep(job_id=job_id, stage_id=stage_id, ordinal=ordinal, impl=impl)
         db.add(step)
+    preparing_since = (
+        step.started_at
+        if step.status == RunStatus.IN_PROGRESS and (step.metrics or {}).get(PREPARING)
+        else None
+    )
     step.stage_id = stage_id
     step.impl = impl
     step.attempt = attempt
     step.status = RunStatus.IN_PROGRESS
-    step.started_at = started_at or utcnow()
+    step.started_at = preparing_since or started_at or utcnow()
     # A restarted step (a retry, the phone's Refine) starts with nothing measured: the
     # previous attempt's metrics, its progress bar included, describe a run that is over.
     step.metrics = {}

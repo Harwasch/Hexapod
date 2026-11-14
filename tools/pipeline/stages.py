@@ -506,7 +506,26 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
             else fps
         )
         extracted = ctx.work_dir / "extracted"
+        if extracted.exists():
+            shutil.rmtree(extracted)
         extracted.mkdir(parents=True, exist_ok=True)
+        (ctx.work_dir / "extraction.json").unlink(missing_ok=True)
+        cap = _optional_int(ctx.param("max_candidates", 1200)) if applied == "viewpoint" else None
+        # A hard output bound also covers missing/inaccurate container duration. The
+        # rate alone was only an estimate and could leave >max_candidates JPEGs.
+        expected_rate = rate if rate is not None else meta.fps
+        expected = (
+            math.ceil(meta.duration_s * expected_rate)
+            if expected_rate is not None and meta.duration_s is not None
+            else cap
+        )
+        if expected is not None:
+            _write_json(
+                ctx.work_dir / "extraction.json",
+                {
+                    "total": min(expected, cap) if cap else expected,
+                },
+            )
         ctx.run(
             video.extract_frames_argv(
                 source.path,
@@ -515,6 +534,7 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
                 quality=int(ctx.param("quality", 2)),
                 max_side=max_side,
                 tonemap=tonemap,
+                max_frames=cap,
             )
         )
         candidates = sorted(extracted.glob("frame_*.jpg"))
@@ -585,6 +605,11 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     if applied == "usable" and source.is_video:
         rate = meta.fps  # Native decode has no fps filter; offsets are nominal source time.
     records = _frame_records(source, upload, candidates, chosen, written, meta, rate)
+    if source.is_video:
+        # Kept frames now live in out/: rejected JPEGs need not wait for the entire
+        # reconstruction (pose/train) to finish before releasing volume space.
+        shutil.rmtree(extracted)
+        (ctx.work_dir / "extraction.json").unlink(missing_ok=True)
     records, linear = _measure_exposure(records, written)
     thresholds = _exposure_thresholds(ctx)
     clip_pct = thresholds["clip_pct"]
