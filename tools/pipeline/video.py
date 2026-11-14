@@ -583,29 +583,38 @@ def extract_frames_argv(
     quality: int = 2,
     max_side: int | None = None,
     tonemap: str | None = None,
+    max_frames: int | None = None,
 ) -> list[str]:
     """The argv that turns a clip into numbered JPEGs. Built here so a test can read it.
 
     `-vsync vfr` with an `fps` filter is deliberately *not* used: constant-rate sampling
     is what makes "4 fps" mean the same number of frames for the same clip on any
     machine, which is what the frame count in `source_meta.json` is worth anything for.
-    `tonemap` (`TONEMAP_FILTER` for an HDR clip) sits between the rate and the size, so
-    only the frames kept are converted and they are scaled in 8-bit BT.709.
+    Sample and shrink before HDR float conversion: Preview need not tonemap native
+    4K pixels it will discard. Native extraction has no scale and keeps its HDR path.
+    Decoder, filter and encoder pools are bounded for the two-CPU Fly worker.
     """
     chain = [] if fps is None else [f"fps={fps:g}"]
-    if tonemap:
-        chain.append(tonemap)
     if max_side is not None:
         chain.append(scale_filter(max_side))
+    if tonemap:
+        chain.append(tonemap)
     return [
         ffmpeg_exe(),
         "-hide_banner",
         "-nostdin",
         "-y",
+        "-threads",
+        "2",
+        "-filter_threads",
+        "2",
         "-i",
         str(source),
         *(["-vf", ",".join(chain)] if chain else []),
         *(["-vsync", "0"] if fps is None else []),
+        *(["-frames:v", str(max_frames)] if max_frames is not None else []),
+        "-threads",
+        "2",
         "-q:v",
         str(quality),
         "-start_number",

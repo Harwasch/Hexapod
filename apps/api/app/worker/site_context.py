@@ -31,7 +31,9 @@ import json
 import logging
 import math
 import shutil
+import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -43,7 +45,13 @@ from app.models import Capture
 from app.models.enums import UploadStatus
 from app.services import check_targets, epochs
 from app.storage import ObjectStorage
-from app.worker.pipeline_bridge import SITE_CONTEXT_FILE, empty_site_context
+from app.storage.base import ObjectSummary
+from app.worker.pipeline_bridge import (
+    SITE_CONTEXT_FILE,
+    empty_site_context,
+    image_names,
+    sample_evenly,
+)
 
 log = logging.getLogger("app.worker")
 
@@ -142,28 +150,59 @@ def _download(storage: ObjectStorage, key: str, path: Path) -> None:
         raise
 
 
-def _download_tree(storage: ObjectStorage, prefix: str, target: Path) -> int:
+def _download_tree(
+    storage: ObjectStorage,
+    prefix: str,
+    target: Path,
+    *,
+    names: set[str] | None = None,
+    progress: Callable[[int, int], None] | None = None,
+) -> int:
     """Every object under `prefix/` into `target`, file by file, skipping what is there
     (a download writes beside its target and renames, so a present file is whole)."""
-    count = 0
+    items: list[ObjectSummary] = []
     token: str | None = None
     while True:
         page = storage.list_objects(f"{prefix}/", continuation_token=token)
-        for item in page.objects:
-            relative = item.key[len(prefix) + 1 :]
-            path = (target / relative).resolve()
-            if not relative or not path.is_relative_to(target.resolve()):
-                continue
-            count += 1
-            if not path.is_file():
-                _download(storage, item.key, path)
+        items.extend(page.objects)
         token = page.next_continuation_token
         if token is None:
-            return count
+            break
+    selected = []
+    for item in items:
+        relative = item.key[len(prefix) + 1 :]
+        path = (target / relative).resolve()
+        if (
+            relative
+            and path.is_relative_to(target.resolve())
+            and (names is None or relative in names)
+        ):
+            selected.append((item, path))
+    if names is not None and len(selected) != len(names):
+        raise Vanished(prefix)
+    total = sum(item.size for item, _ in selected)
+    began = time.monotonic()
+    log.info("site context: preparing %s (%d files, %d bytes)", target, len(selected), total)
+    done = 0
+    if progress is not None:
+        progress(done, total)
+    for item, path in selected:
+        if not path.is_file():
+            _download(storage, item.key, path)
+        done += item.size
+        if progress is not None:
+            progress(done, total)
+    log.info("site context: ready %s (%d bytes), %.1f s", target, total, time.monotonic() - began)
+    return len(selected)
 
 
 def _fetch_reference(
-    storage: ObjectStorage, reference: epochs.ReferenceChoice, directory: Path
+    storage: ObjectStorage,
+    reference: epochs.ReferenceChoice,
+    directory: Path,
+    *,
+    frame_limit: int | None = None,
+    progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any] | None:
     """The reference's files under `reference/` and its block of `site_context.json`, or
     None (logged) when the bucket no longer has one of them: the run then aligns by its
@@ -188,11 +227,28 @@ def _fetch_reference(
     root.mkdir(parents=True, exist_ok=True)
     marker.write_text(json.dumps(whose), encoding="utf-8")
     names = epochs.REFERENCE_ARTIFACTS
-    for role, key in reference.keys.items():
+    # Poses first: only registered names participate in the aligner's sample.
+    for role, key in sorted(reference.keys.items(), key=lambda pair: pair[0] == "frames"):
         path = root / names[role]
         try:
             if role in DIRECTORIES:
-                if _download_tree(storage, key, path) == 0:
+                selected = None
+                if role == "frames" and frame_limit is not None:
+                    selected = set(
+                        sample_evenly(
+                            image_names(root / names["poses"] / "images.bin"), frame_limit
+                        )
+                    )
+                    # A seed interrupted on the previous worker version may have fetched
+                    # the entire capture. Keep only what alignment will actually read.
+                    if path.is_dir():
+                        for held_frame in path.rglob("*"):
+                            if (
+                                held_frame.is_file()
+                                and held_frame.relative_to(path).as_posix() not in selected
+                            ):
+                                held_frame.unlink()
+                if _download_tree(storage, key, path, names=selected, progress=progress) == 0:
                     raise Vanished(key)
             elif not path.is_file():
                 if storage.head_object(key) is None:
@@ -233,6 +289,13 @@ def _fetch_reference(
         "frameRelativeUncertaintyM": reference.frame_relative_uncertainty_m,
         **{role: f"{REFERENCE_DIR}/{names[role]}" for role in epochs.REFERENCE_ARTIFACTS},
         "placement": placement,
+        # Internal seed metadata: a retry may change align.max_frames. Fetch its new
+        # sample from this frozen reference, without choosing a different epoch.
+        **(
+            {"frameSource": reference.keys["frames"], "frameLimit": frame_limit}
+            if frame_limit is not None
+            else {}
+        ),
     }
 
 
@@ -330,19 +393,53 @@ def seed_site_context(
     directory: Path,
     *,
     located: tuple[float, float] | None = None,
+    reference_frame_limit: int | None = None,
+    progress: Callable[[int, int], None] | None = None,
 ) -> None:
     """Write `directory/site_context.json` (and the files it names) unless it exists."""
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / SITE_CONTEXT_FILE
     if path.exists():
+        document: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        reference = document.get("reference")
+        if (
+            reference_frame_limit is not None
+            and isinstance(reference, dict)
+            and isinstance(reference.get("frameSource"), str)
+            and reference.get("frameLimit") != reference_frame_limit
+        ):
+            # The context and pose model stay frozen even when the site's current
+            # reference has changed. Only hydrate the new aligner's required JPEGs.
+            selected = set(
+                sample_evenly(
+                    image_names(directory / reference["poses"] / "images.bin"),
+                    reference_frame_limit,
+                )
+            )
+            _end_transaction(db)
+            try:
+                _download_tree(
+                    storage,
+                    reference["frameSource"],
+                    directory / reference["frames"],
+                    names=selected,
+                    progress=progress,
+                )
+                reference["frameLimit"] = reference_frame_limit
+            except Vanished:
+                log.warning("site context: frozen reference's new frame sample vanished")
+                document["reference"] = None
+            staging = path.with_suffix(".json.tmp")
+            staging.write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")
+            staging.replace(path)
         return
     plan = plan_seed(db, capture, located)
     _end_transaction(db)
-    document: dict[str, Any] = empty_site_context(
-        str(plan.site_id) if plan.site_id is not None else None
-    )
+    document = empty_site_context(str(plan.site_id) if plan.site_id is not None else None)
     if plan.reference is not None:
-        document["reference"] = _fetch_reference(storage, plan.reference, directory)
+        document["reference"] = _fetch_reference(
+            storage, plan.reference, directory, frame_limit=reference_frame_limit, progress=progress
+        )
     document["targets"] = plan.targets
     # Whether this epoch makes the site's frame (0) or is placed relative to one: what
     # caps its confidence grid when it could not be aligned (ADR 0016).
