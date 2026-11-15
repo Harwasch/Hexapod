@@ -31,6 +31,7 @@ import json
 import logging
 import math
 import shutil
+import struct
 import time
 import uuid
 from collections.abc import Callable
@@ -234,11 +235,20 @@ def _fetch_reference(
             if role in DIRECTORIES:
                 selected = None
                 if role == "frames" and frame_limit is not None:
-                    selected = set(
-                        sample_evenly(
-                            image_names(root / names["poses"] / "images.bin"), frame_limit
+                    try:
+                        selected = set(
+                            sample_evenly(
+                                image_names(root / names["poses"] / "images.bin"), frame_limit
+                            )
                         )
-                    )
+                    except (OSError, ValueError, struct.error) as error:
+                        log.warning(
+                            "site context: reference epoch %s has unreadable poses (%s); "
+                            "the run is aligned by its own georeference",
+                            reference.epoch_id,
+                            error,
+                        )
+                        return None
                     # A seed interrupted on the previous worker version may have fetched
                     # the entire capture. Keep only what alignment will actually read.
                     if path.is_dir():
@@ -410,14 +420,14 @@ def seed_site_context(
         ):
             # The context and pose model stay frozen even when the site's current
             # reference has changed. Only hydrate the new aligner's required JPEGs.
-            selected = set(
-                sample_evenly(
-                    image_names(directory / reference["poses"] / "images.bin"),
-                    reference_frame_limit,
-                )
-            )
             _end_transaction(db)
             try:
+                selected = set(
+                    sample_evenly(
+                        image_names(directory / reference["poses"] / "images.bin"),
+                        reference_frame_limit,
+                    )
+                )
                 _download_tree(
                     storage,
                     reference["frameSource"],
@@ -426,8 +436,12 @@ def seed_site_context(
                     progress=progress,
                 )
                 reference["frameLimit"] = reference_frame_limit
-            except Vanished:
-                log.warning("site context: frozen reference's new frame sample vanished")
+            except (Vanished, OSError, ValueError, struct.error) as error:
+                log.warning(
+                    "site context: frozen reference's new frame sample is unavailable (%s); "
+                    "the run is aligned by its own georeference",
+                    error,
+                )
                 document["reference"] = None
             staging = path.with_suffix(".json.tmp")
             staging.write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")

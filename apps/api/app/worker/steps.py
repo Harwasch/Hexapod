@@ -59,7 +59,20 @@ def prepare_step(
     """
     row = db.scalar(select(JobStep).where(JobStep.job_id == job_id, JobStep.ordinal == ordinal))
     if row is not None:
-        return row if (row.metrics or {}).get(PREPARING) else None
+        if row.status == RunStatus.COMPLETE:
+            return None  # A resumed run still needs its completed stage's evidence.
+        preparing = (row.metrics or {}).get(PREPARING)
+        detached = row.status == RunStatus.IN_PROGRESS and (row.metrics or {}).get(DETACHED)
+        # Reserve the next stage attempt now; _attempts reuses it while PREPARING.
+        # An interrupted preparation (or detached stage) already reserved its attempt.
+        row.attempt = max(1, row.attempt) if preparing or detached else row.attempt + 1
+        row.status = RunStatus.IN_PROGRESS
+        row.started_at = utcnow()
+        row.finished_at = None
+        row.metrics = {**(row.metrics or {}), PREPARING: True}
+        row.metrics.pop("progress", None)
+        db.commit()
+        return row
     row = JobStep(
         job_id=job_id,
         stage_id=stage_id,

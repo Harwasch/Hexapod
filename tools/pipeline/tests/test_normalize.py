@@ -1332,8 +1332,9 @@ def test_an_unknown_hdr_rule_is_refused(tmp_path: Path) -> None:
         run_normalize(tmp_path, {"hdr": "yes"}, upload)
 
 
+@pytest.mark.parametrize("duration_recovered", [True, False])
 def test_viewpoint_candidates_have_a_hard_count_and_size_bound_and_release_scratch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, duration_recovered: bool
 ) -> None:
     upload = tmp_path / "upload"
     upload.mkdir()
@@ -1348,6 +1349,8 @@ def test_viewpoint_candidates_have_a_hard_count_and_size_bound_and_release_scrat
             duration_s=None,
         ),
     )
+    if not duration_recovered:
+        monkeypatch.setattr(video, "decoded_duration", lambda *args: None)
     original_analyse = keyframes.analyse
 
     def analyse(paths: list[Path]) -> keyframes.Analysis:
@@ -1370,6 +1373,12 @@ def test_viewpoint_candidates_have_a_hard_count_and_size_bound_and_release_scrat
     )
     result = json.loads(work.step_path("normalize").read_text())
     assert result["metrics"]["candidates"] == 5
+    assert result["metrics"]["candidatesTruncated"] is (not duration_recovered)
+    if duration_recovered:
+        assert result["metrics"]["fps"] == 2.5
+        assert result["metrics"]["durationS"] == 2
+    else:
+        assert "candidatesTruncated=true" in work.log_path("normalize").read_text()
     frames = list((work.out_dir("normalize") / "frames").glob("*.jpg"))
     assert frames
     assert all(max(Image.open(path).size) <= 160 for path in frames)
@@ -1397,3 +1406,41 @@ def test_native_refine_extracts_every_frame_without_candidate_or_size_cap(tmp_pa
     assert all(Image.open(path).size == (320, 240) for path in frames)
     argv = _extraction_argv(work)
     assert "-frames:v" not in argv and "scale=" not in argv and "fps=" not in argv
+
+
+@pytest.mark.parametrize("tonemap", [None, "tonemap=tonemap=hable"])
+def test_native_extraction_argv_matches_main(tonemap: str | None) -> None:
+    assert video.extract_frames_argv(
+        Path("clip.mov"), Path("frame_%05d.jpg"), fps=None, tonemap=tonemap
+    ) == [
+        video.ffmpeg_exe(),
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-i",
+        "clip.mov",
+        *(["-vf", tonemap] if tonemap else []),
+        "-vsync",
+        "0",
+        "-q:v",
+        "2",
+        "-start_number",
+        "0",
+        "frame_%05d.jpg",
+    ]
+
+
+@pytest.mark.parametrize(
+    "progress,fps,expected",
+    [
+        ("out_time_us=300000000\nframe=3000\nprogress=end\n", 10, 300),
+        ("out_time_us=N/A\nframe=3000\nprogress=end\n", 10, 300),
+        ("out_time_us=N/A\nframe=3000\nprogress=end\n", None, None),
+        ("out_time_us=300000000\nprogress=continue\n", 10, None),
+    ],
+)
+def test_decoded_duration_fallbacks(
+    monkeypatch: pytest.MonkeyPatch, progress: str, fps: float | None, expected: float | None
+) -> None:
+    monkeypatch.setattr(video, "_run", lambda argv: progress)
+    assert video.decoded_duration(Path("clip.mov"), fps) == expected

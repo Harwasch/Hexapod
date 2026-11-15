@@ -272,8 +272,9 @@ def test_reference_fetch_downloads_poses_before_its_exact_frame_sample(tmp_path:
     assert storage.download_file.call_count == downloads
 
 
+@pytest.mark.parametrize("poses_state", ["valid", "missing", "corrupt"])
 def test_retry_hydrates_a_new_sample_from_the_frozen_reference(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, poses_state: str
 ) -> None:
     from app.worker import site_context
 
@@ -297,13 +298,74 @@ def test_retry_hydrates_a_new_sample_from_the_frozen_reference(
     }
     path = tmp_path / "site_context.json"
     path.write_text(json.dumps(document))
+    if poses_state == "missing":
+        (reference / "poses/images.bin").unlink()
+    elif poses_state == "corrupt":
+        (reference / "poses/images.bin").write_bytes(b"corrupt")
     seed_plan = Mock(side_effect=AssertionError("must not choose another reference"))
     monkeypatch.setattr(site_context, "plan_seed", seed_plan)
     fetch = Mock(return_value=7)
     monkeypatch.setattr(site_context, "_download_tree", fetch)
     site_context.seed_site_context(Mock(), Mock(), None, tmp_path, reference_frame_limit=7)
+    if poses_state != "valid":
+        fetch.assert_not_called()
+        assert json.loads(path.read_text())["reference"] is None
+        return
     assert fetch.call_args.args[1] == "old/frames"
     assert len(fetch.call_args.kwargs["names"]) == 7
     saved = json.loads(path.read_text())
     assert saved["reference"]["epochId"] == "frozen-epoch"
     assert saved["reference"]["frameLimit"] == 7
+
+
+@pytest.mark.parametrize("preparing,attempt", [(False, 0), (True, 0), (False, 2), (True, 1)])
+def test_retry_claim_restores_preparation_progress(preparing: bool, attempt: int) -> None:
+    db = Mock()
+    row = JobStep(
+        status=RunStatus.NOT_STARTED,
+        attempt=attempt,
+        metrics={steps.PREPARING: preparing, "progress": {"done": 99}},
+        finished_at=datetime.now(UTC),
+    )
+    db.scalar.return_value = row
+    assert steps.prepare_step(db, uuid.uuid4(), stage_id="normalize", ordinal=0, impl="x") is row
+    assert row.status == RunStatus.IN_PROGRESS
+    assert row.attempt == (max(1, attempt) if preparing else attempt + 1)
+    assert row.finished_at is None
+    assert steps.report_progress(db, row, {"done": 0, "total": 1})
+    assert row.metrics[steps.PREPARING] is True
+    assert row.metrics["progress"]["done"] == 0
+
+
+@pytest.mark.parametrize("poses", [None, b"corrupt"])
+def test_unreadable_reference_poses_fall_back_to_georeference(
+    tmp_path: Path,
+    poses: bytes | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.epochs import ReferenceChoice
+    from app.worker import site_context
+
+    reference = ReferenceChoice(
+        epoch_id=uuid.uuid4(),
+        job_id=uuid.uuid4(),
+        observed_at=datetime.now(UTC),
+        created_at=datetime.now(UTC),
+        platform="phone-video",
+        verdict="coarse",
+        uncertainty_m=5,
+        keys={"poses": "poses", "frames": "frames"},
+    )
+
+    def download_tree(storage: object, key: str, path: Path, **kwargs: object) -> int:
+        assert key == "poses"
+        path.mkdir(parents=True)
+        if poses is not None:
+            (path / "images.bin").write_bytes(poses)
+        return 1
+
+    monkeypatch.setattr(site_context, "_download_tree", download_tree)
+    warning = Mock()
+    monkeypatch.setattr(site_context.log, "warning", warning)
+    assert site_context._fetch_reference(Mock(), reference, tmp_path, frame_limit=7) is None
+    assert "own georeference" in warning.call_args.args[0]
