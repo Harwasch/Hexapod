@@ -83,6 +83,7 @@ __all__ = [
     "count_pairs",
     "default_threads",
     "feature_extractor_argv",
+    "image_names",
     "mapper_argv",
     "matcher_argv",
     "matching_plan",
@@ -866,6 +867,21 @@ def _fallback_param_count(model_id: int) -> int:
         f"COLMAP camera model id {model_id} is not one this reader knows the parameter "
         f"count for, so the rest of cameras.bin cannot be located. Add it to CAMERA_MODELS"
     )
+
+
+def image_names(path: Path) -> list[str]:
+    """Registered names from images.bin without loading observations or geometry.
+
+    Used before downloading a reference's frames: alignment samples these names,
+    which can differ from the full set of normalized JPEGs.
+    """
+    names = []
+    with path.open("rb") as handle:
+        for _ in range(_u64(handle)):
+            handle.seek(64, 1)
+            names.append(_read_cstring(handle))
+            handle.seek(24 * _u64(handle), 1)
+    return sorted(names)
 
 
 def _read_images(path: Path) -> tuple[Image, ...]:

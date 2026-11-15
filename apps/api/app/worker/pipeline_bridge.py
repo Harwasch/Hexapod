@@ -55,6 +55,9 @@ ensure_importable()
 
 from adapters import FakeAdapter, LocalTransfer, SubprocessAdapter  # noqa: E402
 from alignment import (  # noqa: E402
+    DEFAULT_MAX_FRAMES as DEFAULT_ALIGN_MAX_FRAMES,
+)
+from alignment import (  # noqa: E402
     PLATFORM_WORDS,
     SITE_CONTEXT,
     SITE_CONTEXT_FILE,
@@ -73,6 +76,7 @@ from cloud import (  # noqa: E402
     Transfer,
     run_cost,
 )
+from colmap4 import sample_evenly  # noqa: E402
 from contracts import StepResult  # noqa: E402
 from errors import (  # noqa: E402
     BAD_INPUT_ERRORS,
@@ -99,11 +103,13 @@ from progress import tail as tail_of  # noqa: E402
 from providers import PROVIDERS, Provider, Rate, rates_from_env, with_rates  # noqa: E402
 from recipe import Recipe, load_recipe, recipe_dir  # noqa: E402
 from runners import RunnerSet, checkpoint_key  # noqa: E402
+from sfm import image_names  # noqa: E402
 from workdir import Workdir  # noqa: E402
 
 __all__ = [
     "BAD_INPUT_ERRORS",
     "CALL_BOOK",
+    "DEFAULT_ALIGN_MAX_FRAMES",
     "LIVE_PAYLOAD_NAME",
     "PIPELINE_DIR",
     "PLATFORM_WORDS",
@@ -145,6 +151,7 @@ __all__ = [
     "empty_site_context",
     "ensure_importable",
     "execute",
+    "image_names",
     "latest_live",
     "latest_progress",
     "live_checkpoint_keys",
@@ -156,6 +163,7 @@ __all__ = [
     "read_live_payload",
     "recipe_dir",
     "run_cost",
+    "sample_evenly",
     "tail_of",
     "with_rates",
 ]

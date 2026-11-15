@@ -7,6 +7,7 @@ frames this file drew, encoded with the same binary the stage uses.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 from datetime import UTC, datetime
@@ -1225,14 +1226,19 @@ def test_the_wheels_ffmpeg_has_the_filters_hdr_needs() -> None:
     assert {"zscale", "tonemap"} == video.TONEMAP_NEEDS
 
 
-def test_the_tonemap_sits_between_the_rate_and_the_size() -> None:
+def test_preview_shrinks_before_hdr_float_conversion() -> None:
     argv = video.extract_frames_argv(
         Path("x.mov"), Path("f_%05d.jpg"), fps=4, tonemap=video.TONEMAP_FILTER, max_side=800
     )
     chain = argv[argv.index("-vf") + 1]
 
-    assert chain.startswith("fps=4,zscale=t=linear")
-    assert chain.endswith(video.scale_filter(800))
+    assert chain == f"fps=4,{video.scale_filter(800)},{video.TONEMAP_FILTER}"
+    assert argv[argv.index("-threads") + 1] == "2"
+    assert argv[argv.index("-filter_threads") + 1] == "2"
+    native = video.extract_frames_argv(
+        Path("x.mov"), Path("f_%05d.jpg"), fps=None, tonemap=video.TONEMAP_FILTER
+    )
+    assert native[native.index("-vf") + 1] == video.TONEMAP_FILTER
     plain = video.extract_frames_argv(Path("x.mov"), Path("f_%05d.jpg"), fps=4, max_side=800)
     assert "zscale" not in plain[plain.index("-vf") + 1]
     grab = video.grab_frame_argv(
@@ -1324,3 +1330,117 @@ def test_an_unknown_hdr_rule_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(Exception, match="hdr must be one of auto, off"):
         run_normalize(tmp_path, {"hdr": "yes"}, upload)
+
+
+@pytest.mark.parametrize("duration_recovered", [True, False])
+def test_viewpoint_candidates_have_a_hard_count_and_size_bound_and_release_scratch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, duration_recovered: bool
+) -> None:
+    upload = tmp_path / "upload"
+    upload.mkdir()
+    make_clip(upload / "clip.mp4", frames=20, fps=10)
+    # A bad/missing duration used to bypass the rate-based candidate bound entirely.
+    original = video.parse_probe
+    monkeypatch.setattr(
+        video,
+        "parse_probe",
+        lambda text: dataclasses.replace(
+            original(text),
+            duration_s=None,
+        ),
+    )
+    if not duration_recovered:
+        monkeypatch.setattr(video, "decoded_duration", lambda *args: None)
+    original_analyse = keyframes.analyse
+
+    def analyse(paths: list[Path]) -> keyframes.Analysis:
+        assert len(paths) <= 5
+        assert all(max(Image.open(path).size) <= 160 for path in paths)
+        assert sum(path.stat().st_size for path in paths) <= 5 * 160 * 160 * 3
+        return original_analyse(paths)
+
+    monkeypatch.setattr(keyframes, "analyse", analyse)
+    work = run_normalize(
+        tmp_path,
+        {
+            "select": "viewpoint",
+            "fps": 10,
+            "keep_video": 2,
+            "max_candidates": 5,
+            "max_side": 160,
+        },
+        upload,
+    )
+    result = json.loads(work.step_path("normalize").read_text())
+    assert result["metrics"]["candidates"] == 5
+    assert result["metrics"]["candidatesTruncated"] is (not duration_recovered)
+    if duration_recovered:
+        assert result["metrics"]["fps"] == 2.5
+        assert result["metrics"]["durationS"] == 2
+    else:
+        assert "candidatesTruncated=true" in work.log_path("normalize").read_text()
+    frames = list((work.out_dir("normalize") / "frames").glob("*.jpg"))
+    assert frames
+    assert all(max(Image.open(path).size) <= 160 for path in frames)
+    assert not (work.work_dir("normalize") / "extracted").exists()
+
+
+def test_native_refine_extracts_every_frame_without_candidate_or_size_cap(tmp_path: Path) -> None:
+    upload = tmp_path / "upload"
+    upload.mkdir()
+    make_clip(upload / "clip.mp4", frames=20, fps=10)
+    work = run_normalize(
+        tmp_path,
+        {
+            "select": "usable",
+            "keep_video": 0,
+            "max_side": None,
+            "max_candidates": 3,
+            "dedupe_mae": 0,
+        },
+        upload,
+    )
+    result = json.loads(work.step_path("normalize").read_text())
+    assert result["metrics"]["candidates"] == result["metrics"]["frames"] == 20
+    frames = list((work.out_dir("normalize") / "frames").glob("*.jpg"))
+    assert all(Image.open(path).size == (320, 240) for path in frames)
+    argv = _extraction_argv(work)
+    assert "-frames:v" not in argv and "scale=" not in argv and "fps=" not in argv
+
+
+@pytest.mark.parametrize("tonemap", [None, "tonemap=tonemap=hable"])
+def test_native_extraction_argv_matches_main(tonemap: str | None) -> None:
+    assert video.extract_frames_argv(
+        Path("clip.mov"), Path("frame_%05d.jpg"), fps=None, tonemap=tonemap
+    ) == [
+        video.ffmpeg_exe(),
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-i",
+        "clip.mov",
+        *(["-vf", tonemap] if tonemap else []),
+        "-vsync",
+        "0",
+        "-q:v",
+        "2",
+        "-start_number",
+        "0",
+        "frame_%05d.jpg",
+    ]
+
+
+@pytest.mark.parametrize(
+    "progress,fps,expected",
+    [
+        ("out_time_us=300000000\nframe=3000\nprogress=end\n", 10, 300),
+        ("out_time_us=N/A\nframe=3000\nprogress=end\n", 10, 300),
+        ("out_time_us=N/A\nframe=3000\nprogress=end\n", None, None),
+        ("out_time_us=300000000\nprogress=continue\n", 10, None),
+    ],
+)
+def test_decoded_duration_fallbacks(
+    monkeypatch: pytest.MonkeyPatch, progress: str, fps: float | None, expected: float | None
+) -> None:
+    monkeypatch.setattr(video, "_run", lambda argv: progress)
+    assert video.decoded_duration(Path("clip.mov"), fps) == expected

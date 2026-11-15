@@ -87,6 +87,20 @@ def steps_by_stage(db: Session, job_id: uuid.UUID) -> dict[str, JobStep]:
     return {row.stage_id: row for row in rows}
 
 
+def test_a_claim_is_visible_as_the_first_step_before_the_supervisor_runs(
+    db: Session, sessions: sessionmaker[Session], storage: S3Storage, tmp_path: Path
+) -> None:
+    job = queue_job(db, make_capture(db))
+    worker = Worker(sessions, storage, config(tmp_path))
+    assert worker.claim() == job.id
+    # Another session sees the committed row, while no download or child has run.
+    with sessions() as observer:
+        first = observer.scalar(select(JobStep).where(JobStep.job_id == job.id))
+        assert first is not None and first.stage_id == "one"
+        assert first.status == RunStatus.IN_PROGRESS and first.attempt == 1
+        assert first.metrics["preparing"] is True
+
+
 def wait_until(predicate: object, timeout: float = 20.0, interval: float = 0.05) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

@@ -575,6 +575,46 @@ def _iso6709_component(text: str, degree_digits: int) -> float | None:
     return None
 
 
+def decoded_duration(source: Path, fps: float | None) -> float | None:
+    """Measure a headerless clip through EOF using the bundled binary (no ffprobe).
+
+    A null output writes no JPEGs. Progress gives decoded timestamps, with the frame
+    count / nominal rate as a fallback for streams without usable timestamps.
+    """
+    text = _run(
+        [
+            ffmpeg_exe(),
+            "-hide_banner",
+            "-nostdin",
+            "-threads",
+            "2",
+            "-i",
+            str(source),
+            "-map",
+            "0:v:0",
+            "-an",
+            "-vsync",
+            "0",
+            "-threads",
+            "2",
+            "-progress",
+            "pipe:1",
+            "-f",
+            "null",
+            "-",
+        ]
+    )
+    if "progress=end" not in text:
+        return None
+    for key, scale in (("out_time_us", 1_000_000.0), ("frame", fps)):
+        if scale is None or scale <= 0:
+            continue
+        values = re.findall(rf"^{key}=(\d+)\s*$", text, re.MULTILINE)
+        if values and (duration := int(values[-1]) / scale) > 0:
+            return duration
+    return None
+
+
 def extract_frames_argv(
     source: Path,
     pattern: Path,
@@ -583,29 +623,36 @@ def extract_frames_argv(
     quality: int = 2,
     max_side: int | None = None,
     tonemap: str | None = None,
+    max_frames: int | None = None,
 ) -> list[str]:
     """The argv that turns a clip into numbered JPEGs. Built here so a test can read it.
 
     `-vsync vfr` with an `fps` filter is deliberately *not* used: constant-rate sampling
     is what makes "4 fps" mean the same number of frames for the same clip on any
     machine, which is what the frame count in `source_meta.json` is worth anything for.
-    `tonemap` (`TONEMAP_FILTER` for an HDR clip) sits between the rate and the size, so
-    only the frames kept are converted and they are scaled in 8-bit BT.709.
+    Sample and shrink before HDR float conversion: Preview need not tonemap native
+    4K pixels it will discard. Native extraction has no scale and keeps its HDR path.
+    Preview decoder, filter and encoder pools are bounded for the two-CPU Fly worker.
+    Native Refine keeps the original argv, including its HDR filter order.
     """
+    preview = fps is not None or max_side is not None
     chain = [] if fps is None else [f"fps={fps:g}"]
-    if tonemap:
-        chain.append(tonemap)
     if max_side is not None:
         chain.append(scale_filter(max_side))
+    if tonemap:
+        chain.append(tonemap)
     return [
         ffmpeg_exe(),
         "-hide_banner",
         "-nostdin",
         "-y",
+        *(["-threads", "2", "-filter_threads", "2"] if preview else []),
         "-i",
         str(source),
         *(["-vf", ",".join(chain)] if chain else []),
         *(["-vsync", "0"] if fps is None else []),
+        *(["-frames:v", str(max_frames)] if max_frames is not None else []),
+        *(["-threads", "2"] if preview else []),
         "-q:v",
         str(quality),
         "-start_number",

@@ -472,12 +472,24 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     rate: float | None = None
     size: resolution.SizeDecision | None = None
     hdr: dict[str, object] | None = None
+    candidates_truncated = False
     if source.is_video:
         ctx.log(f"$ {' '.join(video.probe_argv(source.path))}")
         text = video.probe_text(source.path)
         for line in text.splitlines():
             ctx.log(line)
         meta = video.parse_probe(text)
+        cap = _optional_int(ctx.param("max_candidates", 1200)) if applied == "viewpoint" else None
+        if cap and (meta.duration_s is None or meta.duration_s <= 0):
+            ctx.log("duration missing: measuring the decoded video through EOF before capping")
+            duration = video.decoded_duration(source.path, meta.fps)
+            meta = dataclasses.replace(meta, duration_s=duration)
+            if duration is None:
+                candidates_truncated = True
+                ctx.log(
+                    "WARNING: duration still unknown; max_candidates may truncate the clip; "
+                    "candidatesTruncated=true"
+                )
         if VIDEO_LOCATION_PARAM in ctx.params:
             # The worker's reading of the container, which already chose this capture's
             # site (`apps/api/app/services/video_location.py`): one source of truth, so
@@ -506,7 +518,25 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
             else fps
         )
         extracted = ctx.work_dir / "extracted"
+        if extracted.exists():
+            shutil.rmtree(extracted)
         extracted.mkdir(parents=True, exist_ok=True)
+        (ctx.work_dir / "extraction.json").unlink(missing_ok=True)
+        # A hard output bound also covers missing/inaccurate container duration. The
+        # rate alone was only an estimate and could leave >max_candidates JPEGs.
+        expected_rate = rate if rate is not None else meta.fps
+        expected = (
+            math.ceil(meta.duration_s * expected_rate)
+            if expected_rate is not None and meta.duration_s is not None
+            else cap
+        )
+        if expected is not None:
+            _write_json(
+                ctx.work_dir / "extraction.json",
+                {
+                    "total": min(expected, cap) if cap else expected,
+                },
+            )
         ctx.run(
             video.extract_frames_argv(
                 source.path,
@@ -515,6 +545,7 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
                 quality=int(ctx.param("quality", 2)),
                 max_side=max_side,
                 tonemap=tonemap,
+                max_frames=cap,
             )
         )
         candidates = sorted(extracted.glob("frame_*.jpg"))
@@ -585,6 +616,12 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     if applied == "usable" and source.is_video:
         rate = meta.fps  # Native decode has no fps filter; offsets are nominal source time.
     records = _frame_records(source, upload, candidates, chosen, written, meta, rate)
+    if source.is_video:
+        # Kept frames now live in out/: rejected JPEGs need not wait for the entire
+        # reconstruction (pose/train) to finish before releasing volume space. This is
+        # safe for native Refine too: copy_frames has copied every retained JPEG to out/.
+        shutil.rmtree(extracted)
+        (ctx.work_dir / "extraction.json").unlink(missing_ok=True)
     records, linear = _measure_exposure(records, written)
     thresholds = _exposure_thresholds(ctx)
     clip_pct = thresholds["clip_pct"]
@@ -752,6 +789,8 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     if source.is_video:
         metrics["fps"] = rate if rate is not None else fps
         metrics["hdrTonemapped"] = bool(hdr and hdr["tonemapped"])
+        if applied == "viewpoint":
+            metrics["candidatesTruncated"] = candidates_truncated
         if meta.duration_s is not None:
             metrics["durationS"] = meta.duration_s
     if segmentation is not None:
