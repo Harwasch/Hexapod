@@ -1,51 +1,84 @@
 import SwiftUI
 
-@MainActor
-struct CameraScreen: View {
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var isTalking = false
-    var recording: any RecordingControl = StubRecordingControl()
-    var voice: any PushToTalkControl = StubPushToTalkControl()
+@MainActor struct CameraScreen: View {
+  @Environment(\.scenePhase) private var scenePhase
+  @State private var model: CameraModel
+  @State private var isPressing = false
 
-    var body: some View {
-        ZStack(alignment: .bottom) {
-            ARCameraView(isActive: scenePhase == .active)
-                .ignoresSafeArea()
-            HStack(spacing: 48) {
-                Button(action: recording.toggleRecording) {
-                    Image(systemName: "record.circle")
-                        .foregroundStyle(.red)
-                        .font(.system(size: 64))
-                }
-                .accessibilityLabel("Record")
+  init(model: CameraModel = CameraModel()) {
+    _model = State(initialValue: model)
+  }
 
-                Image(systemName: isTalking ? "mic.fill" : "mic")
-                    .font(.system(size: 30))
-                    .frame(width: 64, height: 64)
-                    .background(isTalking ? Color.red : Color.black.opacity(0.5), in: Circle())
-                    .contentShape(Circle())
-                    .gesture(DragGesture(minimumDistance: 0)
-                        .onChanged { _ in setTalking(true) }
-                        .onEnded { _ in setTalking(false) })
-                    .accessibilityLabel("Push to talk")
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityValue(isTalking ? "Pressed" : "Released")
-                    .accessibilityAction { setTalking(!isTalking) }
+  var body: some View {
+    ZStack(alignment: .bottom) {
+      ARCameraView(isActive: scenePhase == .active, model: model).ignoresSafeArea()
+      VStack(spacing: 16) {
+        if let entity = model.card {
+          HStack {
+            Text(entity.label).lineLimit(1)
+            Spacer()
+            Button {
+              model.card = nil
+            } label: {
+              Image(systemName: "xmark")
             }
-            .buttonStyle(.plain)
-            .padding(.bottom, 24)
-            .disabled(!ARCameraView.supportsDevice || scenePhase != .active)
+            .accessibilityLabel("Close")
+          }
+          .padding(16)
+          .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+          .padding(.horizontal)
         }
-        .onChange(of: scenePhase) { _, phase in
-            if phase != .active { setTalking(false) }
+        HStack(spacing: 48) {
+          Button(action: model.toggleRecording) {
+            Image(systemName: model.recording ? "stop.circle.fill" : "record.circle")
+              .foregroundStyle(.red).font(.system(size: 64))
+          }
+          .accessibilityLabel(model.recording ? "Stop recording" : "Record")
+          Image(systemName: model.isTalking ? "mic.fill" : "mic")
+            .font(.system(size: 30)).frame(width: 64, height: 64)
+            .background(model.isTalking ? Color.red : Color.black.opacity(0.5), in: Circle())
+            .contentShape(Circle())
+            .gesture(
+              DragGesture(minimumDistance: 0)
+                .onChanged { _ in setPressing(true) }
+                .onEnded { _ in setPressing(false) }
+            )
+            .accessibilityLabel("Push to talk")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityValue(model.isTalking ? "Pressed" : "Released")
+            .accessibilityAction {
+              setPressing(!isPressing)
+            }
         }
-        .onDisappear { setTalking(false) }
+        .buttonStyle(.plain)
+        .disabled(!ARCameraView.supportsDevice || scenePhase != .active || !model.cameraReady)
+      }
+      .padding(.bottom, 24)
+      if model.failed {
+        VStack {
+          Image(systemName: "exclamationmark.circle").accessibilityLabel("Unavailable")
+          Spacer()
+        }
+        .padding(.top, 16)
+        .allowsHitTesting(false)
+      }
     }
+    .onChange(of: scenePhase) { _, phase in
+      if phase != .active {
+        setPressing(false)
+        model.suspend()
+      }
+    }
+    .onDisappear {
+      setPressing(false)
+      model.suspend()
+    }
+  }
 
-    private func setTalking(_ value: Bool) {
-        guard value != isTalking else { return }
-        if value && (!ARCameraView.supportsDevice || scenePhase != .active) { return }
-        isTalking = value
-        if value { voice.beginTalking() } else { voice.endTalking() }
-    }
+  private func setPressing(_ value: Bool) {
+    guard value != isPressing else { return }
+    if value && (!model.cameraReady || scenePhase != .active) { return }
+    isPressing = value
+    if value { model.beginTalking() } else { model.endTalking() }
+  }
 }

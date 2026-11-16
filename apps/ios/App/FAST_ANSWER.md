@@ -1,0 +1,76 @@
+# Fast answer integration
+
+The camera shares one AR session between perception, overlays and capture. Hold
+the mic to transcribe, release to ask, tap a subject to select it, and tap a
+numbered pin for its card. Controls and failure feedback are icons. Record writes
+M1 capture bundles under Application Support/Captures; incomplete bundles have no
+manifest. SharedSessionRecorder adapts M1's bundle writer because ARCaptureRecorder
+owns a separate private AR session. Upload integration remains with M1.
+
+CameraScreen accepts a CameraModel. CameraModel accepts VoiceInput, Planning,
+ScenePerception and EntitySchema.DeepAnswering. The default deep implementation
+finishes offline. After the Cloud merge, supply its DeepAnswering implementation
+through CameraModel(deep:); no Ask contract changes are needed.
+
+The deep request begins concurrently with fast planning. Deep events wait until
+the fast stream finishes, then refine it. A matching label (case/outer whitespace
+ignored) within 0.35 m replaces the same pin; distinct labels remain distinct.
+A completed question emits done once after both paths; cancellation ends
+the old stream immediately. Path failures retain the other answer and emit a
+status. No placeholder geometry or subject identity is invented.
+
+PerceptionScene contains portable selection orchestration. A tap chooses a mask;
+a voice noun requires a matching on-device classification. Generic questions use
+the selected subject or the image centre. Count finds visible foreground
+instances, not a complete scene inventory. Depth estimates discard holes and
+depth outliers, then use median centres and 5th/95th percentile extents. These are
+approximate visible-surface extents, not calibrated full-object dimensions.
+Tracks reproject anchors and associate by distance/IoU, tolerate short gaps, and
+age on processed frames. Explicit new selections replace the tracked subject set.
+Masks carry the transform of their source frame and expire after 0.75 s.
+
+## Optional neural segmentation
+
+No weight file, URL or digest is supplied. Vision foreground masks work by
+default. To configure a promptable export, inject
+RuntimeSegmenter(configuration:layout:) into ScenePerception(segmenter:).
+ModelConfiguration requires an HTTPS URL and SHA-256; CoreMLPromptLayout names
+the image, point, box and output features. The adapter expects a single-file
+.mlmodel with a colour image input, normalized [1,2] point / [1,4] box inputs
+(-1 for the unused prompt), and [H,W] or [1,1,H,W] output logits. A split
+encoder/decoder export needs its own Segmenter adapter.
+
+Weights download to Application Support/Hex/Segmentation on first use. The first
+answer continues with Vision during acquisition. Cached bytes are checked before
+reuse, and new bytes are verified before atomic publication. Missing or
+incompatible exports fall back to Vision. The cache/integrity boundary is
+Linux-tested using injected downloads; no network request was made during this
+task. Speech asset installation is similarly runtime-only.
+
+## Device acceptance still required
+
+Linux cannot compile or execute Speech, FoundationModels, Vision, Core ML,
+ARKit, RealityKit, AVFoundation or the Metal pass. The guarded adapters are
+implementation candidates, not a claimed device build. Run Xcode 26 strict
+concurrency compilation, then check on an eligible iPhone:
+
+- Microphone/camera denial, speech asset availability, volatile/final transcript
+  order, rapid press/release, interruptions and background/foreground recovery.
+- Tool calls with Apple Intelligence available, and rule fallback when disabled.
+- An asymmetric image/depth fixture to confirm bitmap orientation, display
+  transform, tap location, lifted world anchor and mask alignment.
+- The selected model export's feature layout, resizing, digest failure and Vision
+  fallback; generic classification does not establish fine-grained species.
+- Metal texture formats/coordinates, subject-only brightness, outline glow,
+  billboard pins, hit testing and spoken-answer audio routing.
+- Recording while asking, HEVC backpressure, raw/smoothed depth and location
+  files, finalized bundle playback and rendering/inference frame times.
+
+The current recorder writes depth synchronously on the main actor; capture and
+inference throughput have not been measured. Move that work behind a bounded
+serial writer if device profiling shows frame stalls. No GPU run, paid service,
+deployment, workflow, signing or upload was performed.
+
+Open decisions: choose a licensed single-file promptable export and its verified
+URL/digest/layout; confirm acceptable visible-surface measurement accuracy and
+foreground-count coverage; choose retention/sharing for locally saved bundles.
