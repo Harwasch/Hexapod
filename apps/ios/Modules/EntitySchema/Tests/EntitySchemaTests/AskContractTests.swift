@@ -60,3 +60,12 @@ private struct Canned: DeepAnswering {
     for try await event in Canned().ask(AskRequest(id: "1", question: "hi")) { seen.append(event) }
     #expect(seen == [.status("thinking"), .speech("hi"), .done])
 }
+
+@Test func propertyScopeRoundTrips() throws {
+    let request = AskRequest(id: "q-2", question: "where are the thistles", scope: .property, siteId: "site-1")
+    let object = try json(request)
+    #expect(object["scope"] as? String == "property")
+    #expect(object["siteId"] as? String == "site-1")
+    #expect(try JSONDecoder().decode(AskRequest.self, from: JSONEncoder().encode(request)) == request)
+    #expect(try json(AskRequest(id: "q", question: "x"))["scope"] == nil)
+}

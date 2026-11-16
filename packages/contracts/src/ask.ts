@@ -44,6 +44,10 @@ export interface KeyframeRef {
 export interface AskRequest {
   id: string;
   question: string;
+  /** What the question may draw on; absent means "scan". "property" needs siteId. */
+  scope?: "scan" | "property";
+  /** The property (site). */
+  siteId?: string;
   scanId?: string;
   location?: GeoCoordinate;
   keyframes: KeyframeRef[];
