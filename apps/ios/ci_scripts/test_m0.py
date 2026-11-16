@@ -68,7 +68,7 @@ class WorkflowTests(unittest.TestCase):
         for job in self.workflow["jobs"].values():
             self.assertEqual(job["runs-on"], "macos-26")
             select = next(s for s in job["steps"] if s.get("name") == "Select Xcode 26 explicitly")
-            self.assertIn("/Applications/Xcode_26.2.app/Contents/Developer", select["run"])
+            self.assertIn("/Applications/Xcode_26*.app", select["run"])
 
     def test_every_missing_secret_skips_without_disclosing_values(self):
         for missing in (*self.names, "all", None):
