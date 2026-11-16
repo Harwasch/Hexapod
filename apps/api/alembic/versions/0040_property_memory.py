@@ -23,7 +23,10 @@ def upgrade() -> None:
     op.create_index("ix_ask_runs_site_id", "ask_runs", ["site_id"])
     op.execute("""
         CREATE VIEW property_entity_memory AS
-        SELECT e.id, c.site_id, c.id AS scan_id, e.entity->>'label' AS label,
+        SELECT e.id, COALESCE(
+                   e.site_id, ep.site_id, c.site_id, (c.metadata->>'siteId')::uuid
+               ) AS site_id, c.id AS scan_id,
+               e.entity->>'label' AS label,
                e.entity->'attrs' AS attrs, e.entity, e.geo_anchor AS geo,
                CASE WHEN jsonb_typeof(e.entity #> '{attrs,georeference,uncertaintyM}') = 'number'
                     THEN (e.entity #>> '{attrs,georeference,uncertaintyM}')::double precision
@@ -34,13 +37,13 @@ def upgrade() -> None:
     """)
     op.execute("""
         CREATE VIEW property_answer_memory AS
-        SELECT r.id, COALESCE(c.site_id, r.site_id) AS site_id, r.capture_id AS scan_id,
+        SELECT r.id, COALESCE(c.site_id, (c.metadata->>'siteId')::uuid, r.site_id) AS site_id, r.capture_id AS scan_id,
                r.request->>'question' AS question, r.events AS answer, r.created_at AS observed_at
         FROM ask_runs r LEFT JOIN captures c ON c.id = r.capture_id WHERE r.state = 'complete'
     """)
     op.execute("CREATE INDEX ix_scan_entities_attrs ON scan_entities USING gin ((entity->'attrs'))")
     op.execute(
-        "CREATE INDEX ix_scan_entities_geography ON scan_entities USING gist ((geo_anchor::geography))"
+        "CREATE INDEX ix_scan_entities_geography ON scan_entities USING gist (geography(geo_anchor))"
     )
     op.create_index("ix_scan_entities_site_time", "scan_entities", ["site_id", "created_at", "id"])
 

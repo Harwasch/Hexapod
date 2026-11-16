@@ -35,8 +35,23 @@ def capture_scope(db: Session, scan_id: str | None) -> Capture | None:
     return capture
 
 
+def capture_site(capture: Capture) -> uuid.UUID | None:
+    """The capture's site: registered, else the one it was uploaded into (`metadata.siteId`).
+
+    A capture keeps its intended site in metadata until a pipeline run registers it, and an
+    answer can arrive before that; its entities still belong to that property.
+    """
+    if capture.site_id is not None:
+        return capture.site_id
+    value = (capture.metadata_ or {}).get("siteId")
+    try:
+        return uuid.UUID(str(value)) if value else None
+    except ValueError:
+        return None
+
+
 def check_site(capture: Capture, site_id: uuid.UUID | None) -> None:
-    if site_id is not None and capture.site_id != site_id:
+    if site_id is not None and capture_site(capture) != site_id:
         raise NotFoundError("Capture in site", capture.id)
 
 
@@ -67,7 +82,9 @@ def assign(row: ScanEntity, entity: Entity) -> None:
 
 
 def add(db: Session, capture: Capture, entity: Entity, ask_id: str | None = None) -> ScanEntity:
-    row = ScanEntity(id=uuid.uuid4(), capture_id=capture.id, site_id=capture.site_id, ask_id=ask_id)
+    row = ScanEntity(
+        id=uuid.uuid4(), capture_id=capture.id, site_id=capture_site(capture), ask_id=ask_id
+    )
     prepared = prepare(capture, entity)
     assign(row, prepared)
     row.created_at = utcnow()
@@ -98,8 +115,9 @@ def link_identity(db: Session, capture: Capture, row: ScanEntity) -> None:
     geo = row.entity["anchor"].get("geo")
     uncertainty = row.entity["attrs"]["georeference"]["uncertaintyM"]
     label = row.entity["label"]
+    site_id = capture_site(capture)
     if (
-        capture.site_id is None
+        site_id is None
         or geo is None
         or uncertainty is None
         or uncertainty > 5
@@ -108,7 +126,7 @@ def link_identity(db: Session, capture: Capture, row: ScanEntity) -> None:
     ):
         return
     # Create and update use the same property lock before discovering identity links.
-    db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": capture.site_id.int % (2**63)})
+    db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": site_id.int % (2**63)})
     observed = (
         db.scalar(select(Epoch.observed_at).where(Epoch.capture_id == capture.id))
         or capture.captured_at
@@ -116,7 +134,7 @@ def link_identity(db: Session, capture: Capture, row: ScanEntity) -> None:
     )
     new = Observation(
         id=row.id,
-        site_id=capture.site_id,
+        site_id=site_id,
         scan_id=capture.id,
         label=row.entity["label"],
         lat=geo["lat"],
@@ -129,7 +147,7 @@ def link_identity(db: Session, capture: Capture, row: ScanEntity) -> None:
     repository = PostgresMemory(db)
     while True:
         page = repository.entities(
-            capture.site_id,
+            site_id,
             MemoryQuery(
                 lat=new.lat,
                 lon=new.lon,
@@ -153,7 +171,7 @@ def link_identity(db: Session, capture: Capture, row: ScanEntity) -> None:
                 candidates.append(
                     Observation(
                         id=item["id"],
-                        site_id=capture.site_id,
+                        site_id=site_id,
                         scan_id=item["scanId"],
                         label=item["entity"]["label"],
                         lat=anchor["lat"],

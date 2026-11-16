@@ -4,7 +4,7 @@ import uuid
 from typing import Any
 
 from geoalchemy2 import Geometry
-from sqlalchemy import CheckConstraint, ForeignKey, Index, String
+from sqlalchemy import CheckConstraint, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -49,4 +49,8 @@ class ScanEntity(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         Index("ix_scan_entities_capture_id", "capture_id"),
         Index("ix_scan_entities_geo_anchor", "geo_anchor", postgresql_using="gist"),
+        # Property memory (0040): attribute filters, metre distances and per-site history.
+        Index("ix_scan_entities_attrs", text("(entity -> 'attrs')"), postgresql_using="gin"),
+        Index("ix_scan_entities_geography", text("geography(geo_anchor)"), postgresql_using="gist"),
+        Index("ix_scan_entities_site_time", "site_id", "created_at", "id"),
     )

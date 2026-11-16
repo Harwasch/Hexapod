@@ -6,7 +6,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.deps import DbSession
+from app.api.deps import DbSession, RequireWriteToken
 from app.services.property_memory import (
     MemoryQuery,
     Observation,
@@ -24,7 +24,7 @@ def entities(
     return _page(PostgresMemory(db).entities(site_id, query), query)
 
 
-@router.post("/{site_id}/entities/search")
+@router.post("/{site_id}/entities/search", dependencies=[RequireWriteToken])
 def search(site_id: uuid.UUID, query: MemoryQuery, db: DbSession) -> dict[str, Any]:
     """Read-only POST permits polygon/JSON attribute filters without URL-size limits."""
     return _page(PostgresMemory(db).entities(site_id, query), query)
@@ -43,7 +43,7 @@ class DedupeRequest(BaseModel):
     candidates: list[Observation] = Field(max_length=500)
 
 
-@router.post("/{site_id}/entities/dedupe")
+@router.post("/{site_id}/entities/dedupe", dependencies=[RequireWriteToken])
 def dedupe(site_id: uuid.UUID, request: Annotated[DedupeRequest, Body()]) -> dict[str, Any]:
     """Pure proposal against supplied observations. No database writes or identity claims."""
     if request.observation.site_id != site_id or any(
