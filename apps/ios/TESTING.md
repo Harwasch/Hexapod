@@ -26,9 +26,9 @@ runner. Scratch output stays in this worktree.
 | Perception   | `swift test --package-path apps/ios/Modules/Perception --scratch-path "$PWD/.swift-scratch/Perception" --jobs 2 --disable-sandbox`     | Masks, lifting, tracking, scene selection and yard fixture geometry                     |
 | ARAnswer     | `swift test --package-path apps/ios/Modules/ARAnswer --scratch-path "$PWD/.swift-scratch/ARAnswer" --jobs 2 --disable-sandbox`         | Presentation, highlight projection and recorded overlay commands                        |
 | App support  | `swift test --package-path apps/ios/App --scratch-path "$PWD/.swift-scratch/App" --jobs 2 --disable-sandbox`                           | Independent persisted provider choices; FIFO disk writes, capacity, drain and failure   |
-| Cloud        | See that module's `TESTING.md`: `Modules/Cloud/TESTING.md` after merge.                                                                | Placeholder owned by Cloud                                                              |
-| LiveSplat    | See that module's `TESTING.md`: `Modules/LiveSplat/TESTING.md` after merge.                                                            | Placeholder owned by LiveSplat                                                          |
-| Globe        | See that module's `TESTING.md`: `Modules/Globe/TESTING.md` after merge.                                                                | Placeholder owned by Globe                                                              |
+| Cloud        | `swift test --package-path apps/ios/Modules/Cloud --scratch-path "$PWD/.swift-scratch/Cloud" --jobs 1 --disable-sandbox`               | Recorded SSE parsing, retry/cancellation and server recording parity                    |
+| LiveSplat    | `swift test --package-path apps/ios/Modules/LiveSplat --scratch-path "$PWD/.swift-scratch/LiveSplat" --jobs 1 --disable-sandbox`       | Frame replay, coverage, numerical reference, lifecycle and PLY export                   |
+| Globe        | `swift test --package-path apps/ios/Modules/Globe --scratch-path "$PWD/.swift-scratch/Globe" --jobs 1 --disable-sandbox`               | Property endpoints, routing, pagination and geographic pins                             |
 
 Repository gates, also from the root. Remove Swift scratch output before the
 format gate because Prettier scans its generated JSON too:
@@ -100,17 +100,46 @@ For a complete offline camera path:
    commands without drawing. Apply. No ARKit session or camera permission is used
    by replay; hold/release the microphone control to replay the scripted question.
 4. Reopen the menu to run each standalone screen, or probe the selected LiveSplat
-   and Globe providers. Fake probes report **Simulated** and retain a run counter
-   within that provider instance. The sibling renderers/data sources are not linked
-   yet; their real choices report unavailable until registered.
+   and Globe providers. Fake probes report **Simulated**. LiveSplat receives the camera's shared AR frames;
+   Globe uses the property endpoint and Cloud uses the authenticated Ask stream.
 
-`App/Support/PieceProviders.swift` owns the typed registry. Its three
-`TODO(merge)` lines mark registrations for Cloud's `DeepAnswering`, a LiveSplat
-adapter and a Globe adapter. Register one factory per piece after merge. The latter
-two use the local `DebugPieceService` seam for standalone probes; their eventual
-renderer/source adapters own the sibling-specific setup. Unregistered choices
-fail visibly and never silently substitute a fake or contact a service. The
-registry and queue tests run separately via the App support command above.
+`App/Support/PieceProviders.swift` registers Cloud's recorded fake and real client,
+LiveSplat's off/fake/real renderers, and Globe's fake/real sources. App support tests
+exercise configuration, provider resolution, coverage and local capture status.
+
+Home links to Scan, Captures and Globe. Captures lists finalized local bundles and
+status from `Application Support/Uploads/<local-bundle-id>/upload.json`; upload state
+stays outside immutable capture bundles. An uploaded capture with a known site opens
+that site's Globe route. Map pins and camera pins share ARAnswer's entity card.
+A configured web URL enables the published scan preview from the map card.
+
+Host configuration is read from `hex.api.baseURL`, `hex.api.writeToken` and
+`hex.web.baseURL` in UserDefaults, or the corresponding Info.plist keys
+`HEX_API_BASE_URL`, `HEX_API_WRITE_TOKEN`, `HEX_WEB_BASE_URL`. Supply credentials
+at runtime; never commit a token. API URLs may be an origin, `/api`, or `/api/v1`.
+With URL and token, release defaults use Cloud; otherwise deep answering is offline.
+LiveSplat defaults to its LiDAR preview. Globe defaults to the real source with an
+API URL, otherwise to the explicitly labelled Simulated fixture. Saved debug provider
+choices are ignored outside DEBUG or an explicitly enabled TestFlight menu.
+
+An unregistered live camera session has no catalog scan ID. Its fast path still uses
+local perception; its Cloud request omits scene evidence rather than attaching it to
+an unrelated saved scan. For saved-scan Cloud testing, use Cloud's standalone harness
+with the catalog capture UUID. Bundle upload orchestration and historical scan playback
+remain separate from the minimal Captures list.
+
+One command runs **every Linux integration check**, sequentially, using installed
+local dependencies (Swift, CI scripts, web, contracts, API, analysis and pipeline):
+
+```bash
+bash scripts/test-ios-integration.sh
+```
+
+The command removes `.tmp-test` and `.swift-scratch` on exit. Without
+`TEST_DATABASE_URL`, API tests select `--without-db`; with a dedicated PostGIS test
+URL they include migrations and DB tests. The DB fixture truncates its test catalog.
+See [server testing](../../docs/TESTING-SERVER.md) for the combined replay test.
+Browser e2e and Apple-only framework compilation remain separate acceptance gates.
 
 ## What fixture tests establish
 
