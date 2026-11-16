@@ -7,8 +7,8 @@
   /// output composites with RealityKit's camera; this host neither owns nor resets it.
   /// No captions or text are added. The App polls coverageFraction/status as needed.
   public struct LiveSplatView: UIViewRepresentable {
-    public let renderer: LiveSplatRenderer
-    public init(renderer: LiveSplatRenderer) { self.renderer = renderer }
+    public let renderer: DefaultLiveSplatRenderer
+    public init(renderer: DefaultLiveSplatRenderer) { self.renderer = renderer }
     public func makeUIView(context: Context) -> LiveSplatOverlay {
       LiveSplatOverlay(renderer: renderer)
     }
@@ -16,13 +16,13 @@
   }
 
   @MainActor public final class LiveSplatOverlay: UIView {
-    private let renderer: LiveSplatRenderer
+    private let renderer: DefaultLiveSplatRenderer
     private let points: PointOverlay
     private var metalView: MTKView?
     private var driver: MetalSplatDriver?
     private var link: CADisplayLink?
     private var proxy: DisplayProxy?
-    public init(renderer: LiveSplatRenderer) {
+    public init(renderer: DefaultLiveSplatRenderer) {
       self.renderer = renderer
       points = PointOverlay(renderer: renderer)
       super.init(frame: .zero)
@@ -101,8 +101,8 @@
   }
 
   @MainActor private final class PointOverlay: UIView {
-    let renderer: LiveSplatRenderer
-    init(renderer: LiveSplatRenderer) {
+    let renderer: DefaultLiveSplatRenderer
+    init(renderer: DefaultLiveSplatRenderer) {
       self.renderer = renderer
       super.init(frame: .zero)
       backgroundColor = .clear
@@ -148,7 +148,7 @@
   // experimental setting is required; an unavailable pipeline or measured overrun
   // returns to the same host's LiDAR preview. At most one command buffer is in flight.
   @MainActor private final class MetalSplatDriver: NSObject, @preconcurrency MTKViewDelegate {
-    let renderer: LiveSplatRenderer
+    let renderer: DefaultLiveSplatRenderer
     let device: MTLDevice
     let queue: MTLCommandQueue
     let project: MTLComputePipelineState, bin: MTLComputePipelineState
@@ -160,7 +160,7 @@
     var pendingIDs: [UInt64] = []
     var lastSubmittedGeneration: UInt64?
     var offset: UInt32 = 0
-    init(renderer: LiveSplatRenderer, device: MTLDevice) throws {
+    init(renderer: DefaultLiveSplatRenderer, device: MTLDevice) throws {
       self.renderer = renderer
       self.device = device
       guard let queue = device.makeCommandQueue(),

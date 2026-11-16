@@ -203,7 +203,7 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
   config.maxSplats = 5
   config.maxSeedsPerFrame = 3
   config.maxAgeFrames = 1
-  let r = LiveSplatRenderer(configuration: config)
+  let r = DefaultLiveSplatRenderer(configuration: config)
   r.ingest(try frame())
   #expect(r.splats.isEmpty)
   r.start()
@@ -229,7 +229,7 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
 }
 
 @Test @MainActor func stationaryCoverageDoesNotReseedSameCells() throws {
-  let r = LiveSplatRenderer()
+  let r = DefaultLiveSplatRenderer()
   r.start()
   r.ingest(try frame())
   let first = r.splats.count
@@ -244,7 +244,7 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
 @Test @MainActor func gpuResultsFollowStableIDsAndRejectPreviousSessions() throws {
   var config = LiveSplatConfiguration()
   config.maxAgeFrames = 1
-  let r = LiveSplatRenderer(configuration: config)
+  let r = DefaultLiveSplatRenderer(configuration: config)
   r.start()
   r.ingest(try frame())
   r.activateGaussian()
@@ -314,7 +314,7 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
   let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
   defer { try? FileManager.default.removeItem(at: directory) }
-  let r = LiveSplatRenderer()
+  let r = DefaultLiveSplatRenderer()
   r.start()
   r.ingest(try frame())
   #expect(throws: LiveSplatError.self) { try r.exportPLY(to: directory) }
@@ -341,7 +341,7 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
   try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
   defer { try? FileManager.default.removeItem(at: directory) }
   try Data("{}".utf8).write(to: directory.appendingPathComponent("manifest.json"))
-  let r = LiveSplatRenderer()
+  let r = DefaultLiveSplatRenderer()
   #expect(throws: LiveSplatError.self) { try r.exportPLY(to: directory) }
   #expect(
     !FileManager.default.fileExists(atPath: directory.appendingPathComponent("live_splat.ply").path)
@@ -349,7 +349,7 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
 }
 
 @Test @MainActor func overBudgetGPUResultTriggersFallbackEvenAfterNewCameraFrame() throws {
-  let r = LiveSplatRenderer()
+  let r = DefaultLiveSplatRenderer()
   r.start()
   r.ingest(try frame())
   r.activateGaussian()
@@ -366,7 +366,7 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
 }
 
 @Test @MainActor func trackingLossClearsStaleOverlayAndKeyframes() throws {
-  let r = LiveSplatRenderer()
+  let r = DefaultLiveSplatRenderer()
   r.start()
   r.ingest(try frame())
   r.trackingUnavailable()

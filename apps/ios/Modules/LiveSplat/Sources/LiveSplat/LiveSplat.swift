@@ -131,7 +131,7 @@ public struct SplatBudget: Sendable {
 
 /// Main actor owns the state. Feed frames from the existing ARSession delegate;
 /// this module never replaces that delegate or runs/resets the shared session.
-@MainActor public final class LiveSplatRenderer {
+@MainActor public final class DefaultLiveSplatRenderer: LiveSplatRenderer {
   public let configuration: LiveSplatConfiguration
   public private(set) var status: LiveSplatStatus = .stopped
   public private(set) var splats: [Gaussian] = []
@@ -146,7 +146,8 @@ public struct SplatBudget: Sendable {
   private(set) var splatIDs: [UInt64] = []
   private(set) var sessionGeneration: UInt64 = 0
   private var nextID: UInt64 = 0
-  func trackingUnavailable() {
+  public func trackingUnavailable() {
+    guard status != .stopped else { return }
     latestFrame = nil
     recentKeyframes = []
     coverage = CoverageGrid()

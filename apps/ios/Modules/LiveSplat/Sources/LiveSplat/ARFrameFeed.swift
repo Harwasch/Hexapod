@@ -4,7 +4,7 @@
   import UIKit
 
   // DEVICE VALIDATION REQUIRED: ARKit buffer formats, RGB/depth alignment and colour.
-  @MainActor extension LiveSplatRenderer {
+  @MainActor extension DefaultLiveSplatRenderer {
     /// The App continues to own ARSession configuration, delegate and lifetime.
     /// Enable .sceneDepth on its ARWorldTrackingConfiguration before feeding frames.
     public func start(session: ARSession) {
