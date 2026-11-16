@@ -19,6 +19,8 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 
+import video
+
 F64 = npt.NDArray[np.float64]
 NAME = re.compile(r"[A-Za-z0-9_.-]{1,99}\Z")
 # Resource bounds, not quality thresholds. No subsampling inside these bounds.
@@ -33,6 +35,8 @@ class Bundle:
     directory: Path
     manifest: dict[str, Any]
     frames: list[dict[str, Any]]
+    locations: list[dict[str, Any]]
+    location: dict[str, object] | None
 
 
 def safe_name(name: object) -> str:
@@ -142,6 +146,58 @@ def validate_frame(frame: dict[str, Any], index: int, previous: float) -> float:
     return float(timestamp)
 
 
+def read_locations(
+    directory: Path, manifest: dict[str, Any]
+) -> tuple[list[dict[str, Any]], dict[str, object] | None]:
+    """Retain all fixes; locate from the first fix with the lowest positive uncertainty."""
+    locations: list[dict[str, Any]] = []
+    best = None
+    if manifest.get("locationLog") is not None:
+        if manifest["locationLog"] != "location.jsonl":
+            raise ValueError("v1 locationLog must be location.jsonl")
+        with (directory / "location.jsonl").open() as log:
+            while line := log.readline(MAX_LINE + 1):
+                if len(line) > MAX_LINE or len(locations) >= MAX_FRAMES:
+                    raise ValueError("location log exceeds limits")
+                fix = json.loads(line)
+                fields = (
+                    "timestamp",
+                    "lat",
+                    "lon",
+                    "altitudeM",
+                    "horizontalAccuracyM",
+                    "verticalAccuracyM",
+                )
+                if (
+                    not isinstance(fix, dict)
+                    or any(
+                        type(fix.get(key)) not in (int, float) or not math.isfinite(fix[key])
+                        for key in fields
+                    )
+                    or not (-90 <= fix["lat"] <= 90 and -180 <= fix["lon"] <= 180)
+                ):
+                    raise ValueError("invalid bundle location fix")
+                locations.append(fix)
+                if fix["horizontalAccuracyM"] > 0 and (
+                    best is None or fix["horizontalAccuracyM"] < best["horizontalAccuracyM"]
+                ):
+                    best = fix
+    if manifest.get("location") != best:
+        raise ValueError("manifest location does not match the location log summary")
+    location = (
+        None
+        if best is None
+        else video.Location(
+            lat=best["lat"],
+            lon=best["lon"],
+            altitude_m=best["altitudeM"] if best["verticalAccuracyM"] >= 0 else None,
+            source="capture-bundle-corelocation",
+            accuracy_m=best["horizontalAccuracyM"],
+        ).to_dict()
+    )
+    return locations, location
+
+
 def read_bundle(directory: Path) -> Bundle:
     manifest_path = directory / "manifest.json"
     if manifest_path.stat().st_size > MAX_MANIFEST:
@@ -186,8 +242,13 @@ def read_bundle(directory: Path) -> Bundle:
         raise ValueError("undeclared files or bundle too large")
     if not inventory.get("rgb.mov") or not inventory.get("frames.jsonl"):
         raise ValueError("missing video/frame log")
+    if manifest.get("locationLog") is not None and "location.jsonl" not in inventory:
+        raise ValueError("location log is not in file inventory")
+    locations, location = read_locations(directory, manifest)
     frames: list[dict[str, Any]] = []
     used = {"rgb.mov", "frames.jsonl"}
+    if manifest.get("locationLog") is not None:
+        used.add("location.jsonl")
     counts = {"depth": 0, "smoothedDepth": 0}
     previous = -1.0
     with (directory / "frames.jsonl").open() as log:
@@ -224,7 +285,7 @@ def read_bundle(directory: Path) -> Bundle:
     for key, actual_count in counts.items():
         if integer(manifest.get(key + "FrameCount"), key + "FrameCount") != actual_count:
             raise ValueError("depth count mismatch")
-    return Bundle(directory, manifest, frames)
+    return Bundle(directory, manifest, frames, locations, location)
 
 
 def unpack(archive: Path, destination: Path) -> Bundle:
@@ -239,7 +300,7 @@ def unpack(archive: Path, destination: Path) -> Bundle:
                     raise ValueError("bundle contains a link, duplicate or special member")
                 seen.add(name)
                 total += member.size
-                if total > MAX_BYTES or len(seen) > 4 * MAX_FRAMES + 3:
+                if total > MAX_BYTES or len(seen) > 4 * MAX_FRAMES + 4:
                     raise ValueError("bundle exceeds resource limits")
                 source = tar.extractfile(member)
                 if source is None:

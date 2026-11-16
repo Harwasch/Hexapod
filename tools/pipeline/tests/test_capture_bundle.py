@@ -5,7 +5,7 @@ import json
 import sqlite3
 import tarfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -13,6 +13,7 @@ import pytest
 import arkit_ingest
 import capture_bundle as bundle
 import sfm
+from contracts import StageContext
 
 
 def frame(index: int = 0) -> dict[str, Any]:
@@ -33,7 +34,11 @@ def frame(index: int = 0) -> dict[str, Any]:
     }
 
 
-def make_bundle(root: Path, frames: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def make_bundle(
+    root: Path,
+    frames: list[dict[str, Any]] | None = None,
+    locations: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     root.mkdir()
     frames = frames or [frame()]
     (root / "rgb.mov").write_bytes(b"fake video; parser does not decode")
@@ -41,6 +46,8 @@ def make_bundle(root: Path, frames: list[dict[str, Any]] | None = None) -> dict[
     for record in frames:
         (root / record["depth"]["file"]).write_bytes(np.array([1, 2], dtype="<f2").tobytes())
         (root / record["depth"]["confidence"]).write_bytes(bytes([1, 2]))
+    if locations is not None:
+        (root / "location.jsonl").write_text("".join(json.dumps(f) + "\n" for f in locations))
     manifest = {
         "version": 1,
         "format": "hex-capture",
@@ -53,6 +60,12 @@ def make_bundle(root: Path, frames: list[dict[str, Any]] | None = None) -> dict[
         "smoothedDepthFrameCount": 0,
         "files": [{"path": p.name, "bytes": p.stat().st_size} for p in sorted(root.iterdir())],
     }
+    if locations is not None:
+        manifest["locationLog"] = "location.jsonl"
+        valid = [fix for fix in locations if fix["horizontalAccuracyM"] > 0]
+        manifest["location"] = (
+            min(valid, key=lambda fix: fix["horizontalAccuracyM"]) if valid else None
+        )
     (root / "manifest.json").write_text(json.dumps(manifest))
     return manifest
 
@@ -217,7 +230,10 @@ def test_normalize_keeps_every_frame_at_native_size(tmp_path: Path) -> None:
     from workdir import Workdir
 
     source = tmp_path / "source"
-    make_bundle(source, [frame(i) for i in range(4)])
+    records = [frame(i) for i in range(4)]
+    records[0]["trackingState"] = "limited:initializing"
+    records[2]["trackingState"] = "limited:excessiveMotion"
+    make_bundle(source, records, locations=location_fixes())
     (source / "rgb.mov").unlink()
     make_clip(source / "rgb.mov", frames=4, fps=30)
     # make_clip creates stills beside its output; only archive the declared payload.
@@ -239,6 +255,29 @@ def test_normalize_keeps_every_frame_at_native_size(tmp_path: Path) -> None:
     execute(recipe, work, RunnerSet(cpu=LocalRunner()))
     images = list((work.stage_dir("normalize") / "out" / "frames").glob("*.png"))
     assert len(images) == 4
+    out = work.stage_dir("normalize") / "out"
+    source_meta = json.loads((out / "source_meta.json").read_text())
+    frames_meta = json.loads((out / "frames_meta.json").read_text())
+    assert source_meta["location"] == {
+        "lat": 37.002,
+        "lon": -122,
+        "altitudeM": 102,
+        "accuracyM": 5,
+        "source": "capture-bundle-corelocation",
+    }
+    assert frames_meta["arkit"] == records
+    assert frames_meta["locations"] == location_fixes()
+    assert len(frames_meta["frames"]) == 4
+    # Exercise the actual georeference readers, including the historical altitude key.
+    from types import SimpleNamespace
+
+    import stages
+
+    ctx = cast(
+        StageContext, SimpleNamespace(has_input=lambda _: True, input=lambda name: out / name)
+    )
+    assert stages._sole_location(ctx, ()) == (37.002, -122, 102)
+    assert stages._video_location_accuracy(ctx) == 5
 
 
 def test_placement_keeps_arkit_metres_and_gravity(tmp_path: Path) -> None:
@@ -257,3 +296,162 @@ def test_placement_keeps_arkit_metres_and_gravity(tmp_path: Path) -> None:
     assert placed["scaleSource"] == "arkit"
     assert placed["scaleEstimate"] is None
     np.testing.assert_allclose(np.asarray(placed["rotation"]) @ [0, 1, 0], [0, 0, 1], atol=1e-12)
+
+
+def pose_context(tmp_path: Path, records: list[dict[str, Any]], **params: Any) -> Any:
+    from types import SimpleNamespace
+
+    (tmp_path / "frames_meta.json").write_text(
+        json.dumps({"format": "hex-capture-v1", "arkit": records})
+    )
+    (tmp_path / "frames").mkdir()
+    (tmp_path / "poses").mkdir()
+    return SimpleNamespace(
+        work_dir=tmp_path,
+        input=lambda name: tmp_path / name,
+        output=lambda name: tmp_path / name,
+        param=lambda name, default=None: params.get(name, default),
+    )
+
+
+@pytest.mark.parametrize("minimum,normal,needed", [(10, 3, 10), (0, 1, 2)])
+def test_pose_requires_enough_normal_frames(
+    tmp_path: Path, minimum: int, normal: int, needed: int
+) -> None:
+    records = [frame(i) for i in range(normal + 2)]
+    for record in records[:2]:
+        record["trackingState"] = "limited:initializing"
+    ctx = pose_context(tmp_path, records, min_tracked_frames=minimum)
+    with pytest.raises(
+        ValueError,
+        match=(
+            f"capture bundle has {normal} of {normal + 2} frames with normal "
+            f"ARKit tracking; at least {needed} are needed"
+        ),
+    ):
+        arkit_ingest.pose(ctx)
+
+
+def test_pose_excludes_limited_frames_from_database_and_seed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from types import SimpleNamespace
+
+    records = [frame(i) for i in range(13)]
+    records[0]["trackingState"] = records[1]["trackingState"] = "limited:initializing"
+    records[7]["trackingState"] = "limited:excessiveMotion"
+    normal = [f for f in records if f["trackingState"] == "normal"]
+    names = [f"frame_{f['index']:08d}.png" for f in normal]
+    ctx = pose_context(tmp_path, records)
+    commands = []
+
+    def run(argv: list[str]) -> None:
+        commands.append(argv)
+        if argv[1] == "feature_extractor":
+            selected = Path(argv[argv.index("--image_list_path") + 1]).read_text().splitlines()
+            assert selected == names
+            with sqlite3.connect(tmp_path / "arkit.db") as db:
+                db.execute(
+                    "CREATE TABLE images (image_id INTEGER PRIMARY KEY, "
+                    "name TEXT, camera_id INTEGER)"
+                )
+                db.execute(
+                    "CREATE TABLE cameras (camera_id INTEGER PRIMARY KEY, model INTEGER, "
+                    "width INTEGER, height INTEGER, params BLOB, prior_focal_length INTEGER)"
+                )
+                db.executemany(
+                    "INSERT INTO images VALUES (?, ?, 1)",
+                    [(100 + i, name) for i, name in enumerate(selected)],
+                )
+        elif argv[1] == "point_triangulator":
+            seed = (tmp_path / "arkit-seed" / "images.txt").read_text().splitlines()[::2]
+            assert [line.split()[-1] for line in seed] == names
+
+    ctx.run = run
+    monkeypatch.setattr(sfm, "colmap_exe", lambda: "colmap-stand-in")
+    images = []
+    for record in normal:
+        r, t = bundle.world_to_camera(bundle.matrix(record["transform"], 4))
+        images.append(SimpleNamespace(rotation=r, tvec=t, to_dict=lambda: {}))
+    model = SimpleNamespace(
+        registered=10,
+        points3d=1,
+        cameras=[],
+        images=images,
+        by_name=lambda: dict(zip(names, images, strict=True)),
+    )
+    monkeypatch.setattr(sfm, "read_model", lambda _: model)
+    outcome = arkit_ingest.pose(ctx)
+    report = json.loads((tmp_path / "poses" / "poses.json").read_text())
+    assert report["tracking"] == {
+        "total": 13,
+        "normal": 10,
+        "excluded": 3,
+        "excludedByState": {"limited:initializing": 2, "limited:excessiveMotion": 1},
+    }
+    assert outcome.metrics["excluded"] == 3
+    excluded_counts = outcome.metrics["excludedByState"]
+    assert isinstance(excluded_counts, str)
+    assert json.loads(excluded_counts) == report["tracking"]["excludedByState"]
+    assert len(commands) == 3
+
+
+def location_fixes() -> list[dict[str, Any]]:
+    return [
+        {
+            "timestamp": 1800000000 + i,
+            "lat": 37 + i / 1000,
+            "lon": -122,
+            "altitudeM": 100 + i,
+            "horizontalAccuracyM": accuracy,
+            "verticalAccuracyM": 10,
+        }
+        for i, accuracy in enumerate([-1, 20, 5, 5])
+    ]
+
+
+@pytest.mark.parametrize("vertical", [10, -1])
+def test_bundle_location_round_trip(tmp_path: Path, vertical: int) -> None:
+    fixes = location_fixes()
+    fixes[2]["verticalAccuracyM"] = vertical
+    source = tmp_path / "source"
+    make_bundle(source, locations=fixes)
+    tar = tmp_path / "capture.hexcap"
+    archive(source, tar)
+    parsed = bundle.unpack(tar, tmp_path / "out")
+    assert parsed.locations == fixes
+    assert parsed.location == {
+        "lat": 37.002,
+        "lon": -122,
+        "altitudeM": 102 if vertical >= 0 else None,
+        "accuracyM": 5,
+        "source": "capture-bundle-corelocation",
+    }
+
+
+@pytest.mark.parametrize("mutation", ["latitude", "nan", "summary", "missing-log", "log-path"])
+def test_bundle_rejects_invalid_locations(tmp_path: Path, mutation: str) -> None:
+    fixes = location_fixes()
+    if mutation == "latitude":
+        fixes[0]["lat"] = 91
+    elif mutation == "nan":
+        fixes[0]["timestamp"] = float("nan")
+    source = tmp_path / "source"
+    manifest = make_bundle(source, locations=fixes)
+    if mutation == "summary":
+        manifest["location"] = fixes[1]
+    elif mutation == "missing-log":
+        del manifest["locationLog"]
+    elif mutation == "log-path":
+        manifest["locationLog"] = "../location.jsonl"
+    (source / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError):
+        bundle.read_bundle(source)
+
+
+def test_no_usable_bundle_location(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    make_bundle(source, locations=location_fixes()[:1])
+    parsed = bundle.read_bundle(source)
+    assert parsed.locations == location_fixes()[:1]
+    assert parsed.location is None

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,8 @@ import capture_bundle as bundle
 import frame_meta
 import sfm
 from contracts import StageContext, StageOutcome
+
+MIN_TRACKED_FRAMES = 10
 
 
 def normalize(ctx: StageContext) -> StageOutcome:
@@ -78,7 +81,7 @@ def normalize(ctx: StageContext) -> StageOutcome:
         "device": capture.manifest["device"],
         "capturedAt": capture.manifest["startedAt"],
         "platform": platform,
-        "location": None,
+        "location": capture.location,
         "selection": "all",
         "sensor": "ARKit LiDAR",
     }
@@ -91,6 +94,7 @@ def normalize(ctx: StageContext) -> StageOutcome:
                 "platform": platform,
                 "frames": records,
                 "arkit": capture.frames,
+                "locations": capture.locations,
             }
         )
         + "\n"
@@ -106,7 +110,7 @@ def seed_model(database: Path, frames: list[dict[str, Any]], output: Path) -> No
     cameras, images = [], []
     with sqlite3.connect(database) as db:
         rows = db.execute("SELECT image_id, name FROM images ORDER BY name").fetchall()
-        if [row[1] for row in rows] != [f"frame_{i:08d}.png" for i in range(len(frames))]:
+        if [row[1] for row in rows] != [f"frame_{f['index']:08d}.png" for f in frames]:
             raise ValueError("COLMAP database images do not match the frame log")
         for (image_id, name), frame in zip(rows, frames, strict=True):
             camera_id = image_id
@@ -134,33 +138,45 @@ def pose(ctx: StageContext) -> StageOutcome:
     if metadata.get("format") != "hex-capture-v1":
         raise ValueError("ARKit pose input is not a capture bundle")
     records = metadata["arkit"]
-    # Preserve limited-tracking frames in storage and normalize, but do not invent
-    # trustworthy poses for them. M1 fails the job rather than dropping observations.
     previous = -1.0
     for i, record in enumerate(records):
         previous = bundle.validate_frame(record, i, previous)
-        if record["trackingState"] != "normal":
-            raise ValueError("bundle has non-normal tracking; retained, reconstruction unverified")
+    tracked = [record for record in records if record["trackingState"] == "normal"]
+    excluded = dict(Counter(r["trackingState"] for r in records if r["trackingState"] != "normal"))
+    minimum = max(2, int(ctx.param("min_tracked_frames", MIN_TRACKED_FRAMES)))
+    if len(tracked) < minimum:
+        raise ValueError(
+            f"capture bundle has {len(tracked)} of {len(records)} frames with normal "
+            f"ARKit tracking; at least {minimum} are needed"
+        )
+    tracking = {
+        "total": len(records),
+        "normal": len(tracked),
+        "excluded": len(records) - len(tracked),
+        "excludedByState": excluded,
+    }
+    image_list = ctx.work_dir / "arkit-images.txt"
+    image_list.write_text("".join(f"frame_{r['index']:08d}.png\n" for r in tracked))
     frames = ctx.input("frames")
     database = ctx.work_dir / "arkit.db"
     database.unlink(missing_ok=True)
     seed = ctx.work_dir / "arkit-seed"
     out = ctx.output("poses")
-    ctx.run(
-        sfm.feature_extractor_argv(
-            database,
-            frames,
-            camera_model="PINHOLE",
-            single_camera=False,
-            max_features=int(ctx.param("max_features", 4096)),
-            max_image_size=int(ctx.param("max_image_size", 1600)),
-            first_octave=0,
-            num_threads=4,
-        )
+    argv = sfm.feature_extractor_argv(
+        database,
+        frames,
+        camera_model="PINHOLE",
+        single_camera=False,
+        max_features=int(ctx.param("max_features", 4096)),
+        max_image_size=int(ctx.param("max_image_size", 1600)),
+        first_octave=0,
+        num_threads=4,
     )
-    seed_model(database, records, seed)
+    argv += ["--image_list_path", str(image_list)]
+    ctx.run(argv)
+    seed_model(database, tracked, seed)
     # Known metric poses remove the need for incremental/backbone pose estimation.
-    # Sequential matching keeps this linear in capture length; no frame is removed.
+    # Only normal-tracking images entered the database, so matching cannot include others.
     ctx.run(
         sfm.matcher_argv(
             database,
@@ -174,13 +190,13 @@ def pose(ctx: StageContext) -> StageOutcome:
     argv += ["--Mapper.fix_existing_images", "1"]
     ctx.run(argv)
     model = sfm.read_model(out)
-    if model.registered != len(records) or model.points3d == 0:
+    if model.registered != len(tracked) or model.points3d == 0:
         raise ValueError("ARKit triangulation did not retain every pose with usable points")
     # Confirm the tool held the metric poses, not only its option spelling.
     by_name = model.by_name()
-    for i, record in enumerate(records):
+    for record in tracked:
         expected_r, expected_t = bundle.world_to_camera(bundle.matrix(record["transform"], 4))
-        image = by_name[f"frame_{i:08d}.png"]
+        image = by_name[f"frame_{record['index']:08d}.png"]
         if not np.allclose(image.rotation, expected_r, atol=1e-5, rtol=0) or not np.allclose(
             image.tvec, expected_t, atol=1e-5, rtol=0
         ):
@@ -190,6 +206,7 @@ def pose(ctx: StageContext) -> StageOutcome:
             {
                 "source": "hex-capture-v1",
                 "registered": model.registered,
+                "tracking": tracking,
                 "points3D": model.points3d,
                 "cameras": [camera.to_dict() for camera in model.cameras],
                 "images": [image.to_dict() for image in model.images],
@@ -204,6 +221,11 @@ def pose(ctx: StageContext) -> StageOutcome:
         + "\n"
     )
     return StageOutcome(
-        metrics={"registered": model.registered, "points3D": model.points3d},
+        metrics={
+            "registered": model.registered,
+            "points3D": model.points3d,
+            "excluded": len(records) - len(tracked),
+            "excludedByState": json.dumps(excluded, sort_keys=True),
+        },
         summary="ARKit metric poses with triangulated features",
     )

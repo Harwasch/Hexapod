@@ -40,12 +40,22 @@ PINHOLE calibration and known poses, using COLMAP's actual database image IDs,
 then matches features sequentially and triangulates at fixed poses. It refuses
 an empty point cloud, missing cameras, or altered poses. It produces the same
 binary COLMAP model the existing trainer consumes. ARKit gravity and metric
-scale are preserved through placement; heading and geolocation still need the
-existing capture placement/site context. Local ARKit coordinates are not GPS.
+scale are preserved through placement; geolocation comes from the bundle's CoreLocation fixes by default. An optional
+existing site supplies its coordinate frame through the existing site context.
+Heading remains arbitrary unless provided through existing placement controls;
+local ARKit coordinates are not GPS.
 
-All raw observations remain in the archive. Frames with limited/unavailable
-tracking are retained, but M1 refuses reconstruction for such a bundle rather
-than pretending those poses are reliable or silently discarding frames. LiDAR
+All raw observations remain in the archive and **every RGB frame** stays in
+normalize's outputs, including limited/unavailable tracking. Only frames whose
+`trackingState` is exactly `normal` enter COLMAP feature extraction (via
+`--image_list_path`), matching, pose seeding, and fixed-pose triangulation.
+Original frame indices/names are preserved across gaps. Pose requires
+`min_tracked_frames` normal frames (default 10, with an absolute minimum of 2);
+otherwise it reports `capture bundle has N of M frames with normal ARKit tracking;
+at least K are needed`. The registration check covers only those normal frames.
+`poses.json.tracking` records `total`, `normal`, `excluded`, and `excludedByState`;
+stage metrics include `excluded` and JSON-encoded `excludedByState` counts, such as
+`limited:initializing` and `limited:excessiveMotion`. LiDAR
 points are not yet used as training seeds; their full recorded depth and
 confidence remain available for a later implementation.
 
@@ -58,6 +68,7 @@ sparse files, duplicate archive members, or undeclared files are accepted.
 ```text
 manifest.json
 frames.jsonl
+location.jsonl     (optional)
 rgb.mov
 depth_00000000.f16
 depth_00000000.u8
@@ -93,7 +104,7 @@ The example byte sizes are illustrative; every actual size must match. `files`
 includes every payload file, excluding the manifest itself. Counts distinguish
 raw and smoothed depth availability. Limits reject an entire bundle, never
 subsample it: 128 GiB total expanded archive bytes, 64 MiB manifest, one million
-frames, 16 KiB per frame-log line. The Swift USTAR writer limits each member to
+frames, 16 KiB per frame/location-log line, and one million location fixes. The Swift USTAR writer limits each member to
 less than 8 GiB (USTAR's size field); longer recordings must finish a bundle
 before reaching that bound. The archive duplicates the folder's bytes locally,
 and Upload retains another private archive copy until the app deletes it.
@@ -154,6 +165,44 @@ confidence byte per pixel (ARKit low/medium/high: 0/1/2). Both references must
 exist and have exactly `width × height × 2` and `width × height` bytes. Raw and
 smoothed measurements are separate. There is no depth image rotation or resizing.
 
+## Phone location and default placement
+
+CoreLocation requests **when-in-use** permission and records delivered fixes during
+recording. The containing app must supply `NSLocationWhenInUseUsageDescription`.
+Manager and delegate access run on the main actor; writes run on the capture's
+serial queue. Denied permission or unavailable GPS leaves location absent and does
+not fail recording. The Codable model and log writer have no CoreLocation dependency
+on Linux. No format-version bump is needed: older bundles omit these optional fields.
+
+When fixes are delivered, `location.jsonl` is inventoried like any other payload,
+and `manifest.locationLog` is `"location.jsonl"`. Each line is one observation:
+
+```json
+{
+  "timestamp": 1800000000,
+  "lat": 37.25,
+  "lon": -122.1,
+  "altitudeM": 100,
+  "horizontalAccuracyM": 12,
+  "verticalAccuracyM": 20
+}
+```
+
+`timestamp` is Unix UTC seconds from CoreLocation, independent of ARKit's relative
+clock. Coordinates are latitude/longitude degrees; altitude and accuracies are
+metres as reported by CoreLocation. Negative accuracies are retained as invalid
+measurement indicators. `manifest.location` is the full observation with the lowest
+**positive** horizontal accuracy (first delivered wins ties), or absent if none is
+usable. All logged fixes remain stored; the parser verifies this summary against
+the log. A negative vertical accuracy prevents altitude from being used for placement.
+
+Normalize writes all fixes to `frames_meta.locations` and the chosen fix to
+`source_meta.location` in the existing video-location shape: `lat`, `lon`,
+`altitudeM`, `accuracyM`, and `source: "capture-bundle-corelocation"`. It does not
+invent per-frame EXIF fixes or GPS/ARKit alignment. The existing `exif_gps` stage
+reads this capture location and accuracy, preserves ARKit metres/gravity, and
+applies an existing site's frame when supplied. Video uploads are unchanged.
+
 ## Resumable protocol
 
 The API base passed to Upload includes `/api/v1`. The app supplies the existing
@@ -195,25 +244,32 @@ Deliver the completion handler on the app's main actor. The uploader waits for
 ETag persistence and queued delegate events before invoking it. Control-plane
 requests run when the app is active or receives a background wake; iOS does not
 guarantee continuous execution, and force-quitting requires a user relaunch.
-The module does not own app lifecycle, Keychain, permissions, progress UI, or
-cleanup policy; those remain M0/App integration responsibilities. Pass a
-`BundlePlacement` (latitude, longitude, uncertainty in metres) or a `siteID` whose
-site already has a coordinate frame when starting an upload. These use existing
-capture placement fields and are persisted with the transfer. Without either,
-the source still uploads and its job queues, but the existing georeference stage
-will refuse to invent a world location. ARKit does not supply geographic coordinates.
+Upload does not own app lifecycle, Keychain, progress UI, or cleanup policy;
+those remain M0/App integration responsibilities. Capture owns the location
+permission request; the app supplies its usage description and camera permission.
+`BundleUploader` explicitly defaults to `placement: .bundleGPS`: it reads the
+bounded manifest from the owned archive and derives a `BundlePlacement`. Capture
+creation sends `metadata.lat`, `lon`, `uncertaintyM`, and `locationAccuracyM` through
+the existing API fields. Optional `siteID` also sends `siteId`; GPS still supplies
+the offset in that site's frame. When GPS is absent, a selected site can supply
+its frame origin. Without GPS or a site, starting the upload raises
+`UploadError.missingLocation`, allowing the app to request a site selection.
+Explicit placement remains available with `.explicit(BundlePlacement(...))`.
+Placement and site are persisted for relaunch. ARKit supplies no geographic fix.
 
 ## Verification boundary
 
 Linux exercises Codable models, folder writing, USTAR layout, chunk planning,
-chunk materialization, upload-state persistence, parser rejection cases, real
+chunk materialization, GPS log/summary round trips, default upload placement,
+upload-state persistence, parser rejection cases, real
 FFmpeg extraction on synthetic video, and pose math/database seeding. API tests
 exercise the new route lifecycle using the existing PostGIS and moto fixtures.
 They do not prove live R2 authorization or an iOS background upload.
 
 **Device-only implementation is unverified:** Linux excludes ARKit and
 AVFoundation code. Xcode must compile it under Swift 6, and an iPhone 15 Pro or
-newer must verify camera permission, LiDAR availability with the chosen 4K
+newer must verify camera and location permissions (including denial/revocation),
+CoreLocation delivery and placement accuracy, LiDAR availability with the chosen 4K
 format, color encoding, RGB/depth alignment, recording throughput, writer
 backpressure, interruption, locked-device file access, and relaunch callbacks.
 `start` first warms up tracking; its completion fires when tracking is normal
