@@ -5,8 +5,8 @@ Use `Authorization: Bearer <API_WRITE_TOKEN>`. Each SSE `data:` line contains on
 `AskEvent`: status, entity, speech, or done. Only a successful, committed answer ends
 with done. A status followed by EOF without done means the answer was interrupted.
 
-`scanId` is a catalog capture UUID. Its registered site supplies the property scope;
-there is no new field in the phone contract. A question without a scan can receive
+`scanId` is a catalog capture UUID. The phone contract now includes optional
+`scope`/`siteId`; API schema alignment is still pending. A question without a scan can receive
 speech, but cannot supply scene evidence or save entities. The reasoner receives the
 question, device observations, earlier entities from that capture, keyframe pixels,
 mask references and depth summaries. It can make at most eight turns, four tools per
@@ -64,18 +64,22 @@ Counting uses only the first requested frame and labels its count accordingly; t
 is no unverified cross-view instance association.
 
 The location source ships a tiny, explicitly labelled California fixture. Unknown
-coverage stays unknown. Segmentation and plant inference intentionally raise
+coverage stays unknown. A synthetic-only CLI backend now exercises masks, lifting
+and entities using the committed yard bundles. Real segmentation and plant inference raise
 unavailable until dependencies, weights and alignment are validated. The plant
 interface defaults to an open-weight backend seam; the actual backend remains an
 open decision. No model accuracy or GPU claim follows from synthetic tests.
 
 ## Verification limits
 
-Linux covers contract roundtrips, the mocked tool loop/SDK/adapter, streaming routes,
-mask handling, cancellation, lifting and the Cloud SSE parser/client with a fake
-transport. Run `uv run --no-sync python -m tests.offline_gate` from `apps/api` for
-all tests whose fixture closure does not require PostGIS. In a sandbox that blocks
-asyncio cross-thread wakeups, add `--sandbox-poll`; it only bounds loop selector sleep.
+Linux covers contract roundtrips, the mocked tool loop/SDK/adapter, mask handling,
+cancellation, lifting and the Cloud SSE parser/client with a fake transport.
+`ASK_REASONER=mock` enables deterministic tool planning without a key;
+`ASK_MODE=replay` serves two recorded synthetic streams through the normal ledger.
+See [standalone testing commands](TESTING-SERVER.md) for each CLI, API tests,
+curl replay and the Cloud debug view. HTTP TestClient checks can stall in a sandbox
+that blocks cross-thread wakeups; run them in the coordinator environment without
+event-loop patches.
 
 PostGIS migration/CRUD/replay tests are in `apps/api/tests/test_ask_db.py` and need a
 reachable database. The coordinator must run these and the cross review before merge.
