@@ -81,6 +81,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask */
+        post: operations["ask_api_v1_ask_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/assets": {
         parameters: {
             query?: never;
@@ -205,6 +222,43 @@ export interface paths {
         put: operations["register_bundle_api_v1_captures__capture_id__bundle_upload_put"];
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/captures/{capture_id}/entities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Entities */
+        get: operations["list_entities_api_v1_captures__capture_id__entities_get"];
+        put?: never;
+        /** Create Entity */
+        post: operations["create_entity_api_v1_captures__capture_id__entities_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/captures/{capture_id}/entities/{entity_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Entity */
+        get: operations["read_entity_api_v1_captures__capture_id__entities__entity_id__get"];
+        /** Update Entity */
+        put: operations["update_entity_api_v1_captures__capture_id__entities__entity_id__put"];
+        post?: never;
+        /** Delete Entity */
+        delete: operations["delete_entity_api_v1_captures__capture_id__entities__entity_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -3738,6 +3792,12 @@ export interface components {
             /** Uncertaintym */
             uncertaintyM: number;
         };
+        /** Anchor */
+        Anchor: {
+            /** Geo */
+            geo?: components["schemas"]["GeoCoordinate"];
+            world: components["schemas"]["Vector3"];
+        };
         /** AppearancePackage */
         AppearancePackage: {
             /** Appearance */
@@ -4010,6 +4070,21 @@ export interface components {
              * Format: date-time
              */
             updatedAt: string;
+        };
+        /** AskRequest */
+        AskRequest: {
+            /** Deviceentities */
+            deviceEntities: components["schemas"]["Entity"][];
+            /** Id */
+            id: string;
+            /** Keyframes */
+            keyframes: components["schemas"]["KeyframeRef"][];
+            /** Location */
+            location?: components["schemas"]["GeoCoordinate"];
+            /** Question */
+            question: string;
+            /** Scanid */
+            scanId?: string;
         };
         /** AssetBase */
         AssetBase: {
@@ -6068,6 +6143,14 @@ export interface components {
             /** Truncated */
             truncated: boolean;
         };
+        /** DoneEvent */
+        DoneEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "done";
+        };
         /** EcologyRequest */
         EcologyRequest: {
             /**
@@ -6093,6 +6176,54 @@ export interface components {
             includeOccurrences?: boolean;
             /** Taxa */
             taxa?: components["schemas"]["TaxonQuery"][];
+        };
+        /** Entity */
+        Entity: {
+            anchor: components["schemas"]["Anchor"];
+            /** Attrs */
+            attrs: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Confidence */
+            confidence: number;
+            extent: components["schemas"]["Extent"];
+            /** Label */
+            label: string;
+            /** Masks */
+            masks: components["schemas"]["MaskReference"][];
+            source: components["schemas"]["EntitySource"];
+        };
+        /** EntityEvent */
+        EntityEvent: {
+            entity: components["schemas"]["Entity"];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "entity";
+        };
+        /** EntityRecord */
+        EntityRecord: {
+            entity: components["schemas"]["Entity"];
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Scanid
+             * Format: uuid
+             */
+            scanId: string;
+            /** Siteid */
+            siteId?: string | null;
+        };
+        /** EntitySource */
+        EntitySource: {
+            /** Model */
+            model: string;
+            /** Module */
+            module: string;
         };
         /**
          * EpochConfidenceRead
@@ -6368,6 +6499,15 @@ export interface components {
             title: string;
             /** Url */
             url?: string | null;
+        };
+        /** Extent */
+        Extent: {
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+            /** Z */
+            z: number;
         };
         /** FeatureBatchItem */
         FeatureBatchItem: {
@@ -6717,6 +6857,15 @@ export interface components {
              * @enum {string}
              */
             source: "llm" | "local-guide";
+        };
+        /** GeoCoordinate */
+        GeoCoordinate: {
+            /** Alt */
+            alt: number;
+            /** Lat */
+            lat: number;
+            /** Lon */
+            lon: number;
         };
         /** GeoJsonSource */
         GeoJsonSource: {
@@ -7463,6 +7612,18 @@ export interface components {
          * @enum {string}
          */
         JoinPointSource: "video" | "upload";
+        JsonValue: unknown;
+        /** KeyframeRef */
+        KeyframeRef: {
+            /** Depth */
+            depth?: string;
+            /** Image */
+            image: string;
+            /** Index */
+            index: number;
+            /** Pose */
+            pose: string;
+        };
         /** KnowledgeCellRead */
         KnowledgeCellRead: {
             /** Bounds */
@@ -9168,6 +9329,13 @@ export interface components {
             legend: string;
             /** Unit */
             unit?: string | null;
+        };
+        /** MaskReference */
+        MaskReference: {
+            /** Keyframe */
+            keyframe: string;
+            /** Ref */
+            ref: string;
         };
         /** MemberRead */
         MemberRead: {
@@ -12207,6 +12375,16 @@ export interface components {
              */
             targetRelation: "not-modeled" | "inside-target" | "overlaps-target" | "outside-target";
         };
+        /** SpeechEvent */
+        SpeechEvent: {
+            /** Text */
+            text: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "speech";
+        };
         /**
          * StacSource
          * @description Reference to a STAC item/collection. Resolution to a renderable asset happens client-side.
@@ -12252,6 +12430,16 @@ export interface components {
             kind: "measured-fit" | "stated-by-source" | "standard" | "not-stated";
             /** Valuem */
             valueM?: number | null;
+        };
+        /** StatusEvent */
+        StatusEvent: {
+            /** Text */
+            text: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "status";
         };
         /**
          * StorageReconciliation
@@ -12633,6 +12821,15 @@ export interface components {
             storageKey: string;
             /** Uploadid */
             uploadId: string;
+        };
+        /** Vector3 */
+        Vector3: {
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+            /** Z */
+            z: number;
         };
         /** VegetationObservation */
         VegetationObservation: {
@@ -13142,6 +13339,7 @@ export type SchemaAction = components['schemas']['Action'];
 export type SchemaActionConstraint = components['schemas']['ActionConstraint'];
 export type SchemaActionMissionCreate = components['schemas']['ActionMissionCreate'];
 export type SchemaAlignmentCapRead = components['schemas']['AlignmentCapRead'];
+export type SchemaAnchor = components['schemas']['Anchor'];
 export type SchemaAppearancePackage = components['schemas']['AppearancePackage'];
 export type SchemaArcGisMapServerSource = components['schemas']['ArcGisMapServerSource'];
 export type SchemaArchiveImageRead = components['schemas']['ArchiveImageRead'];
@@ -13151,6 +13349,7 @@ export type SchemaArtifactKind = components['schemas']['ArtifactKind'];
 export type SchemaArtifactRead = components['schemas']['ArtifactRead'];
 export type SchemaArtifactReference = components['schemas']['ArtifactReference'];
 export type SchemaArtifactRow = components['schemas']['ArtifactRow'];
+export type SchemaAskRequest = components['schemas']['AskRequest'];
 export type SchemaAssetBase = components['schemas']['AssetBase'];
 export type SchemaAssetCreate = components['schemas']['AssetCreate'];
 export type SchemaAssetProvider = components['schemas']['AssetProvider'];
@@ -13249,7 +13448,12 @@ export type SchemaDocumentOcrRequest = components['schemas']['DocumentOcrRequest
 export type SchemaDocumentOutput = components['schemas']['DocumentOutput'];
 export type SchemaDocumentPageRead = components['schemas']['DocumentPageRead'];
 export type SchemaDocumentSearchHit = components['schemas']['DocumentSearchHit'];
+export type SchemaDoneEvent = components['schemas']['DoneEvent'];
 export type SchemaEcologyRequest = components['schemas']['EcologyRequest'];
+export type SchemaEntity = components['schemas']['Entity'];
+export type SchemaEntityEvent = components['schemas']['EntityEvent'];
+export type SchemaEntityRecord = components['schemas']['EntityRecord'];
+export type SchemaEntitySource = components['schemas']['EntitySource'];
 export type SchemaEpochConfidenceRead = components['schemas']['EpochConfidenceRead'];
 export type SchemaEpochJoinMethod = components['schemas']['EpochJoinMethod'];
 export type SchemaEpochPlatform = components['schemas']['EpochPlatform'];
@@ -13260,6 +13464,7 @@ export type SchemaEventLocation = components['schemas']['EventLocation'];
 export type SchemaEventLocationRef = components['schemas']['EventLocationRef'];
 export type SchemaEventRead = components['schemas']['EventRead'];
 export type SchemaEvidenceRead = components['schemas']['EvidenceRead'];
+export type SchemaExtent = components['schemas']['Extent'];
 export type SchemaFeatureBatchItem = components['schemas']['FeatureBatchItem'];
 export type SchemaFeatureBatchPreview = components['schemas']['FeatureBatchPreview'];
 export type SchemaFeatureBatchRead = components['schemas']['FeatureBatchRead'];
@@ -13277,6 +13482,7 @@ export type SchemaFindingRead = components['schemas']['FindingRead'];
 export type SchemaGalleryOutput = components['schemas']['GalleryOutput'];
 export type SchemaGameEvent = components['schemas']['GameEvent'];
 export type SchemaGameResult = components['schemas']['GameResult'];
+export type SchemaGeoCoordinate = components['schemas']['GeoCoordinate'];
 export type SchemaGeoJsonSource = components['schemas']['GeoJsonSource'];
 export type SchemaGeoPosition = components['schemas']['GeoPosition'];
 export type SchemaGeorefMethod = components['schemas']['GeorefMethod'];
@@ -13317,6 +13523,8 @@ export type SchemaJobRetry = components['schemas']['JobRetry'];
 export type SchemaJobStepLog = components['schemas']['JobStepLog'];
 export type SchemaJobStepRead = components['schemas']['JobStepRead'];
 export type SchemaJoinPointSource = components['schemas']['JoinPointSource'];
+export type SchemaJsonValue = components['schemas']['JsonValue'];
+export type SchemaKeyframeRef = components['schemas']['KeyframeRef'];
 export type SchemaKnowledgeCellRead = components['schemas']['KnowledgeCellRead'];
 export type SchemaKnowledgeCellRecord = components['schemas']['KnowledgeCellRecord'];
 export type SchemaKnowledgeClassRead = components['schemas']['KnowledgeClassRead'];
@@ -13391,6 +13599,7 @@ export type SchemaLiveTrainTiles = components['schemas']['LiveTrainTiles'];
 export type SchemaLonLatGrid = components['schemas']['LonLatGrid'];
 export type SchemaMapFeature = components['schemas']['MapFeature'];
 export type SchemaMapOutput = components['schemas']['MapOutput'];
+export type SchemaMaskReference = components['schemas']['MaskReference'];
 export type SchemaMemberRead = components['schemas']['MemberRead'];
 export type SchemaMembershipWrite = components['schemas']['MembershipWrite'];
 export type SchemaMessageRead = components['schemas']['MessageRead'];
@@ -13533,8 +13742,10 @@ export type SchemaSourceRead = components['schemas']['SourceRead'];
 export type SchemaSpeciesObservation = components['schemas']['SpeciesObservation'];
 export type SchemaSpeciesTarget = components['schemas']['SpeciesTarget'];
 export type SchemaSpeciesTargetResult = components['schemas']['SpeciesTargetResult'];
+export type SchemaSpeechEvent = components['schemas']['SpeechEvent'];
 export type SchemaStacSource = components['schemas']['StacSource'];
 export type SchemaStatedAccuracy = components['schemas']['StatedAccuracy'];
+export type SchemaStatusEvent = components['schemas']['StatusEvent'];
 export type SchemaStorageReconciliation = components['schemas']['StorageReconciliation'];
 export type SchemaSurveyCreate = components['schemas']['SurveyCreate'];
 export type SchemaSurveyLocator = components['schemas']['SurveyLocator'];
@@ -13555,6 +13766,7 @@ export type SchemaTimelineEntry = components['schemas']['TimelineEntry'];
 export type SchemaTimelineOutput = components['schemas']['TimelineOutput'];
 export type SchemaUploadStatus = components['schemas']['UploadStatus'];
 export type SchemaUploadWindow = components['schemas']['UploadWindow'];
+export type SchemaVector3 = components['schemas']['Vector3'];
 export type SchemaVegetationObservation = components['schemas']['VegetationObservation'];
 export type SchemaVegetationPeriod = components['schemas']['VegetationPeriod'];
 export type SchemaVegetationTimeline = components['schemas']['VegetationTimeline'];
@@ -13822,6 +14034,73 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Problem"];
                 };
+            };
+        };
+    };
+    ask_api_v1_ask_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description One AskEvent JSON per SSE data line */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string & (components["schemas"]["EntityEvent"] | components["schemas"]["SpeechEvent"] | components["schemas"]["StatusEvent"] | components["schemas"]["DoneEvent"]);
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Reasoner is not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -14491,6 +14770,317 @@ export interface operations {
             };
             /** @description Object storage is not configured */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    list_entities_api_v1_captures__capture_id__entities_get: {
+        parameters: {
+            query?: {
+                after?: string | null;
+                limit?: number;
+                site_id?: string | null;
+            };
+            header?: never;
+            path: {
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EntityRecord"][];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    create_entity_api_v1_captures__capture_id__entities_post: {
+        parameters: {
+            query?: {
+                site_id?: string | null;
+            };
+            header?: never;
+            path: {
+                capture_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Entity"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EntityRecord"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    read_entity_api_v1_captures__capture_id__entities__entity_id__get: {
+        parameters: {
+            query?: {
+                site_id?: string | null;
+            };
+            header?: never;
+            path: {
+                capture_id: string;
+                entity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EntityRecord"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    update_entity_api_v1_captures__capture_id__entities__entity_id__put: {
+        parameters: {
+            query?: {
+                site_id?: string | null;
+            };
+            header?: never;
+            path: {
+                capture_id: string;
+                entity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Entity"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EntityRecord"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    delete_entity_api_v1_captures__capture_id__entities__entity_id__delete: {
+        parameters: {
+            query?: {
+                site_id?: string | null;
+            };
+            header?: never;
+            path: {
+                capture_id: string;
+                entity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
