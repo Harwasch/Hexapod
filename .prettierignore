@@ -22,3 +22,5 @@ packages/world/fixtures/**/*.json
 hardware/arm/viewer/data
 hardware/arm/cad/cad.json
 hardware/arm/data/actuators_research.yaml
+# Byte-inventoried synthetic capture bundles and generator-owned ground truth
+apps/ios/Fixtures/bundles
