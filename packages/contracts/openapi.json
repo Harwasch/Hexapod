@@ -42637,6 +42637,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Dedupe",
         "tags": [
           "property-memory"
@@ -42723,6 +42728,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
         "summary": "Search",
         "tags": [
           "property-memory"
