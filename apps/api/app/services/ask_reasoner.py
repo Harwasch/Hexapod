@@ -21,6 +21,51 @@ class AnswerModel(Protocol):
     async def turn(self, messages: list[dict[str, Any]]) -> dict[str, Any]: ...
 
 
+class Answering(Protocol):
+    def answer(
+        self, request: AskRequest, previous: list[Entity], bundle_url: str | None
+    ) -> AsyncIterator[AskEvent]: ...
+
+
+class ScriptedAnswerModel:
+    """Stateless deterministic tool planning; never initializes a provider client."""
+
+    async def turn(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        request = json.loads(messages[0]["content"][0]["text"])["request"]
+        question = request["question"].casefold()
+        if len(messages) == 1:
+            name = "segment"
+            if any(word in question for word in ("count", "many", "height", "tall", "measure")):
+                name = "count_measure"
+            elif "invasive" in question:
+                name = "invasive_lookup"
+            elif any(word in question for word in ("species", "identify", "plant")):
+                name = "plant_id"
+            prompt = "shed" if "shed" in question else "tree"
+            return {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "scripted-1",
+                        "name": name,
+                        "input": {"prompt": prompt},
+                    }
+                ],
+                "stop_reason": "tool_use",
+            }
+        results = messages[-1]["content"]
+        text = "Simulated mock answer: analysis is unavailable; I cannot measure this scene."
+        if not any(result.get("is_error") for result in results):
+            entities = [
+                entity for result in results for entity in json.loads(result["content"])["entities"]
+            ]
+            text = f"Simulated mock answer: {len(entities)} observed instance(s) in the reference frame."
+            if entities and any(word in question for word in ("height", "tall", "measure")):
+                height = entities[0]["extent"]["y"]
+                text += f" Observed surface height is {height:.2f} metres."
+        return {"content": [{"type": "text", "text": text}], "stop_reason": "end_turn"}
+
+
 class ToolModel:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings

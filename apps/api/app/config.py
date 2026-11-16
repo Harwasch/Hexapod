@@ -154,6 +154,8 @@ class Settings(BaseSettings):
     ask_model: str = "claude-opus-5"
     ask_analysis_app: str = "hex-analysis"
     ask_analysis_enabled: bool = False
+    ask_reasoner: Literal["claude", "mock"] = "claude"
+    ask_mode: Literal["live", "replay"] = "live"
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-opus-5"
 

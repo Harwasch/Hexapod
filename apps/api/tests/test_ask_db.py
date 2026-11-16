@@ -107,3 +107,47 @@ def test_entity_endpoints_scope_and_crud(client: Any, db: Any) -> None:
     )
     assert client.delete(f"{root}/{entity_id}").status_code == 204
     assert client.get(root).json() == []
+
+
+def test_recorded_route_commits_and_replays_entities_once(
+    client: Any, db: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scan = capture(db)
+    monkeypatch.setattr(client.app.state.settings, "ask_mode", "replay")
+    monkeypatch.setattr(client.app.state.settings, "anthropic_api_key", None)
+    payload = {**REQUEST, "scanId": str(scan.id), "question": "How tall is the tree?"}
+    from tests.test_ask import events
+
+    first = client.post("/v1/ask", json=payload)
+    assert first.status_code == 200
+    assert events(first)[-1] == {"type": "done"}
+    assert len(ledger.rows(db, scan)) == 1
+    run = db.get(AskRun, payload["id"])
+    assert run.state == "complete" and run.events == events(first)
+    # Saved answers remain available after switching modes, with no configured key.
+    client.app.state.settings.ask_mode = "live"
+    second = client.post("/v1/ask", json=payload)
+    assert events(second) == events(first)
+    assert len(ledger.rows(db, scan)) == 1
+    changed = client.post("/v1/ask", json={**payload, "question": "How many trees?"})
+    assert changed.status_code == 409
+
+
+def test_mock_route_without_key_and_invalid_replay_cleanup(
+    client: Any, db: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(client.app.state.settings, "ask_reasoner", "mock")
+    monkeypatch.setattr(client.app.state.settings, "ask_analysis_enabled", False)
+    monkeypatch.setattr(client.app.state.settings, "anthropic_api_key", None)
+    monkeypatch.setattr(client.app.state.settings, "ask_mode", "live")
+    from tests.test_ask import events
+
+    response = client.post("/v1/ask", json=REQUEST)
+    assert response.status_code == 200 and events(response)[-1] == {"type": "done"}
+    assert db.get(AskRun, REQUEST["id"]).state == "complete"
+    client.app.state.settings.ask_mode = "replay"
+    scan = capture(db)
+    payload = {**REQUEST, "id": "unsupported-replay", "scanId": str(scan.id)}
+    assert client.post("/v1/ask", json=payload).status_code == 422
+    assert db.get(AskRun, payload["id"]).state == "failed"
+    assert ledger.rows(db, scan) == []

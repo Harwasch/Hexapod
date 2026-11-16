@@ -9,16 +9,18 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from starlette.requests import Request
 
 from app.api.deps import _db
-from app.api.v1.ask import reasoner
+from app.api.v1.ask import ask, reasoner
 from app.config import Settings
 from app.main import create_app
 from app.models import AskRun
 from app.schemas.ask import AskRequest, DoneEvent, Entity, EntityEvent, SpeechEvent, StatusEvent
 from app.services import ask_entities as ledger
 from app.services.ask_analysis import AnalysisUnavailableError, ModalAnalysis
-from app.services.ask_reasoner import Reasoner, ToolModel
+from app.services.ask_reasoner import Reasoner, ScriptedAnswerModel, ToolModel
+from app.services.ask_replay import QUESTIONS, ReplayAnswerer, recorded_events
 
 ENTITY: dict[str, Any] = {
     "label": "plant",
@@ -364,3 +366,192 @@ def test_saved_answers_replay_without_model_configuration(monkeypatch: pytest.Mo
     )
     assert events(response) == replay
     finish.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("question", "tool", "prompt"),
+    [
+        ("How many trees?", "count_measure", "tree"),
+        ("How tall is the tree?", "count_measure", "tree"),
+        ("Identify this plant", "plant_id", "tree"),
+        ("Is this invasive?", "invasive_lookup", "tree"),
+        ("Find the shed", "segment", "shed"),
+    ],
+)
+def test_scripted_model_plans_tools(question: str, tool: str, prompt: str) -> None:
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": json.dumps({"request": {**REQUEST, "question": question}})}
+            ],
+        }
+    ]
+    result = asyncio.run(ScriptedAnswerModel().turn(messages))
+    assert result["content"][0]["name"] == tool
+    assert result["content"][0]["input"] == {"prompt": prompt}
+
+
+def test_scripted_reasoner_uses_tool_evidence_and_handles_unavailable() -> None:
+    class FixtureAnalysis(Analysis):
+        async def run(self, name: Any, arguments: Any, request: Any, bundle_url: Any) -> Any:
+            assert name == "count_measure" and arguments == {"prompt": "tree"}
+            return [Entity.model_validate(ENTITY)]
+
+    request = AskRequest.model_validate({**REQUEST, "question": "How tall is the tree?"})
+    events = collect(Reasoner(ScriptedAnswerModel(), FixtureAnalysis()).answer(request, [], None))
+    assert events[-1] == SpeechEvent(
+        text=(
+            "Simulated mock answer: 1 observed instance(s) in the reference frame. "
+            "Observed surface height is 2.00 metres."
+        )
+    )
+    disabled = ModalAnalysis(Settings(_env_file=None, ask_analysis_enabled=False), MagicMock())
+    events = collect(Reasoner(ScriptedAnswerModel(), disabled).answer(request, [], None))
+    assert "unavailable" in events[-1].text
+    assert not any(event.type == "entity" for event in events)
+
+
+def test_mock_route_works_without_key_or_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, _, _, finish = offline_client(monkeypatch, model_configured=False)
+    client.app.state.settings.ask_reasoner = "mock"
+    client.app.state.settings.ask_analysis_enabled = False
+    client.app.dependency_overrides.pop(reasoner)
+    monkeypatch.setattr(ToolModel, "turn", AsyncMock(side_effect=AssertionError("provider called")))
+    response = client.post(
+        "/v1/ask", json=REQUEST, headers={"Authorization": "Bearer fixture-write"}
+    )
+    assert response.status_code == 200
+    assert events(response)[-1] == {"type": "done"}
+    assert "unavailable" in events(response)[-2]["text"]
+    finish.assert_called_once()
+
+
+@pytest.mark.parametrize("question", list(QUESTIONS))
+def test_recorded_stream_matches_ground_truth_and_cloud(question: str) -> None:
+    from app.config import REPO_ROOT
+    from app.services.ask_replay import RECORDINGS
+
+    recording = recorded_events(question)
+    truth = json.loads(
+        (REPO_ROOT / "apps/ios/Fixtures/bundles/yard-small/ground_truth.json").read_text()
+    )
+    entity = next(event.entity for event in recording if event.type == "entity")
+    assert entity.attrs["instanceCountInReferenceFrame"] == truth["counts"]["tree"]
+    assert abs(entity.extent.y - truth["treeHeight"]) <= 0.30
+    assert entity.attrs["synthetic"] is True
+    name = QUESTIONS[question]
+    assert (RECORDINGS / name).read_bytes() == (
+        REPO_ROOT / "apps/ios/Modules/Cloud/Sources/Cloud/Resources" / name
+    ).read_bytes()
+    replay = collect(
+        ReplayAnswerer().answer(
+            AskRequest.model_validate({**REQUEST, "question": question}), [], None
+        )
+    )
+    assert replay == recording[:-1]  # done belongs to the route's transaction.
+
+
+def test_replay_route_uses_ledger_without_provider_or_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _, _, finish = offline_client(monkeypatch, model_configured=False)
+    client.app.state.settings.ask_mode = "replay"
+    client.app.dependency_overrides.pop(reasoner)
+    capture = MagicMock()
+    monkeypatch.setattr(ledger, "capture_scope", lambda *_: capture)
+    monkeypatch.setattr(ledger, "rows", lambda *_: [])
+    monkeypatch.setattr(ToolModel, "turn", AsyncMock(side_effect=AssertionError("provider called")))
+    response = client.post(
+        "/v1/ask",
+        json={
+            **REQUEST,
+            "question": "How tall is the tree?",
+            "scanId": "00000000-0000-0000-0000-000000000001",
+        },
+        headers={"Authorization": "Bearer fixture-write"},
+    )
+    assert response.status_code == 200
+    expected = [
+        event.model_dump(mode="json", by_alias=True, exclude_none=True)
+        for event in recorded_events("How tall is the tree?")
+    ]
+    assert events(response) == expected
+    assert finish.call_args.args[2] == expected
+
+
+def test_replay_rejects_unrecorded_question() -> None:
+    with pytest.raises(ValueError):
+        # InvalidInputError is a domain error, not an arbitrary recording path.
+        recorded_events("../../other.sse")
+
+
+@pytest.mark.parametrize("mode", ["mock", "replay", "ledger"])
+def test_handler_runs_alone_without_key_gpu_or_http_threads(
+    monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        anthropic_api_key=None,
+        ask_analysis_enabled=False,
+        ask_reasoner="mock",
+        ask_mode="live" if mode == "mock" else "replay",
+    )
+    db, storage = MagicMock(), MagicMock()
+    capture = MagicMock() if mode == "replay" else None
+    monkeypatch.setattr(ledger, "capture_scope", lambda *_: capture)
+    monkeypatch.setattr(ledger, "rows", lambda *_: [])
+    saved = [{"type": "speech", "text": "Saved unrelated question."}, {"type": "done"}]
+    run = AskRun(
+        id="standalone",
+        state="complete" if mode == "ledger" else "running",
+        events=saved if mode == "ledger" else [],
+    )
+    monkeypatch.setattr(ledger, "claim", lambda *_: (run, mode == "ledger"))
+    finish = MagicMock()
+    monkeypatch.setattr(ledger, "finish", finish)
+    monkeypatch.setattr(ToolModel, "turn", AsyncMock(side_effect=AssertionError("provider called")))
+    body = {**REQUEST, "question": "How tall is the tree?"}
+    if mode == "replay":
+        body["scanId"] = "00000000-0000-0000-0000-000000000001"
+    if mode == "ledger":
+        body["question"] = "Unrelated saved question"
+    payload = AskRequest.model_validate(body)
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def run_handler() -> list[dict[str, Any]]:
+        response = await ask(
+            payload,
+            Request({"type": "http"}, receive),
+            db,
+            settings,
+            storage,
+            reasoner(settings, storage),
+        )
+        result = []
+        async for chunk in response.body_iterator:
+            assert isinstance(chunk, str)
+            result.append(json.loads(chunk.removeprefix("data: ")))
+        return result
+
+    observed = asyncio.run(run_handler())
+    assert observed[-1] == {"type": "done"}
+    if mode == "ledger":
+        assert observed == saved
+        finish.assert_not_called()
+        return
+    if mode == "replay":
+        assert any(event["type"] == "entity" for event in observed)
+    else:
+        assert "unavailable" in observed[-2]["text"]
+    assert finish.call_args.args[2] == observed
+    storage.presign_get.assert_not_called()
+
+
+def test_mode_settings_are_explicit_and_default_still_requires_configuration() -> None:
+    settings = Settings(_env_file=None, anthropic_api_key=None)
+    assert settings.ask_reasoner == "claude" and settings.ask_mode == "live"
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, ask_mode="unknown")

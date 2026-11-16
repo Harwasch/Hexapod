@@ -15,18 +15,22 @@ from app.schemas.ask import AskEvent, AskRequest, DoneEvent, Entity, StatusEvent
 from app.schemas.base import CamelModel
 from app.services import ask_entities as ledger
 from app.services.ask_analysis import ModalAnalysis
-from app.services.ask_reasoner import Reasoner, ToolModel
+from app.services.ask_reasoner import Answering, Reasoner, ScriptedAnswerModel, ToolModel
+from app.services.ask_replay import ReplayAnswerer, recorded_events
 from app.services.errors import InvalidInputError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ask"], dependencies=[RequireWriteToken])
 
 
-def reasoner(settings: SettingsDep, storage: Storage) -> Reasoner:
-    return Reasoner(ToolModel(settings), ModalAnalysis(settings, storage))
+def reasoner(settings: SettingsDep, storage: Storage) -> Answering:
+    if settings.ask_mode == "replay":
+        return ReplayAnswerer()
+    model = ScriptedAnswerModel() if settings.ask_reasoner == "mock" else ToolModel(settings)
+    return Reasoner(model, ModalAnalysis(settings, storage))
 
 
-ReasonerDep = Annotated[Reasoner, Depends(reasoner)]
+ReasonerDep = Annotated[Answering, Depends(reasoner)]
 
 
 class EntityRecord(CamelModel):
@@ -162,9 +166,17 @@ async def ask(
     previous: list[Entity] = []
     if not replay:
         try:
-            if not settings.anthropic_api_key:
+            if settings.ask_mode == "replay":
+                recorded_events(payload.question)
+                if capture is None:
+                    raise InvalidInputError("synthetic replay entities require scanId")
+            if (
+                settings.ask_mode == "live"
+                and settings.ask_reasoner != "mock"
+                and not settings.anthropic_api_key
+            ):
                 raise HTTPException(503, "Reasoner is not configured")
-            if capture is not None and payload.keyframes:
+            if settings.ask_mode == "live" and capture is not None and payload.keyframes:
                 files = [
                     f
                     for f in capture.files
