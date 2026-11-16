@@ -134,3 +134,24 @@ import Testing
   try data.prefix(520).write(to: archive)
   #expect(throws: CaptureError.self) { try CaptureArchive.readManifest(from: archive) }
 }
+
+@Test func optionalLiveSplatIsReferencedBeforeManifestPublication() throws {
+  let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: folder) }
+  let writer = try CaptureBundleWriter(directory: folder, device: "fixture")
+  try Data([1]).write(to: folder.appendingPathComponent("rgb.mov"))
+  try Data("ply\n".utf8).write(to: folder.appendingPathComponent("livesplat.ply"))
+  try writer.append(
+    CaptureFrame(
+      index: 0, timestamp: 0, transform: Array(repeating: 0, count: 16),
+      intrinsics: Array(repeating: 0, count: 9), imageWidth: 1, imageHeight: 1,
+      trackingState: "normal"))
+  let manifest = try writer.finish()
+  #expect(manifest.liveSplat == "livesplat.ply")
+  #expect(manifest.files.contains { $0.path == "livesplat.ply" && $0.bytes == 4 })
+  let archive = folder.deletingLastPathComponent().appendingPathComponent(
+    "\(UUID().uuidString).hexcap")
+  defer { try? FileManager.default.removeItem(at: archive) }
+  try CaptureArchive.write(bundle: folder, to: archive)
+  #expect(try CaptureArchive.readManifest(from: archive).liveSplat == "livesplat.ply")
+}

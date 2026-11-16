@@ -198,6 +198,54 @@ def read_locations(
     return locations, location
 
 
+def validate_live_splat(path: Path) -> None:
+    """Bounded validation of the optional preview export; never initializes training."""
+    properties = [
+        "x",
+        "y",
+        "z",
+        "nx",
+        "ny",
+        "nz",
+        "f_dc_0",
+        "f_dc_1",
+        "f_dc_2",
+        "opacity",
+        "scale_0",
+        "scale_1",
+        "scale_2",
+        "rot_0",
+        "rot_1",
+        "rot_2",
+        "rot_3",
+    ]
+    with path.open("rb") as stream:
+        lines = []
+        for _ in range(32):
+            line = stream.readline(256)
+            lines.append(line)
+            if line == b"end_header\n":
+                break
+        header = b"".join(lines).decode("ascii")
+        expected = ["ply", "format binary_little_endian 1.0"]
+        if header.splitlines()[:2] != expected or lines[-1] != b"end_header\n":
+            raise ValueError("invalid live splat header")
+        fields = [line for line in header.splitlines()[2:-1] if not line.startswith("comment ")]
+        if not fields or not fields[0].startswith("element vertex "):
+            raise ValueError("invalid live splat vertex count")
+        count = int(fields[0].removeprefix("element vertex "))
+        if not 0 <= count <= 32768 or fields[1:] != [
+            "property float " + name for name in properties
+        ]:
+            raise ValueError("invalid live splat properties/count")
+        payload = stream.read(32768 * 17 * 4 + 1)
+        if (
+            len(payload) != count * 17 * 4
+            or not np.isfinite(np.frombuffer(payload, dtype="<f4")).all()
+        ):
+            raise ValueError("invalid live splat payload")
+
+
 def read_bundle(directory: Path) -> Bundle:
     manifest_path = directory / "manifest.json"
     if manifest_path.stat().st_size > MAX_MANIFEST:
@@ -249,6 +297,11 @@ def read_bundle(directory: Path) -> Bundle:
     used = {"rgb.mov", "frames.jsonl"}
     if manifest.get("locationLog") is not None:
         used.add("location.jsonl")
+    if "liveSplat" in manifest:
+        if manifest["liveSplat"] != "livesplat.ply" or "livesplat.ply" not in inventory:
+            raise ValueError("liveSplat must reference inventoried livesplat.ply")
+        validate_live_splat(directory / "livesplat.ply")
+        used.add("livesplat.ply")
     counts = {"depth": 0, "smoothedDepth": 0}
     previous = -1.0
     with (directory / "frames.jsonl").open() as log:

@@ -4465,6 +4465,8 @@ def capture_manifest(ctx: StageContext) -> StageOutcome:
     consumes=("splat", "georef.json"),
     optional_consumes=(
         "manifest.json",
+        "poses",
+        "placement.json",
         "thumbnail.jpg",
         "ground_samples.json",
         quality.QUALITY_JSON.name,
@@ -4499,6 +4501,7 @@ def catalog(ctx: StageContext) -> StageOutcome:
         "platformEvidence": facts.get("platformEvidence"),
         "capturedAtUtc": facts.get("capturedAtUtc"),
         "georef": georef,
+        "entityPlacement": entity_placement(ctx, georef),
         "artifacts": tiles,
         # `ground_samples.json` in full, not the manifest's five-field summary of it.
         # B4 is where this stops being an artifact nothing reads: the worker turns each
@@ -4534,6 +4537,27 @@ def catalog(ctx: StageContext) -> StageOutcome:
     }
     _write_json(ctx.output(REGISTRATION.name), document)
     return StageOutcome(metrics={"artifacts": len(tiles)})
+
+
+def entity_placement(ctx: StageContext, georef: dict[str, Any]) -> dict[str, Any]:
+    """Carry the same run's full transform only for verified fixed ARKit poses."""
+    poses = _read_json(ctx.input("poses") / "poses.json") if ctx.has_input("poses") else {}
+    scale = poses.get("scale")
+    verified = (
+        poses.get("source") == "hex-capture-v1"
+        and isinstance(scale, dict)
+        and scale.get("source") == "arkit"
+    )
+    return {
+        "georef": georef,
+        "placement": _read_json(ctx.input("placement.json"))
+        if ctx.has_input("placement.json")
+        else None,
+        "arkitTrainingFrameVerified": verified,
+        "heightDatum": georef.get("siteFrame", {}).get(
+            "heightDatum", georef.get("heightDatum", "msl-unverified")
+        ),
+    }
 
 
 #: What of `quality.json` travels to the API. Not the thresholds or the per-bin geometry:

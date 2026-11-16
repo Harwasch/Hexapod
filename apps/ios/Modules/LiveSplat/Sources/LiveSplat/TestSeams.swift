@@ -92,7 +92,7 @@ extension LiveSplatRenderer {
       !FileManager.default.fileExists(
         atPath: captureBundleFolder.appendingPathComponent("manifest.json").path)
     else { throw LiveSplatError.bundleFinalized }
-    let url = captureBundleFolder.appendingPathComponent("live_splat.ply")
+    let url = captureBundleFolder.appendingPathComponent("livesplat.ply")
     try SplatPLY.encode(splats).write(to: url, options: .atomic)
     return url
   }

@@ -320,7 +320,7 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
   #expect(throws: LiveSplatError.self) { try r.exportPLY(to: directory) }
   r.stop()
   let url = try r.exportPLY(to: directory)
-  #expect(url.lastPathComponent == "live_splat.ply")
+  #expect(url.lastPathComponent == "livesplat.ply")
   #expect(try Data(contentsOf: url) == SplatPLY.encode(r.splats))
 }
 
@@ -344,7 +344,7 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
   let r = DefaultLiveSplatRenderer()
   #expect(throws: LiveSplatError.self) { try r.exportPLY(to: directory) }
   #expect(
-    !FileManager.default.fileExists(atPath: directory.appendingPathComponent("live_splat.ply").path)
+    !FileManager.default.fileExists(atPath: directory.appendingPathComponent("livesplat.ply").path)
   )
 }
 

@@ -65,6 +65,7 @@ public struct CaptureManifest: Codable, Equatable, Sendable {
   public var smoothedDepthFrameCount: Int
   public var video: String = "rgb.mov"
   public var frameLog: String = "frames.jsonl"
+  public var liveSplat: String?
   public var locationLog: String?
   public var location: CaptureLocation?
   /// Every payload file, excluding manifest.json itself.
@@ -184,6 +185,7 @@ public final class CaptureBundleWriter {
     let manifest = CaptureManifest(
       device: device, startedAt: startedAt, frameCount: count,
       depthFrameCount: depthCount, smoothedDepthFrameCount: smoothedCount,
+      liveSplat: files.contains(where: { $0.path == "livesplat.ply" }) ? "livesplat.ply" : nil,
       locationLog: locationLog == nil ? nil : "location.jsonl", location: location, files: files)
     try JSONEncoder().encode(manifest).write(
       to: directory.appendingPathComponent("manifest.json"), options: .atomic)

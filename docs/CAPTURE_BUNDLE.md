@@ -287,3 +287,16 @@ run. Synthetic math alone does not verify those. Nothing is deployed by M1.
 Protocol references: Apple's [scene depth](https://developer.apple.com/documentation/arkit/arconfiguration/framesemantics-swift.struct/scenedepth)
 and [video formats](https://developer.apple.com/documentation/arkit/arconfiguration/videoformat-swift.class),
 and COLMAP's [known-pose reconstruction](https://colmap.github.io/faq.html#reconstruct-sparse-dense-model-from-known-camera-poses).
+
+## Optional live preview export
+
+A bundle may contain `livesplat.ply`, referenced by the optional manifest field
+`"liveSplat": "livesplat.ply"` and included in `files` with its exact byte size.
+LiveSplat stops and atomically exports before Capture publishes the manifest.
+The binary little-endian PLY stores ARKit world metres, float xyz/normals, SH DC,
+opacity logits, log scales and Hamilton wxyz rotation, with at most 32,768 vertices.
+Zero vertices is valid for the simulated renderer. The Python validator checks the
+bounded header, vertex inventory, exact payload size and finite floats. Unknown or
+unreferenced payloads remain invalid. Archives and the Swift writer preserve the file.
+The reconstruction pipeline ignores this optional preview; it does not initialize
+training or alter metric poses from it.

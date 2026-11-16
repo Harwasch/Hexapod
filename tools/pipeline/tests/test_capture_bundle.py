@@ -455,3 +455,47 @@ def test_no_usable_bundle_location(tmp_path: Path) -> None:
     parsed = bundle.read_bundle(source)
     assert parsed.locations == location_fixes()[:1]
     assert parsed.location is None
+
+
+def test_optional_live_splat_is_inventoried_validated_and_not_a_frame(tmp_path: Path) -> None:
+    root = tmp_path / "bundle"
+    manifest = make_bundle(root)
+    names = [
+        "x",
+        "y",
+        "z",
+        "nx",
+        "ny",
+        "nz",
+        "f_dc_0",
+        "f_dc_1",
+        "f_dc_2",
+        "opacity",
+        "scale_0",
+        "scale_1",
+        "scale_2",
+        "rot_0",
+        "rot_1",
+        "rot_2",
+        "rot_3",
+    ]
+    ply = (
+        "ply\nformat binary_little_endian 1.0\nelement vertex 0\n"
+        + "".join("property float " + name + "\n" for name in names)
+        + "end_header\n"
+    ).encode()
+    (root / "livesplat.ply").write_bytes(ply)
+    manifest["files"].append({"path": "livesplat.ply", "bytes": len(ply)})
+    manifest["liveSplat"] = "livesplat.ply"
+    (root / "manifest.json").write_text(json.dumps(manifest))
+    parsed = bundle.read_bundle(root)
+    assert len(parsed.frames) == 1 and parsed.manifest["liveSplat"] == "livesplat.ply"
+    # An inventoried arbitrary payload or an unreferenced PLY still fails closed.
+    (root / "livesplat.ply").write_bytes(b"x" * len(ply))
+    with pytest.raises(ValueError, match="header"):
+        bundle.read_bundle(root)
+    (root / "livesplat.ply").write_bytes(ply)
+    del manifest["liveSplat"]
+    (root / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="referenced"):
+        bundle.read_bundle(root)
