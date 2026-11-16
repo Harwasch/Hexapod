@@ -6,6 +6,57 @@ import FoundationNetworking
 #endif
 import Testing
 
+private func recording(_ name: String) throws -> Data {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    return try Data(contentsOf: root.appendingPathComponent("Sources/Cloud/Resources/\(name).sse"))
+}
+
+@Test func recordedYardStreamsMatchServerAndSurviveEveryByteSplit() async throws {
+    let repo = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent()
+    for name in ["yard-small-height", "yard-small-count"] {
+        let data = try recording(name)
+        #expect(data == (try Data(contentsOf: repo.appendingPathComponent("apps/api/app/fixtures/ask/\(name).sse"))))
+        var expectedParser = SSEParser()
+        let expected = try expectedParser.feed(data)
+        #expect(expected.count == 4)
+        #expect(expected.last == .done)
+        for size in [1, 7, data.count] {
+            let client = CloudAnswerer(
+                baseURL: URL(string: "https://fixture.invalid")!, writeToken: "",
+                transport: RecordedSSETransport(recording: data, chunkSize: size)
+            )
+            var events: [AskEvent] = []
+            for try await event in client.ask(AskRequest(id: "recorded", question: "Replay")) {
+                events.append(event)
+            }
+            #expect(events == expected)
+        }
+        var fakeEvents: [AskEvent] = []
+        for try await event in FakeDeepAnswering(recording: data).ask(AskRequest(id: "fake", question: "Replay")) {
+            fakeEvents.append(event)
+        }
+        #expect(fakeEvents == expected)
+    }
+}
+
+@Test func bundledFakeAndTruncatedRecording() async throws {
+    var events: [AskEvent] = []
+    let fake = try FakeDeepAnswering.yardSmall()
+    for try await event in fake.ask(AskRequest(id: "bundled", question: "Height")) {
+        events.append(event)
+    }
+    #expect(events.last == .done)
+    let partial = Data("data: {\"type\":\"status\",\"text\":\"Simulated\"}\n\n".utf8)
+    do {
+        for try await _ in FakeDeepAnswering(recording: partial).ask(AskRequest(id: "partial", question: "Replay")) {}
+        Issue.record("Expected incomplete stream")
+    } catch { #expect(error as? CloudError == .incompleteStream) }
+}
+
 private func stream(_ value: String) -> AsyncThrowingStream<Data, Error> {
     AsyncThrowingStream { continuation in
         continuation.yield(Data(value.utf8))

@@ -7,7 +7,7 @@ let package = Package(
     products: [.library(name: "Cloud", targets: ["Cloud"])],
     dependencies: [.package(path: "../EntitySchema")],
     targets: [
-        .target(name: "Cloud", dependencies: ["EntitySchema"]),
+        .target(name: "Cloud", dependencies: ["EntitySchema"], resources: [.process("Resources")]),
         .testTarget(name: "CloudTests", dependencies: ["Cloud", "EntitySchema"]),
     ]
 )
