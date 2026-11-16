@@ -1,12 +1,21 @@
 """Bounded asynchronous tool loop with a replaceable model and analysis seam."""
 
 import json
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Protocol, cast
+
+from fastapi.encoders import jsonable_encoder
 
 from app.config import Settings
 from app.schemas.ask import AskEvent, AskRequest, Entity, EntityEvent, SpeechEvent, StatusEvent
 from app.services.ask_analysis import TOOLS, Analysis, AnalysisUnavailableError
+from app.services.property_memory import (
+    PROPERTY_TOOLS,
+    MemoryRepository,
+    search_property_answers,
+    search_property_entities,
+)
 
 SYSTEM = """Answer the spoken question briefly, in one or two speakable sentences.
 Use analysis tools for observations, identity, counts and metric measurements. Never invent
@@ -33,6 +42,20 @@ class ScriptedAnswerModel:
     async def turn(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
         request = json.loads(messages[0]["content"][0]["text"])["request"]
         question = request["question"].casefold()
+        if len(messages) == 1 and request.get("scope") == "property":
+            return {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "property-1",
+                        "name": "search_property_entities",
+                        "input": {"label": "shed" if "shed" in question else "tree"}
+                        if "shed" in question or "tree" in question
+                        else {},
+                    }
+                ],
+                "stop_reason": "tool_use",
+            }
         if len(messages) == 1:
             name = "segment"
             if any(word in question for word in ("count", "many", "height", "tall", "measure")):
@@ -57,8 +80,23 @@ class ScriptedAnswerModel:
         text = "Simulated mock answer: analysis is unavailable; I cannot measure this scene."
         if not any(result.get("is_error") for result in results):
             entities = [
-                entity for result in results for entity in json.loads(result["content"])["entities"]
+                entity
+                for result in results
+                for entity in json.loads(result["content"]).get("entities", [])
             ]
+            if request.get("scope") == "property":
+                count = sum(
+                    len(json.loads(result["content"]).get("observations", [])) for result in results
+                )
+                return {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"Simulated mock answer: {count} saved observation(s) on this property page.",
+                        }
+                    ],
+                    "stop_reason": "end_turn",
+                }
             text = f"Simulated mock answer: {len(entities)} observed instance(s) in the reference frame."
             if entities and any(word in question for word in ("height", "tall", "measure")):
                 height = entities[0]["extent"]["y"]
@@ -69,6 +107,7 @@ class ScriptedAnswerModel:
 class ToolModel:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.tools = TOOLS
 
     async def turn(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
         import anthropic
@@ -82,19 +121,26 @@ class ToolModel:
                 model=self.settings.ask_model,
                 max_tokens=1024,
                 system=SYSTEM,
-                tools=cast(list[ToolParam], TOOLS),
+                tools=cast(list[ToolParam], self.tools),
                 messages=cast(list[MessageParam], messages),
             )
         return response.model_dump()
 
 
 class Reasoner:
-    def __init__(self, model: AnswerModel, analysis: Analysis) -> None:
-        self.model, self.analysis = model, analysis
+    def __init__(
+        self, model: AnswerModel, analysis: Analysis, memory: MemoryRepository | None = None
+    ) -> None:
+        self.model, self.analysis, self.memory = model, analysis, memory
 
     async def answer(
         self, request: AskRequest, previous: list[Entity], bundle_url: str | None
     ) -> AsyncIterator[AskEvent]:
+        property_site = (
+            uuid.UUID(request.site_id) if request.scope == "property" and request.site_id else None
+        )
+        if isinstance(self.model, ToolModel):
+            self.model.tools = [*TOOLS, *PROPERTY_TOOLS] if property_site else TOOLS
         yield StatusEvent(text="Looking")
         content: list[dict[str, Any]] = [
             {
@@ -135,6 +181,25 @@ class Reasoner:
             for call in calls:
                 yield StatusEvent(text="Analyzing")
                 try:
+                    if call["name"] in {tool["name"] for tool in PROPERTY_TOOLS}:
+                        if property_site is None or self.memory is None:
+                            raise ValueError("property tools require a bound site")
+                        search = (
+                            search_property_entities
+                            if call["name"] == "search_property_entities"
+                            else search_property_answers
+                        )
+                        observations = search(self.memory, property_site, call["input"])
+                        results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": call["id"],
+                                "content": json.dumps(
+                                    jsonable_encoder({"observations": observations})
+                                ),
+                            }
+                        )
+                        continue
                     entities = await self.analysis.run(
                         call["name"], call["input"], request, bundle_url
                     )

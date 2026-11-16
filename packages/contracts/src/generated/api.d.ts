@@ -2077,6 +2077,63 @@ export interface paths {
         patch: operations["set_status_api_v1_plans__plan_id__status_patch"];
         trace?: never;
     };
+    "/api/v1/properties/{site_id}/entities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Entities */
+        get: operations["entities_api_v1_properties__site_id__entities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/properties/{site_id}/entities/dedupe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dedupe
+         * @description Pure proposal against supplied observations. No database writes or identity claims.
+         */
+        post: operations["dedupe_api_v1_properties__site_id__entities_dedupe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/properties/{site_id}/entities/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Search
+         * @description Read-only POST permits polygon/JSON attribute filters without URL-size limits.
+         */
+        post: operations["search_api_v1_properties__site_id__entities_search_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/parcels/near": {
         parameters: {
             query?: never;
@@ -4085,6 +4142,13 @@ export interface components {
             question: string;
             /** Scanid */
             scanId?: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope?: "scan" | "property";
+            /** Siteid */
+            siteId?: string;
         };
         /** AssetBase */
         AssetBase: {
@@ -5890,6 +5954,12 @@ export interface components {
             fromDatum: "NAD27";
             /** Operation */
             operation: string;
+        };
+        /** DedupeRequest */
+        DedupeRequest: {
+            /** Candidates */
+            candidates: components["schemas"]["Observation"][];
+            observation: components["schemas"]["Observation"];
         };
         /** DirectorRequest */
         DirectorRequest: {
@@ -9359,6 +9429,41 @@ export interface components {
              */
             role: "owner" | "editor" | "viewer";
         };
+        /** MemoryQuery */
+        MemoryQuery: {
+            /** Attrs */
+            attrs?: {
+                [key: string]: unknown;
+            };
+            /** Label */
+            label?: string | null;
+            /** Lat */
+            lat?: number | null;
+            /**
+             * Limit
+             * @default 100
+             */
+            limit?: number;
+            /** Lon */
+            lon?: number | null;
+            /**
+             * Nearest
+             * @default false
+             */
+            nearest?: boolean;
+            /**
+             * Offset
+             * @default 0
+             */
+            offset?: number;
+            polygon?: components["schemas"]["Polygon"] | null;
+            /** Radius M */
+            radius_m?: number | null;
+            /** Since */
+            since?: string | null;
+            /** Until */
+            until?: string | null;
+        };
         /** MessageRead */
         MessageRead: {
             /** Content */
@@ -9451,6 +9556,44 @@ export interface components {
              * @enum {string}
              */
             progress: "unknown" | "not-started" | "in-progress" | "appears-complete";
+        };
+        /**
+         * Observation
+         * @description Dedup metadata envelope; `entity` remains the unchanged EntitySchema payload.
+         */
+        Observation: {
+            /** Attrs */
+            attrs?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Label */
+            label: string;
+            /** Lat */
+            lat: number;
+            /** Lon */
+            lon: number;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Scan Id
+             * Format: uuid
+             */
+            scan_id: string;
+            /**
+             * Site Id
+             * Format: uuid
+             */
+            site_id: string;
+            /** Uncertainty M */
+            uncertainty_m: number;
         };
         /**
          * ObservedAtSource
@@ -13437,6 +13580,7 @@ export type SchemaDatedImageryProviderStatus = components['schemas']['DatedImage
 export type SchemaDatedImagerySource = components['schemas']['DatedImagerySource'];
 export type SchemaDatedImageryTiles = components['schemas']['DatedImageryTiles'];
 export type SchemaDatumShift = components['schemas']['DatumShift'];
+export type SchemaDedupeRequest = components['schemas']['DedupeRequest'];
 export type SchemaDirectorRequest = components['schemas']['DirectorRequest'];
 export type SchemaDirectorResult = components['schemas']['DirectorResult'];
 export type SchemaDocumentLinkCreate = components['schemas']['DocumentLinkCreate'];
@@ -13602,12 +13746,14 @@ export type SchemaMapOutput = components['schemas']['MapOutput'];
 export type SchemaMaskReference = components['schemas']['MaskReference'];
 export type SchemaMemberRead = components['schemas']['MemberRead'];
 export type SchemaMembershipWrite = components['schemas']['MembershipWrite'];
+export type SchemaMemoryQuery = components['schemas']['MemoryQuery'];
 export type SchemaMessageRead = components['schemas']['MessageRead'];
 export type SchemaMissingObject = components['schemas']['MissingObject'];
 export type SchemaMultiPolygon = components['schemas']['MultiPolygon'];
 export type SchemaMvtSource = components['schemas']['MvtSource'];
 export type SchemaNotCountedRead = components['schemas']['NotCountedRead'];
 export type SchemaObjectiveAssessment = components['schemas']['ObjectiveAssessment'];
+export type SchemaObservation = components['schemas']['Observation'];
 export type SchemaObservedAtSource = components['schemas']['ObservedAtSource'];
 export type SchemaOffer = components['schemas']['Offer'];
 export type SchemaOrphanObject = components['schemas']['OrphanObject'];
@@ -23028,6 +23174,208 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlanRead"];
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    entities_api_v1_properties__site_id__entities_get: {
+        parameters: {
+            query?: {
+                attrs?: {
+                    [key: string]: unknown;
+                };
+                label?: string | null;
+                lat?: number | null;
+                limit?: number;
+                lon?: number | null;
+                nearest?: boolean;
+                offset?: number;
+                polygon?: components["schemas"]["Polygon"] | null;
+                radius_m?: number | null;
+                since?: string | null;
+                until?: string | null;
+            };
+            header?: never;
+            path: {
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    dedupe_api_v1_properties__site_id__entities_dedupe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DedupeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Missing or wrong write token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    search_api_v1_properties__site_id__entities_search_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                site_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryQuery"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Missing or wrong write token */

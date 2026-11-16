@@ -18,16 +18,17 @@ from app.services.ask_analysis import ModalAnalysis
 from app.services.ask_reasoner import Answering, Reasoner, ScriptedAnswerModel, ToolModel
 from app.services.ask_replay import ReplayAnswerer, recorded_events
 from app.services.errors import InvalidInputError
+from app.services.property_memory import PostgresMemory
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ask"], dependencies=[RequireWriteToken])
 
 
-def reasoner(settings: SettingsDep, storage: Storage) -> Answering:
+def reasoner(settings: SettingsDep, storage: Storage, db: DbSession) -> Answering:
     if settings.ask_mode == "replay":
-        return ReplayAnswerer()
+        return ReplayAnswerer(PostgresMemory(db, release_reads=True))
     model = ScriptedAnswerModel() if settings.ask_reasoner == "mock" else ToolModel(settings)
-    return Reasoner(model, ModalAnalysis(settings, storage))
+    return Reasoner(model, ModalAnalysis(settings, storage), PostgresMemory(db, release_reads=True))
 
 
 ReasonerDep = Annotated[Answering, Depends(reasoner)]
@@ -114,7 +115,8 @@ def update_entity(
 ) -> EntityRecord:
     capture = required_capture(db, capture_id, site_id)
     row = ledger.get_row(db, capture, entity_id)
-    ledger.assign(row, payload)
+    ledger.assign(row, ledger.prepare(capture, payload))
+    ledger.link_identity(db, capture, row)
     row.site_id = capture.site_id
     db.commit()
     return envelope(row, capture)
@@ -159,6 +161,7 @@ async def ask(
     ):
         raise InvalidInputError("question exceeds analysis resource limits")
     capture = ledger.capture_scope(db, payload.scan_id)
+    ledger.request_site(db, payload, capture)
     if capture is None and (payload.keyframes or payload.device_entities):
         raise InvalidInputError("scene evidence requires scanId")
     run, replay = ledger.claim(db, payload, capture)
@@ -167,8 +170,9 @@ async def ask(
     if not replay:
         try:
             if settings.ask_mode == "replay":
-                recorded_events(payload.question)
-                if capture is None:
+                if payload.scope != "property":
+                    recorded_events(payload.question)
+                if capture is None and payload.scope != "property":
                     raise InvalidInputError("synthetic replay entities require scanId")
             if (
                 settings.ask_mode == "live"
@@ -210,6 +214,10 @@ async def ask(
                     return
                 if event.type == "entity" and capture is None:
                     raise InvalidInputError("analysis entities require a capture")
+                if event.type == "entity" and capture is not None:
+                    event = event.model_copy(
+                        update={"entity": ledger.prepare(capture, event.entity)}
+                    )
                 events.append(event.model_dump(mode="json", by_alias=True, exclude_none=True))
                 yield f"data: {event.model_dump_json(by_alias=True, exclude_none=True)}\n\n"
             done = DoneEvent()

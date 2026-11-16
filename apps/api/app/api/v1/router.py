@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from app.api.property_memory import router as property_router
 from app.api.v1 import (
     agent,
     artifacts,
@@ -103,3 +104,5 @@ api_v1.include_router(imagery.router)
 api_v1.include_router(text.router)
 
 api_v1.include_router(ask.router)
+
+api_v1.include_router(property_router)

@@ -1629,6 +1629,10 @@ def register(
         _mirror_site_metadata(site, registration, job_id, coverage)
     capture.quality = quality
     capture.status = CaptureStatus.COMPLETE
+    capture.metadata_ = {
+        **capture.metadata_,
+        "entityPlacement": registration.document.get("entityPlacement", {}),
+    }
     capture.georef_method = registration.georef_method
     capture.scale_source = registration.scale_source
     capture.uncertainty_m = registration.uncertainty_m

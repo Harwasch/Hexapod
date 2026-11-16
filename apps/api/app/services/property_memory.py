@@ -1,6 +1,6 @@
 """Property-wide retrieval seam for the Ask reasoner; never owns Ask's tables.
 
-Postgres adapters read two coordinator-provided views documented in docs/V2.md.
+Postgres adapters read the migrated Ask ledger views documented in docs/V2.md.
 Tool callers bind site_id from the validated Ask request, not from model arguments.
 """
 
@@ -60,12 +60,20 @@ class MemoryRepository(Protocol):
 
 
 class PostgresMemory:
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: Session, *, release_reads: bool = False) -> None:
         self.db = db
+        self.release_reads = release_reads
+
+    def read(self, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        result = [dict(row) for row in self.db.execute(text(sql), params).mappings()]
+        if self.release_reads:
+            # Ask has committed its claim; end this read before another remote turn.
+            self.db.commit()
+        return result
 
     def entities(self, site_id: uuid.UUID, query: MemoryQuery) -> list[dict[str, Any]]:
         sql, params = entity_query(site_id, query)
-        return [dict(row) for row in self.db.execute(text(sql), params).mappings()]
+        return self.read(sql, params)
 
     def answers(self, site_id: uuid.UUID, query: MemoryQuery) -> list[dict[str, Any]]:
         # Earlier answers are historical evidence, never silently recomputed current truth.
@@ -80,7 +88,7 @@ class PostgresMemory:
               AND (CAST(:label AS text) IS NULL OR question ILIKE :label ESCAPE '!')
             ORDER BY observed_at DESC, id ASC LIMIT :limit OFFSET :offset
         """
-        return [dict(row) for row in self.db.execute(text(sql), params).mappings()]
+        return self.read(sql, params)
 
 
 def _params(site_id: uuid.UUID, query: MemoryQuery) -> dict[str, Any]:

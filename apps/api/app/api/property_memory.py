@@ -1,4 +1,4 @@
-"""Independent router; coordinator mounts under /api/v1 after B supplies memory views."""
+"""Catalog observations across scans of a property; historical answers stay authenticated."""
 
 import uuid
 from typing import Annotated, Any

@@ -18,6 +18,10 @@ class AskRun(TimestampMixin, Base):
     capture_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("captures.id", ondelete="CASCADE"), index=True
     )
+    site_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sites.id", ondelete="SET NULL"), index=True
+    )
+    request: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     state: Mapped[str] = mapped_column(String(16), nullable=False)
     events: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
     __table_args__ = (CheckConstraint("state IN ('running','complete','failed')"),)

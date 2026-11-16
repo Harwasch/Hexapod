@@ -1,11 +1,13 @@
 """Recorded synthetic AskEvent streams; the route still owns ledger commit and done."""
 
+import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from app.schemas.ask import AskEvent, AskRequest, Entity
+from app.schemas.ask import AskEvent, AskRequest, Entity, SpeechEvent, StatusEvent
 from app.services.ask_entities import EVENT
 from app.services.errors import InvalidInputError
+from app.services.property_memory import MemoryQuery, MemoryRepository
 
 RECORDINGS = Path(__file__).resolve().parents[1] / "fixtures/ask"
 QUESTIONS = {
@@ -29,8 +31,24 @@ def recorded_events(question: str) -> list[AskEvent]:
 
 
 class ReplayAnswerer:
+    def __init__(self, memory: MemoryRepository | None = None) -> None:
+        self.memory = memory
+
     async def answer(
         self, request: AskRequest, previous: list[Entity], bundle_url: str | None
     ) -> AsyncIterator[AskEvent]:
+        if request.scope == "property":
+            if self.memory is None or request.site_id is None:
+                raise InvalidInputError("property replay requires memory")
+            yield StatusEvent(text="Looking")
+            question = request.question.casefold()
+            label = "shed" if "shed" in question else "tree" if "tree" in question else None
+            observations = self.memory.entities(
+                uuid.UUID(request.site_id), MemoryQuery(label=label)
+            )
+            yield SpeechEvent(
+                text=f"Simulated replay: {len(observations)} saved observation(s) on this property page."
+            )
+            return
         for event in recorded_events(request.question)[:-1]:
             yield event

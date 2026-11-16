@@ -1,5 +1,6 @@
 """Wire models mirror the shared phone contract; ledger envelopes are separate."""
 
+import uuid
 from typing import Annotated, Any, Literal
 
 from pydantic import ConfigDict, Field, JsonValue, model_validator
@@ -78,9 +79,19 @@ class AskRequest(WireModel):
     id: str = Field(min_length=1)
     question: str = Field(min_length=1)
     scan_id: str | SkipJsonSchema[None] = Field(default=None, min_length=1)
+    scope: Literal["scan", "property"] | SkipJsonSchema[None] = None
+    site_id: str | SkipJsonSchema[None] = Field(default=None, min_length=1)
     location: GeoCoordinate | SkipJsonSchema[None] = None
     keyframes: list[KeyframeRef]
     device_entities: list[Entity]
+
+    @model_validator(mode="after")
+    def property_site(self) -> "AskRequest":
+        if self.site_id is not None:
+            uuid.UUID(self.site_id)
+        if self.scope == "property" and self.site_id is None:
+            raise ValueError("property scope requires siteId")
+        return self
 
 
 class EntityEvent(WireModel):

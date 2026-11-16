@@ -443,7 +443,11 @@ def georeference_entity(entity: Mapping[str, Any], alignment: Alignment | None) 
         "source": None if alignment is None else alignment.source,
         "transform": None
         if alignment is None or alignment.transform is None
-        else asdict(alignment.transform),
+        else {
+            "rotation": [list(row) for row in alignment.transform.rotation],
+            "translation": list(alignment.transform.translation),
+            "scale": alignment.transform.scale,
+        },
         "headingKnown": alignment is not None and alignment.transform is not None,
         "heightDatum": None if alignment is None else alignment.height_datum,
         "verticalKnown": alignment is not None and alignment.vertical_known,
