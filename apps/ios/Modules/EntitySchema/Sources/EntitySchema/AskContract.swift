@@ -19,11 +19,21 @@ public struct KeyframeRef: Codable, Equatable, Sendable {
     }
 }
 
+/// What a question may draw on: the scan in hand, or every scan of the property.
+public enum AskScope: String, Codable, Equatable, Sendable {
+    case scan
+    case property
+}
+
 /// A spoken question plus what the phone already knows about the scene.
 public struct AskRequest: Codable, Equatable, Sendable {
     /// Client-chosen identifier, so a retried request is the same question.
     public var id: String
     public var question: String
+    /// Absent means `.scan`.
+    public var scope: AskScope?
+    /// The property (site); required for `.property` scope.
+    public var siteId: String?
     public var scanId: String?
     public var location: GeoCoordinate?
     public var keyframes: [KeyframeRef]
@@ -31,11 +41,14 @@ public struct AskRequest: Codable, Equatable, Sendable {
     public var deviceEntities: [Entity]
 
     public init(
-        id: String, question: String, scanId: String? = nil, location: GeoCoordinate? = nil,
+        id: String, question: String, scope: AskScope? = nil, siteId: String? = nil,
+        scanId: String? = nil, location: GeoCoordinate? = nil,
         keyframes: [KeyframeRef] = [], deviceEntities: [Entity] = []
     ) {
         self.id = id
         self.question = question
+        self.scope = scope
+        self.siteId = siteId
         self.scanId = scanId
         self.location = location
         self.keyframes = keyframes
