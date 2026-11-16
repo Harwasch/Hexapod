@@ -15,13 +15,17 @@
   {
     private(set) var isRecording = false
     var onChange: ((Bool, Bool) -> Void)?
-    private var bundle: CaptureBundleWriter?
+    private var disk: RecordingDiskWriter?
+    private var writer: BackgroundWriter<RecordingPacket>?
+    private var directory: URL?
     private var video: AVAssetWriter?
     private var input: AVAssetWriterInput?
     private var pixels: AVAssetWriterInputPixelBufferAdaptor?
     private var firstTimestamp: TimeInterval?
     private var index = 0
     private var finishing = false
+    private var starting: Task<Void, Never>?
+    private var generation = UUID()
     private var width = 0, height = 0
     private let location = CLLocationManager()
 
@@ -31,30 +35,41 @@
         return
       }
       guard !finishing else { return }
-      do {
-        let root = try FileManager.default.url(
-          for: .applicationSupportDirectory, in: .userDomainMask,
-          appropriateFor: nil, create: true
-        ).appendingPathComponent("Captures")
-        var system = utsname()
-        uname(&system)
-        let device = withUnsafeBytes(of: &system.machine) {
-          String(decoding: $0.prefix(while: { $0 != 0 }), as: UTF8.self)
-        }
-        bundle = try CaptureBundleWriter(
-          directory: root.appendingPathComponent(UUID().uuidString), device: device)
-        firstTimestamp = nil
-        index = 0
-        isRecording = true
-        location.delegate = self
-        location.requestWhenInUseAuthorization()
-        location.startUpdatingLocation()
-        onChange?(true, false)
-      } catch { fail() }
+      finishing = true
+      let id = UUID()
+      generation = id
+      starting = Task {
+        defer { if generation == id { starting = nil } }
+        do {
+          let root = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Captures")
+          var system = utsname()
+          uname(&system)
+          let device = withUnsafeBytes(of: &system.machine) {
+            String(decoding: $0.prefix(while: { $0 != 0 }), as: UTF8.self)
+          }
+          let directory = root.appendingPathComponent(UUID().uuidString)
+          let disk = try await RecordingDiskWriter.create(directory: directory, device: device)
+          guard generation == id, !Task.isCancelled else { return }
+          self.disk = disk
+          self.directory = directory
+          // At most four complete depth/frame packets, including the active disk write.
+          writer = BackgroundWriter(capacity: 4) { try await disk.write($0) }
+          firstTimestamp = nil
+          index = 0
+          finishing = false
+          isRecording = true
+          location.delegate = self
+          location.requestWhenInUseAuthorization()
+          location.startUpdatingLocation()
+          onChange?(true, false)
+        } catch { if generation == id { fail() } }
+      }
     }
 
     func append(_ frame: ARFrame) {
-      guard isRecording, let bundle else { return }
+      guard isRecording, let writer, let directory else { return }
       do {
         // Tracking initialization is pre-roll, just as in M1.
         if firstTimestamp == nil {
@@ -63,7 +78,7 @@
           width = CVPixelBufferGetWidth(buffer)
           height = CVPixelBufferGetHeight(buffer)
           let writer = try AVAssetWriter(
-            outputURL: bundle.directory.appendingPathComponent("rgb.mov"), fileType: .mov)
+            outputURL: directory.appendingPathComponent("rgb.mov"), fileType: .mov)
           let input = AVAssetWriterInput(
             mediaType: .video,
             outputSettings: [
@@ -94,9 +109,9 @@
             frame.capturedImage,
             withPresentationTime: CMTime(seconds: timestamp, preferredTimescale: 1_000_000_000))
         else { throw CaptureError.recordingFailed }
-        let raw = try writeDepth(frame.sceneDepth, prefix: "depth", directory: bundle.directory)
-        let smooth = try writeDepth(
-          frame.smoothedSceneDepth, prefix: "smooth", directory: bundle.directory)
+        var files: [RecordedFile] = []
+        let raw = try copyDepth(frame.sceneDepth, prefix: "depth", files: &files)
+        let smooth = try copyDepth(frame.smoothedSceneDepth, prefix: "smooth", files: &files)
         let tracking: String
         switch frame.camera.trackingState {
         case .normal: tracking = "normal"
@@ -104,22 +119,23 @@
         case .limited(let reason): tracking = "limited:\(reason)"
         @unknown default: tracking = "notAvailable"
         }
-        try bundle.append(
-          CaptureFrame(
-            index: index, timestamp: timestamp,
-            transform: (0..<4).flatMap { row in
-              (0..<4).map { Double(frame.camera.transform[$0][row]) }
-            },
-            intrinsics: (0..<3).flatMap { row in
-              (0..<3).map { Double(frame.camera.intrinsics[$0][row]) }
-            },
-            imageWidth: width, imageHeight: height, trackingState: tracking, depth: raw,
-            smoothedDepth: smooth))
+        let metadata = CaptureFrame(
+          index: index, timestamp: timestamp,
+          transform: (0..<4).flatMap { row in
+            (0..<4).map { Double(frame.camera.transform[$0][row]) }
+          },
+          intrinsics: (0..<3).flatMap { row in
+            (0..<3).map { Double(frame.camera.intrinsics[$0][row]) }
+          },
+          imageWidth: width, imageHeight: height, trackingState: tracking, depth: raw,
+          smoothedDepth: smooth)
+        guard writer.submit(.frame(metadata, files)) else { throw CaptureError.recordingFailed }
         index += 1
       } catch { fail() }
     }
 
-    private func writeDepth(_ depth: ARDepthData?, prefix: String, directory: URL) throws
+    private func copyDepth(_ depth: ARDepthData?, prefix: String, files: inout [RecordedFile])
+      throws
       -> DepthReference?
     {
       guard let depth else { return nil }
@@ -159,18 +175,24 @@
             to: UInt8.self), count: width)
       }
       let name = String(format: "%@_%08d", prefix, index)
-      try values.write(to: directory.appendingPathComponent(name + ".f16"))
-      try confidences.write(to: directory.appendingPathComponent(name + ".u8"))
+      files.append(RecordedFile(name: name + ".f16", data: values))
+      files.append(RecordedFile(name: name + ".u8", data: confidences))
       return DepthReference(
         file: name + ".f16", confidence: name + ".u8", width: width, height: height)
     }
 
     func stop() {
+      if starting != nil {
+        generation = UUID()
+        starting?.cancel()
+        starting = nil
+        finishing = false
+      }
       guard isRecording else { return }
       isRecording = false
       location.stopUpdatingLocation()
       onChange?(false, false)
-      guard let video, index > 0 else {
+      guard let video, let disk, let writer, index > 0 else {
         fail()
         return
       }
@@ -178,14 +200,15 @@
       input?.markAsFinished()
       video.finishWriting { [weak self] in
         Task { @MainActor in
-          guard let self else { return }
           do {
-            guard self.video?.status == .completed, let bundle = self.bundle else {
-              throw CaptureError.recordingFailed
-            }
-            _ = try bundle.finish()
-            self.reset()
-          } catch { self.fail() }
+            guard video.status == .completed else { throw CaptureError.recordingFailed }
+            // Keep finalization alive even when provider switching releases the camera model.
+            try await writer.close()
+            try await disk.finish()
+            if self?.video === video { self?.reset() }
+          } catch {
+            if self?.video === video { self?.fail() }
+          }
         }
       }
     }
@@ -198,9 +221,14 @@
       onChange?(false, true)
     }
     private func reset() {
+      generation = UUID()
+      starting?.cancel()
+      starting = nil
       isRecording = false
       finishing = false
-      bundle = nil
+      disk = nil
+      writer = nil
+      directory = nil
       video = nil
       input = nil
       pixels = nil
@@ -208,15 +236,19 @@
       index = 0
     }
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-      guard isRecording, let bundle else { return }
+      guard isRecording, let writer else { return }
       do {
         for fix in locations {
-          try bundle.appendLocation(
-            CaptureLocation(
-              timestamp: fix.timestamp.timeIntervalSince1970,
-              latitude: fix.coordinate.latitude, longitude: fix.coordinate.longitude,
-              altitudeM: fix.altitude,
-              horizontalAccuracyM: fix.horizontalAccuracy, verticalAccuracyM: fix.verticalAccuracy))
+          guard
+            writer.submit(
+              .location(
+                CaptureLocation(
+                  timestamp: fix.timestamp.timeIntervalSince1970,
+                  latitude: fix.coordinate.latitude, longitude: fix.coordinate.longitude,
+                  altitudeM: fix.altitude,
+                  horizontalAccuracyM: fix.horizontalAccuracy,
+                  verticalAccuracyM: fix.verticalAccuracy)))
+          else { throw CaptureError.recordingFailed }
         }
       } catch { fail() }
     }
