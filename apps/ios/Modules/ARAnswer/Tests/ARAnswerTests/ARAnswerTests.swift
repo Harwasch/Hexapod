@@ -37,3 +37,16 @@ private func entity(_ x: Double, confidence: Double = 0.5) -> Entity {
       == nil)
   #expect(!HighlightMask(width: 2, height: 2, pixels: [255]).isValid)
 }
+
+@Test func progressStatusesDoNotReportAnAnswerFailure() {
+  var presentation = AnswerPresentation()
+  presentation.receive(.status("Looking"))
+  presentation.receive(.status("Analyzing"))
+  #expect(!presentation.isUnavailable)
+  presentation.receive(.status("Deep answer unavailable"))
+  #expect(presentation.isUnavailable)
+  presentation.reset()
+  #expect(!presentation.isUnavailable)
+  presentation.receive(.status("Answer interrupted"))
+  #expect(presentation.isUnavailable)
+}

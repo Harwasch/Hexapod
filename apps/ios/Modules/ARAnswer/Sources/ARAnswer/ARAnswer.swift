@@ -6,6 +6,7 @@ public struct AnswerPresentation: Sendable {
   public private(set) var entities: [Entity] = []
   public private(set) var speech = ""
   public private(set) var isComplete = false
+  public private(set) var isUnavailable = false
   public init() {}
   public mutating func reset() { self = Self() }
   public mutating func receive(_ event: AskEvent) {
@@ -18,7 +19,11 @@ public struct AnswerPresentation: Sendable {
       }
     case .speech(let text): speech = text
     case .done: isComplete = true
-    case .status: break
+    case .status(let text):
+      if ["Fast answer unavailable", "Deep answer unavailable", "Answer interrupted"].contains(text)
+      {
+        isUnavailable = true
+      }
     }
   }
 }

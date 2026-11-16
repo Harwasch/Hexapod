@@ -1,5 +1,6 @@
 #if canImport(SwiftUI) && canImport(MapKit) && canImport(UIKit)
   import SwiftUI
+  import ARAnswer
   import MapKit
   import EntitySchema
   import SafariServices
@@ -65,7 +66,7 @@
       .sheet(item: $selectedPin) { pin in
         NavigationStack {
           List {
-            Text(pin.entity.label)
+            EntityCard(entity: pin.entity) { selectedPin = nil }
             Text(pin.observedAt)
             if let uncertainty = pin.uncertaintyM { Text("±\(uncertainty, specifier: "%.1f") m") }
             if onOpenScan != nil {

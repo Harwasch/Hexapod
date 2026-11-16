@@ -31,7 +31,7 @@
     let restored = PieceRegistry(defaults: defaults)
     #expect(restored.choice("voice") == "fake")
     #expect(restored.choice("deep") == "cloud")
-    #expect(!restored.deep.contains("cloud"))
+    #expect(restored.deep.contains("cloud"))
     registry.choose("yard-small", for: "capture")
     #expect(throws: ProviderError.self) { try registry.makeCamera() }
     #expect(!PieceRegistry.menuAvailable(debug: false, receipt: "receipt", enabled: true))

@@ -2,6 +2,7 @@ import ARAnswer
 import ARKit
 import EntitySchema
 import Foundation
+import LiveSplat
 import Observation
 import Perception
 import RealityKit
@@ -18,7 +19,7 @@ import Voice
   func endTalking()
 }
 
-/// DeepAnswering remains injected; Cloud can replace the offline default after merge.
+/// The camera shares providers and one world coordinate frame.
 @MainActor @Observable final class CameraModel: PushToTalkControl {
   private(set) var cameraReady = false
   private(set) var isTalking = false
@@ -34,6 +35,7 @@ import Voice
   private let captureSource: any CameraCaptureSource
   private let fakeOverlay: Bool
   let simulated: Bool
+  let liveSplat: (any LiveSplatRenderer)?
   private var replayTask: Task<Void, Never>?
   var usesLiveCapture: Bool { captureSource.usesLiveSession }
   private weak var arView: ARView?
@@ -54,8 +56,15 @@ import Voice
     captureSource = providers.capture
     fakeOverlay = providers.fakeOverlay
     simulated = providers.simulated
+    liveSplat = providers.liveSplat
     router = AnswerRouter(
       planner: providers.planner, fast: DeviceFastAnswer(scene: perception), deep: providers.deep)
+    recorder.exportBundle = { [weak self] directory in
+      guard let renderer = self?.liveSplat else { return }
+      renderer.stop()
+      _ = try renderer.exportPLY(to: directory)
+      renderer.start()
+    }
     recorder.onChange = { [weak self] active, failure in
       self?.recording = active
       if failure { self?.failed = true }
@@ -69,6 +78,7 @@ import Voice
 
   func attach(_ view: ARView) {
     arView = view
+    if usesLiveCapture { liveSplat?.start() }
     cameraReady = true
     do {
       if fakeOverlay {
@@ -101,6 +111,15 @@ import Voice
 
   func frame(_ frame: ARFrame) {
     recorder.append(frame)
+    if let view = arView, let renderer = liveSplat {
+      let orientation = view.window?.windowScene?.interfaceOrientation ?? .portrait
+      do {
+        try renderer.ingest(frame, orientation: orientation, viewportSize: view.bounds.size)
+      } catch {
+        renderer.trackingUnavailable()
+        failed = true
+      }
+    }
     (overlay as? RealityAnswerOverlay)?.updateCamera()
     if ProcessInfo.processInfo.systemUptime - lastMaskUpdate > 0.75 { overlay?.setMask(nil) }
     guard perceptionTask == nil, frame.timestamp - lastPerceptionTime >= 0.35,
@@ -230,9 +249,8 @@ import Voice
     overlay?.update(entities: [])
     overlay?.stopSpeaking()
     answerTask = Task {
-      let selected = await perception.selection()
       guard id == questionGeneration, !Task.isCancelled else { return }
-      let request = AskRequest(id: id.uuidString, question: text, deviceEntities: selected.entities)
+      let request = AskRequest(id: id.uuidString, question: text)
       let stream = await router.ask(request)
       guard id == questionGeneration, !Task.isCancelled else { return }
       for await event in stream {
@@ -241,7 +259,7 @@ import Voice
         switch event {
         case .entity: overlay?.update(entities: presentation.entities)
         case .speech(let text): overlay?.speak(text)
-        case .status: failed = true
+        case .status: failed = presentation.isUnavailable
         case .done:
           let selection = await perception.selection()
           guard id == questionGeneration else { return }
@@ -299,6 +317,7 @@ import Voice
       await perception.clear()
     }
     recorder.stop()
+    liveSplat?.stop()
     overlay?.remove()
     overlay = nil
     arView = nil

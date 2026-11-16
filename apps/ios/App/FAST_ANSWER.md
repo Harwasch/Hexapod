@@ -5,12 +5,14 @@ the mic to transcribe, release to ask, tap a subject to select it, and tap a
 numbered pin for its card. Controls and failure feedback are icons. Record writes
 M1 capture bundles under Application Support/Captures; incomplete bundles have no
 manifest. SharedSessionRecorder adapts M1's bundle writer because ARCaptureRecorder
-owns a separate private AR session. Upload integration remains with M1.
+owns a separate private AR session. The minimal Captures list reads finalized bundles and durable upload status.
 
 CameraScreen accepts a CameraModel constructed from CameraProviders. PieceRegistry
 resolves VoiceInput, Planning, PerceptionServing, DeepAnswering and the capture
-source independently. The default deep implementation finishes offline. Cloud
-registers its DeepAnswering implementation in one line after merge. Ask requests
+source independently. Cloud supplies both the recorded fake and the real deep provider.
+Release uses Cloud when an API URL and token are configured, otherwise offline.
+LiveSplat receives shared-session frames and exports before the manifest is finalized.
+Its default remains the LiDAR preview. Home and Captures expose the Globe. Ask requests
 preserve the shared scope/siteId contract; the camera currently asks in scan scope.
 See [TESTING.md](../TESTING.md) for isolated screens and phone provider selection.
 

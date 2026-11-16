@@ -14,6 +14,7 @@
     @preconcurrency CLLocationManagerDelegate
   {
     private(set) var isRecording = false
+    var exportBundle: ((URL) throws -> Void)?
     var onChange: ((Bool, Bool) -> Void)?
     private var disk: RecordingDiskWriter?
     private var writer: BackgroundWriter<RecordingPacket>?
@@ -193,6 +194,12 @@
       location.stopUpdatingLocation()
       onChange?(false, false)
       guard let video, let disk, let writer, index > 0 else {
+        fail()
+        return
+      }
+      do {
+        if let directory { try exportBundle?(directory) }
+      } catch {
         fail()
         return
       }

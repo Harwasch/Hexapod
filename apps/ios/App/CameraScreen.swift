@@ -1,3 +1,5 @@
+import ARAnswer
+import LiveSplat
 import SwiftUI
 
 @MainActor struct CameraScreen: View {
@@ -12,22 +14,14 @@ import SwiftUI
   var body: some View {
     ZStack(alignment: .bottom) {
       ARCameraView(isActive: scenePhase == .active, model: model).ignoresSafeArea()
+      if let renderer = model.liveSplat as? DefaultLiveSplatRenderer {
+        LiveSplatView(renderer: renderer).allowsHitTesting(false).ignoresSafeArea()
+      }
       VStack(spacing: 16) {
         if model.simulated { Text("Simulated test providers").font(.caption) }
         if let entity = model.card {
-          HStack {
-            Text(entity.label).lineLimit(1)
-            Spacer()
-            Button {
-              model.card = nil
-            } label: {
-              Image(systemName: "xmark")
-            }
-            .accessibilityLabel("Close")
-          }
-          .padding(16)
-          .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
-          .padding(.horizontal)
+          EntityCard(entity: entity) { model.card = nil }
+            .padding(.horizontal)
         }
         HStack(spacing: 48) {
           Button(action: model.toggleRecording) {

@@ -4,7 +4,7 @@ import SwiftUI
 struct HexApp: App {
   var body: some Scene {
     WindowGroup {
-      CameraHost()
+      HomeScreen()
         .preferredColorScheme(.dark)
     }
   }

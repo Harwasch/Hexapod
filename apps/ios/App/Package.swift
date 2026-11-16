@@ -8,11 +8,17 @@
     dependencies: [
       .package(path: "../Modules/Capture"), .package(path: "../Modules/Voice"),
       .package(path: "../Modules/Router"), .package(path: "../Modules/Perception"),
-      .package(path: "../Modules/ARAnswer"),
+      .package(path: "../Modules/ARAnswer"), .package(path: "../Modules/Cloud"),
+      .package(path: "../Modules/Globe"), .package(path: "../Modules/LiveSplat"),
+      .package(path: "../Modules/Upload"),
     ],
     targets: [
       .target(
-        name: "AppSupport", dependencies: ["Capture", "Voice", "Router", "Perception", "ARAnswer"],
+        name: "AppSupport",
+        dependencies: [
+          "Capture", "Voice", "Router", "Perception", "ARAnswer", "Cloud", "Globe", "LiveSplat",
+          "Upload",
+        ],
         path: "Support"),
       .testTarget(name: "AppSupportTests", dependencies: ["AppSupport"], path: "Tests"),
     ])
