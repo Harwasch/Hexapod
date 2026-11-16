@@ -59,7 +59,7 @@ def upgrade() -> None:
         sa.Column("ask_id", sa.String(), sa.ForeignKey("ask_runs.id", ondelete="SET NULL")),
         sa.Column(
             "world_anchor",
-            Geometry("POINTZ", srid=0, dimension=3, spatial_index=False),
+            Geometry("POINTZ", dimension=3, spatial_index=False),
             nullable=False,
         ),
         sa.Column("geo_anchor", Geometry("POINTZ", srid=4326, dimension=3, spatial_index=False)),

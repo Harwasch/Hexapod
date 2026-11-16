@@ -35,7 +35,7 @@ class ScanEntity(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("ask_runs.id", ondelete="SET NULL"), index=True
     )
     world_anchor: Mapped[Any] = mapped_column(
-        Geometry("POINTZ", srid=0, dimension=3, spatial_index=False), nullable=False
+        Geometry("POINTZ", dimension=3, spatial_index=False), nullable=False
     )
     geo_anchor: Mapped[Any | None] = mapped_column(
         Geometry("POINTZ", srid=4326, dimension=3, spatial_index=False)
