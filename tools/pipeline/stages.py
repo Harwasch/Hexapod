@@ -40,6 +40,7 @@ import PIL
 import PIL.Image
 
 import alignment
+import arkit_ingest
 import blocks
 import capture_platform
 import colmap4
@@ -439,6 +440,8 @@ def ffmpeg_frames(ctx: StageContext) -> StageOutcome:
     What it does *not* do is turn a location into a georeference -- `exif_gps` is that
     stage. A location found here is recorded and goes no further.
     """
+    if _optional_bool(ctx.param("capture_bundle"), "capture_bundle"):
+        return arkit_ingest.normalize(ctx)
     upload = ctx.input("upload")
     source = video.pick_source(upload)
     fps = float(ctx.param("fps", 4))
@@ -1243,6 +1246,8 @@ def colmap(ctx: StageContext) -> StageOutcome:
     a threshold, D4): `fail_below_registered_fraction` and
     `max_mean_reprojection_error_px` raise `QualityGateError`, which is never retried.
     """
+    if _optional_bool(ctx.param("capture_bundle"), "capture_bundle"):
+        return arkit_ingest.pose(ctx)
     frames = ctx.input(FRAMES.name)
     out = ctx.output(POSES.name)
     requested = str(ctx.param("matcher", "auto"))
@@ -1866,17 +1871,9 @@ def glomap(ctx: StageContext) -> StageOutcome:
     summary="poses and metric scale straight out of an ARKit capture",
 )
 def arkit(ctx: StageContext) -> StageOutcome:
-    # Still a stub after B4, deliberately, and this is the one-line reason: there is no
-    # ARKit capture here and no agreed on-disk format to synthesise one against --
-    # `ARFrame.camera.transform` is Apple's, but the *file* is Polycam's or Record3D's or
-    # Stray Scanner's, and they disagree about layout, handedness and units. A fixture
-    # would be inventing the format, and a parser tested against an invented format is a
-    # fourth never-executed implementation beside `gsplat`, `opensplat` and ModalAdapter.
-    #
-    # It is still the only producer of `scale.json`. B4 did not make that the only route
-    # to metric scale, though: `georeference: exif_gps` now recovers a metric similarity
-    # from GPS and records it in `georef.json`, so a capture can be scaled without a
-    # phone -- less precisely, and it says so.
+    # This generic external-export adapter remains a stub: Polycam/Record3D/Stray
+    # Scanner layouts are not verified here. Hex capture v1 uses the existing colmap
+    # implementation's explicit capture_bundle branch and its frames_meta artifact.
     _lands_in("B4", "pose: arkit")
 
 
@@ -3588,6 +3585,22 @@ def _frame_from_poses(
     up: dict[str, object] | None = None
     source = "none"
     if model_dir is not None:
+        summary_path = model_dir / "poses.json"
+        if summary_path.is_file() and _read_json(summary_path).get("source") == "hex-capture-v1":
+            return {
+                "source": "arkit-gravity",
+                "scale": scale,
+                "scaleSource": "arkit" if given is None else "manual",
+                "scaleEstimate": None,
+                "rotation": (
+                    gaussians.heading_rotation(heading) @ sfm.rotation_onto_z([0, 1, 0])
+                ).tolist(),
+                "translationM": None,
+                "recentre": True,
+                "headingDeg": heading,
+                "headingSource": "capture" if ctx.param("heading_deg") is not None else "none",
+                "up": {"up": [0, 1, 0], "source": "arkit-gravity"},
+            }
         model = sfm.read_model(model_dir)
         estimate = sfm.camera_up(model)
         if estimate is not None:
