@@ -1,0 +1,70 @@
+name: Hex
+options:
+  deploymentTarget:
+    iOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    HEX_BUNDLE_ID: com.harwasch.hex
+    PRODUCT_BUNDLE_IDENTIFIER: $(HEX_BUNDLE_ID)
+    TARGETED_DEVICE_FAMILY: "1"
+    SUPPORTS_MACCATALYST: NO
+    SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+packages:
+  Capture:
+    path: Modules/Capture
+  LiveSplat:
+    path: Modules/LiveSplat
+  Voice:
+    path: Modules/Voice
+  Router:
+    path: Modules/Router
+  Perception:
+    path: Modules/Perception
+  ARAnswer:
+    path: Modules/ARAnswer
+  Upload:
+    path: Modules/Upload
+  EntitySchema:
+    path: Modules/EntitySchema
+targets:
+  Hex:
+    type: application
+    platform: iOS
+    sources:
+      - App
+    dependencies:
+      - package: Capture
+      - package: LiveSplat
+      - package: Voice
+      - package: Router
+      - package: Perception
+      - package: ARAnswer
+      - package: Upload
+      - package: EntitySchema
+    settings:
+      base:
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+    info:
+      path: build/Info.plist
+      properties:
+        CFBundleDisplayName: Hex
+        NSCameraUsageDescription: Hex uses the camera to scan your surroundings.
+        NSMicrophoneUsageDescription: Hex uses the microphone while you hold the talk button.
+        NSSpeechRecognitionUsageDescription: Hex transcribes your spoken requests.
+        NSLocationWhenInUseUsageDescription: Hex places captures at their geographic location.
+        UIRequiredDeviceCapabilities:
+          - arkit
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+schemes:
+  Hex:
+    build:
+      targets:
+        Hex: all
+    archive:
+      config: Release

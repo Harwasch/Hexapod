@@ -81,3 +81,8 @@ data/tiles/sh-compare-place/
 # Claude Code worker worktrees and the coordinator log (claude-ops)
 .claude/worktrees/
 .claude/ops/
+
+# iOS app: SwiftPM build output and the generated Xcode project
+apps/ios/**/.build/
+apps/ios/**/.swiftpm/
+apps/ios/Hex.xcodeproj/
