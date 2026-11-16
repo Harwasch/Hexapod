@@ -65,6 +65,8 @@ public struct CaptureManifest: Codable, Equatable, Sendable {
   public var smoothedDepthFrameCount: Int
   public var video: String = "rgb.mov"
   public var frameLog: String = "frames.jsonl"
+  public var locationLog: String?
+  public var location: CaptureLocation?
   /// Every payload file, excluding manifest.json itself.
   public var files: [BundleFile]
 }
@@ -75,6 +77,8 @@ public final class CaptureBundleWriter {
   private let device: String
   private let startedAt: String
   private let log: FileHandle
+  private var locationLog: FileHandle?
+  private var location: CaptureLocation?
   private var count = 0
   private var depthCount = 0
   private var smoothedCount = 0
@@ -96,7 +100,26 @@ public final class CaptureBundleWriter {
     log = try FileHandle(forWritingTo: url)
   }
 
-  deinit { try? log.close() }
+  deinit {
+    try? log.close()
+    try? locationLog?.close()
+  }
+
+  public func appendLocation(_ fix: CaptureLocation) throws {
+    guard !closed else { throw CaptureError.closed }
+    guard fix.isValid else { throw CaptureError.invalidFrame }
+    if locationLog == nil {
+      let url = directory.appendingPathComponent("location.jsonl")
+      guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+        throw CaptureError.invalidFile
+      }
+      locationLog = try FileHandle(forWritingTo: url)
+    }
+    var data = try JSONEncoder().encode(fix)
+    data.append(10)
+    try locationLog!.write(contentsOf: data)
+    if fix.improves(location) { location = fix }
+  }
 
   public func append(_ frame: CaptureFrame) throws {
     guard !closed else { throw CaptureError.closed }
@@ -140,6 +163,8 @@ public final class CaptureBundleWriter {
 
   public func finish() throws -> CaptureManifest {
     guard !closed, count > 0 else { throw CaptureError.incomplete }
+    try locationLog?.synchronize()
+    try locationLog?.close()
     try log.synchronize()
     try log.close()
     closed = true
@@ -158,7 +183,8 @@ public final class CaptureBundleWriter {
     }
     let manifest = CaptureManifest(
       device: device, startedAt: startedAt, frameCount: count,
-      depthFrameCount: depthCount, smoothedDepthFrameCount: smoothedCount, files: files)
+      depthFrameCount: depthCount, smoothedDepthFrameCount: smoothedCount,
+      locationLog: locationLog == nil ? nil : "location.jsonl", location: location, files: files)
     try JSONEncoder().encode(manifest).write(
       to: directory.appendingPathComponent("manifest.json"), options: .atomic)
     return manifest

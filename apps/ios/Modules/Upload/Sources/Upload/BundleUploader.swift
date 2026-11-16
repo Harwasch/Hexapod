@@ -19,11 +19,23 @@ private struct Window: Decodable {
   var partsTotal: Int
   var parts: [PartURL]
 }
-private struct Begin: Encodable {
+struct Begin: Encodable {
   var name: String
   let kind = "video"
   var siteId: UUID?
-  var metadata: BundlePlacement?
+  var metadata: [String: Double]
+
+  init(name: String, siteId: UUID?, placement: BundlePlacement?) {
+    self.name = name
+    self.siteId = siteId
+    metadata =
+      placement.map {
+        [
+          "lat": $0.lat, "lon": $0.lon, "uncertaintyM": $0.uncertaintyM,
+          "locationAccuracyM": $0.uncertaintyM,
+        ]
+      } ?? [:]
+  }
 }
 private struct Register: Encodable {
   let filename = "capture.hexcap"
@@ -51,7 +63,7 @@ public actor BundleUploader {
 
   public init(
     directory: URL, archive: URL? = nil, name: String = "Capture",
-    placement: BundlePlacement? = nil, siteID: UUID? = nil, apiBase: URL,
+    placement: BundlePlacementSource = .bundleGPS, siteID: UUID? = nil, apiBase: URL,
     token: @escaping @Sendable () async throws -> String
   ) throws {
     guard
@@ -81,7 +93,7 @@ public actor BundleUploader {
       let size = try FileManager.default.attributesOfItem(atPath: owned.path)[.size] as! NSNumber
       state = try UploadState(name: name, totalBytes: size.uint64Value)
       state.apiBase = apiBase.absoluteString
-      state.placement = placement
+      state.placement = try placement.resolve(archive: owned, siteID: siteID)
       state.siteID = siteID
       try state.save(to: stateURL)
     }
@@ -168,7 +180,7 @@ public actor BundleUploader {
       let capture = try await request(
         "captures/bundles/" + state.bundleID.uuidString,
         method: "PUT",
-        body: Begin(name: state.name, siteId: state.siteID, metadata: state.placement),
+        body: Begin(name: state.name, siteId: state.siteID, placement: state.placement),
         as: Identifier.self)
       state.captureID = capture.id
       try save()

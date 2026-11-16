@@ -27,6 +27,9 @@
     private var finishing = false
     private var width = 0
     private var height = 0
+    #if canImport(CoreLocation)
+      @MainActor private var locationRecorder: CaptureLocationRecorder?
+    #endif
 
     public override init() {
       super.init()
@@ -68,6 +71,23 @@
           self.failure = nil
           self.firstTimestamp = nil
           self.index = 0
+          #if canImport(CoreLocation)
+            DispatchQueue.main.async {
+              let recorder = CaptureLocationRecorder { [weak self] fixes in
+                guard let self else { return }
+                self.queue.async {
+                  guard let bundle = self.bundle, self.failure == nil, !self.finishing else {
+                    return
+                  }
+                  do {
+                    for fix in fixes { try bundle.appendLocation(fix) }
+                  } catch { self.fail(error) }
+                }
+              }
+              self.locationRecorder = recorder
+              recorder.start()
+            }
+          #endif
           self.session.run(config, options: [.resetTracking, .removeExistingAnchors])
         } catch { completion(.failure(error)) }
       }
@@ -186,7 +206,17 @@
 
     public func session(_ session: ARSession, didFailWithError error: Error) { fail(error) }
     public func sessionWasInterrupted(_ session: ARSession) { fail(CaptureError.incomplete) }
+    private func stopLocation() {
+      #if canImport(CoreLocation)
+        DispatchQueue.main.async {
+          self.locationRecorder?.stop()
+          self.locationRecorder = nil
+        }
+      #endif
+    }
+
     private func fail(_ error: Error) {
+      stopLocation()
       failure = error
       session.pause()
       let pending = pendingStart
@@ -197,6 +227,7 @@
     public func stop(completion: @escaping @Sendable (Result<URL, Error>) -> Void) {
       queue.async {
         self.session.pause()
+        self.stopLocation()
         if self.pendingStart != nil { self.fail(CaptureError.incomplete) }
         guard !self.finishing else {
           completion(.failure(CaptureError.closed))

@@ -1,12 +1,13 @@
+import Capture
 import Foundation
 
 public enum UploadError: Error {
-  case invalidPlan, invalidState, changedArchive
+  case invalidPlan, invalidState, changedArchive, missingLocation
   case http(Int)
   case missingETag, invalidURL
 }
 
-/// Optional existing catalog placement. ARKit's local origin is never treated as GPS.
+/// Geographic capture placement. ARKit's local origin is never treated as GPS.
 public struct BundlePlacement: Codable, Equatable, Sendable {
   public let lat: Double
   public let lon: Double
@@ -19,6 +20,27 @@ public struct BundlePlacement: Codable, Equatable, Sendable {
     lat = latitude
     lon = longitude
     self.uncertaintyM = uncertaintyM
+  }
+}
+
+/// GPS from the immutable bundle is the default. Explicit placement remains available.
+public enum BundlePlacementSource: Sendable {
+  case bundleGPS
+  case explicit(BundlePlacement)
+
+  public func resolve(archive: URL, siteID: UUID?) throws -> BundlePlacement? {
+    switch self {
+    case .explicit(let placement): return placement
+    case .bundleGPS:
+      let manifest = try CaptureArchive.readManifest(from: archive)
+      if let fix = manifest.location, fix.isValid, fix.horizontalAccuracyM > 0 {
+        return try BundlePlacement(
+          latitude: fix.lat, longitude: fix.lon, uncertaintyM: fix.horizontalAccuracyM)
+      }
+      // An existing site supplies its frame when GPS is unavailable.
+      guard siteID != nil else { throw UploadError.missingLocation }
+      return nil
+    }
   }
 }
 

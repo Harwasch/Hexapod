@@ -1,3 +1,4 @@
+import Capture
 import Foundation
 import Testing
 
@@ -61,7 +62,9 @@ import Testing
   let folder = root.appendingPathComponent("transfer")
   let base = URL(string: "https://api.example.test/api/v1")!
   let uploader = try BundleUploader(
-    directory: folder, archive: archive, apiBase: base, token: { "unused" })
+    directory: folder, archive: archive,
+    placement: .explicit(try BundlePlacement(latitude: 37, longitude: -122, uncertaintyM: 12)),
+    apiBase: base, token: { "unused" })
   let before = await uploader.snapshot
   let resumed = try BundleUploader(directory: folder, apiBase: base, token: { "unused" })
   #expect(await resumed.snapshot == before)
@@ -92,6 +95,78 @@ import Testing
   try Data([9, 8, 7]).write(to: archive)
   _ = try BundleUploader(
     directory: folder, archive: archive,
+    placement: .explicit(try BundlePlacement(latitude: 37, longitude: -122, uncertaintyM: 12)),
     apiBase: URL(string: "https://api.example.test/api/v1")!, token: { "unused" })
   #expect(try Data(contentsOf: archive) == Data([9, 8, 7]))
+}
+
+@Test func uploadDefaultsToBundleGPSAndKeepsOptionalSite() async throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let folder = root.appendingPathComponent("bundle")
+  let writer = try CaptureBundleWriter(directory: folder, device: "fixture")
+  try Data([1]).write(to: folder.appendingPathComponent("rgb.mov"))
+  try writer.append(
+    CaptureFrame(
+      index: 0, timestamp: 0, transform: Array(repeating: 0, count: 16),
+      intrinsics: Array(repeating: 0, count: 9), imageWidth: 1, imageHeight: 1,
+      trackingState: "normal"))
+  let fix = CaptureLocation(
+    timestamp: 1_800_000_000, latitude: 37, longitude: -122, altitudeM: 100,
+    horizontalAccuracyM: 12, verticalAccuracyM: 20)
+  try writer.appendLocation(fix)
+  _ = try writer.finish()
+  let archive = root.appendingPathComponent("source.hexcap")
+  try CaptureArchive.write(bundle: folder, to: archive)
+  let base = URL(string: "https://api.example.test/api/v1")!
+  for site in [nil, UUID()] {
+    let uploader = try BundleUploader(
+      directory: root.appendingPathComponent(UUID().uuidString), archive: archive,
+      siteID: site, apiBase: base, token: { "unused" })
+    let state = await uploader.snapshot
+    #expect(
+      state.placement == (try BundlePlacement(latitude: 37, longitude: -122, uncertaintyM: 12)))
+    #expect(state.siteID == site)
+    let payload =
+      try JSONSerialization.jsonObject(
+        with: JSONEncoder().encode(
+          Begin(name: state.name, siteId: state.siteID, placement: state.placement)))
+      as! [String: Any]
+    let metadata = payload["metadata"] as! [String: Double]
+    #expect(metadata["lat"] == 37 && metadata["lon"] == -122)
+    #expect(metadata["locationAccuracyM"] == 12)
+    #expect((payload["siteId"] as? String) == site?.uuidString)
+  }
+}
+
+@Test func missingGPSRequiresSiteOrExplicitPlacement() async throws {
+  let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: root) }
+  let writer = try CaptureBundleWriter(directory: root, device: "fixture")
+  try Data([1]).write(to: root.appendingPathComponent("rgb.mov"))
+  try writer.append(
+    CaptureFrame(
+      index: 0, timestamp: 0, transform: Array(repeating: 0, count: 16),
+      intrinsics: Array(repeating: 0, count: 9), imageWidth: 1, imageHeight: 1,
+      trackingState: "normal"))
+  _ = try writer.finish()
+  let archive = root.deletingLastPathComponent().appendingPathComponent(
+    UUID().uuidString + ".hexcap")
+  defer { try? FileManager.default.removeItem(at: archive) }
+  try CaptureArchive.write(bundle: root, to: archive)
+  #expect(throws: UploadError.self) {
+    try BundlePlacementSource.bundleGPS.resolve(archive: archive, siteID: nil)
+  }
+  let site = UUID()
+  let uploader = try BundleUploader(
+    directory: root.appendingPathComponent("transfer"), archive: archive, siteID: site,
+    apiBase: URL(string: "https://api.example.test/api/v1")!, token: { "unused" })
+  let state = await uploader.snapshot
+  #expect(state.placement == nil && state.siteID == site)
+  let payload =
+    try JSONSerialization.jsonObject(
+      with: JSONEncoder().encode(
+        Begin(name: state.name, siteId: site, placement: state.placement))) as! [String: Any]
+  #expect((payload["metadata"] as? [String: Double]) == [:])
+  #expect((payload["siteId"] as? String) == site.uuidString)
 }

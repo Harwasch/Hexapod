@@ -2,6 +2,45 @@ import Foundation
 
 /// USTAR, regular flat files only; bounded memory even for multi-gigabyte HEVC files.
 public enum CaptureArchive {
+  /// Read only bounded metadata; skip video/depth bytes without loading them into memory.
+  /// Full inventory and observation validation remains the pipeline's responsibility.
+  public static func readManifest(from archive: URL) throws -> CaptureManifest {
+    let input = try FileHandle(forReadingFrom: archive)
+    defer { try? input.close() }
+    let length = try input.seekToEnd()
+    try input.seek(toOffset: 0)
+    while try input.offset() + 512 <= length {
+      let header = [UInt8](try input.read(upToCount: 512) ?? Data())
+      guard header.count == 512, header.contains(where: { $0 != 0 }) else { break }
+      func field(_ range: Range<Int>) -> String {
+        String(decoding: header[range].prefix(while: { $0 != 0 }), as: UTF8.self)
+          .trimmingCharacters(in: .whitespaces)
+      }
+      let checksum = header.enumerated().reduce(0) {
+        $0 + ((148..<156).contains($1.offset) ? 32 : Int($1.element))
+      }
+      guard field(257..<263) == "ustar", header[156] == 48,
+        field(345..<500).isEmpty, CaptureBundleWriter.safeName(field(0..<100)),
+        Int(field(148..<156), radix: 8) == checksum,
+        let size = UInt64(field(124..<136), radix: 8), size < 8_589_934_592
+      else { throw CaptureError.invalidFile }
+      let offset = try input.offset()
+      guard size <= length - offset else { throw CaptureError.incomplete }
+      if field(0..<100) == "manifest.json" {
+        guard size <= 64 * 1024 * 1024 else { throw CaptureError.invalidFile }
+        let data = try input.read(upToCount: Int(size)) ?? Data()
+        guard data.count == Int(size) else { throw CaptureError.incomplete }
+        let manifest = try JSONDecoder().decode(CaptureManifest.self, from: data)
+        guard manifest.version == 1, manifest.format == "hex-capture" else {
+          throw CaptureError.invalidFile
+        }
+        return manifest
+      }
+      try input.seek(toOffset: offset + size + (512 - size % 512) % 512)
+    }
+    throw CaptureError.incomplete
+  }
+
   public static func write(bundle: URL, to destination: URL) throws {
     let manifestURL = bundle.appendingPathComponent("manifest.json")
     let manifest = try JSONDecoder().decode(
