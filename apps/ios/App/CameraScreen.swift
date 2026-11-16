@@ -5,7 +5,7 @@ import SwiftUI
   @State private var model: CameraModel
   @State private var isPressing = false
 
-  init(model: CameraModel = CameraModel()) {
+  init(model: CameraModel) {
     _model = State(initialValue: model)
   }
 
@@ -13,6 +13,7 @@ import SwiftUI
     ZStack(alignment: .bottom) {
       ARCameraView(isActive: scenePhase == .active, model: model).ignoresSafeArea()
       VStack(spacing: 16) {
+        if model.simulated { Text("Simulated test providers").font(.caption) }
         if let entity = model.card {
           HStack {
             Text(entity.label).lineLimit(1)
@@ -34,6 +35,7 @@ import SwiftUI
               .foregroundStyle(.red).font(.system(size: 64))
           }
           .accessibilityLabel(model.recording ? "Stop recording" : "Record")
+          .disabled(!model.usesLiveCapture)
           Image(systemName: model.isTalking ? "mic.fill" : "mic")
             .font(.system(size: 30)).frame(width: 64, height: 64)
             .background(model.isTalking ? Color.red : Color.black.opacity(0.5), in: Circle())
@@ -51,7 +53,9 @@ import SwiftUI
             }
         }
         .buttonStyle(.plain)
-        .disabled(!ARCameraView.supportsDevice || scenePhase != .active || !model.cameraReady)
+        .disabled(
+          (model.usesLiveCapture && !ARCameraView.supportsDevice) || scenePhase != .active
+            || !model.cameraReady)
       }
       .padding(.bottom, 24)
       if model.failed {

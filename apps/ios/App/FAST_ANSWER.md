@@ -7,10 +7,12 @@ M1 capture bundles under Application Support/Captures; incomplete bundles have n
 manifest. SharedSessionRecorder adapts M1's bundle writer because ARCaptureRecorder
 owns a separate private AR session. Upload integration remains with M1.
 
-CameraScreen accepts a CameraModel. CameraModel accepts VoiceInput, Planning,
-ScenePerception and EntitySchema.DeepAnswering. The default deep implementation
-finishes offline. After the Cloud merge, supply its DeepAnswering implementation
-through CameraModel(deep:); no Ask contract changes are needed.
+CameraScreen accepts a CameraModel constructed from CameraProviders. PieceRegistry
+resolves VoiceInput, Planning, PerceptionServing, DeepAnswering and the capture
+source independently. The default deep implementation finishes offline. Cloud
+registers its DeepAnswering implementation in one line after merge. Ask requests
+preserve the shared scope/siteId contract; the camera currently asks in scan scope.
+See [TESTING.md](../TESTING.md) for isolated screens and phone provider selection.
 
 The deep request begins concurrently with fast planning. Deep events wait until
 the fast stream finishes, then refine it. A matching label (case/outer whitespace
@@ -23,7 +25,10 @@ PerceptionScene contains portable selection orchestration. A tap chooses a mask;
 a voice noun requires a matching on-device classification. Generic questions use
 the selected subject or the image centre. Count finds visible foreground
 instances, not a complete scene inventory. Depth estimates discard holes and
-depth outliers, then use median centres and 5th/95th percentile extents. These are
+depth outliers, then use median centres and supported visible bounds. A surface with neighbouring
+depth support survives the global depth filter, preserving narrow trunks and curved
+crowns. Bounds include those retained samples rather than trimming narrow parts
+with per-axis percentiles. These are
 approximate visible-surface extents, not calibrated full-object dimensions.
 Tracks reproject anchors and associate by distance/IoU, tolerate short gaps, and
 age on processed frames. Explicit new selections replace the tracked subject set.
@@ -66,10 +71,14 @@ concurrency compilation, then check on an eligible iPhone:
 - Recording while asking, HEVC backpressure, raw/smoothed depth and location
   files, finalized bundle playback and rendering/inference frame times.
 
-The current recorder writes depth synchronously on the main actor; capture and
-inference throughput have not been measured. Move that work behind a bounded
-serial writer if device profiling shows frame stalls. No GPU run, paid service,
-deployment, workflow, signing or upload was performed.
+Depth buffers are copied on the main actor, then submitted to a background writer
+actor. The four-packet bound includes the active write; overflow stops recording
+and leaves an incomplete bundle without a manifest. Depth files precede their
+JSONL frame, and finalization drains accepted packets before publishing a manifest.
+Directory creation, JSONL/location writes, synchronization and manifest publication
+also run off the main actor. HEVC setup/append and buffer-copy throughput still
+need device profiling. No GPU run, paid service, deployment, workflow, signing or
+upload was performed.
 
 Open decisions: choose a licensed single-file promptable export and its verified
 URL/digest/layout; confirm acceptable visible-surface measurement accuracy and

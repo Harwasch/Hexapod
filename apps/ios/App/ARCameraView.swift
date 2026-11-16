@@ -24,7 +24,9 @@
     }
 
     func makeUIView(context: Context) -> ARView {
-      let view = ARView(frame: .zero, cameraMode: .ar, automaticallyConfigureSession: false)
+      let view = ARView(
+        frame: .zero, cameraMode: model.usesLiveCapture ? .ar : .nonAR,
+        automaticallyConfigureSession: false)
       let coordinator = context.coordinator
       coordinator.view = view
       view.session.delegate = coordinator
@@ -36,6 +38,18 @@
 
     func updateUIView(_ view: ARView, context: Context) {
       let coordinator = context.coordinator
+      if !model.usesLiveCapture {
+        if isActive {
+          if !coordinator.running {
+            model.attach(view)
+            model.beginReplay()
+            coordinator.running = true
+          }
+        } else {
+          coordinator.stop()
+        }
+        return
+      }
       coordinator.active = isActive && Self.supportsDevice
       guard coordinator.active else {
         coordinator.stop()

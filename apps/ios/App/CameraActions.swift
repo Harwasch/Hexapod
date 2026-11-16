@@ -28,9 +28,14 @@ import Voice
   private var presentation = AnswerPresentation()
   private let voice: any VoiceInput
   let perception: ScenePerception
-  private let router: AnswerRouter
+  private let router: any AnswerRouting
   private let recorder = SharedSessionRecorder()
-  private var overlay: RealityAnswerOverlay?
+  private var overlay: (any AnswerOverlaySink)?
+  private let captureSource: any CameraCaptureSource
+  private let fakeOverlay: Bool
+  let simulated: Bool
+  private var replayTask: Task<Void, Never>?
+  var usesLiveCapture: Bool { captureSource.usesLiveSession }
   private weak var arView: ARView?
   private var voiceTask: Task<Void, Never>?
   private var answerTask: Task<Void, Never>?
@@ -43,13 +48,14 @@ import Voice
   private var hasSnapshot = false
   private var viewportToImage: [Double] = [1, 0, 0, 1, 0, 0]
 
-  init(
-    voice: any VoiceInput = SpeechVoice(), deep: any DeepAnswering = OfflineDeepAnswer(),
-    perception: ScenePerception = ScenePerception(), planner: any Planning = ApplePlanner()
-  ) {
-    self.voice = voice
-    self.perception = perception
-    router = AnswerRouter(planner: planner, fast: DeviceFastAnswer(scene: perception), deep: deep)
+  init(providers: CameraProviders) {
+    voice = providers.voice
+    perception = ScenePerception(scene: providers.perception)
+    captureSource = providers.capture
+    fakeOverlay = providers.fakeOverlay
+    simulated = providers.simulated
+    router = AnswerRouter(
+      planner: providers.planner, fast: DeviceFastAnswer(scene: perception), deep: providers.deep)
     recorder.onChange = { [weak self] active, failure in
       self?.recording = active
       if failure { self?.failed = true }
@@ -65,14 +71,37 @@ import Voice
     arView = view
     cameraReady = true
     do {
-      overlay = try RealityAnswerOverlay(view: view)
+      if fakeOverlay {
+        overlay = FakeOverlaySink()
+      } else {
+        overlay = try RealityAnswerOverlay(view: view)
+      }
       failed = false
     } catch { failed = true }
   }
 
+  func beginReplay() {
+    guard !usesLiveCapture, replayTask == nil else { return }
+    replayTask = Task { [weak self] in
+      guard let self else { return }
+      do {
+        for try await snapshot in captureSource.frames() {
+          try Task.checkCancellation()
+          let time = ProcessInfo.processInfo.systemUptime
+          await perception.update(snapshot, viewportToImage: [1, 0, 0, 1, 0, 0], capturedAt: time)
+          hasSnapshot = true
+          cameraReady = true
+          let entities = try await perception.inspect(.init(subject: "subject", tools: [.count]))
+          overlay?.update(entities: entities)
+          highlight(await perception.selection())
+        }
+      } catch is CancellationError {} catch { failed = true }
+    }
+  }
+
   func frame(_ frame: ARFrame) {
     recorder.append(frame)
-    overlay?.updateCamera()
+    (overlay as? RealityAnswerOverlay)?.updateCamera()
     if ProcessInfo.processInfo.systemUptime - lastMaskUpdate > 0.75 { overlay?.setMask(nil) }
     guard perceptionTask == nil, frame.timestamp - lastPerceptionTime >= 0.35,
       let view = arView, view.bounds.width > 0, view.bounds.height > 0,
@@ -109,7 +138,7 @@ import Voice
   }
 
   func tap(_ point: CGPoint) {
-    if let entity = overlay?.pin(at: point) {
+    if let entity = (overlay as? RealityAnswerOverlay)?.pin(at: point) {
       card = entity
       return
     }
@@ -145,7 +174,7 @@ import Voice
     }
   }
 
-  func toggleRecording() { recorder.toggleRecording() }
+  func toggleRecording() { if usesLiveCapture { recorder.toggleRecording() } }
 
   func beginTalking() {
     guard !isTalking else { return }
@@ -249,6 +278,8 @@ import Voice
   }
 
   func suspend() {
+    replayTask?.cancel()
+    replayTask = nil
     cameraReady = false
     isTalking = false
     voiceGeneration = UUID()
