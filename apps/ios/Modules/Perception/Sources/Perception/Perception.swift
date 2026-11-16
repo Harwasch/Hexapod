@@ -187,7 +187,7 @@ public struct CameraGeometry: Sendable {
 
 public enum MaskLifter {
   /// Independent depth samples, not replicated mask pixels, determine confidence.
-  /// 5th/95th percentiles trim boundary noise; depth MAD rejects isolated returns.
+  /// Depth MAD and local support reject isolated returns before measuring the visible bounds.
   public static func lift(
     mask: SubjectMask, depth: DepthImage, camera: CameraGeometry,
     label: String, model: String = "depth-mask"
@@ -199,6 +199,7 @@ public enum MaskLifter {
       throw PerceptionError.invalidGeometry
     }
     var samples: [(ImagePoint, Double)] = []
+    var maskedDepth = [Double](repeating: .nan, count: depth.metres.count)
     for y in 0..<depth.height {
       for x in 0..<depth.width {
         let u = (Double(x) + 0.5) / Double(depth.width)
@@ -208,6 +209,7 @@ public enum MaskLifter {
         let d = Double(depth.metres[y * depth.width + x])
         if mask.pixels[my * mask.width + mx] > 0 && d.isFinite && d >= 0.1 && d <= 20 {
           samples.append((.init(x: u, y: v), d))
+          maskedDepth[y * depth.width + x] = d
         }
       }
     }
@@ -216,7 +218,27 @@ public enum MaskLifter {
     let mad = percentile(samples.map { abs($0.1 - median) }, 0.5)
     // Sensor floor is an explicit policy, not an arithmetic test tolerance.
     let band = max(0.08, 3 * 1.4826 * mad)
-    let points = samples.filter { abs($0.1 - median) <= band }.compactMap {
+    let points = samples.filter { sample in
+      if abs(sample.1 - median) <= band { return true }
+      // A curved crown or a narrow trunk can be far from the global median.
+      // Keep a locally supported surface; reject isolated returns, not whole limbs.
+      let x = min(depth.width - 1, Int(sample.0.x * Double(depth.width)))
+      let y = min(depth.height - 1, Int(sample.0.y * Double(depth.height)))
+      let footprint = sample.1 * Double(camera.imageWidth) / (camera.fx * Double(depth.width))
+      var neighbours = 0
+      for dy in -1...1 {
+        for dx in -1...1 where dx != 0 || dy != 0 {
+          let nx = x + dx
+          let ny = y + dy
+          if nx >= 0, nx < depth.width, ny >= 0, ny < depth.height,
+            abs(maskedDepth[ny * depth.width + nx] - sample.1) <= max(0.08, 2 * footprint)
+          {
+            neighbours += 1
+          }
+        }
+      }
+      return neighbours >= 2
+    }.compactMap {
       camera.worldPoint(pixel: $0.0, depth: $0.1)
     }
     guard points.count >= 6 else { throw PerceptionError.insufficientDepth }
@@ -230,11 +252,11 @@ public enum MaskLifter {
           x: percentile(xs, 0.5),
           y: percentile(ys, 0.5), z: percentile(zs, 0.5))),
       extent: .init(
-        x: percentile(xs, 0.95) - percentile(xs, 0.05),
-        y: percentile(ys, 0.95) - percentile(ys, 0.05),
-        z: percentile(zs, 0.95) - percentile(zs, 0.05)),
+        x: (xs.max()! - xs.min()!),
+        y: (ys.max()! - ys.min()!),
+        z: (zs.max()! - zs.min()!)),
       masks: [], confidence: Double(points.count) / Double(depth.width * depth.height),
-      attrs: ["measurement": .string("LiDAR percentile extent")],
+      attrs: ["measurement": .string("LiDAR supported visible extent")],
       source: EntitySource(module: "Perception", model: model))
   }
   private static func percentile(_ values: [Double], _ p: Double) -> Double {
