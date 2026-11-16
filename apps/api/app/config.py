@@ -151,6 +151,9 @@ class Settings(BaseSettings):
 
     # Mission planning agent. With a key the plan drafter calls Claude through the official
     # SDK; without one it falls back to a rule-based drafter and says so in every draft.
+    ask_model: str = "claude-opus-5"
+    ask_analysis_app: str = "hex-analysis"
+    ask_analysis_enabled: bool = False
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-opus-5"
 
