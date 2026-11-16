@@ -6,11 +6,13 @@ Pixel centres are integer coordinates; resizing preserves half-pixel boundaries.
 """
 
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 import numpy.typing as npt
 
 F64 = npt.NDArray[np.float64]
+PixelCentres = Literal["half-pixel", "scaled-intrinsics"]
 
 
 @dataclass(frozen=True)
@@ -27,12 +29,16 @@ def lift_depth(
     intrinsics: F64,
     camera_to_world: F64,
     image_size: tuple[int, int],
+    *,
+    pixel_centres: PixelCentres = "half-pixel",
 ) -> F64:
     """Return Nx3 world points. Holes (<=0, NaN, inf) are omitted, never filled.
 
     The mask is sampled on the depth grid. Intrinsics belong to the original RGB
     image, whose (width, height) is image_size. No distortion model is assumed.
     Rigid-transform tolerances allow float32 pose serialization, as capture_bundle does.
+    half-pixel preserves resize boundaries; scaled-intrinsics maps integer depth
+    samples with directly scaled calibration, as the synthetic fixture specifies.
     """
     if depth.ndim != 2 or 0 in depth.shape or mask.shape != depth.shape:
         raise ValueError("depth and mask must be matching nonempty 2D grids")
@@ -60,8 +66,14 @@ def lift_depth(
         raise ValueError("camera-to-world must be a proper rigid transform")
     rows, columns = np.nonzero(mask & np.isfinite(depth) & (depth > 0))
     z = depth[rows, columns]
-    u = (columns + 0.5) * width / depth.shape[1] - 0.5
-    v = (rows + 0.5) * height / depth.shape[0] - 0.5
+    if pixel_centres == "half-pixel":
+        u = (columns + 0.5) * width / depth.shape[1] - 0.5
+        v = (rows + 0.5) * height / depth.shape[0] - 0.5
+    elif pixel_centres == "scaled-intrinsics":
+        u = columns * width / depth.shape[1]
+        v = rows * height / depth.shape[0]
+    else:
+        raise ValueError("unknown pixel-centre convention")
     camera = np.column_stack(((u - k[0, 2]) * z / k[0, 0], -(v - k[1, 2]) * z / k[1, 1], -z))
     return np.asarray(camera @ t[:3, :3].T + t[:3, 3], dtype=np.float64)
 

@@ -7,7 +7,7 @@ from typing import Any, Protocol
 import numpy as np
 import numpy.typing as npt
 
-from hex_analysis.lifting import F64, bounds, lift_depth
+from hex_analysis.lifting import F64, PixelCentres, bounds, lift_depth
 
 
 class AnalysisUnavailableError(RuntimeError):
@@ -22,6 +22,7 @@ class Frame:
     intrinsics: F64
     transform: F64
     image_size: tuple[int, int]
+    pixel_centres: PixelCentres = "half-pixel"
 
 
 @dataclass(frozen=True)
@@ -124,7 +125,12 @@ class Registry:
             raise AnalysisUnavailableError("reference keyframe has no metric depth")
         for detection in self.segmenter.segment(frame, arguments["prompt"]):
             points = lift_depth(
-                frame.depth, detection.mask, frame.intrinsics, frame.transform, frame.image_size
+                frame.depth,
+                detection.mask,
+                frame.intrinsics,
+                frame.transform,
+                frame.image_size,
+                pixel_centres=frame.pixel_centres,
             )
             measured = bounds(points, int(detection.mask.sum()))
             if measured is None:
