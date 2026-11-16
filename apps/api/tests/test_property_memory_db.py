@@ -53,7 +53,7 @@ def test_property_queries_postgis_scope_distance_polygon_attributes_time(
     ):
         db.execute(
             text(
-                "INSERT INTO property_entity_memory VALUES (:id, :site, :scan, :label, '{\"healthy\":true}', "
+                "INSERT INTO property_entity_memory VALUES (:id, :site, :scan, :label, '{\"healthy\"\\:true}', "
                 "'{}', ST_SetSRID(ST_MakePoint(:lon,0),4326), 1, :time)"
             ),
             {
