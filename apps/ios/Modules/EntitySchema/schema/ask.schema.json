@@ -29,6 +29,8 @@
       "properties": {
         "id": { "type": "string", "minLength": 1 },
         "question": { "type": "string", "minLength": 1 },
+        "scope": { "enum": ["scan", "property"] },
+        "siteId": { "type": "string", "minLength": 1 },
         "scanId": { "type": "string", "minLength": 1 },
         "location": { "$ref": "#/$defs/geo" },
         "keyframes": { "type": "array", "items": { "$ref": "#/$defs/keyframeRef" } },
