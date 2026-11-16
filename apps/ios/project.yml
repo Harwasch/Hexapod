@@ -15,6 +15,8 @@ settings:
 packages:
   Cloud:
     path: Modules/Cloud
+  Globe:
+    path: Modules/Globe
   Capture:
     path: Modules/Capture
   LiveSplat:
@@ -45,6 +47,7 @@ targets:
           - "*.md"
     dependencies:
       - package: Cloud
+      - package: Globe
       - package: Capture
       - package: LiveSplat
       - package: Voice
