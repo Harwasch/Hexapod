@@ -8,7 +8,7 @@
 
   /// Device-only: RealityKit callbacks, Metal validation, pin hit-testing and speech audio
   /// routing have not been compiled or exercised on Linux.
-  @MainActor public final class RealityAnswerOverlay {
+  @MainActor public final class RealityAnswerOverlay: AnswerOverlaySink {
     private weak var view: ARView?
     private var anchors: [AnchorEntity] = []
     private var entities: [EntitySchema.Entity] = []
