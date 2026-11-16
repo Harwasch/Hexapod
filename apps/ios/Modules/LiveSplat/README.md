@@ -5,6 +5,11 @@ and bounded photometric updates. This package is isolated from the Ask contract,
 Capture, App and server. Linux validates the pure Swift numerical reference and
 state management. **Apple-framework code and Metal have not been compiled or run.**
 
+For isolated tests, fakes, bundle replay and the standalone SwiftUI debug screen,
+see [TESTING.md](TESTING.md). `LiveSplatRenderer` is the injectable protocol;
+`DefaultLiveSplatRenderer` is the concrete implementation and `FakeLiveSplat`
+provides deterministic simulated coverage.
+
 ## App integration
 
 All renderer methods run on the main actor. Use the App's existing ARSession
@@ -14,7 +19,7 @@ session. Enable `.sceneDepth` in the App's `ARWorldTrackingConfiguration`.
 ```swift
 import LiveSplat
 
-let renderer = LiveSplatRenderer() // automatic currently selects LiDAR preview
+let renderer = DefaultLiveSplatRenderer() // automatic currently selects LiDAR preview
 renderer.start(session: session)
 
 // Forward each frame on the main actor. Pass the actual overlay viewport and
