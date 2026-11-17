@@ -58,7 +58,7 @@ They have no microphone, camera or network dependency.
 | Router     | `RouterDebugScreen()`                          | `Modules/Router/Sources/Router/Fakes.swift`                 |
 | Perception | `PerceptionDebugScreen(directory: fixtureURL)` | `Modules/Perception/Sources/Perception/FixtureReplay.swift` |
 | ARAnswer   | `ARAnswerDebugScreen()`                        | `Modules/ARAnswer/Sources/ARAnswer/OverlaySink.swift`       |
-| App        | `CameraHost()` in the app                      | `App/DebugMenu.swift`                                       |
+| App        | `CameraHost(registry:)` in the app             | `App/DebugMenu.swift`                                       |
 
 Voice displays the script's volatile replacements followed by its committed final
 question. Router runs the rule planner on editable text; `FakePlanner` supplies
@@ -107,7 +107,7 @@ For a complete offline camera path:
 LiveSplat's off/fake/real renderers, and Globe's fake/real sources. App support tests
 exercise configuration, provider resolution, coverage and local capture status.
 
-Home links to Scan, Captures and Globe. Captures lists finalized local bundles and
+Home links to Scan, Captures, Globe and Settings. Captures lists finalized local bundles and
 status from `Application Support/Uploads/<local-bundle-id>/upload.json`; upload state
 stays outside immutable capture bundles. An uploaded capture with a known site opens
 that site's Globe route. Map pins and camera pins share ARAnswer's entity card.
@@ -118,7 +118,17 @@ Host configuration is read from `hex.api.baseURL`, `hex.api.writeToken` and
 `HEX_API_BASE_URL`, `HEX_API_WRITE_TOKEN`, `HEX_WEB_BASE_URL`. Supply credentials
 at runtime; never commit a token. API URLs may be an origin, `/api`, or `/api/v1`.
 With URL and token, release defaults use Cloud; otherwise deep answering is offline.
-LiveSplat defaults to its LiDAR preview. Globe defaults to the real source with an
+LiveSplat training defaults on. Home → Settings has the Live splat row; the scan
+screen has an icon-only toggle. Both use `LiveSplatPreference.shared`, also injected
+into the real renderer. Off switches immediately to the LiDAR point preview without
+resetting the scan; on requests training again (device fallback still applies).
+The hidden menu selects the provider first: **off** removes the renderer and **fake**
+uses simulated training independent of the user preference. Only **real** follows
+the user toggle. Applying providers keeps the same real camera renderer; standalone
+probes have separate renderers so they cannot reset an active scan.
+App support tests cover the default, live mode changes, override precedence and
+shared preference identity. On a phone, verify the Settings row and scan icon stay
+in sync across navigation and relaunch, and repeat with off/fake debug overrides. Globe defaults to the real source with an
 API URL, otherwise to the explicitly labelled Simulated fixture. Saved debug provider
 choices are ignored outside DEBUG or an explicitly enabled TestFlight menu.
 

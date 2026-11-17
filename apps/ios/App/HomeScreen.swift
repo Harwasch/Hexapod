@@ -1,5 +1,6 @@
 import Foundation
 import Globe
+import LiveSplat
 import SwiftUI
 
 @MainActor struct HomeScreen: View {
@@ -7,12 +8,16 @@ import SwiftUI
   var body: some View {
     NavigationStack {
       List {
-        NavigationLink("Scan", systemImage: "viewfinder") { CameraHost() }
+        NavigationLink("Scan", systemImage: "viewfinder") { CameraHost(registry: registry) }
         NavigationLink("Captures", systemImage: "square.stack") {
           CapturesScreen(registry: registry)
         }
         NavigationLink("Globe", systemImage: "globe.americas") {
           PropertyScreen(registry: registry)
+        }
+        NavigationLink("Settings", systemImage: "gearshape") {
+          Form { LiveSplatSettingsRow(preference: registry.liveSplatPreference) }
+            .navigationTitle("Settings")
         }
       }.navigationTitle("Hex")
     }

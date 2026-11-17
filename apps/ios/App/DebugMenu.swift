@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 import Voice
 
 @MainActor struct CameraHost: View {
-  @State private var registry = PieceRegistry()
+  let registry: PieceRegistry
   @State private var model: CameraModel?
   @State private var error = ""
   @State private var revision = UUID()

@@ -94,6 +94,7 @@ enum ProviderError: Error, CustomStringConvertible {
   let globeSources = PieceProviders<any GlobeDataSource>()
   let configuration: ServiceConfiguration
   let defaults: UserDefaults
+  let liveSplatPreference: LiveSplatPreference
   static let options: [(key: String, title: String, choices: [String])] = [
     ("capture", "Capture source", ["live", "yard-small", "yard-limited"]),
     ("voice", "Voice", ["real", "fake"]),
@@ -104,7 +105,11 @@ enum ProviderError: Error, CustomStringConvertible {
     ("globe", "Globe data", ["fake", "real"]),
     ("overlay", "Answer overlay", ["real", "fake"]),
   ]
-  init(defaults: UserDefaults = .standard, configuration: ServiceConfiguration? = nil) {
+  init(
+    defaults: UserDefaults = .standard, configuration: ServiceConfiguration? = nil,
+    liveSplatPreference: LiveSplatPreference = .shared
+  ) {
+    self.liveSplatPreference = liveSplatPreference
     self.defaults = defaults
     let config = configuration ?? ServiceConfiguration(defaults: defaults)
     self.configuration = config
@@ -145,11 +150,21 @@ enum ProviderError: Error, CustomStringConvertible {
       }
       return CloudAnswerer(baseURL: base, writeToken: config.writeToken)
     }
+    // Developer off/fake selects the provider first. Only real follows the user setting.
+    // Keep one real camera renderer across provider reapplication; probes stay isolated.
+    let realSplat = DefaultLiveSplatRenderer(preference: liveSplatPreference)
     splatRenderers.register("off") { nil }
-    splatRenderers.register("fake") { FakeLiveSplat() }
-    splatRenderers.register("real") { DefaultLiveSplatRenderer() }
-    liveSplat.register("real") { SplatProbe(renderer: DefaultLiveSplatRenderer()) }
-    liveSplat.register("fake") { SplatProbe(renderer: FakeLiveSplat()) }
+    splatRenderers.register("fake") {
+      FakeLiveSplat(preference: LiveSplatPreference(store: DebugSplatPreferenceStore()))
+    }
+    splatRenderers.register("real") { realSplat }
+    liveSplat.register("real") {
+      SplatProbe(renderer: DefaultLiveSplatRenderer(preference: liveSplatPreference))
+    }
+    liveSplat.register("fake") {
+      SplatProbe(
+        renderer: FakeLiveSplat(preference: LiveSplatPreference(store: DebugSplatPreferenceStore())))
+    }
     globeSources.register("fake") { FakeGlobeDataSource() }
     globeSources.register("real") {
       guard let root = config.apiRoot else { throw ProviderError.unavailable("API URL") }
@@ -252,4 +267,11 @@ struct ServiceConfiguration: Sendable {
     let sites = try await source.sites()
     return "\(simulated ? "Simulated · " : "")\(sites.count)"
   }
+}
+
+/// Simulated training is a developer override, independent of the persisted user setting.
+@MainActor private final class DebugSplatPreferenceStore: LiveSplatPreferenceStore {
+  private var enabled = true
+  func bool(forKey key: String) -> Bool? { enabled }
+  func set(_ value: Bool, forKey key: String) { enabled = value }
 }

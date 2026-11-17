@@ -12,7 +12,11 @@ resolves VoiceInput, Planning, PerceptionServing, DeepAnswering and the capture
 source independently. Cloud supplies both the recorded fake and the real deep provider.
 Release uses Cloud when an API URL and token are configured, otherwise offline.
 LiveSplat receives shared-session frames and exports before the manifest is finalized.
-Its default remains the LiDAR preview. Home and Captures expose the Globe. Ask requests
+Training defaults on; the scan icon and Home → Settings row share the real renderer's
+persisted preference. Off shows the LiDAR point preview immediately. Hidden debug
+off/fake provider overrides take precedence; the user setting applies within real.
+Home owns the camera registry and reuses its real renderer; debug probes stay separate.
+Home and Captures expose the Globe. Ask requests
 preserve the shared scope/siteId contract; the camera currently asks in scan scope.
 See [TESTING.md](../TESTING.md) for isolated screens and phone provider selection.
 

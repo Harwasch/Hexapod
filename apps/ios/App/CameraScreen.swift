@@ -23,7 +23,12 @@ import SwiftUI
           EntityCard(entity: entity) { model.card = nil }
             .padding(.horizontal)
         }
-        HStack(spacing: 48) {
+        HStack(spacing: 32) {
+          if let renderer = model.liveSplat as? DefaultLiveSplatRenderer {
+            LiveSplatToggle(preference: renderer.preference)
+              .font(.system(size: 22)).frame(width: 44, height: 44)
+              .background(Color.black.opacity(0.5), in: Circle())
+          }
           Button(action: model.toggleRecording) {
             Image(systemName: model.recording ? "stop.circle.fill" : "record.circle")
               .foregroundStyle(.red).font(.system(size: 64))
