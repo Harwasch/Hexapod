@@ -89,6 +89,24 @@ and manifest guards. Use the real renderer for geometry/export-content tests.
 `FakeFrameSource(events:)` replays an explicit event list;
 `try FakeFrameSource.plane()` supplies a small stationary plane without files.
 
+## Training preference and controls
+
+Training defaults on. Linux preference tests use an injected in-memory
+`LiveSplatPreferenceStore` and an isolated UserDefaults suite; no standard user
+preferences are changed. They verify the absent-key default, false/true persistence,
+start/restart behaviour, immediate mode changes without clearing the scan,
+reason-preserving support/budget fallback without preference writes, and
+`FakeLiveSplat` live changes. Public names are `.training` and `.pointPreview`;
+`.fallback(reason)` still indicates automatic point-preview fallback.
+
+On an Apple host, share one `LiveSplatPreference` between the renderer,
+`LiveSplatToggle` (icon only, accessibility label/value) and
+`LiveSplatSettingsRow` ("Live splat", no captions). Check that both controls stay in
+sync, off shows points, on resumes training on supported hardware, and restarting
+the renderer or app preserves the choice. Confirm fallback on unsupported hardware
+and budget overrun, including off/on after fallback without resetting the ARSession.
+Linux does not compile these SwiftUI/Metal branches.
+
 ## Debug screen
 
 In Xcode, open `LiveSplatDebugView.swift` and resume its Canvas preview. Press

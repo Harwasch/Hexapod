@@ -22,6 +22,7 @@
     private var driver: MetalSplatDriver?
     private var link: CADisplayLink?
     private var proxy: DisplayProxy?
+    private var pipelineFailure: String?
     public init(renderer: DefaultLiveSplatRenderer) {
       self.renderer = renderer
       points = PointOverlay(renderer: renderer)
@@ -30,26 +31,38 @@
       backgroundColor = .clear
       isOpaque = false
       addSubview(points)
-      // Automatic remains a capability-safe preview until a device acceptance run.
-      if renderer.configuration.mode == .experimentalGaussian,
-        let device = MTLCreateSystemDefaultDevice(), device.supportsFamily(.apple7)
-      {
-        do {
-          let view = MTKView(frame: .zero, device: device)
-          let driver = try MetalSplatDriver(renderer: renderer, device: device)
-          view.delegate = driver
-          view.framebufferOnly = false
-          view.colorPixelFormat = .bgra8Unorm
-          view.isOpaque = false
-          view.backgroundColor = .clear
-          view.clearColor = MTLClearColorMake(0, 0, 0, 0)
-          view.preferredFramesPerSecond = 30
-          // Bounded preview resolution, independently of a full-resolution capture.
-          view.autoResizeDrawable = false
-          addSubview(view)
-          metalView = view
-          self.driver = driver
-        } catch { renderer.fallback("Metal pipeline unavailable: \(error)") }
+    }
+    private func prepareTraining() {
+      guard driver == nil else { return }
+      if let pipelineFailure {
+        renderer.fallback(pipelineFailure)
+        return
+      }
+      guard let device = MTLCreateSystemDefaultDevice(), device.supportsFamily(.apple7) else {
+        pipelineFailure = "Metal device unsupported"
+        renderer.fallback("Metal device unsupported")
+        return
+      }
+      do {
+        let view = MTKView(frame: .zero, device: device)
+        let driver = try MetalSplatDriver(renderer: renderer, device: device)
+        view.delegate = driver
+        view.framebufferOnly = false
+        view.colorPixelFormat = .bgra8Unorm
+        view.isOpaque = false
+        view.backgroundColor = .clear
+        view.clearColor = MTLClearColorMake(0, 0, 0, 0)
+        view.preferredFramesPerSecond = 30
+        // Bounded preview resolution, independently of a full-resolution capture.
+        view.autoResizeDrawable = false
+        addSubview(view)
+        metalView = view
+        self.driver = driver
+        setNeedsLayout()
+      } catch {
+        let reason = "Metal pipeline unavailable: \(error)"
+        pipelineFailure = reason
+        renderer.fallback(reason)
       }
     }
     required init?(coder: NSCoder) { nil }
@@ -80,8 +93,8 @@
       }
     }
     fileprivate func refresh() {
-      if driver != nil, renderer.status == .lidarPreview { renderer.activateGaussian() }
-      let gaussian = renderer.status == .experimentalGaussian
+      if renderer.status == .training { prepareTraining() }
+      let gaussian = renderer.status == .training
       metalView?.isHidden = !gaussian || renderer.latestFrame == nil
       points.isHidden = gaussian || renderer.status == .stopped
       points.setNeedsDisplay()
@@ -144,8 +157,8 @@
     }
   }
 
-  // DEVICE VALIDATION REQUIRED: this entire path is excluded by Linux. An explicit
-  // experimental setting is required; an unavailable pipeline or measured overrun
+  // DEVICE VALIDATION REQUIRED: this entire path is excluded by Linux.
+  // An unavailable pipeline or measured overrun
   // returns to the same host's LiDAR preview. At most one command buffer is in flight.
   @MainActor private final class MetalSplatDriver: NSObject, @preconcurrency MTKViewDelegate {
     let renderer: DefaultLiveSplatRenderer
@@ -236,7 +249,9 @@
     func draw(in view: MTKView) {
       if let command = pending {
         if command.status == .error {
-          renderer.fallback("Metal command failed")
+          if renderer.sessionGeneration == pendingSession, renderer.status != .stopped {
+            renderer.fallback("Metal command failed")
+          }
           pending = nil
           pendingSplats = nil
           return
@@ -255,8 +270,7 @@
         pendingSplats = nil
         pendingSnapshot = []
       }
-      guard renderer.status != .stopped, !renderer.budget.exceeded else { return }
-      if case .fallback = renderer.status { return }
+      guard renderer.status == .training, !renderer.budget.exceeded else { return }
       if ProcessInfo.processInfo.thermalState == .serious
         || ProcessInfo.processInfo.thermalState == .critical
         || ProcessInfo.processInfo.isLowPowerModeEnabled
