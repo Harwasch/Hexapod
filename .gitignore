@@ -86,3 +86,10 @@ data/tiles/sh-compare-place/
 apps/ios/**/.build/
 apps/ios/**/.swiftpm/
 apps/ios/Hex.xcodeproj/
+
+# Generated local globe bundle and task scratch
+apps/web/dist-globe/
+apps/ios/Modules/Globe/Sources/Globe/Resources/GlobeWeb/*
+!apps/ios/Modules/Globe/Sources/Globe/Resources/GlobeWeb/README.txt
+.tmp-test/
+.swift-scratch/
