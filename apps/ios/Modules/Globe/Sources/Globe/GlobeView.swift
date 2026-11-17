@@ -19,11 +19,19 @@
     @State private var preview: PreviewRoute?
     @State private var failed = false
     @State private var retry = 0
+    @State private var selectedScan: UUID?
+    @AppStorage("globeImplementation") private var implementation = GlobeImplementation.defaultValue
+      .rawValue
+    private let fixture: Bool
+    private let renderer: GlobeImplementation?
 
     public init(
       source: any GlobeDataSource, route: GlobeRoute? = nil, webBaseURL: URL? = nil,
-      onOpenScan: (@MainActor (GlobeRoute) -> Void)? = nil
+      onOpenScan: (@MainActor (GlobeRoute) -> Void)? = nil, fixture: Bool = false,
+      renderer: GlobeImplementation? = nil
     ) {
+      self.renderer = renderer
+      self.fixture = fixture
       self.source = source
       self.route = route
       self.webBaseURL = webBaseURL
@@ -35,7 +43,29 @@
         if failed {
           Button("Retry", systemImage: "arrow.clockwise") { retry += 1 }
         } else if let snapshot {
-          propertyMap(snapshot)
+          VStack(spacing: 0) {
+            if (renderer?.rawValue ?? implementation) == GlobeImplementation.appleMaps.rawValue {
+              AppleMapsGlobeView(
+                snapshot: snapshot, selectedScan: selectedScan ?? route?.scanID,
+                onPin: { selectedPin = $0 }, onScan: { selectedScan = $0 })
+            } else {
+              CesiumGlobeView(
+                snapshot: snapshot, scanID: selectedScan ?? route?.scanID, fixture: fixture,
+                onPin: { selectedPin = $0 }, onScan: { selectedScan = $0 })
+            }
+            if !snapshot.property.epochs.isEmpty {
+              Picker("Scan", selection: $selectedScan) {
+                Text("Choose scan").tag(nil as UUID?)
+                ForEach(snapshot.property.epochs) { scan in
+                  Text(scan.observedAt).tag(Optional(scan.captureId ?? scan.id))
+                }
+              }
+              if let selectedScan {
+                Button("Open scan") { openScan(selectedScan, siteID: snapshot.property.id) }
+                  .disabled(onOpenScan == nil && webBaseURL == nil)
+              }
+            }
+          }
         } else if route == nil {
           List(sites) { site in
             NavigationLink(site.name, value: GlobeRoute(siteID: site.id))
@@ -46,8 +76,22 @@
       }
       .navigationTitle(snapshot?.property.name ?? "Globe")
       .navigationDestination(for: GlobeRoute.self) { next in
-        GlobeView(source: source, route: next, webBaseURL: webBaseURL, onOpenScan: onOpenScan)
+        GlobeView(
+          source: source, route: next, webBaseURL: webBaseURL, onOpenScan: onOpenScan,
+          fixture: fixture, renderer: renderer)
       }
+      .toolbar {
+        #if DEBUG
+          Menu("Debug") {
+            Picker("Globe", selection: $implementation) {
+              ForEach(GlobeImplementation.allCases, id: \.rawValue) { choice in
+                Text(choice.rawValue).tag(choice.rawValue)
+              }
+            }
+          }
+        #endif
+      }
+      .task { _ = CesiumGlobeSession.shared }
       .task(id: LoadKey(route: route, retry: retry)) {
         failed = false
         snapshot = nil
@@ -84,7 +128,32 @@
       .sheet(item: $preview) { route in ScanPreview(url: route.url) }
     }
 
-    private func propertyMap(_ snapshot: GlobeSnapshot) -> some View {
+    private func openScan(_ scanID: UUID?, siteID: UUID) {
+      selectedPin = nil
+      if let onOpenScan {
+        onOpenScan(
+          snapshot?.captureRoute(for: scanID) ?? GlobeRoute(siteID: siteID, scanID: scanID))
+      } else if let webBaseURL {
+        preview = PreviewRoute(url: globeScanPreviewURL(webBaseURL: webBaseURL, siteID: siteID))
+      }
+    }
+    private struct LoadKey: Hashable {
+      let route: GlobeRoute?
+      let retry: Int
+    }
+    private struct PreviewRoute: Identifiable {
+      let url: URL
+      var id: URL { url }
+    }
+  }
+
+  @MainActor
+  public struct AppleMapsGlobeView: GlobeRenderer {
+    public let snapshot: GlobeSnapshot
+    let selectedScan: UUID?
+    let onPin: (GlobePin) -> Void
+    let onScan: (UUID) -> Void
+    public var body: some View {
       Map {
         ForEach(Array(snapshot.property.boundary.polygons.enumerated()), id: \.offset) { _, rings in
           MapPolygon(polygon(rings)).foregroundStyle(.green.opacity(0.12)).stroke(
@@ -93,19 +162,20 @@
         ForEach(snapshot.property.epochs) { scan in
           ForEach(Array(scan.footprint.polygons.enumerated()), id: \.offset) { _, rings in
             MapPolygon(polygon(rings)).foregroundStyle(.cyan.opacity(0.16)).stroke(
-              .cyan, lineWidth: route?.scanID != nil && scan.captureId == route?.scanID ? 3 : 1)
+              .cyan,
+              lineWidth: selectedScan != nil && (scan.captureId ?? scan.id) == selectedScan ? 3 : 1)
           }
           if let point = scan.footprint.polygons.first?.first?.first, point.count >= 2 {
             Annotation(
               "Scan", coordinate: CLLocationCoordinate2D(latitude: point[1], longitude: point[0])
             ) {
               Button {
-                openScan(scan.captureId, siteID: snapshot.property.id)
+                onScan(scan.captureId ?? scan.id)
               } label: {
                 Image(systemName: "viewfinder").padding(10).background(
                   .regularMaterial, in: Circle())
               }.accessibilityLabel("Scan \(scan.observedAt)")
-                .disabled(onOpenScan == nil && webBaseURL == nil)
+
             }.annotationTitles(.hidden)
           }
         }
@@ -116,7 +186,7 @@
               coordinate: CLLocationCoordinate2D(latitude: geo.lat, longitude: geo.lon)
             ) {
               Button {
-                selectedPin = pin
+                onPin(pin)
               } label: {
                 Image(systemName: "mappin.circle.fill").font(.title).foregroundStyle(.orange)
               }.accessibilityLabel(pin.entity.label)
@@ -147,22 +217,6 @@
         interiorPolygons: rings.dropFirst().map(ring))
     }
 
-    private func openScan(_ scanID: UUID?, siteID: UUID) {
-      selectedPin = nil
-      if let onOpenScan {
-        onOpenScan(GlobeRoute(siteID: siteID, scanID: scanID))
-      } else if let webBaseURL {
-        preview = PreviewRoute(url: globeScanPreviewURL(webBaseURL: webBaseURL, siteID: siteID))
-      }
-    }
-    private struct LoadKey: Hashable {
-      let route: GlobeRoute?
-      let retry: Int
-    }
-    private struct PreviewRoute: Identifiable {
-      let url: URL
-      var id: URL { url }
-    }
   }
 
   private struct ScanPreview: UIViewControllerRepresentable {
@@ -179,7 +233,8 @@
     public var body: some View {
       NavigationStack {
         GlobeView(
-          source: FakeGlobeDataSource(), route: GlobeRoute(siteID: FakeGlobeDataSource.siteID))
+          source: FakeGlobeDataSource(), route: GlobeRoute(siteID: FakeGlobeDataSource.siteID),
+          fixture: true, renderer: .cesium)
       }
     }
   }

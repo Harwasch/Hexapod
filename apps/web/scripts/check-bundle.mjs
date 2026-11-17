@@ -55,6 +55,10 @@ export const CESIUM_FREE_PAGES = [
   "landing.html",
 ];
 export const GLOBE_PAGE = "index.html";
+export const EMBED_PAGE = "globe-embed.html";
+// Small bridge and shared providers; the separately budgeted engine dominates load.
+export const EMBED_ENTRY_GZIP_BUDGET = 40_000;
+export const EMBED_TOTAL_GZIP_BUDGET = 1_800_000;
 
 /**
  * Gzip bytes the globe page's entry script may weigh: 179.1 kB measured (Node's gzip, as
@@ -227,7 +231,7 @@ export function checkBundle(root, log = console) {
     return 2;
   }
   let status = 0;
-  for (const page of [GLOBE_PAGE, ...CESIUM_FREE_PAGES]) {
+  for (const page of [GLOBE_PAGE, EMBED_PAGE, ...CESIUM_FREE_PAGES]) {
     if (!existsSync(join(root, page))) {
       log.error(`check-bundle: ${page} is missing from ${root}`);
       status = 2;
@@ -242,6 +246,21 @@ export function checkBundle(root, log = console) {
     for (const path of missing) {
       log.error(`  ${page} names ${path}, which is not in the build`);
       status = 2;
+    }
+    if (page === EMBED_PAGE) {
+      const entries = entryScripts(readFileSync(join(root, page), "utf8"));
+      if (!entries.length || entries.some((entry) => !files.has(entry))) status = 2;
+      if (
+        js.gzip > EMBED_TOTAL_GZIP_BUDGET ||
+        entries.some(
+          (entry) =>
+            files.has(entry) && gzipSync(files.get(entry)).length > EMBED_ENTRY_GZIP_BUDGET,
+        )
+      ) {
+        log.error(`  ${page} exceeds embed entry/total gzip budget`);
+        if (status === 0) status = 1;
+      }
+      continue;
     }
     if (page === GLOBE_PAGE) {
       if (checkGlobePage(root, page, files, log) && status === 0) status = 1;

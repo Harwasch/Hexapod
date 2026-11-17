@@ -2073,6 +2073,15 @@ Integrations → App Store Connect API, with the **App Manager** role.
 | `ASC_KEY_P8`    | the full text of the downloaded `AuthKey_<id>.p8`  |
 | `APPLE_TEAM_ID` | the 10-character team id (Membership details page) |
 
+The iOS globe bundles local Cesium resources. With dependencies already present, run
+`heavy bash apps/ios/ci_scripts/build_globe.sh` before XcodeGen. Both iOS workflow jobs
+provision Node/pnpm, install the lockfile, and run this command before their Xcode build.
+Xcode Cloud's `ci_post_clone.sh` uses the same command and requires Node 22.12+, pnpm 10
+and the installed web dependencies in its environment. The generated approximately 11 MB
+resource tree is ignored in git; the source entry, schema and tiny splat fixture are tracked.
+See [Globe testing](../apps/ios/Modules/Globe/TESTING.md) for local commands and device gates.
+No deployment or workflow run is required to build these resources locally.
+
 ## What is unverified
 
 Undersold on purpose. Most of this list was written before production existed. The
