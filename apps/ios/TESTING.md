@@ -101,7 +101,7 @@ For a complete offline camera path:
    by replay; hold/release the microphone control to replay the scripted question.
 4. Reopen the menu to run each standalone screen, or probe the selected LiveSplat
    and Globe providers. Fake probes report **Simulated**. LiveSplat receives the camera's shared AR frames;
-   Globe uses the property endpoint and Cloud uses the authenticated Ask stream.
+   Globe uses the property endpoint and Cloud uses the authenticated Ask stream. The globe renders with the bundled Cesium page by default; the menu's "Globe renderer" picker switches to Apple Maps 3D, and "Cesium globe with fixture data" runs it with no API (build the bundle first: `bash apps/ios/ci_scripts/build_globe.sh`).
 
 `App/Support/PieceProviders.swift` registers Cloud's recorded fake and real client,
 LiveSplat's off/fake/real renderers, and Globe's fake/real sources. App support tests

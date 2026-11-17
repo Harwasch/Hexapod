@@ -1,5 +1,6 @@
 import ARAnswer
 import Foundation
+import Globe
 import Perception
 import Router
 import SwiftUI
@@ -80,6 +81,7 @@ import Voice
   let apply: () -> Void
   @State private var choices: [String: String] = [:]
   @State private var result = ""
+  @AppStorage("globeImplementation") private var globeImplementation = GlobeImplementation.defaultValue.rawValue
   @State private var importFixture = false
   var body: some View {
     NavigationStack {
@@ -102,6 +104,14 @@ import Voice
             "For replay, select yard-small or yard-limited above, then import that folder (bundle/ and ground_truth.json)."
           )
           Button("Apply camera providers", action: apply)
+        }
+        Section("Globe renderer") {
+          // Cesium (bundled web globe) is the default; Apple Maps 3D is the second
+          // implementation behind the same Globe protocol. GlobeView reads this key.
+          Picker("Renderer", selection: $globeImplementation) {
+            ForEach(GlobeImplementation.allCases, id: \.rawValue) { Text($0.rawValue).tag($0.rawValue) }
+          }
+          NavigationLink("Cesium globe with fixture data") { GlobeDebugView() }
         }
         Section("Run pieces alone") {
           NavigationLink("Voice") { VoiceDebugScreen() }
