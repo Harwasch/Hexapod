@@ -7,7 +7,8 @@ let package = Package(
   products: [.library(name: "Globe", targets: ["Globe"])],
   dependencies: [.package(path: "../EntitySchema")],
   targets: [
-    .target(name: "Globe", dependencies: ["EntitySchema"]),
-    .testTarget(name: "GlobeTests", dependencies: ["Globe"]),
+    .target(
+      name: "Globe", dependencies: ["EntitySchema"], resources: [.copy("Resources/GlobeWeb")]),
+    .testTarget(name: "GlobeTests", dependencies: ["Globe"], resources: [.copy("Fixtures")]),
   ]
 )

@@ -71,12 +71,28 @@ public struct GlobeScan: Codable, Identifiable, Sendable {
   public let id: UUID
   public let captureId: UUID?
   public let observedAt: String
+  public let currentAssetId: UUID?
   public let footprint: GlobeFootprint
-  public init(id: UUID, captureId: UUID?, observedAt: String, footprint: GlobeFootprint) {
+  public init(
+    id: UUID, captureId: UUID?, observedAt: String, footprint: GlobeFootprint,
+    currentAssetId: UUID? = nil
+  ) {
     self.id = id
+    self.currentAssetId = currentAssetId
     self.captureId = captureId
     self.observedAt = observedAt
     self.footprint = footprint
+  }
+}
+
+public struct GlobeAsset: Codable, Sendable {
+  public let id: UUID
+  public let epochId: UUID?
+  public let representation: String
+  public let source: Source
+  public struct Source: Codable, Sendable {
+    public let type: String
+    public let url: String?
   }
 }
 
@@ -84,12 +100,17 @@ public struct GlobeProperty: Codable, Identifiable, Sendable {
   public let id: UUID
   public let name: String
   public let boundary: GlobeFootprint
+  public let assets: [GlobeAsset]?
   public let epochs: [GlobeScan]
-  public init(id: UUID, name: String, boundary: GlobeFootprint, epochs: [GlobeScan]) {
+  public init(
+    id: UUID, name: String, boundary: GlobeFootprint, epochs: [GlobeScan],
+    assets: [GlobeAsset]? = nil
+  ) {
     self.id = id
     self.name = name
     self.boundary = boundary
     self.epochs = epochs
+    self.assets = assets
   }
 }
 
