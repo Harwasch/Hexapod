@@ -362,7 +362,7 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
   #expect(r.budget.optimizationSteps == 0)
   r.start()
   #expect(!r.budget.exceeded)
-  #expect(r.status == .lidarPreview)
+  #expect(r.status == .training)
 }
 
 @Test @MainActor func trackingLossClearsStaleOverlayAndKeyframes() throws {

@@ -1,6 +1,6 @@
 # LiveSplat
 
-Live LiDAR seeding, a point preview, an **experimental** Metal Gaussian preview
+Live LiDAR seeding, a point preview, a Metal Gaussian preview
 and bounded photometric updates. This package is isolated from the Ask contract,
 Capture, App and server. Linux validates the pure Swift numerical reference and
 state management. **Apple-framework code and Metal have not been compiled or run.**
@@ -19,7 +19,7 @@ session. Enable `.sceneDepth` in the App's `ARWorldTrackingConfiguration`.
 ```swift
 import LiveSplat
 
-let renderer = DefaultLiveSplatRenderer() // automatic currently selects LiDAR preview
+let renderer = DefaultLiveSplatRenderer() // training on by default
 renderer.start(session: session)
 
 // Forward each frame on the main actor. Pass the actual overlay viewport and
@@ -39,7 +39,7 @@ let ply = try renderer.exportPLY(to: captureBundleFolder)
 and invalidates outstanding GPU work. Stop/start after an AR world reset or
 relocalization into a different world basis. Tracking loss or missing depth hides
 the overlay and clears recent keyframes. The App must stop on session interruption
-and handle frame conversion errors. No UI text is introduced.
+and handle frame conversion errors. The scan toggle uses an icon and accessibility label.
 
 `LiveSplatView` is a SwiftUI wrapper around the public `LiveSplatOverlay` UIView.
 The transparent Metal view composites premultiplied output above RealityKit's
@@ -49,12 +49,39 @@ The host must remain mounted while a scan is active. The renderer is not an
 ObservableObject: poll `coverageFraction` and `status` from the App's frame handler
 if separate SwiftUI state needs updates.
 
-For device evaluation only, set `configuration.mode = .experimentalGaussian`
-before constructing the renderer. The host requires Metal family Apple7 or newer;
-unsupported devices, pipeline allocation/compilation errors, GPU errors, low power
-mode, serious/critical thermal state or a measured budget overrun use the point
-preview. `automatic` and `lidarPreview` deliberately remain point previews pending
-a device acceptance run. No capability claim is inferred from Linux tests.
+Training is **on by default** (Harrison's decision, 2026-11-16). Public modes are
+`LiveSplatMode.training` and `.pointPreview`; statuses are `.training`,
+`.pointPreview`, `.fallback(String)` and `.stopped`. `configuration.mode` defaults
+to `.training`; setting it to `.pointPreview` forces a preview-only renderer.
+
+`LiveSplatPreference.shared` persists `trainingEnabled` in UserDefaults under
+`hex.liveSplat.training`, defaulting to true when absent. The renderer reads it at
+start and reacts immediately to writes through the same preference instance,
+without resetting the scan or the App's ARSession. For isolated state, inject
+`LiveSplatPreference(store:)` using `LiveSplatPreferenceStore` or
+`UserDefaultsLiveSplatStore(defaults:)`. Direct writes to UserDefaults or separate
+preference instances are not live notifications; controls and renderers must share
+an instance and write through `trainingEnabled`.
+
+```swift
+let preference = LiveSplatPreference.shared
+let renderer = DefaultLiveSplatRenderer(preference: preference)
+// Scan screen: icon only, accessibility label/value.
+LiveSplatToggle(preference: preference)
+// Settings: a single short Toggle label, no caption.
+LiveSplatSettingsRow(preference: preference)
+// Also available without SwiftUI:
+preference.trainingEnabled = false // point preview; true requests training again
+```
+
+The host requires Metal family Apple7 or newer; unsupported devices, pipeline
+allocation/compilation errors, GPU errors, low power mode, serious/critical thermal
+state or a measured budget overrun use the point preview and report
+`.fallback(reason)`. Fallback never changes the stored preference. The first
+fallback reason latches until renderer restart; switching off shows `.pointPreview`
+and switching back on restores that reason. `FakeLiveSplat(preference:)` follows
+the same user preference, with simulated training status and no GPU work.
+No capability claim is inferred from Linux tests.
 
 ## Numerical and resource boundaries
 
@@ -123,16 +150,12 @@ change is needed or made here.
 Run offline, from the repository root:
 
 ```bash
-. ~/hw-tools/swift/env.sh
-mkdir -p .tmp-test
-export TMPDIR="$PWD/.tmp-test"
-heavy swift test --package-path apps/ios/Modules/LiveSplat \
-  --scratch-path ./.swift-scratch/LiveSplat --jobs 4 --no-parallel
+bash apps/ios/Modules/LiveSplat/test-piece.sh
 pnpm format:check
 rm -rf ./.swift-scratch ./.tmp-test
 ```
 
-Required before enabling automatic Gaussian mode:
+Apple/device acceptance still required (training now defaults on):
 
 1. Xcode 26 / Swift 6 strict-concurrency compile of the ARKit, UIKit, SwiftUI and
    MetalKit branches; verify packaged shader discovery and runtime Metal compile.
@@ -151,6 +174,5 @@ Required before enabling automatic Gaussian mode:
 6. A separate cloud acceptance test after the bundle/initialization protocol is
    extended. The existing upload path cannot consume this new payload yet.
 
-Open choices: when to enable automatic Gaussian mode after measurements; whether
-this isolated-patch optimizer gives sufficient quality or needs a full composite
+Open choices: whether this isolated-patch optimizer gives sufficient quality or needs a full composite
 loss; and ownership/timing of the optional bundle PLY handoff.

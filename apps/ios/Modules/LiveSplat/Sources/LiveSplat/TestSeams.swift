@@ -59,20 +59,28 @@ extension LiveSplatRenderer {
 
 /// Simulated coverage: each accepted timestamp adds a fixed number of cells.
 /// Does not seed geometry or run Metal; export is an empty, valid PLY for UI tests.
-@MainActor public final class FakeLiveSplat: LiveSplatRenderer {
+@MainActor public final class FakeLiveSplat: LiveSplatRenderer, LiveSplatPreferenceObserver {
   public private(set) var status: LiveSplatStatus = .stopped
   public private(set) var coverage = CoverageGrid()
   public var coverageFraction: Double { coverage.fraction }
   public let splats: [Gaussian] = []
+  public let preference: LiveSplatPreference
   private let cellsPerFrame: Int
   private var lastTimestamp: Double?
-  public init(cellsPerFrame: Int = 64) {
+  public init(cellsPerFrame: Int = 64, preference: LiveSplatPreference = .shared) {
+    self.preference = preference
     self.cellsPerFrame = min(768, max(1, cellsPerFrame))
+    preference.observe(self)
   }
   public func start() {
     coverage = CoverageGrid()
     lastTimestamp = nil
-    status = .lidarPreview
+    status = .training
+    preferenceChanged()
+  }
+  func preferenceChanged() {
+    guard status != .stopped else { return }
+    status = preference.trainingEnabled ? .training : .pointPreview
   }
   public func stop() { status = .stopped }
   public func ingest(_ frame: SplatFrame) {

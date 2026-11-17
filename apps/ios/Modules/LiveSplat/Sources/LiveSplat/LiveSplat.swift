@@ -1,13 +1,13 @@
 import Foundation
 
-public enum LiveSplatMode: Sendable { case automatic, lidarPreview, experimentalGaussian }
+public enum LiveSplatMode: Sendable { case training, pointPreview }
 public enum LiveSplatStatus: Sendable, Equatable {
-  case stopped, lidarPreview, experimentalGaussian
+  case stopped, pointPreview, training
   case fallback(String)
 }
 
 public struct LiveSplatConfiguration: Sendable {
-  public var mode: LiveSplatMode = .automatic
+  public var mode: LiveSplatMode = .training
   public var maxSplats: Int = 8_192
   public var maxSeedsPerFrame: Int = 128
   public var maxAgeFrames: Int = 600
@@ -131,7 +131,10 @@ public struct SplatBudget: Sendable {
 
 /// Main actor owns the state. Feed frames from the existing ARSession delegate;
 /// this module never replaces that delegate or runs/resets the shared session.
-@MainActor public final class DefaultLiveSplatRenderer: LiveSplatRenderer {
+@MainActor
+public final class DefaultLiveSplatRenderer: LiveSplatRenderer, LiveSplatPreferenceObserver {
+  public let preference: LiveSplatPreference
+  private var fallbackReason: String?
   public let configuration: LiveSplatConfiguration
   public private(set) var status: LiveSplatStatus = .stopped
   public private(set) var splats: [Gaussian] = []
@@ -154,9 +157,13 @@ public struct SplatBudget: Sendable {
   }
   private var lastSeen: [Int] = []
   private var sequence = 0
-  public init(configuration: LiveSplatConfiguration = .init()) {
+  public init(
+    configuration: LiveSplatConfiguration = .init(), preference: LiveSplatPreference = .shared
+  ) {
+    self.preference = preference
     self.configuration = configuration.bounded
     budget = SplatBudget(milliseconds: configuration.bounded.gpuBudgetMilliseconds)
+    preference.observe(self)
   }
   /// Starts a fresh local AR world. Call stop/start after tracking resets/relocalization.
   public func start() {
@@ -171,7 +178,9 @@ public struct SplatBudget: Sendable {
     sequence = 0
     coverage = CoverageGrid()
     budget = SplatBudget(milliseconds: configuration.gpuBudgetMilliseconds)
-    status = .lidarPreview
+    fallbackReason = nil
+    status = .training
+    preferenceChanged()
   }
   public func stop() {
     status = .stopped
@@ -228,17 +237,31 @@ public struct SplatBudget: Sendable {
       if recentKeyframes.count > 3 { recentKeyframes.removeFirst() }
     }
   }
-  func activateGaussian() { if status != .stopped { status = .experimentalGaussian } }
-  func fallback(_ reason: String) { if status != .stopped { status = .fallback(reason) } }
+  func preferenceChanged() {
+    guard status != .stopped else { return }
+    if !preference.trainingEnabled || configuration.mode == .pointPreview {
+      status = .pointPreview
+    } else if let fallbackReason {
+      status = .fallback(fallbackReason)
+    } else {
+      status = .training
+    }
+  }
+  func activateGaussian() { preferenceChanged() }
+  func fallback(_ reason: String) {
+    guard status != .stopped else { return }
+    fallbackReason = fallbackReason ?? reason
+    preferenceChanged()
+  }
   func acceptGPU(_ updated: [Gaussian], ids: [UInt64], seconds: Double, session: UInt64) {
-    guard session == sessionGeneration, status == .experimentalGaussian else { return }
+    guard session == sessionGeneration, status != .stopped else { return }
     // Record even when the camera advanced: stale view snapshots still consumed GPU time.
     budget.record(seconds: seconds)
     if budget.exceeded {
       fallback("GPU budget exceeded")
       return
     }
-    guard ids.count == updated.count else { return }
+    guard status == .training, ids.count == updated.count else { return }
     let indices = Dictionary(
       uniqueKeysWithValues: splatIDs.enumerated().map { ($0.element, $0.offset) })
     for (i, id) in ids.enumerated() {
