@@ -76,6 +76,8 @@ XHR, Cesium workers/WASM, local imagery, SPZ decoding, WebGL2 and depth composit
 IIFE avoids file-origin ES-module loading but cannot prove those runtime behaviors.
 Check camera framing, footprint holes, pin/card/scan navigation, touch/VoiceOver and the
 Apple Maps debug choice. Confirm exact-epoch asset selection and remote R2 CORS in live mode.
+The WebKit round-trip test (`WebKitBridgeTests`) is disabled in package tests, which have no
+host app for WebKit's content process; it needs an app-hosted test target or this device check.
 
 Measure app launch → JS `ready`, tab activation → first rendered frame (warm target <0.5 s),
 peak resident/GPU memory, battery/thermal load, background/foreground, memory warnings and
