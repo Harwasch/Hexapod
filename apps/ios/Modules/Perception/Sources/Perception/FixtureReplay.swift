@@ -56,39 +56,57 @@ public struct FixtureReplay: Sendable {
     let confidence = [UInt8](try Data(contentsOf: folder.appendingPathComponent(ref.confidence)))
     guard bytes.count == ref.width * ref.height * 2, confidence.count == ref.width * ref.height
     else { throw PerceptionError.invalidGeometry }
-    let values = (0..<confidence.count).map { i in
-      confidence[i] == 0
-        ? Float.infinity
-        : Float(Float16(bitPattern: UInt16(bytes[i * 2]) | UInt16(bytes[i * 2 + 1]) << 8))
+    // Spelled out step by step: the iOS SDK's type checker times out on the one-expression form.
+    var values = [Float](repeating: .infinity, count: confidence.count)
+    for i in 0..<confidence.count where confidence[i] != 0 {
+      let low = UInt16(bytes[i * 2])
+      let high = UInt16(bytes[i * 2 + 1]) << 8
+      values[i] = Float(Float16(bitPattern: low | high))
     }
     let sx = Double(ref.width) / Double(frame.imageWidth)
     let sy = Double(ref.height) / Double(frame.imageHeight)
+    let fx: Double = frame.intrinsics[0] * sx
+    let fy: Double = frame.intrinsics[4] * sy
+    // The fixtures use integer pixel centres; MaskLifter uses normalized texel centres.
+    let cx: Double = frame.intrinsics[2] * sx + 0.5
+    let cy: Double = frame.intrinsics[5] * sy + 0.5
+    var transform: [Double] = []
+    transform.reserveCapacity(16)
+    for col in 0..<4 {
+      for row in 0..<4 { transform.append(frame.transform[row * 4 + col]) }
+    }
     let camera = CameraGeometry(
-      fx: frame.intrinsics[0] * sx, fy: frame.intrinsics[4] * sy,
-      // The fixtures use integer pixel centres; MaskLifter uses normalized texel centres.
-      cx: frame.intrinsics[2] * sx + 0.5, cy: frame.intrinsics[5] * sy + 0.5,
-      imageWidth: ref.width, imageHeight: ref.height,
-      transform: (0..<4).flatMap { col in (0..<4).map { frame.transform[$0 * 4 + col] } })
+      fx: fx, fy: fy, cx: cx, cy: cy,
+      imageWidth: ref.width, imageHeight: ref.height, transform: transform)
     var rgba = [UInt8](repeating: 0, count: values.count * 4)
     for i in values.indices {
-      let point = camera.worldPoint(
-        pixel: .init(
-          x: (Double(i % ref.width) + 0.5) / Double(ref.width),
-          y: (Double(i / ref.width) + 0.5) / Double(ref.height)), depth: Double(values[i]))
-      let object = point.flatMap { p in
-        truth.objects.first { object in
-          // Float16 depth at < 10m has <= 4mm rounding; 1cm covers that in world axes.
-          zip([p.x, p.y, p.z], zip(object.centre, object.extents)).allSatisfy {
-            abs($0.0 - $0.1.0) <= $0.1.1 / 2 + 0.01
-          }
+      let u: Double = (Double(i % ref.width) + 0.5) / Double(ref.width)
+      let v: Double = (Double(i / ref.width) + 0.5) / Double(ref.height)
+      let point = camera.worldPoint(pixel: .init(x: u, y: v), depth: Double(values[i]))
+      var label = "sky"
+      if let p = point {
+        let coordinates: [Double] = [p.x, p.y, p.z]
+        for object in truth.objects where Self.contains(object, coordinates) {
+          label = object.label
+          break
         }
       }
-      let colour = FakeSegmenter.palette[object?.label ?? "sky"] ?? [130, 180, 225]
+      let colour: [UInt8] = FakeSegmenter.palette[label] ?? [130, 180, 225]
       rgba.replaceSubrange(i * 4..<i * 4 + 4, with: colour + [255])
     }
     return FrameSnapshot(
       image: .init(width: ref.width, height: ref.height, rgba: rgba),
       depth: .init(width: ref.width, height: ref.height, metres: values), camera: camera)
+  }
+
+  /// Whether a world point lies inside an object's ground-truth box. Float16 depth at < 10 m
+  /// rounds by <= 4 mm; 1 cm of slack covers that in world axes.
+  static func contains(_ object: FixtureTruth.Object, _ point: [Double]) -> Bool {
+    for axis in 0..<3 {
+      let half: Double = object.extents[axis] / 2 + 0.01
+      if abs(point[axis] - object.centre[axis]) > half { return false }
+    }
+    return true
   }
 }
 
