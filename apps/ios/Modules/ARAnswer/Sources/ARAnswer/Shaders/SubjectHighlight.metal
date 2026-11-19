@@ -1,7 +1,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// Runtime-compiled by the RealityKit post-process adapter. GPU appearance and texture
+// Compiled into this package's default Metal library. GPU appearance and texture
 // coordinates require an iPhone acceptance run; there is no Linux rendering substitute.
 kernel void subjectHighlight(texture2d<float, access::read> source [[texture(0)]],
                              texture2d<float, access::write> target [[texture(1)]],
