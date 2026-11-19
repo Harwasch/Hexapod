@@ -2,6 +2,8 @@
   @preconcurrency import Vision
   @preconcurrency import CoreML
   import CoreImage
+  import CoreGraphics
+  import CoreVideo
   import Foundation
 
   private func pixelBuffer(_ image: CameraImage) throws -> CVPixelBuffer {

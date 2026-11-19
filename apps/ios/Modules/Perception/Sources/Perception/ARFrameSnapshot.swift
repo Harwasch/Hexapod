@@ -14,6 +14,8 @@ public struct FrameSnapshot: Sendable {
 #if canImport(ARKit) && canImport(CoreImage)
   @preconcurrency import ARKit
   import CoreImage
+  import CoreGraphics
+  import CoreVideo
   import Foundation
 
   extension FrameSnapshot {
