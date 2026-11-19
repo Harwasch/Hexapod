@@ -3,6 +3,26 @@ import Testing
 
 @testable import LiveSplat
 
+#if canImport(Combine)
+  import Combine
+
+  @Test @MainActor func preferencePublishesThroughObservableObjectBeforeChanging() {
+    func publisher<Object: ObservableObject>(_ object: Object) -> Object.ObjectWillChangePublisher {
+      object.objectWillChange
+    }
+    let preference = LiveSplatPreference(store: MemoryPreferenceStore())
+    var previousValues: [Bool] = []
+    let subscription = publisher(preference).sink {
+      previousValues.append(preference.trainingEnabled)
+    }
+    preference.trainingEnabled = false
+    preference.trainingEnabled = false
+    preference.trainingEnabled = true
+    #expect(previousValues == [true, false])
+    withExtendedLifetime(subscription) {}
+  }
+#endif
+
 @MainActor private final class MemoryPreferenceStore: LiveSplatPreferenceStore {
   var values: [String: Bool] = [:]
   func bool(forKey key: String) -> Bool? { values[key] }

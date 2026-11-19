@@ -58,5 +58,6 @@ import Foundation
 }
 
 #if canImport(Combine)
-  extension LiveSplatPreference: ObservableObject {}
+  // SwiftUI reads this publisher on the main actor; Combine's requirement predates isolation.
+  extension LiveSplatPreference: @preconcurrency ObservableObject {}
 #endif

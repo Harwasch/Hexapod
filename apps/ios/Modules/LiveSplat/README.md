@@ -158,7 +158,7 @@ rm -rf ./.swift-scratch ./.tmp-test
 Apple/device acceptance still required (training now defaults on):
 
 1. Xcode 26 / Swift 6 strict-concurrency compile of the ARKit, UIKit, SwiftUI and
-   MetalKit branches; verify packaged shader discovery and runtime Metal compile.
+   MetalKit branches; verify the package's compiled Metal library and pipeline creation.
 2. GPU/CPU projection, covariance, all 14 derivatives, tile overflow/depth ties and
    alpha-compositing readback comparisons on the same fixtures. Record float32
    errors before selecting device tolerances; none have been inferred here.
