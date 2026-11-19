@@ -2059,6 +2059,20 @@ Honestly, and not quietly left on the list:
   credential than the two lines of copying it would save.
 - **Reading the verify job.** Nothing else in this project has ever spoken to a provider.
 
+### iPhone app — TestFlight (optional)
+
+`.github/workflows/ios.yml` is dispatch-only. Its build job needs no secrets. Its `testflight`
+job archives, signs and uploads the app to TestFlight, and skips with a message unless all four of these
+repository secrets exist. Make the key in App Store Connect → Users and Access →
+Integrations → App Store Connect API, with the **App Manager** role.
+
+| Secret          | Value                                              |
+| --------------- | -------------------------------------------------- |
+| `ASC_KEY_ID`    | the key's id                                       |
+| `ASC_ISSUER_ID` | the issuer id shown above the key list             |
+| `ASC_KEY_P8`    | the full text of the downloaded `AuthKey_<id>.p8`  |
+| `APPLE_TEAM_ID` | the 10-character team id (Membership details page) |
+
 ## What is unverified
 
 Undersold on purpose. Most of this list was written before production existed. The
