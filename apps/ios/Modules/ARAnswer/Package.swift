@@ -13,7 +13,7 @@ let package = Package(
   ],
   targets: [
     .target(
-      name: "ARAnswer", dependencies: ["EntitySchema", "Router"], resources: [.copy("Shaders")]),
+      name: "ARAnswer", dependencies: ["EntitySchema", "Router"], resources: [.process("Shaders")]),
     .testTarget(
       name: "ARAnswerTests", dependencies: ["ARAnswer", "Voice", "Router", "Perception"]),
   ]

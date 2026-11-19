@@ -20,7 +20,7 @@
       speech.usesApplicationAudioSession = false
       processor = try HighlightProcessor()
       let processor = processor
-      view.renderCallbacks.postProcess = { context in processor.render(context) }
+      view.renderCallbacks.postProcess = { @Sendable context in processor.render(context) }
     }
     public func update(entities: [EntitySchema.Entity]) {
       guard let view else { return }
@@ -82,12 +82,8 @@
     private let pipeline: MTLComputePipelineState
     init() throws {
       guard let device = MTLCreateSystemDefaultDevice(),
-        let url = Bundle.module.url(
-          forResource: "SubjectHighlight", withExtension: "metal", subdirectory: "Shaders"),
-        let function = try device.makeLibrary(
-          source: String(contentsOf: url, encoding: .utf8), options: nil
-        )
-        .makeFunction(name: "subjectHighlight")
+        let function = try device.makeDefaultLibrary(bundle: .module)
+          .makeFunction(name: "subjectHighlight")
       else { throw CocoaError(.fileReadUnknown) }
       pipeline = try device.makeComputePipelineState(function: function)
     }
