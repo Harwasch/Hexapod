@@ -182,7 +182,7 @@
         layout.point: MLFeatureValue(multiArray: point),
         layout.box: MLFeatureValue(multiArray: box),
       ])
-      let output = try model.prediction(from: input)
+      let output = try await model.prediction(from: input)
       guard let mask = output.featureValue(for: layout.mask)?.multiArrayValue,
         mask.shape.count == 2 || (mask.shape.count == 4 && mask.shape[0] == 1 && mask.shape[1] == 1)
       else { throw PerceptionError.unsupportedModel }
