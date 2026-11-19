@@ -1,5 +1,6 @@
 #if canImport(SwiftUI) && canImport(WebKit) && canImport(UIKit)
   import SwiftUI
+  import UIKit
   import WebKit
 
   /// Both renderers consume the same native snapshot and return native IDs.
@@ -71,7 +72,7 @@
       // JSON is passed as an argument, never interpolated into executable JavaScript.
       webView.callAsyncJavaScript(
         "window.globeBridge.receive(JSON.parse(payload))",
-        arguments: ["payload": json], in: nil, contentWorld: .page
+        arguments: ["payload": json], in: nil, in: .page
       ) { [weak self] result in
         if case .failure = result { self?.error = "Globe communication failed" }
       }
@@ -109,7 +110,7 @@
     }
     public func webView(
       _ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
-      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+      decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
     ) {
       decisionHandler(navigationAction.request.url?.isFileURL == true ? .allow : .cancel)
     }

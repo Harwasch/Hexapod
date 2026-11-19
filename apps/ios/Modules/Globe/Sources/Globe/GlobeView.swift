@@ -4,6 +4,7 @@
   import MapKit
   import EntitySchema
   import SafariServices
+  import UIKit
 
   /// Apple UI is unverified on Linux: compile and exercise on iOS 26 before shipping.
   /// Embed in App A's NavigationStack; nil route provides the Home property picker.
