@@ -8,16 +8,24 @@ import SwiftUI
   var body: some View {
     NavigationStack {
       List {
-        NavigationLink("Scan", systemImage: "viewfinder") { CameraHost(registry: registry) }
-        NavigationLink("Captures", systemImage: "square.stack") {
+        NavigationLink { CameraHost(registry: registry) } label: {
+          Label("Scan", systemImage: "viewfinder")
+        }
+        NavigationLink {
           CapturesScreen(registry: registry)
+        } label: {
+          Label("Captures", systemImage: "square.stack")
         }
-        NavigationLink("Globe", systemImage: "globe.americas") {
+        NavigationLink {
           PropertyScreen(registry: registry)
+        } label: {
+          Label("Globe", systemImage: "globe.americas")
         }
-        NavigationLink("Settings", systemImage: "gearshape") {
+        NavigationLink {
           Form { LiveSplatSettingsRow(preference: registry.liveSplatPreference) }
             .navigationTitle("Settings")
+        } label: {
+          Label("Settings", systemImage: "gearshape")
         }
       }.navigationTitle("Hex")
     }
@@ -30,7 +38,9 @@ import SwiftUI
   @State private var failed = false
   var body: some View {
     List {
-      NavigationLink("Globe", systemImage: "globe.americas") { PropertyScreen(registry: registry) }
+      NavigationLink { PropertyScreen(registry: registry) } label: {
+        Label("Globe", systemImage: "globe.americas")
+      }
       if failed { Image(systemName: "exclamationmark.circle").accessibilityLabel("Unavailable") }
       ForEach(captures) { capture in
         NavigationLink {
