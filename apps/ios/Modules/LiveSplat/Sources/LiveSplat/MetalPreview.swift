@@ -1,5 +1,7 @@
 #if canImport(MetalKit) && canImport(UIKit) && canImport(SwiftUI)
   @preconcurrency import MetalKit
+  import Metal
+  import QuartzCore
   import SwiftUI
   import UIKit
 
@@ -176,17 +178,11 @@
     init(renderer: DefaultLiveSplatRenderer, device: MTLDevice) throws {
       self.renderer = renderer
       self.device = device
-      guard let queue = device.makeCommandQueue(),
-        let url = Bundle.module.url(
-          forResource: "LiveSplat", withExtension: "metal", subdirectory: "Shaders")
-      else {
+      guard let queue = device.makeCommandQueue() else {
         throw LiveSplatError.unavailable
       }
       self.queue = queue
-      let options = MTLCompileOptions()
-      options.fastMathEnabled = false
-      let library = try device.makeLibrary(
-        source: String(contentsOf: url, encoding: .utf8), options: options)
+      let library = try device.makeDefaultLibrary(bundle: .module)
       func pipeline(_ name: String) throws -> MTLComputePipelineState {
         guard let function = library.makeFunction(name: name) else {
           throw LiveSplatError.unavailable

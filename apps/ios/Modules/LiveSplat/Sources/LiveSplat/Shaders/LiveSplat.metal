@@ -1,7 +1,10 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// DEVICE VALIDATION REQUIRED: runtime compilation, float parity, timing and visuals.
+// Preserve the former runtime compiler's fastMathEnabled=false in the packaged library.
+#pragma METAL fp math_mode(safe)
+
+// DEVICE VALIDATION REQUIRED: float parity, timing and visuals.
 // Scalar formulas mirror Math.swift. No fast-math contract is assumed.
 struct D { float v, d; D(float v=0, float d=0):v(v),d(d) {} };
 D operator+(D a,D b) { return D(a.v+b.v,a.d+b.d); }
@@ -9,8 +12,8 @@ D operator-(D a,D b) { return D(a.v-b.v,a.d-b.d); }
 D operator-(D a) { return D(-a.v,-a.d); }
 D operator*(D a,D b) { return D(a.v*b.v,a.d*b.v+a.v*b.d); }
 D operator/(D a,D b) { return D(a.v/b.v,(a.d*b.v-a.v*b.d)/(b.v*b.v)); }
-D dexp(D a) { float e=exp(a.v); return D(e,e*a.d); }
-D dsqrt(D a) { float s=sqrt(a.v); return D(s,a.d/(2*s)); }
+D dexp(D a) { float e=precise::exp(a.v); return D(e,e*a.d); }
+D dsqrt(D a) { float s=precise::sqrt(a.v); return D(s,a.d/(2*s)); }
 struct Gaussian { float p[14]; };
 // camera: world->optical row-major 9, world centre 3, fx fy cx cy, width height.
 struct Camera { float p[18]; };
@@ -64,8 +67,8 @@ kernel void projectGaussians(device const Gaussian* splats [[buffer(0)]],
     Projection o={0,0,-1,0,0,0,0,0};
     if(project(p,camera,c)) {
         o.u=c[0].v; o.v=c[1].v; o.z=c[2].v; o.xx=c[3].v; o.xy=c[4].v; o.yy=c[5].v;
-        o.radius=3*sqrt(0.5f*(o.xx+o.yy+sqrt((o.xx-o.yy)*(o.xx-o.yy)+4*o.xy*o.xy)));
-        o.opacity=1/(1+exp(-p[10].v));
+        o.radius=3*precise::sqrt(0.5f*(o.xx+o.yy+precise::sqrt((o.xx-o.yy)*(o.xx-o.yy)+4*o.xy*o.xy)));
+        o.opacity=1/(1+precise::exp(-p[10].v));
     }
     projected[id]=o;
 }
@@ -119,7 +122,7 @@ kernel void compositeGaussians(device const Gaussian* splats [[buffer(0)]],
         float2 d=sample-float2(p.u,p.v);
         float q=(p.yy*d.x*d.x-2*p.xy*d.x*d.y+p.xx*d.y*d.y)/(p.xx*p.yy-p.xy*p.xy);
         if(q>9) continue;
-        float alpha=min(0.99f,p.opacity*exp(-0.5f*q));
+        float alpha=min(0.99f,p.opacity*precise::exp(-0.5f*q));
         rgb+=transmittance*alpha*float3(splats[i].p[11],splats[i].p[12],splats[i].p[13]);
         transmittance*=1-alpha;
     }
@@ -164,10 +167,10 @@ kernel void optimizeGaussians(device Gaussian* splats [[buffer(0)]],
         if(!isfinite(gradients[parameter])) return;
     }
     for(uint i=0;i<14;i++) g.p[i]-=0.001f*clamp(gradients[i],-1.f,1.f);
-    for(uint i=3;i<6;i++) g.p[i]=clamp(g.p[i],log(0.001f),log(0.5f));
+    for(uint i=3;i<6;i++) g.p[i]=clamp(g.p[i],precise::log(0.001f),precise::log(0.5f));
     float norm=0; for(uint i=6;i<10;i++) norm+=g.p[i]*g.p[i];
     if(norm<1e-12f || !isfinite(norm)) return;
-    for(uint i=6;i<10;i++) g.p[i]/=sqrt(norm);
+    for(uint i=6;i<10;i++) g.p[i]/=precise::sqrt(norm);
     g.p[10]=clamp(g.p[10],-8.f,8.f);
     for(uint i=11;i<14;i++) g.p[i]=clamp(g.p[i],0.f,1.f);
     splats[id]=g;
