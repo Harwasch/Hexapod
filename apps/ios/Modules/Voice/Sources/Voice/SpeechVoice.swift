@@ -29,7 +29,7 @@
       let transcriber = SpeechTranscriber(
         locale: locale, transcriptionOptions: [],
         reportingOptions: [.volatileResults], attributeOptions: [])
-      guard await SpeechTranscriber.isAvailable else { throw VoiceError.unavailable }
+      guard SpeechTranscriber.isAvailable else { throw VoiceError.unavailable }
       if let installation = try await AssetInventory.assetInstallationRequest(supporting: [
         transcriber
       ]) {
@@ -77,7 +77,8 @@
             results.continuation.finish(throwing: error)
           }
         }
-        engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in
+        // The audio thread invokes this block; it must not inherit MainActor isolation.
+        engine.inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { @Sendable buffer, _ in
           do {
             let converted = try bridge.convert(buffer)
             if case .dropped = audio.continuation.yield(AnalyzerInput(buffer: converted)) {
