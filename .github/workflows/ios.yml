@@ -271,11 +271,15 @@ jobs:
           signing_dir="$RUNNER_TEMP/hex-signing-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           auth=(-allowProvisioningUpdates -authenticationKeyPath "$signing_dir/AuthKey.p8"
             -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+          # Archive with an ad hoc code signature: an automatically signed archive asks for a
+          # development profile, which needs a registered device. The export below re-signs
+          # for the App Store with a cloud-managed distribution certificate (Admin-role key).
           xcodebuild archive -project Hex.xcodeproj -scheme Hex -configuration Release \
             -destination 'generic/platform=iOS' -jobs 4 \
-            -archivePath "$signing_dir/Hex.xcarchive" "${auth[@]}" \
+            -archivePath "$signing_dir/Hex.xcarchive" \
             -derivedDataPath build/DerivedData \
             HEX_BUNDLE_ID="$HEX_BUNDLE_ID" DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY=- AD_HOC_CODE_SIGNING_ALLOWED=YES \
             CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER"
           xcodebuild -exportArchive -archivePath "$signing_dir/Hex.xcarchive" \
             -exportOptionsPlist "$signing_dir/ExportOptions.plist" \

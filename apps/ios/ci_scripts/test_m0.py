@@ -146,6 +146,17 @@ class WorkflowTests(unittest.TestCase):
             subprocess.run(["bash", "-euo", "pipefail", "-c", self.steps[-1]["run"]], env=env, check=True)
             self.assertFalse(signing.exists())
 
+    def test_archive_needs_no_device_profile(self):
+        # Run 44592652993: an automatically signed archive asked for a development profile,
+        # which needs a registered device. Archive ad hoc; only the export signs for the store.
+        run = next(s for s in self.steps if "xcodebuild archive" in s.get("run", ""))["run"]
+        archive = run[run.index("xcodebuild archive"):run.index("xcodebuild -exportArchive")]
+        self.assertIn("CODE_SIGN_IDENTITY=-", archive)
+        self.assertIn("AD_HOC_CODE_SIGNING_ALLOWED=YES", archive)
+        self.assertNotIn("-allowProvisioningUpdates", archive)
+        self.assertNotIn("auth[@]", archive)
+        self.assertIn("auth[@]", run[run.index("xcodebuild -exportArchive"):])
+
 
 if __name__ == "__main__":
     unittest.main()

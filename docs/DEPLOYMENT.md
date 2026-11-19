@@ -2074,7 +2074,8 @@ newest available iPhone/runtime. SwiftPM and app DerivedData are cached by manif
 With `testflight=true`, `testflight` waits for all three jobs (45-minute limit), then
 archives, signs and uploads the app. It skips with a message unless all four of these
 repository secrets exist. Make the key in App Store Connect → Users and Access →
-Integrations → App Store Connect API, with the **App Manager** role.
+Integrations → App Store Connect API, with the **Admin** role: Apple lets only Admin keys
+use the cloud-managed distribution certificate the upload is signed with.
 
 | Secret          | Value                                              |
 | --------------- | -------------------------------------------------- |
