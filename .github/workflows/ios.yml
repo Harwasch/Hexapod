@@ -93,7 +93,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ios-globe-resources
-          path: apps/ios/Modules/Globe/Resources/GlobeWeb
+          path: apps/ios/Modules/Globe/Sources/Globe/Resources/GlobeWeb
           if-no-files-found: error
       - name: Generate project
         run: |
@@ -154,7 +154,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: ios-globe-resources
-          path: apps/ios/Modules/Globe/Resources/GlobeWeb
+          path: apps/ios/Modules/Globe/Sources/Globe/Resources/GlobeWeb
       - name: Test packages on an available iPhone simulator
         run: python3 apps/ios/ci_scripts/packages.py test
       - name: Upload ios-test-logs

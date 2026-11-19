@@ -32,3 +32,15 @@ class GlobeTests(unittest.TestCase):
         self.assertLess(cloud.index("build_globe.sh"), cloud.index("xcodegen generate"))
         package = (ROOT / "apps/ios/Modules/Globe/Package.swift").read_text()
         self.assertIn('.copy("Resources/GlobeWeb")', package)
+        # The globe artifact must be uploaded from, and restored to, where the copy script writes it.
+        copy = (ROOT / "apps/web/scripts/copy-globe-embed.mjs").read_text()
+        target = "apps/ios/Modules/Globe/Sources/Globe/Resources/GlobeWeb"
+        self.assertIn(target + "/", copy)
+        artifact_paths = [
+            step["with"]["path"]
+            for job in jobs.values()
+            for step in job["steps"]
+            if step.get("uses", "").startswith(("actions/upload-artifact", "actions/download-artifact"))
+            and step.get("with", {}).get("name") == "ios-globe-resources"
+        ]
+        self.assertEqual(artifact_paths, [target, target])
