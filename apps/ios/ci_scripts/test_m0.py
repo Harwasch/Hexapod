@@ -61,14 +61,49 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.workflow["permissions"], {"contents": "read"})
         job = self.workflow["jobs"]["testflight"]
         self.assertEqual(job["if"], "${{ inputs.testflight }}")
-        self.assertEqual(job["needs"], "build")
+        self.assertEqual(job["needs"], ["packages", "app", "tests"])
         for step in self.steps[1:]:
             self.assertIn("steps.signing.outputs.ready == 'true'", step["if"])
         self.assertIn("always()", self.steps[-1]["if"])
-        for job in self.workflow["jobs"].values():
+        jobs = self.workflow["jobs"]
+        self.assertEqual(set(jobs), {"packages", "app", "tests", "testflight"})
+        self.assertNotIn("needs", jobs["packages"])
+        self.assertNotIn("needs", jobs["app"])
+        self.assertEqual(jobs["tests"]["needs"], "app")
+        self.assertIs(self.workflow["concurrency"]["cancel-in-progress"], True)
+        self.assertIn("github.ref", self.workflow["concurrency"]["group"])
+        self.assertEqual(triggers["workflow_dispatch"]["inputs"]["testflight"]["type"], "boolean")
+        self.assertEqual(set(triggers["workflow_dispatch"]["inputs"]), {"testflight", "bundle_id"})
+        for name, job in jobs.items():
+            self.assertEqual(job["timeout-minutes"], {"packages": 20, "app": 30, "tests": 30, "testflight": 45}[name])
             self.assertEqual(job["runs-on"], "macos-26")
             select = next(s for s in job["steps"] if s.get("name") == "Select Xcode 26 explicitly")
             self.assertIn("/Applications/Xcode_26*.app", select["run"])
+
+    def test_build_logs_caches_and_ios_destination(self):
+        jobs = self.workflow["jobs"]
+        app = next(s for s in jobs["app"]["steps"] if s.get("name") == "Build without signing")
+        for expected in ("generic/platform=iOS Simulator", "CODE_SIGNING_ALLOWED=NO", "-skipMacroValidation", "tee build/app.log | xcbeautify", "pipefail"):
+            self.assertIn(expected, app["run"])
+        errors = next(s for s in jobs["app"]["steps"] if s.get("name") == "Show every build error")
+        self.assertEqual(errors["if"], "${{ always() }}")
+        self.assertIn("grep 'error:'", errors["run"])
+        self.assertNotIn("head", errors["run"])
+        for name, job in jobs.items():
+            cache = next(s for s in job["steps"] if s.get("name") == "Cache SwiftPM")
+            for path in ("~/Library/Caches/org.swift.swiftpm", "apps/ios/Modules/*/.build", "apps/ios/App/.build"):
+                self.assertIn(path, cache["with"]["path"])
+            for manifest in ("Package.swift", "Package.resolved"):
+                self.assertIn(manifest, cache["with"]["key"])
+            if name in ("app", "testflight"):
+                derived = next(s for s in job["steps"] if s.get("name") == "Cache DerivedData")
+                self.assertIn("project.yml", derived["with"]["key"])
+                self.assertIn("Package.swift", derived["with"]["key"])
+            else:
+                self.assertTrue(any("packages.py " in s.get("run", "") for s in job["steps"]))
+            if name != "testflight":
+                artifact = next(s for s in job["steps"] if s.get("name", "").startswith("Upload "))
+                self.assertEqual(artifact["if"], "${{ always() }}")
 
     def test_every_missing_secret_skips_without_disclosing_values(self):
         for missing in (*self.names, "all", None):

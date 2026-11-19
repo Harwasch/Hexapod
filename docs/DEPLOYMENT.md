@@ -2061,8 +2061,18 @@ Honestly, and not quietly left on the list:
 
 ### iPhone app — TestFlight (optional)
 
-`.github/workflows/ios.yml` is dispatch-only. Its build job needs no secrets. Its `testflight`
-job archives, signs and uploads the app, and skips with a message unless all four of these
+`.github/workflows/ios.yml` is dispatch-only, with `testflight` (boolean, default false)
+and `bundle_id` inputs. New runs cancel superseded runs on the same ref. The `packages`
+(20-minute limit) and `app` (30-minute limit) jobs start in parallel without secrets.
+`packages` builds every local module and AppSupport for iOS Simulator, retains every
+package log, and reports all failures together. `app` builds the unsigned simulator app
+with macro validation skipped, retains its raw log alongside formatted console output,
+and lists every `error:` line in the step summary. `tests` follows `app` (30-minute limit),
+running each package with test targets on an available iPhone 17 Pro simulator, or the
+newest available iPhone/runtime. SwiftPM and app DerivedData are cached by manifests.
+
+With `testflight=true`, `testflight` waits for all three jobs (45-minute limit), then
+archives, signs and uploads the app. It skips with a message unless all four of these
 repository secrets exist. Make the key in App Store Connect → Users and Access →
 Integrations → App Store Connect API, with the **App Manager** role.
 
@@ -2074,8 +2084,10 @@ Integrations → App Store Connect API, with the **App Manager** role.
 | `APPLE_TEAM_ID` | the 10-character team id (Membership details page) |
 
 The iOS globe bundles local Cesium resources. With dependencies already present, run
-`heavy bash apps/ios/ci_scripts/build_globe.sh` before XcodeGen. Both iOS workflow jobs
+`heavy bash apps/ios/ci_scripts/build_globe.sh` before XcodeGen. The independent `packages` and `app` jobs, plus the optional `testflight` job,
 provision Node/pnpm, install the lockfile, and run this command before their Xcode build.
+The package build needs the generated Globe resource directory even for compilation;
+`tests` downloads the real globe resources from `app` instead of rebuilding them.
 Xcode Cloud's `ci_post_clone.sh` uses the same command and requires Node 22.12+, pnpm 10
 and the installed web dependencies in its environment. The generated approximately 11 MB
 resource tree is ignored in git; the source entry, schema and tiny splat fixture are tracked.

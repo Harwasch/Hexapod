@@ -4,6 +4,8 @@ from pathlib import Path
 import subprocess
 import unittest
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -17,7 +19,15 @@ class GlobeTests(unittest.TestCase):
 
     def test_both_build_paths_generate_resources_before_xcode(self):
         workflow = (ROOT / ".github/workflows/ios.yml").read_text()
-        self.assertEqual(workflow.count("bash apps/ios/ci_scripts/build_globe.sh"), 2)
+        jobs = yaml.safe_load(workflow)["jobs"]
+        self.assertEqual(workflow.count("bash apps/ios/ci_scripts/build_globe.sh"), 3)
+        for name in ("packages", "app", "testflight"):
+            steps = jobs[name]["steps"]
+            bundle = next(i for i, step in enumerate(steps) if step.get("name") == "Bundle local globe")
+            build = next(i for i, step in enumerate(steps) if step.get("name") in (
+                "Build every package for iOS Simulator", "Generate project"))
+            self.assertLess(bundle, build)
+        self.assertTrue(any(s.get("uses") == "actions/download-artifact@v4" for s in jobs["tests"]["steps"]))
         cloud = (ROOT / "apps/ios/ci_scripts/ci_post_clone.sh").read_text()
         self.assertLess(cloud.index("build_globe.sh"), cloud.index("xcodegen generate"))
         package = (ROOT / "apps/ios/Modules/Globe/Package.swift").read_text()
