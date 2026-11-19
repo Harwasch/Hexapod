@@ -4,6 +4,26 @@ import Testing
 
 @testable import Upload
 
+@Test @MainActor func backgroundSessionCompletionRunsOnMainActorOnce() async throws {
+  let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+  defer { try? FileManager.default.removeItem(at: folder) }
+  let archive = folder.appendingPathComponent("source.hexcap")
+  try Data([1]).write(to: archive)
+  let uploader = try BundleUploader(
+    directory: folder.appendingPathComponent("transfer"), archive: archive,
+    placement: .explicit(try BundlePlacement(latitude: 37, longitude: -122, uncertaintyM: 12)),
+    apiBase: URL(string: "https://api.example.test/api/v1")!, token: { "unused" })
+  var completions = 0
+  await uploader.onBackgroundEventsFinished { @MainActor in
+    MainActor.preconditionIsolated()
+    completions += 1
+  }
+  await uploader.drained()
+  await uploader.drained()
+  #expect(completions == 1)
+}
+
 @Test func chunkBoundaries() throws {
   let size: UInt64 = 8 * 1024 * 1024
   for total in [UInt64(1), size, size + 1, size * 3] {

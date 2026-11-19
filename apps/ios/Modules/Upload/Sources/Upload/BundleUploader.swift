@@ -59,7 +59,7 @@ public actor BundleUploader {
   private var background: URLSession?
   private var pumping = false
   private var pumpAgain = false
-  private var eventsFinished: (@Sendable () -> Void)?
+  private var eventsFinished: (@MainActor @Sendable () -> Void)?
 
   public init(
     directory: URL, archive: URL? = nil, name: String = "Capture",
@@ -104,7 +104,7 @@ public actor BundleUploader {
 
   /// Forward UIApplication's background-session completion handler here before resume.
   /// Retain this uploader until events have drained. No App or UI dependency is needed.
-  public func onBackgroundEventsFinished(_ completion: @escaping @Sendable () -> Void) {
+  public func onBackgroundEventsFinished(_ completion: @escaping @MainActor @Sendable () -> Void) {
     eventsFinished = completion
   }
 
@@ -268,10 +268,11 @@ public actor BundleUploader {
     }
   }
 
-  private func drained() {
+  func drained() async {
     let completion = eventsFinished
     eventsFinished = nil
-    completion?()
+    // UIKit requires its background-session completion handler on the main thread.
+    await completion?()
   }
 }
 
