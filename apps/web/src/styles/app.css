@@ -3059,3 +3059,19 @@ body > .cesium-credit-lightbox-overlay .cesium-credit-lightbox-close {
     border-radius: var(--glass-radius);
   }
 }
+
+/* The living lab's developer toggle (features/living/LivingLabPanel.tsx). */
+.living-lab .notice__text {
+  display: grid;
+  gap: 4px;
+}
+.living-lab__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+.living-lab__row input[type="range"] {
+  width: 120px;
+}

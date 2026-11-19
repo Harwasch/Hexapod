@@ -43,6 +43,15 @@ describe("readEnv", () => {
     expect(read("true")).toBe(true);
   });
 
+  it("keeps weather wind off unless the build turns it on", () => {
+    const read = (value?: string) =>
+      readEnv({ DEV: true, VITE_LIVING_WEATHER: value } as unknown as ImportMetaEnv).livingWeather;
+    expect(read()).toBe(false);
+    expect(read("0")).toBe(false);
+    expect(read("1")).toBe(true);
+    expect(read("true")).toBe(true);
+  });
+
   it("defaults to no token and dev tools on in development", () => {
     const env = readEnv({ DEV: true } as unknown as ImportMetaEnv);
     expect(env.ionAccessToken).toBeUndefined();
