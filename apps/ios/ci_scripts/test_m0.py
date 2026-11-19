@@ -157,6 +157,24 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("auth[@]", archive)
         self.assertIn("auth[@]", run[run.index("xcodebuild -exportArchive"):])
 
+    def test_app_target_is_iphone_only_with_an_icon(self):
+        # Run 44597285483: App Store validation wanted iPad icons and orientations because the
+        # target-level device family came from XcodeGen's preset, and no app icon existed.
+        import json
+        project = yaml.safe_load((ROOT / "apps/ios/project.yml").read_text())
+        target = project["targets"]["Hex"]["settings"]["base"]
+        self.assertEqual(str(target["TARGETED_DEVICE_FAMILY"]), "1")
+        self.assertEqual(target["ASSETCATALOG_COMPILER_APPICON_NAME"], "AppIcon")
+        icon_set = ROOT / "apps/ios/App/Assets.xcassets/AppIcon.appiconset"
+        contents = json.loads((icon_set / "Contents.json").read_text())
+        image = contents["images"][0]
+        self.assertEqual((image["idiom"], image["size"]), ("universal", "1024x1024"))
+        png = (icon_set / image["filename"]).read_bytes()
+        self.assertEqual(png[:8], b"\x89PNG\r\n\x1a\n")
+        width, height = int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+        self.assertEqual((width, height), (1024, 1024))
+        self.assertEqual(png[25], 2, "App Store icons must be RGB with no alpha channel")
+
 
 if __name__ == "__main__":
     unittest.main()

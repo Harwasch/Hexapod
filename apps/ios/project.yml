@@ -61,6 +61,11 @@ targets:
       base:
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: YES
+        # XcodeGen's iOS application preset sets "1,2" on the target, which overrode the
+        # project-level iPhone-only value and made App Store validation demand iPad icons
+        # and orientations (run 44597285483).
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: build/Info.plist
       properties:
