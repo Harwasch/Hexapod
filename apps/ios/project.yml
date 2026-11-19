@@ -71,6 +71,8 @@ targets:
         UIRequiredDeviceCapabilities:
           - arkit
         UILaunchScreen: {}
+        # Standard HTTPS only: exempt, so builds skip the export-compliance question.
+        ITSAppUsesNonExemptEncryption: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
 schemes:
