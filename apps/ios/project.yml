@@ -5,6 +5,7 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
     HEX_BUNDLE_ID: com.harwasch.hex
     PRODUCT_BUNDLE_IDENTIFIER: $(HEX_BUNDLE_ID)
     TARGETED_DEVICE_FAMILY: "1"
