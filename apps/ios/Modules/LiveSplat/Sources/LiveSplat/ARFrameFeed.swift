@@ -69,8 +69,7 @@
       guard imageWidth > 0, imageHeight > 0, chromaWidth > 0, chromaHeight > 0 else {
         throw LiveSplatError.invalidFrame
       }
-      let matrix =
-        CVBufferGetAttachment(rgb, kCVImageBufferYCbCrMatrix, nil)?.takeUnretainedValue() as? String
+      let matrix = CVBufferCopyAttachment(rgb, kCVImageBufferYCbCrMatrixKey, nil) as? String
       let bt709 = matrix == (kCVImageBufferYCbCrMatrix_ITU_R_709_2 as String)
       let videoRange = format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
       var d: [Float] = []
