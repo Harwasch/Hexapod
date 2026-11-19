@@ -7,6 +7,7 @@ import Observation
 import Perception
 import RealityKit
 import Router
+import UIKit
 import Voice
 
 @MainActor protocol RecordingControl: AnyObject {

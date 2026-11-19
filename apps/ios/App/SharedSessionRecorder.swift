@@ -3,6 +3,8 @@
   @preconcurrency import AVFoundation
   import Capture
   import CoreLocation
+  import CoreMedia
+  import CoreVideo
   import Darwin
   import Foundation
 
@@ -28,6 +30,7 @@
     private var starting: Task<Void, Never>?
     private var generation = UUID()
     private var width = 0, height = 0
+    // Core Location delivers callbacks on the run loop where this manager is created.
     private let location = CLLocationManager()
 
     func toggleRecording() {
@@ -205,17 +208,19 @@
       }
       finishing = true
       input?.markAsFinished()
-      video.finishWriting { [weak self] in
-        Task { @MainActor in
-          do {
-            guard video.status == .completed else { throw CaptureError.recordingFailed }
-            // Keep finalization alive even when provider switching releases the camera model.
-            try await writer.close()
-            try await disk.finish()
-            if self?.video === video { self?.reset() }
-          } catch {
-            if self?.video === video { self?.fail() }
-          }
+      Task { @MainActor [weak self] in
+        // The AVFoundation callback is Sendable; only the continuation crosses to it.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+          video.finishWriting { continuation.resume() }
+        }
+        do {
+          guard video.status == .completed else { throw CaptureError.recordingFailed }
+          // Keep finalization alive even when provider switching releases the camera model.
+          try await writer.close()
+          try await disk.finish()
+          if self?.video === video { self?.reset() }
+        } catch {
+          if self?.video === video { self?.fail() }
         }
       }
     }

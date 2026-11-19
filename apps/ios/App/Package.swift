@@ -6,6 +6,7 @@
     platforms: [.iOS("26.0"), .macOS(.v15)],
     products: [.library(name: "AppSupport", targets: ["AppSupport"])],
     dependencies: [
+      .package(path: "../Modules/EntitySchema"),
       .package(path: "../Modules/Capture"), .package(path: "../Modules/Voice"),
       .package(path: "../Modules/Router"), .package(path: "../Modules/Perception"),
       .package(path: "../Modules/ARAnswer"), .package(path: "../Modules/Cloud"),
@@ -17,7 +18,7 @@
         name: "AppSupport",
         dependencies: [
           "Capture", "Voice", "Router", "Perception", "ARAnswer", "Cloud", "Globe", "LiveSplat",
-          "Upload",
+          "Upload", "EntitySchema",
         ],
         path: "Support"),
       .testTarget(name: "AppSupportTests", dependencies: ["AppSupport"], path: "Tests"),

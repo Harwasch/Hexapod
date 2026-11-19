@@ -4,6 +4,7 @@
   import Darwin
   import RealityKit
   import SwiftUI
+  import UIKit
 
   @MainActor struct ARCameraView: UIViewRepresentable {
     var isActive: Bool
@@ -65,6 +66,7 @@
       view.session.delegate = nil
     }
 
+    // The session above delivers every delegate callback on the main queue.
     @MainActor final class Coordinator: NSObject, @preconcurrency ARSessionDelegate {
       weak var view: ARView?
       let model: CameraModel
