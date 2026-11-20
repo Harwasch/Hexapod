@@ -2138,6 +2138,18 @@ scope. Actions → **Phone key → Fly** (`.github/workflows/phone-key.yml`, dis
 hashes the `PHONE_API_TOKEN` secret and stages the hash with `flyctl secrets import --stage`,
 so the next **Deploy** applies it. The key is never printed; only the hash reaches Fly.
 
+Actions → **Phone key · production smoke** (`.github/workflows/phone-smoke.yml`) is
+dispatch-only and reads the `PHONE_API_TOKEN` repository secret. Its optional
+`api_base_url` input defaults to `vars.VITE_API_BASE_URL`, then the `fly.toml` app's
+HTTPS origin. It checks the phone key, uploads the synthetic yard-small bundle,
+reads its capture, asks a scan question with no keyframes, and checks write refusals.
+It never calls `process-bundle`, deploys, or queues reconstruction. Each run leaves
+one smoke capture; the log and step summary print its UUID for later manual cleanup.
+A missing `ANTHROPIC_API_KEY` on Fly skips Ask distinctly; other failures fail the run.
+Tokens, presigned URLs, response bodies and request headers are never printed.
+The same script runs locally with `PHONE_API_TOKEN` in the environment:
+`python3 scripts/phone_smoke.py --api https://twin-api.fly.dev`.
+
 The bundled phone key can create/resume its own capture bundles, upload their archive
 parts, queue bundle processing, ask about phone captures or their sites, read its own
 capture status, and read/search entities on those sites. It also retains the existing
