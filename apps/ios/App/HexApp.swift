@@ -6,13 +6,23 @@ import UIKit
 struct HexApp: App {
   @UIApplicationDelegateAdaptor(UploadLifecycle.self) private var uploadLifecycle
   @Environment(\.scenePhase) private var scenePhase
+  init() {
+    if LaunchMode.current.isUITest { UIView.setAnimationsEnabled(false) }
+  }
+
   var body: some Scene {
     WindowGroup {
       HomeScreen()
         .preferredColorScheme(.dark)
+        .transaction { transaction in
+          if LaunchMode.current.isUITest {
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+          }
+        }
         // Warm the bundled Cesium globe so opening it is quick.
         .task {
-          _ = CesiumGlobeSession.shared
+          if !LaunchMode.current.isUITest { _ = CesiumGlobeSession.shared }
           if scenePhase == .active { await CaptureUploadQueue.shared.resumeQueued() }
         }
         .onChange(of: scenePhase) { _, phase in

@@ -62,3 +62,17 @@ import Voice
   registry.planner.register("real") { RulePlanner() }
   registry.perception.register("real") { FakePerception() }
 }
+
+@Test @MainActor func fixturePreviewSkipsTrackingPrerollAndSeedsOneStaticFrame() async throws {
+  let ios = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    .deletingLastPathComponent().deletingLastPathComponent()
+  let directory = ios.appendingPathComponent("Fixtures/bundles/yard-small/bundle")
+  let preference = LiveSplatPreference(store: UserDefaultsLiveSplatStore(defaults: .standard))
+  let renderer = DefaultLiveSplatRenderer(preference: preference)
+  renderer.start()
+  defer { renderer.stop() }
+  try await FixtureSplatPreview.seed(renderer: renderer, directory: directory)
+  #expect(!renderer.splats.isEmpty)
+  #expect(renderer.latestFrame != nil)
+  #expect(renderer.recentKeyframes.count == 1)
+}

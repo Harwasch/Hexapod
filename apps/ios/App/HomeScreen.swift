@@ -19,16 +19,7 @@ import Upload
 }
 
 enum UIFixtureLaunch {
-  static var active: Bool {
-    #if DEBUG
-      let args = ProcessInfo.processInfo.arguments
-      return args.firstIndex(of: "-uiTestFixture").map {
-        args.indices.contains($0 + 1) && args[$0 + 1] == "yard-small"
-      } ?? false
-    #else
-      false
-    #endif
-  }
+  static var active: Bool { LaunchMode.current.usesFixtureProviders }
   static func install() {
     #if DEBUG
       if active { _ = URLProtocol.registerClass(UIFixtureAPIProtocol.self) }
@@ -90,6 +81,7 @@ private enum HexStyle {
       guard phase == .active else { return }
       while !Task.isCancelled {
         await reload()
+        if LaunchMode.current.isUITest { return }
         do { try await Task.sleep(for: .seconds(3)) } catch { return }
       }
     }
@@ -196,6 +188,7 @@ private enum HexStyle {
           dismiss()
         } catch { deleteFailed = true }
       }
+      .accessibilityIdentifier("capture.confirmDelete")
       Button("Cancel", role: .cancel) {}
     } message: { Text("The uploaded copy stays on the server.") }
     .task {
@@ -204,6 +197,7 @@ private enum HexStyle {
         var updated = capture
         await updated.refresh(configuration: registry.configuration)
         capture = updated
+        if LaunchMode.current.isUITest { return }
         do { try await Task.sleep(for: .seconds(3)) } catch { return }
       }
     }
@@ -359,7 +353,7 @@ private struct CaptureRow: Identifiable, Sendable {
         VStack(spacing: 0) {
           if choice == "fake" { Text("Simulated").font(.caption) }
           GlobeView(source: source, route: route, webBaseURL: registry.configuration.webBaseURL,
-                    fixture: choice == "fake")
+                    fixture: choice == "fake", uiTestMode: LaunchMode.current.isUITest)
         }
       } else { Label("Server unavailable", systemImage: "wifi.exclamationmark") }
     }
@@ -369,6 +363,7 @@ private struct CaptureRow: Identifiable, Sendable {
 }
 
 @MainActor struct SettingsScreen: View {
+  @Environment(\.dismiss) private var dismiss
   let registry: PieceRegistry
   @State private var token = ""
   @State private var saved = false
@@ -435,6 +430,15 @@ private struct CaptureRow: Identifiable, Sendable {
     }
     .scrollContentBackground(.hidden).background(HexStyle.background)
     .navigationTitle("Settings").accessibilityIdentifier("settings.screen")
+    .navigationBarBackButtonHidden(LaunchMode.current.isUITest)
+    .toolbar {
+      if LaunchMode.current.isUITest {
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Back", systemImage: "chevron.left") { dismiss() }
+            .accessibilityIdentifier("settings.back")
+        }
+      }
+    }
     .toolbar(.visible, for: .navigationBar)
     .onAppear { token = APICredentials.writeToken }
     .onChange(of: token) { _, _ in saved = false }

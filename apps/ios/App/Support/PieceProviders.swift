@@ -185,16 +185,16 @@ enum ProviderError: Error, CustomStringConvertible {
   func makeCamera(useTestChoices: Bool = false) throws -> CameraProviders {
     #if DEBUG
       // UI automation is an explicit DEBUG launch; this path is absent from Release.
-      if let index = ProcessInfo.processInfo.arguments.firstIndex(of: "-uiTestFixture"),
-        ProcessInfo.processInfo.arguments.indices.contains(index + 1),
-        ProcessInfo.processInfo.arguments[index + 1] == "yard-small",
+      if LaunchMode.current.usesFixtureProviders,
         let directory = Bundle.main.url(
           forResource: "yard-small", withExtension: nil,
           subdirectory: "UITestFixtures")
       {
         return CameraProviders(
           voice: FakeVoice(), planner: RulePlanner(), perception: FakePerception(),
-          liveSplat: try splatRenderers.resolve("fake"), deep: try FakeDeepAnswering.yardSmall(),
+          liveSplat: DefaultLiveSplatRenderer(
+            preference: LiveSplatPreference(store: DebugSplatPreferenceStore())),
+          deep: try FakeDeepAnswering.yardSmall(),
           capture: FixtureCaptureSource(directory: directory), fakeOverlay: true, simulated: true)
       }
     #endif

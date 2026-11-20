@@ -224,15 +224,24 @@ xcrun xcresulttool export attachments --path apps/ios/build/HexUITests.xcresult 
   --output-path apps/ios/build/ui-screenshots
 ```
 
-The workflow runs package and app UI tests before TestFlight, retaining the full
+The workflow runs package `tests` and `ui-tests` in parallel after `app`, retaining the full
 result bundle and `ios-ui-screenshots`. Every UI step attaches a screenshot with
 `lifetime = .keepAlways`. Screenshots are evidence produced by the simulator run;
-Linux does not produce substitutes for these attachments.
+Linux does not produce substitutes for these attachments. The UI job has a 40-minute
+limit, boots the selected simulator and waits for `bootstatus -b` before Xcode runs,
+and gives each test a 300-second execution allowance.
 
 UI fixtures launch with `-uiTestFixture yard-small`. The Xcode build copies the
 recorded bundle under `UITestFixtures/yard-small` only in Debug, and removes it in
 Release. The camera handles that argument only in DEBUG and replays the recorded source without
-changing saved provider preferences. `UIFixtureAPIProtocol` registers before app network
+changing saved provider preferences. `LaunchMode.current` parses this switch once.
+UI-test mode never constructs an ARView/ARSession, displays the first recorded RGB
+frame as a still, seeds one tracked splat preview frame (skipping tracking pre-roll),
+and creates neither a display link nor a Metal render loop. The recording clock is
+stopped, camera timelines use one date, UIKit/SwiftUI animations are disabled, and
+capture polling stops after its first refresh. The Cesium session is created only
+when opening the globe, with render-on-request, a stopped clock and instant flights.
+Without the launch argument, production rendering and timing remain unchanged. `UIFixtureAPIProtocol` registers before app network
 tasks start, intercepts app HTTP requests, returns an already uploaded fixture to exercise
 the uploader's resume path, and fails unknown requests locally. It never contacts the
 production API. The tests enter a fixture credential through Settings and remove it
@@ -243,8 +252,9 @@ remain a separate device gate. The UI tests require these camera identifiers:
 The native screens add `capture.row.<local-id>`, `capture.detail`, `capture.status`,
 `capture.share`, `capture.delete`, `capture.openGlobe`, `globe.scanPicker`,
 `globe.scan.<capture-id>`, `settings.token`, `settings.signIn`, `settings.server`.
-The ordinary launch test omits fixture arguments and checks the actual registry
-selection through DEBUG's `settings.providers` accessibility value. Deep answers
+The production-provider test uses `-uiTestFixture production-providers`: it keeps
+quiet rendering and the same recorded still, while resolving real camera providers
+and leaving the fixture API interceptor off. It checks the registry selection through DEBUG's `settings.providers` accessibility value. Deep answers
 may be explicitly unavailable when no credential is present; fake providers fail
 that assertion.
 

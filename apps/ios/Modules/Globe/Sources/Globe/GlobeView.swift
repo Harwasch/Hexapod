@@ -27,14 +27,16 @@
     private var effectiveRoute: GlobeRoute? { route ?? selectedSite }
     @AppStorage("globeImplementation") private var implementation = GlobeImplementation.defaultValue
       .rawValue
+    private let uiTestMode: Bool
     private let fixture: Bool
     private let renderer: GlobeImplementation?
 
     public init(
       source: any GlobeDataSource, route: GlobeRoute? = nil, webBaseURL: URL? = nil,
-      onOpenScan: (@MainActor (GlobeRoute) -> Void)? = nil, fixture: Bool = false,
+      onOpenScan: (@MainActor (GlobeRoute) -> Void)? = nil, fixture: Bool = false, uiTestMode: Bool = false,
       renderer: GlobeImplementation? = nil
     ) {
+      self.uiTestMode = uiTestMode
       self.renderer = renderer
       self.fixture = fixture
       self.source = source
@@ -72,6 +74,7 @@
             } else {
               CesiumGlobeView(
                 snapshot: snapshot, scanID: selectedScan ?? effectiveRoute?.scanID, fixture: fixture,
+                uiTestMode: uiTestMode,
                 onPin: { selectedPin = $0 }, onScan: { selectedScan = $0 })
             }
             if snapshot.property.epochs.isEmpty {
