@@ -24,7 +24,7 @@ vi.mock("cesium", async (original) => ({
 }));
 vi.mock("@/cesium/createGlobeWidget", () => ({ createGlobeWidget: hooks.widget }));
 vi.mock("@/cesium/providers/tiles", () => ({ createEmbedScanTileset: hooks.load }));
-vi.mock("@/cesium/providers/imagery", () => ({ createNaturalEarthProvider: vi.fn() }));
+vi.mock("./basemap", () => ({ installBasemap: vi.fn(() => vi.fn()) }));
 afterEach(() => {
   window.dispatchEvent(new Event("pagehide"));
   delete window.webkit;
@@ -64,6 +64,12 @@ it("boots offline, shares pins, sends native tap IDs, flies to loaded geometry a
   );
   bridge.receive(fixtures[1]);
   expect(hooks.load).toHaveBeenCalledOnce();
+  viewer.scene.pick.mockReturnValue({
+    id: entities.getById(`scan:${fixtures[0]!.snapshot!.scans[0]!.id}:0`),
+  });
+  viewer.camera.flyToBoundingSphere.mockClear();
+  hooks.click({ position: new Cartesian2() });
+  expect(viewer.camera.flyToBoundingSphere).toHaveBeenCalledOnce();
   const pin = fixtures[0]!.snapshot!.pins[0]!;
   viewer.scene.pick.mockReturnValue({
     id: entities.getById(`property-answer:${pin.siteId}:${pin.id}`),

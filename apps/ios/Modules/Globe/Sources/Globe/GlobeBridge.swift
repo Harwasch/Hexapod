@@ -7,6 +7,25 @@ public enum GlobeImplementation: String, CaseIterable, Sendable {
 }
 
 extension GlobeSnapshot {
+  /// Published /r2 paths belong to the web host, never the bundled file:// page.
+  public func resolvingAssetURLs(relativeTo webBaseURL: URL?) -> GlobeSnapshot {
+    let assets = property.assets?.map { asset in
+      let url = asset.source.url.flatMap { value -> String? in
+        guard let resolved = URL(string: value, relativeTo: webBaseURL)?.absoluteURL,
+          ["http", "https"].contains(resolved.scheme)
+        else { return nil }
+        return resolved.absoluteString
+      }
+      return GlobeAsset(
+        id: asset.id, epochId: asset.epochId, representation: asset.representation,
+        source: GlobeAsset.Source(type: asset.source.type, url: url))
+    }
+    return GlobeSnapshot(
+      property: GlobeProperty(
+        id: property.id, name: property.name, boundary: property.boundary,
+        epochs: property.epochs, assets: assets), pins: pins)
+  }
+
   /// Wire selection may identify an epoch; App scan routes must identify a capture.
   public func captureRoute(for selection: UUID?) -> GlobeRoute {
     if let epoch = property.epochs.first(where: { ($0.captureId ?? $0.id) == selection }) {
@@ -77,7 +96,8 @@ public struct GlobeBridgeState: Sendable {
   public init() {}
   public mutating func invalidate() { ready = false }
   public mutating func update(snapshot: BridgeSnapshot, scanID: String?) -> [BridgeMessage] {
-    let selected = snapshot.scans.first(where: { $0.id == scanID })?.id ?? snapshot.scans.first?.id
+    let selected = scanID == nil
+      ? snapshot.scans.first?.id : snapshot.scans.first(where: { $0.id == scanID })?.id
     let changed = self.snapshot != snapshot
     let selectionChanged = self.scanID != selected
     self.snapshot = snapshot

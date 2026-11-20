@@ -82,4 +82,12 @@ struct BridgeTests {
     #expect(state.becomeReady() == [.snapshot(snapshot: empty)])
   }
 
+  @Test func missingScanNeverFocusesAnUnrelatedCapture() async throws {
+    let snapshot = try await FakeGlobeDataSource().snapshot(siteID: FakeGlobeDataSource.siteID)
+    let wire = snapshot.bridgeSnapshot(fixture: true)
+    var state = GlobeBridgeState()
+    _ = state.update(snapshot: wire, scanID: UUID().uuidString)
+    #expect(state.becomeReady() == [.snapshot(snapshot: wire)])
+  }
+
 }

@@ -41,7 +41,7 @@
         let page = Bundle.module.url(
           forResource: "globe-embed", withExtension: "html", subdirectory: "GlobeWeb")
       else {
-        error = "Bundled globe missing. Run the iOS globe build script."
+        error = "Globe unavailable"
         return
       }
       webView.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
@@ -91,7 +91,9 @@
         case .ready:
           for message in bridge.becomeReady() { send(message) }
         case .pin(let id): if let pin = snapshot?.pins.first(where: { $0.id == id }) { onPin?(pin) }
-        case .scan(let id): onScan?(id)
+        case .scan(let id):
+          error = nil
+          onScan?(id)
         case .failure(let message): error = message
         }
       } catch { self.error = "Invalid globe event" }

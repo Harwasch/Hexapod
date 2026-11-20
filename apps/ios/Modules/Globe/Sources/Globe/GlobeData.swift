@@ -251,7 +251,11 @@ public struct FakeGlobeDataSource: GlobeDataSource {
       epochs: [
         GlobeScan(
           id: Self.scanID, captureId: Self.scanID, observedAt: "2026-01-01T00:00:00Z",
-          footprint: footprint)
+          footprint: footprint),
+        GlobeScan(
+          id: UUID(uuidString: "00000000-0000-0000-0000-000000000004")!,
+          captureId: UUID(uuidString: "00000000-0000-0000-0000-000000000004")!,
+          observedAt: "2026-01-02T00:00:00Z", footprint: footprint)
       ])
     let entity = Entity(
       label: "Simulated oak",

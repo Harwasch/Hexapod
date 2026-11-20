@@ -60,7 +60,9 @@ Chosen phone defaults, conservative starting policy rather than measured optimal
 - Tile **maximumScreenSpaceError 32**; no hidden preload, flight-destination preload or
   collision mesh. This trades some fine detail for fewer requests and decoded tiles.
 - Globe cache **64 terrain tiles**, globe screen-space error **4**, and canvas resolution
-  capped at one render pixel per CSS pixel. Natural Earth is local; no default ion calls,
+  capped at one render pixel per CSS pixel. Natural Earth is local; the configured public
+  token enables ion imagery and terrain. Without it, OSM imagery is used and terrain
+  unavailability is visible. Online failure preserves the bundled map; no evaluation-token calls,
   Google imagery, geocoder, timeline, animation controls or picker widgets.
 - Request-render mode, infinite maximum time change and one MSAA sample are shared with
   the web bootstrap. Pin updates and tile changes request renders.

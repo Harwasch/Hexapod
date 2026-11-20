@@ -9,8 +9,8 @@ canvas {
   overflow: hidden;
 }
 body {
-  background: #0b1a3a;
-  color: white;
+  background: #0d1517;
+  color: #e4ece9;
   font: 14px system-ui;
 }
 canvas {
@@ -23,12 +23,24 @@ canvas {
   background: #111a;
   font-size: 10px;
 }
-#status {
+#status,
+#map-status {
   position: absolute;
   top: env(safe-area-inset-top, 0);
   left: 12px;
   pointer-events: none;
 }
+#map-status {
+  top: auto;
+  bottom: 28px;
+}
 .cesium-credit-logoContainer img {
   max-height: 20px;
+}
+
+#status:not(:empty),
+#map-status:not(:empty) {
+  padding: 8px 12px;
+  background: #142023;
+  border-radius: 16px;
 }

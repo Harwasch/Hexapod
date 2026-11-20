@@ -1,5 +1,5 @@
 import {
-  ImageryLayer,
+  BoundingSphere,
   HeadingPitchRange,
   Cartesian3,
   Color,
@@ -10,7 +10,7 @@ import {
   type Cartesian2,
 } from "cesium";
 import { createGlobeWidget } from "@/cesium/createGlobeWidget";
-import { createNaturalEarthProvider } from "@/cesium/providers/imagery";
+import { installBasemap } from "./basemap";
 import { createEmbedScanTileset } from "@/cesium/providers/tiles";
 import { addAnswerPins } from "@/features/answers/answerPinLayer";
 import { dispatchMessage } from "./bridge";
@@ -31,6 +31,10 @@ function element(id: string): HTMLElement {
   return found;
 }
 const status = element("#status");
+const mapStatus = document.createElement("p");
+mapStatus.id = "map-status";
+mapStatus.setAttribute("role", "status");
+document.body.append(mapStatus);
 const fixtureMode = new URLSearchParams(location.search).has("fixture");
 function emit(message: BridgeMessage): void {
   window.webkit?.messageHandlers?.globe?.postMessage(message);
@@ -40,7 +44,13 @@ try {
   viewer.resolutionScale = 1 / Math.max(1, window.devicePixelRatio);
   viewer.scene.globe.tileCacheSize = 64;
   viewer.scene.globe.maximumScreenSpaceError = 4;
-  viewer.imageryLayers.add(ImageryLayer.fromProviderAsync(createNaturalEarthProvider()));
+  const removeBasemap = installBasemap(
+    viewer,
+    import.meta.env.VITE_CESIUM_ION_ACCESS_TOKEN,
+    (message) => {
+      mapStatus.textContent = message;
+    },
+  );
   let state: BridgeSnapshot = { pins: [], scans: [], boundary: [] };
   let removePins = (): void => {
     /* no pins before the first snapshot */
@@ -52,6 +62,8 @@ try {
     createEmbedScanTileset,
     (tiles) => {
       viewer.scene.primitives.add(tiles);
+      status.textContent = fixtureMode ? "Simulated fixture" : "";
+      document.body.dataset.scanState = "ready";
       if (selectedId && flightId === selectedId) flyToScan(selectedId);
     },
     (tiles) => {
@@ -59,6 +71,7 @@ try {
     },
     () => viewer.scene.requestRender(),
     () => {
+      document.body.dataset.scanState = "failed";
       status.textContent = "Scan could not load";
       emit({ version: 1, type: "failure", message: "Scan could not load" });
     },
@@ -66,11 +79,13 @@ try {
   function selectScan(id: string): void {
     const scan = state.scans.find((s) => s.id === id);
     if (!scan) throw Error("Unknown scan");
-    status.textContent = fixtureMode ? "Simulated fixture" : "";
     if (selectedId !== id) {
+      status.textContent = scan.tilesetURL ? "Loading scan" : "Preview pending";
+      document.body.dataset.scanState = scan.tilesetURL ? "loading" : "pending";
       selectedId = id;
       void scanLayer.select(scan.tilesetURL);
     }
+    flyToScan(id);
     emit({ version: 1, type: "scanSelected", scanId: id });
   }
   function flyToScan(id: string): void {
@@ -85,10 +100,13 @@ try {
       });
       return;
     }
-    viewer.camera.flyTo({
-      destination: Cartesian3.fromDegrees(scan.geo.lon, scan.geo.lat, scan.geo.alt + 100),
-      duration: 0.35,
-    });
+    viewer.camera.flyToBoundingSphere(
+      new BoundingSphere(Cartesian3.fromDegrees(scan.geo.lon, scan.geo.lat, scan.geo.alt), 30),
+      {
+        offset: new HeadingPitchRange(0, -0.7, 120),
+        duration: 0.35,
+      },
+    );
   }
   function polygons(values: number[][][][], id: string, color: Color): void {
     for (const [index, rings] of values.entries()) {
@@ -133,6 +151,22 @@ try {
             );
             polygons(next.boundary, "boundary", Color.GREEN);
             for (const scan of next.scans) polygons(scan.polygons, `scan:${scan.id}`, Color.CYAN);
+            if (next.scans.length === 0) {
+              status.textContent = "No scans yet";
+              const points = next.boundary
+                .flatMap((polygon) => polygon[0] ?? [])
+                .flatMap((point) => {
+                  const [lon, lat] = point;
+                  return lon === undefined || lat === undefined
+                    ? []
+                    : [Cartesian3.fromDegrees(lon, lat)];
+                });
+              if (points.length)
+                viewer.camera.flyToBoundingSphere(BoundingSphere.fromPoints(points), {
+                  offset: new HeadingPitchRange(0, -0.7, 0),
+                  duration: 0.35,
+                });
+            }
             viewer.scene.requestRender();
           },
           selectScan,
@@ -160,6 +194,8 @@ try {
   window.addEventListener(
     "pagehide",
     () => {
+      removeBasemap();
+      mapStatus.remove();
       scanLayer.dispose();
       handler.destroy();
       viewer.destroy();
