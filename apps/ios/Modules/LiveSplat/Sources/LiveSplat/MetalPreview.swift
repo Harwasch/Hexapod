@@ -10,14 +10,21 @@
   /// No captions or text are added. The App polls coverageFraction/status as needed.
   public struct LiveSplatView: UIViewRepresentable {
     public let renderer: DefaultLiveSplatRenderer
-    public init(renderer: DefaultLiveSplatRenderer) { self.renderer = renderer }
-    public func makeUIView(context: Context) -> LiveSplatOverlay {
-      LiveSplatOverlay(renderer: renderer)
+    public let staticPreview: Bool
+    public init(renderer: DefaultLiveSplatRenderer, staticPreview: Bool = false) {
+      self.renderer = renderer
+      self.staticPreview = staticPreview
     }
-    public func updateUIView(_ view: LiveSplatOverlay, context: Context) {}
+    public func makeUIView(context: Context) -> LiveSplatOverlay {
+      LiveSplatOverlay(renderer: renderer, staticPreview: staticPreview)
+    }
+    public func updateUIView(_ view: LiveSplatOverlay, context: Context) {
+      if staticPreview { view.refresh() }
+    }
   }
 
   @MainActor public final class LiveSplatOverlay: UIView {
+    private let staticPreview: Bool
     private let renderer: DefaultLiveSplatRenderer
     private let points: PointOverlay
     private var metalView: MTKView?
@@ -25,7 +32,8 @@
     private var link: CADisplayLink?
     private var proxy: DisplayProxy?
     private var pipelineFailure: String?
-    public init(renderer: DefaultLiveSplatRenderer) {
+    public init(renderer: DefaultLiveSplatRenderer, staticPreview: Bool = false) {
+      self.staticPreview = staticPreview
       self.renderer = renderer
       points = PointOverlay(renderer: renderer)
       super.init(frame: .zero)
@@ -85,7 +93,9 @@
       link = nil
       proxy = nil
       metalView?.isPaused = window == nil
-      if window != nil {
+      if window != nil && staticPreview {
+        refresh()
+      } else if window != nil {
         let proxy = DisplayProxy(owner: self)
         let link = CADisplayLink(target: proxy, selector: #selector(DisplayProxy.tick(_:)))
         self.proxy = proxy
@@ -95,8 +105,8 @@
       }
     }
     fileprivate func refresh() {
-      if renderer.status == .training { prepareTraining() }
-      let gaussian = renderer.status == .training
+      if !staticPreview && renderer.status == .training { prepareTraining() }
+      let gaussian = !staticPreview && renderer.status == .training
       metalView?.isHidden = !gaussian || renderer.latestFrame == nil
       points.isHidden = gaussian || renderer.status == .stopped
       points.setNeedsDisplay()

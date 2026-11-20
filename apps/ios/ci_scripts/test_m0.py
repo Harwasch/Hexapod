@@ -61,12 +61,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.workflow["permissions"], {"contents": "read"})
         job = self.workflow["jobs"]["testflight"]
         self.assertEqual(job["if"], "${{ inputs.testflight }}")
-        self.assertEqual(job["needs"], ["packages", "app", "tests"])
+        self.assertEqual(job["needs"], ["packages", "app", "tests", "ui-tests"])
         for step in self.steps[1:]:
             self.assertIn("steps.signing.outputs.ready == 'true'", step["if"])
         self.assertIn("always()", self.steps[-1]["if"])
         jobs = self.workflow["jobs"]
-        self.assertEqual(set(jobs), {"packages", "app", "tests", "testflight"})
+        self.assertEqual(set(jobs), {"packages", "app", "tests", "ui-tests", "testflight"})
         self.assertNotIn("needs", jobs["packages"])
         self.assertNotIn("needs", jobs["app"])
         self.assertEqual(jobs["tests"]["needs"], "app")
@@ -75,7 +75,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(triggers["workflow_dispatch"]["inputs"]["testflight"]["type"], "boolean")
         self.assertEqual(set(triggers["workflow_dispatch"]["inputs"]), {"testflight", "bundle_id"})
         for name, job in jobs.items():
-            self.assertEqual(job["timeout-minutes"], {"packages": 20, "app": 30, "tests": 45, "testflight": 45}[name])
+            self.assertEqual(job["timeout-minutes"], {"packages": 20, "app": 30, "tests": 45, "ui-tests": 40, "testflight": 45}[name])
             self.assertEqual(job["runs-on"], "macos-26")
             select = next(s for s in job["steps"] if s.get("name") == "Select Xcode 26 explicitly")
             self.assertIn("/Applications/Xcode_26*.app", select["run"])
@@ -99,6 +99,8 @@ class WorkflowTests(unittest.TestCase):
                 derived = next(s for s in job["steps"] if s.get("name") == "Cache DerivedData")
                 self.assertIn("project.yml", derived["with"]["key"])
                 self.assertIn("Package.swift", derived["with"]["key"])
+            elif name == "ui-tests":
+                self.assertTrue(any("ui_tests.py" in s.get("run", "") for s in job["steps"]))
             else:
                 self.assertTrue(any("packages.py " in s.get("run", "") for s in job["steps"]))
             if name != "testflight":

@@ -23,6 +23,7 @@ private enum CameraStyle {
   @State private var isPressing = false
   @State private var showSites = false
   @State private var latestThumbnail: UIImage?
+  @State private var fixtureBackground: UIImage?
   private let onCaptures: (() -> Void)?
   private let onSettings: (() -> Void)?
   private let onGlobe: (() -> Void)?
@@ -40,11 +41,36 @@ private enum CameraStyle {
   var body: some View {
     ZStack {
       CameraStyle.background.ignoresSafeArea()
-      ARCameraView(isActive: scenePhase == .active, model: model).ignoresSafeArea()
+      if LaunchMode.current.isUITest {
+        GeometryReader { geometry in
+          Group {
+            if let fixtureBackground {
+              Image(uiImage: fixtureBackground).resizable().scaledToFill()
+            }
+          }
+          .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+          .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            if let directory = LaunchMode.current.previewDirectory {
+              fixtureBackground = await CapturePreview.image(directory: directory)
+            }
+            model.beginUITestPreview(size: geometry.size)
+          }
+        }.ignoresSafeArea()
+          .accessibilityElement(children: .ignore).accessibilityLabel("Fixture camera still")
+          .accessibilityIdentifier("fixture.still")
+      } else {
+        ARCameraView(isActive: scenePhase == .active, model: model).ignoresSafeArea()
+      }
       if model.recording, model.splatEnabled,
+        !LaunchMode.current.isUITest || model.previewGeneration > 0,
         let renderer = model.liveSplat as? DefaultLiveSplatRenderer
       {
-        LiveSplatView(renderer: renderer).allowsHitTesting(false).ignoresSafeArea()
+        LiveSplatView(renderer: renderer, staticPreview: LaunchMode.current.isUITest)
+          .id(LaunchMode.current.isUITest ? model.previewGeneration : 0)
+          .accessibilityElement(children: .ignore).accessibilityLabel("Scan preview")
+          .accessibilityIdentifier(LaunchMode.current.isUITest ? "splat.staticPreview" : "splat.preview")
+          .allowsHitTesting(false).ignoresSafeArea()
       }
       LinearGradient(
         colors: [.clear, .black.opacity(0.65)], startPoint: .center, endPoint: .bottom
@@ -65,12 +91,12 @@ private enum CameraStyle {
           .accessibilityIdentifier("answer.pin.\(pin.id + 1)")
           .position(x: pin.x, y: pin.y)
       }
-      TimelineView(.periodic(from: .now, by: 0.25)) { context in
+      CameraTimeline { date in
         GeometryReader { geometry in
           VStack {
-            header(at: context.date)
+            header(at: date)
             Spacer()
-            if model.simulated {
+            if model.simulated || LaunchMode.current.isUITest {
               Text("Simulated").font(.caption).padding(8).background(.black, in: Capsule())
             }
             if !model.cameraReady {
@@ -239,10 +265,10 @@ private enum CameraStyle {
       )
       .font(.system(size: 24, weight: .medium)).multilineTextAlignment(.center)
       .padding(.horizontal, 12)
-      TimelineView(.animation(minimumInterval: 0.15)) { timeline in
+      CameraTimeline(waveform: true) { date in
         HStack(spacing: 5) {
           ForEach(0..<14) { i in
-            let phase = timeline.date.timeIntervalSinceReferenceDate * 4 + Double(i)
+            let phase = date.timeIntervalSinceReferenceDate * 4 + Double(i)
             let height = CGFloat(10 + 28 * abs(sin(phase)))
             Capsule().fill(CameraStyle.amber).frame(
               width: 5, height: height)
@@ -398,6 +424,7 @@ private struct ProgressRing: View {
                 .system(size: 13, weight: .medium, design: .monospaced))
             }.frame(width: 56, height: 56).accessibilityLabel(
               "Uploaded \(Int(progress * 100)) percent")
+              .accessibilityIdentifier(progress == 1 ? "upload.complete" : "upload.progress")
           }
           VStack(alignment: .leading, spacing: 3) {
             Text(siteName ?? "Capture").font(.system(size: 17, weight: .semibold)).lineLimit(1)
@@ -426,6 +453,7 @@ private struct ProgressRing: View {
       await upload()
       while !Task.isCancelled {
         await queue.refresh(capture)
+        if LaunchMode.current.isUITest { return }
         try? await Task.sleep(for: .seconds(1))
       }
     }
@@ -505,5 +533,20 @@ private struct ProgressRing: View {
         do { sites = try await APIGlobeDataSource(baseURL: root).sites() } catch { failed = true }
       }
     }.tint(CameraStyle.amber).presentationDetents([.medium, .large])
+  }
+}
+
+/// The fixture clock has one date and creates no repeating schedule.
+private struct CameraTimeline<Content: View>: View {
+  var waveform = false
+  @ViewBuilder let content: (Date) -> Content
+  var body: some View {
+    if LaunchMode.current.isUITest {
+      content(LaunchMode.current.date()).animation(nil, value: false)
+    } else if waveform {
+      TimelineView(.animation(minimumInterval: 0.15)) { content($0.date) }
+    } else {
+      TimelineView(.periodic(from: .now, by: 0.25)) { content($0.date) }
+    }
   }
 }

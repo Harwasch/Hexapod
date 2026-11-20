@@ -21,6 +21,7 @@ import "./style.css";
 
 declare global {
   interface Window {
+    hexUITestMode?: boolean;
     globeBridge?: { receive(value: unknown): void };
     webkit?: { messageHandlers?: { globe?: { postMessage(value: BridgeMessage): void } } };
   }
@@ -41,6 +42,12 @@ function emit(message: BridgeMessage): void {
 }
 try {
   const viewer = createGlobeWidget(element("#globe"), element("#credits"));
+  // Set by the native UI-test session before this module runs.
+  if (window.hexUITestMode) {
+    viewer.clock.shouldAnimate = false;
+    viewer.scene.requestRenderMode = true;
+    viewer.scene.maximumRenderTimeChange = Number.POSITIVE_INFINITY;
+  }
   viewer.resolutionScale = 1 / Math.max(1, window.devicePixelRatio);
   viewer.scene.globe.tileCacheSize = 64;
   viewer.scene.globe.maximumScreenSpaceError = 4;
@@ -96,7 +103,7 @@ try {
     if (tiles) {
       viewer.camera.flyToBoundingSphere(tiles.boundingSphere, {
         offset: new HeadingPitchRange(0, -0.7, Math.max(20, tiles.boundingSphere.radius * 3)),
-        duration: 0.35,
+        duration: window.hexUITestMode ? 0 : 0.35,
       });
       return;
     }
@@ -104,7 +111,7 @@ try {
       new BoundingSphere(Cartesian3.fromDegrees(scan.geo.lon, scan.geo.lat, scan.geo.alt), 30),
       {
         offset: new HeadingPitchRange(0, -0.7, 120),
-        duration: 0.35,
+        duration: window.hexUITestMode ? 0 : 0.35,
       },
     );
   }
@@ -164,7 +171,7 @@ try {
               if (points.length)
                 viewer.camera.flyToBoundingSphere(BoundingSphere.fromPoints(points), {
                   offset: new HeadingPitchRange(0, -0.7, 0),
-                  duration: 0.35,
+                  duration: window.hexUITestMode ? 0 : 0.35,
                 });
             }
             viewer.scene.requestRender();

@@ -28,61 +28,80 @@ vi.mock("./basemap", () => ({ installBasemap: vi.fn(() => vi.fn()) }));
 afterEach(() => {
   window.dispatchEvent(new Event("pagehide"));
   delete window.webkit;
+  delete window.hexUITestMode;
 });
-it("boots offline, shares pins, sends native tap IDs, flies to loaded geometry and cleans up", async () => {
-  document.body.innerHTML = '<div id="globe"></div><div id="credits"></div><p id="status"></p>';
-  const postMessage = vi.fn();
-  window.webkit = { messageHandlers: { globe: { postMessage } } };
-  const entities = new EntityCollection();
-  const viewer = {
-    entities,
-    resolutionScale: 1,
-    canvas: document.createElement("canvas"),
-    scene: {
-      globe: {},
-      requestRender: vi.fn(),
-      pick: vi.fn(),
-      primitives: { add: vi.fn(), remove: vi.fn() },
-    },
-    imageryLayers: { add: vi.fn() },
-    camera: { flyTo: vi.fn(), flyToBoundingSphere: vi.fn() },
-    destroy: vi.fn(),
-  };
-  hooks.widget.mockReturnValue(viewer);
-  const tile = { boundingSphere: { radius: 4 }, destroy: vi.fn() };
-  hooks.load.mockResolvedValue(tile);
-  await import("./main");
-  expect(postMessage).toHaveBeenCalledWith({ version: 1, type: "ready" });
-  const bridge = window.globeBridge!;
-  fixtures.slice(0, 3).forEach((fixture) => bridge.receive(fixture));
-  await Promise.resolve();
-  expect(entities.values).toHaveLength(3);
-  expect(hooks.load).toHaveBeenCalledWith("./fixtures/globe-splat/tileset.json");
-  expect(viewer.camera.flyToBoundingSphere).toHaveBeenCalledWith(
-    tile.boundingSphere,
-    expect.any(Object),
-  );
-  bridge.receive(fixtures[1]);
-  expect(hooks.load).toHaveBeenCalledOnce();
-  viewer.scene.pick.mockReturnValue({
-    id: entities.getById(`scan:${fixtures[0]!.snapshot!.scans[0]!.id}:0`),
-  });
-  viewer.camera.flyToBoundingSphere.mockClear();
-  hooks.click({ position: new Cartesian2() });
-  expect(viewer.camera.flyToBoundingSphere).toHaveBeenCalledOnce();
-  const pin = fixtures[0]!.snapshot!.pins[0]!;
-  viewer.scene.pick.mockReturnValue({
-    id: entities.getById(`property-answer:${pin.siteId}:${pin.id}`),
-  });
-  hooks.click({ position: new Cartesian2() });
-  expect(postMessage).toHaveBeenCalledWith({ version: 1, type: "pinTapped", pinId: pin.id });
-  bridge.receive({ version: 1, type: "selectScan", scanId: "absent" });
-  expect(postMessage).toHaveBeenCalledWith({
-    version: 1,
-    type: "failure",
-    message: "Invalid globe command",
-  });
-  bridge.receive({ version: 1, type: "snapshot", snapshot: { pins: [], scans: [], boundary: [] } });
-  expect(entities.values).toHaveLength(0);
-  expect(viewer.scene.primitives.remove).toHaveBeenCalledWith(tile);
-});
+it.each([false, true])(
+  "boots offline, shares pins and frames scans (UI test mode: %s)",
+  async (uiTestMode) => {
+    vi.resetModules();
+    hooks.load.mockClear();
+    window.hexUITestMode = uiTestMode;
+    document.body.innerHTML = '<div id="globe"></div><div id="credits"></div><p id="status"></p>';
+    const postMessage = vi.fn();
+    window.webkit = { messageHandlers: { globe: { postMessage } } };
+    const entities = new EntityCollection();
+    const viewer = {
+      entities,
+      resolutionScale: 1,
+      canvas: document.createElement("canvas"),
+      clock: { shouldAnimate: true },
+      scene: {
+        globe: {},
+        requestRenderMode: false,
+        maximumRenderTimeChange: 0,
+        requestRender: vi.fn(),
+        pick: vi.fn(),
+        primitives: { add: vi.fn(), remove: vi.fn() },
+      },
+      imageryLayers: { add: vi.fn() },
+      camera: { flyTo: vi.fn(), flyToBoundingSphere: vi.fn() },
+      destroy: vi.fn(),
+    };
+    hooks.widget.mockReturnValue(viewer);
+    const tile = { boundingSphere: { radius: 4 }, destroy: vi.fn() };
+    hooks.load.mockResolvedValue(tile);
+    await import("./main");
+    expect(postMessage).toHaveBeenCalledWith({ version: 1, type: "ready" });
+    expect(viewer.clock.shouldAnimate).toBe(!uiTestMode);
+    if (uiTestMode) {
+      expect(viewer.scene.requestRenderMode).toBe(true);
+      expect(viewer.scene.maximumRenderTimeChange).toBe(Number.POSITIVE_INFINITY);
+    }
+    const bridge = window.globeBridge!;
+    fixtures.slice(0, 3).forEach((fixture) => bridge.receive(fixture));
+    await Promise.resolve();
+    expect(entities.values).toHaveLength(3);
+    expect(hooks.load).toHaveBeenCalledWith("./fixtures/globe-splat/tileset.json");
+    expect(viewer.camera.flyToBoundingSphere).toHaveBeenCalledWith(
+      tile.boundingSphere,
+      expect.objectContaining({ duration: uiTestMode ? 0 : 0.35 }),
+    );
+    bridge.receive(fixtures[1]);
+    expect(hooks.load).toHaveBeenCalledOnce();
+    viewer.scene.pick.mockReturnValue({
+      id: entities.getById(`scan:${fixtures[0]!.snapshot!.scans[0]!.id}:0`),
+    });
+    viewer.camera.flyToBoundingSphere.mockClear();
+    hooks.click({ position: new Cartesian2() });
+    expect(viewer.camera.flyToBoundingSphere).toHaveBeenCalledOnce();
+    const pin = fixtures[0]!.snapshot!.pins[0]!;
+    viewer.scene.pick.mockReturnValue({
+      id: entities.getById(`property-answer:${pin.siteId}:${pin.id}`),
+    });
+    hooks.click({ position: new Cartesian2() });
+    expect(postMessage).toHaveBeenCalledWith({ version: 1, type: "pinTapped", pinId: pin.id });
+    bridge.receive({ version: 1, type: "selectScan", scanId: "absent" });
+    expect(postMessage).toHaveBeenCalledWith({
+      version: 1,
+      type: "failure",
+      message: "Invalid globe command",
+    });
+    bridge.receive({
+      version: 1,
+      type: "snapshot",
+      snapshot: { pins: [], scans: [], boundary: [] },
+    });
+    expect(entities.values).toHaveLength(0);
+    expect(viewer.scene.primitives.remove).toHaveBeenCalledWith(tile);
+  },
+);

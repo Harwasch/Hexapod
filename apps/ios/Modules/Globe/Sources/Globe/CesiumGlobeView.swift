@@ -15,6 +15,7 @@
     WKNavigationDelegate
   {
     public static let shared = CesiumGlobeSession()
+    public static let uiTest = CesiumGlobeSession(uiTestMode: true)
     public let webView: WKWebView
     @Published public private(set) var error: String?
     private var bridge = GlobeBridgeState()
@@ -23,9 +24,16 @@
     private var onPin: ((GlobePin) -> Void)?
     private var onScan: ((UUID) -> Void)?
 
-    public override init() {
+    public override convenience init() { self.init(uiTestMode: false) }
+    public init(uiTestMode: Bool) {
       let configuration = WKWebViewConfiguration()
       configuration.websiteDataStore = .nonPersistent()
+      if uiTestMode {
+        configuration.userContentController.addUserScript(
+          WKUserScript(
+            source: "window.hexUITestMode = true;", injectionTime: .atDocumentStart,
+            forMainFrameOnly: true))
+      }
       webView = WKWebView(frame: .zero, configuration: configuration)
       super.init()
       configuration.userContentController.add(WeakGlobeHandler(self), name: "globe")
@@ -136,11 +144,12 @@
     let fixture: Bool
     let onPin: (GlobePin) -> Void
     let onScan: (UUID) -> Void
-    @ObservedObject private var session = CesiumGlobeSession.shared
+    @ObservedObject private var session: CesiumGlobeSession
     public init(
-      snapshot: GlobeSnapshot, scanID: UUID? = nil, fixture: Bool = false,
+      snapshot: GlobeSnapshot, scanID: UUID? = nil, fixture: Bool = false, uiTestMode: Bool = false,
       onPin: @escaping (GlobePin) -> Void, onScan: @escaping (UUID) -> Void
     ) {
+      self.session = uiTestMode ? .uiTest : .shared
       self.snapshot = snapshot
       self.scanID = scanID
       self.fixture = fixture

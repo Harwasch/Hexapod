@@ -69,6 +69,7 @@ import Voice
   let simulated: Bool
   let liveSplat: (any LiveSplatRenderer)?
   private var replayTask: Task<Void, Never>?
+  private var previewTask: Task<Void, Never>?
   var usesLiveCapture: Bool { captureSource.usesLiveSession }
   var canRecord: Bool { usesLiveCapture || (simulated && captureSource.fixtureDirectory != nil) }
   struct ScreenPin: Identifiable {
@@ -76,7 +77,14 @@ import Voice
     let x: CGFloat
     let y: CGFloat
   }
+  private(set) var previewGeneration = 0
+  var previewSize: CGSize = .zero
   var screenPins: [ScreenPin] {
+    if LaunchMode.current.isUITest && simulated {
+      return presentation.entities.indices.map {
+        ScreenPin(id: $0, x: previewSize.width / 2, y: previewSize.height * 0.55)
+      }
+    }
     guard let view = arView else { return [] }
     return presentation.entities.enumerated().compactMap { index, entity in
       let p = entity.anchor.world
@@ -141,7 +149,8 @@ import Voice
         recordingStarted = start
         liveSplat?.start()
       case .stopping:
-        captureDuration = Date().timeIntervalSince(recordingStarted ?? Date())
+        captureDuration = LaunchMode.current.date().timeIntervalSince(
+          recordingStarted ?? LaunchMode.current.date())
         liveSplat?.stop()
       case .saved(let directory):
         savedCapture = directory
@@ -176,6 +185,13 @@ import Voice
     } catch { failed = true }
   }
 
+  func beginUITestPreview(size: CGSize) {
+    previewSize = size
+    guard !usesLiveCapture else { return }
+    overlay = FakeOverlaySink()
+    beginReplay()
+  }
+
   func beginReplay() {
     guard !usesLiveCapture, replayTask == nil else { return }
     replayTask = Task { [weak self] in
@@ -190,6 +206,7 @@ import Voice
           let entities = try await perception.inspect(.init(subject: "subject", tools: [.count]))
           overlay?.update(entities: entities)
           highlight(await perception.selection())
+          if LaunchMode.current.isUITest { break }
         }
       } catch is CancellationError {} catch { failed = true }
     }
@@ -300,7 +317,9 @@ import Voice
     if recording {
       recording = false
       capturePhase = .stopping
-      captureDuration = Date().timeIntervalSince(recordingStarted ?? Date())
+      captureDuration = LaunchMode.current.date().timeIntervalSince(
+        recordingStarted ?? LaunchMode.current.date())
+      previewTask?.cancel()
       liveSplat?.stop()
       let destination = FileManager.default.urls(
         for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -321,11 +340,28 @@ import Voice
       }
     } else if !capturePhase.isBusy {
       clearAnswer()
-      let start = Date()
+      let start = LaunchMode.current.date()
       recordingStarted = start
       capturePhase = .recording(start)
       recording = true
+      previewGeneration = 0
       liveSplat?.start()
+      if LaunchMode.current.isUITest { seedStaticPreview() }
+    }
+  }
+
+  private func seedStaticPreview() {
+    guard let directory = LaunchMode.current.previewDirectory, let renderer = liveSplat else { return }
+    previewTask?.cancel()
+    previewTask = Task {
+      do {
+        try await FixtureSplatPreview.seed(renderer: renderer, directory: directory)
+        try Task.checkCancellation()
+        previewGeneration += 1
+      } catch is CancellationError {} catch {
+        failed = true
+        failureText = "Fixture preview unavailable"
+      }
     }
   }
 
@@ -496,6 +532,8 @@ import Voice
   }
 
   func suspend() {
+    previewTask?.cancel()
+    previewTask = nil
     replayTask?.cancel()
     replayTask = nil
     cameraReady = false

@@ -43,4 +43,4 @@ class GlobeTests(unittest.TestCase):
             if step.get("uses", "").startswith(("actions/upload-artifact", "actions/download-artifact"))
             and step.get("with", {}).get("name") == "ios-globe-resources"
         ]
-        self.assertEqual(artifact_paths, [target, target])
+        self.assertEqual(artifact_paths, [target, target, target])
