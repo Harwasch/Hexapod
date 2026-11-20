@@ -227,8 +227,12 @@ class Smoke:
             self.ask()
         except SmokeFailure as error:
             self.report("FAIL", str(error))
-        except Exception:
-            self.report("FAIL", "request or response failed; details suppressed")
+        except Exception as error:
+            # The exception's type (and a URLError's reason type) cannot carry the key or a
+            # signed URL; its message can, so only the type names are reported.
+            reason = getattr(error, "reason", None)
+            kind = type(error).__name__ + (f"/{type(reason).__name__}" if reason is not None else "")
+            self.report("FAIL", f"request or response failed ({kind}); details suppressed")
         self.refusals()
         if self.capture_id:
             print("Capture id: " + self.capture_id, flush=True)
