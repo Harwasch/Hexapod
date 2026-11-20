@@ -306,25 +306,32 @@ jobs:
         if: steps.signing.outputs.ready == 'true'
         working-directory: apps/ios
         env:
+          HEX_API_PHONE_TOKEN: ${{ secrets.PHONE_API_TOKEN }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           HEX_BUNDLE_ID: ${{ inputs.bundle_id }}
         run: |
+          set -o pipefail
           signing_dir="$RUNNER_TEMP/hex-signing-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           auth=(-allowProvisioningUpdates -authenticationKeyPath "$signing_dir/AuthKey.p8"
             -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
           # Archive with an ad hoc code signature: an automatically signed archive asks for a
           # development profile, which needs a registered device. The export below re-signs
           # for the App Store with a cloud-managed distribution certificate (Admin-role key).
-          xcodebuild archive -project Hex.xcodeproj -scheme Hex -configuration Release \
+          xcodebuild archive -quiet -project Hex.xcodeproj -scheme Hex -configuration Release \
             -destination 'generic/platform=iOS' -jobs 4 \
             -archivePath "$signing_dir/Hex.xcarchive" \
             -derivedDataPath build/DerivedData \
             HEX_BUNDLE_ID="$HEX_BUNDLE_ID" HEX_API_BASE_URL="$HEX_API_BASE_URL" \
-            HEX_WEB_BASE_URL="$HEX_WEB_BASE_URL" DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            HEX_WEB_BASE_URL="$HEX_WEB_BASE_URL" HEX_API_PHONE_TOKEN="$HEX_API_PHONE_TOKEN" DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY=- AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER"
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" 2>&1 | python3 -u -c '
+          import os, sys
+          token = os.environ.get("HEX_API_PHONE_TOKEN", "")
+          for line in sys.stdin:
+              sys.stdout.write(line.replace(token, "<phone credential>") if token else line)
+          '
           xcodebuild -exportArchive -archivePath "$signing_dir/Hex.xcarchive" \
             -exportOptionsPlist "$signing_dir/ExportOptions.plist" \
             -exportPath "$signing_dir/export" "${auth[@]}"

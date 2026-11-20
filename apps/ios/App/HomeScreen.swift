@@ -162,7 +162,7 @@ private enum HexStyle {
             .foregroundStyle(HexStyle.muted).frame(minHeight: 44)
         }
         if capture.local.upload?.jobID == nil {
-          if APICredentials.writeToken.isEmpty {
+          if APICredentials.token.isEmpty {
             NavigationLink("Sign in") { SettingsScreen(registry: registry) }.frame(minHeight: 44)
           } else {
             Button("Retry upload", systemImage: "arrow.clockwise") {

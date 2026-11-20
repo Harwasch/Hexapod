@@ -233,7 +233,7 @@ enum ProviderError: Error, CustomStringConvertible {
 struct ServiceConfiguration: Sendable {
   let baseURL: URL?
   private let tokenOverride: String?
-  var writeToken: String { tokenOverride ?? APICredentials.writeToken }
+  var writeToken: String { tokenOverride ?? APICredentials.token }
   let webBaseURL: URL?
   init(baseURL: URL?, writeToken: String = "", webBaseURL: URL? = nil) {
     self.baseURL = baseURL

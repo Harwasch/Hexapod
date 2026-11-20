@@ -57,7 +57,7 @@ import Upload
             directory: directory, archive: archive,
             name: chosenName ?? "Capture", siteID: chosenSiteID, apiBase: api,
             token: {
-              let token = APICredentials.writeToken
+              let token = APICredentials.token
               guard !token.isEmpty else { throw APICredentials.CredentialError.unavailable }
               return token
             })
@@ -106,7 +106,7 @@ import Upload
           uploader = try await Task.detached {
             try BundleUploader(
               directory: capture.uploadDirectory, apiBase: base,
-              token: { APICredentials.writeToken })
+              token: { APICredentials.token })
           }.value
         }
         uploaders[capture.id] = uploader

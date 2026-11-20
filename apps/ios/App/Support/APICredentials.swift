@@ -4,8 +4,24 @@ import Foundation
   import Security
 #endif
 
-/// Shared by Settings and background uploads. Tokens never go in preferences or the bundle.
+/// Resolves the effective API credential; Settings edits only the pasted Keychain value.
+struct TokenProvider {
+  static func resolve(pasted: String, bundled: String?) -> String? {
+    let pasted = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !pasted.isEmpty { return pasted }
+    let bundled = (bundled ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    return bundled.isEmpty || bundled.contains("$(") ? nil : bundled
+  }
+}
+
+/// Shared by Settings and background uploads. Pasted tokens stay in the Keychain.
 enum APICredentials {
+  static var token: String {
+    TokenProvider.resolve(
+      pasted: writeToken,
+      bundled: Bundle.main.object(forInfoDictionaryKey: "HEX_API_PHONE_TOKEN") as? String
+    ) ?? ""
+  }
   enum CredentialError: Error { case unavailable, keychain(Int32) }
   static var writeToken: String {
     #if canImport(Security)

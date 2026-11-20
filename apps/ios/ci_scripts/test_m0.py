@@ -105,6 +105,51 @@ class WorkflowTests(unittest.TestCase):
                 artifact = next(s for s in job["steps"] if s.get("name", "").startswith("Upload "))
                 self.assertEqual(artifact["if"], "${{ always() }}")
 
+    def test_phone_key_is_only_supplied_to_archive(self):
+        jobs = self.workflow["jobs"]
+        found = []
+        for name, job in jobs.items():
+            for step in job["steps"]:
+                if "PHONE_API_TOKEN" in json.dumps(step):
+                    found.append((name, step))
+        self.assertEqual(len(found), 1)
+        name, archive = found[0]
+        self.assertEqual(name, "testflight")
+        self.assertEqual(archive["env"]["HEX_API_PHONE_TOKEN"], "${{ secrets.PHONE_API_TOKEN }}")
+        self.assertIn("xcodebuild archive", archive["run"])
+        self.assertNotIn("secrets.API_WRITE_TOKEN", json.dumps(self.workflow))
+        project = yaml.safe_load((IOS / "project.yml").read_text())
+        self.assertEqual(project["settings"]["base"]["HEX_API_PHONE_TOKEN"], "")
+        self.assertEqual(project["targets"]["Hex"]["info"]["properties"]["HEX_API_PHONE_TOKEN"], "$(HEX_API_PHONE_TOKEN)")
+
+    def test_archive_redacts_phone_key_and_preserves_failures(self):
+        run = next(s for s in self.steps if "xcodebuild archive" in s.get("run", ""))["run"]
+        archive = run[:run.index("xcodebuild -exportArchive")]
+        with tempfile.TemporaryDirectory() as directory:
+            xcode = Path(directory) / "xcodebuild"
+            xcode.write_text(
+                "#!/usr/bin/env python3\nimport os, sys\n"
+                "print(os.environ['HEX_API_PHONE_TOKEN'])\n"
+                "print(os.environ['HEX_API_PHONE_TOKEN'], file=sys.stderr)\n"
+                "sys.exit(int(os.environ['ARCHIVE_EXIT']))\n"
+            )
+            xcode.chmod(0o700)
+            env = dict(os.environ)
+            env.update(
+                PATH=directory + os.pathsep + env["PATH"], RUNNER_TEMP=directory,
+                GITHUB_RUN_ID="1", GITHUB_RUN_ATTEMPT="1", GITHUB_RUN_NUMBER="1",
+                HEX_API_PHONE_TOKEN="private-phone-fixture", ASC_KEY_ID="id",
+                ASC_ISSUER_ID="issuer", APPLE_TEAM_ID="team", HEX_BUNDLE_ID="app",
+                HEX_API_BASE_URL="https://example.com", HEX_WEB_BASE_URL="https://example.com",
+            )
+            for code in (0, 17):
+                env["ARCHIVE_EXIT"] = str(code)
+                result = subprocess.run(["bash", "-eu", "-c", archive], env=env,
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, code, result.stderr)
+                self.assertNotIn(env["HEX_API_PHONE_TOKEN"], result.stdout + result.stderr)
+                self.assertIn("<phone credential>", result.stdout)
+
     def test_every_missing_secret_skips_without_disclosing_values(self):
         for missing in (*self.names, "all", None):
             with self.subTest(missing=missing), tempfile.TemporaryDirectory() as directory:

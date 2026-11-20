@@ -6,6 +6,7 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
+    HEX_API_PHONE_TOKEN: ""
     HEX_API_BASE_URL: https://twin-api.fly.dev
     HEX_WEB_BASE_URL: https://twin-web-f57.pages.dev
     HEX_BUNDLE_ID: com.harwasch.hex
@@ -82,6 +83,7 @@ targets:
       path: build/Info.plist
       properties:
         CFBundleDisplayName: Hex
+        HEX_API_PHONE_TOKEN: $(HEX_API_PHONE_TOKEN)
         HEX_API_BASE_URL: $(HEX_API_BASE_URL)
         HEX_WEB_BASE_URL: $(HEX_WEB_BASE_URL)
         NSCameraUsageDescription: Hex uses the camera to scan your surroundings.
