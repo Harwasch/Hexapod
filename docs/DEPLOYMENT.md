@@ -2067,9 +2067,13 @@ and `bundle_id` inputs. New runs cancel superseded runs on the same ref. The `pa
 `packages` builds every local module and AppSupport for iOS Simulator, retains every
 package log, and reports all failures together. `app` builds the unsigned simulator app
 with macro validation skipped, retains its raw log alongside formatted console output,
-and lists every `error:` line in the step summary. `tests` follows `app` (30-minute limit),
+and lists every `error:` line in the step summary. `tests` follows `app` (45-minute limit),
 running each package with test targets on an available iPhone 17 Pro simulator, or the
-newest available iPhone/runtime. SwiftPM and app DerivedData are cached by manifests.
+newest available iPhone/runtime. It also generates the `HexUITests` scheme and runs
+app UI flows on that simulator. Screenshot attachments are retained on passing tests,
+exported with `xcresulttool export attachments`, and uploaded as `ios-ui-screenshots`
+even after a test failure. `ios-ui-result` retains the result bundle and raw UI log.
+SwiftPM and app DerivedData are cached by manifests.
 
 With `testflight=true`, `testflight` waits for all three jobs (45-minute limit), then
 archives, signs and uploads the app. It skips with a message unless all four of these
@@ -2092,6 +2096,20 @@ The package build needs the generated Globe resource directory even for compilat
 Xcode Cloud's `ci_post_clone.sh` uses the same command and requires Node 22.12+, pnpm 10
 and the installed web dependencies in its environment. The generated approximately 11 MB
 resource tree is ignored in git; the source entry, schema and tiny splat fixture are tracked.
+All three globe builds receive the existing `VITE_CESIUM_ION_ACCESS_TOKEN` repository
+secret, the same public read token used by the deployed web build. The embedded globe
+uses world imagery and terrain with that token. Without it, OpenStreetMap imagery
+covers bundled Natural Earth; a network failure keeps the bundled map and displays
+Map offline. Terrain unavailability is visible. No server credential enters the bundle.
+
+The app's public `HEX_API_BASE_URL` defaults to `https://twin-api.fly.dev` (the app
+named in `fly.toml`), and `HEX_WEB_BASE_URL` to `https://twin-web-f57.pages.dev`.
+The workflow uses `vars.VITE_API_BASE_URL` when set and explicitly passes both build
+settings to app builds, UI tests and archives. These are substituted into Info.plist.
+The API write token is pasted into Settings at runtime and stored in the Keychain.
+No write credential is supplied by CI or committed. Debug fixture media is copied
+only into Debug app bundles; Release removes it.
+
 See [Globe testing](../apps/ios/Modules/Globe/TESTING.md) for local commands and device gates.
 No deployment or workflow run is required to build these resources locally.
 
