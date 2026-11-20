@@ -49,7 +49,7 @@ from app.worlds.router import router as worlds_router
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     # 401 is documented API-wide rather than per route: it is the shared write token's
-    # answer on every mutating endpoint, and a read never raises it.
+    # answer on mutating endpoints and on reads outside a phone key's scope.
     401: {"model": Problem, "description": "Missing or wrong write token"},
     404: {"model": Problem, "description": "Not found"},
     409: {"model": Problem, "description": "Conflict"},

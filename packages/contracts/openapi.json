@@ -27333,12 +27333,17 @@
     },
     "securitySchemes": {
       "phoneKey": {
-        "description": "The phone key, as `Authorization: Bearer <key>`. Opens only /phone routes.",
+        "description": "The phone key, as `Authorization: Bearer <key>`, for legacy phone operations.",
         "scheme": "bearer",
         "type": "http"
       },
       "uploadToken": {
         "description": "Either the shared write token (`API_WRITE_TOKEN`), or a capture handoff token from `POST /captures/{capture_id}/handoff`. A handoff token is accepted only on this capture's upload endpoints and only until it expires.",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "writeOrPhoneKey": {
+        "description": "The write token or a PBKDF2-checked phone key. Phone keys reach only their own capture bundles and questions, and property reads for their captures' sites.",
         "scheme": "bearer",
         "type": "http"
       },
@@ -27825,7 +27830,7 @@
         },
         "security": [
           {
-            "writeToken": []
+            "writeOrPhoneKey": []
           }
         ],
         "summary": "Ask",
@@ -28651,7 +28656,7 @@
         },
         "security": [
           {
-            "writeToken": []
+            "writeOrPhoneKey": []
           }
         ],
         "summary": "Begin or resume a capture bundle by a client-persisted UUID",
@@ -28727,6 +28732,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeOrPhoneKey": []
+          }
+        ],
         "summary": "Get a capture, its files and its jobs",
         "tags": [
           "captures"
@@ -28822,7 +28832,7 @@
         },
         "security": [
           {
-            "writeToken": []
+            "writeOrPhoneKey": []
           }
         ],
         "summary": "Register or recover the bundle archive's multipart upload",
@@ -29672,6 +29682,9 @@
         "security": [
           {
             "uploadToken": []
+          },
+          {
+            "writeOrPhoneKey": []
           }
         ],
         "summary": "Complete a file's multipart upload",
@@ -29780,6 +29793,9 @@
         "security": [
           {
             "uploadToken": []
+          },
+          {
+            "writeOrPhoneKey": []
           }
         ],
         "summary": "Presign the next window of parts",
@@ -30196,7 +30212,7 @@
         },
         "security": [
           {
-            "writeToken": []
+            "writeOrPhoneKey": []
           }
         ],
         "summary": "Queue or recover the bundle's reconstruction job",
@@ -42551,6 +42567,11 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeOrPhoneKey": []
+          }
+        ],
         "summary": "Entities",
         "tags": [
           "property-memory"
@@ -42730,7 +42751,7 @@
         },
         "security": [
           {
-            "writeToken": []
+            "writeOrPhoneKey": []
           }
         ],
         "summary": "Search",

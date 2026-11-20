@@ -139,11 +139,13 @@ def test_dedupe_requires_label_time_and_measured_uncertainty() -> None:
 
 def test_router_search_uses_bound_property_and_paginates(monkeypatch: pytest.MonkeyPatch) -> None:
     from sqlalchemy.orm import Session
+    from starlette.requests import Request
 
     from app.api import property_memory as routes
 
     monkeypatch.setattr(routes, "PostgresMemory", lambda db: FakeMemory())
+    request = Request({"type": "http"})
     with Session() as db:
-        result = routes.entities(SITE, db, MemoryQuery(limit=1, label="oak"))
+        result = routes.entities(SITE, db, MemoryQuery(limit=1, label="oak"), request)
         assert result["nextOffset"] == 1 and result["items"][0]["siteId"] == str(SITE)
-        assert routes.search(SITE, MemoryQuery(limit=2), db)["nextOffset"] is None
+        assert routes.search(SITE, MemoryQuery(limit=2), db, request)["nextOffset"] is None

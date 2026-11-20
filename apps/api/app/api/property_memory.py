@@ -3,10 +3,11 @@
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api.deps import DbSession, RequireWriteToken
+from app.api.deps import DbSession, PhoneRead, RequireWriteOrPhoneKey, RequireWriteToken
+from app.services import phone_access
 from app.services.property_memory import (
     MemoryQuery,
     Observation,
@@ -17,16 +18,22 @@ from app.services.property_memory import (
 router = APIRouter(prefix="/properties", tags=["property-memory"])
 
 
-@router.get("/{site_id}/entities")
+@router.get("/{site_id}/entities", dependencies=[PhoneRead])
 def entities(
-    site_id: uuid.UUID, db: DbSession, query: Annotated[MemoryQuery, Query()]
+    site_id: uuid.UUID, db: DbSession, query: Annotated[MemoryQuery, Query()], request: Request
 ) -> dict[str, Any]:
+    if getattr(request.state, "api_credential", None) == "phone":
+        phone_access.site(db, site_id)
     return _page(PostgresMemory(db).entities(site_id, query), query)
 
 
-@router.post("/{site_id}/entities/search", dependencies=[RequireWriteToken])
-def search(site_id: uuid.UUID, query: MemoryQuery, db: DbSession) -> dict[str, Any]:
+@router.post("/{site_id}/entities/search", dependencies=[RequireWriteOrPhoneKey])
+def search(
+    site_id: uuid.UUID, query: MemoryQuery, db: DbSession, request: Request
+) -> dict[str, Any]:
     """Read-only POST permits polygon/JSON attribute filters without URL-size limits."""
+    if getattr(request.state, "api_credential", None) == "phone":
+        phone_access.site(db, site_id)
     return _page(PostgresMemory(db).entities(site_id, query), query)
 
 

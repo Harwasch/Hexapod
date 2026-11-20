@@ -11,7 +11,7 @@ from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_write_token
+from app.api.deps import require_write_or_phone_key, require_write_token
 from app.api.v1.captures import router
 from app.config import Settings
 from app.models import Capture, CaptureFile, Job
@@ -21,13 +21,13 @@ from app.services import capture_bundles, captures, handoff, jobs
 from app.services.errors import ConflictError, InvalidInputError, UnauthorizedError
 
 
-def test_new_routes_require_write_token_not_handoff() -> None:
+def test_bundle_routes_require_write_or_phone_key_not_handoff() -> None:
     routes = [
         route for route in router.routes if isinstance(route, APIRoute) and "bundle" in route.path
     ]
     assert len(routes) == 3
     for route in routes:
-        assert any(dep.dependency is require_write_token for dep in route.dependencies)
+        assert any(dep.dependency is require_write_or_phone_key for dep in route.dependencies)
     settings = Settings(_env_file=None, api_write_token="test-only-write-token")
     scoped = handoff.issue(handoff.key_for(settings), uuid.uuid4(), now=int(time.time()))
     with pytest.raises(UnauthorizedError):

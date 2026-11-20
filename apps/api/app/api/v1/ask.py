@@ -8,20 +8,21 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import DbSession, RequireWriteToken, SettingsDep, Storage
+from app.api.deps import DbSession, RequireWriteOrPhoneKey, RequireWriteToken, SettingsDep, Storage
 from app.models import Capture, ScanEntity
 from app.models.enums import UploadStatus
 from app.schemas.ask import AskEvent, AskRequest, DoneEvent, Entity, StatusEvent
 from app.schemas.base import CamelModel
 from app.services import ask_entities as ledger
+from app.services import phone_access
 from app.services.ask_analysis import ModalAnalysis
 from app.services.ask_reasoner import Answering, Reasoner, ScriptedAnswerModel, ToolModel
 from app.services.ask_replay import ReplayAnswerer, recorded_events
-from app.services.errors import InvalidInputError
+from app.services.errors import InvalidInputError, UnauthorizedError
 from app.services.property_memory import PostgresMemory
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["ask"], dependencies=[RequireWriteToken])
+router = APIRouter(tags=["ask"])
 
 
 def reasoner(settings: SettingsDep, storage: Storage, db: DbSession) -> Answering:
@@ -62,6 +63,7 @@ def required_capture(db: DbSession, capture_id: uuid.UUID, site_id: uuid.UUID | 
     "/captures/{capture_id}/entities",
     response_model=list[EntityRecord],
     response_model_exclude_none=True,
+    dependencies=[RequireWriteToken],
 )
 def list_entities(
     db: DbSession,
@@ -78,6 +80,7 @@ def list_entities(
     "/captures/{capture_id}/entities",
     response_model=EntityRecord,
     response_model_exclude_none=True,
+    dependencies=[RequireWriteToken],
     status_code=201,
 )
 def create_entity(
@@ -93,6 +96,7 @@ def create_entity(
     "/captures/{capture_id}/entities/{entity_id}",
     response_model=EntityRecord,
     response_model_exclude_none=True,
+    dependencies=[RequireWriteToken],
 )
 def read_entity(
     db: DbSession, capture_id: uuid.UUID, entity_id: uuid.UUID, site_id: uuid.UUID | None = None
@@ -105,6 +109,7 @@ def read_entity(
     "/captures/{capture_id}/entities/{entity_id}",
     response_model=EntityRecord,
     response_model_exclude_none=True,
+    dependencies=[RequireWriteToken],
 )
 def update_entity(
     db: DbSession,
@@ -122,7 +127,9 @@ def update_entity(
     return envelope(row, capture)
 
 
-@router.delete("/captures/{capture_id}/entities/{entity_id}", status_code=204)
+@router.delete(
+    "/captures/{capture_id}/entities/{entity_id}", status_code=204, dependencies=[RequireWriteToken]
+)
 def delete_entity(
     db: DbSession, capture_id: uuid.UUID, entity_id: uuid.UUID, site_id: uuid.UUID | None = None
 ) -> Response:
@@ -138,6 +145,7 @@ class EventStreamResponse(StreamingResponse):
 
 @router.post(
     "/ask",
+    dependencies=[RequireWriteOrPhoneKey],
     response_class=EventStreamResponse,
     responses={
         200: {"model": AskEvent, "description": "One AskEvent JSON per SSE data line"},
@@ -160,7 +168,21 @@ async def ask(
         or len(payload.id) > 256
     ):
         raise InvalidInputError("question exceeds analysis resource limits")
-    capture = ledger.capture_scope(db, payload.scan_id)
+    is_phone = getattr(request.state, "api_credential", None) == "phone"
+    capture: Capture | None
+    if is_phone and payload.scan_id is not None:
+        try:
+            capture_id = uuid.UUID(payload.scan_id)
+        except ValueError as exc:
+            raise InvalidInputError("scanId must be a capture UUID") from exc
+        capture = phone_access.capture(db, capture_id)
+    else:
+        capture = ledger.capture_scope(db, payload.scan_id)
+    if is_phone:
+        if payload.scope != "property" and capture is None:
+            raise UnauthorizedError("That phone key is not right.")
+        if payload.site_id is not None:
+            phone_access.site(db, uuid.UUID(payload.site_id))
     ledger.request_site(db, payload, capture)
     if capture is None and (payload.keyframes or payload.device_entities):
         raise InvalidInputError("scene evidence requires scanId")

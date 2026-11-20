@@ -7,11 +7,12 @@ import uuid
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.config import Settings
 from app.models import Capture, Job
 from app.models.enums import CaptureKind, UploadStatus
 from app.schemas.capture import CaptureCreate, CaptureFileCreate, CaptureFileRead
 from app.schemas.job import JobCreate
-from app.services import captures, jobs
+from app.services import captures, jobs, phone_access
 from app.services.errors import ConflictError, InvalidInputError
 from app.storage import ObjectStorage
 
@@ -20,7 +21,13 @@ CONTENT_TYPE = "application/x-hex-capture"
 PARAMS = {"normalize": {"capture_bundle": True}, "pose": {"capture_bundle": True}}
 
 
-def begin(db: Session, bundle_id: uuid.UUID, payload: CaptureCreate) -> Capture:
+def begin(
+    db: Session,
+    bundle_id: uuid.UUID,
+    payload: CaptureCreate,
+    *,
+    phone_settings: Settings | None = None,
+) -> Capture:
     # The client persists this UUID BEFORE its first request. A lost response must not
     # create a second capture. Transaction lock also covers simultaneous first requests.
     key = int.from_bytes(bundle_id.bytes[:8], "big", signed=True)
@@ -28,11 +35,20 @@ def begin(db: Session, bundle_id: uuid.UUID, payload: CaptureCreate) -> Capture:
     slug = f"hex-{bundle_id}"
     existing = db.scalar(select(Capture).where(Capture.slug == slug))
     if existing is not None:
+        if phone_settings is not None:
+            phone_access.capture(db, existing.id)
         if existing.metadata_.get("bundleFormat") != FORMAT:
             raise ConflictError("bundle identifier belongs to another capture")
         return existing
     if payload.kind != CaptureKind.VIDEO:
         raise InvalidInputError("a capture bundle must have kind video")
+    if phone_settings is not None:
+        phone_access.creation_budget(db, phone_settings)
+        if payload.site_id is not None:
+            phone_access.check_join_site(db, payload.site_id)
+        payload = payload.model_copy(
+            update={"metadata": {**payload.metadata, "origin": phone_access.ORIGIN}}
+        )
     value = payload.model_copy(
         update={"slug": slug, "metadata": {**payload.metadata, "bundleFormat": FORMAT}}
     )

@@ -1317,15 +1317,14 @@ about 59 bits — not the key, and slow to attack — but it is in a public repo
 offline guesser has all the time it likes and the API's rate limit does not apply. To take
 it out of the repository:
 
-1. Generate a new key (the old hash has been public, so rotate rather than move it) and its
-   hash, in `apps/api`:
-   `uv run python -c "import secrets, sys; from app.services.phone_key import hash_key; k = '-'.join(secrets.token_hex(2) for _ in range(4)); print(k); print(hash_key(k, salt=secrets.token_bytes(16)), file=sys.stderr)"`
-   — the key on stdout is for the phone; the hash on stderr is for Fly.
-2. `fly secrets set -a twin-api API_PHONE_KEY_HASH='<the hash>'` — single quotes, because
-   the hash contains `$`.
-3. In the same change, delete the `API_PHONE_KEY_HASH` line from `fly.toml`'s `[env]`, so
-   the old value cannot come back with a later deploy, and deploy.
-4. On each phone: **Forget key**, then type the new one.
+1. Move the existing hash into Fly secret `API_PHONE_KEY_HASH`, preserving its value
+   so current phones keep working. Use single quotes in the shell because hashes contain `$`.
+2. Delete the `API_PHONE_KEY_HASH` line from `fly.toml`'s `[env]` in the same deployment,
+   so a later deploy cannot restore an obsolete value.
+3. For future rotation, append a hash instead of replacing the existing one. The
+   [iPhone deployment instructions](#iphone-app--testflight-optional) describe the stdin
+   hash helper and the GitHub secret for new builds. Retire an old hash only after its
+   phones/builds have moved to a current key.
 
 ### MinIO, for development
 
@@ -2100,14 +2099,44 @@ All three globe builds receive the existing `VITE_CESIUM_ION_ACCESS_TOKEN` repos
 secret, the same public read token used by the deployed web build. The embedded globe
 uses world imagery and terrain with that token. Without it, OpenStreetMap imagery
 covers bundled Natural Earth; a network failure keeps the bundled map and displays
-Map offline. Terrain unavailability is visible. No server credential enters the bundle.
+Map offline. Terrain unavailability is visible. No server secret enters the globe bundle.
 
 The app's public `HEX_API_BASE_URL` defaults to `https://twin-api.fly.dev` (the app
 named in `fly.toml`), and `HEX_WEB_BASE_URL` to `https://twin-web-f57.pages.dev`.
 The workflow uses `vars.VITE_API_BASE_URL` when set and explicitly passes both build
 settings to app builds, UI tests and archives. These are substituted into Info.plist.
-The API write token is pasted into Settings at runtime and stored in the Keychain.
-No write credential is supplied by CI or committed. Debug fixture media is copied
+Settings stores a pasted API credential in the Keychain and shows only that value.
+It overrides the bundled phone key; clearing it restores the bundled fallback.
+The optional GitHub secret `PHONE_API_TOKEN` is the phone key itself. Only the
+TestFlight archive step receives it, through its environment as `HEX_API_PHONE_TOKEN`,
+and embeds it in Info.plist. Build and test jobs receive no phone key. Empty or
+unexpanded build settings mean no bundled credential. The write token is never
+supplied to the iOS workflow.
+
+On Fly, `API_PHONE_KEY_HASH` holds one or more comma-separated PBKDF2 hashes, never
+the key itself. All accepted keys share the phone-created capture scope and rolling
+`API_PHONE_DAILY_CAPTURES` budget. To hash a key without putting it in command arguments
+or shell history, run this from `apps/api` and type/paste the key at the hidden prompt:
+
+```bash
+read -rs -p 'Phone key: ' phone_key; printf '\n'
+printf '%s' "$phone_key" | uv run python -m app.scripts.phone_key_hash
+unset phone_key
+```
+
+The helper reads stdin, normalizes case and surrounding whitespace, and prints only
+its salted hash. Append that hash to the existing Fly `API_PHONE_KEY_HASH` value,
+separated by a comma, so already-installed builds keep working. Set the same new key
+as GitHub `PHONE_API_TOKEN` for future TestFlight archives; retire an old hash only
+when those builds no longer need access. Do not replace the existing hash during
+this rollout.
+
+The bundled phone key can create/resume its own capture bundles, upload their archive
+parts, queue bundle processing, ask about phone captures or their sites, read its own
+capture status, and read/search entities on those sites. It also retains the existing
+`/phone` routes. It cannot delete, change catalog/admin/worker/research data, dedupe
+entities, or access other captures/sites. Anonymous public reads stay open; supplying
+a recognized phone key on a route outside its allowlist is refused. Debug fixture media is copied
 only into Debug app bundles; Release removes it.
 
 See [Globe testing](../apps/ios/Modules/Globe/TESTING.md) for local commands and device gates.
@@ -2231,7 +2260,7 @@ baked into the web build. See [the testing checklist](WORLDS_LAND_TESTING.md).
 
 ### iPhone deep answers (optional)
 
-`POST /v1/ask` shares `API_WRITE_TOKEN` with catalog writes and reuses the existing
+`POST /v1/ask` accepts `API_WRITE_TOKEN` or the scoped phone key and reuses the existing
 `ANTHROPIC_API_KEY`. No additional API secret is needed. `ASK_MODEL` selects the
 reasoning model independently of other services; keep the identifier in runtime
 configuration. `ASK_ANALYSIS_ENABLED` defaults to false, and `ASK_ANALYSIS_APP`
