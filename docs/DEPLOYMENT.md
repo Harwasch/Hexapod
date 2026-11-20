@@ -2131,6 +2131,13 @@ as GitHub `PHONE_API_TOKEN` for future TestFlight archives; retire an old hash o
 when those builds no longer need access. Do not replace the existing hash during
 this rollout.
 
+**The iPhone app's key has its own Fly secret.** Fly cannot read a secret back, so a
+workflow cannot append to `API_PHONE_KEY_HASH`. The app's key is hashed into
+`API_PHONE_APP_KEY_HASH` instead; the API accepts the keys of both settings with the same
+scope. Actions → **Phone key → Fly** (`.github/workflows/phone-key.yml`, dispatch only)
+hashes the `PHONE_API_TOKEN` secret and stages the hash with `flyctl secrets import --stage`,
+so the next **Deploy** applies it. The key is never printed; only the hash reaches Fly.
+
 The bundled phone key can create/resume its own capture bundles, upload their archive
 parts, queue bundle processing, ask about phone captures or their sites, read its own
 capture status, and read/search entities on those sites. It also retains the existing

@@ -1,0 +1,46 @@
+name: Phone key → Fly
+
+# Puts the hash of the iPhone app's phone key (GitHub secret PHONE_API_TOKEN) on Fly as
+# API_PHONE_APP_KEY_HASH, staged for the next deploy. The key never leaves this job's
+# environment and is never printed; only its salted PBKDF2 hash reaches Fly, through
+# stdin. API_PHONE_KEY_HASH (fly.toml, the general phone key) is not touched.
+# Dispatch only: it changes production configuration.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phone-key
+  cancel-in-progress: false
+
+jobs:
+  hash:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check secrets
+        env:
+          PHONE_API_TOKEN: ${{ secrets.PHONE_API_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          [ -n "$PHONE_API_TOKEN" ] || { echo "::error::PHONE_API_TOKEN is not set."; exit 1; }
+          [ -n "$FLY_API_TOKEN" ] || { echo "::error::FLY_API_TOKEN is not set."; exit 1; }
+      - uses: astral-sh/setup-uv@v6
+      - name: Install flyctl
+        run: |
+          curl -L https://fly.io/install.sh | sh
+          echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
+      - name: Stage API_PHONE_APP_KEY_HASH on the Fly app
+        env:
+          PHONE_API_TOKEN: ${{ secrets.PHONE_API_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          app=$(sed -n 's/^app *= *"\(.*\)"/\1/p' fly.toml | head -1)
+          hash=$(printf '%s' "$PHONE_API_TOKEN" | uv run --project apps/api --frozen python -m app.scripts.phone_key_hash)
+          case "$hash" in pbkdf2_sha256\$*) ;; *) echo "::error::hash helper produced no hash"; exit 1 ;; esac
+          printf 'API_PHONE_APP_KEY_HASH=%s\n' "$hash" | flyctl secrets import --app "$app" --stage
+          echo "Staged API_PHONE_APP_KEY_HASH on $app; the next deploy applies it." >> "$GITHUB_STEP_SUMMARY"
