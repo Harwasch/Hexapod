@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "records": {
+    "BridgeGeo": { "lat": "Double", "lon": "Double", "alt": "Double" },
+    "BridgePin": {
+      "id": "String",
+      "siteId": "String",
+      "scanId": "String",
+      "label": "String",
+      "observedAt": "String",
+      "uncertaintyM": "Double?",
+      "geo": "BridgeGeo"
+    },
+    "BridgeScan": {
+      "id": "String",
+      "geo": "BridgeGeo",
+      "polygons": "Double[][][][]",
+      "tilesetURL": "String?"
+    },
+    "BridgeSnapshot": {
+      "pins": "BridgePin[]",
+      "scans": "BridgeScan[]",
+      "boundary": "Double[][][][]"
+    }
+  },
+  "messages": {
+    "snapshot": { "snapshot": "BridgeSnapshot" },
+    "selectScan": { "scanId": "String" },
+    "flyToScan": { "scanId": "String" },
+    "ready": {},
+    "pinTapped": { "pinId": "String" },
+    "scanSelected": { "scanId": "String" },
+    "failure": { "message": "String" }
+  }
+}

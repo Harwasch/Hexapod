@@ -95,6 +95,7 @@ class Redactor:
                 settings.api_write_token,
                 settings.api_handoff_secret,
                 settings.api_phone_key_hash,
+                settings.api_phone_app_key_hash,
                 settings.object_storage_access_key,
                 settings.object_storage_secret_key,
                 settings.anthropic_api_key,

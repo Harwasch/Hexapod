@@ -146,6 +146,23 @@
         "title": "AlignmentCapRead",
         "type": "object"
       },
+      "Anchor": {
+        "additionalProperties": false,
+        "properties": {
+          "geo": {
+            "$ref": "#/components/schemas/GeoCoordinate",
+            "title": "Geo"
+          },
+          "world": {
+            "$ref": "#/components/schemas/Vector3"
+          }
+        },
+        "required": [
+          "world"
+        ],
+        "title": "Anchor",
+        "type": "object"
+      },
       "AppearancePackage": {
         "properties": {
           "appearance": {
@@ -778,6 +795,65 @@
           "references"
         ],
         "title": "ArtifactRow",
+        "type": "object"
+      },
+      "AskRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "deviceEntities": {
+            "items": {
+              "$ref": "#/components/schemas/Entity"
+            },
+            "title": "Deviceentities",
+            "type": "array"
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "keyframes": {
+            "items": {
+              "$ref": "#/components/schemas/KeyframeRef"
+            },
+            "title": "Keyframes",
+            "type": "array"
+          },
+          "location": {
+            "$ref": "#/components/schemas/GeoCoordinate",
+            "title": "Location"
+          },
+          "question": {
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "scanId": {
+            "minLength": 1,
+            "title": "Scanid",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "scan",
+              "property"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "siteId": {
+            "minLength": 1,
+            "title": "Siteid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "question",
+          "keyframes",
+          "deviceEntities"
+        ],
+        "title": "AskRequest",
         "type": "object"
       },
       "AssetBase": {
@@ -5854,6 +5930,28 @@
         "title": "DatumShift",
         "type": "object"
       },
+      "DedupeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/Observation"
+            },
+            "maxItems": 500,
+            "title": "Candidates",
+            "type": "array"
+          },
+          "observation": {
+            "$ref": "#/components/schemas/Observation"
+          }
+        },
+        "required": [
+          "observation",
+          "candidates"
+        ],
+        "title": "DedupeRequest",
+        "type": "object"
+      },
       "DirectorRequest": {
         "additionalProperties": false,
         "properties": {
@@ -6434,6 +6532,19 @@
         "title": "DocumentSearchHit",
         "type": "object"
       },
+      "DoneEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "done",
+            "default": "done",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "DoneEvent",
+        "type": "object"
+      },
       "EcologyRequest": {
         "additionalProperties": false,
         "properties": {
@@ -6468,6 +6579,130 @@
           }
         },
         "title": "EcologyRequest",
+        "type": "object"
+      },
+      "Entity": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/Anchor"
+          },
+          "attrs": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Attrs",
+            "type": "object"
+          },
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "extent": {
+            "$ref": "#/components/schemas/Extent"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "masks": {
+            "items": {
+              "$ref": "#/components/schemas/MaskReference"
+            },
+            "title": "Masks",
+            "type": "array"
+          },
+          "source": {
+            "$ref": "#/components/schemas/EntitySource"
+          }
+        },
+        "required": [
+          "label",
+          "anchor",
+          "extent",
+          "masks",
+          "confidence",
+          "attrs",
+          "source"
+        ],
+        "title": "Entity",
+        "type": "object"
+      },
+      "EntityEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "$ref": "#/components/schemas/Entity"
+          },
+          "type": {
+            "const": "entity",
+            "default": "entity",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity"
+        ],
+        "title": "EntityEvent",
+        "type": "object"
+      },
+      "EntityRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "entity": {
+            "$ref": "#/components/schemas/Entity"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "scanId": {
+            "format": "uuid",
+            "title": "Scanid",
+            "type": "string"
+          },
+          "siteId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siteid"
+          }
+        },
+        "required": [
+          "id",
+          "scanId",
+          "entity"
+        ],
+        "title": "EntityRecord",
+        "type": "object"
+      },
+      "EntitySource": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "module": {
+            "title": "Module",
+            "type": "string"
+          }
+        },
+        "required": [
+          "module",
+          "model"
+        ],
+        "title": "EntitySource",
         "type": "object"
       },
       "EpochConfidenceRead": {
@@ -7259,6 +7494,33 @@
           "runId"
         ],
         "title": "EvidenceRead",
+        "type": "object"
+      },
+      "Extent": {
+        "additionalProperties": false,
+        "properties": {
+          "x": {
+            "minimum": 0.0,
+            "title": "X",
+            "type": "number"
+          },
+          "y": {
+            "minimum": 0.0,
+            "title": "Y",
+            "type": "number"
+          },
+          "z": {
+            "minimum": 0.0,
+            "title": "Z",
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "z"
+        ],
+        "title": "Extent",
         "type": "object"
       },
       "FeatureBatchItem": {
@@ -8132,6 +8394,34 @@
           "source"
         ],
         "title": "GameResult",
+        "type": "object"
+      },
+      "GeoCoordinate": {
+        "additionalProperties": false,
+        "properties": {
+          "alt": {
+            "title": "Alt",
+            "type": "number"
+          },
+          "lat": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lon",
+            "type": "number"
+          }
+        },
+        "required": [
+          "lat",
+          "lon",
+          "alt"
+        ],
+        "title": "GeoCoordinate",
         "type": "object"
       },
       "GeoJsonSource": {
@@ -10005,6 +10295,39 @@
         ],
         "title": "JoinPointSource",
         "type": "string"
+      },
+      "JsonValue": {},
+      "KeyframeRef": {
+        "additionalProperties": false,
+        "properties": {
+          "depth": {
+            "minLength": 1,
+            "title": "Depth",
+            "type": "string"
+          },
+          "image": {
+            "minLength": 1,
+            "title": "Image",
+            "type": "string"
+          },
+          "index": {
+            "minimum": 0.0,
+            "title": "Index",
+            "type": "integer"
+          },
+          "pose": {
+            "pattern": "^frames\\.jsonl#[0-9]+$",
+            "title": "Pose",
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "image",
+          "pose"
+        ],
+        "title": "KeyframeRef",
+        "type": "object"
       },
       "KnowledgeCellRead": {
         "additionalProperties": false,
@@ -15679,6 +16002,25 @@
         "title": "MapOutput",
         "type": "object"
       },
+      "MaskReference": {
+        "additionalProperties": false,
+        "properties": {
+          "keyframe": {
+            "title": "Keyframe",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "keyframe",
+          "ref"
+        ],
+        "title": "MaskReference",
+        "type": "object"
+      },
       "MemberRead": {
         "additionalProperties": false,
         "properties": {
@@ -15738,6 +16080,123 @@
           "role"
         ],
         "title": "MembershipWrite",
+        "type": "object"
+      },
+      "MemoryQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "attrs": {
+            "additionalProperties": true,
+            "title": "Attrs",
+            "type": "object"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "lat": {
+            "anyOf": [
+              {
+                "maximum": 90.0,
+                "minimum": -90.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lat"
+          },
+          "limit": {
+            "default": 100,
+            "maximum": 500.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "lon": {
+            "anyOf": [
+              {
+                "maximum": 180.0,
+                "minimum": -180.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lon"
+          },
+          "nearest": {
+            "default": false,
+            "title": "Nearest",
+            "type": "boolean"
+          },
+          "offset": {
+            "default": 0,
+            "maximum": 100000.0,
+            "minimum": 0.0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "polygon": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Polygon"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "radius_m": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 100000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Radius M"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Until"
+          }
+        },
+        "title": "MemoryQuery",
         "type": "object"
       },
       "MessageRead": {
@@ -15955,6 +16414,72 @@
           "evidence"
         ],
         "title": "ObjectiveAssessment",
+        "type": "object"
+      },
+      "Observation": {
+        "additionalProperties": false,
+        "description": "Dedup metadata envelope; `entity` remains the unchanged EntitySchema payload.",
+        "properties": {
+          "attrs": {
+            "additionalProperties": true,
+            "title": "Attrs",
+            "type": "object"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "lat": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lon",
+            "type": "number"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "scan_id": {
+            "format": "uuid",
+            "title": "Scan Id",
+            "type": "string"
+          },
+          "site_id": {
+            "format": "uuid",
+            "title": "Site Id",
+            "type": "string"
+          },
+          "uncertainty_m": {
+            "minimum": 0.0,
+            "title": "Uncertainty M",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "site_id",
+          "scan_id",
+          "label",
+          "lat",
+          "lon",
+          "uncertainty_m",
+          "observed_at"
+        ],
+        "title": "Observation",
         "type": "object"
       },
       "ObservedAtSource": {
@@ -24334,6 +24859,26 @@
         "title": "SpeciesTargetResult",
         "type": "object"
       },
+      "SpeechEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "speech",
+            "default": "speech",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "SpeechEvent",
+        "type": "object"
+      },
       "StacSource": {
         "additionalProperties": false,
         "description": "Reference to a STAC item/collection. Resolution to a renderable asset happens client-side.",
@@ -24431,6 +24976,26 @@
           "basis"
         ],
         "title": "StatedAccuracy",
+        "type": "object"
+      },
+      "StatusEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "status",
+            "default": "status",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "StatusEvent",
         "type": "object"
       },
       "StorageReconciliation": {
@@ -25393,6 +25958,30 @@
           "nextPartNumber"
         ],
         "title": "UploadWindow",
+        "type": "object"
+      },
+      "Vector3": {
+        "additionalProperties": false,
+        "properties": {
+          "x": {
+            "title": "X",
+            "type": "number"
+          },
+          "y": {
+            "title": "Y",
+            "type": "number"
+          },
+          "z": {
+            "title": "Z",
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "z"
+        ],
+        "title": "Vector3",
         "type": "object"
       },
       "VegetationObservation": {
@@ -26744,12 +27333,17 @@
     },
     "securitySchemes": {
       "phoneKey": {
-        "description": "The phone key, as `Authorization: Bearer <key>`. Opens only /phone routes.",
+        "description": "The phone key, as `Authorization: Bearer <key>`, for legacy phone operations.",
         "scheme": "bearer",
         "type": "http"
       },
       "uploadToken": {
         "description": "Either the shared write token (`API_WRITE_TOKEN`), or a capture handoff token from `POST /captures/{capture_id}/handoff`. A handoff token is accepted only on this capture's upload endpoints and only until it expires.",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "writeOrPhoneKey": {
+        "description": "The write token or a PBKDF2-checked phone key. Phone keys reach only their own capture bundles and questions, and property reads for their captures' sites.",
         "scheme": "bearer",
         "type": "http"
       },
@@ -27139,6 +27733,109 @@
         "summary": "List artifacts, newest first",
         "tags": [
           "artifacts"
+        ]
+      }
+    },
+    "/api/v1/ask": {
+      "post": {
+        "operationId": "ask_api_v1_ask_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "discriminator": {
+                    "mapping": {
+                      "done": "#/components/schemas/DoneEvent",
+                      "entity": "#/components/schemas/EntityEvent",
+                      "speech": "#/components/schemas/SpeechEvent",
+                      "status": "#/components/schemas/StatusEvent"
+                    },
+                    "propertyName": "type"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/EntityEvent"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SpeechEvent"
+                    },
+                    {
+                      "$ref": "#/components/schemas/StatusEvent"
+                    },
+                    {
+                      "$ref": "#/components/schemas/DoneEvent"
+                    }
+                  ],
+                  "title": "Response 200 Ask Api V1 Ask Post",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "One AskEvent JSON per SSE data line"
+          },
+          "401": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "503": {
+            "description": "Reasoner is not configured"
+          }
+        },
+        "security": [
+          {
+            "writeOrPhoneKey": []
+          }
+        ],
+        "summary": "Ask",
+        "tags": [
+          "ask"
         ]
       }
     },
@@ -27880,6 +28577,94 @@
         ]
       }
     },
+    "/api/v1/captures/bundles/{bundle_id}": {
+      "put": {
+        "operationId": "begin_bundle_api_v1_captures_bundles__bundle_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bundle_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Bundle Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptureRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeOrPhoneKey": []
+          }
+        ],
+        "summary": "Begin or resume a capture bundle by a client-persisted UUID",
+        "tags": [
+          "captures"
+        ]
+      }
+    },
     "/api/v1/captures/{capture_id}": {
       "get": {
         "operationId": "get_capture_api_v1_captures__capture_id__get",
@@ -27947,9 +28732,657 @@
             "description": "Validation error"
           }
         },
+        "security": [
+          {
+            "writeOrPhoneKey": []
+          }
+        ],
         "summary": "Get a capture, its files and its jobs",
         "tags": [
           "captures"
+        ]
+      }
+    },
+    "/api/v1/captures/{capture_id}/bundle-upload": {
+      "put": {
+        "operationId": "register_bundle_api_v1_captures__capture_id__bundle_upload_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureFileCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptureFileRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Object storage is not configured"
+          }
+        },
+        "security": [
+          {
+            "writeOrPhoneKey": []
+          }
+        ],
+        "summary": "Register or recover the bundle archive's multipart upload",
+        "tags": [
+          "captures"
+        ]
+      }
+    },
+    "/api/v1/captures/{capture_id}/entities": {
+      "get": {
+        "operationId": "list_entities_api_v1_captures__capture_id__entities_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "site_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Site Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EntityRecord"
+                  },
+                  "title": "Response List Entities Api V1 Captures  Capture Id  Entities Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "List Entities",
+        "tags": [
+          "ask"
+        ]
+      },
+      "post": {
+        "operationId": "create_entity_api_v1_captures__capture_id__entities_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "site_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Site Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Entity"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntityRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Create Entity",
+        "tags": [
+          "ask"
+        ]
+      }
+    },
+    "/api/v1/captures/{capture_id}/entities/{entity_id}": {
+      "delete": {
+        "operationId": "delete_entity_api_v1_captures__capture_id__entities__entity_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Entity Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "site_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Site Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Delete Entity",
+        "tags": [
+          "ask"
+        ]
+      },
+      "get": {
+        "operationId": "read_entity_api_v1_captures__capture_id__entities__entity_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Entity Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "site_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Site Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntityRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Read Entity",
+        "tags": [
+          "ask"
+        ]
+      },
+      "put": {
+        "operationId": "update_entity_api_v1_captures__capture_id__entities__entity_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Entity Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "site_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Site Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Entity"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntityRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Update Entity",
+        "tags": [
+          "ask"
         ]
       }
     },
@@ -28249,6 +29682,9 @@
         "security": [
           {
             "uploadToken": []
+          },
+          {
+            "writeOrPhoneKey": []
           }
         ],
         "summary": "Complete a file's multipart upload",
@@ -28357,6 +29793,9 @@
         "security": [
           {
             "uploadToken": []
+          },
+          {
+            "writeOrPhoneKey": []
           }
         ],
         "summary": "Presign the next window of parts",
@@ -28699,6 +30138,84 @@
           }
         ],
         "summary": "Queue a pipeline run over a capture",
+        "tags": [
+          "captures"
+        ]
+      }
+    },
+    "/api/v1/captures/{capture_id}/process-bundle": {
+      "post": {
+        "operationId": "process_bundle_api_v1_captures__capture_id__process_bundle_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Capture Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeOrPhoneKey": []
+          }
+        ],
+        "summary": "Queue or recover the bundle's reconstruction job",
         "tags": [
           "captures"
         ]
@@ -40812,6 +42329,434 @@
         "summary": "Change lifecycle state",
         "tags": [
           "plans"
+        ]
+      }
+    },
+    "/api/v1/properties/{site_id}/entities": {
+      "get": {
+        "operationId": "entities_api_v1_properties__site_id__entities_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "label",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Label"
+            }
+          },
+          {
+            "in": "query",
+            "name": "attrs",
+            "required": false,
+            "schema": {
+              "additionalProperties": true,
+              "title": "Attrs",
+              "type": "object"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Until"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lon",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 180,
+                  "minimum": -180,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lon"
+            }
+          },
+          {
+            "in": "query",
+            "name": "lat",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 90,
+                  "minimum": -90,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Lat"
+            }
+          },
+          {
+            "in": "query",
+            "name": "radius_m",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "exclusiveMinimum": 0,
+                  "maximum": 100000,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Radius M"
+            }
+          },
+          {
+            "in": "query",
+            "name": "nearest",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Nearest",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "polygon",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Polygon"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Polygon"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "maximum": 100000,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Entities Api V1 Properties  Site Id  Entities Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeOrPhoneKey": []
+          }
+        ],
+        "summary": "Entities",
+        "tags": [
+          "property-memory"
+        ]
+      }
+    },
+    "/api/v1/properties/{site_id}/entities/dedupe": {
+      "post": {
+        "description": "Pure proposal against supplied observations. No database writes or identity claims.",
+        "operationId": "dedupe_api_v1_properties__site_id__entities_dedupe_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DedupeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Dedupe Api V1 Properties  Site Id  Entities Dedupe Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeToken": []
+          }
+        ],
+        "summary": "Dedupe",
+        "tags": [
+          "property-memory"
+        ]
+      }
+    },
+    "/api/v1/properties/{site_id}/entities/search": {
+      "post": {
+        "description": "Read-only POST permits polygon/JSON attribute filters without URL-size limits.",
+        "operationId": "search_api_v1_properties__site_id__entities_search_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "site_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Site Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Search Api V1 Properties  Site Id  Entities Search Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Missing or wrong write token"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "writeOrPhoneKey": []
+          }
+        ],
+        "summary": "Search",
+        "tags": [
+          "property-memory"
         ]
       }
     },

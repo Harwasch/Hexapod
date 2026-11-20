@@ -1,0 +1,226 @@
+{
+  "version": 1,
+  "format": "hex-capture",
+  "device": "SYNTHETIC",
+  "startedAt": "2026-11-16T12:00:00Z",
+  "frameCount": 24,
+  "depthFrameCount": 24,
+  "smoothedDepthFrameCount": 0,
+  "video": "rgb.mov",
+  "frameLog": "frames.jsonl",
+  "locationLog": "location.jsonl",
+  "location": {
+    "timestamp": 1794830400,
+    "lat": 37.2499998041466,
+    "lon": -122.1,
+    "altitudeM": 100,
+    "horizontalAccuracyM": 5,
+    "verticalAccuracyM": 8
+  },
+  "files": [
+    {
+      "path": "depth_00000000.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000000.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000001.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000001.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000002.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000002.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000003.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000003.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000004.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000004.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000005.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000005.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000006.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000006.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000007.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000007.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000008.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000008.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000009.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000009.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000010.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000010.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000011.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000011.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000012.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000012.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000013.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000013.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000014.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000014.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000015.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000015.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000016.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000016.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000017.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000017.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000018.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000018.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000019.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000019.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000020.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000020.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000021.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000021.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000022.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000022.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "depth_00000023.f16",
+      "bytes": 3456
+    },
+    {
+      "path": "depth_00000023.u8",
+      "bytes": 1728
+    },
+    {
+      "path": "frames.jsonl",
+      "bytes": 12488
+    },
+    {
+      "path": "location.jsonl",
+      "bytes": 269
+    },
+    {
+      "path": "rgb.mov",
+      "bytes": 3513
+    }
+  ]
+}

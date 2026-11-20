@@ -319,3 +319,19 @@ export function is3DSource(source: Layer["source"]): boolean {
     source.type,
   );
 }
+
+/** One visible scan in the phone embed. Cache targets are per scan, not a process RAM cap. */
+export const EMBED_TILE_OPTIONS = {
+  maximumScreenSpaceError: 32,
+  cacheBytes: 64 * MB,
+  maximumCacheOverflowBytes: 16 * MB,
+  preloadWhenHidden: false,
+  preloadFlightDestinations: false,
+  enableCollision: false,
+  skipLevelOfDetail: false,
+} satisfies Cesium3DTileset.ConstructorOptions;
+
+/** Same URL/3D Tiles path as web assets; KHR Gaussian content is decoded by Cesium itself. */
+export function createEmbedScanTileset(url: string): Promise<TilesetType> {
+  return tilesetAtUrl(url, { ...COMMON, ...EMBED_TILE_OPTIONS }, undefined);
+}

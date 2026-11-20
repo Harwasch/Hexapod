@@ -17,10 +17,53 @@ permissions:
 
 concurrency:
   group: ios-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
+
+env:
+  HEX_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || 'https://twin-api.fly.dev' }}
+  HEX_WEB_BASE_URL: https://twin-web-f57.pages.dev
 
 jobs:
-  build:
+  packages:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 26 explicitly
+        run: |
+          xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          sudo xcode-select --switch "$xcode/Contents/Developer"
+          xcodebuild -version
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            apps/ios/Modules/*/.build
+            apps/ios/App/.build
+          key: ${{ runner.os }}-xcode26-spm-${{ hashFiles('apps/ios/**/Package.swift', 'apps/ios/**/Package.resolved') }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Bundle local globe
+        env:
+          VITE_CESIUM_ION_ACCESS_TOKEN: ${{ secrets.VITE_CESIUM_ION_ACCESS_TOKEN }}
+        run: |
+          pnpm install --frozen-lockfile
+          bash apps/ios/ci_scripts/build_globe.sh
+      - name: Build every package for iOS Simulator
+        run: python3 apps/ios/ci_scripts/packages.py build
+      - name: Upload ios-package-logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-package-logs
+          path: apps/ios/build/package-logs
+          if-no-files-found: warn
+
+  app:
     runs-on: macos-26
     timeout-minutes: 30
     steps:
@@ -30,32 +73,142 @@ jobs:
           xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
           sudo xcode-select --switch "$xcode/Contents/Developer"
           xcodebuild -version
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            apps/ios/Modules/*/.build
+            apps/ios/App/.build
+          key: ${{ runner.os }}-xcode26-spm-${{ hashFiles('apps/ios/**/Package.swift', 'apps/ios/**/Package.resolved') }}
+      - name: Cache DerivedData
+        uses: actions/cache@v4
+        with:
+          path: apps/ios/build/DerivedData
+          key: ${{ runner.os }}-xcode26-app-${{ hashFiles('apps/ios/project.yml', 'apps/ios/**/Package.swift', 'apps/ios/**/Package.resolved') }}
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: pnpm
       - name: Bundle local globe
+        env:
+          VITE_CESIUM_ION_ACCESS_TOKEN: ${{ secrets.VITE_CESIUM_ION_ACCESS_TOKEN }}
         run: |
           pnpm install --frozen-lockfile
           bash apps/ios/ci_scripts/build_globe.sh
+      - name: Share globe resources with simulator tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-globe-resources
+          path: apps/ios/Modules/Globe/Sources/Globe/Resources/GlobeWeb
+          if-no-files-found: error
       - name: Generate project
         run: |
-          brew install xcodegen
+          brew install xcodegen xcbeautify
           cd apps/ios
           xcodegen generate
       - name: Build without signing
         working-directory: apps/ios
         env:
           HEX_BUNDLE_ID: ${{ inputs.bundle_id }}
+        shell: bash
         run: |
+          set -o pipefail
+          mkdir -p build
           xcodebuild build -project Hex.xcodeproj -scheme Hex -configuration Debug \
-            -destination 'generic/platform=iOS' -jobs 4 \
-            HEX_BUNDLE_ID="$HEX_BUNDLE_ID" CODE_SIGNING_ALLOWED=NO
+            -destination 'generic/platform=iOS Simulator' -jobs 4 -skipMacroValidation \
+            -derivedDataPath build/DerivedData \
+            HEX_BUNDLE_ID="$HEX_BUNDLE_ID" HEX_API_BASE_URL="$HEX_API_BASE_URL" \
+            HEX_WEB_BASE_URL="$HEX_WEB_BASE_URL" CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/app.log | xcbeautify
+      - name: Show every build error
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          {
+            echo '### App build errors (raw log)'
+            echo '```text'
+            if [[ -f apps/ios/build/app.log ]]; then
+              grep 'error:' apps/ios/build/app.log || true
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload ios-app-log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-app-log
+          path: apps/ios/build/app.log
+          if-no-files-found: warn
+
+  tests:
+    needs: app
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 26 explicitly
+        run: |
+          xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          sudo xcode-select --switch "$xcode/Contents/Developer"
+          xcodebuild -version
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            apps/ios/Modules/*/.build
+            apps/ios/App/.build
+          key: ${{ runner.os }}-xcode26-spm-${{ hashFiles('apps/ios/**/Package.swift', 'apps/ios/**/Package.resolved') }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: ios-globe-resources
+          path: apps/ios/Modules/Globe/Sources/Globe/Resources/GlobeWeb
+      - name: Test packages on an available iPhone simulator
+        run: python3 apps/ios/ci_scripts/packages.py test
+      - name: Generate UI test project
+        if: ${{ !cancelled() }}
+        run: |
+          brew install xcodegen
+          cd apps/ios
+          xcodegen generate
+      - name: UI tests with screenshots
+        if: ${{ !cancelled() }}
+        run: python3 apps/ios/ci_scripts/ui_tests.py
+      - name: Export UI screenshots
+        if: ${{ always() }}
+        run: |
+          if [[ -d apps/ios/build/HexUITests.xcresult ]]; then
+            xcrun xcresulttool export attachments --path apps/ios/build/HexUITests.xcresult \
+              --output-path apps/ios/build/ui-screenshots
+          fi
+      - name: Upload ios-ui-screenshots
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-screenshots
+          path: apps/ios/build/ui-screenshots
+          if-no-files-found: warn
+      - name: Upload ios-ui-result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-result
+          path: |
+            apps/ios/build/HexUITests.xcresult
+            apps/ios/build/ui-tests.log
+          if-no-files-found: warn
+      - name: Upload ios-test-logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-test-logs
+          path: apps/ios/build/test-logs
+          if-no-files-found: warn
 
   testflight:
     if: ${{ inputs.testflight }}
-    needs: build
+    needs: [packages, app, tests]
     runs-on: macos-26
     timeout-minutes: 45
     steps:
@@ -86,6 +239,21 @@ jobs:
           xcode=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
           sudo xcode-select --switch "$xcode/Contents/Developer"
           xcodebuild -version
+      - name: Cache SwiftPM
+        if: steps.signing.outputs.ready == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            apps/ios/Modules/*/.build
+            apps/ios/App/.build
+          key: ${{ runner.os }}-xcode26-spm-${{ hashFiles('apps/ios/**/Package.swift', 'apps/ios/**/Package.resolved') }}
+      - name: Cache DerivedData
+        if: steps.signing.outputs.ready == 'true'
+        uses: actions/cache@v4
+        with:
+          path: apps/ios/build/DerivedData
+          key: ${{ runner.os }}-xcode26-app-${{ hashFiles('apps/ios/project.yml', 'apps/ios/**/Package.swift', 'apps/ios/**/Package.resolved') }}
       - uses: pnpm/action-setup@v4
         if: steps.signing.outputs.ready == 'true'
       - uses: actions/setup-node@v4
@@ -94,6 +262,8 @@ jobs:
           node-version: "22"
           cache: pnpm
       - name: Bundle local globe
+        env:
+          VITE_CESIUM_ION_ACCESS_TOKEN: ${{ secrets.VITE_CESIUM_ION_ACCESS_TOKEN }}
         if: steps.signing.outputs.ready == 'true'
         run: |
           pnpm install --frozen-lockfile
@@ -136,19 +306,32 @@ jobs:
         if: steps.signing.outputs.ready == 'true'
         working-directory: apps/ios
         env:
+          HEX_API_PHONE_TOKEN: ${{ secrets.PHONE_API_TOKEN }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           HEX_BUNDLE_ID: ${{ inputs.bundle_id }}
         run: |
+          set -o pipefail
           signing_dir="$RUNNER_TEMP/hex-signing-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           auth=(-allowProvisioningUpdates -authenticationKeyPath "$signing_dir/AuthKey.p8"
             -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
-          xcodebuild archive -project Hex.xcodeproj -scheme Hex -configuration Release \
+          # Archive with an ad hoc code signature: an automatically signed archive asks for a
+          # development profile, which needs a registered device. The export below re-signs
+          # for the App Store with a cloud-managed distribution certificate (Admin-role key).
+          xcodebuild archive -quiet -project Hex.xcodeproj -scheme Hex -configuration Release \
             -destination 'generic/platform=iOS' -jobs 4 \
-            -archivePath "$signing_dir/Hex.xcarchive" "${auth[@]}" \
-            HEX_BUNDLE_ID="$HEX_BUNDLE_ID" DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER"
+            -archivePath "$signing_dir/Hex.xcarchive" \
+            -derivedDataPath build/DerivedData \
+            HEX_BUNDLE_ID="$HEX_BUNDLE_ID" HEX_API_BASE_URL="$HEX_API_BASE_URL" \
+            HEX_WEB_BASE_URL="$HEX_WEB_BASE_URL" HEX_API_PHONE_TOKEN="$HEX_API_PHONE_TOKEN" DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY=- AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" 2>&1 | python3 -u -c '
+          import os, sys
+          token = os.environ.get("HEX_API_PHONE_TOKEN", "")
+          for line in sys.stdin:
+              sys.stdout.write(line.replace(token, "<phone credential>") if token else line)
+          '
           xcodebuild -exportArchive -archivePath "$signing_dir/Hex.xcarchive" \
             -exportOptionsPlist "$signing_dir/ExportOptions.plist" \
             -exportPath "$signing_dir/export" "${auth[@]}"

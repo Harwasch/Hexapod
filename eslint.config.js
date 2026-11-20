@@ -12,6 +12,10 @@ export default tseslint.config(
     ignores: [
       "**/node_modules/**",
       "**/dist/**",
+      "apps/web/dist-globe/**",
+      "apps/ios/Modules/Globe/Sources/Globe/Resources/GlobeWeb/**",
+      ".tmp-test/**",
+      ".swift-scratch/**",
       "**/coverage/**",
       "**/playwright-report/**",
       "**/test-results/**",

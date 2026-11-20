@@ -26,7 +26,8 @@ const cesiumVersion = (
  * version alone names the contents: `Build/Cesium` ships prebuilt in the npm package, and the
  * pnpm patch only touches `@cesium/engine`'s sources. Dev serves the same path.
  */
-const CESIUM_BASE_URL = `/cesium/${cesiumVersion}/`;
+const embedded = process.env.GLOBE_EMBED === "1";
+const CESIUM_BASE_URL = `${embedded ? "./" : "/"}cesium/${cesiumVersion}/`;
 /**
  * CesiumJS's static build directories the app loads at runtime through CESIUM_BASE_URL. Not
  * `Widgets`: only `@cesium/widgets` reads from it (InfoBox, picker icons), and the scene runs on
@@ -96,7 +97,7 @@ function cesiumBuildAssets(): Plugin {
       for (const dir of CESIUM_STATIC_DIRS) {
         const from = join(cesiumSource, dir);
         if (!existsSync(from)) throw new Error(`CesiumJS build assets not found: ${from}`);
-        cpSync(from, join(outDir, CESIUM_BASE_URL.slice(1), dir), {
+        cpSync(from, join(outDir, CESIUM_BASE_URL.replace(/^\.?\//, ""), dir), {
           recursive: true,
           dereference: true,
         });
@@ -176,9 +177,12 @@ function tileProxyDev(): Plugin {
 
 // https://vite.dev/config/
 export default defineConfig({
+  base: embedded ? "./" : "/",
+  publicDir: embedded ? false : "public",
   plugins: [react(), cesiumDevAssets(), cesiumBuildAssets(), tileProxyDev()],
   define: {
     CESIUM_BASE_URL: JSON.stringify(CESIUM_BASE_URL),
+    ...(embedded ? { "import.meta.url": "document.baseURI" } : {}),
   },
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
@@ -202,7 +206,8 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
-    sourcemap: true,
+    outDir: embedded ? "dist-globe" : "dist",
+    sourcemap: !embedded,
     chunkSizeWarningLimit: 5000,
     rolldownOptions: {
       // Three entries, and only the first one is a globe. `upload.html` is the page a
@@ -213,66 +218,71 @@ export default defineConfig({
       // server for a cesium request, which proves the *source* imports none; only the
       // build can prove the *chunks* do not, so `scripts/check-bundle.mjs` reads dist/
       // and fails CI when any of these pages reaches a Cesium chunk.
-      input: {
-        // Offline benchmark only: absent from ordinary production builds.
-        ...(process.env.VIEWER_PERF === "1"
-          ? { viewerPerf: resolve(import.meta.dirname, "viewer-perf.html") }
-          : {}),
-        index: resolve(import.meta.dirname, "index.html"),
-        upload: resolve(import.meta.dirname, "upload.html"),
-        admin: resolve(import.meta.dirname, "admin.html"),
-        // The scan viewer: one splat on its own, rendered with Spark (three.js), not the
-        // globe. Also free of CesiumJS, which e2e asserts the same way.
-        view: resolve(import.meta.dirname, "view.html"),
-        // A separate neural-world product on the same host, with no globe dependency.
-        worlds: resolve(import.meta.dirname, "worlds.html"),
-        // The landing page: the fleet, its use cases and the request form. Its scenes are
-        // three.js, loaded on demand; no CesiumJS, which check-bundle.mjs asserts too.
-        landing: resolve(import.meta.dirname, "landing.html"),
-        // The site finder the landing page opens in a dialog: the app's globe and parcel
-        // picker on a page of their own, so the landing page never loads CesiumJS itself.
-        finder: resolve(import.meta.dirname, "finder.html"),
-      },
+      input: embedded
+        ? { globeEmbed: resolve(import.meta.dirname, "globe-embed.html") }
+        : {
+            globeEmbed: resolve(import.meta.dirname, "globe-embed.html"),
+            // Offline benchmark only: absent from ordinary production builds.
+            ...(process.env.VIEWER_PERF === "1"
+              ? { viewerPerf: resolve(import.meta.dirname, "viewer-perf.html") }
+              : {}),
+            index: resolve(import.meta.dirname, "index.html"),
+            upload: resolve(import.meta.dirname, "upload.html"),
+            admin: resolve(import.meta.dirname, "admin.html"),
+            // The scan viewer: one splat on its own, rendered with Spark (three.js), not the
+            // globe. Also free of CesiumJS, which e2e asserts the same way.
+            view: resolve(import.meta.dirname, "view.html"),
+            // A separate neural-world product on the same host, with no globe dependency.
+            worlds: resolve(import.meta.dirname, "worlds.html"),
+            // The landing page: the fleet, its use cases and the request form. Its scenes are
+            // three.js, loaded on demand; no CesiumJS, which check-bundle.mjs asserts too.
+            landing: resolve(import.meta.dirname, "landing.html"),
+            // The site finder the landing page opens in a dialog: the app's globe and parcel
+            // picker on a page of their own, so the landing page never loads CesiumJS itself.
+            finder: resolve(import.meta.dirname, "finder.html"),
+          },
       // Keep shared chunks out of the entries. From rolldown 1.2.9 the common-chunk merge
       // (on by default) folded the globe page's lazy modules (demoRanchData, planFlow,
       // landPlanning, queries, ...) into index-*.js: 190 kB gz to 238 kB, past check-bundle's
       // INDEX_ENTRY_GZIP_BUDGET. https://rolldown.rs/reference/InputOptions.experimental
       experimental: { chunkOptimization: { mergeCommonChunks: false } },
-      output: {
-        codeSplitting: {
-          groups: [
-            // Shared runtime helpers, in a chunk of their own, claimed *before* the
-            // engine's group below. A group takes its modules' dependencies with it
-            // (`includeDependenciesRecursively`, on by default, and what keeps chunks free
-            // of import cycles), and CesiumJS depends on `autolinker`, which depends on
-            // `tslib`. So when the engine had the only group, `tslib` was bundled inside
-            // `cesium-*.js`, and the admin page — whose dialogs use `react-remove-scroll`,
-            // which also imports `tslib` — modulepreloaded all 4.9 MB of the engine for
-            // three 200-byte helpers. Vite's dynamic-import preload helper landed there
-            // the same way. Anything else the engine and another page come to share shows
-            // up in check-bundle.mjs, which names the page and the chunk.
-            {
-              name: "helpers",
-              test: /node_modules[\\/](tslib|@babel[\\/]runtime|@swc[\\/]helpers)[\\/]|vite[\\/]preload-helper/,
-              priority: 2,
+      output: embedded
+        ? { format: "iife", inlineDynamicImports: true }
+        : {
+            codeSplitting: {
+              groups: [
+                // Shared runtime helpers, in a chunk of their own, claimed *before* the
+                // engine's group below. A group takes its modules' dependencies with it
+                // (`includeDependenciesRecursively`, on by default, and what keeps chunks free
+                // of import cycles), and CesiumJS depends on `autolinker`, which depends on
+                // `tslib`. So when the engine had the only group, `tslib` was bundled inside
+                // `cesium-*.js`, and the admin page — whose dialogs use `react-remove-scroll`,
+                // which also imports `tslib` — modulepreloaded all 4.9 MB of the engine for
+                // three 200-byte helpers. Vite's dynamic-import preload helper landed there
+                // the same way. Anything else the engine and another page come to share shows
+                // up in check-bundle.mjs, which names the page and the chunk.
+                {
+                  name: "helpers",
+                  test: /node_modules[\\/](tslib|@babel[\\/]runtime|@swc[\\/]helpers)[\\/]|vite[\\/]preload-helper/,
+                  priority: 2,
+                },
+                {
+                  name: "cesium",
+                  test: /node_modules[\\/](cesium|@cesium)[\\/]/,
+                  priority: 1,
+                },
+                // The cell views' shared code -- the look, the grid it reads, and what hands a
+                // view to PlayCanvas or Spark -- is reached from five on-demand chunks (the view,
+                // the per-cell rules, the key, both renderers), each a different set, so left alone
+                // it split into four chunks of a few kB, and the globe's entry carries every
+                // chunk's name for the preloader. One chunk for all of it.
+                {
+                  name: "cellLook",
+                  test: /src[\\/](lib[\\/](cellLook|cellGrid|cellRamps)|cesium[\\/]scanView[\\/](cellModifier|scanCellView))\.ts$/,
+                },
+              ],
             },
-            {
-              name: "cesium",
-              test: /node_modules[\\/](cesium|@cesium)[\\/]/,
-              priority: 1,
-            },
-            // The cell views' shared code -- the look, the grid it reads, and what hands a
-            // view to PlayCanvas or Spark -- is reached from five on-demand chunks (the view,
-            // the per-cell rules, the key, both renderers), each a different set, so left alone
-            // it split into four chunks of a few kB, and the globe's entry carries every
-            // chunk's name for the preloader. One chunk for all of it.
-            {
-              name: "cellLook",
-              test: /src[\\/](lib[\\/](cellLook|cellGrid|cellRamps)|cesium[\\/]scanView[\\/](cellModifier|scanCellView))\.ts$/,
-            },
-          ],
-        },
-      },
+          },
     },
   },
   optimizeDeps: {

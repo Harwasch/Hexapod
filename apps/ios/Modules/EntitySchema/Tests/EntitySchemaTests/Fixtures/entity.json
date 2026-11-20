@@ -1,0 +1,43 @@
+{
+  "label": "oak",
+  "anchor": {
+    "world": {
+      "x": 1.25,
+      "y": 0,
+      "z": -2.5
+    },
+    "geo": {
+      "lat": 34.6,
+      "lon": -120.1,
+      "alt": 210
+    }
+  },
+  "extent": {
+    "x": 2,
+    "y": 4,
+    "z": 2
+  },
+  "masks": [
+    {
+      "keyframe": "000001",
+      "ref": "masks/000001.png"
+    }
+  ],
+  "confidence": 0.95,
+  "attrs": {
+    "reviewed": true,
+    "count": 9007199254740993,
+    "note": null,
+    "tags": [
+      "tree",
+      3.5,
+      {
+        "season": "autumn"
+      }
+    ]
+  },
+  "source": {
+    "module": "Perception",
+    "model": "fixture-v1"
+  }
+}

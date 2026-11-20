@@ -1,3 +1,5 @@
+import { AnswerPinBridge } from "@/features/answers/AnswerPinBridge";
+
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
@@ -305,5 +307,5 @@ export function SceneBridge() {
     }
   }, [scene, measureMode, exploreMode]);
 
-  return null;
+  return <AnswerPinBridge />;
 }

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hex Ask contract",
+  "description": "AskRequest (phone to reasoner) and AskEvent (one item of the answer stream). Mirrors AskContract.swift and packages/contracts/src/ask.ts.",
+  "$defs": {
+    "geo": {
+      "type": "object",
+      "properties": {
+        "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+        "lon": { "type": "number", "minimum": -180, "maximum": 180 },
+        "alt": { "type": "number" }
+      },
+      "required": ["lat", "lon", "alt"],
+      "additionalProperties": false
+    },
+    "keyframeRef": {
+      "type": "object",
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "image": { "type": "string", "minLength": 1 },
+        "depth": { "type": "string", "minLength": 1 },
+        "pose": { "type": "string", "pattern": "^frames\\.jsonl#[0-9]+$" }
+      },
+      "required": ["index", "image", "pose"],
+      "additionalProperties": false
+    },
+    "askRequest": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "question": { "type": "string", "minLength": 1 },
+        "scope": { "enum": ["scan", "property"] },
+        "siteId": { "type": "string", "minLength": 1 },
+        "scanId": { "type": "string", "minLength": 1 },
+        "location": { "$ref": "#/$defs/geo" },
+        "keyframes": { "type": "array", "items": { "$ref": "#/$defs/keyframeRef" } },
+        "deviceEntities": { "type": "array", "items": { "$ref": "entity.schema.json" } }
+      },
+      "required": ["id", "question", "keyframes", "deviceEntities"],
+      "additionalProperties": false
+    },
+    "askEvent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "entity" },
+            "entity": { "$ref": "entity.schema.json" }
+          },
+          "required": ["type", "entity"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": { "type": { "enum": ["speech", "status"] }, "text": { "type": "string" } },
+          "required": ["type", "text"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": { "type": { "const": "done" } },
+          "required": ["type"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

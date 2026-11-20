@@ -119,10 +119,14 @@ class Settings(BaseSettings):
     # process, or a token minted by one will be refused by the next.
     api_handoff_secret: str | None = None
     # The phone key (app/services/phone_key.py): a short shared key typed once on a phone,
-    # stored here only as `pbkdf2_sha256$<iterations>$<salt hex>$<digest hex>`. Unset
-    # means the phone routes are closed. It unlocks less than the write token: creating a
-    # phone capture, uploading to it and processing it.
+    # stored only as comma-separated `pbkdf2_sha256$<iterations>$<salt hex>$<digest hex>`
+    # hashes. Unset means phone access is closed. Keys share the phone-created scope:
+    # captures, bundle uploads/processing, questions and scoped property reads.
     api_phone_key_hash: str | None = None
+    # The iPhone app's key hash, kept apart so a workflow can set it from the PHONE_API_TOKEN
+    # Actions secret without reading or overwriting API_PHONE_KEY_HASH (Fly cannot read a
+    # secret back). Same format and scope; either setting's keys are accepted.
+    api_phone_app_key_hash: str | None = None
     # How many captures the phone key may create in any 24 hours.
     api_phone_daily_captures: int = 20
     # The request header holding the real client address, for the per-client rate limits
@@ -151,6 +155,11 @@ class Settings(BaseSettings):
 
     # Mission planning agent. With a key the plan drafter calls Claude through the official
     # SDK; without one it falls back to a rule-based drafter and says so in every draft.
+    ask_model: str = "claude-opus-5"
+    ask_analysis_app: str = "hex-analysis"
+    ask_analysis_enabled: bool = False
+    ask_reasoner: Literal["claude", "mock"] = "claude"
+    ask_mode: Literal["live", "replay"] = "live"
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-opus-5"
 

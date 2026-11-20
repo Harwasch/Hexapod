@@ -9,10 +9,11 @@ from typing import Annotated
 from fastapi import Depends, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
+from starlette.routing import compile_path
 
 from app.config import Settings
 from app.db import get_db
-from app.services import handoff
+from app.services import handoff, phone_access, phone_key
 from app.services.errors import UnauthorizedError
 from app.services.ion import IonClient
 from app.services.planner import Planner, build_planner
@@ -99,12 +100,148 @@ def require_write_token(
 RequireWriteToken = Depends(require_write_token)
 
 
+write_or_phone_key_scheme = HTTPBearer(
+    auto_error=False,
+    scheme_name="writeOrPhoneKey",
+    description=(
+        "The write token or a PBKDF2-checked phone key. Phone keys reach only their "
+        "own capture bundles and questions, and property reads for their captures' sites."
+    ),
+)
+
+
+def check_phone_key(request: Request, settings: Settings, supplied: str) -> None:
+    bucket = limits_of(request).phone_key
+    client = client_key(request, settings)
+    bucket.take(client)
+    phone_key.check(settings, supplied)
+    bucket.give_back(client)
+    request.state.api_credential = "phone"
+
+
+def require_write_or_phone_key(
+    request: Request,
+    settings: SettingsDep,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(write_or_phone_key_scheme)],
+) -> None:
+    supplied = credentials.credentials if credentials is not None else ""
+    if settings.api_write_token and hmac.compare_digest(
+        supplied.encode("utf-8"), settings.api_write_token.encode("utf-8")
+    ):
+        request.state.api_credential = "write"
+        return
+    # Preserve open writes in development, while recognizing explicit phone keys.
+    if not settings.api_write_token:
+        if supplied and phone_key.enabled(settings):
+            try:
+                check_phone_key(request, settings, supplied)
+                return
+            except UnauthorizedError:
+                pass
+        request.state.api_credential = "write"
+        return
+    check_phone_key(request, settings, supplied)
+
+
+RequireWriteOrPhoneKey = Depends(require_write_or_phone_key)
+
+
+def scoped_phone_capture(capture_id: uuid.UUID, request: Request, db: DbSession) -> None:
+    if getattr(request.state, "api_credential", None) == "phone":
+        phone_access.capture(db, capture_id)
+
+
+PhoneCaptureScope = Depends(scoped_phone_capture)
+
+
+def optional_phone_read(
+    request: Request,
+    settings: SettingsDep,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(write_or_phone_key_scheme)],
+) -> None:
+    # Public reads remain available without a credential.
+    if credentials is not None:
+        require_write_or_phone_key(request, settings, credentials)
+
+
+PhoneRead = Depends(optional_phone_read)
+
+
+# Exact route templates, including the non-schema Ask alias. A recognized phone key
+# cannot use unrelated public reads either. Endpoint dependencies still enforce auth
+# and resource ownership; this deny-by-default guard never grants access on its own.
+PHONE_OPERATIONS = frozenset(
+    {
+        ("POST", "/api/v1/phone/check"),
+        ("POST", "/api/v1/phone/captures"),
+        *(
+            ("POST", f"/api/v1/phone/captures/{{capture_id}}/{action}")
+            for action in ("process", "refine", "stop")
+        ),
+        ("PUT", "/api/v1/captures/bundles/{bundle_id}"),
+        ("PUT", "/api/v1/captures/{capture_id}/bundle-upload"),
+        ("POST", "/api/v1/captures/{capture_id}/process-bundle"),
+        ("POST", "/api/v1/captures/{capture_id}/files/{file_id}/parts"),
+        ("POST", "/api/v1/captures/{capture_id}/files/{file_id}/complete"),
+        ("GET", "/api/v1/captures/{capture_id}"),
+        ("POST", "/api/v1/ask"),
+        ("POST", "/v1/ask"),
+        ("GET", "/api/v1/properties/{site_id}/entities"),
+        ("POST", "/api/v1/properties/{site_id}/entities/search"),
+    }
+)
+_MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_PHONE_OPERATION_PATTERNS = tuple(
+    (method, compile_path(template)[0]) for method, template in PHONE_OPERATIONS
+)
+
+
+def _allowed_for_phone(method: str, path: str) -> bool:
+    """Whether this method and full path match an operation in PHONE_OPERATIONS.
+
+    An app-level dependency sees only the router-relative route in `scope["route"]`
+    (`/phone/check`), so the full request path is matched against the allowlist's own
+    templates, compiled the way Starlette compiles route paths.
+    """
+    return any(m == method and regex.fullmatch(path) for m, regex in _PHONE_OPERATION_PATTERNS)
+
+
+def restrict_phone_routes(request: Request, settings: SettingsDep) -> None:
+    # Reads are public or carry their own credential checks, and a phone key grants nothing
+    # there that an anonymous request lacks. Checking them would run the deliberately slow
+    # key hash, and spend the phone-key rate limit, on every bearer read.
+    if request.method not in _MUTATING:
+        return
+    scheme, _, supplied = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not supplied:
+        return
+    if settings.api_write_token and hmac.compare_digest(
+        supplied.encode("utf-8"), settings.api_write_token.encode("utf-8")
+    ):
+        return
+    if not phone_key.enabled(settings):
+        return
+    if _allowed_for_phone(request.method, request.scope.get("path", "")):
+        return
+    # Bound password hashing on public endpoints, just as on /phone/check.
+    bucket = limits_of(request).phone_key
+    client = client_key(request, settings)
+    bucket.take(client)
+    try:
+        phone_key.check(settings, supplied)
+    except UnauthorizedError:
+        return
+    bucket.give_back(client)
+    raise UnauthorizedError("That phone key is not right.")
+
+
 #: `Authorization: Bearer <write token | handoff token>` on the upload endpoints.
 #:
 #: A second scheme rather than a second header: both tokens are bearer credentials for
 #: the same API, and the header a phone sends must not depend on which one it holds. The
 #: schemes are separate in the document because they are not interchangeable anywhere
-#: else -- every other mutating route takes `writeToken` and only `writeToken`.
+#: else. The app bundle routes use `writeOrPhoneKey`; part/complete also retain this
+#: handoff scheme via require_bundle_part_token.
 upload_token_scheme = HTTPBearer(
     auto_error=False,
     scheme_name="uploadToken",
@@ -133,10 +270,9 @@ def require_upload_token(
     here, every request, with no cooperation required from the client. There is no code
     path on which a handoff token reaches a route whose capture id it does not name.
 
-    Everything outside these four endpoints keeps `require_write_token`, which does not
-    know handoff tokens exist -- so creating a capture, queueing a job, deleting a site
-    or touching another capture is closed to a handoff token by construction, not by a
-    check that could be forgotten.
+    Only these four upload endpoints admit a handoff token. Part/complete wrap this
+    dependency to also admit scoped phone keys; the other routes never accept handoff
+    tokens for creation, processing, deletion or another capture.
     """
     supplied = credentials.credentials if credentials is not None else ""
     expected = settings.api_write_token
@@ -163,6 +299,48 @@ def require_upload_token(
 
 #: Spelled once so the upload routes read `dependencies=[RequireUploadToken]`.
 RequireUploadToken = Depends(require_upload_token)
+
+
+def require_bundle_part_token(
+    capture_id: uuid.UUID,
+    file_id: uuid.UUID,
+    request: Request,
+    settings: SettingsDep,
+    db: DbSession,
+    response: Response,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(upload_token_scheme)],
+    phone_credentials: Annotated[
+        HTTPAuthorizationCredentials | None, Depends(write_or_phone_key_scheme)
+    ],
+) -> None:
+    # Preserve handoff renewal and existing write-token behavior on shared routes.
+    if settings.api_write_token:
+        try:
+            require_upload_token(capture_id, settings, response, credentials)
+            supplied = credentials.credentials if credentials else ""
+            request.state.api_credential = (
+                "write"
+                if hmac.compare_digest(
+                    supplied.encode("utf-8"), settings.api_write_token.encode("utf-8")
+                )
+                else "handoff"
+            )
+            return
+        except UnauthorizedError:
+            pass
+    require_write_or_phone_key(request, settings, phone_credentials)
+    if getattr(request.state, "api_credential", None) == "phone":
+        row = phone_access.capture(db, capture_id)
+        if row.metadata_.get("bundleFormat") != "hex-capture-v1" or not any(
+            file.id == file_id
+            and file.filename == "capture.hexcap"
+            and file.content_type == "application/x-hex-capture"
+            for file in row.files
+        ):
+            raise UnauthorizedError("That phone key is not right.")
+
+
+RequireBundlePartToken = Depends(require_bundle_part_token)
 
 
 def limit_reconcile(request: Request, settings: SettingsDep) -> None:

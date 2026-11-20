@@ -1,3 +1,4 @@
+from app.models.ask import AskRun, ScanEntity
 from app.models.asset import Asset
 from app.models.base import Base
 from app.models.bookmark import CameraBookmark
@@ -69,6 +70,7 @@ from app.models.workspace import Membership, Workspace, WorkspaceInvitation, Wor
 __all__ = [
     "Artifact",
     "ArtifactKind",
+    "AskRun",
     "Asset",
     "AssetProvider",
     "AssetSourceKind",
@@ -132,6 +134,7 @@ __all__ = [
     "ResearchWorkerPresence",
     "RunStatus",
     "ScaleSource",
+    "ScanEntity",
     "ScanRequest",
     "Site",
     "SiteCheckTarget",

@@ -1,0 +1,132 @@
+name: Hex
+options:
+  deploymentTarget:
+    iOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    HEX_API_PHONE_TOKEN: ""
+    HEX_API_BASE_URL: https://twin-api.fly.dev
+    HEX_WEB_BASE_URL: https://twin-web-f57.pages.dev
+    HEX_BUNDLE_ID: com.harwasch.hex
+    PRODUCT_BUNDLE_IDENTIFIER: $(HEX_BUNDLE_ID)
+    TARGETED_DEVICE_FAMILY: "1"
+    SUPPORTS_MACCATALYST: NO
+    SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+packages:
+  Cloud:
+    path: Modules/Cloud
+  Globe:
+    path: Modules/Globe
+  Capture:
+    path: Modules/Capture
+  LiveSplat:
+    path: Modules/LiveSplat
+  Voice:
+    path: Modules/Voice
+  Router:
+    path: Modules/Router
+  Perception:
+    path: Modules/Perception
+  ARAnswer:
+    path: Modules/ARAnswer
+  Upload:
+    path: Modules/Upload
+  EntitySchema:
+    path: Modules/EntitySchema
+targets:
+  Hex:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        # App/Package.swift and App/Tests make App/Support testable with swift test on Linux;
+        # the app target compiles the Support sources directly and must not build either.
+        excludes:
+          - Package.swift
+          - Tests/**
+          - "*.md"
+          # swift test on App/Package.swift leaves build output here; never compile it into
+          # the app (run 44655055029 failed on duplicate tasks from App/.build).
+          - .build/**
+          - .swiftpm/**
+    postBuildScripts:
+      - name: Debug UI fixture
+        basedOnDependencyAnalysis: false
+        script: |
+          fixture_dir="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/UITestFixtures"
+          rm -rf "$fixture_dir"
+          if [ "$CONFIGURATION" = Debug ]; then
+            mkdir -p "$fixture_dir"
+            cp -R "$SRCROOT/Fixtures/bundles/yard-small" "$fixture_dir/yard-small"
+          fi
+    dependencies:
+      - package: Cloud
+      - package: Globe
+      - package: Capture
+      - package: LiveSplat
+      - package: Voice
+      - package: Router
+      - package: Perception
+      - package: ARAnswer
+      - package: Upload
+      - package: EntitySchema
+    settings:
+      base:
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        # XcodeGen's iOS application preset sets "1,2" on the target, which overrode the
+        # project-level iPhone-only value and made App Store validation demand iPad icons
+        # and orientations (run 44597285483).
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: build/Info.plist
+      properties:
+        CFBundleDisplayName: Hex
+        HEX_API_PHONE_TOKEN: $(HEX_API_PHONE_TOKEN)
+        HEX_API_BASE_URL: $(HEX_API_BASE_URL)
+        HEX_WEB_BASE_URL: $(HEX_WEB_BASE_URL)
+        NSCameraUsageDescription: Hex uses the camera to scan your surroundings.
+        NSMicrophoneUsageDescription: Hex uses the microphone while you hold the talk button.
+        NSSpeechRecognitionUsageDescription: Hex transcribes your spoken requests.
+        NSLocationWhenInUseUsageDescription: Hex places captures at their geographic location.
+        UIRequiredDeviceCapabilities:
+          - arkit
+        UILaunchScreen: {}
+        # Standard HTTPS only: exempt, so builds skip the export-compliance question.
+        ITSAppUsesNonExemptEncryption: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+  HexUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Hex
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: $(HEX_BUNDLE_ID).uitests
+        TEST_TARGET_NAME: Hex
+schemes:
+  Hex:
+    build:
+      targets:
+        Hex: all
+    archive:
+      config: Release
+  HexUITests:
+    build:
+      targets:
+        Hex: all
+        HexUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - HexUITests
+      gatherCoverageData: false

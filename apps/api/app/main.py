@@ -8,12 +8,14 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Response, status
+from fastapi import Depends, FastAPI, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.deps import restrict_phone_routes
+from app.api.v1.ask import router as ask_router
 from app.api.v1.router import api_v1
 from app.config import REPO_ROOT, Settings, get_settings
 from app.observability import configure_logging, init_sentry
@@ -158,6 +160,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
     app = FastAPI(
         lifespan=worlds_lifespan,
+        dependencies=[Depends(restrict_phone_routes)],
         title=settings.app_name,
         version="1.0.0",
         description=API_DESCRIPTION,
@@ -323,6 +326,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.public_parcels = PublicParcels()
     app.include_router(api_v1)
+    app.include_router(ask_router, prefix="/v1", include_in_schema=False)
     # **Development only.** Capture tiles kept on a developer's disk
     # (data/tiles/<slug>/<representation>/tileset.json) are served as static 3D Tiles under
     # the API prefix, so the web app's /api proxy covers them with no bucket configured.

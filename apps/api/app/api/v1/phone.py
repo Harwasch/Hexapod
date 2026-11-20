@@ -7,28 +7,26 @@ import math
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Annotated, Any, Final, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import Field
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.api.deps import DbSession, SettingsDep, Storage
-from app.models.capture import Capture
 from app.models.enums import CaptureKind
 from app.models.job import Job
-from app.models.site import Site
 from app.schemas.base import CamelModel
 from app.schemas.capture import QUALITY_BARS, QUALITY_MODES, CaptureCreate, CaptureRead
 from app.schemas.common import Problem
 from app.schemas.job import JobCreate, JobRead
 from app.services import captures as capture_service
-from app.services import epochs, handoff, phone_key, worker_wake
+from app.services import handoff, phone_access, phone_key, worker_wake
 from app.services import jobs as job_service
 from app.services import recipes as recipe_service
-from app.services.errors import ConflictError, NotFoundError, UnauthorizedError
+from app.services.errors import ConflictError, UnauthorizedError
 from app.services.ratelimit import client_key, limits_of
 from app.storage import ObjectStorage
 from app.worker.outputs import artifact_key
@@ -40,7 +38,7 @@ router = APIRouter(
 )
 
 #: What a phone capture is marked with, and how the key's routes recognise their own.
-ORIGIN = "phone-key"
+ORIGIN = phone_access.ORIGIN
 #: The only recipes a phone can start: the two lanes a capture can go down.
 PHONE_RECIPES = frozenset({"splat-ingest", "photo-reconstruct"})
 
@@ -230,7 +228,7 @@ def _checked_roi(stage: str, value: object) -> dict[str, object]:
 phone_key_scheme = HTTPBearer(
     auto_error=False,
     scheme_name="phoneKey",
-    description="The phone key, as `Authorization: Bearer <key>`. Opens only /phone routes.",
+    description="The phone key, as `Authorization: Bearer <key>`, for legacy phone operations.",
 )
 
 
@@ -289,19 +287,9 @@ def check_key() -> None:
 def create_phone_capture(
     payload: PhoneCaptureCreate, db: DbSession, settings: SettingsDep
 ) -> PhoneCapture:
-    since = datetime.now(tz=UTC) - timedelta(hours=24)
-    recent = db.scalar(
-        select(func.count(Capture.id)).where(
-            Capture.metadata_["origin"].as_string() == ORIGIN, Capture.created_at >= since
-        )
-    )
-    if (recent or 0) >= settings.api_phone_daily_captures:
-        raise ConflictError(
-            f"The phone key has started {settings.api_phone_daily_captures} captures in "
-            "the last 24 hours, which is its limit. Try again later."
-        )
+    phone_access.creation_budget(db, settings)
     if payload.site_id is not None:
-        _check_phone_site(db, payload.site_id)
+        phone_access.check_join_site(db, payload.site_id)
     metadata: dict[str, object] = {"origin": ORIGIN}
     if payload.lat is not None and payload.lon is not None:
         # The phone's own fix, which is a far better placement guess than a desktop
@@ -320,55 +308,6 @@ def create_phone_capture(
     return PhoneCapture(capture=capture_service.capture_to_read(capture), upload_token=token)
 
 
-def _check_phone_site(db: DbSession, site_id: uuid.UUID) -> None:
-    """The phone key may name only a site a phone capture made (decision D3's `siteId`).
-
-    The key is a weak shared credential that reaches only what it created. Naming a site
-    makes the capture that site's next epoch: on a site with no frame yet (every seeded,
-    catalog or hand-made one) its run would fix the frame where the phone happens to be,
-    add a default-visible splat, grow the boundary and take the thumbnail. So a site the
-    key did not make -- seeded, catalog, hand-made, or made by a desktop upload -- is
-    refused here; the write-token route (`POST /captures`) can still name any site.
-    """
-    site = db.get(Site, site_id)
-    if site is None:
-        raise NotFoundError("site", site_id)
-    made_by = (site.metadata_ or {}).get("captureId")
-    maker = None
-    if isinstance(made_by, str):
-        try:
-            maker = db.get(Capture, uuid.UUID(made_by))
-        except ValueError:
-            maker = None
-    if maker is None or (maker.metadata_ or {}).get("origin") != ORIGIN:
-        raise ConflictError(
-            "A phone capture can join only a site a phone capture made. Start a new site, "
-            "or add this capture to that site from the console.",
-            code="site_not_phone",
-        )
-
-
-def _check_phone_run(db: DbSession, capture: Capture) -> None:
-    """A run the phone key starts goes into a site the key may still join.
-
-    A re-run of an epoch goes into that epoch's site, a capture the console put on a site
-    into that site, and one that named a site at creation into the named one. Each is held
-    to the rule its first join was (`_check_phone_site`) every time the key starts a run,
-    since what made it allowed can change: a site's metadata is replaced by PATCH, and the
-    console may move a phone capture onto any site. The write-token routes are not limited.
-    """
-    epoch = epochs.epoch_of_capture(db, capture.id)
-    if epoch is not None:
-        site_id: uuid.UUID | None = epoch.site_id
-    elif capture.site_id is not None:
-        site_id = capture.site_id
-    else:
-        named = epochs.requested_site(db, capture)
-        site_id = named.id if named is not None else None
-    if site_id is not None:
-        _check_phone_site(db, site_id)
-
-
 @router.post(
     "/captures/{capture_id}/process",
     response_model=JobRead,
@@ -383,7 +322,7 @@ def process_phone_capture(
     if (capture.metadata_ or {}).get("origin") != ORIGIN:
         # Same answer as a wrong key: the phone key does not reach other captures.
         raise UnauthorizedError("That phone key is not right.")
-    _check_phone_run(db, capture)
+    phone_access.check_run(db, capture)
     if payload.recipe not in PHONE_RECIPES:
         raise ConflictError(f"A phone can start {', '.join(sorted(PHONE_RECIPES))}, not that.")
     params = _checked_options(payload.recipe, payload.params)
@@ -440,7 +379,7 @@ def refine_phone_capture(
     capture = capture_service.get_capture(db, capture_id)
     if (capture.metadata_ or {}).get("origin") != ORIGIN:
         raise UnauthorizedError("That phone key is not right.")
-    _check_phone_run(db, capture)
+    phone_access.check_run(db, capture)
     job = db.scalars(
         select(Job).where(Job.capture_id == capture_id).order_by(Job.created_at.desc())
     ).first()

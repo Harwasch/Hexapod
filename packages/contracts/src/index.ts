@@ -269,3 +269,5 @@ export type LiveTrainSnapshot = Schemas["LiveTrainSnapshot"];
 export type LiveTrainSeeds = Schemas["LiveTrainSeeds"];
 export type LiveTrainFinal = Schemas["LiveTrainFinal"];
 export type LiveQualitySeries = Schemas["LiveQualitySeries"];
+
+export type { AskEvent, AskRequest, Entity as HexEntity, KeyframeRef } from "./ask";

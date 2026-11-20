@@ -25,6 +25,8 @@ TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or get_settings().test_d
 # other client's on the same database (`tests/idle_transactions.py`).
 os.environ["PGAPPNAME"] = f"twin-tests-{os.getpid()}"
 TABLES = (
+    "scan_entities",
+    "ask_runs",
     "scan_requests",
     "land_research_workers",
     "land_views",
@@ -227,3 +229,21 @@ def site_payload(**overrides: object) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--without-db", action="store_true", help="Run tests that do not use PostGIS fixtures"
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if not config.getoption("--without-db"):
+        return
+    selected: list[pytest.Item] = []
+    database: list[pytest.Item] = []
+    for item in items:
+        fixtures = getattr(item, "fixturenames", ())
+        (database if "engine" in fixtures or "memory_db" in fixtures else selected).append(item)
+    items[:] = selected
+    config.hook.pytest_deselected(items=database)

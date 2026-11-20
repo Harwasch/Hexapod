@@ -325,3 +325,33 @@ def test_the_catalog_copies_the_platform_and_capture_time_from_the_manifest(
         registration["platformEvidence"],
         registration["capturedAtUtc"],
     ) == ("rtk-drone", "claimed", "2026-10-01T15:20:30.123Z")
+
+
+def test_catalog_carries_verified_entity_frame_and_full_placement(tmp_path: Path) -> None:
+    from conftest import make_recipe
+
+    workdir = Workdir.create(tmp_path / "entity-run")
+    tiles = workdir.input_path("splat")
+    tiles.mkdir(parents=True)
+    (tiles / "tileset.json").write_text("{}")
+    georef = {"lat": LAT, "lon": LON, "height": 100, "heightDatum": "ellipsoid-wgs84"}
+    transform = {
+        "scale": 1,
+        "rotation": [[1, 0, 0], [0, 0, -1], [0, 1, 0]],
+        "translation": [2, 3, 4],
+    }
+    workdir.input_path("georef.json").write_text(json.dumps(georef))
+    workdir.input_path("placement.json").write_text(json.dumps(transform))
+    poses = workdir.input_path("poses")
+    poses.mkdir()
+    (poses / "poses.json").write_text(
+        json.dumps({"source": "hex-capture-v1", "scale": {"source": "arkit"}})
+    )
+    recipe = make_recipe(
+        [{"id": "register", "impl": "catalog", "params": {}}],
+        inputs=["splat", "georef.json", "placement.json", "poses"],
+    )
+    execute(recipe, workdir, RunnerSet.local())
+    carried = _json(workdir, "register", "registration.json")["entityPlacement"]
+    assert carried["arkitTrainingFrameVerified"] is True
+    assert carried["placement"] == transform and carried["georef"] == georef

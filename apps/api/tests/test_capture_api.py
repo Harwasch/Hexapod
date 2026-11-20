@@ -486,3 +486,44 @@ def test_unknown_job_is_404(client: TestClient) -> None:
     missing = "00000000-0000-0000-0000-000000000000"
     assert client.get(f"/api/v1/jobs/{missing}").status_code == 404
     assert client.post(f"/api/v1/jobs/{missing}/cancel").status_code == 404
+
+
+def test_bundle_resume_and_queue_use_existing_ledger(client: TestClient, db: Session) -> None:
+    import uuid
+
+    key = uuid.uuid4()
+    url = f"/api/v1/captures/bundles/{key}"
+    capture = client.put(url, json={"name": "ARKit", "kind": "video"}).json()
+    assert client.put(url, json={"name": "ARKit", "kind": "video"}).json()["id"] == capture["id"]
+    base = f"/api/v1/captures/{capture['id']}"
+    payload = {
+        "filename": "capture.hexcap",
+        "contentType": "application/x-hex-capture",
+        "bytes": len(BODY),
+    }
+    response = client.put(base + "/bundle-upload", json=payload)
+    assert response.status_code == 200, response.text
+    file = response.json()
+    assert client.put(base + "/bundle-upload", json=payload).json()["id"] == file["id"]
+    assert client.post(base + "/process-bundle").status_code == 409
+    assert client.put(base + "/bundle-upload", json={**payload, "bytes": 1}).status_code == 409
+    file_base = base + f"/files/{file['id']}"
+    window = client.post(file_base + "/parts", json={"firstPartNumber": 1}).json()
+    completed = [
+        put_part(p, slice_for(p["partNumber"], window["partSize"])) for p in window["parts"]
+    ]
+    assert client.post(file_base + "/complete", json={"parts": completed}).status_code == 200
+    job = client.post(base + "/process-bundle")
+    assert job.status_code == 202, job.text
+    assert job.json()["recipe"] == "photo-reconstruct"
+    assert job.json()["params"] == {
+        "normalize": {"capture_bundle": True},
+        "pose": {"capture_bundle": True},
+    }
+    assert client.post(base + "/process-bundle").json()["id"] == job.json()["id"]
+    assert db.scalar(select(func.count()).select_from(Job)) == 1
+
+
+def test_bundle_endpoint_rejects_ordinary_video(client: TestClient) -> None:
+    capture = make_capture(client)
+    assert client.post(f"/api/v1/captures/{capture['id']}/process-bundle").status_code == 422

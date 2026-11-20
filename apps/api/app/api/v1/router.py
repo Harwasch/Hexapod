@@ -4,9 +4,11 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from app.api.property_memory import router as property_router
 from app.api.v1 import (
     agent,
     artifacts,
+    ask,
     assets,
     captures,
     imagery,
@@ -47,7 +49,7 @@ from app.worlds.router import router as worlds_router
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     # 401 is documented API-wide rather than per route: it is the shared write token's
-    # answer on every mutating endpoint, and a read never raises it.
+    # answer on mutating endpoints and on reads outside a phone key's scope.
     401: {"model": Problem, "description": "Missing or wrong write token"},
     404: {"model": Problem, "description": "Not found"},
     409: {"model": Problem, "description": "Conflict"},
@@ -100,3 +102,7 @@ api_v1.include_router(land_views.router)
 
 api_v1.include_router(imagery.router)
 api_v1.include_router(text.router)
+
+api_v1.include_router(ask.router)
+
+api_v1.include_router(property_router)
