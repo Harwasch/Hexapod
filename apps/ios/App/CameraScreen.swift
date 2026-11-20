@@ -242,10 +242,10 @@ private enum CameraStyle {
       TimelineView(.animation(minimumInterval: 0.15)) { timeline in
         HStack(spacing: 5) {
           ForEach(0..<14) { i in
+            let phase = timeline.date.timeIntervalSinceReferenceDate * 4 + Double(i)
+            let height = CGFloat(10 + 28 * abs(sin(phase)))
             Capsule().fill(CameraStyle.amber).frame(
-              width: 5,
-              height: 10 + 28
-                * abs(sin(timeline.date.timeIntervalSinceReferenceDate * 4 + Double(i))))
+              width: 5, height: height)
           }
         }.frame(height: 40)
       }.accessibilityLabel("Listening")

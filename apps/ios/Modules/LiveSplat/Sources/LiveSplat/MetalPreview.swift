@@ -142,12 +142,9 @@
         let screen = point(p.x / Double(frame.camera.width), p.y / Double(frame.camera.height))
         context.setFillColor(
           UIColor(red: g.color.x, green: g.color.y, blue: g.color.z, alpha: 0.42).cgColor)
-        let radius = min(
-          14,
-          max(
-            2,
-            exp(g.parameters[3]) * frame.camera.fx / p.z
-              * bounds.width / Double(frame.camera.width)))
+        let pixelRadius = exp(g.parameters[3]) * frame.camera.fx / p.z
+        let pointRadius = pixelRadius * Double(bounds.width) / Double(frame.camera.width)
+        let radius = CGFloat(min(14, max(2, pointRadius)))
         context.fillEllipse(
           in: CGRect(
             x: screen.x - radius, y: screen.y - radius,
