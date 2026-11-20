@@ -220,6 +220,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual((width, height), (1024, 1024))
         self.assertEqual(png[25], 2, "App Store icons must be RGB with no alpha channel")
 
+    def test_app_sources_exclude_swiftpm_build_output(self):
+        # Run 44655055029: swift test on App/Package.swift left App/.build behind, and the
+        # regenerated project compiled it into the app ("Unexpected duplicate tasks").
+        import yaml
+        project = yaml.safe_load((ROOT / "apps/ios/project.yml").read_text())
+        source = next(s for s in project["targets"]["Hex"]["sources"] if s["path"] == "App")
+        for pattern in (".build/**", ".swiftpm/**", "Package.swift", "Tests/**"):
+            self.assertIn(pattern, source["excludes"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -49,6 +49,10 @@ targets:
           - Package.swift
           - Tests/**
           - "*.md"
+          # swift test on App/Package.swift leaves build output here; never compile it into
+          # the app (run 44655055029 failed on duplicate tasks from App/.build).
+          - .build/**
+          - .swiftpm/**
     postBuildScripts:
       - name: Debug UI fixture
         basedOnDependencyAnalysis: false
