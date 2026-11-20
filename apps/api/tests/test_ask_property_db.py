@@ -45,7 +45,13 @@ class FixtureAnalysis:
         bundle = ROOT / "apps/ios/Fixtures/bundles/yard-small"
         result = subprocess.run(
             [
-                str(ROOT / "tools/analysis/.venv/bin/python"),
+                # uv resolves tools/analysis's own environment here and on CI runners alike.
+                "uv",
+                "run",
+                "--frozen",
+                "--project",
+                str(ROOT / "tools/analysis"),
+                "python",
                 "-m",
                 "hex_analysis.cli",
                 "count_measure",
