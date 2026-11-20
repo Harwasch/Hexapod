@@ -69,3 +69,23 @@ public struct HighlightMask: Sendable {
     return Self(width: outputSize, height: outputSize, pixels: output)
   }
 }
+
+/// Evidence-backed card facts. Unknown invasive status never becomes an Invasive chip.
+public struct EntityCardFacts: Sendable {
+  public let latinName: String?
+  public let invasive: Bool
+  public init(_ entity: Entity) {
+    if case .string(let name) = entity.attrs["latinName"] {
+      latinName = name
+    } else if case .string(let name) = entity.attrs["scientificName"] {
+      latinName = name
+    } else {
+      latinName = nil
+    }
+    if case .object(let lookup) = entity.attrs["invasive"] {
+      invasive = lookup["listed"] == .bool(true)
+    } else {
+      invasive = entity.attrs["invasive"] == .bool(true)
+    }
+  }
+}
