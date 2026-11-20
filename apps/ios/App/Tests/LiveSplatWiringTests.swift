@@ -14,7 +14,8 @@ import Voice
   let preference = LiveSplatPreference(store: UserDefaultsLiveSplatStore(defaults: defaults))
   let registry = PieceRegistry(defaults: defaults, liveSplatPreference: preference)
   useOfflineCameraProviders(registry)
-  let renderer = try #require(try registry.makeCamera().liveSplat as? DefaultLiveSplatRenderer)
+  let renderer = try #require(
+    try registry.makeCamera(useTestChoices: true).liveSplat as? DefaultLiveSplatRenderer)
   #expect(renderer.preference === registry.liveSplatPreference)
   #expect(renderer.preference === preference)
   renderer.start()
@@ -37,10 +38,10 @@ import Voice
   for enabled in [false, true] {
     preference.trainingEnabled = enabled
     registry.choose("off", for: "liveSplat")
-    #expect(try registry.makeCamera().liveSplat == nil)
+    #expect(try registry.makeCamera(useTestChoices: true).liveSplat == nil)
     registry.choose("fake", for: "liveSplat")
     let fake = try #require(
-      try registry.makeCamera().liveSplat as? FakeLiveSplat)
+      try registry.makeCamera(useTestChoices: true).liveSplat as? FakeLiveSplat)
     fake.start()
     #expect(fake.status == .training)
     preference.trainingEnabled.toggle()

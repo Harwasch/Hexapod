@@ -17,9 +17,9 @@
       registry.choose(value, for: key)
     }
     registry.choose("cloud", for: "deep")
-    #expect(throws: ProviderError.self) { try registry.makeCamera() }
+    #expect(throws: ProviderError.self) { try registry.makeCamera(useTestChoices: true) }
     registry.deep.register("cloud") { FakeDeepAnswerForRegistry() }
-    #expect(try registry.makeCamera().fakeOverlay)
+    #expect(try registry.makeCamera(useTestChoices: true).fakeOverlay)
     #expect(registry.choice("capture") == "live")
     // Release uses real/offline defaults even if TestFlight left fake selections stored.
     registry.voice.register("real") { Voice.FakeVoice() }
@@ -33,7 +33,7 @@
     #expect(restored.choice("deep") == "cloud")
     #expect(restored.deep.contains("cloud"))
     registry.choose("yard-small", for: "capture")
-    #expect(throws: ProviderError.self) { try registry.makeCamera() }
+    #expect(throws: ProviderError.self) { try registry.makeCamera(useTestChoices: true) }
     #expect(!PieceRegistry.menuAvailable(debug: false, receipt: "receipt", enabled: true))
     #expect(!PieceRegistry.menuAvailable(debug: false, receipt: "sandboxReceipt", enabled: false))
     #expect(PieceRegistry.menuAvailable(debug: false, receipt: "sandboxReceipt", enabled: true))

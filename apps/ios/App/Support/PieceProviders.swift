@@ -10,14 +10,18 @@ import Voice
 
 protocol CameraCaptureSource: Sendable {
   var usesLiveSession: Bool { get }
+  var fixtureDirectory: URL? { get }
   func frames() -> AsyncThrowingStream<FrameSnapshot, Error>
 }
+extension CameraCaptureSource { var fixtureDirectory: URL? { nil } }
+
 struct LiveCaptureSource: CameraCaptureSource {
   let usesLiveSession = true
   func frames() -> AsyncThrowingStream<FrameSnapshot, Error> { AsyncThrowingStream { $0.finish() } }
 }
 struct FixtureCaptureSource: CameraCaptureSource {
   let directory: URL
+  var fixtureDirectory: URL? { directory }
   let usesLiveSession = false
   func frames() -> AsyncThrowingStream<FrameSnapshot, Error> {
     AsyncThrowingStream { c in
@@ -117,7 +121,7 @@ enum ProviderError: Error, CustomStringConvertible {
       "hex.piece.capture": "live", "hex.piece.voice": "real", "hex.piece.planner": "real",
       "hex.piece.perception": "real",
       "hex.piece.deep": config.cloudConfigured ? "cloud" : "offline", "hex.piece.liveSplat": "real",
-      "hex.piece.globe": config.apiRoot == nil ? "fake" : "real", "hex.piece.overlay": "real",
+      "hex.piece.globe": "real", "hex.piece.overlay": "real",
     ])
     voice.register("fake") { FakeVoice() }
     planner.register("fake") { FakePlanner() }
@@ -163,7 +167,8 @@ enum ProviderError: Error, CustomStringConvertible {
     }
     liveSplat.register("fake") {
       SplatProbe(
-        renderer: FakeLiveSplat(preference: LiveSplatPreference(store: DebugSplatPreferenceStore())))
+        renderer: FakeLiveSplat(preference: LiveSplatPreference(store: DebugSplatPreferenceStore()))
+      )
     }
     globeSources.register("fake") { FakeGlobeDataSource() }
     globeSources.register("real") {
@@ -177,7 +182,22 @@ enum ProviderError: Error, CustomStringConvertible {
   }
   func choice(_ key: String) -> String { defaults.string(forKey: "hex.piece.\(key)") ?? "" }
   func choose(_ value: String, for key: String) { defaults.set(value, forKey: "hex.piece.\(key)") }
-  func makeCamera(useTestChoices: Bool = true) throws -> CameraProviders {
+  func makeCamera(useTestChoices: Bool = false) throws -> CameraProviders {
+    #if DEBUG
+      // UI automation is an explicit DEBUG launch; this path is absent from Release.
+      if let index = ProcessInfo.processInfo.arguments.firstIndex(of: "-uiTestFixture"),
+        ProcessInfo.processInfo.arguments.indices.contains(index + 1),
+        ProcessInfo.processInfo.arguments[index + 1] == "yard-small",
+        let directory = Bundle.main.url(
+          forResource: "yard-small", withExtension: nil,
+          subdirectory: "UITestFixtures")
+      {
+        return CameraProviders(
+          voice: FakeVoice(), planner: RulePlanner(), perception: FakePerception(),
+          liveSplat: try splatRenderers.resolve("fake"), deep: try FakeDeepAnswering.yardSmall(),
+          capture: FixtureCaptureSource(directory: directory), fakeOverlay: true, simulated: true)
+      }
+    #endif
     // Stored TestFlight choices must not leak into a later App Store launch or
     // remain active after the testing setting is disabled. Preserve them for re-entry.
     let selected: (String) -> String = { key in
@@ -212,20 +232,23 @@ enum ProviderError: Error, CustomStringConvertible {
 /// The API origin (or /api/v1 root) and write token are supplied by the host's settings.
 struct ServiceConfiguration: Sendable {
   let baseURL: URL?
-  let writeToken: String
+  private let tokenOverride: String?
+  var writeToken: String { tokenOverride ?? APICredentials.writeToken }
   let webBaseURL: URL?
   init(baseURL: URL?, writeToken: String = "", webBaseURL: URL? = nil) {
     self.baseURL = baseURL
-    self.writeToken = writeToken
+    self.tokenOverride = writeToken
     self.webBaseURL = webBaseURL
   }
   init(defaults: UserDefaults) {
     func setting(_ name: String, _ info: String) -> String {
-      defaults.string(forKey: name)
+      let value =
+        defaults.string(forKey: name)
         ?? (Bundle.main.object(forInfoDictionaryKey: info) as? String ?? "")
+      return value.contains("$(") ? "" : value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     baseURL = URL(string: setting("hex.api.baseURL", "HEX_API_BASE_URL"))
-    writeToken = setting("hex.api.writeToken", "HEX_API_WRITE_TOKEN")
+    tokenOverride = nil
     webBaseURL = URL(string: setting("hex.web.baseURL", "HEX_WEB_BASE_URL"))
   }
   var cloudConfigured: Bool { cloudBase != nil && !writeToken.isEmpty }

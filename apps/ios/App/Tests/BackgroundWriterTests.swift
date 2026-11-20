@@ -91,7 +91,18 @@
       !FileManager.default.fileExists(atPath: root.appendingPathComponent("manifest.json").path))
     // A fake finalized video is sufficient to exercise bundle publication, not codec validity.
     try Data([1]).write(to: root.appendingPathComponent("rgb.mov"))
+    let siteID = UUID()
+    try await disk.writeDetails(CaptureDetails(siteName: "Field", siteID: siteID, duration: 1))
     try await disk.finish()
+    let local = LocalCapture(directory: root, upload: nil)
+    #expect(local.details?.siteID == siteID && local.details?.siteName == "Field")
+    let archive = root.deletingLastPathComponent().appendingPathComponent(
+      root.lastPathComponent + ".hexcap")
+    defer { try? FileManager.default.removeItem(at: archive) }
+    try CaptureArchive.write(bundle: root, to: archive)
+    let archived = try CaptureArchive.readManifest(from: archive)
+    #expect(archived.frameCount == 2 && archived.depthFrameCount == 2)
+    #expect(archived.files.contains { $0.path == "capture-info.json" })
     let manifest = try JSONDecoder().decode(
       CaptureManifest.self, from: Data(contentsOf: root.appendingPathComponent("manifest.json")))
     #expect(manifest.frameCount == 2 && manifest.depthFrameCount == 2)
