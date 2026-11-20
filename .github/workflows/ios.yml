@@ -19,6 +19,10 @@ concurrency:
   group: ios-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  HEX_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || 'https://twin-api.fly.dev' }}
+  HEX_WEB_BASE_URL: https://twin-web-f57.pages.dev
+
 jobs:
   packages:
     runs-on: macos-26
@@ -44,6 +48,8 @@ jobs:
           node-version: "22"
           cache: pnpm
       - name: Bundle local globe
+        env:
+          VITE_CESIUM_ION_ACCESS_TOKEN: ${{ secrets.VITE_CESIUM_ION_ACCESS_TOKEN }}
         run: |
           pnpm install --frozen-lockfile
           bash apps/ios/ci_scripts/build_globe.sh
@@ -86,6 +92,8 @@ jobs:
           node-version: "22"
           cache: pnpm
       - name: Bundle local globe
+        env:
+          VITE_CESIUM_ION_ACCESS_TOKEN: ${{ secrets.VITE_CESIUM_ION_ACCESS_TOKEN }}
         run: |
           pnpm install --frozen-lockfile
           bash apps/ios/ci_scripts/build_globe.sh
@@ -111,7 +119,8 @@ jobs:
           xcodebuild build -project Hex.xcodeproj -scheme Hex -configuration Debug \
             -destination 'generic/platform=iOS Simulator' -jobs 4 -skipMacroValidation \
             -derivedDataPath build/DerivedData \
-            HEX_BUNDLE_ID="$HEX_BUNDLE_ID" CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/app.log | xcbeautify
+            HEX_BUNDLE_ID="$HEX_BUNDLE_ID" HEX_API_BASE_URL="$HEX_API_BASE_URL" \
+            HEX_WEB_BASE_URL="$HEX_WEB_BASE_URL" CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/app.log | xcbeautify
       - name: Show every build error
         if: ${{ always() }}
         shell: bash
@@ -135,7 +144,7 @@ jobs:
   tests:
     needs: app
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode 26 explicitly
@@ -157,6 +166,38 @@ jobs:
           path: apps/ios/Modules/Globe/Sources/Globe/Resources/GlobeWeb
       - name: Test packages on an available iPhone simulator
         run: python3 apps/ios/ci_scripts/packages.py test
+      - name: Generate UI test project
+        if: ${{ !cancelled() }}
+        run: |
+          brew install xcodegen
+          cd apps/ios
+          xcodegen generate
+      - name: UI tests with screenshots
+        if: ${{ !cancelled() }}
+        run: python3 apps/ios/ci_scripts/ui_tests.py
+      - name: Export UI screenshots
+        if: ${{ always() }}
+        run: |
+          if [[ -d apps/ios/build/HexUITests.xcresult ]]; then
+            xcrun xcresulttool export attachments --path apps/ios/build/HexUITests.xcresult \
+              --output-path apps/ios/build/ui-screenshots
+          fi
+      - name: Upload ios-ui-screenshots
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-screenshots
+          path: apps/ios/build/ui-screenshots
+          if-no-files-found: warn
+      - name: Upload ios-ui-result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ui-result
+          path: |
+            apps/ios/build/HexUITests.xcresult
+            apps/ios/build/ui-tests.log
+          if-no-files-found: warn
       - name: Upload ios-test-logs
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -221,6 +262,8 @@ jobs:
           node-version: "22"
           cache: pnpm
       - name: Bundle local globe
+        env:
+          VITE_CESIUM_ION_ACCESS_TOKEN: ${{ secrets.VITE_CESIUM_ION_ACCESS_TOKEN }}
         if: steps.signing.outputs.ready == 'true'
         run: |
           pnpm install --frozen-lockfile
@@ -278,7 +321,8 @@ jobs:
             -destination 'generic/platform=iOS' -jobs 4 \
             -archivePath "$signing_dir/Hex.xcarchive" \
             -derivedDataPath build/DerivedData \
-            HEX_BUNDLE_ID="$HEX_BUNDLE_ID" DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            HEX_BUNDLE_ID="$HEX_BUNDLE_ID" HEX_API_BASE_URL="$HEX_API_BASE_URL" \
+            HEX_WEB_BASE_URL="$HEX_WEB_BASE_URL" DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY=- AD_HOC_CODE_SIGNING_ALLOWED=YES \
             CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER"
           xcodebuild -exportArchive -archivePath "$signing_dir/Hex.xcarchive" \

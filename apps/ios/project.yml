@@ -6,6 +6,8 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
+    HEX_API_BASE_URL: https://twin-api.fly.dev
+    HEX_WEB_BASE_URL: https://twin-web-f57.pages.dev
     HEX_BUNDLE_ID: com.harwasch.hex
     PRODUCT_BUNDLE_IDENTIFIER: $(HEX_BUNDLE_ID)
     TARGETED_DEVICE_FAMILY: "1"
@@ -46,6 +48,16 @@ targets:
           - Package.swift
           - Tests/**
           - "*.md"
+    postBuildScripts:
+      - name: Debug UI fixture
+        basedOnDependencyAnalysis: false
+        script: |
+          fixture_dir="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/UITestFixtures"
+          rm -rf "$fixture_dir"
+          if [ "$CONFIGURATION" = Debug ]; then
+            mkdir -p "$fixture_dir"
+            cp -R "$SRCROOT/Fixtures/bundles/yard-small" "$fixture_dir/yard-small"
+          fi
     dependencies:
       - package: Cloud
       - package: Globe
@@ -70,6 +82,8 @@ targets:
       path: build/Info.plist
       properties:
         CFBundleDisplayName: Hex
+        HEX_API_BASE_URL: $(HEX_API_BASE_URL)
+        HEX_WEB_BASE_URL: $(HEX_WEB_BASE_URL)
         NSCameraUsageDescription: Hex uses the camera to scan your surroundings.
         NSMicrophoneUsageDescription: Hex uses the microphone while you hold the talk button.
         NSSpeechRecognitionUsageDescription: Hex transcribes your spoken requests.
@@ -81,6 +95,18 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+  HexUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Hex
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: $(HEX_BUNDLE_ID).uitests
+        TEST_TARGET_NAME: Hex
 schemes:
   Hex:
     build:
@@ -88,3 +114,13 @@ schemes:
         Hex: all
     archive:
       config: Release
+  HexUITests:
+    build:
+      targets:
+        Hex: all
+        HexUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - HexUITests
+      gatherCoverageData: false
