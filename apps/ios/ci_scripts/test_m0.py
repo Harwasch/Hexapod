@@ -73,7 +73,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIs(self.workflow["concurrency"]["cancel-in-progress"], True)
         self.assertIn("github.ref", self.workflow["concurrency"]["group"])
         self.assertEqual(triggers["workflow_dispatch"]["inputs"]["testflight"]["type"], "boolean")
-        self.assertEqual(set(triggers["workflow_dispatch"]["inputs"]), {"testflight", "bundle_id"})
+        self.assertEqual(set(triggers["workflow_dispatch"]["inputs"]), {"testflight", "bundle_id", "skip_ui_tests"})
         for name, job in jobs.items():
             self.assertEqual(job["timeout-minutes"], {"packages": 20, "app": 30, "tests": 45, "testflight": 45}[name])
             self.assertEqual(job["runs-on"], "macos-26")
