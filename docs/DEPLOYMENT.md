@@ -1317,15 +1317,14 @@ about 59 bits — not the key, and slow to attack — but it is in a public repo
 offline guesser has all the time it likes and the API's rate limit does not apply. To take
 it out of the repository:
 
-1. Generate a new key (the old hash has been public, so rotate rather than move it) and its
-   hash, in `apps/api`:
-   `uv run python -c "import secrets, sys; from app.services.phone_key import hash_key; k = '-'.join(secrets.token_hex(2) for _ in range(4)); print(k); print(hash_key(k, salt=secrets.token_bytes(16)), file=sys.stderr)"`
-   — the key on stdout is for the phone; the hash on stderr is for Fly.
-2. `fly secrets set -a twin-api API_PHONE_KEY_HASH='<the hash>'` — single quotes, because
-   the hash contains `$`.
-3. In the same change, delete the `API_PHONE_KEY_HASH` line from `fly.toml`'s `[env]`, so
-   the old value cannot come back with a later deploy, and deploy.
-4. On each phone: **Forget key**, then type the new one.
+1. Move the existing hash into Fly secret `API_PHONE_KEY_HASH`, preserving its value
+   so current phones keep working. Use single quotes in the shell because hashes contain `$`.
+2. Delete the `API_PHONE_KEY_HASH` line from `fly.toml`'s `[env]` in the same deployment,
+   so a later deploy cannot restore an obsolete value.
+3. For future rotation, append a hash instead of replacing the existing one. The
+   [iPhone deployment instructions](#iphone-app--testflight-optional) describe the stdin
+   hash helper and the GitHub secret for new builds. Retire an old hash only after its
+   phones/builds have moved to a current key.
 
 ### MinIO, for development
 
@@ -2061,10 +2060,25 @@ Honestly, and not quietly left on the list:
 
 ### iPhone app — TestFlight (optional)
 
-`.github/workflows/ios.yml` is dispatch-only. Its build job needs no secrets. Its `testflight`
-job archives, signs and uploads the app, and skips with a message unless all four of these
+`.github/workflows/ios.yml` is dispatch-only, with `testflight` (boolean, default false)
+and `bundle_id` inputs. New runs cancel superseded runs on the same ref. The `packages`
+(20-minute limit) and `app` (30-minute limit) jobs start in parallel without secrets.
+`packages` builds every local module and AppSupport for iOS Simulator, retains every
+package log, and reports all failures together. `app` builds the unsigned simulator app
+with macro validation skipped, retains its raw log alongside formatted console output,
+and lists every `error:` line in the step summary. `tests` follows `app` (45-minute limit),
+running each package with test targets on an available iPhone 17 Pro simulator, or the
+newest available iPhone/runtime. It also generates the `HexUITests` scheme and runs
+app UI flows on that simulator. Screenshot attachments are retained on passing tests,
+exported with `xcresulttool export attachments`, and uploaded as `ios-ui-screenshots`
+even after a test failure. `ios-ui-result` retains the result bundle and raw UI log.
+SwiftPM and app DerivedData are cached by manifests.
+
+With `testflight=true`, `testflight` waits for all three jobs (45-minute limit), then
+archives, signs and uploads the app. It skips with a message unless all four of these
 repository secrets exist. Make the key in App Store Connect → Users and Access →
-Integrations → App Store Connect API, with the **App Manager** role.
+Integrations → App Store Connect API, with the **Admin** role: Apple lets only Admin keys
+use the cloud-managed distribution certificate the upload is signed with.
 
 | Secret          | Value                                              |
 | --------------- | -------------------------------------------------- |
@@ -2072,6 +2086,68 @@ Integrations → App Store Connect API, with the **App Manager** role.
 | `ASC_ISSUER_ID` | the issuer id shown above the key list             |
 | `ASC_KEY_P8`    | the full text of the downloaded `AuthKey_<id>.p8`  |
 | `APPLE_TEAM_ID` | the 10-character team id (Membership details page) |
+
+The iOS globe bundles local Cesium resources. With dependencies already present, run
+`heavy bash apps/ios/ci_scripts/build_globe.sh` before XcodeGen. The independent `packages` and `app` jobs, plus the optional `testflight` job,
+provision Node/pnpm, install the lockfile, and run this command before their Xcode build.
+The package build needs the generated Globe resource directory even for compilation;
+`tests` downloads the real globe resources from `app` instead of rebuilding them.
+Xcode Cloud's `ci_post_clone.sh` uses the same command and requires Node 22.12+, pnpm 10
+and the installed web dependencies in its environment. The generated approximately 11 MB
+resource tree is ignored in git; the source entry, schema and tiny splat fixture are tracked.
+All three globe builds receive the existing `VITE_CESIUM_ION_ACCESS_TOKEN` repository
+secret, the same public read token used by the deployed web build. The embedded globe
+uses world imagery and terrain with that token. Without it, OpenStreetMap imagery
+covers bundled Natural Earth; a network failure keeps the bundled map and displays
+Map offline. Terrain unavailability is visible. No server secret enters the globe bundle.
+
+The app's public `HEX_API_BASE_URL` defaults to `https://twin-api.fly.dev` (the app
+named in `fly.toml`), and `HEX_WEB_BASE_URL` to `https://twin-web-f57.pages.dev`.
+The workflow uses `vars.VITE_API_BASE_URL` when set and explicitly passes both build
+settings to app builds, UI tests and archives. These are substituted into Info.plist.
+Settings stores a pasted API credential in the Keychain and shows only that value.
+It overrides the bundled phone key; clearing it restores the bundled fallback.
+The optional GitHub secret `PHONE_API_TOKEN` is the phone key itself. Only the
+TestFlight archive step receives it, through its environment as `HEX_API_PHONE_TOKEN`,
+and embeds it in Info.plist. Build and test jobs receive no phone key. Empty or
+unexpanded build settings mean no bundled credential. The write token is never
+supplied to the iOS workflow.
+
+On Fly, `API_PHONE_KEY_HASH` holds one or more comma-separated PBKDF2 hashes, never
+the key itself. All accepted keys share the phone-created capture scope and rolling
+`API_PHONE_DAILY_CAPTURES` budget. To hash a key without putting it in command arguments
+or shell history, run this from `apps/api` and type/paste the key at the hidden prompt:
+
+```bash
+read -rs -p 'Phone key: ' phone_key; printf '\n'
+printf '%s' "$phone_key" | uv run python -m app.scripts.phone_key_hash
+unset phone_key
+```
+
+The helper reads stdin, normalizes case and surrounding whitespace, and prints only
+its salted hash. Append that hash to the existing Fly `API_PHONE_KEY_HASH` value,
+separated by a comma, so already-installed builds keep working. Set the same new key
+as GitHub `PHONE_API_TOKEN` for future TestFlight archives; retire an old hash only
+when those builds no longer need access. Do not replace the existing hash during
+this rollout.
+
+**The iPhone app's key has its own Fly secret.** Fly cannot read a secret back, so a
+workflow cannot append to `API_PHONE_KEY_HASH`. The app's key is hashed into
+`API_PHONE_APP_KEY_HASH` instead; the API accepts the keys of both settings with the same
+scope. Actions → **Phone key → Fly** (`.github/workflows/phone-key.yml`, dispatch only)
+hashes the `PHONE_API_TOKEN` secret and stages the hash with `flyctl secrets import --stage`,
+so the next **Deploy** applies it. The key is never printed; only the hash reaches Fly.
+
+The bundled phone key can create/resume its own capture bundles, upload their archive
+parts, queue bundle processing, ask about phone captures or their sites, read its own
+capture status, and read/search entities on those sites. It also retains the existing
+`/phone` routes. It cannot delete, change catalog/admin/worker/research data, dedupe
+entities, or access other captures/sites. Anonymous public reads stay open; supplying
+a recognized phone key on a route outside its allowlist is refused. Debug fixture media is copied
+only into Debug app bundles; Release removes it.
+
+See [Globe testing](../apps/ios/Modules/Globe/TESTING.md) for local commands and device gates.
+No deployment or workflow run is required to build these resources locally.
 
 ## What is unverified
 
@@ -2191,7 +2267,7 @@ baked into the web build. See [the testing checklist](WORLDS_LAND_TESTING.md).
 
 ### iPhone deep answers (optional)
 
-`POST /v1/ask` shares `API_WRITE_TOKEN` with catalog writes and reuses the existing
+`POST /v1/ask` accepts `API_WRITE_TOKEN` or the scoped phone key and reuses the existing
 `ANTHROPIC_API_KEY`. No additional API secret is needed. `ASK_MODEL` selects the
 reasoning model independently of other services; keep the identifier in runtime
 configuration. `ASK_ANALYSIS_ENABLED` defaults to false, and `ASK_ANALYSIS_APP`

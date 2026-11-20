@@ -124,5 +124,9 @@ actor RecordingDiskWriter {
     case .location(let fix): try bundle.appendLocation(fix)
     }
   }
+  func writeDetails(_ details: CaptureDetails) throws {
+    try JSONEncoder().encode(details).write(
+      to: directory.appendingPathComponent("capture-info.json"), options: .atomic)
+  }
   func finish() throws { _ = try bundle.finish() }
 }

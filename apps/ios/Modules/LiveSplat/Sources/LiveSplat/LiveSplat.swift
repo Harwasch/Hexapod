@@ -82,6 +82,26 @@ public struct CoverageGrid: Sendable {
     covered = Array(repeating: false, count: columns * rows)
   }
   public var fraction: Double { Double(covered.filter { $0 }.count) / Double(covered.count) }
+  /// One uncovered cell in the visible camera crop, nearest its centre. Coverage is
+  /// view-local; the app renders a single hint instead of painting a debug grid.
+  public func gapHint(displayTransform t: [Double]) -> SplatVector? {
+    guard t.count == 6, t.allSatisfy({ $0.isFinite }) else { return nil }
+    var nearest: SplatVector?
+    var distance = Double.infinity
+    for index in covered.indices where !covered[index] {
+      let u = (Double(index % columns) + 0.5) / Double(columns)
+      let v = (Double(index / columns) + 0.5) / Double(rows)
+      let x = t[0] * u + t[2] * v + t[4]
+      let y = t[1] * u + t[3] * v + t[5]
+      guard (0.1...0.9).contains(x), (0.2...0.75).contains(y) else { continue }
+      let d = (x - 0.5) * (x - 0.5) + (y - 0.5) * (y - 0.5)
+      if d < distance {
+        nearest = SplatVector(x, y, 0)
+        distance = d
+      }
+    }
+    return nearest
+  }
   public func cell(u: Double, v: Double, width: Int, height: Int) -> Int? {
     guard u.isFinite, v.isFinite, width > 0, height > 0,
       u >= 0, v >= 0, u < Double(width), v < Double(height)
@@ -276,7 +296,7 @@ public final class DefaultLiveSplatRenderer: LiveSplatRenderer, LiveSplatPrefere
     else {
       throw LiveSplatError.bundleFinalized
     }
-    let url = captureBundleFolder.appendingPathComponent("live_splat.ply")
+    let url = captureBundleFolder.appendingPathComponent("livesplat.ply")
     try SplatPLY.encode(splats).write(to: url, options: .atomic)
     return url
   }

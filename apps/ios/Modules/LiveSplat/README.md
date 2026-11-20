@@ -1,8 +1,7 @@
 # LiveSplat
 
 Live LiDAR seeding, a point preview, a Metal Gaussian preview
-and bounded photometric updates. This package is isolated from the Ask contract,
-Capture, App and server. Linux validates the pure Swift numerical reference and
+and bounded photometric updates. The App feeds this package from its shared AR session; the renderer does not own it. Linux validates the pure Swift numerical reference and
 state management. **Apple-framework code and Metal have not been compiled or run.**
 
 For isolated tests, fakes, bundle replay and the standalone SwiftUI debug screen,
@@ -129,21 +128,17 @@ No capability claim is inferred from Linux tests.
 
 ## PLY handoff boundary
 
-`exportPLY(to:)` atomically writes `live_splat.ply` after `stop()`, before the
+`exportPLY(to:)` atomically writes `livesplat.ply` after `stop()`, before the
 capture manifest is finalized. It refuses a folder containing `manifest.json` so
 it cannot silently invalidate an existing inventory. The binary little-endian PLY
 contains xyz in ARKit world metres, zero normals, SH degree-zero `f_dc_0..2`, opacity
 logits, log standard deviations and Hamilton `rot_0..3`. RGB converts via
 `(rgb - 0.5) / (1 / sqrt(4π))`. Point-preview mode exports its LiDAR-seeded Gaussians.
 
-**Cloud initialization is not wired.** Capture's folder writer can inventory the
-PLY, but the current server bundle validator rejects files not referenced by its
-frame/depth/location records, even if inventoried. Do not submit a capture bundle
-containing this PLY to the existing pipeline. The coordinator must add an optional
-splat reference/validation and trainer initialization path in the owning modules,
-or keep the PLY as a local artifact until then. Exporting after finalization or
-silently editing the manifest would not solve that protocol gap. No Ask contract
-change is needed or made here.
+Capture inventories this optional export through `manifest.liveSplat`; the Python
+bundle validator accepts the bounded PLY and the pipeline ignores it for now.
+Training initialization from the preview remains unimplemented. Exporting after
+finalization is still forbidden because it would invalidate the inventory.
 
 ## Verification and acceptance
 
@@ -171,8 +166,8 @@ Apple/device acceptance still required (training now defaults on):
 5. Sustained device thermals/battery, low-power transitions, background/foreground,
    memory pressure and fallback rendering. Confirm the weak display-link lifecycle
    and that the App's RealityKit camera remains aligned and interactive.
-6. A separate cloud acceptance test after the bundle/initialization protocol is
-   extended. The existing upload path cannot consume this new payload yet.
+6. A separate training acceptance test before initializing cloud reconstruction
+   from the preview. Bundles can carry it today; training deliberately ignores it.
 
 Open choices: whether this isolated-patch optimizer gives sufficient quality or needs a full composite
-loss; and ownership/timing of the optional bundle PLY handoff.
+loss; and training initialization from the optional bundle PLY.

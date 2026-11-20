@@ -26,9 +26,9 @@ runner. Scratch output stays in this worktree.
 | Perception   | `swift test --package-path apps/ios/Modules/Perception --scratch-path "$PWD/.swift-scratch/Perception" --jobs 2 --disable-sandbox`     | Masks, lifting, tracking, scene selection and yard fixture geometry                     |
 | ARAnswer     | `swift test --package-path apps/ios/Modules/ARAnswer --scratch-path "$PWD/.swift-scratch/ARAnswer" --jobs 2 --disable-sandbox`         | Presentation, highlight projection and recorded overlay commands                        |
 | App support  | `swift test --package-path apps/ios/App --scratch-path "$PWD/.swift-scratch/App" --jobs 2 --disable-sandbox`                           | Independent persisted provider choices; FIFO disk writes, capacity, drain and failure   |
-| Cloud        | See that module's `TESTING.md`: `Modules/Cloud/TESTING.md` after merge.                                                                | Placeholder owned by Cloud                                                              |
-| LiveSplat    | See that module's `TESTING.md`: `Modules/LiveSplat/TESTING.md` after merge.                                                            | Placeholder owned by LiveSplat                                                          |
-| Globe        | See that module's `TESTING.md`: `Modules/Globe/TESTING.md` after merge.                                                                | Placeholder owned by Globe                                                              |
+| Cloud        | `swift test --package-path apps/ios/Modules/Cloud --scratch-path "$PWD/.swift-scratch/Cloud" --jobs 1 --disable-sandbox`               | Recorded SSE parsing, retry/cancellation and server recording parity                    |
+| LiveSplat    | `swift test --package-path apps/ios/Modules/LiveSplat --scratch-path "$PWD/.swift-scratch/LiveSplat" --jobs 1 --disable-sandbox`       | Frame replay, coverage, numerical reference, lifecycle and PLY export                   |
+| Globe        | `swift test --package-path apps/ios/Modules/Globe --scratch-path "$PWD/.swift-scratch/Globe" --jobs 1 --disable-sandbox`               | Property endpoints, routing, pagination and geographic pins                             |
 
 Repository gates, also from the root. Remove Swift scratch output before the
 format gate because Prettier scans its generated JSON too:
@@ -58,7 +58,7 @@ They have no microphone, camera or network dependency.
 | Router     | `RouterDebugScreen()`                          | `Modules/Router/Sources/Router/Fakes.swift`                 |
 | Perception | `PerceptionDebugScreen(directory: fixtureURL)` | `Modules/Perception/Sources/Perception/FixtureReplay.swift` |
 | ARAnswer   | `ARAnswerDebugScreen()`                        | `Modules/ARAnswer/Sources/ARAnswer/OverlaySink.swift`       |
-| App        | `CameraHost()` in the app                      | `App/DebugMenu.swift`                                       |
+| App        | `CameraHost(registry:)` in the app             | `App/DebugMenu.swift`                                       |
 
 Voice displays the script's volatile replacements followed by its committed final
 question. Router runs the rule planner on editable text; `FakePlanner` supplies
@@ -73,12 +73,11 @@ by this fast-answer job.
 
 ## Phone debug menu
 
-In a DEBUG app, long-press **Current scan** at the top of the camera. In a
-TestFlight app, first tap the gear and enable **Enable piece testing menu**, then
-long-press **Current scan**. Release access requires both a `sandboxReceipt` and
-the persisted setting; ordinary App Store builds do not expose the menu. Disabling
-the TestFlight setting restores real/offline camera defaults while keeping test
-choices saved for later. App Store launches also ignore saved test choices.
+In a DEBUG app, open Settings → Testing. TestFlight builds expose the same explicit
+entry and store whether testing is enabled; the menu can disable it again. Ordinary
+App Store builds do not expose the menu. Leaving testing restores real providers,
+with an explicit unavailable state where capabilities or credentials are missing.
+Saved developer choices are ignored in App Store builds.
 
 Choose providers independently for capture, voice, planner, perception, deep
 answer, live splat, globe data and answer overlay. Choices persist in UserDefaults
@@ -100,17 +99,56 @@ For a complete offline camera path:
    commands without drawing. Apply. No ARKit session or camera permission is used
    by replay; hold/release the microphone control to replay the scripted question.
 4. Reopen the menu to run each standalone screen, or probe the selected LiveSplat
-   and Globe providers. Fake probes report **Simulated** and retain a run counter
-   within that provider instance. The sibling renderers/data sources are not linked
-   yet; their real choices report unavailable until registered.
+   and Globe providers. Fake probes report **Simulated**. LiveSplat receives the camera's shared AR frames;
+   Globe uses the property endpoint and Cloud uses the authenticated Ask stream. The globe renders with the bundled Cesium page by default; the menu's "Globe renderer" picker switches to Apple Maps 3D, and "Cesium globe with fixture data" runs it with no API (build the bundle first: `bash apps/ios/ci_scripts/build_globe.sh`).
 
-`App/Support/PieceProviders.swift` owns the typed registry. Its three
-`TODO(merge)` lines mark registrations for Cloud's `DeepAnswering`, a LiveSplat
-adapter and a Globe adapter. Register one factory per piece after merge. The latter
-two use the local `DebugPieceService` seam for standalone probes; their eventual
-renderer/source adapters own the sibling-specific setup. Unregistered choices
-fail visibly and never silently substitute a fake or contact a service. The
-registry and queue tests run separately via the App support command above.
+`App/Support/PieceProviders.swift` registers Cloud's recorded fake and real client,
+LiveSplat's off/fake/real renderers, and Globe's fake/real sources. App support tests
+exercise configuration, provider resolution, coverage and local capture status.
+
+The camera is Home, with controls for Captures, Globe and Settings. Captures lists finalized local bundles and
+status from `Application Support/Uploads/<local-bundle-id>/upload.json`; upload state
+stays outside immutable capture bundles. An uploaded capture with a known site opens
+that site's Globe route. Map pins and camera pins share ARAnswer's entity card.
+A configured web URL enables the published scan preview from the map card.
+
+Public host configuration is read from `hex.api.baseURL` and `hex.web.baseURL`
+in UserDefaults, or `HEX_API_BASE_URL` and `HEX_WEB_BASE_URL` in Info.plist.
+The write credential comes only from the runtime Keychain API. Supply credentials
+in Settings; never commit a token. API URLs may be an origin, `/api`, or `/api/v1`.
+With URL and token, release defaults use Cloud; otherwise deep answering is offline.
+LiveSplat training defaults on. Home → Settings has the Live splat row; the scan
+screen has an icon-only toggle. Both use `LiveSplatPreference.shared`, also injected
+into the real renderer. Off switches immediately to the LiDAR point preview without
+resetting the scan; on requests training again (device fallback still applies).
+The hidden menu selects the provider first: **off** removes the renderer and **fake**
+uses simulated training independent of the user preference. Only **real** follows
+the user toggle. Applying providers keeps the same real camera renderer; standalone
+probes have separate renderers so they cannot reset an active scan.
+App support tests cover the default, live mode changes, override precedence and
+shared preference identity. On a phone, verify the Settings preference persists across navigation and relaunch,
+and repeat with off/fake debug overrides. Globe defaults to the real source;
+missing configuration displays Server unavailable. Saved debug provider
+choices are ignored outside DEBUG or an explicitly enabled TestFlight menu.
+
+An unregistered live camera session has no catalog scan ID. Its fast path still uses
+local perception; its Cloud request omits scene evidence rather than attaching it to
+an unrelated saved scan. For saved-scan Cloud testing, use Cloud's standalone harness
+with the catalog capture UUID. Background bundle uploads continue after Done, and capture detail offers video replay.
+The globe scan picker selects the exact published scan tileset.
+
+One command runs **every Linux integration check**, sequentially, using installed
+local dependencies (Swift, CI scripts, web, contracts, API, analysis and pipeline):
+
+```bash
+bash scripts/test-ios-integration.sh
+```
+
+The command removes `.tmp-test` and `.swift-scratch` on exit. Without
+`TEST_DATABASE_URL`, API tests select `--without-db`; with a dedicated PostGIS test
+URL they include migrations and DB tests. The DB fixture truncates its test catalog.
+See [server testing](../../docs/TESTING-SERVER.md) for the combined replay test.
+Browser e2e and Apple-only framework compilation remain separate acceptance gates.
 
 ## What fixture tests establish
 
@@ -156,3 +194,70 @@ Apple-framework compilation, preview layout, permission flows, HEVC throughput,
 Metal rendering, TestFlight receipt/settings behavior and real phone accuracy
 remain device checks. No network/install, paid service, GPU or cloud job is used by
 this test suite.
+
+## Captures, globe and settings acceptance (uxb)
+
+The camera is the root screen. Its callbacks push `CapturesScreen(registry:)`,
+`GlobeScreen(registry:route:)` and `SettingsScreen(registry:)` on the existing
+NavigationStack. Captures opens a scan detail, never another copy of the site list.
+Rows read real finalized bundles, sort by manifest start date, show a video thumbnail
+and the final recorded frame timestamp. Upload percentages count acknowledged bytes;
+a queued job is not proof of a finished reconstruction. The catalog capture endpoint
+supplies Queued / Refining / Ready / Failed and the server-assigned site. Network failure
+shows Status offline. Pull to refresh or leave the foreground screen open to poll.
+Detail provides video replay, a mapped scan route, video sharing and local deletion.
+An upload in progress disables local deletion; the confirmation explains that server
+copies remain. No API delete is issued.
+
+Settings uses the shared Keychain credential API, `APICredentials.writeToken` and
+`try APICredentials.setWriteToken(_:)`. A successful save resumes queued uploads.
+There is no write token Info.plist key and no credential is stored in UserDefaults.
+The public API and web origins are build settings. Testing is reachable only in DEBUG
+or with a TestFlight receipt; enabling it opens the existing independent provider menu.
+
+`HexUITests` is an XCUITest target and scheme. On macOS, build the local globe, generate
+the project, then run:
+
+```bash
+python3 apps/ios/ci_scripts/ui_tests.py
+xcrun xcresulttool export attachments --path apps/ios/build/HexUITests.xcresult \
+  --output-path apps/ios/build/ui-screenshots
+```
+
+The workflow runs package and app UI tests before TestFlight, retaining the full
+result bundle and `ios-ui-screenshots`. Every UI step attaches a screenshot with
+`lifetime = .keepAlways`. Screenshots are evidence produced by the simulator run;
+Linux does not produce substitutes for these attachments.
+
+UI fixtures launch with `-uiTestFixture yard-small`. The Xcode build copies the
+recorded bundle under `UITestFixtures/yard-small` only in Debug, and removes it in
+Release. The camera handles that argument only in DEBUG and replays the recorded source without
+changing saved provider preferences. `UIFixtureAPIProtocol` registers before app network
+tasks start, intercepts app HTTP requests, returns an already uploaded fixture to exercise
+the uploader's resume path, and fails unknown requests locally. It never contacts the
+production API. The tests enter a fixture credential through Settings and remove it
+afterward; normal launches retain the real providers. Background multipart transfers
+remain a separate device gate. The UI tests require these camera identifiers:
+`home.record`, `scan.stop`, `upload.done`, `home.captures`, `home.globe`,
+`home.settings`, `ask.microphone`, `answer.pin.1`, `entity.card`.
+The native screens add `capture.row.<local-id>`, `capture.detail`, `capture.status`,
+`capture.share`, `capture.delete`, `capture.openGlobe`, `globe.scanPicker`,
+`globe.scan.<capture-id>`, `settings.token`, `settings.signIn`, `settings.server`.
+The ordinary launch test omits fixture arguments and checks the actual registry
+selection through DEBUG's `settings.providers` accessibility value. Deep answers
+may be explicitly unavailable when no credential is present; fake providers fail
+that assertion.
+
+For the bundled globe's browser acceptance on a separate port:
+
+```bash
+E2E_PORT=5287 heavy pnpm e2e --config src/globe-embed/playwright.config.mjs
+```
+
+This blocks online imagery, checks that the bundled Natural Earth globe still renders,
+asserts no ion evaluation-token requests, and saves phone-sized screenshots under
+`test-results/globe-embed`. SwiftUI layout, Keychain writes, file-origin WebKit workers,
+real ion entitlements, private bucket CORS and LiDAR recording still need the Apple
+simulator/device gates. API references were checked against Apple's
+[image generator documentation](https://developer.apple.com/documentation/avfoundation/avassetimagegenerator)
+and [test attachment documentation](https://developer.apple.com/documentation/xctest/xctattachment).

@@ -49,7 +49,7 @@ Use a dedicated test DB containing no important data: the test fixture truncates
 its tables. Set `TEST_DATABASE_URL` to that database, then:
 
 ```bash
-(cd apps/api && ALEMBIC_DATABASE_URL="$TEST_DATABASE_URL" uv run --no-sync alembic upgrade head && uv run --no-sync pytest -q tests/test_ask.py tests/test_ask_db.py)
+(cd apps/api && ALEMBIC_DATABASE_URL="$TEST_DATABASE_URL" uv run --no-sync alembic upgrade head && uv run --no-sync pytest -q tests/test_ask.py tests/test_ask_db.py tests/test_ask_property_db.py tests/test_property_memory_db.py)
 ```
 
 The DB tests check capture scope, XYZ anchors, CRUD, request conflicts, failed-run
@@ -203,11 +203,44 @@ conditional exclusion and exercises the parser/client through fake transport.
 pnpm format:check && pnpm contracts:check
 ```
 
-The shared phone request now includes `scope`/`siteId`; the API schema still needs
-alignment and regenerated OpenAPI/types outside this job's allowed paths. The
-examples above use the compatible request shape without those optional fields.
-Property-wide analysis is not implemented by the replay or mock backends.
+The integrated API accepts `scope`/`siteId`; OpenAPI and TypeScript are regenerated.
+Both mock and recorded replay support property retrieval. For a property question,
+send `{"id":"property-1","scope":"property","siteId":"<catalog-site-uuid>","question":"How many trees?","keyframes":[],"deviceEntities":[]}`
+to `/v1/ask` with the same write authorization. A scan ID is optional for retrieval;
+new local-frame analysis observations still require their source capture.
 
 Some restricted Linux environments cannot complete TestClient cross-thread
 wakeups. Run the ordinary tests in an unrestricted coordinator environment if
 they stall. Do not patch event loops or add sandbox-specific test gates.
+
+## Integrated replay and complete Linux gate
+
+One PostGIS test loads yard-small's real synthetic depth/poses through fixture
+analyses, asks a scan question through HTTP using the mock reasoner, saves anchored
+entities, asks a property question, reads the real public pin endpoint and verifies
+cross-scan identity links and property replay. It uses a synthetic control-point
+placement with an explicitly verified ellipsoid origin, never raw phone GPS.
+
+```bash
+(cd apps/api && uv run --no-sync pytest -q tests/test_ask_property_db.py tests/test_property_memory_db.py)
+```
+
+One command for the API's entire non-DB suite:
+
+```bash
+(cd apps/api && uv run --no-sync pytest -q --without-db)
+```
+
+One command for **all Linux checks**, including every Swift package, both CI-script
+suites, web format/lint/types/tests, contracts, and the three Python project gates:
+
+```bash
+bash scripts/test-ios-integration.sh
+```
+
+It uses existing environments with offline dependency resolution, one Swift build
+job and one web test worker, and deletes `.tmp-test` / `.swift-scratch` on exit.
+Set `TEST_DATABASE_URL` to a dedicated PostGIS test database to include the DB suite;
+otherwise the API selects only tests without DB fixtures. The DB fixture upgrades
+migrations itself and truncates its catalog. Browser e2e, device rendering and live
+services are excluded. No installs, deployments or remote inference are part of this gate.

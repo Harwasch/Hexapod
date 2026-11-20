@@ -24,3 +24,11 @@ hardware/arm/cad/cad.json
 hardware/arm/data/actuators_research.yaml
 # Byte-inventoried synthetic capture bundles and generator-owned ground truth
 apps/ios/Fixtures/bundles
+
+.tmp-test
+.swift-scratch
+apps/web/dist-globe
+apps/web/public/fixtures/globe-splat
+apps/ios/Modules/Globe/Sources/Globe/Resources/GlobeWeb
+# Approved iPhone UI mockup (reference for the SwiftUI screens; not built)
+apps/ios/design/mockup

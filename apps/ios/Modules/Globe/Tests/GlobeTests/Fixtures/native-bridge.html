@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8" />
+<script>
+  let snapshot;
+  let selectedScan;
+  window.globeBridge = {
+    receive(message) {
+      if (message.type === "snapshot") snapshot = message.snapshot;
+      if (message.type === "selectScan") selectedScan = message.scanId;
+      if (
+        message.type === "flyToScan" &&
+        message.scanId === selectedScan &&
+        snapshot?.scans.some((scan) => scan.id === selectedScan)
+      ) {
+        window.webkit.messageHandlers.globe.postMessage({
+          version: 1,
+          type: "scanSelected",
+          scanId: selectedScan,
+        });
+      }
+    },
+  };
+  window.webkit.messageHandlers.globe.postMessage({ version: 1, type: "ready" });
+</script>

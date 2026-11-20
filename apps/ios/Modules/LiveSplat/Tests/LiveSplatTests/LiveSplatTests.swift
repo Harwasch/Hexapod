@@ -320,7 +320,7 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
   #expect(throws: LiveSplatError.self) { try r.exportPLY(to: directory) }
   r.stop()
   let url = try r.exportPLY(to: directory)
-  #expect(url.lastPathComponent == "live_splat.ply")
+  #expect(url.lastPathComponent == "livesplat.ply")
   #expect(try Data(contentsOf: url) == SplatPLY.encode(r.splats))
 }
 
@@ -344,7 +344,7 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
   let r = DefaultLiveSplatRenderer()
   #expect(throws: LiveSplatError.self) { try r.exportPLY(to: directory) }
   #expect(
-    !FileManager.default.fileExists(atPath: directory.appendingPathComponent("live_splat.ply").path)
+    !FileManager.default.fileExists(atPath: directory.appendingPathComponent("livesplat.ply").path)
   )
 }
 
@@ -386,4 +386,19 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
       position: SplatVector(0, 0, -2), scale: SplatVector(0.1, 0.1, 0.1),
       rotation: [1e300, 0, 0, 0], color: .zero)
   }
+}
+
+@Test func coverageHintSelectsAVisibleUncoveredCellAndDisappearsWhenFilled() throws {
+  var grid = CoverageGrid(columns: 4, rows: 4)
+  let identity: [Double] = [1, 0, 0, 1, 0, 0]
+  let hint = try #require(grid.gapHint(displayTransform: identity))
+  let index = try #require(grid.cell(u: hint.x, v: hint.y, width: 1, height: 1))
+  #expect(!grid.covered[index])
+  grid.mark(index)
+  let next = try #require(grid.gapHint(displayTransform: identity))
+  #expect(next != hint)
+  for cell in grid.covered.indices { grid.mark(cell) }
+  #expect(grid.gapHint(displayTransform: identity) == nil)
+  #expect(grid.gapHint(displayTransform: []) == nil)
+  #expect(CoverageGrid().gapHint(displayTransform: [1, 0, 0, 1, 5, 0]) == nil)
 }

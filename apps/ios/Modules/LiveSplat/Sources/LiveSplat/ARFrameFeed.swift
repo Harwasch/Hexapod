@@ -14,6 +14,9 @@
       }
     }
 
+  }
+
+  @MainActor extension LiveSplatRenderer {
     /// Forward from the shared session on the main actor. No ARFrame crosses an
     /// actor boundary here; the App should marshal its existing delegate accordingly.
     public func ingest(_ frame: ARFrame, orientation: UIInterfaceOrientation, viewportSize: CGSize)
@@ -116,7 +119,7 @@
         timestamp: frame.timestamp, camera: camera, width: width, height: height,
         depths: d, confidence: conf, colors: colors)
       let transform = frame.displayTransform(for: orientation, viewportSize: viewportSize)
-      setDisplayTransform(
+      (self as? DefaultLiveSplatRenderer)?.setDisplayTransform(
         [transform.a, transform.b, transform.c, transform.d, transform.tx, transform.ty].map(
           Double.init))
       ingest(input)

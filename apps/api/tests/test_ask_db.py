@@ -32,18 +32,15 @@ def test_entity_metric_geo_storage_and_capture_scope(db: Any) -> None:
     )
     row = ledger.add(db, first, entity)
     db.commit()
-    assert ledger.get_row(db, first, row.id).entity == entity.model_dump(
+    assert ledger.get_row(db, first, row.id).entity == ledger.prepare(first, entity).model_dump(
         mode="json", exclude_none=True
     )
     assert (
         db.scalar(select(func.ST_AsText(ScanEntity.world_anchor)).where(ScanEntity.id == row.id))
         == "POINT Z (1 2 -3)"
     )
-    assert (
-        db.scalar(select(func.ST_SRID(ScanEntity.geo_anchor)).where(ScanEntity.id == row.id))
-        == 4326
-    )
-    assert db.scalar(select(func.ST_Z(ScanEntity.geo_anchor)).where(ScanEntity.id == row.id)) == 15
+    # Client-provided geography without placement is not trusted.
+    assert row.geo_anchor is None
     with pytest.raises(NotFoundError):
         ledger.get_row(db, second, row.id)
     with pytest.raises(NotFoundError):
@@ -97,7 +94,9 @@ def test_entity_endpoints_scope_and_crud(client: Any, db: Any) -> None:
     response = client.post(root, json=ENTITY)
     assert response.status_code == 201
     entity_id = response.json()["id"]
-    assert client.get(root).json()[0]["entity"] == ENTITY
+    assert client.get(root).json()[0]["entity"] == ledger.prepare(
+        first, Entity.model_validate(ENTITY)
+    ).model_dump(mode="json", by_alias=True, exclude_none=True)
     assert client.get(f"/api/v1/captures/{second.id}/entities/{entity_id}").status_code == 404
     assert (
         client.put(f"{root}/{entity_id}", json={**ENTITY, "label": "tree"}).json()["entity"][

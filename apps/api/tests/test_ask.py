@@ -167,6 +167,18 @@ def test_sdk_client_is_fully_mocked(monkeypatch: Any) -> None:
     assert client.messages.create.call_args.kwargs["model"] == "fixture-model"
     assert constructor.call_args.kwargs["max_retries"] == 0
 
+    model = ToolModel(settings)
+    property_request = AskRequest.model_validate(
+        {**REQUEST, "scope": "property", "siteId": "00000000-0000-0000-0000-000000000001"}
+    )
+    collect(Reasoner(model, Analysis()).answer(property_request, [], None))
+    names = {tool["name"] for tool in client.messages.create.call_args.kwargs["tools"]}
+    assert {"search_property_entities", "search_property_answers"} <= names
+    collect(Reasoner(model, Analysis()).answer(AskRequest.model_validate(REQUEST), [], None))
+    assert "search_property_entities" not in {
+        tool["name"] for tool in client.messages.create.call_args.kwargs["tools"]
+    }
+
 
 def offline_client(
     monkeypatch: Any, *, replay: Any = None, failure: Any = False, model_configured: Any = True
@@ -458,7 +470,7 @@ def test_replay_route_uses_ledger_without_provider_or_bundle(
     client, _, _, finish = offline_client(monkeypatch, model_configured=False)
     client.app.state.settings.ask_mode = "replay"
     client.app.dependency_overrides.pop(reasoner)
-    capture = MagicMock()
+    capture = MagicMock(metadata_={})
     monkeypatch.setattr(ledger, "capture_scope", lambda *_: capture)
     monkeypatch.setattr(ledger, "rows", lambda *_: [])
     monkeypatch.setattr(ToolModel, "turn", AsyncMock(side_effect=AssertionError("provider called")))
@@ -475,6 +487,17 @@ def test_replay_route_uses_ledger_without_provider_or_bundle(
     expected = [
         event.model_dump(mode="json", by_alias=True, exclude_none=True)
         for event in recorded_events("How tall is the tree?")
+    ]
+    expected = [
+        {
+            **event,
+            "entity": ledger.prepare(capture, Entity.model_validate(event["entity"])).model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            ),
+        }
+        if event["type"] == "entity"
+        else event
+        for event in expected
     ]
     assert events(response) == expected
     assert finish.call_args.args[2] == expected
@@ -498,7 +521,7 @@ def test_handler_runs_alone_without_key_gpu_or_http_threads(
         ask_mode="live" if mode == "mock" else "replay",
     )
     db, storage = MagicMock(), MagicMock()
-    capture = MagicMock() if mode == "replay" else None
+    capture = MagicMock(metadata_={}) if mode == "replay" else None
     monkeypatch.setattr(ledger, "capture_scope", lambda *_: capture)
     monkeypatch.setattr(ledger, "rows", lambda *_: [])
     saved = [{"type": "speech", "text": "Saved unrelated question."}, {"type": "done"}]
@@ -528,7 +551,7 @@ def test_handler_runs_alone_without_key_gpu_or_http_threads(
             db,
             settings,
             storage,
-            reasoner(settings, storage),
+            reasoner(settings, storage, db),
         )
         result = []
         async for chunk in response.body_iterator:
@@ -555,3 +578,77 @@ def test_mode_settings_are_explicit_and_default_still_requires_configuration() -
     assert settings.ask_reasoner == "claude" and settings.ask_mode == "live"
     with pytest.raises(ValidationError):
         Settings(_env_file=None, ask_mode="unknown")
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"scope": "property"},
+        {"scope": "unknown"},
+        {"scope": "property", "siteId": "not-a-uuid"},
+        {"siteId": None},
+    ],
+)
+def test_property_contract_rejects_missing_or_invalid_site(changes: Any) -> None:
+    with pytest.raises(ValidationError):
+        AskRequest.model_validate({**REQUEST, **changes})
+
+
+def test_property_mock_and_replay_query_bound_memory_without_copying_scan_frames() -> None:
+    import uuid
+    from datetime import UTC, datetime
+
+    from app.services.property_memory import MemoryQuery
+
+    site = uuid.UUID(int=1)
+
+    class Memory:
+        def entities(self, site_id: uuid.UUID, query: MemoryQuery) -> list[dict[str, Any]]:
+            assert site_id == site and query.label == "tree"
+            return [{"entity": ENTITY, "observedAt": datetime(2026, 1, 1, tzinfo=UTC)}]
+
+        def answers(self, site_id: uuid.UUID, query: MemoryQuery) -> list[dict[str, Any]]:
+            raise AssertionError("unexpected answer query")
+
+    request = AskRequest.model_validate(
+        {**REQUEST, "scope": "property", "siteId": str(site), "question": "How many trees?"}
+    )
+    memory = Memory()
+    observed = collect(
+        Reasoner(ScriptedAnswerModel(), Analysis(), memory).answer(request, [], None)
+    )
+    assert observed[-1].type == "speech" and "1 saved observation" in observed[-1].text
+    assert all(event.type != "entity" for event in observed)
+    replayed = collect(ReplayAnswerer(memory).answer(request, [], None))
+    assert "1 saved observation" in replayed[-1].text
+    # Model arguments cannot change the validated site's binding.
+    turn = {
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "bad",
+                "name": "search_property_entities",
+                "input": {"siteId": str(uuid.UUID(int=2))},
+            }
+        ]
+    }
+    model = Model([turn, FINAL_TURN])
+    collect(Reasoner(model, Analysis(), memory).answer(request, [], None))
+    assert model.messages[-1][-1]["content"][0]["is_error"] is True
+
+
+def test_save_georeference_requires_verified_frame_and_vertical_datum() -> None:
+    from app.models import Capture
+    from tests.test_ask_property_db import PLACEMENT
+
+    entity = Entity.model_validate(ENTITY)
+    capture = Capture(metadata_={"entityPlacement": PLACEMENT})
+    located = ledger.prepare(capture, entity)
+    assert located.anchor.geo is not None
+    assert entity.anchor.geo is None
+    provenance = located.attrs["georeference"]
+    assert isinstance(provenance, dict) and provenance["headingKnown"] is True
+    capture.metadata_["entityPlacement"] = {**PLACEMENT, "arkitTrainingFrameVerified": False}
+    assert ledger.prepare(capture, located).anchor.geo is None
+    capture.metadata_["entityPlacement"] = {**PLACEMENT, "heightDatum": "msl-unverified"}
+    assert ledger.prepare(capture, located).anchor.geo is None

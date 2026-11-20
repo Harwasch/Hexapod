@@ -5,6 +5,10 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    HEX_API_PHONE_TOKEN: ""
+    HEX_API_BASE_URL: https://twin-api.fly.dev
+    HEX_WEB_BASE_URL: https://twin-web-f57.pages.dev
     HEX_BUNDLE_ID: com.harwasch.hex
     PRODUCT_BUNDLE_IDENTIFIER: $(HEX_BUNDLE_ID)
     TARGETED_DEVICE_FAMILY: "1"
@@ -15,6 +19,8 @@ settings:
 packages:
   Cloud:
     path: Modules/Cloud
+  Globe:
+    path: Modules/Globe
   Capture:
     path: Modules/Capture
   LiveSplat:
@@ -43,8 +49,23 @@ targets:
           - Package.swift
           - Tests/**
           - "*.md"
+          # swift test on App/Package.swift leaves build output here; never compile it into
+          # the app (run 44655055029 failed on duplicate tasks from App/.build).
+          - .build/**
+          - .swiftpm/**
+    postBuildScripts:
+      - name: Debug UI fixture
+        basedOnDependencyAnalysis: false
+        script: |
+          fixture_dir="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/UITestFixtures"
+          rm -rf "$fixture_dir"
+          if [ "$CONFIGURATION" = Debug ]; then
+            mkdir -p "$fixture_dir"
+            cp -R "$SRCROOT/Fixtures/bundles/yard-small" "$fixture_dir/yard-small"
+          fi
     dependencies:
       - package: Cloud
+      - package: Globe
       - package: Capture
       - package: LiveSplat
       - package: Voice
@@ -57,10 +78,18 @@ targets:
       base:
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: YES
+        # XcodeGen's iOS application preset sets "1,2" on the target, which overrode the
+        # project-level iPhone-only value and made App Store validation demand iPad icons
+        # and orientations (run 44597285483).
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: build/Info.plist
       properties:
         CFBundleDisplayName: Hex
+        HEX_API_PHONE_TOKEN: $(HEX_API_PHONE_TOKEN)
+        HEX_API_BASE_URL: $(HEX_API_BASE_URL)
+        HEX_WEB_BASE_URL: $(HEX_WEB_BASE_URL)
         NSCameraUsageDescription: Hex uses the camera to scan your surroundings.
         NSMicrophoneUsageDescription: Hex uses the microphone while you hold the talk button.
         NSSpeechRecognitionUsageDescription: Hex transcribes your spoken requests.
@@ -68,8 +97,22 @@ targets:
         UIRequiredDeviceCapabilities:
           - arkit
         UILaunchScreen: {}
+        # Standard HTTPS only: exempt, so builds skip the export-compliance question.
+        ITSAppUsesNonExemptEncryption: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+  HexUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Hex
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: $(HEX_BUNDLE_ID).uitests
+        TEST_TARGET_NAME: Hex
 schemes:
   Hex:
     build:
@@ -77,3 +120,13 @@ schemes:
         Hex: all
     archive:
       config: Release
+  HexUITests:
+    build:
+      targets:
+        Hex: all
+        HexUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - HexUITests
+      gatherCoverageData: false

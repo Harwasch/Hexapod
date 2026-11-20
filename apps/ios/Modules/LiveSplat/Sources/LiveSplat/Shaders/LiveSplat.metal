@@ -126,11 +126,6 @@ kernel void compositeGaussians(device const Gaussian* splats [[buffer(0)]],
         rgb+=transmittance*alpha*float3(splats[i].p[11],splats[i].p[12],splats[i].p[13]);
         transmittance*=1-alpha;
     }
-    uint cell=min(uint(sensor.y*24),23u)*32+min(uint(sensor.x*32),31u);
-    if(coverage[cell]==0 || overflow[tile]>0) {
-        // Premultiplied cyan hint; AR camera remains visible beneath the overlay.
-        rgb=float3(0,0.8,1)*0.12f+rgb*0.88f; transmittance*=0.88f;
-    }
     output.write(float4(rgb,1-transmittance),pixel);
 }
 

@@ -3,12 +3,16 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, BackgroundTasks, Query, status
+from fastapi import APIRouter, BackgroundTasks, Query, Request, status
 from fastapi.responses import RedirectResponse
 
 from app.api.deps import (
     DbSession,
+    PhoneCaptureScope,
+    PhoneRead,
+    RequireBundlePartToken,
     RequireUploadToken,
+    RequireWriteOrPhoneKey,
     RequireWriteToken,
     SettingsDep,
     Storage,
@@ -27,7 +31,7 @@ from app.schemas.capture import (
 )
 from app.schemas.common import Problem
 from app.schemas.job import JobCreate, JobRead
-from app.services import capture_bundles, worker_wake
+from app.services import capture_bundles, phone_access, worker_wake
 from app.services import captures as capture_service
 from app.services import jobs as job_service
 
@@ -62,7 +66,10 @@ def create_capture(payload: CaptureCreate, db: DbSession) -> CaptureRead:
 
 
 @router.get(
-    "/{capture_id}", response_model=CaptureDetail, summary="Get a capture, its files and its jobs"
+    "/{capture_id}",
+    response_model=CaptureDetail,
+    dependencies=[PhoneRead, PhoneCaptureScope],
+    summary="Get a capture, its files and its jobs",
 )
 def get_capture(capture_id: uuid.UUID, db: DbSession) -> CaptureDetail:
     capture = capture_service.get_capture(db, capture_id)
@@ -87,7 +94,7 @@ def register_file(
 @router.post(
     "/{capture_id}/files/{file_id}/parts",
     response_model=UploadWindow,
-    dependencies=[RequireUploadToken],
+    dependencies=[RequireBundlePartToken],
     responses=STORAGE_RESPONSES,
     summary="Presign the next window of parts",
 )
@@ -104,7 +111,7 @@ def presign_parts(
 @router.post(
     "/{capture_id}/files/{file_id}/complete",
     response_model=CaptureFileRead,
-    dependencies=[RequireUploadToken],
+    dependencies=[RequireBundlePartToken],
     responses=STORAGE_RESPONSES,
     summary="Complete a file's multipart upload",
 )
@@ -191,17 +198,30 @@ def download_splat(capture_id: uuid.UUID, db: DbSession, storage: Storage) -> Re
 @router.put(
     "/bundles/{bundle_id}",
     response_model=CaptureRead,
-    dependencies=[RequireWriteToken],
+    dependencies=[RequireWriteOrPhoneKey],
     summary="Begin or resume a capture bundle by a client-persisted UUID",
 )
-def begin_bundle(bundle_id: uuid.UUID, payload: CaptureCreate, db: DbSession) -> CaptureRead:
-    return capture_service.capture_to_read(capture_bundles.begin(db, bundle_id, payload))
+def begin_bundle(
+    bundle_id: uuid.UUID,
+    payload: CaptureCreate,
+    db: DbSession,
+    request: Request,
+    settings: SettingsDep,
+) -> CaptureRead:
+    return capture_service.capture_to_read(
+        capture_bundles.begin(
+            db,
+            bundle_id,
+            payload,
+            phone_settings=settings if request.state.api_credential == "phone" else None,
+        )
+    )
 
 
 @router.put(
     "/{capture_id}/bundle-upload",
     response_model=CaptureFileRead,
-    dependencies=[RequireWriteToken],
+    dependencies=[RequireWriteOrPhoneKey, PhoneCaptureScope],
     responses=STORAGE_RESPONSES,
     summary="Register or recover the bundle archive's multipart upload",
 )
@@ -215,10 +235,14 @@ def register_bundle(
     "/{capture_id}/process-bundle",
     response_model=JobRead,
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[RequireWriteToken],
+    dependencies=[RequireWriteOrPhoneKey, PhoneCaptureScope],
     summary="Queue or recover the bundle's reconstruction job",
 )
-def process_bundle(capture_id: uuid.UUID, db: DbSession, background: BackgroundTasks) -> JobRead:
+def process_bundle(
+    capture_id: uuid.UUID, db: DbSession, background: BackgroundTasks, request: Request
+) -> JobRead:
+    if request.state.api_credential == "phone":
+        phone_access.check_run(db, capture_service.get_capture(db, capture_id))
     job = capture_bundles.process(db, capture_id)
     worker_wake.schedule(background)
     return job_service.job_to_read(job)

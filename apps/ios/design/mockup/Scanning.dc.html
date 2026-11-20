@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Scanning</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@500&amp;display=swap">
+<style>
+body{margin:0}
+a{color:#ffb547}a:hover{color:#ffc977}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; position: relative; overflow: hidden; font-family: Inter, system-ui, sans-serif; color: #fff; background: #0d1517;">
+<div style="position: absolute; inset: 0;"><dc-import name="Scene" hl="none" splat="{{yes}}" hint-size="390px,844px"></dc-import></div>
+<div style="position: absolute; top: 62px; left: 0; right: 0; display: flex; justify-content: center;">
+<div style="display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 999px; background: rgba(5,9,10,.6); font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 14px; font-weight: 500;">
+<span style="width: 9px; height: 9px; border-radius: 50%; background: #ff4d4d; display: block;"></span>02:14
+</div>
+</div>
+<div style="position: absolute; top: 58px; right: 20px; width: 44px; height: 44px; border-radius: 50%; background: rgba(5,9,10,.6); display: flex; align-items: center; justify-content: center;" role="img" aria-label="Coverage 70 percent">
+<svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="12" fill="none" stroke="rgba(255,255,255,.2)" stroke-width="4"></circle><circle cx="16" cy="16" r="12" fill="none" stroke="#3fd0c9" stroke-width="4" stroke-dasharray="53 76" transform="rotate(-90 16 16)" stroke-linecap="round"></circle></svg>
+</div>
+<div style="position: absolute; left: 22px; top: 500px; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; background: rgba(5,9,10,.6); font-size: 12px; font-weight: 500;">
+<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#3fd0c9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12l7 7 7-7"></path></svg>
+Fill gap
+</div>
+<div style="position: absolute; left: 0; right: 0; bottom: 48px; display: flex; justify-content: center;">
+<a href="Upload.dc.html" aria-label="Stop scan" style="width: 84px; height: 84px; border-radius: 50%; border: 5px solid #fff; box-sizing: border-box; display: flex; align-items: center; justify-content: center;">
+<span style="width: 32px; height: 32px; border-radius: 8px; background: #ff4d4d; display: block;"></span>
+</a>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() { return { yes: true }; }
+}
+</script>
+</body>
+</html>

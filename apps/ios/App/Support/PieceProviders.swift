@@ -1,20 +1,27 @@
 import ARAnswer
+import Cloud
 import EntitySchema
 import Foundation
+import Globe
+import LiveSplat
 import Perception
 import Router
 import Voice
 
 protocol CameraCaptureSource: Sendable {
   var usesLiveSession: Bool { get }
+  var fixtureDirectory: URL? { get }
   func frames() -> AsyncThrowingStream<FrameSnapshot, Error>
 }
+extension CameraCaptureSource { var fixtureDirectory: URL? { nil } }
+
 struct LiveCaptureSource: CameraCaptureSource {
   let usesLiveSession = true
   func frames() -> AsyncThrowingStream<FrameSnapshot, Error> { AsyncThrowingStream { $0.finish() } }
 }
 struct FixtureCaptureSource: CameraCaptureSource {
   let directory: URL
+  var fixtureDirectory: URL? { directory }
   let usesLiveSession = false
   func frames() -> AsyncThrowingStream<FrameSnapshot, Error> {
     AsyncThrowingStream { c in
@@ -34,19 +41,10 @@ struct FixtureCaptureSource: CameraCaptureSource {
   }
 }
 
-/// Local plug-in seam until the sibling modules merge. A provider owns its renderer
+/// A provider owns its renderer
 /// or source and reports the result of starting it. The menu can exercise it alone.
 @MainActor protocol DebugPieceService: AnyObject {
   func run() async throws -> String
-}
-@MainActor final class FakeDebugPiece: DebugPieceService {
-  private let label: String
-  private(set) var runs = 0
-  init(_ label: String) { self.label = label }
-  func run() async throws -> String {
-    runs += 1
-    return "Simulated \(label), run \(runs)"
-  }
 }
 @MainActor final class DisabledDebugPiece: DebugPieceService {
   func run() async throws -> String { "Off" }
@@ -81,6 +79,7 @@ enum ProviderError: Error, CustomStringConvertible {
   let voice: any VoiceInput
   let planner: any Planning
   let perception: any PerceptionServing
+  let liveSplat: (any LiveSplatRenderer)?
   let deep: any DeepAnswering
   let capture: any CameraCaptureSource
   let fakeOverlay: Bool
@@ -95,7 +94,11 @@ enum ProviderError: Error, CustomStringConvertible {
   let capture = PieceProviders<any CameraCaptureSource>()
   let liveSplat = PieceProviders<any DebugPieceService>()
   let globe = PieceProviders<any DebugPieceService>()
+  let splatRenderers = PieceProviders<(any LiveSplatRenderer)?>()
+  let globeSources = PieceProviders<any GlobeDataSource>()
+  let configuration: ServiceConfiguration
   let defaults: UserDefaults
+  let liveSplatPreference: LiveSplatPreference
   static let options: [(key: String, title: String, choices: [String])] = [
     ("capture", "Capture source", ["live", "yard-small", "yard-limited"]),
     ("voice", "Voice", ["real", "fake"]),
@@ -106,19 +109,26 @@ enum ProviderError: Error, CustomStringConvertible {
     ("globe", "Globe data", ["fake", "real"]),
     ("overlay", "Answer overlay", ["real", "fake"]),
   ]
-  init(defaults: UserDefaults = .standard) {
+  init(
+    defaults: UserDefaults = .standard, configuration: ServiceConfiguration? = nil,
+    liveSplatPreference: LiveSplatPreference = .shared
+  ) {
+    self.liveSplatPreference = liveSplatPreference
     self.defaults = defaults
+    let config = configuration ?? ServiceConfiguration(defaults: defaults)
+    self.configuration = config
     defaults.register(defaults: [
       "hex.piece.capture": "live", "hex.piece.voice": "real", "hex.piece.planner": "real",
-      "hex.piece.perception": "real", "hex.piece.deep": "offline", "hex.piece.liveSplat": "off",
-      "hex.piece.globe": "fake", "hex.piece.overlay": "real",
+      "hex.piece.perception": "real",
+      "hex.piece.deep": config.cloudConfigured ? "cloud" : "offline", "hex.piece.liveSplat": "real",
+      "hex.piece.globe": "real", "hex.piece.overlay": "real",
     ])
     voice.register("fake") { FakeVoice() }
     planner.register("fake") { FakePlanner() }
     planner.register("rules") { RulePlanner() }
     perception.register("fake") { FakePerception() }
     deep.register("offline") { OfflineDeepAnswer() }
-    deep.register("fake") { FakeDeepAnswer() }
+    deep.register("fake") { try FakeDeepAnswering.yardSmall() }
     capture.register("live") { LiveCaptureSource() }
     for name in ["yard-small", "yard-limited"] {
       capture.register(name) { [weak self] in
@@ -129,10 +139,6 @@ enum ProviderError: Error, CustomStringConvertible {
       }
     }
     liveSplat.register("off") { DisabledDebugPiece() }
-    let fakeSplat = FakeDebugPiece("live splat")
-    let fakeGlobe = FakeDebugPiece("globe data")
-    liveSplat.register("fake") { fakeSplat }
-    globe.register("fake") { fakeGlobe }
     #if os(iOS)
       voice.register("real") { SpeechVoice() }
       planner.register("real") { ApplePlanner() }
@@ -142,28 +148,76 @@ enum ProviderError: Error, CustomStringConvertible {
           identifier: VisionIdentifier())
       }
     #endif
-    // TODO(merge): deep.register("cloud") { CloudAnswerer(...) }
-    // TODO(merge): liveSplat.register("real") { LiveSplatDebugAdapter(renderer: ...) }
-    // TODO(merge): globe.register("real") { GlobeDebugAdapter(source: ...) }
+    deep.register("cloud") {
+      guard let base = config.cloudBase, config.cloudConfigured else {
+        throw ProviderError.unavailable("cloud configuration")
+      }
+      return CloudAnswerer(baseURL: base, writeToken: config.writeToken)
+    }
+    // Developer off/fake selects the provider first. Only real follows the user setting.
+    // Keep one real camera renderer across provider reapplication; probes stay isolated.
+    let realSplat = DefaultLiveSplatRenderer(preference: liveSplatPreference)
+    splatRenderers.register("off") { nil }
+    splatRenderers.register("fake") {
+      FakeLiveSplat(preference: LiveSplatPreference(store: DebugSplatPreferenceStore()))
+    }
+    splatRenderers.register("real") { realSplat }
+    liveSplat.register("real") {
+      SplatProbe(renderer: DefaultLiveSplatRenderer(preference: liveSplatPreference))
+    }
+    liveSplat.register("fake") {
+      SplatProbe(
+        renderer: FakeLiveSplat(preference: LiveSplatPreference(store: DebugSplatPreferenceStore()))
+      )
+    }
+    globeSources.register("fake") { FakeGlobeDataSource() }
+    globeSources.register("real") {
+      guard let root = config.apiRoot else { throw ProviderError.unavailable("API URL") }
+      return APIGlobeDataSource(baseURL: root)
+    }
+    globe.register("real") { [globeSources] in
+      GlobeProbe(source: try globeSources.resolve("real"))
+    }
+    globe.register("fake") { GlobeProbe(source: FakeGlobeDataSource(), simulated: true) }
   }
   func choice(_ key: String) -> String { defaults.string(forKey: "hex.piece.\(key)") ?? "" }
   func choose(_ value: String, for key: String) { defaults.set(value, forKey: "hex.piece.\(key)") }
-  func makeCamera(useTestChoices: Bool = true) throws -> CameraProviders {
+  func makeCamera(useTestChoices: Bool = false) throws -> CameraProviders {
+    #if DEBUG
+      // UI automation is an explicit DEBUG launch; this path is absent from Release.
+      if let index = ProcessInfo.processInfo.arguments.firstIndex(of: "-uiTestFixture"),
+        ProcessInfo.processInfo.arguments.indices.contains(index + 1),
+        ProcessInfo.processInfo.arguments[index + 1] == "yard-small",
+        let directory = Bundle.main.url(
+          forResource: "yard-small", withExtension: nil,
+          subdirectory: "UITestFixtures")
+      {
+        return CameraProviders(
+          voice: FakeVoice(), planner: RulePlanner(), perception: FakePerception(),
+          liveSplat: try splatRenderers.resolve("fake"), deep: try FakeDeepAnswering.yardSmall(),
+          capture: FixtureCaptureSource(directory: directory), fakeOverlay: true, simulated: true)
+      }
+    #endif
     // Stored TestFlight choices must not leak into a later App Store launch or
     // remain active after the testing setting is disabled. Preserve them for re-entry.
     let selected: (String) -> String = { key in
       if useTestChoices { return self.choice(key) }
       return [
         "capture": "live", "voice": "real", "planner": "real", "perception": "real",
-        "deep": "offline", "overlay": "real",
+        "deep": self.configuration.cloudConfigured ? "cloud" : "offline", "overlay": "real",
+        "liveSplat": "real",
       ][key] ?? ""
     }
     return try CameraProviders(
       voice: voice.resolve(selected("voice")), planner: planner.resolve(selected("planner")),
-      perception: perception.resolve(selected("perception")), deep: deep.resolve(selected("deep")),
+      perception: perception.resolve(selected("perception")),
+      liveSplat: splatRenderers.resolve(selected("liveSplat")),
+      deep: deep.resolve(selected("deep")),
       capture: capture.resolve(selected("capture")), fakeOverlay: selected("overlay") == "fake",
       simulated: selected("capture") != "live"
-        || ["voice", "planner", "perception", "deep", "overlay"].contains { selected($0) == "fake" }
+        || ["voice", "planner", "perception", "deep", "overlay", "liveSplat"].contains {
+          selected($0) == "fake"
+        }
     )
   }
   var fixtureDirectory: URL? {
@@ -173,4 +227,74 @@ enum ProviderError: Error, CustomStringConvertible {
   static func menuAvailable(debug: Bool, receipt: String?, enabled: Bool) -> Bool {
     debug || (receipt == "sandboxReceipt" && enabled)
   }
+}
+
+/// The API origin (or /api/v1 root) and write token are supplied by the host's settings.
+struct ServiceConfiguration: Sendable {
+  let baseURL: URL?
+  private let tokenOverride: String?
+  var writeToken: String { tokenOverride ?? APICredentials.token }
+  let webBaseURL: URL?
+  init(baseURL: URL?, writeToken: String = "", webBaseURL: URL? = nil) {
+    self.baseURL = baseURL
+    self.tokenOverride = writeToken
+    self.webBaseURL = webBaseURL
+  }
+  init(defaults: UserDefaults) {
+    func setting(_ name: String, _ info: String) -> String {
+      let value =
+        defaults.string(forKey: name)
+        ?? (Bundle.main.object(forInfoDictionaryKey: info) as? String ?? "")
+      return value.contains("$(") ? "" : value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    baseURL = URL(string: setting("hex.api.baseURL", "HEX_API_BASE_URL"))
+    tokenOverride = nil
+    webBaseURL = URL(string: setting("hex.web.baseURL", "HEX_WEB_BASE_URL"))
+  }
+  var cloudConfigured: Bool { cloudBase != nil && !writeToken.isEmpty }
+  var cloudBase: URL? {
+    guard var url = baseURL, ["http", "https"].contains(url.scheme), url.host != nil else {
+      return nil
+    }
+    if url.lastPathComponent == "v1" { url.deleteLastPathComponent() }
+    return url
+  }
+  var apiRoot: URL? {
+    guard let base = cloudBase else { return nil }
+    return base.lastPathComponent == "api"
+      ? base.appendingPathComponent("v1") : base.appendingPathComponent("api/v1")
+  }
+}
+
+@MainActor final class SplatProbe: DebugPieceService {
+  let renderer: any LiveSplatRenderer
+  init(renderer: any LiveSplatRenderer) {
+    self.renderer = renderer
+  }
+  func run() async throws -> String {
+    renderer.start()
+    defer { renderer.stop() }
+    let source = try FakeFrameSource.plane(frameCount: 1)
+    if let event = try await source.next() { renderer.ingest(event) }
+    return "Simulated probe · \(renderer.coverageFraction)"
+  }
+}
+@MainActor final class GlobeProbe: DebugPieceService {
+  let source: any GlobeDataSource
+  let simulated: Bool
+  init(source: any GlobeDataSource, simulated: Bool = false) {
+    self.source = source
+    self.simulated = simulated
+  }
+  func run() async throws -> String {
+    let sites = try await source.sites()
+    return "\(simulated ? "Simulated · " : "")\(sites.count)"
+  }
+}
+
+/// Simulated training is a developer override, independent of the persisted user setting.
+@MainActor private final class DebugSplatPreferenceStore: LiveSplatPreferenceStore {
+  private var enabled = true
+  func bool(forKey key: String) -> Bool? { enabled }
+  func set(_ value: Bool, forKey key: String) { enabled = value }
 }

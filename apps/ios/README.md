@@ -10,8 +10,18 @@ your registered identifier. The shell opens an AR camera with icon-only record
 and hold-to-talk controls. Both controls call no-op integration hooks in M0.
 Older devices and devices without LiDAR have disabled controls.
 
-Dispatch the **iOS** workflow manually for an unsigned build; set `testflight=true`
-and `bundle_id` to archive and upload. Required repository secrets: `ASC_KEY_ID`,
+Dispatch the **iOS** workflow manually for simulator validation. `packages` (20-minute
+limit) and `app` (30-minute limit) run in parallel; `tests` (30-minute limit) follows
+`app`. Every module and AppSupport builds against the iOS Simulator SDK, so UIKit/ARKit
+paths compile. Package failures are collected into a summary table with individual log
+artifacts. The unsigned app build uses xcbeautify, preserves its raw log, and reports
+all `error:` lines in the summary. Tests run for packages with test targets on an available
+iPhone 17 Pro simulator, falling back to the newest available iPhone/runtime. SwiftPM
+and app DerivedData caches reduce repeat work. Each independent build bundles the globe;
+tests reuse the app job's globe artifact. New dispatches cancel older runs on the same ref.
+
+Set `testflight=true` and `bundle_id` to archive and upload after all three jobs pass
+(`testflight` has a 45-minute limit). Required repository secrets: `ASC_KEY_ID`,
 `ASC_ISSUER_ID`, `ASC_KEY_P8` (the complete PEM key), and `APPLE_TEAM_ID`. Missing
 secrets skip upload with a notice. The API key needs access to certificates,
 identifiers and profiles and permission to upload builds; configure the app record,

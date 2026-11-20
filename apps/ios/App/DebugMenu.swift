@@ -1,22 +1,81 @@
 import ARAnswer
 import Foundation
+import Globe
 import Perception
 import Router
 import SwiftUI
 import UniformTypeIdentifiers
 import Voice
 
-@MainActor struct CameraHost: View {
-  @State private var registry = PieceRegistry()
-  @State private var model: CameraModel?
-  @State private var error = ""
-  @State private var revision = UUID()
-  @State private var showMenu = false
-  @State private var showSettings = false
-  @AppStorage("hex.testflight.debugEnabled") private var testFlightDebug = false
-  private var isTestFlight: Bool {
-    Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
+#if DEBUG
+  /// Explicit UI launches intercept control requests before URLSession.shared starts.
+  /// The server reports an already uploaded fixture, exercising the uploader's resume
+  /// path without a background object-store transfer or any production API request.
+  final class UIFixtureAPIProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool {
+      UIFixtureLaunch.active && ["https", "http"].contains(request.url?.scheme ?? "")
+    }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+      guard let url = request.url else { return }
+      let path = url.path
+      let captureID = FakeGlobeDataSource.scanID.uuidString.lowercased()
+      let siteID = FakeGlobeDataSource.siteID.uuidString.lowercased()
+      var status = 200
+      let payload: Any
+      if path.contains("/captures/bundles/"),
+        (body()["siteId"] as? String)?.lowercased() == siteID
+      {
+        payload = ["id": captureID]
+      } else if path.hasSuffix("/captures/" + captureID + "/bundle-upload"),
+        let bytes = body()["bytes"] as? NSNumber
+      {
+        payload = ["id": "00000000-0000-0000-0000-000000000005", "status": "complete", "bytes": bytes] as [String: Any]
+      } else if path.hasSuffix("/captures/" + captureID + "/process-bundle") {
+        payload = ["id": "00000000-0000-0000-0000-000000000006"]
+      } else if path.hasSuffix("/captures/" + captureID) {
+        payload = ["status": "complete", "siteId": siteID]
+      } else if path.hasSuffix("/sites") {
+        payload = [["id": siteID, "name": "Simulated property"]]
+      } else {
+        // Unknown requests fail locally. They must never fall through to the network.
+        status = 503
+        payload = ["detail": "Fixture unavailable"]
+      }
+      guard let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1",
+        headerFields: ["Content-Type": "application/json"]),
+        let data = try? JSONSerialization.data(withJSONObject: payload)
+      else { return }
+      client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocol(self, didLoad: data)
+      client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() { /* Responses are synchronous and own no task. */ }
+    private func body() -> [String: Any] {
+      var data = request.httpBody ?? Data()
+      if data.isEmpty, let stream = request.httpBodyStream {
+        stream.open()
+        defer { stream.close() }
+        var bytes = [UInt8](repeating: 0, count: 4096)
+        while data.count < 65_536 {
+          let count = stream.read(&bytes, maxLength: bytes.count)
+          guard count > 0 else { break }
+          data.append(contentsOf: bytes.prefix(count))
+        }
+      }
+      return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    }
   }
+#endif
+
+@MainActor struct CameraHost: View {
+  let registry: PieceRegistry
+  @State private var model: CameraModel?
+  @State private var revision = UUID()
+  @State private var showSettings = false
+  @State private var showCaptures = false
+  @State private var showGlobe = false
+  @AppStorage("hex.testflight.debugEnabled") private var testFlightDebug = false
   private var menuEnabled: Bool {
     #if DEBUG
       let debug = true
@@ -28,48 +87,47 @@ import Voice
       enabled: testFlightDebug)
   }
   var body: some View {
-    ZStack(alignment: .top) {
+    Group {
       if let model {
-        CameraScreen(model: model).id(revision)
+        CameraScreen(model: model, onCaptures: { showCaptures = true },
+          onSettings: { showSettings = true }, onGlobe: { showGlobe = true }).id(revision)
       } else {
-        Text(error).padding().frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(spacing: 20) {
+          Label("Camera unavailable", systemImage: "camera.fill")
+          Button("Retry") { apply() }.frame(minHeight: 44)
+          Button("Captures", systemImage: "square.stack") { showCaptures = true }
+            .frame(minHeight: 44).accessibilityIdentifier("home.captures")
+          Button("Globe", systemImage: "globe.americas") { showGlobe = true }
+            .frame(minHeight: 44).accessibilityIdentifier("home.globe")
+          Button("Settings", systemImage: "gearshape") { showSettings = true }
+            .frame(minHeight: 44).accessibilityIdentifier("home.settings")
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
       }
-      HStack {
-        Text("Current scan")
-          .padding(12).background(.ultraThinMaterial, in: Capsule())
-          .onLongPressGesture { if menuEnabled { showMenu = true } }
-          .accessibilityHint(menuEnabled ? "Long press for piece testing" : "")
-        Spacer()
-        if isTestFlight {
-          Button {
-            showSettings = true
-          } label: {
-            Image(systemName: "gearshape")
-          }
-          .accessibilityLabel("TestFlight settings")
-        }
-      }.padding()
     }
-    .task { if model == nil { apply() } }
+    .onAppear { apply() }
     .onChange(of: testFlightDebug) { _, _ in apply() }
-    .sheet(isPresented: $showSettings) {
-      Form { Toggle("Enable piece testing menu", isOn: $testFlightDebug) }
-        .presentationDetents([.medium])
-    }
-    .sheet(isPresented: $showMenu) {
-      PieceDebugMenu(registry: registry) {
-        apply()
-        showMenu = false
-      }
-    }
+    .navigationDestination(isPresented: $showSettings) { SettingsScreen(registry: registry) }
+    .navigationDestination(isPresented: $showCaptures) { CapturesScreen(registry: registry) }
+    .navigationDestination(isPresented: $showGlobe) { GlobeScreen(registry: registry) }
   }
   private func apply() {
+    let pendingCapture = model?.savedCapture
+    let duration = model?.captureDuration ?? 0
     model?.suspend()
     model = nil
     do {
-      model = CameraModel(providers: try registry.makeCamera(useTestChoices: menuEnabled))
-      error = ""
-    } catch { self.error = String(describing: error) }
+      let refreshed = PieceRegistry(defaults: registry.defaults, configuration: registry.configuration,
+        liveSplatPreference: registry.liveSplatPreference)
+      model = CameraModel(providers: try refreshed.makeCamera(useTestChoices: menuEnabled))
+      if UIFixtureLaunch.active {
+        // The recorded replay has no device GPS. An explicit fixture site supplies
+        // placement without changing the user's saved current-site preferences.
+        model?.siteID = FakeGlobeDataSource.siteID
+        model?.siteName = "Simulated property"
+      }
+      model?.savedCapture = pendingCapture
+      model?.captureDuration = duration
+    } catch { model = nil }
     revision = UUID()
   }
 }
@@ -80,10 +138,15 @@ import Voice
   let apply: () -> Void
   @State private var choices: [String: String] = [:]
   @State private var result = ""
+  @AppStorage("hex.testflight.debugEnabled") private var testingEnabled = false
+  @AppStorage("globeImplementation") private var globeImplementation = GlobeImplementation.defaultValue.rawValue
   @State private var importFixture = false
   var body: some View {
     NavigationStack {
       Form {
+        if Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt" {
+          Toggle("Enable testing", isOn: $testingEnabled)
+        }
         Section("Independent providers · fake data is Simulated") {
           ForEach(PieceRegistry.options, id: \.key) { option in
             Picker(
@@ -102,6 +165,23 @@ import Voice
             "For replay, select yard-small or yard-limited above, then import that folder (bundle/ and ground_truth.json)."
           )
           Button("Apply camera providers", action: apply)
+          Button("Use real providers") {
+            for (key, value) in [
+              "capture": "live", "voice": "real", "planner": "real", "perception": "real",
+              "deep": registry.configuration.cloudConfigured ? "cloud" : "offline",
+              "liveSplat": "real", "globe": "real", "overlay": "real",
+            ] { registry.choose(value, for: key) }
+            choices = [:]
+            apply()
+          }
+        }
+        Section("Globe renderer") {
+          // Cesium (bundled web globe) is the default; Apple Maps 3D is the second
+          // implementation behind the same Globe protocol. GlobeView reads this key.
+          Picker("Renderer", selection: $globeImplementation) {
+            ForEach(GlobeImplementation.allCases, id: \.rawValue) { Text($0.rawValue).tag($0.rawValue) }
+          }
+          NavigationLink("Cesium globe with fixture data") { GlobeDebugView() }
         }
         Section("Run pieces alone") {
           NavigationLink("Voice") { VoiceDebugScreen() }

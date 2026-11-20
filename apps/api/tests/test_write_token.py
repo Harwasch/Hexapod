@@ -27,7 +27,10 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 #: must name one of these and nothing else; see the test at the bottom of this file.
 #: `phoneKey` joined deliberately: it is a real gate (a PBKDF2-checked key; see
 #: app/services/phone_key.py), and the test below pins it to the /phone routes alone.
-GATING_SCHEMES = {"writeToken", "uploadToken", "phoneKey"}
+#: `writeOrPhoneKey` deliberately admits the hashed phone key on the app's exact
+#: bundle/question/read allowlist, with per-capture/site checks. The exhaustive route
+#: matrix in test_phone_app_access.py verifies it never opens any other operation.
+GATING_SCHEMES = {"writeToken", "uploadToken", "phoneKey", "writeOrPhoneKey"}
 #: Mutating operations open to anyone, on purpose, each named here with a reviewer attached.
 #: Each is rate-limited per client and body-capped (app/main.py PUBLIC_BODY_LIMITS) instead:
 #: `POST /public/parcels/near` is the landing page's parcel lookup, approved by Harrison on

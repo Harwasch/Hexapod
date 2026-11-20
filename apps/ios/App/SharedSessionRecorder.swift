@@ -3,6 +3,8 @@
   @preconcurrency import AVFoundation
   import Capture
   import CoreLocation
+  import CoreMedia
+  import CoreVideo
   import Darwin
   import Foundation
 
@@ -14,6 +16,9 @@
     @preconcurrency CLLocationManagerDelegate
   {
     private(set) var isRecording = false
+    var exportBundle: (@MainActor (URL) async throws -> Void)?
+    var captureDetails: (() -> CaptureDetails)?
+    var onPhase: ((CapturePhase) -> Void)?
     var onChange: ((Bool, Bool) -> Void)?
     private var disk: RecordingDiskWriter?
     private var writer: BackgroundWriter<RecordingPacket>?
@@ -27,6 +32,7 @@
     private var starting: Task<Void, Never>?
     private var generation = UUID()
     private var width = 0, height = 0
+    // Core Location delivers callbacks on the run loop where this manager is created.
     private let location = CLLocationManager()
 
     func toggleRecording() {
@@ -36,6 +42,7 @@
       }
       guard !finishing else { return }
       finishing = true
+      onPhase?(.starting)
       let id = UUID()
       generation = id
       starting = Task {
@@ -64,6 +71,7 @@
           location.requestWhenInUseAuthorization()
           location.startUpdatingLocation()
           onChange?(true, false)
+          onPhase?(.recording(Date()))
         } catch { if generation == id { fail() } }
       }
     }
@@ -86,6 +94,9 @@
               AVVideoHeightKey: height,
               AVVideoCompressionPropertiesKey: [AVVideoAllowFrameReorderingKey: false],
             ])
+          // The capture buffers/intrinsics stay in sensor coordinates; this is
+          // presentation metadata only, for the portrait iPhone replay/thumbnail.
+          input.transform = CGAffineTransform(rotationAngle: .pi / 2)
           input.expectsMediaDataInRealTime = true
           input.mediaTimeScale = 1_000_000_000
           guard writer.canAdd(input) else { throw CaptureError.recordingFailed }
@@ -187,6 +198,7 @@
         starting?.cancel()
         starting = nil
         finishing = false
+        onPhase?(.idle)
       }
       guard isRecording else { return }
       isRecording = false
@@ -197,18 +209,29 @@
         return
       }
       finishing = true
+      onPhase?(.stopping)
+      let details = captureDetails?()
+      let savedDirectory = directory
+      let export = exportBundle
       input?.markAsFinished()
-      video.finishWriting { [weak self] in
-        Task { @MainActor in
-          do {
-            guard video.status == .completed else { throw CaptureError.recordingFailed }
-            // Keep finalization alive even when provider switching releases the camera model.
-            try await writer.close()
-            try await disk.finish()
-            if self?.video === video { self?.reset() }
-          } catch {
-            if self?.video === video { self?.fail() }
+      Task { @MainActor [weak self] in
+        // The AVFoundation callback is Sendable; only the continuation crosses to it.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+          video.finishWriting { continuation.resume() }
+        }
+        do {
+          guard video.status == .completed else { throw CaptureError.recordingFailed }
+          // Keep finalization alive even when provider switching releases the camera model.
+          try await writer.close()
+          if let savedDirectory { try await export?(savedDirectory) }
+          if let details { try await disk.writeDetails(details) }
+          try await disk.finish()
+          if self?.video === video {
+            self?.reset()
+            if let savedDirectory { self?.onPhase?(.saved(savedDirectory)) }
           }
+        } catch {
+          if self?.video === video { self?.fail() }
         }
       }
     }
@@ -219,6 +242,7 @@
       location.stopUpdatingLocation()
       reset()
       onChange?(false, true)
+      onPhase?(.failed)
     }
     private func reset() {
       generation = UUID()

@@ -6,6 +6,7 @@ public struct AnswerPresentation: Sendable {
   public private(set) var entities: [Entity] = []
   public private(set) var speech = ""
   public private(set) var isComplete = false
+  public private(set) var isUnavailable = false
   public init() {}
   public mutating func reset() { self = Self() }
   public mutating func receive(_ event: AskEvent) {
@@ -18,7 +19,11 @@ public struct AnswerPresentation: Sendable {
       }
     case .speech(let text): speech = text
     case .done: isComplete = true
-    case .status: break
+    case .status(let text):
+      if ["Fast answer unavailable", "Deep answer unavailable", "Answer interrupted"].contains(text)
+      {
+        isUnavailable = true
+      }
     }
   }
 }
@@ -62,5 +67,25 @@ public struct HighlightMask: Sendable {
       }
     }
     return Self(width: outputSize, height: outputSize, pixels: output)
+  }
+}
+
+/// Evidence-backed card facts. Unknown invasive status never becomes an Invasive chip.
+public struct EntityCardFacts: Sendable {
+  public let latinName: String?
+  public let invasive: Bool
+  public init(_ entity: Entity) {
+    if case .string(let name) = entity.attrs["latinName"] {
+      latinName = name
+    } else if case .string(let name) = entity.attrs["scientificName"] {
+      latinName = name
+    } else {
+      latinName = nil
+    }
+    if case .object(let lookup) = entity.attrs["invasive"] {
+      invasive = lookup["listed"] == .bool(true)
+    } else {
+      invasive = entity.attrs["invasive"] == .bool(true)
+    }
   }
 }

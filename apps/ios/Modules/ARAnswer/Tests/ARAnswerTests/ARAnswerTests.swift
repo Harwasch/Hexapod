@@ -37,3 +37,27 @@ private func entity(_ x: Double, confidence: Double = 0.5) -> Entity {
       == nil)
   #expect(!HighlightMask(width: 2, height: 2, pixels: [255]).isValid)
 }
+
+@Test func progressStatusesDoNotReportAnAnswerFailure() {
+  var presentation = AnswerPresentation()
+  presentation.receive(.status("Looking"))
+  presentation.receive(.status("Analyzing"))
+  #expect(!presentation.isUnavailable)
+  presentation.receive(.status("Deep answer unavailable"))
+  #expect(presentation.isUnavailable)
+  presentation.reset()
+  #expect(!presentation.isUnavailable)
+  presentation.receive(.status("Answer interrupted"))
+  #expect(presentation.isUnavailable)
+}
+
+@Test func entityCardDisplaysOnlyKnownInvasiveAndTaxonFacts() {
+  var subject = entity(0)
+  #expect(!EntityCardFacts(subject).invasive && EntityCardFacts(subject).latinName == nil)
+  subject.attrs["invasive"] = .object(["listed": .null, "source": .string("survey")])
+  #expect(!EntityCardFacts(subject).invasive)
+  subject.attrs["invasive"] = .object(["listed": .bool(true)])
+  subject.attrs["scientificName"] = .string("Cortaderia jubata")
+  #expect(EntityCardFacts(subject).invasive)
+  #expect(EntityCardFacts(subject).latinName == "Cortaderia jubata")
+}

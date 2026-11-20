@@ -8,26 +8,28 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
-from app.api.deps import DbSession, RequireWriteToken, SettingsDep, Storage
+from app.api.deps import DbSession, RequireWriteOrPhoneKey, RequireWriteToken, SettingsDep, Storage
 from app.models import Capture, ScanEntity
 from app.models.enums import UploadStatus
 from app.schemas.ask import AskEvent, AskRequest, DoneEvent, Entity, StatusEvent
 from app.schemas.base import CamelModel
 from app.services import ask_entities as ledger
+from app.services import phone_access
 from app.services.ask_analysis import ModalAnalysis
 from app.services.ask_reasoner import Answering, Reasoner, ScriptedAnswerModel, ToolModel
 from app.services.ask_replay import ReplayAnswerer, recorded_events
-from app.services.errors import InvalidInputError
+from app.services.errors import InvalidInputError, UnauthorizedError
+from app.services.property_memory import PostgresMemory
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["ask"], dependencies=[RequireWriteToken])
+router = APIRouter(tags=["ask"])
 
 
-def reasoner(settings: SettingsDep, storage: Storage) -> Answering:
+def reasoner(settings: SettingsDep, storage: Storage, db: DbSession) -> Answering:
     if settings.ask_mode == "replay":
-        return ReplayAnswerer()
+        return ReplayAnswerer(PostgresMemory(db, release_reads=True))
     model = ScriptedAnswerModel() if settings.ask_reasoner == "mock" else ToolModel(settings)
-    return Reasoner(model, ModalAnalysis(settings, storage))
+    return Reasoner(model, ModalAnalysis(settings, storage), PostgresMemory(db, release_reads=True))
 
 
 ReasonerDep = Annotated[Answering, Depends(reasoner)]
@@ -61,6 +63,7 @@ def required_capture(db: DbSession, capture_id: uuid.UUID, site_id: uuid.UUID | 
     "/captures/{capture_id}/entities",
     response_model=list[EntityRecord],
     response_model_exclude_none=True,
+    dependencies=[RequireWriteToken],
 )
 def list_entities(
     db: DbSession,
@@ -77,6 +80,7 @@ def list_entities(
     "/captures/{capture_id}/entities",
     response_model=EntityRecord,
     response_model_exclude_none=True,
+    dependencies=[RequireWriteToken],
     status_code=201,
 )
 def create_entity(
@@ -92,6 +96,7 @@ def create_entity(
     "/captures/{capture_id}/entities/{entity_id}",
     response_model=EntityRecord,
     response_model_exclude_none=True,
+    dependencies=[RequireWriteToken],
 )
 def read_entity(
     db: DbSession, capture_id: uuid.UUID, entity_id: uuid.UUID, site_id: uuid.UUID | None = None
@@ -104,6 +109,7 @@ def read_entity(
     "/captures/{capture_id}/entities/{entity_id}",
     response_model=EntityRecord,
     response_model_exclude_none=True,
+    dependencies=[RequireWriteToken],
 )
 def update_entity(
     db: DbSession,
@@ -114,13 +120,16 @@ def update_entity(
 ) -> EntityRecord:
     capture = required_capture(db, capture_id, site_id)
     row = ledger.get_row(db, capture, entity_id)
-    ledger.assign(row, payload)
+    ledger.assign(row, ledger.prepare(capture, payload))
+    ledger.link_identity(db, capture, row)
     row.site_id = capture.site_id
     db.commit()
     return envelope(row, capture)
 
 
-@router.delete("/captures/{capture_id}/entities/{entity_id}", status_code=204)
+@router.delete(
+    "/captures/{capture_id}/entities/{entity_id}", status_code=204, dependencies=[RequireWriteToken]
+)
 def delete_entity(
     db: DbSession, capture_id: uuid.UUID, entity_id: uuid.UUID, site_id: uuid.UUID | None = None
 ) -> Response:
@@ -136,6 +145,7 @@ class EventStreamResponse(StreamingResponse):
 
 @router.post(
     "/ask",
+    dependencies=[RequireWriteOrPhoneKey],
     response_class=EventStreamResponse,
     responses={
         200: {"model": AskEvent, "description": "One AskEvent JSON per SSE data line"},
@@ -158,7 +168,22 @@ async def ask(
         or len(payload.id) > 256
     ):
         raise InvalidInputError("question exceeds analysis resource limits")
-    capture = ledger.capture_scope(db, payload.scan_id)
+    is_phone = getattr(request.state, "api_credential", None) == "phone"
+    capture: Capture | None
+    if is_phone and payload.scan_id is not None:
+        try:
+            capture_id = uuid.UUID(payload.scan_id)
+        except ValueError as exc:
+            raise InvalidInputError("scanId must be a capture UUID") from exc
+        capture = phone_access.capture(db, capture_id)
+    else:
+        capture = ledger.capture_scope(db, payload.scan_id)
+    if is_phone:
+        if payload.scope != "property" and capture is None:
+            raise UnauthorizedError("That phone key is not right.")
+        if payload.site_id is not None:
+            phone_access.site(db, uuid.UUID(payload.site_id))
+    ledger.request_site(db, payload, capture)
     if capture is None and (payload.keyframes or payload.device_entities):
         raise InvalidInputError("scene evidence requires scanId")
     run, replay = ledger.claim(db, payload, capture)
@@ -167,8 +192,9 @@ async def ask(
     if not replay:
         try:
             if settings.ask_mode == "replay":
-                recorded_events(payload.question)
-                if capture is None:
+                if payload.scope != "property":
+                    recorded_events(payload.question)
+                if capture is None and payload.scope != "property":
                     raise InvalidInputError("synthetic replay entities require scanId")
             if (
                 settings.ask_mode == "live"
@@ -210,6 +236,10 @@ async def ask(
                     return
                 if event.type == "entity" and capture is None:
                     raise InvalidInputError("analysis entities require a capture")
+                if event.type == "entity" and capture is not None:
+                    event = event.model_copy(
+                        update={"entity": ledger.prepare(capture, event.entity)}
+                    )
                 events.append(event.model_dump(mode="json", by_alias=True, exclude_none=True))
                 yield f"data: {event.model_dump_json(by_alias=True, exclude_none=True)}\n\n"
             done = DoneEvent()

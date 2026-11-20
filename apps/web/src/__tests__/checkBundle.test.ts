@@ -8,7 +8,15 @@
  */
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  openSync,
+  readFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -43,6 +51,8 @@ function build(files: Record<string, string>): string {
 /** Every page clean: the globe imports the engine, the others do not. */
 function cleanBuild(): Record<string, string> {
   return {
+    "globe-embed.html": page("embed-1.js", ["cesium-1.js"]),
+    "assets/embed-1.js": `export {};`,
     "index.html": page("index-1.js", ["cesium-1.js", "helpers-1.js"]),
     "admin.html": page("admin-1.js", ["helpers-1.js", "client-1.js"]),
     "upload.html": page("upload-1.js"),
@@ -65,8 +75,18 @@ function cleanBuild(): Record<string, string> {
 }
 
 function run(root: string): { status: number | null; output: string } {
-  const result = spawnSync(process.execPath, [SCRIPT, root], { encoding: "utf8" });
-  return { status: result.status, output: `${result.stdout}${result.stderr}` };
+  // File-backed capture also works in restricted Linux sandboxes that refuse Node pipes.
+  const directory = mkdtempSync(join(tmpdir(), "bundle-output-"));
+  roots.push(directory);
+  const output = join(directory, "output.log");
+  const fd = openSync(output, "w");
+  try {
+    const result = spawnSync(process.execPath, [SCRIPT, root], { stdio: ["ignore", fd, fd] });
+    if (result.error) throw result.error;
+    return { status: result.status, output: readFileSync(output, "utf8") };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 const roots: string[] = [];
@@ -157,4 +177,15 @@ describe("check-bundle.mjs", () => {
     expect(output).toContain("admin.html names assets/admin-missing.js");
     expect(status).toBe(2);
   });
+});
+
+it("requires the embed and enforces its own entry budget", () => {
+  const files = cleanBuild();
+  delete files["globe-embed.html"];
+  expect(run(build(files)).status).toBe(2);
+  const large = cleanBuild();
+  large["assets/embed-1.js"] = `const data="${randomBytes(100_000).toString("hex")}";`;
+  const result = run(build(large));
+  expect(result.status).toBe(1);
+  expect(result.output).toContain("exceeds embed entry/total gzip budget");
 });

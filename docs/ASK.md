@@ -5,8 +5,9 @@ Use `Authorization: Bearer <API_WRITE_TOKEN>`. Each SSE `data:` line contains on
 `AskEvent`: status, entity, speech, or done. Only a successful, committed answer ends
 with done. A status followed by EOF without done means the answer was interrupted.
 
-`scanId` is a catalog capture UUID. The phone contract now includes optional
-`scope`/`siteId`; API schema alignment is still pending. A question without a scan can receive
+`scanId` is a catalog capture UUID. Optional `scope` defaults to scan.
+`scope: property` requires a valid catalog `siteId`; a supplied scan must belong
+to that site. A question without a scan can receive
 speech, but cannot supply scene evidence or save entities. The reasoner receives the
 question, device observations, earlier entities from that capture, keyframe pixels,
 mask references and depth summaries. It can make at most eight turns, four tools per
@@ -87,3 +88,27 @@ Apple URLSession bytes streaming, strict concurrency in the Apple-only branch,
 radio cancellation and XcodeGen app integration require a Mac/iPhone. The Modal
 image, provider cancellation, ffmpeg against a real phone bundle, segmentation and
 plant inference require a separate provider/device verification; none has been run.
+
+## Integrated property scope
+
+Property requests register `search_property_entities` and `search_property_answers`
+alongside the scan analysis tools. The site is bound from the validated request and
+cannot be changed by tool arguments. Results carry dates and capture IDs; retrieved
+scan-local anchors are evidence, never new observations in the current scan's frame.
+Mock and recorded replay modes query the same property memory without paid calls.
+Their counts describe the returned page of observations, not deduplicated physical objects.
+
+Migration 0040 stores request context/site on `ask_runs` and creates
+`property_entity_memory` / `property_answer_memory` views over the real tables.
+Entity scope comes from the capture's current site; observation dates prefer its epoch,
+then capture time, then save time. Historical answers are available only through the
+write-authenticated Ask tools. Public catalog pins use
+`GET /api/v1/properties/{site_id}/entities` (`items`, `nextOffset`).
+
+Catalog registration carries the same run's georef, full placement, verified fixed
+ARKit-frame provenance and height datum into capture metadata. Every entity save
+runs the v2 georeferencing service. Unknown heading/frame/vertical datum leaves geo
+absent. A verified ellipsoid placement produces both payload and PostGIS anchors.
+Cross-scan dedupe serializes per site, pages all nearby candidates, and saves identity
+proposals under `attrs.identity` in the entity transaction. It retains every dated
+observation and never averages anchors. Ambiguous matches require review.
