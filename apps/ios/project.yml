@@ -34,7 +34,13 @@ targets:
     type: application
     platform: iOS
     sources:
-      - App
+      - path: App
+        # App/Package.swift and App/Tests make App/Support testable with swift test on Linux;
+        # the app target compiles the Support sources directly and must not build either.
+        excludes:
+          - Package.swift
+          - Tests/**
+          - "*.md"
     dependencies:
       - package: Capture
       - package: LiveSplat
