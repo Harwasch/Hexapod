@@ -28,6 +28,7 @@
       let view = ARView(
         frame: .zero, cameraMode: model.usesLiveCapture ? .ar : .nonAR,
         automaticallyConfigureSession: false)
+      view.debugOptions = []
       let coordinator = context.coordinator
       coordinator.view = view
       view.session.delegate = coordinator
@@ -54,6 +55,7 @@
       coordinator.active = isActive && Self.supportsDevice
       guard coordinator.active else {
         coordinator.stop()
+        if isActive { model.reportUnavailable() }
         return
       }
       coordinator.startIfNeeded()

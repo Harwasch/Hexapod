@@ -135,26 +135,23 @@
           x: (t[0] * u + t[2] * v + t[4]) * bounds.width,
           y: (t[1] * u + t[3] * v + t[5]) * bounds.height)
       }
-      context.setFillColor(UIColor.cyan.withAlphaComponent(0.12).cgColor)
-      for i in renderer.coverage.covered.indices where !renderer.coverage.covered[i] {
-        let u = Double(i % 32) / 32
-        let v = Double(i / 32) / 24
-        context.beginPath()
-        context.move(to: point(u, v))
-        context.addLine(to: point(u + 1 / 32, v))
-        context.addLine(to: point(u + 1 / 32, v + 1 / 24))
-        context.addLine(to: point(u, v + 1 / 24))
-        context.closePath()
-        context.fillPath()
-      }
       for g in renderer.splats {
         guard let p = frame.camera.project(g.position), p.x >= 0, p.y >= 0,
           p.x < Double(frame.camera.width), p.y < Double(frame.camera.height)
         else { continue }
         let screen = point(p.x / Double(frame.camera.width), p.y / Double(frame.camera.height))
         context.setFillColor(
-          UIColor(red: g.color.x, green: g.color.y, blue: g.color.z, alpha: 0.8).cgColor)
-        context.fillEllipse(in: CGRect(x: screen.x - 1.5, y: screen.y - 1.5, width: 3, height: 3))
+          UIColor(red: g.color.x, green: g.color.y, blue: g.color.z, alpha: 0.42).cgColor)
+        let radius = min(
+          14,
+          max(
+            2,
+            exp(g.parameters[3]) * frame.camera.fx / p.z
+              * bounds.width / Double(frame.camera.width)))
+        context.fillEllipse(
+          in: CGRect(
+            x: screen.x - radius, y: screen.y - radius,
+            width: radius * 2, height: radius * 2))
       }
     }
   }

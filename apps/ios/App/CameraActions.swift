@@ -26,6 +26,37 @@ import Voice
   private(set) var isTalking = false
   private(set) var recording = false
   private(set) var failed = false
+  private(set) var failureText = "Unavailable"
+  private(set) var capturePhase = CapturePhase.idle
+  private(set) var preparingVoice = false
+  private(set) var transcript = ""
+  private(set) var question = ""
+  private(set) var answerText = ""
+  private(set) var answering = false
+  var latestCapture: URL?
+  var savedCapture: URL?
+  var captureDuration: TimeInterval = 0
+  var siteName: String?
+  var siteID: UUID?
+  private var recordingStarted: Date?
+  var splatEnabled: Bool {
+    (liveSplat as? DefaultLiveSplatRenderer)?.preference.trainingEnabled ?? (liveSplat != nil)
+  }
+  var coverage: Double { liveSplat?.coverageFraction ?? 0 }
+  var answerEntities: [EntitySchema.Entity] { presentation.entities }
+  var splatFallback: Bool {
+    guard splatEnabled, let liveSplat else { return false }
+    if case .fallback = liveSplat.status { return true }
+    return liveSplat.status == .pointPreview
+  }
+  var gapPosition: CGPoint? {
+    guard splatEnabled, let renderer = liveSplat as? DefaultLiveSplatRenderer,
+      renderer.latestFrame != nil,
+      let point = renderer.coverage.gapHint(displayTransform: renderer.displayTransform)
+    else { return nil }
+    return CGPoint(x: point.x, y: point.y)
+  }
+
   var card: EntitySchema.Entity?
   private var presentation = AnswerPresentation()
   private let voice: any VoiceInput
@@ -39,6 +70,31 @@ import Voice
   let liveSplat: (any LiveSplatRenderer)?
   private var replayTask: Task<Void, Never>?
   var usesLiveCapture: Bool { captureSource.usesLiveSession }
+  var canRecord: Bool { usesLiveCapture || (simulated && captureSource.fixtureDirectory != nil) }
+  struct ScreenPin: Identifiable {
+    let id: Int
+    let x: CGFloat
+    let y: CGFloat
+  }
+  var screenPins: [ScreenPin] {
+    guard let view = arView else { return [] }
+    return presentation.entities.enumerated().compactMap { index, entity in
+      let p = entity.anchor.world
+      if let point = view.project(SIMD3(Float(p.x), Float(p.y), Float(p.z))),
+        view.bounds.contains(point)
+      {
+        return ScreenPin(id: index, x: point.x, y: point.y)
+      }
+      if simulated {
+        return ScreenPin(id: index, x: view.bounds.midX, y: view.bounds.height * 0.55)
+      }
+      return nil
+    }
+  }
+  func openPin(_ index: Int) {
+    guard presentation.entities.indices.contains(index) else { return }
+    card = presentation.entities[index]
+  }
   private weak var arView: ARView?
   private var voiceTask: Task<Void, Never>?
   private var answerTask: Task<Void, Never>?
@@ -63,8 +119,38 @@ import Voice
     recorder.exportBundle = { [weak self] directory in
       guard let renderer = self?.liveSplat else { return }
       renderer.stop()
-      _ = try renderer.exportPLY(to: directory)
-      renderer.start()
+      let splats = renderer.splats
+      guard !splats.isEmpty else { return }
+      try await Task.detached(priority: .utility) {
+        try SplatPLY.encode(splats).write(
+          to: directory.appendingPathComponent("livesplat.ply"), options: .atomic)
+      }.value
+    }
+    siteName = UserDefaults.standard.string(forKey: "hex.currentSite.name")
+    siteID = UserDefaults.standard.string(forKey: "hex.currentSite.id").flatMap(
+      UUID.init(uuidString:))
+    recorder.captureDetails = { [weak self] in
+      CaptureDetails(
+        siteName: self?.siteName, siteID: self?.siteID, duration: self?.captureDuration ?? 0)
+    }
+    recorder.onPhase = { [weak self] phase in
+      guard let self else { return }
+      capturePhase = phase
+      switch phase {
+      case .recording(let start):
+        recordingStarted = start
+        liveSplat?.start()
+      case .stopping:
+        captureDuration = Date().timeIntervalSince(recordingStarted ?? Date())
+        liveSplat?.stop()
+      case .saved(let directory):
+        savedCapture = directory
+        latestCapture = directory
+      case .failed:
+        failureText = "Scan failed"
+        liveSplat?.stop()
+      default: break
+      }
     }
     recorder.onChange = { [weak self] active, failure in
       self?.recording = active
@@ -79,7 +165,6 @@ import Voice
 
   func attach(_ view: ARView) {
     arView = view
-    if usesLiveCapture { liveSplat?.start() }
     cameraReady = true
     do {
       if fakeOverlay {
@@ -112,13 +197,14 @@ import Voice
 
   func frame(_ frame: ARFrame) {
     recorder.append(frame)
-    if let view = arView, let renderer = liveSplat {
+    if recording, splatEnabled, let view = arView, let renderer = liveSplat {
       let orientation = view.window?.windowScene?.interfaceOrientation ?? .portrait
       do {
         try renderer.ingest(frame, orientation: orientation, viewportSize: view.bounds.size)
       } catch {
         renderer.trackingUnavailable()
         failed = true
+        failureText = "Preview unavailable"
       }
     }
     (overlay as? RealityAnswerOverlay)?.updateCamera()
@@ -188,17 +274,99 @@ import Voice
       } catch is CancellationError {} catch {
         if generation == questionGeneration {
           failed = true
+          failureText = "Selection unavailable"
           overlay?.setMask(nil)
         }
       }
     }
   }
 
-  func toggleRecording() { if usesLiveCapture { recorder.toggleRecording() } }
+  func toggleRecording() {
+    guard canRecord, cameraReady else { return }
+    if !usesLiveCapture {
+      toggleFixtureRecording()
+      return
+    }
+    if case .stopping = capturePhase { return }
+    if case .starting = capturePhase { return }
+    failed = false
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    if !recording { clearAnswer() }
+    recorder.toggleRecording()
+  }
+
+  private func toggleFixtureRecording() {
+    guard let source = captureSource.fixtureDirectory else { return }
+    if recording {
+      recording = false
+      capturePhase = .stopping
+      captureDuration = Date().timeIntervalSince(recordingStarted ?? Date())
+      liveSplat?.stop()
+      let destination = FileManager.default.urls(
+        for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Captures/" + UUID().uuidString)
+      let details = CaptureDetails(siteName: siteName, siteID: siteID, duration: captureDuration)
+      Task {
+        do {
+          let directory = try await FixtureCaptureRecording.save(
+            source: source.appendingPathComponent("bundle"),
+            destination: destination, details: details)
+          capturePhase = .saved(directory)
+          latestCapture = directory
+          savedCapture = directory
+        } catch {
+          capturePhase = .failed
+          failed = true
+        }
+      }
+    } else if !capturePhase.isBusy {
+      clearAnswer()
+      let start = Date()
+      recordingStarted = start
+      capturePhase = .recording(start)
+      recording = true
+      liveSplat?.start()
+    }
+  }
+
+  func chooseSite(id: UUID?, name: String?) {
+    siteID = id
+    siteName = name
+    UserDefaults.standard.set(id?.uuidString, forKey: "hex.currentSite.id")
+    UserDefaults.standard.set(name, forKey: "hex.currentSite.name")
+  }
+  func dismissCapture() {
+    savedCapture = nil
+    capturePhase = .idle
+  }
+  func clearAnswer() {
+    answerTask?.cancel()
+    questionGeneration = UUID()
+    question = ""
+    answerText = ""
+    answering = false
+    overlay?.stopSpeaking()
+    overlay?.update(entities: [])
+    overlay?.setMask(nil)
+    presentation.reset()
+    let router = router
+    Task { await router.cancel() }
+  }
+  func replayAnswer() { if !answerText.isEmpty { overlay?.speak(answerText) } }
+  func pinCard() {
+    guard let card else { return }
+    overlay?.update(entities: [card])
+    self.card = nil
+  }
 
   func beginTalking() {
     guard !isTalking else { return }
     isTalking = true
+    preparingVoice = true
+    transcript = ""
+    question = ""
+    answerText = ""
+    answering = false
     failed = false
     card = nil
     voiceTask?.cancel()
@@ -214,17 +382,29 @@ import Voice
       var accumulator = TranscriptAccumulator()
       do {
         let stream = try await voice.start()
+        guard id == voiceGeneration, !Task.isCancelled else { return }
+        preparingVoice = false
         for try await result in stream {
           try Task.checkCancellation()
           guard id == voiceGeneration else { return }
           accumulator.receive(result)
+          transcript = accumulator.text
         }
         guard id == voiceGeneration, !Task.isCancelled else { return }
         isTalking = false
-        if !accumulator.text.isEmpty { ask(accumulator.text) }
+        if !accumulator.text.isEmpty {
+          ask(accumulator.text)
+        } else {
+          question = ""
+          answering = false
+        }
       } catch is CancellationError {} catch {
         if id == voiceGeneration {
           failed = true
+          preparingVoice = false
+          failureText = "Voice unavailable"
+          question = ""
+          answering = false
           isTalking = false
           voice.cancel()
         }
@@ -235,6 +415,15 @@ import Voice
   func endTalking() {
     guard isTalking else { return }
     isTalking = false
+    if preparingVoice {
+      voiceGeneration = UUID()
+      voiceTask?.cancel()
+      voice.cancel()
+      preparingVoice = false
+      return
+    }
+    question = transcript.isEmpty ? "Listening" : transcript
+    answering = true
     let id = voiceGeneration
     Task {
       guard id == voiceGeneration else { return }
@@ -242,7 +431,10 @@ import Voice
     }
   }
 
-  private func ask(_ text: String) {
+  func ask(_ text: String) {
+    question = text
+    answerText = ""
+    answering = true
     answerTask?.cancel()
     let id = UUID()
     questionGeneration = id
@@ -259,9 +451,16 @@ import Voice
         presentation.receive(event)
         switch event {
         case .entity: overlay?.update(entities: presentation.entities)
-        case .speech(let text): overlay?.speak(text)
-        case .status: failed = presentation.isUnavailable
+        case .speech(let text):
+          answerText = text
+          overlay?.speak(text)
+        case .status(let status):
+          failed = presentation.isUnavailable
+          if failed {
+            failureText = status.hasPrefix("Deep") ? "Cloud unavailable" : "Answer unavailable"
+          }
         case .done:
+          answering = false
           let selection = await perception.selection()
           guard id == questionGeneration else { return }
           highlight(selection)
@@ -301,6 +500,7 @@ import Voice
     replayTask = nil
     cameraReady = false
     isTalking = false
+    preparingVoice = false
     voiceGeneration = UUID()
     questionGeneration = UUID()
     voiceTask?.cancel()
@@ -317,6 +517,7 @@ import Voice
       await router.cancel()
       await perception.clear()
     }
+    if !usesLiveCapture && recording { toggleFixtureRecording() }
     recorder.stop()
     liveSplat?.stop()
     overlay?.remove()
@@ -324,6 +525,7 @@ import Voice
     arView = nil
     presentation.reset()
     card = nil
+    answering = false
   }
 }
 

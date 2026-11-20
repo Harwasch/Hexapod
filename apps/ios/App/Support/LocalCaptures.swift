@@ -1,9 +1,20 @@
 import Foundation
 import Upload
 
+struct CaptureDetails: Codable, Sendable {
+  var siteName: String?
+  var siteID: UUID?
+  var duration: TimeInterval
+}
+
 struct LocalCapture: Identifiable, Sendable {
   let directory: URL
   let upload: UploadState?
+  var details: CaptureDetails? {
+    guard let data = try? Data(contentsOf: directory.appendingPathComponent("capture-info.json"))
+    else { return nil }
+    return try? JSONDecoder().decode(CaptureDetails.self, from: data)
+  }
   var uploadDirectory: URL {
     directory.deletingLastPathComponent().deletingLastPathComponent()
       .appendingPathComponent("Uploads/\(id)")
