@@ -1,0 +1,41 @@
+name: Phone key · production smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: API origin (blank uses repository variable, then fly.toml)
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Phone upload, Ask and scope refusals
+        env:
+          PHONE_API_TOKEN: ${{ secrets.PHONE_API_TOKEN }}
+          INPUT_API_BASE_URL: ${{ inputs.api_base_url }}
+          REPOSITORY_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        shell: bash
+        run: |
+          api_base_url="$INPUT_API_BASE_URL"
+          if [ -z "$api_base_url" ]; then
+            api_base_url="$REPOSITORY_API_BASE_URL"
+          fi
+          if [ -z "$api_base_url" ]; then
+            api_base_url=$(python3 -c 'import tomllib; print("https://" + tomllib.load(open("fly.toml", "rb"))["app"] + ".fly.dev")')
+          fi
+          set +e
+          python3 scripts/phone_smoke.py --api "$api_base_url" | tee phone-smoke.log
+          smoke_status=${PIPESTATUS[0]}
+          cat phone-smoke.log >> "$GITHUB_STEP_SUMMARY"
+          exit "$smoke_status"
