@@ -11,6 +11,10 @@ on:
         description: Registered App Store Connect bundle identifier
         type: string
         default: com.harwasch.hex
+      skip_ui_tests:
+        description: Skip only the UI tests (build, package tests and upload still run)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -167,13 +171,13 @@ jobs:
       - name: Test packages on an available iPhone simulator
         run: python3 apps/ios/ci_scripts/packages.py test
       - name: Generate UI test project
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && !inputs.skip_ui_tests }}
         run: |
           brew install xcodegen
           cd apps/ios
           xcodegen generate
       - name: UI tests with screenshots
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && !inputs.skip_ui_tests }}
         run: python3 apps/ios/ci_scripts/ui_tests.py
       - name: Export UI screenshots
         if: ${{ always() }}
