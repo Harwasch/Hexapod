@@ -2188,3 +2188,26 @@ The capture worker and its existing volume remain separate. All Worlds paid
 provider provisioning flags remain false. Existing private-storage, API-token and
 Anthropic secrets are shared with the research process; no new secret values are
 baked into the web build. See [the testing checklist](WORLDS_LAND_TESTING.md).
+
+### iPhone deep answers (optional)
+
+`POST /v1/ask` shares `API_WRITE_TOKEN` with catalog writes and reuses the existing
+`ANTHROPIC_API_KEY`. No additional API secret is needed. `ASK_MODEL` selects the
+reasoning model independently of other services; keep the identifier in runtime
+configuration. `ASK_ANALYSIS_ENABLED` defaults to false, and `ASK_ANALYSIS_APP`
+defaults to `hex-analysis`. Without analysis, the answer must acknowledge missing
+scene evidence. Without the API key, new questions return 503; saved answers can replay.
+
+The API needs its existing Modal extra and the existing `MODAL_TOKEN_ID` and
+`MODAL_TOKEN_SECRET` to dispatch analysis. The analysis wrapper receives a signed,
+15-minute read URL for one private bundle; it needs no bucket credentials or new
+storage secret. Returned mask artifacts are written by the API through its existing
+private object-storage credentials. Never pass these capabilities to model tools or
+put them in a `VITE_` setting.
+
+`tools/analysis/modal_app.py` defines a separate optional app, without deploying it.
+It currently supplies CPU bundle/context access and explicit unavailable inference
+backends. Do not enable it expecting GPU inference: dependency/weight provisioning,
+GPU allocation, plant-backend choice and live verification remain open. If a chosen
+backend requires a new weights secret, document its exact name here before adding it.
+See [Ask](ASK.md) for coordinates, persistence, replay and verification limits.

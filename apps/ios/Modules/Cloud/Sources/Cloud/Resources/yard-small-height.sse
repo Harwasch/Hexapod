@@ -1,0 +1,8 @@
+data: {"type":"status","text":"Simulated fixture replay"}
+
+data: {"type":"entity","entity":{"label":"tree","anchor":{"world":{"x":1.1342903101976505,"y":1.3910502292353828,"z":0.39781087557603456}},"extent":{"x":1.2849082395480766,"y":2.562817926254709,"z":0.705769758742191},"masks":[],"confidence":1.0,"attrs":{"synthetic":true,"validDepthPixels":116,"selectedPixels":116,"measurement":"observed-surface-bounds","referenceFrame":2,"instanceCountInReferenceFrame":1,"replay":true},"source":{"module":"count_measure","model":"fixture"}}}
+
+data: {"type":"speech","text":"Simulated fixture: one tree, with observed surface height 2.56 metres."}
+
+data: {"type":"done"}
+

@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     agent,
     artifacts,
+    ask,
     assets,
     captures,
     imagery,
@@ -100,3 +101,5 @@ api_v1.include_router(land_views.router)
 
 api_v1.include_router(imagery.router)
 api_v1.include_router(text.router)
+
+api_v1.include_router(ask.router)

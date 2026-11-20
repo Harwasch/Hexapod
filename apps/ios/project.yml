@@ -13,6 +13,8 @@ settings:
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
 packages:
+  Cloud:
+    path: Modules/Cloud
   Capture:
     path: Modules/Capture
   LiveSplat:
@@ -42,6 +44,7 @@ targets:
           - Tests/**
           - "*.md"
     dependencies:
+      - package: Cloud
       - package: Capture
       - package: LiveSplat
       - package: Voice
