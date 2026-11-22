@@ -7,9 +7,11 @@ public struct AnswerPresentation: Sendable {
   public private(set) var speech = ""
   public private(set) var isComplete = false
   public private(set) var isUnavailable = false
+  public private(set) var isConnecting = false
   public init() {}
   public mutating func reset() { self = Self() }
   public mutating func receive(_ event: AskEvent) {
+    isConnecting = event == .status("Connecting…")
     switch event {
     case .entity(let entity):
       if let index = entities.firstIndex(where: { EntityMatch.matches($0, entity) }) {

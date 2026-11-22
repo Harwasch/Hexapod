@@ -1,3 +1,4 @@
+import Networking
 import EntitySchema
 import Foundation
 #if canImport(FoundationNetworking)
@@ -33,7 +34,7 @@ public struct URLSessionSSETransport: SSETransport {
     public func connect(_ request: URLRequest) async throws -> SSEConnection {
         #if canImport(Darwin)
         // Apple URLSession streaming and radio cancellation require a device/Mac check.
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        let (bytes, response) = try await APISession.shared.bytes(for: request)
         guard let http = response as? HTTPURLResponse else { throw CloudError.invalidResponse }
         let (chunks, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
         let task = Task {
@@ -78,7 +79,7 @@ public struct CloudAnswerer: DeepAnswering {
         self.endpoint = baseURL.appendingPathComponent("v1/ask")
         self.writeToken = writeToken
         self.transport = transport
-        self.maximumRetries = max(0, maximumRetries)
+        self.maximumRetries = min(RetryPolicy.maximumRetries, max(0, maximumRetries))
         self.retryDelay = retryDelay
     }
 
@@ -88,7 +89,7 @@ public struct CloudAnswerer: DeepAnswering {
                 do {
                     var urlRequest = URLRequest(url: endpoint)
                     urlRequest.httpMethod = "POST"
-                    urlRequest.timeoutInterval = 600
+                    urlRequest.timeoutInterval = 90
                     urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
                     if !writeToken.isEmpty {
@@ -98,7 +99,8 @@ public struct CloudAnswerer: DeepAnswering {
                     var delivered = false
                     for attempt in 0...maximumRetries {
                         try Task.checkCancellation()
-                        var delay = retryDelay
+                        continuation.yield(.status("Connecting…"))
+                        var delay = retryDelay * (1 << attempt)
                         do {
                             let connection = try await transport.connect(urlRequest)
                             defer { connection.cancel() }
@@ -138,10 +140,9 @@ public struct CloudAnswerer: DeepAnswering {
 
     private static func retryable(_ error: any Error) -> Bool {
         if case CloudError.server(let status) = error {
-            return [408, 429, 500, 502, 503, 504].contains(status)
+            return RetryPolicy.retryable(status: status)
         }
         if case CloudError.incompleteStream = error { return true }
-        if let error = error as? URLError { return error.code != .cancelled }
-        return false
+        return RetryPolicy.retryable(error)
     }
 }

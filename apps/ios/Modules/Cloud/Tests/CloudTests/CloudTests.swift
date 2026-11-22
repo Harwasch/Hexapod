@@ -33,13 +33,13 @@ private func recording(_ name: String) throws -> Data {
             for try await event in client.ask(AskRequest(id: "recorded", question: "Replay")) {
                 events.append(event)
             }
-            #expect(events == expected)
+            #expect(events == [.status("Connecting…")] + expected)
         }
         var fakeEvents: [AskEvent] = []
         for try await event in FakeDeepAnswering(recording: data).ask(AskRequest(id: "fake", question: "Replay")) {
             fakeEvents.append(event)
         }
-        #expect(fakeEvents == expected)
+        #expect(fakeEvents == [.status("Connecting…")] + expected)
     }
 }
 
@@ -120,11 +120,12 @@ private actor Transport: SSETransport {
     let request = AskRequest(id: "same-question", question: "What is that?")
     var events: [AskEvent] = []
     for try await event in client.ask(request) { events.append(event) }
-    #expect(events == [.done])
+    #expect(events == [.status("Connecting…"), .done])
     let sent = await transport.recorded()
     #expect(sent.count == 1)
     #expect(sent[0].url?.path == "/api/v1/ask")
     #expect(sent[0].httpMethod == "POST")
+    #expect(sent[0].timeoutInterval == 90)
     #expect(sent[0].value(forHTTPHeaderField: "Authorization") == "Bearer test-write")
     #expect(try JSONDecoder().decode(AskRequest.self, from: sent[0].httpBody!) == request)
 }
@@ -132,10 +133,32 @@ private actor Transport: SSETransport {
 @Test func retriesTransientFailuresWithIdenticalBody() async throws {
     let transport = Transport(statuses: [503, 200])
     let client = CloudAnswerer(baseURL: URL(string: "https://example.test")!, writeToken: "", transport: transport, retryDelay: .zero)
-    for try await _ in client.ask(AskRequest(id: "retry", question: "Count")) {}
+    var events: [AskEvent] = []
+    for try await event in client.ask(AskRequest(id: "retry", question: "Count")) { events.append(event) }
+    #expect(events == [.status("Connecting…"), .status("Connecting…"), .done])
     let sent = await transport.recorded()
     #expect(sent.count == 2)
     #expect(sent[0].httpBody == sent[1].httpBody)
+}
+
+private actor ColdStartTransport: SSETransport {
+    var attempts = 0
+    func connect(_ request: URLRequest) async throws -> SSEConnection {
+        attempts += 1
+        if attempts == 1 { throw URLError(.timedOut) }
+        if attempts == 2 { throw URLError(.networkConnectionLost) }
+        return SSEConnection(status: 200, chunks: stream("data: {\"type\":\"done\"}\n\n"))
+    }
+}
+
+@Test func retriesColdStartConnectionFailuresAndReportsConnecting() async throws {
+    let transport = ColdStartTransport()
+    let client = CloudAnswerer(baseURL: URL(string: "https://fixture.invalid")!, writeToken: "",
+        transport: transport, retryDelay: .zero)
+    var events: [AskEvent] = []
+    for try await event in client.ask(AskRequest(id: "cold", question: "Look")) { events.append(event) }
+    #expect(events == [.status("Connecting…"), .status("Connecting…"), .status("Connecting…"), .done])
+    #expect(await transport.attempts == 3)
 }
 
 @Test func doesNotRetryAuthenticationOrPartialAnswers() async throws {

@@ -1,3 +1,4 @@
+import Networking
 import EntitySchema
 import Foundation
 
@@ -166,12 +167,8 @@ public protocol GlobeTransport: Sendable {
 public struct URLSessionGlobeTransport: GlobeTransport {
   public init() {}
   public func get(_ url: URL) async throws -> Data {
-    let (data, response) = try await URLSession.shared.data(from: url)
-    guard let http = response as? HTTPURLResponse else { throw GlobeError.invalidResponse }
-    guard (200..<300).contains(http.statusCode) else {
-      throw GlobeError.httpStatus(http.statusCode)
-    }
-    return data
+    do { return try await APIClient().data(for: URLRequest(url: url)) }
+    catch APIError.httpStatus(let status) { throw GlobeError.httpStatus(status) }
   }
 }
 
@@ -219,14 +216,6 @@ public struct APIGlobeDataSource: GlobeDataSource {
     let items: [GlobePin]
     let nextOffset: Int?
   }
-}
-
-/// Web's existing published scan route. Epoch selection remains an App callback seam.
-public func globeScanPreviewURL(webBaseURL: URL, siteID: UUID) -> URL {
-  var components = URLComponents(
-    url: webBaseURL.appendingPathComponent("view.html"), resolvingAgainstBaseURL: false)!
-  components.fragment = siteID.uuidString.lowercased()
-  return components.url!
 }
 
 public struct FakeGlobeDataSource: GlobeDataSource {

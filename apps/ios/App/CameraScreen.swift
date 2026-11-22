@@ -257,7 +257,10 @@ private enum CameraStyle {
     HStack(spacing: 12) {
       if model.answering {
         ProgressView().tint(CameraStyle.amber)
-        Text(model.question).font(.system(size: 15, weight: .medium)).lineLimit(2)
+        VStack(alignment: .leading, spacing: 4) {
+          Text(model.question).font(.system(size: 15, weight: .medium)).lineLimit(2)
+          if model.answerConnecting { Text("Connecting…").font(.caption) }
+        }
       } else {
         Button(action: model.replayAnswer) {
           Label(

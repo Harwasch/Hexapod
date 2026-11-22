@@ -44,6 +44,7 @@ import Voice
   }
   var coverage: Double { liveSplat?.coverageFraction ?? 0 }
   var answerEntities: [EntitySchema.Entity] { presentation.entities }
+  var answerConnecting: Bool { presentation.isConnecting }
   var splatFallback: Bool {
     guard splatEnabled, let liveSplat else { return false }
     if case .fallback = liveSplat.status { return true }
