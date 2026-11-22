@@ -9,7 +9,7 @@
     var snapshot: GlobeSnapshot { get }
   }
 
-  /// One retained local page, preloaded when the property picker opens.
+  /// One retained HTTPS page. Explicit fixtures use the bundled copy.
   @MainActor
   public final class CesiumGlobeSession: NSObject, ObservableObject, WKScriptMessageHandler,
     WKNavigationDelegate
@@ -17,6 +17,7 @@
     public static let shared = CesiumGlobeSession()
     public let webView: WKWebView
     @Published public private(set) var error: String?
+    private var origin: GlobeOrigin?
     private var bridge = GlobeBridgeState()
     private var snapshot: GlobeSnapshot?
     private var owner: UUID?
@@ -32,24 +33,34 @@
       webView.navigationDelegate = self
       webView.isOpaque = false
       webView.scrollView.isScrollEnabled = false
+    }
+    public func configure(webBaseURL: URL?, fixture: Bool) {
+      let local = fixture ? Bundle.module.url(
+        forResource: "globe-embed", withExtension: "html", subdirectory: "GlobeWeb") : nil
+      guard !fixture || local != nil else { error = "Globe fixture unavailable"; return }
+      let next = GlobeOrigin(webBaseURL: webBaseURL ?? GlobeOrigin.deployed, fixturePage: local)
+      guard origin?.page != next.page else { return }
+      origin = next
       load()
+    }
+    public func focus(scanID: UUID) {
+      for message in bridge.openScan(scanID.uuidString.lowercased()) { send(message) }
     }
     public func load() {
       bridge.invalidate()
       error = nil
-      guard
-        let page = Bundle.module.url(
-          forResource: "globe-embed", withExtension: "html", subdirectory: "GlobeWeb")
-      else {
-        error = "Globe unavailable"
-        return
+      guard let page = origin?.page else { error = "Globe unavailable"; return }
+      if page.isFileURL {
+        webView.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
+      } else {
+        webView.load(URLRequest(url: page))
       }
-      webView.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
     }
     func update(
-      owner: UUID, snapshot: GlobeSnapshot, scanID: UUID?, fixture: Bool,
+      owner: UUID, snapshot: GlobeSnapshot, scanID: UUID?, fixture: Bool, webBaseURL: URL? = nil,
       onPin: @escaping (GlobePin) -> Void, onScan: @escaping (UUID) -> Void
     ) {
+      configure(webBaseURL: webBaseURL, fixture: fixture)
       self.owner = owner
       self.snapshot = snapshot
       self.onPin = onPin
@@ -80,7 +91,11 @@
     public func userContentController(
       _ userContentController: WKUserContentController, didReceive message: WKScriptMessage
     ) {
-      guard message.frameInfo.isMainFrame, message.frameInfo.request.url?.isFileURL == true else {
+      let sender = message.frameInfo.securityOrigin
+      guard message.webView === webView, message.frameInfo.isMainFrame,
+        origin?.allowsMessage(message.frameInfo.request.url) == true,
+        origin?.allowsSecurityOrigin(scheme: sender.`protocol`, host: sender.host, port: sender.port) == true
+      else {
         return
       }
       do {
@@ -114,7 +129,9 @@
       _ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
       decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
     ) {
-      decisionHandler(navigationAction.request.url?.isFileURL == true ? .allow : .cancel)
+      decisionHandler(
+        navigationAction.targetFrame?.isMainFrame == true
+          && origin?.allowsNavigation(navigationAction.request.url) == true ? .allow : .cancel)
     }
   }
 
@@ -134,23 +151,25 @@
     public let snapshot: GlobeSnapshot
     let scanID: UUID?
     let fixture: Bool
+    let webBaseURL: URL?
     let onPin: (GlobePin) -> Void
     let onScan: (UUID) -> Void
     @ObservedObject private var session = CesiumGlobeSession.shared
     public init(
-      snapshot: GlobeSnapshot, scanID: UUID? = nil, fixture: Bool = false,
+      snapshot: GlobeSnapshot, scanID: UUID? = nil, fixture: Bool = false, webBaseURL: URL? = nil,
       onPin: @escaping (GlobePin) -> Void, onScan: @escaping (UUID) -> Void
     ) {
       self.snapshot = snapshot
       self.scanID = scanID
       self.fixture = fixture
+      self.webBaseURL = webBaseURL
       self.onPin = onPin
       self.onScan = onScan
     }
     public var body: some View {
-      ZStack {
+      ZStack(alignment: .top) {
         GlobeWebSurface(
-          session: session, snapshot: snapshot, scanID: scanID, fixture: fixture, onPin: onPin,
+          session: session, snapshot: snapshot, scanID: scanID, fixture: fixture, webBaseURL: webBaseURL, onPin: onPin,
           onScan: onScan)
         if let error = session.error {
           VStack {
@@ -167,6 +186,7 @@
     let snapshot: GlobeSnapshot
     let scanID: UUID?
     let fixture: Bool
+    let webBaseURL: URL?
     let onPin: (GlobePin) -> Void
     let onScan: (UUID) -> Void
     final class Coordinator { let id = UUID() }
@@ -183,7 +203,7 @@
         }
         session.webView.frame = view.bounds
         session.update(
-          owner: owner, snapshot: snapshot, scanID: scanID, fixture: fixture,
+          owner: owner, snapshot: snapshot, scanID: scanID, fixture: fixture, webBaseURL: webBaseURL,
           onPin: onPin, onScan: onScan)
       }
       view.deactivate = { session.detach(owner: owner) }

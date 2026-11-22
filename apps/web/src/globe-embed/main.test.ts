@@ -1,7 +1,8 @@
 import type * as Cesium from "cesium";
-import { EntityCollection, Cartesian2 } from "cesium";
+import { EntityCollection, Cartesian2, Event as CesiumEvent } from "cesium";
 import { afterEach, expect, it, vi } from "vitest";
 import fixtures from "../../../ios/Modules/Globe/Tests/GlobeTests/Fixtures/messages.json";
+import { installBasemap } from "./basemap";
 
 const hooks = vi.hoisted(() => ({
   click: (_event: { position: unknown }): void => {
@@ -40,6 +41,7 @@ it("boots offline, shares pins, sends native tap IDs, flies to loaded geometry a
     canvas: document.createElement("canvas"),
     scene: {
       globe: {},
+      renderError: new CesiumEvent(),
       requestRender: vi.fn(),
       pick: vi.fn(),
       primitives: { add: vi.fn(), remove: vi.fn() },
@@ -49,10 +51,12 @@ it("boots offline, shares pins, sends native tap IDs, flies to loaded geometry a
     destroy: vi.fn(),
   };
   hooks.widget.mockReturnValue(viewer);
-  const tile = { boundingSphere: { radius: 4 }, destroy: vi.fn() };
+  const tile = { tileFailed: new CesiumEvent(), boundingSphere: { radius: 4 }, destroy: vi.fn() };
   hooks.load.mockResolvedValue(tile);
   await import("./main");
   expect(postMessage).toHaveBeenCalledWith({ version: 1, type: "ready" });
+  vi.mocked(installBasemap).mock.calls[0]![2]("No imagery");
+  expect(postMessage).toHaveBeenCalledWith({ version: 1, type: "failure", message: "No imagery" });
   const bridge = window.globeBridge!;
   fixtures.slice(0, 3).forEach((fixture) => bridge.receive(fixture));
   await Promise.resolve();
@@ -81,6 +85,18 @@ it("boots offline, shares pins, sends native tap IDs, flies to loaded geometry a
     version: 1,
     type: "failure",
     message: "Invalid globe command",
+  });
+  tile.tileFailed.raiseEvent({ url: "private", message: "network" });
+  expect(postMessage).toHaveBeenCalledWith({
+    version: 1,
+    type: "failure",
+    message: "Scan could not load",
+  });
+  viewer.scene.renderError.raiseEvent();
+  expect(postMessage).toHaveBeenCalledWith({
+    version: 1,
+    type: "failure",
+    message: "Globe rendering failed",
   });
   bridge.receive({ version: 1, type: "snapshot", snapshot: { pins: [], scans: [], boundary: [] } });
   expect(entities.values).toHaveLength(0);

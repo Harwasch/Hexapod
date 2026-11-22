@@ -78,11 +78,18 @@ struct GlobeTests {
     }
   }
 
-  @Test func previewUsesPublishedViewerRoute() {
-    let url = globeScanPreviewURL(
-      webBaseURL: URL(string: "https://example.invalid")!, siteID: FakeGlobeDataSource.siteID)
-    #expect(url.path == "/view.html")
-    #expect(url.fragment == FakeGlobeDataSource.siteID.uuidString.lowercased())
+  @Test func openScanRefocusesTheEmbeddedGlobeWithoutReloadingItsSnapshot() async throws {
+    let snapshot = try await FakeGlobeDataSource().snapshot(siteID: FakeGlobeDataSource.siteID)
+    let wire = snapshot.bridgeSnapshot(fixture: true)
+    let id = wire.scans[0].id
+    var bridge = GlobeBridgeState()
+    _ = bridge.update(snapshot: wire, scanID: id)
+    #expect(bridge.openScan(id).isEmpty)
+    _ = bridge.becomeReady()
+    let focus: [BridgeMessage] = [.selectScan(scanId: id), .flyToScan(scanId: id)]
+    #expect(bridge.openScan(id) == focus)
+    #expect(bridge.openScan(id) == focus)
+    #expect(bridge.openScan(UUID().uuidString).isEmpty)
   }
 
   @Test func siteListAndForeignPinRefusal() async throws {

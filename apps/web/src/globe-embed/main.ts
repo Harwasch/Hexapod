@@ -16,6 +16,7 @@ import { addAnswerPins } from "@/features/answers/answerPinLayer";
 import { dispatchMessage } from "./bridge";
 import type { BridgeMessage, BridgeSnapshot } from "./generated";
 import { ScanLayer } from "./ScanLayer";
+import { installErrorForwarding } from "./errors";
 import fixtures from "../../../ios/Modules/Globe/Tests/GlobeTests/Fixtures/messages.json";
 import "./style.css";
 
@@ -39,8 +40,14 @@ const fixtureMode = new URLSearchParams(location.search).has("fixture");
 function emit(message: BridgeMessage): void {
   window.webkit?.messageHandlers?.globe?.postMessage(message);
 }
+const removeErrors = installErrorForwarding(window, emit);
+window.addEventListener("pagehide", removeErrors, { once: true });
 try {
   const viewer = createGlobeWidget(element("#globe"), element("#credits"));
+  const removeRenderError = viewer.scene.renderError.addEventListener(() => {
+    status.textContent = "Globe rendering failed";
+    emit({ version: 1, type: "failure", message: "Globe rendering failed" });
+  });
   viewer.resolutionScale = 1 / Math.max(1, window.devicePixelRatio);
   viewer.scene.globe.tileCacheSize = 64;
   viewer.scene.globe.maximumScreenSpaceError = 4;
@@ -49,6 +56,7 @@ try {
     import.meta.env.VITE_CESIUM_ION_ACCESS_TOKEN,
     (message) => {
       mapStatus.textContent = message;
+      if (message) emit({ version: 1, type: "failure", message });
     },
   );
   let state: BridgeSnapshot = { pins: [], scans: [], boundary: [] };
@@ -195,6 +203,7 @@ try {
     "pagehide",
     () => {
       removeBasemap();
+      removeRenderError();
       mapStatus.remove();
       scanLayer.dispose();
       handler.destroy();

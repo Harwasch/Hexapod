@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { Cesium3DTileset } from "cesium";
+import { Event as CesiumEvent, type Cesium3DTileset } from "cesium";
 import { decodeMessage, dispatchMessage } from "./bridge";
 import { ScanLayer } from "./ScanLayer";
 import { EMBED_TILE_OPTIONS } from "@/cesium/providers/tiles";
@@ -52,7 +52,8 @@ describe("shared native bridge", () => {
   });
 });
 it("destroys stale loads, replaces the visible scan, and ignores late failures", async () => {
-  const tile = (): Cesium3DTileset => ({ destroy: vi.fn() }) as unknown as Cesium3DTileset;
+  const tile = (): Cesium3DTileset =>
+    ({ destroy: vi.fn(), tileFailed: new CesiumEvent() }) as unknown as Cesium3DTileset;
   let resolveFirst!: (tile: Cesium3DTileset) => void;
   const first = new Promise<Cesium3DTileset>((resolve) => {
     resolveFirst = resolve;
@@ -74,4 +75,23 @@ it("destroys stale loads, replaces the visible scan, and ignores late failures",
   layer.dispose();
   expect(remove).toHaveBeenCalledOnce();
   expect(failed).not.toHaveBeenCalled();
+});
+
+it("forwards failures of loaded tiles and detaches retired tiles", async () => {
+  const tile = { tileFailed: new CesiumEvent(), destroy: vi.fn() };
+  const failed = vi.fn();
+  const layer = new ScanLayer(
+    () => Promise.resolve(tile as unknown as Cesium3DTileset),
+    vi.fn(),
+    vi.fn(),
+    vi.fn(),
+    failed,
+  );
+  await layer.select("a");
+  tile.tileFailed.raiseEvent({ message: "blocked" });
+  expect(failed).toHaveBeenCalledOnce();
+  layer.dispose();
+  tile.tileFailed.raiseEvent({ message: "late" });
+  expect(failed).toHaveBeenCalledOnce();
+  expect(tile.tileFailed.numberOfListeners).toBe(0);
 });
