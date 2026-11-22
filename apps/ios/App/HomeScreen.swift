@@ -90,6 +90,7 @@ private enum HexStyle {
       guard phase == .active else { return }
       while !Task.isCancelled {
         await reload()
+        if captures.contains(where: { $0.serverUnavailable }) { return }
         do { try await Task.sleep(for: .seconds(3)) } catch { return }
       }
     }
@@ -100,9 +101,16 @@ private enum HexStyle {
       var rows = try await Task.detached(priority: .utility) {
         try LocalCapture.list(at: root).map(CaptureRow.init).sorted { $0.date > $1.date }
       }.value
+      let previous = Dictionary(uniqueKeysWithValues: captures.compactMap { row in
+        row.remote.map { (row.id, $0) }
+      })
+      for index in rows.indices { rows[index].remote = previous[rows[index].id] }
+      captures = rows
+      unavailable = false
       for index in rows.indices {
         guard !Task.isCancelled else { return }
         await rows[index].refresh(configuration: registry.configuration)
+        captures = rows
       }
       captures = rows
       unavailable = false
@@ -132,6 +140,7 @@ private enum HexStyle {
   @State private var player: AVPlayer?
   @State private var deleteConfirmation = false
   @State private var deleteFailed = false
+  @State private var connectionRetry = 0
   @State private var queue = CaptureUploadQueue.shared
   private var deletionAllowed: Bool {
     capture.local.upload == nil ? queue.issues[capture.id] != nil : !capture.uploadActive
@@ -152,6 +161,15 @@ private enum HexStyle {
         Text(capture.subtitle).font(.system(.caption, design: .monospaced))
           .foregroundStyle(HexStyle.muted)
         CaptureStatusPill(label: capture.status).accessibilityIdentifier("capture.status")
+        if capture.serverUnavailable {
+          Button("Retry connection") {
+            connectionRetry += 1
+          }.frame(minHeight: 44)
+        }
+        if let error = capture.remote?.fullError ?? capture.local.upload?.lastError {
+          Text(error).font(.footnote).textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
         if let route = capture.route {
           NavigationLink {
             GlobeScreen(registry: registry, route: route)
@@ -198,12 +216,14 @@ private enum HexStyle {
       }
       Button("Cancel", role: .cancel) {}
     } message: { Text("The uploaded copy stays on the server.") }
-    .task {
+    .task(id: connectionRetry) {
       player = AVPlayer(url: capture.video)
+      capture.serverUnavailable = false
       while !Task.isCancelled {
         var updated = capture
         await updated.refresh(configuration: registry.configuration)
         capture = updated
+        if capture.serverUnavailable { return }
         do { try await Task.sleep(for: .seconds(3)) } catch { return }
       }
     }
@@ -237,18 +257,15 @@ private enum HexStyle {
 private struct CaptureStatusPill: View {
   let label: String
   private var color: Color {
-    switch label {
-    case "Failed": .red
-    case "Queued", "Refining": HexStyle.amber
-    case "Ready": Color(red: 185 / 255, green: 196 / 255, blue: 106 / 255)
-    default: HexStyle.teal
-    }
+    if label.hasPrefix("Failed") { return .red }
+    if label == "Ready" { return Color(red: 185 / 255, green: 196 / 255, blue: 106 / 255) }
+    return label.hasPrefix("Uploading") ? HexStyle.teal : HexStyle.amber
   }
   var body: some View {
     Text(label).font(.system(size: 12, weight: .semibold, design: .monospaced))
       .padding(.horizontal, 10).padding(.vertical, 5)
       .foregroundStyle(color).background(color.opacity(0.15), in: Capsule())
-      .accessibilityLabel(label.contains("%") ? "\(label) uploading" : label)
+      .accessibilityLabel(label)
   }
 }
 
@@ -303,19 +320,9 @@ private struct CaptureRow: Identifiable, Sendable {
     } catch { return nil }
   }
   var status: String {
-    guard let upload = local.upload else { return "Queued" }
-    if upload.lastError != nil { return "Failed" }
-    if upload.jobID != nil {
-      if serverUnavailable { return "Status offline" }
-      return remote?.label ?? "Queued"
-    }
-    guard let size = upload.partSize, upload.totalBytes > 0 else { return "Queued" }
-    let bytes = upload.completed.reduce(UInt64(0)) { result, part in
-      let offset = UInt64(max(0, part.partNumber - 1)) * size
-      return result + min(size, upload.totalBytes - min(offset, upload.totalBytes))
-    }
-    return "\(Int(min(1, Double(bytes) / Double(upload.totalBytes)) * 100))%"
+    CaptureStatus.label(upload: local.upload, remote: remote, unavailable: serverUnavailable)
   }
+
   var uploadActive: Bool {
     local.upload.map { $0.jobID == nil && $0.lastError == nil } ?? false
   }
