@@ -101,9 +101,10 @@ private enum HexStyle {
       var rows = try await Task.detached(priority: .utility) {
         try LocalCapture.list(at: root).map(CaptureRow.init).sorted { $0.date > $1.date }
       }.value
-      let previous = Dictionary(uniqueKeysWithValues: captures.compactMap { row in
-        row.remote.map { (row.id, $0) }
-      })
+      let previous = Dictionary(
+        uniqueKeysWithValues: captures.compactMap { row in
+          row.remote.map { (row.id, $0) }
+        })
       for index in rows.indices { rows[index].remote = previous[rows[index].id] }
       captures = rows
       unavailable = false
@@ -122,7 +123,9 @@ private enum HexStyle {
   @Environment(\.dismiss) private var dismiss
   var body: some View {
     HStack(spacing: 12) {
-      Button { dismiss() } label: {
+      Button {
+        dismiss()
+      } label: {
         Image(systemName: "chevron.left").font(.system(size: 20, weight: .medium))
           .foregroundStyle(HexStyle.text).frame(width: 44, height: 44)
           .background(HexStyle.panel, in: Circle())
@@ -149,7 +152,11 @@ private enum HexStyle {
   var body: some View {
     ScrollView {
       VStack(spacing: 20) {
-        if let player {
+        if let route = capture.route {
+          GlobeScreen(registry: registry, route: route).frame(height: 360)
+            .clipShape(RoundedRectangle(cornerRadius: 18))
+            .accessibilityIdentifier("capture.trainedScan")
+        } else if let player {
           VideoPlayer(player: player).frame(height: 300)
             .clipShape(RoundedRectangle(cornerRadius: 18))
             .accessibilityLabel("Scan replay")
@@ -173,7 +180,9 @@ private enum HexStyle {
         if let route = capture.route {
           NavigationLink {
             GlobeScreen(registry: registry, route: route)
-          } label: { Label("Open on globe", systemImage: "globe.americas") }
+          } label: {
+            Label("Open on globe", systemImage: "globe.americas")
+          }
           .frame(minHeight: 44).accessibilityIdentifier("capture.openGlobe")
         } else {
           Label("Not mapped yet", systemImage: "globe.americas")
@@ -191,7 +200,9 @@ private enum HexStyle {
         HStack(spacing: 32) {
           ShareLink(item: capture.video) { Label("Share", systemImage: "square.and.arrow.up") }
             .frame(minHeight: 44).accessibilityIdentifier("capture.share")
-          Button(role: .destructive) { deleteConfirmation = true } label: {
+          Button(role: .destructive) {
+            deleteConfirmation = true
+          } label: {
             Label("Delete", systemImage: "trash")
           }.frame(minHeight: 44).accessibilityIdentifier("capture.delete")
             .disabled(!deletionAllowed)
@@ -203,7 +214,9 @@ private enum HexStyle {
     .navigationTitle("Scan").navigationBarTitleDisplayMode(.inline)
     .toolbar(.visible, for: .navigationBar)
     .accessibilityIdentifier("capture.detail")
-    .confirmationDialog("Delete local scan?", isPresented: $deleteConfirmation, titleVisibility: .visible) {
+    .confirmationDialog(
+      "Delete local scan?", isPresented: $deleteConfirmation, titleVisibility: .visible
+    ) {
       Button("Delete local scan", role: .destructive) {
         // An active uploader owns these files. Deletion is available once it stops.
         do {
@@ -215,7 +228,9 @@ private enum HexStyle {
         } catch { deleteFailed = true }
       }
       Button("Cancel", role: .cancel) {}
-    } message: { Text("The uploaded copy stays on the server.") }
+    } message: {
+      Text("The uploaded copy stays on the server.")
+    }
     .task(id: connectionRetry) {
       player = AVPlayer(url: capture.video)
       capture.serverUnavailable = false
@@ -286,12 +301,19 @@ private struct CaptureRow: Identifiable, Sendable {
     self.local = local
     details = local.details
     manifest = try? JSONDecoder().decode(
-      CaptureManifest.self, from: Data(contentsOf: local.directory.appendingPathComponent("manifest.json")))
-    durationSeconds = manifest.flatMap { Self.lastTimestamp(in: local.directory.appendingPathComponent($0.frameLog)) }
+      CaptureManifest.self,
+      from: Data(contentsOf: local.directory.appendingPathComponent("manifest.json")))
+    durationSeconds = manifest.flatMap {
+      Self.lastTimestamp(in: local.directory.appendingPathComponent($0.frameLog))
+    }
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    date = manifest.flatMap { formatter.date(from: $0.startedAt) ?? ISO8601DateFormatter().date(from: $0.startedAt) }
-      ?? (try? local.directory.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+    date =
+      manifest.flatMap {
+        formatter.date(from: $0.startedAt) ?? ISO8601DateFormatter().date(from: $0.startedAt)
+      }
+      ?? (try? local.directory.resourceValues(forKeys: [.creationDateKey]).creationDate)
+      ?? .distantPast
   }
   var name: String {
     if let site = details?.siteName, !site.isEmpty { return site }
@@ -300,7 +322,9 @@ private struct CaptureRow: Identifiable, Sendable {
   }
   var video: URL { local.directory.appendingPathComponent(manifest?.video ?? "rgb.mov") }
   var subtitle: String {
-    let day = Calendar.current.isDateInToday(date) ? "Today" : date.formatted(.dateTime.month(.abbreviated).day())
+    let day =
+      Calendar.current.isDateInToday(date)
+      ? "Today" : date.formatted(.dateTime.month(.abbreviated).day())
     return "\(day) · \(duration)"
   }
   var duration: String {
@@ -327,19 +351,21 @@ private struct CaptureRow: Identifiable, Sendable {
     local.upload.map { $0.jobID == nil && $0.lastError == nil } ?? false
   }
   var route: GlobeRoute? {
-    guard remote?.status == "complete", let siteID = remote?.siteId,
-      let scanID = local.upload?.captureID.flatMap(UUID.init(uuidString:)) else { return nil }
-    return GlobeRoute(siteID: siteID, scanID: scanID)
+    CaptureStatus.trainedRoute(upload: local.upload, remote: remote)
   }
   mutating func refresh(configuration: ServiceConfiguration) async {
-    if let upload = try? UploadState.load(from: local.uploadDirectory.appendingPathComponent("upload.json")) {
+    if let upload = try? UploadState.load(
+      from: local.uploadDirectory.appendingPathComponent("upload.json"))
+    {
       local = LocalCapture(directory: local.directory, upload: upload)
     }
     guard let base = configuration.apiRoot,
       let id = local.upload?.captureID.flatMap(UUID.init(uuidString:)), local.upload?.jobID != nil
     else { return }
-    do { remote = try await CatalogCaptureState.fetch(captureID: id, baseURL: base); serverUnavailable = false }
-    catch { if !Task.isCancelled { serverUnavailable = true } }
+    do {
+      remote = try await CatalogCaptureState.fetch(captureID: id, baseURL: base)
+      serverUnavailable = false
+    } catch { if !Task.isCancelled { serverUnavailable = true } }
   }
 }
 
@@ -360,15 +386,19 @@ private struct CaptureRow: Identifiable, Sendable {
     #endif
   }
   var body: some View {
-    let choice = UIFixtureLaunch.active ? "fake" : (debugChoices ? registry.choice("globe") : "real")
+    let choice =
+      UIFixtureLaunch.active ? "fake" : (debugChoices ? registry.choice("globe") : "real")
     Group {
       if let source = try? registry.globeSources.resolve(choice) {
         VStack(spacing: 0) {
           if choice == "fake" { Text("Simulated").font(.caption) }
-          GlobeView(source: source, route: route, webBaseURL: registry.configuration.webBaseURL,
-                    fixture: choice == "fake")
+          GlobeView(
+            source: source, route: route, webBaseURL: registry.configuration.webBaseURL,
+            fixture: choice == "fake")
         }
-      } else { Label("Server unavailable", systemImage: "wifi.exclamationmark") }
+      } else {
+        Label("Server unavailable", systemImage: "wifi.exclamationmark")
+      }
     }
     .background(HexStyle.background).accessibilityIdentifier("globe.screen")
     .toolbar(.visible, for: .navigationBar)
@@ -428,7 +458,9 @@ private struct CaptureRow: Identifiable, Sendable {
         Section {
           Text("Providers")
             .accessibilityIdentifier("settings.providers")
-            .accessibilityValue(PieceRegistry.options.map { "\($0.key):\(registry.choice($0.key))" }.joined(separator: ","))
+            .accessibilityValue(
+              PieceRegistry.options.map { "\($0.key):\(registry.choice($0.key))" }.joined(
+                separator: ","))
         }
       #endif
       if testingAvailable {
