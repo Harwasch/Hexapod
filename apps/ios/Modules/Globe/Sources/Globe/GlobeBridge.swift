@@ -111,6 +111,12 @@ public struct GlobeBridgeState: Sendable {
     guard let snapshot else { return [] }
     return [.snapshot(snapshot: snapshot)] + focus()
   }
+  /// Explicit Open scan refocuses even when its selection has not changed.
+  public mutating func openScan(_ scanID: String) -> [BridgeMessage] {
+    guard snapshot?.scans.contains(where: { $0.id == scanID }) == true else { return [] }
+    self.scanID = scanID
+    return ready ? focus() : []
+  }
   private func focus() -> [BridgeMessage] {
     guard let scanID else { return [] }
     return [.selectScan(scanId: scanID), .flyToScan(scanId: scanID)]

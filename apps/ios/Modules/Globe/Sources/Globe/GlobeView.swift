@@ -3,7 +3,6 @@
   import ARAnswer
   import MapKit
   import EntitySchema
-  import SafariServices
   import UIKit
 
   /// Apple UI is unverified on Linux: compile and exercise on iOS 26 before shipping.
@@ -17,7 +16,6 @@
     @State private var sites: [GlobeSite] = []
     @State private var snapshot: GlobeSnapshot?
     @State private var selectedPin: GlobePin?
-    @State private var preview: PreviewRoute?
     @State private var failed = false
     @State private var retry = 0
     @State private var selectedScan: UUID?
@@ -71,7 +69,7 @@
                 onPin: { selectedPin = $0 }, onScan: { selectedScan = $0 })
             } else {
               CesiumGlobeView(
-                snapshot: snapshot, scanID: selectedScan ?? effectiveRoute?.scanID, fixture: fixture,
+                snapshot: snapshot, scanID: selectedScan ?? effectiveRoute?.scanID, fixture: fixture, webBaseURL: webBaseURL,
                 onPin: { selectedPin = $0 }, onScan: { selectedScan = $0 })
             }
             if snapshot.property.epochs.isEmpty {
@@ -87,7 +85,7 @@
                 Label(selectedScanLabel(snapshot), systemImage: "viewfinder")
                   .frame(maxWidth: .infinity, minHeight: 44)
               }.accessibilityIdentifier("globe.scanPicker")
-              if let selectedScan, webBaseURL != nil || onOpenScan != nil {
+              if let selectedScan {
                 Button("Open scan") { openScan(selectedScan, siteID: snapshot.property.id) }
                   .frame(minHeight: 44)
               }
@@ -104,11 +102,11 @@
             }.scrollContentBackground(.hidden)
           }
         } else {
-          ProgressView()
+          ProgressView("Connecting…")
         }
       }
       .navigationTitle(snapshot?.property.name ?? "Globe")
-      .task { _ = CesiumGlobeSession.shared }
+      .task { CesiumGlobeSession.shared.configure(webBaseURL: webBaseURL, fixture: fixture) }
       .task(id: LoadKey(route: effectiveRoute, retry: retry)) {
         failed = false
         scanPending = false
@@ -141,19 +139,12 @@
               .accessibilityIdentifier("globe.entityCard")
             Text(pin.observedAt)
             if let uncertainty = pin.uncertaintyM { Text("±\(uncertainty, specifier: "%.1f") m") }
-            if onOpenScan != nil {
-              Button("Scan", systemImage: "viewfinder") { openScan(pin.scanId, siteID: pin.siteId) }
-            } else if let webBaseURL {
-              NavigationLink("Scan") {
-                ScanPreview(url: globeScanPreviewURL(webBaseURL: webBaseURL, siteID: pin.siteId))
-              }
-            }
+            Button("Scan", systemImage: "viewfinder") { openScan(pin.scanId, siteID: pin.siteId) }
           }
           .toolbar { Button("Done") { selectedPin = nil } }
         }
         .presentationDetents([.medium])
       }
-      .sheet(item: $preview) { route in ScanPreview(url: route.url) }
     }
 
     private func selectedScanLabel(_ snapshot: GlobeSnapshot) -> String {
@@ -165,18 +156,17 @@
       if let onOpenScan {
         onOpenScan(
           snapshot?.captureRoute(for: scanID) ?? GlobeRoute(siteID: siteID, scanID: scanID))
-      } else if let webBaseURL {
-        preview = PreviewRoute(url: globeScanPreviewURL(webBaseURL: webBaseURL, siteID: siteID))
+      } else if let target = snapshot?.captureRoute(for: scanID).scanID {
+        selectedScan = target
+        implementation = GlobeImplementation.cesium.rawValue
+        CesiumGlobeSession.shared.focus(scanID: target)
       }
     }
     private struct LoadKey: Hashable {
       let route: GlobeRoute?
       let retry: Int
     }
-    private struct PreviewRoute: Identifiable {
-      let url: URL
-      var id: URL { url }
-    }
+
   }
 
   @MainActor
@@ -251,13 +241,6 @@
 
   }
 
-  private struct ScanPreview: UIViewControllerRepresentable {
-    let url: URL
-    func makeUIViewController(context: Context) -> SFSafariViewController {
-      SFSafariViewController(url: url)
-    }
-    func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
-  }
 
   @MainActor
   public struct GlobeDebugView: View {

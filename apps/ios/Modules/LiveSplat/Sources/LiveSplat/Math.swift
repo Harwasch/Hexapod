@@ -123,29 +123,8 @@ public struct Gaussian: Sendable, Equatable {
     for i in 11..<14 { parameters[i] = min(1, max(0, parameters[i])) }
   }
   public var covariance: SplatMatrix {
-    SplatMatrix(SplatMath.covariance(parameters.map { Dual($0) }).map(\.v))
+    SplatMatrix(SplatMath.covariance(parameters))
   }
-}
-
-/// Scalar forward-mode differentiation. Shaders/LiveSplat.metal mirrors these
-/// formulas, parameter ordering, near plane, blur variance, alpha cap and clamps.
-/// Linux tests pin the CPU formulas; they do NOT verify Metal compilation/parity.
-struct Dual {
-  var v: Double
-  var d: Double = 0
-  init(_ v: Double, _ d: Double = 0) {
-    self.v = v
-    self.d = d
-  }
-  static func + (a: Self, b: Self) -> Self { Self(a.v + b.v, a.d + b.d) }
-  static func - (a: Self, b: Self) -> Self { Self(a.v - b.v, a.d - b.d) }
-  static prefix func - (a: Self) -> Self { Self(-a.v, -a.d) }
-  static func * (a: Self, b: Self) -> Self { Self(a.v * b.v, a.d * b.v + a.v * b.d) }
-  static func / (a: Self, b: Self) -> Self {
-    Self(a.v / b.v, (a.d * b.v - a.v * b.d) / (b.v * b.v))
-  }
-  func exponential() -> Self { Self(exp(v), exp(v) * d) }
-  func root() -> Self { Self(sqrt(v), d / (2 * sqrt(v))) }
 }
 
 public struct ProjectedGaussian: Sendable {
@@ -156,160 +135,43 @@ public struct ProjectedGaussian: Sendable {
   }
 }
 
-public struct PhotometricSample: Sendable {
-  public let u: Double, v: Double
-  public let target: SplatVector
-  public let background: SplatVector
-  public init(u: Double, v: Double, target: SplatVector, background: SplatVector = .zero) {
-    self.u = u
-    self.v = v
-    self.target = target
-    self.background = background
-  }
-}
-
+/// Gaussian projection/export compatibility for offline fixtures; no optimizer.
 public enum SplatMath {
-  static func covariance(_ p: [Dual]) -> [Dual] {
-    let n = p[6...9].reduce(Dual(0)) { $0 + $1 * $1 }.root()
+  static func covariance(_ p: [Double]) -> [Double] {
+    let n = sqrt(p[6...9].reduce(0) { $0 + $1 * $1 })
     let w = p[6] / n
     let x = p[7] / n
     let y = p[8] / n
     let z = p[9] / n
-    let one = Dual(1)
-    let two = Dual(2)
     let r = [
-      one - two * (y * y + z * z), two * (x * y - w * z), two * (x * z + w * y),
-      two * (x * y + w * z), one - two * (x * x + z * z), two * (y * z - w * x),
-      two * (x * z - w * y), two * (y * z + w * x), one - two * (x * x + y * y),
+      1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y),
+      2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x),
+      2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y),
     ]
-    let s = (3..<6).map { (two * p[$0]).exponential() }
-    var result = Array(repeating: Dual(0), count: 9)
+    let scales = (3..<6).map { exp(2 * p[$0]) }
+    var result = Array(repeating: 0.0, count: 9)
     for i in 0..<9 {
-      for k in 0..<3 {
-        let left = r[(i / 3) * 3 + k] * s[k]
-        result[i] = result[i] + left * r[(i % 3) * 3 + k]
-      }
+      for k in 0..<3 { result[i] += r[(i / 3) * 3 + k] * scales[k] * r[(i % 3) * 3 + k] }
     }
     return result
-  }
-  // Returns [u,v,z,Cxx,Cxy,Cyy], with C2 = J W C3 W^T J^T + 0.3 I.
-  static func projected(_ p: [Dual], _ camera: SplatCamera) -> [Dual]? {
-    let w = camera.worldToOptical
-    let relative = (0..<3).map { p[$0] - Dual(camera.position.values[$0]) }
-    let t = (0..<3).map { r in (0..<3).reduce(Dual(0)) { $0 + Dual(w[r, $1]) * relative[$1] } }
-    guard t[2].v > 0.01 else { return nil }
-    let fx = Dual(camera.fx)
-    let fy = Dual(camera.fy)
-    let z = t[2]
-    let j = [fx / z, Dual(0), -fx * t[0] / (z * z), Dual(0), fy / z, -fy * t[1] / (z * z)]
-    let a = (0..<6).map { i in
-      (0..<3).reduce(Dual(0)) { $0 + j[(i / 3) * 3 + $1] * Dual(w[$1, i % 3]) }
-    }
-    let cov = covariance(p)
-    func c(_ r: Int, _ s: Int) -> Dual {
-      var sum = Dual(r == s ? 0.3 : 0)
-      for k in 0..<3 { for l in 0..<3 { sum = sum + a[r * 3 + k] * cov[k * 3 + l] * a[s * 3 + l] } }
-      return sum
-    }
-    let xx = c(0, 0)
-    let xy = c(0, 1)
-    let yy = c(1, 1)
-    let determinant = xx.v * yy.v - xy.v * xy.v
-    guard determinant.isFinite, determinant > 0 else { return nil }
-    return [fx * t[0] / z + Dual(camera.cx), fy * t[1] / z + Dual(camera.cy), z, xx, xy, yy]
   }
   public static func project(_ g: Gaussian, camera: SplatCamera) -> ProjectedGaussian? {
-    guard g.isValid, let c = projected(g.parameters.map { Dual($0) }, camera),
-      c.allSatisfy({ $0.v.isFinite })
-    else { return nil }
+    guard g.isValid, let projected = camera.project(g.position) else { return nil }
+    let p = camera.worldToOptical * (g.position - camera.position)
+    let z = p.z
+    let j = [
+      camera.fx / z, 0, -camera.fx * p.x / (z * z), 0, camera.fy / z, -camera.fy * p.y / (z * z),
+    ]
+    let a = (0..<6).map { i in
+      (0..<3).reduce(0.0) { $0 + j[(i / 3) * 3 + $1] * camera.worldToOptical[$1, i % 3] }
+    }
+    let cov = covariance(g.parameters)
+    func c(_ r: Int, _ s: Int) -> Double {
+      var sum = r == s ? 0.3 : 0
+      for k in 0..<3 { for l in 0..<3 { sum += a[r * 3 + k] * cov[k * 3 + l] * a[s * 3 + l] } }
+      return sum
+    }
     return ProjectedGaussian(
-      u: c[0].v, v: c[1].v, depth: c[2].v, xx: c[3].v, xy: c[4].v, yy: c[5].v)
-  }
-  static func loss(_ p: [Dual], camera: SplatCamera, samples: [PhotometricSample]) -> Dual {
-    guard let c = projected(p, camera), !samples.isEmpty else { return Dual(0) }
-    let det = c[3] * c[5] - c[4] * c[4]
-    var loss = Dual(0)
-    for sample in samples {
-      let dx = Dual(sample.u) - c[0]
-      let dy = Dual(sample.v) - c[1]
-      let q = (c[5] * dx * dx - Dual(2) * c[4] * dx * dy + c[3] * dy * dy) / det
-      let raw = (-Dual(0.5) * q).exponential() / (Dual(1) + (-p[10]).exponential())
-      let alpha = raw.v < 0.99 ? raw : Dual(0.99)
-      for k in 0..<3 {
-        let prediction = alpha * p[11 + k] + (Dual(1) - alpha) * Dual(sample.background.values[k])
-        let e = prediction - Dual(sample.target.values[k])
-        loss = loss + Dual(0.5) * e * e
-      }
-    }
-    return loss / Dual(Double(samples.count))
-  }
-  public static func loss(_ g: Gaussian, camera: SplatCamera, samples: [PhotometricSample])
-    -> Double
-  {
-    guard g.isValid else { return .infinity }
-    return loss(g.parameters.map { Dual($0) }, camera: camera, samples: samples).v
-  }
-  public static func gradient(_ g: Gaussian, camera: SplatCamera, samples: [PhotometricSample])
-    -> [Double]
-  {
-    guard g.isValid else { return Array(repeating: 0, count: 14) }
-    return (0..<14).map { index in
-      loss(
-        g.parameters.enumerated().map { Dual($0.element, $0.offset == index ? 1 : 0) },
-        camera: camera, samples: samples
-      ).d
-    }
-  }
-  public static func step(_ g: Gaussian, gradient: [Double], learningRate: Double = 0.001)
-    -> Gaussian
-  {
-    guard g.isValid, gradient.count == 14, gradient.allSatisfy(\.isFinite),
-      learningRate.isFinite, learningRate > 0
-    else { return g }
-    var result = g
-    // Per-component clipping bounds an individual update; this is not a convergence guarantee.
-    for i in 0..<14 { result.parameters[i] -= learningRate * min(1, max(-1, gradient[i])) }
-    guard result.isValid else { return g }
-    result.constrain()
-    return result
-  }
-  /// Front-to-back, premultiplied alpha; caller provides increasing camera depth.
-  public static func composite(_ layers: [(color: SplatVector, alpha: Double)]) -> (
-    SplatVector, Double
-  ) {
-    var color = SplatVector.zero
-    var transmittance = 1.0
-    for layer in layers {
-      let a = min(0.99, max(0, layer.alpha))
-      color = color + layer.color * (transmittance * a)
-      transmittance *= 1 - a
-    }
-    return (color, 1 - transmittance)
-  }
-}
-
-/// CPU reference of one shader tile's bounded insertion sort. This is a numerical
-/// oracle for device parity tests, not the runtime fallback's rendering algorithm.
-public struct SplatTile: Sendable {
-  public let indices: [Int]
-  public let overflow: Int
-  public static func bin(_ projections: [ProjectedGaussian?], column: Int, row: Int) -> Self {
-    let loX = Double(column * 16)
-    let loY = Double(row * 16)
-    var indices: [Int] = []
-    var dropped = 0
-    for (i, optional) in projections.enumerated() {
-      guard let p = optional, p.depth > 0,
-        p.u + p.radius >= loX, p.u - p.radius <= loX + 16,
-        p.v + p.radius >= loY, p.v - p.radius <= loY + 16
-      else { continue }
-      let at = indices.firstIndex { projections[$0]!.depth > p.depth } ?? indices.count
-      if indices.count == 64 { dropped += 1 }
-      if at < 64 {
-        indices.insert(i, at: at)
-        if indices.count > 64 { indices.removeLast() }
-      }
-    }
-    return Self(indices: indices, overflow: dropped)
+      u: projected.x, v: projected.y, depth: z, xx: c(0, 0), xy: c(0, 1), yy: c(1, 1))
   }
 }

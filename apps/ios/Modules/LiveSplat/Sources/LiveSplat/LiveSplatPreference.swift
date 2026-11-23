@@ -23,7 +23,7 @@ import Foundation
   func preferenceChanged()
 }
 
-/// Share one instance between controls and renderers; write through trainingEnabled.
+/// Share one instance between controls and renderers; write through previewEnabled.
 /// Runtime fallback never writes this preference.
 @MainActor public final class LiveSplatPreference {
   public static let key = "hex.liveSplat.training"
@@ -39,10 +39,10 @@ import Foundation
   public init(store: any LiveSplatPreferenceStore = UserDefaultsLiveSplatStore()) {
     self.store = store
   }
-  public var trainingEnabled: Bool {
+  public var previewEnabled: Bool {
     get { store.bool(forKey: Self.key) ?? true }
     set {
-      guard newValue != trainingEnabled else { return }
+      guard newValue != previewEnabled else { return }
       #if canImport(Combine)
         objectWillChange.send()
       #endif

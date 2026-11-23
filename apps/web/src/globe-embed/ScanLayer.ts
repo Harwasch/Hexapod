@@ -4,6 +4,7 @@ import type { Cesium3DTileset } from "cesium";
 export class ScanLayer {
   private generation = 0;
   private current: Cesium3DTileset | null = null;
+  private removeFailure: (() => void) | null = null;
   get visible(): Cesium3DTileset | null {
     return this.current;
   }
@@ -16,6 +17,8 @@ export class ScanLayer {
   ) {}
   async select(url: string | null): Promise<void> {
     const generation = ++this.generation;
+    this.removeFailure?.();
+    this.removeFailure = null;
     if (this.current) this.remove(this.current);
     this.current = null;
     this.changed();
@@ -27,6 +30,9 @@ export class ScanLayer {
         return;
       }
       this.current = tiles;
+      this.removeFailure = tiles.tileFailed.addEventListener(() => {
+        if (generation === this.generation) this.failed();
+      });
       this.add(tiles);
       this.changed();
     } catch {
@@ -35,6 +41,8 @@ export class ScanLayer {
   }
   dispose(): void {
     ++this.generation;
+    this.removeFailure?.();
+    this.removeFailure = null;
     if (this.current) this.remove(this.current);
     this.current = null;
   }

@@ -10,7 +10,7 @@ struct HexApp: App {
     WindowGroup {
       HomeScreen()
         .preferredColorScheme(.dark)
-        // Warm the bundled Cesium globe so opening it is quick.
+        // Retain WebKit early; the globe chooses HTTPS or an explicit fixture on opening.
         .task {
           _ = CesiumGlobeSession.shared
           if scenePhase == .active { await CaptureUploadQueue.shared.resumeQueued() }

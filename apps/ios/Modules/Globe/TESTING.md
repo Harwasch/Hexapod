@@ -38,10 +38,16 @@ The embed does not mount the full `SceneBridge` (which fetches the application c
 binds mission UI); its typed adapter supplies native snapshots to the shared scene code.
 `GLOBE_EMBED=1` selects only `globe-embed.html`, a relative-path IIFE build. The copy script
 removes module/CORS attributes for local-file loading and copies Cesium workers, WASM,
-Natural Earth imagery and the tiny fixture. The module uses `Bundle.module` and
-`loadFileURL(...allowingReadAccessTo:)`, with no HTTP server or remote app page. Only the
-catalog and selected scan content use remote URLs in live mode. Navigation away from the
-local document is rejected and messages are accepted only from its main frame.
+Natural Earth imagery and the tiny fixture. Live mode loads `https://twin-web-f57.pages.dev/globe-embed.html` (or the configured
+HTTPS web origin), so R2 CORS, Cesium workers, WASM and imagery use the website origin.
+Only explicit fixture/debug mode uses `Bundle.module` and
+`loadFileURL(...allowingReadAccessTo:)`. There is no automatic file-origin fallback.
+Navigation permits only the exact configured HTTPS origin and `about:blank`; fixture
+mode permits only its exact bundled document. Bridge events require that document's
+main frame, matching request URL and WebKit security origin. Blank documents cannot
+send events. No API credentials enter the page or bridge. Open scan selects and flies
+to that scan in the retained globe. JS errors, render failures, imagery failures and
+failed scan tile loads report typed failure messages to native without raw URLs/stacks.
 
 The generated page and engine assets are about **11 MB** uncompressed (initial local
 measurement); bundled JS is about **1.04 MB gzip**. Keep them out of git. Both jobs in
@@ -67,15 +73,15 @@ Chosen phone defaults, conservative starting policy rather than measured optimal
 - Request-render mode, infinite maximum time change and one MSAA sample are shared with
   the web bootstrap. Pin updates and tile changes request renders.
 - A retained WKWebView preloads when the app starts and survives tab/card transitions.
-  Native snapshots wait for `ready`; process termination reloads local resources and
+  Native snapshots wait for `ready`; process termination reloads the selected page and
   replays the latest snapshot/selection. The **<0.5 s warm-start goal is unmeasured**.
 
 ## Device gate
 
 Linux compiles only Foundation code. On a Mac build the guarded SwiftUI/WebKit/MapKit code,
-then use the fixture on an iPhone before treating this as release-ready. Verify file-origin
-XHR, Cesium workers/WASM, local imagery, SPZ decoding, WebGL2 and depth composition; the
-IIFE avoids file-origin ES-module loading but cannot prove those runtime behaviors.
+then use the fixture on an iPhone before treating this as release-ready. Verify hosted
+HTTPS navigation, workers/WASM, imagery, SPZ decoding, WebGL2 and depth composition.
+The bundled fixture's file-origin behavior still needs a device check.
 Check camera framing, footprint holes, pin/card/scan navigation, touch/VoiceOver and the
 Apple Maps debug choice. Confirm exact-epoch asset selection and remote R2 CORS in live mode.
 The WebKit round-trip test (`WebKitBridgeTests`) is disabled in package tests, which have no
@@ -85,5 +91,24 @@ Measure app launch → JS `ready`, tab activation → first rendered frame (warm
 peak resident/GPU memory, battery/thermal load, background/foreground, memory warnings and
 web-content-process termination/replay. Test large tiles: cache overflow is not a strict
 allocation guard. Evaluate whether to discard the retained web view under memory pressure.
-No live capture, browser e2e, GPU run, iOS build or device measurement is claimed here.
+No live capture, GPU run, iOS build or device measurement is claimed here.
 Delete `.tmp-test` and `.swift-scratch` after collecting local test results.
+
+## Capture status and networking
+
+`Networking` supplies the shared foreground API session: 90 seconds without data,
+180 seconds per resource (also bounds waiting for connectivity), at most two retries
+with 1/2 second backoff for public catalog reads. Cloud answers use the same session
+and policy, preserve the question ID/body, honor bounded Retry-After, and never replay
+after any server event. Upload control uses the session without automatic mutation
+retries; multipart background transfers retain their existing background session.
+Cloud retries emit Connecting… into the native answer presentation.
+
+Capture rows publish local upload progress immediately, then read the capture detail's
+latest job and running step. Training percentages come only from valid
+`metrics.progress.done/total`; absent progress stays Training. Unknown remote state is
+Connecting…; exhausted requests show Connection unavailable and need an explicit retry,
+pull-to-refresh or foreground activation. Successful processing reads continue polling.
+The normalize-error fixture copies the API read-model fields and wrapped error text from
+`tools/pipeline/tests/test_quality_gates.py`; it is synthetic and contains no production
+capture. A production response was not supplied and no production calls were made.

@@ -1,3 +1,4 @@
+import Networking
 import Foundation
 
 #if canImport(FoundationNetworking)
@@ -137,11 +138,12 @@ public actor BundleUploader {
     _ path: String, method: String, body: Body, as: Response.Type
   ) async throws -> Response {
     var request = URLRequest(url: apiBase.appendingPathComponent(path))
+    request.timeoutInterval = 90
     request.httpMethod = method
     request.setValue("Bearer " + (try await token()), forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.httpBody = try JSONEncoder().encode(body)
-    let (data, response) = try await URLSession.shared.data(for: request)
+    let (data, response) = try await APISession.shared.data(for: request)
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     guard (200..<300).contains(status) else { throw UploadError.http(status) }
     return try JSONDecoder().decode(Response.self, from: data)

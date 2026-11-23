@@ -1,0 +1,45 @@
+{
+  "status": "error",
+  "siteId": null,
+  "jobs": [
+    {
+      "id": "00000000-0000-0000-0000-000000000010",
+      "captureId": "00000000-0000-0000-0000-000000000002",
+      "recipe": "photo-reconstruct",
+      "recipeVersion": "fixture",
+      "params": {},
+      "status": "error",
+      "provider": "modal",
+      "tier": null,
+      "finishedAt": "2026-11-01T00:00:00Z",
+      "durationS": 1,
+      "costUsd": null,
+      "error": "recipe 'photo-reconstruct', stage 'normalize' (impl 'ffmpeg_frames') failed on 'modal': QualityGateError: quality gate registered_fraction: measured 0.62 fraction, limit 0.8 fraction -- too few frames registered\nTraceback (most recent call last): ...",
+      "claimedBy": null,
+      "claimedAt": null,
+      "leaseExpiresAt": null,
+      "createdAt": "2026-11-01T00:00:00Z",
+      "updatedAt": "2026-11-01T00:00:00Z",
+      "steps": [
+        {
+          "id": "00000000-0000-0000-0000-000000000011",
+          "jobId": "00000000-0000-0000-0000-000000000010",
+          "stageId": "normalize",
+          "ordinal": 0,
+          "impl": "ffmpeg_frames",
+          "status": "error",
+          "startedAt": "2026-11-01T00:00:00Z",
+          "finishedAt": "2026-11-01T00:00:00Z",
+          "metrics": {},
+          "logKey": null,
+          "attempt": 1,
+          "checkpointKey": null,
+          "preemptedAt": null,
+          "artifacts": [],
+          "createdAt": "2026-11-01T00:00:00Z",
+          "updatedAt": "2026-11-01T00:00:00Z"
+        }
+      ]
+    }
+  ]
+}

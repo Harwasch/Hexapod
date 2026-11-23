@@ -41,11 +41,6 @@ private enum CameraStyle {
     ZStack {
       CameraStyle.background.ignoresSafeArea()
       ARCameraView(isActive: scenePhase == .active, model: model).ignoresSafeArea()
-      if model.recording, model.splatEnabled,
-        let renderer = model.liveSplat as? DefaultLiveSplatRenderer
-      {
-        LiveSplatView(renderer: renderer).allowsHitTesting(false).ignoresSafeArea()
-      }
       LinearGradient(
         colors: [.clear, .black.opacity(0.65)], startPoint: .center, endPoint: .bottom
       )
@@ -97,14 +92,7 @@ private enum CameraStyle {
             if model.card == nil { controls }
           }
           .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 18)
-          if model.recording, let gap = model.gapPosition {
-            Label("Fill gap", systemImage: "arrow.down")
-              .font(.system(size: 12, weight: .medium)).foregroundStyle(CameraStyle.text)
-              .padding(.horizontal, 10).padding(.vertical, 6)
-              .background(.black.opacity(0.6), in: Capsule())
-              .position(x: gap.x * geometry.size.width, y: gap.y * geometry.size.height)
-              .allowsHitTesting(false)
-          }
+
         }
       }
       if let directory = model.savedCapture {
@@ -223,10 +211,7 @@ private enum CameraStyle {
           .opacity(model.capturePhase.isBusy ? 0 : 1)
           .allowsHitTesting(!model.capturePhase.isBusy)
           .position(x: model.isTalking ? geometry.size.width / 2 : geometry.size.width - 36, y: 42)
-        if model.recording && model.splatFallback {
-          Image(systemName: "bolt.slash").accessibilityLabel("Point preview; training unavailable")
-            .frame(width: 44, height: 44).position(x: geometry.size.width - 36, y: 42)
-        }
+
       }
     }.frame(height: 84).padding(.top, 20).buttonStyle(.plain)
   }
@@ -257,7 +242,10 @@ private enum CameraStyle {
     HStack(spacing: 12) {
       if model.answering {
         ProgressView().tint(CameraStyle.amber)
-        Text(model.question).font(.system(size: 15, weight: .medium)).lineLimit(2)
+        VStack(alignment: .leading, spacing: 4) {
+          Text(model.question).font(.system(size: 15, weight: .medium)).lineLimit(2)
+          if model.answerConnecting { Text("Connecting…").font(.caption) }
+        }
       } else {
         Button(action: model.replayAnswer) {
           Label(

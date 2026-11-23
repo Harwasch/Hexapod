@@ -75,12 +75,12 @@ extension LiveSplatRenderer {
   public func start() {
     coverage = CoverageGrid()
     lastTimestamp = nil
-    status = .training
+    status = .scanPreview
     preferenceChanged()
   }
   func preferenceChanged() {
     guard status != .stopped else { return }
-    status = preference.trainingEnabled ? .training : .pointPreview
+    status = preference.previewEnabled ? .scanPreview : .coverageOnly
   }
   public func stop() { status = .stopped }
   public func ingest(_ frame: SplatFrame) {

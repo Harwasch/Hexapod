@@ -9,8 +9,8 @@ case "${1:-all}" in
   seeding) filter=(--filter 'seedUses|frameRejects|replayYardSmall') ;;
   coverage) filter=(--filter 'coverage|Coverage') ;;
   fake) filter=(--filter 'fake|rendererProtocol') ;;
-  math) filter=(--filter 'Projection|camera|Covariance|covariance|Gradient|gradient|alpha|tile|gaussianRejects') ;;
-  lifecycle) filter=(--filter 'rendererCaps|gpuResults|overBudget|budget|trackingLoss|rendererProtocol') ;;
+  math) filter=(--filter 'Projection|camera|Covariance|covariance|surfel|fusionDispatch|gaussianRejects') ;;
+  lifecycle) filter=(--filter 'rendererCaps|qualityRecovers|fiveMinute|trackingLoss|rendererProtocol') ;;
   export) filter=(--filter 'PLY|export|rendererProtocol') ;;
   *) echo "Usage: bash $0 [all|replay|seeding|coverage|fake|math|lifecycle|export|format]" >&2; exit 2 ;;
 esac

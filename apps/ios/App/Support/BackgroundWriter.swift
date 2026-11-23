@@ -22,13 +22,16 @@ final class BackgroundWriter<Job: Sendable>: Sendable {
     self.capacity = capacity
     worker = Worker(write: write)
   }
+  var hasFailed: Bool { lock.withLock { state.error != nil } }
   var outstanding: Int { lock.withLock { state.outstanding } }
-  @discardableResult func submit(_ job: Job) -> Bool {
+  @discardableResult func submit(_ job: Job) -> Bool { submit { job } }
+  /// Called only after a slot is available; do not copy camera planes before this boundary.
+  @discardableResult func submit(makeJob: () -> Job) -> Bool {
     let result: (Bool, Bool) = lock.withLock {
       guard !state.closed, state.error == nil, state.outstanding < capacity else {
         return (false, false)
       }
-      state.queue.append(job)
+      state.queue.append(makeJob())
       state.outstanding += 1
       let start = !state.running
       state.running = true

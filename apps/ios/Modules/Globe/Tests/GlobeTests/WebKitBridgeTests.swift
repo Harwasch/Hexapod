@@ -19,11 +19,6 @@
     session.update(
       owner: UUID(), snapshot: snapshot, scanID: FakeGlobeDataSource.scanID, fixture: true,
       onPin: { _ in }, onScan: { continuation.yield($0) })
-    let page = try #require(
-      Bundle.module.url(
-        forResource: "native-bridge", withExtension: "html", subdirectory: "Fixtures"))
-    session.webView.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent())
-
     let selected = try await withThrowingTaskGroup(of: UUID.self) { group in
       group.addTask {
         for await id in events { return id }
