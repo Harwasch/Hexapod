@@ -69,6 +69,7 @@ sparse files, duplicate archive members, or undeclared files are accepted.
 manifest.json
 frames.jsonl
 location.jsonl     (optional)
+capture-info.json (optional app metadata)
 rgb.mov
 depth_00000000.f16
 depth_00000000.u8
@@ -108,6 +109,17 @@ frames, 16 KiB per frame/location-log line, and one million location fixes. The 
 less than 8 GiB (USTAR's size field); longer recordings must finish a bundle
 before reaching that bound. The archive duplicates the folder's bytes locally,
 and Upload retains another private archive copy until the app deletes it.
+
+`capture-info.json` is optional app metadata (for example `siteName`, `siteID`,
+and `duration`). The app writes it before finalizing the bundle, so it must appear
+in `files` with its exact byte size. Its fixed filename is its implicit reference;
+it needs no additional manifest field. It must contain a UTF-8 JSON object of at
+most 64 KiB. Reconstruction validates but does not interpret its fields. Older
+bundles without it remain valid; other unreferenced inventory files remain invalid.
+
+Validation reports the `frames.jsonl` line count and manifest `frameCount`, plus
+sorted lists of unreferenced inventory files and references missing from the
+inventory. Filename lists show at most ten names and the number omitted.
 
 ## Frames, clocks, and coordinates
 
@@ -285,6 +297,25 @@ Explicit placement remains available with `.explicit(BundlePlacement(...))`.
 Placement and site are persisted for relaunch. ARKit supplies no geographic fix.
 
 ## Verification boundary
+
+Run `bash tools/pipeline/test_swift_bundle.sh` from any directory in the checkout
+to build the real local Swift Capture package and the App's `BackgroundWriter` /
+`RecordingDiskWriter`, then validate their folders and archives with Python.
+The script can source `~/hw-tools/swift/env.sh` on Linux; otherwise put Swift 6
+on `PATH`. Python dependencies must already be installed (`uv sync` at setup).
+The ordinary pipeline pytest suite also runs this test, skipping it when Swift
+is absent from `PATH`. Builds use four jobs, `heavy` when available, no remote
+dependencies, and explicit SwiftPM build/cache/config/security paths under pytest's
+temporary directory. Set `TMPDIR` to a disk-backed scratch directory; the script
+defaults to `.scratch/tmp` in this checkout. No build output belongs in git.
+
+The harness stages an exact copy of the current App `BackgroundWriter.swift`
+alongside a small `CaptureDetails` declaration, avoiding SwiftPM's restriction
+against targets outside their package without source symlinks. It exercises 1, 18,
+and 48 logical seconds through the real cadence, background queue, disk writer,
+bundle writer, and archive writer, with and without capture details. Both depth
+streams and GPS are synthetic. Linux replaces finalized video with nonempty bytes:
+this verifies bundle validation, not AVFoundation, ARKit, or video decoding.
 
 Linux exercises Codable models, folder writing, USTAR layout, chunk planning,
 chunk materialization, GPS log/summary round trips, default upload placement,
