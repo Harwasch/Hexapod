@@ -1,8 +1,15 @@
+import Foundation
 import Globe
 import Upload
 
 /// Upload bytes describe transfer only; reconstruction always comes from the server.
 enum CaptureStatus {
+  static func trainedRoute(upload: UploadState?, remote: CatalogCaptureState?) -> GlobeRoute? {
+    guard remote?.status == "complete", let siteID = remote?.siteId,
+      let scanID = upload?.captureID.flatMap(UUID.init(uuidString:))
+    else { return nil }
+    return GlobeRoute(siteID: siteID, scanID: scanID)
+  }
   static func label(upload: UploadState?, remote: CatalogCaptureState?, unavailable: Bool) -> String
   {
     guard let upload else { return "Connecting…" }

@@ -14,13 +14,14 @@
     private var entities: [EntitySchema.Entity] = []
     private let speech = AVSpeechSynthesizer()
     private let processor: HighlightProcessor
+    private var scanning = false
+    private var installed = false
 
     public init(view: ARView) throws {
       self.view = view
       speech.usesApplicationAudioSession = false
       processor = try HighlightProcessor()
-      let processor = processor
-      view.renderCallbacks.postProcess = { @Sendable context in processor.render(context) }
+
     }
     public func update(entities: [EntitySchema.Entity]) {
       guard let view else { return }
@@ -47,7 +48,22 @@
         anchor.children.first?.setOrientation(view.cameraTransform.rotation, relativeTo: nil)
       }
     }
-    public func setMask(_ mask: HighlightMask?) { processor.setMask(mask) }
+    public func setScanning(_ value: Bool) {
+      scanning = value
+      if value { setMask(nil) }
+    }
+    public func setMask(_ mask: HighlightMask?) {
+      let active = !scanning && mask?.isValid == true
+      processor.setMask(active ? mask : nil)
+      if active {
+        let processor = processor
+        view?.renderCallbacks.postProcess = { @Sendable context in processor.render(context) }
+        installed = true
+      } else if installed {
+        view?.renderCallbacks.postProcess = nil
+        installed = false
+      }
+    }
     public func pin(at point: CGPoint) -> EntitySchema.Entity? {
       guard var hit = view?.entity(at: point) else { return nil }
       while !hit.name.hasPrefix("hex-pin-") {
@@ -70,7 +86,6 @@
       setMask(nil)
       for anchor in anchors { view?.scene.removeAnchor(anchor) }
       anchors.removeAll()
-      view?.renderCallbacks.postProcess = nil
     }
   }
 
@@ -78,43 +93,47 @@
   /// No RealityKit render callback reaches into UI/MainActor state.
   private final class HighlightProcessor: @unchecked Sendable {
     private let lock = NSLock()
-    private var mask: HighlightMask?
+    private var texture: MTLTexture?
+    private let device: MTLDevice
     private let pipeline: MTLComputePipelineState
     init() throws {
       guard let device = MTLCreateSystemDefaultDevice(),
         let function = try device.makeDefaultLibrary(bundle: .module)
           .makeFunction(name: "subjectHighlight")
       else { throw CocoaError(.fileReadUnknown) }
+      self.device = device
       pipeline = try device.makeComputePipelineState(function: function)
     }
     func setMask(_ mask: HighlightMask?) {
-      lock.lock()
-      self.mask = mask?.isValid == true ? mask : nil
-      lock.unlock()
-    }
-    func render(_ context: ARView.PostProcessContext) {
-      lock.lock()
-      let current = mask
-      lock.unlock()
-      let width = current?.width ?? 1
-      let height = current?.height ?? 1
+      guard let mask, mask.isValid else {
+        lock.withLock { texture = nil }
+        return
+      }
       let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-        pixelFormat: .r8Unorm,
-        width: width, height: height, mipmapped: false)
+        pixelFormat: .r8Unorm, width: mask.width, height: mask.height, mipmapped: false)
       descriptor.usage = .shaderRead
       descriptor.storageMode = .shared
-      guard let texture = context.device.makeTexture(descriptor: descriptor),
-        let encoder = context.commandBuffer.makeComputeCommandEncoder()
-      else { return }
-      let pixels = current?.pixels ?? [0]
-      pixels.withUnsafeBytes {
-        if let base = $0.baseAddress {
-          texture.replace(
-            region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0,
-            withBytes: base, bytesPerRow: width)
+      let next = device.makeTexture(descriptor: descriptor)
+      mask.pixels.withUnsafeBytes { bytes in
+        if let base = bytes.baseAddress {
+          next?.replace(
+            region: MTLRegionMake2D(0, 0, mask.width, mask.height), mipmapLevel: 0,
+            withBytes: base, bytesPerRow: mask.width)
         }
       }
-      var enabled: UInt32 = current == nil ? 0 : 1
+      // Immutable for its GPU lifetime. Upload once per changed mask, not every display frame.
+      lock.withLock { texture = next }
+    }
+    func render(_ context: ARView.PostProcessContext) {
+      guard let texture = lock.withLock({ texture }),
+        let encoder = context.commandBuffer.makeComputeCommandEncoder()
+      else {
+        let blit = context.commandBuffer.makeBlitCommandEncoder()
+        blit?.copy(from: context.sourceColorTexture, to: context.targetColorTexture)
+        blit?.endEncoding()
+        return
+      }
+      var enabled: UInt32 = 1
       encoder.setComputePipelineState(pipeline)
       encoder.setTexture(context.sourceColorTexture, index: 0)
       encoder.setTexture(context.targetColorTexture, index: 1)

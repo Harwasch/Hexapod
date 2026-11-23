@@ -272,13 +272,31 @@ newer must verify camera and location permissions (including denial/revocation),
 CoreLocation delivery and placement accuracy, LiDAR availability with the chosen 4K
 format, color encoding, RGB/depth alignment, recording throughput, writer
 backpressure, interruption, locked-device file access, and relaunch callbacks.
-`start` first warms up tracking; its completion fires when tracking is normal
-and recording begins. No recording is claimed during initialization. Every
-frame delivered after that boundary is recorded, including later limited
-tracking. The recorder fails a capture on writer backpressure or session interruption;
-it never marks a dropped-frame recording complete. This preserves every frame
-ARKit delivers, but does not claim ARKit delivers every physical sensor exposure.
-M1 does not enable any device-dependent feature in App code.
+The App's shared-session recorder admits coherent packets at a **nominal 15 fps**
+from the 60 Hz ARSession input. Admission and immutable-frame handoff run on a
+dedicated serial delegate queue. A four-packet bound includes queued and active
+work; capacity is checked before retaining/copying a packet. Missing raw/smoothed
+depth or confidence drops the whole input frame. HEVC encoding declares
+15 fps expected input and disables frame reordering. Every accepted video sample
+has exactly one `frames.jsonl` row, with the same relative ARKit timestamp, pose,
+raw/smoothed depth and confidence. The first successfully recorded sample is time zero.
+
+Depth float32 → float16 uses Accelerate's
+[vImage conversion](<https://developer.apple.com/documentation/accelerate/vimageconvert_planarftoplanar16f(_:_:_:)>)
+on the recording actor, respecting row strides; confidence rows are copied there.
+The iOS little-endian output preserves the v1 format. No depth conversion or codec
+append occurs on MainActor. Saturation or codec backpressure drops an entire packet
+before conversion/video append. Such gaps preserve real timestamps and may reduce
+the effective video rate below 15 fps; no duplicate frames or synthetic metadata are
+inserted. Partial disk/codec failures prevent manifest publication. Stop first closes
+ingress, drains accepted packets, finishes HEVC, validates its finalized sample
+count against the accepted packet count, then publishes the manifest.
+
+Normalize still decodes every frame and requires **decoded video count == JSONL
+count**. This invariant is unchanged; 15 fps is an acquisition policy, not a new
+bundle version or a restriction on older 60 fps bundles. The standalone legacy
+`ARCaptureRecorder` is not used by the App; its older lossless delegate behavior is
+not the shared-session capture contract.
 
 COLMAP triangulation at fixed ARKit poses, real-device drift, the full Modal
 training path, and production cloud delivery need a real capture acceptance
@@ -292,7 +310,9 @@ and COLMAP's [known-pose reconstruction](https://colmap.github.io/faq.html#recon
 
 A bundle may contain `livesplat.ply`, referenced by the optional manifest field
 `"liveSplat": "livesplat.ply"` and included in `files` with its exact byte size.
-LiveSplat stops and atomically exports before Capture publishes the manifest.
+The App no longer exports its live GPU preview. Its thumbnail comes from captured
+video, and Ready details show the cloud-trained scan. Older/offline previews remain
+accepted for bundle compatibility; any export must finish before the manifest is published.
 The binary little-endian PLY stores ARKit world metres, float xyz/normals, SH DC,
 opacity logits, log scales and Hamilton wxyz rotation, with at most 32,768 vertices.
 Zero vertices is valid for the simulated renderer. The Python validator checks the

@@ -114,3 +114,45 @@
     #expect(manifest.files.contains { $0.path == "depth_1.f16" && $0.bytes == 2 })
   }
 #endif
+
+#if !os(iOS)
+  @Test func reservationRejectsBeforePacketCreation() async throws {
+    let gate = Gate()
+    let writer = BackgroundWriter<Int>(capacity: 1) { _ in await gate.wait() }
+    #expect(writer.submit(1))
+    await gate.waitForEntry()
+    var copies = 0
+    #expect(
+      !writer.submit {
+        copies += 1
+        return 2
+      })
+    #expect(copies == 0)
+    await gate.release()
+    try await writer.close()
+  }
+
+  @Test func fiveMinuteBackpressureKeepsPacketQueueFlatAndStreamsCoherent() async throws {
+    let gate = Gate()
+    let log = Log()
+    let writer = BackgroundWriter<Int>(capacity: 4) { value in
+      await gate.wait()
+      await log.append(value)  // One log entry represents one paired video/depth/pose packet.
+    }
+    var cadence = CaptureCadence()
+    var copied = 0
+    for frame in 0..<18_000 {
+      if cadence.admit(Double(frame) / 60) {
+        writer.submit {
+          copied += 1
+          return frame
+        }
+      }
+    }
+    #expect(copied == 4 && writer.outstanding == 4)
+    await gate.release()
+    try await writer.close()
+    #expect(await log.values == [0, 4, 8, 12])
+    #expect(writer.outstanding == 0)
+  }
+#endif

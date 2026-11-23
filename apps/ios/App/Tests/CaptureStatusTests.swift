@@ -22,3 +22,20 @@ import Upload
     CaptureStatus.label(upload: upload, remote: ready, unavailable: true)
       == "Connection unavailable")
 }
+
+@Test func trainedScanRouteRequiresServerReadyAndUsesServerSite() throws {
+  var upload = try UploadState(name: "Scan", totalBytes: 100)
+  let scan = UUID()
+  let site = UUID()
+  upload.captureID = scan.uuidString
+  upload.jobID = UUID().uuidString
+  for status in ["created", "processing", "error", "complete"] {
+    let remote = try JSONDecoder().decode(
+      CatalogCaptureState.self,
+      from: Data("{\"status\":\"\(status)\",\"siteId\":\"\(site)\"}".utf8))
+    #expect(
+      CaptureStatus.trainedRoute(upload: upload, remote: remote)
+        == (status == "complete" ? GlobeRoute(siteID: site, scanID: scan) : nil))
+  }
+  #expect(CaptureStatus.trainedRoute(upload: upload, remote: nil) == nil)
+}

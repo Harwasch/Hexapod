@@ -7,12 +7,12 @@
     public init(preference: LiveSplatPreference = .shared) { self.preference = preference }
     public var body: some View {
       Button {
-        preference.trainingEnabled.toggle()
+        preference.previewEnabled.toggle()
       } label: {
-        Image(systemName: preference.trainingEnabled ? "sparkles" : "circle.dotted")
+        Image(systemName: preference.previewEnabled ? "sparkles" : "circle.dotted")
       }
-      .accessibilityLabel("Live splat")
-      .accessibilityValue(preference.trainingEnabled ? "On" : "Off")
+      .accessibilityLabel("Scan preview")
+      .accessibilityValue(preference.previewEnabled ? "On" : "Off")
     }
   }
 
@@ -21,10 +21,10 @@
     public init(preference: LiveSplatPreference = .shared) { self.preference = preference }
     public var body: some View {
       Toggle(
-        "Live splat",
+        "Scan preview",
         isOn: Binding(
-          get: { preference.trainingEnabled },
-          set: { preference.trainingEnabled = $0 }))
+          get: { preference.previewEnabled },
+          set: { preference.previewEnabled = $0 }))
     }
   }
 #endif

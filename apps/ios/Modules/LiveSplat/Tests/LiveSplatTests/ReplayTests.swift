@@ -124,7 +124,7 @@ private func depthTolerance(_ f: SplatFrame, x: Int, y: Int, depth: Double) -> D
   #expect(surfaceHits == checkedProbes)
   #expect(firstCoverage > 0)
   #expect(renderer.coverageFraction > firstCoverage)
-  #expect(renderer.splats.count > renderer.configuration.maxSeedsPerFrame)
+  #expect(renderer.splats.count > 768)
   #expect(try await source.next() == nil)
 }
 
@@ -149,7 +149,6 @@ private func depthTolerance(_ f: SplatFrame, x: Int, y: Int, depth: Double) -> D
       #expect(renderer.splats == before)
       #expect(renderer.coverageFraction == 0)
       #expect(renderer.latestFrame == nil)
-      #expect(renderer.recentKeyframes.isEmpty)
     }
   }
   #expect(accepted == truth.normalFrames && accepted == 3)

@@ -40,23 +40,11 @@ import Voice
   var siteID: UUID?
   private var recordingStarted: Date?
   var splatEnabled: Bool {
-    (liveSplat as? DefaultLiveSplatRenderer)?.preference.trainingEnabled ?? (liveSplat != nil)
+    (liveSplat as? DefaultLiveSplatRenderer)?.preference.previewEnabled ?? (liveSplat != nil)
   }
-  var coverage: Double { liveSplat?.coverageFraction ?? 0 }
+  var coverage: Double { usesLiveCapture ? scanCoverage : (liveSplat?.coverageFraction ?? 0) }
   var answerEntities: [EntitySchema.Entity] { presentation.entities }
   var answerConnecting: Bool { presentation.isConnecting }
-  var splatFallback: Bool {
-    guard splatEnabled, let liveSplat else { return false }
-    if case .fallback = liveSplat.status { return true }
-    return liveSplat.status == .pointPreview
-  }
-  var gapPosition: CGPoint? {
-    guard splatEnabled, let renderer = liveSplat as? DefaultLiveSplatRenderer,
-      renderer.latestFrame != nil,
-      let point = renderer.coverage.gapHint(displayTransform: renderer.displayTransform)
-    else { return nil }
-    return CGPoint(x: point.x, y: point.y)
-  }
 
   var card: EntitySchema.Entity?
   private var presentation = AnswerPresentation()
@@ -64,6 +52,7 @@ import Voice
   let perception: ScenePerception
   private let router: any AnswerRouting
   private let recorder = SharedSessionRecorder()
+  let frameFeed: CameraFrameFeed
   private var overlay: (any AnswerOverlaySink)?
   private let captureSource: any CameraCaptureSource
   private let fakeOverlay: Bool
@@ -117,16 +106,7 @@ import Voice
     liveSplat = providers.liveSplat
     router = AnswerRouter(
       planner: providers.planner, fast: DeviceFastAnswer(scene: perception), deep: providers.deep)
-    recorder.exportBundle = { [weak self] directory in
-      guard let renderer = self?.liveSplat else { return }
-      renderer.stop()
-      let splats = renderer.splats
-      guard !splats.isEmpty else { return }
-      try await Task.detached(priority: .utility) {
-        try SplatPLY.encode(splats).write(
-          to: directory.appendingPathComponent("livesplat.ply"), options: .atomic)
-      }.value
-    }
+    frameFeed = CameraFrameFeed(ingress: recorder.ingress)
     siteName = UserDefaults.standard.string(forKey: "hex.currentSite.name")
     siteID = UserDefaults.standard.string(forKey: "hex.currentSite.id").flatMap(
       UUID.init(uuidString:))
@@ -140,16 +120,22 @@ import Voice
       switch phase {
       case .recording(let start):
         recordingStarted = start
+        (overlay as? RealityAnswerOverlay)?.setScanning(true)
         liveSplat?.start()
+        installPreview()
       case .stopping:
         captureDuration = Date().timeIntervalSince(recordingStarted ?? Date())
         liveSplat?.stop()
+        arView?.renderCallbacks.postProcess = nil
+        (overlay as? RealityAnswerOverlay)?.setScanning(false)
       case .saved(let directory):
         savedCapture = directory
         latestCapture = directory
       case .failed:
         failureText = "Scan failed"
         liveSplat?.stop()
+        arView?.renderCallbacks.postProcess = nil
+        (overlay as? RealityAnswerOverlay)?.setScanning(false)
       default: break
       }
     }
@@ -196,18 +182,44 @@ import Voice
     }
   }
 
-  func frame(_ frame: ARFrame) {
-    recorder.append(frame)
-    if recording, splatEnabled, let view = arView, let renderer = liveSplat {
-      let orientation = view.window?.windowScene?.interfaceOrientation ?? .portrait
-      do {
-        try renderer.ingest(frame, orientation: orientation, viewportSize: view.bounds.size)
-      } catch {
-        renderer.trackingUnavailable()
-        failed = true
-        failureText = "Preview unavailable"
-      }
+  private func installPreview() {
+    guard let renderer = liveSplat as? DefaultLiveSplatRenderer, let view = arView else { return }
+    do {
+      let processor = try renderer.preparePreview()
+      processor.setActive(true, enabled: splatEnabled)
+      processor.setViewport(
+        view.bounds.size, orientation: view.window?.windowScene?.interfaceOrientation ?? .portrait)
+      frameFeed.setPreview(processor)
+      view.renderCallbacks.postProcess = { @Sendable context in processor.render(context) }
+    } catch {
+      failed = true
+      failureText = "Preview unavailable"
     }
+  }
+
+  /// Called by a 10 Hz UI timer, never from the ARSession delegate.
+  func tick() {
+    recorder.pollFailure()
+    if recording {
+      if let renderer = liveSplat as? DefaultLiveSplatRenderer, let view = arView {
+        renderer.processor?.setViewport(
+          view.bounds.size, orientation: view.window?.windowScene?.interfaceOrientation ?? .portrait
+        )
+        renderer.pollSummary()
+        scanCoverage = renderer.coverageFraction
+        if renderer.processor?.unavailable == true {
+          failed = true
+          failureText = "Preview unavailable"
+        } else if failureText == "Preview unavailable" {
+          failed = false
+        }
+      }
+      return
+    }
+    if let frame = frameFeed.takeFrame() { frameForPerception(frame.frame) }
+  }
+  private var scanCoverage = 0.0
+  private func frameForPerception(_ frame: ARFrame) {
     (overlay as? RealityAnswerOverlay)?.updateCamera()
     if ProcessInfo.processInfo.systemUptime - lastMaskUpdate > 0.75 { overlay?.setMask(nil) }
     guard perceptionTask == nil, frame.timestamp - lastPerceptionTime >= 0.35,
@@ -245,6 +257,7 @@ import Voice
   }
 
   func tap(_ point: CGPoint) {
+    guard !capturePhase.isBusy else { return }
     if let entity = (overlay as? RealityAnswerOverlay)?.pin(at: point) {
       card = entity
       return
@@ -292,7 +305,12 @@ import Voice
     if case .starting = capturePhase { return }
     failed = false
     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-    if !recording { clearAnswer() }
+    if !recording {
+      clearAnswer()
+      perceptionTask?.cancel()
+      frameGeneration = UUID()
+      perceptionTask = nil
+    }
     recorder.toggleRecording()
   }
 
@@ -471,6 +489,7 @@ import Voice
   }
 
   private func highlight(_ selection: SceneSelection) {
+    guard !capturePhase.isBusy else { return }
     guard ProcessInfo.processInfo.systemUptime - selection.capturedAt <= 0.75 else {
       overlay?.setMask(nil)
       return
@@ -521,6 +540,8 @@ import Voice
     if !usesLiveCapture && recording { toggleFixtureRecording() }
     recorder.stop()
     liveSplat?.stop()
+    frameFeed.setPreview(nil)
+    arView?.renderCallbacks.postProcess = nil
     overlay?.remove()
     overlay = nil
     arView = nil

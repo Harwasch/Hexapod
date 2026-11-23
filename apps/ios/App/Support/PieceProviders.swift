@@ -105,7 +105,7 @@ enum ProviderError: Error, CustomStringConvertible {
     ("planner", "Planner", ["real", "rules", "fake"]),
     ("perception", "Perception", ["real", "fake"]),
     ("deep", "Deep answer", ["offline", "fake", "cloud"]),
-    ("liveSplat", "Live splat", ["off", "fake", "real"]),
+    ("liveSplat", "Scan preview", ["off", "fake", "real"]),
     ("globe", "Globe data", ["fake", "real"]),
     ("overlay", "Answer overlay", ["real", "fake"]),
   ]
@@ -292,7 +292,7 @@ struct ServiceConfiguration: Sendable {
   }
 }
 
-/// Simulated training is a developer override, independent of the persisted user setting.
+/// Simulated scan preview is a developer override, independent of the persisted user setting.
 @MainActor private final class DebugSplatPreferenceStore: LiveSplatPreferenceStore {
   private var enabled = true
   func bool(forKey key: String) -> Bool? { enabled }

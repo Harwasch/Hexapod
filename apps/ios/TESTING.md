@@ -261,3 +261,28 @@ real ion entitlements, private bucket CORS and LiDAR recording still need the Ap
 simulator/device gates. API references were checked against Apple's
 [image generator documentation](https://developer.apple.com/documentation/avfoundation/avassetimagegenerator)
 and [test attachment documentation](https://developer.apple.com/documentation/xctest/xctattachment).
+
+## Smooth scan preview and capture gate
+
+See [scan preview verification](Modules/LiveSplat/TESTING.md) for the GPU/phone
+acceptance checklist and the distinction between measured pure CPU admission and
+unmeasured device GPU/frame-rate targets. The shared-session App path records at
+15 Hz; the delegate only admits and hands off immutable frames. AppSupport's
+`ScanPerformanceTests` runs the five-minute synthetic 60 Hz/15 Hz workload under
+XCTest on Linux and in the existing simulator package-test job. `ScanCodecTests`
+checks real HEVC decoded counts against frame/depth metadata on Apple platforms.
+
+Run every module and App package sequentially through `heavy`, with `--jobs 1`,
+`--scratch-path ./.swift-scratch/<Name>` and `TMPDIR="$PWD/.tmp-test"`. Then run:
+
+```bash
+(cd tools/pipeline && uv run --no-sync pytest -q tests/test_capture_bundle.py tests/test_fixture_bundles.py)
+python3 -m unittest discover -s apps/ios/ci_scripts
+python3 -m unittest discover -s .github/scripts
+rm -rf ./.swift-scratch ./.tmp-test
+pnpm format:check
+```
+
+Device-only acceptance still includes sustained 60 Hz display, ≤0.5 ms delegate
+latency under load, memory plateau, thermals, quality recovery, alignment/occlusion,
+visual density and real-bundle frame counts. Linux cannot substitute for these checks.
