@@ -137,7 +137,7 @@
         guard
           adaptor.append(
             pixel,
-            withPresentationTime: CMTime(seconds: timestamp, preferredTimescale: 1_000_000_000))
+            withPresentationTime: CMTime(value: Int64((timestamp * 1e9).rounded()), timescale: 1_000_000_000))
         else { throw video?.error ?? CaptureError.recordingFailed }
         let raw = try writeDepth(frame.sceneDepth, prefix: "depth", directory: bundle.directory)
         let smoothed = try writeDepth(
