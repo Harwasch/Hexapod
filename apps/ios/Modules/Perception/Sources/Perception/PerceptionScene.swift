@@ -5,15 +5,17 @@ public struct SceneSelection: Sendable {
   public var entities: [Entity]
   public var masks: [SubjectMask]
   public var viewportToImage: [Double] = [1, 0, 0, 1, 0, 0]
+  public var camera: CameraGeometry?
   public var capturedAt: TimeInterval = 0
   public init(
     entities: [Entity], masks: [SubjectMask], viewportToImage: [Double] = [1, 0, 0, 1, 0, 0],
-    capturedAt: TimeInterval = 0
+    capturedAt: TimeInterval = 0, camera: CameraGeometry? = nil
   ) {
     self.entities = entities
     self.masks = masks
     self.viewportToImage = viewportToImage
     self.capturedAt = capturedAt
+    self.camera = camera
   }
 }
 
@@ -52,6 +54,12 @@ public actor PerceptionScene {
     tracker = EntityTracker()
     latest = SceneSelection(entities: [], masks: [])
   }
+  private func clearSelection() {
+    selected = nil
+    tracker = EntityTracker()
+    latest = SceneSelection(
+      entities: [], masks: [], viewportToImage: viewportToImage, capturedAt: capturedAt)
+  }
   public func selection() -> SceneSelection { latest }
 
   public func select(_ point: ImagePoint) async throws -> SceneSelection {
@@ -62,23 +70,78 @@ public actor PerceptionScene {
     let transform = viewportToImage
     let time = capturedAt
     guard let frame = snapshot else { throw PerceptionError.insufficientDepth }
-    let mask = try await segmenter.segment(frame.image, prompt: .point(point))
+    let mask: SubjectMask
+    do {
+      mask = try await segmenter.segment(frame.image, prompt: .point(point))
+    } catch PerceptionError.noSubject {
+      guard id == revision else { throw CancellationError() }
+      clearSelection()
+      return latest
+    }
     try Task.checkCancellation()
+    guard id == revision else { throw CancellationError() }
+    guard mask.bounds != nil else {
+      clearSelection()
+      return latest
+    }
+    let lifted = try MaskLifter.lift(
+      mask: mask, depth: frame.depth, camera: frame.camera, label: "subject")
+    // Same-frame masks are exact; after movement use the tracker's world-distance/overlap gate.
+    if let index = tracker.tracks.indices.first(where: { index in
+      if latest.capturedAt == time, latest.masks.count == latest.entities.count,
+        latest.masks.indices.contains(index),
+        (latest.masks[index].bounds?.iou(mask.bounds!) ?? 0) > 0.7
+      {
+        return true
+      }
+      let previous = tracker.tracks[index].entity
+      let p = previous.anchor.world
+      let q = lifted.anchor.world
+      let distance = sqrt(pow(p.x - q.x, 2) + pow(p.y - q.y, 2) + pow(p.z - q.z, 2))
+      return distance <= tracker.maximumDistance * 0.5
+        && (frame.camera.projectedBounds(previous)?.iou(mask.bounds!) ?? 0) >= 0.05
+    }) {
+      var remaining = tracker.tracks.map(\.entity)
+      remaining.remove(at: index)
+      selected = remaining.last
+      var masks =
+        latest.capturedAt == time && latest.masks.count == latest.entities.count ? latest.masks : []
+      if masks.indices.contains(index) { masks.remove(at: index) }
+      latest = SceneSelection(
+        entities: remaining, masks: masks, viewportToImage: transform, capturedAt: time,
+        camera: frame.camera)
+      rebuildTracks(remaining, camera: frame.camera)
+      return latest
+    }
     let label = try await identifier.identify(frame.image, mask: mask)
     try Task.checkCancellation()
     guard id == revision else { throw CancellationError() }
-    var entity = try MaskLifter.lift(
-      mask: mask, depth: frame.depth, camera: frame.camera, label: label?.label ?? "subject")
+    var entity = lifted
+    entity.label = label?.label ?? "subject"
     if let label {
       entity.attrs["identifiedOnDevice"] = .bool(true)
       entity.attrs["identificationConfidence"] = .number(label.confidence)
     }
+    // Preserve the selected set and its order. Old masks must never be mixed with a new camera.
+    var entities = tracker.tracks.isEmpty ? latest.entities : tracker.tracks.map(\.entity)
+    entities.append(entity)
     selected = entity
+    var masks =
+      latest.capturedAt == time && latest.masks.count == latest.entities.count ? latest.masks : []
+    masks.append(mask)
     latest = SceneSelection(
-      entities: [entity], masks: [mask], viewportToImage: transform, capturedAt: time)
-    tracker = EntityTracker()
-    _ = tracker.update([Detection(entity: entity, bounds: mask.bounds!)], camera: frame.camera)
+      entities: entities, masks: masks, viewportToImage: transform, capturedAt: time,
+      camera: frame.camera)
+    rebuildTracks(entities, camera: frame.camera)
     return latest
+  }
+
+  private func rebuildTracks(_ entities: [Entity], camera: CameraGeometry) {
+    tracker = EntityTracker()
+    _ = tracker.update(
+      entities.compactMap { entity in
+        camera.projectedBounds(entity).map { Detection(entity: entity, bounds: $0) }
+      }, camera: camera)
   }
 
   public func refreshSelection(isQuery: Bool = false) async throws -> SceneSelection {
@@ -124,7 +187,8 @@ public actor PerceptionScene {
       }, camera: frame.camera)
     selected = entities.first ?? tracker.tracks.first?.entity
     latest = SceneSelection(
-      entities: entities, masks: masks, viewportToImage: transform, capturedAt: time)
+      entities: tracker.tracks.map(\.entity), masks: masks, viewportToImage: transform,
+      capturedAt: time, camera: frame.camera)
     return latest
   }
 
@@ -175,7 +239,8 @@ public actor PerceptionScene {
     try Task.checkCancellation()
     guard id == revision else { throw CancellationError() }
     latest = SceneSelection(
-      entities: found, masks: accepted, viewportToImage: transform, capturedAt: time)
+      entities: found, masks: accepted, viewportToImage: transform, capturedAt: time,
+      camera: frame.camera)
     selected = found.first
     tracker = EntityTracker()
     _ = tracker.update(

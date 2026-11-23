@@ -51,11 +51,18 @@ public struct FrameSnapshot: Sendable {
         for x in 0..<dw { values[y * dw + x] = row[x] }
       }
       depth = DepthImage(width: dw, height: dh, metres: values)
-      let k = frame.camera.intrinsics
-      let t = frame.camera.transform
-      camera = CameraGeometry(
+      camera = CameraGeometry(camera: frame.camera)
+    }
+  }
+
+  extension CameraGeometry {
+    public init(camera: ARCamera) {
+      let k = camera.intrinsics
+      let t = camera.transform
+      self.init(
         fx: Double(k[0][0]), fy: Double(k[1][1]), cx: Double(k[2][0]), cy: Double(k[2][1]),
-        imageWidth: width, imageHeight: height,
+        imageWidth: Int(camera.imageResolution.width),
+        imageHeight: Int(camera.imageResolution.height),
         transform: (0..<4).flatMap { c in (0..<4).map { Double(t[c][$0]) } })
     }
   }

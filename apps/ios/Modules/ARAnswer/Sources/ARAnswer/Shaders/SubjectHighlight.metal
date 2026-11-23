@@ -15,7 +15,8 @@ kernel void subjectHighlight(texture2d<float, access::read> source [[texture(0)]
     float2 uv = (float2(gid)+0.5)/float2(target.get_width(), target.get_height());
     float inside = mask.sample(s, uv).r;
     float edge = 0.0, glow = 0.0;
-    float2 texel = 1.0/float2(mask.get_width(), mask.get_height());
+    // Width is measured in output screen pixels, independent of mask resolution.
+    float2 texel = 1.0/float2(target.get_width(), target.get_height());
     for (int y = -3; y <= 3; ++y) {
         for (int x = -3; x <= 3; ++x) {
             float m = mask.sample(s, uv+float2(x,y)*texel).r;

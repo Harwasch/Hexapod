@@ -251,3 +251,65 @@ private actor IntermittentSegmenter: InstanceSegmenting {
   #expect(try await scene.refreshSelection().masks.isEmpty)
   #expect(try await scene.refreshSelection().entities.first?.label == "tree")
 }
+
+private struct TapSegmenter: InstanceSegmenting {
+  func segment(_ image: CameraImage, prompt: SubjectPrompt) async throws -> SubjectMask {
+    guard case .point(let point) = prompt, point.y < 0.8 else { throw PerceptionError.noSubject }
+    let left = point.x < 0.5
+    return SubjectMask(
+      width: 4, height: 4,
+      pixels: (0..<16).map { i in
+        ((i % 4 < 2) == left) ? 255 : 0
+      })
+  }
+  func instances(_ image: CameraImage) async throws -> [SubjectMask] { [] }
+}
+@Test func tapsAccumulateToggleAndEmptySpaceClearsSelection() async throws {
+  let scene = PerceptionScene(
+    segmenter: TapSegmenter(), instances: TapSegmenter(), identifier: SceneIdentifier())
+  await scene.update(sceneFrame(), viewportToImage: [1, 0, 0, 1, 0, 0], capturedAt: 1)
+  let first = try await scene.select(.init(x: 0.2, y: 0.3))
+  #expect(first.entities.count == 1)
+  let second = try await scene.select(.init(x: 0.7, y: 0.3))
+  #expect(second.entities.count == 2 && second.masks.count == 2)
+  let toggled = try await scene.select(.init(x: 0.2, y: 0.3))
+  #expect(toggled.entities.count == 1)
+  #expect(toggled.entities.first?.anchor.world.x == second.entities.last?.anchor.world.x)
+  let empty = try await scene.select(.init(x: 0.7, y: 0.9))
+  #expect(empty.entities.isEmpty && empty.masks.isEmpty)
+}
+
+@Test func maskHidesWhenCameraOrViewportMovesByMoreThanTwoPixels() async throws {
+  let scene = PerceptionScene(
+    segmenter: SceneSegmenter(), instances: SceneSegmenter(), identifier: SceneIdentifier())
+  await scene.update(sceneFrame(), viewportToImage: [1, 0, 0, 1, 0, 0], capturedAt: 1)
+  let selection = try await scene.select(.init(x: 0.5, y: 0.5))
+  #expect(
+    selection.isRegistered(
+      camera: camera(), viewportToImage: [1, 0, 0, 1, 0, 0], width: 390, height: 844))
+  var translated = identity
+  translated[12] = 0.1
+  #expect(
+    !selection.isRegistered(
+      camera: camera(translated), viewportToImage: [1, 0, 0, 1, 0, 0], width: 390, height: 844))
+  #expect(
+    !selection.isRegistered(
+      camera: camera(), viewportToImage: [1, 0, 0, 1, 0.1, 0], width: 390, height: 844))
+}
+
+@Test func multiSelectionRefreshRetainsOrderAndTogglingAfterCameraUpdateRemovesOnlyOne()
+  async throws
+{
+  let scene = PerceptionScene(
+    segmenter: TapSegmenter(), instances: TapSegmenter(), identifier: SceneIdentifier())
+  await scene.update(sceneFrame(), viewportToImage: [1, 0, 0, 1, 0, 0], capturedAt: 1)
+  _ = try await scene.select(.init(x: 0.2, y: 0.3))
+  _ = try await scene.select(.init(x: 0.7, y: 0.3))
+  await scene.update(sceneFrame(), viewportToImage: [1, 0, 0, 1, 0, 0], capturedAt: 2)
+  let refreshed = try await scene.refreshSelection()
+  #expect(refreshed.entities.count == 2 && refreshed.masks.count == 2)
+  #expect(refreshed.entities[0].anchor.world.x < refreshed.entities[1].anchor.world.x)
+  await scene.update(sceneFrame(), viewportToImage: [1, 0, 0, 1, 0, 0], capturedAt: 3)
+  let toggled = try await scene.select(.init(x: 0.2, y: 0.3))
+  #expect(toggled.entities.count == 1 && toggled.entities[0].anchor.world.x > 0)
+}
