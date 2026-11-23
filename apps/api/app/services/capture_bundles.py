@@ -59,7 +59,7 @@ def locked_capture(db: Session, capture_id: uuid.UUID) -> Capture:
     capture = captures.get_capture(db, capture_id)
     db.execute(select(Capture.id).where(Capture.id == capture_id).with_for_update())
     db.refresh(capture)
-    if capture.metadata_.get("bundleFormat") != FORMAT:
+    if capture.kind != CaptureKind.VIDEO or capture.metadata_.get("bundleFormat") != FORMAT:
         raise InvalidInputError("capture is not a hex-capture-v1 bundle")
     return capture
 
@@ -92,7 +92,8 @@ def register(
     return captures.register_file(db, storage, capture_id, payload).file
 
 
-def process(db: Session, capture_id: uuid.UUID) -> Job:
+def completed_capture(db: Session, capture_id: uuid.UUID) -> Capture:
+    """Lock and validate the single completed archive for processing or correction."""
     capture = locked_capture(db, capture_id)
     if (
         len(capture.files) != 1
@@ -101,6 +102,11 @@ def process(db: Session, capture_id: uuid.UUID) -> Job:
         or capture.files[0].content_type != CONTENT_TYPE
     ):
         raise ConflictError("complete the single bundle archive before processing")
+    return capture
+
+
+def process(db: Session, capture_id: uuid.UUID) -> Job:
+    completed_capture(db, capture_id)
     existing = db.scalar(
         select(Job)
         .where(Job.capture_id == capture_id, Job.recipe == "photo-reconstruct")

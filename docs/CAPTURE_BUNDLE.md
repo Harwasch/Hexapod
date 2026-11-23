@@ -153,8 +153,35 @@ The world basis stays unchanged. Flip **camera axes after inversion**, not the
 world axes. COLMAP quaternions are Hamilton `(w,x,y,z)`. The inverse is
 `R_cw = R_wcᵀ D`, `C = −R_wcᵀ t_wc`. Tests cover identity, translation, quarter
 turns, half turns, off-axis points, pixel agreement, and quaternion round trips.
-The rigid-transform acceptance bound of `1e-5` accounts for float32 matrix
-serialization; it is not a fitted reconstruction accuracy threshold.
+Normal-tracking poses use a bounded nearest-rotation correction. ARKit's float32
+matrices are serialized as Doubles, which preserves float32 drift rather than
+restoring an exact rotation. For `trackingState == "normal"`, the parser requires
+finite 4×4 entries, positive determinant, `max(abs(RᵀR − I)) <= 1e-3`, and
+`max(abs(lastRow − [0,0,0,1])) <= 1e-6`. Conversion projects the rotation onto
+SO(3) by SVD/polar decomposition (`U diag(1,1,det(UVᵀ)) Vᵀ`), then uses that
+rotation for both COLMAP seeding and fixed-pose verification. Camera centres
+remain unchanged; the accepted homogeneous-row drift is treated as `[0,0,0,1]`.
+Every conversion uses the correction, including poses loaded from older frame metadata.
+
+These are input precision bounds for float32 pose drift, not reconstruction
+accuracy thresholds fitted to one machine. The synthetic phone-like regression
+uses prescribed rotation drift rounded through float32, measuring approximately
+`1e-6`–`1e-4` maximum orthonormality error, with `2e-7` homogeneous-row drift.
+Scale 1.1 has error 0.21 and shear 0.02 has error 0.02; both are rejected,
+as are reflections, nonfinite values and excessive homogeneous-row error.
+The 2026-11-22 production failures establish that the previous strict check
+rejected phone bundles; no real-device error distribution has been measured here.
+The `1e-3` envelope is an explicit conservative input policy, not a claim about
+measured device accuracy. A rejected normal transform reports the frame index
+and measured orthonormality, determinant and homogeneous-row diagnostics (or
+shape/nonfinite error when those measurements cannot be computed).
+
+For `notAvailable` and `limited:*` tracking, transform validation requires only
+finite entries and 4×4 shape. Identity, zero and degenerate startup transforms
+remain stored and never enter posing. Original transforms for every tracking
+state remain unchanged in the archive and `frames_meta.json`; only downstream
+conversion of normal poses applies the rotation correction. All other archive,
+frame, timestamp, intrinsics, image and depth checks still apply.
 
 Optional `depth` and `smoothedDepth` objects each contain `file`, `confidence`,
 `width`, and `height`. Missing depth is omitted, never synthesized. Each `.f16`

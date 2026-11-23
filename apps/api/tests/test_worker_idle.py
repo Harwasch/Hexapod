@@ -299,6 +299,7 @@ def test_a_stop_still_interrupts_a_backed_off_wait(
     assert not worker.exited_idle
 
 
+@pytest.mark.usefixtures("engine")
 def test_the_process_exits_0_when_idle(tmp_path: Path) -> None:
     """Exit status 0 is the contract with fly.toml's restart policy (`on-failure`): an
     idle exit leaves the machine stopped, where a crash would have it restarted."""

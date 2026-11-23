@@ -439,6 +439,7 @@ def test_a_database_refusal_is_generic_and_carries_no_personal_data(
     assert "could not be stored" in response.text
 
 
+@pytest.mark.usefixtures("engine")
 def test_the_engine_keeps_sql_parameters_out_of_its_errors() -> None:
     # The reviewed case: a NUL in a text value, refused by the driver. Without hide_parameters
     # the error's message lists every parameter of the statement, the email among them.

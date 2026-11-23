@@ -33,6 +33,19 @@ class SleepingApiTests(unittest.TestCase):
             committed = tomllib.load(handle)
         self.assertEqual(problems(committed), [])
 
+    def test_api_stays_awake_for_phone_uploads_and_worlds_reaper(self) -> None:
+        with open(ROOT / "fly.toml", "rb") as handle:
+            committed = tomllib.load(handle)
+        self.assertEqual(committed["http_service"]["auto_stop_machines"], "off")
+        self.assertEqual(committed["http_service"]["min_machines_running"], 1)
+        self.assertEqual(committed["env"]["WORLD_API_MAY_SLEEP"], "false")
+        for flag in (
+            "WORLD_RUNPOD_ALLOW_PROVISION",
+            "WORLD_LAMBDA_ALLOW_PROVISION",
+            "WORLD_MODAL_ALLOW_PROVISION",
+        ):
+            self.assertEqual(committed["env"][flag], "false")
+
     def test_database_health_probe_is_rejected(self) -> None:
         broken = config()
         broken["http_service"]["checks"] = [{"path": "/api/v1/health"}]

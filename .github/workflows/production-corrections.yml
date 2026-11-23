@@ -34,8 +34,9 @@ on:
         options:
           - redate-epochs
           - fit-site-boundaries
+          - requeue-jobs
       ids:
-        description: Epoch ids (redate-epochs) or site ids (fit-site-boundaries), space-separated
+        description: Epoch ids (redate-epochs), site ids (fit-site-boundaries) or capture ids (requeue-jobs), space-separated
         type: string
         required: true
       apply:
@@ -77,6 +78,9 @@ jobs:
           case "$CORRECTION" in
             redate-epochs) module=app.scripts.redate_epochs; flag=--epoch ;;
             fit-site-boundaries) module=app.scripts.fit_site_boundaries; flag=--site ;;
+            # Re-queue iPhone capture bundles that failed before the ARKit pose fix. Apply
+            # queues paid GPU training; the script is idempotent per capture.
+            requeue-jobs) module=app.scripts.requeue_jobs; flag=--capture ;;
             *) echo "::error::unknown correction '$CORRECTION'."; exit 1 ;;
           esac
           if [ "$APPLY" = "true" ] && [ "$CONFIRM" != "correct-production" ]; then
