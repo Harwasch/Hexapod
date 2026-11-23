@@ -9,6 +9,7 @@
   /// Embed in App A's NavigationStack; nil route provides the Home property picker.
   @MainActor
   public struct GlobeView: View {
+    @Environment(\.dismiss) private var dismiss
     private let source: any GlobeDataSource
     private let route: GlobeRoute?
     private let webBaseURL: URL?
@@ -54,42 +55,57 @@
             Button("Refresh") { retry += 1 }.frame(minHeight: 44)
           }
         } else if let snapshot {
-          VStack(spacing: 0) {
-            if sites.count > 1 && route == nil {
-              Picker("Site", selection: Binding(
-                get: { snapshot.property.id },
-                set: { selectedSite = GlobeRoute(siteID: $0); selectedScan = nil }
-              )) {
-                ForEach(sites) { site in Text(site.name).tag(site.id) }
-              }.frame(minHeight: 44).accessibilityIdentifier("globe.sitePicker")
-            }
+          ZStack {
             if (renderer?.rawValue ?? implementation) == GlobeImplementation.appleMaps.rawValue {
               AppleMapsGlobeView(
                 snapshot: snapshot, selectedScan: selectedScan ?? effectiveRoute?.scanID,
-                onPin: { selectedPin = $0 }, onScan: { selectedScan = $0 })
+                onPin: { selectedPin = $0 }, onScan: { selectedScan = $0 }
+              )
+              .ignoresSafeArea()
             } else {
               CesiumGlobeView(
-                snapshot: snapshot, scanID: selectedScan ?? effectiveRoute?.scanID, fixture: fixture, webBaseURL: webBaseURL,
-                onPin: { selectedPin = $0 }, onScan: { selectedScan = $0 })
+                snapshot: snapshot, scanID: selectedScan ?? effectiveRoute?.scanID,
+                fixture: fixture, webBaseURL: webBaseURL,
+                onPin: { selectedPin = $0 }, onScan: { selectedScan = $0 }
+              )
+              .ignoresSafeArea()
             }
-            if snapshot.property.epochs.isEmpty {
-              Label("No scans yet", systemImage: "viewfinder")
-                .padding().accessibilityIdentifier("globe.empty")
-            } else {
-              Menu {
-                ForEach(snapshot.property.epochs) { scan in
-                  Button(scan.observedAt) { selectedScan = scan.captureId ?? scan.id }
-                    .accessibilityIdentifier("globe.scan.\((scan.captureId ?? scan.id).uuidString.lowercased())")
-                }
-              } label: {
-                Label(selectedScanLabel(snapshot), systemImage: "viewfinder")
-                  .frame(maxWidth: .infinity, minHeight: 44)
-              }.accessibilityIdentifier("globe.scanPicker")
-              if let selectedScan {
-                Button("Open scan") { openScan(selectedScan, siteID: snapshot.property.id) }
-                  .frame(minHeight: 44)
+          }
+          .overlay(alignment: .topTrailing) {
+            Menu {
+              if sites.count > 1 && route == nil {
+                Picker(
+                  "Site",
+                  selection: Binding(
+                    get: { snapshot.property.id },
+                    set: {
+                      selectedSite = GlobeRoute(siteID: $0)
+                      selectedScan = nil
+                    }
+                  )
+                ) {
+                  ForEach(sites) { site in Text(site.name).tag(site.id) }
+                }.accessibilityIdentifier("globe.sitePicker")
               }
-            }
+              Picker("Scan", selection: $selectedScan) {
+                ForEach(snapshot.property.epochs) { scan in
+                  Text(globeScanDate(scan.observedAt)).tag(Optional(scan.captureId ?? scan.id))
+                    .accessibilityIdentifier(
+                      "globe.scan.\((scan.captureId ?? scan.id).uuidString.lowercased())")
+                }
+              }
+              if let selectedScan {
+                Button("Open scan", systemImage: "viewfinder") {
+                  openScan(selectedScan, siteID: snapshot.property.id)
+                }
+              }
+            } label: {
+              Label(snapshot.property.name, systemImage: "globe.americas")
+                .font(.subheadline.weight(.medium)).lineLimit(1).frame(maxWidth: 220)
+                .padding(.horizontal, 14).frame(minHeight: 44)
+                .background(.regularMaterial, in: Capsule())
+            }.accessibilityIdentifier("globe.scanPicker")
+              .padding(.trailing, 16).padding(.top, 8)
           }
         } else if effectiveRoute == nil && loadedSites {
           if sites.isEmpty {
@@ -105,7 +121,15 @@
           ProgressView("Connecting…")
         }
       }
-      .navigationTitle(snapshot?.property.name ?? "Globe")
+      .overlay(alignment: .topLeading) {
+        Button {
+          dismiss()
+        } label: {
+          Image(systemName: "chevron.left").frame(width: 44, height: 44)
+            .background(.regularMaterial, in: Circle())
+        }.accessibilityLabel("Back").padding(.leading, 16).padding(.top, 8)
+      }
+      .toolbar(.hidden, for: .navigationBar)
       .task { CesiumGlobeSession.shared.configure(webBaseURL: webBaseURL, fixture: fixture) }
       .task(id: LoadKey(route: effectiveRoute, retry: retry)) {
         failed = false
@@ -122,7 +146,8 @@
               return
             }
             snapshot = loaded.resolvingAssetURLs(relativeTo: webBaseURL)
-            selectedScan = route.scanID ?? loaded.property.epochs.first.map { $0.captureId ?? $0.id }
+            selectedScan =
+              route.scanID ?? loaded.property.epochs.first.map { $0.captureId ?? $0.id }
           } else {
             let loaded = try await source.sites()
             try Task.checkCancellation()
@@ -137,7 +162,7 @@
           VStack(spacing: 12) {
             EntityCard(entity: pin.entity) { selectedPin = nil }
               .accessibilityIdentifier("globe.entityCard")
-            Text(pin.observedAt)
+            Text(globeScanDate(pin.observedAt))
             if let uncertainty = pin.uncertaintyM { Text("±\(uncertainty, specifier: "%.1f") m") }
             Button("Scan", systemImage: "viewfinder") { openScan(pin.scanId, siteID: pin.siteId) }
           }
@@ -145,10 +170,6 @@
         }
         .presentationDetents([.medium])
       }
-    }
-
-    private func selectedScanLabel(_ snapshot: GlobeSnapshot) -> String {
-      snapshot.property.epochs.first { ($0.captureId ?? $0.id) == selectedScan }?.observedAt ?? "Scan"
     }
 
     private func openScan(_ scanID: UUID?, siteID: UUID) {
@@ -240,7 +261,6 @@
     }
 
   }
-
 
   @MainActor
   public struct GlobeDebugView: View {

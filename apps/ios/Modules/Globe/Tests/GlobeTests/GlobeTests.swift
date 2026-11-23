@@ -133,3 +133,10 @@ struct GlobeTests {
   }
 
 }
+
+@Test func scanMenuUsesFriendlyDatesInsteadOfServerTimestamps() {
+  let locale = Locale(identifier: "en_US")
+  #expect(globeScanDate("2026-10-03T12:00:00Z", locale: locale).contains("Oct"))
+  #expect(globeScanDate("2026-10-03T12:00:00.123Z", locale: locale).contains("2026"))
+  #expect(globeScanDate("invalid", locale: locale) == "Scan")
+}

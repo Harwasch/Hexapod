@@ -93,7 +93,8 @@ import XCTest
     screenshot("Globe loaded")
     tap("globe.scanPicker", shot: "Scan picker")
     tap("globe.scan.00000000-0000-0000-0000-000000000004", shot: "Selected second scan")
-    XCTAssertTrue(app.buttons["globe.scanPicker"].label.contains("2026-01-02"))
+    XCTAssertTrue(app.buttons["globe.scanPicker"].label.contains("Simulated property"))
+    XCTAssertFalse(app.buttons["globe.scanPicker"].label.contains("2026-01-02"))
     screenshot("Second scan on globe")
   }
 
