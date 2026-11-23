@@ -25,11 +25,20 @@
     private let fuse: MTLComputePipelineState, composite: MTLComputePipelineState,
       coverage: MTLComputePipelineState
     private let renderPipeline: MTLRenderPipelineState
+    private let gaussianPipeline: MTLRenderPipelineState, frustumPipeline: MTLRenderPipelineState
+    private let gaussianDepthState: MTLDepthStencilState
+    private let attributes: MTLBuffer, order: MTLBuffer, scene: MTLBuffer
+    private let prepareSort: MTLComputePipelineState, sort: MTLComputePipelineState
+    private let reduceScene: MTLComputePipelineState, finishScene: MTLComputePipelineState
+    private let insetComposite: MTLComputePipelineState
+    private var insetColor: MTLTexture?, insetDepth: MTLTexture?
     private let depthState: MTLDepthStencilState
     private var color: MTLTexture?, depth: MTLTexture?
     private var generation: UInt64 = .max
     private var lastFusion = -Double.infinity
     private var epoch: UInt32 = 0
+    private var sceneEpoch: UInt32 = .max
+    private var sceneGeneration: UInt64 = .max
 
     public init() throws {
       guard let device = MTLCreateSystemDefaultDevice() else { throw LiveSplatError.unavailable }
@@ -48,6 +57,15 @@
       self.cells = cells
       self.locks = locks
       self.counters = counters
+      guard
+        let attributes = device.makeBuffer(
+          length: GaussianSeed.attributeBytes, options: .storageModePrivate),
+        let order = device.makeBuffer(length: GaussianSeed.sortBytes, options: .storageModePrivate),
+        let scene = device.makeBuffer(length: 1025 * 48, options: .storageModePrivate)
+      else { throw LiveSplatError.unavailable }
+      self.attributes = attributes
+      self.order = order
+      self.scene = scene
       let library = try device.makeDefaultLibrary(bundle: .module)
       func function(_ name: String) throws -> MTLFunction {
         guard let value = library.makeFunction(name: name) else { throw LiveSplatError.unavailable }
@@ -56,6 +74,11 @@
       fuse = try device.makeComputePipelineState(function: function("fuseSurfels"))
       coverage = try device.makeComputePipelineState(function: function("coverageScanPreview"))
       composite = try device.makeComputePipelineState(function: function("compositeScanPreview"))
+      prepareSort = try device.makeComputePipelineState(function: function("prepareGaussianSort"))
+      sort = try device.makeComputePipelineState(function: function("bitonicGaussianSort"))
+      reduceScene = try device.makeComputePipelineState(function: function("reduceScanScene"))
+      finishScene = try device.makeComputePipelineState(function: function("finishScanScene"))
+      insetComposite = try device.makeComputePipelineState(function: function("compositeScanInset"))
       let descriptor = MTLRenderPipelineDescriptor()
       descriptor.vertexFunction = try function("surfelVertex")
       descriptor.fragmentFunction = try function("surfelFragment")
@@ -67,6 +90,12 @@
       descriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
       descriptor.depthAttachmentPixelFormat = .depth32Float
       renderPipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+      descriptor.vertexFunction = try function("gaussianVertex")
+      descriptor.fragmentFunction = try function("gaussianFragment")
+      gaussianPipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+      descriptor.vertexFunction = try function("phoneFrustumVertex")
+      descriptor.fragmentFunction = try function("phoneFrustumFragment")
+      frustumPipeline = try device.makeRenderPipelineState(descriptor: descriptor)
       let depthDescriptor = MTLDepthStencilDescriptor()
       depthDescriptor.depthCompareFunction = .less
       depthDescriptor.isDepthWriteEnabled = true
@@ -74,6 +103,12 @@
         throw LiveSplatError.unavailable
       }
       depthState = state
+      depthDescriptor.depthCompareFunction = .always
+      depthDescriptor.isDepthWriteEnabled = false
+      guard let gaussianState = device.makeDepthStencilState(descriptor: depthDescriptor) else {
+        throw LiveSplatError.unavailable
+      }
+      gaussianDepthState = gaussianState
     }
     public func offer(_ frame: ARFrame) {
       lock.withLock { if input.active { input.frame = PreviewFrame(frame) } }
@@ -88,6 +123,15 @@
         }
       }
     }
+    public func setStyle(splat: Bool, inset: Bool) {
+      lock.withLock {
+        // Medium-confidence seeds must not leak into the unchanged Discs path.
+        if input.splat != splat { input.generation &+= 1 }
+        input.splat = splat
+        input.inset = inset
+      }
+    }
+    public func setOrbit(_ orbit: ScanOrbit) { lock.withLock { input.orbit = orbit } }
     public func reset() {
       lock.withLock {
         input.generation &+= 1
@@ -188,6 +232,7 @@
           }
           blit.fill(buffer: cells, range: 0..<cells.length, value: 0)
           blit.fill(buffer: locks, range: 0..<locks.length, value: 0)
+          blit.fill(buffer: attributes, range: 0..<attributes.length, value: 0)
           blit.endEncoding()
           generation = snapshot.generation
           epoch = 0
@@ -220,7 +265,11 @@
             UInt32(quality.visibleStride),
             CVPixelBufferGetPixelFormatType(rgb) == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
               ? 1 : 0,
-            matrix == (kCVImageBufferYCbCrMatrix_ITU_R_709_2 as String) ? 1 : 0, 0))
+            matrix == (kCVImageBufferYCbCrMatrix_ITU_R_709_2 as String) ? 1 : 0,
+            snapshot.splat ? 2 : 0))
+        var orbit = OrbitUniforms(
+          controls: SIMD4(snapshot.orbit.angle(at: frame.timestamp), snapshot.orbit.pitch, 0, 0),
+          rect: snapshot.orbit.rect, phoneIntrinsics: uniforms.intrinsics)
         if frame.timestamp - lastFusion >= quality.fusionInterval {
           epoch &+= 1
           uniforms.settings.y = epoch
@@ -237,6 +286,7 @@
           encoder.setBuffer(cells, offset: 0, index: 0)
           encoder.setBuffer(locks, offset: 0, index: 1)
           encoder.setBuffer(counters, offset: 0, index: 2)
+          encoder.setBuffer(attributes, offset: 0, index: 4)
           encoder.setBytes(&uniforms, length: MemoryLayout<PreviewUniforms>.stride, index: 3)
           for (i, texture) in textures.enumerated() { encoder.setTexture(texture, index: i) }
           encoder.dispatchThreads(
@@ -245,6 +295,11 @@
           encoder.endEncoding()
           lastFusion = frame.timestamp
           fused = true
+        }
+        if snapshot.inset && (sceneEpoch != epoch || sceneGeneration != snapshot.generation) {
+          try updateScene(context.commandBuffer)
+          sceneEpoch = epoch
+          sceneGeneration = snapshot.generation
         }
         guard let coverageEncoder = context.commandBuffer.makeComputeCommandEncoder() else {
           throw LiveSplatError.unavailable
@@ -259,30 +314,10 @@
           MTLSize(width: width, height: height, depth: 1),
           threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
         coverageEncoder.endEncoding()
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = color
-        pass.colorAttachments[0].loadAction = .load
-        pass.colorAttachments[0].storeAction = .store
-        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
-        pass.depthAttachment.texture = depth
-        pass.depthAttachment.loadAction = .clear
-        pass.depthAttachment.storeAction = .dontCare
-        pass.depthAttachment.clearDepth = 1
-        guard let render = context.commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
-          throw LiveSplatError.unavailable
-        }
-        render.setRenderPipelineState(renderPipeline)
-        render.setDepthStencilState(depthState)
-        render.setVertexBuffer(cells, offset: 0, index: 0)
-        render.setVertexBytes(&uniforms, length: MemoryLayout<PreviewUniforms>.stride, index: 1)
-        render.setFragmentBytes(&uniforms, length: MemoryLayout<PreviewUniforms>.stride, index: 1)
-        render.setFragmentTexture(textures[0], index: 0)
-        render.setFragmentTexture(textures[1], index: 1)
-        if snapshot.enabled {
-          render.drawPrimitives(
-            type: .point, vertexStart: 0, vertexCount: SurfelHash.capacity / quality.visibleStride)
-        }
-        render.endEncoding()
+        try draw(
+          command: context.commandBuffer, uniforms: &uniforms, orbit: &orbit,
+          color: color!, depth: depth!, textures: textures, splat: snapshot.splat,
+          enabled: snapshot.enabled, quality: quality, inset: false)
         guard let encoder = context.commandBuffer.makeComputeCommandEncoder() else {
           throw LiveSplatError.unavailable
         }
@@ -294,6 +329,34 @@
           MTLSize(width: target.width, height: target.height, depth: 1),
           threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
         encoder.endEncoding()
+        if snapshot.inset {
+          let rect = snapshot.orbit.rect
+          let aspect = Float(target.width) * rect.z / (Float(target.height) * rect.w)
+          try insetTargets(
+            width: max(1, Int(320 * min(1, aspect))), height: max(1, Int(320 / max(1, aspect))))
+          var insetUniforms = uniforms
+          insetUniforms.flags.w |= 1
+          insetUniforms.intrinsics = SIMD4(0.8, 0.8 * aspect, 0.5, 0.5)
+          insetUniforms.displayX = SIMD4(1, 0, 0, 0)
+          insetUniforms.displayY = SIMD4(0, 1, 0, 0)
+          insetUniforms.dimensions.x = Float(insetColor!.width)
+          insetUniforms.dimensions.y = Float(insetColor!.height)
+          try draw(
+            command: context.commandBuffer, uniforms: &insetUniforms, orbit: &orbit,
+            color: insetColor!, depth: insetDepth!, textures: textures, splat: snapshot.splat,
+            enabled: true, quality: quality, inset: true)
+          guard let composite = context.commandBuffer.makeComputeCommandEncoder() else {
+            throw LiveSplatError.unavailable
+          }
+          composite.setComputePipelineState(insetComposite)
+          composite.setBytes(&orbit, length: MemoryLayout<OrbitUniforms>.stride, index: 0)
+          composite.setTexture(target, index: 0)
+          composite.setTexture(insetColor, index: 1)
+          composite.dispatchThreads(
+            MTLSize(width: target.width, height: target.height, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
+          composite.endEncoding()
+        }
       } catch {
         generation = .max
         copyCamera(context)
@@ -323,6 +386,125 @@
         }
       }
     }
+    private func insetTargets(width: Int, height: Int) throws {
+      guard insetColor?.width != width || insetColor?.height != height else { return }
+      let d = MTLTextureDescriptor.texture2DDescriptor(
+        pixelFormat: .rgba16Float, width: width, height: height, mipmapped: false)
+      d.storageMode = .private
+      d.usage = [.renderTarget, .shaderRead]
+      insetColor = device.makeTexture(descriptor: d)
+      d.pixelFormat = .depth32Float
+      d.usage = .renderTarget
+      insetDepth = device.makeTexture(descriptor: d)
+      guard insetColor != nil, insetDepth != nil else { throw LiveSplatError.unavailable }
+    }
+    private func updateScene(_ command: MTLCommandBuffer) throws {
+      guard let encoder = command.makeComputeCommandEncoder() else {
+        throw LiveSplatError.unavailable
+      }
+      encoder.setComputePipelineState(reduceScene)
+      encoder.setBuffer(cells, offset: 0, index: 0)
+      encoder.setBuffer(scene, offset: 0, index: 1)
+      encoder.dispatchThreads(
+        MTLSize(width: 1024, height: 1, depth: 1),
+        threadsPerThreadgroup: MTLSize(width: 64, height: 1, depth: 1))
+      encoder.endEncoding()
+      guard let finish = command.makeComputeCommandEncoder() else {
+        throw LiveSplatError.unavailable
+      }
+      finish.setComputePipelineState(finishScene)
+      finish.setBuffer(scene, offset: 0, index: 0)
+      finish.dispatchThreads(
+        MTLSize(width: 1, height: 1, depth: 1),
+        threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+      finish.endEncoding()
+    }
+    private func sortedOrder(
+      command: MTLCommandBuffer, uniforms: inout PreviewUniforms, orbit: inout OrbitUniforms,
+      count: Int
+    ) throws {
+      guard let encoder = command.makeComputeCommandEncoder() else {
+        throw LiveSplatError.unavailable
+      }
+      encoder.setComputePipelineState(prepareSort)
+      encoder.setBuffer(cells, offset: 0, index: 0)
+      encoder.setBytes(&uniforms, length: MemoryLayout<PreviewUniforms>.stride, index: 1)
+      encoder.setBuffer(order, offset: 0, index: 3)
+      encoder.setBuffer(scene, offset: 0, index: 4)
+      encoder.setBytes(&orbit, length: MemoryLayout<OrbitUniforms>.stride, index: 5)
+      var n = UInt32(count)
+      encoder.setBytes(&n, length: 4, index: 6)
+      let grid = MTLSize(width: count, height: 1, depth: 1)
+      let group = MTLSize(width: 64, height: 1, depth: 1)
+      encoder.dispatchThreads(grid, threadsPerThreadgroup: group)
+      encoder.memoryBarrier(scope: .buffers)
+      encoder.setComputePipelineState(sort)
+      encoder.setBuffer(order, offset: 0, index: 0)
+      var width = 2
+      while width <= count {
+        var distance = width / 2
+        while distance > 0 {
+          var stage = SIMD4<UInt32>(UInt32(width), UInt32(distance), n, 0)
+          encoder.setBytes(&stage, length: 16, index: 1)
+          encoder.dispatchThreads(grid, threadsPerThreadgroup: group)
+          encoder.memoryBarrier(scope: .buffers)
+          distance /= 2
+        }
+        width *= 2
+      }
+      encoder.endEncoding()
+    }
+    private func draw(
+      command: MTLCommandBuffer, uniforms: inout PreviewUniforms, orbit: inout OrbitUniforms,
+      color: MTLTexture, depth: MTLTexture, textures: [MTLTexture], splat: Bool,
+      enabled: Bool, quality: PreviewQuality, inset: Bool
+    ) throws {
+      // A 32K Gaussian draw cap bounds sort and overdraw. The full voxel scene is
+      // retained; evenly spaced hash slots thin the draw at reversible quality levels.
+      // 60 fps and the 8 ms target still require a phone measurement.
+      let count = GaussianSeed.drawCapacity / quality.visibleStride
+      if splat && enabled {
+        try sortedOrder(command: command, uniforms: &uniforms, orbit: &orbit, count: count)
+      }
+      let pass = MTLRenderPassDescriptor()
+      pass.colorAttachments[0].texture = color
+      pass.colorAttachments[0].loadAction = inset ? .clear : .load
+      pass.colorAttachments[0].storeAction = .store
+      pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
+      pass.depthAttachment.texture = depth
+      pass.depthAttachment.loadAction = .clear
+      pass.depthAttachment.storeAction = .dontCare
+      pass.depthAttachment.clearDepth = 1
+      guard let render = command.makeRenderCommandEncoder(descriptor: pass) else {
+        throw LiveSplatError.unavailable
+      }
+      render.setRenderPipelineState(splat ? gaussianPipeline : renderPipeline)
+      render.setDepthStencilState(splat ? gaussianDepthState : depthState)
+      render.setVertexBuffer(cells, offset: 0, index: 0)
+      render.setVertexBytes(&uniforms, length: MemoryLayout<PreviewUniforms>.stride, index: 1)
+      render.setVertexBuffer(attributes, offset: 0, index: 2)
+      render.setVertexBuffer(order, offset: 0, index: 3)
+      render.setVertexBuffer(scene, offset: 0, index: 4)
+      render.setVertexBytes(&orbit, length: MemoryLayout<OrbitUniforms>.stride, index: 5)
+      render.setFragmentBytes(&uniforms, length: MemoryLayout<PreviewUniforms>.stride, index: 1)
+      render.setFragmentTexture(textures[0], index: 0)
+      render.setFragmentTexture(textures[1], index: 1)
+      if enabled {
+        if splat {
+          render.drawPrimitives(
+            type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: count)
+        } else {
+          render.drawPrimitives(
+            type: .point, vertexStart: 0, vertexCount: SurfelHash.capacity / quality.visibleStride)
+        }
+      }
+      if inset {
+        render.setRenderPipelineState(frustumPipeline)
+        render.setDepthStencilState(gaussianDepthState)
+        render.drawPrimitives(type: .line, vertexStart: 0, vertexCount: 16)
+      }
+      render.endEncoding()
+    }
     private func qualityRecord(seconds: Double, constrained: Bool) {
       quality.record(seconds: seconds, constrained: constrained)
     }
@@ -338,6 +520,9 @@
     var intrinsics: SIMD4<Float>, displayX: SIMD4<Float>, displayY: SIMD4<Float>
     var inverseX: SIMD4<Float>, inverseY: SIMD4<Float>, dimensions: SIMD4<Float>
     var settings: SIMD4<UInt32>, flags: SIMD4<UInt32>
+  }
+  struct OrbitUniforms {
+    var controls: SIMD4<Float>, rect: SIMD4<Float>, phoneIntrinsics: SIMD4<Float>
   }
   private final class PreviewLifetime: @unchecked Sendable {
     let frame: PreviewFrame
