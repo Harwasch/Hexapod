@@ -10,6 +10,9 @@ test("phone globe keeps imagery without an ion token, frames scans and survives 
   await page.route("https://tile.openstreetmap.org/**", (route) => route.abort());
   await page.goto("/globe-embed.html");
   await expect(page.locator("canvas")).toBeVisible();
+  await expect
+    .poll(() => page.locator("canvas").evaluate((canvas) => canvas.width / canvas.clientWidth))
+    .toBe(3);
   await expect.poll(() => page.evaluate(() => Boolean(window.globeBridge))).toBe(true);
   await expect(page.locator("#map-status")).toHaveText(/Terrain unavailable|Map offline/);
   // Natural Earth is bundled below the failed online layer. The rendered Earth should

@@ -11,6 +11,7 @@ export default defineConfig({
   use: {
     baseURL: `http://127.0.0.1:${port}`,
     viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 3,
     screenshot: "on",
     launchOptions: {
       args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"],

@@ -72,3 +72,17 @@ it("discards late resources after the page closes", async () => {
   await Promise.resolve();
   expect(add).not.toHaveBeenCalled();
 });
+
+it("announces terrain readiness after installation, and releases waiters on disposal", async () => {
+  const { viewer, status } = setup();
+  const terrain = { errorEvent: new Event() };
+  hooks.imagery.mockResolvedValue({ errorEvent: new Event() });
+  hooks.terrain.mockResolvedValue(terrain);
+  const ready = vi.fn(() => expect(viewer.terrainProvider).toBe(terrain));
+  const remove = installBasemap(viewer, "public-test-token", status, ready);
+  expect(ready).not.toHaveBeenCalled();
+  await Promise.resolve();
+  expect(ready).toHaveBeenCalledOnce();
+  remove();
+  expect(ready).toHaveBeenCalledTimes(2);
+});

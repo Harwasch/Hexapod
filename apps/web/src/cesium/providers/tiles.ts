@@ -322,7 +322,7 @@ export function is3DSource(source: Layer["source"]): boolean {
 
 /** One visible scan in the phone embed. Cache targets are per scan, not a process RAM cap. */
 export const EMBED_TILE_OPTIONS = {
-  maximumScreenSpaceError: 32,
+  maximumScreenSpaceError: 8,
   cacheBytes: 64 * MB,
   maximumCacheOverflowBytes: 16 * MB,
   preloadWhenHidden: false,

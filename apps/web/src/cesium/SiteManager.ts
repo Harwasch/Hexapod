@@ -106,6 +106,7 @@ import {
   groundAtScale,
   liftAt,
   placedMatrix,
+  lowestHeight,
   placementFrame,
   sameRootFrame,
   samePlacement,
@@ -3168,38 +3169,9 @@ function bboxArea(footprint: Footprint): number {
   return Number.isFinite(west) ? Math.max(0, east - west) * Math.max(0, north - south) : 0;
 }
 
-/** Ellipsoid height of the lowest corner of a tileset's root oriented bounding box. */
 /** The transform a tileset's root tile declares (its `tileset.json`), or none. */
 function rootTransform(tileset: Cesium3DTileset): Matrix4 | undefined {
   return (tileset.root as { transform?: Matrix4 } | undefined)?.transform;
-}
-
-function lowestHeight(tileset: Cesium3DTileset): number | undefined {
-  const inner = (tileset.root as unknown as { boundingVolume?: TileVolume } | undefined)
-    ?.boundingVolume?.boundingVolume;
-  const halfAxes = inner?.halfAxes;
-  if (!inner?.center || !halfAxes) return undefined;
-  let lowest = Number.POSITIVE_INFINITY;
-  const axes = [0, 1, 2].map((i) => Matrix3.getColumn(halfAxes, i, new Cartesian3()));
-  for (const sx of [-1, 1])
-    for (const sy of [-1, 1])
-      for (const sz of [-1, 1]) {
-        const corner = Cartesian3.clone(inner.center, new Cartesian3());
-        for (const [axis, sign] of [
-          [axes[0], sx],
-          [axes[1], sy],
-          [axes[2], sz],
-        ] as const) {
-          if (axis)
-            Cartesian3.add(
-              corner,
-              Cartesian3.multiplyByScalar(axis, sign, new Cartesian3()),
-              corner,
-            );
-        }
-        lowest = Math.min(lowest, Cartographic.fromCartesian(corner).height);
-      }
-  return Number.isFinite(lowest) ? lowest : undefined;
 }
 
 /** Lon/lat footprint of one tile: a region's rectangle, an oriented box's horizontal corners, or a sphere's circle. */
