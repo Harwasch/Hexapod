@@ -10,12 +10,14 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
 from sqlalchemy import text
 
 from app.db import make_engine
 from tests.conftest import TEST_DATABASE_URL
 
 
+@pytest.mark.usefixtures("engine")
 def test_a_timestamptz_reads_back_in_utc_in_any_session_time_zone() -> None:
     engine = make_engine(TEST_DATABASE_URL)
     try:

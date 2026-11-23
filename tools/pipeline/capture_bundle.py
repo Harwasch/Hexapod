@@ -28,6 +28,10 @@ MAX_BYTES = 128 * 1024**3
 MAX_MANIFEST = 64 * 1024**2
 MAX_FRAMES = 1_000_000
 MAX_LINE = 16384
+# Input precision bounds for float32 ARKit poses, not reconstruction quality gates.
+# See docs/CAPTURE_BUNDLE.md for the drift envelope and synthetic measurements.
+ROTATION_ERROR_MAX = 1e-3
+HOMOGENEOUS_ERROR_MAX = 1e-6
 
 
 @dataclass(frozen=True)
@@ -63,18 +67,36 @@ def matrix(value: object, size: int) -> F64:
 
 
 def world_to_camera(transform: F64) -> tuple[F64, F64]:
-    """D @ inverse(T_cw), D=diag(1,-1,-1); world remains ARKit's metric Y-up."""
+    """Invert the nearest proper rotation; keep ARKit's metric Y-up world and centre.
+
+    Raw observations stay in frames_meta; both seeding and fixed-pose checks call this
+    conversion so that COLMAP always sees the same corrected, orthonormal rotation.
+    """
     if transform.shape != (4, 4) or not np.isfinite(transform).all():
-        raise ValueError("invalid camera transform")
+        raise ValueError("camera transform must be a proper rigid transform; error=nonfinite/shape")
     rotation, centre = transform[:3, :3], transform[:3, 3]
-    # ARKit serializes float32 rotations. 1e-5 allows their rounding, not pose noise.
+    with np.errstate(over="ignore", invalid="ignore"):
+        error = float(np.max(np.abs(rotation.T @ rotation - np.eye(3))))
+        determinant = float(np.linalg.det(rotation))
+    row_error = float(np.max(np.abs(transform[3] - [0, 0, 0, 1])))
     if (
-        not np.allclose(transform[3], [0, 0, 0, 1], atol=1e-7, rtol=0)
-        or not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-5, rtol=0)
-        or not math.isclose(float(np.linalg.det(rotation)), 1, abs_tol=1e-5)
+        not math.isfinite(error)
+        or not math.isfinite(determinant)
+        or error > ROTATION_ERROR_MAX
+        or determinant <= 0
+        or row_error > HOMOGENEOUS_ERROR_MAX
     ):
-        raise ValueError("camera transform must be a proper rigid transform")
-    converted = np.diag([1.0, -1.0, -1.0]) @ rotation.T
+        raise ValueError(
+            "camera transform must be a proper rigid transform; "
+            f"orthonormality error={error:.9g}, det={determinant:.9g}, "
+            f"last-row error={row_error:.9g}"
+        )
+    u, _, vt = np.linalg.svd(rotation)
+    # Polar/SVD projection onto SO(3), explicitly enforcing det +1.
+    if np.linalg.det(u @ vt) < 0:
+        u[:, -1] *= -1
+    corrected = u @ vt
+    converted = np.diag([1.0, -1.0, -1.0]) @ corrected.T
     return converted, -converted @ centre
 
 
@@ -131,7 +153,17 @@ def validate_frame(frame: dict[str, Any], index: int, previous: float) -> float:
         or (index == 0 and timestamp != 0)
     ):
         raise ValueError("timestamps must start at zero and strictly increase")
-    world_to_camera(matrix(frame.get("transform"), 4))
+    try:
+        transform = matrix(frame.get("transform"), 4)
+        if frame.get("trackingState") == "normal":
+            world_to_camera(transform)
+    except ValueError as error:
+        if frame.get("trackingState") != "normal":
+            raise ValueError(f"frame {index}: {error}") from error
+        detail = str(error).removeprefix("camera transform must be a proper rigid transform; ")
+        raise ValueError(
+            f"camera transform must be a proper rigid transform; frame {index}; error={detail}"
+        ) from error
     k = matrix(frame.get("intrinsics"), 3)
     if (
         k[0, 0] <= 0

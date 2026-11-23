@@ -28,7 +28,9 @@ from app.storage import ObjectStorage
 ACTIVE_STATUSES = (RunStatus.NOT_STARTED, RunStatus.IN_PROGRESS)
 
 
-def create_job(db: Session, capture_id: uuid.UUID, payload: JobCreate) -> Job:
+def create_job(
+    db: Session, capture_id: uuid.UUID, payload: JobCreate, *, job_id: uuid.UUID | None = None
+) -> Job:
     """Queue a run. Nothing is executed here, and no step rows are written: the recipe
     decides the steps, and the worker that resolves the recipe writes them."""
     capture = get_capture(db, capture_id)
@@ -55,6 +57,7 @@ def create_job(db: Session, capture_id: uuid.UUID, payload: JobCreate) -> Job:
     if running is not None:
         raise ConflictError(f"capture {capture.id} already has job {running} queued or running")
     job = Job(
+        id=job_id or uuid.uuid4(),
         capture_id=capture.id,
         recipe=payload.recipe,
         recipe_version=version,
