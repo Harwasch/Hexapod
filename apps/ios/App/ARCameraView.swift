@@ -3,6 +3,7 @@
   import AVFoundation
   import Darwin
   import RealityKit
+  import LiveSplat
   import SwiftUI
   import UIKit
 
@@ -31,8 +32,8 @@
       view.debugOptions = []
       let coordinator = context.coordinator
       coordinator.view = view
-      view.session.delegate = coordinator
-      view.session.delegateQueue = .main
+      view.session.delegate = model.frameFeed
+      view.session.delegateQueue = model.frameFeed.queue
       view.addGestureRecognizer(
         UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.tap(_:))))
       return view
@@ -68,8 +69,7 @@
       view.session.delegate = nil
     }
 
-    // The session above delivers every delegate callback on the main queue.
-    @MainActor final class Coordinator: NSObject, @preconcurrency ARSessionDelegate {
+    @MainActor final class Coordinator: NSObject {
       weak var view: ARView?
       let model: CameraModel
       var active = false
@@ -77,23 +77,27 @@
       var interrupted = false
       private var startGeneration = UUID()
       var starting: Task<Void, Never>?
-      init(model: CameraModel) { self.model = model }
-      func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        guard running, active, !interrupted else { return }
-        model.frame(frame)
-      }
-      func sessionWasInterrupted(_ session: ARSession) {
-        interrupted = true
-        stop()
-      }
-      func sessionInterruptionEnded(_ session: ARSession) {
-        interrupted = false
-        startIfNeeded()
-      }
-      func session(_ session: ARSession, didFailWithError error: Error) {
-        active = false
-        stop()
-        model.reportUnavailable()
+      private var summaryTimer: Timer?
+      init(model: CameraModel) {
+        self.model = model
+        super.init()
+        model.frameFeed.onEvent = { [weak self] event in
+          Task { @MainActor [weak self] in
+            guard let self else { return }
+            switch event {
+            case .interrupted:
+              self.interrupted = true
+              self.stop()
+            case .resumed:
+              self.interrupted = false
+              self.startIfNeeded()
+            case .failed:
+              self.active = false
+              self.stop()
+              self.model.reportUnavailable()
+            }
+          }
+        }
       }
       func startIfNeeded() {
         guard active, !interrupted, !running, starting == nil, let view else { return }
@@ -115,6 +119,10 @@
           self.model.attach(view)
           view.session.run(configuration)
           self.running = true
+          self.summaryTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) {
+            [weak self] _ in
+            Task { @MainActor [weak self] in self?.model.tick() }
+          }
         }
       }
       @objc func tap(_ gesture: UITapGestureRecognizer) {
@@ -122,6 +130,8 @@
         model.tap(gesture.location(in: view))
       }
       func stop() {
+        summaryTimer?.invalidate()
+        summaryTimer = nil
         startGeneration = UUID()
         starting?.cancel()
         starting = nil
@@ -129,6 +139,51 @@
         if running { model.suspend() }
         running = false
       }
+    }
+  }
+
+  /// Serial delegate ingress: fixed-cost admission and two bounded retained-frame mailboxes.
+  final class CameraFrameFeed: NSObject, ARSessionDelegate, @unchecked Sendable {
+    enum Event: Sendable { case interrupted, resumed, failed }
+    let queue = DispatchQueue(label: "hex.scan.admission", qos: .userInitiated)
+    private let ingress: ScanIngress
+    private let lock = NSLock()
+    private var preview: ScanPreviewProcessor?
+    private var latest: ScanFrame?
+    private var eventHandler: (@Sendable (Event) -> Void)?
+    var onEvent: (@Sendable (Event) -> Void)? {
+      get { lock.withLock { eventHandler } }
+      set { lock.withLock { eventHandler = newValue } }
+    }
+    init(ingress: ScanIngress) { self.ingress = ingress }
+    func setPreview(_ processor: ScanPreviewProcessor?) {
+      lock.withLock {
+        preview = processor
+        latest = nil
+      }
+    }
+    func takeFrame() -> ScanFrame? {
+      lock.withLock {
+        defer { latest = nil }
+        return latest
+      }
+    }
+    func session(_ session: ARSession, didUpdate frame: ARFrame) {
+      ingress.offer(frame)
+      let processor = lock.withLock {
+        latest = ScanFrame(frame)
+        return preview
+      }
+      processor?.offer(frame)
+    }
+    func sessionWasInterrupted(_ session: ARSession) {
+      ingress.stop()
+      onEvent?(.interrupted)
+    }
+    func sessionInterruptionEnded(_ session: ARSession) { onEvent?(.resumed) }
+    func session(_ session: ARSession, didFailWithError error: Error) {
+      ingress.stop()
+      onEvent?(.failed)
     }
   }
 #endif
