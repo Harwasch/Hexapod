@@ -66,14 +66,17 @@ import Voice
     let x: CGFloat
     let y: CGFloat
   }
-  var screenPins: [ScreenPin] {
-    guard let view = arView else { return [] }
-    return presentation.entities.enumerated().compactMap { index, entity in
+  private(set) var screenPins: [ScreenPin] = []
+  private func updatePins() {
+    guard let view = arView else {
+      screenPins = []
+      return
+    }
+    screenPins = presentation.entities.enumerated().compactMap { index, entity in
       let p = entity.anchor.world
-      if let point = view.project(SIMD3(Float(p.x), Float(p.y), Float(p.z))),
-        view.bounds.contains(point)
-      {
-        return ScreenPin(id: index, x: point.x, y: point.y)
+      let top = SIMD3(Float(p.x), Float(p.y + entity.extent.y / 2), Float(p.z))
+      if let point = view.project(top), view.bounds.contains(point) {
+        return ScreenPin(id: index, x: point.x, y: max(22, point.y - 18))
       }
       if simulated {
         return ScreenPin(id: index, x: view.bounds.midX, y: view.bounds.height * 0.55)
@@ -93,8 +96,11 @@ import Voice
   private var voiceGeneration = UUID()
   private var lastPerceptionTime: TimeInterval = -.infinity
   private var frameGeneration = UUID()
-  private var lastMaskUpdate: TimeInterval = 0
   private var hasSnapshot = false
+  private var latestCamera: CameraGeometry?
+  private var selecting = false
+  private var tapSelectionActive = false
+  private var maskSelection: SceneSelection?
   private var viewportToImage: [Double] = [1, 0, 0, 1, 0, 0]
 
   init(providers: CameraProviders) {
@@ -220,17 +226,24 @@ import Voice
   }
   private var scanCoverage = 0.0
   private func frameForPerception(_ frame: ARFrame) {
-    (overlay as? RealityAnswerOverlay)?.updateCamera()
-    if ProcessInfo.processInfo.systemUptime - lastMaskUpdate > 0.75 { overlay?.setMask(nil) }
-    guard perceptionTask == nil, frame.timestamp - lastPerceptionTime >= 0.35,
-      let view = arView, view.bounds.width > 0, view.bounds.height > 0,
-      case .normal = frame.camera.trackingState
-    else { return }
-    lastPerceptionTime = frame.timestamp
-    let inverse = frame.displayTransform(for: .portrait, viewportSize: view.bounds.size).inverted()
+    updatePins()
+    guard let view = arView, view.bounds.width > 0, view.bounds.height > 0 else { return }
+    let orientation = view.window?.windowScene?.interfaceOrientation ?? .portrait
+    let inverse = frame.displayTransform(for: orientation, viewportSize: view.bounds.size)
+      .inverted()
     viewportToImage = [inverse.a, inverse.b, inverse.c, inverse.d, inverse.tx, inverse.ty].map {
       Double($0)
     }
+    latestCamera = CameraGeometry(camera: frame.camera)
+    if let maskSelection, !maskIsCurrent(maskSelection) { overlay?.setMask(nil) }
+    guard case .normal = frame.camera.trackingState else {
+      overlay?.setMask(nil)
+      return
+    }
+    guard !selecting, perceptionTask == nil, frame.timestamp - lastPerceptionTime >= 0.35 else {
+      return
+    }
+    lastPerceptionTime = frame.timestamp
     // FrameSnapshot copies immutable ARFrame buffers off the UI thread, one frame at a time.
     let transfer = FrameTransfer(frame)
     let transform = viewportToImage
@@ -248,9 +261,15 @@ import Voice
         try Task.checkCancellation()
         guard self?.frameGeneration == frameID else { return }
         await scene.update(snapshot, viewportToImage: transform, capturedAt: capturedAt)
+        try Task.checkCancellation()
+        guard self?.frameGeneration == frameID else { return }
         self?.hasSnapshot = true
         let selection = try await scene.refreshSelection()
         try Task.checkCancellation()
+        if let self, tapSelectionActive {
+          presentation.replaceSelection(selection.entities)
+          updatePins()
+        }
         self?.highlight(selection)
       } catch is CancellationError {} catch { self?.overlay?.setMask(nil) }
     }
@@ -258,31 +277,56 @@ import Voice
 
   func tap(_ point: CGPoint) {
     guard !capturePhase.isBusy else { return }
-    if let entity = (overlay as? RealityAnswerOverlay)?.pin(at: point) {
-      card = entity
-      return
-    }
     guard let view = arView, view.bounds.width > 0, view.bounds.height > 0, hasSnapshot else {
       return
     }
-    let t = viewportToImage
+    let transfer = usesLiveCapture ? view.session.currentFrame.map(FrameTransfer.init) : nil
+    let orientation = view.window?.windowScene?.interfaceOrientation ?? .portrait
+    let tapTransform = transfer?.frame.displayTransform(
+      for: orientation, viewportSize: view.bounds.size
+    ).inverted()
+    let t =
+      tapTransform.map { [$0.a, $0.b, $0.c, $0.d, $0.tx, $0.ty].map(Double.init) }
+      ?? viewportToImage
     let u = Double(point.x / view.bounds.width)
     let v = Double(point.y / view.bounds.height)
-    let prompt = ImagePoint(x: t[0] * u + t[2] * v + t[4], y: t[1] * u + t[3] * v + t[5])
+    guard let mapped = ViewportMapping(viewportToImage: t).imagePoint(x: u, y: v) else { return }
+    let prompt = ImagePoint(x: mapped.x, y: mapped.y)
     answerTask?.cancel()
     let generation = UUID()
     questionGeneration = generation
     card = nil
     overlay?.stopSpeaking()
-    Task {
+    selecting = true
+    tapSelectionActive = true
+    question = ""
+    answerText = ""
+    answering = false
+    perceptionTask?.cancel()
+    perceptionTask = nil
+    frameGeneration = UUID()
+    answerTask = Task {
+      defer { if generation == questionGeneration { selecting = false } }
       await router.cancel()
       guard generation == questionGeneration else { return }
       do {
+        if let transfer {
+          let capturedAt = ProcessInfo.processInfo.systemUptime
+          let snapshot = try await Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            return try FrameSnapshot(frame: transfer.frame)
+          }.value
+          try Task.checkCancellation()
+          guard generation == questionGeneration else { return }
+          await perception.update(snapshot, viewportToImage: t, capturedAt: capturedAt)
+        }
+        let previousSelectionCount = presentation.entities.count
         let selected = try await perception.select(prompt)
         guard generation == questionGeneration else { return }
-        presentation.reset()
-        selected.entities.forEach { presentation.receive(.entity($0)) }
+        presentation.replaceSelection(selected.entities)
         overlay?.update(entities: presentation.entities)
+        updatePins()
+        card = selected.entities.count > previousSelectionCount ? selected.entities.last : nil
         highlight(selected)
         failed = false
       } catch is CancellationError {} catch {
@@ -361,6 +405,8 @@ import Voice
   func clearAnswer() {
     answerTask?.cancel()
     questionGeneration = UUID()
+    selecting = false
+    tapSelectionActive = false
     question = ""
     answerText = ""
     answering = false
@@ -368,19 +414,30 @@ import Voice
     overlay?.update(entities: [])
     overlay?.setMask(nil)
     presentation.reset()
+    card = nil
+    screenPins = []
+    maskSelection = nil
+    hasSnapshot = false
+    perceptionTask?.cancel()
+    perceptionTask = nil
+    frameGeneration = UUID()
     let router = router
-    Task { await router.cancel() }
+    let perception = perception
+    Task {
+      await router.cancel()
+      await perception.clear()
+    }
   }
   func replayAnswer() { if !answerText.isEmpty { overlay?.speak(answerText) } }
   func pinCard() {
-    guard let card else { return }
-    overlay?.update(entities: [card])
-    self.card = nil
+    card = nil
   }
 
   func beginTalking() {
     guard !isTalking else { return }
     isTalking = true
+    selecting = false
+    tapSelectionActive = false
     preparingVoice = true
     transcript = ""
     question = ""
@@ -451,6 +508,8 @@ import Voice
   }
 
   func ask(_ text: String) {
+    selecting = false
+    tapSelectionActive = false
     question = text
     answerText = ""
     answering = true
@@ -469,7 +528,9 @@ import Voice
         guard id == questionGeneration, !Task.isCancelled else { return }
         presentation.receive(event)
         switch event {
-        case .entity: overlay?.update(entities: presentation.entities)
+        case .entity:
+          overlay?.update(entities: presentation.entities)
+          updatePins()
         case .speech(let text):
           answerText = text
           overlay?.speak(text)
@@ -488,21 +549,41 @@ import Voice
     }
   }
 
+  private func maskIsCurrent(_ selection: SceneSelection) -> Bool {
+    guard ProcessInfo.processInfo.systemUptime - selection.capturedAt <= 0.75,
+      let view = arView, let latestCamera
+    else { return simulated }
+    return selection.isRegistered(
+      camera: latestCamera, viewportToImage: viewportToImage,
+      width: Double(view.bounds.width * view.contentScaleFactor),
+      height: Double(view.bounds.height * view.contentScaleFactor))
+  }
+
   private func highlight(_ selection: SceneSelection) {
     guard !capturePhase.isBusy else { return }
-    guard ProcessInfo.processInfo.systemUptime - selection.capturedAt <= 0.75 else {
+    maskSelection = selection
+    guard maskIsCurrent(selection), let view = arView else {
       overlay?.setMask(nil)
       return
     }
+    // Match the full camera viewport, including aspect-fill crop and safe areas.
+    let scale = min(
+      1,
+      1536
+        / max(
+          view.bounds.width * view.contentScaleFactor,
+          view.bounds.height * view.contentScaleFactor))
+    let outputWidth = max(1, Int((view.bounds.width * view.contentScaleFactor * scale).rounded()))
+    let outputHeight = max(1, Int((view.bounds.height * view.contentScaleFactor * scale).rounded()))
     let masks = selection.masks
     let transform = selection.viewportToImage
-    lastMaskUpdate = selection.capturedAt
     var projected: HighlightMask?
     for mask in masks {
       guard
         let next = HighlightMask.project(
           width: mask.width, height: mask.height,
-          pixels: mask.pixels, viewportToImage: transform)
+          pixels: mask.pixels, viewportToImage: transform,
+          outputWidth: outputWidth, outputHeight: outputHeight)
       else { continue }
       if projected == nil {
         projected = next
@@ -518,6 +599,8 @@ import Voice
   func suspend() {
     replayTask?.cancel()
     replayTask = nil
+    selecting = false
+    tapSelectionActive = false
     cameraReady = false
     isTalking = false
     preparingVoice = false
@@ -546,6 +629,9 @@ import Voice
     overlay = nil
     arView = nil
     presentation.reset()
+    screenPins = []
+    maskSelection = nil
+    latestCamera = nil
     card = nil
     answering = false
   }

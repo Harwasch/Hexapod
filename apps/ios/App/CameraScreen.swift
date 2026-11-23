@@ -45,25 +45,35 @@ private enum CameraStyle {
         colors: [.clear, .black.opacity(0.65)], startPoint: .center, endPoint: .bottom
       )
       .ignoresSafeArea().allowsHitTesting(false)
-      ForEach(model.screenPins) { pin in
-        Button {
-          model.openPin(pin.id)
-        } label: {
-          Group {
-            if model.simulated {
-              Text("\(pin.id + 1)").font(.headline).foregroundStyle(CameraStyle.teal)
-            } else {
-              Color.clear
-            }
-          }.frame(width: 44, height: 44).contentShape(Rectangle())
-        }.accessibilityLabel("Subject \(pin.id + 1)")
-          .accessibilityIdentifier("answer.pin.\(pin.id + 1)")
-          .position(x: pin.x, y: pin.y)
-      }
+      GeometryReader { _ in
+        ForEach(model.screenPins) { pin in
+          Button {
+            model.openPin(pin.id)
+          } label: {
+            Text("\(pin.id + 1)").font(.system(size: 13, weight: .bold, design: .rounded))
+              .foregroundStyle(.black).frame(width: 24, height: 24)
+              .background(CameraStyle.teal, in: Circle())
+              .overlay(Circle().stroke(.white.opacity(0.9), lineWidth: 1.5))
+              .shadow(radius: 3)
+              .frame(width: 44, height: 44).contentShape(Rectangle())
+          }.accessibilityLabel("Subject \(pin.id + 1)")
+            .accessibilityIdentifier("answer.pin.\(pin.id + 1)")
+            .position(x: pin.x, y: pin.y)
+        }
+      }.ignoresSafeArea()
       TimelineView(.periodic(from: .now, by: 0.25)) { context in
         GeometryReader { geometry in
           VStack {
             header(at: context.date)
+            if !model.answerEntities.isEmpty {
+              HStack {
+                Spacer()
+                Button("Clear all", systemImage: "xmark") { model.clearAnswer() }
+                  .font(.caption.weight(.medium)).padding(10)
+                  .background(.ultraThinMaterial, in: Capsule())
+                  .accessibilityIdentifier("answer.clearAll")
+              }
+            }
             Spacer()
             if model.simulated {
               Text("Simulated").font(.caption).padding(8).background(.black, in: Capsule())
@@ -80,7 +90,7 @@ private enum CameraStyle {
             }
             if let entity = model.card {
               EntityCard(
-                entity: entity, pin: model.pinCard,
+                entity: entity, compact: true, pin: model.pinCard,
                 ask: {
                   model.card = nil
                   setPressing(true)
