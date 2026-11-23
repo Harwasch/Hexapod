@@ -13,11 +13,11 @@ import Testing
     let preference = LiveSplatPreference(store: MemoryPreferenceStore())
     var previousValues: [Bool] = []
     let subscription = publisher(preference).sink {
-      previousValues.append(preference.trainingEnabled)
+      previousValues.append(preference.previewEnabled)
     }
-    preference.trainingEnabled = false
-    preference.trainingEnabled = false
-    preference.trainingEnabled = true
+    preference.previewEnabled = false
+    preference.previewEnabled = false
+    preference.previewEnabled = true
     #expect(previousValues == [true, false])
     withExtendedLifetime(subscription) {}
   }
@@ -29,19 +29,19 @@ import Testing
   func set(_ value: Bool, forKey key: String) { values[key] = value }
 }
 
-@Test @MainActor func trainingIsOnByDefaultAndPreferenceRoundTrips() {
+@Test @MainActor func previewIsOnByDefaultAndPreferenceRoundTrips() {
   let store = MemoryPreferenceStore()
   let preference = LiveSplatPreference(store: store)
-  #expect(preference.trainingEnabled)
-  #expect(LiveSplatConfiguration().mode == .training)
+  #expect(preference.previewEnabled)
+  #expect(LiveSplatConfiguration().mode == .scanPreview)
   let renderer = DefaultLiveSplatRenderer(preference: preference)
   renderer.start()
-  #expect(renderer.status == .training)
-  preference.trainingEnabled = false
+  #expect(renderer.status == .scanPreview)
+  preference.previewEnabled = false
   #expect(store.values["hex.liveSplat.training"] == false)
-  #expect(!LiveSplatPreference(store: store).trainingEnabled)
-  preference.trainingEnabled = true
-  #expect(LiveSplatPreference(store: store).trainingEnabled)
+  #expect(!LiveSplatPreference(store: store).previewEnabled)
+  preference.previewEnabled = true
+  #expect(LiveSplatPreference(store: store).previewEnabled)
 }
 
 @Test @MainActor func preferenceSwitchesRunningRendererWithoutResettingScan() async throws {
@@ -52,57 +52,33 @@ import Testing
   renderer.ingest(try #require(await source.next()))
   let session = renderer.sessionGeneration
   let splats = renderer.splats
-  preference.trainingEnabled = false
-  #expect(renderer.status == .pointPreview)
-  renderer.activateGaussian()  // A display tick must not undo the user's choice.
-  #expect(renderer.status == .pointPreview)
-  preference.trainingEnabled = true
-  #expect(renderer.status == .training)
+  preference.previewEnabled = false
+  #expect(renderer.status == .coverageOnly)
+  #expect(renderer.status == .coverageOnly)
+  preference.previewEnabled = true
+  #expect(renderer.status == .scanPreview)
   #expect(renderer.sessionGeneration == session)
   #expect(renderer.splats.count == splats.count)
   #expect(renderer.latestFrame != nil)
   renderer.stop()
-  preference.trainingEnabled = false
+  preference.previewEnabled = false
   #expect(renderer.status == .stopped)
   renderer.start()
-  #expect(renderer.status == .pointPreview)
-}
-
-@Test @MainActor func fallbackPreservesPreferenceAndReasonAcrossToggles() {
-  for reason in ["Metal device unsupported", "GPU budget exceeded"] {
-    let store = MemoryPreferenceStore()
-    let preference = LiveSplatPreference(store: store)
-    let renderer = DefaultLiveSplatRenderer(preference: preference)
-    renderer.start()
-    if reason == "GPU budget exceeded" {
-      renderer.acceptGPU([], ids: [], seconds: 0.009, session: renderer.sessionGeneration)
-    } else {
-      renderer.fallback(reason)
-    }
-    #expect(renderer.status == .fallback(reason))
-    #expect(preference.trainingEnabled)
-    #expect(store.values.isEmpty)
-    preference.trainingEnabled = false
-    #expect(renderer.status == .pointPreview)
-    preference.trainingEnabled = true
-    renderer.activateGaussian()
-    #expect(renderer.status == .fallback(reason))
-    #expect(store.values[LiveSplatPreference.key] == true)
-  }
+  #expect(renderer.status == .coverageOnly)
 }
 
 @Test @MainActor func fakeHonoursPreferenceAtStartAndWhileRunning() {
   let preference = LiveSplatPreference(store: MemoryPreferenceStore())
   let fake = FakeLiveSplat(preference: preference)
   fake.start()
-  #expect(fake.status == .training)
-  preference.trainingEnabled = false
-  #expect(fake.status == .pointPreview)
+  #expect(fake.status == .scanPreview)
+  preference.previewEnabled = false
+  #expect(fake.status == .coverageOnly)
   fake.stop()
-  preference.trainingEnabled = true
+  preference.previewEnabled = true
   #expect(fake.status == .stopped)
   fake.start()
-  #expect(fake.status == .training)
+  #expect(fake.status == .scanPreview)
 }
 
 @Test @MainActor func preferencePersistsThroughUserDefaultsStore() throws {
@@ -110,34 +86,21 @@ import Testing
   let defaults = try #require(UserDefaults(suiteName: domain))
   defer { defaults.removePersistentDomain(forName: domain) }
   let preference = LiveSplatPreference(store: UserDefaultsLiveSplatStore(defaults: defaults))
-  #expect(preference.trainingEnabled)
-  preference.trainingEnabled = false
+  #expect(preference.previewEnabled)
+  preference.previewEnabled = false
   let restored = LiveSplatPreference(store: UserDefaultsLiveSplatStore(defaults: defaults))
-  #expect(!restored.trainingEnabled)
-  restored.trainingEnabled = true
-  #expect(preference.trainingEnabled)
+  #expect(!restored.previewEnabled)
+  restored.previewEnabled = true
+  #expect(preference.previewEnabled)
 }
 
-@Test @MainActor func pointPreviewConfigurationRemainsPreviewWhenPreferenceIsOn() {
+@Test @MainActor func coverageOnlyConfigurationRemainsPreviewWhenPreferenceIsOn() {
   let preference = LiveSplatPreference(store: MemoryPreferenceStore())
   var configuration = LiveSplatConfiguration()
-  configuration.mode = .pointPreview
+  configuration.mode = .coverageOnly
   let renderer = DefaultLiveSplatRenderer(configuration: configuration, preference: preference)
   renderer.start()
-  #expect(renderer.status == .pointPreview)
-  renderer.activateGaussian()
-  #expect(renderer.status == .pointPreview)
-  #expect(preference.trainingEnabled)
-}
-
-@Test @MainActor func inFlightBudgetOverrunStillLatchesWhileUserChoosesPoints() {
-  let preference = LiveSplatPreference(store: MemoryPreferenceStore())
-  let renderer = DefaultLiveSplatRenderer(preference: preference)
-  renderer.start()
-  preference.trainingEnabled = false
-  renderer.acceptGPU([], ids: [], seconds: 0.009, session: renderer.sessionGeneration)
-  #expect(renderer.status == .pointPreview)
-  #expect(!preference.trainingEnabled)
-  preference.trainingEnabled = true
-  #expect(renderer.status == .fallback("GPU budget exceeded"))
+  #expect(renderer.status == .coverageOnly)
+  #expect(renderer.status == .coverageOnly)
+  #expect(preference.previewEnabled)
 }

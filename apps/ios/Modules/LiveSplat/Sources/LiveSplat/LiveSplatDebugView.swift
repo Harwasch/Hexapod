@@ -13,7 +13,7 @@
 
     public var body: some View {
       VStack(alignment: .leading, spacing: 16) {
-        Text("Live splat — Simulated replay").font(.headline)
+        Text("Scan preview — Simulated replay").font(.headline)
         Text("Coverage \(model.coverage * 100, specifier: "%.1f")%")
           .monospacedDigit()
         ProgressView(value: model.coverage)

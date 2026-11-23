@@ -1,25 +1,19 @@
 import Foundation
 
-public enum LiveSplatMode: Sendable { case training, pointPreview }
+public enum LiveSplatMode: Sendable { case scanPreview, coverageOnly }
 public enum LiveSplatStatus: Sendable, Equatable {
-  case stopped, pointPreview, training
-  case fallback(String)
+  case stopped, coverageOnly, scanPreview
 }
 
 public struct LiveSplatConfiguration: Sendable {
-  public var mode: LiveSplatMode = .training
-  public var maxSplats: Int = 8_192
-  public var maxSeedsPerFrame: Int = 128
-  public var maxAgeFrames: Int = 600
-  public var gpuBudgetMilliseconds: Double = 8
+  public var mode: LiveSplatMode = .scanPreview
+  public var maxSplats: Int = 262_144
+  public var maxSeedsPerFrame: Int = 12_288
   public init() {}
   var bounded: Self {
     var c = self
-    c.maxSplats = min(32_768, max(1, maxSplats))
-    c.maxSeedsPerFrame = min(256, max(1, maxSeedsPerFrame))
-    c.maxAgeFrames = min(3_600, max(1, maxAgeFrames))
-    c.gpuBudgetMilliseconds =
-      gpuBudgetMilliseconds.isFinite ? min(8, max(1, gpuBudgetMilliseconds)) : 8
+    c.maxSplats = max(4, min(262_144, maxSplats) / 4 * 4)
+    c.maxSeedsPerFrame = min(12_288, max(1, maxSeedsPerFrame))
     return c
   }
 }
@@ -137,157 +131,109 @@ public struct CoverageGrid: Sendable {
   }
 }
 
-/// Cannot preempt a Metal command buffer. The budget is a feedback target: a single
-/// overrun disables training/rendering and selects preview on subsequent frames.
-public struct SplatBudget: Sendable {
-  public let milliseconds: Double
-  public private(set) var exceeded = false
-  public init(milliseconds: Double = 8) { self.milliseconds = milliseconds }
-  public mutating func record(seconds: Double) {
-    if !seconds.isFinite || seconds <= 0 || seconds * 1_000 > milliseconds { exceeded = true }
-  }
-  public var optimizationSteps: Int { exceeded ? 0 : 2 }
-}
-
-/// Main actor owns the state. Feed frames from the existing ARSession delegate;
-/// this module never replaces that delegate or runs/resets the shared session.
+/// UI facade and offline reference. Live frames go directly to ScanPreviewProcessor;
+/// this replay method is never used by the camera delegate or GPU completion.
 @MainActor
 public final class DefaultLiveSplatRenderer: LiveSplatRenderer, LiveSplatPreferenceObserver {
   public let preference: LiveSplatPreference
-  private var fallbackReason: String?
   public let configuration: LiveSplatConfiguration
   public private(set) var status: LiveSplatStatus = .stopped
   public private(set) var splats: [Gaussian] = []
   public private(set) var coverage = CoverageGrid()
-  public var coverageFraction: Double { coverage.fraction }
+  public var coverageFraction: Double { liveCoverage ?? coverage.fraction }
+  private var liveCoverage: Double?
   public private(set) var latestFrame: SplatFrame?
-  public private(set) var recentKeyframes: [SplatFrame] = []
-  public private(set) var budget: SplatBudget
-  public private(set) var generation: UInt64 = 0
   public private(set) var displayTransform: [Double] = [1, 0, 0, 1, 0, 0]
-  func setDisplayTransform(_ value: [Double]) { displayTransform = value }
-  private(set) var splatIDs: [UInt64] = []
   private(set) var sessionGeneration: UInt64 = 0
-  private var nextID: UInt64 = 0
-  public func trackingUnavailable() {
-    guard status != .stopped else { return }
-    latestFrame = nil
-    recentKeyframes = []
-    coverage = CoverageGrid()
-  }
-  private var lastSeen: [Int] = []
-  private var sequence = 0
+  private var reference: SurfelHash?
+  private var epoch: UInt32 = 0
+  #if canImport(RealityKit) && os(iOS)
+    public private(set) var processor: ScanPreviewProcessor?
+  #endif
   public init(
     configuration: LiveSplatConfiguration = .init(), preference: LiveSplatPreference = .shared
   ) {
     self.preference = preference
     self.configuration = configuration.bounded
-    budget = SplatBudget(milliseconds: configuration.bounded.gpuBudgetMilliseconds)
     preference.observe(self)
   }
-  /// Starts a fresh local AR world. Call stop/start after tracking resets/relocalization.
   public func start() {
-    generation &+= 1
     sessionGeneration &+= 1
-    nextID = 0
-    splatIDs = []
+    reference = nil
     splats = []
-    lastSeen = []
-    recentKeyframes = []
     latestFrame = nil
-    sequence = 0
     coverage = CoverageGrid()
-    budget = SplatBudget(milliseconds: configuration.gpuBudgetMilliseconds)
-    fallbackReason = nil
-    status = .training
+    liveCoverage = nil
+    epoch = 0
+    status = .scanPreview
     preferenceChanged()
+    #if canImport(RealityKit) && os(iOS)
+      processor?.reset()
+    #endif
   }
   public func stop() {
     status = .stopped
-    generation &+= 1
-    sessionGeneration &+= 1
+    #if canImport(RealityKit) && os(iOS)
+      processor?.setActive(false, enabled: preference.previewEnabled)
+    #endif
+  }
+  public func trackingUnavailable() {
+    guard status != .stopped else { return }
+    latestFrame = nil
+    coverage = CoverageGrid()
+    liveCoverage = nil
   }
   public func ingest(_ frame: SplatFrame) {
     guard status != .stopped, latestFrame.map({ frame.timestamp > $0.timestamp }) ?? true else {
       return
     }
-    generation &+= 1
-    sequence += 1
-    var grid = CoverageGrid()
-    var retained: [Gaussian] = []
-    var seen: [Int] = []
-    var retainedIDs: [UInt64] = []
-    for (i, g) in splats.enumerated() where g.isValid && g.opacity >= 0.05 {
-      let visible = grid.observe(g, in: frame)
-      let age = visible ? sequence : lastSeen[i]
-      if sequence - age <= configuration.maxAgeFrames {
-        retained.append(g)
-        seen.append(age)
-        retainedIDs.append(splatIDs[i])
-      }
-    }
-    splats = retained
-    lastSeen = seen
-    splatIDs = retainedIDs
-    var added = 0
-    // Rotate the scan origin so a capped insertion pass does not always favour the top left.
+    if reference == nil { reference = SurfelHash(capacity: configuration.maxSplats) }
+    epoch &+= 1
     let count = frame.width * frame.height
-    for offset in 0..<count {
-      if added >= configuration.maxSeedsPerFrame { break }
-      let i = (offset + sequence * 997) % count
-      let x = i % frame.width
-      let y = i / frame.width
-      guard
-        let cell = grid.cell(
-          u: Double(x) + 0.5, v: Double(y) + 0.5, width: frame.width, height: frame.height),
-        !grid.covered[cell], let seed = frame.seed(x: x, y: y)
-      else { continue }
-      if splats.count >= configuration.maxSplats { break }
-      splats.append(seed)
-      lastSeen.append(sequence)
-      splatIDs.append(nextID)
-      nextID &+= 1
-      grid.mark(cell)
-      added += 1
+    for offset in 0..<min(count, configuration.maxSeedsPerFrame) {
+      let i = (offset * 997 + Int(epoch) * 131) % count
+      guard let seed = frame.seed(x: i % frame.width, y: i / frame.width) else { continue }
+      let p = seed.position
+      let c = seed.color
+      let depth = frame.depths[i]
+      let focal = Float(frame.camera.fx * Double(frame.width) / Double(frame.camera.width))
+      reference!.fuse(
+        position: SIMD3(Float(p.x), Float(p.y), Float(p.z)),
+        color: SIMD3(Float(c.x), Float(c.y), Float(c.z)), depth: depth,
+        confidence: frame.confidence[i],
+        radius: SurfelHash.radius(depth: depth, focalPixels: focal), epoch: epoch)
     }
+    splats = reference!.cells.compactMap { cell in
+      guard let cell else { return nil }
+      let p = cell.position
+      let c = cell.color
+      let r = Double(cell.radius)
+      return try? Gaussian(
+        position: SplatVector(Double(p.x), Double(p.y), Double(p.z)),
+        scale: SplatVector(r, r, r), color: SplatVector(Double(c.x), Double(c.y), Double(c.z)))
+    }
+    var grid = CoverageGrid()
+    for g in splats { _ = grid.observe(g, in: frame) }
     coverage = grid
     latestFrame = frame
-    if recentKeyframes.last.map({ frame.timestamp - $0.timestamp >= 0.2 }) ?? true {
-      recentKeyframes.append(frame)
-      if recentKeyframes.count > 3 { recentKeyframes.removeFirst() }
-    }
   }
   func preferenceChanged() {
     guard status != .stopped else { return }
-    if !preference.trainingEnabled || configuration.mode == .pointPreview {
-      status = .pointPreview
-    } else if let fallbackReason {
-      status = .fallback(fallbackReason)
-    } else {
-      status = .training
-    }
+    status =
+      preference.previewEnabled && configuration.mode == .scanPreview ? .scanPreview : .coverageOnly
+    #if canImport(RealityKit) && os(iOS)
+      processor?.setActive(true, enabled: status == .scanPreview)
+    #endif
   }
-  func activateGaussian() { preferenceChanged() }
-  func fallback(_ reason: String) {
-    guard status != .stopped else { return }
-    fallbackReason = fallbackReason ?? reason
-    preferenceChanged()
-  }
-  func acceptGPU(_ updated: [Gaussian], ids: [UInt64], seconds: Double, session: UInt64) {
-    guard session == sessionGeneration, status != .stopped else { return }
-    // Record even when the camera advanced: stale view snapshots still consumed GPU time.
-    budget.record(seconds: seconds)
-    if budget.exceeded {
-      fallback("GPU budget exceeded")
-      return
+  #if canImport(RealityKit) && os(iOS)
+    public func preparePreview() throws -> ScanPreviewProcessor {
+      if let processor { return processor }
+      let value = try ScanPreviewProcessor()
+      processor = value
+      return value
     }
-    guard status == .training, ids.count == updated.count else { return }
-    let indices = Dictionary(
-      uniqueKeysWithValues: splatIDs.enumerated().map { ($0.element, $0.offset) })
-    for (i, id) in ids.enumerated() {
-      if let current = indices[id], updated[i].isValid { splats[current] = updated[i] }
-    }
-  }
+    public func pollSummary() { liveCoverage = processor?.coverageFraction ?? 0 }
+  #endif
   public func exportPLY(to captureBundleFolder: URL) throws -> URL {
     guard status == .stopped else { throw LiveSplatError.exportWhileRunning }
     guard

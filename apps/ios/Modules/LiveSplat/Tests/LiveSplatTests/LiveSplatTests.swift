@@ -4,7 +4,7 @@ import Testing
 @testable import LiveSplat
 
 // Bounds chosen from Double roundoff and central-difference truncation, not fitted
-// to device arithmetic: analytic 1e-10; finite differences h=1e-5, error 2e-6.
+// to device arithmetic: analytic 1e-10.
 private func near(
   _ a: Double, _ b: Double, _ tolerance: Double = 1e-10,
   sourceLocation: SourceLocation = #_sourceLocation
@@ -101,70 +101,6 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
   near(p.xy, 0)
 }
 
-@Test func allParameterGradientsMatchIndependentFiniteDifferences() throws {
-  var g = try gaussian(position: SplatVector(0.06, -0.04, -2))
-  g.parameters.replaceSubrange(6..<10, with: [0.9, 0.15, -0.2, 0.3])
-  let c = try camera(rotation: SplatMatrix([0.96, 0, 0.28, 0, 1, 0, -0.28, 0, 0.96]))
-  let p = try #require(SplatMath.project(g, camera: c))
-  let samples = [
-    PhotometricSample(
-      u: p.u + 3, v: p.v - 4, target: SplatVector(0.2, 0.4, 0.7),
-      background: SplatVector(0.1, 0.05, 0.2)),
-    PhotometricSample(u: p.u - 2, v: p.v + 2, target: SplatVector(0.6, 0.1, 0.2)),
-  ]
-  let gradient = SplatMath.gradient(g, camera: c, samples: samples)
-  let h = 1e-5
-  for i in 0..<14 {
-    var plus = g
-    var minus = g
-    plus.parameters[i] += h
-    minus.parameters[i] -= h
-    let fd =
-      (SplatMath.loss(plus, camera: c, samples: samples)
-        - SplatMath.loss(minus, camera: c, samples: samples)) / (2 * h)
-    near(gradient[i], fd, 2e-6)
-  }
-  let updated = SplatMath.step(g, gradient: gradient, learningRate: 1e-4)
-  #expect(
-    SplatMath.loss(updated, camera: c, samples: samples)
-      < SplatMath.loss(g, camera: c, samples: samples))
-}
-
-@Test func gradientCenterColorAndOpacityHandValues() throws {
-  let g = try Gaussian(
-    position: SplatVector(0, 0, -2), scale: SplatVector(0.1, 0.1, 0.1), opacity: 0.5,
-    color: SplatVector(0.8, 0.4, 0.2))
-  let samples = [PhotometricSample(u: 32, v: 24, target: .zero)]
-  near(SplatMath.loss(g, camera: try camera(), samples: samples), 0.105)
-  let grad = SplatMath.gradient(g, camera: try camera(), samples: samples)
-  near(grad[10], 0.105)
-  near(grad[11], 0.2)
-  near(grad[12], 0.1)
-  near(grad[13], 0.05)
-  for i in 0..<10 { near(grad[i], 0) }
-}
-
-@Test func invalidGradientCannotPoisonState() throws {
-  let g = try gaussian()
-  #expect(SplatMath.step(g, gradient: Array(repeating: .nan, count: 14)) == g)
-  #expect(SplatMath.step(g, gradient: [0]) == g)
-  #expect(SplatMath.step(g, gradient: Array(repeating: 1, count: 14), learningRate: .infinity) == g)
-  let bounded = SplatMath.step(g, gradient: Array(repeating: 1e30, count: 14))
-  #expect(bounded.isValid)
-  near(bounded.position.x, g.position.x - 0.001)
-}
-
-@Test func alphaCompositingIsFrontToBack() {
-  let (color, alpha) = SplatMath.composite([
-    (SplatVector(1, 0, 0), 0.5), (SplatVector(0, 0, 1), 0.5),
-  ])
-  near(color.x, 0.5)
-  near(color.z, 0.25)
-  near(alpha, 0.75)
-  let (_, emptyAlpha) = SplatMath.composite([])
-  near(emptyAlpha, 0)
-}
-
 @Test func seedUsesDepthResolutionAndConfidence() throws {
   let f = try frame()
   let g = try #require(f.seed(x: 21, y: 9))
@@ -198,90 +134,34 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
   #expect(!grid.observe(try gaussian(), in: try frame(confidence: 0)))
 }
 
-@Test @MainActor func rendererCapsSeedsPrunesAndResets() throws {
+@Test @MainActor func rendererCapsSeedsAndResets() throws {
   var config = LiveSplatConfiguration()
-  config.maxSplats = 5
+  config.maxSplats = 4
   config.maxSeedsPerFrame = 3
-  config.maxAgeFrames = 1
-  let r = DefaultLiveSplatRenderer(configuration: config)
-  r.ingest(try frame())
-  #expect(r.splats.isEmpty)
-  r.start()
-  r.ingest(try frame())
-  #expect(r.splats.count == 3)
-  r.ingest(try frame(timestamp: 2))
-  #expect(r.splats.count == 5)
-  let version = r.generation
-  r.ingest(try frame(timestamp: 2))
-  #expect(r.generation == version)
-  r.ingest(try frame(timestamp: 3, confidence: 0))
-  #expect(r.splats.count == 5)
-  r.ingest(try frame(timestamp: 4, confidence: 0))
-  #expect(r.splats.isEmpty)
-  for i in 5..<20 { r.ingest(try frame(timestamp: Double(i))) }
-  #expect(r.recentKeyframes.count == 3)
-  #expect(r.splats.count == 5)
-  r.stop()
-  #expect(r.status == .stopped)
-  r.start()
-  #expect(r.splats.isEmpty)
-  near(r.coverageFraction, 0)
+  let renderer = DefaultLiveSplatRenderer(configuration: config)
+  renderer.start()
+  renderer.ingest(try frame())
+  #expect(renderer.splats.count == 3)
+  renderer.ingest(try frame(timestamp: 2))
+  #expect(renderer.splats.count == 4)
+  let before = renderer.splats
+  renderer.ingest(try frame(timestamp: 2))
+  #expect(renderer.splats == before)
+  renderer.stop()
+  renderer.start()
+  #expect(renderer.splats.isEmpty)
 }
 
-@Test @MainActor func stationaryCoverageDoesNotReseedSameCells() throws {
-  let r = DefaultLiveSplatRenderer()
-  r.start()
-  r.ingest(try frame())
-  let first = r.splats.count
-  for i in 2..<10 { r.ingest(try frame(timestamp: Double(i))) }
-  #expect(first == 128)
-  #expect(r.splats.count == 768)
-  near(r.coverageFraction, 1)
-  r.ingest(try frame(timestamp: 10))
-  #expect(r.splats.count == 768)
-}
-
-@Test @MainActor func gpuResultsFollowStableIDsAndRejectPreviousSessions() throws {
-  var config = LiveSplatConfiguration()
-  config.maxAgeFrames = 1
-  let r = DefaultLiveSplatRenderer(configuration: config)
-  r.start()
-  r.ingest(try frame())
-  r.activateGaussian()
-  let session = r.sessionGeneration
-  let ids = r.splatIDs
-  var changed = r.splats
-  changed[0].parameters[11] = 0.2
-  r.ingest(try frame(timestamp: 2))
-  r.acceptGPU(changed, ids: ids, seconds: 0.001, session: session)
-  near(r.splats[0].color.x, 0.2)  // A newer camera view does not discard training.
-  r.ingest(try frame(timestamp: 3, confidence: 0))
-  r.ingest(try frame(timestamp: 4, confidence: 0))
-  r.ingest(try frame(timestamp: 5))
-  let newSeeds = r.splats
-  r.acceptGPU(changed, ids: ids, seconds: 0.001, session: session)
-  #expect(r.splats == newSeeds)  // Removed IDs cannot overwrite newly inserted seeds.
-  r.stop()
-  r.start()
-  r.ingest(try frame())
-  r.activateGaussian()
-  let restarted = r.splats
-  r.acceptGPU(changed, ids: ids, seconds: 0.001, session: session)
-  #expect(r.splats == restarted)
-}
-
-@Test func budgetFailsClosedOnOverrunOrMissingTiming() {
-  var b = SplatBudget()
-  b.record(seconds: 0.007)
-  #expect(b.optimizationSteps == 2)
-  b.record(seconds: 0.009)
-  #expect(b.exceeded)
-  #expect(b.optimizationSteps == 0)
-  b.record(seconds: 0.001)
-  #expect(b.exceeded)
-  var missing = SplatBudget()
-  missing.record(seconds: 0)
-  #expect(missing.exceeded)
+@Test @MainActor func stationaryFusionIsNotLimitedByCoverageGrid() throws {
+  let c = try SplatCamera(fx: 100, fy: 100, cx: 32, cy: 24, width: 64, height: 48)
+  let f = try SplatFrame(
+    timestamp: 0, camera: c, width: 64, height: 48,
+    depths: Array(repeating: 2, count: 3072), confidence: Array(repeating: 2, count: 3072),
+    colors: Array(repeating: .zero, count: 3072))
+  let renderer = DefaultLiveSplatRenderer()
+  renderer.start()
+  renderer.ingest(f)
+  #expect(renderer.splats.count > 768)
 }
 
 @Test func binaryPLYUsesStandardActivationsAndOrder() throws {
@@ -324,18 +204,6 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
   #expect(try Data(contentsOf: url) == SplatPLY.encode(r.splats))
 }
 
-@Test func tileBinningRetainsNearestAndReportsOverflow() {
-  var projections: [ProjectedGaussian?] = (0..<70).map {
-    ProjectedGaussian(u: 8, v: 8, depth: Double(70 - $0), xx: 1, xy: 0, yy: 1)
-  }
-  projections += [nil, ProjectedGaussian(u: 100, v: 100, depth: 0.1, xx: 1, xy: 0, yy: 1)]
-  let tile = SplatTile.bin(projections, column: 0, row: 0)
-  #expect(tile.indices == Array((6..<70).reversed()))
-  #expect(tile.overflow == 6)
-  let tied = ProjectedGaussian(u: 8, v: 8, depth: 1, xx: 1, xy: 0, yy: 1)
-  #expect(SplatTile.bin([tied, tied], column: 0, row: 0).indices == [0, 1])
-}
-
 @Test @MainActor func exportDoesNotInvalidateAFinalizedManifest() throws {
   let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
   try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -348,30 +216,12 @@ private func frame(timestamp: Double = 1, depth: Float = 2, confidence: UInt8 = 
   )
 }
 
-@Test @MainActor func overBudgetGPUResultTriggersFallbackEvenAfterNewCameraFrame() throws {
-  let r = DefaultLiveSplatRenderer()
-  r.start()
-  r.ingest(try frame())
-  r.activateGaussian()
-  let snapshot = r.splats
-  let ids = r.splatIDs
-  let session = r.sessionGeneration
-  r.ingest(try frame(timestamp: 2))
-  r.acceptGPU(snapshot, ids: ids, seconds: 0.009, session: session)
-  #expect(r.status == .fallback("GPU budget exceeded"))
-  #expect(r.budget.optimizationSteps == 0)
-  r.start()
-  #expect(!r.budget.exceeded)
-  #expect(r.status == .training)
-}
-
 @Test @MainActor func trackingLossClearsStaleOverlayAndKeyframes() throws {
   let r = DefaultLiveSplatRenderer()
   r.start()
   r.ingest(try frame())
   r.trackingUnavailable()
   #expect(r.latestFrame == nil)
-  #expect(r.recentKeyframes.isEmpty)
   near(r.coverageFraction, 0)
   #expect(!r.splats.isEmpty)
 }
