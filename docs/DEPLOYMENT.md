@@ -1663,7 +1663,7 @@ cd /app
 /app/.venv/bin/python -m app.scripts.requeue_jobs --capture FULL_CAPTURE_UUID --capture ANOTHER_FULL_UUID
 ```
 
-Or, without Fly SSH access: Actions → **Production corrections** with `requeue-bundles` and the
+Or, without Fly SSH access: Actions → **Production corrections** with `requeue-jobs` and the
 full capture ids (dry run first; then `apply` with confirm `correct-production`).
 
 Repeat the Python command with `--apply` after checking its capture/job list.
