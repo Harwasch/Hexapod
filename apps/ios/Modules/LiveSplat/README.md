@@ -1,9 +1,10 @@
 # Scan preview (LiveSplat package)
 
-LiveSplat is the existing package/preference identity. Its live renderer is now a
-**scan preview**: coloured LiDAR surfels, with no on-device training. The real splat
-is reconstructed in the cloud. Ready capture details open the server scan through
-the in-app globe. No live GPU geometry is read back or exported by the App.
+LiveSplat is the existing package/preference identity. Settings → **Preview** selects
+**Discs** (the existing default) or the experimental **Splat** renderer. Both fuse
+LiDAR depth and camera colour into the same bounded voxel layout, with no on-device
+training. Cloud reconstruction remains the published scan. No live GPU geometry is
+read back or exported by the App.
 
 ## Integration and ownership
 
@@ -24,8 +25,11 @@ submission; stop disables ingress. A generation check rejects stale summaries.
 `LiveSplatPreference.previewEnabled` defaults on. The stored key remains
 `hex.liveSplat.training` to preserve existing installations. Off means camera plus
 coverage; fusion continues to measure coverage, with no coloured surfel drawing.
-Settings calls this **Scan preview**. The simulated provider and replay screen are
-labelled Simulated. The old UIKit dots, tile binning, optimizer, per-frame CPU
+Settings retains **Scan preview**, adds the **Preview** picker and an **Inset**
+toggle (default off). They persist independently. Switching Discs/Splat clears only
+the preview hash on its next submission, so medium-confidence Gaussian seeds cannot
+leak into Discs; capture recording is unaffected. The simulated provider and replay
+screen are labelled Simulated. The old UIKit dots, tile binning, optimizer, per-frame CPU
 colour conversion, model uploads and model readbacks are removed.
 
 ## GPU resource and work bounds
@@ -57,9 +61,43 @@ colour conversion, model uploads and model readbacks are removed.
   sets a reversible quality floor. Timing includes RealityKit's command buffer,
   so it is conservative, and **8 ms/60 Hz are targets, not phone measurements**.
 
+## Experimental Gaussian and inset paths
+
+`GaussianSeed.swift` defines the portable seeding/sort reference. A Gaussian has a
+world-space surface normal, equal tangent standard deviations of half the disc
+radius, and a normal deviation of one fifth of that (at least 1 mm). Adjacent valid
+depth samples estimate the normal; image edges and depth discontinuities fall back
+to the viewing normal. Medium/high depth confidence maps to opacity 0.45/0.85;
+coverage continues to count high-confidence observations only. RGB is constant
+per Gaussian. Photometric refinement is omitted until a safe phone budget and a
+visual benefit are measured; there is no refinement job to enable accidentally.
+
+The GPU retains all 262,144 voxel slots and a parallel fixed 16-byte normal/opacity
+attribute per slot. For low compute, Splat draws at most 32,768 evenly spaced hash
+slots (16,384/8,192 at reduced quality). This deliberately trades density for work;
+it is not a trained reconstruction. A descending bitonic network sorts those slots
+from each current camera, with index tie-breaking and invalid depths last. Six
+vertices form each EWA quad: the pinhole Jacobian and display transform project
+its 3D covariance to 2D, a 0.3-pixel filter regularizes it, and a three-sigma conic
+uses premultiplied back-to-front alpha blending without depth writes. LiDAR depth
+still rejects foreground occlusion. Quad extent is capped at 96 pixels per axis.
+
+The inset uses the same buffers, active renderer, command buffer, quality policy
+and one-in-flight guard. A bounded GPU reduction finds the full scene centroid and
+bounds; a virtual camera orbits it once per two minutes. Sparse observations tint
+teal and an amber wireframe marks the phone frustum. Tap the corner to enlarge;
+drag it to rotate. `ScanOrbit` shares the normalized viewport with `ScanInsetHost`,
+the transparent SwiftUI gesture host. No second display loop or CPU model readback
+is introduced. The inset has at most a 320-pixel longest edge. Its two textures
+require at most 1,228,800 bytes. Additional fixed GPU buffers total 4,505,648 bytes
+(attributes, sort order and reduction partials), independent of scan duration.
+Normals and sorting are skipped in Discs; the inset reduction/draw is skipped when
+the toggle is off. These are work bounds, **not measured GPU timings or a measured
+memory plateau**. Metal compilation, rendering, 60 fps and appearance need the phone.
+
 The pure Swift `SurfelReference.swift` mirrors quantization, hashing, four-way
-fusion/eviction, sizing and quality policy. `Math.swift` retains Gaussian
-projection/export utilities for offline fixtures; it has no optimizer. The
+fusion/eviction, sizing and quality policy. `Math.swift` supplies Gaussian projection/export math for offline fixtures and
+analytic tests; it has no optimizer. The
 `ingest(SplatFrame)` API is an offline reference only. It lazily allocates its CPU
 hash and is never called for live ARFrames. `FakeLiveSplat` supplies deterministic
 coverage for isolated UI tests. See [TESTING.md](TESTING.md) for the evidence boundary.

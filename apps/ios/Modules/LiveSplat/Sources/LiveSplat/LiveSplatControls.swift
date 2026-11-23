@@ -25,6 +25,19 @@
         isOn: Binding(
           get: { preference.previewEnabled },
           set: { preference.previewEnabled = $0 }))
+      Picker(
+        "Preview",
+        selection: Binding(
+          get: { preference.previewStyle }, set: { preference.previewStyle = $0 })
+      ) {
+        ForEach(ScanPreviewStyle.allCases, id: \.self) { style in
+          Text(style.rawValue).tag(style)
+        }
+      }
+      Toggle(
+        "Inset",
+        isOn: Binding(
+          get: { preference.insetEnabled }, set: { preference.insetEnabled = $0 }))
     }
   }
 #endif
