@@ -144,14 +144,12 @@ def check(root: Path) -> None:
     assert restored_numpy[2:] == tuple(numpy_rng[2:])
     assert torch.equal(torch.get_rng_state(), saved["rng"]["torch"])
     assert torch.equal(runner.strategy_state["grad2d"], saved["strategy"]["grad2d"])
-    # A changed data setting still rejects resume, even after probe restores methods.
+    # A changed plan discards this lane and restarts, rather than accepting stale state.
     cfg.strategy.cap_max += 1
-    try:
-        resume_trainer.restore(runner, runner.schedulers, loader)
-    except ValueError as error:
-        assert "incompatible" in str(error)
-    else:
-        raise AssertionError("changed strategy settings accepted")
+    assert resume_trainer.restore(runner, runner.schedulers, loader) == 0
+    assert cfg.resume is None
+    assert not target.exists()
+    assert resume_trainer.checkpoints(root / "ckpt") == []
 
 
 if __name__ == "__main__":

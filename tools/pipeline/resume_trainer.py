@@ -70,6 +70,7 @@ def patch_source(source: str) -> str:
         "import sys as _hex_resume_sys\n"
         f"_hex_resume_sys.path.insert(0, {str(Path(__file__).parent)!r})\n"
         "import resume_trainer as _hex_resume\n"
+        "import depth_trainer as _hex_depth\n"
         "_hex_resume_sys.path.pop(0)\n"
     )
     futures = list(re.finditer(r"(?m)^from __future__ import [^\n]+\n", source))
@@ -627,7 +628,9 @@ def _save(runner: Any, schedulers: list[Any], loader: Any, step: int) -> Path | 
 
 def main() -> int:
     source = Path(sys.argv[1])
-    patched = patch_source(source.read_text())
+    import depth_trainer
+
+    patched = depth_trainer.patch_source(patch_source(source.read_text()))
     compile(patched, str(source), "exec", dont_inherit=True)
     source.write_text(patched)
     return 0
