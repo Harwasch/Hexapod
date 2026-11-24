@@ -364,6 +364,58 @@ Protocol references: Apple's [scene depth](https://developer.apple.com/documenta
 and [video formats](https://developer.apple.com/documentation/arkit/arconfiguration/videoformat-swift.class),
 and COLMAP's [known-pose reconstruction](https://colmap.github.io/faq.html#reconstruct-sparse-dense-model-from-known-camera-poses).
 
+## App RGB compression budget
+
+The shared-session `ScanRecordingWorker` builds `rgb.mov` settings through the
+pure `CaptureVideoSettings` builder in the Capture package. HEVC is retained.
+Its average bitrate is `min(width × height × 15 × 0.65, 30_000_000)` bits/s:
+**26,956,800 bit/s at 1920×1440**, about 5.7 times the reported 4.7 Mbit/s default
+in the 48-second capture. The 0.65 bits/pixel/frame budget deliberately spends
+more bits on reconstruction texture than the default; it is an initial policy,
+not a measured optimum. Larger formats cap at 30 Mbit/s, accepting fewer bits
+per pixel. The writer retains expected input rate 15, maximum keyframe interval
+15 (one second at nominal cadence), and frame reordering disabled. These existing
+GOP/reordering settings are preserved; no independent quality gain is claimed for
+them. Dropped packets can make the wall-clock GOP longer. `AVVideoQualityKey` is
+omitted: support for quality-based control alongside HEVC average-bitrate control
+is not assumed. The standalone legacy recorder remains unchanged.
+
+At the target rate, 48 seconds of RGB is **161.7 MB** (decimal); the 30 Mbit/s cap
+targets 180 MB. Average bitrate is not a hard byte ceiling: actual encoder output,
+scene complexity and movie overhead need device measurement. Duration remains
+user-controlled. Raw plus smoothed depth/confidence at 256×192 and 720 packets
+adds about **212.3 MB**, so this example's full uncompressed bundle is about
+374 MB plus JSON/USTAR overhead. Budget phone space for the recording folder,
+archive, uploader's retained archive copy and one upload part; RGB size alone is
+not the storage requirement. Higher bitrate cannot undo exposure motion blur;
+motion-speed feedback/capture guidance remains deferred.
+
+No upload or worker limits need raising for that example:
+
+- `CaptureArchive` streams payloads in 1 MiB reads and requires each file to be
+  less than 8 GiB (USTAR). It does not impose a smaller total archive cap.
+- API bundle registration requires positive declared bytes, with no smaller
+  bundle-size ceiling. `services/captures.py` uses 8 MiB multipart parts, growing
+  them beyond 10,000 parts; the phone's `ChunkPlan` enforces that part-count limit
+  and uploads one disk-backed part at a time. Archive bytes go directly to object
+  storage, so they do not meet an API HTTP multipart-body limit.
+- Pipeline validation caps total payload at 128 GiB and 1,000,000 frames. Those
+  parser ceilings are not practical phone/worker storage budgets.
+- The capture worker has a committed 20 GB volume and normally refuses new claims
+  below 5 GiB free (`WORKER_MIN_FREE_GB`), cleaning finished work first. This is a
+  claim-time guard, not a per-job reservation; archive, extracted bundle and decoded
+  images still need room together. Long captures can exhaust storage.
+
+Linux Capture tests cover bitrate arithmetic, orientation invariance and the cap.
+An AVFoundation-conditional unit test checks the actual HEVC settings dictionary
+without opening a device. It cannot execute on Linux. No macOS build or CI dispatch
+is needed for this edit. Before release, an eligible iPhone/TestFlight build must
+verify that HEVC accepts the settings, measure bitrate/file size on a textured
+48-second capture, inspect codec/profile, cadence, keyframe spacing and decoding,
+compare detail at matched motion/exposure, and check thermal behavior, writer
+backpressure and finalized video/JSONL counts. Also complete a real bundle upload
+and reconstruction; simulator or arithmetic tests cannot establish image quality.
+
 ## Optional live preview export
 
 A bundle may contain `livesplat.ply`, referenced by the optional manifest field
