@@ -1837,22 +1837,49 @@ An isolated pycolmap **4.2.0** CPU process then runs free-pose BA with a SOFT_L1
 all frames, seeded with the median ARKit `(fx, fy, cx, cy)` when those vary. Focal,
 principal point and `(k1, k2, p1, p2)` are optimized together. Rebuilding the shared
 camera also rebuilds COLMAP 4's trivial rigs and sensor data IDs. Solves use four
-threads, the two-camera gauge, 150 iterations and function tolerance `1e-7`.
+threads, 150 iterations and function tolerance `1e-7`. Both BA passes anchor the
+metric gauge to **all original ARKit camera centres**, using pycolmap 4.2's
+`create_pose_prior_bundle_adjuster`. Each Cartesian `PosePrior` has covariance
+`(0.03 m)^2 I`; its `corr_data_id` comes from the current model (including rebuilt
+shared-camera sensor IDs), but its position always comes from the untouched input.
+Position residuals use SOFT_L1 with scale `sqrt(7.815)` in whitened sigma units;
+the API's initial alignment uses a 15 cm RANSAC threshold and seed 0. Three
+centres spanning at least a plane are required. The 3 cm sigma is a policy weight,
+not a measured ARKit uncertainty. A failed prior alignment silently selects a
+camera gauge in pycolmap 4.2; the pipeline detects this and falls back to the intact
+fixed model instead of solving with that gauge.
+
+The former `TWO_CAMS_FROM_WORLD` gauge fixed one pose and one translation component
+of a second camera. Millimetre errors on a centimetre video baseline could give an
+otherwise good refinement a large raw scale error. On the 724-frame capture, the
+first two centres were only 2.15 cm apart: the first pose and the second camera's
+Z translation stayed fixed, while the final all-centre fit needed scale 0.9176.
+Reprojection improved from 1.555 to 1.050 px and aligned corrections remained below
+2.94 cm / 1.04 degrees. Whole-trajectory priors remove that arbitrary short-baseline
+anchor and allow every camera pose to improve.
 
 An all-camera-centre Umeyama similarity maps the result back to ARKit's metre and
 gravity frame, including the points and camera orientations. The fitted scale must
 satisfy **`abs(s - 1) < 0.005` before applying it**; the accepted model is then expressed
-in ARKit metres, so placement still uses scale 1. Any correction above **15 cm or
+in ARKit metres, so placement still uses scale 1. The same scale bound is recorded
+and checked before each prior factory's internal alignment and after each solve.
+This prevents the second factory from hiding first-pass or re-triangulation drift.
+Any correction above **15 cm or
 5 degrees**, a mean point reprojection error that does not decrease, a degenerate
 alignment, or a failed solve restores the intact fixed model and records a reason.
-These are conservative policy bounds, not measurements of device accuracy. In
-particular the diagnosis's pose-only fit needed scale 0.9494 and would be rejected.
-The shared-lens control's scale must be checked in a real retrain; acceptance is not
-promised by the diagnostic reprojection improvement alone.
+These are conservative policy bounds, not measurements of device accuracy. The
+raw scale guard now checks consistency of the prior-constrained solve with the
+whole ARKit trajectory; it cannot independently validate ARKit's absolute scale.
+The earlier pose-only diagnostic's scale 0.9494 used a different gauge and is not
+evidence of physical scale drift. Real-capture acceptance with the new gauge still
+needs a CPU rerun; synthetic success does not establish training quality.
 
 `poses.json.refinement` records before/after mean point reprojection errors, median /
 p95 / maximum translations in centimetres and rotations in degrees, the raw Sim3,
-lens parameters, observation counts, bounds and fallback reason. Per-frame raw BA
+lens parameters, observation counts, bounds and fallback reason. The `gauge` field
+records type `arkit-position-priors`, `positionSigmaM`, position `loss`,
+`lossScaleSigma`, `alignmentMaxErrorM`, `numPositions` and `scaleChecks` (stage and
+raw all-centre scale before alignment / after solving each pass). Per-frame raw BA
 and ARKit poses make the applied transform auditable. The pose step's `refinement`
 metric contains the same summary without the per-frame arrays. Unmeasured values
 are null. Georeferencing and entity placement validate accepted correction evidence;
@@ -1882,6 +1909,15 @@ nonzero crop origin, source-image preservation and resized training images. Run 
 suite under `heavy`, with `ARKIT_TEST_PYTHON` pointing at a pycolmap 4.2 interpreter
 and `ARKIT_TEST_GSPLAT_EXAMPLES` pointing at the pinned trainer's `examples` directory
 to include it. Those optional dependencies are not downloaded by the tests.
+`tests/arkit_gauge_scene.py` adds 80-frame video trajectories with millimetre pose
+noise and approximately 1.3 cm adjacent baselines. It runs the old gauge as a
+negative control and requires the new one to stay within the unchanged 0.5% scale
+bound, improve reprojection and recover positions/orientations. Separate seeds
+exercise fixed PINHOLE intrinsics and shared OPENCV lens refinement. It also checks
+that both prior passes target the original centres and preserve the input bytes.
+Injected scale drift after the first solve and re-triangulation must be rejected
+before another alignment can conceal it; an actual 4.2 prior-alignment failure
+must also be rejected.
 
 An unrun comparison for capture `99c02b1d` is prepared in
 [`infra/modal/arkit_bench.py`](../../infra/modal/arkit_bench.py). After placing the

@@ -52,6 +52,8 @@ def evidence() -> dict[str, Any]:
     [
         ("reprojectionAfterPx", 1.5, "did not improve"),
         ("sim3", {"scale": 1.01}, "scale"),
+        ("gauge", {"scaleChecks": [{"scale": 1.01}]}, "scale"),
+        ("gauge", {"scaleChecks": [{"scale": float("nan")}]}, "non-finite"),
         ("translationCm", {"max": 15.01}, "correction"),
         ("rotationDeg", {"max": 5.01}, "correction"),
         ("reprojectionAfterPx", float("nan"), "non-finite"),
@@ -153,3 +155,32 @@ def test_recipe_defaults_are_bundle_only() -> None:
     pose = next(s for s in recipe.stages if s.id == "pose")
     assert pose.params["arkit_refine"] is True
     assert pose.params["arkit_shared_lens"] is True
+
+
+@pytest.mark.parametrize("lens,seed", [(False, 120), (True, 121)])
+def test_short_baseline_gauge_cpu(tmp_path: Path, lens: bool, seed: int) -> None:
+    interpreter = os.environ.get("ARKIT_TEST_PYTHON") or os.environ.get("COLMAP_GLOBAL_PYTHON")
+    if not interpreter:
+        pytest.skip("needs pycolmap 4.2 CPU interpreter")
+    completed = subprocess.run(
+        [
+            "heavy",
+            interpreter,
+            str(Path(__file__).with_name("arkit_gauge_scene.py")),
+            str(tmp_path),
+            "lens" if lens else "pinhole",
+            str(seed),
+        ],
+        env={
+            **os.environ,
+            "PYTHONPATH": str(Path(__file__).parents[1]),
+            "OMP_NUM_THREADS": "4",
+            "OPENBLAS_NUM_THREADS": "4",
+            "MKL_NUM_THREADS": "4",
+            "HEAVY_CPUS": "4",
+        },
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr

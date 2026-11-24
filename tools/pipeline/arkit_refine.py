@@ -22,6 +22,9 @@ F64 = npt.NDArray[np.float64]
 MAX_CM = 15.0
 MAX_DEG = 5.0
 MAX_SCALE_DELTA = 0.005
+POSITION_PRIOR_SIGMA_M = 0.03
+# pycolmap 4.2's 95% chi-square threshold for a 3D whitened position residual.
+POSITION_PRIOR_LOSS_SCALE = float(np.sqrt(7.815))
 
 
 def empty_report(status: str = "fallback") -> dict[str, Any]:
@@ -34,6 +37,7 @@ def empty_report(status: str = "fallback") -> dict[str, Any]:
         "rotationDeg": None,
         "sim3": None,
         "lensParams": None,
+        "gauge": None,
         "bounds": {
             "translationCm": MAX_CM,
             "rotationDeg": MAX_DEG,
@@ -70,11 +74,13 @@ def guard(report: dict[str, Any]) -> str | None:
     """Accept only finite, improving, bounded corrections with a near-unit raw gauge."""
     try:
         before, after = report["reprojectionBeforePx"], report["reprojectionAfterPx"]
-        scale = report["sim3"]["scale"]
+        scales = [report["sim3"]["scale"]] + [
+            item["scale"] for item in (report.get("gauge") or {}).get("scaleChecks", [])
+        ]
         cm, deg = report["translationCm"]["max"], report["rotationDeg"]["max"]
-        if not np.isfinite([before, after, scale, cm, deg]).all():
+        if not np.isfinite([before, after, *scales, cm, deg]).all():
             return "non-finite refinement"
-        if abs(scale - 1) >= MAX_SCALE_DELTA:
+        if any(abs(scale - 1) >= MAX_SCALE_DELTA for scale in scales):
             return "Sim3 scale differs from ARKit by >=0.5%"
         if after >= before:
             return "mean reprojection error did not improve"
@@ -164,7 +170,21 @@ def verified_summary(poses: dict[str, Any]) -> bool:
     return True
 
 
-def bundle_adjust(pycolmap: Any, model: Any, *, lens: bool) -> None:
+def bundle_adjust(
+    pycolmap: Any,
+    model: Any,
+    *,
+    lens: bool,
+    original: Any,
+    scale_checks: list[dict[str, Any]],
+    phase: str,
+) -> None:
+    """Anchor the metric gauge to all original ARKit centres, in both BA passes.
+
+    TWO_CAMS_FROM_WORLD fixes scale using one translation component of a second
+    camera. Millimetre noise on a centimetre video baseline can therefore give a
+    good reconstruction an arbitrary, multi-percent raw scale error.
+    """
     options = pycolmap.BundleAdjustmentOptions()
     options.refine_focal_length = lens
     options.refine_principal_point = lens
@@ -177,12 +197,52 @@ def bundle_adjust(pycolmap: Any, model: Any, *, lens: bool) -> None:
     options.ceres.solver_options.max_num_iterations = 150
     options.ceres.solver_options.function_tolerance = 1e-7
     config = pycolmap.BundleAdjustmentConfig()
-    for image_id in model.reg_image_ids():
+    priors = []
+    for image_id in sorted(model.reg_image_ids()):
         config.add_image(image_id)
-    config.fix_gauge(pycolmap.BundleAdjustmentGauge.TWO_CAMS_FROM_WORLD)
-    summary = pycolmap.create_default_bundle_adjuster(options, config, model).solve()
+        # The shared-lens model rebuilds sensor IDs. Use its data ID but always
+        # the immutable input's centre, never the first BA pass's fitted position.
+        priors.append(
+            pycolmap.PosePrior(
+                corr_data_id=model.images[image_id].data_id,
+                position=original.images[image_id].projection_center(),
+                position_covariance=np.eye(3) * POSITION_PRIOR_SIGMA_M**2,
+                coordinate_system=pycolmap.PosePriorCoordinateSystem.CARTESIAN,
+            )
+        )
+    centres = np.array([p.position for p in priors])
+    align(centres, centres)  # Reject an unobservable gauge before entering Ceres.
+
+    def check_scale(stage: str) -> None:
+        raw = np.array([model.images[i].projection_center() for i in sorted(model.reg_image_ids())])
+        scale, _, _ = align(raw, centres)
+        scale_checks.append({"stage": f"{phase}.{stage}", "scale": scale})
+        if not np.isfinite(scale):
+            raise ValueError("non-finite refinement")
+        if abs(scale - 1) >= MAX_SCALE_DELTA:
+            raise ValueError("Sim3 scale differs from ARKit by >=0.5%")
+
+    # The factory aligns to priors before solving. Check its input too, so neither
+    # that alignment nor retriangulation can conceal an out-of-bounds raw scale.
+    check_scale("beforeAlignment")
+    prior_options = pycolmap.PosePriorBundleAdjustmentOptions()
+    prior_options.ceres.prior_position_loss_function_type = pycolmap.LossFunctionType.SOFT_L1
+    prior_options.ceres.prior_position_loss_scale = POSITION_PRIOR_LOSS_SCALE
+    prior_options.alignment_ransac.max_error = MAX_CM / 100
+    prior_options.alignment_ransac.random_seed = 0
+    prior_options.alignment_ransac.num_threads = 1
+    # Leave config's gauge UNSPECIFIED: the position priors constrain the Sim3.
+    adjuster = pycolmap.create_pose_prior_bundle_adjuster(
+        options, prior_options, config, priors, model
+    )
+    # In 4.2 failed prior alignment logs a warning and switches to TWO_CAMS.
+    # A usable solve would not establish that the trajectory priors were used.
+    if adjuster.config.fixed_gauge != pycolmap.BundleAdjustmentGauge.UNSPECIFIED:
+        raise ValueError("position-prior alignment failed; refusing a fallback camera gauge")
+    summary = adjuster.solve()
     if not summary.is_solution_usable():
         raise ValueError("bundle adjustment has no usable solution")
+    check_scale("afterSolve")
 
 
 def shared_camera(pycolmap: Any, original: Any, work: Path) -> Any:
@@ -238,9 +298,25 @@ def refine(
         reprojectionBeforePx=original.compute_mean_reprojection_error(),
         loss="SOFT_L1",
         lossScalePx=1.0,
+        gauge={
+            "type": "arkit-position-priors",
+            "positionSigmaM": POSITION_PRIOR_SIGMA_M,
+            "loss": "SOFT_L1",
+            "lossScaleSigma": POSITION_PRIOR_LOSS_SCALE,
+            "alignmentMaxErrorM": MAX_CM / 100,
+            "numPositions": original.num_reg_images(),
+            "scaleChecks": [],
+        },
     )
     model = shared_camera(pycolmap, original, work) if lens else pycolmap.Reconstruction(source)
-    bundle_adjust(pycolmap, model, lens=lens)
+    bundle_adjust(
+        pycolmap,
+        model,
+        lens=lens,
+        original=original,
+        scale_checks=report["gauge"]["scaleChecks"],
+        phase="initial",
+    )
     # Upgrade only a copy of the CLI database; the fixed fallback remains reusable.
     db_path = work / "refine.db"
     shutil.copy2(database, db_path)
@@ -282,7 +358,14 @@ def refine(
         options=options,
         refine_intrinsics=False,
     )
-    bundle_adjust(pycolmap, model, lens=lens)
+    bundle_adjust(
+        pycolmap,
+        model,
+        lens=lens,
+        original=original,
+        scale_checks=report["gauge"]["scaleChecks"],
+        phase="final",
+    )
     ids = sorted(original.reg_image_ids())
     if model.num_points3D() == 0:
         raise ValueError("refinement lost every triangulated point")

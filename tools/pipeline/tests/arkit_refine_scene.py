@@ -15,19 +15,30 @@ import capture_bundle
 import sfm
 
 
-def scene(root: Path, pycolmap: Any) -> tuple[Path, Path, Path, list[dict[str, Any]], np.ndarray]:
-    rng = np.random.default_rng(120)
+def scene(
+    root: Path, pycolmap: Any, *, short_baseline: bool = False, seed: int = 120
+) -> tuple[Path, Path, Path, list[dict[str, Any]], np.ndarray]:
+    rng = np.random.default_rng(seed)
     frames, source = root / "frames", root / "fixed"
     frames.mkdir()
     source.mkdir()
     points = rng.uniform([-0.7, -0.6, 3], [0.7, 0.6, 5], (120, 3))
     cameras, images, records, centres = [], [], [], []
     observations = []
-    for index in range(12):
-        theta = index * 2 * np.pi / 12
-        centre = np.array([0.7 * np.cos(theta), 0.35 * np.sin(theta), 0.1 * np.sin(2 * theta)])
+    count = 80 if short_baseline else 12
+    for index in range(count):
+        theta = index * 2 * np.pi / count
+        radii = [0.25, 0.15, 0.03] if short_baseline else [0.7, 0.35, 0.1]
+        centre = np.array(radii) * [np.cos(theta), np.sin(theta), np.sin(2 * theta)]
         centres.append(centre)
-        noisy = centre + (rng.normal(0, 0.006, 3) if index > 1 else 0)
+        if short_baseline:
+            noisy = centre + rng.normal(0, 0.002, 3)
+            # 2 mm differential error on a ~13 mm video baseline. All frames
+            # remain noisy; no privileged, exact anchor pair like the lens fixture.
+            if index < 2:
+                noisy = centre + np.array([0, -0.001 if index == 0 else 0.001, 0])
+        else:
+            noisy = centre + (rng.normal(0, 0.006, 3) if index > 1 else 0)
         rotation = pycolmap.Rotation3d(np.array([0, 0.02 * np.sin(theta), 0])).matrix()
         translation = -rotation @ noisy
         transform = capture_bundle.camera_to_world(rotation, translation)
@@ -54,7 +65,7 @@ def scene(root: Path, pycolmap: Any) -> tuple[Path, Path, Path, list[dict[str, A
     (source / "images.txt").write_text("\n".join(images) + "\n")
     (source / "points3D.txt").write_text(
         "\n".join(
-            f"{j + 1} {x} {y} {z} 100 150 200 0 " + " ".join(f"{i + 1} {j}" for i in range(12))
+            f"{j + 1} {x} {y} {z} 100 150 200 0 " + " ".join(f"{i + 1} {j}" for i in range(count))
             for j, (x, y, z) in enumerate(points)
         )
         + "\n"
@@ -73,8 +84,8 @@ def scene(root: Path, pycolmap: Any) -> tuple[Path, Path, Path, list[dict[str, A
         )
         db.write_keypoints(i + 1, xy.astype(np.float32))
     matches = np.column_stack([np.arange(len(points)), np.arange(len(points))]).astype(np.uint32)
-    for a in range(1, 13):
-        for b in range(a + 1, 13):
+    for a in range(1, count + 1):
+        for b in range(a + 1, count + 1):
             geometry = pycolmap.TwoViewGeometry()
             geometry.config = pycolmap.TwoViewGeometryConfiguration.CALIBRATED
             geometry.inlier_matches = matches
