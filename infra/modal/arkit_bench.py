@@ -33,7 +33,8 @@ volume = modal.Volume.from_name("hexapod-bench", create_if_missing=False)
 cpu_image = shared.cpu_image.add_local_file(SHARED, "/root/bench_training_app.py")
 gpu_image = shared.image.add_local_file(SHARED, "/root/bench_training_app.py")
 CPU_TIMEOUT = 3600
-GPU_TIMEOUT = 7200
+# The v17 arm trained 60k steps in 5575 s wall on L40S; keep about 2x headroom.
+GPU_TIMEOUT = 10800
 ARMS = ("v17", "pr1", "pr1+init", "pr1+init+depthloss")
 
 
@@ -170,6 +171,7 @@ def train(tag: str, arm: str, revision: str) -> dict[str, Any]:
         "trainParams": params,
         "keepSplat": True,
         "renders": 16,
+        "timeoutSeconds": GPU_TIMEOUT,
     }
     result = run_training(destination / "scene", run, plan)
     volume.commit()
