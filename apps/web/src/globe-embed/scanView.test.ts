@@ -8,7 +8,7 @@ import {
 } from "cesium";
 import type { Cesium3DTileset } from "cesium";
 import { expect, it } from "vitest";
-import { ScanResolution, scanRange, seatScan } from "./scanView";
+import { ScanResolution, scanRange, seatScan, seatScanWithRetry } from "./scanView";
 
 it.each([
   [44.7965, -111.1346, 2010],
@@ -71,9 +71,9 @@ it("starts at full device resolution capped at 3 and steps down only after susta
   expect(quality.scale).toBe(3);
   quality.frame(50);
   expect(quality.scale).toBe(2.5);
-  // An idle request-render gap is not a slow frame.
-  for (let i = 0; i < 120; i++) quality.frame(2000);
-  expect(quality.scale).toBe(2.5);
+  // Expensive real frames still count even when one takes over 250 ms.
+  for (let i = 0; i < 60; i++) quality.frame(300);
+  expect(quality.scale).toBe(2);
 });
 
 it("does not pretend a failed terrain sample is zero height", async () => {
@@ -116,3 +116,51 @@ it("seats the root box's ground instead of burying geometry below the scan origi
   // Same ECEF double-roundoff bound as the origin tests, not a placement tolerance.
   expect(Math.abs(Cartographic.fromCartesian(seated).height - 55)).toBeLessThan(1e-7);
 });
+
+it("recovers device resolution after sustained inexpensive renders", () => {
+  const quality = new ScanResolution(3);
+  for (let i = 0; i < 60; i++) quality.frame(50);
+  expect(quality.scale).toBe(2.5);
+  for (let i = 0; i < 180; i++) quality.frame(10);
+  expect(quality.scale).toBe(3);
+});
+
+it("ignores tile-loading gaps by measuring preRender to postRender", () => {
+  const quality = new ScanResolution(3);
+  for (let i = 0; i < 300; i++) {
+    quality.beginFrame(i * 2000);
+    quality.endFrame(i * 2000 + 5);
+  }
+  expect(quality.scale).toBe(3);
+  expect(quality.endFrame(1_000_000)).toBe(false);
+  const lowDpr = new ScanResolution(1.5);
+  for (let i = 0; i < 60; i++) lowDpr.frame(50);
+  for (let i = 0; i < 400; i++) lowDpr.frame(10);
+  expect(lowDpr.scale).toBe(1.5);
+});
+
+it.each([false, true])(
+  "retries terrain once and preserves raw placement on outage=%s",
+  async (outage) => {
+    const origin = Cartesian3.fromDegrees(-111, 44, 30);
+    const tiles = {
+      root: { transform: Transforms.eastNorthUpToFixedFrame(origin) },
+      boundingSphere: { center: origin, radius: 2 },
+      modelMatrix: Matrix4.IDENTITY,
+    } as unknown as Cesium3DTileset;
+    let attempts = 0;
+    const seated = await seatScanWithRetry(
+      tiles,
+      new EllipsoidTerrainProvider(),
+      (_terrain, positions) => {
+        if (++attempts === 1 || outage) throw Error("Terrain offline");
+        positions[0]!.height = 55;
+        return Promise.resolve(positions);
+      },
+    );
+    expect(attempts).toBe(2);
+    expect(seated).toBe(!outage);
+    if (outage) expect(tiles.modelMatrix).toBe(Matrix4.IDENTITY);
+    else expect(tiles.modelMatrix).not.toBe(Matrix4.IDENTITY);
+  },
+);

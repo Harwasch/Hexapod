@@ -15,7 +15,7 @@ import { createEmbedScanTileset } from "@/cesium/providers/tiles";
 import { addAnswerPins } from "@/features/answers/answerPinLayer";
 import { dispatchMessage } from "./bridge";
 import type { BridgeMessage, BridgeSnapshot } from "./generated";
-import { ScanResolution, scanRange, seatScan } from "./scanView";
+import { ScanResolution, scanRange, seatScanWithRetry } from "./scanView";
 import { ScanLayer } from "./ScanLayer";
 import { installErrorForwarding } from "./errors";
 import fixtures from "../../../ios/Modules/Globe/Tests/GlobeTests/Fixtures/messages.json";
@@ -54,14 +54,14 @@ try {
   viewer.resolutionScale = resolution.scale;
   const controls = viewer.scene.screenSpaceCameraController;
   controls.minimumZoomDistance = 0.05;
-  let previousFrame: number | undefined;
+  const removeRenderStart = viewer.scene.preRender.addEventListener(() => {
+    resolution.beginFrame(performance.now());
+  });
   const removeQuality = viewer.scene.postRender.addEventListener(() => {
-    const now = performance.now();
-    if (scanLayer.visible && previousFrame !== undefined && resolution.frame(now - previousFrame)) {
+    if (scanLayer.visible && resolution.endFrame(performance.now())) {
       viewer.resolutionScale = resolution.scale;
       viewer.scene.requestRender();
     }
-    previousFrame = now;
   });
   let terrainReady!: () => void;
   const terrainLoaded = new Promise<void>((resolve) => {
@@ -85,12 +85,13 @@ try {
   const outlines: Entity[] = [];
   let selectedId: string | null = null;
   let flightId: string | null = null;
+  const unseatedScans = new WeakSet<object>();
   const scanLayer = new ScanLayer(
     async (url) => {
       const tiles = await createEmbedScanTileset(url);
       try {
         await terrainLoaded;
-        await seatScan(tiles, viewer.terrainProvider);
+        if (!(await seatScanWithRetry(tiles, viewer.terrainProvider))) unseatedScans.add(tiles);
         return tiles;
       } catch (error) {
         tiles.destroy();
@@ -100,7 +101,12 @@ try {
     (tiles) => {
       viewer.scene.primitives.add(tiles);
       controls.enableCollisionDetection = false;
-      status.textContent = fixtureMode ? "Simulated fixture" : "";
+      status.textContent = [
+        fixtureMode ? "Simulated fixture" : "",
+        unseatedScans.has(tiles) ? "Terrain unavailable · height unverified" : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
       document.body.dataset.scanState = "ready";
       if (selectedId && flightId === selectedId) flyToScan(selectedId);
     },
@@ -236,6 +242,7 @@ try {
       removeBasemap();
       removeRenderError();
       removeQuality();
+      removeRenderStart();
       mapStatus.remove();
       scanLayer.dispose();
       handler.destroy();
