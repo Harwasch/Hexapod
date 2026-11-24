@@ -126,6 +126,9 @@ def prepare_pool(root: Path, inputs: Path, split: dict[str, Any]) -> None:
     frames.mkdir(parents=True)
     for name in split["pool"]:
         shutil.copyfile(root / "frames" / safe_name(name), frames / name)
+    import arkit_depth
+
+    arkit_depth.subset(root / "frames", frames, set(split["pool"]))
     poses.mkdir()
     for name in ("cameras.bin", "images.bin", "points3D.bin"):
         shutil.copyfile(root / "poses" / name, poses / name)

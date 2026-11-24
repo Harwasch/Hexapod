@@ -56,8 +56,10 @@ at least K are needed`. The registration check covers only those normal frames.
 `poses.json.tracking` records `total`, `normal`, `excluded`, and `excludedByState`;
 stage metrics include `excluded` and JSON-encoded `excludedByState` counts, such as
 `limited:initializing` and `limited:excessiveMotion`. LiDAR
-points are not yet used as training seeds; their full recorded depth and
-confidence remain available for a later implementation.
+confidence-2 smoothed depth now seeds the private training model by default, using
+the final poses and raw camera calibration; pose artifacts remain unchanged. An
+optional depth loss is off until benchmarked. See the capture-bundle LiDAR section
+in `tools/pipeline/README.md` for flags, rectification, limits and holdout exclusion.
 
 ## Folder and manifest
 

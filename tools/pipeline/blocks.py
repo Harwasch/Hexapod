@@ -486,6 +486,17 @@ def build_block_dataset(
     sfm.write_points3d(
         sparse / "points3D.bin", keep_tracks(sfm.read_points3d(source / "points3D.bin"), kept)
     )
+    import arkit_depth
+
+    prior_dir = target / arkit_depth.PRIORS
+    if prior_dir.exists():
+        shutil.rmtree(prior_dir)
+    if (dataset / arkit_depth.PRIORS).is_dir():
+        prior_dir.mkdir()
+        for old, new in rename.items():
+            source_prior = dataset / arkit_depth.PRIORS / (old + ".npy")
+            if source_prior.is_file():
+                shutil.copy2(source_prior, prior_dir / (new + ".npy"))
     return rename
 
 
@@ -1013,6 +1024,9 @@ def _coarse_prior(ctx: StageContext, settings: Settings, work: Path) -> Prior:
     dataset = training.build_dataset(
         settings.frames, settings.poses, work / "dataset", max_side=max_side
     )
+    import arkit_depth
+
+    arkit_depth.prepare(settings.frames, settings.poses, dataset, settings.params, cap_max=cap)
     if settings.region is not None:
         training.crop_initial_points(dataset / "sparse" / "0", settings.region)
     result = work / "gsplat"

@@ -2060,6 +2060,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     preamble = Phases()
     with preamble.phase("stageDataset"):
         dataset = training.build_dataset(frames, poses, ctx.work_dir / "dataset", max_side=max_side)
+    import arkit_depth
+
     # A shorter schedule for a smaller capture (`training.schedule_scale`), unless the
     # recipe leaves `schedule_full_at` out, which keeps the full one -- or unless the run
     # names its own `schedule_scale`, which wins over both.
@@ -2090,8 +2092,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     )
     test_every = int(ctx.param("test_every", 0))
     production_extra = training.train_extra(ctx.params, ctx.checkpoint_dir / "resume")
-    if int(ctx.param("checkpoint_every", 5000)):
-        production_extra += ["--checkpoint-token", training.checkpoint_token(ctx.params, dataset)]
+    production_extra += arkit_depth.loss_args(frames, ctx.params)
+    token_index = len(production_extra)
     if not ctx.param("streaming_export", True):
         production_extra.append("--no-streaming-export")
     train_size: tuple[int, int] | None = None
@@ -2131,6 +2133,12 @@ def gsplat(ctx: StageContext) -> StageOutcome:
                 f"gsplat: cap_max {budget.cap} is more than {budget.gpu_memory_gb:g} GB is "
                 f"modelled to hold at {frame_size} ({budget.memory_ceiling}); used as given"
             )
+    depth_metrics = arkit_depth.prepare(frames, poses, dataset, ctx.params, cap_max=cap_max)
+    if int(ctx.param("checkpoint_every", 5000)):
+        production_extra[token_index:token_index] = [
+            "--checkpoint-token",
+            training.checkpoint_token(ctx.params, dataset),
+        ]
     crop: training.RoiCrop | None = None
     if roi is not None:
         crop = training.crop_initial_points(dataset / "sparse" / "0", roi)
@@ -2202,7 +2210,10 @@ def gsplat(ctx: StageContext) -> StageOutcome:
                 holdout_error=_optional_bool(ctx.param("holdout_error"), "holdout_error"),
                 holdout_script=_optional_path(ctx.param("holdout_script")),
                 holdout_budget_s=float(ctx.param("holdout_budget_s", holdout.DEFAULT_BUDGET_S)),
-                params=dict(ctx.params),
+                params={
+                    **ctx.params,
+                    **({"_arkit_depth_metrics": depth_metrics} if depth_metrics else {}),
+                },
                 images=images,
                 schedule_full_at=full_at,
                 schedule_floor=float(ctx.param("schedule_floor", 0.25)),
@@ -2481,6 +2492,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         "shDegreeTrained": _trained_sh_degree(splat.properties_in),
     }
     document["holdout"] = {key: held_out[key] for key in HOLDOUT_SUMMARY_KEYS if key in held_out}
+    if depth_metrics is not None:
+        document["arkitDepth"] = depth_metrics
     document["init"] = None if seeded is None else seeded.to_dict()
     # The gaussian budget, every input to it, and the bound that applied.
     document["budget"] = None if budget is None else budget.to_dict()
@@ -2537,6 +2550,8 @@ def gsplat(ctx: StageContext) -> StageOutcome:
         "trainFrames": train_frames,
         "initFrom": "sfm" if seeded is None else "preview",
     }
+    if depth_metrics is not None:
+        metrics["arkitDepth"] = json.dumps(depth_metrics, sort_keys=True)
     if seeded is not None:
         metrics["seedPoints"] = seeded.seeded
     if budget is not None:
@@ -2739,6 +2754,8 @@ def _train_in_blocks(
     document["gsplatVersion"] = training.GSPLAT_VERSION
     record = run.document["blocks"]
     caps = [block["capMax"] for block in record["blocks"]]
+    if settings.params.get("_arkit_depth_metrics") is not None:
+        document["arkitDepth"] = settings.params["_arkit_depth_metrics"]
     document["settings"] = {
         "strategy": settings.strategy,
         "capMax": None if any(cap is None for cap in caps) else sum(caps),

@@ -790,6 +790,9 @@ def checkpoint_token(params: Mapping[str, Any], dataset: Path) -> str:
     # run to the cloud must not discard recoverable training. Policy params remain.
     settings = {key: value for key, value in params.items() if key != "_train_admission"}
     digest = hashlib.sha256(json.dumps(settings, sort_keys=True).encode())
+    depth_identity = dataset / "arkit-depth.sha256"
+    if depth_identity.is_file():
+        digest.update(depth_identity.read_bytes())
     for path in sorted(p for p in dataset.rglob("*") if p.is_file()):
         stat = path.stat()
         digest.update(

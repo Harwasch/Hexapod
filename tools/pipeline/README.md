@@ -1943,3 +1943,64 @@ live price or measured duration; the command refuses a reservation above `--cap`
 It has not been run. Capture-specific guard acceptance remains a CPU check; the
 GPU arms are needed to establish held-out PSNR/SSIM/LPIPS, visible smear reduction,
 convergence, memory and runtime. A sharper training fit alone proves none of those.
+
+### Capture-bundle LiDAR (ARKit PR2, stacked on recipe v18)
+
+Bundle normalize now carries the smoothed `.f16` metres and `.u8` confidence in
+`frames/arkit-depth/`, with a frame-name manifest, so remote training receives the
+measurements. Raw depth remains in the source bundle. Existing normalized artifacts
+must be normalized again to acquire this payload. Ordinary inputs and the shipped
+recipe YAML are unchanged; these per-run `train` parameters activate only when the
+bundle payload exists:
+
+| Parameter                | Default  | Meaning                                                    |
+| ------------------------ | -------- | ---------------------------------------------------------- |
+| `arkit_depth_init`       | `true`   | Append measured points to the private training model       |
+| `arkit_depth_stride`     | `8`      | Every eighth training frame, after validation exclusion    |
+| `arkit_depth_voxel_m`    | `0.02`   | One representative per 2 cm world voxel                    |
+| `arkit_depth_max_points` | `250000` | Maximum added points; also limited to room under `cap_max` |
+| `arkit_depth_loss`       | `false`  | Experimental metric L1 supervision                         |
+| `arkit_depth_weight`     | `0.01`   | Weight multiplying mean absolute Z error in metres         |
+| `arkit_depth_warmup`     | `1000`   | First optimizer step with supervision; not schedule-scaled |
+
+Only finite, positive, confidence-2 smoothed samples are used. Back-projection uses
+the **final** raw model's OPENCV calibration (or fallback ARKit PINHOLE), scaled to
+the native depth resolution, with inverse distortion. Final world-to-camera poses
+are inverted once; the COLMAP camera already incorporates ARKit's Y/Z flip. Movie
+display rotation is ignored just as it is in RGB normalize. Colours come from the
+native RGB pixels. Streaming voxel fusion retains the first representative and stops
+adding new voxels at the cap; points have empty tracks and are appended through the
+existing preview-seed machinery. Original pose files and SfM observation tracks are
+unchanged. `train_metrics.json.arkitDepth` records sample, frame, seed and prior counts,
+voxel size and effective cap. The stage emits the same summary as a JSON metric.
+
+Supervision uses a grid with longest side at most 256 pixels, spanning the exact
+rectified training camera (including crop origin and resized intrinsics). Inverse
+mapping uses nearest depth/confidence samples, avoiding mixed-confidence edges.
+The trainer loads one `.npy` lazily per image, downsamples rendered **expected** Z to
+those pixel centres, and divides absolute error by valid count (empty masks give zero).
+Metric L1 retains LiDAR scale. There is no new per-step device-to-host reduction.
+It requires `data_factor: 1`, full images and `batch_size: 1`; use `train_max_side`
+for resizing. Init alone also uses `data_factor: 1`. Missing measurements contribute
+no points or loss. The guarded patch is composed by `resume_trainer.py` against
+512d366b, on Python 3.10, alongside existing resume, telemetry, live and block hooks.
+
+Depth is excluded from both seeding and supervision for the parser's lexical
+`test_every` validation indices. The benchmark physically strips external test-depth
+files before entering the runner. Coarse block training uses the same split, and
+block renaming carries only already-filtered priors. Holdouts still participate in
+PR1 pose estimation; this is a training holdout, not a pose-estimation holdout.
+Setting both depth flags false preserves PR1 dataset bytes and training behavior.
+
+`infra/modal/arkit_bench.py` prepares four arms: `v17`, `pr1`, `pr1+init`, and
+`pr1+init+depthloss`. `--arms pr1+init` selects one; a comma-separated subset is also
+accepted. Use one tag/revision/bundle for a comparison: `_prepared/pr1/scene` is
+verified and reused across separate arm calls, keeping the exact refined poses and
+holdouts fixed. An existing arm is never replayed. The default cap is $20 for all
+four arms; forecast reservation is about $18.24 (or $4.76 for one arm), using repository
+rates and timeout/startup allowances. This is an unrun forecast, not a billing limit.
+The benchmark must establish held-out quality, visible smear/floaters, runtime,
+memory and whether the depth weight/warm-up help before the loss becomes a default.
+No archived experiment establishes that: `docs/ARCHIVE.md` records inferred
+surface-fill/solidity experiments, including failed or soft invented surfaces, but
+no ARKit LiDAR training-prior measurement.
