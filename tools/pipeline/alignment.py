@@ -1175,8 +1175,12 @@ def align_epoch(ctx: StageContext) -> StageOutcome:
         )
         for problem in problems:
             ctx.log(f"check targets: {problem}")
+        import distortion
+
         checks = check_targets.evaluate(
-            check_targets.triangulate(model, observations),
+            check_targets.triangulate(
+                model, observations, allow_opencv=distortion.enabled(model_dir)
+            ),
             targets,
             to_frame=chosen.similarity,
             origin=origin,

@@ -132,3 +132,19 @@ def prepare_pool(root: Path, inputs: Path, split: dict[str, Any]) -> None:
     # The existing binary editor preserves extrinsics/observations and cuts tracks.
     # Do not copy poses.json: it contains the full model's stale registered count.
     sfm.keep_images(poses, set(split["pool"]))
+
+    # Bundle rectification needs the shared-lens provenance in the training pool.
+    # Retain it with counts and per-frame evidence restricted to the actual model.
+    import distortion
+
+    if distortion.enabled(root / "poses"):
+        summary = read_json(root / "poses" / "poses.json")
+        subset = sfm.read_model(poses)
+        summary.update(
+            registered=subset.registered,
+            points3D=subset.points3d,
+            images=[image.to_dict() for image in subset.images],
+        )
+        corrections = summary["refinement"]["corrections"]
+        summary["refinement"]["corrections"] = {name: corrections[name] for name in split["pool"]}
+        write_json(poses / "poses.json", summary)

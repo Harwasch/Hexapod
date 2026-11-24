@@ -257,7 +257,9 @@ def read_snapshot(
     max_points: int = MAX_POINTS,
 ) -> dict[str, Any]:
     """`encode_model` of a COLMAP model directory. Raises while it is still being written."""
-    model = sfm.read_model(directory)
+    import distortion
+
+    model = distortion.projection_model(sfm.read_model(directory), directory)
     points, colours, total = _read_points_sample(directory / "points3D.bin", max_points)
     return encode_model(
         model,
@@ -415,7 +417,9 @@ def ply_indices(live_steps: Iterable[int], steps_scaler: float) -> set[int]:
 def snapshot_cameras(sparse: Path) -> dict[str, Any]:
     """Read training centres/focal once; old or hand-made datasets may lack a model."""
     try:
-        model = sfm.read_model(sparse)
+        import distortion
+
+        model = distortion.projection_model(sfm.read_model(sparse), sparse)
         return {
             "camera_centres": np.array(
                 [image.centre for image in model.images], dtype=np.float64

@@ -247,6 +247,9 @@ def build_dataset(frames: Path, poses: Path, root: Path, *, max_side: int | None
             shutil.copystat(frame, images / frame.name)
     for entry in sorted(p for p in poses.iterdir() if p.is_file()):
         shutil.copy2(entry, sparse / entry.name)
+    import distortion
+
+    distortion.rectify_dataset(root)
     return root
 
 

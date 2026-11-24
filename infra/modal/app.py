@@ -66,6 +66,7 @@ IMAGE_PACKAGES: tuple[str, ...] = (
     "pillow==13.0.0",
     "pyyaml==6.0.3",
     "imageio-ffmpeg==0.6.0",
+    "opencv-python-headless==4.10.0.84",
 )
 
 #: CUDA devel and torch agree at 12.8; retain the isolated Python 3.10 trainer venv.
