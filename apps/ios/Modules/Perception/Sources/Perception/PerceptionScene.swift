@@ -3,14 +3,16 @@ import Foundation
 
 public struct SceneSelection: Sendable {
   public var entities: [Entity]
+  public var surfaces: [SubjectSurface]
   public var masks: [SubjectMask]
   public var viewportToImage: [Double] = [1, 0, 0, 1, 0, 0]
   public var camera: CameraGeometry?
   public var capturedAt: TimeInterval = 0
   public init(
     entities: [Entity], masks: [SubjectMask], viewportToImage: [Double] = [1, 0, 0, 1, 0, 0],
-    capturedAt: TimeInterval = 0, camera: CameraGeometry? = nil
+    capturedAt: TimeInterval = 0, camera: CameraGeometry? = nil, surfaces: [SubjectSurface] = []
   ) {
+    self.surfaces = surfaces
     self.entities = entities
     self.masks = masks
     self.viewportToImage = viewportToImage
@@ -189,6 +191,111 @@ public actor PerceptionScene {
     latest = SceneSelection(
       entities: tracker.tracks.map(\.entity), masks: masks, viewportToImage: transform,
       capturedAt: time, camera: frame.camera)
+    return latest
+  }
+
+  /// One foreground-instance request for the entire frame, shared by selection and refresh.
+  /// No repeated Vision request per subject, and classification runs only for a new tap.
+  public func foregroundSelection(tap: ImagePoint?) async throws -> SceneSelection {
+    guard queriesInFlight == 0 else { throw CancellationError() }
+    queriesInFlight += 1
+    defer { queriesInFlight -= 1 }
+    if tap != nil { revision += 1 }
+    let id = revision
+    guard let frame = snapshot else { throw PerceptionError.insufficientDepth }
+    let transform = viewportToImage
+    let time = capturedAt
+    let masks = try await instances.instances(frame.image)
+    try Task.checkCancellation()
+    guard id == revision else { throw CancellationError() }
+    func contains(_ mask: SubjectMask, _ point: ImagePoint) -> Bool {
+      guard mask.isValid, point.x.isFinite, point.y.isFinite,
+        (0..<1).contains(point.x), (0..<1).contains(point.y)
+      else { return false }
+      let x = Int(point.x * Double(mask.width))
+      let y = Int(point.y * Double(mask.height))
+      return mask.pixels[y * mask.width + x] > 0
+    }
+    var entities = latest.entities
+    var choices = entities.map { previous -> Int? in
+      if let point = frame.camera.project(previous.anchor.world),
+        let index = masks.firstIndex(where: { contains($0, point) })
+      {
+        return index
+      }
+      // Handles rings/handles and other subjects whose median anchor lies outside their mask.
+      guard
+        let surface = latest.surfaces.first(where: {
+          $0.entity.label == previous.label && $0.entity.anchor.world == previous.anchor.world
+        })
+      else { return nil }
+      let points = surface.mesh.points
+      let step = max(
+        1,
+        (points.count + PerceptionLimits.maximumAssociationPoints - 1)
+          / PerceptionLimits.maximumAssociationPoints)
+      let projected = stride(from: 0, to: points.count, by: step).compactMap {
+        frame.camera.project(points[$0])
+      }
+      let votes = masks.map { mask in projected.filter { contains(mask, $0) }.count }
+      guard let maximum = votes.max(), maximum > 0 else { return nil }
+      return votes.firstIndex(of: maximum)
+    }
+    if let tap {
+      guard let choice = masks.firstIndex(where: { contains($0, tap) }) else {
+        clearSelection()
+        return latest
+      }
+      if let existing = choices.firstIndex(where: { $0 == choice }) {
+        entities.remove(at: existing)
+        choices.remove(at: existing)
+      } else {
+        let label = try await identifier.identify(frame.image, mask: masks[choice])
+        try Task.checkCancellation()
+        guard id == revision else { throw CancellationError() }
+        var entity = try MaskLifter.lift(
+          mask: masks[choice], depth: frame.depth,
+          camera: frame.camera, label: label?.label ?? "subject")
+        if let label {
+          entity.attrs["identifiedOnDevice"] = .bool(true)
+          entity.attrs["identificationConfidence"] = .number(label.confidence)
+        }
+        entities.append(entity)
+        choices.append(choice)
+      }
+    }
+    var surfaces: [SubjectSurface] = []
+    var accepted: [SubjectMask] = []
+    for index in entities.indices {
+      let previous = entities[index]
+      if let choice = choices[index],
+        var entity = try? MaskLifter.lift(
+          mask: masks[choice], depth: frame.depth,
+          camera: frame.camera, label: previous.label),
+        let mesh = try? DepthSurface.lift(
+          mask: masks[choice], depth: frame.depth, camera: frame.camera)
+      {
+        entity.attrs.merge(previous.attrs) { current, _ in current }
+        entities[index] = entity
+        accepted.append(masks[choice])
+        surfaces.append(SubjectSurface(entity: entity, mesh: mesh, capturedAt: time))
+      } else if let old = latest.surfaces.first(where: {
+        $0.entity.label == previous.label && $0.entity.anchor.world == previous.anchor.world
+      }),
+        PerceptionLimits.isCurrent(
+          capturedAt: old.capturedAt, now: time, maximumAge: PerceptionLimits.maximumSurfaceAge)
+      {
+        // A temporary Vision/depth hole keeps its own old geometry and original age.
+        surfaces.append(old)
+      }
+    }
+    try Task.checkCancellation()
+    guard id == revision else { throw CancellationError() }
+    selected = entities.last
+    rebuildTracks(entities, camera: frame.camera)
+    latest = SceneSelection(
+      entities: entities, masks: accepted, viewportToImage: transform,
+      capturedAt: time, camera: frame.camera, surfaces: surfaces)
     return latest
   }
 
