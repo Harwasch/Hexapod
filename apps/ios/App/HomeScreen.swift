@@ -370,6 +370,7 @@ private struct CaptureRow: Identifiable, Sendable {
 }
 
 @MainActor struct GlobeScreen: View {
+  @Environment(\.dismiss) private var dismiss
   let registry: PieceRegistry
   let route: GlobeRoute?
   @AppStorage("hex.testflight.debugEnabled") private var testing = false
@@ -390,18 +391,30 @@ private struct CaptureRow: Identifiable, Sendable {
       UIFixtureLaunch.active ? "fake" : (debugChoices ? registry.choice("globe") : "real")
     Group {
       if let source = try? registry.globeSources.resolve(choice) {
-        VStack(spacing: 0) {
-          if choice == "fake" { Text("Simulated").font(.caption) }
-          GlobeView(
-            source: source, route: route, webBaseURL: registry.configuration.webBaseURL,
-            fixture: choice == "fake")
+        GlobeView(
+          source: UIFixtureLaunch.active
+            && ProcessInfo.processInfo.arguments.contains("-uiTestGlobeEmpty")
+            ? FakeGlobeDataSource(includeScans: false) : source,
+          route: route, webBaseURL: registry.configuration.webBaseURL,
+          fixture: choice == "fake"
+        )
+        .overlay(alignment: .bottomLeading) {
+          if choice == "fake" {
+            Text("Simulated").font(.caption).padding(8)
+              .background(.regularMaterial, in: Capsule()).padding(16)
+          }
         }
       } else {
         Label("Server unavailable", systemImage: "wifi.exclamationmark")
+          .overlay(alignment: .topLeading) {
+            Button("Back", systemImage: "chevron.left") { dismiss() }
+              .accessibilityIdentifier("globe.back")
+          }
       }
     }
     .background(HexStyle.background).accessibilityIdentifier("globe.screen")
-    .toolbar(.visible, for: .navigationBar)
+    .navigationBarBackButtonHidden()
+    .toolbar(.hidden, for: .navigationBar)
   }
 }
 

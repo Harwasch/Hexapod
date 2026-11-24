@@ -71,6 +71,13 @@
               .ignoresSafeArea()
             }
           }
+          .overlay(alignment: .bottom) {
+            if snapshot.property.epochs.isEmpty {
+              Label("No scans yet", systemImage: "viewfinder")
+                .padding(12).background(.regularMaterial, in: Capsule())
+                .padding(.bottom, 64).accessibilityIdentifier("globe.empty")
+            }
+          }
           .overlay(alignment: .topTrailing) {
             Menu {
               if sites.count > 1 && route == nil {
@@ -87,11 +94,13 @@
                   ForEach(sites) { site in Text(site.name).tag(site.id) }
                 }.accessibilityIdentifier("globe.sitePicker")
               }
-              Picker("Scan", selection: $selectedScan) {
-                ForEach(snapshot.property.epochs) { scan in
-                  Text(globeScanDate(scan.observedAt)).tag(Optional(scan.captureId ?? scan.id))
-                    .accessibilityIdentifier(
-                      "globe.scan.\((scan.captureId ?? scan.id).uuidString.lowercased())")
+              if !snapshot.property.epochs.isEmpty {
+                Picker("Scan", selection: $selectedScan) {
+                  ForEach(snapshot.property.epochs) { scan in
+                    Text(globeScanDate(scan.observedAt)).tag(Optional(scan.captureId ?? scan.id))
+                      .accessibilityIdentifier(
+                        "globe.scan.\((scan.captureId ?? scan.id).uuidString.lowercased())")
+                  }
                 }
               }
               if let selectedScan {
@@ -127,8 +136,10 @@
         } label: {
           Image(systemName: "chevron.left").frame(width: 44, height: 44)
             .background(.regularMaterial, in: Circle())
-        }.accessibilityLabel("Back").padding(.leading, 16).padding(.top, 8)
+        }.accessibilityLabel("Back").accessibilityIdentifier("globe.back")
+          .padding(.leading, 16).padding(.top, 8)
       }
+      .navigationBarBackButtonHidden()
       .toolbar(.hidden, for: .navigationBar)
       .task { CesiumGlobeSession.shared.configure(webBaseURL: webBaseURL, fixture: fixture) }
       .task(id: LoadKey(route: effectiveRoute, retry: retry)) {

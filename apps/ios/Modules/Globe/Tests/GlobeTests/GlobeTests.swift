@@ -27,6 +27,14 @@ struct GlobeTests {
     #expect(try JSONDecoder().decode(GlobeRoute.self, from: JSONEncoder().encode(route)) == route)
   }
 
+  @Test func emptySiteFixtureRetainsItsPropertyBoundaryWithoutScansOrPins() async throws {
+    let source = FakeGlobeDataSource(includeScans: false)
+    let snapshot = try await source.snapshot(siteID: FakeGlobeDataSource.siteID)
+    #expect(snapshot.property.epochs.isEmpty && snapshot.pins.isEmpty)
+    #expect(!snapshot.property.boundary.polygons.isEmpty)
+    #expect(try await source.sites().count == 1)
+  }
+
   @Test func liveAdapterPaginationAndExistingSiteShapes() async throws {
     let fixture = try await FakeGlobeDataSource().snapshot(siteID: FakeGlobeDataSource.siteID)
     let encoder = JSONEncoder()

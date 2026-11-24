@@ -1,6 +1,6 @@
-import Networking
 import EntitySchema
 import Foundation
+import Networking
 
 #if canImport(FoundationNetworking)
   import FoundationNetworking
@@ -167,8 +167,9 @@ public protocol GlobeTransport: Sendable {
 public struct URLSessionGlobeTransport: GlobeTransport {
   public init() {}
   public func get(_ url: URL) async throws -> Data {
-    do { return try await APIClient().data(for: URLRequest(url: url)) }
-    catch APIError.httpStatus(let status) { throw GlobeError.httpStatus(status) }
+    do { return try await APIClient().data(for: URLRequest(url: url)) } catch APIError.httpStatus(
+      let status)
+    { throw GlobeError.httpStatus(status) }
   }
 }
 
@@ -221,7 +222,8 @@ public struct APIGlobeDataSource: GlobeDataSource {
 public struct FakeGlobeDataSource: GlobeDataSource {
   public static let siteID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
   public static let scanID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
-  public init() {}
+  private let includeScans: Bool
+  public init(includeScans: Bool = true) { self.includeScans = includeScans }
   public func sites() async throws -> [GlobeSite] {
     [GlobeSite(id: Self.siteID, name: "Simulated property")]
   }
@@ -237,15 +239,16 @@ public struct FakeGlobeDataSource: GlobeDataSource {
     ])
     let property = GlobeProperty(
       id: siteID, name: "Simulated property", boundary: footprint,
-      epochs: [
-        GlobeScan(
-          id: Self.scanID, captureId: Self.scanID, observedAt: "2026-01-01T00:00:00Z",
-          footprint: footprint),
-        GlobeScan(
-          id: UUID(uuidString: "00000000-0000-0000-0000-000000000004")!,
-          captureId: UUID(uuidString: "00000000-0000-0000-0000-000000000004")!,
-          observedAt: "2026-01-02T00:00:00Z", footprint: footprint)
-      ])
+      epochs: includeScans
+        ? [
+          GlobeScan(
+            id: Self.scanID, captureId: Self.scanID, observedAt: "2026-01-01T00:00:00Z",
+            footprint: footprint),
+          GlobeScan(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000004")!,
+            captureId: UUID(uuidString: "00000000-0000-0000-0000-000000000004")!,
+            observedAt: "2026-01-02T00:00:00Z", footprint: footprint),
+        ] : [])
     let entity = Entity(
       label: "Simulated oak",
       anchor: Anchor(
@@ -254,10 +257,12 @@ public struct FakeGlobeDataSource: GlobeDataSource {
       source: EntitySource(module: "GlobeFixture", model: "fixture"))
     return GlobeSnapshot(
       property: property,
-      pins: [
-        GlobePin(
-          id: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!, siteId: siteID,
-          scanId: Self.scanID, entity: entity, observedAt: "2026-01-01T00:00:00Z", uncertaintyM: 3)
-      ])
+      pins: includeScans
+        ? [
+          GlobePin(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!, siteId: siteID,
+            scanId: Self.scanID, entity: entity, observedAt: "2026-01-01T00:00:00Z", uncertaintyM: 3
+          )
+        ] : [])
   }
 }
