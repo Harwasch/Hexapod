@@ -66,7 +66,8 @@ def prepare(bundle_path: str, tag: str, revision: str) -> None:
         shutil.copyfile(bundle, work.input_path("upload") / bundle.name)
         stages_config = []
         for stage in source.stages[:2]:
-            params = dict(stage.params)
+            # As the API's capture_bundles.PARAMS: route both stages to the bundle branch.
+            params = {**stage.params, "capture_bundle": True}
             if stage.id == "pose":
                 params.update(arkit_refine=arm == "pr1", arkit_shared_lens=arm == "pr1")
             stages_config.append({"id": stage.id, "impl": stage.impl, "params": params})
