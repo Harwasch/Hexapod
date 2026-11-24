@@ -9,8 +9,9 @@
   func metalFusionMatchesReferenceForExactlyRepresentableFixture() async throws {
     let device = try #require(MTLCreateSystemDefaultDevice())
     let queue = try #require(device.makeCommandQueue())
-    let library = try device.makeDefaultLibrary(bundle: .module)
-    let pipeline = try device.makeComputePipelineState(
+    // In an async context the iOS 26 SDK resolves this to its async overload.
+    let library = try await device.makeDefaultLibrary(bundle: .module)
+    let pipeline = try await device.makeComputePipelineState(
       function: #require(library.makeFunction(name: "fuseSurfels")))
     #expect(MemoryLayout<SurfelGPUCell>.stride == 64)
     #expect(MemoryLayout<PreviewUniforms>.stride == 256)
