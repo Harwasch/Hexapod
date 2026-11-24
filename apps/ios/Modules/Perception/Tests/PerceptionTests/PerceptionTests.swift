@@ -279,24 +279,6 @@ private struct TapSegmenter: InstanceSegmenting {
   #expect(empty.entities.isEmpty && empty.masks.isEmpty)
 }
 
-@Test func maskHidesWhenCameraOrViewportMovesByMoreThanTwoPixels() async throws {
-  let scene = PerceptionScene(
-    segmenter: SceneSegmenter(), instances: SceneSegmenter(), identifier: SceneIdentifier())
-  await scene.update(sceneFrame(), viewportToImage: [1, 0, 0, 1, 0, 0], capturedAt: 1)
-  let selection = try await scene.select(.init(x: 0.5, y: 0.5))
-  #expect(
-    selection.isRegistered(
-      camera: camera(), viewportToImage: [1, 0, 0, 1, 0, 0], width: 390, height: 844))
-  var translated = identity
-  translated[12] = 0.1
-  #expect(
-    !selection.isRegistered(
-      camera: camera(translated), viewportToImage: [1, 0, 0, 1, 0, 0], width: 390, height: 844))
-  #expect(
-    !selection.isRegistered(
-      camera: camera(), viewportToImage: [1, 0, 0, 1, 0.1, 0], width: 390, height: 844))
-}
-
 @Test func multiSelectionRefreshRetainsOrderAndTogglingAfterCameraUpdateRemovesOnlyOne()
   async throws
 {

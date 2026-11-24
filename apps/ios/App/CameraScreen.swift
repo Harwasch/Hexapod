@@ -22,6 +22,7 @@ private enum CameraStyle {
   @State private var model: CameraModel
   @State private var isPressing = false
   @State private var showSites = false
+  @AppStorage("hex.testflight.debugEnabled") private var testFlightDebug = false
   @State private var latestThumbnail: UIImage?
   private let onCaptures: (() -> Void)?
   private let onSettings: (() -> Void)?
@@ -35,6 +36,17 @@ private enum CameraStyle {
     self.onCaptures = onCaptures
     self.onSettings = onSettings
     self.onGlobe = onGlobe
+  }
+
+  private var showPerceptionPerformance: Bool {
+    #if DEBUG
+      let debug = true
+    #else
+      let debug = false
+    #endif
+    return PieceRegistry.menuAvailable(
+      debug: debug,
+      receipt: Bundle.main.appStoreReceiptURL?.lastPathComponent, enabled: testFlightDebug)
   }
 
   var body: some View {
@@ -65,6 +77,12 @@ private enum CameraStyle {
         GeometryReader { geometry in
           VStack {
             header(at: context.date)
+            if showPerceptionPerformance {
+              Text(model.perceptionPerformance).font(.caption2.monospaced())
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(.black.opacity(0.65), in: Capsule())
+                .allowsHitTesting(false).accessibilityIdentifier("camera.perceptionPerformance")
+            }
             if !model.answerEntities.isEmpty {
               HStack {
                 Spacer()

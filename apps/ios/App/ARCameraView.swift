@@ -3,6 +3,7 @@
   import AVFoundation
   import Darwin
   import RealityKit
+  import Perception
   import LiveSplat
   import SwiftUI
   import UIKit
@@ -78,6 +79,7 @@
       private var startGeneration = UUID()
       var starting: Task<Void, Never>?
       private var summaryTimer: Timer?
+      private var displayLink: CADisplayLink?
       init(model: CameraModel) {
         self.model = model
         super.init()
@@ -119,17 +121,27 @@
           self.model.attach(view)
           view.session.run(configuration)
           self.running = true
+          let displayLink = CADisplayLink(target: self, selector: #selector(self.displayFrame))
+          displayLink.preferredFrameRateRange = CAFrameRateRange(
+            minimum: Float(PerceptionLimits.displayFramesPerSecond),
+            maximum: Float(PerceptionLimits.displayFramesPerSecond),
+            preferred: Float(PerceptionLimits.displayFramesPerSecond))
+          displayLink.add(to: .main, forMode: .common)
+          self.displayLink = displayLink
           self.summaryTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) {
             [weak self] _ in
             Task { @MainActor [weak self] in self?.model.tick() }
           }
         }
       }
+      @objc private func displayFrame() { model.displayTick() }
       @objc func tap(_ gesture: UITapGestureRecognizer) {
         guard let view else { return }
         model.tap(gesture.location(in: view))
       }
       func stop() {
+        displayLink?.invalidate()
+        displayLink = nil
         summaryTimer?.invalidate()
         summaryTimer = nil
         startGeneration = UUID()
@@ -149,7 +161,7 @@
     private let ingress: ScanIngress
     private let lock = NSLock()
     private var preview: ScanPreviewProcessor?
-    private var latest: ScanFrame?
+    private var perceptionDriver: CameraPerceptionDriver?
     private var eventHandler: (@Sendable (Event) -> Void)?
     var onEvent: (@Sendable (Event) -> Void)? {
       get { lock.withLock { eventHandler } }
@@ -159,22 +171,16 @@
     func setPreview(_ processor: ScanPreviewProcessor?) {
       lock.withLock {
         preview = processor
-        latest = nil
       }
     }
-    func takeFrame() -> ScanFrame? {
-      lock.withLock {
-        defer { latest = nil }
-        return latest
-      }
+    func setPerceptionDriver(_ driver: CameraPerceptionDriver?) {
+      lock.withLock { perceptionDriver = driver }
     }
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
       ingress.offer(frame)
-      let processor = lock.withLock {
-        latest = ScanFrame(frame)
-        return preview
-      }
-      processor?.offer(frame)
+      let consumers = lock.withLock { (preview, perceptionDriver) }
+      consumers.0?.offer(frame)
+      consumers.1?.offer(frame)
     }
     func sessionWasInterrupted(_ session: ARSession) {
       ingress.stop()
