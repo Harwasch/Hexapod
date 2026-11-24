@@ -11,5 +11,10 @@
     let library = try device.makeDefaultLibrary(bundle: .module)
     let function = try #require(library.makeFunction(name: "subjectHighlight"))
     _ = try device.makeComputePipelineState(function: function)
+    let surface = MTLRenderPipelineDescriptor()
+    surface.vertexFunction = try #require(library.makeFunction(name: "worldSurfaceVertex"))
+    surface.fragmentFunction = try #require(library.makeFunction(name: "worldSurfaceMask"))
+    surface.colorAttachments[0].pixelFormat = .r8Unorm
+    _ = try device.makeRenderPipelineState(descriptor: surface)
   }
 #endif

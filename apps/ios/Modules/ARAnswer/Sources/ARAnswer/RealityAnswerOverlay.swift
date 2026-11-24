@@ -14,6 +14,8 @@
     private let processor: HighlightProcessor
     private var scanning = false
     private var installed = false
+    private var worldHighlightEnabled = false
+    public var worldSurfaceRenderer: WorldSurfaceRenderer { processor.worldSurfaces }
 
     public init(view: ARView) throws {
       self.view = view
@@ -27,7 +29,17 @@
       scanning = value
       if value { setMask(nil) }
     }
+    public func enableWorldHighlight() {
+      guard !scanning, !worldHighlightEnabled else { return }
+      worldHighlightEnabled = true
+      processor.setWorldEnabled(true)
+      let processor = processor
+      view?.renderCallbacks.postProcess = { @Sendable context in processor.render(context) }
+      installed = true
+    }
     public func setMask(_ mask: HighlightMask?) {
+      worldHighlightEnabled = false
+      processor.setWorldEnabled(false)
       let active = !scanning && mask?.isValid == true
       processor.setMask(active ? mask : nil)
       if active {
@@ -49,6 +61,7 @@
     public func remove() {
       stopSpeaking()
       setMask(nil)
+      worldSurfaceRenderer.clear()
     }
   }
 
@@ -57,6 +70,8 @@
   private final class HighlightProcessor: @unchecked Sendable {
     private let lock = NSLock()
     private var texture: MTLTexture?
+    private var worldEnabled = false
+    let worldSurfaces: WorldSurfaceRenderer
     private let device: MTLDevice
     private let pipeline: MTLComputePipelineState
     init() throws {
@@ -65,7 +80,14 @@
           .makeFunction(name: "subjectHighlight")
       else { throw CocoaError(.fileReadUnknown) }
       self.device = device
+      worldSurfaces = try WorldSurfaceRenderer(device: device)
       pipeline = try device.makeComputePipelineState(function: function)
+    }
+    func setWorldEnabled(_ value: Bool) {
+      lock.withLock {
+        worldEnabled = value
+        texture = nil
+      }
     }
     func setMask(_ mask: HighlightMask?) {
       guard let mask, mask.isValid else {
@@ -88,7 +110,9 @@
       lock.withLock { texture = next }
     }
     func render(_ context: ARView.PostProcessContext) {
-      guard let texture = lock.withLock({ texture }),
+      let state = lock.withLock { (worldEnabled, texture) }
+      let mask = state.0 ? worldSurfaces.mask(context) : state.1
+      guard let texture = mask,
         let encoder = context.commandBuffer.makeComputeCommandEncoder()
       else {
         let blit = context.commandBuffer.makeBlitCommandEncoder()
