@@ -1820,3 +1820,90 @@ The training console uses the completed run's published epoch asset
 Updating the Modal image is necessary: an already-running container cannot acquire
 the new observer. Deploy the API and web reader first, then rebuild/deploy Modal,
 then deploy the worker. No database migration is needed.
+
+### Capture bundles: v18 pose refinement and shared lens
+
+`photo-reconstruct` v18 enables `pose.arkit_refine: true` and
+`pose.arkit_shared_lens: true` only for `hex-capture-v1` bundles. Photos and ordinary
+videos keep their existing extraction, mapping, calibration and training paths.
+`arkit_refine: false` restores the v17 fixed-ARKit pose path; with refinement enabled,
+`arkit_shared_lens: false` refines poses/points with the original per-frame PINHOLE
+intrinsics held fixed. Neither setting enables training pose optimization or depth loss.
+LiDAR ingestion, initialization and supervision are outside this change.
+
+The fixed triangulated model is checked against the original ARKit transforms first.
+An isolated pycolmap **4.2.0** CPU process then runs free-pose BA with a SOFT_L1 loss
+(scale 1 pixel), re-triangulates, and runs final BA. One OPENCV camera is shared by
+all frames, seeded with the median ARKit `(fx, fy, cx, cy)` when those vary. Focal,
+principal point and `(k1, k2, p1, p2)` are optimized together. Rebuilding the shared
+camera also rebuilds COLMAP 4's trivial rigs and sensor data IDs. Solves use four
+threads, the two-camera gauge, 150 iterations and function tolerance `1e-7`.
+
+An all-camera-centre Umeyama similarity maps the result back to ARKit's metre and
+gravity frame, including the points and camera orientations. The fitted scale must
+satisfy **`abs(s - 1) < 0.005` before applying it**; the accepted model is then expressed
+in ARKit metres, so placement still uses scale 1. Any correction above **15 cm or
+5 degrees**, a mean point reprojection error that does not decrease, a degenerate
+alignment, or a failed solve restores the intact fixed model and records a reason.
+These are conservative policy bounds, not measurements of device accuracy. In
+particular the diagnosis's pose-only fit needed scale 0.9494 and would be rejected.
+The shared-lens control's scale must be checked in a real retrain; acceptance is not
+promised by the diagnostic reprojection improvement alone.
+
+`poses.json.refinement` records before/after mean point reprojection errors, median /
+p95 / maximum translations in centimetres and rotations in degrees, the raw Sim3,
+lens parameters, observation counts, bounds and fallback reason. Per-frame raw BA
+and ARKit poses make the applied transform auditable. The pose step's `refinement`
+metric contains the same summary without the per-frame arrays. Unmeasured values
+are null. Georeferencing and entity placement validate accepted correction evidence;
+disabled and fallback paths retain the strict fixed-pose check.
+
+Previously `training.build_dataset` copied OPENCV cameras untouched and gsplat's
+pinned parser used `cv2.getOptimalNewCameraMatrix(alpha=0)` plus remapping and an ROI
+crop. Its perspective path did not subtract the crop origin from the principal
+point. Also, quality and live consumers used the raw focal/principal point as a
+pinhole. Accepted bundle lenses are now explicitly rectified in the **private training
+dataset**: images, dimensions, intrinsics and feature observations change together,
+with the ROI origin subtracted. Untracked images are omitted. The resulting camera
+is PINHOLE, preventing double undistortion by the training/holdout parser. Raw pose
+artifacts and source images are preserved, as are stable dataset timestamps for
+checkpoint resume. Quality and live cameras use the same
+rectification calculation. Survey-target clicks remain in raw capture pixels and
+use the OPENCV inverse/forward distortion model when bundle refinement is accepted;
+other target paths stay unchanged. Training budget and block projections use the rectified
+model. OpenCV 4.10.0.84 is pinned in both Modal pipeline images; local bundle training
+and projection consumers need `opencv-python-headless` too. Non-bundle datasets do
+not enter this path.
+
+The CPU integration fixture (`tests/arkit_refine_scene.py`) runs a known nonplanar
+scene with noisy poses and varying ARKit intrinsics through real pycolmap BA,
+re-triangulation, metric alignment and the pinned gsplat parser. It also exercises a
+nonzero crop origin, source-image preservation and resized training images. Run the
+suite under `heavy`, with `ARKIT_TEST_PYTHON` pointing at a pycolmap 4.2 interpreter
+and `ARKIT_TEST_GSPLAT_EXAMPLES` pointing at the pinned trainer's `examples` directory
+to include it. Those optional dependencies are not downloaded by the tests.
+
+An unrun comparison for capture `99c02b1d` is prepared in
+[`infra/modal/arkit_bench.py`](../../infra/modal/arkit_bench.py). After placing the
+bundle on the existing **hexapod-bench** volume and committing the reviewed code:
+
+```sh
+modal run infra/modal/arkit_bench.py \
+  --bundle-path /bench/inputs/99c02b1d.hexcap \
+  --tag arkit-pr1-001 --revision "$(git rev-parse HEAD)" --cap 12
+```
+
+This prepares v17 fixed-pose and PR1 scenes on CPU, aborting before either GPU arm
+if PR1 falls back, then trains them sequentially on
+L40S with identical seed 42 and settings. Both use the same deterministic 1/8 test
+split, plus `test_every: 8` validation within the training pool. Test images are
+excluded from training, but remain available to pose estimation: this measures
+render generalization, not independent lens calibration. Results and renders stay
+under `/bench/arkit/<tag>/{v17,pr1}/run`; no production API or storage writes occur.
+Allow roughly **$5** for two one-hour L40S arms plus CPU preparation, or **$9.25** at
+the coded timeouts and startup allowances, using the repository's recorded rates
+($2.173392/hour L40S including CPU/RAM; $0.2526/hour CPU). This is a forecast, not a
+live price or measured duration; the command refuses a reservation above `--cap`.
+It has not been run. Capture-specific guard acceptance remains a CPU check; the
+GPU arms are needed to establish held-out PSNR/SSIM/LPIPS, visible smear reduction,
+convergence, memory and runtime. A sharper training fit alone proves none of those.
