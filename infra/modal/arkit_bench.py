@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import sys
 import time
@@ -51,7 +52,8 @@ def prepare(bundle_path: str, tag: str, revision: str) -> None:
     from workdir import Workdir
 
     volume.reload()
-    bundle = Path(bundle_path).resolve()
+    # Not resolve(): Modal mounts the volume at /bench through a symlink.
+    bundle = Path(os.path.normpath(bundle_path))
     if not bundle.is_relative_to("/bench") or not bundle.is_file():
         raise ValueError("bundle must already exist on hexapod-bench")
     source = load_recipe("photo-reconstruct")
