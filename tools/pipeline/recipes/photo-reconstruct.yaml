@@ -9,7 +9,7 @@
 # `compensate` gains a `gpu:` block when its impl becomes `imc` (B3); asking for an L4 to
 # run `none` would be billing a GPU to do nothing.
 name: photo-reconstruct
-version: 17
+version: 18
 description: Reconstruct a splat from a raw capture, then package and register it.
 
 # `site_context` is what the worker knows about the site before the run: its reference
@@ -68,6 +68,9 @@ stages:
       # twice the time exhaustive. The tree is in the Modal CPU image
       # ($COLMAP_VOCAB_TREE); where there is none, `auto` is exhaustive. A0 #7 is why
       # sequential never runs without it: 2 of 40 on a closed orbit.
+      # Bundle-only refinement; ignored for photos and ordinary videos.
+      arkit_refine: true
+      arkit_shared_lens: true
       matcher: auto
       min_registered_fraction: 0.8
       # Half the stage's defaults (8192 / 2400): the same 50/50 registered, in 62% of

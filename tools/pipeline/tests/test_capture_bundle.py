@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import sqlite3
+import subprocess
 import tarfile
 from pathlib import Path
 from typing import Any, cast
@@ -501,9 +502,15 @@ def test_pose_requires_enough_normal_frames(
         arkit_ingest.pose(ctx)
 
 
+@pytest.mark.parametrize("process_error", [False, True])
+@pytest.mark.parametrize("refinement", [False, True])
 @pytest.mark.parametrize("phone_like", [False, True])
 def test_pose_excludes_limited_frames_from_database_and_seed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phone_like: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    phone_like: bool,
+    refinement: bool,
+    process_error: bool,
 ) -> None:
     from types import SimpleNamespace
 
@@ -519,7 +526,7 @@ def test_pose_excludes_limited_frames_from_database_and_seed(
         records = json.loads((out / "frames_meta.json").read_text())["arkit"]
     normal = [f for f in records if f["trackingState"] == "normal"]
     names = [f"frame_{f['index']:08d}.png" for f in normal]
-    ctx = pose_context(tmp_path, records)
+    ctx = pose_context(tmp_path, records, arkit_refine=refinement)
     if phone_like:
         ctx.input = lambda name: out / name
     commands = []
@@ -542,6 +549,14 @@ def test_pose_excludes_limited_frames_from_database_and_seed(
                     "INSERT INTO images VALUES (?, ?, 1)",
                     [(100 + i, name) for i, name in enumerate(selected)],
                 )
+        elif "--report" in argv:
+            if process_error:
+                raise subprocess.CalledProcessError(1, argv)
+            Path(argv[argv.index("--report") + 1]).write_text(
+                json.dumps(
+                    {"status": "fallback", "fallbackReason": "pose correction exceeds bound"}
+                )
+            )
         elif argv[1] == "point_triangulator":
             seed = (tmp_path / "arkit-seed" / "images.txt").read_text().splitlines()[::2]
             assert [line.split()[-1] for line in seed] == names
@@ -564,6 +579,7 @@ def test_pose_excludes_limited_frames_from_database_and_seed(
     model = SimpleNamespace(
         registered=10,
         points3d=1,
+        mean_reprojection_error=1.5,
         cameras=[],
         images=images,
         by_name=lambda: dict(zip(names, images, strict=True)),
@@ -590,7 +606,11 @@ def test_pose_excludes_limited_frames_from_database_and_seed(
     excluded_counts = outcome.metrics["excludedByState"]
     assert isinstance(excluded_counts, str)
     assert json.loads(excluded_counts) == report["tracking"]["excludedByState"]
-    assert len(commands) == 3
+    assert len(commands) == (4 if refinement else 3)
+    assert report["refinement"]["status"] == ("fallback" if refinement else "disabled")
+    if refinement:
+        reason = "exit status" if process_error else "exceeds"
+        assert reason in report["refinement"]["fallbackReason"]
 
 
 def phone_frames() -> list[dict[str, Any]]:

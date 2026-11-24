@@ -41,6 +41,7 @@ import PIL.Image
 
 import alignment
 import arkit_ingest
+import arkit_refine
 import blocks
 import capture_platform
 import colmap4
@@ -2110,8 +2111,12 @@ def gsplat(ctx: StageContext) -> StageOutcome:
     if frame_size is not None:
         train_size = frame_size
     budgeting = time.monotonic()
+    # Rectified bundle cameras already use training pixels. Raw artifact intrinsics
+    # would mix distorted native focal lengths with the cropped dataset dimensions.
+    rectified = (dataset / "sparse" / "0" / "rectification.json").is_file()
+    budget_poses = dataset / "sparse" / "0" if rectified else poses
     budget = train_admission.plan(
-        ctx.params, ctx.gpu_tier, poses, frame_size, pixel_scale, fixed_tier=True
+        ctx.params, ctx.gpu_tier, budget_poses, frame_size, pixel_scale, fixed_tier=True
     )
     preamble.add("budget", time.monotonic() - budgeting)
     cap_max = None if budget is None else budget.cap
@@ -3587,6 +3592,10 @@ def _frame_from_poses(
     if model_dir is not None:
         summary_path = model_dir / "poses.json"
         if summary_path.is_file() and _read_json(summary_path).get("source") == "hex-capture-v1":
+            if not arkit_refine.verified_summary(_read_json(summary_path)):
+                raise ValueError(
+                    "unverified ARKit refinement cannot establish metric gravity frame"
+                )
             return {
                 "source": "arkit-gravity",
                 "scale": scale,
@@ -4540,13 +4549,14 @@ def catalog(ctx: StageContext) -> StageOutcome:
 
 
 def entity_placement(ctx: StageContext, georef: dict[str, Any]) -> dict[str, Any]:
-    """Carry the same run's full transform only for verified fixed ARKit poses."""
+    """Carry the transform only for fixed or verified metric-aligned ARKit poses."""
     poses = _read_json(ctx.input("poses") / "poses.json") if ctx.has_input("poses") else {}
     scale = poses.get("scale")
     verified = (
         poses.get("source") == "hex-capture-v1"
         and isinstance(scale, dict)
         and scale.get("source") == "arkit"
+        and arkit_refine.verified_summary(poses)
     )
     return {
         "georef": georef,

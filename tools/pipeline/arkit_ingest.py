@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+import subprocess
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -13,10 +14,13 @@ import imageio_ffmpeg
 import numpy as np
 from PIL import Image
 
+import arkit_refine
 import capture_bundle as bundle
+import colmap4
 import frame_meta
 import sfm
 from contracts import StageContext, StageOutcome
+from global_sfm import KEEP
 
 MIN_TRACKED_FRAMES = 10
 
@@ -192,21 +196,56 @@ def pose(ctx: StageContext) -> StageOutcome:
     model = sfm.read_model(out)
     if model.registered != len(tracked) or model.points3d == 0:
         raise ValueError("ARKit triangulation did not retain every pose with usable points")
-    # Confirm the tool held the metric poses, not only its option spelling.
-    by_name = model.by_name()
-    for record in tracked:
-        expected_r, expected_t = bundle.world_to_camera(bundle.matrix(record["transform"], 4))
-        image = by_name[f"frame_{record['index']:08d}.png"]
-        if not np.allclose(image.rotation, expected_r, atol=1e-5, rtol=0) or not np.allclose(
-            image.tvec, expected_t, atol=1e-5, rtol=0
-        ):
-            raise ValueError("COLMAP changed a fixed ARKit pose")
+    # Always check the immutable fixed baseline before attempting free-pose BA.
+    arkit_refine.verify(model, tracked, None)
+    refinement = arkit_refine.empty_report("disabled")
+    if bool(ctx.param("arkit_refine", True)):
+        work = ctx.work_dir / "arkit-refine"
+        if work.exists():
+            shutil.rmtree(work)
+        work.mkdir()
+        candidate, report_path = work / "model", work / "report.json"
+        command = [
+            colmap4.python(),
+            str(Path(arkit_refine.__file__).resolve()),
+            "--source",
+            str(out),
+            "--database",
+            str(database),
+            "--frames",
+            str(frames),
+            "--output",
+            str(candidate),
+            "--report",
+            str(report_path),
+        ]
+        if not bool(ctx.param("arkit_shared_lens", True)):
+            command.append("--no-lens")
+        try:
+            ctx.run(command)
+            refinement = json.loads(report_path.read_text())
+            if refinement.get("status") == "accepted":
+                refined = sfm.read_model(candidate)
+                arkit_refine.verify(refined, tracked, refinement)
+        except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+            refinement.update(status="fallback", fallbackReason=str(error))
+        if refinement["status"] == "accepted":
+            # An IO failure during publication fails the stage; never label a partly
+            # copied candidate as the fixed fallback.
+            for filename in KEEP:
+                shutil.copy2(candidate / filename, out / filename)
+            model = sfm.read_model(out)
+        else:
+            arkit_refine.verify(model, tracked, None)
+    if refinement.get("reprojectionBeforePx") is None:
+        refinement["reprojectionBeforePx"] = model.mean_reprojection_error
     (out / "poses.json").write_text(
         json.dumps(
             {
                 "source": "hex-capture-v1",
                 "registered": model.registered,
                 "tracking": tracking,
+                "refinement": refinement,
                 "points3D": model.points3d,
                 "cameras": [camera.to_dict() for camera in model.cameras],
                 "images": [image.to_dict() for image in model.images],
@@ -226,6 +265,10 @@ def pose(ctx: StageContext) -> StageOutcome:
             "points3D": model.points3d,
             "excluded": len(records) - len(tracked),
             "excludedByState": json.dumps(excluded, sort_keys=True),
+            "refinement": json.dumps(
+                {key: value for key, value in refinement.items() if key != "corrections"},
+                sort_keys=True,
+            ),
         },
-        summary="ARKit metric poses with triangulated features",
+        summary="ARKit metric poses; refinement " + refinement["status"],
     )
