@@ -16,6 +16,13 @@ struct ScenePerception: SceneQuerying {
   func update(_ frame: FrameSnapshot, viewportToImage: [Double], capturedAt: Double) async {
     await scene.update(frame, viewportToImage: viewportToImage, capturedAt: capturedAt)
   }
+  func foregroundFrame(
+    _ frame: FrameSnapshot, viewportToImage: [Double], capturedAt: Double,
+    tap: ImagePoint?
+  ) async throws -> SceneSelection {
+    await scene.update(frame, viewportToImage: viewportToImage, capturedAt: capturedAt)
+    return try await scene.foregroundSelection(tap: tap)
+  }
   func clear() async { await scene.clear() }
   func selection() async -> SceneSelection { await scene.selection() }
   func select(_ point: ImagePoint) async throws -> SceneSelection { try await scene.select(point) }

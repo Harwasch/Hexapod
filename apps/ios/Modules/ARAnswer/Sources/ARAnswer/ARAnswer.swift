@@ -10,6 +10,11 @@ public struct AnswerPresentation: Sendable {
   public private(set) var isConnecting = false
   public init() {}
   public mutating func reset() { self = Self() }
+  /// Perception already separates instances. Nearby subjects must retain separate pins.
+  public mutating func replaceSelection(_ entities: [Entity]) {
+    reset()
+    self.entities = entities
+  }
   public mutating func receive(_ event: AskEvent) {
     isConnecting = event == .status("Connecting…")
     switch event {
@@ -50,25 +55,45 @@ public struct HighlightMask: Sendable {
     width: Int, height: Int, pixels: [UInt8],
     viewportToImage: [Double], outputSize: Int = 256
   ) -> Self? {
+    project(
+      width: width, height: height, pixels: pixels, viewportToImage: viewportToImage,
+      outputWidth: outputSize, outputHeight: outputSize)
+  }
+
+  public static func project(
+    width: Int, height: Int, pixels: [UInt8], viewportToImage: [Double],
+    outputWidth: Int, outputHeight: Int
+  ) -> Self? {
     guard width > 0, height > 0, pixels.count / width == height, pixels.count % width == 0,
       viewportToImage.count == 6, viewportToImage.allSatisfy(\.isFinite),
-      outputSize > 0 && outputSize <= 2048
+      outputWidth > 0, outputHeight > 0, outputWidth <= 2048, outputHeight <= 2048
     else { return nil }
-    let t = viewportToImage
-    var output = [UInt8](repeating: 0, count: outputSize * outputSize)
-    for y in 0..<outputSize {
-      for x in 0..<outputSize {
-        let u = (Double(x) + 0.5) / Double(outputSize)
-        let v = (Double(y) + 0.5) / Double(outputSize)
-        let ix = t[0] * u + t[2] * v + t[4]
-        let iy = t[1] * u + t[3] * v + t[5]
-        if ix >= 0 && ix < 1 && iy >= 0 && iy < 1 {
-          output[y * outputSize + x] =
-            pixels[Int(iy * Double(height)) * width + Int(ix * Double(width))]
-        }
+    let mapping = ViewportMapping(viewportToImage: viewportToImage)
+    var output = [UInt8](repeating: 0, count: outputWidth * outputHeight)
+    for y in 0..<outputHeight {
+      for x in 0..<outputWidth {
+        guard
+          let p = mapping.imagePoint(
+            x: (Double(x) + 0.5) / Double(outputWidth),
+            y: (Double(y) + 0.5) / Double(outputHeight)),
+          p.x >= 0, p.x < 1, p.y >= 0, p.y < 1
+        else { continue }
+        // Pixel centres, not pixel corners. Clamp the bilinear footprint at image edges.
+        let sx = max(0, min(Double(width - 1), p.x * Double(width) - 0.5))
+        let sy = max(0, min(Double(height - 1), p.y * Double(height) - 0.5))
+        let x0 = Int(sx)
+        let y0 = Int(sy)
+        let x1 = min(width - 1, x0 + 1)
+        let y1 = min(height - 1, y0 + 1)
+        let fx = sx - Double(x0)
+        let fy = sy - Double(y0)
+        let top = Double(pixels[y0 * width + x0]) * (1 - fx) + Double(pixels[y0 * width + x1]) * fx
+        let bottom =
+          Double(pixels[y1 * width + x0]) * (1 - fx) + Double(pixels[y1 * width + x1]) * fx
+        output[y * outputWidth + x] = UInt8((top * (1 - fy) + bottom * fy).rounded())
       }
     }
-    return Self(width: outputSize, height: outputSize, pixels: output)
+    return Self(width: outputWidth, height: outputHeight, pixels: output)
   }
 }
 

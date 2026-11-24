@@ -61,3 +61,13 @@ private func entity(_ x: Double, confidence: Double = 0.5) -> Entity {
   #expect(EntityCardFacts(subject).invasive)
   #expect(EntityCardFacts(subject).latinName == "Cortaderia jubata")
 }
+
+@Test func selectedNearbyInstancesKeepTheirOwnNumbers() {
+  var state = AnswerPresentation()
+  state.replaceSelection([entity(0), entity(0.1)])
+  #expect(state.entities.count == 2)
+  state.replaceSelection([entity(0.1)])
+  #expect(state.entities.count == 1 && state.entities[0].anchor.world.x == 0.1)
+  state.replaceSelection([])
+  #expect(state.entities.isEmpty)
+}

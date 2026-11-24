@@ -36,6 +36,15 @@
     return buffer
   }
 
+  private func performForeground(
+    _ request: VNGenerateForegroundInstanceMaskRequest, buffer: CVPixelBuffer
+  ) throws {
+    let trace = InferenceSignpost(name: "VisionForegroundMask")
+    let started = ProcessInfo.processInfo.systemUptime
+    defer { trace.end(duration: ProcessInfo.processInfo.systemUptime - started) }
+    try VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .up).perform([request])
+  }
+
   /// Vision discovers foreground instances, without claiming a semantic object identity.
   /// Prompt and output both use unrotated top-left camera coordinates.
   /// Device-only: mask orientation and Vision instance quality need an iPhone acceptance run.
@@ -45,7 +54,7 @@
       try Task.checkCancellation()
       let buffer = try pixelBuffer(image)
       let request = VNGenerateForegroundInstanceMaskRequest()
-      try VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .up).perform([request])
+      try performForeground(request, buffer: buffer)
       guard let observation = request.results?.first else { return [] }
       let map = observation.instanceMask
       CVPixelBufferLockBaseAddress(map, .readOnly)
@@ -53,21 +62,22 @@
       guard let base = CVPixelBufferGetBaseAddress(map) else { throw PerceptionError.noSubject }
       let width = CVPixelBufferGetWidth(map)
       let height = CVPixelBufferGetHeight(map)
-      return observation.allInstances.map { id in
-        var pixels = [UInt8](repeating: 0, count: width * height)
-        for y in 0..<height {
-          let row = base.advanced(by: y * CVPixelBufferGetBytesPerRow(map)).assumingMemoryBound(
-            to: UInt8.self)
-          for x in 0..<width { pixels[y * width + x] = Int(row[x]) == id ? 255 : 0 }
-        }
-        return SubjectMask(width: width, height: height, pixels: pixels)
+      var labels = Array(repeating: UInt8(0), count: width * height)
+      for y in 0..<height {
+        let row = base.advanced(by: y * CVPixelBufferGetBytesPerRow(map)).assumingMemoryBound(
+          to: UInt8.self)
+        for x in 0..<width { labels[y * width + x] = row[x] }
       }
+      return try ForegroundInstanceMasks.decode(
+        width: width, height: height,
+        labels: labels, instances: Array(observation.allInstances))
     }
+
     public func segment(_ image: CameraImage, prompt: SubjectPrompt) async throws -> SubjectMask {
       try Task.checkCancellation()
       let buffer = try pixelBuffer(image)
       let request = VNGenerateForegroundInstanceMaskRequest()
-      try VNImageRequestHandler(cvPixelBuffer: buffer, orientation: .up).perform([request])
+      try performForeground(request, buffer: buffer)
       guard let observation = request.results?.first else { throw PerceptionError.noSubject }
       let instanceMap = observation.instanceMask
       CVPixelBufferLockBaseAddress(instanceMap, .readOnly)

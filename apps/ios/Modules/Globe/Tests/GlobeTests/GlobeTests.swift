@@ -27,6 +27,14 @@ struct GlobeTests {
     #expect(try JSONDecoder().decode(GlobeRoute.self, from: JSONEncoder().encode(route)) == route)
   }
 
+  @Test func emptySiteFixtureRetainsItsPropertyBoundaryWithoutScansOrPins() async throws {
+    let source = FakeGlobeDataSource(includeScans: false)
+    let snapshot = try await source.snapshot(siteID: FakeGlobeDataSource.siteID)
+    #expect(snapshot.property.epochs.isEmpty && snapshot.pins.isEmpty)
+    #expect(!snapshot.property.boundary.polygons.isEmpty)
+    #expect(try await source.sites().count == 1)
+  }
+
   @Test func liveAdapterPaginationAndExistingSiteShapes() async throws {
     let fixture = try await FakeGlobeDataSource().snapshot(siteID: FakeGlobeDataSource.siteID)
     let encoder = JSONEncoder()
@@ -132,4 +140,11 @@ struct GlobeTests {
     #expect(unknown.coordinate == nil)
   }
 
+}
+
+@Test func scanMenuUsesFriendlyDatesInsteadOfServerTimestamps() {
+  let locale = Locale(identifier: "en_US")
+  #expect(globeScanDate("2026-10-03T12:00:00Z", locale: locale).contains("Oct"))
+  #expect(globeScanDate("2026-10-03T12:00:00.123Z", locale: locale).contains("2026"))
+  #expect(globeScanDate("invalid", locale: locale) == "Scan")
 }

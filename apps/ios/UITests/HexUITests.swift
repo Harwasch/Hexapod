@@ -23,8 +23,9 @@ import XCTest
     app.terminate()
   }
 
-  private func launchFixture(signIn: Bool = true) {
+  private func launchFixture(signIn: Bool = true, emptyGlobe: Bool = false) {
     app.launchArguments = ["-uiTestFixture", "yard-small"]
+    if emptyGlobe { app.launchArguments.append("-uiTestGlobeEmpty") }
     app.launch()
     visible("home.record")
     screenshot("Home")
@@ -91,10 +92,24 @@ import XCTest
     tap("home.globe", shot: "Globe")
     visible("globe.scanPicker")
     screenshot("Globe loaded")
+    XCTAssertEqual(app.navigationBars.count, 0)
+    XCTAssertEqual(app.buttons.matching(identifier: "globe.back").count, 1)
     tap("globe.scanPicker", shot: "Scan picker")
     tap("globe.scan.00000000-0000-0000-0000-000000000004", shot: "Selected second scan")
-    XCTAssertTrue(app.buttons["globe.scanPicker"].label.contains("2026-01-02"))
+    XCTAssertTrue(app.buttons["globe.scanPicker"].label.contains("Simulated property"))
+    XCTAssertFalse(app.buttons["globe.scanPicker"].label.contains("2026-01-02"))
     screenshot("Second scan on globe")
+  }
+
+  func testGlobeWithoutScansKeepsTheMapAndOneBackControl() {
+    launchFixture(emptyGlobe: true)
+    tap("home.globe", shot: "Empty globe")
+    visible("globe.empty")
+    visible("globe.scanPicker")
+    XCTAssertEqual(app.navigationBars.count, 0)
+    XCTAssertEqual(app.buttons.matching(identifier: "globe.back").count, 1)
+    tap("globe.back", shot: "Home after empty globe")
+    visible("home.globe")
   }
 
   func testAskAnswerAndEntityCard() {

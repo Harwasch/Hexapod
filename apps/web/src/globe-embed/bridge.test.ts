@@ -44,7 +44,7 @@ describe("shared native bridge", () => {
       "KHR_gaussian_splatting",
     );
     expect(EMBED_TILE_OPTIONS).toMatchObject({
-      maximumScreenSpaceError: 32,
+      maximumScreenSpaceError: 8,
       cacheBytes: 64 * 1024 * 1024,
       maximumCacheOverflowBytes: 16 * 1024 * 1024,
       preloadWhenHidden: false,

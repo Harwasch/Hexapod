@@ -164,10 +164,17 @@ public protocol PerceptionServing: Sendable {
   func clear() async
   func selection() async -> SceneSelection
   func select(_ point: ImagePoint) async throws -> SceneSelection
+  func foregroundSelection(tap: ImagePoint?) async throws -> SceneSelection
   func refreshSelection(isQuery: Bool) async throws -> SceneSelection
   func inspect(subject: String, count: Bool) async throws -> [Entity]
 }
 extension PerceptionScene: PerceptionServing {}
+extension PerceptionServing {
+  public func foregroundSelection(tap: ImagePoint?) async throws -> SceneSelection {
+    if let tap { return try await select(tap) }
+    return try await refreshSelection(isQuery: false)
+  }
+}
 
 /// A fake service uses the real lifting/tracking code with deterministic semantic masks.
 public struct FakePerception: PerceptionServing {
@@ -182,6 +189,9 @@ public struct FakePerception: PerceptionServing {
   public func selection() async -> SceneSelection { await scene.selection() }
   public func select(_ point: ImagePoint) async throws -> SceneSelection {
     try await scene.select(point)
+  }
+  public func foregroundSelection(tap: ImagePoint?) async throws -> SceneSelection {
+    try await scene.foregroundSelection(tap: tap)
   }
   public func refreshSelection(isQuery: Bool = false) async throws -> SceneSelection {
     try await scene.refreshSelection(isQuery: isQuery)

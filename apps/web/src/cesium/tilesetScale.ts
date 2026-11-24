@@ -22,6 +22,7 @@ import {
   Cartographic,
   Math as CesiumMath,
   Matrix4,
+  Matrix3,
   type Cesium3DTileset,
 } from "cesium";
 
@@ -263,4 +264,36 @@ export function footprintAtScale(
 export function syncRootTransform(tileset: Pick<Cesium3DTileset, "root" | "modelMatrix">): void {
   const root = tileset.root as { updateTransform?: (parent: Matrix4) => void } | undefined;
   root?.updateTransform?.(tileset.modelMatrix);
+}
+
+/** Ellipsoid height of the lowest root-box corner, shared by main-globe and embed placement. */
+export function lowestHeight(tileset: Cesium3DTileset): number | undefined {
+  const inner = (
+    tileset.root as unknown as
+      | { boundingVolume?: { boundingVolume?: { center?: Cartesian3; halfAxes?: Matrix3 } } }
+      | undefined
+  )?.boundingVolume?.boundingVolume;
+  const halfAxes = inner?.halfAxes;
+  if (!inner?.center || !halfAxes) return undefined;
+  let lowest = Number.POSITIVE_INFINITY;
+  const axes = [0, 1, 2].map((i) => Matrix3.getColumn(halfAxes, i, new Cartesian3()));
+  for (const sx of [-1, 1])
+    for (const sy of [-1, 1])
+      for (const sz of [-1, 1]) {
+        const corner = Cartesian3.clone(inner.center, new Cartesian3());
+        for (const [axis, sign] of [
+          [axes[0], sx],
+          [axes[1], sy],
+          [axes[2], sz],
+        ] as const) {
+          if (axis)
+            Cartesian3.add(
+              corner,
+              Cartesian3.multiplyByScalar(axis, sign, new Cartesian3()),
+              corner,
+            );
+        }
+        lowest = Math.min(lowest, Cartographic.fromCartesian(corner).height);
+      }
+  return Number.isFinite(lowest) ? lowest : undefined;
 }

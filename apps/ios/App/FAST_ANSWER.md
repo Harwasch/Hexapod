@@ -38,7 +38,15 @@ with per-axis percentiles. These are
 approximate visible-surface extents, not calibrated full-object dimensions.
 Tracks reproject anchors and associate by distance/IoU, tolerate short gaps, and
 age on processed frames. Explicit new selections replace the tracked subject set.
-Masks carry the transform of their source frame and expire after 0.75 s.
+Camera selections lift masked LiDAR depth into world-space surfaces. The overlay
+reprojects them with the latest camera and display transform at a requested 60 fps,
+keeping geometry until replacement or deselection, and hiding it when the display
+camera is stale using PerceptionLimits. Vision runs only for pending taps or selected
+objects, off the main thread, one request at a time. Busy camera frames are dropped
+before copying; the next available frame starts when the worker is idle without
+an interval timer. Queued taps keep owned buffer copies, not ARFrames, with a limit
+of two. The 10 Hz target is not a measured device rate. Each successful match
+refreshes the selected surface.
 
 ## Optional neural segmentation
 

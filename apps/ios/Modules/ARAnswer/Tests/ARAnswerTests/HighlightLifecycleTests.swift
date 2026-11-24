@@ -26,3 +26,22 @@
     #expect(view.renderCallbacks.postProcess == nil)
   }
 #endif
+
+#if canImport(RealityKit) && os(iOS)
+  @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil, "Requires Metal"))
+  @MainActor func worldSurfaceRenderingYieldsThePostprocessToScanning() throws {
+    let view = ARView(frame: .zero, cameraMode: .nonAR, automaticallyConfigureSession: false)
+    let overlay = try RealityAnswerOverlay(view: view)
+    overlay.enableWorldHighlight()
+    #expect(view.renderCallbacks.postProcess != nil)
+    overlay.setScanning(true)
+    #expect(view.renderCallbacks.postProcess == nil)
+    overlay.enableWorldHighlight()
+    #expect(view.renderCallbacks.postProcess == nil)
+    overlay.setScanning(false)
+    overlay.enableWorldHighlight()
+    #expect(view.renderCallbacks.postProcess != nil)
+    overlay.remove()
+    #expect(view.renderCallbacks.postProcess == nil)
+  }
+#endif

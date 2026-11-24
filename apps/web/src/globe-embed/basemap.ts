@@ -14,6 +14,7 @@ export function installBasemap(
   viewer: CesiumWidget,
   token: string | undefined,
   status: (message: string) => void,
+  terrainReady?: () => void,
 ): () => void {
   let disposed = false;
   const removers: (() => void)[] = [];
@@ -45,14 +46,19 @@ export function installBasemap(
       (terrain) => {
         if (disposed) return;
         viewer.terrainProvider = terrain;
+        terrainReady?.();
         removers.push(terrain.errorEvent.addEventListener(() => status("Terrain unavailable")));
         viewer.scene.requestRender();
       },
       () => {
-        if (!disposed) status("Terrain unavailable");
+        if (!disposed) {
+          status("Terrain unavailable");
+          terrainReady?.();
+        }
       },
     );
   } else {
+    terrainReady?.();
     status("Terrain unavailable");
     void add(
       Promise.resolve(
@@ -66,6 +72,7 @@ export function installBasemap(
   }
   return () => {
     disposed = true;
+    terrainReady?.();
     removers.forEach((remove) => remove());
   };
 }

@@ -66,14 +66,17 @@ import Voice
     let x: CGFloat
     let y: CGFloat
   }
-  var screenPins: [ScreenPin] {
-    guard let view = arView else { return [] }
-    return presentation.entities.enumerated().compactMap { index, entity in
+  private(set) var screenPins: [ScreenPin] = []
+  private func updatePins() {
+    guard let view = arView else {
+      screenPins = []
+      return
+    }
+    screenPins = presentation.entities.enumerated().compactMap { index, entity in
       let p = entity.anchor.world
-      if let point = view.project(SIMD3(Float(p.x), Float(p.y), Float(p.z))),
-        view.bounds.contains(point)
-      {
-        return ScreenPin(id: index, x: point.x, y: point.y)
+      let top = SIMD3(Float(p.x), Float(p.y + entity.extent.y / 2), Float(p.z))
+      if let point = view.project(top), view.bounds.contains(point) {
+        return ScreenPin(id: index, x: point.x, y: max(22, point.y - 18))
       }
       if simulated {
         return ScreenPin(id: index, x: view.bounds.midX, y: view.bounds.height * 0.55)
@@ -88,14 +91,18 @@ import Voice
   private weak var arView: ARView?
   private var voiceTask: Task<Void, Never>?
   private var answerTask: Task<Void, Never>?
-  private var perceptionTask: Task<Void, Never>?
   private var questionGeneration = UUID()
   private var voiceGeneration = UUID()
-  private var lastPerceptionTime: TimeInterval = -.infinity
-  private var frameGeneration = UUID()
-  private var lastMaskUpdate: TimeInterval = 0
-  private var hasSnapshot = false
-  private var viewportToImage: [Double] = [1, 0, 0, 1, 0, 0]
+  private var perceptionDriver: CameraPerceptionDriver?
+  private var tapSelectionActive = false
+  private(set) var perceptionMetrics = InferenceMetrics()
+  var perceptionPerformance: String {
+    if capturePhase.isBusy || isTalking || answering { return "Vision paused" }
+    return String(
+      format: "Vision %.1f Hz · %.0f ms · target ≥%.0f Hz",
+      perceptionMetrics.achievedHz, perceptionMetrics.averageDurationMilliseconds,
+      PerceptionLimits.targetInferenceHz)
+  }
 
   init(providers: CameraProviders) {
     voice = providers.voice
@@ -119,6 +126,7 @@ import Voice
       capturePhase = phase
       switch phase {
       case .recording(let start):
+        perceptionDriver?.setEnabled(false)
         recordingStarted = start
         (overlay as? RealityAnswerOverlay)?.setScanning(true)
         liveSplat?.start()
@@ -159,6 +167,18 @@ import Voice
       } else {
         overlay = try RealityAnswerOverlay(view: view)
       }
+      if usesLiveCapture {
+        let renderer = (overlay as? RealityAnswerOverlay)?.worldSurfaceRenderer
+        if let driver = perceptionDriver {
+          driver.setRenderer(renderer)
+          driver.setEnabled(true)
+        } else {
+          perceptionDriver = CameraPerceptionDriver(scene: perception, renderer: renderer)
+        }
+        frameFeed.setPerceptionDriver(perceptionDriver)
+        (overlay as? RealityAnswerOverlay)?.enableWorldHighlight()
+        displayTick()
+      }
       failed = false
     } catch { failed = true }
   }
@@ -172,7 +192,6 @@ import Voice
           try Task.checkCancellation()
           let time = ProcessInfo.processInfo.systemUptime
           await perception.update(snapshot, viewportToImage: [1, 0, 0, 1, 0, 0], capturedAt: time)
-          hasSnapshot = true
           cameraReady = true
           let entities = try await perception.inspect(.init(subject: "subject", tools: [.count]))
           overlay?.update(entities: entities)
@@ -200,6 +219,25 @@ import Voice
   /// Called by a 10 Hz UI timer, never from the ARSession delegate.
   func tick() {
     recorder.pollFailure()
+    if let driver = perceptionDriver {
+      let enabled = !capturePhase.isBusy && !isTalking && !answering
+      driver.setEnabled(enabled)
+      if enabled { (overlay as? RealityAnswerOverlay)?.enableWorldHighlight() }
+      perceptionMetrics = driver.metrics
+      if let result = driver.takeResult(), driver.isCurrent(result.generation), !capturePhase.isBusy
+      {
+        if tapSelectionActive {
+          presentation.replaceSelection(result.selection.entities)
+          overlay?.update(entities: presentation.entities)
+          updatePins()
+        }
+        if result.tapped {
+          card = result.card
+          failed = false
+        }
+      }
+    }
+    updatePins()
     if recording {
       if let renderer = liveSplat as? DefaultLiveSplatRenderer, let view = arView {
         renderer.processor?.setViewport(
@@ -216,81 +254,61 @@ import Voice
       }
       return
     }
-    if let frame = frameFeed.takeFrame() { frameForPerception(frame.frame) }
   }
   private var scanCoverage = 0.0
-  private func frameForPerception(_ frame: ARFrame) {
-    (overlay as? RealityAnswerOverlay)?.updateCamera()
-    if ProcessInfo.processInfo.systemUptime - lastMaskUpdate > 0.75 { overlay?.setMask(nil) }
-    guard perceptionTask == nil, frame.timestamp - lastPerceptionTime >= 0.35,
-      let view = arView, view.bounds.width > 0, view.bounds.height > 0,
-      case .normal = frame.camera.trackingState
-    else { return }
-    lastPerceptionTime = frame.timestamp
-    let inverse = frame.displayTransform(for: .portrait, viewportSize: view.bounds.size).inverted()
-    viewportToImage = [inverse.a, inverse.b, inverse.c, inverse.d, inverse.tx, inverse.ty].map {
-      Double($0)
-    }
-    // FrameSnapshot copies immutable ARFrame buffers off the UI thread, one frame at a time.
-    let transfer = FrameTransfer(frame)
-    let transform = viewportToImage
-    let capturedAt = ProcessInfo.processInfo.systemUptime
-    let scene = perception
-    let frameID = UUID()
-    frameGeneration = frameID
-    perceptionTask = Task { [weak self] in
-      defer { if self?.frameGeneration == frameID { self?.perceptionTask = nil } }
-      do {
-        let snapshot = try await Task.detached(priority: .userInitiated) {
-          try Task.checkCancellation()
-          return try FrameSnapshot(frame: transfer.frame)
-        }.value
-        try Task.checkCancellation()
-        guard self?.frameGeneration == frameID else { return }
-        await scene.update(snapshot, viewportToImage: transform, capturedAt: capturedAt)
-        self?.hasSnapshot = true
-        let selection = try await scene.refreshSelection()
-        try Task.checkCancellation()
-        self?.highlight(selection)
-      } catch is CancellationError {} catch { self?.overlay?.setMask(nil) }
-    }
+
+  /// Lightweight camera uniforms only. Surface rasterization happens on the GPU each display frame.
+  func displayTick() {
+    guard let view = arView, let driver = perceptionDriver else { return }
+    driver.setViewport(
+      size: view.bounds.size,
+      orientation: view.window?.windowScene?.interfaceOrientation ?? .portrait)
+    if let frame = view.session.currentFrame { driver.display(frame) }
   }
 
   func tap(_ point: CGPoint) {
-    guard !capturePhase.isBusy else { return }
-    if let entity = (overlay as? RealityAnswerOverlay)?.pin(at: point) {
-      card = entity
-      return
-    }
-    guard let view = arView, view.bounds.width > 0, view.bounds.height > 0, hasSnapshot else {
-      return
-    }
-    let t = viewportToImage
-    let u = Double(point.x / view.bounds.width)
-    let v = Double(point.y / view.bounds.height)
-    let prompt = ImagePoint(x: t[0] * u + t[2] * v + t[4], y: t[1] * u + t[3] * v + t[5])
-    answerTask?.cancel()
-    let generation = UUID()
-    questionGeneration = generation
+    guard !capturePhase.isBusy, let view = arView,
+      view.bounds.width > 0, view.bounds.height > 0
+    else { return }
     card = nil
+    answerTask?.cancel()
+    questionGeneration = UUID()
+    question = ""
+    answerText = ""
+    answering = false
+    tapSelectionActive = true
     overlay?.stopSpeaking()
-    Task {
-      await router.cancel()
-      guard generation == questionGeneration else { return }
+    let router = router
+    Task { await router.cancel() }
+    if let driver = perceptionDriver, let frame = view.session.currentFrame {
+      driver.setEnabled(true)
+      let accepted = driver.select(
+        ImagePoint(
+          x: Double(point.x / view.bounds.width),
+          y: Double(point.y / view.bounds.height)), frame: frame)
+      if !accepted {
+        failed = true
+        failureText = "Selection unavailable"
+      }
+      return
+    }
+    // Explicit simulated replay has no ARFrame or live camera projection.
+    let generation = questionGeneration
+    answerTask = Task {
       do {
-        let selected = try await perception.select(prompt)
-        guard generation == questionGeneration else { return }
-        presentation.reset()
-        selected.entities.forEach { presentation.receive(.entity($0)) }
-        overlay?.update(entities: presentation.entities)
-        highlight(selected)
-        failed = false
+        let previousCount = presentation.entities.count
+        let selection = try await perception.select(
+          ImagePoint(
+            x: Double(point.x / view.bounds.width),
+            y: Double(point.y / view.bounds.height)))
+        guard generation == questionGeneration, !Task.isCancelled else { return }
+        presentation.replaceSelection(selection.entities)
+        updatePins()
+        card = selection.entities.count > previousCount ? selection.entities.last : nil
+        highlight(selection)
       } catch is CancellationError {} catch {
-        if generation == questionGeneration {
-          failed = true
-          failureText = "Selection unavailable"
-          overlay?.setMask(nil)
-        }
+        failed = true
+        failureText = "Selection unavailable"
       }
     }
   }
@@ -307,9 +325,6 @@ import Voice
     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     if !recording {
       clearAnswer()
-      perceptionTask?.cancel()
-      frameGeneration = UUID()
-      perceptionTask = nil
     }
     recorder.toggleRecording()
   }
@@ -361,6 +376,7 @@ import Voice
   func clearAnswer() {
     answerTask?.cancel()
     questionGeneration = UUID()
+    tapSelectionActive = false
     question = ""
     answerText = ""
     answering = false
@@ -368,19 +384,27 @@ import Voice
     overlay?.update(entities: [])
     overlay?.setMask(nil)
     presentation.reset()
+    card = nil
+    screenPins = []
     let router = router
-    Task { await router.cancel() }
+    let perception = perception
+    let driver = perceptionDriver
+    driver?.resetSelection(enabled: !capturePhase.isBusy && !isTalking && !answering)
+    Task {
+      await router.cancel()
+      if driver == nil { await perception.clear() }
+    }
   }
   func replayAnswer() { if !answerText.isEmpty { overlay?.speak(answerText) } }
   func pinCard() {
-    guard let card else { return }
-    overlay?.update(entities: [card])
-    self.card = nil
+    card = nil
   }
 
   func beginTalking() {
     guard !isTalking else { return }
     isTalking = true
+    perceptionDriver?.setEnabled(false)
+    tapSelectionActive = false
     preparingVoice = true
     transcript = ""
     question = ""
@@ -451,6 +475,8 @@ import Voice
   }
 
   func ask(_ text: String) {
+    perceptionDriver?.setEnabled(false)
+    tapSelectionActive = false
     question = text
     answerText = ""
     answering = true
@@ -462,6 +488,8 @@ import Voice
     overlay?.stopSpeaking()
     answerTask = Task {
       guard id == questionGeneration, !Task.isCancelled else { return }
+      await perceptionDriver?.waitUntilIdle()
+      guard id == questionGeneration, !Task.isCancelled else { return }
       let request = AskRequest(id: id.uuidString, question: text)
       let stream = await router.ask(request)
       guard id == questionGeneration, !Task.isCancelled else { return }
@@ -469,7 +497,9 @@ import Voice
         guard id == questionGeneration, !Task.isCancelled else { return }
         presentation.receive(event)
         switch event {
-        case .entity: overlay?.update(entities: presentation.entities)
+        case .entity:
+          overlay?.update(entities: presentation.entities)
+          updatePins()
         case .speech(let text):
           answerText = text
           overlay?.speak(text)
@@ -489,20 +519,25 @@ import Voice
   }
 
   private func highlight(_ selection: SceneSelection) {
-    guard !capturePhase.isBusy else { return }
-    guard ProcessInfo.processInfo.systemUptime - selection.capturedAt <= 0.75 else {
-      overlay?.setMask(nil)
-      return
-    }
+    // Live selection surfaces are uploaded by the inference worker, never rasterized on MainActor.
+    guard perceptionDriver == nil, !capturePhase.isBusy, let view = arView else { return }
+    let scale = min(
+      1,
+      1536
+        / max(
+          view.bounds.width * view.contentScaleFactor,
+          view.bounds.height * view.contentScaleFactor))
+    let outputWidth = max(1, Int((view.bounds.width * view.contentScaleFactor * scale).rounded()))
+    let outputHeight = max(1, Int((view.bounds.height * view.contentScaleFactor * scale).rounded()))
     let masks = selection.masks
     let transform = selection.viewportToImage
-    lastMaskUpdate = selection.capturedAt
     var projected: HighlightMask?
     for mask in masks {
       guard
         let next = HighlightMask.project(
           width: mask.width, height: mask.height,
-          pixels: mask.pixels, viewportToImage: transform)
+          pixels: mask.pixels, viewportToImage: transform,
+          outputWidth: outputWidth, outputHeight: outputHeight)
       else { continue }
       if projected == nil {
         projected = next
@@ -516,8 +551,12 @@ import Voice
   }
 
   func suspend() {
+    perceptionDriver?.resetSelection(enabled: false)
+    frameFeed.setPerceptionDriver(nil)
+    let stoppedDriver = perceptionDriver
     replayTask?.cancel()
     replayTask = nil
+    tapSelectionActive = false
     cameraReady = false
     isTalking = false
     preparingVoice = false
@@ -526,16 +565,11 @@ import Voice
     voiceTask?.cancel()
     voice.cancel()
     answerTask?.cancel()
-    perceptionTask?.cancel()
-    frameGeneration = UUID()
-    perceptionTask = nil
-    hasSnapshot = false
-    lastPerceptionTime = -.infinity
     let router = router
     let perception = perception
     Task {
       await router.cancel()
-      await perception.clear()
+      if stoppedDriver == nil { await perception.clear() }
     }
     if !usesLiveCapture && recording { toggleFixtureRecording() }
     recorder.stop()
@@ -546,14 +580,8 @@ import Voice
     overlay = nil
     arView = nil
     presentation.reset()
+    screenPins = []
     card = nil
     answering = false
   }
-}
-
-/// ARFrame and its buffers are immutable snapshots retained until the copy finishes.
-/// No ARSession or mutable renderer crosses the task boundary.
-private final class FrameTransfer: @unchecked Sendable {
-  let frame: ARFrame
-  init(_ frame: ARFrame) { self.frame = frame }
 }

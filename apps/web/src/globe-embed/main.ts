@@ -15,6 +15,7 @@ import { createEmbedScanTileset } from "@/cesium/providers/tiles";
 import { addAnswerPins } from "@/features/answers/answerPinLayer";
 import { dispatchMessage } from "./bridge";
 import type { BridgeMessage, BridgeSnapshot } from "./generated";
+import { ScanResolution, scanRange, seatScanWithRetry } from "./scanView";
 import { ScanLayer } from "./ScanLayer";
 import { installErrorForwarding } from "./errors";
 import fixtures from "../../../ios/Modules/Globe/Tests/GlobeTests/Fixtures/messages.json";
@@ -48,7 +49,24 @@ try {
     status.textContent = "Globe rendering failed";
     emit({ version: 1, type: "failure", message: "Globe rendering failed" });
   });
-  viewer.resolutionScale = 1 / Math.max(1, window.devicePixelRatio);
+  viewer.useBrowserRecommendedResolution = true;
+  const resolution = new ScanResolution(window.devicePixelRatio);
+  viewer.resolutionScale = resolution.scale;
+  const controls = viewer.scene.screenSpaceCameraController;
+  controls.minimumZoomDistance = 0.05;
+  const removeRenderStart = viewer.scene.preRender.addEventListener(() => {
+    resolution.beginFrame(performance.now());
+  });
+  const removeQuality = viewer.scene.postRender.addEventListener(() => {
+    if (scanLayer.visible && resolution.endFrame(performance.now())) {
+      viewer.resolutionScale = resolution.scale;
+      viewer.scene.requestRender();
+    }
+  });
+  let terrainReady!: () => void;
+  const terrainLoaded = new Promise<void>((resolve) => {
+    terrainReady = resolve;
+  });
   viewer.scene.globe.tileCacheSize = 64;
   viewer.scene.globe.maximumScreenSpaceError = 4;
   const removeBasemap = installBasemap(
@@ -58,6 +76,7 @@ try {
       mapStatus.textContent = message;
       if (message) emit({ version: 1, type: "failure", message });
     },
+    terrainReady,
   );
   let state: BridgeSnapshot = { pins: [], scans: [], boundary: [] };
   let removePins = (): void => {
@@ -66,16 +85,34 @@ try {
   const outlines: Entity[] = [];
   let selectedId: string | null = null;
   let flightId: string | null = null;
+  const unseatedScans = new WeakSet<object>();
   const scanLayer = new ScanLayer(
-    createEmbedScanTileset,
+    async (url) => {
+      const tiles = await createEmbedScanTileset(url);
+      try {
+        await terrainLoaded;
+        if (!(await seatScanWithRetry(tiles, viewer.terrainProvider))) unseatedScans.add(tiles);
+        return tiles;
+      } catch (error) {
+        tiles.destroy();
+        throw error;
+      }
+    },
     (tiles) => {
       viewer.scene.primitives.add(tiles);
-      status.textContent = fixtureMode ? "Simulated fixture" : "";
+      controls.enableCollisionDetection = false;
+      status.textContent = [
+        fixtureMode ? "Simulated fixture" : "",
+        unseatedScans.has(tiles) ? "Terrain unavailable · height unverified" : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
       document.body.dataset.scanState = "ready";
       if (selectedId && flightId === selectedId) flyToScan(selectedId);
     },
     (tiles) => {
       viewer.scene.primitives.remove(tiles);
+      controls.enableCollisionDetection = true;
     },
     () => viewer.scene.requestRender(),
     () => {
@@ -103,7 +140,7 @@ try {
     const tiles = selectedId === id ? scanLayer.visible : null;
     if (tiles) {
       viewer.camera.flyToBoundingSphere(tiles.boundingSphere, {
-        offset: new HeadingPitchRange(0, -0.7, Math.max(20, tiles.boundingSphere.radius * 3)),
+        offset: new HeadingPitchRange(0, -0.7, scanRange(tiles.boundingSphere.radius)),
         duration: 0.35,
       });
       return;
@@ -204,6 +241,8 @@ try {
     () => {
       removeBasemap();
       removeRenderError();
+      removeQuality();
+      removeRenderStart();
       mapStatus.remove();
       scanLayer.dispose();
       handler.destroy();
