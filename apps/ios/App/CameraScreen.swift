@@ -95,6 +95,9 @@ private enum CameraStyle {
 
         }
       }
+      if model.recording, let renderer = model.liveSplat as? DefaultLiveSplatRenderer {
+        ScanInsetHost(renderer: renderer).ignoresSafeArea()
+      }
       if let directory = model.savedCapture {
         CaptureUploadScreen(
           capture: LocalCapture(directory: directory, upload: nil),

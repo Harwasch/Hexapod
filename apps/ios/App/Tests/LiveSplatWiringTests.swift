@@ -62,3 +62,31 @@ import Voice
   registry.planner.register("real") { RulePlanner() }
   registry.perception.register("real") { FakePerception() }
 }
+
+@Test @MainActor func previewChoicesPersistIndependentlyAndSeedAnisotropicReference() async throws {
+  let domain = "hex.preview.\(UUID().uuidString)"
+  let defaults = try #require(UserDefaults(suiteName: domain))
+  defer { defaults.removePersistentDomain(forName: domain) }
+  let preference = LiveSplatPreference(store: UserDefaultsLiveSplatStore(defaults: defaults))
+  #expect(
+    preference.previewStyle == .discs && !preference.insetEnabled && preference.previewEnabled)
+  preference.previewStyle = .splat
+  preference.insetEnabled = true
+  let restored = LiveSplatPreference(store: UserDefaultsLiveSplatStore(defaults: defaults))
+  #expect(restored.previewStyle == .splat && restored.insetEnabled)
+  #expect(restored.previewEnabled)
+  preference.insetEnabled = false
+  #expect(restored.previewStyle == .splat && !restored.insetEnabled)
+  let renderer = DefaultLiveSplatRenderer(preference: preference)
+  renderer.start()
+  let source = try FakeFrameSource.plane(frameCount: 2)
+  renderer.ingest(try #require(await source.next()))
+  let g = try #require(renderer.splats.first)
+  #expect(g.covariance[2, 2] < g.covariance[0, 0])
+  #expect(renderer.status == .scanPreview)
+  preference.previewStyle = .discs
+  renderer.ingest(try #require(await source.next()))
+  let disc = try #require(renderer.splats.first)
+  #expect(disc.covariance[2, 2] == disc.covariance[0, 0])
+  renderer.stop()
+}

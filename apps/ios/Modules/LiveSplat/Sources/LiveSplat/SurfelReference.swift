@@ -42,9 +42,11 @@ public struct SurfelHash: Sendable {
   }
   @discardableResult public mutating func fuse(
     position: SIMD3<Float>, color: SIMD3<Float>,
-    depth: Float, confidence: UInt8, radius: Float, epoch: UInt32
+    depth: Float, confidence: UInt8, radius: Float, epoch: UInt32,
+    allowMediumConfidence: Bool = false
   ) -> Bool {
-    guard confidence == 2, depth.isFinite, (0.1...8).contains(depth),
+    guard confidence == 2 || (allowMediumConfidence && confidence == 1), depth.isFinite,
+      (0.1...8).contains(depth),
       position.x.isFinite, position.y.isFinite, position.z.isFinite,
       max(abs(position.x), max(abs(position.y), abs(position.z))) < 1_000_000,
       radius.isFinite, radius > 0

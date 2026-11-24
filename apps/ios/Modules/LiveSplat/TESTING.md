@@ -4,9 +4,11 @@ From the repository root, with the installed Swift environment and no downloads:
 
 ```bash
 . ~/hw-tools/swift/env.sh
-mkdir -p .tmp-test .swift-scratch
-TMPDIR="$PWD/.tmp-test" heavy swift test --package-path apps/ios/Modules/LiveSplat --scratch-path ./.swift-scratch/LiveSplat --jobs 1
-rm -rf ./.swift-scratch ./.tmp-test
+mkdir -p .scratch/tmp
+TMPDIR="$PWD/.scratch/tmp" heavy swift test --package-path apps/ios/Modules/LiveSplat \
+  --scratch-path "$PWD/.scratch/build/LiveSplat" --cache-path "$PWD/.scratch/cache" \
+  --config-path "$PWD/.scratch/config" --security-path "$PWD/.scratch/security" \
+  --disable-sandbox --jobs 4
 ```
 
 The Linux suite covers negative-coordinate floor quantization, near/far hash keys,
@@ -16,6 +18,18 @@ fixture geometry/coverage, preference persistence, replay and legacy PLY validat
 A 3,000-keyframe synthetic reference run fills a deliberately small hash and asserts
 flat allocated capacity. Its measured CPU budget is for a 128-sample fixture subset;
 it is **not** a GPU timing measurement or a full 12,288-sample CPU performance claim.
+
+The same five-minute capacity/budget regression now exercises Gaussian voxel
+fusion, a 128-entry bitonic sort and orbit controls (`PreviewPerformanceTests`).
+It asserts fixed cell/attribute array counts and the same 8 ms mean CPU subset
+budget; it does not measure process resident memory. `GaussianTests` checks
+normal-oriented covariance eigenvalues, near/far footprint scales, confidence
+opacity, invalid inputs and depth-edge fallback, analytic 2D projection, dedupe,
+eviction, allocation caps and sorting up to the full 32,768-entry draw limit.
+`ScanOrbitTests` checks viewport bounds, rotation limits and orbit periodicity.
+App support tests persist the independent defaults/choices and ingest both preview
+styles through the real facade. The existing capture admission performance test
+continues to run unchanged.
 
 `apps/ios/App/Tests/ScanPerformanceTests.swift` uses XCTest `measure` and a monotonic
 clock over five minutes of 60 Hz synthetic input, with exactly 4,500 15 Hz admissions
@@ -33,7 +47,12 @@ functions from the compiled package library. `SurfelMetalTests` checks the 64-by
 cell/256-byte uniform ABI and executes fusion twice on an exactly representable
 fixture, comparing key, position, radius and observation count without a fitted
 tolerance. `HighlightLifecycleTests` verifies callback installation/removal.
-Linux does not execute these Apple-only tests.
+`GaussianMetalTests` executes the actual GPU bitonic network and compares exact
+depths/indices against the portable reference. The library smoke test constructs
+all Gaussian, reduction, composite and frustum pipelines. Fusion's exactly
+representable fixture now runs in both styles and checks normal/opacity attributes
+and the new 48-byte orbit uniform ABI. Async Metal library/pipeline creation uses
+`await` for the iOS 26 overloads. Linux does not execute these Apple-only tests.
 
 ## Still requires Apple hardware or simulator
 
@@ -52,10 +71,22 @@ Linux does not execute these Apple-only tests.
   portrait/landscape, tracking loss, relocalization and new-scan clearing.
 - Sustained thermals, battery/Low Power transitions, recovery of quality, background/
   foreground, memory pressure and saving while GPU or disk work is in flight.
-- Confirm preference off shows camera plus coverage only; no inactive answer
+- Settings comparison: confirm Discs and Inset off on a clean install; switch to
+  Splat and enable Inset, scan near/far and slanted surfaces, inspect low-coverage
+  tint and phone frustum, tap to enlarge and drag in both orientations. Compare
+  both styles with inset off/on for a five-minute scan each, including quality
+  degradation/recovery, relaunch persistence and memory plateau. Style changes
+  reset preview geometry; neither change recording or server output. Check correct
+  sort order during orbit and phone motion, EWA ellipses, alpha overlap and depth
+  occlusion. All of this remains unverified here.
+- Confirm preview off shows camera plus coverage only (Inset remains independent); no inactive answer
   postprocess; highlighting resumes outside scans with a cached mask texture.
 - Upload a real capture, await server Ready, and verify the detail renders the
   cloud-trained scan through the globe. Local surfels must never substitute for it.
 
 The debug replay screen remains manually stepped and labelled Simulated. It tests
 fixture ingestion, not the live GPU path. There is no UIKit fallback or local trainer.
+
+Before `pnpm format:check`, remove generated `.scratch/build`, `.scratch/cache`,
+`.scratch/config`, `.scratch/security` and `.scratch/tmp`: Prettier otherwise scans
+SwiftPM's generated JSON/YAML. Keep test logs and the task's commit manifest.

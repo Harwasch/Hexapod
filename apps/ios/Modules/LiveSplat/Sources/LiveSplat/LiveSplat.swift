@@ -146,6 +146,8 @@ public final class DefaultLiveSplatRenderer: LiveSplatRenderer, LiveSplatPrefere
   public private(set) var displayTransform: [Double] = [1, 0, 0, 1, 0, 0]
   private(set) var sessionGeneration: UInt64 = 0
   private var reference: SurfelHash?
+  private var gaussianReference: GaussianVoxelHash?
+  private var referenceStyle: ScanPreviewStyle = .discs
   private var epoch: UInt32 = 0
   #if canImport(RealityKit) && os(iOS)
     public private(set) var processor: ScanPreviewProcessor?
@@ -160,6 +162,8 @@ public final class DefaultLiveSplatRenderer: LiveSplatRenderer, LiveSplatPrefere
   public func start() {
     sessionGeneration &+= 1
     reference = nil
+    gaussianReference = nil
+    referenceStyle = preference.previewStyle
     splats = []
     latestFrame = nil
     coverage = CoverageGrid()
@@ -185,6 +189,15 @@ public final class DefaultLiveSplatRenderer: LiveSplatRenderer, LiveSplatPrefere
   }
   public func ingest(_ frame: SplatFrame) {
     guard status != .stopped, latestFrame.map({ frame.timestamp > $0.timestamp }) ?? true else {
+      return
+    }
+    if referenceStyle != preference.previewStyle {
+      reference = nil
+      gaussianReference = nil
+      referenceStyle = preference.previewStyle
+    }
+    if preference.previewStyle == .splat {
+      ingestGaussians(frame)
       return
     }
     if reference == nil { reference = SurfelHash(capacity: configuration.maxSplats) }
@@ -217,7 +230,29 @@ public final class DefaultLiveSplatRenderer: LiveSplatRenderer, LiveSplatPrefere
     coverage = grid
     latestFrame = frame
   }
+  private func ingestGaussians(_ frame: SplatFrame) {
+    if gaussianReference == nil {
+      gaussianReference = GaussianVoxelHash(capacity: configuration.maxSplats)
+    }
+    epoch &+= 1
+    let count = frame.width * frame.height
+    for offset in 0..<min(count, configuration.maxSeedsPerFrame) {
+      let i = (offset * 997 + Int(epoch) * 131) % count
+      guard let seed = GaussianSeed.surface(frame: frame, x: i % frame.width, y: i / frame.width)
+      else { continue }
+      gaussianReference!.fuse(
+        seed, depth: frame.depths[i], confidence: frame.confidence[i], epoch: epoch)
+    }
+    splats = gaussianReference!.seeds.indices.compactMap { gaussianReference!.gaussian(at: $0) }
+    var grid = CoverageGrid()
+    for g in splats { _ = grid.observe(g, in: frame) }
+    coverage = grid
+    latestFrame = frame
+  }
   func preferenceChanged() {
+    #if canImport(RealityKit) && os(iOS)
+      processor?.setStyle(splat: preference.previewStyle == .splat, inset: preference.insetEnabled)
+    #endif
     guard status != .stopped else { return }
     status =
       preference.previewEnabled && configuration.mode == .scanPreview ? .scanPreview : .coverageOnly
@@ -230,6 +265,7 @@ public final class DefaultLiveSplatRenderer: LiveSplatRenderer, LiveSplatPrefere
       if let processor { return processor }
       let value = try ScanPreviewProcessor()
       processor = value
+      value.setStyle(splat: preference.previewStyle == .splat, inset: preference.insetEnabled)
       return value
     }
     public func pollSummary() { liveCoverage = processor?.coverageFraction ?? 0 }
