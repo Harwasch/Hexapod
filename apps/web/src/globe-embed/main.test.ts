@@ -85,6 +85,7 @@ it("boots offline, shares pins, sends native tap IDs, flies to loaded geometry a
   const bridge = window.globeBridge!;
   fixtures.slice(0, 3).forEach((fixture) => bridge.receive(fixture));
   await vi.waitFor(() => expect(viewer.scene.primitives.add).toHaveBeenCalledWith(tile));
+  expect(document.body.dataset.scanState).toBe("ready");
   expect(entities.values).toHaveLength(3);
   expect(viewer.scene.screenSpaceCameraController.enableCollisionDetection).toBe(false);
   expect(hooks.load).toHaveBeenCalledWith("./fixtures/globe-splat/tileset.json");

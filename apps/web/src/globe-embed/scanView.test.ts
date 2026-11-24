@@ -45,6 +45,24 @@ it("frames small scans closely and scales range with radius", () => {
   expect(scanRange(100)).toBe(250);
 });
 
+it("seats offline scans on the ellipsoid without terrain availability or a network sample", async () => {
+  const terrain = new EllipsoidTerrainProvider();
+  expect(terrain.availability).toBeUndefined();
+  const origin = Cartesian3.fromDegrees(-111.1346, 44.7965, 30);
+  const tiles = {
+    root: { transform: Transforms.eastNorthUpToFixedFrame(origin) },
+    boundingSphere: { center: origin, radius: 2 },
+    modelMatrix: Matrix4.IDENTITY,
+  } as unknown as Cesium3DTileset;
+  // The real sampleTerrainMostDetailed rejects providers without availability.
+  // Use the default sampler here to exercise the offline bypass, not an injected fake.
+  await seatScan(tiles, terrain);
+  const seated = Matrix4.multiplyByPoint(tiles.modelMatrix, origin, new Cartesian3());
+  expect(Cartesian3.distance(seated, Cartesian3.fromDegrees(-111.1346, 44.7965, 0))).toBeLessThan(
+    1e-7,
+  );
+});
+
 it("starts at full device resolution capped at 3 and steps down only after sustained slow frames", () => {
   const quality = new ScanResolution(3);
   expect(quality.scale).toBe(3);
