@@ -107,7 +107,7 @@ private actor RequestGate {
 @Test func namedStalenessBoundsRejectExpiredAndFutureData() {
   for limit in [
     PerceptionLimits.maximumInputAge, PerceptionLimits.maximumTapAge,
-    PerceptionLimits.maximumSurfaceAge, PerceptionLimits.maximumCameraAge,
+    PerceptionLimits.maximumCameraAge,
   ] {
     #expect(PerceptionLimits.isCurrent(capturedAt: 1, now: 1 + limit / 2, maximumAge: limit))
     #expect(!PerceptionLimits.isCurrent(capturedAt: 1, now: 1 + limit * 2, maximumAge: limit))
@@ -115,7 +115,7 @@ private actor RequestGate {
     #expect(!PerceptionLimits.isCurrent(capturedAt: .nan, now: 1, maximumAge: limit))
   }
   #expect(PerceptionLimits.maximumRetainedResults == 1)
-  #expect(PerceptionLimits.maximumPendingTaps == 4)
+  #expect(PerceptionLimits.maximumPendingTaps == 2)
   #expect(PerceptionLimits.maximumGPUFramesInFlight == 3)
 }
 
@@ -138,4 +138,27 @@ private actor RequestGate {
   taps.clear()
   let cleared = taps.take()
   #expect(cleared == nil)
+}
+
+@Test func idleAdmissionDoesNotCopyOrRequestAndBusyArrivalsAreDropped() async {
+  let gate = RequestGate()
+  let loop = ForegroundInferenceLoop<Int, Int>(
+    clock: { 1000 }, process: { await gate.run($0) }, result: { _ in })
+  var copies = 0
+  for _ in 0..<60 {
+    loop.offerIfIdle(capturedAt: 1000, hasDemand: false) { copies += 1; return 99 }
+  }
+  await loop.waitUntilIdle()
+  #expect(copies == 0 && loop.metrics.requestCount == 0)
+  loop.offerIfIdle(capturedAt: 1000, hasDemand: true) { copies += 1; return 1 }
+  await gate.waitForFirst()
+  loop.offerIfIdle(capturedAt: 1000, hasDemand: true) { copies += 1; return 2 }
+  #expect(copies == 1)
+  await gate.release()
+  await loop.waitUntilIdle()
+  loop.offerIfIdle(capturedAt: 1000, hasDemand: true) { copies += 1; return 3 }
+  await loop.waitUntilIdle()
+  #expect(await gate.values == [1, 3])
+  #expect(copies == 2)
+  #expect(await gate.maximumActive == 1)
 }

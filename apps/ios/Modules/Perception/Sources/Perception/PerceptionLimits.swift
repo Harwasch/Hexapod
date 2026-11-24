@@ -7,10 +7,9 @@ public enum PerceptionLimits {
   public static let maximumInFlightRequests = 1
   public static let maximumRetainedFrames = 1
   public static let maximumRetainedResults = 1
-  public static let maximumPendingTaps = 4
+  public static let maximumPendingTaps = 2
   public static let maximumTapAge = 1.0
   public static let maximumInputAge = 2 / targetInferenceHz
-  public static let maximumSurfaceAge = 5 / targetInferenceHz
   public static let maximumCameraAge = 3.0 / Double(displayFramesPerSecond)
   public static let maximumGPUFramesInFlight = 3
   public static let maximumAssociationPoints = 128

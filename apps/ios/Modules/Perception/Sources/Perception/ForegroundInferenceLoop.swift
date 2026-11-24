@@ -50,6 +50,21 @@ public final class ForegroundInferenceLoop<Frame: Sendable, Result: Sendable>: @
     }
     if start { Task.detached(priority: .userInitiated) { await self.drain() } }
   }
+  /// Admission precedes buffer copying. Busy camera frames and idle demand do no work.
+  /// The synchronous factory must copy owned values; it must not retain an ARFrame.
+  @discardableResult
+  public func offerIfIdle(
+    capturedAt: TimeInterval, hasDemand: Bool, makeFrame: () -> Frame?
+  ) -> Bool {
+    let start = lock.withLock {
+      guard enabled, hasDemand, !running, let frame = makeFrame() else { return false }
+      pending = Input(frame: frame, capturedAt: capturedAt, generation: generation)
+      running = true
+      return true
+    }
+    if start { Task.detached(priority: .userInitiated) { await self.drain() } }
+    return start
+  }
   public func waitUntilIdle() async {
     await withCheckedContinuation { continuation in
       lock.withLock {

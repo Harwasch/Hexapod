@@ -40,6 +40,25 @@ private struct ForegroundLabel: ImageIdentifying {
   #expect(removed.entities.count == 1 && removed.surfaces.count == 1)
   let empty = try await scene.foregroundSelection(tap: ImagePoint(x: -1, y: 0))
   #expect(empty.entities.isEmpty && empty.surfaces.isEmpty)
+  _ = try await scene.foregroundSelection(tap: nil)
+  #expect(await masks.calls == 5)
+}
+
+@Test func idleForegroundFramesNeverRequestVision() async throws {
+  let masks = ForegroundMasks()
+  let scene = PerceptionScene(segmenter: masks, instances: masks, identifier: ForegroundLabel())
+  let frame = FrameSnapshot(
+    image: CameraImage(width: 4, height: 4, rgba: Array(repeating: 255, count: 64)),
+    depth: DepthImage(width: 4, height: 4, metres: Array(repeating: 2, count: 16)),
+    camera: CameraGeometry(
+      fx: 4, fy: 4, cx: 2, cy: 2, imageWidth: 4, imageHeight: 4,
+      transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]))
+  for time in 0..<10 {
+    await scene.update(frame, viewportToImage: [1, 0, 0, 1, 0, 0], capturedAt: Double(time))
+    let selection = try await scene.foregroundSelection(tap: nil)
+    #expect(selection.entities.isEmpty)
+  }
+  #expect(await masks.calls == 0)
 }
 
 private struct RingMask: InstanceSegmenting {
@@ -86,7 +105,7 @@ private actor TemporaryMaskHole: InstanceSegmenting {
     visible ? [SubjectMask(width: 4, height: 4, pixels: Array(repeating: 255, count: 16))] : []
   }
 }
-@Test func aMissingMaskNeverResetsTheAgeOfOldWorldPointsAndFreshDepthReplacesThem() async throws {
+@Test func missingMasksRetainWorldSurfacesUntilReplacementOrDeselection() async throws {
   let masks = TemporaryMaskHole()
   let scene = PerceptionScene(segmenter: masks, instances: masks, identifier: ForegroundLabel())
   let frame = FrameSnapshot(
@@ -100,16 +119,18 @@ private actor TemporaryMaskHole: InstanceSegmenting {
   await masks.setVisible(false)
   await scene.update(
     frame, viewportToImage: [1, 0, 0, 1, 0, 0],
-    capturedAt: 1 + PerceptionLimits.maximumSurfaceAge / 2)
+    capturedAt: 1.3)
   let held = try await scene.foregroundSelection(tap: nil)
   #expect(held.surfaces.first?.capturedAt == 1)
   await scene.update(
     frame, viewportToImage: [1, 0, 0, 1, 0, 0],
-    capturedAt: 1 + PerceptionLimits.maximumSurfaceAge * 2)
-  let expired = try await scene.foregroundSelection(tap: nil)
-  #expect(expired.entities.count == 1 && expired.surfaces.isEmpty)
+    capturedAt: 100)
+  let retained = try await scene.foregroundSelection(tap: nil)
+  #expect(retained.entities.count == 1 && retained.surfaces.first?.capturedAt == 1)
   await masks.setVisible(true)
-  await scene.update(frame, viewportToImage: [1, 0, 0, 1, 0, 0], capturedAt: 3)
+  await scene.update(frame, viewportToImage: [1, 0, 0, 1, 0, 0], capturedAt: 101)
   let fresh = try await scene.foregroundSelection(tap: nil)
-  #expect(fresh.surfaces.first?.capturedAt == 3)
+  #expect(fresh.surfaces.first?.capturedAt == 101)
+  let deselected = try await scene.foregroundSelection(tap: ImagePoint(x: 0.5, y: 0.5))
+  #expect(deselected.entities.isEmpty && deselected.surfaces.isEmpty)
 }

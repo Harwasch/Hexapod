@@ -197,6 +197,7 @@ public actor PerceptionScene {
   /// One foreground-instance request for the entire frame, shared by selection and refresh.
   /// No repeated Vision request per subject, and classification runs only for a new tap.
   public func foregroundSelection(tap: ImagePoint?) async throws -> SceneSelection {
+    guard tap != nil || !latest.entities.isEmpty else { return latest }
     guard queriesInFlight == 0 else { throw CancellationError() }
     queriesInFlight += 1
     defer { queriesInFlight -= 1 }
@@ -281,11 +282,8 @@ public actor PerceptionScene {
         surfaces.append(SubjectSurface(entity: entity, mesh: mesh, capturedAt: time))
       } else if let old = latest.surfaces.first(where: {
         $0.entity.label == previous.label && $0.entity.anchor.world == previous.anchor.world
-      }),
-        PerceptionLimits.isCurrent(
-          capturedAt: old.capturedAt, now: time, maximumAge: PerceptionLimits.maximumSurfaceAge)
-      {
-        // A temporary Vision/depth hole keeps its own old geometry and original age.
+      }) {
+        // Keep the last world geometry until a refresh succeeds or selection removes it.
         surfaces.append(old)
       }
     }

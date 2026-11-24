@@ -11,7 +11,6 @@
       let points: MTLBuffer
       let indices: MTLBuffer
       let count: Int
-      let capturedAt: TimeInterval
     }
     private struct Slot {
       var texture: MTLTexture?
@@ -61,9 +60,7 @@
           }
         }
         guard let points, let indices else { return nil }
-        return Mesh(
-          points: points, indices: indices, count: surface.mesh.triangles.count,
-          capturedAt: surface.capturedAt)
+        return Mesh(points: points, indices: indices, count: surface.mesh.triangles.count)
       }
       lock.withLock { if generation == expected { meshes = next } }
     }
@@ -81,10 +78,8 @@
       guard let camera = state.1, camera.isCurrent(at: now), let uniforms = camera.uniforms else {
         return nil
       }
-      let visible = state.0.filter {
-        PerceptionLimits.isCurrent(
-          capturedAt: $0.capturedAt, now: now, maximumAge: PerceptionLimits.maximumSurfaceAge)
-      }
+      // Geometry lives as long as the selection; only the display camera must be fresh.
+      let visible = state.0
       guard !visible.isEmpty else { return nil }
       let width = context.targetColorTexture.width
       let height = context.targetColorTexture.height

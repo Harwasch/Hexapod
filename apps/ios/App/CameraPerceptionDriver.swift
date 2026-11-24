@@ -13,23 +13,26 @@
     let card: EntitySchema.Entity?
   }
 
-  /// ARFrame is an immutable retained snapshot. Its buffers are copied only by the worker.
+  /// Only owned native pixel/depth copies cross the worker boundary.
   private final class CameraInferenceFrame: @unchecked Sendable {
-    let frame: ARFrame
+    let captured: CapturedCameraFrame
     let mapping: [Double]
     let capturedAt: TimeInterval
     let generation: Int
     let tap: ImagePoint?
-    init(frame: ARFrame, mapping: [Double], generation: Int, tap: ImagePoint? = nil) {
-      self.frame = frame
+    init(
+      captured: CapturedCameraFrame, mapping: [Double], capturedAt: TimeInterval, generation: Int,
+      tap: ImagePoint? = nil
+    ) {
+      self.captured = captured
       self.mapping = mapping
       self.generation = generation
       self.tap = tap
-      capturedAt = frame.timestamp
+      self.capturedAt = capturedAt
     }
   }
 
-  /// Fixed-cost frame admission on the AR delegate, one request and one replacing mailbox.
+  /// Demand-gated admission on the AR delegate; busy arrivals never copy camera buffers.
   final class CameraPerceptionDriver: @unchecked Sendable {
     private final class State: @unchecked Sendable {
       let lock = NSLock()
@@ -37,6 +40,7 @@
       var orientation = UIInterfaceOrientation.portrait
       var generation = 0
       var enabled = true
+      var hasSelection = false
       var taps = InferenceIntentQueue<CameraInferenceFrame>()
       var needsReset = false
       var renderer: WorldSurfaceRenderer?
@@ -69,7 +73,7 @@
           guard let request else { throw CancellationError() }
           let chosen = request.0
           if request.1 { await scene.clear() }
-          let snapshot = try FrameSnapshot(frame: chosen.frame)
+          let snapshot = FrameSnapshot(captured: chosen.captured)
           let previousCount = await scene.selection().entities.count
           let selection = try await scene.foregroundFrame(
             snapshot, viewportToImage: chosen.mapping,
@@ -90,6 +94,7 @@
             } else {
               state.result = output
             }
+            state.hasSelection = !output.selection.entities.isEmpty
             return state.renderer
           }
           renderer?.setSurfaces(output.selection.surfaces, generation: output.generation)
@@ -108,6 +113,7 @@
         state.generation += 1
         state.enabled = enabled
         state.taps.clear()
+        state.hasSelection = false
         state.result = nil
         state.needsReset = true
         return state.generation
@@ -147,8 +153,10 @@
       }
     }
     func offer(_ frame: ARFrame) {
-      guard let input = input(frame) else { return }
-      worker.offer(input, capturedAt: input.capturedAt)
+      let demand = state.lock.withLock {
+        state.enabled && (state.hasSelection || !state.taps.isEmpty)
+      }
+      worker.offerIfIdle(capturedAt: frame.timestamp, hasDemand: demand) { input(frame) }
     }
     func select(_ point: ImagePoint, frame: ARFrame) -> Bool {
       guard let base = input(frame),
@@ -156,14 +164,15 @@
           x: point.x, y: point.y)
       else { return false }
       let tap = CameraInferenceFrame(
-        frame: frame, mapping: base.mapping, generation: base.generation,
+        captured: base.captured, mapping: base.mapping, capturedAt: base.capturedAt,
+        generation: base.generation,
         tap: ImagePoint(x: mapped.x, y: mapped.y))
       guard
         state.lock.withLock({
           state.enabled && state.generation == tap.generation && state.taps.offer(tap)
         })
       else { return false }
-      worker.offer(base, capturedAt: base.capturedAt)
+      worker.offerIfIdle(capturedAt: base.capturedAt, hasDemand: true) { base }
       return true
     }
     /// Called by CADisplayLink with the latest ARFrame, independent of Vision completion.
@@ -189,11 +198,12 @@
       }
       guard viewport.3, viewport.0.width > 0, viewport.0.height > 0 else { return nil }
       let inverse = frame.displayTransform(for: viewport.1, viewportSize: viewport.0).inverted()
+      guard let captured = try? CapturedCameraFrame(frame: frame) else { return nil }
       return CameraInferenceFrame(
-        frame: frame,
+        captured: captured,
         mapping: [inverse.a, inverse.b, inverse.c, inverse.d, inverse.tx, inverse.ty].map(
           Double.init),
-        generation: viewport.2)
+        capturedAt: frame.timestamp, generation: viewport.2)
     }
   }
 #endif

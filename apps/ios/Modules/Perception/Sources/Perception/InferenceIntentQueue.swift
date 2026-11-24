@@ -6,6 +6,7 @@ public struct InferenceIntentQueue<Element: Sendable>: Sendable {
   public init(capacity: Int = PerceptionLimits.maximumPendingTaps) {
     self.capacity = max(0, capacity)
   }
+  public var isEmpty: Bool { values.isEmpty }
   public mutating func offer(_ element: Element) -> Bool {
     guard values.count < capacity else { return false }
     values.append(element)
