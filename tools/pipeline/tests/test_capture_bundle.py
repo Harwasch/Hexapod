@@ -38,6 +38,7 @@ def make_bundle(
     root: Path,
     frames: list[dict[str, Any]] | None = None,
     locations: list[dict[str, Any]] | None = None,
+    payloads: dict[str, bytes] | None = None,
 ) -> dict[str, Any]:
     root.mkdir()
     frames = frames or [frame()]
@@ -48,6 +49,8 @@ def make_bundle(
         (root / record["depth"]["confidence"]).write_bytes(bytes([1, 2]))
     if locations is not None:
         (root / "location.jsonl").write_text("".join(json.dumps(f) + "\n" for f in locations))
+    for name, data in (payloads or {}).items():
+        (root / name).write_bytes(data)
     manifest = {
         "version": 1,
         "format": "hex-capture",
@@ -122,6 +125,169 @@ def test_bundle_round_trip(tmp_path: Path) -> None:
     assert (parsed.directory / "depth_0.f16").read_bytes() == np.array(
         [1, 2], dtype="<f2"
     ).tobytes()
+
+
+@pytest.fixture
+def capture_info_bundle(tmp_path: Path) -> Path:
+    source = tmp_path / "source"
+    make_bundle(
+        source,
+        payloads={"capture-info.json": b'{"siteName":"Field scan","duration":18}'},
+    )
+    return source
+
+
+def test_bundle_accepts_capture_info(capture_info_bundle: Path, tmp_path: Path) -> None:
+    parsed = bundle.read_bundle(capture_info_bundle)
+    assert parsed.manifest["frameCount"] == len(parsed.frames) == 1
+    tar = tmp_path / "capture.hexcap"
+    archive(capture_info_bundle, tar)
+    assert bundle.unpack(tar, tmp_path / "parsed").manifest == parsed.manifest
+
+
+@pytest.mark.parametrize(
+    ("data", "message"),
+    [
+        (b"[]", "capture-info.json must contain a JSON object"),
+        (b"null", "capture-info.json must contain a JSON object"),
+        (b'"details"', "capture-info.json must contain a JSON object"),
+        (b"{", "capture-info.json must contain valid UTF-8 JSON"),
+        (b"\xff", "capture-info.json must contain valid UTF-8 JSON"),
+        (b'{"duration":NaN}', "capture-info.json must contain valid UTF-8 JSON"),
+        (b" " * (64 * 1024 + 1), "capture-info.json exceeds 65536 byte limit"),
+    ],
+)
+def test_bundle_rejects_invalid_capture_info(tmp_path: Path, data: bytes, message: str) -> None:
+    source = tmp_path / "source"
+    make_bundle(source, payloads={"capture-info.json": data})
+    with pytest.raises(ValueError, match=message):
+        bundle.read_bundle(source)
+
+
+def test_capture_info_at_byte_limit(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    make_bundle(source, payloads={"capture-info.json": b"{}" + b" " * (64 * 1024 - 2)})
+    assert len(bundle.read_bundle(source).frames) == 1
+
+
+def test_capture_info_size_still_checked(capture_info_bundle: Path) -> None:
+    with (capture_info_bundle / "capture-info.json").open("ab") as stream:
+        stream.write(b" ")
+    with pytest.raises(ValueError, match=r"file size/inventory mismatch: capture-info.json;"):
+        bundle.read_bundle(capture_info_bundle)
+
+
+@pytest.mark.parametrize("declared", [1, 3])
+def test_mismatch_names_frame_counts(tmp_path: Path, declared: int) -> None:
+    source = tmp_path / "source"
+    manifest = make_bundle(source, [frame(0), frame(1)])
+    manifest["frameCount"] = declared
+    (source / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError) as error:
+        bundle.read_bundle(source)
+    assert str(error.value) == (
+        f"capture bundle mismatch: frames.jsonl line count=2; manifest frameCount={declared}; "
+        "inventory files not referenced=[]; referenced files missing from inventory=[]"
+    )
+
+
+def test_mismatch_lists_unreferenced_files(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    make_bundle(source, payloads={"z-orphan": b"z", "a-orphan": b"a"})
+    with pytest.raises(ValueError) as error:
+        bundle.read_bundle(source)
+    assert str(error.value) == (
+        "capture bundle mismatch: frames.jsonl line count=1; manifest frameCount=1; "
+        'inventory files not referenced=["a-orphan", "z-orphan"]; '
+        "referenced files missing from inventory=[]"
+    )
+
+
+def test_mismatch_truncates_filename_list(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    names = [f"orphan-{i:02}" for i in range(12)]
+    make_bundle(source, payloads=dict.fromkeys(names, b"x"))
+    with pytest.raises(ValueError) as error:
+        bundle.read_bundle(source)
+    assert f"inventory files not referenced={json.dumps(names[:10])} (+2 more);" in str(error.value)
+    assert names[10] not in str(error.value)
+
+
+@pytest.mark.parametrize("remove_from_disk", [False, True])
+def test_mismatch_lists_missing_references(tmp_path: Path, remove_from_disk: bool) -> None:
+    source = tmp_path / "source"
+    manifest = make_bundle(source, locations=location_fixes())
+    missing = {"depth_0.f16", "depth_0.u8", "location.jsonl"}
+    manifest["files"] = [entry for entry in manifest["files"] if entry["path"] not in missing]
+    if remove_from_disk:
+        for name in missing:
+            (source / name).unlink()
+    (source / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError) as error:
+        bundle.read_bundle(source)
+    assert str(error.value) == (
+        "capture bundle mismatch: frames.jsonl line count=1; manifest frameCount=1; "
+        "inventory files not referenced=[]; "
+        'referenced files missing from inventory=["depth_0.f16", "depth_0.u8", "location.jsonl"]'
+    )
+
+
+def test_mismatch_names_file_missing_from_disk(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    make_bundle(source)
+    (source / "depth_0.f16").unlink()
+    with pytest.raises(ValueError, match=r"inventoried file missing.*: depth_0\.f16"):
+        bundle.read_bundle(source)
+
+
+@pytest.mark.parametrize("name", ["rgb.mov", "frames.jsonl", "livesplat.ply"])
+def test_mismatch_names_missing_top_level_reference(tmp_path: Path, name: str) -> None:
+    source = tmp_path / "source"
+    manifest = make_bundle(source)
+    if name == "livesplat.ply":
+        manifest["liveSplat"] = name
+    else:
+        manifest["files"] = [entry for entry in manifest["files"] if entry["path"] != name]
+    (source / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError) as error:
+        bundle.read_bundle(source)
+    assert f'referenced files missing from inventory=["{name}"]' in str(error.value)
+
+
+@pytest.mark.parametrize("name", ["rgb.mov", "frames.jsonl"])
+def test_mismatch_names_empty_required_file(tmp_path: Path, name: str) -> None:
+    source = tmp_path / "source"
+    manifest = make_bundle(source)
+    (source / name).write_bytes(b"")
+    for entry in manifest["files"]:
+        if entry["path"] == name:
+            entry["bytes"] = 0
+    (source / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError) as error:
+        bundle.read_bundle(source)
+    assert str(error.value) == f'required bundle files empty=["{name}"]'
+
+
+@pytest.mark.parametrize("reuse", [False, True])
+def test_depth_reference_diagnostic(tmp_path: Path, reuse: bool) -> None:
+    source = tmp_path / "source"
+    record = frame()
+    if reuse:
+        record["depth"]["confidence"] = record["depth"]["file"]
+    else:
+        record["depth"]["width"] = 3
+    manifest = make_bundle(source)
+    (source / "frames.jsonl").write_text(json.dumps(record) + "\n")
+    for entry in manifest["files"]:
+        entry["bytes"] = (source / entry["path"]).stat().st_size
+    (source / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError) as error:
+        bundle.read_bundle(source)
+    assert str(error.value) == (
+        "depth reference reused: depth_0.f16"
+        if reuse
+        else "depth reference wrong size: depth_0.f16; expected=6, inventoried=4"
+    )
 
 
 @pytest.mark.parametrize(

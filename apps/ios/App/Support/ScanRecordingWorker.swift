@@ -159,7 +159,7 @@
       guard
         pixels.append(
           frame.image,
-          withPresentationTime: CMTime(seconds: timestamp, preferredTimescale: 1_000_000_000))
+          withPresentationTime: CMTime(value: Int64((timestamp * 1e9).rounded()), timescale: 1_000_000_000))
       else {
         throw CaptureError.recordingFailed
       }

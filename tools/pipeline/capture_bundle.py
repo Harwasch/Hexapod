@@ -28,6 +28,8 @@ MAX_BYTES = 128 * 1024**3
 MAX_MANIFEST = 64 * 1024**2
 MAX_FRAMES = 1_000_000
 MAX_LINE = 16384
+MAX_CAPTURE_INFO = 64 * 1024
+MAX_DIAGNOSTIC_NAMES = 10
 # Input precision bounds for float32 ARKit poses, not reconstruction quality gates.
 # See docs/CAPTURE_BUNDLE.md for the drift envelope and synthetic measurements.
 ROTATION_ERROR_MAX = 1e-3
@@ -278,6 +280,31 @@ def validate_live_splat(path: Path) -> None:
             raise ValueError("invalid live splat payload")
 
 
+def diagnostic_names(names: set[str]) -> str:
+    ordered = sorted(names)
+    result = json.dumps(ordered[:MAX_DIAGNOSTIC_NAMES])
+    remaining = len(ordered) - MAX_DIAGNOSTIC_NAMES
+    return result + (f" (+{remaining} more)" if remaining > 0 else "")
+
+
+def validate_capture_info(path: Path) -> None:
+    """App metadata is optional and opaque to reconstruction, but bounded JSON."""
+    with path.open("rb") as stream:
+        data = stream.read(MAX_CAPTURE_INFO + 1)
+    if len(data) > MAX_CAPTURE_INFO:
+        raise ValueError(f"capture-info.json exceeds {MAX_CAPTURE_INFO} byte limit")
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"invalid JSON constant: {value}")
+
+    try:
+        value = json.loads(data.decode("utf-8"), parse_constant=reject_constant)
+    except (ValueError, RecursionError) as error:
+        raise ValueError("capture-info.json must contain valid UTF-8 JSON") from error
+    if not isinstance(value, dict):
+        raise ValueError("capture-info.json must contain a JSON object")
+
+
 def read_bundle(directory: Path) -> Bundle:
     manifest_path = directory / "manifest.json"
     if manifest_path.stat().st_size > MAX_MANIFEST:
@@ -314,32 +341,45 @@ def read_bundle(directory: Path) -> Bundle:
             raise ValueError("duplicate or reserved filename")
         size = integer(entry.get("bytes"), "bytes")
         path = directory / name
-        if path.is_symlink() or not path.is_file() or path.stat().st_size != size:
-            raise ValueError("file size/inventory mismatch")
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"inventoried file missing or not a regular file: {name}")
+        actual_size = path.stat().st_size
+        if actual_size != size:
+            raise ValueError(
+                f"file size/inventory mismatch: {name}; actual={actual_size}, inventoried={size}"
+            )
         inventory[name] = size
     actual = {p.name for p in directory.iterdir()}
-    if actual != set(inventory) | {"manifest.json"} or sum(inventory.values()) > MAX_BYTES:
-        raise ValueError("undeclared files or bundle too large")
-    if not inventory.get("rgb.mov") or not inventory.get("frames.jsonl"):
-        raise ValueError("missing video/frame log")
-    if manifest.get("locationLog") is not None and "location.jsonl" not in inventory:
-        raise ValueError("location log is not in file inventory")
-    locations, location = read_locations(directory, manifest)
+    if sum(inventory.values()) > MAX_BYTES:
+        raise ValueError("bundle too large")
+    required = {"rgb.mov", "frames.jsonl"}
+    if missing_required := required - set(inventory):
+        raise ValueError(
+            f"referenced files missing from inventory={diagnostic_names(missing_required)}"
+        )
+    if empty_required := {name for name in required if inventory[name] == 0}:
+        raise ValueError(f"required bundle files empty={diagnostic_names(empty_required)}")
     frames: list[dict[str, Any]] = []
     used = {"rgb.mov", "frames.jsonl"}
+    # Known optional app metadata, opaque to reconstruction. Existing inventory
+    # checks still enforce a regular file, exact size and the total byte bound.
+    if "capture-info.json" in inventory:
+        validate_capture_info(directory / "capture-info.json")
+        used.add("capture-info.json")
     if manifest.get("locationLog") is not None:
+        if manifest["locationLog"] != "location.jsonl":
+            raise ValueError("v1 locationLog must be location.jsonl")
         used.add("location.jsonl")
     if "liveSplat" in manifest:
-        if manifest["liveSplat"] != "livesplat.ply" or "livesplat.ply" not in inventory:
+        if manifest["liveSplat"] != "livesplat.ply":
             raise ValueError("liveSplat must reference inventoried livesplat.ply")
-        validate_live_splat(directory / "livesplat.ply")
         used.add("livesplat.ply")
     counts = {"depth": 0, "smoothedDepth": 0}
     previous = -1.0
     with (directory / "frames.jsonl").open() as log:
         while line := log.readline(MAX_LINE + 1):
-            if len(line) > MAX_LINE or len(frames) >= count:
-                raise ValueError("frame log exceeds declared limits")
+            if len(line) > MAX_LINE or len(frames) >= MAX_FRAMES:
+                raise ValueError("frame log exceeds resource limits")
             frame = json.loads(line)
             if not isinstance(frame, dict):
                 raise ValueError("frame must be an object")
@@ -360,13 +400,35 @@ def read_bundle(directory: Path) -> Bundle:
                 )
                 for field, size in (("file", pixels * 2), ("confidence", pixels)):
                     name = safe_name(depth.get(field))
-                    if name in used or inventory.get(name) != size:
-                        raise ValueError("depth reference reused, missing or wrong size")
+                    if name in used:
+                        raise ValueError(f"depth reference reused: {name}")
                     used.add(name)
+                    # Accumulate missing names for the aggregate diagnostic below.
+                    if name in inventory and inventory[name] != size:
+                        raise ValueError(
+                            f"depth reference wrong size: {name}; "
+                            f"expected={size}, inventoried={inventory[name]}"
+                        )
                 counts[key] += 1
             frames.append(frame)
-    if len(frames) != count or used != set(inventory):
-        raise ValueError("frame count or referenced files mismatch")
+    unreferenced = set(inventory) - used
+    missing = used - set(inventory)
+    if len(frames) != count or unreferenced or missing:
+        raise ValueError(
+            f"capture bundle mismatch: frames.jsonl line count={len(frames)}; "
+            f"manifest frameCount={count}; "
+            f"inventory files not referenced={diagnostic_names(unreferenced)}; "
+            f"referenced files missing from inventory={diagnostic_names(missing)}"
+        )
+    if actual != set(inventory) | {"manifest.json"}:
+        raise ValueError(
+            "undeclared bundle files="
+            + diagnostic_names(actual - set(inventory) - {"manifest.json"})
+        )
+    # Validate optional payload contents only after their references are reconciled.
+    locations, location = read_locations(directory, manifest)
+    if "liveSplat" in manifest:
+        validate_live_splat(directory / "livesplat.ply")
     for key, actual_count in counts.items():
         if integer(manifest.get(key + "FrameCount"), key + "FrameCount") != actual_count:
             raise ValueError("depth count mismatch")
