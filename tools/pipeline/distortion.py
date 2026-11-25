@@ -106,7 +106,11 @@ def rectify_dataset(root: Path) -> None:
             pixels = np.array(image.convert("RGB"))
         pixels = cv2.remap(pixels, *maps[item.camera_id], cv2.INTER_LINEAR)
         path.unlink()
-        Image.fromarray(pixels).save(path)
+        # Pillow's JPEG default (quality 75, 4:2:0) would visibly soften 4K bundle frames.
+        options = (
+            {"quality": 95, "subsampling": 0} if path.suffix.lower() in {".jpg", ".jpeg"} else {}
+        )
+        Image.fromarray(pixels).save(path, **options)
         os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
     with (sparse / "cameras.bin").open("wb") as handle:
         handle.write(struct.pack("<Q", len(model.cameras)))

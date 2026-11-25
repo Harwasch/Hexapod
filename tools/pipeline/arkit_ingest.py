@@ -35,6 +35,8 @@ def normalize(ctx: StageContext) -> StageOutcome:
         shutil.rmtree(directory)
     capture = bundle.unpack(archives[0], directory)
     frames = ctx.output("frames")
+    first = capture.frames[0]
+    suffix = bundle.frame_suffix(first["imageWidth"], first["imageHeight"])
     # No rotation, resizing, fps filter, deduplication or quality-based selection.
     ctx.run(
         [
@@ -50,14 +52,15 @@ def normalize(ctx: StageContext) -> StageOutcome:
             "0:v:0",
             "-vsync",
             "0",
+            *(["-q:v", str(bundle.JPEG_QUALITY)] if suffix == ".jpg" else []),
             "-start_number",
             "0",
             "-threads",
             "2",
-            str(frames / "frame_%08d.png"),
+            str(frames / f"frame_%08d{suffix}"),
         ]
     )
-    images = sorted(frames.glob("*.png"))
+    images = sorted(frames.glob(f"*{suffix}"))
     if len(images) != len(capture.frames):
         raise ValueError("decoded video count differs from the frame log")
     records = []
@@ -108,13 +111,15 @@ def normalize(ctx: StageContext) -> StageOutcome:
     )
 
 
-def seed_model(database: Path, frames: list[dict[str, Any]], output: Path) -> None:
+def seed_model(
+    database: Path, frames: list[dict[str, Any]], output: Path, suffix: str = ".png"
+) -> None:
     """Keep COLMAP's assigned image IDs; give every frame its measured calibration."""
     output.mkdir(parents=True, exist_ok=True)
     cameras, images = [], []
     with sqlite3.connect(database) as db:
         rows = db.execute("SELECT image_id, name FROM images ORDER BY name").fetchall()
-        if [row[1] for row in rows] != [f"frame_{f['index']:08d}.png" for f in frames]:
+        if [row[1] for row in rows] != [bundle.frame_name(f["index"], suffix) for f in frames]:
             raise ValueError("COLMAP database images do not match the frame log")
         for (image_id, name), frame in zip(rows, frames, strict=True):
             camera_id = image_id
@@ -160,7 +165,9 @@ def pose(ctx: StageContext) -> StageOutcome:
         "excludedByState": excluded,
     }
     image_list = ctx.work_dir / "arkit-images.txt"
-    image_list.write_text("".join(f"frame_{r['index']:08d}.png\n" for r in tracked))
+    # Normalize chose the extension from the frame size; the names it wrote are the truth.
+    suffix = Path(metadata["frames"][0]["name"]).suffix if metadata.get("frames") else ".png"
+    image_list.write_text("".join(bundle.frame_name(r["index"], suffix) + "\n" for r in tracked))
     frames = ctx.input("frames")
     database = ctx.work_dir / "arkit.db"
     database.unlink(missing_ok=True)
@@ -178,7 +185,7 @@ def pose(ctx: StageContext) -> StageOutcome:
     )
     argv += ["--image_list_path", str(image_list)]
     ctx.run(argv)
-    seed_model(database, tracked, seed)
+    seed_model(database, tracked, seed, suffix)
     # Known metric poses remove the need for incremental/backbone pose estimation.
     # Only normal-tracking images entered the database, so matching cannot include others.
     ctx.run(
@@ -197,7 +204,7 @@ def pose(ctx: StageContext) -> StageOutcome:
     if model.registered != len(tracked) or model.points3d == 0:
         raise ValueError("ARKit triangulation did not retain every pose with usable points")
     # Always check the immutable fixed baseline before attempting free-pose BA.
-    arkit_refine.verify(model, tracked, None)
+    arkit_refine.verify(model, tracked, None, suffix=suffix)
     refinement = arkit_refine.empty_report("disabled")
     if bool(ctx.param("arkit_refine", True)):
         work = ctx.work_dir / "arkit-refine"
@@ -226,7 +233,7 @@ def pose(ctx: StageContext) -> StageOutcome:
             refinement = json.loads(report_path.read_text())
             if refinement.get("status") == "accepted":
                 refined = sfm.read_model(candidate)
-                arkit_refine.verify(refined, tracked, refinement)
+                arkit_refine.verify(refined, tracked, refinement, suffix=suffix)
         except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
             refinement.update(status="fallback", fallbackReason=str(error))
         if refinement["status"] == "accepted":
@@ -236,7 +243,7 @@ def pose(ctx: StageContext) -> StageOutcome:
                 shutil.copy2(candidate / filename, out / filename)
             model = sfm.read_model(out)
         else:
-            arkit_refine.verify(model, tracked, None)
+            arkit_refine.verify(model, tracked, None, suffix=suffix)
     if refinement.get("reprojectionBeforePx") is None:
         refinement["reprojectionBeforePx"] = model.mean_reprojection_error
     (out / "poses.json").write_text(

@@ -91,14 +91,20 @@ def guard(report: dict[str, Any]) -> str | None:
     return None
 
 
-def verify(model: sfm.Model, records: list[dict[str, Any]], report: dict[str, Any] | None) -> None:
+def verify(
+    model: sfm.Model,
+    records: list[dict[str, Any]],
+    report: dict[str, Any] | None,
+    *,
+    suffix: str = ".png",
+) -> None:
     """Strict fixed poses unless an accepted correction accounts for each changed pose."""
     accepted = report is not None and report.get("status") == "accepted"
     if accepted and report is not None and guard(report):
         raise ValueError("invalid ARKit refinement evidence")
     by_name = model.by_name()
     for record in records:
-        name = f"frame_{record['index']:08d}.png"
+        name = bundle.frame_name(record["index"], suffix)
         r, t = bundle.world_to_camera(bundle.matrix(record["transform"], 4))
         image = by_name[name]
         if accepted:
