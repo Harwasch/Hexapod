@@ -10,26 +10,36 @@
   /// `observe` and `exposure` run on the ARSession delegate queue; `configure`, `holdExposure` and
   /// `releaseExposure` on the MainActor. Everything shared sits behind one lock.
   final class CaptureCamera: @unchecked Sendable {
-    /// Set once a device has shown that ARKit's 4K format gives no usable depth beside it.
-    static let fourKUnsupportedKey = "hex.capture.fourKUnsupported"
-    /// Frames to watch after the session starts before trusting the 4K format.
-    static let probeFrames = 10
+    /// Versioned by app build: a later build that maps 4K depth differently tries again.
+    static var fourKFallbackKey: String {
+      "hex.capture.fourKFallback."
+        + ((Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "0")
+    }
 
     private let mutex = NSLock()
     private var format: CaptureVideoFormat?
     private var control = CaptureExposureControl(mode: "auto", whiteBalance: "auto")
     private var device: AVCaptureDevice?
     private var meter = MotionBlurMeter()
-    private var probed = 0
+    private var probe = FourKProbe()
+    /// This session's rejection, recorded into the default-format session that follows it.
+    private var sessionFallback: CaptureFormatFallback?
     private var sessionStarted = Date.distantPast
     /// Called once, off the main thread, when the 4K format must be abandoned.
     var onFourKRejected: (@Sendable () -> Void)?
 
     var motionLevel: MotionBlurMeter.Level { mutex.withLock { meter.level } }
 
-    /// The format the session will run: ARKit's 4K one unless this device ruled it out.
+    /// The 4K rejection this build measured on this device, if any (depth aspect only).
+    static var persistedFallback: CaptureFormatFallback? {
+      UserDefaults.standard.data(forKey: fourKFallbackKey).flatMap {
+        try? JSONDecoder().decode(CaptureFormatFallback.self, from: $0)
+      }
+    }
+
+    /// The format the session will run: ARKit's 4K one unless this build ruled it out here.
     @MainActor static func videoFormat() -> (ARConfiguration.VideoFormat?, String) {
-      if !UserDefaults.standard.bool(forKey: fourKUnsupportedKey),
+      if persistedFallback == nil,
         let format = ARWorldTrackingConfiguration.recommendedVideoFormatFor4KResolution
       {
         return (format, "4k")
@@ -39,13 +49,16 @@
 
     @MainActor func configure(_ configuration: ARWorldTrackingConfiguration, kind: String) {
       let format = configuration.videoFormat
+      let persisted = Self.persistedFallback
       mutex.withLock {
         self.format = CaptureVideoFormat(
           kind: kind, width: Int(format.imageResolution.width),
-          height: Int(format.imageResolution.height), framesPerSecond: format.framesPerSecond)
+          height: Int(format.imageResolution.height), framesPerSecond: format.framesPerSecond,
+          fallback: kind == "default" ? (sessionFallback ?? persisted) : nil)
+        if kind == "4k" { sessionFallback = nil }
         device = ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera
         meter = MotionBlurMeter()
-        probed = 0
+        probe = FourKProbe()
         sessionStarted = Date()
       }
     }
@@ -55,8 +68,8 @@
       mutex.withLock { (format, control) }
     }
 
-    /// Hold what auto-exposure metered, capping the shutter at 1/250 s (ExposurePlan), and
-    /// lock white balance. Waits out the first second of a fresh session so it has metered.
+    /// Hold what auto-exposure metered on the shortest shutter the noise ceiling allows
+    /// (ExposurePlan), and lock white balance. Waits out the first second of a fresh session so it has metered.
     @MainActor func holdExposure() async {
       let age = mutex.withLock { Date().timeIntervalSince(sessionStarted) }
       if age < ExposurePlan.meteringS {
@@ -87,9 +100,10 @@
           device.whiteBalanceMode = .locked
           whiteBalance = "locked"
         }
+        let held = mode != "auto"
         let applied = CaptureExposureControl(
-          mode: mode, whiteBalance: whiteBalance,
-          durationS: mode == "auto" ? nil : plan.durationS, iso: mode == "auto" ? nil : plan.iso)
+          mode: mode, whiteBalance: whiteBalance, durationS: held ? plan.durationS : nil,
+          iso: held ? plan.iso : nil, shortfallEV: held ? plan.shortfallEV : nil)
         mutex.withLock { control = applied }
       } catch {
         mutex.withLock { control = CaptureExposureControl(mode: "auto", whiteBalance: "auto") }
@@ -123,43 +137,38 @@
         })
     }
 
-    /// Every delegate frame: update the blur cue, and in the first frames of a 4K session
-    /// confirm that depth arrives covering the same view as the image.
+    /// Every delegate frame: update the blur cue, and early in a 4K session confirm that the
+    /// depth ARKit pairs with it covers the same view as the image (FourKProbe).
     func observe(_ frame: ARFrame) {
       let k = frame.camera.intrinsics
       let depth = Self.centreDepth(frame)
-      let reject = mutex.withLock { () -> Bool in
+      let image = frame.camera.imageResolution
+      let map = frame.smoothedSceneDepth != nil ? frame.sceneDepth?.depthMap : nil
+      let depthSize = map.map { (CVPixelBufferGetWidth($0), CVPixelBufferGetHeight($0)) }
+      let rejected = mutex.withLock { () -> (CaptureFormatFallback, Bool)? in
         meter.update(
           time: frame.timestamp,
           transform: (0..<4).flatMap { row in
             (0..<4).map { Double(frame.camera.transform[$0][row]) }
           },
           focalPx: Double(k[0][0]), shutterS: frame.camera.exposureDuration, depthM: depth)
-        guard format?.kind == "4k", probed < Self.probeFrames else { return false }
-        probed += 1
-        let fits = Self.depthFits(frame)
-        if fits == false || (fits == nil && probed == Self.probeFrames) {
-          probed = Self.probeFrames
-          return true
-        }
-        if fits == true { probed = Self.probeFrames }
-        return false
+        guard format?.kind == "4k", probe.verdict == .pending else { return nil }
+        let verdict = probe.observe(
+          time: frame.timestamp, imageWidth: Int(image.width), imageHeight: Int(image.height),
+          depthWidth: depthSize?.0, depthHeight: depthSize?.1)
+        guard case .rejected(let reason, let persist) = verdict else { return nil }
+        // The evidence of what ARKit gave at 4K, for the manifest and for mapping it later.
+        let evidence = CaptureFormatFallback(
+          reason: reason, imageWidth: Int(image.width), imageHeight: Int(image.height),
+          depthWidth: depthSize?.0, depthHeight: depthSize?.1)
+        sessionFallback = evidence
+        return (evidence, persist)
       }
-      if reject {
-        UserDefaults.standard.set(true, forKey: Self.fourKUnsupportedKey)
-        onFourKRejected?()
+      guard let (evidence, persist) = rejected else { return }
+      if persist, let data = try? JSONEncoder().encode(evidence) {
+        UserDefaults.standard.set(data, forKey: Self.fourKFallbackKey)
       }
-    }
-
-    /// nil while there is no depth yet; false when depth and image differ in aspect, so the
-    /// depth covers another field of view than the image (normalized intrinsics would lie).
-    static func depthFits(_ frame: ARFrame) -> Bool? {
-      guard let map = frame.sceneDepth?.depthMap, frame.smoothedSceneDepth != nil else {
-        return nil
-      }
-      let image = frame.camera.imageResolution
-      let depthAspect = Double(CVPixelBufferGetWidth(map)) / Double(CVPixelBufferGetHeight(map))
-      return abs(depthAspect / (image.width / image.height) - 1) < 0.02
+      onFourKRejected?()
     }
 
     /// The smoothed depth at the image centre, metres, when ARKit is confident of it.

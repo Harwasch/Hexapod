@@ -97,12 +97,39 @@ public struct CaptureVideoFormat: Codable, Equatable, Sendable {
   public var width: Int
   public var height: Int
   public var framesPerSecond: Int
+  /// Why a default-format scan is not 4K, when 4K was tried and rejected, with what the
+  /// probe saw: so we learn what depth ARKit pairs with its 4K format.
+  public var fallback: CaptureFormatFallback?
 
-  public init(kind: String, width: Int, height: Int, framesPerSecond: Int) {
+  public init(
+    kind: String, width: Int, height: Int, framesPerSecond: Int,
+    fallback: CaptureFormatFallback? = nil
+  ) {
     self.kind = kind
     self.width = width
     self.height = height
     self.framesPerSecond = framesPerSecond
+    self.fallback = fallback
+  }
+}
+
+/// The 4K probe's evidence: "noDepth" (none within the budget) or "depthAspect".
+public struct CaptureFormatFallback: Codable, Equatable, Sendable {
+  public var reason: String
+  public var imageWidth: Int
+  public var imageHeight: Int
+  public var depthWidth: Int?
+  public var depthHeight: Int?
+
+  public init(
+    reason: String, imageWidth: Int, imageHeight: Int, depthWidth: Int? = nil,
+    depthHeight: Int? = nil
+  ) {
+    self.reason = reason
+    self.imageWidth = imageWidth
+    self.imageHeight = imageHeight
+    self.depthWidth = depthWidth
+    self.depthHeight = depthHeight
   }
 }
 
@@ -113,12 +140,18 @@ public struct CaptureExposureControl: Codable, Equatable, Sendable {
   public var whiteBalance: String
   public var durationS: Double?
   public var iso: Double?
+  /// How much darker than metered the held exposure is, when ISO ran out (ExposurePlan).
+  public var shortfallEV: Double?
 
-  public init(mode: String, whiteBalance: String, durationS: Double? = nil, iso: Double? = nil) {
+  public init(
+    mode: String, whiteBalance: String, durationS: Double? = nil, iso: Double? = nil,
+    shortfallEV: Double? = nil
+  ) {
     self.mode = mode
     self.whiteBalance = whiteBalance
     self.durationS = durationS
     self.iso = iso
+    self.shortfallEV = shortfallEV
   }
 }
 

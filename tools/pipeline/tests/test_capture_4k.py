@@ -71,6 +71,28 @@ def test_exposure_and_format_records_round_trip(tmp_path: Path) -> None:
     assert capture.frames[1]["iso"] == 320.0
 
 
+def test_default_format_records_the_4k_probe_evidence(tmp_path: Path) -> None:
+    root = tmp_path / "bundle"
+    make_bundle(root, [frame(0)])
+    evidence = {
+        "reason": "depthAspect",
+        "imageWidth": W4K,
+        "imageHeight": H4K,
+        "depthWidth": 256,
+        "depthHeight": 192,
+    }
+    video_format = {"kind": "default", "width": 320, "height": 240, "framesPerSecond": 60}
+    control = {"mode": "custom", "whiteBalance": "locked", "durationS": 1 / 120, "iso": 1600}
+    with_settings(
+        root,
+        {
+            "videoFormat": {**video_format, "fallback": evidence},
+            "exposureControl": {**control, "shortfallEV": 0.0},
+        },
+    )
+    bundle.read_bundle(root)
+
+
 def test_bundles_without_new_fields_stay_valid(tmp_path: Path) -> None:
     make_bundle(tmp_path / "bundle", [frame(0), frame(1)])
     bundle.read_bundle(tmp_path / "bundle")
@@ -112,6 +134,22 @@ def test_invalid_exposure_fields_are_rejected(
         ),
         ({"videoFormat": {"kind": "4k", "width": W4K, "height": H4K}}, "framesPerSecond"),
         ({"exposureControl": {"mode": "manual", "whiteBalance": "locked"}}, "known mode"),
+        (
+            {"exposureControl": {"mode": "custom", "whiteBalance": "locked", "shortfallEV": -1}},
+            "shortfallEV",
+        ),
+        (
+            {
+                "videoFormat": {
+                    "kind": "4k",
+                    "width": W4K,
+                    "height": H4K,
+                    "framesPerSecond": 30,
+                    "fallback": {"reason": "tooDark", "imageWidth": W4K, "imageHeight": H4K},
+                }
+            },
+            "fallback.reason",
+        ),
         (
             {"exposureControl": {"mode": "custom", "whiteBalance": "locked", "durationS": 3}},
             "durationS",

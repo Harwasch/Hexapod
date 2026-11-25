@@ -192,3 +192,20 @@ import Testing
   #expect(decoded.iso == nil && decoded.exposureDurationS == nil)
   #expect(!String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self).contains("iso"))
 }
+
+@Test func defaultFormatCarriesTheFourKProbeEvidence() throws {
+  let evidence = CaptureFormatFallback(
+    reason: "depthAspect", imageWidth: 3840, imageHeight: 2160, depthWidth: 256, depthHeight: 192)
+  let format = CaptureVideoFormat(
+    kind: "default", width: 1920, height: 1440, framesPerSecond: 60, fallback: evidence)
+  let json = try JSONEncoder().encode(format)
+  #expect(try JSONDecoder().decode(CaptureVideoFormat.self, from: json) == format)
+  let control = CaptureExposureControl(
+    mode: "custom", whiteBalance: "locked", durationS: 1.0 / 120, iso: 1600, shortfallEV: 0)
+  #expect(
+    try JSONDecoder().decode(CaptureExposureControl.self, from: JSONEncoder().encode(control))
+      == control)
+  // A 4K scan carries no fallback key at all.
+  let plain = CaptureVideoFormat(kind: "4k", width: 3840, height: 2160, framesPerSecond: 30)
+  #expect(!String(decoding: try JSONEncoder().encode(plain), as: UTF8.self).contains("fallback"))
+}

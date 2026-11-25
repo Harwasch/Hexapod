@@ -206,6 +206,8 @@ def validate_exposure(frame: dict[str, Any], index: int) -> None:
 
 
 VIDEO_FORMAT_KINDS = {"default", "4k"}
+#: Why the app's 4K probe fell back: no depth within its budget, or depth of another aspect.
+FALLBACK_REASONS = {"noDepth", "depthAspect"}
 EXPOSURE_MODES = {"auto", "locked", "custom"}
 WHITE_BALANCE_MODES = {"auto", "locked"}
 
@@ -224,6 +226,17 @@ def validate_capture_settings(manifest: dict[str, Any], first: dict[str, Any]) -
         # ARKit reports the format landscape, as capturedImage is stored.
         if size != (first["imageWidth"], first["imageHeight"]):
             raise ValueError("videoFormat size differs from the recorded frames")
+        fallback = video_format.get("fallback")
+        if fallback is not None:
+            if not isinstance(fallback, dict) or fallback.get("reason") not in FALLBACK_REASONS:
+                raise ValueError(
+                    "videoFormat.fallback.reason must be " + str(sorted(FALLBACK_REASONS))
+                )
+            integer(fallback.get("imageWidth"), "videoFormat.fallback.imageWidth", minimum=1)
+            integer(fallback.get("imageHeight"), "videoFormat.fallback.imageHeight", minimum=1)
+            for key in ("depthWidth", "depthHeight"):
+                if fallback.get(key) is not None:
+                    integer(fallback[key], f"videoFormat.fallback.{key}", minimum=1)
     control = manifest.get("exposureControl")
     if control is not None:
         if (
@@ -236,6 +249,9 @@ def validate_capture_settings(manifest: dict[str, Any], first: dict[str, Any]) -
             value = control.get(key)
             if value is not None and not (finite_number(value) and 0 < value <= upper):
                 raise ValueError(f"exposureControl.{key} must be positive")
+        shortfall = control.get("shortfallEV")
+        if shortfall is not None and not (finite_number(shortfall) and shortfall >= 0):
+            raise ValueError("exposureControl.shortfallEV must be a non-negative number")
 
 
 #: The largest frame the bundle normalizer still extracts losslessly: the 4:3 1920x1440

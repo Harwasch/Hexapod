@@ -419,20 +419,31 @@ and reconstruction; simulator or arithmetic tests cannot establish image quality
 ## Sharp capture: 4K format, exposure lock and slow-down cue
 
 The scan session asks ARKit for `recommendedVideoFormatFor4KResolution` (3840×2160,
-16:9, 30 fps; frames are still admitted at 15 Hz). Its first ten frames must bring raw
-and smoothed depth whose aspect matches the image; otherwise the app remembers the
-device as unsupported (`hex.capture.fourKUnsupported`) and restarts in the default
-1920×1440 format. The manifest's optional `videoFormat` records what was used:
-`{"kind": "4k" | "default", "width", "height", "framesPerSecond"}`, the size landscape
-as `capturedImage` is stored, and must match the frames.
+16:9, 30 fps; frames are still admitted at 15 Hz). ARKit often delivers depth only once
+tracking has initialized, so the probe (`FourKProbe`) counts only frames that carry depth:
+ten whose depth aspect matches the image accept 4K. Depth of another aspect would map onto
+the wrong pixels through normalized intrinsics, so it rejects 4K on this device for this
+app build (`hex.capture.fourKFallback.<build>`, a later build tries again); no depth at all
+within 3 s rejects it for that session only. Either way the session restarts in the
+default 1920×1440 format. The manifest's optional `videoFormat` records what was used:
+`{"kind": "4k" | "default", "width", "height", "framesPerSecond", "fallback"?}`, the size
+landscape as `capturedImage` is stored, and must match the frames. `fallback` is the
+probe's evidence, `{"reason": "noDepth" | "depthAspect", "imageWidth", "imageHeight",
+"depthWidth"?, "depthHeight"?}`: what depth ARKit pairs with its 4K format, in case a 4:3
+depth over a 16:9 crop can be mapped by crop later.
 
 When a scan starts, after at least a second of metering, the primary capture device
-(`configurableCaptureDeviceForPrimaryCamera`) holds its exposure: a metered shutter
-at or under 1/250 s is locked as is, a longer one is capped at 1/250 s with ISO raised
-by the same factor (`ExposurePlan`; if the ISO ceiling stops it, frames are darker by
-the recorded shortfall). White balance is locked. Both return to auto when the scan
-stops. The manifest's optional `exposureControl` records `{"mode": "auto" | "locked" |
-"custom", "whiteBalance": "auto" | "locked", "durationS"?, "iso"?}`.
+(`configurableCaptureDeviceForPrimaryCamera`) holds its exposure (`ExposurePlan`). A metered
+shutter at or under 1/250 s is locked as is. A longer one is shortened only as far as ISO
+1600 (`noiseCeilingISO`, or the sensor's own maximum if lower) allows, never below 1/250 s
+and never longer than metered: 1/60 s at ISO 200 becomes 1/250 s at ISO 833, 1/30 s at ISO
+400 becomes 1/120 s at ISO 1600, and 1/30 s already at ISO 1600 stays. The splat learns
+sensor noise as readily as blur, so the ceiling bounds it; the slow-down cue uses each
+frame's actual shutter, so it tightens or relaxes with the exposure chosen. White balance
+is locked. Both return to auto when the scan stops. The manifest's optional
+`exposureControl` records `{"mode": "auto" | "locked" | "custom", "whiteBalance": "auto" |
+"locked", "durationS"?, "iso"?, "shortfallEV"?}`, the last how much darker than metered the
+held exposure is when the sensor's ISO range runs out.
 
 Each frame may carry `exposureDurationS` (ARCamera.exposureDuration, in (0, 1] s),
 `exposureOffsetEV`, `iso` and `whiteBalanceGains` (red, green, blue). All are
