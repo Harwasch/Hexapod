@@ -52,20 +52,64 @@ private func settle(_ omega: Double, speed: Double = 0, focal: Double, depth: Do
   #expect(meter.blurPixels > 0)
 }
 
-@Test func exposurePlanKeepsShortShuttersAndCapsLongOnes() {
-  let bright = ExposurePlan.plan(
-    meteredDurationS: 1.0 / 500, meteredISO: 50, minDurationS: 1.0 / 20000, maxDurationS: 1.0 / 3,
-    minISO: 32, maxISO: 2304)
-  #expect(bright == ExposurePlan(mode: "locked", durationS: 1.0 / 500, iso: 50, shortfallEV: 0))
-  let indoor = ExposurePlan.plan(
-    meteredDurationS: 1.0 / 60, meteredISO: 200, minDurationS: 1.0 / 20000,
-    maxDurationS: 1.0 / 3, minISO: 32, maxISO: 2304)
-  #expect(indoor.mode == "custom" && indoor.durationS == 1.0 / 250)
-  #expect(abs(indoor.iso - 200 * 250.0 / 60) < 1e-9)
-  #expect(indoor.shortfallEV == 0)
-  let dim = ExposurePlan.plan(
-    meteredDurationS: 1.0 / 30, meteredISO: 1600, minDurationS: 1.0 / 20000,
-    maxDurationS: 1.0 / 3, minISO: 32, maxISO: 2304)
-  #expect(dim.iso == 2304)
-  #expect(abs(dim.shortfallEV - log2(1600 * 250.0 / 30 / 2304)) < 1e-9)
+private func plan(_ duration: Double, _ iso: Double, maxISO: Double = 2304) -> ExposurePlan {
+  ExposurePlan.plan(
+    meteredDurationS: duration, meteredISO: iso, minDurationS: 1.0 / 20000,
+    maxDurationS: 1.0 / 3, minISO: 32, maxISO: maxISO)
+}
+
+@Test func exposurePlanLocksShortShutters() {
+  #expect(
+    plan(1.0 / 500, 50)
+      == ExposurePlan(mode: "locked", durationS: 1.0 / 500, iso: 50, shortfallEV: 0))
+}
+
+@Test func exposurePlanShortensOnlyAsFarAsTheNoiseCeilingAllows() {
+  // Bright indoor: 1/60 s at ISO 200 reaches 1/250 s at ISO 833, under the ceiling.
+  let bright = plan(1.0 / 60, 200)
+  #expect(bright.mode == "custom" && bright.durationS == 1.0 / 250)
+  #expect(abs(bright.iso - 200 * 250.0 / 60) < 1e-9)
+  // Dim indoor: 1/30 s at ISO 400 would need ISO 3333 at 1/250 s; stop at ISO 1600, 1/120 s.
+  let dim = plan(1.0 / 30, 400)
+  #expect(dim.mode == "custom" && dim.iso == ExposurePlan.noiseCeilingISO)
+  #expect(abs(dim.durationS - 1.0 / 120) < 1e-12 && dim.shortfallEV == 0)
+  // Already at or over the ceiling: keep what was metered, never a longer shutter.
+  #expect(
+    plan(1.0 / 30, 1600)
+      == ExposurePlan(mode: "locked", durationS: 1.0 / 30, iso: 1600, shortfallEV: 0))
+  #expect(plan(1.0 / 30, 2000).durationS == 1.0 / 30)
+  // A sensor whose ISO tops out below the ceiling uses its own maximum.
+  let small = plan(1.0 / 30, 400, maxISO: 1000)
+  #expect(small.iso == 1000 && abs(small.durationS - 1.0 / 75) < 1e-12)
+}
+
+@Test func probeWaitsForDepthAndCountsOnlyFramesWithIt() {
+  var probe = FourKProbe()
+  for step in 0..<40 {  // 2.6 s of depth-less frames at 15 Hz: still pending
+    #expect(
+      probe.observe(
+        time: Double(step) / 15, imageWidth: 3840, imageHeight: 2160, depthWidth: nil,
+        depthHeight: nil) == .pending)
+  }
+  for step in 0..<FourKProbe.depthFramesNeeded {
+    probe.observe(
+      time: 2.7 + Double(step) / 15, imageWidth: 3840, imageHeight: 2160, depthWidth: 256,
+      depthHeight: 144)
+  }
+  #expect(probe.verdict == .accepted)
+}
+
+@Test func probeRejectsMeasuredAspectForGoodAndMissingDepthForTheSession() {
+  var aspect = FourKProbe()
+  aspect.observe(time: 0, imageWidth: 3840, imageHeight: 2160, depthWidth: nil, depthHeight: nil)
+  #expect(
+    aspect.observe(
+      time: 0.5, imageWidth: 3840, imageHeight: 2160, depthWidth: 256, depthHeight: 192)
+      == .rejected(reason: "depthAspect", persist: true))
+  var missing = FourKProbe()
+  missing.observe(time: 10, imageWidth: 3840, imageHeight: 2160, depthWidth: nil, depthHeight: nil)
+  #expect(
+    missing.observe(
+      time: 13, imageWidth: 3840, imageHeight: 2160, depthWidth: nil, depthHeight: nil)
+      == .rejected(reason: "noDepth", persist: false))
 }

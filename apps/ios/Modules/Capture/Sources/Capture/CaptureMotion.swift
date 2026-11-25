@@ -69,12 +69,18 @@ public struct MotionBlurMeter: Sendable {
 ///
 /// Auto-exposure lets the shutter run long indoors (1/30-1/60 s), which smears every frame
 /// of a handheld sweep, and lets brightness and colour drift frame to frame, which the
-/// splat then learns as view-dependent colour. After about a second of metering the app
-/// holds what the camera chose: as-is when the shutter is already at most `maximumShutterS`,
-/// else at that shutter with ISO raised by the same factor (more noise, far less blur). If the
-/// sensor's ISO ceiling stops the compensation, the frames come out darker by `shortfallEV`.
+/// splat then learns as view-dependent colour. But a short shutter is paid for in ISO, and
+/// the splat learns sensor noise just as readily as blur. So after about a second of
+/// metering the app holds the same exposure (shutter x ISO) with the shortest shutter, no
+/// shorter than `minimumShutterS`, that keeps ISO at or under `noiseCeilingISO`, and never a
+/// longer shutter than the camera metered. A metered shutter already at or under 1/250 s is
+/// simply locked. Only when the sensor's own ISO range cannot make up the difference do the
+/// frames come out darker, by `shortfallEV`.
 public struct ExposurePlan: Equatable, Sendable {
-  public static let maximumShutterS = 1.0 / 250
+  /// Below this the blur gained is under a pixel even at 4K for a slow sweep (CaptureMotion).
+  public static let minimumShutterS = 1.0 / 250
+  /// Above this phone-sensor noise is visible in a splat; a starting point to tune on device.
+  public static let noiseCeilingISO = 1600.0
   public static let meteringS = 1.0
 
   public var mode: String
@@ -86,14 +92,70 @@ public struct ExposurePlan: Equatable, Sendable {
     meteredDurationS: Double, meteredISO: Double,
     minDurationS: Double, maxDurationS: Double, minISO: Double, maxISO: Double
   ) -> ExposurePlan {
-    let cap = min(max(Self.maximumShutterS, minDurationS), maxDurationS)
-    guard meteredDurationS > cap else {
+    let floor = min(max(Self.minimumShutterS, minDurationS), maxDurationS)
+    guard meteredDurationS > floor else {
       return ExposurePlan(
         mode: "locked", durationS: meteredDurationS, iso: meteredISO, shortfallEV: 0)
     }
-    let wanted = meteredISO * meteredDurationS / cap
+    let exposure = meteredDurationS * meteredISO
+    let ceiling = max(min(Self.noiseCeilingISO, maxISO), meteredISO)
+    let shutter = min(max(floor, exposure / ceiling), meteredDurationS)
+    guard shutter < meteredDurationS else {
+      return ExposurePlan(
+        mode: "locked", durationS: meteredDurationS, iso: meteredISO, shortfallEV: 0)
+    }
+    let wanted = exposure / shutter
     let iso = min(max(wanted, minISO), maxISO)
     return ExposurePlan(
-      mode: "custom", durationS: cap, iso: iso, shortfallEV: max(0, log2(wanted / iso)))
+      mode: "custom", durationS: shutter, iso: iso, shortfallEV: max(0, log2(wanted / iso)))
+  }
+}
+
+/// Whether ARKit's 4K format can be trusted on this device, from the session's first frames.
+///
+/// ARKit often delivers scene depth only after tracking has initialized, so a frame without
+/// depth proves nothing: only frames that carry depth count. A depth map whose aspect differs
+/// from the image's covers another field of view, which normalized intrinsics would map onto
+/// the wrong pixels; that is measured evidence, and it rejects 4K on this device for good
+/// (`persist`). No depth at all within `noDepthBudgetS` rejects 4K for this session only.
+public struct FourKProbe: Sendable {
+  public enum Verdict: Equatable, Sendable {
+    case pending, accepted
+    case rejected(reason: String, persist: Bool)
+  }
+
+  public static let depthFramesNeeded = 10
+  public static let noDepthBudgetS = 3.0
+  /// Relative aspect difference tolerated between depth and image.
+  public static let aspectTolerance = 0.02
+
+  private var started: Double?
+  private var withDepth = 0
+  public private(set) var verdict = Verdict.pending
+
+  public init() {}
+
+  @discardableResult
+  public mutating func observe(
+    time: Double, imageWidth: Int, imageHeight: Int, depthWidth: Int?, depthHeight: Int?
+  ) -> Verdict {
+    guard verdict == .pending, imageWidth > 0, imageHeight > 0 else { return verdict }
+    let start = started ?? time
+    started = start
+    guard let depthWidth, let depthHeight, depthWidth > 0, depthHeight > 0 else {
+      if time - start >= Self.noDepthBudgetS {
+        verdict = .rejected(reason: "noDepth", persist: false)
+      }
+      return verdict
+    }
+    let image = Double(imageWidth) / Double(imageHeight)
+    let depth = Double(depthWidth) / Double(depthHeight)
+    if abs(depth / image - 1) >= Self.aspectTolerance {
+      verdict = .rejected(reason: "depthAspect", persist: true)
+    } else {
+      withDepth += 1
+      if withDepth >= Self.depthFramesNeeded { verdict = .accepted }
+    }
+    return verdict
   }
 }
