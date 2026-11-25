@@ -1,6 +1,7 @@
 import ARAnswer
 import AVFoundation
 import AVKit
+import Capture
 import Globe
 import LiveSplat
 import SwiftUI
@@ -214,7 +215,7 @@ private enum CameraStyle {
         .position(x: 34, y: 42)
         Button(action: model.toggleRecording) {
           ZStack {
-            Circle().stroke(.white, lineWidth: 5).frame(width: 79, height: 79)
+            MotionCueRing(level: model.recording ? model.motionLevel : .steady)
             if model.recording {
               RoundedRectangle(cornerRadius: 8).fill(CameraStyle.red).frame(width: 32, height: 32)
             } else if model.capturePhase.isBusy {
@@ -225,6 +226,9 @@ private enum CameraStyle {
           }.frame(width: 84, height: 84)
         }
         .accessibilityLabel(model.recording ? "Stop scan" : "Start scan")
+        .accessibilityValue(
+          model.recording && model.motionLevel != .steady ? "Moving too fast" : ""
+        )
         .accessibilityIdentifier(model.recording ? "scan.stop" : "home.record")
         .disabled(
           !model.cameraReady || !model.canRecord
@@ -524,5 +528,30 @@ private struct ProgressRing: View {
         do { sites = try await APIGlobeDataSource(baseURL: root).sites() } catch { failed = true }
       }
     }.tint(CameraStyle.amber).presentationDetents([.medium, .large])
+  }
+}
+
+/// The record button's ring, coloured by predicted motion blur while scanning: white when
+/// steady (under 1 px), amber to slow down (1-3 px), red and pulsing when too fast. No text:
+/// the cue has to read at a glance while the phone is moving.
+private struct MotionCueRing: View {
+  let level: MotionBlurMeter.Level
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  var body: some View {
+    let colour: Color =
+      switch level {
+      case .steady: .white
+      case .slowDown: CameraStyle.amber
+      case .tooFast: CameraStyle.red
+      }
+    Circle().stroke(colour, lineWidth: level == .steady ? 5 : 7)
+      .frame(width: 79, height: 79)
+      .phaseAnimator([1.0, 1.12]) { ring, scale in
+        ring.scaleEffect(level == .tooFast && !reduceMotion ? scale : 1)
+      } animation: { _ in
+        .easeInOut(duration: 0.3)
+      }
+      .animation(.easeOut(duration: 0.2), value: level)
   }
 }

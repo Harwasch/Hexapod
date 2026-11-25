@@ -1,5 +1,6 @@
 import ARAnswer
 import ARKit
+import Capture
 import EntitySchema
 import Foundation
 import LiveSplat
@@ -25,6 +26,8 @@ import Voice
   private(set) var cameraReady = false
   private(set) var isTalking = false
   private(set) var recording = false
+  /// The slow-down cue while recording: predicted motion blur (CaptureCamera, MotionBlurMeter).
+  private(set) var motionLevel = MotionBlurMeter.Level.steady
   private(set) var failed = false
   private(set) var failureText = "Unavailable"
   private(set) var capturePhase = CapturePhase.idle
@@ -219,6 +222,8 @@ import Voice
   /// Called by a 10 Hz UI timer, never from the ARSession delegate.
   func tick() {
     recorder.pollFailure()
+    let level = recording && usesLiveCapture ? frameFeed.camera.motionLevel : .steady
+    if level != motionLevel { motionLevel = level }
     if let driver = perceptionDriver {
       let enabled = !capturePhase.isBusy && !isTalking && !answering
       driver.setEnabled(enabled)
