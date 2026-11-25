@@ -8,7 +8,7 @@ measures the placement's **accuracy** rather than its consistency: a bias common
 GNSS fix moves the whole model, every alignment residual stays small, and only an
 independent mark sees it (LIVING_WORLD.md section 6 reserves 2-3 checkpoints a site).
 
-What is computed, all of it closed-form or a few Gauss-Newton steps, numpy only:
+What is computed, closed-form or a few Gauss-Newton steps (OpenCV only for bundle lenses):
 
 * **observations** come in a frame's pixels (`px` with the `imageSize` they were clicked
   at, COLMAP's continuous convention: the top-left corner is (0, 0), so a click on pixel
@@ -16,8 +16,9 @@ What is computed, all of it closed-form or a few Gauss-Newton steps, numpy only:
   (mapped to the kept frame through `frames_meta.json`'s `original`) or a kept frame name;
   they are scaled to the kept frame, whose size is read from the frame itself;
 * **undistortion**: SIMPLE_RADIAL's `x_d = x (1 + k r^2)` is inverted by ten fixed-point
-  steps `x = x_d / (1 + k r^2)`; PINHOLE and SIMPLE_PINHOLE need none; any other camera
-  model is `unsupported-camera` rather than triangulated wrongly;
+  steps `x = x_d / (1 + k r^2)`; PINHOLE and SIMPLE_PINHOLE need none. Refined
+  bundles opt into OpenCV inversion of OPENCV radial/tangential distortion; other
+  camera models remain `unsupported-camera` rather than triangulated wrongly;
 * **triangulation**: the multi-view DLT (Hartley & Zisserman, 12.2) by SVD on the
   undistorted normalised coordinates, then five Gauss-Newton steps on the reprojection
   error in undistorted pixels;
@@ -310,18 +311,21 @@ class _View:
     k: float
     u: float
     v: float
+    opencv: tuple[float, ...] = ()
 
     @property
     def centre(self) -> F64:
         return np.asarray(-self.rotation.T @ self.translation, dtype=np.float64)
 
 
-def _intrinsics(camera: sfm.Camera) -> tuple[float, float, float, float, float] | None:
+def _intrinsics(
+    camera: sfm.Camera, *, allow_opencv: bool = False
+) -> tuple[float, float, float, float, float] | None:
     """(fx, fy, cx, cy, k) of a supported camera model, else None."""
     p = camera.params
     if camera.model == "SIMPLE_PINHOLE":
         return p[0], p[0], p[1], p[2], 0.0
-    if camera.model == "PINHOLE":
+    if camera.model == "PINHOLE" or (allow_opencv and camera.model == "OPENCV"):
         return p[0], p[1], p[2], p[3], 0.0
     if camera.model == "SIMPLE_RADIAL":
         return p[0], p[0], p[1], p[2], p[3]
@@ -330,6 +334,20 @@ def _intrinsics(camera: sfm.Camera) -> tuple[float, float, float, float, float] 
 
 def _undistorted(view: _View) -> tuple[float, float]:
     """The normalised image point of the click, radial distortion undone."""
+    if view.opencv:
+        import cv2  # type: ignore[import-not-found,unused-ignore]
+
+        cv2.setNumThreads(4)
+        k = np.array([[view.fx, 0, view.cx], [0, view.fy, view.cy], [0, 0, 1]])
+        xy = cv2.undistortPointsIter(
+            np.array([[[view.u, view.v]]]),
+            k,
+            np.array(view.opencv),
+            None,
+            None,
+            (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 50, 1e-12),
+        ).reshape(2)
+        return float(xy[0]), float(xy[1])
     xd, yd = (view.u - view.cx) / view.fx, (view.v - view.cy) / view.fy
     x, y = xd, yd
     if view.k != 0.0:
@@ -345,6 +363,13 @@ def _project(view: _View, point: F64) -> tuple[float, float] | None:
     if camera[2] <= 0.0:
         return None
     x, y = float(camera[0] / camera[2]), float(camera[1] / camera[2])
+    if view.opencv:
+        k1, k2, p1, p2 = view.opencv
+        r2 = x * x + y * y
+        factor = 1 + k1 * r2 + k2 * r2 * r2
+        xd = x * factor + 2 * p1 * x * y + p2 * (r2 + 2 * x * x)
+        yd = y * factor + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y
+        return view.fx * xd + view.cx, view.fy * yd + view.cy
     factor = 1.0 + view.k * (x * x + y * y)
     return view.fx * x * factor + view.cx, view.fy * y * factor + view.cy
 
@@ -397,7 +422,9 @@ def _largest_angle_deg(views: Sequence[_View], point: F64) -> float:
     return best
 
 
-def triangulate(model: sfm.Model, observations: Sequence[Observation]) -> dict[str, Triangulated]:
+def triangulate(
+    model: sfm.Model, observations: Sequence[Observation], *, allow_opencv: bool = False
+) -> dict[str, Triangulated]:
     """Each target seen in the model's registered frames, triangulated in the model frame.
 
     A click on a frame the model did not register is not a view (it has no pose)."""
@@ -414,7 +441,8 @@ def triangulate(model: sfm.Model, observations: Sequence[Observation]) -> dict[s
             image = images.get(observation.frame)
             if image is None:
                 continue
-            intrinsics = _intrinsics(cameras[image.camera_id])
+            camera = cameras[image.camera_id]
+            intrinsics = _intrinsics(camera, allow_opencv=allow_opencv)
             if intrinsics is None:
                 unsupported = True
                 continue
@@ -431,6 +459,7 @@ def triangulate(model: sfm.Model, observations: Sequence[Observation]) -> dict[s
                     k=k,
                     u=observation.u,
                     v=observation.v,
+                    opencv=camera.params[4:] if camera.model == "OPENCV" else (),
                 )
             )
         names = tuple(view.name for view in views)

@@ -1820,3 +1820,126 @@ The training console uses the completed run's published epoch asset
 Updating the Modal image is necessary: an already-running container cannot acquire
 the new observer. Deploy the API and web reader first, then rebuild/deploy Modal,
 then deploy the worker. No database migration is needed.
+
+### Capture bundles: v18 pose refinement and shared lens
+
+`photo-reconstruct` v18 enables `pose.arkit_refine: true` and
+`pose.arkit_shared_lens: true` only for `hex-capture-v1` bundles. Photos and ordinary
+videos keep their existing extraction, mapping, calibration and training paths.
+`arkit_refine: false` restores the v17 fixed-ARKit pose path; with refinement enabled,
+`arkit_shared_lens: false` refines poses/points with the original per-frame PINHOLE
+intrinsics held fixed. Neither setting enables training pose optimization or depth loss.
+LiDAR ingestion, initialization and supervision are outside this change.
+
+The fixed triangulated model is checked against the original ARKit transforms first.
+An isolated pycolmap **4.2.0** CPU process then runs free-pose BA with a SOFT_L1 loss
+(scale 1 pixel), re-triangulates, and runs final BA. One OPENCV camera is shared by
+all frames, seeded with the median ARKit `(fx, fy, cx, cy)` when those vary. Focal,
+principal point and `(k1, k2, p1, p2)` are optimized together. Rebuilding the shared
+camera also rebuilds COLMAP 4's trivial rigs and sensor data IDs. Solves use four
+threads, 150 iterations and function tolerance `1e-7`. Both BA passes anchor the
+metric gauge to **all original ARKit camera centres**, using pycolmap 4.2's
+`create_pose_prior_bundle_adjuster`. Each Cartesian `PosePrior` has covariance
+`(0.03 m)^2 I`; its `corr_data_id` comes from the current model (including rebuilt
+shared-camera sensor IDs), but its position always comes from the untouched input.
+Position residuals use SOFT_L1 with scale `sqrt(7.815)` in whitened sigma units;
+the API's initial alignment uses a 15 cm RANSAC threshold and seed 0. Three
+centres spanning at least a plane are required. The 3 cm sigma is a policy weight,
+not a measured ARKit uncertainty. A failed prior alignment silently selects a
+camera gauge in pycolmap 4.2; the pipeline detects this and falls back to the intact
+fixed model instead of solving with that gauge.
+
+The former `TWO_CAMS_FROM_WORLD` gauge fixed one pose and one translation component
+of a second camera. Millimetre errors on a centimetre video baseline could give an
+otherwise good refinement a large raw scale error. On the 724-frame capture, the
+first two centres were only 2.15 cm apart: the first pose and the second camera's
+Z translation stayed fixed, while the final all-centre fit needed scale 0.9176.
+Reprojection improved from 1.555 to 1.050 px and aligned corrections remained below
+2.94 cm / 1.04 degrees. Whole-trajectory priors remove that arbitrary short-baseline
+anchor and allow every camera pose to improve.
+
+An all-camera-centre Umeyama similarity maps the result back to ARKit's metre and
+gravity frame, including the points and camera orientations. The fitted scale must
+satisfy **`abs(s - 1) < 0.005` before applying it**; the accepted model is then expressed
+in ARKit metres, so placement still uses scale 1. The same scale bound is recorded
+and checked before each prior factory's internal alignment and after each solve.
+This prevents the second factory from hiding first-pass or re-triangulation drift.
+Any correction above **15 cm or
+5 degrees**, a mean point reprojection error that does not decrease, a degenerate
+alignment, or a failed solve restores the intact fixed model and records a reason.
+These are conservative policy bounds, not measurements of device accuracy. The
+raw scale guard now checks consistency of the prior-constrained solve with the
+whole ARKit trajectory; it cannot independently validate ARKit's absolute scale.
+The earlier pose-only diagnostic's scale 0.9494 used a different gauge and is not
+evidence of physical scale drift. Real-capture acceptance with the new gauge still
+needs a CPU rerun; synthetic success does not establish training quality.
+
+`poses.json.refinement` records before/after mean point reprojection errors, median /
+p95 / maximum translations in centimetres and rotations in degrees, the raw Sim3,
+lens parameters, observation counts, bounds and fallback reason. The `gauge` field
+records type `arkit-position-priors`, `positionSigmaM`, position `loss`,
+`lossScaleSigma`, `alignmentMaxErrorM`, `numPositions` and `scaleChecks` (stage and
+raw all-centre scale before alignment / after solving each pass). Per-frame raw BA
+and ARKit poses make the applied transform auditable. The pose step's `refinement`
+metric contains the same summary without the per-frame arrays. Unmeasured values
+are null. Georeferencing and entity placement validate accepted correction evidence;
+disabled and fallback paths retain the strict fixed-pose check.
+
+Previously `training.build_dataset` copied OPENCV cameras untouched and gsplat's
+pinned parser used `cv2.getOptimalNewCameraMatrix(alpha=0)` plus remapping and an ROI
+crop. Its perspective path did not subtract the crop origin from the principal
+point. Also, quality and live consumers used the raw focal/principal point as a
+pinhole. Accepted bundle lenses are now explicitly rectified in the **private training
+dataset**: images, dimensions, intrinsics and feature observations change together,
+with the ROI origin subtracted. Untracked images are omitted. The resulting camera
+is PINHOLE, preventing double undistortion by the training/holdout parser. Raw pose
+artifacts and source images are preserved, as are stable dataset timestamps for
+checkpoint resume. Quality and live cameras use the same
+rectification calculation. Survey-target clicks remain in raw capture pixels and
+use the OPENCV inverse/forward distortion model when bundle refinement is accepted;
+other target paths stay unchanged. Training budget and block projections use the rectified
+model. OpenCV 4.10.0.84 is pinned in both Modal pipeline images; local bundle training
+and projection consumers need `opencv-python-headless` too. Non-bundle datasets do
+not enter this path.
+
+The CPU integration fixture (`tests/arkit_refine_scene.py`) runs a known nonplanar
+scene with noisy poses and varying ARKit intrinsics through real pycolmap BA,
+re-triangulation, metric alignment and the pinned gsplat parser. It also exercises a
+nonzero crop origin, source-image preservation and resized training images. Run the
+suite under `heavy`, with `ARKIT_TEST_PYTHON` pointing at a pycolmap 4.2 interpreter
+and `ARKIT_TEST_GSPLAT_EXAMPLES` pointing at the pinned trainer's `examples` directory
+to include it. Those optional dependencies are not downloaded by the tests.
+`tests/arkit_gauge_scene.py` adds 80-frame video trajectories with millimetre pose
+noise and approximately 1.3 cm adjacent baselines. It runs the old gauge as a
+negative control and requires the new one to stay within the unchanged 0.5% scale
+bound, improve reprojection and recover positions/orientations. Separate seeds
+exercise fixed PINHOLE intrinsics and shared OPENCV lens refinement. It also checks
+that both prior passes target the original centres and preserve the input bytes.
+Injected scale drift after the first solve and re-triangulation must be rejected
+before another alignment can conceal it; an actual 4.2 prior-alignment failure
+must also be rejected.
+
+An unrun comparison for capture `99c02b1d` is prepared in
+[`infra/modal/arkit_bench.py`](../../infra/modal/arkit_bench.py). After placing the
+bundle on the existing **hexapod-bench** volume and committing the reviewed code:
+
+```sh
+modal run infra/modal/arkit_bench.py \
+  --bundle-path /bench/inputs/99c02b1d.hexcap \
+  --tag arkit-pr1-001 --revision "$(git rev-parse HEAD)" --cap 12
+```
+
+This prepares v17 fixed-pose and PR1 scenes on CPU, aborting before either GPU arm
+if PR1 falls back, then trains them sequentially on
+L40S with identical seed 42 and settings. Both use the same deterministic 1/8 test
+split, plus `test_every: 8` validation within the training pool. Test images are
+excluded from training, but remain available to pose estimation: this measures
+render generalization, not independent lens calibration. Results and renders stay
+under `/bench/arkit/<tag>/{v17,pr1}/run`; no production API or storage writes occur.
+Allow roughly **$5** for two one-hour L40S arms plus CPU preparation, or **$9.25** at
+the coded timeouts and startup allowances, using the repository's recorded rates
+($2.173392/hour L40S including CPU/RAM; $0.2526/hour CPU). This is a forecast, not a
+live price or measured duration; the command refuses a reservation above `--cap`.
+It has not been run. Capture-specific guard acceptance remains a CPU check; the
+GPU arms are needed to establish held-out PSNR/SSIM/LPIPS, visible smear reduction,
+convergence, memory and runtime. A sharper training fit alone proves none of those.

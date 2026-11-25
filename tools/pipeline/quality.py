@@ -1572,7 +1572,9 @@ def support_gate(ctx: StageContext) -> StageOutcome:
     # Every SH band `train` shipped (`ship_sh_degree`) passes through to `gated.ply` untouched:
     # the gate selects and fades gaussians, it does not decide what colour they carry.
     source = splat_stream.open_splat(ctx.input(GATED_PLY_SOURCE), chunk=chunk, sh_degree=None)
-    model = sfm.read_model(ctx.input("poses"))
+    import distortion
+
+    model = distortion.projection_model(sfm.read_model(ctx.input("poses")), ctx.input("poses"))
     cameras = Cameras.from_model(model)
     scratch = ctx.work_dir / "quality-chunks"
     # An attempt killed mid-stage leaves its columns and spilled depth samples here; the
